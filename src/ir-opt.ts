@@ -17,6 +17,7 @@ import type {
 	IRInstruction,
 	IRTypeofResult,
 } from "./ir.ts";
+import { isSafepoint } from "./liveness.ts";
 import { debugEnabled, isNil } from "./utils.ts";
 
 /**
@@ -1505,8 +1506,8 @@ function patchBodyEntryBlock(fn: IRFunction, oldToNew: Array<number | undefined>
  * the slot is definitely initialized (a non-empty store dominates the read on
  * every path). The analysis is restricted to function-local slots
  * (`loadLocal`/`storeLocal`); captured and global bindings can be initialized by
- * another function, so their checks are left alone. Exception-handler edges are
- * treated conservatively (the handler entry sees nothing as initialized).
+ * another function, so their checks are left alone. Handler facts are intersected
+ * at every instruction that can transfer to that handler.
  */
 function optEliminateRedundantTdzChecks(program: IntermediateProgram) {
 	for (const fn of program.functions) {
@@ -1542,18 +1543,11 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 		}
 	}
 
-	// Exception handlers and protected-range continuation markers are pinned to
-	// "nothing initialized". The latter can merge compiler-generated exceptional
-	// continuation shapes that this local CFG analysis does not model explicitly.
-	const pinnedEmpty = new Set<number>();
 	const checkedSlots = new Set<number>();
 	for (const block of blocks) {
 		const regToSlot = new Map<number, number>();
 		for (const instr of block.instructions) {
-			if (instr.type === "tryBegin") {
-				pinnedEmpty.add(instr.blocks[0]);
-				pinnedEmpty.add(instr.blocks[1]);
-			} else if (instr.type === "loadLocal") {
+			if (instr.type === "loadLocal") {
 				regToSlot.set(instr.registers[0], instr.index);
 			} else if (instr.type === "throwIfTdz") {
 				const slot = regToSlot.get(instr.registers[0]);
@@ -1567,21 +1561,41 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 		return;
 	}
 
+	// Resolve the innermost handler at each potentially throwing instruction. Try
+	// markers are balanced in flattened block order, matching VM lowering.
+	const handlerByInstruction: Array<Array<number | undefined>> = [];
+	const activeHandlers: Array<number> = [];
+	for (const block of blocks) {
+		const handlers = new Array<number | undefined>(block.instructions.length);
+		handlerByInstruction.push(handlers);
+		for (let i = 0; i < block.instructions.length; i++) {
+			const instr = block.instructions[i]!;
+			if (instr.type === "tryBegin") {
+				activeHandlers.push(instr.blocks[0]);
+			} else if (instr.type === "tryEnd") {
+				if (activeHandlers.pop() === undefined) {
+					throw new Error("Unbalanced tryEnd marker in TDZ analysis");
+				}
+			} else if (instr.type === "throw" || isSafepoint(instr)) {
+				handlers[i] = activeHandlers[activeHandlers.length - 1];
+			}
+		}
+	}
+	if (activeHandlers.length > 0) {
+		throw new Error("Unbalanced tryBegin marker in TDZ analysis");
+	}
+
 	// Forward must-analysis: inSets[b] = local slots definitely initialized on
-	// entry to b. Entry/exception blocks start empty; the rest start at top (all
-	// checked slots) and are intersected down to a fixpoint. A `jumpIf` continues
-	// in-block when not taken, so it is a branch — not a terminator.
+	// entry to b. Entry starts empty; other blocks start at top (all checked slots)
+	// and are intersected down by normal and instruction-precise exceptional edges.
+	// A `jumpIf` continues in-block when not taken, so it is a branch, not a terminator.
 	const inSets: Array<Set<number>> = blocks.map((_, b) =>
-		b === 0 || pinnedEmpty.has(b) ? new Set<number>() : new Set(checkedSlots),
+		b === 0 ? new Set<number>() : new Set(checkedSlots),
 	);
 
-	const startSet = (b: number): Set<number> =>
-		b === 0 || pinnedEmpty.has(b) ? new Set<number>() : inSets[b]!;
+	const startSet = (b: number): Set<number> => (b === 0 ? new Set<number>() : inSets[b]!);
 
 	const propagate = (target: number, set: Set<number>): boolean => {
-		if (pinnedEmpty.has(target)) {
-			return false;
-		}
 		const current = inSets[target]!;
 		let shrank = false;
 		for (const slot of current) {
@@ -1600,7 +1614,12 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 			const cur = new Set(startSet(b));
 			const empties = new Set<number>();
 			let terminated = false;
-			for (const instr of blocks[b]!.instructions) {
+			for (let i = 0; i < blocks[b]!.instructions.length; i++) {
+				const instr = blocks[b]!.instructions[i]!;
+				const handler = handlerByInstruction[b]![i];
+				if (handler !== undefined) {
+					changed = propagate(handler, cur) || changed;
+				}
 				if (instr.type === "createEmpty") {
 					empties.add(instr.registers[0]);
 				} else if (instr.type === "storeLocal" && checkedSlots.has(instr.index)) {

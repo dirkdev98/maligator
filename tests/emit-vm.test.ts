@@ -285,6 +285,16 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("keeps initialized numeric locals native across exception edges", () => {
+		const output = emit(
+			`"use strict"; function classify(value) { let errors = 0; try { value.x; } catch { errors = errors + 1; } return errors + 1; } globalThis.classify = classify;`,
+		);
+		expect(output).toContain("static MalValue mal_compiled_1(");
+		expect(output).not.toContain("mal_vm_op_throw_if_tdz");
+		expect(output).toMatch(/double r\d+;/);
+		expect(output).not.toContain("mal_vm_binary_op");
+	});
+
 	it("omits consolidated key guards only for static property sites", () => {
 		const staticOutput = emit(
 			`"use strict"; function read(object) { object.a = object.a + 1; return object.a + object.b; } globalThis.read = read;`,
