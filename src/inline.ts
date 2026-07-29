@@ -1083,6 +1083,54 @@ function containsTryMarker(instructions: ReadonlyArray<IRInstruction>): boolean 
 	);
 }
 
+function hasStackObjectMaterialization(fn: IRFunction): boolean {
+	return fn.blocks.some((block) =>
+		block.instructions.some(
+			(instruction) =>
+				instruction.type === "return" &&
+				instruction.stackObjectMaterializeSiteId !== undefined,
+		),
+	);
+}
+
+/** Whether control can leave `host` and return to it. A partial-escape target
+ * inlined at such a site executes its allocation repeatedly in one activation;
+ * the current merge analysis then loses the callee's rare materialization path. */
+function blockIsInCycle(fn: IRFunction, host: IRBlock): boolean {
+	const hostIndex = fn.blocks.indexOf(host);
+	if (hostIndex < 0) return false;
+	const successors = fn.blocks.map((block, blockIndex) => {
+		const result = new Set<number>();
+		for (const instruction of block.instructions) {
+			if (instruction.type === "jump" || instruction.type === "jumpIf") {
+				for (const target of instruction.blocks) {
+					if (target >= 0 && target < fn.blocks.length) result.add(target);
+				}
+			}
+		}
+		const last = block.instructions[block.instructions.length - 1];
+		if (
+			last?.type !== "jump" &&
+			last?.type !== "return" &&
+			last?.type !== "throw" &&
+			blockIndex + 1 < fn.blocks.length
+		) {
+			result.add(blockIndex + 1);
+		}
+		return result;
+	});
+	const visited = new Set<number>();
+	const worklist = [...successors[hostIndex]!];
+	while (worklist.length > 0) {
+		const blockIndex = worklist.pop()!;
+		if (blockIndex === hostIndex) return true;
+		if (visited.has(blockIndex)) continue;
+		visited.add(blockIndex);
+		for (const successor of successors[blockIndex]!) worklist.push(successor);
+	}
+	return false;
+}
+
 /** Clone an instruction with every register operand shifted by `offset` (negative
  * sentinels are left as-is). Non-register fields (functionIndex, index, stringIndex,
  * value, blocks, …) are preserved — in particular `loadCaptured`/`storeCaptured`
@@ -1346,6 +1394,9 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 			if (host === undefined) {
 				continue; // already removed/rewritten by a prior step
 			}
+			if (hasStackObjectMaterialization(targetFn) && blockIsInCycle(fn, host)) {
+				continue; // preserve rare materialization instead of allocating every iteration
+			}
 
 			if (singleBlock === null && isCallInTry(fn, host, index)) {
 				continue; // multi-block relocation would move code out of the enclosing try
@@ -1516,6 +1567,12 @@ function inlineGuardedCallSite(
 	}
 	if (host === undefined || isCallInTry(fn, host, index)) {
 		return false; // gone / relocating out of an enclosing try (see multi-block inliner)
+	}
+	if (
+		targetFns.some((target) => hasStackObjectMaterialization(target)) &&
+		blockIsInCycle(fn, host)
+	) {
+		return false;
 	}
 
 	// call.registers = [destination, callee, this, ...arguments]

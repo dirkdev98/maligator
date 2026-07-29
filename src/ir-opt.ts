@@ -188,6 +188,17 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// computed without coercing an object or running user code. Constant jump
 		// cleanup then exposes dead blocks to the existing CFG passes.
 		{ run: optFoldPrimitiveConstants },
+		// Preserve partial-escape facts for the inliner cost check below. The final
+		// residual annotation is rebuilt after the fixpoint; this early analysis only
+		// prevents a hot-loop inline from replacing rare materialization with one heap
+		// allocation per iteration.
+		{
+			run: (program) => {
+				annotateStackObjectSites(program);
+				return false;
+			},
+			requires: "object",
+		},
 		// Rewrite `arr.forEach(cb)` into a guarded inlined loop whose `cb(...)` is a
 		// direct call. Runs before optInlineCalls so that direct call is folded in the
 		// same fixpoint round → the per-call closure + its captured env are eliminated.

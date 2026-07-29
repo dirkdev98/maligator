@@ -281,6 +281,36 @@ describe("closed fixed-shape stack-object proof", () => {
 		).toBe(1);
 	});
 
+	it("preserves partial escape when a helper is called from a loop", () => {
+		const program = optimized(`
+			function run(count) {
+				function partial(value, escape) {
+					const object = { value };
+					if (escape) return object;
+					return typeof object === "object" ? object.value : 0;
+				}
+				let total = 0;
+				for (let i = 0; i < count; i++) {
+					const result = partial(i, i === count - 1);
+					total += typeof result === "object" ? result.value : result;
+				}
+				return total;
+			}
+			globalThis.keep = run;
+		`);
+		expect(stackSiteCount(program)).toBe(1);
+		expect(
+			instructions(program).filter((instruction) => instruction.type === "call"),
+		).toHaveLength(1);
+		expect(
+			instructions(program).filter(
+				(instruction) =>
+					instruction.type === "return" &&
+					instruction.stackObjectMaterializeSiteId !== undefined,
+			),
+		).toHaveLength(1);
+	});
+
 	it.each([
 		[
 			"looped activation",
