@@ -18,6 +18,7 @@ import type {
 	IRTypeofResult,
 } from "./ir.ts";
 import { isSafepoint } from "./liveness.ts";
+import { definedRegister, inferVirtualReps } from "./register-alloc.ts";
 import { debugEnabled, isNil } from "./utils.ts";
 
 /**
@@ -176,6 +177,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		{ run: optDropUnreferencedBlocks },
 		{ run: optLocalsToRegister },
 		{ run: optCopyPropagation },
+		{ run: optEliminateRedundantNumericCoercions },
+		{ run: optForwardSingleUsePrimitiveResults },
+		{ run: optCommonPrimitiveConstants },
+		{ run: optValueNumberPurePredicates },
 		// A fused predicate must execute where the original typeof did: moving the
 		// observation to its later comparison could see a reassigned source.
 		{
@@ -229,6 +234,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// (storeProperty) becomes per-key registers (T7.4). Handled separately from
 		// the immutable pass above, which only fires on never-written records.
 		{ run: optScalarReplaceMutableObjects, requires: "object" },
+		{ run: optValueNumberNumericSubtractions },
 		// Empty functions made unreachable by inlining (their createFunction was
 		// DCE'd) — reclaims dead bodies and unblocks env elimination below.
 		{ run: optEmptyDeadFunctions },
@@ -286,6 +292,234 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	annotateTerminalYieldSites(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);
+}
+
+function optEliminateRedundantNumericCoercions(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const reps = inferVirtualReps(fn);
+		for (const block of fn.blocks) {
+			block.instructions = block.instructions.map((instruction) => {
+				if (
+					instruction.type !== "unary" ||
+					instruction.operator !== "tonumeric" ||
+					reps.get(instruction.registers[1]) !== "number"
+				) {
+					return instruction;
+				}
+				changed = true;
+				return { type: "move", registers: [...instruction.registers] };
+			});
+		}
+	}
+	return changed;
+}
+
+const RETARGETABLE_PRIMITIVE_PRODUCERS = new Set<IRInstruction["type"]>([
+	"createNumber",
+	"createF64",
+	"createBoolean",
+	"createUndefined",
+	"createNull",
+	"createEmpty",
+]);
+
+const NATIVE_NUMERIC_UNARY_OPERATORS = new Set(["-", "+", "~", "increment", "decrement"]);
+const NONTHROWING_NATIVE_BINARY_OPERATORS = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"<",
+	"<=",
+	">",
+	">=",
+	"==",
+	"!=",
+	"===",
+	"!==",
+]);
+
+function optForwardSingleUsePrimitiveResults(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const reps = inferVirtualReps(fn);
+		const registerIndex = buildIRRegisterIndex(fn);
+		for (const block of fn.blocks) {
+			const next: Array<IRInstruction> = [];
+			for (let i = 0; i < block.instructions.length; i++) {
+				const producer = block.instructions[i]!;
+				const move = block.instructions[i + 1];
+				if (
+					move?.type !== "move" ||
+					!("registers" in producer) ||
+					destinationCount(producer) !== 1
+				) {
+					next.push(producer);
+					continue;
+				}
+				const temporary = producer.registers[0]!;
+				const uses = registerIndex.uses.get(temporary) ?? [];
+				const nativeUnary =
+					producer.type === "unary" &&
+					NATIVE_NUMERIC_UNARY_OPERATORS.has(producer.operator) &&
+					reps.get(producer.registers[1]) === "number";
+				const nativeBinary =
+					producer.type === "binary" &&
+					NONTHROWING_NATIVE_BINARY_OPERATORS.has(producer.operator) &&
+					reps.get(producer.registers[1]) === "number" &&
+					reps.get(producer.registers[2]) === "number";
+				if (
+					move.registers[1] !== temporary ||
+					uses.length !== 1 ||
+					uses[0]!.instruction !== move ||
+					uses[0]!.position !== 1 ||
+					(!RETARGETABLE_PRIMITIVE_PRODUCERS.has(producer.type) &&
+						!nativeUnary &&
+						!nativeBinary)
+				) {
+					next.push(producer);
+					continue;
+				}
+				producer.registers[0] = move.registers[0];
+				next.push(producer);
+				i++;
+				changed = true;
+			}
+			block.instructions = next;
+		}
+	}
+	return changed;
+}
+
+function primitiveConstantKey(instruction: IRInstruction): string | undefined {
+	switch (instruction.type) {
+		case "createNumber":
+		case "createF64":
+			return `${instruction.type}:${Object.is(instruction.value, -0) ? "-0" : String(instruction.value)}`;
+		case "createBoolean":
+			return `boolean:${instruction.value}`;
+		case "createUndefined":
+		case "createNull":
+		case "createEmpty":
+			return instruction.type;
+		case "createString":
+			return `string:${instruction.stringIndex}`;
+		default:
+			return undefined;
+	}
+}
+
+function optValueNumberPurePredicates(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			const available = new Map<string, { result: number; source: number }>();
+			block.instructions = block.instructions.map((instruction) => {
+				const definition = definedRegister(instruction);
+				if (definition !== null) {
+					for (const [key, predicate] of available) {
+						if (predicate.result === definition || predicate.source === definition) {
+							available.delete(key);
+						}
+					}
+				}
+				let key: string;
+				let source: number;
+				if (instruction.type === "isEmpty") {
+					source = instruction.registers[1];
+					key = `empty:${source}`;
+				} else if (instruction.type === "typeofCompare") {
+					source = instruction.registers[1];
+					key = `typeof:${source}:${instruction.expected}:${instruction.negated}`;
+				} else {
+					return instruction;
+				}
+				const existing = available.get(key);
+				available.set(key, { result: instruction.registers[0], source });
+				if (existing === undefined) return instruction;
+				changed = true;
+				return { type: "move", registers: [instruction.registers[0], existing.result] };
+			});
+		}
+	}
+	return changed;
+}
+
+function optCommonPrimitiveConstants(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const definitions = buildIRRegisterIndex(fn).definitions;
+		for (const block of fn.blocks) {
+			const available = new Map<string, number>();
+			block.instructions = block.instructions.map((instruction) => {
+				const definition = definedRegister(instruction);
+				const key = primitiveConstantKey(instruction);
+				if (key === undefined || definition === null) return instruction;
+				const existing = available.get(key);
+				if (existing === undefined) {
+					if (definitions.get(definition)?.length === 1) available.set(key, definition);
+					return instruction;
+				}
+				changed = true;
+				return { type: "move", registers: [definition, existing] };
+			});
+		}
+	}
+	return changed;
+}
+
+function optValueNumberNumericSubtractions(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const reps = inferVirtualReps(fn);
+		for (const block of fn.blocks) {
+			const available = new Map<
+				string,
+				{ result: number; left: number; right: number }
+			>();
+			block.instructions = block.instructions.map((instruction) => {
+				const definition = definedRegister(instruction);
+				if (definition !== null) {
+					for (const [key, expression] of available) {
+						if (
+							expression.result === definition ||
+							expression.left === definition ||
+							expression.right === definition
+						) {
+							available.delete(key);
+						}
+					}
+				}
+				if (
+					instruction.type !== "binary" ||
+					instruction.operator !== "-" ||
+					reps.get(instruction.registers[1]) !== "number" ||
+					reps.get(instruction.registers[2]) !== "number"
+				) {
+					return instruction;
+				}
+				const key = `${instruction.registers[1]}:${instruction.registers[2]}`;
+				const existing = available.get(key);
+				available.set(key, {
+					result: instruction.registers[0],
+					left: instruction.registers[1],
+					right: instruction.registers[2],
+				});
+				if (existing === undefined) return instruction;
+				changed = true;
+				return { type: "move", registers: [instruction.registers[0], existing.result] };
+			});
+		}
+	}
+	return changed;
 }
 
 function optFuseObjectRestLeadingSpread(program: IntermediateProgram): boolean {
@@ -1724,6 +1958,11 @@ export const irOptTestHooks = {
 	combineLinearBlocksInFunction,
 	eliminateRedundantTdzChecksInFunction,
 	foldPrimitiveConstants: optFoldPrimitiveConstants,
+	eliminateRedundantNumericCoercions: optEliminateRedundantNumericCoercions,
+	forwardSingleUsePrimitiveResults: optForwardSingleUsePrimitiveResults,
+	commonPrimitiveConstants: optCommonPrimitiveConstants,
+	valueNumberPurePredicates: optValueNumberPurePredicates,
+	valueNumberNumericSubtractions: optValueNumberNumericSubtractions,
 	resetOptimizationIndexBuildCounts() {
 		optimizationIndexBuildCounts.typeofComparisons = 0;
 		optimizationIndexBuildCounts.capturedSlots = 0;

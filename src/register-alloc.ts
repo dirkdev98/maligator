@@ -22,7 +22,7 @@ export function allocateRegisters(program: IntermediateProgram) {
  * would demote it to `boxed`, collapsing the native fast paths — which is what
  * made hot `%`/comparison results (and the accumulators they feed) box.
  */
-type RegisterRep = "boxed" | "number" | "boolean";
+export type RegisterRep = "boxed" | "number" | "boolean";
 
 /** Comparison operators emit-c lowers to a native C bool. Result rep: boolean. */
 const COMPARE_OPERATORS = new Set(["<", "<=", ">", ">=", "===", "==", "!==", "!="]);
@@ -232,7 +232,7 @@ export function definedRegister(instruction: IRInstruction): number | null {
  * arguments, so they start (and stay) `boxed`; a register never resolved (only
  * ever a non-first / iterator output, or unwritten) defaults to `boxed`.
  */
-function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
+export function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
 	const reps = new Map<number, RegisterRep | null>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
