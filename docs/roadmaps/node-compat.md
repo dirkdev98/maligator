@@ -33,7 +33,8 @@ observable Node API adapters over that substrate.
 
 - [ ] Close measured Express gaps without regressing fixture behavior or bare-server
       throughput. Profile call dispatch and object shaping; inherited-value caching
-      depends on the per-chain validity cells owned by [`TODO.md`](../../TODO.md).
+      depends on the per-chain validity cells owned by the
+      [compiler optimization roadmap](compiler.md).
 
 ## Active ecosystem work
 

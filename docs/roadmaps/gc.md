@@ -14,7 +14,7 @@ marking on the mutator thread. This file contains only unfinished work.
 ## Queued allocation elimination
 
 Stack-object emission, partial escape, and region-allocation experiments are owned
-by the compiler/runtime performance checklist in [`TODO.md`](../../TODO.md).
+by the [compiler optimization roadmap](compiler.md).
 
 - [ ] Deterministically release non-escaping RegExp and ICU handles at compiled
       scope end after the escape work can prove ownership.
