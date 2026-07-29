@@ -105,6 +105,21 @@ function readPair(object) {
 	return object.alpha + object.beta;
 }
 
+function stackObjectProbe(value, escape) {
+	const object = { value };
+	if (escape) return object;
+	return typeof object === "object" ? object.value : 0;
+}
+
+function runStackObjectProbe(count) {
+	let result = 0;
+	for (let i = 0; i < count; i++) {
+		const value = stackObjectProbe(i, i === count - 1);
+		result += typeof value === "object" ? value.value : value;
+	}
+	return result;
+}
+
 const polymorphicObjects = [
 	{ alpha: 1, beta: 2 },
 	{ extra0: 0, alpha: 2, beta: 3 },
@@ -112,6 +127,7 @@ const polymorphicObjects = [
 	{ extra0: 0, extra1: 1, extra2: 2, alpha: 4, beta: 5 },
 ];
 let total = 0;
+total += runStackObjectProbe(8);
 for (let i = 0; i < 2000; i++) {
 	const object = objects[i % objects.length];
 	total += object.alpha;

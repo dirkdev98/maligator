@@ -118,6 +118,13 @@ describe("opt-in performance statistics", () => {
 		const properties = reportLine(result.stderr, "[perf-property-stats]");
 		expect(field(properties, "ensure_calls")).toBeGreaterThan(0);
 		expect(field(properties, "ensure_inserts")).toBeGreaterThan(0);
+		const allocations = reportLine(result.stderr, "[perf-allocation-stats]");
+		expect(
+			field(allocations, "empty_objects") + field(allocations, "shaped_objects"),
+		).toBeGreaterThan(0);
+		expect(field(allocations, "stack_objects")).toBeGreaterThan(0);
+		expect(field(allocations, "stack_materializations")).toBe(1);
+		expect(result.stderr).not.toContain("name=Intl.Segmenter ");
 
 		for (const role of ["object", "atoms", "map"]) {
 			const table = reportLine(result.stderr, "[perf-table-stats]", `role=${role} `);

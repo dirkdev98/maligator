@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compileSourceToBuffer } from "../src/compile.ts";
 import { emitVmDefinition } from "../src/emit-vm.ts";
+import { debugStackAlloc } from "../src/escape.ts";
+import { debugInlinableCalls } from "../src/inline.ts";
 import { annotateStackObjectSites, executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { IntermediateProgram, IRInstruction } from "../src/ir.ts";
@@ -309,6 +311,10 @@ describe("closed fixed-shape stack-object proof", () => {
 					instruction.stackObjectMaterializeSiteId !== undefined,
 			),
 		).toHaveLength(1);
+		expect(debugInlinableCalls(program)).toContain("kept call: partial escape in cycle");
+		const stackAlloc = debugStackAlloc(program);
+		expect(stackAlloc).toContain("native-stack slots=1 materializing-returns=1");
+		expect(stackAlloc).toContain("1 native-stack");
 	});
 
 	it.each([

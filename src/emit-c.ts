@@ -1676,6 +1676,7 @@ function emitInstruction(
 				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`, throwCheck];
 			}
 			return [
+				"mal_perf_stack_object_init();",
 				`${stackObjectSite.objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = mal_shape_empty(), .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = nullptr, .overflow = nullptr };`,
 				`r${instruction.dst} = mal_value_from_object(&${stackObjectSite.objectName});`,
 			];
@@ -1701,6 +1702,7 @@ function emitInstruction(
 				...shape,
 				// Direct initialization is essential: this storage never enters the heap,
 				// and IMMORTAL+WHITE makes tracing/finalization/remembering skip the header.
+				"mal_perf_stack_object_init();",
 				`${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = &__gc_slots[${slotsOffset}], .overflow = nullptr };`,
 				...instruction.valueRegisters.map(
 					(register, index) => `__gc_slots[${slotsOffset + index}] = ${boxed(register)};`,

@@ -132,6 +132,15 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-allocation-stats] empty_objects=%llu shaped_objects=%llu "
+        "stack_objects=%llu stack_materializations=%llu\n",
+        (unsigned long long) mal_perf_stats.object_empty_creations,
+        (unsigned long long) mal_perf_stats.object_shaped_creations,
+        (unsigned long long) mal_perf_stats.stack_object_initializations,
+        (unsigned long long) mal_perf_stats.stack_object_materializations
+    );
+    fprintf(
+        stderr,
         "[perf-binary-stats] arithmetic_hits=%llu arithmetic_fallbacks=%llu "
         "comparison_hits=%llu comparison_fallbacks=%llu bitwise_hits=%llu "
         "bitwise_fallbacks=%llu other_fallbacks=%llu\n",
@@ -449,6 +458,14 @@ void mal_perf_stats_init(void) {
         registered = true;
         atexit(mal_perf_stats_print);
     }
+}
+
+void mal_perf_stats_reset(void) {
+    if (!mal_perf_stats_enabled) {
+        return;
+    }
+    memset(&mal_perf_stats, 0, sizeof(mal_perf_stats));
+    memset(mal_perf_intrinsic_names, 0, sizeof(mal_perf_intrinsic_names));
 }
 #else
 // Keep dead instrumentation references valid even in unoptimized diagnostic builds.

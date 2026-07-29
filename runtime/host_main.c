@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "perf_stats.h"
 
 #include <stdio.h>  // setvbuf
 #include <stdlib.h> // getenv
@@ -59,6 +60,7 @@ int main(int argc, char **argv) {
     mal_vm_run_host_installs(&vm, &launch);
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
+    mal_perf_stats_reset();
     mal_vm_run(&vm, callable);      // synchronous top level + its microtask drain
     mal_host_run_event_loop(&vm);   // timers / I/O + their microtasks, until idle
 

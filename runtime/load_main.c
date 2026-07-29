@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "perf_stats.h"
 #include "vm_load.h"
 #include "bigint128.h"
 
@@ -115,6 +116,7 @@ int main(int argc, char **argv) {
     mal_vm_run_host_installs(&vm, &launch);
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
+    mal_perf_stats_reset();
     mal_vm_run(&vm, callable);
     int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
 

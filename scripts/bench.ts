@@ -91,6 +91,22 @@ interface LanguageMetrics {
 	malMs: number;
 	nodeMs: number;
 	ratio: number;
+	collections: number;
+	allocatedMb: number;
+	emptyObjects: number;
+	shapedObjects: number;
+	stackObjects: number;
+	stackMaterializations: number;
+	callProbes: number;
+	callMisses: number;
+	loadMonoHits: number;
+	loadRegionHits: number;
+	loadInheritedHits: number;
+	loadWatchedHits: number;
+	loadFallbacks: number;
+	storeMonoHits: number;
+	storeRegionHits: number;
+	storeFallbacks: number;
 }
 interface CompilerMetrics {
 	wallMs: number;
@@ -462,7 +478,55 @@ function benchLanguage(runs: number): LanguageMetrics {
 	});
 	const malMs = timeCommand(binary, [], runs);
 	const nodeMs = timeNodeComparison("language", "bench/language.js", runs);
-	return { malMs, nodeMs, ratio: malMs / nodeMs };
+	const gcResult = spawnSync(binary, [], {
+		env: { ...process.env, MAL_GC_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const previousPerfStats = process.env.MAL_PERF_STATS;
+	process.env.MAL_PERF_STATS = "1";
+	let perfBinary: string;
+	try {
+		perfBinary = buildNativeBinary({
+			fixture: "bench/language.js",
+			name: "bench-language-perf",
+		});
+	} finally {
+		if (previousPerfStats === undefined) delete process.env.MAL_PERF_STATS;
+		else process.env.MAL_PERF_STATS = previousPerfStats;
+	}
+	const perfResult = spawnSync(perfBinary, [], {
+		env: { ...process.env, MAL_PERF_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const gcStderr = gcResult.stderr ?? "";
+	const perfStderr = perfResult.stderr ?? "";
+	return {
+		malMs,
+		nodeMs,
+		ratio: malMs / nodeMs,
+		collections: parseGcStat(gcStderr, "collections"),
+		allocatedMb: parseGcStat(gcStderr, "allocated_bytes") / (1024 * 1024),
+		emptyObjects: parsePerfStat(perfStderr, "perf-allocation-stats", "empty_objects"),
+		shapedObjects: parsePerfStat(perfStderr, "perf-allocation-stats", "shaped_objects"),
+		stackObjects: parsePerfStat(perfStderr, "perf-allocation-stats", "stack_objects"),
+		stackMaterializations: parsePerfStat(
+			perfStderr,
+			"perf-allocation-stats",
+			"stack_materializations",
+		),
+		callProbes: parsePerfStat(perfStderr, "perf-call-cache-stats", "probes"),
+		callMisses: parsePerfStat(perfStderr, "perf-call-cache-stats", "dispatch_misses"),
+		loadMonoHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_mono_hits"),
+		loadRegionHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_region_hits"),
+		loadInheritedHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_inherited_hits"),
+		loadWatchedHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_watched_hits"),
+		loadFallbacks: parsePerfStat(perfStderr, "perf-ic-stats", "load_fallbacks"),
+		storeMonoHits: parsePerfStat(perfStderr, "perf-ic-stats", "store_mono_hits"),
+		storeRegionHits: parsePerfStat(perfStderr, "perf-ic-stats", "store_region_hits"),
+		storeFallbacks: parsePerfStat(perfStderr, "perf-ic-stats", "store_fallbacks"),
+	};
 }
 
 // ---- module (const-helper allocation; vs V8) ------------------------------
@@ -472,6 +536,12 @@ function parseGcStat(stderr: string, field: string): number {
 	const line = stderr.split("\n").find((l) => l.includes("[gc-stats]"));
 	const m = line?.match(new RegExp(`${field}=([0-9.]+)`));
 	return m ? Number(m[1]) : 0;
+}
+
+function parsePerfStat(stderr: string, group: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes(`[${group}]`));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
 }
 
 function parsePerfArrayStat(stderr: string, field: string): number {
@@ -1274,6 +1344,21 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		console.log(`  node      ${entry.language.nodeMs.toFixed(1)}ms`);
 		console.log(
 			`  ratio     ${entry.language.ratio.toFixed(2)}x${delta(entry.language.ratio, p?.ratio)}`,
+		);
+		console.log(
+			`  managed   ${entry.language.collections} collections, ${entry.language.allocatedMb.toFixed(1)}MB allocated${delta(entry.language.allocatedMb, p?.allocatedMb)}`,
+		);
+		console.log(
+			`  objects   ${entry.language.emptyObjects} empty, ${entry.language.shapedObjects} shaped, ${entry.language.stackObjects} stack, ${entry.language.stackMaterializations} materialized`,
+		);
+		console.log(
+			`  calls     ${entry.language.callProbes} cache probes, ${entry.language.callMisses} misses`,
+		);
+		console.log(
+			`  loads     ${entry.language.loadMonoHits} mono, ${entry.language.loadRegionHits} region, ${entry.language.loadInheritedHits} inherited, ${entry.language.loadWatchedHits} watched, ${entry.language.loadFallbacks} fallback`,
+		);
+		console.log(
+			`  stores    ${entry.language.storeMonoHits} mono, ${entry.language.storeRegionHits} region, ${entry.language.storeFallbacks} fallback`,
 		);
 	}
 	if (entry.module) {

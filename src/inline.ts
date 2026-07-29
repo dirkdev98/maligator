@@ -977,6 +977,7 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 /** Cap on a caller's instruction count to bound inline expansion (mutual recursion
  * etc. inlines a few levels then stops). */
 const MAX_CALLER_INSTRUCTIONS = 2000;
+const partialEscapeInlineBlocked = new WeakSet<IRInstruction>();
 
 /**
  * If `fn` is a single straight-line block ending in `return` (no branches, no
@@ -1395,6 +1396,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 				continue; // already removed/rewritten by a prior step
 			}
 			if (hasStackObjectMaterialization(targetFn) && blockIsInCycle(fn, host)) {
+				partialEscapeInlineBlocked.add(call);
 				continue; // preserve rare materialization instead of allocating every iteration
 			}
 
@@ -1572,6 +1574,7 @@ function inlineGuardedCallSite(
 		targetFns.some((target) => hasStackObjectMaterialization(target)) &&
 		blockIsInCycle(fn, host)
 	) {
+		partialEscapeInlineBlocked.add(call);
 		return false;
 	}
 
@@ -2615,7 +2618,14 @@ export function debugInlinableCalls(program: IntermediateProgram): string {
 			continue;
 		}
 		output += `fn#${fn.functionIndex}: ${candidates.length} inlinable call(s) → ${candidates
-			.map((candidate) => `#${candidate.target}`)
+			.map(
+				(candidate) =>
+					`#${candidate.target}${
+						partialEscapeInlineBlocked.has(candidate.call)
+							? " (kept call: partial escape in cycle)"
+							: ""
+					}`,
+			)
 			.join(", ")}\n`;
 	}
 	log.info(output || "(no inlinable calls)\n");

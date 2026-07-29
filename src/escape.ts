@@ -963,6 +963,88 @@ export function debugStackAlloc(program: IntermediateProgram): string {
 	lines.push(
 		`=== ${stackCount} stack-only (identity observed) + ${scalarCount} also-scalar-replaceable ===`,
 	);
+
+	lines.push("=== residual object allocation decisions ===");
+	const functionName = (fn: IRFunction): string => {
+		const decoded =
+			fn.nameStringIndex >= 0 && fn.nameStringIndex < program.stringConstants.length
+				? decodeStringConstant(program, fn.nameStringIndex)
+				: "";
+		return decoded || "<anon>";
+	};
+	const sourceLocation = (position: number): string => {
+		const parts: Array<string> = [];
+		let current = position;
+		while (current >= 0) {
+			const sourcePosition = program.sourcePositions[current];
+			if (sourcePosition === undefined) break;
+			const inlined =
+				sourcePosition.inlinedFunctionIndex === undefined
+					? ""
+					: `${functionName(program.functions[sourcePosition.inlinedFunctionIndex]!)}@`;
+			parts.push(`${inlined}${sourcePosition.line}:${sourcePosition.column}`);
+			current = sourcePosition.callerPosId ?? -1;
+		}
+		return parts.length === 0 ? "?:?" : parts.join(" <- ");
+	};
+	let nativeStackCount = 0;
+	let residualHeapCount = 0;
+	for (const fn of program.functions) {
+		const ctx = analysis.contexts.get(fn.functionIndex)!;
+		const name = functionName(fn);
+		let wroteFunction = false;
+		for (const block of fn.blocks) {
+			let position = -1;
+			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") {
+					position = instruction.pos;
+					continue;
+				}
+				if (
+					instruction.type !== "createObject" &&
+					instruction.type !== "createObjectShaped"
+				) {
+					continue;
+				}
+				if (!wroteFunction) {
+					lines.push(`fn#${fn.functionIndex} ${name}`);
+					wroteFunction = true;
+				}
+				const source = sourceLocation(position);
+				const register = instruction.registers[0];
+				if (instruction.stackObject) {
+					const siteId = instruction.stackObjectSiteId;
+					const materializations = fn.blocks.reduce(
+						(sum, candidateBlock) =>
+							sum +
+							candidateBlock.instructions.filter(
+								(candidate) =>
+									candidate.type === "return" &&
+									candidate.stackObjectMaterializeSiteId === siteId,
+							).length,
+						0,
+					);
+					const slots =
+						instruction.type === "createObjectShaped"
+							? instruction.keyStringIndices.length
+							: 0;
+					lines.push(
+						`    ${source} r${register} ${instruction.type}: native-stack slots=${slots} materializing-returns=${materializations}`,
+					);
+					nativeStackCount++;
+				} else {
+					const escape = escapeOfRegister(program, fn, ctx, register, analysis.summaries);
+					lines.push(
+						`    ${source} r${register} ${instruction.type}: heap-residual escape=${escape}`,
+					);
+					residualHeapCount++;
+				}
+			}
+		}
+	}
+	lines.push(
+		`=== ${nativeStackCount} native-stack + ${residualHeapCount} heap-residual object sites ===`,
+	);
 	return lines.join("\n");
 }
 

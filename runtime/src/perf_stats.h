@@ -82,6 +82,10 @@ typedef struct MalPerfStats {
     u64 property_ensure_calls;
     u64 property_ensure_inserts;
     u64 property_ensure_hits;
+    u64 object_empty_creations;
+    u64 object_shaped_creations;
+    u64 stack_object_initializations;
+    u64 stack_object_materializations;
 
     u64 binary_number_arithmetic_hits;
     u64 binary_number_arithmetic_fallbacks;
@@ -255,6 +259,7 @@ extern MalPerfStats mal_perf_stats;
 #if MAL_PERF_STATS
 extern bool mal_perf_stats_enabled;
 void mal_perf_stats_init(void);
+void mal_perf_stats_reset(void);
 void mal_perf_intrinsic_name(const byte *name, usize length);
 
 #define MAL_PERF_COUNT(field) \
@@ -274,6 +279,7 @@ void mal_perf_intrinsic_name(const byte *name, usize length);
 #define mal_perf_stats_enabled false
 
 static inline void mal_perf_stats_init(void) {}
+static inline void mal_perf_stats_reset(void) {}
 static inline void mal_perf_intrinsic_name(const byte *name, usize length) {
     (void) name;
     (void) length;
@@ -313,4 +319,8 @@ static inline void mal_perf_ic_store_mono_hit(void) {
 
 static inline void mal_perf_ic_store_region_hit(void) {
     MAL_PERF_COUNT(ic_store_region_hits);
+}
+
+static inline void mal_perf_stack_object_init(void) {
+    MAL_PERF_COUNT(stack_object_initializations);
 }
