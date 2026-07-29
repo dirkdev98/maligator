@@ -6,12 +6,12 @@
 #include "table.h"
 
 /**
- * Cap on inline shape slots. Beyond this an object drops to dictionary mode:
- * shape lookup is a linear scan, so large objects are faster as a hash table,
- * and the cap also bounds shape-tree growth under churn. The static
- * object-literal optimization only applies at or below this count.
+ * Dynamic keys stop extending shapes at the normal limit, bounding shape-tree
+ * growth under churn. Immortal compiler/runtime keys may use the wider absolute
+ * limit so stable framework records do not dictionarize at their 33rd field.
  */
-#define MAL_SHAPE_MAX_INLINE_SLOTS 32
+#define MAL_SHAPE_DYNAMIC_INLINE_SLOTS 32
+#define MAL_SHAPE_MAX_INLINE_SLOTS 64
 
 /**
  * Hidden-class shape support. A MalShape is the
@@ -75,6 +75,13 @@ struct MalShape {
     /** Children, one per distinct added (key, attrs); singly linked. */
     MalShapeTransition *transitions;
 };
+
+static inline bool mal_shape_can_add_property(const MalShape *shape, MalKey key) {
+    if (shape->inline_count < MAL_SHAPE_DYNAMIC_INLINE_SLOTS) return true;
+    return shape->inline_count < MAL_SHAPE_MAX_INLINE_SLOTS
+        && key.kind == MAL_KEY_STRING && mal_value_is_string(key.value)
+        && mal_value_to_heap(key.value)->storage == MAL_HEAP_STORAGE_IMMORTAL;
+}
 
 static_assert(sizeof(MalShape) <= 32, "MalShape outgrew its 32-byte size class");
 

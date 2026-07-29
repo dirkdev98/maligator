@@ -378,7 +378,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             // An attribute transition needs the dictionary's full descriptor
             // compatibility machinery.
         } else if (mal_object_desc_is_default_data(desc) && object->overflow == nullptr
-            && object->shape->inline_count < MAL_SHAPE_MAX_INLINE_SLOTS) {
+            && mal_shape_can_add_property(object->shape, key)) {
             // Pure shaped (or empty) object with no dictionary props: grow the
             // shape and the inline slots. Coallocated managed cells cannot move,
             // so their first growth migrates to a separately-owned buffer.

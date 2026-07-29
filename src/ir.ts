@@ -10831,7 +10831,7 @@ function staticObjectShape(
 	objectExpression: ESTree.ObjectExpression,
 ): { names: Array<string>; values: Array<ESTree.Expression> } | null {
 	const properties = objectExpression.properties;
-	if (properties.length < 1 || properties.length > 32) {
+	if (properties.length < 1 || properties.length > 64) {
 		return null;
 	}
 	const names: Array<string> = [];
@@ -10845,9 +10845,8 @@ function staticObjectShape(
 		if (name === undefined || name === "__proto__" || seen.has(name)) {
 			return null;
 		}
-		// Exclude any index-like name (a canonical numeric string is an integer-
-		// indexed key, which lives in the overflow table, not a shape slot).
-		if (!Number.isNaN(Number(name))) {
+		// Canonical array indices live in the overflow table, not a shape slot.
+		if (isArrayIndexName(name)) {
 			return null;
 		}
 		seen.add(name);

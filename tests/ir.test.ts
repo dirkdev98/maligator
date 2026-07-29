@@ -33,6 +33,37 @@ function instructionsOf(fn: IRFunction): Array<IRInstruction> {
 	return fn.blocks.flatMap((block) => block.instructions);
 }
 
+test("bulk-constructs wide static-key object literals", () => {
+	const properties = Array.from(
+		{ length: 48 },
+		(_, index) => `field${index}: seed + ${index}`,
+	).join(",");
+	const program = compileScript(
+		`function make(seed) { return { ${properties} }; } globalThis.make = make;`,
+	);
+	executeIROptimizations(program);
+	const instructions = program.functions.flatMap(instructionsOf);
+	const shaped = instructions.find(
+		(instruction) =>
+			instruction.type === "createObjectShaped" &&
+			instruction.keyStringIndices.length === 48,
+	);
+	expect(shaped).toBeDefined();
+});
+
+test("accepts non-index numeric-looking names in static shapes", () => {
+	const program = compileScript(`globalThis.value = { "01": 1, "1e3": 2, "-1": 3 };`);
+	executeIROptimizations(program);
+	const instructions = program.functions.flatMap(instructionsOf);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "createObjectShaped" &&
+				instruction.keyStringIndices.length === 3,
+		),
+	).toBe(true);
+});
+
 test("reuses an otherwise-unobserved object rest value for a leading spread", () => {
 	const program = compileScript(`
 		function normalize({ id, ...rest }) {
