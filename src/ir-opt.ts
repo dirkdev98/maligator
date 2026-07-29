@@ -179,8 +179,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		{ run: optCopyPropagation },
 		{ run: optEliminateRedundantNumericCoercions },
 		{ run: optForwardSingleUsePrimitiveResults },
-		{ run: optCommonPrimitiveConstants },
-		{ run: optValueNumberPurePredicates },
+		{ run: optValueNumberIsEmptyChecks },
 		// A fused predicate must execute where the original typeof did: moving the
 		// observation to its later comparison could see a reassigned source.
 		{
@@ -279,6 +278,12 @@ export function executeIROptimizations(program: IntermediateProgram) {
 			break;
 		}
 	}
+
+	// Generic sharing deliberately runs after the transform fixpoint: canonical
+	// constant producers remain visible to every specialized fusion first.
+	optCommonPrimitiveConstants(program);
+	optCopyPropagation(program);
+	optDeadInstructionElimination(program);
 
 	// This is intentionally outside the transform fixpoint: it classifies the
 	// residual identity-observed objects left after scalar replacement, and keys
@@ -417,7 +422,7 @@ function primitiveConstantKey(instruction: IRInstruction): string | undefined {
 	}
 }
 
-function optValueNumberPurePredicates(program: IntermediateProgram): boolean {
+function optValueNumberIsEmptyChecks(program: IntermediateProgram): boolean {
 	let changed = false;
 	for (const fn of program.functions) {
 		for (const block of fn.blocks) {
@@ -431,17 +436,9 @@ function optValueNumberPurePredicates(program: IntermediateProgram): boolean {
 						}
 					}
 				}
-				let key: string;
-				let source: number;
-				if (instruction.type === "isEmpty") {
-					source = instruction.registers[1];
-					key = `empty:${source}`;
-				} else if (instruction.type === "typeofCompare") {
-					source = instruction.registers[1];
-					key = `typeof:${source}:${instruction.expected}:${instruction.negated}`;
-				} else {
-					return instruction;
-				}
+				if (instruction.type !== "isEmpty") return instruction;
+				const source = instruction.registers[1];
+				const key = `empty:${source}`;
 				const existing = available.get(key);
 				available.set(key, { result: instruction.registers[0], source });
 				if (existing === undefined) return instruction;
@@ -460,6 +457,10 @@ function optCommonPrimitiveConstants(program: IntermediateProgram): boolean {
 		for (const block of fn.blocks) {
 			const available = new Map<string, number>();
 			block.instructions = block.instructions.map((instruction) => {
+				if (instruction.type === "yield" || instruction.type === "await") {
+					available.clear();
+					return instruction;
+				}
 				const definition = definedRegister(instruction);
 				const key = primitiveConstantKey(instruction);
 				if (key === undefined || definition === null) return instruction;
@@ -579,6 +580,9 @@ function optFuseObjectRestLeadingSpread(program: IntermediateProgram): boolean {
 const NATIVE_NUMERIC_FUSION_OPERATORS = new Set<
 	Extract<IRInstruction, { type: "binary" }>["operator"]
 >(["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", ">>>"]);
+const NATIVE_NUMERIC_FUSION_FINISH_OPERATORS = new Set<
+	Extract<IRInstruction, { type: "binary" }>["operator"]
+>([...NATIVE_NUMERIC_FUSION_OPERATORS, "<", "<=", ">", ">=", "==", "!=", "===", "!=="]);
 
 /** Mark pairs where a number-producing binary result has exactly one use in a
  * later binary in the same block. The native backend keeps the first numeric
@@ -608,7 +612,7 @@ export function annotateNativeNumericFusions(program: IntermediateProgram): void
 				if (
 					finish.type !== "binary" ||
 					(use.position !== 1 && use.position !== 2) ||
-					!NATIVE_NUMERIC_FUSION_OPERATORS.has(finish.operator) ||
+					!NATIVE_NUMERIC_FUSION_FINISH_OPERATORS.has(finish.operator) ||
 					participating.has(finish)
 				) {
 					continue;
@@ -1961,7 +1965,7 @@ export const irOptTestHooks = {
 	eliminateRedundantNumericCoercions: optEliminateRedundantNumericCoercions,
 	forwardSingleUsePrimitiveResults: optForwardSingleUsePrimitiveResults,
 	commonPrimitiveConstants: optCommonPrimitiveConstants,
-	valueNumberPurePredicates: optValueNumberPurePredicates,
+	valueNumberIsEmptyChecks: optValueNumberIsEmptyChecks,
 	valueNumberNumericSubtractions: optValueNumberNumericSubtractions,
 	resetOptimizationIndexBuildCounts() {
 		optimizationIndexBuildCounts.typeofComparisons = 0;

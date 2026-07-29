@@ -806,6 +806,16 @@ static bool mal_json_consume_keyword(MalJsonParser *parser, const byte *keyword)
 
 static MalValue mal_json_parse_string(MalJsonParser *parser) {
     // The opening quote was already consumed.
+    usize start = parser->position;
+    for (usize position = start; position < parser->length; position++) {
+        c16 code_unit = parser->code_units[position];
+        if (code_unit == '"') {
+            parser->position = position + 1;
+            return mal_value_from_string(mal_string_new_copy(
+                &parser->vm->heap, &parser->code_units[start], position - start));
+        }
+        if (code_unit == '\\' || code_unit < 0x20) break;
+    }
     MalJsonBuilder builder = {.vm = parser->vm};
 
     while (parser->position < parser->length) {

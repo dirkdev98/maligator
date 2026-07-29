@@ -1020,6 +1020,16 @@ static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, M
     return false;
 }
 
+/** A successful dense own-element lookup proves `index in array`; every miss must
+ * use the general path because a hole can still be supplied by the prototype. */
+static inline bool mal_vm_array_try_has(const MalArrayObject *arr, f64 index) {
+    if (arr && index >= 0 && index < (f64) UINT32_MAX) {
+        u32 i = (u32) index;
+        return (f64) i == index && mal_array_object_dense_has(arr, i);
+    }
+    return false;
+}
+
 /**
  * Attempt a dense-vector store of `arr[index] = value`. Returns true when applied
  * (an overwrite of a present element — own data shadows any inherited setter — or a

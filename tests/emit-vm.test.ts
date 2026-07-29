@@ -230,7 +230,7 @@ describe("native update-expression representation", () => {
 			`"use strict"; function sum(array) { let total = 0; for (let i = 0; i < array.length; i++) total += array[i]; return total; } globalThis.sum = sum;`,
 		);
 		expect(output).toContain("mal_vm_array_try_load");
-		expect(output).toContain("+ 1.0;");
+		expect(output).toContain("+= 1.0;");
 		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 	});
@@ -285,6 +285,29 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("keeps arithmetic results native through comparisons", () => {
+		const output = emit(
+			`"use strict"; function divisible(value) { return value % 7 === 0; } globalThis.divisible = divisible;`,
+		);
+		expect(output).toMatch(/__nf_(\d+)_value = mal_number_remainder/);
+		expect(output).toMatch(/__nf_\d+_value == r\d+/);
+	});
+
+	it("uses compound assignments for in-place numeric updates", () => {
+		const output = emit(
+			`"use strict"; function count(limit) { let value = 0; while (value < limit) value++; return value; } globalThis.count = count;`,
+		);
+		expect(output).toMatch(/r\d+ \+= 1\.0;/);
+	});
+
+	it("takes a dense own-element fast path for the in operator", () => {
+		const output = emit(
+			`"use strict"; function has(array, index) { return index in array; } globalThis.has = has;`,
+		);
+		expect(output).toContain("mal_vm_array_try_has");
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_IN");
+	});
+
 	it("keeps initialized numeric locals native across exception edges", () => {
 		const output = emit(
 			`"use strict"; function classify(value) { let errors = 0; try { value.x; } catch { errors = errors + 1; } return errors + 1; } globalThis.classify = classify;`,
@@ -324,7 +347,7 @@ describe("native update-expression representation", () => {
 
 	it("checks completion only inside speculative numeric slow paths", () => {
 		const output = emit(
-			`"use strict"; function calculate(value) { return value + 1 < 10; } globalThis.calculate = calculate;`,
+			`"use strict"; function calculate(value) { return value + 1; } globalThis.calculate = calculate;`,
 		);
 		expect(output).toMatch(
 			/if \(mal_ops_is_number\([^\n]+\) \{[\s\S]*?\} else \{[\s\S]*?mal_vm_binary_op[\s\S]*?completion\.kind/,

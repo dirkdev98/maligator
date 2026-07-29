@@ -53,7 +53,7 @@ test("value-numbers repeated pure predicates within a block", () => {
 		{ type: "isEmpty", registers: [2, 0] },
 	]);
 
-	expect(irOptTestHooks.valueNumberPurePredicates(program)).toBe(true);
+	expect(irOptTestHooks.valueNumberIsEmptyChecks(program)).toBe(true);
 	expect(program.functions[0]!.blocks[0]!.instructions[2]).toEqual({
 		type: "move",
 		registers: [2, 1],

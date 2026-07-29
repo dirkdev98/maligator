@@ -2054,6 +2054,19 @@ function emitInstruction(
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			const fusion = instruction.nativeNumericFusion;
+			if (operator === "in") {
+				const numberGuard = leftIsNum ? "" : `mal_ops_is_number(${boxed(left)}) && `;
+				return [
+					`if (${numberGuard}mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`})) {`,
+					dstIsBool ? `  r${dst} = true;` : `  r${dst} = MAL_VALUE_TRUE;`,
+					`} else {`,
+					dstIsBool
+						? `  r${dst} = mal_value_to_boolean(mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)}));`
+						: `  r${dst} = mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)});`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
 
 			if (fusion?.role === "start" && reps[dst] !== "number") {
 				const nativeExpr = nativeNumberExpr(
@@ -2097,6 +2110,30 @@ function emitInstruction(
 						reps[external] === "number"
 							? num(external)
 							: `mal_ops_number_as_f64(${boxed(external)})`;
+					const compare = NATIVE_COMPARE[operator];
+					if (compare !== undefined) {
+						const guard =
+							reps[external] === "number"
+								? `__nf_${fusion.id}_ok`
+								: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
+						const fast = firstOnLeft
+							? `__nf_${fusion.id}_value ${compare} ${externalExpr}`
+							: `${externalExpr} ${compare} __nf_${fusion.id}_value`;
+						const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
+						return [
+							`if (${guard}) {`,
+							reps[dst] === "boolean"
+								? `  r${dst} = ${fast};`
+								: `  r${dst} = mal_value_new_boolean(${fast});`,
+							`} else {`,
+							`  if (__nf_${fusion.id}_ok) r${first.dst} = mal_ops_number_value(__nf_${fusion.id}_value);`,
+							reps[dst] === "boolean"
+								? `  r${dst} = mal_value_to_boolean(${slow});`
+								: `  r${dst} = ${slow};`,
+							...(binaryOpCanThrow(operator) ? [`  ${throwCheck}`] : []),
+							`}`,
+						];
+					}
 					const nativeExpr = nativeNumberExpr(
 						operator,
 						firstOnLeft ? `__nf_${fusion.id}_value` : externalExpr,
@@ -2129,6 +2166,12 @@ function emitInstruction(
 				// Bail defensively if the lattice invariant ever breaks.
 				if (!leftIsNum || !rightIsNum) {
 					return null;
+				}
+				if (dst === left && ["+", "-", "*", "/"].includes(operator)) {
+					return [`r${dst} ${operator}= ${num(right)};`];
+				}
+				if (dst === right && (operator === "+" || operator === "*")) {
+					return [`r${dst} ${operator}= ${num(left)};`];
 				}
 				const expr = nativeNumberExpr(operator, num(left), num(right));
 				return expr === null ? null : [`r${dst} = ${expr};`];
@@ -2279,6 +2322,9 @@ function emitInstruction(
 					return [`r${dst} = (f64) (~mal_ops_number_to_i32(${num(src)}));`];
 				}
 				if (operator === "increment" || operator === "decrement") {
+					if (dst === src) {
+						return [`r${dst} ${operator === "increment" ? "+=" : "-="} 1.0;`];
+					}
 					return [`r${dst} = ${num(src)} ${operator === "increment" ? "+" : "-"} 1.0;`];
 				}
 				return [operator === "-" ? `r${dst} = -${num(src)};` : `r${dst} = ${num(src)};`];
