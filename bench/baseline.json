@@ -1,83 +1,6 @@
 {
   "entries": [
     {
-      "commit": "e843ed6",
-      "dirty": false,
-      "size": {
-        "full": {
-          "binaryBytes": 14865760,
-          "runtimeArchiveBytes": 105664,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 2657512,
-          "rustArchiveBytes": 21746656
-        },
-        "no-eval": {
-          "binaryBytes": 13148376,
-          "runtimeArchiveBytes": 105664,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 952416,
-          "rustArchiveBytes": 21746656
-        },
-        "no-intl": {
-          "binaryBytes": 4334296,
-          "runtimeArchiveBytes": 105664,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 2554968,
-          "rustArchiveBytes": 8344256
-        },
-        "no-web": {
-          "binaryBytes": 14299048,
-          "runtimeArchiveBytes": 78000,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 2657512,
-          "rustArchiveBytes": 21106552
-        },
-        "no-regexp": {
-          "binaryBytes": 14261728,
-          "runtimeArchiveBytes": 105664,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 2618488,
-          "rustArchiveBytes": 20761016
-        },
-        "minimal": {
-          "binaryBytes": 2049928,
-          "runtimeArchiveBytes": 78000,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 849872,
-          "rustArchiveBytes": 7703680
-        }
-      },
-      "language": {
-        "malMs": 229.323583,
-        "nodeMs": 102.631917,
-        "ratio": 2.234427551421455
-      },
-      "gc": {
-        "cli": {
-          "wallMs": 91.048083,
-          "rssMb": 27.609375,
-          "maxPauseMs": 4.036
-        },
-        "desktop": {
-          "wallMs": 2633.809083,
-          "rssMb": 24.453125,
-          "maxPauseMs": 4.634
-        },
-        "server": {
-          "wallMs": 5389.88,
-          "rssMb": 21.59375,
-          "maxPauseMs": 4.615
-        }
-      },
-      "http": {
-        "malRps": 119433.8006102777,
-        "nodeRps": 103981.16768024793,
-        "ratio": 1.1486099192264132,
-        "malP99Ms": 2.189125,
-        "nodeP99Ms": 1.027083
-      }
-    },
-    {
       "commit": "b6429d0",
       "dirty": false,
       "size": {
@@ -7275,6 +7198,31 @@
         },
         "nodeMs": 91.375583,
         "checksum": 812707571
+      }
+    },
+    {
+      "commit": "feeb0f1",
+      "dirty": false,
+      "language": {
+        "malMs": 281.182916,
+        "nodeMs": 116.164125,
+        "ratio": 2.420565867474145,
+        "collections": 3,
+        "allocatedMb": 26.85943603515625,
+        "emptyObjects": 0,
+        "shapedObjects": 3364,
+        "stackObjects": 0,
+        "stackMaterializations": 0,
+        "callProbes": 81749,
+        "callMisses": 68,
+        "loadMonoHits": 1882301,
+        "loadRegionHits": 13537320,
+        "loadInheritedHits": 62401,
+        "loadWatchedHits": 2864109,
+        "loadFallbacks": 55600,
+        "storeMonoHits": 0,
+        "storeRegionHits": 4505539,
+        "storeFallbacks": 17285
       }
     }
   ]
