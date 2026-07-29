@@ -850,6 +850,12 @@ export type IRInstruction =
 
 			// [destination, callee, this, ...arguments]
 			registers: [number, number, number, ...Array<number>];
+			/**
+			 * COMPILE-ONLY: the exact ordinary script-function index held by the callee.
+			 * Native lowering guards the live callee before entering this target and
+			 * falls back to generic dispatch on a mismatch.
+			 */
+			directFunctionIndex?: number;
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }

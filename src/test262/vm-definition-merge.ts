@@ -105,6 +105,10 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CALL":
 			return {
 				...instruction,
+				directFunctionIndex:
+					instruction.directFunctionIndex === undefined
+						? undefined
+						: instruction.directFunctionIndex + base.function,
 				callee: rebaseVmValueOperand(instruction.callee, base.string),
 				thisValue: rebaseVmValueOperand(instruction.thisValue, base.string),
 				arguments: instruction.arguments.map((operand) =>

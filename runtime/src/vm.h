@@ -1941,6 +1941,22 @@ MalCompletion mal_vm_call_cached(
 );
 
 /**
+ * Guarded direct script-function call for native sites with an exact static target.
+ * A matching live plain closure bypasses MalCallCache and generic dispatch while
+ * retaining its own environment, realm, identity, and this binding. Guard misses
+ * use the ordinary cached call path.
+ */
+MalCompletion mal_vm_call_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    i32 expected_function_index,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
+/**
  * Push a bytecode frame for `function_index` and run it to completion, marshaling
  * `args` onto the top of the value stack as the callee's incoming window, and
  * returning the result (vm->completion carries a throw out). Unlike

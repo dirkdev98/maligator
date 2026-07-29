@@ -528,6 +528,8 @@ export type VmInstruction =
 			thisValue: number;
 			argumentCount: number;
 			arguments: Array<number>;
+			/** COMPILE-ONLY: guarded direct script-function target for native emission. */
+			directFunctionIndex?: number;
 	  }
 	| {
 			opcode: "CONSTRUCT";
@@ -1459,6 +1461,7 @@ function lowerInstructionToVmInstruction(
 					.map((register, index) =>
 						encodeVmValueOperand(register, instruction.immediateValues?.[index + 3]),
 					),
+				directFunctionIndex: instruction.directFunctionIndex,
 			};
 		case "construct":
 			return {

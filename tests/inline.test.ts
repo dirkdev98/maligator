@@ -107,6 +107,37 @@ test("a local function with a loop body inlines (back-edge preserved)", () => {
 	expect(programCountType(source, "jumpIf")).toBeGreaterThan(0); // loop condition, spliced in
 });
 
+test("residual large immutable local calls retain their exact function index", () => {
+	const body = Array.from({ length: 24 }, (_, index) => `value += ${index};`).join("\n");
+	const ir = optimizedProgram(`
+		const large = function large(value) { ${body} return value; };
+		globalThis.result = large(1);
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	expect(calls).toHaveLength(1);
+	expect(calls[0]).toMatchObject({ directFunctionIndex: 1 });
+});
+
+test("residual dynamic globals and methods are not direct-call annotated", () => {
+	const ir = optimizedProgram(`
+		globalThis.dynamic = function (value) { return value; };
+		globalThis.dynamic(1);
+		const holder = { method(value) { return value; } };
+		holder.method(2);
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	expect(calls.length).toBeGreaterThanOrEqual(2);
+	expect(calls.every((call) => call.directFunctionIndex === undefined)).toBe(true);
+});
+
 test("a call inside try is not multi-block inlined (handler-range soundness)", () => {
 	// `boom` is a single-block `throw` target → the multi-block path. Inlining it
 	// would append its throw after the function's tryEnd, escaping the handler. A

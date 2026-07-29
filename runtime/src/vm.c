@@ -3412,6 +3412,67 @@ call_compiled:
         : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
 }
 
+MalCompletion mal_vm_call_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    i32 expected_function_index,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+    if (!mal_value_is_function_object(callee) ||
+        expected_function_index < 0 ||
+        expected_function_index >= vm->definition->function_count) {
+        return mal_vm_call_cached(
+            vm, fallback_cache, callee, this_value, args, arg_count);
+    }
+
+    MalFunctionObject *function_object = mal_value_to_function_object(callee);
+    i32 function_index = mal_function_object_function_index(function_object);
+    if (function_index != expected_function_index) {
+        return mal_vm_call_cached(
+            vm, fallback_cache, callee, this_value, args, arg_count);
+    }
+
+    const MalFunction *function = &vm->definition->functions[function_index];
+    MalEnv *env = function_object->creation_env;
+    MalCompletion completion;
+
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+
+    if (function->compiled != nullptr) {
+        if (!mal_vm_enter_compiled(vm, function_index)) {
+            completion = vm->completion;
+        } else {
+            MalValue callee_this = mal_vm_callee_this(vm, function, this_value);
+            MalValue value = function->compiled(
+                vm, callee_this, args, arg_count, mal_value_new_undefined(),
+                env, callee, nullptr);
+            mal_vm_leave_compiled(vm);
+            completion = vm->completion.kind == MAL_COMPLETION_THROW
+                ? vm->completion
+                : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+        }
+    } else {
+        mal_vm_interpret_function(
+            vm, function_index, callee, this_value, args, arg_count,
+            mal_value_new_undefined(), env);
+        completion = vm->completion;
+    }
+
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    return completion;
+}
+
 MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count) {
     return mal_vm_construct_value_with_target(vm, callee, args, arg_count, callee);
 }

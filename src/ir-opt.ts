@@ -1,4 +1,5 @@
 import {
+	annotateDirectCallTargets,
 	decodeStringConstant,
 	optEliminateCapturedSlots,
 	optEmptyDeadFunctions,
@@ -291,6 +292,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	const residualFeatures = optimizationFeatures(program);
 	if (residualFeatures.object) annotateStackObjectSites(program);
 	if (residualFeatures.property) optStaticPropertyKeys(program);
+	if (residualFeatures.call) annotateDirectCallTargets(program);
 	if (residualFeatures.call) optImmediateCallOperands(program);
 	optDeadInstructionElimination(program);
 	annotateNativeNumericFusions(program);

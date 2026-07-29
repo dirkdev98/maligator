@@ -388,4 +388,16 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("if (mal_value_is_empty(");
 		expect(output).toContain("mal_vm_op_throw_if_tdz");
 	});
+
+	it("emits guarded direct calls for residual exact script functions", () => {
+		const body = Array.from({ length: 24 }, (_, index) => `value += ${index};`).join(
+			"\n",
+		);
+		const output = emit(`
+			const large = function large(value) { ${body} return value; };
+			globalThis.result = large(1);
+		`);
+		expect(output).toContain("mal_vm_call_direct(vm,");
+		expect(output).toContain(", 1,");
+	});
 });

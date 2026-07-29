@@ -311,6 +311,31 @@ export function globalSlotFunctions(program: IntermediateProgram): Map<number, n
 	return resolved;
 }
 
+/**
+ * Annotate residual calls whose callee is proven to be one exact ordinary script
+ * closure. This deliberately reuses only the static inliner's immutable provenance:
+ * dynamic globals, methods, native/bound/proxy values, and unresolved CommonJS
+ * exports never enter `functionValuedRegisters`.
+ */
+export function annotateDirectCallTargets(program: IntermediateProgram): void {
+	const capturedSlots = capturedSlotFunctions(program);
+	const globalSlots = globalSlotFunctions(program);
+	const functionIndices = new Set(program.functions.map((fn) => fn.functionIndex));
+
+	for (const fn of program.functions) {
+		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call") continue;
+				const target = funcOf.get(instruction.registers[1]);
+				if (target !== undefined && functionIndices.has(target)) {
+					instruction.directFunctionIndex = target;
+				}
+			}
+		}
+	}
+}
+
 export interface InlineCandidate {
 	/** The `call` instruction in the caller. */
 	call: IRInstruction;
