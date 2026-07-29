@@ -188,6 +188,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// computed without coercing an object or running user code. Constant jump
 		// cleanup then exposes dead blocks to the existing CFG passes.
 		{ run: optFoldPrimitiveConstants },
+		// Reuse a fresh object-rest result as a leading object-spread target when its
+		// identity is otherwise unobserved. This removes the redundant empty result
+		// allocation and CopyDataProperties traversal without moving source effects.
+		{ run: optFuseObjectRestLeadingSpread, requires: "object" },
 		// Preserve partial-escape facts for the inliner cost check below. The final
 		// residual annotation is rebuilt after the fixpoint; this early analysis only
 		// prevents a hot-loop inline from replacing rare materialization with one heap
@@ -281,6 +285,60 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	annotateTerminalYieldSites(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);
+}
+
+function optFuseObjectRestLeadingSpread(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const index = buildIRRegisterIndex(fn, { locations: true });
+		const drops = new Set<IRInstruction>();
+		for (const block of fn.blocks) {
+			for (const merge of block.instructions) {
+				if (merge.type !== "mergeDataProperties") continue;
+				const target = merge.registers[0];
+				const source = merge.registers[1];
+				const create = index.uniqueDefinitions.get(target);
+				const copy = index.uniqueDefinitions.get(source);
+				if (create?.type !== "createObject" || copy?.type !== "copyDataProperties") {
+					continue;
+				}
+				const sourceUses = index.uses.get(source) ?? [];
+				if (
+					sourceUses.length !== 1 ||
+					sourceUses[0]!.instruction !== merge ||
+					sourceUses[0]!.position !== 1
+				) {
+					continue;
+				}
+				const createLocation = index.locations!.get(create)!;
+				const mergeLocation = index.locations!.get(merge)!;
+				if (
+					createLocation.blockIndex !== mergeLocation.blockIndex ||
+					createLocation.instructionIndex >= mergeLocation.instructionIndex
+				) {
+					continue;
+				}
+				const between = block.instructions.slice(
+					createLocation.instructionIndex + 1,
+					mergeLocation.instructionIndex,
+				);
+				if (between.some((instruction) => instruction.type !== "sourcePos")) continue;
+
+				copy.registers[0] = target;
+				drops.add(create);
+				drops.add(merge);
+				changed = true;
+			}
+		}
+		if (drops.size > 0) {
+			for (const block of fn.blocks) {
+				block.instructions = block.instructions.filter(
+					(instruction) => !drops.has(instruction),
+				);
+			}
+		}
+	}
+	return changed;
 }
 
 const NATIVE_NUMERIC_FUSION_OPERATORS = new Set<

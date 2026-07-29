@@ -33,6 +33,44 @@ function instructionsOf(fn: IRFunction): Array<IRInstruction> {
 	return fn.blocks.flatMap((block) => block.instructions);
 }
 
+test("reuses an otherwise-unobserved object rest value for a leading spread", () => {
+	const program = compileScript(`
+		function normalize({ id, ...rest }) {
+			return { ...rest, id };
+		}
+		globalThis.normalize = normalize;
+	`);
+	executeIROptimizations(program);
+	const instructions = instructionsOf(functionNamed(program, "normalize"));
+	expect(
+		instructions.filter((instruction) => instruction.type === "copyDataProperties"),
+	).toHaveLength(1);
+	expect(
+		instructions.filter((instruction) => instruction.type === "createObject"),
+	).toHaveLength(0);
+	expect(
+		instructions.filter((instruction) => instruction.type === "mergeDataProperties"),
+	).toHaveLength(0);
+});
+
+test("keeps a leading spread target when the object rest identity is observed", () => {
+	const program = compileScript(`
+		function normalize({ id, ...rest }) {
+			globalThis.rest = rest;
+			return { ...rest, id };
+		}
+		globalThis.normalize = normalize;
+	`);
+	executeIROptimizations(program);
+	const instructions = instructionsOf(functionNamed(program, "normalize"));
+	expect(
+		instructions.filter((instruction) => instruction.type === "createObject"),
+	).toHaveLength(1);
+	expect(
+		instructions.filter((instruction) => instruction.type === "mergeDataProperties"),
+	).toHaveLength(1);
+});
+
 test("generator class computed keys suspend in class-element source order", () => {
 	const program = compileScript(`
 		function* define() {
