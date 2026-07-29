@@ -23,7 +23,7 @@
 - `npm run test262:report` - Complete compiled/normal Test262 report without updating the baseline (full corpus; ask before running)
 - `npm run test:wpt:report` - Complete compiled/normal curated WPT report
 - `npm run test:wpt:matrix-report` - Complete compiled/interpreted normal/GC-stress WPT report
-- `npm run bench` - Consolidated benchmark tracker (size / language-vs-V8 / gc / http); `--update` records a baseline entry
+- `npm run bench` - Consolidated benchmark runner (size / language-vs-V8 / gc / http); `--update` merges selected lanes into the saved snapshot
 
 ### Manual milestone scripts (not part of `npm test`)
 

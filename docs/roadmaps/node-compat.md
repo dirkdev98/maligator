@@ -12,7 +12,7 @@ and outbound client in compiled and interpreted modes, including GC stress.
 
 The pinned Express behavior baseline and its benchmark lane are established.
 `tests/native/express-smoke.test.ts` is the compatibility acceptance test;
-`bench/baseline.json` is the sole source for performance history. The fixture's
+`bench/baseline.json` is the current committed performance snapshot. The fixture's
 `node:assert/strict` module remains a three-method harness subset, not a general Node
 assertion surface.
 

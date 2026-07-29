@@ -6,8 +6,8 @@ property caches, and a narrow stack-object path are implemented. This roadmap ow
 unfinished compiler/runtime optimization work; Test262 corpus build throughput and
 artifact size remain in the [Test262 performance roadmap](../../test262-perf-todo.md).
 
-`bench/baseline.json` is the sole committed source for performance history. Keep
-changing measurements out of this document. The current queue reflects compiled
+`bench/baseline.json` is the current committed performance snapshot; Git retains its
+history. Keep changing measurements out of this document. The current queue reflects compiled
 investigations through `e02d78d`. Module-local const helpers eliminate their hot
 allocations; partial-return helpers now retain stack materialization when called in a
 loop; and opt-in workload counters are compiled out unless `MAL_PERF_STATS=1` was set

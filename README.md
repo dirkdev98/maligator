@@ -262,7 +262,8 @@ npm run test:full:report
 
 npm run type-check
 npm run lint
-npm run bench
+npm run bench                         # compare only; never updates the baseline
+npm run bench -- language --update  # update only the selected baseline lanes
 
 # Complete standards reports without baseline updates. Ask before full Test262.
 npm run test262:report

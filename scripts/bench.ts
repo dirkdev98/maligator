@@ -1,6 +1,6 @@
 /**
- * Consolidated benchmark runner + historical tracker. One entry point drives the
- * whole bench/ tree and diffs against a commit-attributed baseline:
+ * Consolidated benchmark runner. One entry point drives the whole bench/ tree and
+ * diffs selected lanes against their last saved values:
  *
  *   node scripts/bench.ts [size|language|stack-object|gc|http ...] [--runs N] [--update]
  *
@@ -44,21 +44,13 @@
  *               req/s, and p99 latency vs Node, driven by `oha` (multi-threaded, so
  *               the load generator isn't the bottleneck). Skipped if `oha` is absent.
  *
- * History: bench/baseline.json is a bounded list of entries keyed by commit
- * short-SHA (no timestamps). A run prints current-vs-latest deltas; `--update`
- * records an entry for HEAD (replacing any existing one for that SHA, marking
- * dirty if the tree isn't clean).
+ * `bench/baseline.json` is one unattributed snapshot. A run never changes it unless
+ * `--update` is present; an update atomically replaces only the selected top-level
+ * lane sections and preserves every lane that was not run.
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import {
-	existsSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
@@ -69,6 +61,7 @@ import {
 	buildNativeBinaryResult,
 	HOST_MAIN,
 } from "../src/test-harness.ts";
+import { persistBenchmarkBaseline, readBenchmarkBaseline } from "./bench-baseline.ts";
 import {
 	formatOhaDuration,
 	parseOhaOutput,
@@ -77,7 +70,6 @@ import {
 import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
-const HISTORY_LIMIT = 50;
 const MIN_NODE_COMPARISON_MS = 60;
 
 interface SizeMetrics {
@@ -291,9 +283,7 @@ interface HttpComparisonMetrics {
 	malP99Ms: number;
 	nodeP99Ms: number;
 }
-interface Entry {
-	commit: string;
-	dirty: boolean;
+interface BenchmarkSnapshot {
 	/** Per-config binary/archive bytes (keyed by SIZE_PROFILES name). */
 	size?: Record<string, SizeMetrics>;
 	compiler?: CompilerMetrics;
@@ -306,7 +296,7 @@ interface Entry {
 	stackObject?: StackObjectMetrics;
 	interpreter?: InterpreterMetrics;
 	gc?: Record<string, GcWorkload>;
-	http?: HttpMetrics | null;
+	http?: HttpMetrics;
 }
 
 function median(xs: Array<number>): number {
@@ -1251,44 +1241,7 @@ function benchHttp(durationSeconds: number, conc: number): HttpMetrics | null {
 	}
 }
 
-// ---- history + reporting --------------------------------------------------
-
-function gitInfo(): { commit: string; dirty: boolean } {
-	const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-		encoding: "utf-8",
-	}).trim();
-	const dirty =
-		execFileSync("git", ["status", "--porcelain"], { encoding: "utf-8" }).trim().length >
-		0;
-	return { commit, dirty };
-}
-
-function loadBaseline(): { entries: Array<Entry> } {
-	if (!existsSync(BASELINE_FILE)) return { entries: [] };
-	return JSON.parse(readFileSync(BASELINE_FILE, "utf-8")) as { entries: Array<Entry> };
-}
-
-function latestMetrics(entries: Array<Entry>): Entry | undefined {
-	if (entries.length === 0) return undefined;
-	const latest: Entry = { commit: "latest-per-metric", dirty: false };
-	for (let index = entries.length - 1; index >= 0; index--) {
-		const entry = entries[index];
-		if (entry === undefined) continue;
-		latest.size ??= entry.size;
-		latest.compiler ??= entry.compiler;
-		latest.language ??= entry.language;
-		latest.module ??= entry.module;
-		latest.string ??= entry.string;
-		latest.promise ??= entry.promise;
-		latest.coroutine ??= entry.coroutine;
-		latest.arguments ??= entry.arguments;
-		latest.stackObject ??= entry.stackObject;
-		latest.interpreter ??= entry.interpreter;
-		latest.gc ??= entry.gc;
-		latest.http ??= entry.http;
-	}
-	return latest;
-}
+// ---- baseline reporting ---------------------------------------------------
 
 function humanBytes(bytes: number): string {
 	return bytes >= 1024 * 1024
@@ -1309,12 +1262,12 @@ function delta(
 	return ` (${sign}${pct.toFixed(1)}% vs ${previous.toFixed(0)}${mark})`;
 }
 
-function report(entry: Entry, previous: Entry | undefined): void {
-	console.log(`\n=== bench @ ${entry.commit}${entry.dirty ? " (dirty)" : ""} ===`);
+function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefined): void {
+	console.log("\n=== benchmark run ===");
 	if (entry.size) {
 		console.log("size (per build-config profile):");
 		for (const [name, m] of Object.entries(entry.size)) {
-			// Diff against the same profile in the previous entry (undefined the first
+			// Diff against the same profile in the saved snapshot (undefined the first
 			// run after the metric reshaped, which just shows no delta).
 			const p = previous?.size?.[name];
 			console.log(`  ${name}`);
@@ -1651,8 +1604,7 @@ const which =
 				"http",
 			];
 
-const { commit, dirty } = gitInfo();
-const entry: Entry = { commit, dirty };
+const entry: BenchmarkSnapshot = {};
 
 if (which.includes("size")) entry.size = benchSize();
 if (which.includes("compiler")) entry.compiler = benchCompiler(runs);
@@ -1665,24 +1617,16 @@ if (which.includes("arguments")) entry.arguments = benchArguments(runs);
 if (which.includes("stack-object")) entry.stackObject = benchStackObject(runs);
 if (which.includes("interpreter")) entry.interpreter = benchInterpreter(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
-if (which.includes("http")) entry.http = benchHttp(httpSeconds, 50);
+if (which.includes("http")) {
+	const http = benchHttp(httpSeconds, 50);
+	if (http !== null) entry.http = http;
+}
 
-const baseline = loadBaseline();
-const previous = latestMetrics(baseline.entries);
-report(entry, previous);
-
+const baseline = readBenchmarkBaseline<BenchmarkSnapshot>(BASELINE_FILE);
+report(entry, baseline);
+persistBenchmarkBaseline(BASELINE_FILE, baseline, entry, update);
 if (update) {
-	const last = baseline.entries[baseline.entries.length - 1];
-	if (last && last.commit === commit) {
-		baseline.entries[baseline.entries.length - 1] = entry;
-	} else {
-		baseline.entries.push(entry);
-	}
-	if (baseline.entries.length > HISTORY_LIMIT) {
-		baseline.entries = baseline.entries.slice(-HISTORY_LIMIT);
-	}
-	writeFileSync(BASELINE_FILE, `${JSON.stringify(baseline, null, 2)}\n`);
-	console.log(`\nUpdated ${BASELINE_FILE} for ${commit}.`);
+	console.log(`\nUpdated selected sections in ${BASELINE_FILE}.`);
 } else {
-	console.log("\n(run with --update to record this as the new baseline entry)");
+	console.log("\n(run with --update to merge these sections into the saved baseline)");
 }

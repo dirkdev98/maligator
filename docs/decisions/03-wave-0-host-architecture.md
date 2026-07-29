@@ -399,9 +399,9 @@ Record the pre-H1 fixed-response server as the migration baseline, then track:
 H2 and H3 cannot merge with more than a 10% throughput regression, 15% p99 latency
 regression, or unbounded/whole-body memory growth relative to the preceding
 checkpoint without an explicit recorded exception. A paused stream must remain
-within its configured connection budget plus one 64 KiB task buffer. Benchmark
-entries record compiler, optimization mode, OS, CPU, llhttp version, TLS setting,
-and commit.
+within its configured connection budget plus one 64 KiB task buffer. Reproducibility
+metadata belongs in CI artifacts or dedicated reports; the committed benchmark file
+stores only the latest comparison snapshot.
 
 ## Checkpoints
 
