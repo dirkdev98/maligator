@@ -285,6 +285,20 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("omits consolidated key guards only for static property sites", () => {
+		const staticOutput = emit(
+			`"use strict"; function read(object) { object.a = object.a + 1; return object.a + object.b; } globalThis.read = read;`,
+		);
+		expect(staticOutput).toContain("mal_perf_ic_load_region_hit");
+		expect(staticOutput).toContain("mal_perf_ic_store_region_hit");
+		expect(staticOutput).not.toMatch(/&& .* == __rg\d+_key\[/);
+
+		const dynamicOutput = emit(
+			`"use strict"; function read(object, key) { return object.a + object[key]; } globalThis.read = read;`,
+		);
+		expect(dynamicOutput).toMatch(/&& .* == __rg\d+_key\[/);
+	});
+
 	it("guards direct unary and binary Math calls by exact callbacks", () => {
 		const output = emit(
 			`"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } globalThis.calculate = calculate;`,

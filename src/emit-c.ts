@@ -1869,12 +1869,16 @@ function emitInstruction(
 			// Consolidated object region: one shape guard (__rgok) covers the run; a hit is a
 			// direct cached-slot read (key compare guards a computed-key mismatch), a miss the
 			// per-access IC. The run's last access commits the cache on the slow path.
+			const regionHit =
+				instruction.opcode === "LOAD_PROPERTY_STATIC"
+					? `${reg.name}_ok`
+					: `${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]`;
 			return [
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				...consolidatedRegionRevalidate(reg),
 				`static MalInlineCache __ic_${ip};`,
 				`MalValue __v_${ip};`,
-				`if (${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]) {`,
+				`if (${regionHit}) {`,
 				`  mal_perf_ic_load_region_hit();`,
 				`  __v_${ip} = ${reg.name}_o->slots[${reg.name}_slp[${reg.slotIndex}]];`,
 				`} else if (mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})) {`,
@@ -1939,11 +1943,15 @@ function emitInstruction(
 			}
 			// Consolidated object region (see LOAD_PROPERTY): a hit is a barriered cached-slot
 			// overwrite (the shape guard proved the slot writable-default), a miss the IC.
+			const regionHit =
+				instruction.opcode === "STORE_PROPERTY_STATIC"
+					? `${reg.name}_ok`
+					: `${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]`;
 			return [
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				...consolidatedRegionRevalidate(reg),
 				`static MalInlineCache __ic_${ip};`,
-				`if (${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]) {`,
+				`if (${regionHit}) {`,
 				`  mal_perf_ic_store_region_hit();`,
 				`  mal_vm_object_slot_store(${reg.name}_o, ${reg.name}_slp[${reg.slotIndex}], ${boxed(instruction.value)});`,
 				`} else {`,
