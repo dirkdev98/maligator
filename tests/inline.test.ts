@@ -179,13 +179,14 @@ test("methods that read classified frame arguments are guarded-inline candidates
 	expect([...findMethodInlineSites(ir).byCaller.values()].flat()).toHaveLength(2);
 });
 
-test("ambiguous polymorphic methods retain the original call fallback", () => {
+test("three-way polymorphic methods inline behind exact callee guards", () => {
 	const source = `
-		class A { quote(value) { return value + 1; } }
-		class B { quote(value) { return value + 2; } }
-		class C { quote(value) { return value + 3; } }
-		function invoke(receiver, value) { return receiver.quote(value); }
-		globalThis.result = invoke(new A(), 1) + invoke(new B(), 1) + invoke(new C(), 1);
+		class A { quote(order) { return order.net + 7; } }
+		class B { quote(order) { return order.net - Math.floor(order.net / 12); } }
+		class C { quote(order) { return order.net + Math.max(15, order.qty * 3); } }
+		const rules = [new A(), new B(), new C()];
+		const order = { net: 100, qty: 2 };
+		globalThis.result = rules[globalThis.index].quote(order);
 	`;
 	const ir = optimizedProgram(source);
 	const instructions = ir.functions.flatMap((fn) =>
@@ -193,10 +194,31 @@ test("ambiguous polymorphic methods retain the original call fallback", () => {
 	);
 	expect(
 		instructions.filter((instruction) => instruction.type === "guardFunctionIndex"),
-	).toHaveLength(0);
+	).toHaveLength(3);
 	expect(
 		instructions.filter((instruction) => instruction.type === "call").length,
 	).toBeGreaterThan(0);
+});
+
+test("four same-name method bodies retain the original call", () => {
+	const source = `
+		class A { quote(value) { return value + 1; } }
+		class B { quote(value) { return value + 2; } }
+		class C { quote(value) { return value + 3; } }
+		class D { quote(value) { return value + 4; } }
+		const rules = [new A(), new B(), new C(), new D()];
+		globalThis.result = rules[globalThis.index].quote(10);
+	`;
+	const ir = optimizedProgram(source);
+	expect(
+		ir.functions.flatMap((fn) =>
+			fn.blocks.flatMap((block) =>
+				block.instructions.filter(
+					(instruction) => instruction.type === "guardFunctionIndex",
+				),
+			),
+		),
+	).toHaveLength(0);
 });
 
 test("a unique strict class method inlines behind a loaded-callee guard", () => {

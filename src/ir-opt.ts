@@ -212,9 +212,9 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// top-level functions). Runs after the static inliner so only genuinely-dynamic
 		// callees reach it; its deopt path is a normal call, folded no further.
 		{ run: optInlineSpeculative, requires: "call" },
-		// Shape-guarded method inlining: `obj.m()` where m uniquely resolves to a known
-		// candidate; guarded by the resolved callee's function index (the loadProperty callee
-		// is already the proto-resolved method), inlined with this = receiver. Deopt = call.
+		// Loaded-callee-guarded method inlining: `obj.m()` where m resolves to a small
+		// known target set. The loadProperty callee is already proto-resolved; exact
+		// function-index guards select an inlined body with this = receiver. Deopt = call.
 		{ run: optInlineMethod, requires: "call" },
 		// Runs after copy propagation so a record's reads reference its allocation
 		// register directly (not a local copy), and before DCE so the freed key

@@ -707,6 +707,7 @@ function methodDefinitionsByName(
  * Detection only.
  */
 export function findMethodInlineSites(program: IntermediateProgram): ProgramMethodSites {
+	const maxTargets = 3;
 	const targetOf = new Map<number, IRFunction>();
 	for (const fn of program.functions) {
 		targetOf.set(fn.functionIndex, fn);
@@ -747,9 +748,9 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 					continue;
 				}
 				const definitions = methods.get(key.stringIndex) ?? [];
-				// Multiple same-name bodies require a dedicated polymorphic CFG transform.
-				// Keep the original call fallback rather than selecting a candidate.
-				if (definitions.length !== 1) continue;
+				// The guarded substitution already emits one exact-callee branch per target.
+				// Reject a globally common name rather than selecting an arbitrary prefix.
+				if (definitions.length === 0 || definitions.length > maxTargets) continue;
 				const targets = definitions
 					.filter(
 						(target) =>
@@ -760,7 +761,7 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 								instruction.registers.length - 3,
 							),
 					)
-					.slice(0, 1);
+					.slice(0, maxTargets);
 				if (targets.length === 0) continue;
 				sites.push({
 					call: instruction,
