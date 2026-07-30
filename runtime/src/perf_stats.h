@@ -8,7 +8,7 @@
 
 #define MAL_PERF_TABLE_ROLE_COUNT 4
 #define MAL_PERF_SHAPE_CALLER_COUNT 6
-#define MAL_PERF_IC_MODE_COUNT 10
+#define MAL_PERF_IC_MODE_COUNT 9
 
 typedef struct MalPerfTableStats {
     u64 lookups;
@@ -83,10 +83,6 @@ typedef struct MalPerfStats {
     u64 property_ensure_calls;
     u64 property_ensure_inserts;
     u64 property_ensure_hits;
-    u64 property_inline_reads;
-    u64 property_inline_writes;
-    u64 property_boxed_reads;
-    u64 property_boxed_allocations;
     u64 copy_data_linear_exclusion_checks;
     u64 copy_data_shaped_hits;
     u64 copy_data_shaped_slots;
@@ -240,8 +236,6 @@ typedef struct MalPerfStats {
     u64 ic_load_missing_fills;
     u64 ic_load_fallbacks;
     u64 ic_load_slow_mono_hits;
-    u64 ic_load_own_table_hits;
-    u64 ic_load_own_table_fills;
     u64 ic_load_poly_hits;
     u64 ic_load_mega_hits;
     u64 ic_load_mega_misses;

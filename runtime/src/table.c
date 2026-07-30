@@ -22,7 +22,6 @@ typedef struct MalTableEntry {
     MalValue value;
     u32 hash_fingerprint;
     bool live;
-    u8 metadata;
 } MalTableEntry;
 
 // One per Map/Set/dictionary entry; must stay in the 32-byte size class.
@@ -308,7 +307,6 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     entry->value = mal_value_new_undefined();
     entry->hash_fingerprint = mal_table_hash_fingerprint(hash);
     entry->live = true;
-    entry->metadata = 0;
 
     table->slots[index] = (i32) entry_index;
     table->size++;
@@ -430,14 +428,6 @@ void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value) {
     // unconditionally. Folds out off-cycle.
     mal_gc_write_barrier(table->entries[mal_table_handle_index(entry)].value);
     table->entries[mal_table_handle_index(entry)].value = value;
-}
-
-u8 mal_table_entry_metadata(const MalTable *table, void *entry) {
-    return table->entries[mal_table_handle_index(entry)].metadata;
-}
-
-void mal_table_entry_set_metadata(MalTable *table, void *entry, u8 metadata) {
-    table->entries[mal_table_handle_index(entry)].metadata = metadata;
 }
 
 bool mal_table_entry_is_live(const MalTable *table, const void *entry) {

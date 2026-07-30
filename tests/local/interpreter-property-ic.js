@@ -36,62 +36,6 @@ check(loadStatic(own) === 2000, "shape mutation invalidates own load");
 storeStatic(own, 2001);
 check(loadStatic(own) === 2001, "shape mutation refills own load");
 
-function newDictionary(value, alternateOrder = false) {
-	const object = Object.create(null);
-	Object.defineProperty(object, "anchor", {
-		value: 1,
-		configurable: true,
-	});
-	if (alternateOrder) object.before = 2;
-	object.value = value;
-	if (!alternateOrder) object.after = 3;
-	return object;
-}
-
-for (let i = 0; i < 1000; i++) {
-	check(loadStatic(newDictionary(i)) === i, "own table handler spans fresh dictionaries");
-}
-const dictionaryReceiver = newDictionary(2002);
-check(loadStatic(dictionaryReceiver) === 2002, "own table handler reads live value");
-dictionaryReceiver.value = 2003;
-check(loadStatic(dictionaryReceiver) === 2003, "own table handler observes overwrite");
-let dictionaryGetterCalls = 0;
-Object.defineProperty(dictionaryReceiver, "value", {
-	get() {
-		dictionaryGetterCalls++;
-		return 2004;
-	},
-	configurable: true,
-});
-check(
-	loadStatic(dictionaryReceiver) === 2004 && dictionaryGetterCalls === 1,
-	"own table handler rejects accessor transition",
-);
-check(
-	loadStatic(dictionaryReceiver) === 2004 && dictionaryGetterCalls === 2,
-	"own table accessor remains observable",
-);
-Object.defineProperty(dictionaryReceiver, "value", {
-	value: 2005,
-	writable: true,
-	enumerable: true,
-	configurable: true,
-});
-check(loadStatic(dictionaryReceiver) === 2005, "own table data transition refills");
-check(
-	loadStatic(newDictionary(2006, true)) === 2006,
-	"own table handler validates a different entry index",
-);
-delete dictionaryReceiver.value;
-const dictionaryPrototype = { value: 2007 };
-Object.setPrototypeOf(dictionaryReceiver, dictionaryPrototype);
-check(
-	loadStatic(dictionaryReceiver) === 2007,
-	"own table deletion exposes inherited property",
-);
-dictionaryReceiver.value = 2008;
-check(loadStatic(dictionaryReceiver) === 2008, "own table reinsertion refills");
-
 function loadMissing(object) {
 	return object.__mal_definitely_missing_ic__;
 }

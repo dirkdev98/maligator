@@ -107,10 +107,8 @@ void *mal_table_entry_data(const MalTable *table, void *entry);
 void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data);
 
 /**
- * Read the inline value payload stored for an entry handle. Map-like tables use
- * it for their value; object property tables use it for data descriptors.
- * The payload is not owned storage (unlike the data pointer) and defaults to
- * undefined.
+ * Read the inline value payload stored for an entry handle. The payload is
+ * not owned storage (unlike the data pointer) and defaults to undefined.
  */
 MalValue mal_table_entry_value(const MalTable *table, void *entry);
 
@@ -118,13 +116,6 @@ MalValue mal_table_entry_value(const MalTable *table, void *entry);
  * Replace the inline value payload stored for a live entry handle.
  */
 void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value);
-
-/**
- * Read or replace the table-role-specific byte stored in an entry's existing
- * padding. Object property tables use it for inline data-descriptor flags.
- */
-u8 mal_table_entry_metadata(const MalTable *table, void *entry);
-void mal_table_entry_set_metadata(MalTable *table, void *entry, u8 metadata);
 
 /**
  * Check whether an entry handle still refers to a live entry. Storage-order
