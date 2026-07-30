@@ -120,7 +120,8 @@ static void mal_perf_stats_print(void) {
         "search_calls=%llu search_multi_unit_calls=%llu search_candidates=%llu "
         "search_first_unit_rejects=%llu search_last_unit_rejects=%llu "
         "search_memcmp_calls=%llu search_memcmp_code_units=%llu "
-        "split_planned_matches=%llu split_plan_overflows=%llu\n",
+        "split_planned_matches=%llu split_plan_overflows=%llu "
+        "char_code_at_direct_hits=%llu char_code_at_direct_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.key_equals_calls,
         (unsigned long long) mal_perf_stats.key_pointer_hits,
         (unsigned long long) mal_perf_stats.key_string_fallbacks,
@@ -144,7 +145,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_search_memcmp_calls,
         (unsigned long long) mal_perf_stats.string_search_memcmp_code_units,
         (unsigned long long) mal_perf_stats.string_split_planned_matches,
-        (unsigned long long) mal_perf_stats.string_split_plan_overflows
+        (unsigned long long) mal_perf_stats.string_split_plan_overflows,
+        (unsigned long long) mal_perf_stats.string_char_code_at_direct_hits,
+        (unsigned long long) mal_perf_stats.string_char_code_at_direct_fallbacks
     );
     fprintf(
         stderr,

@@ -70,6 +70,8 @@ typedef struct MalPerfStats {
     u64 string_search_memcmp_code_units;
     u64 string_split_planned_matches;
     u64 string_split_plan_overflows;
+    u64 string_char_code_at_direct_hits;
+    u64 string_char_code_at_direct_fallbacks;
 
     u64 intrinsic_ascii_calls;
     u64 intrinsic_ascii_bytes;

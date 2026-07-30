@@ -2428,6 +2428,15 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (instruction.directStringCharCodeAt) {
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`r${instruction.dst} = ${tmp}.value;`,
+					poll,
+				];
+			}
 			if (instruction.directFunctionCall) {
 				return [
 					`static MalCallCache __cc_${ip};`,

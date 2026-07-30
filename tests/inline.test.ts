@@ -202,6 +202,27 @@ test("direct push sites carry guarded Array dispatch metadata", () => {
 	expect(marked.some((call) => call.registers.length === 5)).toBe(true);
 });
 
+test("direct charCodeAt sites carry guarded primitive String dispatch metadata", () => {
+	const ir = optimizedProgram(`
+		function read(value, index) {
+			return value.charCodeAt(index) + value["charCodeAt"](0);
+		}
+		function detached(value) {
+			const method = value.charCodeAt;
+			return method(0);
+		}
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	expect(calls.filter((call) => call.directStringCharCodeAt)).toHaveLength(2);
+	expect(
+		calls.some((call) => call.directStringCharCodeAt && call.registers.length === 4),
+	).toBe(true);
+});
+
 test("direct collection methods carry guarded Map and Set dispatch metadata", () => {
 	const ir = optimizedProgram(`
 		function update(map, set, key, value) {

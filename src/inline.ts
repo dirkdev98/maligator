@@ -599,6 +599,65 @@ export function annotateDirectArrayPushSites(program: IntermediateProgram): numb
 }
 
 /**
+ * Mark direct `receiver.charCodeAt(...)` sites for guarded primitive-String
+ * dispatch. The property Get and all arguments remain evaluated normally.
+ * Receiver provenance only proves that the loaded method is called with the
+ * same `this`; the runtime admits the fast path solely for a primitive String,
+ * the live builtin callback, and an absent or numeric position.
+ */
+export function annotateDirectStringCharCodeAtSites(
+	program: IntermediateProgram,
+): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const moveRoot = (initial: number): number => {
+			let register = initial;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") return register;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call") continue;
+				const callee = definitions.get(instruction.registers[1]);
+				if (callee === undefined) continue;
+
+				let receiver: number;
+				let nameStringIndex: number;
+				if (callee.type === "loadPropertyStatic") {
+					receiver = callee.registers[1];
+					nameStringIndex = callee.stringIndex;
+				} else if (callee.type === "loadProperty") {
+					receiver = callee.registers[1];
+					const key = definitions.get(callee.registers[2]);
+					if (key?.type !== "createString") continue;
+					nameStringIndex = key.stringIndex;
+				} else {
+					continue;
+				}
+
+				if (
+					moveRoot(receiver) !== moveRoot(instruction.registers[2]) ||
+					decodeStringConstant(program, nameStringIndex) !== "charCodeAt"
+				) {
+					continue;
+				}
+				instruction.directStringCharCodeAt = true;
+				count++;
+			}
+		}
+	}
+	return count;
+}
+
+/**
  * Mark direct `receiver.get/set/add(...)` calls for guarded native collection
  * dispatch. Property lookup and argument evaluation stay in their original
  * order; unknown receivers remain candidates because the runtime validates both

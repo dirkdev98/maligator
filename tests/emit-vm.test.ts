@@ -461,6 +461,17 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(", 3);");
 	});
 
+	it("emits guarded primitive String charCodeAt dispatch from call metadata", () => {
+		const output = emit(`
+			function codeUnit(value, index) {
+				return value.charCodeAt(index);
+			}
+			globalThis.codeUnit = codeUnit;
+		`);
+		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
+		expect(output).toContain(", 1);");
+	});
+
 	it("emits guarded direct collection dispatch from call metadata", () => {
 		const output = emit(`
 			function update(map, set, key, value) {

@@ -463,6 +463,39 @@ static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue th
     return mal_value_from_i32(mal_string_code_units(string)[(usize) position]);
 }
 
+MalCompletion mal_builtin_string_char_code_at_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (arg_count >= 0 && mal_value_is_string(this_value) &&
+        mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) ==
+            mal_builtin_string_prototype_char_code_at &&
+        (arg_count == 0 || mal_ops_is_number(args[0]))) {
+        f64 position = arg_count == 0
+            ? 0
+            : mal_ops_number_to_integer_or_infinity(
+                mal_ops_number_as_f64(args[0]));
+        MalString *string = mal_value_to_string(this_value);
+        MalValue result = position < 0 || position >= (f64) mal_string_length(string)
+            ? mal_value_new_nan()
+            : mal_value_from_i32(mal_string_code_units(string)[(usize) position]);
+        MAL_PERF_COUNT(string_char_code_at_direct_hits);
+        return (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = result,
+        };
+    }
+
+    MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);
+    return mal_vm_call_cached(
+        vm, fallback_cache, callee, this_value, args, arg_count);
+}
+
 static MalValue mal_builtin_string_prototype_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     f64 relative = arg_count >= 1 ? mal_builtin_string_arg_to_number(vm, args[0]) : 0;

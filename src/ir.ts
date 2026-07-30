@@ -871,6 +871,12 @@ export type IRInstruction =
 			 */
 			directArrayPush?: true;
 			/**
+			 * COMPILE-ONLY: a direct `.charCodeAt(...)` method site eligible for
+			 * guarded primitive-String dispatch in native code. The runtime still
+			 * validates the loaded callee, receiver, and integer argument.
+			 */
+			directStringCharCodeAt?: true;
+			/**
 			 * COMPILE-ONLY: a direct Map.get/Map.set/Set.add method site eligible for
 			 * guarded intrinsic collection dispatch in native code. The loaded callee
 			 * and receiver brand are still validated at runtime.

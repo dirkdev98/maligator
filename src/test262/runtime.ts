@@ -1172,6 +1172,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		'#include "vm_ops.h"',
 		'#include "value_ops.h"',
 		'#include "builtin_array.h"',
+		'#include "builtin_string.h"',
 		'#include "builtin_math.h"',
 		'#include "builtin_iterator.h"',
 		'#include "builtin_async_iterator.h"',
@@ -1353,7 +1354,7 @@ export async function test262RunSingle(
 		const artifacts = test262NativeArtifacts();
 		writeFileSync(
 			`${baseName}.c`,
-			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_array.h"\n#include "builtin_math.h"\n#include "builtin_iterator.h"\n#include "builtin_async_iterator.h"\n#include "generator_object.h"\n\n${cSource}`,
+			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_array.h"\n#include "builtin_string.h"\n#include "builtin_math.h"\n#include "builtin_iterator.h"\n#include "builtin_async_iterator.h"\n#include "generator_object.h"\n\n${cSource}`,
 		);
 		await execFileAsync(
 			test262Toolchain().tools.cc.path,

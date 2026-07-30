@@ -2,6 +2,7 @@ import {
 	annotateDirectArrayPushSites,
 	annotateDirectCallTargets,
 	annotateDirectCollectionSites,
+	annotateDirectStringCharCodeAtSites,
 	decodeStringConstant,
 	optEliminateCapturedSlots,
 	optEmptyDeadFunctions,
@@ -296,6 +297,8 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	if (residualFeatures.property) optStaticPropertyKeys(program);
 	if (residualFeatures.call && residualFeatures.property)
 		annotateDirectArrayPushSites(program);
+	if (residualFeatures.call && residualFeatures.property)
+		annotateDirectStringCharCodeAtSites(program);
 	if (residualFeatures.call && residualFeatures.property)
 		annotateDirectCollectionSites(program);
 	if (residualFeatures.call) annotateDirectCallTargets(program);

@@ -1466,6 +1466,9 @@ function benchHttpProfile(requests: number, conc: number): void {
 					`    calls/request       ${perfPerRequest(calls, "probes", requests).toFixed(1)} probes, ${perfPerRequest(calls, "compiled_exact_hits", requests).toFixed(1)} compiled exact, ${perfPerRequest(calls, "compiled_family_hits", requests).toFixed(1)} compiled family, ${perfPerRequest(calls, "native_exact_hits", requests).toFixed(1)} native, ${perfPerRequest(calls, "way_checks", requests).toFixed(1)} way checks, ${perfPerRequest(calls, "dispatch_misses", requests).toFixed(1)} misses, ${perfPerRequest(calls, "compiled_debug_frames", requests).toFixed(1)} debug frames; prototype invalidations ${ic.prototype_epoch_invalidations ?? 0}`,
 				);
 				console.log(
+					`    direct charCodeAt   ${perfPerRequest(strings, "char_code_at_direct_hits", requests).toFixed(1)} hits, ${perfPerRequest(strings, "char_code_at_direct_fallbacks", requests).toFixed(1)} fallbacks/request`,
+				);
+				console.log(
 					`    native call leaders ${perfNativeCallRows(stderr)
 						.slice(0, 8)
 						.map((row) => `${(row.calls / requests).toFixed(1)} ${row.name}`)
