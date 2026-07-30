@@ -645,14 +645,20 @@ export function annotateDirectCollectionSites(program: IntermediateProgram): num
 				const thisProvenance = provenanceThroughMoves(instruction.registers[2]);
 				if (receiverProvenance.register !== thisProvenance.register) continue;
 
-				const operation = (
-					{
-						get: "mapGet",
-						set: "mapSet",
-						add: "setAdd",
-					} as const
-				)[decodeStringConstant(program, nameStringIndex) as "get" | "set" | "add"];
-				if (operation === undefined) continue;
+				let operation: "mapGet" | "mapSet" | "setAdd";
+				switch (decodeStringConstant(program, nameStringIndex)) {
+					case "get":
+						operation = "mapGet";
+						break;
+					case "set":
+						operation = "mapSet";
+						break;
+					case "add":
+						operation = "setAdd";
+						break;
+					default:
+						continue;
+				}
 
 				const origin = receiverProvenance.definition;
 				if (

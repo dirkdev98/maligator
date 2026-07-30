@@ -215,6 +215,9 @@ test("direct collection methods carry guarded Map and Set dispatch metadata", ()
 		plain.get();
 		plain.set();
 		plain.add();
+		plain.constructor();
+		plain.toString();
+		plain.valueOf();
 	`);
 	const marked = ir.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) =>
