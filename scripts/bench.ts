@@ -1451,7 +1451,7 @@ function benchHttpProfile(requests: number, conc: number): void {
 					`    proto dependencies  ${perfPerRequest(dependencies, "register_calls", requests).toFixed(1)} registrations, ${perfPerRequest(dependencies, "register_nodes", requests).toFixed(1)} nodes, ${perfPerRequest(dependencies, "unregister_scan_steps", requests).toFixed(1)} unregister scans`,
 				);
 				console.log(
-					`    calls/request       ${perfPerRequest(calls, "probes", requests).toFixed(1)} probes, ${perfPerRequest(calls, "dispatch_misses", requests).toFixed(1)} misses; prototype invalidations ${ic.prototype_epoch_invalidations ?? 0}`,
+					`    calls/request       ${perfPerRequest(calls, "probes", requests).toFixed(1)} probes, ${perfPerRequest(calls, "compiled_exact_hits", requests).toFixed(1)} compiled exact, ${perfPerRequest(calls, "compiled_family_hits", requests).toFixed(1)} compiled family, ${perfPerRequest(calls, "native_exact_hits", requests).toFixed(1)} native, ${perfPerRequest(calls, "way_checks", requests).toFixed(1)} way checks, ${perfPerRequest(calls, "dispatch_misses", requests).toFixed(1)} misses, ${perfPerRequest(calls, "compiled_debug_frames", requests).toFixed(1)} debug frames; prototype invalidations ${ic.prototype_epoch_invalidations ?? 0}`,
 				);
 			} finally {
 				if (server.exitCode === null) server.kill("SIGKILL");

@@ -2805,6 +2805,7 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
 }
 
 bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
+    MAL_PERF_COUNT(compiled_enter_calls);
     // Real C-stack guard (robust to per-frame size): refuse when this entry's frame
     // has descended past the reserved margin. Falls back to the fixed depth counter
     // (also a backstop when stack bounds are unavailable). Both throw the same
@@ -2823,6 +2824,7 @@ bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     if (vm->definition->file_count == 0) {
         return true;
     }
+    MAL_PERF_COUNT(compiled_debug_frame_entries);
     if (vm->native_frame_count == vm->native_frame_capacity) {
         vm->native_frame_capacity = vm->native_frame_capacity == 0 ? 16 : vm->native_frame_capacity * 2;
         vm->native_frames = realloc(vm->native_frames, sizeof(MalNativeFrame) * (usize) vm->native_frame_capacity);
@@ -3348,12 +3350,14 @@ MalCompletion mal_vm_call_cached(
             if (candidate->compiled != nullptr) {
                 function = candidate;
                 for (u32 v = 0; v < cc->count; v++) {
+                    MAL_PERF_COUNT(call_cache_way_checks);
                     if (cc->kind[v] != MAL_CALL_CACHE_COMPILED ||
                         cc->function_index[v] != function_index) {
                         continue;
                     }
                     if (exact_identities_valid && cc->callee[v] == callee) {
                         MAL_PERF_COUNT(call_cache_exact_identity_hits);
+                        MAL_PERF_COUNT(call_cache_compiled_exact_hits);
                     } else {
                         MAL_PERF_COUNT(call_cache_compiled_family_hits);
                     }
@@ -3365,12 +3369,14 @@ MalCompletion mal_vm_call_cached(
         // Native callbacks are cacheable only by exact object identity. The
         // cached pointer must never be reused outside its heap lifetime/epoch.
         for (u32 v = 0; v < cc->count; v++) {
+            MAL_PERF_COUNT(call_cache_way_checks);
             if (cc->kind[v] != MAL_CALL_CACHE_NATIVE || cc->callee[v] != callee) {
                 continue;
             }
             MalNativeFunctionCallback callback = mal_native_function_object_callback(
                 mal_value_to_native_function_object(callee));
             MAL_PERF_COUNT(call_cache_exact_identity_hits);
+            MAL_PERF_COUNT(call_cache_native_exact_hits);
 #if MAL_REALMS
             MalRealm *saved_realm = vm->current_realm;
             mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));

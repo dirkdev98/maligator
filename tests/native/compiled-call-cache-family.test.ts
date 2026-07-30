@@ -81,13 +81,20 @@ describe("compiled call-cache function-index families", () => {
 		const report = callCacheReport(result.stderr);
 		const probes = strictField(report, "probes");
 		const exactHits = strictField(report, "exact_identity_hits");
+		const compiledExactHits = strictField(report, "compiled_exact_hits");
 		const familyHits = strictField(report, "compiled_family_hits");
+		const nativeExactHits = strictField(report, "native_exact_hits");
+		const wayChecks = strictField(report, "way_checks");
 		const misses = strictField(report, "dispatch_misses");
 		const compiledFills = strictField(report, "compiled_fills");
 		const nativeFills = strictField(report, "native_fills");
 
 		expect(exactHits).toBeGreaterThan(0);
+		expect(compiledExactHits).toBeGreaterThan(0);
 		expect(familyHits).toBeGreaterThan(150);
+		expect(nativeExactHits).toBeGreaterThan(0);
+		expect(compiledExactHits + nativeExactHits).toBe(exactHits);
+		expect(wayChecks).toBeGreaterThanOrEqual(exactHits + familyHits);
 		expect(misses).toBeGreaterThan(0);
 		expect(compiledFills).toBeGreaterThan(0);
 		expect(nativeFills).toBeGreaterThan(0);
