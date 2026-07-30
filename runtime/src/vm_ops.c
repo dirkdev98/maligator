@@ -3946,7 +3946,8 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         // Megamorphic: consult the shared stub cache before a shape search (serves
         // the interpreter and any compiled access whose inline stub probe was cold).
         if (ic->megamorphic) {
-            const MalStubEntry *e = &vm->load_stub[mal_stub_hash(object->shape, key_value)];
+            const MalPropertyStubEntry *e =
+                &vm->property_stub[mal_stub_hash(object->shape, key_value)];
             if (e->shape == object->shape && e->key == key_value) {
                 MAL_PERF_COUNT(ic_load_mega_hits);
                 return object->slots[e->slot];
@@ -3975,10 +3976,12 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     MAL_PERF_COUNT(ic_load_shape_fills);
                     // Warm the shared stub cache so a megamorphic site's next access to
                     // this (shape,key) is an O(1) probe rather than another shape search.
-                    MalStubEntry *stub = &vm->load_stub[mal_stub_hash(object->shape, key_value)];
+                    MalPropertyStubEntry *stub =
+                        &vm->property_stub[mal_stub_hash(object->shape, key_value)];
                     stub->shape = object->shape;
                     stub->key = key_value;
                     stub->slot = prop->slot;
+                    stub->attrs = prop->attrs;
                 } else {
                     MAL_PERF_COUNT(ic_load_shape_uncacheable);
                 }
@@ -4139,6 +4142,23 @@ void mal_vm_op_store_property_ic(
                 }
             }
         }
+        // Once the inline four-way cache overflows, share the VM-wide shaped
+        // property stub with loads. The attribute guard is part of the entry:
+        // a load may have warmed a read-only slot, which must never become a
+        // store hit.
+        if (ic->mode == MAL_IC_MODE_SHAPE && ic->megamorphic) {
+            const MalPropertyStubEntry *stub =
+                &vm->property_stub[mal_stub_hash(object->shape, key_value)];
+            if (stub->shape == object->shape && stub->key == key_value &&
+                mal_shape_attrs_are_default(stub->attrs)) {
+                MAL_PERF_COUNT(ic_store_mega_hits);
+                mal_gc_write_barrier(object->slots[stub->slot]);
+                object->slots[stub->slot] = value;
+                mal_gc_card(&object->header, value);
+                return;
+            }
+            MAL_PERF_COUNT(ic_store_mega_misses);
+        }
         // Convert the key ONCE (running any user toString/valueOf once) and reuse
         // it for the cache fill and the slow path — never re-convert via the
         // generic op (that would fire the key's side effect a second time).
@@ -4159,6 +4179,12 @@ void mal_vm_op_store_property_ic(
                 // alternate shapes (polymorphic sites) like the load path.
                 if (mal_ic_key_is_stable_string(key_value)) {
                     mal_ic_record(ic, object->shape, key_value, prop->slot);
+                    MalPropertyStubEntry *stub =
+                        &vm->property_stub[mal_stub_hash(object->shape, key_value)];
+                    stub->shape = object->shape;
+                    stub->key = key_value;
+                    stub->slot = prop->slot;
+                    stub->attrs = prop->attrs;
                     MAL_PERF_COUNT(ic_store_shape_fills);
                 } else {
                     MAL_PERF_COUNT(ic_store_shape_uncacheable);

@@ -750,21 +750,33 @@ static inline MalIntrinsic mal_vm_primitive_method_proto_slot(u8 kind) {
 // table consulted when a per-site cache has gone megamorphic (saw more shapes than
 // the inline N-way holds). It scales to any number of shapes and bounds the
 // megamorphic worst case — an O(1) probe instead of a per-access shape search that
-// also thrashes the single site cache. Load-only for now (megamorphic stores are
-// rarer and still resolve out-of-line). Direct-mapped: a collision just re-resolves
-// and overwrites, so a stale/absent entry is only a perf miss, never wrong.
+// also thrashes the single site cache. Loads accept any data slot; stores additionally
+// require the cached attributes to be default-writable. Direct-mapped: a collision
+// just re-resolves and overwrites, so a stale/absent entry is only a perf miss.
 #define MAL_STUB_CACHE_BITS 10
 #define MAL_STUB_CACHE_SIZE (1u << MAL_STUB_CACHE_BITS)
 
-typedef struct MalStubEntry {
+typedef struct MalPropertyStubEntry {
     const struct MalShape *shape;
     MalValue key;
     u32 slot;
-} MalStubEntry;
+    u8 attrs;
+} MalPropertyStubEntry;
+
+static_assert(sizeof(MalPropertyStubEntry) == 24,
+              "property stub entry must stay in three words");
 
 /** Direct-mapped index for (shape, key) in the stub cache. */
 static inline u32 mal_stub_hash(const struct MalShape *shape, MalValue key) {
-    u64 h = ((u64) (uptr) shape >> 4) * 2654435761u ^ ((u64) key * 1099511628211u >> 13);
+    // Heap size classes make nearby shapes share many low address bits. Avalanche
+    // the full pointer/key mix before masking so those layouts do not collapse
+    // onto one direct-mapped row.
+    u64 h = ((u64) (uptr) shape >> 4) ^ ((u64) key * UINT64_C(0x9e3779b97f4a7c15));
+    h ^= h >> 30;
+    h *= UINT64_C(0xbf58476d1ce4e5b9);
+    h ^= h >> 27;
+    h *= UINT64_C(0x94d049bb133111eb);
+    h ^= h >> 31;
     return (u32) h & (MAL_STUB_CACHE_SIZE - 1u);
 }
 

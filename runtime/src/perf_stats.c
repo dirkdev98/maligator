@@ -433,7 +433,8 @@ static void mal_perf_stats_print(void) {
         "prototype_epoch_delete=%llu prototype_epoch_reparent=%llu "
         "prototype_epoch_shaped=%llu prototype_epoch_finalize=%llu "
         "store_mono_hits=%llu store_region_hits=%llu store_fallbacks=%llu "
-        "store_slow_mono_hits=%llu store_poly_hits=%llu store_shape_hits=%llu "
+        "store_slow_mono_hits=%llu store_poly_hits=%llu "
+        "store_mega_hits=%llu store_mega_misses=%llu store_shape_hits=%llu "
         "store_shape_fills=%llu store_shape_uncacheable=%llu "
         "store_transition_hits=%llu store_transition_fills=%llu store_plain_generic=%llu "
         "store_other_generic=%llu\n",
@@ -478,6 +479,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_store_fallbacks,
         (unsigned long long) mal_perf_stats.ic_store_slow_mono_hits,
         (unsigned long long) mal_perf_stats.ic_store_poly_hits,
+        (unsigned long long) mal_perf_stats.ic_store_mega_hits,
+        (unsigned long long) mal_perf_stats.ic_store_mega_misses,
         (unsigned long long) mal_perf_stats.ic_store_shape_hits,
         (unsigned long long) mal_perf_stats.ic_store_shape_fills,
         (unsigned long long) mal_perf_stats.ic_store_shape_uncacheable,

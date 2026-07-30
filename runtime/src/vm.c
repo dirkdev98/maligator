@@ -466,7 +466,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     for (i32 i = 0; i < function_count; i++) {
         mal_vm_function_cache_init(vm, i);
     }
-    vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
+    vm->property_stub =
+        calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalPropertyStubEntry));
     vm->iterator_result_shape = nullptr;
     vm->regexp_instance_shape = nullptr;
     vm->regexp_result_shape = nullptr;
@@ -757,7 +758,7 @@ void mal_vm_free(MalVm *vm) {
         }
         free(vm->literal_shape_cache);
     }
-    free(vm->load_stub);
+    free(vm->property_stub);
     free(vm->interp_call_cache);
     free(vm->global_property_cache);
     // Only heap-resident (generator/async) leftover frames own their buffers;

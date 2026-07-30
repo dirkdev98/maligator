@@ -92,6 +92,10 @@ hit-path specialization and call/control-flow analysis before new allocation reg
       stores now apply the immutable old-shape-to-child-shape transition directly;
       exact first-prototype guards plus chain-local eager invalidation preserve
       accessors, read-only inherited data, exotic dispatch, and reparenting semantics.
+- [x] Share the VM-scoped megamorphic shaped-property stub between loads and
+      existing-slot stores. Cached descriptor attributes prevent read-only load
+      entries from becoming store hits, and full-bit hash mixing avoids heap
+      size-class address clustering in the direct-mapped table.
 
 ## Queued call and control-flow analysis
 

@@ -1235,12 +1235,12 @@ typedef struct MalVm {
     struct MalString **string_constant_atoms;
 
     /**
-     * Megamorphic property-load stub cache: a shared, direct-mapped (shape, key) ->
-     * slot table (MAL_STUB_CACHE_SIZE entries) probed when a site's inline N-way
+     * Megamorphic shaped-property stub cache: a shared, direct-mapped (shape, key)
+     * -> slot/attributes table probed when a load or store site's inline N-way
      * cache has gone megamorphic. Allocated at VM init, zero-initialized (empty).
-     * See MalStubEntry / mal_stub_hash in vm_ops.h.
+     * See MalPropertyStubEntry / mal_stub_hash in vm_ops.h.
      */
-    struct MalStubEntry *load_stub;
+    struct MalPropertyStubEntry *property_stub;
 
     /** Shared final shape for CreateIterResultObject's `{ value, done }` layout. */
     struct MalShape *iterator_result_shape;

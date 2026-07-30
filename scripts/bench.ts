@@ -109,9 +109,13 @@ interface LanguageMetrics {
 	loadRegionHits: number;
 	loadInheritedHits: number;
 	loadWatchedHits: number;
+	loadMegaHits: number;
+	loadMegaMisses: number;
 	loadFallbacks: number;
 	storeMonoHits: number;
 	storeRegionHits: number;
+	storeMegaHits: number;
+	storeMegaMisses: number;
 	storeTransitionHits: number;
 	storeTransitionFills: number;
 	storeFallbacks: number;
@@ -528,9 +532,13 @@ function benchLanguage(runs: number): LanguageMetrics {
 		loadRegionHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_region_hits"),
 		loadInheritedHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_inherited_hits"),
 		loadWatchedHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_watched_hits"),
+		loadMegaHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_mega_hits"),
+		loadMegaMisses: parsePerfStat(perfStderr, "perf-ic-stats", "load_mega_misses"),
 		loadFallbacks: parsePerfStat(perfStderr, "perf-ic-stats", "load_fallbacks"),
 		storeMonoHits: parsePerfStat(perfStderr, "perf-ic-stats", "store_mono_hits"),
 		storeRegionHits: parsePerfStat(perfStderr, "perf-ic-stats", "store_region_hits"),
+		storeMegaHits: parsePerfStat(perfStderr, "perf-ic-stats", "store_mega_hits"),
+		storeMegaMisses: parsePerfStat(perfStderr, "perf-ic-stats", "store_mega_misses"),
 		storeTransitionHits: parsePerfStat(
 			perfStderr,
 			"perf-ic-stats",
@@ -1423,10 +1431,10 @@ function benchHttpProfile(requests: number, conc: number): void {
 					`    transitions/request ${perfPerRequest(transitions, "calls", requests).toFixed(1)} calls, ${perfPerRequest(transitions, "creates", requests).toFixed(1)} creates, ${perfPerRequest(transitions, "comparisons", requests).toFixed(1)} comparisons`,
 				);
 				console.log(
-					`    loads/request       ${perfPerRequest(ic, "load_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "load_inherited_hits", requests).toFixed(1)} inherited, ${perfPerRequest(ic, "load_missing_hits", requests).toFixed(1)} missing, ${perfPerRequest(ic, "load_fallbacks", requests).toFixed(1)} fallback`,
+					`    loads/request       ${perfPerRequest(ic, "load_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "load_inherited_hits", requests).toFixed(1)} inherited, ${perfPerRequest(ic, "load_missing_hits", requests).toFixed(1)} missing, ${perfPerRequest(ic, "load_mega_hits", requests).toFixed(1)} mega, ${perfPerRequest(ic, "load_fallbacks", requests).toFixed(1)} fallback`,
 				);
 				console.log(
-					`    stores/request      ${perfPerRequest(ic, "store_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "store_poly_hits", requests).toFixed(1)} poly, ${perfPerRequest(ic, "store_transition_hits", requests).toFixed(1)} transition hits, ${perfPerRequest(ic, "store_transition_fills", requests).toFixed(1)} transition fills, ${perfPerRequest(ic, "store_plain_generic", requests).toFixed(1)} generic`,
+					`    stores/request      ${perfPerRequest(ic, "store_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "store_poly_hits", requests).toFixed(1)} poly, ${perfPerRequest(ic, "store_mega_hits", requests).toFixed(1)} mega, ${perfPerRequest(ic, "store_transition_hits", requests).toFixed(1)} transition hits, ${perfPerRequest(ic, "store_transition_fills", requests).toFixed(1)} transition fills, ${perfPerRequest(ic, "store_plain_generic", requests).toFixed(1)} generic`,
 				);
 				console.log(
 					`    calls/request       ${perfPerRequest(calls, "probes", requests).toFixed(1)} probes, ${perfPerRequest(calls, "dispatch_misses", requests).toFixed(1)} misses; prototype invalidations ${ic.prototype_epoch_invalidations ?? 0}`,
@@ -1508,10 +1516,10 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  calls     ${entry.language.callProbes} cache probes, ${entry.language.callMisses} misses`,
 		);
 		console.log(
-			`  loads     ${entry.language.loadMonoHits} mono, ${entry.language.loadRegionHits} region, ${entry.language.loadInheritedHits} inherited, ${entry.language.loadWatchedHits} watched, ${entry.language.loadFallbacks} fallback`,
+			`  loads     ${entry.language.loadMonoHits} mono, ${entry.language.loadRegionHits} region, ${entry.language.loadInheritedHits} inherited, ${entry.language.loadWatchedHits} watched, ${entry.language.loadMegaHits} mega hits/${entry.language.loadMegaMisses} misses, ${entry.language.loadFallbacks} fallback`,
 		);
 		console.log(
-			`  stores    ${entry.language.storeMonoHits} mono, ${entry.language.storeRegionHits} region, ${entry.language.storeTransitionHits} transition hits, ${entry.language.storeTransitionFills} transition fills, ${entry.language.storeFallbacks} fallback`,
+			`  stores    ${entry.language.storeMonoHits} mono, ${entry.language.storeRegionHits} region, ${entry.language.storeMegaHits} mega hits/${entry.language.storeMegaMisses} misses, ${entry.language.storeTransitionHits} transition hits, ${entry.language.storeTransitionFills} transition fills, ${entry.language.storeFallbacks} fallback`,
 		);
 	}
 	if (entry.module) {
