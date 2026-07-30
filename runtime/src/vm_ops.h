@@ -677,14 +677,6 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
     ic->poly_slot[1] = (u32) (epoch >> 32);
 }
 
-/** Return an already-allocated interpreter cache entry without filling or allocating. */
-static inline MalInlineCache *mal_vm_interp_ic_existing(
-    MalCallable *callable, i32 instruction_index
-) {
-    MalInlineCache *caches = callable->vm->interp_ic[callable->function_index];
-    return caches != nullptr ? &caches[instruction_index] : nullptr;
-}
-
 // `slot` sentinel marking a protector-gated value entry (`value` holds the result,
 // there is no object slot). A real shape slot is a small inline index.
 #define MAL_IC_VALUE_SLOT UINT32_MAX
@@ -770,6 +762,28 @@ void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_
  * overflow (megamorphic) accesses stay on the per-site IC path. */
 #define MAL_OBJECT_REGION_MAX_SHAPES 4u
 
+typedef struct MalObjectRegionCache {
+    const MalShape *shapes[MAL_OBJECT_REGION_MAX_SHAPES];
+    MalValue *keys;
+    u32 *slots;
+    u32 count;
+    u32 access_count;
+} MalObjectRegionCache;
+
+typedef struct MalPropertyCachePool {
+    MalInlineCache *sites;
+    MalObjectRegionCache **regions;
+} MalPropertyCachePool;
+
+/** Address an eagerly allocated dense property cache entry. */
+static inline MalInlineCache *mal_vm_property_ic_at(
+    MalCallable *callable, i32 ic_index
+) {
+    MalInlineCache *caches =
+        callable->vm->property_cache[callable->function_index].sites;
+    return &caches[ic_index];
+}
+
 /**
  * Consolidated-object-region shape match (native backend): the index of `shape` among the
  * region's `count` cached variant shapes, or -1. Called once per region entry; generated
@@ -798,6 +812,11 @@ static inline int mal_vm_object_region_variant(const MalShape *shape, const MalS
  */
 int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *const *ics, u32 k,
                                      const MalShape **shapes, u32 *slots, MalValue *keys, u32 *count, u32 max);
+
+/** Resolve and append a region variant, lazily allocating its VM-owned state. */
+int mal_vm_object_region_add_owned(
+    MalVm *vm, i32 function_index, i32 leading_ic_index, const MalObject *o,
+    const MalInlineCache *const *ics, u32 access_count);
 
 /**
  * Inline dense-array index access for the native backend (emit-c), so a `obj[i]`

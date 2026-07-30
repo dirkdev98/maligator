@@ -15,6 +15,7 @@ function field(line: string, name: string): number {
 describe("localized interpreter property inline caches", () => {
 	let expected: string;
 	let compiled: string;
+	let compiledMultiVm: string;
 	let interpreted: string;
 
 	beforeAll(() => {
@@ -23,6 +24,13 @@ describe("localized interpreter property inline caches", () => {
 			fixture,
 			name: "compiled-property-ic",
 			compiled: true,
+			outDir,
+		});
+		compiledMultiVm = buildNativeBinary({
+			fixture,
+			name: "compiled-property-ic-multi-vm",
+			compiled: true,
+			mainFile: "runtime/call_cache_test_main.c",
 			outDir,
 		});
 		interpreted = buildNativeBinary({
@@ -36,6 +44,12 @@ describe("localized interpreter property inline caches", () => {
 
 	it("keeps cache mode transitions sound in compiled property sites", () => {
 		expect(runToStdout(compiled, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
+	});
+
+	it("does not retain property-site or region state across sequential VMs", () => {
+		expect(runToStdout(compiledMultiVm, { env: { MAL_HOST_GC: "1" } })).toBe(
+			expected + expected,
+		);
 	});
 
 	it("preserves own, inherited, exotic, invalidation, accessor, and proxy semantics", () => {

@@ -34,7 +34,7 @@
 MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
-static MalInlineCache *mal_interp_ic(MalCallable *callable);
+static MalInlineCache *mal_interp_literal_ic(MalCallable *callable);
 static bool mal_vm_key_is_prototype(MalKey key);
 
 static u64 g_stack_object_materializations = 0;
@@ -571,7 +571,7 @@ void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *in
     const i32 *value_registers = &data[1 + count];
     MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
     MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
-    MalInlineCache *cache = mal_interp_ic(callable);
+    MalInlineCache *cache = mal_interp_literal_ic(callable);
     MalShape *shape = (MalShape *) cache->shape;
     for (u32 i = 0; i < count; ++i) {
         values[i] = callable->registers[value_registers[i]];
@@ -4082,21 +4082,38 @@ int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *c
     return (int) v;
 }
 
-/** The inline cache for the property op currently executing in `callable`. The
- * dispatch has already advanced instruction_pointer, so the op's index is one
- * back. The function's cache array is allocated on first use. */
-static MalInlineCache *mal_interp_ic(MalCallable *callable) {
-    MalVm *vm = callable->vm;
-    MalInlineCache *existing = mal_vm_interp_ic_existing(
-        callable, callable->instruction_pointer - 1);
-    if (existing != nullptr) {
-        return existing;
+int mal_vm_object_region_add_owned(
+    MalVm *vm, i32 function_index, i32 leading_ic_index, const MalObject *o,
+    const MalInlineCache *const *ics, u32 access_count
+) {
+    assert(access_count > 1);
+    MalPropertyCachePool *pool = &vm->property_cache[function_index];
+    assert(pool->sites != nullptr && pool->regions != nullptr);
+    MalObjectRegionCache *region = pool->regions[leading_ic_index];
+    if (region == nullptr) {
+        region = calloc(1, sizeof(MalObjectRegionCache));
+        region->keys = calloc((usize) access_count, sizeof(MalValue));
+        region->slots = calloc(
+            (usize) MAL_OBJECT_REGION_MAX_SHAPES * access_count, sizeof(u32));
+        region->access_count = access_count;
+        pool->regions[leading_ic_index] = region;
     }
+    assert(region->access_count == access_count);
+    return mal_vm_object_region_add_variant(
+        o, ics, access_count, region->shapes, region->slots, region->keys,
+        &region->count, MAL_OBJECT_REGION_MAX_SHAPES);
+}
+
+/** Interpreter-only cache for the shaped-object literal currently executing.
+ * Dispatch has already advanced instruction_pointer, so the literal's IP is one
+ * back. The per-function array is allocated lazily on first use. */
+static MalInlineCache *mal_interp_literal_ic(MalCallable *callable) {
+    MalVm *vm = callable->vm;
     i32 function_index = callable->function_index;
-    MalInlineCache *caches = vm->interp_ic[function_index];
+    MalInlineCache *caches = vm->interp_literal_ic[function_index];
     if (caches == nullptr) {
         caches = calloc((usize) callable->function->instruction_count, sizeof(MalInlineCache));
-        vm->interp_ic[function_index] = caches;
+        vm->interp_literal_ic[function_index] = caches;
     }
     return &caches[callable->instruction_pointer - 1];
 }
@@ -4106,7 +4123,7 @@ void mal_op_load_property(MalCallable *callable, const MalInstruction *instructi
         callable->vm,
         callable->registers[instruction->as.load_property.object],
         callable->registers[instruction->as.load_property.key],
-        mal_interp_ic(callable)
+        mal_vm_property_ic_at(callable, instruction->as.load_property.ic_index)
     );
 }
 
@@ -4117,7 +4134,7 @@ void mal_op_load_property_static(MalCallable *callable, const MalInstruction *in
         callable->vm,
         callable->registers[instruction->as.load_property_static.object],
         key,
-        mal_interp_ic(callable)
+        mal_vm_property_ic_at(callable, instruction->as.load_property_static.ic_index)
     );
 }
 
@@ -4270,7 +4287,7 @@ void mal_op_store_property(MalCallable *callable, const MalInstruction *instruct
         callable->registers[instruction->as.store_property.key],
         callable->registers[instruction->as.store_property.value],
         callable->function->strict,
-        mal_interp_ic(callable)
+        mal_vm_property_ic_at(callable, instruction->as.store_property.ic_index)
     );
 }
 
@@ -4283,7 +4300,7 @@ void mal_op_store_property_static(MalCallable *callable, const MalInstruction *i
         key,
         callable->registers[instruction->as.store_property_static.value],
         callable->function->strict,
-        mal_interp_ic(callable)
+        mal_vm_property_ic_at(callable, instruction->as.store_property_static.ic_index)
     );
 }
 

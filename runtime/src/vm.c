@@ -38,6 +38,21 @@ static u64 g_coroutine_buffer_peak_retained_bytes = 0;
 static u64 g_loaded_instruction_count = 0;
 static u64 g_loaded_instruction_data_count = 0;
 
+static void mal_vm_property_cache_init(MalVm *vm, i32 function_index) {
+    MalPropertyCachePool *pool = &vm->property_cache[function_index];
+    i32 count = vm->definition->functions[function_index].property_ic_count;
+    if (count <= 0) {
+        *pool = (MalPropertyCachePool){0};
+        return;
+    }
+    // One zeroed allocation keeps the dense IC row and its sparse compiled-region
+    // pointer row adjacent. MalInlineCache is pointer-aligned and 80 bytes, so the
+    // trailing pointer row remains naturally aligned.
+    pool->sites = calloc(
+        (usize) count, sizeof(MalInlineCache) + sizeof(MalObjectRegionCache *));
+    pool->regions = (MalObjectRegionCache **) &pool->sites[count];
+}
+
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
 #define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
 #define MAL_COROUTINE_POOL_POWER_CLASS_COUNT 13
@@ -437,7 +452,13 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     }
     vm->live_definition.literal_template_data = literal_templates;
 
-    vm->interp_ic = calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
+    vm->property_cache =
+        calloc((usize) vm->function_capacity, sizeof(MalPropertyCachePool));
+    vm->interp_literal_ic =
+        calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
+    for (i32 i = 0; i < function_count; i++) {
+        mal_vm_property_cache_init(vm, i);
+    }
     vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
     vm->iterator_result_shape = nullptr;
     vm->regexp_instance_shape = nullptr;
@@ -699,11 +720,28 @@ void mal_vm_free(MalVm *vm) {
         mal_vm_loaded_definition_free(vm->loaded_defs[i]);
     }
     free(vm->loaded_defs);
-    if (vm->interp_ic != nullptr) {
+    if (vm->property_cache != nullptr) {
         for (i32 i = 0; i < vm->definition->function_count; i++) {
-            free(vm->interp_ic[i]);
+            MalPropertyCachePool *pool = &vm->property_cache[i];
+            if (pool->regions != nullptr) {
+                for (i32 j = 0; j < vm->definition->functions[i].property_ic_count; j++) {
+                    MalObjectRegionCache *region = pool->regions[j];
+                    if (region != nullptr) {
+                        free(region->keys);
+                        free(region->slots);
+                        free(region);
+                    }
+                }
+            }
+            free(pool->sites);
         }
-        free(vm->interp_ic);
+        free(vm->property_cache);
+    }
+    if (vm->interp_literal_ic != nullptr) {
+        for (i32 i = 0; i < vm->definition->function_count; i++) {
+            free(vm->interp_literal_ic[i]);
+        }
+        free(vm->interp_literal_ic);
     }
     free(vm->load_stub);
     free(vm->interp_call_cache);
@@ -1103,10 +1141,16 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
         vm->frames[i].function = &functions[vm->frames[i].function_index];
     }
 
-    // Per-function inline caches grow with the function table (lazily filled).
-    vm->interp_ic = realloc(vm->interp_ic, sizeof(struct MalInlineCache *) * (usize) new_functions);
+    // Per-function caches grow with the function table. Property rows are
+    // initialized eagerly; interpreter-only literal rows remain lazy.
+    vm->property_cache =
+        realloc(vm->property_cache, sizeof(MalPropertyCachePool) * (usize) new_functions);
+    vm->interp_literal_ic = realloc(
+        vm->interp_literal_ic, sizeof(struct MalInlineCache *) * (usize) new_functions);
     for (i32 i = fn_base; i < new_functions; i++) {
-        vm->interp_ic[i] = nullptr;
+        vm->property_cache[i] = (MalPropertyCachePool){0};
+        vm->interp_literal_ic[i] = nullptr;
+        mal_vm_property_cache_init(vm, i);
     }
 
     return fn_base;
@@ -1843,16 +1887,13 @@ static void mal_vm_run_until_frame_count(
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }
-                MalInlineCache *ic = mal_vm_interp_ic_existing(
-                    frame, instruction_pointer - 1);
-                bool cache_hit = false;
-                if (ic != nullptr) {
-                    MalObject *plain_object = mal_vm_as_object(object);
-                    cache_hit = plain_object != nullptr &&
-                        mal_vm_object_try_load(plain_object, key, ic, &result);
-                    if (!cache_hit) {
-                        cache_hit = mal_vm_property_try_load(vm, object, key, ic, &result);
-                    }
+                MalInlineCache *ic = mal_vm_property_ic_at(
+                    frame, instruction->as.load_property.ic_index);
+                MalObject *plain_object = mal_vm_as_object(object);
+                bool cache_hit = plain_object != nullptr &&
+                    mal_vm_object_try_load(plain_object, key, ic, &result);
+                if (!cache_hit) {
+                    cache_hit = mal_vm_property_try_load(vm, object, key, ic, &result);
                 }
                 if (cache_hit) {
                     registers[instruction->as.load_property.dst] = result;
@@ -1867,10 +1908,9 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_LOAD_PROPERTY_STATIC: {
                 MalValue object = registers[instruction->as.load_property_static.object];
                 MalValue result;
-                MalInlineCache *ic = mal_vm_interp_ic_existing(
-                    frame, instruction_pointer - 1);
-                bool cache_hit = ic != nullptr &&
-                    mal_vm_property_try_load_static(vm, object, ic, &result);
+                MalInlineCache *ic = mal_vm_property_ic_at(
+                    frame, instruction->as.load_property_static.ic_index);
+                bool cache_hit = mal_vm_property_try_load_static(vm, object, ic, &result);
                 if (cache_hit) {
                     registers[instruction->as.load_property_static.dst] = result;
                     MAL_PERF_COUNT(interpreter_local_load_ic_hits);
@@ -1894,9 +1934,9 @@ static void mal_vm_run_until_frame_count(
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }
-                MalInlineCache *ic = mal_vm_interp_ic_existing(
-                    frame, instruction_pointer - 1);
-                if (ic != nullptr && mal_vm_property_try_store(object, key, value, ic)) {
+                MalInlineCache *ic = mal_vm_property_ic_at(
+                    frame, instruction->as.store_property.ic_index);
+                if (mal_vm_property_try_store(object, key, value, ic)) {
                     MAL_PERF_COUNT(interpreter_local_store_ic_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
@@ -1908,9 +1948,9 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_STORE_PROPERTY_STATIC: {
                 MalValue object = registers[instruction->as.store_property_static.object];
                 MalValue value = registers[instruction->as.store_property_static.value];
-                MalInlineCache *ic = mal_vm_interp_ic_existing(
-                    frame, instruction_pointer - 1);
-                if (ic != nullptr && mal_vm_property_try_store_static(object, value, ic)) {
+                MalInlineCache *ic = mal_vm_property_ic_at(
+                    frame, instruction->as.store_property_static.ic_index);
+                if (mal_vm_property_try_store_static(object, value, ic)) {
                     MAL_PERF_COUNT(interpreter_local_store_ic_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;

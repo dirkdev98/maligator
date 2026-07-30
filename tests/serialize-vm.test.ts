@@ -26,8 +26,8 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "LOAD_INTRINSIC", dst: 6, intrinsic: "__arrayFlatMapAppend" },
 	{ opcode: "MOVE", dst: 7, src: 0 },
 	{ opcode: "LOAD_SUPER_PROPERTY", dst: 7, object: 10, key: 3, receiver: 10 },
-	{ opcode: "LOAD_PROPERTY_STATIC", dst: 7, object: 10, stringIndex: 1 },
-	{ opcode: "STORE_PROPERTY_STATIC", object: 10, value: 7, stringIndex: 1 },
+	{ opcode: "LOAD_PROPERTY_STATIC", dst: 7, object: 10, stringIndex: 1, icIndex: 0 },
+	{ opcode: "STORE_PROPERTY_STATIC", object: 10, value: 7, stringIndex: 1, icIndex: 1 },
 	{ opcode: "BINARY", dst: 8, left: 0, right: 1, operator: ">>>" },
 	{ opcode: "UNARY", dst: 9, src: 8, operator: "typeof" },
 	{ opcode: "TYPEOF_COMPARE", dst: 9, src: 8, expected: "number", negated: true },
@@ -208,6 +208,20 @@ describe("serialize-vm", () => {
 			serializeVmDefinition(definition, { debugInfo: true }),
 		);
 		expect(restored).toEqual(definition);
+	});
+
+	it("requires dense property IC ordinals while keeping them implicit on the wire", () => {
+		const invalidInstructions = instructions.map((instruction) =>
+			instruction.opcode === "LOAD_PROPERTY_STATIC"
+				? { ...instruction, icIndex: 1 }
+				: instruction,
+		);
+		expect(() =>
+			serializeVmDefinition({
+				...definition,
+				functions: [{ ...mainFn, instructions: invalidInstructions }],
+			}),
+		).toThrow("property IC index 1, expected 0");
 	});
 
 	it("round-trips and validates persisted argument snapshot prefixes", () => {

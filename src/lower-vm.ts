@@ -633,12 +633,14 @@ export type VmInstruction =
 			dst: number;
 			object: number;
 			key: number;
+			icIndex: number;
 	  }
 	| {
 			opcode: "LOAD_PROPERTY_STATIC";
 			dst: number;
 			object: number;
 			stringIndex: number;
+			icIndex: number;
 	  }
 	| {
 			opcode: "LOAD_SUPER_PROPERTY";
@@ -652,12 +654,14 @@ export type VmInstruction =
 			object: number;
 			key: number;
 			value: number;
+			icIndex: number;
 	  }
 	| {
 			opcode: "STORE_PROPERTY_STATIC";
 			object: number;
 			value: number;
 			stringIndex: number;
+			icIndex: number;
 	  }
 	| {
 			opcode: "TO_PROPERTY_KEY";
@@ -935,6 +939,21 @@ export type VmInstruction =
 			negated: boolean;
 	  };
 
+export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>): number {
+	let count = 0;
+	for (const instruction of instructions) {
+		switch (instruction.opcode) {
+			case "LOAD_PROPERTY":
+			case "LOAD_PROPERTY_STATIC":
+			case "STORE_PROPERTY":
+			case "STORE_PROPERTY_STATIC":
+				count++;
+				break;
+		}
+	}
+	return count;
+}
+
 export interface VmDefinitionStats {
 	functionCount: number;
 	instructionCount: number;
@@ -1097,6 +1116,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 	}
 
 	const instructions: Array<VmInstruction> = [];
+	let propertyIcCount = 0;
 	const handlers: Array<VmExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
@@ -1135,7 +1155,16 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 				continue;
 			}
 			const instructionIndex = instructions.length;
-			instructions.push(lowerInstructionToVmInstruction(blockStartIps, instruction));
+			const vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
+			switch (vmInstruction.opcode) {
+				case "LOAD_PROPERTY":
+				case "LOAD_PROPERTY_STATIC":
+				case "STORE_PROPERTY":
+				case "STORE_PROPERTY_STATIC":
+					vmInstruction.icIndex = propertyIcCount++;
+					break;
+			}
+			instructions.push(vmInstruction);
 			if (
 				(instruction.type === "createObject" ||
 					instruction.type === "createObjectShaped") &&
@@ -1594,6 +1623,7 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				key: instruction.registers[2],
+				icIndex: -1,
 			};
 		case "loadPropertyStatic":
 			return {
@@ -1601,6 +1631,7 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				stringIndex: instruction.stringIndex,
+				icIndex: -1,
 			};
 		case "loadSuperProperty":
 			return {
@@ -1616,6 +1647,7 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[0],
 				key: instruction.registers[1],
 				value: instruction.registers[2],
+				icIndex: -1,
 			};
 		case "storePropertyStatic":
 			return {
@@ -1623,6 +1655,7 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[0],
 				value: instruction.registers[1],
 				stringIndex: instruction.stringIndex,
+				icIndex: -1,
 			};
 		case "toPropertyKey":
 			return {

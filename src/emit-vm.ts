@@ -2,7 +2,11 @@ import path from "node:path";
 import type { IncludedAsset } from "./assets.ts";
 import { emitCompiledFunction } from "./emit-c.ts";
 import type { CompiledFunction } from "./emit-c.ts";
-import { compressPositions, computeArgumentRetentionLimit } from "./lower-vm.ts";
+import {
+	compressPositions,
+	computeArgumentRetentionLimit,
+	countPropertyIcSites,
+} from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
@@ -164,6 +168,7 @@ function malFunctionRow(
 		`        .is_derived_constructor = ${fn.isDerivedConstructor},`,
 		`        .is_class_constructor = ${fn.isClassConstructor},`,
 		`        .has_prototype = ${fn.hasPrototype},`,
+		`        .property_ic_count = ${countPropertyIcSites(fn.instructions)},`,
 		`        .instruction_count = ${omitBytecode ? 0 : fn.instructions.length},`,
 		`        .instructions = ${omitBytecode ? "nullptr" : instructionsSymbol},`,
 		`        .instruction_data_count = ${omitBytecode ? 0 : instructionDataCount},`,
@@ -855,13 +860,13 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 		case "STORE_GLOBAL":
 			return `{ .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = ${instruction.src}, .index = ${instruction.index} } }`;
 		case "LOAD_PROPERTY":
-			return `{ .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
+			return `{ .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key}, .ic_index = ${instruction.icIndex} } }`;
 		case "LOAD_PROPERTY_STATIC":
-			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC, .as.load_property_static = { .dst = ${instruction.dst}, .object = ${instruction.object}, .string_index = ${instruction.stringIndex} } }`;
+			return `{ .opcode = MAL_OP_LOAD_PROPERTY_STATIC, .as.load_property_static = { .dst = ${instruction.dst}, .object = ${instruction.object}, .string_index = ${instruction.stringIndex}, .ic_index = ${instruction.icIndex} } }`;
 		case "STORE_PROPERTY":
-			return `{ .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value} } }`;
+			return `{ .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value}, .ic_index = ${instruction.icIndex} } }`;
 		case "STORE_PROPERTY_STATIC":
-			return `{ .opcode = MAL_OP_STORE_PROPERTY_STATIC, .as.store_property_static = { .object = ${instruction.object}, .value = ${instruction.value}, .string_index = ${instruction.stringIndex} } }`;
+			return `{ .opcode = MAL_OP_STORE_PROPERTY_STATIC, .as.store_property_static = { .object = ${instruction.object}, .value = ${instruction.value}, .string_index = ${instruction.stringIndex}, .ic_index = ${instruction.icIndex} } }`;
 		case "TO_PROPERTY_KEY":
 			return `{ .opcode = MAL_OP_TO_PROPERTY_KEY, .as.to_property_key = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
 		case "STORE_SUPER_PROPERTY":

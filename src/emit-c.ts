@@ -666,6 +666,12 @@ export function emitCompiledFunction(
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
 	lines.push(`    (void) resume_state;`);
+	if (body.some((line) => line.includes("__property_ic"))) {
+		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${index}].sites;`);
+	}
+	if (body.some((line) => line.includes("__property_function_index"))) {
+		lines.push(`    const i32 __property_function_index = ${index};`);
+	}
 
 	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
 	// as bool (both unboxed). MalValue-rep registers instead alias slots of the
@@ -867,6 +873,12 @@ function emitResumableFunction(
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
+	if (body.some((line) => line.includes("__property_ic"))) {
+		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${index}].sites;`);
+	}
+	if (body.some((line) => line.includes("__property_function_index"))) {
+		lines.push(`    const i32 __property_function_index = ${index};`);
+	}
 
 	lines.push(`    MalValue *__gc_slots;`);
 	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
@@ -1167,8 +1179,8 @@ function producedRep(
  * detection in emitBody). `name` is the region's base identifier; `declare` marks the
  * run's first access (which emits the hoisted receiver guard). For a consolidated object
  * region (`consolidated`, ≥2 string-key accesses on one object), `slotIndex` is this
- * access's position in the region's cached-slot array and `commitIps` — set only on the
- * run's last access — lists every access ip so the slow path can commit the region cache.
+ * access's position in the region's cached-slot array; `commit` marks the run's
+ * last access, where the slow path can commit the aggregate region cache.
  */
 interface RegionAccess {
 	name: string;
@@ -1178,7 +1190,9 @@ interface RegionAccess {
 	revalidate: boolean;
 	slotIndex: number;
 	size: number;
-	commitIps: Array<number> | null;
+	leadingIcIndex: number;
+	icIndices: Array<number>;
+	commit: boolean;
 }
 
 interface StackObjectSite {
@@ -1197,10 +1211,7 @@ interface StackObjectSite {
  */
 function consolidatedRegionDeclare(reg: RegionAccess, objExpr: string): Array<string> {
 	return [
-		`static const MalShape *${reg.name}_sh[MAL_OBJECT_REGION_MAX_SHAPES];`,
-		`static MalValue ${reg.name}_key[${reg.size}];`,
-		`static u32 ${reg.name}_sl[MAL_OBJECT_REGION_MAX_SHAPES * ${reg.size}];`,
-		`static u32 ${reg.name}_n;`,
+		`MalObjectRegionCache *${reg.name}_c = vm->property_cache[__property_function_index].regions[${reg.leadingIcIndex}];`,
 		`MalObject *${reg.name}_o = mal_vm_as_object(${objExpr});`,
 		// Resolve the matched variant's slot row to a pointer ONCE (offset amortized over the
 		// run), so each access is a direct `_slp[i]` — no per-access multiply. The primary
@@ -1208,12 +1219,12 @@ function consolidatedRegionDeclare(reg: RegionAccess, objExpr: string): Array<st
 		// row, so the common case costs exactly the monomorphic form; only other shapes scan.
 		`const u32 *${reg.name}_slp;`,
 		`int ${reg.name}_v;`,
-		`if (${reg.name}_o && ${reg.name}_o->shape == ${reg.name}_sh[0]) {`,
+		`if (${reg.name}_c && ${reg.name}_o && ${reg.name}_o->shape == ${reg.name}_c->shapes[0]) {`,
 		`  ${reg.name}_v = 0;`,
-		`  ${reg.name}_slp = ${reg.name}_sl;`,
+		`  ${reg.name}_slp = ${reg.name}_c->slots;`,
 		`} else {`,
-		`  ${reg.name}_v = ${reg.name}_o ? mal_vm_object_region_variant(${reg.name}_o->shape, ${reg.name}_sh, ${reg.name}_n) : -1;`,
-		`  ${reg.name}_slp = ${reg.name}_v >= 0 ? &${reg.name}_sl[${reg.name}_v * ${reg.size}] : nullptr;`,
+		`  ${reg.name}_v = ${reg.name}_c && ${reg.name}_o ? mal_vm_object_region_variant(${reg.name}_o->shape, ${reg.name}_c->shapes, ${reg.name}_c->count) : -1;`,
+		`  ${reg.name}_slp = ${reg.name}_v >= 0 ? &${reg.name}_c->slots[${reg.name}_v * ${reg.size}] : nullptr;`,
 		`}`,
 		`bool ${reg.name}_ok = ${reg.name}_slp != nullptr;`,
 	];
@@ -1226,7 +1237,7 @@ function consolidatedRegionRevalidate(reg: RegionAccess): Array<string> {
 	return reg.declare || !reg.revalidate
 		? []
 		: [
-				`${reg.name}_ok = ${reg.name}_slp != nullptr && ${reg.name}_o->shape == ${reg.name}_sh[${reg.name}_v];`,
+				`${reg.name}_ok = ${reg.name}_slp != nullptr && ${reg.name}_o->shape == ${reg.name}_c->shapes[${reg.name}_v];`,
 			];
 }
 
@@ -1236,9 +1247,9 @@ function consolidatedRegionRevalidate(reg: RegionAccess): Array<string> {
  * (its per-site ICs having just resolved) so the next matching iteration is consolidated.
  */
 function consolidatedRegionCommit(reg: RegionAccess): Array<string> {
-	const ptrs = reg.commitIps!.map((i) => `&__ic_${i}`).join(", ");
+	const ptrs = reg.icIndices.map((i) => `&__property_ic[${i}]`).join(", ");
 	return [
-		`if (!${reg.name}_ok) mal_vm_object_region_add_variant(${reg.name}_o, (const MalInlineCache *[]){${ptrs}}, ${reg.size}, ${reg.name}_sh, ${reg.name}_sl, ${reg.name}_key, &${reg.name}_n, MAL_OBJECT_REGION_MAX_SHAPES);`,
+		`if (!${reg.name}_ok) mal_vm_object_region_add_owned(vm, __property_function_index, ${reg.leadingIcIndex}, ${reg.name}_o, (const MalInlineCache *[]){${ptrs}}, ${reg.size});`,
 	];
 }
 
@@ -1443,6 +1454,18 @@ function emitBody(
 			// A ≥2-access object run consolidates onto ONE shape guard + a cached-slot array;
 			// arrays and single object accesses keep the per-access guarded form.
 			const consolidated = run.kind === "object" && run.ips.length >= 2;
+			const icIndices = run.ips.map((ip) => {
+				const instruction = fn.instructions[ip]!;
+				if (
+					instruction.opcode !== "LOAD_PROPERTY" &&
+					instruction.opcode !== "LOAD_PROPERTY_STATIC" &&
+					instruction.opcode !== "STORE_PROPERTY" &&
+					instruction.opcode !== "STORE_PROPERTY_STATIC"
+				) {
+					throw new Error(`Invalid property region instruction ${instruction.opcode}`);
+				}
+				return instruction.icIndex;
+			});
 			run.ips.forEach((ip, i) => {
 				const previousIp = run.ips[i - 1];
 				const revalidate =
@@ -1459,7 +1482,9 @@ function emitBody(
 					revalidate,
 					slotIndex: i,
 					size: run.ips.length,
-					commitIps: consolidated && i === run.ips.length - 1 ? run.ips : null,
+					leadingIcIndex: icIndices[0]!,
+					icIndices,
+					commit: consolidated && i === run.ips.length - 1,
 				});
 			});
 		}
@@ -1846,7 +1871,9 @@ function emitInstruction(
 				revalidate: false,
 				slotIndex: 0,
 				size: 1,
-				commitIps: null,
+				leadingIcIndex: instruction.icIndex,
+				icIndices: [instruction.icIndex],
+				commit: false,
 			};
 			if (reg.kind === "array" && instruction.opcode === "LOAD_PROPERTY") {
 				return [
@@ -1855,12 +1882,11 @@ function emitInstruction(
 								`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`,
 							]
 						: []),
-					`static MalInlineCache __ic_${ip};`,
 					`MalValue __v_${ip};`,
 					`if (${reg.name} && mal_vm_array_try_load(${reg.name}, ${num(instruction.key)}, &__v_${ip})) {`,
 					`  r${instruction.dst} = __v_${ip};`,
 					`} else {`,
-					`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__ic_${ip});`,
+					`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
 					`  ${throwCheck}`,
 					`}`,
 				];
@@ -1868,18 +1894,17 @@ function emitInstruction(
 			if (!reg.consolidated) {
 				const probe =
 					instruction.opcode === "LOAD_PROPERTY_STATIC"
-						? `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__ic_${ip}, &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__ic_${ip}, &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__ic_${ip}, &__v_${ip})`
-						: `(${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip}) || mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})`;
+						? `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
+						: `(${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
 				return [
 					...(reg.declare
 						? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
 						: []),
-					`static MalInlineCache __ic_${ip};`,
 					`MalValue __v_${ip};`,
 					`if (${probe}) {`,
 					`  r${instruction.dst} = __v_${ip};`,
 					`} else {`,
-					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip});`,
+					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}]);`,
 					`  ${throwCheck}`,
 					`}`,
 				];
@@ -1890,24 +1915,23 @@ function emitInstruction(
 			const regionHit =
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
 					? `${reg.name}_ok`
-					: `${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]`;
+					: `${reg.name}_ok && ${key} == ${reg.name}_c->keys[${reg.slotIndex}]`;
 			return [
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				...consolidatedRegionRevalidate(reg),
-				`static MalInlineCache __ic_${ip};`,
 				`MalValue __v_${ip};`,
 				`if (${regionHit}) {`,
 				`  mal_perf_ic_load_region_hit();`,
 				`  __v_${ip} = ${reg.name}_o->slots[${reg.name}_slp[${reg.slotIndex}]];`,
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
-					? `} else if (mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__ic_${ip}, &__v_${ip})) {`
-					: `} else if (mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})) {`,
+					? `} else if (mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})) {`
+					: `} else if (mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})) {`,
 				`} else {`,
-				`  __v_${ip} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip});`,
+				`  __v_${ip} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
 				`r${instruction.dst} = __v_${ip};`,
-				...(reg.commitIps ? consolidatedRegionCommit(reg) : []),
+				...(reg.commit ? consolidatedRegionCommit(reg) : []),
 			];
 		}
 		case "STORE_PROPERTY":
@@ -1934,7 +1958,9 @@ function emitInstruction(
 				revalidate: false,
 				slotIndex: 0,
 				size: 1,
-				commitIps: null,
+				leadingIcIndex: instruction.icIndex,
+				icIndices: [instruction.icIndex],
+				commit: false,
 			};
 			if (reg.kind === "array" && instruction.opcode === "STORE_PROPERTY") {
 				return [
@@ -1943,9 +1969,8 @@ function emitInstruction(
 								`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`,
 							]
 						: []),
-					`static MalInlineCache __ic_${ip};`,
 					`if (!(${reg.name} && mal_vm_array_try_store(${reg.name}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
-					`  mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+					`  mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
 					`  ${throwCheck}`,
 					`}`,
 				];
@@ -1953,15 +1978,14 @@ function emitInstruction(
 			if (!reg.consolidated) {
 				const probe =
 					instruction.opcode === "STORE_PROPERTY_STATIC"
-						? `${reg.name} && mal_vm_object_try_store_static(${reg.name}, ${boxed(instruction.value)}, &__ic_${ip})`
-						: `${reg.name} && mal_vm_object_try_store(${reg.name}, ${key}, ${boxed(instruction.value)}, &__ic_${ip})`;
+						? `${reg.name} && mal_vm_object_try_store_static(${reg.name}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`
+						: `${reg.name} && mal_vm_object_try_store(${reg.name}, ${key}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`;
 				return [
 					...(reg.declare
 						? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
 						: []),
-					`static MalInlineCache __ic_${ip};`,
 					`if (!(${probe})) {`,
-					`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+					`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
 					`  ${throwCheck}`,
 					`}`,
 				];
@@ -1971,19 +1995,18 @@ function emitInstruction(
 			const regionHit =
 				instruction.opcode === "STORE_PROPERTY_STATIC"
 					? `${reg.name}_ok`
-					: `${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]`;
+					: `${reg.name}_ok && ${key} == ${reg.name}_c->keys[${reg.slotIndex}]`;
 			return [
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				...consolidatedRegionRevalidate(reg),
-				`static MalInlineCache __ic_${ip};`,
 				`if (${regionHit}) {`,
 				`  mal_perf_ic_store_region_hit();`,
 				`  mal_vm_object_slot_store(${reg.name}_o, ${reg.name}_slp[${reg.slotIndex}], ${boxed(instruction.value)});`,
 				`} else {`,
-				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,
-				...(reg.commitIps ? consolidatedRegionCommit(reg) : []),
+				...(reg.commit ? consolidatedRegionCommit(reg) : []),
 			];
 		}
 		case "TO_PROPERTY_KEY":

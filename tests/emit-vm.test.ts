@@ -322,6 +322,9 @@ describe("native update-expression representation", () => {
 		const staticOutput = emit(
 			`"use strict"; function read(object) { object.a = object.a + 1; return object.a + object.b; } globalThis.read = read;`,
 		);
+		expect(staticOutput).not.toContain("static MalInlineCache");
+		expect(staticOutput).toContain("vm->property_cache[");
+		expect(staticOutput).toMatch(/\.property_ic_count = [1-9]/);
 		expect(staticOutput).toContain("mal_perf_ic_load_region_hit");
 		expect(staticOutput).toContain("mal_perf_ic_store_region_hit");
 		expect(staticOutput).not.toMatch(/&& .* == __rg\d+_key\[/);
@@ -329,7 +332,7 @@ describe("native update-expression representation", () => {
 		const dynamicOutput = emit(
 			`"use strict"; function read(object, key) { return object.a + object[key]; } globalThis.read = read;`,
 		);
-		expect(dynamicOutput).toMatch(/&& .* == __rg\d+_key\[/);
+		expect(dynamicOutput).toMatch(/&& .* == __rg\d+_c->keys\[/);
 	});
 
 	it("uses key-free probes only for non-consolidated static property sites", () => {

@@ -394,19 +394,19 @@ typedef struct MalInstruction {
         } store_global;
 
         struct {
-            i32 dst, object, key;
+            i32 dst, object, key, ic_index;
         } load_property;
 
         struct {
-            i32 object, key, value;
+            i32 object, key, value, ic_index;
         } store_property;
 
         struct {
-            i32 dst, object, string_index;
+            i32 dst, object, string_index, ic_index;
         } load_property_static;
 
         struct {
-            i32 object, value, string_index;
+            i32 object, value, string_index, ic_index;
         } store_property_static;
 
         struct {
@@ -859,6 +859,8 @@ typedef struct MalFunction {
      */
     bool has_prototype;
 
+    /** Dense VM-owned inline-cache rows used by this function's property sites. */
+    i32 property_ic_count;
     i32 instruction_count;
     const MalInstruction *instructions;
     i32 instruction_data_count;
@@ -1212,14 +1214,19 @@ typedef struct MalVm {
     i32 global_capacity;
 
     /**
-     * Per-function inline caches for the interpreter's property load/store ops
-     * and immutable shaped-object literal plans,
-     * indexed [function_index][instruction_pointer]. Each function's array is
-     * allocated lazily on first property access in it. The compiled backend uses
-     * function-static caches instead; this gives the same monomorphic fast path
-     * to interpreted code (the top level, bailed functions, --no-compiled).
+     * Per-function, VM-owned property-site caches shared by compiled and
+     * interpreted execution. Dense rows are allocated with the VM so compiled
+     * function entry needs only one indexed pointer load.
+     * Consolidated native property regions hang their aggregate cache from the
+     * leading site's parallel region row.
      */
-    struct MalInlineCache **interp_ic;
+    struct MalPropertyCachePool *property_cache;
+
+    /**
+     * Interpreter-only immutable shaped-object literal plans, still indexed by
+     * bytecode IP because literal sites are not property-access sites.
+     */
+    struct MalInlineCache **interp_literal_ic;
 
     /**
      * Megamorphic property-load stub cache: a shared, direct-mapped (shape, key) ->

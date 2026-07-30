@@ -566,6 +566,7 @@ export function serializeVmDefinition(
 function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	validateArgumentSnapshotPrefix(fn);
 	validateMappedArguments(fn);
+	validatePropertyIcIndices(fn);
 	w.i32(fn.nameStringIndex);
 	w.u8(fn.isAsync && fn.isGenerator ? 3 : fn.isAsync ? 2 : fn.isGenerator ? 1 : 0);
 	w.u8(fn.strict ? 1 : 0);
@@ -638,6 +639,25 @@ function validateMappedArguments(fn: VmFunction): void {
 		fn.mappedArgumentSlots.some((slot) => slot < -1 || slot >= fn.capturedCount)
 	) {
 		throw new RangeError("serialize-vm: invalid mapped arguments metadata");
+	}
+}
+
+function validatePropertyIcIndices(fn: VmFunction): void {
+	let expected = 0;
+	for (const instruction of fn.instructions) {
+		switch (instruction.opcode) {
+			case "LOAD_PROPERTY":
+			case "LOAD_PROPERTY_STATIC":
+			case "STORE_PROPERTY":
+			case "STORE_PROPERTY_STATIC":
+				if (instruction.icIndex !== expected) {
+					throw new RangeError(
+						`serialize-vm: property IC index ${instruction.icIndex}, expected ${expected}`,
+					);
+				}
+				expected++;
+				break;
+		}
 	}
 }
 
@@ -1190,8 +1210,18 @@ function readFunction(r: Reader): VmFunction {
 
 	const instructionCount = r.count(1);
 	const instructions: Array<VmInstruction> = [];
+	let propertyIcCount = 0;
 	for (let i = 0; i < instructionCount; ++i) {
-		instructions.push(readInstruction(r));
+		const instruction = readInstruction(r);
+		switch (instruction.opcode) {
+			case "LOAD_PROPERTY":
+			case "LOAD_PROPERTY_STATIC":
+			case "STORE_PROPERTY":
+			case "STORE_PROPERTY_STATIC":
+				instruction.icIndex = propertyIcCount++;
+				break;
+		}
+		instructions.push(instruction);
 	}
 
 	const handlerCount = r.count(3);
@@ -1413,9 +1443,15 @@ function readInstruction(r: Reader): VmInstruction {
 		case "STORE_GLOBAL":
 			return { opcode, src: r.i32(), index: r.i32() };
 		case "LOAD_PROPERTY":
-			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
+			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32(), icIndex: -1 };
 		case "LOAD_PROPERTY_STATIC":
-			return { opcode, dst: r.i32(), object: r.i32(), stringIndex: r.i32() };
+			return {
+				opcode,
+				dst: r.i32(),
+				object: r.i32(),
+				stringIndex: r.i32(),
+				icIndex: -1,
+			};
 		case "DELETE_PROPERTY":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
 		case "TO_PROPERTY_KEY":
@@ -1425,9 +1461,21 @@ function readInstruction(r: Reader): VmInstruction {
 		case "HAS_PRIVATE":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
 		case "STORE_PROPERTY":
-			return { opcode, object: r.i32(), key: r.i32(), value: r.i32() };
+			return {
+				opcode,
+				object: r.i32(),
+				key: r.i32(),
+				value: r.i32(),
+				icIndex: -1,
+			};
 		case "STORE_PROPERTY_STATIC":
-			return { opcode, object: r.i32(), value: r.i32(), stringIndex: r.i32() };
+			return {
+				opcode,
+				object: r.i32(),
+				value: r.i32(),
+				stringIndex: r.i32(),
+				icIndex: -1,
+			};
 		case "DEFINE_PRIVATE":
 			return { opcode, object: r.i32(), key: r.i32(), value: r.i32() };
 		case "STORE_PRIVATE":

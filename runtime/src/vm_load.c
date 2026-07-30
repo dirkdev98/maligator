@@ -1154,6 +1154,25 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     for (u32 i = 0; r->ok && i < instruction_count; i++) {
         rd_instruction(r, &instructions[i], &side_data);
     }
+    fn->property_ic_count = 0;
+    for (u32 i = 0; r->ok && i < instruction_count; i++) {
+        switch (instructions[i].opcode) {
+            case MAL_OP_LOAD_PROPERTY:
+                instructions[i].as.load_property.ic_index = fn->property_ic_count++;
+                break;
+            case MAL_OP_LOAD_PROPERTY_STATIC:
+                instructions[i].as.load_property_static.ic_index = fn->property_ic_count++;
+                break;
+            case MAL_OP_STORE_PROPERTY:
+                instructions[i].as.store_property.ic_index = fn->property_ic_count++;
+                break;
+            case MAL_OP_STORE_PROPERTY_STATIC:
+                instructions[i].as.store_property_static.ic_index = fn->property_ic_count++;
+                break;
+            default:
+                break;
+        }
+    }
     fn->instructions = instructions;
     fn->argument_retention_limit = -1;
     if (r->ok) {
