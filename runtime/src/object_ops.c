@@ -4,6 +4,7 @@
 
 #include "array_object.h"
 #include "gc.h"
+#include "perf_stats.h"
 #include "value_ops.h"
 
 /**
@@ -128,6 +129,9 @@ static void mal_object_dictionarize(MalObject *object) {
     if (object->shape->inline_count == 0) {
         return;
     }
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_dictionary_invalidations);
+    }
     MalShape *shape = object->shape;
     MalTable *table = mal_object_ensure_overflow(object);
     for (u32 i = 0; i < shape->inline_count; ++i) {
@@ -192,6 +196,9 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
     if (object->watched_method_proto) {
         mal_primitive_method_protector = false;
     }
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_reparent_invalidations);
+    }
 
     // SATB: reparenting overwrites the traced prototype edge; shade the old
     // prototype (boxed, since prototype is a MalObject* not a MalValue) before it
@@ -200,6 +207,7 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
         mal_gc_write_barrier(mal_value_from_heap(&object->prototype->header));
     }
     object->prototype = prototype;
+    mal_object_mark_as_prototype(prototype);
     // Old object reparented onto a young prototype: remember it (the prototype is a
     // MalObject*, not a MalValue, so card on its boxed form).
     if (prototype != nullptr) {
@@ -321,6 +329,9 @@ MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKe
 }
 
 MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const MalPropertyDesc *desc) {
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+    }
     // Defining an integer-index property on a watched prototype (%Array.prototype% or
     // %Object.prototype%) dirties the fast-elements protector — an inherited indexed
     // property could now intercept an array's fresh-index store.
@@ -480,6 +491,9 @@ bool mal_object_try_append_shaped_values(
     if (object->watched_method_proto) {
         mal_primitive_method_protector = false;
     }
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_append_invalidations);
+    }
     mal_object_grow_slots(object, source_count, expected_final->inline_count);
     for (u32 i = 0; i < count; ++i) {
         const MalShapeProp *prop = &expected_final->props[source_count + i];
@@ -492,6 +506,9 @@ bool mal_object_try_append_shaped_values(
 }
 
 bool mal_object_delete_own(MalObject *object, MalKey key) {
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_delete_invalidations);
+    }
     if (object->watched_method_proto) {
         mal_primitive_method_protector = false;
     }

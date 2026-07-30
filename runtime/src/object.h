@@ -46,6 +46,12 @@ typedef struct MalObject {
      */
     bool immutable_prototype : 1;
     /**
+     * Monotonic marker: this object has served as another object's [[Prototype]].
+     * Structural mutations then invalidate the prototype-chain epoch used by
+     * inherited and negative property caches. It never needs to be cleared.
+     */
+    bool is_prototype : 1;
+    /**
      * Set on built-in prototypes and watched namespace/constructor objects at
      * intrinsics init. Any define/set/delete/reparent breaks the monotonic method
      * protector, disabling cached values that assume those objects are unmodified.
@@ -75,6 +81,32 @@ static_assert(sizeof(MalObject) % alignof(MalValue) == 0,
  * Initialize object state in caller-provided storage.
  */
 void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObject *prototype);
+
+/** Mark an object as participating in another object's prototype chain. */
+static inline void mal_object_mark_as_prototype(MalObject *object) {
+    if (object != nullptr && !object->is_prototype) {
+        object->is_prototype = true;
+    }
+}
+
+/** Current process-wide prototype-chain validity epoch (zero is never used). */
+extern u32 mal_prototype_chain_epoch;
+
+/** Cold half of prototype-chain invalidation; callers use the inline flag guard. */
+void mal_object_bump_prototype_chain_epoch(void);
+
+/**
+ * Invalidate inherited/negative cache guards when a structurally-relevant
+ * mutation occurs on an object that has served as a prototype. The overwhelmingly
+ * common instance-object case folds to one flag test and no call.
+ */
+static inline bool mal_object_note_prototype_mutation(const MalObject *object) {
+    if (object == nullptr || !object->is_prototype) {
+        return false;
+    }
+    mal_object_bump_prototype_chain_epoch();
+    return true;
+}
 
 /**
  * Allocate and initialize a new ordinary object.

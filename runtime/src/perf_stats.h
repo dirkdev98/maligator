@@ -256,6 +256,13 @@ typedef struct MalPerfStats {
     u64 ic_inherited_reject_receiver;
     u64 ic_inherited_reject_resolution;
     u64 ic_inherited_reject_chain;
+    u64 prototype_epoch_invalidations;
+    u64 prototype_epoch_define_invalidations;
+    u64 prototype_epoch_dictionary_invalidations;
+    u64 prototype_epoch_append_invalidations;
+    u64 prototype_epoch_delete_invalidations;
+    u64 prototype_epoch_reparent_invalidations;
+    u64 prototype_epoch_shaped_invalidations;
 
     u64 ic_store_mono_hits;
     u64 ic_store_region_hits;

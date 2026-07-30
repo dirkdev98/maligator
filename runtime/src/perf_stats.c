@@ -428,6 +428,10 @@ static void mal_perf_stats_print(void) {
         "load_other_generic=%llu inherited_fills=%llu inherited_reject_basic=%llu "
         "inherited_reject_key=%llu inherited_reject_receiver=%llu "
         "inherited_reject_resolution=%llu inherited_reject_chain=%llu "
+        "prototype_epoch_invalidations=%llu prototype_epoch_define=%llu "
+        "prototype_epoch_dictionary=%llu prototype_epoch_append=%llu "
+        "prototype_epoch_delete=%llu prototype_epoch_reparent=%llu "
+        "prototype_epoch_shaped=%llu "
         "store_mono_hits=%llu store_region_hits=%llu store_fallbacks=%llu "
         "store_slow_mono_hits=%llu store_poly_hits=%llu store_shape_hits=%llu "
         "store_shape_fills=%llu store_shape_uncacheable=%llu store_plain_generic=%llu "
@@ -460,6 +464,13 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_inherited_reject_receiver,
         (unsigned long long) mal_perf_stats.ic_inherited_reject_resolution,
         (unsigned long long) mal_perf_stats.ic_inherited_reject_chain,
+        (unsigned long long) mal_perf_stats.prototype_epoch_invalidations,
+        (unsigned long long) mal_perf_stats.prototype_epoch_define_invalidations,
+        (unsigned long long) mal_perf_stats.prototype_epoch_dictionary_invalidations,
+        (unsigned long long) mal_perf_stats.prototype_epoch_append_invalidations,
+        (unsigned long long) mal_perf_stats.prototype_epoch_delete_invalidations,
+        (unsigned long long) mal_perf_stats.prototype_epoch_reparent_invalidations,
+        (unsigned long long) mal_perf_stats.prototype_epoch_shaped_invalidations,
         (unsigned long long) mal_perf_stats.ic_store_mono_hits,
         (unsigned long long) mal_perf_stats.ic_store_region_hits,
         (unsigned long long) mal_perf_stats.ic_store_fallbacks,

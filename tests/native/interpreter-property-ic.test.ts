@@ -62,7 +62,10 @@ describe("localized interpreter property inline caches", () => {
 			.split("\n")
 			.find((candidate) => candidate.startsWith("[perf-ic-stats]"));
 		expect(icLine).toBeDefined();
-		expect(field(icLine ?? "", "load_missing_hits")).toBeGreaterThan(900);
-		expect(field(icLine ?? "", "load_missing_fills")).toBeGreaterThan(0);
+		const icStats = icLine ?? "";
+		expect(field(icStats, "load_inherited_hits")).toBeGreaterThan(1500);
+		expect(field(icStats, "load_missing_hits")).toBeGreaterThan(1800);
+		expect(field(icStats, "load_missing_fills")).toBeGreaterThan(0);
+		expect(field(icStats, "prototype_epoch_invalidations")).toBeGreaterThan(0);
 	});
 });

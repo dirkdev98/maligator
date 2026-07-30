@@ -4,9 +4,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "perf_stats.h"
+
 static u64 g_slot_coallocations = 0;
 static u64 g_slot_grow_migrations = 0;
 static u64 g_slot_dictionary_migrations = 0;
+
+u32 mal_prototype_chain_epoch = 1;
+
+void mal_object_bump_prototype_chain_epoch(void) {
+    // Zero denotes an uninitialized cache row. Skip it on the astronomically
+    // unlikely wrap so no filled entry can alias an empty epoch.
+    mal_prototype_chain_epoch++;
+    if (mal_prototype_chain_epoch == 0) {
+        mal_prototype_chain_epoch++;
+    }
+    MAL_PERF_COUNT(prototype_epoch_invalidations);
+}
 
 u64 mal_object_slot_coallocation_count(void) {
     return g_slot_coallocations;
@@ -35,8 +49,10 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     object->is_raw_json = false;
     object->is_arguments = false;
     object->immutable_prototype = false;
+    object->is_prototype = false;
     object->watched_method_proto = false;
     object->slots_owned = false;
+    mal_object_mark_as_prototype(prototype);
 }
 
 MalObject *mal_object_new(MalHeap *heap, MalObject *prototype) {
@@ -73,6 +89,9 @@ void mal_object_set_shaped_values(
     assert(object->slots == nullptr);
     assert(object->overflow == nullptr);
     assert(shape->inline_count == count);
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_shaped_invalidations);
+    }
     object->shape = shape;
     if (count == 0) {
         return;

@@ -3542,26 +3542,20 @@ static bool mal_ic_try_record_inherited_slot(
         return false;
     }
 
-    MalObject *cursor = object;
-    u8 depth = 0;
-    const MalShape *intermediate[MAL_IC_POLY_EXTRA];
-    while (cursor != resolution.holder) {
-        if (depth > MAL_IC_POLY_EXTRA) {
+    // Admit any-depth ordinary chains, including dictionary intermediates. Every
+    // object reached after the receiver is marked as a prototype at attachment
+    // time, so a later structural mutation invalidates the shared epoch.
+    bool found_holder = false;
+    for (MalObject *cursor = object->prototype; cursor != nullptr; cursor = cursor->prototype) {
+        if (cursor->header.type != MAL_HEAP_OBJECT) {
             return false;
         }
-        cursor = cursor->prototype;
-        if (cursor == nullptr || cursor->header.type != MAL_HEAP_OBJECT) {
-            return false;
-        }
-        depth++;
-        if (cursor != resolution.holder) {
-            if (cursor->overflow != nullptr || depth > MAL_IC_POLY_EXTRA) {
-                return false;
-            }
-            intermediate[depth - 1] = cursor->shape;
+        if (cursor == resolution.holder) {
+            found_holder = true;
+            break;
         }
     }
-    if (depth == 0) {
+    if (!found_holder) {
         return false;
     }
 
@@ -3582,7 +3576,6 @@ static bool mal_ic_try_record_inherited_slot(
         }
         mode = MAL_IC_MODE_INHERITED_SLOT;
         slot = resolution.holder->shape->props[index].slot;
-        ic->holder_shape = resolution.holder->shape;
     } else {
         if (own.entry == nullptr) {
             return false;
@@ -3596,10 +3589,10 @@ static bool mal_ic_try_record_inherited_slot(
     ic->key = key_value;
     ic->slot = slot;
     ic->prim_kind = 0;
-    ic->poly_count = depth;
-    for (u8 i = 0; i + 1 < depth; i++) {
-        ic->poly_shape[i] = intermediate[i];
-    }
+    ic->proto_object[0] = object->prototype;
+    ic->proto_object[1] = resolution.holder;
+    ic->poly_slot[0] = mal_prototype_chain_epoch;
+    ic->poly_count = 0;
     ic->megamorphic = false;
     ic->mode = mode;
     ic->receiver_type = MAL_HEAP_OBJECT;
@@ -3619,35 +3612,49 @@ static bool mal_ic_try_record_missing(
     }
 
     const MalShape *prototype_shapes[MAL_IC_POLY_EXTRA];
-    MalObject *cursor = object;
-    u8 depth = 0;
-    while (cursor->prototype != nullptr) {
-        if (depth >= MAL_IC_POLY_EXTRA) {
-            return false;
-        }
-        cursor = cursor->prototype;
+    u32 depth = 0;
+    bool shape_chain = true;
+    for (MalObject *cursor = object->prototype; cursor != nullptr; cursor = cursor->prototype) {
         if (cursor->header.type != MAL_HEAP_OBJECT) {
             return false;
         }
-        if (cursor->overflow != nullptr &&
-            (!mal_primitive_method_protector ||
-             !cursor->watched_method_proto)) {
-            return false;
+        if (cursor->overflow != nullptr || depth >= MAL_IC_POLY_EXTRA) {
+            shape_chain = false;
+        } else if (shape_chain) {
+            prototype_shapes[depth] = cursor->shape;
         }
-        prototype_shapes[depth++] = cursor->shape;
+        depth++;
+    }
+
+    // An exact-chain entry is deliberately monomorphic. Replacing it at a site
+    // that alternates dictionary/deep prototype objects turns every access into
+    // a miss+refill; retain the first exact chain until a broader shaped-chain
+    // entry becomes available. A later mutation of the same chain may refresh
+    // its epoch normally.
+    if (!shape_chain && ic->mode == MAL_IC_MODE_MISSING &&
+        (ic->receiver_type == MAL_IC_MISSING_SHAPE_CHAIN ||
+         ic->proto_object[0] != object->prototype)) {
+        return false;
     }
 
     ic->shape = object->shape;
     ic->key = key_value;
     ic->slot = MAL_IC_VALUE_SLOT;
     ic->prim_kind = 0;
-    ic->poly_count = depth;
-    for (u8 i = 0; i < depth; i++) {
-        ic->poly_shape[i] = prototype_shapes[i];
+    if (shape_chain) {
+        for (u32 i = 0; i < depth; i++) {
+            ic->poly_shape[i] = prototype_shapes[i];
+        }
+        ic->poly_count = (u8) depth;
+        ic->receiver_type = MAL_IC_MISSING_SHAPE_CHAIN;
+    } else {
+        ic->proto_object[0] = object->prototype;
+        ic->poly_slot[0] = mal_prototype_chain_epoch;
+        ic->poly_count = 0;
+        ic->receiver_type = MAL_IC_MISSING_EXACT_CHAIN;
     }
     ic->megamorphic = false;
     ic->mode = MAL_IC_MODE_MISSING;
-    ic->receiver_type = MAL_HEAP_OBJECT;
     MAL_PERF_COUNT(ic_load_missing_fills);
     return true;
 }

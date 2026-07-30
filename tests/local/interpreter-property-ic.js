@@ -72,6 +72,78 @@ for (let i = 0; i < 1000; i++) {
 	check(loadInherited(inheritedReceiver) === inheritedMethod, "inherited data load");
 }
 
+function loadDeepInherited(object) {
+	return object.deepValue;
+}
+const deepHolder = Object.create(null);
+Object.defineProperty(deepHolder, "deepValue", {
+	configurable: true,
+	writable: true,
+	value: 7,
+});
+let deepCursor = deepHolder;
+for (let i = 0; i < 6; i++) deepCursor = Object.create(deepCursor);
+const deepReceiver = Object.create(deepCursor);
+for (let i = 0; i < 1000; i++) {
+	check(loadDeepInherited(deepReceiver) === 7, "deep dictionary inherited load");
+}
+deepHolder.deepValue = 8;
+check(loadDeepInherited(deepReceiver) === 8, "inherited cache reads live holder value");
+deepCursor.deepValue = 9;
+check(
+	loadDeepInherited(deepReceiver) === 9,
+	"intermediate shadow invalidates inherited load",
+);
+delete deepCursor.deepValue;
+check(
+	loadDeepInherited(deepReceiver) === 8,
+	"intermediate delete refills inherited load",
+);
+Object.defineProperty(deepHolder, "deepValue", {
+	configurable: true,
+	get() {
+		return 10;
+	},
+});
+check(
+	loadDeepInherited(deepReceiver) === 10,
+	"holder accessor invalidates inherited load",
+);
+
+function loadDeepMissing(object) {
+	return object.__mal_deep_missing_ic__;
+}
+for (let i = 0; i < 1000; i++) {
+	check(loadDeepMissing(deepReceiver) === undefined, "deep missing load");
+}
+deepCursor.__mal_deep_missing_ic__ = 11;
+check(
+	loadDeepMissing(deepReceiver) === 11,
+	"deep prototype addition invalidates missing load",
+);
+delete deepCursor.__mal_deep_missing_ic__;
+check(
+	loadDeepMissing(deepReceiver) === undefined,
+	"deep prototype delete refills missing load",
+);
+
+function loadSameShapePrototype(object) {
+	return object.sharedValue;
+}
+const sameShapePrototypeA = { sharedValue: 12 };
+const sameShapePrototypeB = { sharedValue: 13 };
+const sameShapeReceiverA = Object.create(sameShapePrototypeA);
+const sameShapeReceiverB = Object.create(sameShapePrototypeB);
+sameShapeReceiverA.marker = 1;
+sameShapeReceiverB.marker = 2;
+for (let i = 0; i < 1000; i++) {
+	check(
+		loadSameShapePrototype(i % 2 === 0 ? sameShapeReceiverA : sameShapeReceiverB) ===
+			(i % 2 === 0 ? 12 : 13),
+		"same receiver shape keeps exact prototype identity",
+	);
+}
+
 function stringLength(value) {
 	return value.length;
 }
