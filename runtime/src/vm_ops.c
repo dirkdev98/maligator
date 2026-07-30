@@ -3607,6 +3607,51 @@ static bool mal_ic_try_record_inherited_slot(
     return true;
 }
 
+static bool mal_ic_try_record_missing(
+    MalValue receiver, MalValue key_value, MalInlineCache *ic
+) {
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+        return false;
+    }
+    MalObject *object = mal_value_to_object(receiver);
+    if (object->overflow != nullptr) {
+        return false;
+    }
+
+    const MalShape *prototype_shapes[MAL_IC_POLY_EXTRA];
+    MalObject *cursor = object;
+    u8 depth = 0;
+    while (cursor->prototype != nullptr) {
+        if (depth >= MAL_IC_POLY_EXTRA) {
+            return false;
+        }
+        cursor = cursor->prototype;
+        if (cursor->header.type != MAL_HEAP_OBJECT) {
+            return false;
+        }
+        if (cursor->overflow != nullptr &&
+            (!mal_primitive_method_protector ||
+             !cursor->watched_method_proto)) {
+            return false;
+        }
+        prototype_shapes[depth++] = cursor->shape;
+    }
+
+    ic->shape = object->shape;
+    ic->key = key_value;
+    ic->slot = MAL_IC_VALUE_SLOT;
+    ic->prim_kind = 0;
+    ic->poly_count = depth;
+    for (u8 i = 0; i < depth; i++) {
+        ic->poly_shape[i] = prototype_shapes[i];
+    }
+    ic->megamorphic = false;
+    ic->mode = MAL_IC_MODE_MISSING;
+    ic->receiver_type = MAL_HEAP_OBJECT;
+    MAL_PERF_COUNT(ic_load_missing_fills);
+    return true;
+}
+
 static void mal_ic_try_record_inherited(
     MalVm *vm, MalValue receiver, MalValue key_value, MalValue result, MalInlineCache *ic
 ) {
@@ -3621,7 +3666,7 @@ static void mal_ic_try_record_inherited(
     }
 
     MalObject *object = mal_value_to_object(receiver);
-    if (object->overflow != nullptr || object->prototype == nullptr) {
+    if (object->overflow != nullptr) {
         MAL_PERF_COUNT(ic_inherited_reject_receiver);
         return;
     }
@@ -3631,7 +3676,15 @@ static void mal_ic_try_record_inherited(
         return;
     }
     MalPropertyResolution resolution = mal_object_resolve_property(object, key);
-    if (!resolution.found || resolution.own ||
+    if (!resolution.found) {
+        if (result == mal_value_new_undefined() &&
+            mal_ic_try_record_missing(receiver, key_value, ic)) {
+            return;
+        }
+        MAL_PERF_COUNT(ic_inherited_reject_resolution);
+        return;
+    }
+    if (resolution.own ||
         (resolution.desc.flags & MAL_PROPERTY_ACCESSOR) ||
         resolution.desc.value != result) {
         MAL_PERF_COUNT(ic_inherited_reject_resolution);

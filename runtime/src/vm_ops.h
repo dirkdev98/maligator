@@ -679,6 +679,7 @@ static inline MalInlineCache *mal_vm_interp_ic_existing(
 #define MAL_IC_MODE_ARRAY_LENGTH 4u
 #define MAL_IC_MODE_INHERITED_SLOT 5u
 #define MAL_IC_MODE_INHERITED_TABLE 6u
+#define MAL_IC_MODE_MISSING 7u
 
 // Primitive kinds for MAL_IC_MODE_PRIMITIVE_VALUE (0 = not cacheable).
 enum {
@@ -832,6 +833,34 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
                                               const MalInlineCache *ic, MalValue *out) {
     if (key != ic->key) {
         return false;
+    }
+
+    if (ic->mode == MAL_IC_MODE_MISSING) {
+        if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+            return false;
+        }
+        const MalObject *cursor = mal_value_to_object(receiver);
+        if (cursor->shape != ic->shape || cursor->overflow != nullptr) {
+            return false;
+        }
+        for (u8 depth = 0; depth < ic->poly_count; depth++) {
+            cursor = cursor->prototype;
+            if (cursor == nullptr || cursor->header.type != MAL_HEAP_OBJECT ||
+                cursor->shape != ic->poly_shape[depth]) {
+                return false;
+            }
+            if (cursor->overflow != nullptr &&
+                (!mal_primitive_method_protector ||
+                 !cursor->watched_method_proto)) {
+                return false;
+            }
+        }
+        if (cursor->prototype != nullptr) {
+            return false;
+        }
+        *out = mal_value_new_undefined();
+        MAL_PERF_COUNT(ic_load_missing_hits);
+        return true;
     }
 
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {

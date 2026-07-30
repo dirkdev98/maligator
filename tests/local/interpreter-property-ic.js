@@ -36,6 +36,33 @@ check(loadStatic(own) === 2000, "shape mutation invalidates own load");
 storeStatic(own, 2001);
 check(loadStatic(own) === 2001, "shape mutation refills own load");
 
+function loadMissing(object) {
+	return object.__mal_definitely_missing_ic__;
+}
+const missingReceiver = { present: 2 };
+for (let i = 0; i < 1000; i++) {
+	check(loadMissing(missingReceiver) === undefined, "missing load");
+}
+const missingPrototype = { __mal_definitely_missing_ic__: 3 };
+Object.setPrototypeOf(missingReceiver, missingPrototype);
+check(loadMissing(missingReceiver) === 3, "prototype addition invalidates missing load");
+delete missingPrototype.__mal_definitely_missing_ic__;
+check(
+	loadMissing(missingReceiver) === undefined,
+	"prototype delete refills missing load",
+);
+missingReceiver.__mal_definitely_missing_ic__ = 4;
+check(loadMissing(missingReceiver) === 4, "own addition invalidates missing load");
+delete missingReceiver.__mal_definitely_missing_ic__;
+Object.defineProperty(missingPrototype, "__mal_definitely_missing_ic__", {
+	configurable: true,
+	get() {
+		return 5;
+	},
+});
+check(loadMissing(missingReceiver) === 5, "prototype accessor invalidates missing load");
+delete missingPrototype.__mal_definitely_missing_ic__;
+
 const inheritedMethod = Array.prototype.slice;
 function loadInherited(array) {
 	return array.slice;

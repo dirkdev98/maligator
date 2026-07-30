@@ -231,6 +231,8 @@ typedef struct MalPerfStats {
     u64 ic_load_mono_hits;
     u64 ic_load_region_hits;
     u64 ic_load_inherited_hits;
+    u64 ic_load_missing_hits;
+    u64 ic_load_missing_fills;
     u64 ic_load_fallbacks;
     u64 ic_load_slow_mono_hits;
     u64 ic_load_poly_hits;
