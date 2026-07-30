@@ -3468,6 +3468,24 @@ static bool mal_ic_key_is_stable_string(MalValue key) {
     return mal_value_is_string(key);
 }
 
+/**
+ * Attribute destructive cache-row replacement without changing shipping builds.
+ * A populated property IC always owns a canonical nonzero string key; zero-key
+ * rows are untouched allocation-time state and are not mode transitions.
+ */
+static void mal_perf_ic_note_replacement(const MalInlineCache *ic, u8 next_mode) {
+#if MAL_PERF_STATS
+    if (mal_perf_stats_enabled && ic->key != 0 &&
+        ic->mode < MAL_PERF_IC_MODE_COUNT &&
+        next_mode < MAL_PERF_IC_MODE_COUNT) {
+        mal_perf_stats.ic_mode_replacements[ic->mode][next_mode]++;
+    }
+#else
+    (void) ic;
+    (void) next_mode;
+#endif
+}
+
 static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
     if (ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
@@ -3483,6 +3501,7 @@ static void mal_ic_record_special(
     MalVm *vm, MalInlineCache *ic, u8 mode, u8 prim_kind, MalValue key,
     MalValue value, const MalObject *prototype
 ) {
+    mal_perf_ic_note_replacement(ic, mode);
     mal_ic_detach_prototype_cache(ic);
     ic->prototype = prototype;
     ic->key = key;
@@ -3509,6 +3528,7 @@ static void mal_ic_record_special(
 static void mal_ic_record_watched(
     MalInlineCache *ic, const MalObject *object, MalValue key, MalValue value
 ) {
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_SHAPE);
     mal_ic_detach_prototype_cache(ic);
     ic->shape = object->shape;
     ic->key = key;
@@ -3535,6 +3555,7 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
     mal_ic_detach_prototype_cache(ic);
     if (ic->mode != MAL_IC_MODE_SHAPE || key != ic->key || ic->shape == nullptr ||
         ic->slot == MAL_IC_VALUE_SLOT || ic->prim_kind != 0) {
+        mal_perf_ic_note_replacement(ic, MAL_IC_MODE_SHAPE);
         ic->shape = shape;
         ic->key = key;
         ic->slot = slot;
@@ -3623,6 +3644,7 @@ static bool mal_ic_record_transition(
         mal_vm_property_cache_invalidate(ic);
         return false;
     }
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_TRANSITION);
     ic->shape = source;
     ic->key = key;
     ic->obj = object->prototype;
@@ -3716,6 +3738,7 @@ static bool mal_ic_try_record_inherited_slot(
         ic->table_handle_epoch = mal_table_handle_epoch(resolution.holder->overflow);
     }
 
+    mal_perf_ic_note_replacement(ic, mode);
     ic->shape = object->shape;
     ic->key = key_value;
     ic->slot = slot;
@@ -3773,6 +3796,7 @@ static bool mal_ic_try_record_missing(
         return false;
     }
 
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_MISSING);
     ic->shape = object->shape;
     ic->key = key_value;
     ic->slot = MAL_IC_VALUE_SLOT;
@@ -3862,6 +3886,7 @@ static void mal_ic_try_record_inherited(
         return;
     }
 
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_INHERITED_VALUE);
     mal_ic_detach_prototype_cache(ic);
     ic->shape = object->shape;
     ic->key = key_value;

@@ -36,11 +36,14 @@ void mal_object_bump_prototype_chain_epoch(void) {
 }
 
 void mal_object_unregister_prototype_cache(void *cache) {
+    MAL_PERF_COUNT(prototype_dependency_unregister_calls);
     MalPrototypeCacheDependency **link = &g_prototype_cache_dependencies;
     while (*link != nullptr) {
+        MAL_PERF_COUNT(prototype_dependency_unregister_scan_steps);
         MalPrototypeCacheDependency *dependency = *link;
         if (dependency->cache == cache) {
             *link = dependency->next;
+            MAL_PERF_COUNT(prototype_dependency_unregister_removed);
             free(dependency);
         } else {
             link = &dependency->next;
@@ -49,12 +52,15 @@ void mal_object_unregister_prototype_cache(void *cache) {
 }
 
 void mal_object_invalidate_prototype_dependents(MalObject *object) {
+    MAL_PERF_COUNT(prototype_dependency_invalidate_calls);
     MalPrototypeCacheDependency **link = &g_prototype_cache_dependencies;
     while (*link != nullptr) {
+        MAL_PERF_COUNT(prototype_dependency_invalidate_scan_steps);
         MalPrototypeCacheDependency *dependency = *link;
         if (dependency->object == object) {
             mal_vm_property_cache_invalidate(dependency->cache);
             *link = dependency->next;
+            MAL_PERF_COUNT(prototype_dependency_invalidate_removed);
             free(dependency);
         } else {
             link = &dependency->next;
@@ -65,10 +71,12 @@ void mal_object_invalidate_prototype_dependents(MalObject *object) {
 bool mal_object_register_prototype_cache(
     MalObject *receiver, MalObject *holder, void *cache
 ) {
+    MAL_PERF_COUNT(prototype_dependency_register_calls);
     mal_object_unregister_prototype_cache(cache);
     for (MalObject *cursor = receiver->prototype;
          cursor != nullptr; cursor = cursor->prototype) {
         MalPrototypeCacheDependency *dependency = malloc(sizeof(*dependency));
+        MAL_PERF_COUNT(prototype_dependency_register_nodes);
         *dependency = (MalPrototypeCacheDependency) {
             .object = cursor,
             .cache = cache,
@@ -82,6 +90,7 @@ bool mal_object_register_prototype_cache(
     if (holder == nullptr) {
         return true;
     }
+    MAL_PERF_COUNT(prototype_dependency_register_failures);
     mal_object_unregister_prototype_cache(cache);
     return false;
 }

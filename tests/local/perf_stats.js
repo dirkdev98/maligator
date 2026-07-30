@@ -109,6 +109,19 @@ function readFreshEquivalentKey(object) {
 	return object[["be", "ta"].join("")];
 }
 
+// Keep these recursive edges unreachable so both compiled and interpreted
+// attribution exercise one real site whose cache mode alternates.
+function loadModeChurn(object, recurse) {
+	const value = object.churn;
+	return recurse ? loadModeChurn(object, false) : value;
+}
+
+function storeModeChurn(object, value) {
+	object.churnStore = value;
+	if (value === -1) return storeModeChurn(object, 0);
+	return value;
+}
+
 function stackObjectProbe(value, escape) {
 	const object = { value };
 	if (escape) return object;
@@ -130,6 +143,9 @@ const polymorphicObjects = [
 	{ extra0: 0, extra1: 1, alpha: 3, beta: 4 },
 	{ extra0: 0, extra1: 1, extra2: 2, alpha: 4, beta: 5 },
 ];
+const churnPrototype = { churn: 2 };
+const churnOwn = { churn: 1 };
+const churnInherited = Object.create(churnPrototype);
 let total = 0;
 total += runStackObjectProbe(8);
 for (let i = 0; i < 2000; i++) {
@@ -144,6 +160,10 @@ for (let i = 0; i < 2000; i++) {
 	if (loadNumberMethod(i) !== numberMethod) throw new Error("number method cache");
 	total += loadStringLength(i % 2 === 0 ? "s" : "stats");
 	total += loadArrayLength(lengthArray);
+	total += loadModeChurn(i % 2 === 0 ? churnOwn : churnInherited, false);
+	const churnStore = {};
+	storeModeChurn(churnStore, i);
+	storeModeChurn(churnStore, i + 1);
 	total += readPair(polymorphicObjects[i % polymorphicObjects.length]);
 	total += readFreshEquivalentKey(object);
 }

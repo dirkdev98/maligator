@@ -8,6 +8,7 @@
 
 #define MAL_PERF_TABLE_ROLE_COUNT 4
 #define MAL_PERF_SHAPE_CALLER_COUNT 6
+#define MAL_PERF_IC_MODE_COUNT 9
 
 typedef struct MalPerfTableStats {
     u64 lookups;
@@ -279,6 +280,18 @@ typedef struct MalPerfStats {
     u64 ic_store_transition_fills;
     u64 ic_store_plain_generic;
     u64 ic_store_other_generic;
+
+    u64 ic_mode_replacements[MAL_PERF_IC_MODE_COUNT][MAL_PERF_IC_MODE_COUNT];
+
+    u64 prototype_dependency_register_calls;
+    u64 prototype_dependency_register_nodes;
+    u64 prototype_dependency_register_failures;
+    u64 prototype_dependency_unregister_calls;
+    u64 prototype_dependency_unregister_scan_steps;
+    u64 prototype_dependency_unregister_removed;
+    u64 prototype_dependency_invalidate_calls;
+    u64 prototype_dependency_invalidate_scan_steps;
+    u64 prototype_dependency_invalidate_removed;
 } MalPerfStats;
 
 extern MalPerfStats mal_perf_stats;

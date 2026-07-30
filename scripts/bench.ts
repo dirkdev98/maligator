@@ -1420,6 +1420,11 @@ function benchHttpProfile(requests: number, conc: number): void {
 				const transitions = perfReportFields(stderr, "[perf-shape-transition-stats]");
 				const calls = perfReportFields(stderr, "[perf-call-cache-stats]");
 				const ic = perfReportFields(stderr, "[perf-ic-stats]");
+				const modes = perfReportFields(stderr, "[perf-ic-mode-stats]");
+				const dependencies = perfReportFields(
+					stderr,
+					"[perf-prototype-dependency-stats]",
+				);
 				console.log(`  ${workload.name}:`);
 				console.log(
 					`    keys/request        ${perfPerRequest(strings, "key_equals_calls", requests).toFixed(1)} comparisons, ${perfPerRequest(strings, "key_string_fallbacks", requests).toFixed(1)} string fallbacks, ${perfPerRequest(strings, "string_memcmp_calls", requests).toFixed(1)} memcmp`,
@@ -1434,7 +1439,16 @@ function benchHttpProfile(requests: number, conc: number): void {
 					`    loads/request       ${perfPerRequest(ic, "load_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "load_inherited_hits", requests).toFixed(1)} inherited, ${perfPerRequest(ic, "load_missing_hits", requests).toFixed(1)} missing, ${perfPerRequest(ic, "load_mega_hits", requests).toFixed(1)} mega, ${perfPerRequest(ic, "load_fallbacks", requests).toFixed(1)} fallback`,
 				);
 				console.log(
+					`    load outcomes       ${perfPerRequest(ic, "load_slow_mono_hits", requests).toFixed(1)} slow mono, ${perfPerRequest(ic, "load_shape_fills", requests).toFixed(1)} shape fills, ${perfPerRequest(ic, "inherited_fills", requests).toFixed(1)} inherited fills, ${perfPerRequest(ic, "load_missing_fills", requests).toFixed(1)} missing fills, ${perfPerRequest(ic, "load_plain_generic", requests).toFixed(1)} plain generic`,
+				);
+				console.log(
 					`    stores/request      ${perfPerRequest(ic, "store_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "store_poly_hits", requests).toFixed(1)} poly, ${perfPerRequest(ic, "store_mega_hits", requests).toFixed(1)} mega, ${perfPerRequest(ic, "store_transition_hits", requests).toFixed(1)} transition hits, ${perfPerRequest(ic, "store_transition_fills", requests).toFixed(1)} transition fills, ${perfPerRequest(ic, "store_plain_generic", requests).toFixed(1)} generic`,
+				);
+				console.log(
+					`    IC replacements     ${perfPerRequest(modes, "replacements", requests).toFixed(1)} total, ${perfPerRequest(modes, "cross_mode", requests).toFixed(1)} cross-mode, ${perfPerRequest(modes, "chain_to_own", requests).toFixed(1)} chain→own, ${perfPerRequest(modes, "transition_to_shape", requests).toFixed(1)} transition→shape`,
+				);
+				console.log(
+					`    proto dependencies  ${perfPerRequest(dependencies, "register_calls", requests).toFixed(1)} registrations, ${perfPerRequest(dependencies, "register_nodes", requests).toFixed(1)} nodes, ${perfPerRequest(dependencies, "unregister_scan_steps", requests).toFixed(1)} unregister scans`,
 				);
 				console.log(
 					`    calls/request       ${perfPerRequest(calls, "probes", requests).toFixed(1)} probes, ${perfPerRequest(calls, "dispatch_misses", requests).toFixed(1)} misses; prototype invalidations ${ic.prototype_epoch_invalidations ?? 0}`,

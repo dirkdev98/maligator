@@ -35,6 +35,10 @@ static const char *const mal_perf_shape_callers[MAL_PERF_SHAPE_CALLER_COUNT] = {
     "store_ic",
 };
 
+static bool mal_perf_ic_mode_is_chain(usize mode) {
+    return mode == 1 || mode == 5 || mode == 6 || mode == 7;
+}
+
 void mal_perf_intrinsic_name(const byte *name, usize length) {
     if (!mal_perf_stats_enabled || length > MAL_PERF_INTRINSIC_NAME_MAX_LENGTH) {
         return;
@@ -488,6 +492,54 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_store_transition_fills,
         (unsigned long long) mal_perf_stats.ic_store_plain_generic,
         (unsigned long long) mal_perf_stats.ic_store_other_generic
+    );
+    u64 replacements = 0;
+    u64 cross_mode = 0;
+    u64 own_to_chain = 0;
+    u64 chain_to_own = 0;
+    for (usize from = 0; from < MAL_PERF_IC_MODE_COUNT; from++) {
+        for (usize to = 0; to < MAL_PERF_IC_MODE_COUNT; to++) {
+            u64 count = mal_perf_stats.ic_mode_replacements[from][to];
+            replacements += count;
+            if (from != to) cross_mode += count;
+            if (from == 0 && mal_perf_ic_mode_is_chain(to)) own_to_chain += count;
+            if (mal_perf_ic_mode_is_chain(from) && to == 0) chain_to_own += count;
+            if (count != 0) {
+                fprintf(
+                    stderr,
+                    "[perf-ic-mode-replacement] from=%zu to=%zu count=%llu\n",
+                    from, to, (unsigned long long) count
+                );
+            }
+        }
+    }
+    fprintf(
+        stderr,
+        "[perf-ic-mode-stats] replacements=%llu cross_mode=%llu "
+        "own_to_chain=%llu chain_to_own=%llu shape_to_transition=%llu "
+        "transition_to_shape=%llu\n",
+        (unsigned long long) replacements,
+        (unsigned long long) cross_mode,
+        (unsigned long long) own_to_chain,
+        (unsigned long long) chain_to_own,
+        (unsigned long long) mal_perf_stats.ic_mode_replacements[0][8],
+        (unsigned long long) mal_perf_stats.ic_mode_replacements[8][0]
+    );
+    fprintf(
+        stderr,
+        "[perf-prototype-dependency-stats] register_calls=%llu register_nodes=%llu "
+        "register_failures=%llu unregister_calls=%llu unregister_scan_steps=%llu "
+        "unregister_removed=%llu invalidate_calls=%llu invalidate_scan_steps=%llu "
+        "invalidate_removed=%llu\n",
+        (unsigned long long) mal_perf_stats.prototype_dependency_register_calls,
+        (unsigned long long) mal_perf_stats.prototype_dependency_register_nodes,
+        (unsigned long long) mal_perf_stats.prototype_dependency_register_failures,
+        (unsigned long long) mal_perf_stats.prototype_dependency_unregister_calls,
+        (unsigned long long) mal_perf_stats.prototype_dependency_unregister_scan_steps,
+        (unsigned long long) mal_perf_stats.prototype_dependency_unregister_removed,
+        (unsigned long long) mal_perf_stats.prototype_dependency_invalidate_calls,
+        (unsigned long long) mal_perf_stats.prototype_dependency_invalidate_scan_steps,
+        (unsigned long long) mal_perf_stats.prototype_dependency_invalidate_removed
     );
 }
 

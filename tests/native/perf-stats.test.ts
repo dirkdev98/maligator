@@ -172,6 +172,15 @@ describe("opt-in performance statistics", () => {
 		expect(field(transitions, "index_hits")).toBeGreaterThan(0);
 		expect(field(transitions, "index_builds")).toBeGreaterThan(0);
 
+		const modeReplacements = reportLine(result.stderr, "[perf-ic-mode-stats]");
+		expect(field(modeReplacements, "replacements")).toBeGreaterThan(0);
+		expect(field(modeReplacements, "cross_mode")).toBeGreaterThan(0);
+		const dependencies = reportLine(result.stderr, "[perf-prototype-dependency-stats]");
+		expect(field(dependencies, "register_calls")).toBeGreaterThan(0);
+		expect(field(dependencies, "register_nodes")).toBeGreaterThan(0);
+		expect(field(dependencies, "unregister_calls")).toBeGreaterThan(0);
+		expect(field(dependencies, "unregister_scan_steps")).toBeGreaterThan(0);
+
 		const ic = reportLine(result.stderr, "[perf-ic-stats]");
 		const loadHits =
 			field(ic, "load_mono_hits") +
