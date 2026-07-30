@@ -149,7 +149,8 @@ static bool regexp_parse_flags(const MalString *flags, u32 *out_bits) {
 static MalShape *regexp_instance_shape(MalVm *vm) {
     if (vm->regexp_instance_shape == nullptr) {
         vm->regexp_instance_shape = mal_shape_add_property(
-            mal_shape_empty(), mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX),
+            mal_shape_root(&vm->heap),
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX),
             MAL_PROPERTY_WRITABLE);
     }
     return vm->regexp_instance_shape;
@@ -380,7 +381,8 @@ static MalValue regexp_build_groups(MalVm *vm, MalRegExpObject *re, MalString *s
             }
             mal_regexp_named_group(re->matcher, i, nb, name_len, range);
         }
-        MalString *name = regexp_string_from_utf8(vm, nb, (usize) name_len);
+        MalString *name = mal_property_atomize_string(
+            vm, regexp_string_from_utf8(vm, nb, (usize) name_len));
         if (nb != name_buf) {
             free(nb);
         }
@@ -434,7 +436,8 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
                 }
                 mal_regexp_named_group(re->matcher, i, nb, name_len, range);
             }
-            MalString *name = regexp_string_from_utf8(vm, nb, (usize) name_len);
+            MalString *name = mal_property_atomize_string(
+                vm, regexp_string_from_utf8(vm, nb, (usize) name_len));
             if (nb != name_buf) {
                 free(nb);
             }
@@ -455,7 +458,7 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
     }
     if (vm->regexp_indices_shape == nullptr) {
         MalString *keys[1] = {mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_GROUPS)};
-        vm->regexp_indices_shape = mal_shape_from_string_keys(keys, 1);
+        vm->regexp_indices_shape = mal_shape_from_string_keys(&vm->heap, keys, 1);
     }
     mal_object_set_shaped_values(
         (MalObject *) indices, vm->regexp_indices_shape, &groups_value, 1
@@ -592,7 +595,7 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
             mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_GROUPS),
             mal_intrinsic_ascii(vm, (const byte *) "indices"),
         };
-        *shape_slot = mal_shape_from_string_keys(keys, named_count);
+        *shape_slot = mal_shape_from_string_keys(&vm->heap, keys, named_count);
     }
     mal_object_set_shaped_values(array_object, *shape_slot, named_values, named_count);
 
@@ -1278,7 +1281,8 @@ static bool regexp_get_substitution(
                 if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
                 i++;
             } else {
-                MalString *name = mal_string_new_copy(&vm->heap, &r[i + 2], close - (i + 2));
+                MalString *name = mal_property_atomize_string(
+                    vm, mal_string_new_copy(&vm->heap, &r[i + 2], close - (i + 2)));
                 MalValue value;
                 if (!mal_vm_get_property(vm, named, (MalKey){.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)}, &value)) {
                     return false;

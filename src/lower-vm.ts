@@ -448,6 +448,7 @@ export type VmInstruction =
 			count: number;
 			keyStringIndices: Array<number>;
 			valueRegisters: Array<number>;
+			shapeCacheIndex: number;
 	  }
 	| {
 			opcode: "CREATE_ARRAY";
@@ -954,6 +955,14 @@ export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>)
 	return count;
 }
 
+export function countLiteralShapeSites(
+	instructions: ReadonlyArray<VmInstruction>,
+): number {
+	return instructions.filter(
+		(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",
+	).length;
+}
+
 export interface VmDefinitionStats {
 	functionCount: number;
 	instructionCount: number;
@@ -1117,6 +1126,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 
 	const instructions: Array<VmInstruction> = [];
 	let propertyIcCount = 0;
+	let literalShapeCount = 0;
 	const handlers: Array<VmExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
@@ -1162,6 +1172,9 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 				case "STORE_PROPERTY":
 				case "STORE_PROPERTY_STATIC":
 					vmInstruction.icIndex = propertyIcCount++;
+					break;
+				case "CREATE_OBJECT_SHAPED":
+					vmInstruction.shapeCacheIndex = literalShapeCount++;
 					break;
 			}
 			instructions.push(vmInstruction);
@@ -1387,6 +1400,7 @@ function lowerInstructionToVmInstruction(
 				count: instruction.registers.length - 1,
 				keyStringIndices: instruction.keyStringIndices,
 				valueRegisters: instruction.registers.slice(1),
+				shapeCacheIndex: -1,
 			};
 		case "createArray":
 			return {

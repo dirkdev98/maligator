@@ -20,14 +20,14 @@ static void mal_function_init_metadata(
     MalString *name,
     MalValue *coallocated_slots
 ) {
-    assert(object->shape == mal_shape_empty());
+    assert(object->shape->inline_count == 0);
     assert(object->slots == nullptr);
     assert(object->overflow == nullptr);
     assert(length_key.kind == MAL_KEY_STRING);
     assert(name == nullptr || name_key.kind == MAL_KEY_STRING);
 
-    MalShape *shape = mal_shape_add_property(
-        mal_shape_empty(), length_key, MAL_PROPERTY_CONFIGURABLE);
+    MalShape *shape =
+        mal_shape_add_property(object->shape, length_key, MAL_PROPERTY_CONFIGURABLE);
     MalValue values[2] = {length, mal_value_new_undefined()};
     u32 count = 1;
     if (name != nullptr) {

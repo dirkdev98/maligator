@@ -5,6 +5,7 @@ import type { CompiledFunction } from "./emit-c.ts";
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
+	countLiteralShapeSites,
 	countPropertyIcSites,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
@@ -169,6 +170,7 @@ function malFunctionRow(
 		`        .is_class_constructor = ${fn.isClassConstructor},`,
 		`        .has_prototype = ${fn.hasPrototype},`,
 		`        .property_ic_count = ${countPropertyIcSites(fn.instructions)},`,
+		`        .literal_shape_count = ${countLiteralShapeSites(fn.instructions)},`,
 		`        .instruction_count = ${omitBytecode ? 0 : fn.instructions.length},`,
 		`        .instructions = ${omitBytecode ? "nullptr" : instructionsSymbol},`,
 		`        .instruction_data_count = ${omitBytecode ? 0 : instructionDataCount},`,
@@ -786,7 +788,7 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 		case "CREATE_OBJECT":
 			return `{ .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = ${instruction.dst} } }`;
 		case "CREATE_OBJECT_SHAPED":
-			return `{ .opcode = MAL_OP_CREATE_OBJECT_SHAPED, .as.create_object_shaped = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
+			return `{ .opcode = MAL_OP_CREATE_OBJECT_SHAPED, .as.create_object_shaped = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()}, .shape_cache_index = ${instruction.shapeCacheIndex} } }`;
 		case "CREATE_ARRAY":
 			return `{ .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = ${instruction.dst}, .length = ${instruction.length} } }`;
 		case "INSTANTIATE_LITERAL_TEMPLATE":

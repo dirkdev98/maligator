@@ -1155,6 +1155,7 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
         rd_instruction(r, &instructions[i], &side_data);
     }
     fn->property_ic_count = 0;
+    fn->literal_shape_count = 0;
     for (u32 i = 0; r->ok && i < instruction_count; i++) {
         switch (instructions[i].opcode) {
             case MAL_OP_LOAD_PROPERTY:
@@ -1168,6 +1169,10 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
                 break;
             case MAL_OP_STORE_PROPERTY_STATIC:
                 instructions[i].as.store_property_static.ic_index = fn->property_ic_count++;
+                break;
+            case MAL_OP_CREATE_OBJECT_SHAPED:
+                instructions[i].as.create_object_shaped.shape_cache_index =
+                    fn->literal_shape_count++;
                 break;
             default:
                 break;
@@ -1388,6 +1393,7 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
         strings[s].storage = MAL_STRING_STORAGE_EXTERNAL;
         strings[s].hash_valid = false;
         strings[s].array_index_impossible = false;
+        strings[s].property_atom = false;
         strings[s].length = length;
         strings[s].code_units = units;
     }

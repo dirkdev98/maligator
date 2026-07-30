@@ -38,10 +38,8 @@ u64 mal_object_slot_dictionary_migration_count(void) {
 }
 
 void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObject *prototype) {
-    (void) heap;
-
     mal_heap_header_init(&object->header, type);
-    object->shape = mal_shape_empty();
+    object->shape = mal_shape_root(heap);
     object->slots = nullptr;
     // Overflow/dictionary table is allocated lazily: a fresh object is empty
     // (shaped), and only index/symbol keys or dictionary transitions create it.
@@ -88,7 +86,7 @@ MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *
 void mal_object_set_shaped_values(
     MalObject *object, MalShape *shape, const MalValue *values, u32 count
 ) {
-    assert(object->shape == mal_shape_empty());
+    assert(object->shape->inline_count == 0);
     assert(object->slots == nullptr);
     assert(object->overflow == nullptr);
     assert(shape->inline_count == count);

@@ -583,8 +583,9 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
  * object site that sees more than one shape accumulates the alternates in the
  * inline polymorphic overflow (`poly_shape`/`poly_slot`), checked right after the
  * primary so a 2-4-shape site stays on the inline fast path instead of an
- * out-of-line re-resolve. A shape is immutable and never freed, so a cached
- * (shape -> slot) is valid for the life of the site. Zero-initialized
+ * out-of-line re-resolve. A shape is immutable and shares the owning VM/heap
+ * lifetime with these cache rows, so a cached (shape -> slot) remains valid for
+ * the life of the site. Zero-initialized
  * (shape == nullptr, poly_count == 0) means empty — the overflow is inline (no
  * heap allocation), so there is nothing to free on teardown.
  *
@@ -597,7 +598,9 @@ typedef struct MalInlineCache {
         // Exact current-realm primitive prototype for a primitive-value entry.
         const struct MalObject *prototype;
     };
-    MalValue key; // the exact key value cached — a computed-key site (o[k]) varies
+    // Exact VM-lifetime string atom cached. A computed-key site (o[k]) may vary;
+    // its slow probe canonicalizes collectable strings before comparing here.
+    MalValue key;
     // `value` caches a resolved property value for the two protector-gated modes:
     //  - primitive-method: `mode == MAL_IC_MODE_PRIMITIVE_VALUE` — `value` is
     //    `key` on that primitive kind's (unmodified) prototype chain.
@@ -990,9 +993,9 @@ static inline bool mal_vm_watched_try_load_static(MalValue receiver,
 
 /**
  * Protector/type-gated value and exotic-length entries. Fill sites admit only
- * immortal exact keys, so identity is stable and a computed-key site cannot use
- * a result cached for equal-looking collectable or alternating keys. Length is
- * read from the receiver on every hit; only the resolution is cached.
+ * VM-lifetime canonical string atoms, so identity is stable and a computed-key
+ * site cannot use a result cached for an alternating key. Length is read from
+ * the receiver on every hit; only the resolution is cached.
  */
 static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValue key,
                                            const MalInlineCache *ic, MalValue *out) {

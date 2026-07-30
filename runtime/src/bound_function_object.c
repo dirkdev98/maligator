@@ -41,11 +41,11 @@ void mal_bound_function_object_init_metadata(
     MalValue name
 ) {
     MalObject *object = &bound->object;
-    assert(object->shape == mal_shape_empty());
+    assert(object->shape->inline_count == 0);
     assert(object->slots == nullptr);
     assert(object->overflow == nullptr);
-    MalShape *shape = mal_shape_add_property(
-        mal_shape_empty(), length_key, MAL_PROPERTY_CONFIGURABLE);
+    MalShape *shape =
+        mal_shape_add_property(object->shape, length_key, MAL_PROPERTY_CONFIGURABLE);
     shape = mal_shape_add_property(shape, name_key, MAL_PROPERTY_CONFIGURABLE);
     object->shape = shape;
     object->slots = (MalValue *) (bound + 1);

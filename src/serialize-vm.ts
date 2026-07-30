@@ -644,6 +644,7 @@ function validateMappedArguments(fn: VmFunction): void {
 
 function validatePropertyIcIndices(fn: VmFunction): void {
 	let expected = 0;
+	let expectedLiteralShape = 0;
 	for (const instruction of fn.instructions) {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
@@ -656,6 +657,14 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 					);
 				}
 				expected++;
+				break;
+			case "CREATE_OBJECT_SHAPED":
+				if (instruction.shapeCacheIndex !== expectedLiteralShape) {
+					throw new RangeError(
+						`serialize-vm: literal shape index ${instruction.shapeCacheIndex}, expected ${expectedLiteralShape}`,
+					);
+				}
+				expectedLiteralShape++;
 				break;
 		}
 	}
@@ -1211,6 +1220,7 @@ function readFunction(r: Reader): VmFunction {
 	const instructionCount = r.count(1);
 	const instructions: Array<VmInstruction> = [];
 	let propertyIcCount = 0;
+	let literalShapeCount = 0;
 	for (let i = 0; i < instructionCount; ++i) {
 		const instruction = readInstruction(r);
 		switch (instruction.opcode) {
@@ -1219,6 +1229,9 @@ function readFunction(r: Reader): VmFunction {
 			case "STORE_PROPERTY":
 			case "STORE_PROPERTY_STATIC":
 				instruction.icIndex = propertyIcCount++;
+				break;
+			case "CREATE_OBJECT_SHAPED":
+				instruction.shapeCacheIndex = literalShapeCount++;
 				break;
 		}
 		instructions.push(instruction);
@@ -1358,6 +1371,7 @@ function readInstruction(r: Reader): VmInstruction {
 				count: r.i32(),
 				keyStringIndices: r.i32Array(),
 				valueRegisters: r.i32Array(),
+				shapeCacheIndex: -1,
 			};
 			if (
 				instruction.count < 1 ||

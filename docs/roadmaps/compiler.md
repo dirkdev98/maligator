@@ -79,9 +79,11 @@ hit-path specialization and call/control-flow analysis before new allocation reg
 - [ ] Propagate stable field value classes through proven shapes and stores. Keep
       numeric values unboxed across property arithmetic only behind a sound guard and
       fallback/deoptimization contract.
-- [ ] Generalize property-key interning beyond the intrinsic atom table. Define
-      lifetime and GC policy before relying on pointer identity in shapes,
-      dictionaries, Maps, or inline caches.
+- [x] Generalize property-key interning beyond the intrinsic atom table. Property
+      names now converge on strongly rooted VM-lifetime atoms; heap-owned shapes,
+      dictionaries, static constants, and VM-owned inline caches can therefore use
+      stable pointer identity without crossing isolate lifetimes. Map/Set keys remain
+      in their separate ECMAScript value-key domain.
 - [ ] Add validity/version cells for user-defined prototype chains, then extend
       inherited-value caching beyond watched built-in chains and measure realistic
       method-call improvement.

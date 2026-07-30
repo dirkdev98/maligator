@@ -72,6 +72,7 @@ describe("Test262 VM definition merger", () => {
 				count: 1,
 				keyStringIndices: [0],
 				valueRegisters: [1],
+				shapeCacheIndex: 0,
 			},
 			{
 				opcode: "CREATE_TEMPLATE_OBJECT",

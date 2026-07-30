@@ -234,9 +234,11 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     if (lookup.present) {
         MAL_PERF_COUNT(intrinsic_ascii_hits);
         atom = mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
+        atom->property_atom = true;
     } else {
         MAL_PERF_COUNT(intrinsic_ascii_misses);
         atom = mal_string_new_ascii(&vm->heap, name, length);
+        atom->property_atom = true;
         MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
         (void) mal_table_upsert_entry(vm->atoms, atom_key, nullptr);
     }
@@ -248,6 +250,26 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
 
     free(heap_units);
     return atom;
+}
+
+MalString *mal_property_atomize_string(MalVm *vm, MalString *string) {
+    if (string->property_atom) {
+        return string;
+    }
+    MalKey key = {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(string),
+    };
+    MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
+    if (lookup.present) {
+        MalString *atom =
+            mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
+        atom->property_atom = true;
+        return atom;
+    }
+    string->property_atom = true;
+    (void) mal_table_upsert_entry(vm->atoms, key, nullptr);
+    return string;
 }
 
 MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit) {
@@ -266,8 +288,10 @@ MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit) {
     MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
     if (lookup.present) {
         cached = mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
+        cached->property_atom = true;
     } else {
         cached = mal_string_new_copy(&vm->heap, &code_unit, 1);
+        cached->property_atom = true;
         MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(cached)};
         (void) mal_table_upsert_entry(vm->atoms, atom_key, nullptr);
     }

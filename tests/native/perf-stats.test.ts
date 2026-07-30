@@ -146,6 +146,11 @@ describe("opt-in performance statistics", () => {
 		for (const role of ["object", "atoms", "map"]) {
 			const table = reportLine(result.stderr, "[perf-table-stats]", `role=${role} `);
 			expect(field(table, "find_calls")).toBeGreaterThan(0);
+			if (role === "atoms") {
+				// Each access constructs a fresh but equal "beta" string. Property
+				// conversion must converge those strings on one VM-lifetime identity.
+				expect(field(table, "lookup_hits")).toBeGreaterThan(1000);
+			}
 			if (role === "map") {
 				expect(field(table, "find_calls")).toBe(
 					field(table, "lookups") +
@@ -173,6 +178,7 @@ describe("opt-in performance statistics", () => {
 			field(ic, "load_region_hits") +
 			field(ic, "load_slow_mono_hits");
 		expect(loadHits).toBeGreaterThan(0);
+		expect(field(ic, "load_slow_mono_hits")).toBeGreaterThan(1000);
 		expect(field(ic, "load_fallbacks")).toBeGreaterThan(0);
 		expect(field(ic, "load_primitive_hits")).toBeGreaterThan(3000);
 		expect(field(ic, "load_string_length_hits")).toBeGreaterThan(1000);
@@ -213,7 +219,9 @@ describe("opt-in performance statistics", () => {
 		const ic = reportLine(result.stderr, "[perf-ic-stats]");
 		expect(field(ic, "load_mono_hits")).toBeGreaterThan(0);
 		expect(field(ic, "store_mono_hits")).toBeGreaterThan(0);
-		expect(field(ic, "load_slow_mono_hits")).toBe(0);
+		// Fresh equal computed strings synchronize once for atom lookup, then hit
+		// the canonical-key cache without repeating the shape search.
+		expect(field(ic, "load_slow_mono_hits")).toBeGreaterThan(1000);
 		expect(field(ic, "store_slow_mono_hits")).toBe(0);
 		expect(field(ic, "load_primitive_hits")).toBeGreaterThan(3000);
 		expect(field(ic, "load_string_length_hits")).toBeGreaterThan(1000);

@@ -262,7 +262,7 @@ typedef struct MalInstruction {
 
         struct {
             // Side data: [count, string-constant indices..., value registers...].
-            i32 dst, data_offset;
+            i32 dst, data_offset, shape_cache_index;
         } create_object_shaped;
 
         struct {
@@ -861,6 +861,8 @@ typedef struct MalFunction {
 
     /** Dense VM-owned inline-cache rows used by this function's property sites. */
     i32 property_ic_count;
+    /** Dense VM-owned shape memo rows used by this function's shaped literals. */
+    i32 literal_shape_count;
     i32 instruction_count;
     const MalInstruction *instructions;
     i32 instruction_data_count;
@@ -1222,11 +1224,15 @@ typedef struct MalVm {
      */
     struct MalPropertyCachePool *property_cache;
 
+    /** Per-function dense shaped-literal memo rows, shared by both backends. */
+    struct MalShape ***literal_shape_cache;
+
     /**
-     * Interpreter-only immutable shaped-object literal plans, still indexed by
-     * bytecode IP because literal sites are not property-access sites.
+     * Canonical property atom for each definition string constant. This keeps
+     * static property instructions and shaped literals identity-stable even
+     * when eval splices a duplicate string constant from another definition.
      */
-    struct MalInlineCache **interp_literal_ic;
+    struct MalString **string_constant_atoms;
 
     /**
      * Megamorphic property-load stub cache: a shared, direct-mapped (shape, key) ->
@@ -1409,10 +1415,10 @@ typedef struct MalVm {
     MalTable *symbol_registry;
 
     /**
-     * Interned runtime-internal key strings (the fixed vocabulary handed out by
-     * mal_intrinsic_ascii: "length", "prototype", …). Keyed by string content so
-     * each distinct name is allocated once for the VM lifetime instead of on
-     * every builtin call. A GC root (the atoms it holds stay reachable).
+     * Canonical property-name strings, including compiler constants, computed
+     * keys, and the fixed vocabulary handed out by mal_intrinsic_ascii. Keyed by
+     * content and strongly retained for the VM lifetime so shapes, dictionaries,
+     * and ICs can converge on stable pointer identity.
      */
     MalTable *atoms;
 

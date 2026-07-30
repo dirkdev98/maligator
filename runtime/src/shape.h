@@ -32,9 +32,9 @@
  * a sealed/frozen object, an integer key) drops the object to dictionary mode
  * (a plain MalTable — exactly today's behavior), so the change is additive.
  *
- * Shapes form a transition tree rooted at the immortal empty shape; adding a
- * named property (key + attrs) transitions to a child, interned so every object
- * that adds the same keys in the same order shares one shape.
+ * Each heap owns a transition tree rooted at its empty shape; adding a named
+ * property (key + attrs) transitions to a child, interned so objects in that
+ * isolate that add the same keys in the same order share one shape.
  */
 
 typedef struct MalShape MalShape;
@@ -85,8 +85,20 @@ static inline bool mal_shape_can_add_property(const MalShape *shape, MalKey key)
 
 static_assert(sizeof(MalShape) <= 32, "MalShape outgrew its 32-byte size class");
 
-/** The immortal empty shape: the root of the transition tree (0 properties). */
-MalShape *mal_shape_empty(void);
+/** Initialize/free the transition tree owned by `heap`. */
+void mal_shape_heap_init(MalHeap *heap);
+void mal_shape_heap_free(MalHeap *heap);
+
+/** The heap-owned empty shape: root of one isolate's transition tree. */
+static inline MalShape *mal_shape_root(MalHeap *heap) {
+    return heap->shape_root;
+}
+
+/**
+ * Process-lifetime transitionless empty sentinel used after an object becomes a
+ * dictionary. New shaped objects start at mal_shape_root(heap), never here.
+ */
+MalShape *mal_shape_dictionary_empty(void);
 
 /**
  * Index of `key` in the shape's props, or -1 if absent. String keys compare by
@@ -109,7 +121,7 @@ bool mal_shape_attrs_are_default(u8 attrs);
  * in order, as default data properties. Materializes a static object literal's
  * final shape in one step so the literal need not transition property-by-property.
  */
-MalShape *mal_shape_from_string_keys(struct MalString **keys, u32 count);
+MalShape *mal_shape_from_string_keys(MalHeap *heap, struct MalString **keys, u32 count);
 
-/** Visit keys retained by the immortal transition tree during GC root scanning. */
-void mal_shape_visit_transition_keys(void (*visit)(MalValue));
+/** Visit keys retained by one heap's transition tree during GC root scanning. */
+void mal_shape_visit_transition_keys(MalHeap *heap, void (*visit)(MalValue));

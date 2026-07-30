@@ -1112,7 +1112,8 @@ static MalValue mal_json_object_members_finalize(
     }
 
     if (shaped) {
-        MalShape *shape = mal_shape_from_string_keys(shape_keys, shape_count);
+        MalShape *shape =
+            mal_shape_from_string_keys(&parser->vm->heap, shape_keys, shape_count);
         MalObject *prototype = mal_value_to_object(
             parser->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
         return mal_value_from_object(mal_object_new_shaped(

@@ -180,11 +180,8 @@ static MalShapeTransition *mal_shape_transition_index_find(
     return nullptr;
 }
 
-/**
- * The immortal empty shape (0 properties). Baked into static storage like other
- * compile-time-immortal cells, so the future GC neither collects nor traces it.
- */
-static MalShape g_empty_shape = {
+/** Transitionless sentinel for objects that have moved to dictionary storage. */
+static MalShape g_dictionary_empty_shape = {
     .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_SHAPE),
     .inline_count = 0,
     .props = nullptr,
@@ -192,8 +189,48 @@ static MalShape g_empty_shape = {
     .transitions = nullptr,
 };
 
-MalShape *mal_shape_empty(void) {
-    return &g_empty_shape;
+static void mal_shape_init_empty(MalShape *shape) {
+    *shape = (MalShape) {
+        .header = {.type = MAL_HEAP_SHAPE, .storage = MAL_HEAP_STORAGE_DYNAMIC},
+        .inline_count = 0,
+        .props = nullptr,
+        .transition_index = nullptr,
+        .transitions = nullptr,
+    };
+}
+
+void mal_shape_heap_init(MalHeap *heap) {
+    heap->shape_root = malloc(sizeof(MalShape));
+    mal_shape_init_empty(heap->shape_root);
+    memset(mal_shape_find_cache, 0, sizeof(mal_shape_find_cache));
+}
+
+static void mal_shape_free_children(MalShape *shape) {
+    MalShapeTransition *transition = shape->transitions;
+    while (transition != nullptr) {
+        MalShapeTransition *next = transition->next;
+        mal_shape_free_children(transition->child);
+        free(transition->child->transition_index);
+        free(transition->child->props);
+        free(transition->child);
+        free(transition);
+        transition = next;
+    }
+}
+
+void mal_shape_heap_free(MalHeap *heap) {
+    if (heap->shape_root == nullptr) return;
+    mal_shape_free_children(heap->shape_root);
+    free(heap->shape_root->transition_index);
+    free(heap->shape_root);
+    heap->shape_root = nullptr;
+    // The TLS direct map may otherwise retain freed shape/key pointers into a
+    // later heap lifetime on this thread.
+    memset(mal_shape_find_cache, 0, sizeof(mal_shape_find_cache));
+}
+
+MalShape *mal_shape_dictionary_empty(void) {
+    return &g_dictionary_empty_shape;
 }
 
 bool mal_shape_attrs_are_default(u8 attrs) {
@@ -260,8 +297,8 @@ i32 mal_shape_find(const MalShape *shape, MalKey key, MalShapeFindCaller caller)
     return -1;
 }
 
-MalShape *mal_shape_from_string_keys(struct MalString **keys, u32 count) {
-    MalShape *shape = mal_shape_empty();
+MalShape *mal_shape_from_string_keys(MalHeap *heap, struct MalString **keys, u32 count) {
+    MalShape *shape = mal_shape_root(heap);
     for (u32 i = 0; i < count; ++i) {
         MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(keys[i])};
         shape = mal_shape_add_property(
@@ -362,6 +399,6 @@ static void mal_shape_visit_child_keys(MalShape *shape, void (*visit)(MalValue))
     }
 }
 
-void mal_shape_visit_transition_keys(void (*visit)(MalValue)) {
-    mal_shape_visit_child_keys(&g_empty_shape, visit);
+void mal_shape_visit_transition_keys(MalHeap *heap, void (*visit)(MalValue)) {
+    mal_shape_visit_child_keys(mal_shape_root(heap), visit);
 }

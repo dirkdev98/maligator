@@ -104,7 +104,7 @@ static bool mal_promise_is_canonical_intrinsic(
     }
 
     MalObject *object = &mal_value_to_promise_object(value)->object;
-    if (object->shape != mal_shape_empty() || object->overflow != nullptr) {
+    if (object->shape->inline_count != 0 || object->overflow != nullptr) {
         return false;
     }
 

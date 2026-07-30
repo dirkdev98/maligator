@@ -119,7 +119,10 @@ static MalValue mal_process_build_env(MalVm *vm) {
         MalValue value = mal_process_utf8_string(vm, eq + 1);
         MalRootSpan value_rs;
         mal_gc_root(&value_rs, &value, 1);
-        mal_object_set(env, mal_key_from_value(name), value);
+        MalKey key;
+        if (mal_vm_value_to_property_key(vm, name, &key)) {
+            mal_object_set(env, key, value);
+        }
         mal_gc_unroot(&value_rs);
         mal_gc_unroot(&name_rs);
     }

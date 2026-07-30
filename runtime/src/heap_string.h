@@ -18,6 +18,8 @@ typedef struct MalString {
     MalStringStorage storage;
     bool hash_valid;
     bool array_index_impossible;
+    /** Canonical VM-lifetime representative in the owning VM's atom table. */
+    bool property_atom;
     union {
         /** Cached only for flat (owned/external) strings. */
         u64 hash;

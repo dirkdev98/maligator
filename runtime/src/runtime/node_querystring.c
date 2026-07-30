@@ -105,7 +105,11 @@ static MalValue qs_parse(
             mal_gc_unroot(&root);
             return mal_value_new_undefined();
         }
-        MalKey key = {.kind = MAL_KEY_STRING, .value = roots[1]};
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, roots[1], &key)) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
         MalPropertyLookup prior = mal_object_get_own(mal_value_to_object(roots[0]), key);
         if (!prior.present) {
             MalPropertyDesc desc = {.flags = QS_VISIBLE, .value = roots[2]};

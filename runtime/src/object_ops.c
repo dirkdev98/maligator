@@ -139,7 +139,7 @@ static void mal_object_dictionarize(MalObject *object) {
         MalPropertyDesc desc = mal_object_data_desc(object->slots[prop->slot], prop->attrs);
         mal_property_define(table, mal_key_from_value(prop->key), &desc);
     }
-    object->shape = mal_shape_empty();
+    object->shape = mal_shape_dictionary_empty();
     // The values now live in the table. Separately-owned buffers are freed;
     // coallocated storage remains part of the managed object cell.
     mal_object_record_slot_dictionary_migration(object);
@@ -402,10 +402,9 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             mal_object_grow_slots(object, object->shape->inline_count, count);
             object->slots[count - 1] = desc->value;
             object->shape = child;
-            // Old object gains a new shaped property: both the value and the (string)
-            // key live through this object — the shape is not a GC cell, so the key is
-            // traced via mal_gc_trace_object_common. A young non-interned computed key
-            // would otherwise be swept.
+            // Old object gains a new shaped property. The value is carded here;
+            // the canonical property atom is retained by vm->atoms and the
+            // heap-owned transition tree is scanned as a root.
             mal_gc_card(&object->header, desc->value);
             mal_gc_card(&object->header, key.value);
             return MAL_DEFINE_OWN_APPLIED;

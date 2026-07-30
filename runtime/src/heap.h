@@ -24,6 +24,7 @@ typedef struct MalHeap MalHeap;
 typedef struct MalGcChunk MalGcChunk;
 typedef struct MalGcBlock MalGcBlock;
 typedef struct MalGcLarge MalGcLarge;
+typedef struct MalShape MalShape;
 
 #if MAL_REALMS
 /* Realm metadata is defined in vm.h; the heap caches only a back-pointer to the
@@ -75,6 +76,8 @@ typedef struct MalHeap {
     /** Bytes of managed cells that survived the last sweep; sizes the next
      * auto-collection trigger. Zero until the first collection. */
     usize live_bytes;
+    /** Heap-lifetime root of this isolate's hidden-class transition tree. */
+    MalShape *shape_root;
     /** Process-unique heap lifetime identity. Static native call caches use this
      * with epoch so exact object identities never cross VM lifetimes. */
     u64 identity;

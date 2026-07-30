@@ -402,6 +402,12 @@ void mal_intrinsics_init(MalVm *vm);
  */
 MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name);
 
+/**
+ * Return the VM-lifetime canonical representative for an existing string.
+ * Property-key conversion uses this after excluding array indices.
+ */
+MalString *mal_property_atomize_string(MalVm *vm, MalString *string);
+
 /** Return a one-code-unit string, interning Latin-1 values in a VM-local cache. */
 MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit);
 

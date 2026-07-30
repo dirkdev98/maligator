@@ -365,7 +365,7 @@ describe("stack-object native metadata and C emission", () => {
 		);
 		const source = emitVmDefinition(definition, { compiled: true });
 		expect(source).toContain("MalObject __stack_object_");
-		expect(source).toContain(".shape = mal_shape_empty()");
+		expect(source).toContain(".shape = mal_shape_root(&vm->heap)");
 		expect(source).toContain(".slots = nullptr");
 		expect(source).not.toContain("mal_vm_op_create_object(vm)");
 	});

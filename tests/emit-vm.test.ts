@@ -15,6 +15,7 @@ const instructions: Array<VmInstruction> = [
 		count: 2,
 		keyStringIndices: [1, 2],
 		valueRegisters: [3, 4],
+		shapeCacheIndex: 0,
 	},
 	{ opcode: "CREATE_MODULE_NAMESPACE", dst: 2, nameIndices: [1, 2], slots: [5, 6] },
 	{

@@ -34,7 +34,6 @@
 MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
-static MalInlineCache *mal_interp_literal_ic(MalCallable *callable);
 static bool mal_vm_key_is_prototype(MalKey key);
 
 static u64 g_stack_object_materializations = 0;
@@ -109,14 +108,18 @@ bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
     return mal_string_equals(string, round_trip);
 }
 
-static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
+static bool mal_vm_string_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     u32 index = 0;
     if (mal_vm_string_to_array_index(mal_value_to_string(value), &index)) {
         *key_out = mal_key_index(index);
         return true;
     }
 
-    *key_out = (MalKey) {.kind = MAL_KEY_STRING, .value = value};
+    MalString *atom = mal_property_atomize_string(vm, mal_value_to_string(value));
+    *key_out = (MalKey) {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(atom),
+    };
     return true;
 }
 
@@ -140,7 +143,7 @@ bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
         return true;
     }
     if (mal_value_is_string(value)) {
-        return mal_vm_string_to_property_key(value, key_out);
+        return mal_vm_string_to_property_key(vm, value, key_out);
     }
     if (mal_value_is_symbol(value)) {
         *key_out = (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
@@ -159,7 +162,7 @@ bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     if (!mal_vm_to_string(vm, primitive, &string)) {
         return false;
     }
-    return mal_vm_string_to_property_key(mal_value_from_string(string), key_out);
+    return mal_vm_string_to_property_key(vm, mal_value_from_string(string), key_out);
 }
 
 bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalValue *out) {
@@ -571,21 +574,20 @@ void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *in
     const i32 *value_registers = &data[1 + count];
     MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
     MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
-    MalInlineCache *cache = mal_interp_literal_ic(callable);
-    MalShape *shape = (MalShape *) cache->shape;
+    MalShape **cache = &callable->vm->literal_shape_cache[callable->function_index][
+        instruction->as.create_object_shaped.shape_cache_index];
+    MalShape *shape = *cache;
     for (u32 i = 0; i < count; ++i) {
         values[i] = callable->registers[value_registers[i]];
     }
     // Shape transitions are immutable and interned. Reuse this bytecode site's
-    // otherwise-unused property-cache row instead of walking the same key sequence
-    // for every object allocation.
+    // dense literal row instead of walking the same key sequence per allocation.
     if (shape == nullptr) {
-        const MalString *string_constants = callable->vm->definition->string_constants;
         for (u32 i = 0; i < count; ++i) {
-            keys[i] = (MalString *) &string_constants[key_indices[i]];
+            keys[i] = callable->vm->string_constant_atoms[key_indices[i]];
         }
-        shape = mal_shape_from_string_keys(keys, count);
-        cache->shape = shape;
+        shape = mal_shape_from_string_keys(&callable->vm->heap, keys, count);
+        *cache = shape;
     }
     callable->registers[instruction->as.create_object_shaped.dst] =
         mal_vm_create_object_shaped(callable->vm, shape, values, count);
@@ -774,7 +776,7 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset) {
         if (parent->is_object) {
             MalKey key = {
                 .kind = MAL_KEY_STRING,
-                .value = mal_value_from_string(&vm->definition->string_constants[key_index]),
+                .value = mal_value_from_string(vm->string_constant_atoms[key_index]),
             };
             MalPropertyDesc desc = {
                 .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
@@ -3459,9 +3461,11 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
     return mal_vm_op_load_property_keyed(vm, object_value, key);
 }
 
-static bool mal_ic_key_is_immortal(MalValue key) {
-    return mal_value_is_heap(key) &&
-        mal_value_to_heap(key)->storage == MAL_HEAP_STORAGE_IMMORTAL;
+static bool mal_ic_key_is_stable_string(MalValue key) {
+    // Property-IC slow paths canonicalize string keys through vm->atoms before
+    // reaching any recorder. The atom table is a VM root, so these identities
+    // remain valid for exactly the same lifetime as the VM-owned cache rows.
+    return mal_value_is_string(key);
 }
 
 static void mal_ic_record_special(
@@ -3689,8 +3693,7 @@ static void mal_ic_try_record_inherited(
         MAL_PERF_COUNT(ic_inherited_reject_basic);
         return;
     }
-    if (!mal_value_is_heap(key_value) ||
-        mal_value_to_heap(key_value)->storage != MAL_HEAP_STORAGE_IMMORTAL) {
+    if (!mal_value_is_string(key_value)) {
         MAL_PERF_COUNT(ic_inherited_reject_key);
         return;
     }
@@ -3760,6 +3763,19 @@ static void mal_ic_try_record_inherited(
 
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
     MAL_PERF_COUNT(ic_load_fallbacks);
+    MalKey converted_key;
+    bool key_converted = false;
+    if (mal_value_is_string(key_value)) {
+        if (!mal_vm_string_to_property_key(vm, key_value, &converted_key)) {
+            return mal_value_new_undefined();
+        }
+        key_converted = true;
+        if (converted_key.kind == MAL_KEY_STRING) {
+            // All cache probes and fills below now use the VM-lifetime atom, not
+            // the transient string instance supplied by a computed-key access.
+            key_value = converted_key.value;
+        }
+    }
     MalValue special_value;
     if (mal_vm_special_try_load(vm, object_value, key_value, ic, &special_value)) {
         return special_value;
@@ -3773,7 +3789,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
     // accesses can read the current length in the caller's inline fast path.
     if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT) && mal_value_is_string(key_value)
         && mal_array_key_is_length((MalKey){.kind = MAL_KEY_STRING, .value = key_value})) {
-        if (mal_ic_key_is_immortal(key_value)) {
+        if (mal_ic_key_is_stable_string(key_value)) {
             mal_ic_record_special(
                 vm, ic, MAL_IC_MODE_ARRAY_LENGTH, 0, key_value,
                 mal_value_new_undefined(), nullptr);
@@ -3826,7 +3842,9 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         // toString/valueOf exactly once) and reuse it for both the cache fill and
         // the slow path — never fall through to a re-converting generic op.
         MalKey key;
-        if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        if (key_converted) {
+            key = converted_key;
+        } else if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
             return mal_value_new_undefined();
         }
         if (key.kind == MAL_KEY_STRING) {
@@ -3834,16 +3852,10 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
             if (idx >= 0) {
                 MAL_PERF_COUNT(ic_load_shape_hits);
                 const MalShapeProp *prop = &object->shape->props[idx];
-                // Only cache when the key can be compared by value across accesses
-                // without an ABA hazard: a heap key (string/symbol) must be immortal
-                // (a collectable one could be freed and its address reused — a later
-                // same-address key would false-hit), and ic->key is not a GC root.
-                // A non-heap key here is ToPropertyKey of a number (e.g. o[1.1] →
-                // "1.1"); key_value is still the number, so it must NOT be derefed —
-                // such keys are simply left uncached. Accumulates alternate shapes
-                // (polymorphic sites) rather than evicting the previous shape.
-                if (mal_value_is_heap(key_value)
-                    && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+                // Canonical string atoms are rooted by the VM for the lifetime of
+                // this VM-owned cache row, so pointer identity is ABA-safe even
+                // when the source expression produced a collectable string.
+                if (mal_ic_key_is_stable_string(key_value)) {
                     mal_ic_record(ic, object->shape, key_value, prop->slot);
                     MAL_PERF_COUNT(ic_load_shape_fills);
                     // Warm the shared stub cache so a megamorphic site's next access to
@@ -3864,8 +3876,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
             // mutation of a watched intrinsic clears it. Accessors are excluded
             // (their getter must run per access).
             if (object->watched_method_proto && mal_primitive_method_protector
-                && mal_value_is_heap(key_value)
-                && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+                && mal_ic_key_is_stable_string(key_value)) {
                 MalPropertyLookup own = mal_object_get_own(object, key);
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
                     mal_ic_record_watched(ic, object, key_value, own.desc.value);
@@ -3891,21 +3902,23 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
     if (prim_kind != 0) {
         if (prim_kind == MAL_PRIM_KIND_STRING && mal_value_is_string(key_value) &&
             mal_array_key_is_length((MalKey){.kind = MAL_KEY_STRING, .value = key_value})) {
-            if (mal_ic_key_is_immortal(key_value)) {
+            if (mal_ic_key_is_stable_string(key_value)) {
                 mal_ic_record_special(
                     vm, ic, MAL_IC_MODE_STRING_LENGTH, 0, key_value,
                     mal_value_new_undefined(), nullptr);
             }
             return mal_value_from_i32((i32) mal_value_to_string(object_value)->length);
         }
-        MalValue result = mal_vm_op_load_property(vm, object_value, key_value);
+        MalValue result = key_converted
+            ? mal_vm_op_load_property_keyed(vm, object_value, converted_key)
+            : mal_vm_op_load_property(vm, object_value, key_value);
         // Cache only a plain DATA method resolved on the (watched) prototype chain:
         // an immortal string key that is not a string-receiver exotic own (length /
         // canonical index, resolved on the value not the prototype) and not an
         // accessor (whose getter must run each time).
         if (mal_primitive_method_protector
             && vm->completion.kind != MAL_COMPLETION_THROW
-            && mal_value_is_string(key_value) && mal_ic_key_is_immortal(key_value)) {
+            && mal_ic_key_is_stable_string(key_value)) {
             MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
             bool string_exotic = prim_kind == MAL_PRIM_KIND_STRING &&
                 (mal_array_key_is_length(key) ||
@@ -3949,8 +3962,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 MAL_PERF_COUNT(ic_load_watched_hits);
                 return ic->value;
             }
-            if (mal_value_is_string(key_value)
-                && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+            if (mal_ic_key_is_stable_string(key_value)) {
                 MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
                 MalPropertyLookup own = mal_object_get_own(object, key);
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
@@ -3962,7 +3974,9 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         }
     }
     MAL_PERF_COUNT(ic_load_other_generic);
-    MalValue result = mal_vm_op_load_property(vm, object_value, key_value);
+    MalValue result = key_converted
+        ? mal_vm_op_load_property_keyed(vm, object_value, converted_key)
+        : mal_vm_op_load_property(vm, object_value, key_value);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         mal_ic_try_record_inherited(vm, object_value, key_value, result, ic);
     }
@@ -3975,6 +3989,17 @@ void mal_vm_op_store_property_ic(
     MAL_PERF_COUNT(ic_store_fallbacks);
     if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
+        MalKey converted_key;
+        bool key_converted = false;
+        if (mal_value_is_string(key_value)) {
+            if (!mal_vm_string_to_property_key(vm, key_value, &converted_key)) {
+                return;
+            }
+            key_converted = true;
+            if (converted_key.kind == MAL_KEY_STRING) {
+                key_value = converted_key.value;
+            }
+        }
         if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape &&
             key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
             MAL_PERF_COUNT(ic_store_slow_mono_hits);
@@ -4002,7 +4027,9 @@ void mal_vm_op_store_property_ic(
         // it for the cache fill and the slow path — never re-convert via the
         // generic op (that would fire the key's side effect a second time).
         MalKey key;
-        if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        if (key_converted) {
+            key = converted_key;
+        } else if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
             return;
         }
         if (key.kind == MAL_KEY_STRING) {
@@ -4012,11 +4039,9 @@ void mal_vm_op_store_property_ic(
             if (idx >= 0 && mal_shape_attrs_are_default(object->shape->props[idx].attrs)) {
                 MAL_PERF_COUNT(ic_store_shape_hits);
                 const MalShapeProp *prop = &object->shape->props[idx];
-                // Cache only a heap immortal key (see the load path's ABA note); a
-                // non-heap key (ToPropertyKey of a number) must not be derefed.
-                // Accumulates alternate shapes (polymorphic sites) like the load path.
-                if (mal_value_is_heap(key_value)
-                    && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+                // Canonical string atoms share the VM/cache lifetime. Accumulate
+                // alternate shapes (polymorphic sites) like the load path.
+                if (mal_ic_key_is_stable_string(key_value)) {
                     mal_ic_record(ic, object->shape, key_value, prop->slot);
                     MAL_PERF_COUNT(ic_store_shape_fills);
                 } else {
@@ -4104,20 +4129,6 @@ int mal_vm_object_region_add_owned(
         &region->count, MAL_OBJECT_REGION_MAX_SHAPES);
 }
 
-/** Interpreter-only cache for the shaped-object literal currently executing.
- * Dispatch has already advanced instruction_pointer, so the literal's IP is one
- * back. The per-function array is allocated lazily on first use. */
-static MalInlineCache *mal_interp_literal_ic(MalCallable *callable) {
-    MalVm *vm = callable->vm;
-    i32 function_index = callable->function_index;
-    MalInlineCache *caches = vm->interp_literal_ic[function_index];
-    if (caches == nullptr) {
-        caches = calloc((usize) callable->function->instruction_count, sizeof(MalInlineCache));
-        vm->interp_literal_ic[function_index] = caches;
-    }
-    return &caches[callable->instruction_pointer - 1];
-}
-
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_property.dst] = mal_vm_array_fast_load(
         callable->vm,
@@ -4129,7 +4140,8 @@ void mal_op_load_property(MalCallable *callable, const MalInstruction *instructi
 
 void mal_op_load_property_static(MalCallable *callable, const MalInstruction *instruction) {
     MalValue key = mal_value_from_string(
-        &callable->vm->definition->string_constants[instruction->as.load_property_static.string_index]);
+        callable->vm->string_constant_atoms[
+            instruction->as.load_property_static.string_index]);
     callable->registers[instruction->as.load_property_static.dst] = mal_vm_array_fast_load(
         callable->vm,
         callable->registers[instruction->as.load_property_static.object],
@@ -4293,7 +4305,8 @@ void mal_op_store_property(MalCallable *callable, const MalInstruction *instruct
 
 void mal_op_store_property_static(MalCallable *callable, const MalInstruction *instruction) {
     MalValue key = mal_value_from_string(
-        &callable->vm->definition->string_constants[instruction->as.store_property_static.string_index]);
+        callable->vm->string_constant_atoms[
+            instruction->as.store_property_static.string_index]);
     mal_vm_array_fast_store(
         callable->vm,
         callable->registers[instruction->as.store_property_static.object],
@@ -4728,7 +4741,7 @@ static MalPropertyLookup mal_vm_global_dictionary_lookup(
     *global_object_out = nullptr;
     *key_out = (MalKey) {
         .kind = MAL_KEY_STRING,
-        .value = mal_value_from_string(&vm->definition->string_constants[name_string_index]),
+        .value = mal_value_from_string(vm->string_constant_atoms[name_string_index]),
     };
 
     // The global object is ordinarily a plain object. Proxies/exotics, shaped
@@ -5098,7 +5111,7 @@ MalValue mal_vm_op_copy_data_properties(
         MalObject *source_object = mal_value_to_object(source);
         MalShape *source_shape = source_object->shape;
         if (source_object->overflow == nullptr && source_shape->inline_count > 0) {
-            MalShape *result_shape = mal_shape_empty();
+            MalShape *result_shape = mal_shape_root(&vm->heap);
             MalValue values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
             u32 count = 0;
             bool eligible = source_shape->inline_count <= MAL_SHAPE_DYNAMIC_INLINE_SLOTS;

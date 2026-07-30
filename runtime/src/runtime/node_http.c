@@ -896,7 +896,7 @@ static MalValue http_server_socket_facade(MalVm *vm) {
             "_events", "_eventsCount", "_maxListeners",
             "encrypted", "readable", "writable",
         };
-        MalShape *shape = mal_shape_empty();
+        MalShape *shape = mal_shape_root(&vm->heap);
         for (usize i = 0; i < countof(names); i++) {
             shape = mal_shape_add_property(
                 shape, mal_intrinsic_string_key(vm, (const byte *) names[i]),
@@ -910,7 +910,7 @@ static MalValue http_server_socket_facade(MalVm *vm) {
         mal_value_new_boolean(true),
     };
     if (mal_object_try_append_shaped_values(
-            mal_value_to_object(roots[0]), mal_shape_empty(),
+            mal_value_to_object(roots[0]), mal_shape_root(&vm->heap),
             vm->node_http_socket_shape, values, (u32) countof(values))) {
         MAL_PERF_COUNT(http_bulk_shaped_objects);
         MAL_PERF_ADD(http_bulk_shaped_slots, countof(values));
@@ -945,7 +945,7 @@ static void http_incoming_message_dispatch_shapes(MalVm *vm) {
     static_assert(countof(source_names) + countof(dispatch_names)
                       <= MAL_SHAPE_MAX_INLINE_SLOTS,
                   "IncomingMessage dispatch shape exceeds inline slots");
-    MalShape *shape = mal_shape_empty();
+    MalShape *shape = mal_shape_root(&vm->heap);
     for (usize i = 0; i < countof(source_names); ++i) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) source_names[i]),
@@ -974,7 +974,7 @@ static void http_server_response_shapes(MalVm *vm) {
     static_assert(countof(parent_names) + countof(constructor_names)
                       + countof(dispatch_names) <= MAL_SHAPE_MAX_INLINE_SLOTS,
                    "ServerResponse dispatch shape exceeds inline slots");
-    MalShape *shape = mal_shape_empty();
+    MalShape *shape = mal_shape_root(&vm->heap);
     for (usize i = 0; i < countof(parent_names); ++i) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) parent_names[i]),
@@ -999,7 +999,7 @@ static void http_initialize_shaped_object(
     MalVm *vm, MalValue object, MalShape *shape,
     const char *const *names, const MalValue *values, usize count) {
     if (mal_object_try_append_shaped_values(
-            mal_value_to_object(object), mal_shape_empty(), shape,
+            mal_value_to_object(object), mal_shape_root(&vm->heap), shape,
             values, (u32) count)) {
         MAL_PERF_COUNT(http_bulk_shaped_objects);
         MAL_PERF_ADD(http_bulk_shaped_slots, count);
@@ -1020,7 +1020,7 @@ static MalShape *http_readable_state_shape(MalVm *vm) {
         "encoding", "decoder", "ended", "endEmitted", "destroyed",
         "objectMode", "highWaterMark", "reading",
     };
-    MalShape *shape = mal_shape_empty();
+    MalShape *shape = mal_shape_root(&vm->heap);
     for (usize i = 0; i < countof(names); i++) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) names[i]),
@@ -1542,8 +1542,12 @@ static MalValue http_response_get_headers(
             MalValue name = http_ascii_value(
                 vm, state->response_headers[i].name,
                 state->response_headers[i].name_len);
-            mal_object_set(mal_value_to_object(object), mal_key_from_value(name),
-                           state->response_headers[i].value);
+            MalKey key;
+            if (mal_vm_value_to_property_key(vm, name, &key)) {
+                mal_object_set(
+                    mal_value_to_object(object), key,
+                    state->response_headers[i].value);
+            }
         }
     }
     mal_gc_unroot(&root);
@@ -2958,8 +2962,13 @@ static bool http_incoming_header_add(
     MalVm *vm, MalValue headers, MalValue lower_name,
     MalValue value, MalValue *scratch) {
     MalObject *object = mal_value_to_object(headers);
-    MalKey key = mal_key_from_value(lower_name);
-    MalString *name = mal_value_to_string(lower_name);
+    MalKey key;
+    if (!mal_vm_value_to_property_key(vm, lower_name, &key)) {
+        return false;
+    }
+    MalString *name = key.kind == MAL_KEY_STRING
+        ? mal_value_to_string(key.value)
+        : mal_value_to_string(lower_name);
     MalPropertyLookup existing = mal_object_get_own(object, key);
     bool set_cookie = mal_string_equals_ascii_ci(name, "set-cookie");
     if (set_cookie) {

@@ -672,6 +672,9 @@ export function emitCompiledFunction(
 	if (body.some((line) => line.includes("__property_function_index"))) {
 		lines.push(`    const i32 __property_function_index = ${index};`);
 	}
+	if (body.some((line) => line.includes("__literal_shapes"))) {
+		lines.push(`    MalShape **__literal_shapes = vm->literal_shape_cache[${index}];`);
+	}
 
 	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
 	// as bool (both unboxed). MalValue-rep registers instead alias slots of the
@@ -878,6 +881,9 @@ function emitResumableFunction(
 	}
 	if (body.some((line) => line.includes("__property_function_index"))) {
 		lines.push(`    const i32 __property_function_index = ${index};`);
+	}
+	if (body.some((line) => line.includes("__literal_shapes"))) {
+		lines.push(`    MalShape **__literal_shapes = vm->literal_shape_cache[${index}];`);
 	}
 
 	lines.push(`    MalValue *__gc_slots;`);
@@ -1715,19 +1721,19 @@ function emitInstruction(
 			}
 			return [
 				"mal_perf_stack_object_init();",
-				`${stackObjectSite.objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = mal_shape_empty(), .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = nullptr, .overflow = nullptr };`,
+				`${stackObjectSite.objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = mal_shape_root(&vm->heap), .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = nullptr, .overflow = nullptr };`,
 				`r${instruction.dst} = mal_value_from_object(&${stackObjectSite.objectName});`,
 			];
 		case "CREATE_OBJECT_SHAPED": {
-			// Build the literal's shape once (static per-site cache) and create the
-			// object directly in it, bulk-filling slots — no per-property defines.
+			// Build the literal's shape once in the VM-owned dense site row and
+			// create the object directly in it — no per-property defines.
 			const keys = instruction.keyStringIndices
-				.map((ki) => `&mal_strings${suffix}[${ki}]`)
+				.map((ki) => `vm->string_constant_atoms[${ki}]`)
 				.join(", ");
 			const values = instruction.valueRegisters.map((r) => boxed(r)).join(", ");
 			const shape = [
-				`static MalShape *__oshape_${ip} = nullptr;`,
-				`if (__oshape_${ip} == nullptr) __oshape_${ip} = mal_shape_from_string_keys((MalString *[]){ ${keys} }, ${instruction.count});`,
+				`MalShape *__oshape_${ip} = __literal_shapes[${instruction.shapeCacheIndex}];`,
+				`if (__oshape_${ip} == nullptr) { __oshape_${ip} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${instruction.count}); __literal_shapes[${instruction.shapeCacheIndex}] = __oshape_${ip}; }`,
 			];
 			if (stackObjectSite === undefined) {
 				return [
@@ -1849,7 +1855,7 @@ function emitInstruction(
 			}
 			const key =
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
-					? `mal_value_from_string(&mal_strings${suffix}[${instruction.stringIndex}])`
+					? `mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}])`
 					: boxed(instruction.key);
 			// Per-site monomorphic inline cache (a static, zero-initialized → starts empty).
 			// A hit is a direct slot/element read with no shape search or key conversion, and
@@ -1942,7 +1948,7 @@ function emitInstruction(
 			}
 			const key =
 				instruction.opcode === "STORE_PROPERTY_STATIC"
-					? `mal_value_from_string(&mal_strings${suffix}[${instruction.stringIndex}])`
+					? `mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}])`
 					: boxed(instruction.key);
 			// See LOAD_PROPERTY: a monomorphic data-slot/dense-element hit runs no user code,
 			// so the region form drops the throwCheck on the hit; the general-[[Set]] miss

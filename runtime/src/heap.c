@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "./gc.h"
+#include "./shape.h"
 
 static _Atomic(u64) g_next_heap_identity = 1;
 
@@ -342,6 +343,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->free_blocks = nullptr;
     heap->bytes_allocated = 0;
     heap->live_bytes = 0;
+    mal_shape_heap_init(heap);
     do {
         heap->identity = atomic_fetch_add(&g_next_heap_identity, 1);
     } while (heap->identity == 0);
@@ -361,6 +363,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
 }
 
 void mal_heap_free(MalHeap *heap) {
+    mal_shape_heap_free(heap);
     MalGcChunk *chunk = heap->chunks;
     while (chunk != nullptr) {
         MalGcChunk *next = chunk->next;

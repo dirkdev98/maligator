@@ -623,8 +623,8 @@ void mal_gc_satb_shade_frame(MalVmFrame *frame) {
 }
 
 /** Common edges of every MalObject-based cell: prototype, inline slots, overflow.
- * The shape is not a GC cell, but its property keys can be heap strings (a
- * computed/concatenated key), so they are marked here through the owning object. */
+ * The shape tree is malloc-owned, but its property atoms are heap strings, so
+ * they are marked here through both owning objects and the heap root scan. */
 static void mal_gc_trace_object_common(MalObject *object) {
     mal_gc_mark_object(object->prototype);
     const MalShape *shape = object->shape;
@@ -917,9 +917,9 @@ static void mal_gc_scan_roots(MalVm *vm) {
     // last Map or key. Every sync/concurrent/verify root scan passes through here.
     mal_vm_invalidate_map_get_set_cache(vm);
 
-    // Shapes are process-lifetime interned, so every transition key they retain is
-    // also a root even when no live object currently owns an intermediate shape.
-    mal_shape_visit_transition_keys(mal_gc_mark_value);
+    // The heap-owned transition tree retains keys even when no live object
+    // currently owns an intermediate shape.
+    mal_shape_visit_transition_keys(&vm->heap, mal_gc_mark_value);
 
     // The running fiber's execution slice lives in the live MalVm fields + the
     // global root-chain heads.

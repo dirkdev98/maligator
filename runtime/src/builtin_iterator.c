@@ -24,7 +24,7 @@ MalValue mal_vm_create_iter_result(MalVm *vm, MalValue value, bool done) {
             mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_VALUE),
             mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_DONE),
         };
-        vm->iterator_result_shape = mal_shape_from_string_keys(keys, 2);
+        vm->iterator_result_shape = mal_shape_from_string_keys(&vm->heap, keys, 2);
     }
     MalValue result =
         mal_vm_create_object_shaped(vm, vm->iterator_result_shape, values, 2);

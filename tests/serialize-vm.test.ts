@@ -38,6 +38,7 @@ const instructions: Array<VmInstruction> = [
 		count: 2,
 		keyStringIndices: [0, 1],
 		valueRegisters: [3, 7],
+		shapeCacheIndex: 0,
 	},
 	{
 		opcode: "CALL",
@@ -222,6 +223,20 @@ describe("serialize-vm", () => {
 				functions: [{ ...mainFn, instructions: invalidInstructions }],
 			}),
 		).toThrow("property IC index 1, expected 0");
+	});
+
+	it("requires dense literal-shape ordinals while keeping them implicit on the wire", () => {
+		const invalidInstructions = instructions.map((instruction) =>
+			instruction.opcode === "CREATE_OBJECT_SHAPED"
+				? { ...instruction, shapeCacheIndex: 1 }
+				: instruction,
+		);
+		expect(() =>
+			serializeVmDefinition({
+				...definition,
+				functions: [{ ...mainFn, instructions: invalidInstructions }],
+			}),
+		).toThrow("literal shape index 1, expected 0");
 	});
 
 	it("round-trips and validates persisted argument snapshot prefixes", () => {
@@ -439,6 +454,7 @@ describe("serialize-vm", () => {
 								count,
 								keyStringIndices,
 								valueRegisters,
+								shapeCacheIndex: 0,
 							},
 						],
 					},

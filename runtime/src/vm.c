@@ -38,19 +38,24 @@ static u64 g_coroutine_buffer_peak_retained_bytes = 0;
 static u64 g_loaded_instruction_count = 0;
 static u64 g_loaded_instruction_data_count = 0;
 
-static void mal_vm_property_cache_init(MalVm *vm, i32 function_index) {
+static void mal_vm_function_cache_init(MalVm *vm, i32 function_index) {
     MalPropertyCachePool *pool = &vm->property_cache[function_index];
-    i32 count = vm->definition->functions[function_index].property_ic_count;
-    if (count <= 0) {
+    const MalFunction *function = &vm->definition->functions[function_index];
+    i32 property_count = function->property_ic_count;
+    if (property_count <= 0) {
         *pool = (MalPropertyCachePool){0};
-        return;
+    } else {
+        // One zeroed allocation keeps the dense IC row and its sparse compiled-region
+        // pointer row adjacent. MalInlineCache is pointer-aligned and 80 bytes, so the
+        // trailing pointer row remains naturally aligned.
+        pool->sites = calloc(
+            (usize) property_count,
+            sizeof(MalInlineCache) + sizeof(MalObjectRegionCache *));
+        pool->regions = (MalObjectRegionCache **) &pool->sites[property_count];
     }
-    // One zeroed allocation keeps the dense IC row and its sparse compiled-region
-    // pointer row adjacent. MalInlineCache is pointer-aligned and 80 bytes, so the
-    // trailing pointer row remains naturally aligned.
-    pool->sites = calloc(
-        (usize) count, sizeof(MalInlineCache) + sizeof(MalObjectRegionCache *));
-    pool->regions = (MalObjectRegionCache **) &pool->sites[count];
+    vm->literal_shape_cache[function_index] = function->literal_shape_count > 0
+        ? calloc((usize) function->literal_shape_count, sizeof(MalShape *))
+        : nullptr;
 }
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
@@ -432,6 +437,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
         memcpy(strings, definition->string_constants, sizeof(MalString) * (usize) string_count);
     }
     vm->live_definition.string_constants = strings;
+    vm->string_constant_atoms =
+        calloc((usize) vm->string_capacity, sizeof(MalString *));
 
     // Fixed capacity, never reallocated (see MAL_MAX_BIGINT_CONSTANTS): like
     // strings, BigInt values point at their cells.
@@ -454,10 +461,10 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 
     vm->property_cache =
         calloc((usize) vm->function_capacity, sizeof(MalPropertyCachePool));
-    vm->interp_literal_ic =
-        calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
+    vm->literal_shape_cache =
+        calloc((usize) vm->function_capacity, sizeof(MalShape **));
     for (i32 i = 0; i < function_count; i++) {
-        mal_vm_property_cache_init(vm, i);
+        mal_vm_function_cache_init(vm, i);
     }
     vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
     vm->iterator_result_shape = nullptr;
@@ -575,6 +582,10 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->symbol_registry = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_SYMBOL_REGISTRY);
     // Must exist before mal_intrinsics_init, which interns keys through it.
     vm->atoms = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
+    for (i32 i = 0; i < definition->string_constant_count; i++) {
+        vm->string_constant_atoms[i] = mal_property_atomize_string(
+            vm, (MalString *) &vm->definition->string_constants[i]);
+    }
     for (u32 i = 0; i < MAL_HOT_KEY_COUNT; i++) {
         vm->hot_intrinsic_keys[i] = nullptr;
     }
@@ -737,11 +748,11 @@ void mal_vm_free(MalVm *vm) {
         }
         free(vm->property_cache);
     }
-    if (vm->interp_literal_ic != nullptr) {
+    if (vm->literal_shape_cache != nullptr) {
         for (i32 i = 0; i < vm->definition->function_count; i++) {
-            free(vm->interp_literal_ic[i]);
+            free(vm->literal_shape_cache[i]);
         }
-        free(vm->interp_literal_ic);
+        free(vm->literal_shape_cache);
     }
     free(vm->load_stub);
     free(vm->interp_call_cache);
@@ -765,6 +776,7 @@ void mal_vm_free(MalVm *vm) {
     // The VM-owned constant/template tables (the instruction/code-unit data their
     // rows point at is owned elsewhere — static, or the caller's loaded definition).
     free((MalFunction *) vm->live_definition.functions);
+    free(vm->string_constant_atoms);
     free((MalString *) vm->live_definition.string_constants);
     free((MalBigInt *) vm->live_definition.bigint_constants);
     free((u32 *) vm->live_definition.literal_template_data);
@@ -1044,6 +1056,10 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     if (loaded->string_constant_count > 0) {
         memcpy((MalString *) live->string_constants + string_base, loaded->string_constants,
                sizeof(MalString) * (usize) loaded->string_constant_count);
+        for (i32 i = string_base; i < new_strings; i++) {
+            vm->string_constant_atoms[i] = mal_property_atomize_string(
+                vm, (MalString *) &live->string_constants[i]);
+        }
     }
     live->string_constant_count = new_strings;
 
@@ -1141,16 +1157,15 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
         vm->frames[i].function = &functions[vm->frames[i].function_index];
     }
 
-    // Per-function caches grow with the function table. Property rows are
-    // initialized eagerly; interpreter-only literal rows remain lazy.
+    // Per-function caches grow with the function table.
     vm->property_cache =
         realloc(vm->property_cache, sizeof(MalPropertyCachePool) * (usize) new_functions);
-    vm->interp_literal_ic = realloc(
-        vm->interp_literal_ic, sizeof(struct MalInlineCache *) * (usize) new_functions);
+    vm->literal_shape_cache = realloc(
+        vm->literal_shape_cache, sizeof(MalShape **) * (usize) new_functions);
     for (i32 i = fn_base; i < new_functions; i++) {
         vm->property_cache[i] = (MalPropertyCachePool){0};
-        vm->interp_literal_ic[i] = nullptr;
-        mal_vm_property_cache_init(vm, i);
+        vm->literal_shape_cache[i] = nullptr;
+        mal_vm_function_cache_init(vm, i);
     }
 
     return fn_base;

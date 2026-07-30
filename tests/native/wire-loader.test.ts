@@ -33,6 +33,7 @@ const fn: VmFunction = {
 			count: 1,
 			keyStringIndices: [0],
 			valueRegisters: [0],
+			shapeCacheIndex: 0,
 		},
 	],
 	handlers: [],

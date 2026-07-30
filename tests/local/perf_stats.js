@@ -105,6 +105,10 @@ function readPair(object) {
 	return object.alpha + object.beta;
 }
 
+function readFreshEquivalentKey(object) {
+	return object[["be", "ta"].join("")];
+}
+
 function stackObjectProbe(value, escape) {
 	const object = { value };
 	if (escape) return object;
@@ -141,6 +145,7 @@ for (let i = 0; i < 2000; i++) {
 	total += loadStringLength(i % 2 === 0 ? "s" : "stats");
 	total += loadArrayLength(lengthArray);
 	total += readPair(polymorphicObjects[i % polymorphicObjects.length]);
+	total += readFreshEquivalentKey(object);
 }
 
 if (total <= 0) throw new Error("expected work");
