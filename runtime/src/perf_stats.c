@@ -39,6 +39,10 @@ static bool mal_perf_ic_mode_is_chain(usize mode) {
     return mode == 1 || mode == 5 || mode == 6 || mode == 7;
 }
 
+static bool mal_perf_ic_mode_is_own(usize mode) {
+    return mode == 0 || mode == 9;
+}
+
 void mal_perf_intrinsic_name(const byte *name, usize length) {
     if (!mal_perf_stats_enabled || length > MAL_PERF_INTRINSIC_NAME_MAX_LENGTH) {
         return;
@@ -130,11 +134,16 @@ static void mal_perf_stats_print(void) {
     }
     fprintf(
         stderr, "[perf-property-stats] ensure_calls=%llu ensure_inserts=%llu ensure_hits=%llu "
+        "inline_reads=%llu inline_writes=%llu boxed_reads=%llu boxed_allocations=%llu "
         "copy_linear_checks=%llu copy_shaped_hits=%llu copy_shaped_slots=%llu "
         "copy_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.property_ensure_calls,
         (unsigned long long) mal_perf_stats.property_ensure_inserts,
         (unsigned long long) mal_perf_stats.property_ensure_hits,
+        (unsigned long long) mal_perf_stats.property_inline_reads,
+        (unsigned long long) mal_perf_stats.property_inline_writes,
+        (unsigned long long) mal_perf_stats.property_boxed_reads,
+        (unsigned long long) mal_perf_stats.property_boxed_allocations,
         (unsigned long long) mal_perf_stats.copy_data_linear_exclusion_checks,
         (unsigned long long) mal_perf_stats.copy_data_shaped_hits,
         (unsigned long long) mal_perf_stats.copy_data_shaped_slots,
@@ -424,6 +433,7 @@ static void mal_perf_stats_print(void) {
         "[perf-ic-stats] load_mono_hits=%llu load_region_hits=%llu "
         "load_inherited_hits=%llu load_missing_hits=%llu load_missing_fills=%llu "
         "load_fallbacks=%llu load_slow_mono_hits=%llu "
+        "load_own_table_hits=%llu load_own_table_fills=%llu "
         "load_poly_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "
         "load_shape_hits=%llu load_shape_fills=%llu load_shape_uncacheable=%llu "
         "load_plain_generic=%llu load_primitive_hits=%llu load_primitive_fills=%llu "
@@ -449,6 +459,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_load_missing_fills,
         (unsigned long long) mal_perf_stats.ic_load_fallbacks,
         (unsigned long long) mal_perf_stats.ic_load_slow_mono_hits,
+        (unsigned long long) mal_perf_stats.ic_load_own_table_hits,
+        (unsigned long long) mal_perf_stats.ic_load_own_table_fills,
         (unsigned long long) mal_perf_stats.ic_load_poly_hits,
         (unsigned long long) mal_perf_stats.ic_load_mega_hits,
         (unsigned long long) mal_perf_stats.ic_load_mega_misses,
@@ -502,8 +514,12 @@ static void mal_perf_stats_print(void) {
             u64 count = mal_perf_stats.ic_mode_replacements[from][to];
             replacements += count;
             if (from != to) cross_mode += count;
-            if (from == 0 && mal_perf_ic_mode_is_chain(to)) own_to_chain += count;
-            if (mal_perf_ic_mode_is_chain(from) && to == 0) chain_to_own += count;
+            if (mal_perf_ic_mode_is_own(from) && mal_perf_ic_mode_is_chain(to)) {
+                own_to_chain += count;
+            }
+            if (mal_perf_ic_mode_is_chain(from) && mal_perf_ic_mode_is_own(to)) {
+                chain_to_own += count;
+            }
             if (count != 0) {
                 fprintf(
                     stderr,

@@ -3545,6 +3545,30 @@ static void mal_ic_record_watched(
     ic->receiver_type = 0;
 }
 
+/**
+ * Record an own ordinary-object dictionary data property by insertion-order
+ * entry handle. The hit path validates that the receiver's current table still
+ * has this exact live key at that handle before reading the current descriptor,
+ * so the handler is reusable across fresh same-layout dictionaries without
+ * retaining receiver identity.
+ */
+static void mal_ic_record_own_table(
+    MalInlineCache *ic, MalValue key, void *entry
+) {
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_OWN_TABLE);
+    mal_ic_detach_prototype_cache(ic);
+    ic->shape = nullptr;
+    ic->key = key;
+    ic->table_handle_epoch = 0;
+    ic->entry = entry;
+    ic->slot = MAL_IC_VALUE_SLOT;
+    ic->prim_kind = 0;
+    ic->poly_count = 0;
+    ic->megamorphic = false;
+    ic->mode = MAL_IC_MODE_OWN_TABLE;
+    ic->receiver_type = MAL_HEAP_OBJECT;
+}
+
 // Record a resolved plain-object data slot (shape -> slot for `key`) in the site
 // cache. The primary (shape/slot) stays the first entry; a fixed-key site that
 // sees another shape accumulates it into the polymorphic overflow, up to
@@ -3940,7 +3964,8 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
         // Hit needs the same shape AND the same key: a computed-key site (o[k])
         // reuses one cache entry across different keys, so the key must match too.
-        if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key_value == ic->key) {
+        if (ic->mode == MAL_IC_MODE_SHAPE &&
+            object->shape == ic->shape && key_value == ic->key) {
             if (ic->slot == MAL_IC_VALUE_SLOT) {
                 // Watched-intrinsic own overflow property, cached by value. The
                 // shape gate above is NOT sufficient (same-layout intrinsics share
@@ -3954,7 +3979,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 // site: fall through and re-resolve (may re-fill for this object).
             } else {
                 MAL_PERF_COUNT(ic_load_slow_mono_hits);
-                return object->slots[ic->slot]; // same layout + key: slot still valid
+                return object->slots[ic->slot];
             }
         }
         // Polymorphic overflow: a previously-seen alternate shape for the same key
@@ -3966,6 +3991,12 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     MAL_PERF_COUNT(ic_load_poly_hits);
                     return object->slots[mal_ic_poly_slot(ic, i)];
                 }
+            }
+        }
+        if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
+            MalValue cached;
+            if (mal_vm_object_try_load(object, key_value, ic, &cached)) {
+                return cached;
             }
         }
         // Megamorphic: consult the shared stub cache before a shape search (serves
@@ -4024,6 +4055,17 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
                     mal_ic_record_watched(ic, object, key_value, own.desc.value);
                     MAL_PERF_COUNT(ic_load_watched_fills);
+                    return own.desc.value;
+                }
+            }
+            if (object->overflow != nullptr &&
+                mal_ic_key_is_stable_string(key_value)) {
+                MalPropertyLookup own =
+                    mal_property_lookup(object->overflow, key);
+                if (own.present &&
+                    !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                    mal_ic_record_own_table(ic, key_value, own.entry);
+                    MAL_PERF_COUNT(ic_load_own_table_fills);
                     return own.desc.value;
                 }
             }

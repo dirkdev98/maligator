@@ -40,6 +40,12 @@ for (let i = 1; i < collisionKeys.length; i++) {
 
 const dictionary = {};
 Object.defineProperty(dictionary, "anchor", { value: 1, configurable: true });
+Object.defineProperty(dictionary, "accessor", {
+	get() {
+		return 2;
+	},
+	configurable: true,
+});
 for (let i = 0; i < 40; i++) {
 	Object.defineProperty(dictionary, "dict-" + i, {
 		value: i,
@@ -48,7 +54,8 @@ for (let i = 0; i < 40; i++) {
 		configurable: true,
 	});
 }
-if (dictionary["dict-39"] !== 39) throw new Error("broken dictionary insertion");
+if (dictionary.accessor !== 2 || dictionary["dict-39"] !== 39)
+	throw new Error("broken dictionary insertion");
 
 const fanoutKeys = [];
 for (let i = 0; i < 160; i++) {

@@ -89,6 +89,8 @@ describe("localized interpreter property inline caches", () => {
 		expect(icLine).toBeDefined();
 		const icStats = icLine ?? "";
 		expect(field(icStats, "load_inherited_hits")).toBeGreaterThan(1500);
+		expect(field(icStats, "load_own_table_hits")).toBeGreaterThan(900);
+		expect(field(icStats, "load_own_table_fills")).toBeGreaterThan(0);
 		expect(field(icStats, "load_missing_hits")).toBeGreaterThan(1800);
 		expect(field(icStats, "load_missing_fills")).toBeGreaterThan(0);
 		expect(field(icStats, "prototype_epoch_invalidations")).toBeGreaterThan(0);

@@ -709,6 +709,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_INHERITED_TABLE 6u
 #define MAL_IC_MODE_MISSING 7u
 #define MAL_IC_MODE_TRANSITION 8u
+#define MAL_IC_MODE_OWN_TABLE 9u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -894,6 +895,20 @@ static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key,
                 *out = object->slots[mal_ic_poly_slot(ic, i)];
                 return true;
             }
+        }
+    }
+    if (ic->mode == MAL_IC_MODE_OWN_TABLE && key == ic->key &&
+        object->overflow != nullptr &&
+        mal_table_entry_matches(
+            object->overflow, ic->entry,
+            mal_table_handle_epoch(object->overflow),
+            mal_key_from_value(key))) {
+        MalPropertyDesc desc =
+            mal_property_entry_desc(object->overflow, ic->entry);
+        if (!(desc.flags & MAL_PROPERTY_ACCESSOR)) {
+            MAL_PERF_COUNT(ic_load_own_table_hits);
+            *out = desc.value;
+            return true;
         }
     }
     return false;
