@@ -125,10 +125,16 @@ static void mal_perf_stats_print(void) {
         );
     }
     fprintf(
-        stderr, "[perf-property-stats] ensure_calls=%llu ensure_inserts=%llu ensure_hits=%llu\n",
+        stderr, "[perf-property-stats] ensure_calls=%llu ensure_inserts=%llu ensure_hits=%llu "
+        "copy_linear_checks=%llu copy_shaped_hits=%llu copy_shaped_slots=%llu "
+        "copy_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.property_ensure_calls,
         (unsigned long long) mal_perf_stats.property_ensure_inserts,
-        (unsigned long long) mal_perf_stats.property_ensure_hits
+        (unsigned long long) mal_perf_stats.property_ensure_hits,
+        (unsigned long long) mal_perf_stats.copy_data_linear_exclusion_checks,
+        (unsigned long long) mal_perf_stats.copy_data_shaped_hits,
+        (unsigned long long) mal_perf_stats.copy_data_shaped_slots,
+        (unsigned long long) mal_perf_stats.copy_data_fallbacks
     );
     fprintf(
         stderr,

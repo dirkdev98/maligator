@@ -4970,38 +4970,86 @@ MalValue mal_vm_op_copy_data_properties(
         return mal_value_new_undefined();
     }
 
-    // The excluded keys land in a throwaway object so the membership checks
-    // reuse the property table's key equality.
-    MalObject *excluded = nullptr;
-    if (excluded_count > 0) {
-        excluded = mal_object_new(&vm->heap, nullptr);
-    }
-
-    MalObject *copy = mal_object_new(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
-    );
-
-    // Neither `copy` (being built) nor `excluded` is held in a register until the
-    // final store, yet a source getter (mal_vm_desc_read) or an excluded-key
-    // ToPropertyKey re-enters JS and can collect — root them across the loops.
-    MalValue roots[2] = {
-        excluded != nullptr ? mal_value_from_object(excluded) : mal_value_new_undefined(),
-        mal_value_from_object(copy),
-    };
-    MalRootSpan span;
-    mal_gc_root(&span, roots, 2);
-    bool ok = true;
-
+    MalKey excluded[excluded_count > 0 ? excluded_count : 1];
+    MalValue excluded_roots[excluded_count > 0 ? excluded_count : 1];
+    MalRootSpan excluded_span;
+    i32 converted_count = 0;
     for (i32 i = 0; i < excluded_count; i++) {
-        MalValue key_value = excluded_keys[i];
-        MalKey key;
-        if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-            ok = false;
-            goto done;
-        }
-        mal_object_set(excluded, key, mal_value_new_boolean(true));
+        excluded_roots[i] = mal_value_new_undefined();
     }
+    mal_gc_root(&excluded_span, excluded_roots, excluded_count);
+    for (i32 i = 0; i < excluded_count; i++) {
+        if (!mal_vm_value_to_property_key(vm, excluded_keys[i], &excluded[i])) {
+            mal_gc_unroot(&excluded_span);
+            return mal_value_new_undefined();
+        }
+        excluded_roots[i] = excluded[i].value;
+        converted_count++;
+    }
+
+    #define MAL_COPY_KEY_EXCLUDED(candidate, result) do { \
+        (result) = false; \
+        for (i32 excluded_index = 0; excluded_index < converted_count; excluded_index++) { \
+            MAL_PERF_COUNT(copy_data_linear_exclusion_checks); \
+            if (excluded[excluded_index].kind == (candidate).kind && \
+                mal_key_value_equals(excluded[excluded_index].value, (candidate).value)) { \
+                (result) = true; \
+                break; \
+            } \
+        } \
+    } while (0)
+
+    MalObject *prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+
+    // Ordinary shaped records have only non-observable inline data properties.
+    // Build the final result shape and slot payload directly; dictionaries,
+    // symbols, indices, exotics, and non-enumerable layouts retain the iterator.
+    if (mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) {
+        MalObject *source_object = mal_value_to_object(source);
+        MalShape *source_shape = source_object->shape;
+        if (source_object->overflow == nullptr && source_shape->inline_count > 0) {
+            MalShape *result_shape = mal_shape_empty();
+            MalValue values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+            u32 count = 0;
+            bool eligible = source_shape->inline_count <= MAL_SHAPE_DYNAMIC_INLINE_SLOTS;
+            for (u32 i = 0; eligible && i < source_shape->inline_count; i++) {
+                const MalShapeProp *prop = &source_shape->props[i];
+                MalKey key = mal_key_from_value(prop->key);
+                if (key.kind != MAL_KEY_STRING) {
+                    eligible = false;
+                    break;
+                }
+                bool skip;
+                MAL_COPY_KEY_EXCLUDED(key, skip);
+                if (skip || (prop->attrs & MAL_PROPERTY_ENUMERABLE) == 0) {
+                    continue;
+                }
+                result_shape = mal_shape_add_property(
+                    result_shape, key,
+                    MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                        MAL_PROPERTY_CONFIGURABLE);
+                values[count++] = source_object->slots[prop->slot];
+            }
+            if (eligible) {
+                MalValue result = count == 0
+                    ? mal_value_from_object(mal_object_new(&vm->heap, prototype))
+                    : mal_value_from_object(mal_object_new_shaped(
+                          &vm->heap, prototype, result_shape, values, count));
+                MAL_PERF_COUNT(copy_data_shaped_hits);
+                MAL_PERF_ADD(copy_data_shaped_slots, count);
+                mal_gc_unroot(&excluded_span);
+                return result;
+            }
+        }
+    }
+
+    MAL_PERF_COUNT(copy_data_fallbacks);
+    MalObject *copy = mal_object_new(&vm->heap, prototype);
+    MalValue copy_root = mal_value_from_object(copy);
+    MalRootSpan copy_span;
+    mal_gc_root(&copy_span, &copy_root, 1);
+    bool ok = true;
 
     if (mal_value_is_string(source)) {
         // String sources expose their code units as own enumerable index
@@ -5009,7 +5057,9 @@ MalValue mal_vm_op_copy_data_properties(
         MalString *string = mal_value_to_string(source);
         for (usize i = 0; i < mal_string_length(string); i++) {
             MalKey key = mal_key_index(i);
-            if (excluded != nullptr && mal_object_get_own(excluded, key).present) {
+            bool skip;
+            MAL_COPY_KEY_EXCLUDED(key, skip);
+            if (skip) {
                 continue;
             }
 
@@ -5028,7 +5078,9 @@ MalValue mal_vm_op_copy_data_properties(
         MalKey key;
         MalPropertyDesc desc;
         while (mal_property_iter_next(&iter, &key, &desc)) {
-            if (excluded != nullptr && mal_object_get_own(excluded, key).present) {
+            bool skip;
+            MAL_COPY_KEY_EXCLUDED(key, skip);
+            if (skip) {
                 continue;
             }
 
@@ -5044,7 +5096,9 @@ MalValue mal_vm_op_copy_data_properties(
     // Other primitives carry no own enumerable properties.
 
 done:
-    mal_gc_unroot(&span);
+    mal_gc_unroot(&copy_span);
+    mal_gc_unroot(&excluded_span);
+    #undef MAL_COPY_KEY_EXCLUDED
     return ok ? mal_value_from_object(copy) : mal_value_new_undefined();
 }
 
