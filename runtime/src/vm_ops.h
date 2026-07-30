@@ -828,6 +828,17 @@ static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key,
     return false;
 }
 
+/**
+ * Static-name variant of mal_vm_object_try_load. The instruction owns one cache
+ * and can only ever fill it for its baked-in name, so the cached key is already
+ * the site's key. Passing it back through the common inline probe lets the C
+ * optimizer erase the otherwise-redundant key equality from the hit path.
+ */
+static inline bool mal_vm_object_try_load_static(const MalObject *object,
+                                                 const MalInlineCache *ic, MalValue *out) {
+    return mal_vm_object_try_load(object, ic->key, ic, out);
+}
+
 /** Guarded inherited data-property slot/entry hit, plus the watched-value fallback. */
 static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
                                               const MalInlineCache *ic, MalValue *out) {
@@ -919,6 +930,11 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
     return true;
 }
 
+static inline bool mal_vm_inherited_try_load_static(MalValue receiver,
+                                                     const MalInlineCache *ic, MalValue *out) {
+    return mal_vm_inherited_try_load(receiver, ic->key, ic, out);
+}
+
 /** Guarded own-value hit for watched built-ins whose properties live in overflow tables. */
 static inline bool mal_vm_watched_try_load(MalValue receiver, MalValue key,
                                            const MalInlineCache *ic, MalValue *out) {
@@ -930,6 +946,11 @@ static inline bool mal_vm_watched_try_load(MalValue receiver, MalValue key,
     *out = ic->value;
     MAL_PERF_COUNT(ic_load_watched_hits);
     return true;
+}
+
+static inline bool mal_vm_watched_try_load_static(MalValue receiver,
+                                                   const MalInlineCache *ic, MalValue *out) {
+    return mal_vm_watched_try_load(receiver, ic->key, ic, out);
 }
 
 /**
@@ -975,6 +996,11 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
     return false;
 }
 
+static inline bool mal_vm_special_try_load_static(MalVm *vm, MalValue receiver,
+                                                   const MalInlineCache *ic, MalValue *out) {
+    return mal_vm_special_try_load(vm, receiver, ic->key, ic, out);
+}
+
 /** Apply only a proven, nonallocating property-load cache hit. */
 static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalValue key,
                                             const MalInlineCache *ic, MalValue *out) {
@@ -983,6 +1009,16 @@ static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalVal
         mal_vm_inherited_try_load(receiver, key, ic, out) ||
         mal_vm_watched_try_load(receiver, key, ic, out) ||
         mal_vm_special_try_load(vm, receiver, key, ic, out);
+}
+
+/** Static-name property probe: the site identity supplies the key guard. */
+static inline bool mal_vm_property_try_load_static(MalVm *vm, MalValue receiver,
+                                                   const MalInlineCache *ic, MalValue *out) {
+    MalObject *object = mal_vm_as_object(receiver);
+    return (object != nullptr && mal_vm_object_try_load_static(object, ic, out)) ||
+        mal_vm_inherited_try_load_static(receiver, ic, out) ||
+        mal_vm_watched_try_load_static(receiver, ic, out) ||
+        mal_vm_special_try_load_static(vm, receiver, ic, out);
 }
 
 /**
@@ -1017,11 +1053,23 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
     return false;
 }
 
+static inline bool mal_vm_object_try_store_static(MalObject *object, MalValue value,
+                                                  const MalInlineCache *ic) {
+    return mal_vm_object_try_store(object, ic->key, value, ic);
+}
+
 /** Apply only a proven existing writable-slot store, including both GC barriers. */
 static inline bool mal_vm_property_try_store(MalValue receiver, MalValue key, MalValue value,
                                              const MalInlineCache *ic) {
     MalObject *object = mal_vm_as_object(receiver);
     return object != nullptr && mal_vm_object_try_store(object, key, value, ic);
+}
+
+/** Static-name store probe: the site identity supplies the key guard. */
+static inline bool mal_vm_property_try_store_static(MalValue receiver, MalValue value,
+                                                    const MalInlineCache *ic) {
+    MalObject *object = mal_vm_as_object(receiver);
+    return object != nullptr && mal_vm_object_try_store_static(object, value, ic);
 }
 
 /**

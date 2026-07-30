@@ -1866,13 +1866,17 @@ function emitInstruction(
 				];
 			}
 			if (!reg.consolidated) {
+				const probe =
+					instruction.opcode === "LOAD_PROPERTY_STATIC"
+						? `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__ic_${ip}, &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__ic_${ip}, &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__ic_${ip}, &__v_${ip})`
+						: `(${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip}) || mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})`;
 				return [
 					...(reg.declare
 						? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
 						: []),
 					`static MalInlineCache __ic_${ip};`,
 					`MalValue __v_${ip};`,
-					`if ((${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip}) || mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})) {`,
+					`if (${probe}) {`,
 					`  r${instruction.dst} = __v_${ip};`,
 					`} else {`,
 					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip});`,
@@ -1895,7 +1899,9 @@ function emitInstruction(
 				`if (${regionHit}) {`,
 				`  mal_perf_ic_load_region_hit();`,
 				`  __v_${ip} = ${reg.name}_o->slots[${reg.name}_slp[${reg.slotIndex}]];`,
-				`} else if (mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})) {`,
+				instruction.opcode === "LOAD_PROPERTY_STATIC"
+					? `} else if (mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__ic_${ip}, &__v_${ip})) {`
+					: `} else if (mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})) {`,
 				`} else {`,
 				`  __v_${ip} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip});`,
 				`  ${throwCheck}`,
@@ -1945,12 +1951,16 @@ function emitInstruction(
 				];
 			}
 			if (!reg.consolidated) {
+				const probe =
+					instruction.opcode === "STORE_PROPERTY_STATIC"
+						? `${reg.name} && mal_vm_object_try_store_static(${reg.name}, ${boxed(instruction.value)}, &__ic_${ip})`
+						: `${reg.name} && mal_vm_object_try_store(${reg.name}, ${key}, ${boxed(instruction.value)}, &__ic_${ip})`;
 				return [
 					...(reg.declare
 						? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
 						: []),
 					`static MalInlineCache __ic_${ip};`,
-					`if (!(${reg.name} && mal_vm_object_try_store(${reg.name}, ${key}, ${boxed(instruction.value)}, &__ic_${ip}))) {`,
+					`if (!(${probe})) {`,
 					`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
 					`  ${throwCheck}`,
 					`}`,

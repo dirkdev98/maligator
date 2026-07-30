@@ -332,6 +332,22 @@ describe("native update-expression representation", () => {
 		expect(dynamicOutput).toMatch(/&& .* == __rg\d+_key\[/);
 	});
 
+	it("uses key-free probes only for non-consolidated static property sites", () => {
+		const staticOutput = emit(
+			`"use strict"; function load(object) { return object.value; } function store(object, value) { object.value = value; } globalThis.keep = [load, store];`,
+		);
+		expect(staticOutput).toContain("mal_vm_object_try_load_static(");
+		expect(staticOutput).toContain("mal_vm_inherited_try_load_static(");
+		expect(staticOutput).toContain("mal_vm_object_try_store_static(");
+
+		const dynamicOutput = emit(
+			`"use strict"; function load(object, key) { return object[key]; } function store(object, key, value) { object[key] = value; } globalThis.keep = [load, store];`,
+		);
+		expect(dynamicOutput).toContain("mal_vm_object_try_load(");
+		expect(dynamicOutput).toContain("mal_vm_object_try_store(");
+		expect(dynamicOutput).not.toContain("mal_vm_object_try_load_static(");
+	});
+
 	it("revalidates consolidated regions only after observable gaps", () => {
 		const pureOutput = emit(
 			`"use strict"; function read(object) { return object.a + object.b; } globalThis.read = read;`,

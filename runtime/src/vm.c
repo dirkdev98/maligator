@@ -1866,20 +1866,11 @@ static void mal_vm_run_until_frame_count(
             }
             case MAL_OP_LOAD_PROPERTY_STATIC: {
                 MalValue object = registers[instruction->as.load_property_static.object];
-                MalValue key = mal_value_from_string(&vm->definition->string_constants[
-                    instruction->as.load_property_static.string_index]);
                 MalValue result;
                 MalInlineCache *ic = mal_vm_interp_ic_existing(
                     frame, instruction_pointer - 1);
-                bool cache_hit = false;
-                if (ic != nullptr) {
-                    MalObject *plain_object = mal_vm_as_object(object);
-                    cache_hit = plain_object != nullptr &&
-                        mal_vm_object_try_load(plain_object, key, ic, &result);
-                    if (!cache_hit) {
-                        cache_hit = mal_vm_property_try_load(vm, object, key, ic, &result);
-                    }
-                }
+                bool cache_hit = ic != nullptr &&
+                    mal_vm_property_try_load_static(vm, object, ic, &result);
                 if (cache_hit) {
                     registers[instruction->as.load_property_static.dst] = result;
                     MAL_PERF_COUNT(interpreter_local_load_ic_hits);
@@ -1916,12 +1907,10 @@ static void mal_vm_run_until_frame_count(
             }
             case MAL_OP_STORE_PROPERTY_STATIC: {
                 MalValue object = registers[instruction->as.store_property_static.object];
-                MalValue key = mal_value_from_string(&vm->definition->string_constants[
-                    instruction->as.store_property_static.string_index]);
                 MalValue value = registers[instruction->as.store_property_static.value];
                 MalInlineCache *ic = mal_vm_interp_ic_existing(
                     frame, instruction_pointer - 1);
-                if (ic != nullptr && mal_vm_property_try_store(object, key, value, ic)) {
+                if (ic != nullptr && mal_vm_property_try_store_static(object, value, ic)) {
                     MAL_PERF_COUNT(interpreter_local_store_ic_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
