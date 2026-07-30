@@ -102,6 +102,8 @@ bool mal_object_register_prototype_cache(
     MalObject *receiver, MalObject *holder, void *cache);
 void mal_object_unregister_prototype_cache(void *cache);
 void mal_object_invalidate_prototype_dependents(MalObject *object);
+/** Release pooled dependency storage when the current thread has no live rows. */
+void mal_object_release_idle_prototype_dependencies(void);
 
 /**
  * Invalidate inherited/negative cache guards when a structurally-relevant

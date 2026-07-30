@@ -13,14 +13,119 @@ static u64 g_slot_dictionary_migrations = 0;
 typedef struct MalPrototypeCacheDependency {
     MalObject *object;
     void *cache;
-    struct MalPrototypeCacheDependency *next;
+    struct MalPrototypeCacheDependency *object_prev;
+    struct MalPrototypeCacheDependency *object_next;
+    struct MalPrototypeCacheDependency *cache_prev;
+    struct MalPrototypeCacheDependency *cache_next;
+    struct MalPrototypeCacheDependency *free_next;
 } MalPrototypeCacheDependency;
 
-static _Thread_local MalPrototypeCacheDependency *g_prototype_cache_dependencies = nullptr;
+#define MAL_PROTOTYPE_DEPENDENCY_BUCKET_BITS 12
+#define MAL_PROTOTYPE_DEPENDENCY_BUCKET_COUNT \
+    ((usize) 1 << MAL_PROTOTYPE_DEPENDENCY_BUCKET_BITS)
+#define MAL_PROTOTYPE_DEPENDENCY_BLOCK_NODES 256
+
+typedef struct MalPrototypeCacheDependencyBlock {
+    struct MalPrototypeCacheDependencyBlock *next;
+    MalPrototypeCacheDependency nodes[MAL_PROTOTYPE_DEPENDENCY_BLOCK_NODES];
+} MalPrototypeCacheDependencyBlock;
+
+static _Thread_local MalPrototypeCacheDependency **g_prototype_object_dependencies = nullptr;
+static _Thread_local MalPrototypeCacheDependency **g_prototype_cache_dependencies = nullptr;
+static _Thread_local MalPrototypeCacheDependency *g_prototype_dependency_free = nullptr;
+static _Thread_local MalPrototypeCacheDependencyBlock *g_prototype_dependency_blocks = nullptr;
+static _Thread_local usize g_prototype_dependency_active = 0;
 
 void mal_vm_property_cache_invalidate(void *cache);
 
 u64 mal_prototype_chain_epoch = 1;
+
+static usize mal_prototype_dependency_hash(const void *pointer) {
+    u64 hash = (u64) (uptr) pointer;
+    hash ^= hash >> 30;
+    hash *= UINT64_C(0xbf58476d1ce4e5b9);
+    hash ^= hash >> 27;
+    hash *= UINT64_C(0x94d049bb133111eb);
+    hash ^= hash >> 31;
+    return (usize) hash & (MAL_PROTOTYPE_DEPENDENCY_BUCKET_COUNT - 1);
+}
+
+static MalPrototypeCacheDependency *mal_prototype_dependency_alloc(void) {
+    if (g_prototype_object_dependencies == nullptr) {
+        g_prototype_object_dependencies =
+            calloc(MAL_PROTOTYPE_DEPENDENCY_BUCKET_COUNT,
+                   sizeof(*g_prototype_object_dependencies));
+        g_prototype_cache_dependencies =
+            calloc(MAL_PROTOTYPE_DEPENDENCY_BUCKET_COUNT,
+                   sizeof(*g_prototype_cache_dependencies));
+        if (g_prototype_object_dependencies == nullptr ||
+            g_prototype_cache_dependencies == nullptr) {
+            abort();
+        }
+    }
+    if (g_prototype_dependency_free == nullptr) {
+        MalPrototypeCacheDependencyBlock *block = malloc(sizeof(*block));
+        if (block == nullptr) abort();
+        block->next = g_prototype_dependency_blocks;
+        g_prototype_dependency_blocks = block;
+        for (usize i = 0; i < MAL_PROTOTYPE_DEPENDENCY_BLOCK_NODES; i++) {
+            block->nodes[i].free_next = g_prototype_dependency_free;
+            g_prototype_dependency_free = &block->nodes[i];
+        }
+    }
+    MalPrototypeCacheDependency *dependency = g_prototype_dependency_free;
+    g_prototype_dependency_free = dependency->free_next;
+    *dependency = (MalPrototypeCacheDependency){0};
+    g_prototype_dependency_active++;
+    return dependency;
+}
+
+static void mal_prototype_dependency_unlink(MalPrototypeCacheDependency *dependency) {
+    usize object_bucket = mal_prototype_dependency_hash(dependency->object);
+    if (dependency->object_prev == nullptr) {
+        g_prototype_object_dependencies[object_bucket] = dependency->object_next;
+    } else {
+        dependency->object_prev->object_next = dependency->object_next;
+    }
+    if (dependency->object_next != nullptr) {
+        dependency->object_next->object_prev = dependency->object_prev;
+    }
+
+    usize cache_bucket = mal_prototype_dependency_hash(dependency->cache);
+    if (dependency->cache_prev == nullptr) {
+        g_prototype_cache_dependencies[cache_bucket] = dependency->cache_next;
+    } else {
+        dependency->cache_prev->cache_next = dependency->cache_next;
+    }
+    if (dependency->cache_next != nullptr) {
+        dependency->cache_next->cache_prev = dependency->cache_prev;
+    }
+
+    *dependency = (MalPrototypeCacheDependency) {
+        .free_next = g_prototype_dependency_free,
+    };
+    g_prototype_dependency_free = dependency;
+    g_prototype_dependency_active--;
+}
+
+static void mal_prototype_dependency_link(
+    MalPrototypeCacheDependency *dependency, MalObject *object, void *cache
+) {
+    usize object_bucket = mal_prototype_dependency_hash(object);
+    usize cache_bucket = mal_prototype_dependency_hash(cache);
+    dependency->object = object;
+    dependency->cache = cache;
+    dependency->object_next = g_prototype_object_dependencies[object_bucket];
+    if (dependency->object_next != nullptr) {
+        dependency->object_next->object_prev = dependency;
+    }
+    g_prototype_object_dependencies[object_bucket] = dependency;
+    dependency->cache_next = g_prototype_cache_dependencies[cache_bucket];
+    if (dependency->cache_next != nullptr) {
+        dependency->cache_next->cache_prev = dependency;
+    }
+    g_prototype_cache_dependencies[cache_bucket] = dependency;
+}
 
 void mal_object_bump_prototype_chain_epoch(void) {
     // Zero is the fail-closed exhausted state: exact-chain fills and hits reject
@@ -37,34 +142,45 @@ void mal_object_bump_prototype_chain_epoch(void) {
 
 void mal_object_unregister_prototype_cache(void *cache) {
     MAL_PERF_COUNT(prototype_dependency_unregister_calls);
-    MalPrototypeCacheDependency **link = &g_prototype_cache_dependencies;
-    while (*link != nullptr) {
+    if (g_prototype_cache_dependencies == nullptr) {
+        return;
+    }
+    usize bucket = mal_prototype_dependency_hash(cache);
+    MalPrototypeCacheDependency *dependency = g_prototype_cache_dependencies[bucket];
+    while (dependency != nullptr) {
         MAL_PERF_COUNT(prototype_dependency_unregister_scan_steps);
-        MalPrototypeCacheDependency *dependency = *link;
+        MalPrototypeCacheDependency *next = dependency->cache_next;
         if (dependency->cache == cache) {
-            *link = dependency->next;
             MAL_PERF_COUNT(prototype_dependency_unregister_removed);
-            free(dependency);
-        } else {
-            link = &dependency->next;
+            mal_prototype_dependency_unlink(dependency);
         }
+        dependency = next;
     }
 }
 
 void mal_object_invalidate_prototype_dependents(MalObject *object) {
     MAL_PERF_COUNT(prototype_dependency_invalidate_calls);
-    MalPrototypeCacheDependency **link = &g_prototype_cache_dependencies;
-    while (*link != nullptr) {
-        MAL_PERF_COUNT(prototype_dependency_invalidate_scan_steps);
-        MalPrototypeCacheDependency *dependency = *link;
-        if (dependency->object == object) {
-            mal_vm_property_cache_invalidate(dependency->cache);
-            *link = dependency->next;
-            MAL_PERF_COUNT(prototype_dependency_invalidate_removed);
-            free(dependency);
-        } else {
-            link = &dependency->next;
+    if (g_prototype_object_dependencies == nullptr) {
+        return;
+    }
+    usize bucket = mal_prototype_dependency_hash(object);
+    for (;;) {
+        MalPrototypeCacheDependency *dependency =
+            g_prototype_object_dependencies[bucket];
+        while (dependency != nullptr && dependency->object != object) {
+            MAL_PERF_COUNT(prototype_dependency_invalidate_scan_steps);
+            dependency = dependency->object_next;
         }
+        if (dependency == nullptr) {
+            break;
+        }
+        MAL_PERF_COUNT(prototype_dependency_invalidate_scan_steps);
+        void *cache = dependency->cache;
+        mal_vm_property_cache_invalidate(cache);
+        MAL_PERF_COUNT(prototype_dependency_invalidate_removed);
+        // Remove the complete registration, not only the node for `object`.
+        // Otherwise sibling prototype nodes could later invalidate a reused row.
+        mal_object_unregister_prototype_cache(cache);
     }
 }
 
@@ -75,14 +191,9 @@ bool mal_object_register_prototype_cache(
     mal_object_unregister_prototype_cache(cache);
     for (MalObject *cursor = receiver->prototype;
          cursor != nullptr; cursor = cursor->prototype) {
-        MalPrototypeCacheDependency *dependency = malloc(sizeof(*dependency));
+        MalPrototypeCacheDependency *dependency = mal_prototype_dependency_alloc();
         MAL_PERF_COUNT(prototype_dependency_register_nodes);
-        *dependency = (MalPrototypeCacheDependency) {
-            .object = cursor,
-            .cache = cache,
-            .next = g_prototype_cache_dependencies,
-        };
-        g_prototype_cache_dependencies = dependency;
+        mal_prototype_dependency_link(dependency, cursor, cache);
         if (cursor == holder) {
             return true;
         }
@@ -93,6 +204,24 @@ bool mal_object_register_prototype_cache(
     MAL_PERF_COUNT(prototype_dependency_register_failures);
     mal_object_unregister_prototype_cache(cache);
     return false;
+}
+
+void mal_object_release_idle_prototype_dependencies(void) {
+    if (g_prototype_dependency_active != 0) {
+        return;
+    }
+    MalPrototypeCacheDependencyBlock *block = g_prototype_dependency_blocks;
+    while (block != nullptr) {
+        MalPrototypeCacheDependencyBlock *next = block->next;
+        free(block);
+        block = next;
+    }
+    g_prototype_dependency_blocks = nullptr;
+    g_prototype_dependency_free = nullptr;
+    free(g_prototype_object_dependencies);
+    free(g_prototype_cache_dependencies);
+    g_prototype_object_dependencies = nullptr;
+    g_prototype_cache_dependencies = nullptr;
 }
 
 u64 mal_object_slot_coallocation_count(void) {

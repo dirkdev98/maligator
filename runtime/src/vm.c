@@ -752,6 +752,7 @@ void mal_vm_free(MalVm *vm) {
         }
         free(vm->property_cache);
     }
+    mal_object_release_idle_prototype_dependencies();
     if (vm->literal_shape_cache != nullptr) {
         for (i32 i = 0; i < vm->definition->function_count; i++) {
             free(vm->literal_shape_cache[i]);
