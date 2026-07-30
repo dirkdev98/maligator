@@ -800,12 +800,11 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
 
 /**
  * Monomorphic shape-slot read of `object[key]` via the site's inline cache. Returns
- * true and writes *out on a hit (cached shape + key resolving to a real data slot);
- * false on any miss (different shape, computed-key mismatch, or a value-slot/accessor
- * entry), which the caller resolves via the out-of-line IC op (poly / mega / refill). A
- * data-slot hit reads `slots[slot]` and runs NO user code, so a region access omits the
- * throwCheck on the hit path. Mirrors the shape/key/slot gate in mal_vm_op_load_property_ic;
- * a zero-initialized cache has shape==null so it misses.
+ * true and writes *out on a primary or bounded-polymorphic shape hit. A miss
+ * (unknown shape, computed-key mismatch, or value-slot/accessor entry) goes to
+ * the out-of-line mega/refill path. A data-slot hit reads `slots[slot]` and runs
+ * no user code, so a region access omits the throw check on the hit path. A
+ * zero-initialized cache has shape==null and poly_count==0, so it misses.
  */
 static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, const MalInlineCache *ic,
                                           MalValue *out) {
@@ -814,6 +813,16 @@ static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key,
         mal_perf_ic_load_mono_hit();
         *out = object->slots[ic->slot];
         return true;
+    }
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key &&
+        ic->slot != MAL_IC_VALUE_SLOT) {
+        for (u8 i = 0; i < ic->poly_count; i++) {
+            if (object->shape == ic->poly_shape[i]) {
+                MAL_PERF_COUNT(ic_load_poly_hits);
+                *out = object->slots[ic->poly_slot[i]];
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -963,6 +972,18 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
         object->slots[ic->slot] = value;
         mal_gc_card(&object->header, value);
         return true;
+    }
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key &&
+        ic->slot != MAL_IC_VALUE_SLOT) {
+        for (u8 i = 0; i < ic->poly_count; i++) {
+            if (object->shape == ic->poly_shape[i]) {
+                MAL_PERF_COUNT(ic_store_poly_hits);
+                mal_gc_write_barrier(object->slots[ic->poly_slot[i]]);
+                object->slots[ic->poly_slot[i]] = value;
+                mal_gc_card(&object->header, value);
+                return true;
+            }
+        }
     }
     return false;
 }
