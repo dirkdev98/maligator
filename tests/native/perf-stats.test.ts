@@ -79,6 +79,23 @@ describe("opt-in performance statistics", () => {
 		expect(result.stderr).not.toContain("[perf-");
 	});
 
+	it("resets an instrumented attribution window only under explicit control", () => {
+		const result = spawnSync(binary, [], {
+			env: {
+				...process.env,
+				MAL_PERF_STATS: "1",
+				MAL_PERF_CONTROL: "1",
+			},
+			encoding: "utf-8",
+		});
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		assertPassLine(result.stdout, "perf-stats");
+		const transitions = reportLine(result.stderr, "[perf-shape-transition-stats]");
+		expect(field(transitions, "calls")).toBeLessThan(10);
+		const ic = reportLine(result.stderr, "[perf-ic-stats]");
+		expect(field(ic, "store_fallbacks")).toBeGreaterThan(0);
+	});
+
 	it("attributes key, table, shape, and inline-cache activity", () => {
 		const result = spawnSync(binary, [], {
 			env: { ...process.env, MAL_PERF_STATS: "1" },
@@ -112,7 +129,7 @@ describe("opt-in performance statistics", () => {
 		const intrinsicName = reportLine(
 			result.stderr,
 			"[perf-intrinsic-name]",
-			"name=length ",
+			"name=push ",
 		);
 		expect(field(intrinsicName, "calls")).toBeGreaterThan(0);
 		const properties = reportLine(result.stderr, "[perf-property-stats]");

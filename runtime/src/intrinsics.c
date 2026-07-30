@@ -762,6 +762,25 @@ static MalValue mal_intrinsic_fail_next_cell_allocation(
     return MAL_VALUE_UNDEFINED;
 }
 
+/** Benchmark-only hook: begin a fresh attribution window after framework warmup. */
+static MalValue mal_intrinsic_perf_stats_reset(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) vm;
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    mal_perf_stats_reset();
+    return MAL_VALUE_UNDEFINED;
+}
+
 /**
  * Expose the intrinsics as properties of a globalThis namespace object.
  */
@@ -853,5 +872,13 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
         mal_intrinsic_define_method(
             vm, global_this, "__mal_fail_next_cell_allocation",
             mal_intrinsic_fail_next_cell_allocation);
+    }
+    // Kept behind both compile/runtime perf instrumentation and an explicit
+    // control flag: production globals remain unchanged, while the HTTP profiler
+    // can discard framework startup and warmup activity before measurement.
+    if (mal_perf_stats_enabled && getenv("MAL_PERF_CONTROL") != nullptr) {
+        mal_intrinsic_define_method(
+            vm, global_this, "__mal_reset_perf_stats",
+            mal_intrinsic_perf_stats_reset);
     }
 }

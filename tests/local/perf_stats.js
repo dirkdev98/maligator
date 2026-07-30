@@ -147,4 +147,16 @@ if (total <= 0) throw new Error("expected work");
 let binaryProbe = total;
 binaryProbe = (binaryProbe << 3) ^ (binaryProbe >>> 2);
 if (typeof binaryProbe !== "number") throw new Error("expected numeric binary probe");
+
+// Instrumented benchmark-control builds can discard everything above. Leave one
+// small operation after the reset so the exit report proves that counting resumed.
+if (typeof globalThis.__mal_reset_perf_stats === "function") {
+	globalThis.__mal_reset_perf_stats();
+	const afterResetKey = ["val", "ue"].join("");
+	const afterReset = {};
+	afterReset[afterResetKey] = 41;
+	afterReset[afterResetKey]++;
+	if (afterReset[afterResetKey] !== 42) throw new Error("broken perf reset continuation");
+}
+
 console.log("perf-stats PASS 1/1");

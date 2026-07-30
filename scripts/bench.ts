@@ -2,7 +2,8 @@
  * Consolidated benchmark runner. One entry point drives the whole bench/ tree and
  * diffs selected lanes against their last saved values:
  *
- *   node scripts/bench.ts [size|language|stack-object|gc|http ...] [--runs N] [--update]
+ *   node scripts/bench.ts [size|language|stack-object|gc|http|http-profile ...]
+ *     [--runs N] [--update]
  *
  * Benches (default: all):
  *   - size      linked binary + per-archive bytes across a build-config matrix
@@ -43,6 +44,10 @@
  *   - http      bare server and pinned Express 5 application: linked binary bytes,
  *               req/s, and p99 latency vs Node, driven by `oha` (multi-threaded, so
  *               the load generator isn't the bottleneck). Skipped if `oha` is absent.
+ *   - http-profile request-window runtime counters for the Express middleware,
+ *               route, JSON, and form workloads. Each runs in a fresh instrumented
+ *               process and resets counters after warmup. Diagnostic only: never
+ *               written to the saved benchmark baseline.
  *
  * `bench/baseline.json` is one unattributed snapshot. A run never changes it unless
  * `--update` is present; an update atomically replaces only the selected top-level
@@ -50,7 +55,16 @@
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	mkdtempSync,
+	openSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
@@ -1097,7 +1111,12 @@ function benchGc(runs: number): Record<string, GcWorkload> {
 // ---- http (vs Node) -------------------------------------------------------
 
 function ohaAvailable(): boolean {
-	return spawnSync("oha", ["--version"], { stdio: "ignore" }).status === 0;
+	return (
+		spawnSync("oha", ["--version"], {
+			env: { ...process.env, NO_COLOR: "false" },
+			stdio: "ignore",
+		}).status === 0
+	);
 }
 
 /** Wait until `url` responds, or throw after ~5s. */
@@ -1132,7 +1151,7 @@ function ohaRun(
 			...extraArgs,
 			target,
 		],
-		{ encoding: "utf-8" },
+		{ encoding: "utf-8", env: { ...process.env, NO_COLOR: "false" } },
 	);
 	return parseOhaOutput(out);
 }
@@ -1155,7 +1174,9 @@ function compareHttp(
 	};
 }
 
-function workloadArgs(workload: ExpressHttpWorkload): Array<string> {
+function workloadArgs(
+	workload: Pick<ExpressHttpWorkload, "method" | "headers" | "body">,
+): Array<string> {
 	const args: Array<string> = [];
 	if (workload.method) args.push("--method", workload.method);
 	for (const header of workload.headers ?? []) args.push("-H", header);
@@ -1238,6 +1259,173 @@ function benchHttp(durationSeconds: number, conc: number): HttpMetrics | null {
 	} finally {
 		mal.kill("SIGKILL");
 		node.kill("SIGKILL");
+	}
+}
+
+interface HttpProfileWorkload {
+	name: "middleware" | ExpressHttpWorkload["name"];
+	paths: Array<string>;
+	method?: "POST";
+	headers?: Array<string>;
+	body?: string;
+}
+
+function perfReportFields(stderr: string, prefix: string): Record<string, number> {
+	const line = stderr.split("\n").find((candidate) => candidate.startsWith(prefix));
+	if (line === undefined) {
+		throw new Error(`instrumented HTTP server omitted ${prefix}`);
+	}
+	const fields: Record<string, number> = {};
+	for (const match of line.matchAll(/(?:^|\s)([a-z0-9_]+)=([0-9]+)/g)) {
+		const name = match[1];
+		const value = match[2];
+		if (name !== undefined && value !== undefined) fields[name] = Number(value);
+	}
+	return fields;
+}
+
+function perfPerRequest(
+	fields: Record<string, number>,
+	name: string,
+	requests: number,
+): number {
+	return (fields[name] ?? 0) / requests;
+}
+
+function waitForPerfReport(file: string): string {
+	for (let attempt = 0; attempt < 100; attempt++) {
+		const stderr = readFileSync(file, "utf-8");
+		if (stderr.includes("[perf-ic-stats]")) return stderr;
+		execFileSync("sleep", ["0.05"]);
+	}
+	throw new Error("instrumented HTTP server did not exit with a performance report");
+}
+
+function runProfileRequests(
+	target: string,
+	requests: number,
+	conc: number,
+	extraArgs: Array<string>,
+): void {
+	execFileSync(
+		"oha",
+		[
+			"-n",
+			String(requests),
+			"-c",
+			String(conc),
+			"--no-tui",
+			"--output-format",
+			"json",
+			"--redirect",
+			"0",
+			...extraArgs,
+			target,
+		],
+		{ env: { ...process.env, NO_COLOR: "false" }, stdio: "ignore" },
+	);
+}
+
+/** Exact-count Express attribution, intentionally separate from the saved throughput lane. */
+function benchHttpProfile(requests: number, conc: number): void {
+	if (!ohaAvailable()) {
+		console.log("http-profile: `oha` not installed — skipping.");
+		return;
+	}
+	if (!Number.isInteger(requests) || requests <= 0) {
+		throw new Error(`--http-requests must be a positive integer, got ${requests}`);
+	}
+
+	const perfEnvironment = { ...process.env, MAL_PERF_STATS: "1" };
+	const binary = buildNativeBinary({
+		fixture: "bench/http/express-server.cjs",
+		name: "bench-http-express-profile",
+		mainFile: HOST_MAIN,
+		nodeEnabled: true,
+		environment: perfEnvironment,
+	});
+	const workloads: Array<HttpProfileWorkload> = [
+		{ name: "middleware", paths: ["/middleware"] },
+		...planExpressHttpWorkload(1),
+	];
+	const tempDir = mkdtempSync(path.join(os.tmpdir(), "mal-bench-http-profile-"));
+	console.log(`http-profile (${requests} measured requests per workload):`);
+	try {
+		for (let index = 0; index < workloads.length; index++) {
+			const workload = workloads[index];
+			if (workload === undefined)
+				throw new Error(`missing HTTP profile workload ${index}`);
+			const port = 3120 + index;
+			const stderrFile = path.join(tempDir, `${workload.name}.stderr`);
+			const stderrFd = openSync(stderrFile, "w");
+			const server = spawn(binary, [], {
+				env: {
+					...perfEnvironment,
+					MAL_BENCH_CONTROL: "1",
+					MAL_PERF_CONTROL: "1",
+					PORT: String(port),
+				},
+				stdio: ["ignore", "ignore", stderrFd],
+			});
+			try {
+				const origin = `http://127.0.0.1:${port}`;
+				waitReachable(`${origin}/middleware`);
+				const urlsFile = path.join(tempDir, `${workload.name}.urls`);
+				writeFileSync(
+					urlsFile,
+					`${workload.paths.map((value) => `${origin}${value}`).join("\n")}\n`,
+				);
+				const extraArgs = ["--urls-from-file", ...workloadArgs(workload)];
+				runProfileRequests(urlsFile, Math.min(requests, 5_000), conc, extraArgs);
+				execFileSync("curl", [
+					"-s",
+					"-o",
+					"/dev/null",
+					"-X",
+					"POST",
+					`${origin}/__maligator_perf_reset`,
+				]);
+				runProfileRequests(urlsFile, requests, conc, extraArgs);
+				execFileSync("curl", [
+					"-s",
+					"-o",
+					"/dev/null",
+					"-X",
+					"POST",
+					`${origin}/__maligator_bench_exit`,
+				]);
+				const stderr = waitForPerfReport(stderrFile);
+				const strings = perfReportFields(stderr, "[perf-string-stats]");
+				const properties = perfReportFields(stderr, "[perf-property-stats]");
+				const transitions = perfReportFields(stderr, "[perf-shape-transition-stats]");
+				const calls = perfReportFields(stderr, "[perf-call-cache-stats]");
+				const ic = perfReportFields(stderr, "[perf-ic-stats]");
+				console.log(`  ${workload.name}:`);
+				console.log(
+					`    keys/request        ${perfPerRequest(strings, "key_equals_calls", requests).toFixed(1)} comparisons, ${perfPerRequest(strings, "key_string_fallbacks", requests).toFixed(1)} string fallbacks, ${perfPerRequest(strings, "string_memcmp_calls", requests).toFixed(1)} memcmp`,
+				);
+				console.log(
+					`    properties/request  ${perfPerRequest(properties, "ensure_inserts", requests).toFixed(1)} inserts, ${perfPerRequest(properties, "ensure_hits", requests).toFixed(1)} ensure hits`,
+				);
+				console.log(
+					`    transitions/request ${perfPerRequest(transitions, "calls", requests).toFixed(1)} calls, ${perfPerRequest(transitions, "creates", requests).toFixed(1)} creates, ${perfPerRequest(transitions, "comparisons", requests).toFixed(1)} comparisons`,
+				);
+				console.log(
+					`    loads/request       ${perfPerRequest(ic, "load_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "load_inherited_hits", requests).toFixed(1)} inherited, ${perfPerRequest(ic, "load_missing_hits", requests).toFixed(1)} missing, ${perfPerRequest(ic, "load_fallbacks", requests).toFixed(1)} fallback`,
+				);
+				console.log(
+					`    stores/request      ${perfPerRequest(ic, "store_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "store_poly_hits", requests).toFixed(1)} poly, ${perfPerRequest(ic, "store_plain_generic", requests).toFixed(1)} generic`,
+				);
+				console.log(
+					`    calls/request       ${perfPerRequest(calls, "probes", requests).toFixed(1)} probes, ${perfPerRequest(calls, "dispatch_misses", requests).toFixed(1)} misses; prototype invalidations ${ic.prototype_epoch_invalidations ?? 0}`,
+				);
+			} finally {
+				if (server.exitCode === null) server.kill("SIGKILL");
+				closeSync(stderrFd);
+			}
+		}
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
 	}
 }
 
@@ -1580,9 +1768,12 @@ const runsIdx = args.indexOf("--runs");
 const runs = runsIdx >= 0 ? Number(args[runsIdx + 1]) : 5;
 const httpSecondsIdx = args.indexOf("--http-seconds");
 const httpSeconds = httpSecondsIdx >= 0 ? Number(args[httpSecondsIdx + 1]) : 10;
+const httpRequestsIdx = args.indexOf("--http-requests");
+const httpRequests = httpRequestsIdx >= 0 ? Number(args[httpRequestsIdx + 1]) : 100_000;
 const optionValues = new Set<number>();
 if (runsIdx >= 0) optionValues.add(runsIdx + 1);
 if (httpSecondsIdx >= 0) optionValues.add(httpSecondsIdx + 1);
+if (httpRequestsIdx >= 0) optionValues.add(httpRequestsIdx + 1);
 const selected = args.filter(
 	(a, index) => !a.startsWith("--") && !optionValues.has(index),
 );
@@ -1621,6 +1812,7 @@ if (which.includes("http")) {
 	const http = benchHttp(httpSeconds, 50);
 	if (http !== null) entry.http = http;
 }
+if (which.includes("http-profile")) benchHttpProfile(httpRequests, 50);
 
 const baseline = readBenchmarkBaseline<BenchmarkSnapshot>(BASELINE_FILE);
 report(entry, baseline);
