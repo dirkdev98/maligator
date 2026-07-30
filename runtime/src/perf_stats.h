@@ -89,6 +89,10 @@ typedef struct MalPerfStats {
     u64 map_get_set_cache_checks;
     u64 map_get_set_cache_hits;
     u64 map_get_set_cache_misses;
+    u64 collection_direct_map_get_hits;
+    u64 collection_direct_map_set_hits;
+    u64 collection_direct_set_add_hits;
+    u64 collection_direct_fallbacks;
     u64 object_empty_creations;
     u64 object_shaped_creations;
     u64 stack_object_initializations;

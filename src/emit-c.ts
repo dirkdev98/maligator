@@ -2362,6 +2362,20 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (instruction.directCollectionOp !== undefined) {
+				const operation = {
+					mapGet: "MAL_BUILTIN_COLLECTION_MAP_GET",
+					mapSet: "MAL_BUILTIN_COLLECTION_MAP_SET",
+					setAdd: "MAL_BUILTIN_COLLECTION_SET_ADD",
+				}[instruction.directCollectionOp];
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`r${instruction.dst} = ${tmp}.value;`,
+					poll,
+				];
+			}
 			if (instruction.directArrayPush) {
 				return [
 					`static MalCallCache __cc_${ip};`,

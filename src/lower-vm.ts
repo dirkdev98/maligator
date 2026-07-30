@@ -536,6 +536,8 @@ export type VmInstruction =
 			directCallTargetFunctionIndex?: number;
 			/** COMPILE-ONLY: guarded intrinsic Array.prototype.push dispatch. */
 			directArrayPush?: true;
+			/** COMPILE-ONLY: guarded intrinsic Map/Set method dispatch. */
+			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
 	  }
 	| {
 			opcode: "CONSTRUCT";
@@ -1473,6 +1475,7 @@ function lowerInstructionToVmInstruction(
 				directFunctionCall: instruction.directFunctionCall,
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
 				directArrayPush: instruction.directArrayPush,
+				directCollectionOp: instruction.directCollectionOp,
 			};
 		case "construct":
 			return {

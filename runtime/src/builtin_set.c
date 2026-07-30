@@ -740,7 +740,8 @@ void mal_builtin_set_install(MalVm *vm) {
         "Set"
     );
 
-    mal_intrinsic_define_method_n(vm, prototype, "add", 1, mal_builtin_set_prototype_add);
+    vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_ADD] =
+        mal_intrinsic_define_method_n(vm, prototype, "add", 1, mal_builtin_set_prototype_add);
     mal_intrinsic_define_method_n(vm, prototype, "has", 1, mal_builtin_set_prototype_has);
     mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_set_prototype_delete);
     mal_intrinsic_define_method_n(vm, prototype, "clear", 0, mal_builtin_set_prototype_clear);

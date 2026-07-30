@@ -597,6 +597,82 @@ export function annotateDirectArrayPushSites(program: IntermediateProgram): numb
 	return count;
 }
 
+/**
+ * Mark direct `receiver.get/set/add(...)` calls for guarded native collection
+ * dispatch. Property lookup and argument evaluation stay in their original
+ * order; unknown receivers remain candidates because the runtime validates both
+ * the exact intrinsic callee and the concrete Map/Set brand before bypassing the
+ * ordinary cached call seam.
+ */
+export function annotateDirectCollectionSites(program: IntermediateProgram): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const provenanceThroughMoves = (
+			register: number,
+		): { register: number; definition: IRInstruction | undefined } => {
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") return { register, definition };
+				register = definition.registers[1];
+			}
+			return { register, definition: undefined };
+		};
+
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call") continue;
+				const callee = definitions.get(instruction.registers[1]);
+				if (callee === undefined) continue;
+
+				let receiver: number;
+				let nameStringIndex: number;
+				if (callee.type === "loadPropertyStatic") {
+					receiver = callee.registers[1];
+					nameStringIndex = callee.stringIndex;
+				} else if (callee.type === "loadProperty") {
+					receiver = callee.registers[1];
+					const key = definitions.get(callee.registers[2]);
+					if (key?.type !== "createString") continue;
+					nameStringIndex = key.stringIndex;
+				} else {
+					continue;
+				}
+
+				const receiverProvenance = provenanceThroughMoves(receiver);
+				const thisProvenance = provenanceThroughMoves(instruction.registers[2]);
+				if (receiverProvenance.register !== thisProvenance.register) continue;
+
+				const operation = (
+					{
+						get: "mapGet",
+						set: "mapSet",
+						add: "setAdd",
+					} as const
+				)[decodeStringConstant(program, nameStringIndex) as "get" | "set" | "add"];
+				if (operation === undefined) continue;
+
+				const origin = receiverProvenance.definition;
+				if (
+					origin?.type === "loadThis" ||
+					origin?.type === "createArray" ||
+					origin?.type === "createObject" ||
+					origin?.type === "createObjectShaped" ||
+					origin?.type === "createFunction"
+				) {
+					continue;
+				}
+
+				instruction.directCollectionOp = operation;
+				count++;
+			}
+		}
+	}
+	return count;
+}
+
 export interface InlineCandidate {
 	/** The `call` instruction in the caller. */
 	call: IRInstruction;

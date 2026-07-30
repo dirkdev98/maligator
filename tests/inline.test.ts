@@ -202,6 +202,34 @@ test("direct push sites carry guarded Array dispatch metadata", () => {
 	expect(marked.some((call) => call.registers.length === 5)).toBe(true);
 });
 
+test("direct collection methods carry guarded Map and Set dispatch metadata", () => {
+	const ir = optimizedProgram(`
+		function update(map, set, key, value) {
+			const previous = map.get(key);
+			map.set(key, value);
+			set.add(key);
+			return previous;
+		}
+		function ownMethod(value) { return this.get(value); }
+		const plain = { get() { return 1; }, set() {}, add() {} };
+		plain.get();
+		plain.set();
+		plain.add();
+	`);
+	const marked = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.flatMap((instruction) =>
+				instruction.type === "call" && instruction.directCollectionOp !== undefined
+					? [instruction.directCollectionOp]
+					: [],
+			),
+		),
+	);
+	// The unknown parameters and captured plain object are both guarded
+	// candidates; only the bare-this protocol call is statically excluded.
+	expect(marked).toEqual(["mapGet", "mapSet", "setAdd", "mapGet", "mapSet", "setAdd"]);
+});
+
 test("immutable ordinary script constructors retain their exact function index", () => {
 	const ir = optimizedProgram(`
 		const Exact = function Exact(value) { this.value = value; };

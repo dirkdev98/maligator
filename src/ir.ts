@@ -870,6 +870,12 @@ export type IRInstruction =
 			 * validates the loaded callee, receiver, prototype, and dense state.
 			 */
 			directArrayPush?: true;
+			/**
+			 * COMPILE-ONLY: a direct Map.get/Map.set/Set.add method site eligible for
+			 * guarded intrinsic collection dispatch in native code. The loaded callee
+			 * and receiver brand are still validated at runtime.
+			 */
+			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }

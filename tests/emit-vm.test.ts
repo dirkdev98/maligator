@@ -437,4 +437,20 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_array_push_direct(vm, &__cc_");
 		expect(output).toContain(", 3);");
 	});
+
+	it("emits guarded direct collection dispatch from call metadata", () => {
+		const output = emit(`
+			function update(map, set, key, value) {
+				const previous = map.get(key);
+				map.set(key, value);
+				set.add(key);
+				return previous;
+			}
+			globalThis.update = update;
+		`);
+		expect(output).toContain("mal_builtin_collection_direct(vm, &__cc_");
+		expect(output).toContain("MAL_BUILTIN_COLLECTION_MAP_GET");
+		expect(output).toContain("MAL_BUILTIN_COLLECTION_MAP_SET");
+		expect(output).toContain("MAL_BUILTIN_COLLECTION_SET_ADD");
+	});
 });
