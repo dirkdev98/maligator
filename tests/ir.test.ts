@@ -102,6 +102,28 @@ test("keeps a leading spread target when the object rest identity is observed", 
 	).toHaveLength(1);
 });
 
+test("canonicalizes a computed object-rest exclusion once", () => {
+	const program = compileScript(`
+		function omit(source, key) {
+			const { [key]: removed, ...rest } = source;
+			return [removed, rest];
+		}
+		globalThis.omit = omit;
+	`);
+	const instructions = instructionsOf(functionNamed(program, "omit"));
+	const conversions = instructions.filter(
+		(instruction) => instruction.type === "toPropertyKey",
+	);
+	expect(conversions).toHaveLength(1);
+	const canonicalKey = conversions[0]!.registers[0];
+	const load = instructions.find((instruction) => instruction.type === "loadProperty");
+	const copy = instructions.find(
+		(instruction) => instruction.type === "copyDataProperties",
+	);
+	expect(load?.registers[2]).toBe(canonicalKey);
+	expect(copy?.registers.slice(2)).toContain(canonicalKey);
+});
+
 test("generator class computed keys suspend in class-element source order", () => {
 	const program = compileScript(`
 		function* define() {

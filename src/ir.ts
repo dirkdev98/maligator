@@ -5557,9 +5557,20 @@ function compileObjectPatternTarget(
 			continue;
 		}
 
-		const key = compilePropertyKey(program, fn, cursor, property);
+		let key = compilePropertyKey(program, fn, cursor, property);
 		if (key === -1) {
 			continue;
+		}
+		if (property.computed) {
+			// PropertyName evaluation applies ToPropertyKey once. Reuse that
+			// canonical string/symbol for both the property read and the later
+			// rest-exclusion list so an observable coercion cannot run twice.
+			const propertyKey = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "toPropertyKey",
+				registers: [propertyKey, value, key],
+			});
+			key = propertyKey;
 		}
 		consumedKeys.push(key);
 		// KeyedDestructuringAssignmentEvaluation evaluates a non-pattern target
