@@ -641,7 +641,8 @@ typedef struct MalInlineCache {
     };
 #endif
     // Polymorphic overflow, stored SoA (parallel `poly_shape[i]` / `poly_slot[i]`)
-    // for own-slot modes. In inherited modes the same pointer storage retains
+    // for own-slot modes. A transition-store entry uses `poly_shape[0]` for its
+    // exact child shape. In inherited modes the same pointer storage retains
     // exact prototype objects: [0] is the receiver's first prototype and [1] is
     // the resolved holder. Missing mode either retains a short all-shaped chain
     // here (polymorphic across equal-layout prototype objects) or one exact
@@ -707,6 +708,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_INHERITED_SLOT 5u
 #define MAL_IC_MODE_INHERITED_TABLE 6u
 #define MAL_IC_MODE_MISSING 7u
+#define MAL_IC_MODE_TRANSITION 8u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -1091,11 +1093,10 @@ static inline bool mal_vm_property_try_load_static(MalVm *vm, MalValue receiver,
 }
 
 /**
- * Monomorphic shape-slot overwrite of an existing writable data slot (barriered).
- * Returns true when applied; false (miss / value-slot / accessor / read-only / fresh
- * key) leaves the store to the general [[Set]]. A successful overwrite runs no user
- * code. The gc write-barrier (old value) + card (old->young) are required for the
- * generational collector and fold out when it is off.
+ * Monomorphic shape-slot overwrite or proven fresh-property shape transition.
+ * Returns true when applied; false leaves the store to the general [[Set]].
+ * Successful hits run no user code. Existing-slot overwrites need the SATB
+ * write barrier; both paths card new references for the generational collector.
  */
 static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalValue value,
                                            const MalInlineCache *ic) {
@@ -1120,6 +1121,28 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
             }
         }
     }
+    // The slow fill proved that the ordinary prototype chain permits creating
+    // this own property and registered the cache row against every prototype.
+    // Structural mutations eagerly invalidate it, leaving an O(1) hit guard.
+    if (ic->mode == MAL_IC_MODE_TRANSITION && object->shape == ic->shape &&
+        key == ic->key && object->prototype == ic->obj &&
+        object->overflow == nullptr && object->extensible) {
+        const MalShape *child = ic->poly_shape[0];
+        u32 old_count = object->shape->inline_count;
+        if (object->watched_method_proto) {
+            mal_primitive_method_protector = false;
+        }
+        if (mal_object_note_prototype_mutation(object)) {
+            MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+        }
+        mal_object_grow_slots(object, old_count, child->inline_count);
+        object->slots[ic->slot] = value;
+        object->shape = (MalShape *) child;
+        mal_gc_card(&object->header, value);
+        mal_gc_card(&object->header, key);
+        MAL_PERF_COUNT(ic_store_transition_hits);
+        return true;
+    }
     return false;
 }
 
@@ -1128,7 +1151,7 @@ static inline bool mal_vm_object_try_store_static(MalObject *object, MalValue va
     return mal_vm_object_try_store(object, ic->key, value, ic);
 }
 
-/** Apply only a proven existing writable-slot store, including both GC barriers. */
+/** Apply only a proven writable-slot overwrite or fresh-property transition. */
 static inline bool mal_vm_property_try_store(MalValue receiver, MalValue key, MalValue value,
                                              const MalInlineCache *ic) {
     MalObject *object = mal_vm_as_object(receiver);

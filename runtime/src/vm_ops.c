@@ -3471,6 +3471,7 @@ static bool mal_ic_key_is_stable_string(MalValue key) {
 static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
     if (ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
+        (ic->mode == MAL_IC_MODE_TRANSITION && ic->obj != nullptr) ||
         (ic->mode == MAL_IC_MODE_MISSING &&
          ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
          ic->poly_count > 0)) {
@@ -3601,6 +3602,59 @@ static bool mal_ic_record_local_prototype_chain(
     ic->proto_object[0] = receiver->prototype;
     ic->proto_object[1] = holder;
     ic->poly_count = 1;
+    return true;
+}
+
+/**
+ * Record an ordinary-object fresh-property transition. The child shape and slot
+ * are immutable VM-lifetime identities. When the receiver has a prototype,
+ * register the row against the complete chain so any structural mutation
+ * invalidates this shortcut before it can bypass [[Set]] semantics.
+ */
+static bool mal_ic_record_transition(
+    MalObject *object, const MalShape *source, MalValue key,
+    const MalShape *child, MalInlineCache *ic
+) {
+    if (object->prototype == nullptr) {
+        mal_ic_detach_prototype_cache(ic);
+    } else if (!(ic->mode == MAL_IC_MODE_TRANSITION &&
+                 ic->obj == object->prototype) &&
+               !mal_object_register_prototype_cache(object, nullptr, ic)) {
+        mal_vm_property_cache_invalidate(ic);
+        return false;
+    }
+    ic->shape = source;
+    ic->key = key;
+    ic->obj = object->prototype;
+    ic->poly_shape[0] = child;
+    ic->slot = (u8) (child->inline_count - 1);
+    ic->prim_kind = 0;
+    ic->poly_count = 0;
+    ic->megamorphic = false;
+    ic->mode = MAL_IC_MODE_TRANSITION;
+    ic->receiver_type = 0;
+    return true;
+}
+
+/**
+ * Whether OrdinarySet on a receiver with no own `key` may directly create the
+ * default own data property. Exotic prototypes must dispatch their actual
+ * [[Set]], accessors intercept, and non-writable inherited data rejects. A
+ * writable inherited data property (or an absent property) permits creation.
+ */
+static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey key) {
+    for (const MalObject *cursor = object->prototype;
+         cursor != nullptr; cursor = cursor->prototype) {
+        if (cursor->header.type != MAL_HEAP_OBJECT) {
+            return false;
+        }
+        MalPropertyLookup lookup = mal_object_get_own(cursor, key);
+        if (!lookup.present) {
+            continue;
+        }
+        return !(lookup.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+            (lookup.desc.flags & MAL_PROPERTY_WRITABLE);
+    }
     return true;
 }
 
@@ -4112,6 +4166,33 @@ void mal_vm_op_store_property_ic(
                 mal_gc_write_barrier(object->slots[prop->slot]);
                 object->slots[prop->slot] = value;
                 mal_gc_card(&object->header, value); // old object -> young value
+                return;
+            }
+            if (idx < 0 && object->overflow == nullptr && object->extensible &&
+                mal_shape_can_add_property(object->shape, key) &&
+                mal_ic_key_is_stable_string(key_value) &&
+                mal_ic_can_apply_transition_store(object, key)) {
+                const MalShape *source = object->shape;
+                MalShape *child = mal_shape_add_property(
+                    object->shape, key,
+                    (u8) (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                          MAL_PROPERTY_CONFIGURABLE));
+                if (object->watched_method_proto) {
+                    mal_primitive_method_protector = false;
+                }
+                if (mal_object_note_prototype_mutation(object)) {
+                    MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+                }
+                mal_object_grow_slots(
+                    object, source->inline_count, child->inline_count);
+                object->slots[child->inline_count - 1] = value;
+                object->shape = child;
+                mal_gc_card(&object->header, value);
+                mal_gc_card(&object->header, key.value);
+                if (mal_ic_record_transition(
+                        object, source, key_value, child, ic)) {
+                    MAL_PERF_COUNT(ic_store_transition_fills);
+                }
                 return;
             }
         }

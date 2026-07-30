@@ -88,6 +88,10 @@ hit-path specialization and call/control-flow analysis before new allocation reg
       Stable VM-owned IC rows register against the exact prototype objects they
       depend on; rare structural mutations eagerly clear only those rows, while
       inherited slot/table hits retain O(1) guards and unrelated chains stay warm.
+- [x] Cache ordinary fresh-property shape transitions. Repeated constructor-style
+      stores now apply the immutable old-shape-to-child-shape transition directly;
+      exact first-prototype guards plus chain-local eager invalidation preserve
+      accessors, read-only inherited data, exotic dispatch, and reparenting semantics.
 
 ## Queued call and control-flow analysis
 

@@ -2002,13 +2002,17 @@ function emitInstruction(
 				instruction.opcode === "STORE_PROPERTY_STATIC"
 					? `${reg.name}_ok`
 					: `${reg.name}_ok && ${key} == ${reg.name}_c->keys[${reg.slotIndex}]`;
+			const icProbe =
+				instruction.opcode === "STORE_PROPERTY_STATIC"
+					? `${reg.name}_o && mal_vm_object_try_store_static(${reg.name}_o, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`
+					: `${reg.name}_o && mal_vm_object_try_store(${reg.name}_o, ${key}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])`;
 			return [
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				...consolidatedRegionRevalidate(reg),
 				`if (${regionHit}) {`,
 				`  mal_perf_ic_store_region_hit();`,
 				`  mal_vm_object_slot_store(${reg.name}_o, ${reg.name}_slp[${reg.slotIndex}], ${boxed(instruction.value)});`,
-				`} else {`,
+				`} else if (!(${icProbe})) {`,
 				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
 				`  ${throwCheck}`,
 				`}`,

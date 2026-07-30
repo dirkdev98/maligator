@@ -273,6 +273,8 @@ typedef struct MalPerfStats {
     u64 ic_store_shape_hits;
     u64 ic_store_shape_fills;
     u64 ic_store_shape_uncacheable;
+    u64 ic_store_transition_hits;
+    u64 ic_store_transition_fills;
     u64 ic_store_plain_generic;
     u64 ic_store_other_generic;
 } MalPerfStats;

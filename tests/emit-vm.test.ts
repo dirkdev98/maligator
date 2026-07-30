@@ -328,6 +328,9 @@ describe("native update-expression representation", () => {
 		expect(staticOutput).toMatch(/\.property_ic_count = [1-9]/);
 		expect(staticOutput).toContain("mal_perf_ic_load_region_hit");
 		expect(staticOutput).toContain("mal_perf_ic_store_region_hit");
+		expect(staticOutput).toMatch(
+			/else if \(!\(__rg\d+_o && mal_vm_object_try_store_static/,
+		);
 		expect(staticOutput).not.toMatch(/&& .* == __rg\d+_key\[/);
 
 		const dynamicOutput = emit(

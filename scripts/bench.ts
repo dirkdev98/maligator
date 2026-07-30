@@ -112,6 +112,8 @@ interface LanguageMetrics {
 	loadFallbacks: number;
 	storeMonoHits: number;
 	storeRegionHits: number;
+	storeTransitionHits: number;
+	storeTransitionFills: number;
 	storeFallbacks: number;
 }
 interface CompilerMetrics {
@@ -529,6 +531,16 @@ function benchLanguage(runs: number): LanguageMetrics {
 		loadFallbacks: parsePerfStat(perfStderr, "perf-ic-stats", "load_fallbacks"),
 		storeMonoHits: parsePerfStat(perfStderr, "perf-ic-stats", "store_mono_hits"),
 		storeRegionHits: parsePerfStat(perfStderr, "perf-ic-stats", "store_region_hits"),
+		storeTransitionHits: parsePerfStat(
+			perfStderr,
+			"perf-ic-stats",
+			"store_transition_hits",
+		),
+		storeTransitionFills: parsePerfStat(
+			perfStderr,
+			"perf-ic-stats",
+			"store_transition_fills",
+		),
 		storeFallbacks: parsePerfStat(perfStderr, "perf-ic-stats", "store_fallbacks"),
 	};
 }
@@ -1414,7 +1426,7 @@ function benchHttpProfile(requests: number, conc: number): void {
 					`    loads/request       ${perfPerRequest(ic, "load_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "load_inherited_hits", requests).toFixed(1)} inherited, ${perfPerRequest(ic, "load_missing_hits", requests).toFixed(1)} missing, ${perfPerRequest(ic, "load_fallbacks", requests).toFixed(1)} fallback`,
 				);
 				console.log(
-					`    stores/request      ${perfPerRequest(ic, "store_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "store_poly_hits", requests).toFixed(1)} poly, ${perfPerRequest(ic, "store_plain_generic", requests).toFixed(1)} generic`,
+					`    stores/request      ${perfPerRequest(ic, "store_mono_hits", requests).toFixed(1)} mono, ${perfPerRequest(ic, "store_poly_hits", requests).toFixed(1)} poly, ${perfPerRequest(ic, "store_transition_hits", requests).toFixed(1)} transition hits, ${perfPerRequest(ic, "store_transition_fills", requests).toFixed(1)} transition fills, ${perfPerRequest(ic, "store_plain_generic", requests).toFixed(1)} generic`,
 				);
 				console.log(
 					`    calls/request       ${perfPerRequest(calls, "probes", requests).toFixed(1)} probes, ${perfPerRequest(calls, "dispatch_misses", requests).toFixed(1)} misses; prototype invalidations ${ic.prototype_epoch_invalidations ?? 0}`,
@@ -1499,7 +1511,7 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  loads     ${entry.language.loadMonoHits} mono, ${entry.language.loadRegionHits} region, ${entry.language.loadInheritedHits} inherited, ${entry.language.loadWatchedHits} watched, ${entry.language.loadFallbacks} fallback`,
 		);
 		console.log(
-			`  stores    ${entry.language.storeMonoHits} mono, ${entry.language.storeRegionHits} region, ${entry.language.storeFallbacks} fallback`,
+			`  stores    ${entry.language.storeMonoHits} mono, ${entry.language.storeRegionHits} region, ${entry.language.storeTransitionHits} transition hits, ${entry.language.storeTransitionFills} transition fills, ${entry.language.storeFallbacks} fallback`,
 		);
 	}
 	if (entry.module) {
