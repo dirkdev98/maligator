@@ -3377,6 +3377,12 @@ MalCompletion mal_vm_call_cached(
                 mal_value_to_native_function_object(callee));
             MAL_PERF_COUNT(call_cache_exact_identity_hits);
             MAL_PERF_COUNT(call_cache_native_exact_hits);
+            MalString *native_name = mal_native_function_object_name(
+                mal_value_to_native_function_object(callee));
+            if (native_name != nullptr) {
+                mal_perf_native_call_name(
+                    mal_string_code_units(native_name), mal_string_length(native_name));
+            }
 #if MAL_REALMS
             MalRealm *saved_realm = vm->current_realm;
             mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));

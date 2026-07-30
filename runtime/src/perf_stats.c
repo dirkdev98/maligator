@@ -7,6 +7,8 @@
 #if MAL_PERF_STATS
 #define MAL_PERF_INTRINSIC_NAME_CAPACITY 2048
 #define MAL_PERF_INTRINSIC_NAME_MAX_LENGTH 63
+#define MAL_PERF_NATIVE_NAME_CAPACITY 512
+#define MAL_PERF_NATIVE_NAME_MAX_LENGTH 63
 
 typedef struct MalPerfIntrinsicName {
     u64 hash;
@@ -15,9 +17,17 @@ typedef struct MalPerfIntrinsicName {
     byte name[MAL_PERF_INTRINSIC_NAME_MAX_LENGTH + 1];
 } MalPerfIntrinsicName;
 
+typedef struct MalPerfNativeName {
+    u64 hash;
+    u64 calls;
+    u32 length;
+    c16 name[MAL_PERF_NATIVE_NAME_MAX_LENGTH + 1];
+} MalPerfNativeName;
+
 bool mal_perf_stats_enabled = false;
 MalPerfStats mal_perf_stats;
 static MalPerfIntrinsicName mal_perf_intrinsic_names[MAL_PERF_INTRINSIC_NAME_CAPACITY];
+static MalPerfNativeName mal_perf_native_names[MAL_PERF_NATIVE_NAME_CAPACITY];
 
 static const char *const mal_perf_table_roles[MAL_PERF_TABLE_ROLE_COUNT] = {
     "object",
@@ -66,6 +76,35 @@ void mal_perf_intrinsic_name(const byte *name, usize length) {
             return;
         }
         index = (index + 1) & (MAL_PERF_INTRINSIC_NAME_CAPACITY - 1);
+    }
+}
+
+void mal_perf_native_call_name(const c16 *name, usize length) {
+    if (!mal_perf_stats_enabled || length > MAL_PERF_NATIVE_NAME_MAX_LENGTH) {
+        return;
+    }
+    u64 hash = 1469598103934665603ULL;
+    for (usize i = 0; i < length; i++) {
+        hash ^= name[i];
+        hash *= 1099511628211ULL;
+    }
+    usize index = hash & (MAL_PERF_NATIVE_NAME_CAPACITY - 1);
+    for (usize probe = 0; probe < MAL_PERF_NATIVE_NAME_CAPACITY; probe++) {
+        MalPerfNativeName *entry = &mal_perf_native_names[index];
+        if (entry->calls == 0) {
+            entry->hash = hash;
+            entry->length = (u32) length;
+            memcpy(entry->name, name, length * sizeof(c16));
+            entry->name[length] = 0;
+            entry->calls = 1;
+            return;
+        }
+        if (entry->hash == hash && entry->length == length &&
+            memcmp(entry->name, name, length * sizeof(c16)) == 0) {
+            entry->calls++;
+            return;
+        }
+        index = (index + 1) & (MAL_PERF_NATIVE_NAME_CAPACITY - 1);
     }
 }
 
@@ -425,6 +464,19 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.compiled_enter_calls,
         (unsigned long long) mal_perf_stats.compiled_debug_frame_entries
     );
+    for (usize i = 0; i < MAL_PERF_NATIVE_NAME_CAPACITY; i++) {
+        const MalPerfNativeName *entry = &mal_perf_native_names[i];
+        if (entry->calls == 0) continue;
+        char name[MAL_PERF_NATIVE_NAME_MAX_LENGTH + 1];
+        for (usize j = 0; j < entry->length; j++) {
+            name[j] = entry->name[j] <= 0x7f ? (char) entry->name[j] : '?';
+        }
+        name[entry->length] = '\0';
+        fprintf(
+            stderr, "[perf-native-call] name=%s calls=%llu\n",
+            name, (unsigned long long) entry->calls
+        );
+    }
     fprintf(
         stderr,
         "[perf-ic-stats] load_mono_hits=%llu load_region_hits=%llu "
@@ -567,6 +619,7 @@ void mal_perf_stats_reset(void) {
     }
     memset(&mal_perf_stats, 0, sizeof(mal_perf_stats));
     memset(mal_perf_intrinsic_names, 0, sizeof(mal_perf_intrinsic_names));
+    memset(mal_perf_native_names, 0, sizeof(mal_perf_native_names));
 }
 #else
 // Keep dead instrumentation references valid even in unoptimized diagnostic builds.

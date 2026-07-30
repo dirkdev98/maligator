@@ -1304,6 +1304,18 @@ function perfReportFields(stderr: string, prefix: string): Record<string, number
 	return fields;
 }
 
+function perfNativeCallRows(stderr: string): Array<{ name: string; calls: number }> {
+	return stderr
+		.split("\n")
+		.flatMap((line) => {
+			const match = line.match(/^\[perf-native-call\] name=(.*) calls=([0-9]+)$/);
+			return match?.[1] !== undefined && match[2] !== undefined
+				? [{ name: match[1], calls: Number(match[2]) }]
+				: [];
+		})
+		.sort((left, right) => right.calls - left.calls);
+}
+
 function perfPerRequest(
 	fields: Record<string, number>,
 	name: string,
@@ -1452,6 +1464,12 @@ function benchHttpProfile(requests: number, conc: number): void {
 				);
 				console.log(
 					`    calls/request       ${perfPerRequest(calls, "probes", requests).toFixed(1)} probes, ${perfPerRequest(calls, "compiled_exact_hits", requests).toFixed(1)} compiled exact, ${perfPerRequest(calls, "compiled_family_hits", requests).toFixed(1)} compiled family, ${perfPerRequest(calls, "native_exact_hits", requests).toFixed(1)} native, ${perfPerRequest(calls, "way_checks", requests).toFixed(1)} way checks, ${perfPerRequest(calls, "dispatch_misses", requests).toFixed(1)} misses, ${perfPerRequest(calls, "compiled_debug_frames", requests).toFixed(1)} debug frames; prototype invalidations ${ic.prototype_epoch_invalidations ?? 0}`,
+				);
+				console.log(
+					`    native call leaders ${perfNativeCallRows(stderr)
+						.slice(0, 8)
+						.map((row) => `${(row.calls / requests).toFixed(1)} ${row.name}`)
+						.join(", ")}`,
 				);
 			} finally {
 				if (server.exitCode === null) server.kill("SIGKILL");

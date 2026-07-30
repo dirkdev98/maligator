@@ -306,6 +306,7 @@ extern bool mal_perf_stats_enabled;
 void mal_perf_stats_init(void);
 void mal_perf_stats_reset(void);
 void mal_perf_intrinsic_name(const byte *name, usize length);
+void mal_perf_native_call_name(const c16 *name, usize length);
 
 #define MAL_PERF_COUNT(field) \
     do { \
@@ -326,6 +327,10 @@ void mal_perf_intrinsic_name(const byte *name, usize length);
 static inline void mal_perf_stats_init(void) {}
 static inline void mal_perf_stats_reset(void) {}
 static inline void mal_perf_intrinsic_name(const byte *name, usize length) {
+    (void) name;
+    (void) length;
+}
+static inline void mal_perf_native_call_name(const c16 *name, usize length) {
     (void) name;
     (void) length;
 }
