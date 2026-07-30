@@ -3283,51 +3283,14 @@ MalCompletion mal_vm_call_cached(
     const MalFunction *function = nullptr;
     i32 function_index = -1;
 
-    // Exact identities are only meaningful in the heap lifetime and epoch that
-    // filled them. The callback/body still receives the current callee object.
-    if (cc->heap_identity == vm->heap.identity && cc->epoch == vm->heap.epoch) {
-        for (u32 v = 0; v < cc->count; v++) {
-            if (callee != cc->callee[v]) {
-                continue;
-            }
-            if (cc->kind[v] == MAL_CALL_CACHE_NATIVE) {
-                if (!mal_value_is_native_function_object(callee)) {
-                    continue;
-                }
-                MalNativeFunctionCallback callback = mal_native_function_object_callback(
-                    mal_value_to_native_function_object(callee));
-                MAL_PERF_COUNT(call_cache_exact_identity_hits);
-#if MAL_REALMS
-                MalRealm *saved_realm = vm->current_realm;
-                mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
-#endif
-                MalCalleeRoots ncr;
-                mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(),
-                                          callee, args, arg_count);
-                vm->gc_native_frames++;
-                MalValue value = callback(
-                    vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
-                vm->gc_native_frames--;
-                mal_gc_callee_roots_end(&ncr);
-#if MAL_REALMS
-                mal_vm_realm_switch_to(vm, saved_realm);
-#endif
-                return vm->completion.kind == MAL_COMPLETION_THROW
-                    ? vm->completion
-                    : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
-            }
-            if (cc->kind[v] == MAL_CALL_CACHE_COMPILED) {
-                function_object = mal_value_to_function_object(callee);
-                function_index = cc->function_index[v];
-                function = &vm->definition->functions[function_index];
-                MAL_PERF_COUNT(call_cache_exact_identity_hits);
-                goto call_compiled;
-            }
-        }
-    }
+    bool exact_identities_valid =
+        cc->heap_identity == vm->heap.identity && cc->epoch == vm->heap.epoch;
 
-    // A compiled way's index is a non-owning hint, valid even when its exact
-    // object guard is stale. Validate entirely from the current direct closure.
+    // Compiled closures are a function-index family: each live closure supplies
+    // its own environment, realm, identity, and `this`, so the cached pointer is
+    // only useful for attributing an exact hit. Resolve the current index once
+    // and scan the ways once instead of first failing an identity scan for every
+    // fresh closure and then repeating the scan by function index.
     if (mal_value_is_function_object(callee)) {
         function_object = mal_value_to_function_object(callee);
         function_index = mal_function_object_function_index(function_object);
@@ -3335,16 +3298,48 @@ MalCompletion mal_vm_call_cached(
             const MalFunction *candidate = &vm->definition->functions[function_index];
             if (candidate->compiled != nullptr) {
                 function = candidate;
+                for (u32 v = 0; v < cc->count; v++) {
+                    if (cc->kind[v] != MAL_CALL_CACHE_COMPILED ||
+                        cc->function_index[v] != function_index) {
+                        continue;
+                    }
+                    if (exact_identities_valid && cc->callee[v] == callee) {
+                        MAL_PERF_COUNT(call_cache_exact_identity_hits);
+                    } else {
+                        MAL_PERF_COUNT(call_cache_compiled_family_hits);
+                    }
+                    goto call_compiled;
+                }
             }
         }
-    }
-    if (function != nullptr) {
+    } else if (exact_identities_valid && mal_value_is_native_function_object(callee)) {
+        // Native callbacks are cacheable only by exact object identity. The
+        // cached pointer must never be reused outside its heap lifetime/epoch.
         for (u32 v = 0; v < cc->count; v++) {
-            if (cc->kind[v] == MAL_CALL_CACHE_COMPILED &&
-                cc->function_index[v] == function_index) {
-                MAL_PERF_COUNT(call_cache_compiled_family_hits);
-                goto call_compiled;
+            if (cc->kind[v] != MAL_CALL_CACHE_NATIVE || cc->callee[v] != callee) {
+                continue;
             }
+            MalNativeFunctionCallback callback = mal_native_function_object_callback(
+                mal_value_to_native_function_object(callee));
+            MAL_PERF_COUNT(call_cache_exact_identity_hits);
+#if MAL_REALMS
+            MalRealm *saved_realm = vm->current_realm;
+            mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+            MalCalleeRoots ncr;
+            mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(),
+                                      callee, args, arg_count);
+            vm->gc_native_frames++;
+            MalValue value = callback(
+                vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
+            vm->gc_native_frames--;
+            mal_gc_callee_roots_end(&ncr);
+#if MAL_REALMS
+            mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+            return vm->completion.kind == MAL_COMPLETION_THROW
+                ? vm->completion
+                : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
         }
     }
 
