@@ -3489,6 +3489,25 @@ static void mal_ic_record_special(
 #endif
 }
 
+/** Record a protector-gated own value on one exact watched intrinsic object. */
+static void mal_ic_record_watched(
+    MalInlineCache *ic, const MalObject *object, MalValue key, MalValue value
+) {
+    ic->shape = object->shape;
+    ic->key = key;
+    ic->value = value;
+    ic->obj = object;
+    ic->slot = MAL_IC_VALUE_SLOT;
+    ic->prim_kind = 0;
+    // A cache row may previously have held a shaped missing-chain entry. Clear
+    // every own-slot discriminator so its prototype shapes/undefined slot words
+    // cannot be reinterpreted as polymorphic own-slot rows after this mode switch.
+    ic->poly_count = 0;
+    ic->megamorphic = false;
+    ic->mode = MAL_IC_MODE_SHAPE;
+    ic->receiver_type = 0;
+}
+
 // Record a resolved plain-object data slot (shape -> slot for `key`) in the site
 // cache. The primary (shape/slot) stays the first entry; a fixed-key site that
 // sees another shape accumulates it into the polymorphic overflow, up to
@@ -3780,7 +3799,8 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         }
         // Polymorphic overflow: a previously-seen alternate shape for the same key
         // (matches the inline fast path in mal_vm_array_fast_load).
-        if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key_value == ic->key) {
+        if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 &&
+            ic->slot != MAL_IC_VALUE_SLOT && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
                     MAL_PERF_COUNT(ic_load_poly_hits);
@@ -3844,13 +3864,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
                 MalPropertyLookup own = mal_object_get_own(object, key);
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-                    ic->shape = object->shape;
-                    ic->key = key_value;
-                    ic->slot = MAL_IC_VALUE_SLOT;
-                    ic->value = own.desc.value;
-                    ic->obj = object;
-                    ic->prim_kind = 0;
-                    ic->mode = MAL_IC_MODE_SHAPE;
+                    mal_ic_record_watched(ic, object, key_value, own.desc.value);
                     MAL_PERF_COUNT(ic_load_watched_fills);
                     return own.desc.value;
                 }
@@ -3936,13 +3950,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
                 MalPropertyLookup own = mal_object_get_own(object, key);
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-                    ic->shape = object->shape;
-                    ic->key = key_value;
-                    ic->slot = MAL_IC_VALUE_SLOT;
-                    ic->value = own.desc.value;
-                    ic->obj = object;
-                    ic->prim_kind = 0;
-                    ic->mode = MAL_IC_MODE_SHAPE;
+                    mal_ic_record_watched(ic, object, key_value, own.desc.value);
                     MAL_PERF_COUNT(ic_load_watched_fills);
                     return own.desc.value;
                 }

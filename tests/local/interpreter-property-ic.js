@@ -63,6 +63,30 @@ Object.defineProperty(missingPrototype, "__mal_definitely_missing_ic__", {
 check(loadMissing(missingReceiver) === 5, "prototype accessor invalidates missing load");
 delete missingPrototype.__mal_definitely_missing_ic__;
 
+// A missing-chain row owns poly_shape[] without corresponding slot rows. Switching
+// the same site to a watched-value entry must discard that state before a later
+// plain-object load can enter the polymorphic own-slot path.
+function loadMissingThenWatched(object) {
+	return object.floor;
+}
+const modeSwitchPrototype = Object.create(null);
+modeSwitchPrototype.marker = 1;
+const modeSwitchMissing = Object.create(modeSwitchPrototype);
+check(
+	loadMissingThenWatched(modeSwitchMissing) === undefined,
+	"mode switch starts with shaped missing chain",
+);
+check(
+	loadMissingThenWatched(Math) === Math.floor,
+	"mode switch fills watched intrinsic value",
+);
+const modeSwitchPlain = Object.create(null);
+modeSwitchPlain.marker = 2;
+check(
+	loadMissingThenWatched(modeSwitchPlain) === undefined,
+	"watched fill clears stale missing-chain rows",
+);
+
 const inheritedMethod = Array.prototype.slice;
 function loadInherited(array) {
 	return array.slice;

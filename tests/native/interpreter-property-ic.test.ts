@@ -14,10 +14,17 @@ function field(line: string, name: string): number {
 
 describe("localized interpreter property inline caches", () => {
 	let expected: string;
+	let compiled: string;
 	let interpreted: string;
 
 	beforeAll(() => {
 		expected = execFileSync(process.execPath, [fixture], { encoding: "utf-8" });
+		compiled = buildNativeBinary({
+			fixture,
+			name: "compiled-property-ic",
+			compiled: true,
+			outDir,
+		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "interpreter-property-ic",
@@ -26,6 +33,10 @@ describe("localized interpreter property inline caches", () => {
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 	}, 600_000);
+
+	it("keeps cache mode transitions sound in compiled property sites", () => {
+		expect(runToStdout(compiled, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
+	});
 
 	it("preserves own, inherited, exotic, invalidation, accessor, and proxy semantics", () => {
 		expect(runToStdout(interpreted, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
