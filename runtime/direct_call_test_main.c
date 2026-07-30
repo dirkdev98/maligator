@@ -33,6 +33,16 @@ int main(void) {
         return 3;
     }
 
+    // Flattened Function.prototype.call reaches the same exact target in both
+    // compiled and interpreted definitions, with thisArg removed from its args.
+    MalValue call_args[] = {mal_value_new_undefined(), args[0], args[1]};
+    if (!result_is_277(mal_vm_call_function_call_direct(
+            &vm, &cache, 1,
+            vm.intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL], callee,
+            call_args, 3))) {
+        return 4;
+    }
+
     mal_gc_collect(&vm);
     mal_vm_free_callable(entry);
     mal_vm_free(&vm);

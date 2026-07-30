@@ -81,6 +81,17 @@ bool mal_array_object_fresh_dense_reserve_exact(MalArrayObject *array, u32 neede
  */
 bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value);
 
+/**
+ * Atomically append `count` values to a contiguous ordinary dense Array. This
+ * reserves all storage before publishing any element, then applies the required
+ * GC barriers. The caller is responsible for proving that inherited indexed
+ * properties cannot intercept the writes. Returns false without changing the
+ * array when its dense/extensible/length state is ineligible or storage cannot grow.
+ */
+bool mal_array_object_dense_append_many(
+    MalArrayObject *array, const MalValue *values, u32 count
+);
+
 /** Result of attempting a dense default-data store. */
 typedef enum MalArrayDenseStore {
     MAL_ARRAY_DENSE_APPLIED,     // stored in the vector (length already updated)

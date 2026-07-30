@@ -57,6 +57,10 @@ MalHeadersObject *mal_headers_create(MalVm *vm);
 /* Create an intrinsic-prototype Headers filled from a Web IDL HeadersInit. */
 MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init);
 
+/* Create one owned lowercase string from an already-validated ASCII header name. */
+MalString *mal_headers_new_lowercase_name(
+    MalVm *vm, const char *name, usize name_len);
+
 /* Append normalized copies of raw host bytes to a JS Headers view. */
 void mal_headers_append_bytes(
     MalVm *vm, MalHeadersObject *headers, const char *name, usize name_len, const char *value,

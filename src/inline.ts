@@ -312,28 +312,289 @@ export function globalSlotFunctions(program: IntermediateProgram): Map<number, n
 }
 
 /**
- * Annotate residual calls whose callee is proven to be one exact ordinary script
- * closure. This deliberately reuses only the static inliner's immutable provenance:
- * dynamic globals, methods, native/bound/proxy values, and unresolved CommonJS
- * exports never enter `functionValuedRegisters`.
+ * Annotate residual calls and constructions whose callee is proven to be one exact
+ * ordinary script closure. This deliberately reuses only the static inliner's
+ * immutable provenance: dynamic globals, methods, native/bound/proxy values, and
+ * unresolved CommonJS exports never enter `functionValuedRegisters`.
  */
-export function annotateDirectCallTargets(program: IntermediateProgram): void {
-	const capturedSlots = capturedSlotFunctions(program);
-	const globalSlots = globalSlotFunctions(program);
-	const functionIndices = new Set(program.functions.map((fn) => fn.functionIndex));
+interface IntrinsicDerivedSlotFacts {
+	captured: ReadonlySet<string>;
+	global: ReadonlySet<number>;
+}
 
+/**
+ * Find immutable slots whose value is rooted at a compiler intrinsic and reached
+ * only through static property loads. This covers aliases such as
+ * `const slice = Array.prototype.slice` without claiming anything about dynamic
+ * callback parameters, CommonJS call results, bound functions, or proxies. Every
+ * mutable property assumption is still validated from the loaded `.call` value at
+ * runtime.
+ */
+function intrinsicDerivedSlotFacts(
+	program: IntermediateProgram,
+): IntrinsicDerivedSlotFacts {
+	interface StoreSource {
+		fn: IRFunction;
+		register: number;
+	}
+	const indexes = new Map(program.functions.map((fn) => [fn, buildIRRegisterIndex(fn)]));
+	const capturedStores = new Map<string, Array<StoreSource>>();
+	const globalStores = new Map<number, Array<StoreSource>>();
 	for (const fn of program.functions) {
-		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
+		const empty = createEmptyRegisters(fn);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				if (instruction.type !== "call") continue;
-				const target = funcOf.get(instruction.registers[1]);
-				if (target !== undefined && functionIndices.has(target)) {
-					instruction.directFunctionIndex = target;
+				if (
+					instruction.type === "storeCaptured" &&
+					instruction.functionIndex !== undefined &&
+					instruction.index !== undefined
+				) {
+					const key = capturedSlotKey(instruction.functionIndex, instruction.index);
+					const stores = capturedStores.get(key) ?? [];
+					stores.push({ fn, register: instruction.registers[0] });
+					capturedStores.set(key, stores);
+				} else if (
+					instruction.type === "storeGlobal" &&
+					!empty.has(instruction.registers[0])
+				) {
+					const stores = globalStores.get(instruction.index) ?? [];
+					stores.push({ fn, register: instruction.registers[0] });
+					globalStores.set(instruction.index, stores);
 				}
 			}
 		}
 	}
+
+	const captured = new Set<string>();
+	const global = new Set<number>();
+	const registersFor = (fn: IRFunction): Set<number> => {
+		const definitions = indexes.get(fn)!.uniqueDefinitions;
+		const registers = new Set<number>();
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const [register, definition] of definitions) {
+				let derived = false;
+				switch (definition.type) {
+					case "loadIntrinsic":
+						derived = true;
+						break;
+					case "move":
+					case "loadPropertyStatic":
+						derived = registers.has(definition.registers[1]);
+						break;
+					case "loadCaptured":
+						derived =
+							definition.functionIndex !== undefined &&
+							definition.index !== undefined &&
+							captured.has(capturedSlotKey(definition.functionIndex, definition.index));
+						break;
+					case "loadGlobal":
+						derived = global.has(definition.index);
+						break;
+				}
+				if (derived && !registers.has(register)) {
+					registers.add(register);
+					changed = true;
+				}
+			}
+		}
+		return registers;
+	};
+
+	let changed = true;
+	while (changed) {
+		changed = false;
+		const registers = new Map(program.functions.map((fn) => [fn, registersFor(fn)]));
+		for (const [key, stores] of capturedStores) {
+			if (
+				stores.length === 1 &&
+				registers.get(stores[0]!.fn)!.has(stores[0]!.register) &&
+				!captured.has(key)
+			) {
+				captured.add(key);
+				changed = true;
+			}
+		}
+		for (const [slot, stores] of globalStores) {
+			if (
+				stores.length === 1 &&
+				registers.get(stores[0]!.fn)!.has(stores[0]!.register) &&
+				!global.has(slot)
+			) {
+				global.add(slot);
+				changed = true;
+			}
+		}
+	}
+	return { captured, global };
+}
+
+export function annotateDirectCallTargets(program: IntermediateProgram): number {
+	const capturedSlots = capturedSlotFunctions(program);
+	const globalSlots = globalSlotFunctions(program);
+	const intrinsicSlots = intrinsicDerivedSlotFacts(program);
+	const functions = new Map(program.functions.map((fn) => [fn.functionIndex, fn]));
+	let functionCallCount = 0;
+
+	for (const fn of program.functions) {
+		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
+		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const intrinsicOf = new Set<number>();
+		let provenanceChanged = true;
+		while (provenanceChanged) {
+			provenanceChanged = false;
+			for (const [register, definition] of definitions) {
+				let derived = false;
+				switch (definition.type) {
+					case "loadIntrinsic":
+						derived = true;
+						break;
+					case "move":
+					case "loadPropertyStatic":
+						derived = intrinsicOf.has(definition.registers[1]);
+						break;
+					case "loadCaptured":
+						derived =
+							definition.functionIndex !== undefined &&
+							definition.index !== undefined &&
+							intrinsicSlots.captured.has(
+								capturedSlotKey(definition.functionIndex, definition.index),
+							);
+						break;
+					case "loadGlobal":
+						derived = intrinsicSlots.global.has(definition.index);
+						break;
+				}
+				if (derived && !intrinsicOf.has(register)) {
+					intrinsicOf.add(register);
+					provenanceChanged = true;
+				}
+			}
+		}
+		const moveRoot = (register: number): number => {
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call" && instruction.type !== "construct") continue;
+				const target = funcOf.get(instruction.registers[1]);
+				const targetFunction = target === undefined ? undefined : functions.get(target);
+				if (
+					targetFunction !== undefined &&
+					(instruction.type === "call" ||
+						(!(targetFunction.isGenerator ?? false) &&
+							!(targetFunction.isAsync ?? false) &&
+							(targetFunction.hasPrototype ?? true)))
+				) {
+					instruction.directFunctionIndex = target;
+				}
+				if (instruction.type !== "call") continue;
+				const callee = definitions.get(moveRoot(instruction.registers[1]));
+				if (callee?.type !== "loadPropertyStatic") continue;
+				const receiver = callee.registers[1];
+				const thisValue = instruction.registers[2];
+				if (
+					decodeStringConstant(program, callee.stringIndex) !== "call" ||
+					moveRoot(receiver) !== moveRoot(thisValue)
+				) {
+					continue;
+				}
+				const receiverTarget = funcOf.get(thisValue) ?? funcOf.get(receiver);
+				if (
+					receiverTarget === undefined &&
+					!intrinsicOf.has(thisValue) &&
+					!intrinsicOf.has(receiver)
+				) {
+					continue;
+				}
+				instruction.directFunctionCall = true;
+				if (receiverTarget !== undefined && functions.has(receiverTarget)) {
+					instruction.directCallTargetFunctionIndex = receiverTarget;
+				}
+				functionCallCount++;
+			}
+		}
+	}
+	return functionCallCount;
+}
+
+/**
+ * Mark direct `receiver.push(...)` sites for native guarded dense append. The
+ * property Get and argument evaluation remain unchanged; this only records that
+ * the call consumed that exact loaded method. Bare `this.push(...)` is excluded:
+ * it is the common stream-protocol shape and carries no array receiver provenance.
+ * Definitely non-array allocation origins are excluded as well. Every admitted
+ * unknown value is still speculative and must pass the runtime's exact Array and
+ * intrinsic-method guards.
+ */
+export function annotateDirectArrayPushSites(program: IntermediateProgram): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const provenanceThroughMoves = (
+			register: number,
+		): { register: number; definition: IRInstruction | undefined } => {
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") return { register, definition };
+				register = definition.registers[1];
+			}
+			return { register, definition: undefined };
+		};
+
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call") continue;
+				const callee = definitions.get(instruction.registers[1]);
+				if (callee === undefined) continue;
+
+				let receiver: number;
+				let nameStringIndex: number;
+				if (callee.type === "loadPropertyStatic") {
+					receiver = callee.registers[1];
+					nameStringIndex = callee.stringIndex;
+				} else if (callee.type === "loadProperty") {
+					receiver = callee.registers[1];
+					const key = definitions.get(callee.registers[2]);
+					if (key?.type !== "createString") continue;
+					nameStringIndex = key.stringIndex;
+				} else {
+					continue;
+				}
+				const receiverProvenance = provenanceThroughMoves(receiver);
+				const thisProvenance = provenanceThroughMoves(instruction.registers[2]);
+				if (
+					receiverProvenance.register !== thisProvenance.register ||
+					decodeStringConstant(program, nameStringIndex) !== "push"
+				) {
+					continue;
+				}
+
+				const origin = receiverProvenance.definition;
+				if (
+					origin?.type === "loadThis" ||
+					origin?.type === "createObject" ||
+					origin?.type === "createObjectShaped" ||
+					origin?.type === "createFunction"
+				) {
+					continue;
+				}
+				instruction.directArrayPush = true;
+				count++;
+			}
+		}
+	}
+	return count;
 }
 
 export interface InlineCandidate {

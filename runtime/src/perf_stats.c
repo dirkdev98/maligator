@@ -132,6 +132,14 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-map-stats] get_set_cache_checks=%llu get_set_cache_hits=%llu "
+        "get_set_cache_misses=%llu\n",
+        (unsigned long long) mal_perf_stats.map_get_set_cache_checks,
+        (unsigned long long) mal_perf_stats.map_get_set_cache_hits,
+        (unsigned long long) mal_perf_stats.map_get_set_cache_misses
+    );
+    fprintf(
+        stderr,
         "[perf-allocation-stats] empty_objects=%llu shaped_objects=%llu "
         "stack_objects=%llu stack_materializations=%llu\n",
         (unsigned long long) mal_perf_stats.object_empty_creations,
@@ -216,13 +224,16 @@ static void mal_perf_stats_print(void) {
         stderr,
         "[perf-array-stats] fresh_dense_stores=%llu fresh_dense_growths=%llu "
         "fresh_dense_fallbacks=%llu fresh_dense_exact_reserves=%llu "
-        "fresh_dense_reserved_slots=%llu fresh_dense_growths_avoided=%llu\n",
+        "fresh_dense_reserved_slots=%llu fresh_dense_growths_avoided=%llu "
+        "push_direct_hits=%llu push_direct_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
         (unsigned long long) mal_perf_stats.array_fresh_dense_fallbacks,
         (unsigned long long) mal_perf_stats.array_fresh_dense_exact_reserves,
         (unsigned long long) mal_perf_stats.array_fresh_dense_reserved_slots,
-        (unsigned long long) mal_perf_stats.array_fresh_dense_growths_avoided
+        (unsigned long long) mal_perf_stats.array_fresh_dense_growths_avoided,
+        (unsigned long long) mal_perf_stats.array_push_direct_hits,
+        (unsigned long long) mal_perf_stats.array_push_direct_fallbacks
     );
     fprintf(
         stderr,

@@ -98,6 +98,7 @@ const C_HEADER_LINES = [
 	'#include "vm_ops.h"',
 	'#include "value_ops.h"',
 	'#include "perf_stats.h"',
+	'#include "builtin_array.h"',
 	'#include "builtin_math.h"',
 	// The compiled (emit-c) for-of lowering uses the iterator-record helpers.
 	'#include "builtin_iterator.h"',

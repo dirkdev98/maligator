@@ -44,17 +44,45 @@ function throwsMessage(callback, message) {
 
 const server = http.createServer(function (request, response) {
 	if (request.url === "/header-snapshot") {
-		const valid =
+		const setCookies = request.headers["set-cookie"];
+		let valid =
 			request.rawHeaders.join("|") ===
 				"Host|127.0.0.1|X-Mixed|first|x-MIXED|second|Cookie|a=1|cookie|b=2|Set-Cookie|one=1|set-cookie|two=2|Authorization|first|authorization|second|X-Order|third|Connection|close" &&
 			request.headers.host === "127.0.0.1" &&
 			request.headers["x-mixed"] === "first, second" &&
 			request.headers.cookie === "a=1; b=2" &&
-			request.headers["set-cookie"].join("|") === "one=1|two=2" &&
+			setCookies.join("|") === "one=1|two=2" &&
 			request.headers.authorization === "first" &&
 			request.headers["x-order"] === "third";
+		const mixedRawValue = request.rawHeaders.indexOf("X-Mixed") + 1;
+		const cookieRawValue = request.rawHeaders.indexOf("Set-Cookie") + 1;
+		request.rawHeaders[mixedRawValue] = "raw-only";
+		setCookies[0] = "array-only";
+		valid =
+			valid &&
+			request.headers["x-mixed"] === "first, second" &&
+			request.rawHeaders[cookieRawValue] === "one=1";
+		request.headers["x-mixed"] = "headers-only";
+		valid = valid && request.rawHeaders[mixedRawValue] === "raw-only";
 		response.statusCode = valid ? 200 : 500;
 		response.end(valid ? "ok" : "header snapshot mismatch");
+		return;
+	}
+
+	if (request.url.startsWith("/header-reuse/")) {
+		const id = request.url.slice(14);
+		const spelling = id === "first" ? "X-ReUsEd" : "x-rEuSeD";
+		const expected = id === "first" ? "first-value" : "second-value";
+		if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+		const offset = request.rawHeaders.indexOf(spelling);
+		const valid =
+			(id === "first" || id === "second") &&
+			offset >= 0 &&
+			request.rawHeaders[offset + 1] === expected &&
+			request.headers["x-reused"] === expected &&
+			request.headers[spelling] === undefined;
+		response.statusCode = valid ? 200 : 500;
+		response.end(valid ? `reuse:${id}` : "header reuse mismatch");
 		return;
 	}
 

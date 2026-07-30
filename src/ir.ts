@@ -856,6 +856,20 @@ export type IRInstruction =
 			 * falls back to generic dispatch on a mismatch.
 			 */
 			directFunctionIndex?: number;
+			/**
+			 * COMPILE-ONLY: this is an exact `target.call(thisArg, ...args)` property-call
+			 * shape. Native lowering guards the loaded method against the retained
+			 * %Function.prototype.call% before calling `target` with shifted arguments.
+			 */
+			directFunctionCall?: true;
+			/** Exact ordinary script target used by directFunctionCall, when known. */
+			directCallTargetFunctionIndex?: number;
+			/**
+			 * COMPILE-ONLY: a direct `.push(...)` method site eligible for guarded
+			 * intrinsic Array dense-append dispatch in native code. The runtime still
+			 * validates the loaded callee, receiver, prototype, and dense state.
+			 */
+			directArrayPush?: true;
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }
@@ -864,6 +878,12 @@ export type IRInstruction =
 
 			// [destination, callee, ...arguments]
 			registers: [number, number, ...Array<number>];
+			/**
+			 * COMPILE-ONLY: the exact ordinary script-constructor index held by the
+			 * callee. Native lowering guards the live callee before direct construction
+			 * and falls back to generic [[Construct]] dispatch on a mismatch.
+			 */
+			directFunctionIndex?: number;
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }

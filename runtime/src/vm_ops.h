@@ -609,7 +609,11 @@ typedef struct MalInlineCache {
     // with its exact realm; `prototype` guards the current intrinsic in all builds.
     // A plain object-shape entry has `prim_kind` 0 and a real `slot` (uses
     // object->slots).
-    MalValue value;
+    union {
+        MalValue value;
+        // MAL_IC_MODE_INHERITED_TABLE: generation of the holder's entry handle.
+        u64 table_handle_epoch;
+    };
     // For a value-slot entry (`slot == MAL_IC_VALUE_SLOT`), the exact watched
     // object the value belongs to. Shape is NOT a unique discriminator — the
     // typed-array constructors (and other same-layout intrinsics) share one
@@ -622,10 +626,16 @@ typedef struct MalInlineCache {
 #if MAL_REALMS
     union {
         const struct MalObject *obj;
+        const struct MalShape *holder_shape;
         const MalRealm *realm;
+        void *entry;
     };
 #else
-    const struct MalObject *obj;
+    union {
+        const struct MalObject *obj;
+        const struct MalShape *holder_shape;
+        void *entry;
+    };
 #endif
     // Polymorphic overflow, stored SoA (parallel `poly_shape[i]` / `poly_slot[i]`):
     // plain-object data-slot alternates for `key` beyond the primary. `poly_count`
@@ -638,9 +648,10 @@ typedef struct MalInlineCache {
     u32 poly_slot[MAL_IC_POLY_EXTRA];
     u8 prim_kind;
     u8 poly_count;
-    // MAL_IC_MODE_INHERITED_VALUE: an exotic/ordinary receiver whose exact heap
-    // type, own shape, empty overflow state, and direct watched prototype guard a
-    // resolved inherited data value. `obj` is that direct prototype.
+    // In inherited slot/table modes, `poly_count` is the holder depth and the first
+    // depth-1 poly shapes guard ordinary intermediate prototypes. Receiver shape +
+    // null overflow guard own absence; the holder's live slot/entry is re-read.
+    // MAL_IC_MODE_INHERITED_VALUE retains the watched built-in value fallback.
     u8 mode;
     u8 receiver_type;
     bool megamorphic;
@@ -666,6 +677,8 @@ static inline MalInlineCache *mal_vm_interp_ic_existing(
 #define MAL_IC_MODE_PRIMITIVE_VALUE 2u
 #define MAL_IC_MODE_STRING_LENGTH 3u
 #define MAL_IC_MODE_ARRAY_LENGTH 4u
+#define MAL_IC_MODE_INHERITED_SLOT 5u
+#define MAL_IC_MODE_INHERITED_TABLE 6u
 
 // Primitive kinds for MAL_IC_MODE_PRIMITIVE_VALUE (0 = not cacheable).
 enum {
@@ -805,25 +818,65 @@ static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key,
     return false;
 }
 
-/**
- * Guarded inherited data-property value hit. The fill path admits only immortal
- * exact keys and a watched prototype chain, and only receivers with no overflow
- * table. Thus shape + null-overflow prove no own shadow, exact prototype proves
- * realm/chain identity, and the monotonic protector proves the holder and chain
- * have not been patched or reparented. Proxy receivers are never filled.
- */
+/** Guarded inherited data-property slot/entry hit, plus the watched-value fallback. */
 static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
-                                             const MalInlineCache *ic, MalValue *out) {
-    if (ic->mode != MAL_IC_MODE_INHERITED_VALUE || !mal_primitive_method_protector ||
-        key != ic->key || !mal_value_is_object(receiver)) {
+                                              const MalInlineCache *ic, MalValue *out) {
+    if (key != ic->key) {
         return false;
     }
-    const MalObject *object = mal_value_to_object(receiver);
-    if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
-        object->prototype != ic->obj || object->overflow != nullptr) {
+
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {
+        if (!mal_primitive_method_protector || !mal_value_is_object(receiver)) {
+            return false;
+        }
+        const MalObject *object = mal_value_to_object(receiver);
+        if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
+            object->prototype != ic->obj || object->overflow != nullptr) {
+            return false;
+        }
+        *out = ic->value;
+        mal_perf_ic_load_inherited_hit();
+        return true;
+    }
+
+    if ((ic->mode != MAL_IC_MODE_INHERITED_SLOT &&
+         ic->mode != MAL_IC_MODE_INHERITED_TABLE) ||
+        !mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT) || ic->poly_count == 0) {
         return false;
     }
-    *out = ic->value;
+
+    const MalObject *cursor = mal_value_to_object(receiver);
+    if (cursor->shape != ic->shape || cursor->overflow != nullptr) {
+        return false;
+    }
+    for (u8 depth = 1; depth <= ic->poly_count; depth++) {
+        cursor = cursor->prototype;
+        if (cursor == nullptr || cursor->header.type != MAL_HEAP_OBJECT) {
+            return false;
+        }
+        if (depth < ic->poly_count &&
+            (cursor->shape != ic->poly_shape[depth - 1] || cursor->overflow != nullptr)) {
+            return false;
+        }
+    }
+
+    if (ic->mode == MAL_IC_MODE_INHERITED_SLOT) {
+        if (cursor->shape != ic->holder_shape || cursor->overflow != nullptr) {
+            return false;
+        }
+        *out = cursor->slots[ic->slot];
+    } else {
+        if (cursor->overflow == nullptr || !mal_table_entry_matches(
+                cursor->overflow, ic->entry, ic->table_handle_epoch,
+                mal_key_from_value(key))) {
+            return false;
+        }
+        MalPropertyDesc desc = mal_property_entry_desc(cursor->overflow, ic->entry);
+        if (desc.flags & MAL_PROPERTY_ACCESSOR) {
+            return false;
+        }
+        *out = desc.value;
+    }
     mal_perf_ic_load_inherited_hit();
     return true;
 }

@@ -1182,6 +1182,15 @@ typedef struct MalGlobalPropertyCacheEntry {
     i32 string_index;
 } MalGlobalPropertyCacheEntry;
 
+/** One isolate-wide handle cache for adjacent ordinary Map get/set operations. */
+typedef struct MalMapGetSetCacheEntry {
+    MalValue collection;
+    MalValue canonical_key;
+    MalTable *table;
+    void *entry;
+    u64 table_handle_epoch;
+} MalMapGetSetCacheEntry;
+
 typedef struct MalVm {
     const MalVmDefinition *definition;
 
@@ -1263,6 +1272,9 @@ typedef struct MalVm {
 
     /** Bounded cache indexed by definition string index; see vm_ops.c. */
     MalGlobalPropertyCacheEntry *global_property_cache;
+
+    /** Ordinary Map.prototype.get -> set cache; direct collection helpers bypass it. */
+    MalMapGetSetCacheEntry map_get_set_cache;
 
     MalHeap heap;
     /** Per-isolate collector working state (grey worklist, weak lists, remembered
@@ -1515,6 +1527,9 @@ typedef struct MalVm {
      */
     void *host;
 } MalVm;
+
+/** Drop the ordinary Map get/set cache without retaining its collection or key. */
+void mal_vm_invalidate_map_get_set_cache(MalVm *vm);
 
 #if MAL_REALMS
 /**
@@ -1957,6 +1972,23 @@ MalCompletion mal_vm_call_direct(
 );
 
 /**
+ * Guarded flattening of `target.call(thisArg, ...args)`. The fast path is entered
+ * only when `call_method` is the retained %Function.prototype.call% object. An
+ * exact script target reuses mal_vm_call_direct; other targets retain ordinary
+ * cached dispatch. A method-guard miss calls the originally loaded method with
+ * the original receiver and arguments.
+ */
+MalCompletion mal_vm_call_function_call_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    i32 expected_function_index,
+    MalValue call_method,
+    MalValue target,
+    const MalValue *args,
+    i32 arg_count
+);
+
+/**
  * Push a bytecode frame for `function_index` and run it to completion, marshaling
  * `args` onto the top of the value stack as the callee's incoming window, and
  * returning the result (vm->completion carries a throw out). Unlike
@@ -1999,6 +2031,20 @@ MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue sco
  * mal_vm_call_value, used by the native backend's CONSTRUCT.
  */
 MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count);
+
+/**
+ * Guarded direct script-function construction for native sites with an exact static
+ * target. A matching live plain closure bypasses bound/proxy/native dispatch while
+ * retaining its environment, realm, callee/new.target identity, and full ordinary
+ * constructor semantics. Guard misses use mal_vm_construct_value unchanged.
+ */
+MalCompletion mal_vm_construct_direct(
+    MalVm *vm,
+    i32 expected_function_index,
+    MalValue callee,
+    const MalValue *args,
+    i32 arg_count
+);
 
 /**
  * Return a CommonJS module's `module.exports`, running its wrapper exactly once

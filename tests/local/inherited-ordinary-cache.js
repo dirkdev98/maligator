@@ -17,6 +17,50 @@ function warm(load, receiver, expected) {
 }
 
 {
+	const proto = { method: "slot-first" };
+	const receiver = Object.create(proto);
+	const load = (value) => value.method;
+	warm(load, receiver, "slot-first");
+	proto.method = "slot-replacement";
+	ok("shaped holder value replacement", load(receiver) === "slot-replacement");
+	receiver.method = "slot-shadow";
+	ok("shaped receiver shadow", load(receiver) === "slot-shadow");
+	delete receiver.method;
+	ok("shaped receiver unshadow", load(receiver) === "slot-replacement");
+}
+
+{
+	const proto = { method: "slot-data" };
+	const receiver = Object.create(proto);
+	const load = (value) => value.method;
+	warm(load, receiver, "slot-data");
+	let gets = 0;
+	Object.defineProperty(proto, "method", {
+		configurable: true,
+		get() {
+			gets++;
+			return "slot-accessor-" + gets;
+		},
+	});
+	ok("shaped holder accessor first", load(receiver) === "slot-accessor-1");
+	ok("shaped holder accessor repeats", load(receiver) === "slot-accessor-2");
+}
+
+{
+	const holder = { method: "slot-base" };
+	const middle = Object.create(holder);
+	const receiver = Object.create(middle);
+	const load = (value) => value.method;
+	warm(load, receiver, "slot-base");
+	middle.method = "slot-middle";
+	ok("shaped intermediate shadow", load(receiver) === "slot-middle");
+	delete middle.method;
+	ok("shaped intermediate unshadow", load(receiver) === "slot-base");
+	Object.setPrototypeOf(receiver, { method: "slot-reparented" });
+	ok("shaped receiver reparent", load(receiver) === "slot-reparented");
+}
+
+{
 	const proto = dictionaryPrototype("first");
 	const receiver = Object.create(proto);
 	const load = (value) => value.method;
@@ -111,6 +155,19 @@ function warm(load, receiver, expected) {
 		proto.method = () => i;
 		if (typeof gc === "function") gc();
 		ok("GC replacement remains live", load(receiver)() === i);
+	}
+}
+
+{
+	const gc = globalThis.__mal_collect_garbage;
+	const proto = { method: { generation: 0 } };
+	const receiver = Object.create(proto);
+	const load = (value) => value.method;
+	warm(load, receiver, proto.method);
+	for (let i = 1; i <= 3; i++) {
+		proto.method = { generation: i };
+		if (typeof gc === "function") gc();
+		ok("shaped GC replacement remains live", load(receiver).generation === i);
 	}
 }
 

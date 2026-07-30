@@ -97,6 +97,31 @@ MalHeadersObject *mal_headers_create(MalVm *vm) {
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_HEADERS_PROTOTYPE]));
 }
 
+MalString *mal_headers_new_lowercase_name(
+    MalVm *vm, const char *name, usize name_len) {
+    c16 *units = mal_heap_alloc_raw(
+        &vm->heap, sizeof(c16) * (name_len == 0 ? 1 : name_len));
+    for (usize i = 0; i < name_len; i++) {
+        u8 unit = (u8) name[i];
+        units[i] = unit >= 'A' && unit <= 'Z'
+            ? (c16) (unit + ('a' - 'A')) : (c16) unit;
+    }
+    return mal_string_new_owned(&vm->heap, units, name_len);
+}
+
+static bool mal_headers_name_equals_bytes_ci(
+    const MalString *name, const char *bytes, usize length) {
+    if (mal_string_length(name) != length) return false;
+    const c16 *units = mal_string_code_units(name);
+    for (usize i = 0; i < length; i++) {
+        u8 unit = (u8) bytes[i];
+        c16 lower = unit >= 'A' && unit <= 'Z'
+            ? (c16) (unit + ('a' - 'A')) : (c16) unit;
+        if (units[i] != lower) return false;
+    }
+    return true;
+}
+
 void mal_headers_append_entry(MalHeadersObject *h, MalString *name, MalString *value) {
     if (h->count == h->cap) {
         h->cap = h->cap == 0 ? 8 : h->cap * 2;
@@ -122,25 +147,26 @@ void mal_headers_append_bytes(
         value_end--;
     }
 
-    char *lower = malloc(name_len == 0 ? 1 : name_len);
-    for (usize i = 0; i < name_len; i++) {
-        char unit = name[i];
-        lower[i] = unit >= 'A' && unit <= 'Z' ? (char) (unit + ('a' - 'A')) : unit;
-    }
-
     MalValue roots[2] = {
         mal_value_from_headers_object(h),
         mal_value_new_undefined(),
     };
     MalRootSpan rs;
     mal_gc_root(&rs, roots, 2);
-    roots[1] = mal_value_from_string(
-        mal_string_new_ascii(&vm->heap, (const byte *) lower, name_len));
+    for (i32 i = 0; i < h->count; i++) {
+        if (mal_headers_name_equals_bytes_ci(h->entries[i].name, name, name_len)) {
+            roots[1] = mal_value_from_string(h->entries[i].name);
+            break;
+        }
+    }
+    if (mal_value_is_undefined(roots[1])) {
+        roots[1] = mal_value_from_string(
+            mal_headers_new_lowercase_name(vm, name, name_len));
+    }
     MalString *v = mal_string_new_ascii(&vm->heap, (const byte *) value + value_start,
         value_end - value_start);
     mal_headers_append_entry(h, mal_value_to_string(roots[1]), v);
     mal_gc_unroot(&rs);
-    free(lower);
 }
 
 static void mal_headers_remove(MalHeadersObject *h, const MalString *name) {

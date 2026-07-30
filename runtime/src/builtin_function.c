@@ -283,7 +283,9 @@ void mal_builtin_function_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_FUNCTION_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    mal_intrinsic_define_method_n(vm, prototype, "call", 1, mal_builtin_function_prototype_call);
+    vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL] =
+        mal_intrinsic_define_method_n(vm, prototype, "call", 1,
+            mal_builtin_function_prototype_call);
     mal_intrinsic_define_method_n(vm, prototype, "apply", 2, mal_builtin_function_prototype_apply);
     mal_intrinsic_define_method_n(vm, prototype, "bind", 1, mal_builtin_function_prototype_bind);
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_function_prototype_to_string);

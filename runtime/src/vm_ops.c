@@ -3527,11 +3527,90 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
     }
 }
 
-static void mal_ic_try_record_inherited_value(
+static bool mal_ic_try_record_inherited_slot(
+    MalValue receiver, MalValue key_value, MalPropertyResolution resolution,
+    MalInlineCache *ic
+) {
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT) ||
+        (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        return false;
+    }
+
+    MalObject *object = mal_value_to_object(receiver);
+    if (object->overflow != nullptr || resolution.holder == nullptr ||
+        resolution.holder->header.type != MAL_HEAP_OBJECT) {
+        return false;
+    }
+
+    MalObject *cursor = object;
+    u8 depth = 0;
+    const MalShape *intermediate[MAL_IC_POLY_EXTRA];
+    while (cursor != resolution.holder) {
+        if (depth > MAL_IC_POLY_EXTRA) {
+            return false;
+        }
+        cursor = cursor->prototype;
+        if (cursor == nullptr || cursor->header.type != MAL_HEAP_OBJECT) {
+            return false;
+        }
+        depth++;
+        if (cursor != resolution.holder) {
+            if (cursor->overflow != nullptr || depth > MAL_IC_POLY_EXTRA) {
+                return false;
+            }
+            intermediate[depth - 1] = cursor->shape;
+        }
+    }
+    if (depth == 0) {
+        return false;
+    }
+
+    MalKey key = mal_key_from_value(key_value);
+    MalPropertyLookup own = mal_object_get_own(resolution.holder, key);
+    if (!own.present || (own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        own.desc.value != resolution.desc.value) {
+        return false;
+    }
+
+    u8 mode;
+    u32 slot = MAL_IC_VALUE_SLOT;
+    if (resolution.holder->overflow == nullptr) {
+        i32 index = mal_shape_find(
+            resolution.holder->shape, key, MAL_SHAPE_FIND_LOAD_IC);
+        if (index < 0) {
+            return false;
+        }
+        mode = MAL_IC_MODE_INHERITED_SLOT;
+        slot = resolution.holder->shape->props[index].slot;
+        ic->holder_shape = resolution.holder->shape;
+    } else {
+        if (own.entry == nullptr) {
+            return false;
+        }
+        mode = MAL_IC_MODE_INHERITED_TABLE;
+        ic->entry = own.entry;
+        ic->table_handle_epoch = mal_table_handle_epoch(resolution.holder->overflow);
+    }
+
+    ic->shape = object->shape;
+    ic->key = key_value;
+    ic->slot = slot;
+    ic->prim_kind = 0;
+    ic->poly_count = depth;
+    for (u8 i = 0; i + 1 < depth; i++) {
+        ic->poly_shape[i] = intermediate[i];
+    }
+    ic->megamorphic = false;
+    ic->mode = mode;
+    ic->receiver_type = MAL_HEAP_OBJECT;
+    MAL_PERF_COUNT(ic_inherited_fills);
+    return true;
+}
+
+static void mal_ic_try_record_inherited(
     MalVm *vm, MalValue receiver, MalValue key_value, MalValue result, MalInlineCache *ic
 ) {
-    if (!mal_primitive_method_protector || !mal_value_is_object(receiver) ||
-        mal_value_is_proxy_object(receiver)) {
+    if (!mal_value_is_object(receiver) || mal_value_is_proxy_object(receiver)) {
         MAL_PERF_COUNT(ic_inherited_reject_basic);
         return;
     }
@@ -3556,6 +3635,15 @@ static void mal_ic_try_record_inherited_value(
         (resolution.desc.flags & MAL_PROPERTY_ACCESSOR) ||
         resolution.desc.value != result) {
         MAL_PERF_COUNT(ic_inherited_reject_resolution);
+        return;
+    }
+
+    if (mal_ic_try_record_inherited_slot(receiver, key_value, resolution, ic)) {
+        return;
+    }
+
+    if (!mal_primitive_method_protector) {
+        MAL_PERF_COUNT(ic_inherited_reject_basic);
         return;
     }
 
@@ -3712,7 +3800,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         MAL_PERF_COUNT(ic_load_plain_generic);
         MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
-            mal_ic_try_record_inherited_value(vm, object_value, key_value, result, ic);
+            mal_ic_try_record_inherited(vm, object_value, key_value, result, ic);
         }
         return result;
     }
@@ -3804,7 +3892,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
     MAL_PERF_COUNT(ic_load_other_generic);
     MalValue result = mal_vm_op_load_property(vm, object_value, key_value);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
-        mal_ic_try_record_inherited_value(vm, object_value, key_value, result, ic);
+        mal_ic_try_record_inherited(vm, object_value, key_value, result, ic);
     }
     return result;
 }

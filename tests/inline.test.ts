@@ -138,6 +138,120 @@ test("residual dynamic globals and methods are not direct-call annotated", () =>
 	expect(calls.every((call) => call.directFunctionIndex === undefined)).toBe(true);
 });
 
+test("exact Function.prototype.call shapes retain target provenance", () => {
+	const ir = optimizedProgram(`
+		const exact = function exact(value) { "use strict"; return this === null ? value : 0; };
+		exact.call(null, 1);
+		const slice = Array.prototype.slice;
+		slice.call([1, 2], 1);
+		function dynamic(callback, value) { return callback.call(null, value); }
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	const flattened = calls.filter((call) => call.directFunctionCall);
+	expect(flattened).toHaveLength(2);
+	expect(flattened.some((call) => call.directCallTargetFunctionIndex !== undefined)).toBe(
+		true,
+	);
+	expect(
+		calls.some(
+			(call) =>
+				!call.directFunctionCall && call.directCallTargetFunctionIndex === undefined,
+		),
+	).toBe(true);
+});
+
+test("own call overrides remain guarded candidates", () => {
+	const ir = optimizedProgram(`
+		const exact = function exact(value) { return value; };
+		exact.call = function overridden() { return 2; };
+		exact.call(null, 1);
+	`);
+	const flattened = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter(
+				(instruction) => instruction.type === "call" && instruction.directFunctionCall,
+			),
+		),
+	);
+	expect(flattened).toHaveLength(1);
+	expect(flattened[0]).toMatchObject({ directCallTargetFunctionIndex: 1 });
+});
+
+test("direct push sites carry guarded Array dispatch metadata", () => {
+	const ir = optimizedProgram(`
+		const dense = [];
+		dense.push(1, 2);
+		function possibleArray(value) { return value.push(3); }
+		function streamProtocol(value) { return this.push(value); }
+		const plain = { push() { return 4; } };
+		plain.push();
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	const marked = calls.filter((call) => call.directArrayPush);
+	// The plain-object override remains a guarded candidate and must miss at runtime;
+	// the bare-this stream protocol is the only statically excluded method shape.
+	expect(marked).toHaveLength(3);
+	expect(marked.some((call) => call.registers.length === 5)).toBe(true);
+});
+
+test("immutable ordinary script constructors retain their exact function index", () => {
+	const ir = optimizedProgram(`
+		const Exact = function Exact(value) { this.value = value; };
+		globalThis.result = new Exact(1);
+	`);
+	const constructs = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "construct"),
+		),
+	);
+	expect(constructs).toHaveLength(1);
+	expect(constructs[0]).toMatchObject({ directFunctionIndex: 1 });
+});
+
+test("immutable base and derived classes are exact constructor targets", () => {
+	const ir = optimizedProgram(`
+		class Base {}
+		const Derived = class Derived extends Base {};
+		new Base();
+		new Derived();
+	`);
+	const constructs = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "construct"),
+		),
+	);
+	expect(constructs).toHaveLength(2);
+	expect(
+		constructs.every((construct) => construct.directFunctionIndex !== undefined),
+	).toBe(true);
+});
+
+test("dynamic and non-constructible script values are not direct-constructor annotated", () => {
+	const ir = optimizedProgram(`
+		const arrow = () => 1;
+		try { new arrow(); } catch {}
+		globalThis.Dynamic = function Dynamic() {};
+		new globalThis.Dynamic();
+	`);
+	const constructs = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "construct"),
+		),
+	);
+	expect(constructs).toHaveLength(2);
+	expect(
+		constructs.every((construct) => construct.directFunctionIndex === undefined),
+	).toBe(true);
+});
+
 test("a call inside try is not multi-block inlined (handler-range soundness)", () => {
 	// `boom` is a single-block `throw` target → the multi-block path. Inlining it
 	// would append its throw after the function's tryEnd, escaping the handler. A

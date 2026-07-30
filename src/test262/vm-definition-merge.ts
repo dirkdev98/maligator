@@ -109,6 +109,10 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 					instruction.directFunctionIndex === undefined
 						? undefined
 						: instruction.directFunctionIndex + base.function,
+				directCallTargetFunctionIndex:
+					instruction.directCallTargetFunctionIndex === undefined
+						? undefined
+						: instruction.directCallTargetFunctionIndex + base.function,
 				callee: rebaseVmValueOperand(instruction.callee, base.string),
 				thisValue: rebaseVmValueOperand(instruction.thisValue, base.string),
 				arguments: instruction.arguments.map((operand) =>
@@ -118,6 +122,10 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CONSTRUCT":
 			return {
 				...instruction,
+				directFunctionIndex:
+					instruction.directFunctionIndex === undefined
+						? undefined
+						: instruction.directFunctionIndex + base.function,
 				callee: rebaseVmValueOperand(instruction.callee, base.string),
 				arguments: instruction.arguments.map((operand) =>
 					rebaseVmValueOperand(operand, base.string),

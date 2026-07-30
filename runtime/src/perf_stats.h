@@ -82,6 +82,9 @@ typedef struct MalPerfStats {
     u64 property_ensure_calls;
     u64 property_ensure_inserts;
     u64 property_ensure_hits;
+    u64 map_get_set_cache_checks;
+    u64 map_get_set_cache_hits;
+    u64 map_get_set_cache_misses;
     u64 object_empty_creations;
     u64 object_shaped_creations;
     u64 stack_object_initializations;
@@ -144,6 +147,8 @@ typedef struct MalPerfStats {
     u64 array_fresh_dense_exact_reserves;
     u64 array_fresh_dense_reserved_slots;
     u64 array_fresh_dense_growths_avoided;
+    u64 array_push_direct_hits;
+    u64 array_push_direct_fallbacks;
 
     u64 node_event_singleton_inserts;
     u64 node_event_listener_array_allocations;

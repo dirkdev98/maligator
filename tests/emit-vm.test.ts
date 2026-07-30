@@ -400,4 +400,41 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_call_direct(vm,");
 		expect(output).toContain(", 1,");
 	});
+
+	it("emits guarded Function.prototype.call flattening with a shifted exact target", () => {
+		const output = emit(`
+			const target = function target(value) { "use strict"; return this === null ? value : 0; };
+			globalThis.result = target.call(null, 1);
+		`);
+		expect(output).toContain("mal_vm_call_function_call_direct(vm, &__cc_");
+		expect(output).toMatch(/mal_vm_call_function_call_direct\(vm, &__cc_\d+, 1,/);
+		expect(output).not.toMatch(
+			/mal_vm_call_function_call_direct\([^\n]+\);[\s\S]{0,80}mal_vm_call_cached/,
+		);
+	});
+
+	it("emits generic target dispatch for an intrinsic method alias call", () => {
+		const output = emit(`
+			const slice = Array.prototype.slice;
+			globalThis.result = slice.call([1, 2], 1);
+		`);
+		expect(output).toMatch(/mal_vm_call_function_call_direct\(vm, &__cc_\d+, -1,/);
+	});
+
+	it("emits guarded direct construction for exact ordinary script constructors", () => {
+		const output = emit(`
+			const Exact = function Exact(value) { this.value = value; };
+			globalThis.result = new Exact(1);
+		`);
+		expect(output).toContain("mal_vm_construct_direct(vm, 1,");
+	});
+
+	it("emits guarded dense Array push dispatch from call metadata", () => {
+		const output = emit(`
+			const values = [];
+			globalThis.length = values.push(1, 2, 3);
+		`);
+		expect(output).toContain("mal_builtin_array_push_direct(vm, &__cc_");
+		expect(output).toContain(", 3);");
+	});
 });

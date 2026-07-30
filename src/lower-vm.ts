@@ -530,6 +530,12 @@ export type VmInstruction =
 			arguments: Array<number>;
 			/** COMPILE-ONLY: guarded direct script-function target for native emission. */
 			directFunctionIndex?: number;
+			/** COMPILE-ONLY: guarded intrinsic Function.prototype.call flattening. */
+			directFunctionCall?: true;
+			/** COMPILE-ONLY: exact script receiver of directFunctionCall, when known. */
+			directCallTargetFunctionIndex?: number;
+			/** COMPILE-ONLY: guarded intrinsic Array.prototype.push dispatch. */
+			directArrayPush?: true;
 	  }
 	| {
 			opcode: "CONSTRUCT";
@@ -537,6 +543,8 @@ export type VmInstruction =
 			callee: number;
 			argumentCount: number;
 			arguments: Array<number>;
+			/** COMPILE-ONLY: guarded direct script-constructor target for native emission. */
+			directFunctionIndex?: number;
 	  }
 	| {
 			opcode: "THROW";
@@ -1462,6 +1470,9 @@ function lowerInstructionToVmInstruction(
 						encodeVmValueOperand(register, instruction.immediateValues?.[index + 3]),
 					),
 				directFunctionIndex: instruction.directFunctionIndex,
+				directFunctionCall: instruction.directFunctionCall,
+				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
+				directArrayPush: instruction.directArrayPush,
 			};
 		case "construct":
 			return {
@@ -1477,6 +1488,7 @@ function lowerInstructionToVmInstruction(
 					.map((register, index) =>
 						encodeVmValueOperand(register, instruction.immediateValues?.[index + 2]),
 					),
+				directFunctionIndex: instruction.directFunctionIndex,
 			};
 		case "throw":
 			return {

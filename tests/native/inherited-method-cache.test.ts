@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	assertExactLines,
 	buildNativeBinary,
@@ -21,6 +22,8 @@ describe("inherited built-in method and native call caches", () => {
 	let ordinaryInterpreted: string;
 	let primitiveCompiled: string;
 	let primitiveInterpreted: string;
+	let slotCompiled: string;
+	let slotInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -77,6 +80,20 @@ describe("inherited built-in method and native call caches", () => {
 			compiled: false,
 			outDir,
 		});
+		slotCompiled = buildNativeBinary({
+			fixture: "tests/local/inherited-property-slot-cache.js",
+			name: "inherited-property-slot-cache",
+			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		slotInterpreted = buildNativeBinary({
+			fixture: "tests/local/inherited-property-slot-cache.js",
+			name: "inherited-property-slot-cache-ni",
+			compiled: false,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
 	});
 
 	it("handles repeated loads/calls, shadows, prototypes, realms, and completions", () => {
@@ -130,10 +147,48 @@ describe("inherited built-in method and native call caches", () => {
 	);
 
 	it.each([
+		["compiled", () => ordinaryCompiled],
+		["interpreted", () => ordinaryInterpreted],
+	])(
+		"keeps inherited holder slots and entries sound under GC stress in %s mode",
+		(_name, binary) => {
+			assertExactLines(
+				runToStdout(binary(), {
+					env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+					timeoutMs: 60_000,
+				}),
+				["inherited-ordinary-cache PASS"],
+			);
+		},
+	);
+
+	it.each([
 		["compiled", () => primitiveCompiled],
 		["interpreted", () => primitiveInterpreted],
 	])("caches primitive methods and exotic lengths in %s mode", (_name, binary) => {
 		assertExactLines(runToStdout(binary()), ["primitive-load-cache PASS"]);
+	});
+
+	it.each([
+		["compiled", () => slotCompiled],
+		["interpreted", () => slotInterpreted],
+	])("reports exact inherited slot fills and hits in %s mode", (_name, binary) => {
+		const result = spawnSync(binary(), [], {
+			env: { ...process.env, MAL_PERF_STATS: "1" },
+			encoding: "utf-8",
+		});
+		if (result.error !== undefined) throw result.error;
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		assertExactLines(result.stdout, ["inherited-property-slot-cache PASS"]);
+		const line = result.stderr
+			.split("\n")
+			.find((candidate) => candidate.startsWith("[perf-ic-stats]"));
+		expect(line).toBeDefined();
+		const field = (name: string): number =>
+			Number(line?.match(new RegExp(`(?:^|\\s)${name}=([0-9]+)`))?.[1] ?? -1);
+		// The two loops inline loadProbe independently, producing two cache sites.
+		expect(field("inherited_fills")).toBe(2);
+		expect(field("load_inherited_hits")).toBe(13);
 	});
 
 	it.each([

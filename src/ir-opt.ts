@@ -1,4 +1,5 @@
 import {
+	annotateDirectArrayPushSites,
 	annotateDirectCallTargets,
 	decodeStringConstant,
 	optEliminateCapturedSlots,
@@ -292,6 +293,8 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	const residualFeatures = optimizationFeatures(program);
 	if (residualFeatures.object) annotateStackObjectSites(program);
 	if (residualFeatures.property) optStaticPropertyKeys(program);
+	if (residualFeatures.call && residualFeatures.property)
+		annotateDirectArrayPushSites(program);
 	if (residualFeatures.call) annotateDirectCallTargets(program);
 	if (residualFeatures.call) optImmediateCallOperands(program);
 	optDeadInstructionElimination(program);

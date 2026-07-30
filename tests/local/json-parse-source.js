@@ -62,6 +62,92 @@ for (let i = 0; i < 50; i++) {
 }
 check("no-reviver parse survives collection", plainChecksum === 350);
 
+const duplicates = JSON.parse(
+	'{"first":1,"same":"old","middle":2,"same":"new","last":3}',
+);
+forceGc();
+check(
+	"duplicate names keep first insertion order and last value",
+	Object.keys(duplicates).join("|") === "first|same|middle|last" &&
+		duplicates.same === "new",
+);
+
+const protoMember = JSON.parse('{"before":1,"__proto__":{"owned":true},"after":2}');
+forceGc();
+const protoDescriptor = Object.getOwnPropertyDescriptor(protoMember, "__proto__");
+check(
+	"__proto__ is an own default data property",
+	Object.getPrototypeOf(protoMember) === Object.prototype &&
+		protoDescriptor.value.owned === true &&
+		protoDescriptor.writable &&
+		protoDescriptor.enumerable &&
+		protoDescriptor.configurable,
+);
+
+const indexed = JSON.parse(
+	'{"2":"two","named":"value","0":"zero","01":"leading","1":"one"}',
+);
+forceGc();
+check(
+	"canonical index keys use ordinary property ordering",
+	Object.keys(indexed).join("|") === "0|1|2|named|01" &&
+		indexed[0] === "zero" &&
+		indexed[2] === "two" &&
+		indexed["01"] === "leading",
+);
+
+function widthSource(count) {
+	let source = "{";
+	for (let i = 0; i < count; i++) {
+		if (i !== 0) source += ",";
+		source += '"field' + i + '":' + i;
+	}
+	return source + "}";
+}
+
+const width32 = JSON.parse(widthSource(32));
+const width33 = JSON.parse(widthSource(33));
+forceGc();
+check(
+	"32 and 33 member objects survive shaped boundary fallback",
+	Object.keys(width32).length === 32 &&
+		width32.field0 === 0 &&
+		width32.field31 === 31 &&
+		Object.keys(width33).length === 33 &&
+		width33.field0 === 0 &&
+		width33.field32 === 32,
+);
+
+let malformedNested = false;
+try {
+	JSON.parse('{"outer":{"first":1,"inner":{"value":2}},"tail":');
+} catch (error) {
+	malformedNested = error instanceof SyntaxError;
+}
+forceGc();
+const afterMalformed = JSON.parse('{"outer":{"inner":{"value":3}}}');
+check(
+	"nested staged members are released after malformed input",
+	malformedNested && afterMalformed.outer.inner.value === 3,
+);
+
+const duplicateReviverVisits = [];
+const duplicateRevived = JSON.parse(
+	'{"first":1,"same":2,"middle":3,"same":4}',
+	function (key, value, context) {
+		if (key !== "") {
+			forceGc();
+			duplicateReviverVisits.push(key + ":" + String(context.source));
+		}
+		return value;
+	},
+);
+check(
+	"reviver mode keeps duplicate order and last source context",
+	duplicateReviverVisits.join("|") === "first:1|same:4|middle:3" &&
+		duplicateRevived.same === 4,
+);
+
 const raw = JSON.rawJSON('{"items":[1,true]}');
 forceGc();
 check("raw JSON validation retains its source", raw.rawJSON === '{"items":[1,true]}');

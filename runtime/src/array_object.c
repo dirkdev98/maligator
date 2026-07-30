@@ -133,6 +133,33 @@ bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value) 
     return true;
 }
 
+bool mal_array_object_dense_append_many(
+    MalArrayObject *array, const MalValue *values, u32 count
+) {
+    u32 start = array->length;
+    if (array->dense_deopted || !array->object.extensible || !array->length_writable ||
+        array->dense_count != start || (start != 0 && array->elements == nullptr) ||
+        count > UINT32_MAX - start) {
+        return false;
+    }
+    if (count == 0) {
+        return true;
+    }
+    u32 end = start + count;
+    if (!mal_array_object_dense_reserve(array, end)) {
+        return false;
+    }
+
+    for (u32 i = 0; i < count; i++) {
+        MalValue value = values[i];
+        array->elements[start + i] = value;
+        mal_gc_card(&array->object.header, value);
+    }
+    array->dense_count = end;
+    array->length = end;
+    return true;
+}
+
 MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index, MalValue value) {
     // Overwrite within the existing dense region (shade the replaced reference).
     if (array->elements != nullptr && index < array->dense_count) {

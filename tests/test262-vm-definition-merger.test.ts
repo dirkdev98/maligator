@@ -97,6 +97,16 @@ describe("Test262 VM definition merger", () => {
 				argumentCount: 0,
 				arguments: [],
 				directFunctionIndex: 0,
+				directFunctionCall: true,
+				directCallTargetFunctionIndex: 0,
+			},
+			{
+				opcode: "CONSTRUCT",
+				dst: 0,
+				callee: 1,
+				argumentCount: 0,
+				arguments: [],
+				directFunctionIndex: 0,
 			},
 		];
 		const second = definition({
@@ -155,6 +165,11 @@ describe("Test262 VM definition merger", () => {
 		});
 		expect(rebased[15]).toMatchObject({ object: 0, keyRegisters: [1, 2] });
 		expect(rebased[16]).toMatchObject({ directFunctionIndex: 2 });
+		expect(rebased[16]).toMatchObject({
+			directFunctionCall: true,
+			directCallTargetFunctionIndex: 2,
+		});
+		expect(rebased[17]).toMatchObject({ directFunctionIndex: 2 });
 		expect(second.functions[0]!.instructions).toEqual(indexed);
 	});
 

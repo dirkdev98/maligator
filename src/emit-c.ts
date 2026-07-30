@@ -2362,6 +2362,24 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (instruction.directArrayPush) {
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`r${instruction.dst} = ${tmp}.value;`,
+					poll,
+				];
+			}
+			if (instruction.directFunctionCall) {
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalCompletion ${tmp} = mal_vm_call_function_call_direct(vm, &__cc_${ip}, ${instruction.directCallTargetFunctionIndex ?? -1}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`r${instruction.dst} = ${tmp}.value;`,
+					poll,
+				];
+			}
 			if (instruction.directFunctionIndex !== undefined) {
 				return [
 					`static MalCallCache __cc_${ip};`,
@@ -2417,16 +2435,20 @@ function emitInstruction(
 		}
 		case "CONSTRUCT": {
 			// `new callee(args)`: marshal args (boxing numbers) and dispatch through
-			// mal_vm_construct_value, which allocates the instance, runs the
-			// constructor (compiled/interpreted/native), and returns the result.
+			// the guarded direct helper for exact script targets, otherwise generic
+			// construction. Both return the completed [[Construct]] result.
 			const args = instruction.arguments;
 			const argsExpr =
 				args.length === 0
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `construct_result_${ip}`;
+			const construct =
+				instruction.directFunctionIndex === undefined
+					? `mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`
+					: `mal_vm_construct_direct(vm, ${instruction.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
 			return [
-				`MalCompletion ${tmp} = mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length});`,
+				`MalCompletion ${tmp} = ${construct};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint

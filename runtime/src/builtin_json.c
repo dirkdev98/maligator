@@ -23,6 +23,11 @@ typedef struct MalJsonBuilder {
     MalU16Buffer buffer;
 } MalJsonBuilder;
 
+typedef struct MalJsonScratch {
+    MalJsonBuilder builder;
+    struct MalJsonScratch *next;
+} MalJsonScratch;
+
 static bool mal_json_throw_string_length(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     return false;
@@ -158,8 +163,8 @@ static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalStrin
 
 /**
  * State threaded through SerializeJSONProperty: the replacer function (or
- * undefined), the optional PropertyList allow-list, the indentation gap, and the
- * cycle-detection stack of objects currently being serialized.
+ * undefined), the optional PropertyList allow-list, the indentation gap, the
+ * cycle-detection stack, and reusable member output for active object depths.
  */
 typedef struct MalJsonState {
     MalVm *vm;
@@ -172,7 +177,44 @@ typedef struct MalJsonState {
     MalValue *stack;  // objects on the active serialization path
     usize stack_count;
     usize stack_capacity;
+    MalJsonScratch scratch;
+    MalJsonScratch *active_scratch;
 } MalJsonState;
+
+static MalJsonScratch *mal_json_scratch_acquire(MalJsonState *state) {
+    // A nested object needs its parent's member output intact. Reuse one buffer
+    // at each active object depth, and retain the chain for later siblings.
+    MalJsonScratch *scratch;
+    if (state->active_scratch == nullptr) {
+        scratch = &state->scratch;
+    } else {
+        scratch = state->active_scratch->next;
+        if (scratch == nullptr) {
+            scratch = calloc(1, sizeof(MalJsonScratch));
+            if (scratch == nullptr) {
+                abort();
+            }
+            scratch->builder.vm = state->vm;
+            state->active_scratch->next = scratch;
+        }
+    }
+    scratch->builder.vm = state->vm;
+    scratch->builder.buffer.length = 0;
+    state->active_scratch = scratch;
+    return scratch;
+}
+
+static void mal_json_scratch_dispose(MalJsonState *state) {
+    MalJsonScratch *scratch = &state->scratch;
+    while (scratch != nullptr) {
+        MalJsonScratch *next = scratch->next;
+        mal_u16_buffer_dispose(&scratch->builder.buffer);
+        if (scratch != &state->scratch) {
+            free(scratch);
+        }
+        scratch = next;
+    }
+}
 
 // Result of attempting to serialize a property: omitted (no output), written, or
 // an abrupt throw (vm->completion holds the error).
@@ -288,6 +330,9 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
     if (!mal_json_builder_push(builder, '{')) {
         return MAL_JSON_THROW;
     }
+    MalJsonScratch *previous_scratch = state->active_scratch;
+    MalJsonScratch *scratch = mal_json_scratch_acquire(state);
+    MalJsonBuilder *member = &scratch->builder;
     bool any = false;
 
     bool ok = true;
@@ -298,15 +343,13 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
             // integer-indexed property rather than a missing string key.
             MalKey get_key;
             mal_vm_value_to_property_key(vm, key, &get_key);
-            MalJsonBuilder member = {.vm = vm};
-            MalJsonResult result = mal_json_serialize_property(state, &member, get_key, key, value, depth + 1);
+            member->buffer.length = 0;
+            MalJsonResult result = mal_json_serialize_property(state, member, get_key, key, value, depth + 1);
             if (result == MAL_JSON_THROW) {
-                mal_u16_buffer_dispose(&member.buffer);
                 ok = false;
                 break;
             }
             if (result == MAL_JSON_OMITTED) {
-                mal_u16_buffer_dispose(&member.buffer);
                 continue;
             }
             bool appended = (!any || mal_json_builder_push(builder, ',')) &&
@@ -315,8 +358,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                 mal_json_builder_push(builder, ':') &&
                 (state->gap_length == 0 || mal_json_builder_push(builder, ' ')) &&
                 mal_json_builder_push_units(
-                    builder, member.buffer.data, member.buffer.length);
-            mal_u16_buffer_dispose(&member.buffer);
+                    builder, member->buffer.data, member->buffer.length);
             if (!appended) {
                 ok = false;
                 break;
@@ -359,15 +401,13 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
 
         for (usize i = 0; ok && i < keys.count; i++) {
             MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys.keys[i].value));
-            MalJsonBuilder member = {.vm = vm};
-            MalJsonResult result = mal_json_serialize_property(state, &member, keys.keys[i], key_string, value, depth + 1);
+            member->buffer.length = 0;
+            MalJsonResult result = mal_json_serialize_property(state, member, keys.keys[i], key_string, value, depth + 1);
             if (result == MAL_JSON_THROW) {
-                mal_u16_buffer_dispose(&member.buffer);
                 ok = false;
                 break;
             }
             if (result == MAL_JSON_OMITTED) {
-                mal_u16_buffer_dispose(&member.buffer);
                 continue;
             }
             bool appended = (!any || mal_json_builder_push(builder, ',')) &&
@@ -376,8 +416,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                 mal_json_builder_push(builder, ':') &&
                 (state->gap_length == 0 || mal_json_builder_push(builder, ' ')) &&
                 mal_json_builder_push_units(
-                    builder, member.buffer.data, member.buffer.length);
-            mal_u16_buffer_dispose(&member.buffer);
+                    builder, member->buffer.data, member->buffer.length);
             if (!appended) {
                 ok = false;
                 break;
@@ -388,16 +427,20 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
     }
 
     if (!ok) {
+        state->active_scratch = previous_scratch;
         return MAL_JSON_THROW;
     }
 
     if (any && !mal_json_push_indent(state, builder, depth)) {
+        state->active_scratch = previous_scratch;
         return MAL_JSON_THROW;
     }
     if (!mal_json_builder_push(builder, '}')) {
+        state->active_scratch = previous_scratch;
         return MAL_JSON_THROW;
     }
 
+    state->active_scratch = previous_scratch;
     state->stack_count--;
     return MAL_JSON_WROTE;
 }
@@ -653,6 +696,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
 
     free(state.property_list);
     free(state.stack);
+    mal_json_scratch_dispose(&state);
 
     if (result != MAL_JSON_WROTE) {
         mal_u16_buffer_dispose(&builder.buffer);
@@ -1013,9 +1057,161 @@ static MalValue mal_json_parse_array(
     }
 }
 
+typedef struct MalJsonObjectMembers {
+    MalRootedKeySnapshot keys;
+    MalRootedValueList values;
+} MalJsonObjectMembers;
+
+static void mal_json_object_members_init(MalJsonObjectMembers *members) {
+    mal_rooted_key_snapshot_init(&members->keys);
+    mal_rooted_value_list_init(&members->values);
+}
+
+static void mal_json_object_members_dispose(MalJsonObjectMembers *members) {
+    mal_rooted_value_list_dispose(&members->values);
+    mal_rooted_key_snapshot_dispose(&members->keys);
+}
+
+static MalValue mal_json_object_members_finalize(
+    MalJsonParser *parser, MalJsonObjectMembers *members
+) {
+    if (members->keys.count == 0) {
+        return mal_value_from_object(mal_intrinsic_new_object(parser->vm));
+    }
+
+    MalString *shape_keys[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+    MalValue shape_values[MAL_SHAPE_DYNAMIC_INLINE_SLOTS];
+    u32 shape_count = 0;
+    bool shaped = true;
+    for (usize i = 0; i < members->keys.count; i++) {
+        MalKey key = members->keys.keys[i];
+        if (key.kind != MAL_KEY_STRING) {
+            shaped = false;
+            break;
+        }
+
+        MalString *string = mal_value_to_string(members->keys.roots[i]);
+        u32 slot = 0;
+        while (slot < shape_count &&
+               !mal_string_equals(shape_keys[slot], string)) {
+            slot++;
+        }
+        if (slot < shape_count) {
+            // CreateDataProperty overwrites a duplicate without changing its
+            // first insertion position.
+            shape_values[slot] = members->values.values[i];
+            continue;
+        }
+        if (shape_count == MAL_SHAPE_DYNAMIC_INLINE_SLOTS) {
+            shaped = false;
+            break;
+        }
+        shape_keys[shape_count] = string;
+        shape_values[shape_count] = members->values.values[i];
+        shape_count++;
+    }
+
+    if (shaped) {
+        MalShape *shape = mal_shape_from_string_keys(shape_keys, shape_count);
+        MalObject *prototype = mal_value_to_object(
+            parser->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+        return mal_value_from_object(mal_object_new_shaped(
+            &parser->vm->heap, prototype, shape, shape_values, shape_count));
+    }
+
+    MalValue object_value = mal_value_from_object(mal_intrinsic_new_object(parser->vm));
+    MalRootSpan object_span;
+    mal_gc_root(&object_span, &object_value, 1);
+    for (usize i = 0; i < members->keys.count; i++) {
+        MalPropertyDesc desc = mal_intrinsic_data_desc(
+            members->values.values[i],
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                MAL_PROPERTY_CONFIGURABLE
+        );
+        mal_object_define_own(
+            mal_value_to_object(object_value), members->keys.keys[i], &desc);
+    }
+    mal_gc_unroot(&object_span);
+    return object_value;
+}
+
+static MalValue mal_json_parse_object_staged(
+    MalJsonParser *parser, MalJsonParseNode **node_out
+) {
+    *node_out = nullptr;
+    MalJsonObjectMembers members;
+    mal_json_object_members_init(&members);
+
+    mal_json_skip_whitespace(parser);
+    if (mal_json_consume(parser, '}')) {
+        MalValue result = mal_json_object_members_finalize(parser, &members);
+        mal_json_object_members_dispose(&members);
+        return result;
+    }
+
+    while (true) {
+        mal_json_skip_whitespace(parser);
+        if (!mal_json_consume(parser, '"')) {
+            mal_json_parse_error(parser);
+            goto fail;
+        }
+
+        MalValue key = mal_json_parse_string(parser);
+        if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
+            goto fail;
+        }
+        MalRootSpan key_span;
+        mal_gc_root(&key_span, &key, 1);
+
+        mal_json_skip_whitespace(parser);
+        if (!mal_json_consume(parser, ':')) {
+            mal_gc_unroot(&key_span);
+            mal_json_parse_error(parser);
+            goto fail;
+        }
+
+        MalKey property_key;
+        if (!mal_vm_value_to_property_key(parser->vm, key, &property_key)) {
+            mal_gc_unroot(&key_span);
+            goto fail;
+        }
+        mal_rooted_key_snapshot_append(&members.keys, property_key);
+        mal_gc_unroot(&key_span);
+
+        MalJsonParseNode *value_node = nullptr;
+        MalValue value = mal_json_parse_value(parser, &value_node);
+        if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_json_parse_node_dispose(value_node);
+            goto fail;
+        }
+        mal_rooted_value_list_append(&members.values, value);
+
+        mal_json_skip_whitespace(parser);
+        if (mal_json_consume(parser, ',')) {
+            continue;
+        }
+        if (mal_json_consume(parser, '}')) {
+            MalValue result = mal_json_object_members_finalize(parser, &members);
+            mal_json_object_members_dispose(&members);
+            return result;
+        }
+
+        mal_json_parse_error(parser);
+        goto fail;
+    }
+
+fail:
+    mal_json_object_members_dispose(&members);
+    return mal_value_new_undefined();
+}
+
 static MalValue mal_json_parse_object(
     MalJsonParser *parser, usize source_start, MalJsonParseNode **node_out
 ) {
+    if (parser->state == nullptr) {
+        return mal_json_parse_object_staged(parser, node_out);
+    }
+
     MalObject *object = mal_intrinsic_new_object(parser->vm);
     MalValue object_value = mal_value_from_object(object);
     MalRootSpan object_span;

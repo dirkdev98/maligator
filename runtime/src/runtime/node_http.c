@@ -27,6 +27,7 @@
 #include "utf8.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
+#include "web_headers_object.h"
 #include "vm_ops.h"
 
 #define HTTP_VISIBLE \
@@ -124,7 +125,6 @@ typedef struct MalNodeHttpServerState {
 
 typedef struct MalNodeHttpCopiedHeader {
     char *name;
-    char *lower_name;
     usize name_len;
     char *value;
     usize value_len;
@@ -449,16 +449,9 @@ static bool http_request_snapshot_add_string(usize *size, usize length) {
 }
 
 static char *http_request_snapshot_copy(
-    char **cursor, const char *bytes, usize length, bool lowercase) {
+    char **cursor, const char *bytes, usize length) {
     char *copy = *cursor;
-    if (lowercase) {
-        for (usize i = 0; i < length; i++) {
-            char ch = bytes[i];
-            copy[i] = ch >= 'A' && ch <= 'Z' ? (char) (ch + 0x20) : ch;
-        }
-    } else {
-        memcpy(copy, bytes, length);
-    }
+    memcpy(copy, bytes, length);
     copy[length] = '\0';
     *cursor += length + 1;
     MAL_PERF_COUNT(http_request_copy_operations);
@@ -715,7 +708,6 @@ static void http_queue_request(
     for (usize i = 0; i < head->field_count; i++) {
         const MalHttpCodecField *field = &head->fields[i];
         if (!http_request_snapshot_add_string(&snapshot_size, field->name_length)
-            || !http_request_snapshot_add_string(&snapshot_size, field->name_length)
             || !http_request_snapshot_add_string(&snapshot_size, field->value_length)) {
             goto fail;
         }
@@ -743,10 +735,10 @@ static void http_queue_request(
     char *cursor = (char *) &state->headers[head->field_count];
     state->method = http_request_snapshot_copy(
         &cursor, (const char *) mal_http_codec_head_method(head),
-        head->method_length, false);
+        head->method_length);
     state->target = http_request_snapshot_copy(
         &cursor, (const char *) mal_http_codec_head_target(head),
-        head->target_length, false);
+        head->target_length);
     for (usize i = 0; i < head->field_count; i++) {
         const MalHttpCodecField *field = &head->fields[i];
         const char *name = (const char *) mal_http_codec_field_name(head, field);
@@ -754,11 +746,9 @@ static void http_queue_request(
         state->headers[i].name_len = field->name_length;
         state->headers[i].value_len = field->value_length;
         state->headers[i].name = http_request_snapshot_copy(
-            &cursor, name, field->name_length, false);
-        state->headers[i].lower_name = http_request_snapshot_copy(
-            &cursor, name, field->name_length, true);
+            &cursor, name, field->name_length);
         state->headers[i].value = http_request_snapshot_copy(
-            &cursor, value, field->value_length, false);
+            &cursor, value, field->value_length);
     }
     MAL_PERF_ADD(http_request_packed_headers, head->field_count);
     if (http_requests_tail == nullptr) {
@@ -2936,7 +2926,20 @@ static void http_scan_roots(MalVm *vm, void *data) {
     }
 }
 
-static bool http_incoming_singleton_header(const char *name, usize length) {
+static bool http_header_names_equal_ci(
+    const char *left, usize left_length,
+    const char *right, usize right_length) {
+    if (left_length != right_length) return false;
+    for (usize i = 0; i < left_length; i++) {
+        if (mal_ascii_to_lower((u8) left[i])
+            != mal_ascii_to_lower((u8) right[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool http_incoming_singleton_header(const MalString *name) {
     static const char *singletons[] = {
         "age", "authorization", "content-length", "content-type", "etag",
         "expires", "from", "host", "if-modified-since", "if-unmodified-since",
@@ -2944,8 +2947,7 @@ static bool http_incoming_singleton_header(const char *name, usize length) {
         "referer", "retry-after", "server", "user-agent",
     };
     for (usize i = 0; i < countof(singletons); i++) {
-        if (strlen(singletons[i]) == length
-            && memcmp(singletons[i], name, length) == 0) {
+        if (mal_string_equals_ascii_ci(name, singletons[i])) {
             return true;
         }
     }
@@ -2954,13 +2956,12 @@ static bool http_incoming_singleton_header(const char *name, usize length) {
 
 static bool http_incoming_header_add(
     MalVm *vm, MalValue headers, MalValue lower_name,
-    const char *lower_bytes, usize name_length, MalValue value,
-    MalValue *scratch) {
+    MalValue value, MalValue *scratch) {
     MalObject *object = mal_value_to_object(headers);
     MalKey key = mal_key_from_value(lower_name);
+    MalString *name = mal_value_to_string(lower_name);
     MalPropertyLookup existing = mal_object_get_own(object, key);
-    bool set_cookie = name_length == 10
-        && memcmp(lower_bytes, "set-cookie", 10) == 0;
+    bool set_cookie = mal_string_equals_ascii_ci(name, "set-cookie");
     if (set_cookie) {
         if (!existing.present || !mal_value_is_array_object(existing.desc.value)) {
             *scratch = mal_value_from_array_object(
@@ -2978,10 +2979,9 @@ static bool http_incoming_header_add(
         mal_object_set(object, key, value);
         return true;
     }
-    if (http_incoming_singleton_header(lower_bytes, name_length)) return true;
+    if (http_incoming_singleton_header(name)) return true;
 
-    const char *separator = name_length == 6
-            && memcmp(lower_bytes, "cookie", 6) == 0
+    const char *separator = mal_string_equals_ascii_ci(name, "cookie")
         ? "; " : ", ";
     MalString *previous = mal_value_to_string(existing.desc.value);
     MalString *next = mal_value_to_string(value);
@@ -3014,6 +3014,7 @@ static bool http_incoming_header_add(
 static bool http_request_headers(
     MalVm *vm, MalNodeHttpRequestState *state,
     MalValue *headers_out, MalValue *raw_headers_out) {
+    if (state->header_count > MAL_HTTP_CODEC_FIELDS_MAX) return false;
     MalValue roots[] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
@@ -3021,17 +3022,37 @@ static bool http_request_headers(
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    MalValue canonical_names[MAL_HTTP_CODEC_FIELDS_MAX];
+    for (usize i = 0; i < state->header_count; i++) {
+        canonical_names[i] = mal_value_new_undefined();
+    }
+    MalRootSpan canonical_root;
+    mal_gc_root(&canonical_root, canonical_names, (i32) state->header_count);
     roots[0] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     roots[1] = mal_value_from_array_object(
         mal_intrinsic_new_dense_array(vm, (u32) (state->header_count * 2)));
     MalArrayObject *raw = mal_value_to_array_object(roots[1]);
     for (usize i = 0; i < state->header_count; i++) {
         MalNodeHttpCopiedHeader *header = &state->headers[i];
-        roots[2] = http_ascii_value(vm, header->lower_name, header->name_len);
+        usize canonical = i;
+        for (usize j = 0; j < i; j++) {
+            MalNodeHttpCopiedHeader *candidate = &state->headers[j];
+            if (http_header_names_equal_ci(
+                    header->name, header->name_len,
+                    candidate->name, candidate->name_len)) {
+                canonical = j;
+                break;
+            }
+        }
+        roots[2] = canonical == i
+            ? mal_value_from_string(mal_headers_new_lowercase_name(
+                  vm, header->name, header->name_len))
+            : canonical_names[canonical];
+        canonical_names[i] = roots[2];
         roots[3] = http_ascii_value(vm, header->value, header->value_len);
         if (!http_incoming_header_add(
-                vm, roots[0], roots[2], header->lower_name, header->name_len,
-                roots[3], &roots[4])) {
+                vm, roots[0], roots[2], roots[3], &roots[4])) {
+            mal_gc_unroot(&canonical_root);
             mal_gc_unroot(&root);
             return false;
         }
@@ -3047,6 +3068,7 @@ static bool http_request_headers(
     }
     *headers_out = roots[0];
     *raw_headers_out = roots[1];
+    mal_gc_unroot(&canonical_root);
     mal_gc_unroot(&root);
     return true;
 }
@@ -3219,38 +3241,49 @@ static bool http_client_response_headers(
     MalVm *vm, const MalHttpCodecHead *head,
     MalValue *headers_out, MalValue *raw_headers_out) {
     MalValue roots[] = {
-        mal_value_from_object(mal_object_new(&vm->heap, nullptr)),
-        mal_value_from_array_object(
-            mal_intrinsic_new_dense_array(vm, (u32) (head->field_count * 2))),
+        mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    MalValue canonical_names[MAL_HTTP_CODEC_FIELDS_MAX];
+    for (usize i = 0; i < head->field_count; i++) {
+        canonical_names[i] = mal_value_new_undefined();
+    }
+    MalRootSpan canonical_root;
+    mal_gc_root(&canonical_root, canonical_names, (i32) head->field_count);
+    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    roots[1] = mal_value_from_array_object(
+        mal_intrinsic_new_dense_array(vm, (u32) (head->field_count * 2)));
     MalArrayObject *raw = mal_value_to_array_object(roots[1]);
     for (usize i = 0; i < head->field_count; i++) {
         const MalHttpCodecField *field = &head->fields[i];
         const char *name = (const char *) mal_http_codec_field_name(head, field);
         const char *value = (const char *) mal_http_codec_field_value(head, field);
-        char *lower = malloc(field->name_length == 0 ? 1 : field->name_length);
-        if (lower == nullptr) {
-            mal_gc_unroot(&root);
-            return false;
+        usize canonical = i;
+        for (usize j = 0; j < i; j++) {
+            const MalHttpCodecField *candidate = &head->fields[j];
+            if (http_header_names_equal_ci(
+                    name, field->name_length,
+                    (const char *) mal_http_codec_field_name(head, candidate),
+                    candidate->name_length)) {
+                canonical = j;
+                break;
+            }
         }
-        for (usize j = 0; j < field->name_length; j++) {
-            char ch = name[j];
-            lower[j] = ch >= 'A' && ch <= 'Z' ? (char) (ch + 0x20) : ch;
-        }
-        roots[2] = http_ascii_value(vm, lower, field->name_length);
+        roots[2] = canonical == i
+            ? mal_value_from_string(mal_headers_new_lowercase_name(
+                  vm, name, field->name_length))
+            : canonical_names[canonical];
+        canonical_names[i] = roots[2];
         roots[3] = http_ascii_value(vm, value, field->value_length);
         if (!http_incoming_header_add(
-                vm, roots[0], roots[2], lower, field->name_length, roots[3],
-                &roots[4])) {
-            free(lower);
+                vm, roots[0], roots[2], roots[3], &roots[4])) {
+            mal_gc_unroot(&canonical_root);
             mal_gc_unroot(&root);
             return false;
         }
-        free(lower);
         roots[4] = http_ascii_value(vm, name, field->name_length);
         mal_array_object_store(
             raw,
@@ -3263,6 +3296,7 @@ static bool http_client_response_headers(
     }
     *headers_out = roots[0];
     *raw_headers_out = roots[1];
+    mal_gc_unroot(&canonical_root);
     mal_gc_unroot(&root);
     return true;
 }

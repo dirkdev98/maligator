@@ -11,6 +11,7 @@
 #include "checked_size.h"
 #include "function_object.h"
 #include "heap_string.h"
+#include "perf_stats.h"
 #include "primitive_wrapper_object.h"
 #include "proxy_object.h"
 #include "rooted_collection.h"
@@ -1408,6 +1409,13 @@ static MalValue mal_builtin_array_push(MalVm *vm, MalValue this_value, const Mal
             goto done;
         }
     }
+    // ArraySetLength rejects values outside the uint32 Array-length domain. Keep
+    // this after the indexed writes: push can have observable partial effects before
+    // the final length Set throws (for example at length 2^32 - 1).
+    if (mal_value_is_array_object(this_value) && new_length > (f64) UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+        goto done;
+    }
     if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(new_length))) {
         goto done;
     }
@@ -1415,6 +1423,44 @@ static MalValue mal_builtin_array_push(MalVm *vm, MalValue this_value, const Mal
 done:
     mal_gc_unroot(&this_span);
     return ret;
+}
+
+MalCompletion mal_builtin_array_push_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (arg_count >= 0 && mal_value_is_array_object(this_value) &&
+        callee == vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH] &&
+        mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) ==
+            mal_builtin_array_push) {
+        MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+        MalArrayObject *array = mal_value_to_array_object(this_value);
+        MalKey push_key = mal_intrinsic_string_key(vm, "push");
+        if (mal_value_is_array_object(prototype_value) &&
+            array->object.prototype == mal_value_to_object(prototype_value) &&
+            !mal_object_get_own(&array->object, push_key).present) {
+            MalPropertyLookup live = mal_object_get_own(
+                mal_value_to_object(prototype_value), push_key);
+            if (live.present && !(live.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+                live.desc.value == callee && mal_array_elements_protector &&
+                mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
+                MAL_PERF_COUNT(array_push_direct_hits);
+                return (MalCompletion) {
+                    .kind = MAL_COMPLETION_NORMAL,
+                    .value = mal_ops_number_value((f64) array->length),
+                };
+            }
+        }
+    }
+
+    MAL_PERF_COUNT(array_push_direct_fallbacks);
+    return mal_vm_call_cached(
+        vm, fallback_cache, callee, this_value, args, arg_count);
 }
 
 static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -3395,7 +3441,8 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "indexOf", 1, mal_builtin_array_index_of);
     mal_intrinsic_define_method_n(vm, prototype, "lastIndexOf", 1, mal_builtin_array_last_index_of);
     mal_intrinsic_define_method_n(vm, prototype, "includes", 1, mal_builtin_array_includes);
-    mal_intrinsic_define_method_n(vm, prototype, "push", 1, mal_builtin_array_push);
+    vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH] =
+        mal_intrinsic_define_method_n(vm, prototype, "push", 1, mal_builtin_array_push);
     mal_intrinsic_define_method_n(vm, prototype, "pop", 0, mal_builtin_array_pop);
     mal_intrinsic_define_method_n(vm, prototype, "shift", 0, mal_builtin_array_shift);
     mal_intrinsic_define_method_n(vm, prototype, "unshift", 1, mal_builtin_array_unshift);

@@ -371,6 +371,13 @@ static uptr mal_vm_compute_stack_limit(void) {
 #endif
 }
 
+void mal_vm_invalidate_map_get_set_cache(MalVm *vm) {
+    vm->map_get_set_cache = (MalMapGetSetCacheEntry) {
+        .collection = mal_value_new_undefined(),
+        .canonical_key = mal_value_new_undefined(),
+    };
+}
+
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 #if MAL_REALMS
     vm->error_data_marker = mal_value_new_undefined();
@@ -460,6 +467,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
         (usize) MAL_INTERP_CALL_CACHE_SIZE, sizeof(MalInterpCallCacheEntry));
     vm->global_property_cache = calloc(
         (usize) MAL_GLOBAL_PROPERTY_CACHE_SIZE, sizeof(MalGlobalPropertyCacheEntry));
+    mal_vm_invalidate_map_get_set_cache(vm);
     vm->global_capacity = definition->global_count > 0 ? definition->global_count : 1;
 #if !MAL_REALMS
     vm->globals = malloc(sizeof(MalValue) * (usize) vm->global_capacity);
@@ -3473,8 +3481,151 @@ MalCompletion mal_vm_call_direct(
     return completion;
 }
 
+MalCompletion mal_vm_call_function_call_direct(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    i32 expected_function_index,
+    MalValue call_method,
+    MalValue target,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+    if (call_method != vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL] ||
+        !mal_value_is_native_function_object(call_method)) {
+        return mal_vm_call_cached(
+            vm, fallback_cache, call_method, target, args, arg_count);
+    }
+
+    MalValue this_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    const MalValue *target_args = arg_count > 1 ? args + 1 : nullptr;
+    i32 target_arg_count = arg_count > 1 ? arg_count - 1 : 0;
+    if (expected_function_index >= 0) {
+        return mal_vm_call_direct(
+            vm, fallback_cache, expected_function_index, target, this_value,
+            target_args, target_arg_count);
+    }
+    return mal_vm_call_cached(
+        vm, fallback_cache, target, this_value, target_args, target_arg_count);
+}
+
 MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count) {
     return mal_vm_construct_value_with_target(vm, callee, args, arg_count, callee);
+}
+
+MalCompletion mal_vm_construct_direct(
+    MalVm *vm,
+    i32 expected_function_index,
+    MalValue callee,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+    if (!mal_value_is_function_object(callee) ||
+        expected_function_index < 0 ||
+        expected_function_index >= vm->definition->function_count) {
+        return mal_vm_construct_value(vm, callee, args, arg_count);
+    }
+
+    MalFunctionObject *function_object = mal_value_to_function_object(callee);
+    i32 function_index = mal_function_object_function_index(function_object);
+    if (function_index != expected_function_index) {
+        return mal_vm_construct_value(vm, callee, args, arg_count);
+    }
+
+    const MalFunction *function = &vm->definition->functions[function_index];
+    if (function->kind != MAL_FUNCTION_KIND_NORMAL || !function->has_prototype) {
+        return mal_vm_construct_value(vm, callee, args, arg_count);
+    }
+
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+
+    MalValue this_value;
+    if (function->is_derived_constructor) {
+        this_value = mal_value_new_empty();
+    } else {
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, callee, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+#if MAL_REALMS
+            mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+            return vm->completion;
+        }
+        this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    }
+
+    MalEnv *env = function_object->creation_env;
+    MalCompletion completion;
+    if (function->compiled != nullptr) {
+        if (!mal_vm_enter_compiled(vm, function_index)) {
+            completion = vm->completion;
+        } else {
+            MalCalleeRoots ncr;
+            mal_gc_callee_roots_begin(
+                &ncr, this_value, callee, callee, args, arg_count);
+            MalValue value = function->compiled(
+                vm, this_value, args, arg_count, callee, env, callee, nullptr);
+            mal_gc_callee_roots_end(&ncr);
+            mal_vm_leave_compiled(vm);
+#if MAL_REALMS
+            mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                completion = vm->completion;
+            } else if (function->is_derived_constructor && mal_value_is_empty(value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                    "Must call super constructor in derived class before returning from derived constructor");
+                completion = vm->completion;
+            } else if (function->is_derived_constructor && !mal_value_is_object(value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Derived constructors may only return an object or undefined");
+                completion = vm->completion;
+            } else {
+                completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+            }
+        }
+    } else if (vm->value_stack_size + arg_count > vm->value_stack_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Maximum call stack size exceeded");
+        completion = vm->completion;
+    } else {
+        i32 base = vm->value_stack_size;
+        for (i32 i = 0; i < arg_count; i++) {
+            vm->value_stack[base + i] = args[i];
+        }
+        vm->value_stack_size = base + arg_count;
+
+        i32 target_frame_count = vm->frame_count;
+        if (mal_vm_push_function_frame(
+                vm, function_index, env, this_value, arg_count, -1, -1)) {
+            vm->frames[vm->frame_count - 1].is_construct = true;
+            vm->frames[vm->frame_count - 1].callee = callee;
+            vm->frames[vm->frame_count - 1].new_target = callee;
+            mal_vm_run_until_frame_count(
+                vm,
+                target_frame_count
+#if MAL_REALMS
+                , saved_realm
+#endif
+            );
+        } else {
+            vm->value_stack_size = base;
+        }
+        completion = vm->completion;
+    }
+
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    return completion;
 }
 
 MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target) {

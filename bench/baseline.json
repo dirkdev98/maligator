@@ -57,22 +57,22 @@
     "functionCount": 800
   },
   "language": {
-    "malMs": 231.261291,
-    "nodeMs": 117.717917,
-    "ratio": 1.9645377432222149,
+    "malMs": 228.096583,
+    "nodeMs": 111.629042,
+    "ratio": 2.043344446152284,
     "collections": 3,
-    "allocatedMb": 26.85943603515625,
+    "allocatedMb": 27.7081298828125,
     "emptyObjects": 0,
     "shapedObjects": 3364,
     "stackObjects": 0,
     "stackMaterializations": 0,
-    "callProbes": 81745,
-    "callMisses": 67,
+    "callProbes": 71142,
+    "callMisses": 55,
     "loadMonoHits": 1882301,
     "loadRegionHits": 13537320,
-    "loadInheritedHits": 62401,
+    "loadInheritedHits": 79680,
     "loadWatchedHits": 2864109,
-    "loadFallbacks": 55600,
+    "loadFallbacks": 38321,
     "storeMonoHits": 0,
     "storeRegionHits": 4505539,
     "storeFallbacks": 17285
@@ -288,34 +288,34 @@
     }
   },
   "http": {
-    "malRps": 144788.2056069221,
-    "nodeRps": 106647.66386127204,
-    "ratio": 1.3576312913451487,
-    "malP99Ms": 0.9791660000000001,
-    "nodeP99Ms": 0.9033329999999999,
+    "malRps": 152632.75395921274,
+    "nodeRps": 106213.30781450465,
+    "ratio": 1.4370398314472699,
+    "malP99Ms": 0.891208,
+    "nodeP99Ms": 0.910042,
     "express": {
-      "binaryBytes": 21774216,
+      "binaryBytes": 21324472,
       "workloads": {
         "routes": {
-          "malRps": 20285.01953492381,
-          "nodeRps": 49228.66812420261,
-          "ratio": 0.4120570453733432,
-          "malP99Ms": 3.327625,
-          "nodeP99Ms": 1.9575
+          "malRps": 21506.423689314306,
+          "nodeRps": 49163.40964195822,
+          "ratio": 0.4374477654405763,
+          "malP99Ms": 3.209583,
+          "nodeP99Ms": 1.9567909999999997
         },
         "json": {
-          "malRps": 15030.973515876522,
-          "nodeRps": 46730.40820280473,
-          "ratio": 0.3216529470627302,
-          "malP99Ms": 4.461417,
-          "nodeP99Ms": 2.045375
+          "malRps": 15206.074560319443,
+          "nodeRps": 45884.585452194915,
+          "ratio": 0.33139832060075963,
+          "malP99Ms": 4.302708,
+          "nodeP99Ms": 2.0515
         },
         "form": {
-          "malRps": 11279.080284625745,
-          "nodeRps": 42412.32514247263,
-          "ratio": 0.26593873942861546,
-          "malP99Ms": 5.566042,
-          "nodeP99Ms": 2.280041
+          "malRps": 11211.754568467952,
+          "nodeRps": 42076.28789326388,
+          "ratio": 0.2664625405384888,
+          "malP99Ms": 5.5453339999999995,
+          "nodeP99Ms": 2.287333
         }
       }
     }
