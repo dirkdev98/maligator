@@ -1156,6 +1156,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     // and have its address reused; ordinary collections with no dead prototypes
     // leave the cache epoch untouched.
     if (object->is_prototype) {
+        mal_object_invalidate_prototype_dependents(object);
         mal_object_bump_prototype_chain_epoch();
         MAL_PERF_COUNT(prototype_epoch_finalize_invalidations);
     }

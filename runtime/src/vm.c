@@ -46,8 +46,8 @@ static void mal_vm_function_cache_init(MalVm *vm, i32 function_index) {
         *pool = (MalPropertyCachePool){0};
     } else {
         // One zeroed allocation keeps the dense IC row and its sparse compiled-region
-        // pointer row adjacent. MalInlineCache is pointer-aligned and 80 bytes, so the
-        // trailing pointer row remains naturally aligned.
+        // pointer row adjacent. The 72-byte site is pointer-aligned, so the trailing
+        // pointer row remains naturally aligned.
         pool->sites = calloc(
             (usize) property_count,
             sizeof(MalInlineCache) + sizeof(MalObjectRegionCache *));
@@ -734,6 +734,9 @@ void mal_vm_free(MalVm *vm) {
     if (vm->property_cache != nullptr) {
         for (i32 i = 0; i < vm->definition->function_count; i++) {
             MalPropertyCachePool *pool = &vm->property_cache[i];
+            for (i32 j = 0; j < vm->definition->functions[i].property_ic_count; j++) {
+                mal_object_unregister_prototype_cache(&pool->sites[j]);
+            }
             if (pool->regions != nullptr) {
                 for (i32 j = 0; j < vm->definition->functions[i].property_ic_count; j++) {
                     MalObjectRegionCache *region = pool->regions[j];

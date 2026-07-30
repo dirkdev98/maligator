@@ -589,8 +589,10 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
  * (shape == nullptr, poly_count == 0) means empty — the overflow is inline (no
  * heap allocation), so there is nothing to free on teardown.
  *
- * Fields are grouped 8-byte members first, then the u32 slots, then the byte
- * flags, so the site carries no interior padding.
+ * Shape slots fit in one byte (the runtime caps inline shapes at 64). The shared
+ * polymorphic payload packs either three byte-sized slots or one 64-bit
+ * deep-chain fallback epoch. This keeps the full typed site in 72 bytes without
+ * reducing four-way polymorphism.
  */
 typedef struct MalInlineCache {
     union {
@@ -649,11 +651,8 @@ typedef struct MalInlineCache {
         const struct MalShape *poly_shape[MAL_IC_POLY_EXTRA];
         const struct MalObject *proto_object[MAL_IC_POLY_EXTRA];
     };
-    u32 slot;
-    // Own-slot modes use all entries as alternate slots. In inherited/exact-
-    // missing modes [0..1] store the low/high halves of the u64 prototype epoch;
-    // [2] is unused.
-    u32 poly_slot[MAL_IC_POLY_EXTRA];
+    u8 slot;
+    byte poly_data[8];
     u8 prim_kind;
     u8 poly_count;
     // In inherited slot/table modes, receiver shape + null overflow guard own
@@ -667,22 +666,38 @@ typedef struct MalInlineCache {
     bool megamorphic;
 } MalInlineCache;
 
-// One per property-access site; keep it at/under 80 bytes.
-static_assert(sizeof(MalInlineCache) <= 80, "MalInlineCache outgrew 80 bytes");
+// One per property-access site; 10% smaller than the former 80-byte row.
+static_assert(sizeof(MalInlineCache) == 72, "MalInlineCache must stay 72 bytes");
 
-/** Packed access keeps the 80-byte cache layout from gaining u64 alignment padding. */
-static inline u64 mal_ic_recorded_prototype_epoch(const MalInlineCache *ic) {
-    return (u64) ic->poly_slot[0] | ((u64) ic->poly_slot[1] << 32);
+static inline u8 mal_ic_poly_slot(const MalInlineCache *ic, u8 index) {
+    return ic->poly_data[index];
 }
 
+static inline void mal_ic_set_poly_slot(MalInlineCache *ic, u8 index, u32 slot) {
+    if (slot >= UINT8_MAX) abort();
+    ic->poly_data[index] = (u8) slot;
+}
+
+/** Packed deep-chain fallback epoch in the first eight payload bytes. */
+static inline u64 mal_ic_unpack_prototype_epoch(const MalInlineCache *ic) {
+    u64 epoch = 0;
+    for (u8 i = 0; i < 8; i++) {
+        epoch |= (u64) ic->poly_data[i] << (i * 8);
+    }
+    return epoch;
+}
+
+u64 mal_ic_recorded_prototype_epoch(const MalInlineCache *ic);
+
 static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 epoch) {
-    ic->poly_slot[0] = (u32) epoch;
-    ic->poly_slot[1] = (u32) (epoch >> 32);
+    for (u8 i = 0; i < 8; i++) {
+        ic->poly_data[i] = (byte) (epoch >> (i * 8));
+    }
 }
 
 // `slot` sentinel marking a protector-gated value entry (`value` holds the result,
 // there is no object slot). A real shape slot is a small inline index.
-#define MAL_IC_VALUE_SLOT UINT32_MAX
+#define MAL_IC_VALUE_SLOT UINT8_MAX
 
 #define MAL_IC_MODE_SHAPE 0u
 #define MAL_IC_MODE_INHERITED_VALUE 1u
@@ -862,7 +877,7 @@ static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key,
         for (u8 i = 0; i < ic->poly_count; i++) {
             if (object->shape == ic->poly_shape[i]) {
                 MAL_PERF_COUNT(ic_load_poly_hits);
-                *out = object->slots[ic->poly_slot[i]];
+                *out = object->slots[mal_ic_poly_slot(ic, i)];
                 return true;
             }
         }
@@ -897,10 +912,16 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
             return false;
         }
         if (ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN) {
-            if (object->prototype != ic->proto_object[0] ||
-                mal_prototype_chain_epoch == 0 ||
-                mal_prototype_chain_epoch != mal_ic_recorded_prototype_epoch(ic)) {
-                return false;
+            if (ic->poly_count > 0) {
+                if (object->prototype != ic->proto_object[0]) {
+                    return false;
+                }
+            } else {
+                if (object->prototype != ic->proto_object[0] ||
+                    mal_prototype_chain_epoch == 0 ||
+                    mal_prototype_chain_epoch != mal_ic_recorded_prototype_epoch(ic)) {
+                    return false;
+                }
             }
         } else {
             const MalObject *cursor = object;
@@ -942,13 +963,23 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
     }
 
     const MalObject *object = mal_value_to_object(receiver);
-    if (object->shape != ic->shape || object->overflow != nullptr ||
-        object->prototype != ic->proto_object[0] ||
-        mal_prototype_chain_epoch == 0 ||
-        mal_prototype_chain_epoch != mal_ic_recorded_prototype_epoch(ic)) {
+    if (object->shape != ic->shape || object->overflow != nullptr) {
         return false;
     }
-    const MalObject *holder = ic->proto_object[1];
+    const MalObject *holder;
+    if (ic->poly_count > 0) {
+        if (object->prototype != ic->proto_object[0]) {
+            return false;
+        }
+        holder = ic->proto_object[1];
+    } else {
+        if (object->prototype != ic->proto_object[0] ||
+            mal_prototype_chain_epoch == 0 ||
+            mal_prototype_chain_epoch != mal_ic_recorded_prototype_epoch(ic)) {
+            return false;
+        }
+        holder = ic->proto_object[1];
+    }
 
     if (ic->mode == MAL_IC_MODE_INHERITED_SLOT) {
         *out = holder->slots[ic->slot];
@@ -1081,8 +1112,9 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
         for (u8 i = 0; i < ic->poly_count; i++) {
             if (object->shape == ic->poly_shape[i]) {
                 MAL_PERF_COUNT(ic_store_poly_hits);
-                mal_gc_write_barrier(object->slots[ic->poly_slot[i]]);
-                object->slots[ic->poly_slot[i]] = value;
+                u8 slot = mal_ic_poly_slot(ic, i);
+                mal_gc_write_barrier(object->slots[slot]);
+                object->slots[slot] = value;
                 mal_gc_card(&object->header, value);
                 return true;
             }

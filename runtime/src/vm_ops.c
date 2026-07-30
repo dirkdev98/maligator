@@ -3468,10 +3468,21 @@ static bool mal_ic_key_is_stable_string(MalValue key) {
     return mal_value_is_string(key);
 }
 
+static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
+    if (ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
+        ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
+        (ic->mode == MAL_IC_MODE_MISSING &&
+         ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
+         ic->poly_count > 0)) {
+        mal_object_unregister_prototype_cache(ic);
+    }
+}
+
 static void mal_ic_record_special(
     MalVm *vm, MalInlineCache *ic, u8 mode, u8 prim_kind, MalValue key,
     MalValue value, const MalObject *prototype
 ) {
+    mal_ic_detach_prototype_cache(ic);
     ic->prototype = prototype;
     ic->key = key;
     ic->value = value;
@@ -3497,6 +3508,7 @@ static void mal_ic_record_special(
 static void mal_ic_record_watched(
     MalInlineCache *ic, const MalObject *object, MalValue key, MalValue value
 ) {
+    mal_ic_detach_prototype_cache(ic);
     ic->shape = object->shape;
     ic->key = key;
     ic->value = value;
@@ -3519,6 +3531,7 @@ static void mal_ic_record_watched(
 // A key change (computed-key site) or a site currently holding a protector-gated
 // special entry (prim-method / watched-value) restarts monomorphic for this slot.
 static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue key, u32 slot) {
+    mal_ic_detach_prototype_cache(ic);
     if (ic->mode != MAL_IC_MODE_SHAPE || key != ic->key || ic->shape == nullptr ||
         ic->slot == MAL_IC_VALUE_SLOT || ic->prim_kind != 0) {
         ic->shape = shape;
@@ -3543,11 +3556,52 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
     }
     if (ic->poly_count < MAL_IC_POLY_EXTRA) {
         ic->poly_shape[ic->poly_count] = shape;
-        ic->poly_slot[ic->poly_count] = slot;
+        mal_ic_set_poly_slot(ic, ic->poly_count, slot);
         ic->poly_count++;
     } else {
         ic->megamorphic = true;
     }
+}
+
+u64 mal_ic_recorded_prototype_epoch(const MalInlineCache *ic) {
+    return mal_ic_unpack_prototype_epoch(ic);
+}
+
+void mal_vm_property_cache_invalidate(void *cache) {
+    *(MalInlineCache *) cache = (MalInlineCache) {0};
+}
+
+/**
+ * Attach this stable VM-owned site to every object whose mutation can invalidate
+ * the resolved chain. Hits then need only the receiver's exact first-prototype
+ * identity; mutations eagerly clear the dependent row.
+ */
+static bool mal_ic_record_local_prototype_chain(
+    MalObject *receiver, MalObject *holder, MalInlineCache *ic
+) {
+    if (receiver->prototype == nullptr) {
+        return false;
+    }
+    bool same_positive_chain =
+        (ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
+         ic->mode == MAL_IC_MODE_INHERITED_TABLE) &&
+        ic->poly_count > 0 &&
+        ic->proto_object[0] == receiver->prototype &&
+        ic->proto_object[1] == holder;
+    bool same_missing_chain =
+        ic->mode == MAL_IC_MODE_MISSING &&
+        ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
+        ic->poly_count > 0 &&
+        ic->proto_object[0] == receiver->prototype &&
+        holder == nullptr;
+    if (!same_positive_chain && !same_missing_chain &&
+        !mal_object_register_prototype_cache(receiver, holder, ic)) {
+        return false;
+    }
+    ic->proto_object[0] = receiver->prototype;
+    ic->proto_object[1] = holder;
+    ic->poly_count = 1;
+    return true;
 }
 
 static bool mal_ic_try_record_inherited_slot(
@@ -3555,8 +3609,7 @@ static bool mal_ic_try_record_inherited_slot(
     MalInlineCache *ic
 ) {
     if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT) ||
-        (resolution.desc.flags & MAL_PROPERTY_ACCESSOR) ||
-        mal_prototype_chain_epoch == 0) {
+        (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
         return false;
     }
 
@@ -3613,10 +3666,15 @@ static bool mal_ic_try_record_inherited_slot(
     ic->key = key_value;
     ic->slot = slot;
     ic->prim_kind = 0;
-    ic->proto_object[0] = object->prototype;
-    ic->proto_object[1] = resolution.holder;
-    mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
-    ic->poly_count = 0;
+    if (!mal_ic_record_local_prototype_chain(object, resolution.holder, ic)) {
+        if (mal_prototype_chain_epoch == 0) {
+            return false;
+        }
+        ic->proto_object[0] = object->prototype;
+        ic->proto_object[1] = resolution.holder;
+        mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
+        ic->poly_count = 0;
+    }
     ic->megamorphic = false;
     ic->mode = mode;
     ic->receiver_type = MAL_HEAP_OBJECT;
@@ -3672,12 +3730,14 @@ static bool mal_ic_try_record_missing(
         ic->poly_count = (u8) depth;
         ic->receiver_type = MAL_IC_MISSING_SHAPE_CHAIN;
     } else {
-        if (mal_prototype_chain_epoch == 0) {
-            return false;
+        if (!mal_ic_record_local_prototype_chain(object, nullptr, ic)) {
+            if (mal_prototype_chain_epoch == 0) {
+                return false;
+            }
+            ic->proto_object[0] = object->prototype;
+            mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
+            ic->poly_count = 0;
         }
-        ic->proto_object[0] = object->prototype;
-        mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
-        ic->poly_count = 0;
         ic->receiver_type = MAL_IC_MISSING_EXACT_CHAIN;
     }
     ic->megamorphic = false;
@@ -3748,6 +3808,7 @@ static void mal_ic_try_record_inherited(
         return;
     }
 
+    mal_ic_detach_prototype_cache(ic);
     ic->shape = object->shape;
     ic->key = key_value;
     ic->value = result;
@@ -3824,7 +3885,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
                     MAL_PERF_COUNT(ic_load_poly_hits);
-                    return object->slots[ic->poly_slot[i]];
+                    return object->slots[mal_ic_poly_slot(ic, i)];
                 }
             }
         }
@@ -4016,8 +4077,9 @@ void mal_vm_op_store_property_ic(
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
                     MAL_PERF_COUNT(ic_store_poly_hits);
-                    mal_gc_write_barrier(object->slots[ic->poly_slot[i]]);
-                    object->slots[ic->poly_slot[i]] = value;
+                    u8 slot = mal_ic_poly_slot(ic, i);
+                    mal_gc_write_barrier(object->slots[slot]);
+                    object->slots[slot] = value;
                     mal_gc_card(&object->header, value);
                     return;
                 }
@@ -4086,7 +4148,7 @@ int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *c
         } else {
             for (u8 p = 0; p < ic->poly_count; p++) {
                 if (ic->poly_shape[p] == shape) {
-                    resolved_slots[i] = ic->poly_slot[p];
+                    resolved_slots[i] = mal_ic_poly_slot(ic, p);
                     found = true;
                     break;
                 }

@@ -10,6 +10,16 @@ static u64 g_slot_coallocations = 0;
 static u64 g_slot_grow_migrations = 0;
 static u64 g_slot_dictionary_migrations = 0;
 
+typedef struct MalPrototypeCacheDependency {
+    MalObject *object;
+    void *cache;
+    struct MalPrototypeCacheDependency *next;
+} MalPrototypeCacheDependency;
+
+static _Thread_local MalPrototypeCacheDependency *g_prototype_cache_dependencies = nullptr;
+
+void mal_vm_property_cache_invalidate(void *cache);
+
 u64 mal_prototype_chain_epoch = 1;
 
 void mal_object_bump_prototype_chain_epoch(void) {
@@ -23,6 +33,57 @@ void mal_object_bump_prototype_chain_epoch(void) {
         }
     }
     MAL_PERF_COUNT(prototype_epoch_invalidations);
+}
+
+void mal_object_unregister_prototype_cache(void *cache) {
+    MalPrototypeCacheDependency **link = &g_prototype_cache_dependencies;
+    while (*link != nullptr) {
+        MalPrototypeCacheDependency *dependency = *link;
+        if (dependency->cache == cache) {
+            *link = dependency->next;
+            free(dependency);
+        } else {
+            link = &dependency->next;
+        }
+    }
+}
+
+void mal_object_invalidate_prototype_dependents(MalObject *object) {
+    MalPrototypeCacheDependency **link = &g_prototype_cache_dependencies;
+    while (*link != nullptr) {
+        MalPrototypeCacheDependency *dependency = *link;
+        if (dependency->object == object) {
+            mal_vm_property_cache_invalidate(dependency->cache);
+            *link = dependency->next;
+            free(dependency);
+        } else {
+            link = &dependency->next;
+        }
+    }
+}
+
+bool mal_object_register_prototype_cache(
+    MalObject *receiver, MalObject *holder, void *cache
+) {
+    mal_object_unregister_prototype_cache(cache);
+    for (MalObject *cursor = receiver->prototype;
+         cursor != nullptr; cursor = cursor->prototype) {
+        MalPrototypeCacheDependency *dependency = malloc(sizeof(*dependency));
+        *dependency = (MalPrototypeCacheDependency) {
+            .object = cursor,
+            .cache = cache,
+            .next = g_prototype_cache_dependencies,
+        };
+        g_prototype_cache_dependencies = dependency;
+        if (cursor == holder) {
+            return true;
+        }
+    }
+    if (holder == nullptr) {
+        return true;
+    }
+    mal_object_unregister_prototype_cache(cache);
+    return false;
 }
 
 u64 mal_object_slot_coallocation_count(void) {

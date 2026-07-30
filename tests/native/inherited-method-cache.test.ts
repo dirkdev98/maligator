@@ -24,6 +24,8 @@ describe("inherited built-in method and native call caches", () => {
 	let primitiveInterpreted: string;
 	let slotCompiled: string;
 	let slotInterpreted: string;
+	let localValidityCompiled: string;
+	let localValidityInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -94,6 +96,20 @@ describe("inherited built-in method and native call caches", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+		localValidityCompiled = buildNativeBinary({
+			fixture: "tests/local/inherited-chain-local-validity.js",
+			name: "inherited-chain-local-validity",
+			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		localValidityInterpreted = buildNativeBinary({
+			fixture: "tests/local/inherited-chain-local-validity.js",
+			name: "inherited-chain-local-validity-ni",
+			compiled: false,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
 	});
 
 	it("handles repeated loads/calls, shadows, prototypes, realms, and completions", () => {
@@ -145,6 +161,28 @@ describe("inherited built-in method and native call caches", () => {
 			]);
 		},
 	);
+
+	it.each([
+		["compiled", () => localValidityCompiled],
+		["interpreted", () => localValidityInterpreted],
+	])("keeps unrelated prototype mutations chain-local in %s mode", (_name, binary) => {
+		const result = spawnSync(binary(), [], {
+			env: { ...process.env, MAL_PERF_STATS: "1" },
+			encoding: "utf-8",
+		});
+		if (result.error !== undefined) throw result.error;
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		assertExactLines(result.stdout, ["inherited-chain-local-validity PASS"]);
+		const line = result.stderr
+			.split("\n")
+			.find((candidate) => candidate.startsWith("[perf-ic-stats]"));
+		expect(line).toBeDefined();
+		const field = (name: string): number =>
+			Number(line?.match(new RegExp(`(?:^|\\s)${name}=([0-9]+)`))?.[1] ?? -1);
+		expect(field("inherited_fills")).toBe(1);
+		expect(field("load_inherited_hits")).toBe(14);
+		expect(field("prototype_epoch_invalidations")).toBeGreaterThan(0);
+	});
 
 	it.each([
 		["compiled", () => ordinaryCompiled],

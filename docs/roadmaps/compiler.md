@@ -84,9 +84,10 @@ hit-path specialization and call/control-flow analysis before new allocation reg
       dictionaries, static constants, and VM-owned inline caches can therefore use
       stable pointer identity without crossing isolate lifetimes. Map/Set keys remain
       in their separate ECMAScript value-key domain.
-- [ ] Add validity/version cells for user-defined prototype chains, then extend
-      inherited-value caching beyond watched built-in chains and measure realistic
-      method-call improvement.
+- [x] Add chain-local validity dependencies for user-defined prototype chains.
+      Stable VM-owned IC rows register against the exact prototype objects they
+      depend on; rare structural mutations eagerly clear only those rows, while
+      inherited slot/table hits retain O(1) guards and unrelated chains stay warm.
 
 ## Queued call and control-flow analysis
 

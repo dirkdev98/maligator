@@ -21,8 +21,7 @@ typedef struct MalObject {
     /*
      * State flags packed into one byte (:1 bitfields) that sits in the word the
      * 3-byte header shares with them, so they cost nothing before the first
-     * 8-aligned pointer. Written rarely (mostly at init / intrinsics setup),
-     * read on the MOP path as a single masked load.
+     * 8-aligned pointer.
      */
     /** [[Extensible]]. */
     bool extensible : 1;
@@ -98,15 +97,22 @@ extern u64 mal_prototype_chain_epoch;
 /** Cold half of prototype-chain invalidation; callers use the inline flag guard. */
 void mal_object_bump_prototype_chain_epoch(void);
 
+/** Register/remove VM-owned cache rows from chain-local mutation dependencies. */
+bool mal_object_register_prototype_cache(
+    MalObject *receiver, MalObject *holder, void *cache);
+void mal_object_unregister_prototype_cache(void *cache);
+void mal_object_invalidate_prototype_dependents(MalObject *object);
+
 /**
  * Invalidate inherited/negative cache guards when a structurally-relevant
  * mutation occurs on an object that has served as a prototype. The overwhelmingly
  * common instance-object case folds to one flag test and no call.
  */
-static inline bool mal_object_note_prototype_mutation(const MalObject *object) {
+static inline bool mal_object_note_prototype_mutation(MalObject *object) {
     if (object == nullptr || !object->is_prototype) {
         return false;
     }
+    mal_object_invalidate_prototype_dependents(object);
     mal_object_bump_prototype_chain_epoch();
     return true;
 }
