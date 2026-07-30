@@ -647,8 +647,9 @@ typedef struct MalInlineCache {
         const struct MalObject *proto_object[MAL_IC_POLY_EXTRA];
     };
     u32 slot;
-    // Own-slot modes use all entries as alternate slots. In inherited/missing
-    // modes [0] records mal_prototype_chain_epoch; the other words are unused.
+    // Own-slot modes use all entries as alternate slots. In inherited/exact-
+    // missing modes [0..1] store the low/high halves of the u64 prototype epoch;
+    // [2] is unused.
     u32 poly_slot[MAL_IC_POLY_EXTRA];
     u8 prim_kind;
     u8 poly_count;
@@ -665,6 +666,16 @@ typedef struct MalInlineCache {
 
 // One per property-access site; keep it at/under 80 bytes.
 static_assert(sizeof(MalInlineCache) <= 80, "MalInlineCache outgrew 80 bytes");
+
+/** Packed access keeps the 80-byte cache layout from gaining u64 alignment padding. */
+static inline u64 mal_ic_recorded_prototype_epoch(const MalInlineCache *ic) {
+    return (u64) ic->poly_slot[0] | ((u64) ic->poly_slot[1] << 32);
+}
+
+static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 epoch) {
+    ic->poly_slot[0] = (u32) epoch;
+    ic->poly_slot[1] = (u32) (epoch >> 32);
+}
 
 /** Return an already-allocated interpreter cache entry without filling or allocating. */
 static inline MalInlineCache *mal_vm_interp_ic_existing(
@@ -865,7 +876,8 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
         }
         if (ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN) {
             if (object->prototype != ic->proto_object[0] ||
-                mal_prototype_chain_epoch != ic->poly_slot[0]) {
+                mal_prototype_chain_epoch == 0 ||
+                mal_prototype_chain_epoch != mal_ic_recorded_prototype_epoch(ic)) {
                 return false;
             }
         } else {
@@ -910,7 +922,8 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
     const MalObject *object = mal_value_to_object(receiver);
     if (object->shape != ic->shape || object->overflow != nullptr ||
         object->prototype != ic->proto_object[0] ||
-        mal_prototype_chain_epoch != ic->poly_slot[0]) {
+        mal_prototype_chain_epoch == 0 ||
+        mal_prototype_chain_epoch != mal_ic_recorded_prototype_epoch(ic)) {
         return false;
     }
     const MalObject *holder = ic->proto_object[1];

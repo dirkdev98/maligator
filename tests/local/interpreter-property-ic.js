@@ -276,6 +276,41 @@ if (typeof collect === "function") {
 	collect();
 	collect();
 }
+
+function loadCollectedInherited(object) {
+	return object.__mal_collected_inherited_ic__;
+}
+function loadCollectedMissing(object) {
+	return object.__mal_collected_missing_ic__;
+}
+function exerciseCollectedChain(iteration) {
+	const chainHolder = Object.create(null);
+	Object.defineProperty(chainHolder, "__mal_collected_inherited_ic__", {
+		configurable: true,
+		writable: true,
+		value: iteration,
+	});
+	if (iteration % 2 === 0) {
+		chainHolder.__mal_collected_missing_ic__ = iteration + 1000;
+	}
+	let chain = chainHolder;
+	for (let depth = 0; depth < 5; depth++) chain = Object.create(chain);
+	const receiver = Object.create(chain);
+	check(
+		loadCollectedInherited(receiver) === iteration,
+		"collected inherited chain reads current holder",
+	);
+	check(
+		loadCollectedMissing(receiver) ===
+			(iteration % 2 === 0 ? iteration + 1000 : undefined),
+		"collected exact chain does not revive stale cache state",
+	);
+}
+for (let iteration = 0; iteration < 16; iteration++) {
+	exerciseCollectedChain(iteration);
+	if (typeof collect === "function") collect();
+}
+
 for (let i = 0; i < 200; i++) {
 	const child = { marker: i };
 	storeStatic(holder, child);

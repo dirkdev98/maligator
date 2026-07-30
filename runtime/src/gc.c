@@ -1151,6 +1151,14 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     }
 
     MalObject *object = (MalObject *) cell;
+    // Exact inherited/missing IC entries retain untraced prototype/holder
+    // identities. Invalidate them before a prototype cell can enter a free list
+    // and have its address reused; ordinary collections with no dead prototypes
+    // leave the cache epoch untouched.
+    if (object->is_prototype) {
+        mal_object_bump_prototype_chain_epoch();
+        MAL_PERF_COUNT(prototype_epoch_finalize_invalidations);
+    }
     if (object->overflow != nullptr) {
         mal_table_free(object->overflow);
         object->overflow = nullptr;

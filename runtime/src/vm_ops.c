@@ -3551,7 +3551,8 @@ static bool mal_ic_try_record_inherited_slot(
     MalInlineCache *ic
 ) {
     if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT) ||
-        (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        (resolution.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        mal_prototype_chain_epoch == 0) {
         return false;
     }
 
@@ -3610,7 +3611,7 @@ static bool mal_ic_try_record_inherited_slot(
     ic->prim_kind = 0;
     ic->proto_object[0] = object->prototype;
     ic->proto_object[1] = resolution.holder;
-    ic->poly_slot[0] = mal_prototype_chain_epoch;
+    mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
     ic->poly_count = 0;
     ic->megamorphic = false;
     ic->mode = mode;
@@ -3667,8 +3668,11 @@ static bool mal_ic_try_record_missing(
         ic->poly_count = (u8) depth;
         ic->receiver_type = MAL_IC_MISSING_SHAPE_CHAIN;
     } else {
+        if (mal_prototype_chain_epoch == 0) {
+            return false;
+        }
         ic->proto_object[0] = object->prototype;
-        ic->poly_slot[0] = mal_prototype_chain_epoch;
+        mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
         ic->poly_count = 0;
         ic->receiver_type = MAL_IC_MISSING_EXACT_CHAIN;
     }

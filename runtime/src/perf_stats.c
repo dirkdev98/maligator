@@ -431,7 +431,7 @@ static void mal_perf_stats_print(void) {
         "prototype_epoch_invalidations=%llu prototype_epoch_define=%llu "
         "prototype_epoch_dictionary=%llu prototype_epoch_append=%llu "
         "prototype_epoch_delete=%llu prototype_epoch_reparent=%llu "
-        "prototype_epoch_shaped=%llu "
+        "prototype_epoch_shaped=%llu prototype_epoch_finalize=%llu "
         "store_mono_hits=%llu store_region_hits=%llu store_fallbacks=%llu "
         "store_slow_mono_hits=%llu store_poly_hits=%llu store_shape_hits=%llu "
         "store_shape_fills=%llu store_shape_uncacheable=%llu store_plain_generic=%llu "
@@ -471,6 +471,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.prototype_epoch_delete_invalidations,
         (unsigned long long) mal_perf_stats.prototype_epoch_reparent_invalidations,
         (unsigned long long) mal_perf_stats.prototype_epoch_shaped_invalidations,
+        (unsigned long long) mal_perf_stats.prototype_epoch_finalize_invalidations,
         (unsigned long long) mal_perf_stats.ic_store_mono_hits,
         (unsigned long long) mal_perf_stats.ic_store_region_hits,
         (unsigned long long) mal_perf_stats.ic_store_fallbacks,

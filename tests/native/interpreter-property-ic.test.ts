@@ -78,5 +78,6 @@ describe("localized interpreter property inline caches", () => {
 		expect(field(icStats, "load_missing_hits")).toBeGreaterThan(1800);
 		expect(field(icStats, "load_missing_fills")).toBeGreaterThan(0);
 		expect(field(icStats, "prototype_epoch_invalidations")).toBeGreaterThan(0);
+		expect(field(icStats, "prototype_epoch_finalize")).toBeGreaterThan(0);
 	});
 });

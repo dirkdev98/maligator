@@ -263,6 +263,7 @@ typedef struct MalPerfStats {
     u64 prototype_epoch_delete_invalidations;
     u64 prototype_epoch_reparent_invalidations;
     u64 prototype_epoch_shaped_invalidations;
+    u64 prototype_epoch_finalize_invalidations;
 
     u64 ic_store_mono_hits;
     u64 ic_store_region_hits;

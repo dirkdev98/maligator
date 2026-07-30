@@ -10,14 +10,17 @@ static u64 g_slot_coallocations = 0;
 static u64 g_slot_grow_migrations = 0;
 static u64 g_slot_dictionary_migrations = 0;
 
-u32 mal_prototype_chain_epoch = 1;
+u64 mal_prototype_chain_epoch = 1;
 
 void mal_object_bump_prototype_chain_epoch(void) {
-    // Zero denotes an uninitialized cache row. Skip it on the astronomically
-    // unlikely wrap so no filled entry can alias an empty epoch.
-    mal_prototype_chain_epoch++;
-    if (mal_prototype_chain_epoch == 0) {
-        mal_prototype_chain_epoch++;
+    // Zero is the fail-closed exhausted state: exact-chain fills and hits reject
+    // it permanently, so no dormant cache row can become valid after wraparound.
+    if (mal_prototype_chain_epoch != 0) {
+        if (mal_prototype_chain_epoch == UINT64_MAX) {
+            mal_prototype_chain_epoch = 0;
+        } else {
+            mal_prototype_chain_epoch++;
+        }
     }
     MAL_PERF_COUNT(prototype_epoch_invalidations);
 }
