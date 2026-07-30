@@ -99,9 +99,11 @@ hit-path specialization and call/control-flow analysis before new allocation reg
 
 ## Queued call and control-flow analysis
 
-- [ ] Implement bounded polymorphic method inlining. Compile a guarded CFG for a
-      small constructor/shape-derived target set, such as the three `quote` methods
-      in the language benchmark, while preserving a generic fallback.
+- [x] Implement bounded polymorphic method inlining. Calls with up to three
+      same-name program method bodies retain the observable property load, then use
+      exact loaded-callee guards to select an inlined body with the original receiver
+      as `this`; unmatched, replaced, accessor-provided, and proxy-provided callees
+      retain the generic call fallback.
 - [ ] Generalize the module benchmark's TDZ-aware single-assignment callee resolution
       to proven immutable imports, single-assignment `let` bindings, stable closure
       fields, and constructor-derived methods.

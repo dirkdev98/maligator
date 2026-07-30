@@ -1,11 +1,9 @@
 /**
- * Inliner eligibility analysis — foundation increment of the small-function inliner
- * (see docs/roadmaps/gc.md).
+ * Small-function inlining analysis and substitution (see docs/roadmaps/gc.md).
  *
- * Identifies direct `call` sites whose callee is a statically-known function (a
- * `createFunction` result) and whose target is safe + cheap to inline. This module
- * performs NO transformation, so it cannot miscompile; the substitution pass (next
- * increment) consumes these candidates and re-verifies before rewriting.
+ * Identifies direct and guarded `call` sites whose candidate bodies are safe and
+ * cheap to inline, then rewrites them while retaining generic fallbacks wherever
+ * target identity is only speculative.
  *
  * Why inline: substituting a local closure's body into the caller lets DCE drop the
  * closure object + its captured `MalEnv` once the closure is otherwise unused — the
@@ -32,6 +30,9 @@ import { log } from "./utils.ts";
 
 /** Max body size (real, non-marker instructions) of an inline target. */
 const MAX_INLINE_INSTRUCTIONS = 40;
+
+/** Maximum exact loaded-callee alternatives emitted at one method call site. */
+const MAX_METHOD_INLINE_TARGETS = 3;
 
 /**
  * Instruction kinds that make a function unsafe to inline as-is: `this` /
@@ -940,7 +941,7 @@ export function debugSpeculativeInlineSites(program: IntermediateProgram): strin
 }
 
 // ---------------------------------------------------------------------------
-// Loaded-callee-guarded method inlining — ELIGIBILITY ANALYSIS ONLY (phase C).
+// Loaded-callee-guarded method inlining — analysis and substitution (phase C).
 //
 // `obj.m(args)` can't be statically resolved (the method lives on obj's runtime prototype),
 // but it knows bounded candidate bodies from program method definitions. The real property
@@ -1075,7 +1076,6 @@ function methodDefinitionsByName(
  * Detection only.
  */
 export function findMethodInlineSites(program: IntermediateProgram): ProgramMethodSites {
-	const maxTargets = 3;
 	const targetOf = new Map<number, IRFunction>();
 	for (const fn of program.functions) {
 		targetOf.set(fn.functionIndex, fn);
@@ -1118,7 +1118,9 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 				const definitions = methods.get(key.stringIndex) ?? [];
 				// The guarded substitution already emits one exact-callee branch per target.
 				// Reject a globally common name rather than selecting an arbitrary prefix.
-				if (definitions.length === 0 || definitions.length > maxTargets) continue;
+				if (definitions.length === 0 || definitions.length > MAX_METHOD_INLINE_TARGETS) {
+					continue;
+				}
 				const targets = definitions
 					.filter(
 						(target) =>
@@ -1129,7 +1131,7 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 								instruction.registers.length - 3,
 							),
 					)
-					.slice(0, maxTargets);
+					.slice(0, MAX_METHOD_INLINE_TARGETS);
 				if (targets.length === 0) continue;
 				sites.push({
 					call: instruction,
