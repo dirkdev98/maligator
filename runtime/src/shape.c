@@ -238,7 +238,9 @@ bool mal_shape_attrs_are_default(u8 attrs) {
         == (u8) (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-i32 mal_shape_find(const MalShape *shape, MalKey key, MalShapeFindCaller caller) {
+i32 mal_shape_find_wide(const MalShape *shape, MalKey key, MalShapeFindCaller caller) {
+    // Empty and single-property shapes are handled by the header fast path.
+    if (shape->inline_count <= 1) abort();
     u64 hash = 0;
     MalShapeFindCacheEntry *cached = nullptr;
     if (shape->inline_count >= MAL_SHAPE_FIND_CACHE_THRESHOLD

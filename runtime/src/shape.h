@@ -100,11 +100,51 @@ static inline MalShape *mal_shape_root(MalHeap *heap) {
  */
 MalShape *mal_shape_dictionary_empty(void);
 
+/** Multi-property shape lookup, including the per-thread hashed lookup cache. */
+i32 mal_shape_find_wide(
+    const MalShape *shape, MalKey key, MalShapeFindCaller caller);
+
 /**
- * Index of `key` in the shape's props, or -1 if absent. String keys compare by
- * content; other key kinds by value bits (matching the table's key equality).
+ * Index of `key` in the shape's props, or -1 if absent. Empty and single-property
+ * shapes dominate short-lived host/framework objects, so resolve them at the call
+ * site without paying an out-of-line lookup/cache setup. Wider shapes retain the
+ * shared hashed implementation.
  */
-i32 mal_shape_find(const MalShape *shape, MalKey key, MalShapeFindCaller caller);
+static inline i32 mal_shape_find(
+    const MalShape *shape, MalKey key, MalShapeFindCaller caller
+) {
+    if (shape->inline_count > 1) {
+        return mal_shape_find_wide(shape, key, caller);
+    }
+
+    MalPerfShapeStats *stats =
+        mal_perf_stats_enabled ? &mal_perf_stats.shapes[caller] : nullptr;
+    if (stats != nullptr) {
+        stats->calls++;
+        stats->widths += shape->inline_count;
+        if (shape->inline_count > stats->max_width) {
+            stats->max_width = shape->inline_count;
+        }
+    }
+    if (shape->inline_count == 0) {
+        if (stats != nullptr) stats->misses++;
+        return -1;
+    }
+
+    bool found = mal_key_value_equals(shape->props[0].key, key.value);
+    if (stats != nullptr) {
+        stats->comparisons++;
+        if (stats->max_comparisons == 0) stats->max_comparisons = 1;
+        if (found) {
+            stats->hits++;
+            if (shape->props[0].key == key.value) stats->pointer_hits++;
+            else stats->content_hits++;
+        } else {
+            stats->misses++;
+        }
+    }
+    return found ? 0 : -1;
+}
 
 /**
  * The child shape reached by adding a data property `key` with `attrs`,
