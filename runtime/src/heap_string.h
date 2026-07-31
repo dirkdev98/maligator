@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "heap.h"
+#include "perf_stats.h"
 
 /**
  * Storage policy for the UTF-16 code units referenced by a MalString.
@@ -110,19 +111,39 @@ static inline const c16 *mal_string_code_units(const MalString *string) {
 /**
  * Return the string UTF-16 code unit length.
  */
-usize mal_string_length(const MalString *string);
+static inline usize mal_string_length(const MalString *string) {
+    return string->length;
+}
 
 /**
  * Return the string hash, caching it on flat strings and recomputing it for
  * dependent strings whose storage-specific word retains their parent. Lazy
  * concatenations are flattened before hashing.
  */
-u64 mal_string_hash(const MalString *string);
+u64 mal_string_hash_slow(const MalString *string);
+
+/**
+ * Most property-name hashes are already cached. Keep that overwhelmingly hot
+ * read at the call site; dependent strings, lazy cons strings, and first hashes
+ * retain the full storage-aware implementation out of line.
+ */
+static inline u64 mal_string_hash(const MalString *string) {
+    MAL_PERF_COUNT(string_hash_calls);
+    if (string->storage != MAL_STRING_STORAGE_DEPENDENT &&
+        string->storage != MAL_STRING_STORAGE_CONS &&
+        string->hash_valid) {
+        MAL_PERF_COUNT(string_hash_cached_hits);
+        return string->hash;
+    }
+    return mal_string_hash_slow(string);
+}
 
 /**
  * Return the storage policy used by the string.
  */
-MalStringStorage mal_string_storage(const MalString *string);
+static inline MalStringStorage mal_string_storage(const MalString *string) {
+    return string->storage;
+}
 
 /**
  * Compare two strings by UTF-16 code units.

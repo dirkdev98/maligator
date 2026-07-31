@@ -420,12 +420,7 @@ const c16 *mal_string_flatten(MalString *mutable) {
     return code_units;
 }
 
-usize mal_string_length(const MalString *string) {
-    return string->length;
-}
-
-u64 mal_string_hash(const MalString *string) {
-    MAL_PERF_COUNT(string_hash_calls);
+u64 mal_string_hash_slow(const MalString *string) {
     if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
         MAL_PERF_COUNT(string_hash_computes);
         MAL_PERF_COUNT(string_hash_dependent_computes);
@@ -445,10 +440,6 @@ u64 mal_string_hash(const MalString *string) {
         MAL_PERF_COUNT(string_hash_cached_hits);
     }
     return mutable->hash;
-}
-
-MalStringStorage mal_string_storage(const MalString *string) {
-    return string->storage;
 }
 
 bool mal_string_equals(const MalString *left, const MalString *right) {
