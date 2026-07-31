@@ -590,6 +590,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     for (u32 i = 0; i < MAL_HOT_KEY_COUNT; i++) {
         vm->hot_intrinsic_keys[i] = nullptr;
     }
+    for (u32 i = 0; i < MAL_ASCII_ATOM_CACHE_CAPACITY; i++) {
+        vm->ascii_atom_cache[i] = (MalAsciiAtomCacheEntry) {0};
+    }
     for (u32 i = 0; i < 256; i++) {
         vm->code_unit_strings[i] = nullptr;
     }

@@ -7,6 +7,16 @@
 
 typedef struct MalVm MalVm;
 
+#define MAL_ASCII_ATOM_CACHE_CAPACITY 256
+static_assert(
+    (MAL_ASCII_ATOM_CACHE_CAPACITY & (MAL_ASCII_ATOM_CACHE_CAPACITY - 1)) == 0,
+    "ASCII atom cache capacity must be a power of two");
+
+typedef struct MalAsciiAtomCacheEntry {
+    u32 hash;
+    MalString *atom;
+} MalAsciiAtomCacheEntry;
+
 /** Request-hot internal ASCII names cached per VM by mal_intrinsic_ascii. */
 typedef enum MalHotIntrinsicKey {
     MAL_HOT_KEY_EMPTY,

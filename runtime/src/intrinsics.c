@@ -200,6 +200,26 @@ static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) 
     }
 }
 
+static u32 mal_ascii_atom_cache_hash(const byte *name, usize length) {
+    u32 hash = 2166136261u;
+    for (usize i = 0; i < length; i++) {
+        hash ^= name[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static bool mal_ascii_atom_cache_matches(
+    const MalString *atom, const byte *name, usize length
+) {
+    if (atom->length != length) return false;
+    const c16 *units = mal_string_code_units(atom);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] != (c16) name[i]) return false;
+    }
+    return true;
+}
+
 MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     usize length = 0;
     while (name[length] != '\0') {
@@ -213,6 +233,15 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     if (hot_key != MAL_HOT_KEY_COUNT && vm->hot_intrinsic_keys[hot_key] != nullptr) {
         MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
         return vm->hot_intrinsic_keys[hot_key];
+    }
+
+    u32 cache_hash = mal_ascii_atom_cache_hash(name, length);
+    MalAsciiAtomCacheEntry *cache = &vm->ascii_atom_cache[
+        cache_hash & (MAL_ASCII_ATOM_CACHE_CAPACITY - 1)];
+    if (cache->atom != nullptr && cache->hash == cache_hash &&
+        mal_ascii_atom_cache_matches(cache->atom, name, length)) {
+        MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
+        return cache->atom;
     }
 
     // Probe the atom table with a stack-allocated (or, for rare long names,
@@ -247,6 +276,8 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
         vm->hot_intrinsic_keys[hot_key] = atom;
         MAL_PERF_COUNT(intrinsic_ascii_cache_fills);
     }
+    *cache = (MalAsciiAtomCacheEntry) {.hash = cache_hash, .atom = atom};
+    MAL_PERF_COUNT(intrinsic_ascii_cache_fills);
 
     free(heap_units);
     return atom;
