@@ -18,6 +18,48 @@ for (let i = 0; i < 3000; i++) {
 }
 ok("direct collection values", sum > 0 && map.size === 128 && set.size === 128);
 
+const iteratedMutationMap = new Map();
+for (let i = 0; i < 64; i++) iteratedMutationMap.set(i, i);
+const mutationIterator = iteratedMutationMap.keys();
+ok("iterator starts before mutation", mutationIterator.next().value === 0);
+for (let i = 1; i < 49; i++) iteratedMutationMap.delete(i);
+iteratedMutationMap.set(64, 64);
+const mutationRemainder = [];
+for (const value of mutationIterator) mutationRemainder.push(value);
+ok(
+	"active iterator survives tombstones and sees later insert",
+	mutationRemainder.join(",") === "49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64",
+);
+
+const clearedDuringIteration = new Map([
+	["old-a", 1],
+	["old-b", 2],
+]);
+const clearIterator = clearedDuringIteration.keys();
+ok("clear iterator starts", clearIterator.next().value === "old-a");
+clearedDuringIteration.clear();
+clearedDuringIteration.set("new", 3);
+const afterClear = clearIterator.next();
+ok(
+	"active iterator observes insertion after clear",
+	afterClear.value === "new" && clearIterator.next().done === true,
+);
+
+const forEachMutation = new Map();
+for (let i = 0; i < 32; i++) forEachMutation.set(i, i);
+const forEachSeen = [];
+forEachMutation.forEach(function (value, key) {
+	forEachSeen.push(value);
+	if (key === 0) {
+		for (let i = 1; i < 25; i++) forEachMutation.delete(i);
+		forEachMutation.set(32, 32);
+	}
+});
+ok(
+	"forEach mutation keeps insertion-order cursor stable",
+	forEachSeen.join(",") === "0,25,26,27,28,29,30,31,32",
+);
+
 const defaults = new Map();
 ok("missing get argument", defaults.get() === undefined);
 ok("missing set arguments", defaults.set() === defaults && defaults.get() === undefined);

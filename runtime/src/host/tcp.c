@@ -56,14 +56,13 @@ void mal_tcp_terminal_free(void *data) {
 }
 
 static MalTcpConnection *tcp_find(MalHost *host, MalHostHandle operation) {
-    for (MalTcpConnection *connection = host->tcp_connections;
-         connection != nullptr; connection = connection->next) {
-        if (connection->operation == operation) return connection;
-    }
-    return nullptr;
+    if (host == nullptr || operation == 0) return nullptr;
+    return mal_host_operation_owner(&host->tasks, operation);
 }
 
 static void tcp_destroy(MalTcpConnection *connection) {
+    mal_host_operation_unbind(
+        &connection->host->tasks, connection->operation, connection);
     MalTcpConnection **link = &connection->host->tcp_connections;
     while (*link != nullptr && *link != connection) link = &(*link)->next;
     if (*link == connection) *link = connection->next;
@@ -425,6 +424,10 @@ bool mal_tcp_connect_address_start(
     connection->fd = mal_net_connect_address(address, length);
     if (connection->fd < 0) goto fail_connection;
     connection->connecting = true;
+    if (!mal_host_operation_bind(
+            &host->tasks, *operation, connection)) {
+        goto fail_connection;
+    }
     if (!tcp_arm_write(connection)
         || !mal_host_operation_activate(&host->tasks, *operation)) {
         goto fail_connection;

@@ -272,6 +272,57 @@ int main(void) {
         mal_http_codec_free(&codec);
     }
 
+    // 12. Real request heads commonly exceed the inline field/arena budget.
+    // Crossing both thresholds must preserve every field and its insertion order.
+    {
+        char wire[8192];
+        usize length = (usize) snprintf(
+            wire, sizeof(wire), "GET /many HTTP/1.1\r\n");
+        bool built = length < sizeof(wire);
+        for (usize i = 0; built && i < 40; i++) {
+            int written = snprintf(
+                wire + length, sizeof(wire) - length,
+                "X-Request-%02zu: value-%02zu-abcdefghijklmnopqrstuvwxyz0123456789\r\n",
+                i, i);
+            built = written > 0 && (usize) written < sizeof(wire) - length;
+            if (built) length += (usize) written;
+        }
+        if (built) {
+            int written = snprintf(
+                wire + length, sizeof(wire) - length,
+                "Connection: close\r\n\r\n");
+            built = written > 0 && (usize) written < sizeof(wire) - length;
+            if (built) length += (usize) written;
+        }
+
+        MalHttpCodec codec;
+        bool initialized = built && mal_http_codec_init(&codec, HTTP_REQUEST);
+        check(initialized, "large request codec initializes");
+        usize consumed_now = 0;
+        MalHttpCodecResult result = initialized
+            ? mal_http_codec_execute(
+                  &codec, (const byte *) wire, length, &consumed_now)
+            : MAL_HTTP_CODEC_ERROR;
+        MalHttpCodecHead *head = result == MAL_HTTP_CODEC_EVENT
+            ? mal_http_codec_take_head(&codec) : nullptr;
+        bool valid = head != nullptr && head->field_count == 41
+            && head->fields != head->inline_fields
+            && head->arena != head->inline_arena;
+        if (valid) {
+            const MalHttpCodecField *field = &head->fields[39];
+            valid = codec_slice_eq(
+                        mal_http_codec_field_name(head, field),
+                        field->name_length, "X-Request-39")
+                && codec_slice_eq(
+                    mal_http_codec_field_value(head, field),
+                    field->value_length,
+                    "value-39-abcdefghijklmnopqrstuvwxyz0123456789");
+        }
+        check(valid, "large request spills fields and arena without truncation");
+        mal_http_codec_head_free(head);
+        if (initialized) mal_http_codec_free(&codec);
+    }
+
     printf("httptest: %d/%d checks\n", g_pass, g_total);
     printf("httptest PASS %d/%d\n", g_pass, g_total);
     return g_pass == g_total ? 0 : 1;

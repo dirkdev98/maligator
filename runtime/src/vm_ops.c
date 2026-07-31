@@ -567,6 +567,8 @@ void mal_op_create_object(MalCallable *callable, const MalInstruction *instructi
 }
 
 void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *instruction) {
+    mal_vm_ensure_function_caches(
+        callable->vm, callable->function_index);
     const i32 *data = mal_op_instruction_data(
         callable, instruction->as.create_object_shaped.data_offset);
     u32 count = (u32) data[0];
@@ -1482,9 +1484,24 @@ static void mal_vm_remarshal_bound_args(MalVm *vm, i32 base, const MalBoundResol
 static MalInterpCallCacheEntry *mal_vm_interp_call_cache_entry(
     MalVm *vm, i32 caller_function_index, i32 call_ip
 ) {
+    if (vm->interp_call_cache == nullptr) {
+        vm->interp_call_cache = calloc(
+            (usize) MAL_INTERP_CALL_CACHE_SIZE,
+            sizeof(MalInterpCallCacheEntry));
+        MAL_PERF_COUNT(interp_call_cache_allocations);
+    }
     u32 hash = (u32) caller_function_index * 2654435761u ^ (u32) call_ip;
     hash ^= hash >> 16;
     return &vm->interp_call_cache[hash & (MAL_INTERP_CALL_CACHE_SIZE - 1u)];
+}
+
+MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm) {
+    if (vm->property_stub == nullptr) {
+        vm->property_stub = calloc(
+            (usize) MAL_STUB_CACHE_SIZE, sizeof(MalPropertyStubEntry));
+        MAL_PERF_COUNT(property_stub_cache_allocations);
+    }
+    return vm->property_stub;
 }
 
 /**
@@ -3972,7 +3989,8 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         // the interpreter and any compiled access whose inline stub probe was cold).
         if (ic->megamorphic) {
             const MalPropertyStubEntry *e =
-                &vm->property_stub[mal_stub_hash(object->shape, key_value)];
+                &mal_vm_property_stub_cache(vm)[
+                    mal_stub_hash(object->shape, key_value)];
             if (e->shape == object->shape && e->key == key_value) {
                 MAL_PERF_COUNT(ic_load_mega_hits);
                 return object->slots[e->slot];
@@ -4002,7 +4020,8 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     // Warm the shared stub cache so a megamorphic site's next access to
                     // this (shape,key) is an O(1) probe rather than another shape search.
                     MalPropertyStubEntry *stub =
-                        &vm->property_stub[mal_stub_hash(object->shape, key_value)];
+                        &mal_vm_property_stub_cache(vm)[
+                            mal_stub_hash(object->shape, key_value)];
                     stub->shape = object->shape;
                     stub->key = key_value;
                     stub->slot = prop->slot;
@@ -4173,7 +4192,8 @@ void mal_vm_op_store_property_ic(
         // store hit.
         if (ic->mode == MAL_IC_MODE_SHAPE && ic->megamorphic) {
             const MalPropertyStubEntry *stub =
-                &vm->property_stub[mal_stub_hash(object->shape, key_value)];
+                &mal_vm_property_stub_cache(vm)[
+                    mal_stub_hash(object->shape, key_value)];
             if (stub->shape == object->shape && stub->key == key_value &&
                 mal_shape_attrs_are_default(stub->attrs)) {
                 MAL_PERF_COUNT(ic_store_mega_hits);
@@ -4205,7 +4225,8 @@ void mal_vm_op_store_property_ic(
                 if (mal_ic_key_is_stable_string(key_value)) {
                     mal_ic_record(ic, object->shape, key_value, prop->slot);
                     MalPropertyStubEntry *stub =
-                        &vm->property_stub[mal_stub_hash(object->shape, key_value)];
+                        &mal_vm_property_stub_cache(vm)[
+                            mal_stub_hash(object->shape, key_value)];
                     stub->shape = object->shape;
                     stub->key = key_value;
                     stub->slot = prop->slot;
@@ -4949,6 +4970,12 @@ static MalPropertyLookup mal_vm_global_dictionary_lookup(
         return (MalPropertyLookup) {.present = false, .entry = nullptr};
     }
 
+    if (vm->global_property_cache == nullptr) {
+        vm->global_property_cache = calloc(
+            (usize) MAL_GLOBAL_PROPERTY_CACHE_SIZE,
+            sizeof(MalGlobalPropertyCacheEntry));
+        MAL_PERF_COUNT(global_property_cache_allocations);
+    }
     MalGlobalPropertyCacheEntry *cache = &vm->global_property_cache[
         (u32) name_string_index & (MAL_GLOBAL_PROPERTY_CACHE_SIZE - 1u)];
     if (cache->string_index == name_string_index
@@ -5877,9 +5904,6 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     generator->frame.instruction_pointer = resume_ip;
     generator->frame.return_register = -1;
     generator->frame.caller_frame_index = -1;
-    generator->frame.with_objects = nullptr;
-    generator->frame.with_count = 0;
-    generator->frame.with_capacity = 0;
 #if MAL_REALMS
     generator->frame.realm = vm->current_realm;
 #endif
@@ -6032,9 +6056,6 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     state->frame.instruction_pointer = -1; // set at each await
     state->frame.return_register = -1;
     state->frame.caller_frame_index = -1;
-    state->frame.with_objects = nullptr;
-    state->frame.with_count = 0;
-    state->frame.with_capacity = 0;
 #if MAL_REALMS
     state->frame.realm = vm->current_realm;
 #endif

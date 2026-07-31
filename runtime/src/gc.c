@@ -7,6 +7,7 @@
 #include "./array_object.h"
 #include "./arguments_object.h"
 #include "./bound_function_object.h"
+#include "./builtin_error.h"
 #include "./builtin_async_generator.h"
 #include "./builtin_data_view.h"
 #include "./builtin_finalization_registry.h"
@@ -555,12 +556,13 @@ static void mal_gc_trace_table(MalTable *table) {
     void *entry;
     while (mal_table_iter_next(&iter, &key, &entry)) {
         mal_gc_mark_value(key.value);
-        mal_gc_mark_value(mal_table_entry_value(table, entry));
-        MalPropertyDesc *desc = mal_table_entry_data(table, entry);
-        if (desc != nullptr) {
-            mal_gc_mark_value(desc->value);
-            mal_gc_mark_value(desc->getter);
-            mal_gc_mark_value(desc->setter);
+        if (mal_table_mode(table) == MAL_TABLE_MODE_OBJECT) {
+            MalPropertyDesc desc = mal_property_entry_desc(table, entry);
+            mal_gc_mark_value(desc.value);
+            mal_gc_mark_value(desc.getter);
+            mal_gc_mark_value(desc.setter);
+        } else {
+            mal_gc_mark_value(mal_table_entry_value(table, entry));
         }
     }
 }
@@ -584,7 +586,6 @@ static void mal_gc_trace_frame(MalVmFrame *frame) {
     mal_gc_mark_value(frame->arguments_object);
     mal_gc_mark_value(frame->callee);
     mal_gc_mark_value(frame->new_target);
-    mal_gc_mark_values(frame->with_objects, frame->with_count);
     mal_gc_trace_env(frame->env);
 }
 
@@ -593,7 +594,7 @@ static void mal_gc_trace_frame(MalVmFrame *frame) {
  * is active (call sites gate on mal_gc_marking_active); the env is boxed as a heap
  * value so the deletion barrier keeps the activation's captured-slot env too. */
 void mal_gc_satb_shade_frame(MalVmFrame *frame) {
-    // Null-safe on the register/argument/with buffers, mirroring mal_gc_trace_frame
+    // Null-safe on the register/argument buffers, mirroring mal_gc_trace_frame
     // (which routes through mal_gc_mark_values, itself null-guarded): a frame can
     // have a non-null function yet a not-yet-allocated register buffer (a coroutine
     // frame captured before its buffer is adopted), so shading must skip a null
@@ -612,11 +613,6 @@ void mal_gc_satb_shade_frame(MalVmFrame *frame) {
     mal_gc_satb_record(frame->arguments_object);
     mal_gc_satb_record(frame->callee);
     mal_gc_satb_record(frame->new_target);
-    if (frame->with_objects != nullptr) {
-        for (i32 i = 0; i < frame->with_count; ++i) {
-            mal_gc_satb_record(frame->with_objects[i]);
-        }
-    }
     if (frame->env != nullptr) {
         mal_gc_satb_record(mal_value_from_heap(&frame->env->header));
     }
@@ -1040,7 +1036,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_SET_OBJECT: {
             MalMapObject *map = (MalMapObject *) cell;
             if (map->entries != nullptr) {
-                mal_table_free(map->entries);
+                mal_table_release_owner(map->entries);
                 map->entries = nullptr;
             }
             break;
@@ -1131,7 +1127,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         }
         case MAL_HEAP_GENERATOR_OBJECT: {
             // A suspended (abandoned) generator/async activation still owns its
-            // frame's malloc'd register + argument + with-object buffers
+            // frame's malloc'd register and argument buffers
             // (transferred off the VM frame stack on suspend). A COMPLETED
             // generator already freed them via the run loop's frame teardown
             // (leaving these pointers dangling), so release ONLY while suspended
@@ -1146,11 +1142,15 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             gen->agen_queue_tail = nullptr;
             break;
         }
+        case MAL_HEAP_ITERATOR_OBJECT:
+            mal_iterator_object_release_table_pin((MalIteratorObject *) cell);
+            break;
         default:
             break;
     }
 
     MalObject *object = (MalObject *) cell;
+    mal_builtin_error_finalize_object(g_gc_vm, object);
     // Exact inherited/missing IC entries retain untraced prototype/holder
     // identities. Invalidate them before a prototype cell can enter a free list
     // and have its address reused; ordinary collections with no dead prototypes

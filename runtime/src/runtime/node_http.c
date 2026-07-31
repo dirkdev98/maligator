@@ -136,6 +136,8 @@ typedef struct MalNodeHttpResponseHeader {
     MalValue value;
 } MalNodeHttpResponseHeader;
 
+#define MAL_NODE_HTTP_INLINE_RESPONSE_HEADERS 8
+
 typedef struct MalNodeHttpResponseNameView {
     const c16 *units;
     usize length;
@@ -183,8 +185,9 @@ typedef struct MalNodeHttpRequestState {
     MalValue response;
     MalValue end_callback;
     MalValue request_destroy_error;
-    MalNodeHttpResponseHeader response_headers[MAL_HTTP_MAX_HEADERS];
+    MalNodeHttpResponseHeader *response_headers;
     usize response_header_count;
+    usize response_header_capacity;
     MalNodeHttpResponseWrite *write_head;
     MalNodeHttpResponseWrite *write_tail;
     usize queued_write_bytes;
@@ -222,6 +225,8 @@ typedef struct MalNodeHttpRequestState {
     struct MalNodeHttpRequestState *ready_next;
     struct MalNodeHttpRequestState *previous;
     struct MalNodeHttpRequestState *next;
+    MalNodeHttpResponseHeader
+        inline_response_headers[MAL_NODE_HTTP_INLINE_RESPONSE_HEADERS];
     MalNodeHttpCopiedHeader headers[];
 } MalNodeHttpRequestState;
 
@@ -229,6 +234,8 @@ static_assert(offsetof(MalNodeHttpRequestState, headers) == sizeof(MalNodeHttpRe
               "request header descriptors must immediately follow request state");
 static_assert(offsetof(MalNodeHttpRequestState, headers) % alignof(MalNodeHttpCopiedHeader) == 0,
               "request header descriptors must be aligned");
+static_assert(sizeof(MalNodeHttpRequestState) <= 512,
+              "request state common case should remain at most 512 bytes");
 
 typedef struct MalNodeHttpClientState {
     MalVm *vm;
@@ -464,6 +471,9 @@ static void http_request_free(MalNodeHttpRequestState *request) {
     http_request_index_remove(request);
     for (usize i = 0; i < request->response_header_count; i++) {
         free(request->response_headers[i].name);
+    }
+    if (request->response_headers != request->inline_response_headers) {
+        free(request->response_headers);
     }
     MalNodeHttpRequestBody *body = request->body_head;
     while (body != nullptr) {
@@ -726,6 +736,8 @@ static void http_queue_request(
     state->response = mal_value_new_undefined();
     state->end_callback = mal_value_new_undefined();
     state->request_destroy_error = mal_value_new_undefined();
+    state->response_headers = state->inline_response_headers;
+    state->response_header_capacity = MAL_NODE_HTTP_INLINE_RESPONSE_HEADERS;
     state->pending = true;
     state->next_write_token = 1;
     state->method_len = head->method_length;
@@ -1417,6 +1429,31 @@ static i64 http_response_header_view_index(
     return -1;
 }
 
+static bool http_response_headers_reserve(
+    MalNodeHttpRequestState *state, usize required) {
+    if (required > MAL_HTTP_MAX_HEADERS) return false;
+    if (required <= state->response_header_capacity) return true;
+    usize capacity = state->response_header_capacity * 2;
+    while (capacity < required) capacity *= 2;
+    if (capacity > MAL_HTTP_MAX_HEADERS) capacity = MAL_HTTP_MAX_HEADERS;
+    MalNodeHttpResponseHeader *headers;
+    if (state->response_headers == state->inline_response_headers) {
+        headers = malloc(capacity * sizeof(*headers));
+        if (headers != nullptr) {
+            memcpy(headers, state->inline_response_headers,
+                   state->response_header_count * sizeof(*headers));
+        }
+    } else {
+        headers = realloc(
+            state->response_headers, capacity * sizeof(*headers));
+    }
+    if (headers == nullptr) return false;
+    state->response_headers = headers;
+    state->response_header_capacity = capacity;
+    MAL_PERF_COUNT(http_response_header_spills);
+    return true;
+}
+
 static MalValue http_response_set_header(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -1454,12 +1491,24 @@ static MalValue http_response_set_header(
                                "Too many response headers");
             return mal_value_new_undefined();
         }
+        if (!http_response_headers_reserve(
+                state, state->response_header_count + 1)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Response header allocation failed");
+            return mal_value_new_undefined();
+        }
         char *stored_name = http_response_name_materialize(vm, &name);
         if (stored_name == nullptr) return mal_value_new_undefined();
         index = (i64) state->response_header_count++;
         state->response_headers[index].name = stored_name;
         state->response_headers[index].name_len = name.length;
         MAL_PERF_COUNT(http_response_header_insertions);
+        if (mal_perf_stats_enabled
+            && state->response_header_count
+                > mal_perf_stats.http_response_header_max_count) {
+            mal_perf_stats.http_response_header_max_count =
+                state->response_header_count;
+        }
     } else {
         MAL_PERF_COUNT(http_response_header_replacements);
         MAL_PERF_COUNT(http_response_header_allocation_free_lookups);

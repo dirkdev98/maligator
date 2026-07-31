@@ -43,6 +43,23 @@ function throwsMessage(callback, message) {
 }
 
 const server = http.createServer(function (request, response) {
+	if (request.url === "/many-headers") {
+		let valid = true;
+		for (let i = 0; i < 40; i++) {
+			const suffix = i < 10 ? "0" + i : String(i);
+			valid =
+				valid &&
+				request.headers["x-request-" + suffix] ===
+					"value-" + suffix + "-abcdefghijklmnopqrstuvwxyz0123456789";
+		}
+		for (let i = 0; i < 24; i++) {
+			response.setHeader("X-Response-" + i, "reply-" + i);
+		}
+		response.statusCode = valid ? 200 : 500;
+		response.end(valid ? "many" : "many header mismatch");
+		return;
+	}
+
 	if (request.url === "/header-snapshot") {
 		const setCookies = request.headers["set-cookie"];
 		let valid =

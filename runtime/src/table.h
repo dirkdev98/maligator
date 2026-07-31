@@ -54,6 +54,12 @@ MalTable *mal_table_new(MalTableMode mode, MalTableRole role);
 void mal_table_free(MalTable *table);
 
 /**
+ * Release a Map/Set's ownership. If a dead iterator is still pinned during the
+ * same GC sweep, defer the raw-table free until its finalizer drops the last pin.
+ */
+void mal_table_release_owner(MalTable *table);
+
+/**
  * Return the mode associated with the table.
  */
 MalTableMode mal_table_mode(const MalTable *table);
@@ -91,6 +97,10 @@ void mal_table_clear(MalTable *table);
  */
 void mal_table_compact(MalTable *table);
 
+/** Prevent/re-enable entry renumbering while a persistent iterator is live. */
+void mal_table_pin(MalTable *table);
+void mal_table_unpin(MalTable *table);
+
 /**
  * Read the key stored for a live entry handle.
  */
@@ -105,6 +115,11 @@ void *mal_table_entry_data(const MalTable *table, void *entry);
  * Replace the owned data pointer stored for a live entry handle.
  */
 void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data);
+
+/** Compact property metadata carried inline by object-mode table entries. */
+u8 mal_table_entry_property_flags(const MalTable *table, void *entry);
+void mal_table_entry_set_property_flags(
+    MalTable *table, void *entry, u8 flags);
 
 /**
  * Read the inline value payload stored for an entry handle. The payload is

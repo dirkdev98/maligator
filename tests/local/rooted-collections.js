@@ -110,8 +110,8 @@ check(
 
 Object.defineProperty(visibilitySource, "later", { enumerable: false });
 check(
-	JSON.stringify(visibilitySource) === '{"first":1,"later":2}',
-	"JSON.stringify rechecks snapshotted key enumerability",
+	JSON.stringify(visibilitySource) === '{"first":1}',
+	"JSON.stringify snapshots enumerable keys before getters",
 );
 
 const jsonLog = [];
@@ -137,7 +137,7 @@ const jsonProxy = new Proxy(
 );
 check(
 	JSON.stringify(jsonProxy) === '{"b":2,"a":1}' &&
-		jsonLog.join(",") === "get:toJSON,ownKeys,desc:b,get:b,desc:hidden,desc:a,get:a",
+		jsonLog.join(",") === "get:toJSON,ownKeys,desc:b,desc:hidden,desc:a,get:b,get:a",
 	"JSON.stringify uses proxy ownKeys, descriptors, and string-key order",
 );
 

@@ -6,17 +6,64 @@
 #include "./heap.h"
 #include "./perf_stats.h"
 
-static MalPropertyDesc *mal_property_entry_data(MalTable *table, void *entry) {
-    MalPropertyDesc *desc = mal_table_entry_data(table, entry);
+typedef struct MalPropertyAccessors {
+    MalValue getter;
+    MalValue setter;
+} MalPropertyAccessors;
 
-    if (desc == nullptr) {
-        // Owned by the table entry, freed by mal_table_free/compact via gc_free_raw:
-        // this blob lives in the RAW space (counted toward the GC trigger) too.
-        desc = mal_heap_alloc_raw(mal_gc_current_heap(), sizeof(MalPropertyDesc));
-        mal_table_entry_set_owned_data(table, entry, desc);
+static_assert(MAL_PROPERTY_ACCESSOR <= UINT8_MAX,
+              "property flags no longer fit in a table entry");
+static_assert(sizeof(MalPropertyAccessors) == 16,
+              "accessor sidecar should use the 16-byte raw class");
+
+static MalPropertyDesc mal_property_entry_read(
+    const MalTable *table, void *entry) {
+    MalPropertyFlags flags =
+        (MalPropertyFlags) mal_table_entry_property_flags(table, entry);
+    if ((flags & MAL_PROPERTY_ACCESSOR) == 0) {
+        return (MalPropertyDesc) {
+            .flags = flags,
+            .value = mal_table_entry_value(table, entry),
+            .getter = mal_value_new_undefined(),
+            .setter = mal_value_new_undefined(),
+        };
     }
+    MalPropertyAccessors *accessors = mal_table_entry_data(table, entry);
+    return (MalPropertyDesc) {
+        .flags = flags,
+        .value = mal_value_new_undefined(),
+        .getter = accessors->getter,
+        .setter = accessors->setter,
+    };
+}
 
-    return desc;
+static void mal_property_entry_write(
+    MalTable *table, void *entry, const MalPropertyDesc *desc) {
+    bool was_accessor =
+        (mal_table_entry_property_flags(table, entry)
+         & MAL_PROPERTY_ACCESSOR) != 0;
+    bool is_accessor = (desc->flags & MAL_PROPERTY_ACCESSOR) != 0;
+    void *data = mal_table_entry_data(table, entry);
+    if (is_accessor) {
+        MalPropertyAccessors *accessors = data;
+        if (!was_accessor) {
+            accessors = mal_heap_alloc_raw(
+                mal_gc_current_heap(), sizeof(*accessors));
+            mal_table_entry_set_owned_data(table, entry, accessors);
+            MAL_PERF_COUNT(property_accessor_sidecar_allocations);
+        }
+        accessors->getter = desc->getter;
+        accessors->setter = desc->setter;
+        mal_table_entry_set_value(table, entry, mal_value_new_undefined());
+    } else {
+        if (was_accessor) {
+            gc_free_raw(mal_gc_current_heap(), data);
+            mal_table_entry_set_owned_data(table, entry, nullptr);
+            MAL_PERF_COUNT(property_accessor_sidecar_frees);
+        }
+        mal_table_entry_set_value(table, entry, desc->value);
+    }
+    mal_table_entry_set_property_flags(table, entry, (u8) desc->flags);
 }
 
 MalPropertyLookup mal_property_lookup(const MalTable *table, MalKey key) {
@@ -26,9 +73,11 @@ MalPropertyLookup mal_property_lookup(const MalTable *table, MalKey key) {
         return (MalPropertyLookup) {.present = false, .entry = nullptr};
     }
 
-    MalPropertyDesc *desc = mal_table_entry_data(table, lookup.entry);
-
-    return (MalPropertyLookup) {.present = true, .entry = lookup.entry, .desc = *desc};
+    return (MalPropertyLookup) {
+        .present = true,
+        .entry = lookup.entry,
+        .desc = mal_property_entry_read(table, lookup.entry),
+    };
 }
 
 MalPropertyEnsure mal_property_ensure(
@@ -37,9 +86,8 @@ MalPropertyEnsure mal_property_ensure(
     MAL_PERF_COUNT(property_ensure_calls);
     bool inserted;
     void *entry = mal_table_upsert_entry(table, key, &inserted);
-    MalPropertyDesc *current = mal_property_entry_data(table, entry);
     if (inserted) {
-        *current = *initial;
+        mal_property_entry_write(table, entry, initial);
         MAL_PERF_COUNT(property_ensure_inserts);
     } else {
         MAL_PERF_COUNT(property_ensure_hits);
@@ -47,37 +95,39 @@ MalPropertyEnsure mal_property_ensure(
     return (MalPropertyEnsure) {
         .inserted = inserted,
         .entry = entry,
-        .desc = *current,
+        .desc = inserted ? *initial : mal_property_entry_read(table, entry),
     };
 }
 
 void *mal_property_define(MalTable *table, MalKey key, const MalPropertyDesc *desc) {
     void *entry = mal_table_upsert_entry(table, key, nullptr);
-    *mal_property_entry_data(table, entry) = *desc;
+    mal_property_entry_write(table, entry, desc);
 
     return entry;
 }
 
 void *mal_property_set_value(MalTable *table, MalKey key, MalValue value) {
     void *entry = mal_table_upsert_entry(table, key, nullptr);
-    MalPropertyDesc *desc = mal_property_entry_data(table, entry);
-
-    desc->flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    desc->value = value;
-    desc->getter = mal_value_new_undefined();
-    desc->setter = mal_value_new_undefined();
+    MalPropertyDesc desc = {
+        .flags = MAL_PROPERTY_WRITABLE
+            | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = value,
+        .getter = mal_value_new_undefined(),
+        .setter = mal_value_new_undefined(),
+    };
+    mal_property_entry_write(table, entry, &desc);
 
     return entry;
 }
 
 void mal_property_write_entry(MalTable *table, void *entry, const MalPropertyDesc *desc) {
-    MalPropertyDesc *current = mal_property_entry_data(table, entry);
+    MalPropertyDesc current = mal_property_entry_read(table, entry);
     // SATB: shade the descriptor refs being overwritten. write_entry is only
     // called on an already-present property, so `current` holds valid old values.
-    mal_gc_write_barrier(current->value);
-    mal_gc_write_barrier(current->getter);
-    mal_gc_write_barrier(current->setter);
-    *current = *desc;
+    mal_gc_write_barrier(current.value);
+    mal_gc_write_barrier(current.getter);
+    mal_gc_write_barrier(current.setter);
+    mal_property_entry_write(table, entry, desc);
 }
 
 MalKey mal_property_entry_key(const MalTable *table, void *entry) {
@@ -85,7 +135,5 @@ MalKey mal_property_entry_key(const MalTable *table, void *entry) {
 }
 
 MalPropertyDesc mal_property_entry_desc(const MalTable *table, void *entry) {
-    MalPropertyDesc *desc = mal_table_entry_data(table, entry);
-
-    return *desc;
+    return mal_property_entry_read(table, entry);
 }

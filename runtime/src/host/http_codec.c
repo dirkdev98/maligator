@@ -3,9 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../perf_stats.h"
+
 static_assert(LLHTTP_VERSION_MAJOR == 9 && LLHTTP_VERSION_MINOR == 4
                   && LLHTTP_VERSION_PATCH == 2,
               "update the pinned llhttp ABI assertion");
+static_assert(sizeof(MalHttpCodecHead) <= 2048,
+              "the HTTP head common case should remain below 2 KiB");
 
 static MalHttpCodec *codec_from_parser(llhttp_t *parser) {
     return parser->data;
@@ -17,8 +21,8 @@ static bool codec_head_reserve(MalHttpCodec *codec, usize added) {
         return false;
     }
     usize required = codec->head->arena_length + added;
-    if (required <= codec->arena_capacity) return true;
-    usize capacity = codec->arena_capacity == 0 ? 1024 : codec->arena_capacity;
+    if (required <= codec->head->arena_capacity) return true;
+    usize capacity = codec->head->arena_capacity;
     while (capacity < required) {
         if (capacity > MAL_HTTP_CODEC_HEAD_MAX / 2) {
             capacity = MAL_HTTP_CODEC_HEAD_MAX;
@@ -26,10 +30,46 @@ static bool codec_head_reserve(MalHttpCodec *codec, usize added) {
         }
         capacity *= 2;
     }
-    byte *arena = realloc(codec->head->arena, capacity);
+    byte *arena;
+    if (codec->head->arena == codec->head->inline_arena) {
+        arena = malloc(capacity);
+        if (arena != nullptr) {
+            memcpy(arena, codec->head->inline_arena, codec->head->arena_length);
+        }
+    } else {
+        arena = realloc(codec->head->arena, capacity);
+    }
     if (arena == nullptr) return false;
     codec->head->arena = arena;
-    codec->arena_capacity = capacity;
+    codec->head->arena_capacity = capacity;
+    MAL_PERF_COUNT(http_codec_arena_spills);
+    return true;
+}
+
+static bool codec_fields_reserve(MalHttpCodecHead *head, usize required) {
+    if (required > MAL_HTTP_CODEC_FIELDS_MAX) return false;
+    if (required <= head->field_capacity) return true;
+    usize capacity = head->field_capacity;
+    while (capacity < required) {
+        capacity *= 2;
+    }
+    if (capacity > MAL_HTTP_CODEC_FIELDS_MAX) {
+        capacity = MAL_HTTP_CODEC_FIELDS_MAX;
+    }
+    MalHttpCodecField *fields;
+    if (head->fields == head->inline_fields) {
+        fields = malloc(capacity * sizeof(*fields));
+        if (fields != nullptr) {
+            memcpy(fields, head->inline_fields,
+                   head->field_count * sizeof(*fields));
+        }
+    } else {
+        fields = realloc(head->fields, capacity * sizeof(*fields));
+    }
+    if (fields == nullptr) return false;
+    head->fields = fields;
+    head->field_capacity = capacity;
+    MAL_PERF_COUNT(http_codec_field_spills);
     return true;
 }
 
@@ -56,8 +96,12 @@ static int codec_message_begin(llhttp_t *parser) {
     }
     codec->head = calloc(1, sizeof(*codec->head));
     if (codec->head == nullptr) return codec_fail(parser, "HTTP head allocation failed");
+    codec->head->arena = codec->head->inline_arena;
+    codec->head->arena_capacity = MAL_HTTP_CODEC_INLINE_ARENA;
+    codec->head->fields = codec->head->inline_fields;
+    codec->head->field_capacity = MAL_HTTP_CODEC_INLINE_FIELDS;
     codec->head->content_length = -1;
-    codec->arena_capacity = 0;
+    MAL_PERF_COUNT(http_codec_head_allocations);
     codec->skip_header_bytes = false;
     codec->header_name_open = false;
     return 0;
@@ -97,6 +141,9 @@ static int codec_header_field(llhttp_t *parser, const char *at, size_t length) {
     if (!codec->header_name_open) {
         if (head->field_count == MAL_HTTP_CODEC_FIELDS_MAX) {
             return codec_fail(parser, "HTTP field count exceeds its limit");
+        }
+        if (!codec_fields_reserve(head, head->field_count + 1)) {
+            return codec_fail(parser, "HTTP field allocation failed");
         }
         MalHttpCodecField *field = &head->fields[head->field_count++];
         field->name_offset = head->arena_length;
@@ -176,7 +223,14 @@ static int codec_headers_complete(llhttp_t *parser) {
     }
     codec->event_head = head;
     codec->head = nullptr;
-    codec->arena_capacity = 0;
+    if (mal_perf_stats_enabled) {
+        if (head->field_count > mal_perf_stats.http_codec_max_fields) {
+            mal_perf_stats.http_codec_max_fields = head->field_count;
+        }
+        if (head->arena_length > mal_perf_stats.http_codec_max_head_bytes) {
+            mal_perf_stats.http_codec_max_head_bytes = head->arena_length;
+        }
+    }
     codec->event = MAL_HTTP_CODEC_EVENT_HEAD;
     return HPE_PAUSED;
 }
@@ -189,10 +243,25 @@ static int codec_body(llhttp_t *parser, const char *at, size_t length) {
         return codec_fail(parser, "HTTP body event exceeds its limit");
     }
     usize required = codec->event_body_length + length;
-    byte *body = realloc(codec->event_body, required);
-    if (body == nullptr) return codec_fail(parser, "HTTP body allocation failed");
-    codec->event_body = body;
-    memcpy(body + codec->event_body_length, at, length);
+    if (required > codec->event_body_capacity) {
+        usize capacity = codec->event_body_capacity == 0 ? 1024
+            : codec->event_body_capacity;
+        while (capacity < required) {
+            if (capacity > MAL_HTTP_CODEC_BODY_MAX / 2) {
+                capacity = MAL_HTTP_CODEC_BODY_MAX;
+                break;
+            }
+            capacity *= 2;
+        }
+        byte *body = realloc(codec->event_body, capacity);
+        if (body == nullptr) {
+            return codec_fail(parser, "HTTP body allocation failed");
+        }
+        codec->event_body = body;
+        codec->event_body_capacity = capacity;
+        MAL_PERF_COUNT(http_codec_body_growths);
+    }
+    memcpy(codec->event_body + codec->event_body_length, at, length);
     codec->event_body_length = required;
     return 0;
 }
@@ -233,7 +302,8 @@ void mal_http_codec_set_skip_body(MalHttpCodec *codec, bool skip_body) {
 
 void mal_http_codec_head_free(MalHttpCodecHead *head) {
     if (head == nullptr) return;
-    free(head->arena);
+    if (head->arena != head->inline_arena) free(head->arena);
+    if (head->fields != head->inline_fields) free(head->fields);
     free(head);
 }
 
@@ -334,6 +404,7 @@ byte *mal_http_codec_take_body(MalHttpCodec *codec, usize *length) {
     *length = codec->event_body_length;
     codec->event_body = nullptr;
     codec->event_body_length = 0;
+    codec->event_body_capacity = 0;
     codec->event = MAL_HTTP_CODEC_EVENT_NONE;
     return body;
 }
@@ -347,6 +418,7 @@ void mal_http_codec_clear_event(MalHttpCodec *codec) {
         free(codec->event_body);
         codec->event_body = nullptr;
         codec->event_body_length = 0;
+        codec->event_body_capacity = 0;
     }
     codec->event = MAL_HTTP_CODEC_EVENT_NONE;
 }

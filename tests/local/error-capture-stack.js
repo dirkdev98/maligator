@@ -218,4 +218,23 @@ check(
 	rooted.stack.indexOf("error-capture-stack.js:199") !== -1,
 );
 
+Error.prepareStackTrace = undefined;
+Error.stackTraceLimit = 3;
+let churnTarget = {};
+for (let i = 0; i < 512; i++) {
+	// Replacing a capture on the same object must retire the old native trace;
+	// periodically dropping the object exercises finalizer-driven retirement.
+	Error.captureStackTrace(churnTarget);
+	if (i % 3 === 0) Error.captureStackTrace(churnTarget);
+	if (i % 8 === 0) churnTarget = {};
+	if (i % 16 === 0 && typeof __mal_collect_garbage === "function") {
+		__mal_collect_garbage();
+	}
+}
+const churnStack = churnTarget.stack;
+check(
+	"capture churn keeps the current trace valid",
+	typeof churnStack === "string" && churnStack.indexOf("error-capture-stack.js:") !== -1,
+);
+
 console.log("RESULT " + passed + "/" + total);

@@ -29,12 +29,14 @@ typedef void (*MalHostTaskDestroy)(void *data);
 typedef bool (*MalHostPostWake)(void *data);
 
 typedef struct MalHostTask {
-    MalHostTaskKind kind;
     MalHostHandle operation;
-    MalHostTerminalResult result;
     void *data;
     struct MalHostTaskNode *_node;
+    MalHostTaskKind kind;
+    MalHostTerminalResult result;
 } MalHostTask;
+
+static_assert(sizeof(MalHostTask) == 32, "MalHostTask should stay four words");
 
 typedef struct MalHostTasks {
     struct MalHostTaskNode *head;
@@ -63,6 +65,13 @@ bool mal_host_operation_abort_start(MalHostTasks *tasks, MalHostHandle operation
 bool mal_host_operation_activate(MalHostTasks *tasks, MalHostHandle operation);
 MalHostOperationState mal_host_operation_state(
     const MalHostTasks *tasks, MalHostHandle operation);
+/** Attach/resolve one host-owned operation state without a linear side-list scan. */
+bool mal_host_operation_bind(
+    MalHostTasks *tasks, MalHostHandle operation, void *owner);
+void *mal_host_operation_owner(
+    const MalHostTasks *tasks, MalHostHandle operation);
+void mal_host_operation_unbind(
+    MalHostTasks *tasks, MalHostHandle operation, void *owner);
 
 /* Ownership of data transfers only when the enqueue/complete call succeeds. */
 bool mal_host_operation_progress(

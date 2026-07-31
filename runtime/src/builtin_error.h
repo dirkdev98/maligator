@@ -20,3 +20,6 @@ MalValue mal_builtin_new_aggregate_error(MalVm *vm, MalValue errors);
  * Error.isError and Object.prototype.toString's "[object Error]" tag.
  */
 bool mal_builtin_value_has_error_data(MalVm *vm, MalValue value);
+
+/** Release a private captured-stack slot owned by a dying ordinary object. */
+void mal_builtin_error_finalize_object(MalVm *vm, MalObject *object);

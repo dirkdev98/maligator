@@ -46,11 +46,13 @@ typedef struct MalOp {
     int fd;
     MalIoInterest interest;
     MalWaker waker;
-    bool active; /* true while registered; cleared when it fires or is cancelled */
     MalReactor *_reactor;
     struct MalOp *_ready_next;
+    bool active; /* true while registered; cleared when it fires or is cancelled */
     bool _queued_ready;
 } MalOp;
+
+static_assert(sizeof(MalOp) <= 48, "MalOp outgrew its 48-byte layout");
 
 /* A pending timer. One-shot: fires its waker once CLOCK_MONOTONIC passes the
  * deadline. Storage is caller-owned; `heap_index` is the reactor's, -1 when not
@@ -86,6 +88,10 @@ struct MalReactor {
 
     /* Reactor-owned readiness registrations and deferred backend event tokens. */
     MalReactorFd *fds;
+    MalReactorFd *retired_fds;
+    /* Sparse two-level fd -> state index (256 descriptor slots per leaf). */
+    MalReactorFd ***fd_pages;
+    usize fd_page_count;
     MalReactorToken *retired_tokens;
     MalReactorToken *free_tokens;
     u64 next_generation;

@@ -805,6 +805,20 @@ typedef struct MalArgumentSnapshotMove {
 } MalArgumentSnapshotMove;
 
 typedef struct MalFunction {
+    /*
+     * Pointer-sized fields lead the structure, followed by the i32 metadata and
+     * packed flags. Functions live for the VM's lifetime and large programs can
+     * carry thousands of them, so avoiding the former pointer-alignment holes is
+     * worthwhile. All producers use named fields; this is not a wire-format ABI.
+     */
+    const MalArgumentSnapshotMove *argument_snapshot_plan;
+    const i32 *mapped_argument_slots;
+    const MalInstruction *instructions;
+    const i32 *instruction_data;
+    const MalExceptionHandler *handlers;
+    MalCompiledFunction compiled;
+    const MalLineEntry *positions;
+
     i32 name_string_index;
     MalFunctionKind kind;
     i32 parameter_count;
@@ -813,11 +827,9 @@ typedef struct MalFunction {
     i32 argument_snapshot_count;
 
     i32 argument_snapshot_plan_count;
-    const MalArgumentSnapshotMove *argument_snapshot_plan;
 
     /** Captured binding slot per mapped argument index; empty for unmapped functions. */
     i32 mapped_argument_count;
-    const i32 *mapped_argument_slots;
 
     /**
      * Function.prototype.length: formal parameters before the first default
@@ -828,13 +840,31 @@ typedef struct MalFunction {
 
     i32 register_count;
     i32 captured_count;
-    bool strict;
-
-    /** Whether any activation can retain supplied arguments after entry. */
-    bool needs_arguments;
     /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
      * largest static index whose absence requires the supplied argument slice. */
     i32 argument_retention_limit;
+
+    /** Dense VM-owned inline-cache rows used by this function's property sites. */
+    i32 property_ic_count;
+    /** Dense VM-owned shape memo rows used by this function's shaped literals. */
+    i32 literal_shape_count;
+    i32 instruction_count;
+    i32 instruction_data_count;
+
+    i32 handler_count;
+
+    /**
+     * Debug-info (stack traces). file_index points into MalVmDefinition.files;
+     * positions is a run-length position table (position_count entries) mapping
+     * instruction pointers to source positions. position_count is 0 / positions
+     * is nullptr for stripped builds.
+     */
+    i32 file_index;
+    i32 position_count;
+
+    bool strict;
+    /** Whether any activation can retain supplied arguments after entry. */
+    bool needs_arguments;
     bool mapped_arguments;
 
     /**
@@ -858,34 +888,10 @@ typedef struct MalFunction {
      * excluded separately by kind.
      */
     bool has_prototype;
-
-    /** Dense VM-owned inline-cache rows used by this function's property sites. */
-    i32 property_ic_count;
-    /** Dense VM-owned shape memo rows used by this function's shaped literals. */
-    i32 literal_shape_count;
-    i32 instruction_count;
-    const MalInstruction *instructions;
-    i32 instruction_data_count;
-    const i32 *instruction_data;
-
-    i32 handler_count;
-    const MalExceptionHandler *handlers;
-
-    /**
-     * Native-backend entry point, or nullptr when the function is interpreted.
-     */
-    MalCompiledFunction compiled;
-
-    /**
-     * Debug-info (stack traces). file_index points into MalVmDefinition.files;
-     * positions is a run-length position table (position_count entries) mapping
-     * instruction pointers to source positions. position_count is 0 / positions
-     * is nullptr for stripped builds.
-     */
-    i32 file_index;
-    i32 position_count;
-    const MalLineEntry *positions;
 } MalFunction;
+
+static_assert(sizeof(MalFunction) <= 136,
+              "function metadata outgrew its packed 136-byte layout");
 
 /**
  * One host export's destination: the export/global name and the global slot the
@@ -1089,8 +1095,8 @@ typedef struct MalStackFrameRecord {
 /**
  * A captured stack trace: a flat list of frames (top first), plus — for async
  * stitching — the parent async trace (the awaiting context, null when none). An
- * Error stores one at construction (looked up by id), formatted lazily by the
- * .stack getter; console.trace formats one immediately.
+ * Error stores one at construction (looked up by a recyclable id), formatted
+ * lazily by the .stack getter; console.trace formats one immediately.
  */
 typedef struct MalStackTrace {
     i32 frame_count;
@@ -1510,14 +1516,16 @@ typedef struct MalVm {
     u64 frame_seq;
 
     /**
-     * Captured stack traces, indexed by id. An Error stores its capture's id (an
-     * i32) under a private property; the .stack getter looks the trace up here
-     * and formats it lazily. Growable, never compacted — like the symbol-registry
-     * and unhandled-rejection roots it leaks until VM teardown. Freed in mal_vm_free.
+     * Captured stack traces, indexed by recyclable id. The private property on
+     * the owning object releases its slot when that object is finalized; the
+     * parallel free-list preserves stable ids for live captures.
      */
     MalStackTrace **captured_traces;
+    i32 *captured_trace_free_next;
     i32 captured_trace_count;
     i32 captured_trace_capacity;
+    i32 captured_trace_free_head;
+    i32 captured_trace_live_count;
 
     /**
      * CommonJS module registry, sized to definition->cjs_module_count (null when
@@ -1546,6 +1554,9 @@ typedef struct MalVm {
      */
     void *host;
 } MalVm;
+
+/** Lazily materialize one function's property and shaped-literal cache rows. */
+void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index);
 
 /** Drop the ordinary Map get/set cache without retaining its collection or key. */
 void mal_vm_invalidate_map_get_set_cache(MalVm *vm);
@@ -1709,6 +1720,9 @@ i32 mal_vm_store_stack_trace(MalVm *vm, MalStackTrace *trace);
 /** Look up a stored trace by id, or nullptr if out of range. */
 MalStackTrace *mal_vm_stored_stack_trace(MalVm *vm, i32 id);
 
+/** Release a stored trace id when its private-property owner dies or replaces it. */
+void mal_vm_release_stack_trace(MalVm *vm, i32 id);
+
 /**
  * Format a captured trace as the lines following an Error header — each frame as
  * "\n    at <name> (<file>:<line>:<column>)" (column 1-based), including any
@@ -1772,13 +1786,6 @@ typedef struct MalVmFrame {
      */
     u64 enter_seq;
 
-    /**
-     * Stack of active `with` objects for this frame (innermost last), grown
-     * lazily by WITH_ENTER and shrunk by WITH_EXIT. Null until the frame first
-     * enters a `with`. Freed on frame teardown.
-     */
-    MalValue *with_objects;
-
 #if MAL_REALMS
     /**
      * The realm this activation runs in, stamped when the frame is pushed (from the
@@ -1804,14 +1811,14 @@ typedef struct MalVmFrame {
     i32 instruction_pointer;
     i32 return_register;
     i32 caller_frame_index;
-    i32 with_count;
-    i32 with_capacity;
-
     /**
      * Construct frames replace non-object return values with this_value.
      */
     bool is_construct;
 } MalVmFrame;
+
+static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 136 : 128),
+              "interpreter frame outgrew its packed layout");
 
 typedef MalVmFrame MalCallable;
 

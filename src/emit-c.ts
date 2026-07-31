@@ -666,6 +666,16 @@ export function emitCompiledFunction(
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
 	lines.push(`    (void) resume_state;`);
+	if (
+		body.some(
+			(line) =>
+				line.includes("__property_ic") ||
+				line.includes("__property_function_index") ||
+				line.includes("__literal_shapes"),
+		)
+	) {
+		lines.push(`    mal_vm_ensure_function_caches(vm, ${index});`);
+	}
 	if (body.some((line) => line.includes("__property_ic"))) {
 		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${index}].sites;`);
 	}
@@ -876,6 +886,16 @@ function emitResumableFunction(
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
+	if (
+		body.some(
+			(line) =>
+				line.includes("__property_ic") ||
+				line.includes("__property_function_index") ||
+				line.includes("__literal_shapes"),
+		)
+	) {
+		lines.push(`    mal_vm_ensure_function_caches(vm, ${index});`);
+	}
 	if (body.some((line) => line.includes("__property_ic"))) {
 		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${index}].sites;`);
 	}

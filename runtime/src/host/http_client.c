@@ -92,15 +92,13 @@ void mal_http_client_progress_free(void *data) {
 
 static MalHttpClient *client_find(MalHost *host, MalHostHandle operation) {
     if (host == nullptr || operation == 0) return nullptr;
-    for (MalHttpClient *client = host->http_clients;
-         client != nullptr; client = client->next) {
-        if (client->operation == operation) return client;
-    }
-    return nullptr;
+    return mal_host_operation_owner(&host->tasks, operation);
 }
 
 static void client_destroy(MalHttpClient *client) {
     if (client == nullptr) return;
+    mal_host_operation_unbind(
+        &client->host->tasks, client->operation, client);
     MalHttpClient **link = &client->host->http_clients;
     while (*link != nullptr && *link != client) link = &(*link)->next;
     if (*link == client) *link = client->next;
@@ -539,6 +537,10 @@ bool mal_http_client_start(
     client->fd = mal_net_connect(host_name, port);
     if (client->fd < 0) goto fail_client;
     client->connecting = true;
+    if (!mal_host_operation_bind(
+            &host->tasks, *operation, client)) {
+        goto fail_client;
+    }
     client->next = host->http_clients;
     host->http_clients = client;
     if (!client_arm_write(client)

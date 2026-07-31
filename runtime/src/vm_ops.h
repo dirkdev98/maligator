@@ -807,14 +807,19 @@ typedef struct MalPropertyCachePool {
     MalObjectRegionCache **regions;
 } MalPropertyCachePool;
 
-/** Address an eagerly allocated dense property cache entry. */
+/** Address a lazily allocated dense property cache entry. */
 static inline MalInlineCache *mal_vm_property_ic_at(
     MalCallable *callable, i32 ic_index
 ) {
+    mal_vm_ensure_function_caches(
+        callable->vm, callable->function_index);
     MalInlineCache *caches =
         callable->vm->property_cache[callable->function_index].sites;
     return &caches[ic_index];
 }
+
+/** Lazily allocate the shared megamorphic property stub array. */
+MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm);
 
 /**
  * Consolidated-object-region shape match (native backend): the index of `shape` among the
@@ -1595,10 +1600,9 @@ MalValue mal_vm_op_derived_construct_return(MalVm *vm, MalValue value, MalValue 
 
 /**
  * `with` statement support, shared by the interpreter op and the native backend.
- * The with-object stack is per-activation and supplied by the caller (the
- * interpreter frame's `with_objects`, or the compiled frame's rooted slots), so
- * these helpers take it as (objects, count). `with_enter` only validates the
- * with-expression (nil → false + pending TypeError); the caller does the push.
+ * Active objects are represented by per-activation object-environment nodes in
+ * the ordinary environment chain, so the frame needs no parallel with-object
+ * vector. `with_enter` validates the expression and returns the new environment.
  * `with_get`/`with_resolve_base` return the EMPTY sentinel on a miss so the caller
  * falls back to the static binding; `with_set` returns whether a binding was found.
  */

@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -21,6 +22,8 @@
 #endif
 
 #define MAL_REACTOR_MAX_EVENTS 64
+#define MAL_REACTOR_FD_PAGE_SHIFT 8u
+#define MAL_REACTOR_FD_PAGE_SIZE (1u << MAL_REACTOR_FD_PAGE_SHIFT)
 
 struct MalReactorFd {
     int fd;
@@ -32,7 +35,10 @@ struct MalReactorFd {
     MalReactorToken *write_token;
     MalReactorToken *poll_token;
     bool backend_present;
+    bool retired;
+    MalReactorFd *previous;
     MalReactorFd *next;
+    MalReactorFd *retired_next;
 };
 
 struct MalReactorToken {
@@ -204,12 +210,38 @@ static void mal_reactor_dispatch_wake(MalReactor *r) {
 }
 
 static MalReactorFd *mal_reactor_find_fd(MalReactor *r, int fd) {
-    for (MalReactorFd *state = r->fds; state != nullptr; state = state->next) {
-        if (state->fd == fd) {
-            return state;
-        }
+    if (fd < 0) return nullptr;
+    usize page = (usize) fd >> MAL_REACTOR_FD_PAGE_SHIFT;
+    if (page >= r->fd_page_count || r->fd_pages[page] == nullptr) {
+        return nullptr;
     }
-    return nullptr;
+    return r->fd_pages[page][(u32) fd & (MAL_REACTOR_FD_PAGE_SIZE - 1)];
+}
+
+static bool mal_reactor_index_fd(MalReactor *r, MalReactorFd *state) {
+    usize page = (usize) state->fd >> MAL_REACTOR_FD_PAGE_SHIFT;
+    if (page >= r->fd_page_count) {
+        usize capacity = r->fd_page_count == 0 ? 4 : r->fd_page_count;
+        while (capacity <= page) {
+            if (capacity > SIZE_MAX / 2) return false;
+            capacity *= 2;
+        }
+        MalReactorFd ***pages =
+            realloc(r->fd_pages, capacity * sizeof(*pages));
+        if (pages == nullptr) return false;
+        memset(pages + r->fd_page_count, 0,
+               (capacity - r->fd_page_count) * sizeof(*pages));
+        r->fd_pages = pages;
+        r->fd_page_count = capacity;
+    }
+    if (r->fd_pages[page] == nullptr) {
+        r->fd_pages[page] =
+            calloc(MAL_REACTOR_FD_PAGE_SIZE, sizeof(**r->fd_pages));
+        if (r->fd_pages[page] == nullptr) return false;
+    }
+    r->fd_pages[page][
+        (u32) state->fd & (MAL_REACTOR_FD_PAGE_SIZE - 1)] = state;
+    return true;
 }
 
 static MalReactorFd *mal_reactor_get_fd(MalReactor *r, int fd) {
@@ -222,9 +254,49 @@ static MalReactorFd *mal_reactor_get_fd(MalReactor *r, int fd) {
         return nullptr;
     }
     state->fd = fd;
+    if (!mal_reactor_index_fd(r, state)) {
+        free(state);
+        return nullptr;
+    }
+    state->previous = nullptr;
     state->next = r->fds;
+    if (r->fds != nullptr) r->fds->previous = state;
     r->fds = state;
     return state;
+}
+
+static void mal_reactor_retire_fd(
+    MalReactor *r, MalReactorFd *state) {
+    if (state == nullptr || state->retired
+        || state->read_op != nullptr
+        || state->write_op != nullptr || state->backend_present
+        || state->read_token != nullptr || state->write_token != nullptr
+        || state->poll_token != nullptr) {
+        return;
+    }
+    usize page = (usize) state->fd >> MAL_REACTOR_FD_PAGE_SHIFT;
+    usize slot =
+        (u32) state->fd & (MAL_REACTOR_FD_PAGE_SIZE - 1);
+    if (page < r->fd_page_count && r->fd_pages[page] != nullptr
+        && r->fd_pages[page][slot] == state) {
+        r->fd_pages[page][slot] = nullptr;
+    }
+    if (state->previous == nullptr) r->fds = state->next;
+    else state->previous->next = state->next;
+    if (state->next != nullptr) state->next->previous = state->previous;
+    state->previous = nullptr;
+    state->next = nullptr;
+    state->retired = true;
+    state->retired_next = r->retired_fds;
+    r->retired_fds = state;
+}
+
+static void mal_reactor_reclaim_retired_fds(MalReactor *r) {
+    while (r->retired_fds != nullptr) {
+        MalReactorFd *state = r->retired_fds;
+        r->retired_fds = state->retired_next;
+        free(state);
+    }
 }
 
 static MalReactorToken *mal_reactor_token(MalReactor *r, MalReactorFd *state) {
@@ -371,6 +443,7 @@ static bool mal_reactor_dispatch_op(
     bool synced = mal_backend_sync(r, state);
 #endif
     waker.fn(waker.data);
+    mal_reactor_retire_fd(r, state);
     return synced;
 }
 
@@ -453,6 +526,7 @@ static void mal_backend_wait(MalReactor *r, i64 timeout_ns) {
     }
 #endif
     mal_reactor_recycle_retired_tokens(r);
+    mal_reactor_reclaim_retired_fds(r);
 }
 
 /* ---------------------------------------------------------------------------
@@ -475,6 +549,9 @@ void mal_reactor_init(MalReactor *r) {
     r->ready_ops_tail = nullptr;
     r->ready_op_count = 0;
     r->fds = nullptr;
+    r->retired_fds = nullptr;
+    r->fd_pages = nullptr;
+    r->fd_page_count = 0;
     r->retired_tokens = nullptr;
     r->free_tokens = nullptr;
     r->next_generation = 0;
@@ -528,6 +605,13 @@ void mal_reactor_free(MalReactor *r) {
         free(state->poll_token);
         free(state);
     }
+    mal_reactor_reclaim_retired_fds(r);
+    for (usize i = 0; i < r->fd_page_count; i++) {
+        free(r->fd_pages[i]);
+    }
+    free(r->fd_pages);
+    r->fd_pages = nullptr;
+    r->fd_page_count = 0;
     r->pending_ops = 0;
     atomic_store_explicit(&r->wake_pending, false, memory_order_relaxed);
     atomic_store_explicit(&r->retained_work, 0, memory_order_relaxed);
@@ -639,6 +723,7 @@ bool mal_reactor_add_op(MalReactor *r, MalOp *op) {
         op->active = false;
         op->_reactor = nullptr;
         r->pending_ops--;
+        mal_reactor_retire_fd(r, state);
         return false;
     }
     return true;
@@ -714,6 +799,7 @@ bool mal_reactor_cancel_op(MalReactor *r, MalOp *op) {
     op->active = false;
     op->_reactor = nullptr;
     r->pending_ops--;
+    mal_reactor_retire_fd(r, state);
     return cancelled;
 }
 

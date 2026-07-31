@@ -12,8 +12,8 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
     // The suspendable frame is only populated on the first suspend (a
     // generator's GENERATOR_START, an async function's first await). Until then
     // the collector still traces gen->frame unconditionally, and a
-    // never-resumed generator's finalizer frees frame.registers/arguments/
-    // with_objects — both would read stale cell bytes without this. Zero-init so
+    // never-resumed generator's finalizer frees frame.registers/arguments,
+    // which would read stale cell bytes without this. Zero-init so
     // an unpopulated frame traces as empty (function/registers null) and
     // finalizes as free(nullptr).
     generator->frame = (MalVmFrame) {
@@ -21,8 +21,6 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
         .registers = nullptr,
         .arguments = nullptr,
         .argument_count = 0,
-        .with_objects = nullptr,
-        .with_count = 0,
         .env = nullptr,
         .this_value = mal_value_new_undefined(),
         .arguments_object = mal_value_new_undefined(),
@@ -57,11 +55,7 @@ void mal_generator_release_frame(MalVm *vm, MalGeneratorObject *generator) {
     }
     mal_vm_release_coroutine_buffer(vm, frame->registers);
     mal_vm_release_coroutine_buffer(vm, frame->arguments);
-    free(frame->with_objects);
     frame->registers = nullptr;
     frame->arguments = nullptr;
     frame->argument_count = 0;
-    frame->with_objects = nullptr;
-    frame->with_count = 0;
-    frame->with_capacity = 0;
 }

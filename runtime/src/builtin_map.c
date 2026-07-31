@@ -471,6 +471,7 @@ static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_valu
 
     // Storage-order walk: entries added during the callback are visited,
     // deleted entries are skipped.
+    mal_table_pin(map->entries);
     MalTableIter iter;
     mal_table_iter_init(&iter, map->entries, MAL_TABLE_ITER_STORAGE);
 
@@ -493,6 +494,7 @@ static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_valu
         }
     }
     mal_gc_native_rooted_end(vm);
+    mal_table_unpin(map->entries);
 
     return mal_value_new_undefined();
 }

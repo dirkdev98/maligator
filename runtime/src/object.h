@@ -19,9 +19,8 @@
 typedef struct MalObject {
     MalHeapHeader header;
     /*
-     * State flags packed into one byte (:1 bitfields) that sits in the word the
-     * 3-byte header shares with them, so they cost nothing before the first
-     * 8-aligned pointer.
+     * State flags packed into bitfields that sit in the padding before the first
+     * 8-aligned pointer, so they do not enlarge the object base.
      */
     /** [[Extensible]]. */
     bool extensible : 1;
@@ -59,6 +58,8 @@ typedef struct MalObject {
     /** `slots` points to a separately malloc-owned buffer. False for empty,
      * one-slot coallocated, and compiler-emitted stack objects. */
     bool slots_owned : 1;
+    /** A private Error.captureStackTrace id must be released at finalization. */
+    bool has_captured_stack : 1;
     MalShape *shape;
     struct MalObject *prototype;
     /** Inline named-property values for the shape; null in dictionary mode. */

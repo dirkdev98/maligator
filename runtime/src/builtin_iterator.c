@@ -93,6 +93,7 @@ static bool mal_builtin_iterator_map_advance(
     void *entry;
     if (!mal_table_iter_next(&table_iter, &key, &entry)) {
         iterator->done = true;
+        mal_iterator_object_release_table_pin(iterator);
         *value_out = mal_value_new_undefined();
         *done_out = true;
         return true;

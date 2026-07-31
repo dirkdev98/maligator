@@ -50,6 +50,34 @@ for (let i = 0; i < 40; i++) {
 }
 if (dictionary["dict-39"] !== 39) throw new Error("broken dictionary insertion");
 
+const accessorProbe = {};
+Object.defineProperty(accessorProbe, "value", {
+	configurable: true,
+	get() {
+		return 7;
+	},
+});
+if (accessorProbe.value !== 7) throw new Error("broken accessor sidecar");
+Object.defineProperty(accessorProbe, "value", {
+	configurable: true,
+	writable: true,
+	value: 8,
+});
+if (accessorProbe.value !== 8) throw new Error("broken accessor-to-data transition");
+
+const compactedMap = new Map();
+for (let i = 0; i < 40; i++) compactedMap.set("compact-" + i, i);
+for (let i = 0; i < 30; i++) compactedMap.delete("compact-" + i);
+compactedMap.set("compact-new", 40);
+if (
+	compactedMap.size !== 11 ||
+	compactedMap.get("compact-39") !== 39 ||
+	compactedMap.get("compact-new") !== 40
+) {
+	throw new Error("broken map compaction");
+}
+compactedMap.clear();
+
 const fanoutKeys = [];
 for (let i = 0; i < 160; i++) {
 	const key = ["fanout", i].join("-");

@@ -62,6 +62,21 @@ describe("node:http request bridge", () => {
 
 	async function checkBridge(base: string): Promise<void> {
 		const port = Number(new URL(base).port);
+		const manyRequestHeaders: Record<string, string> = {};
+		for (let i = 0; i < 40; i++) {
+			const suffix = String(i).padStart(2, "0");
+			manyRequestHeaders[`x-request-${suffix}`] =
+				`value-${suffix}-abcdefghijklmnopqrstuvwxyz0123456789`;
+		}
+		const manyHeaders = await fetch(`${base}/many-headers`, {
+			headers: manyRequestHeaders,
+		});
+		expect(manyHeaders.status).toBe(200);
+		for (let i = 0; i < 24; i++) {
+			expect(manyHeaders.headers.get(`x-response-${i}`)).toBe(`reply-${i}`);
+		}
+		expect(await manyHeaders.text()).toBe("many");
+
 		const headerSnapshot = await new Promise<string>((resolve, reject) => {
 			const socket = createConnection({ host: "127.0.0.1", port }, () => {
 				socket.write(
@@ -635,19 +650,25 @@ describe("node:http request bridge", () => {
 		expect(field(line, "response_index_max_probes")).toBeLessThan(
 			field(line, "response_index_peak_entries"),
 		);
-		expect(field(line, "response_header_name_coercions")).toBe(779);
-		expect(field(line, "response_header_name_materializations")).toBe(201);
-		expect(field(line, "response_header_insertions")).toBe(201);
+		expect(field(line, "response_header_name_coercions")).toBe(803);
+		expect(field(line, "response_header_name_materializations")).toBe(225);
+		expect(field(line, "response_header_insertions")).toBe(225);
 		expect(field(line, "response_header_replacements")).toBe(64);
 		expect(field(line, "response_header_allocation_free_lookups")).toBe(577);
+		expect(field(line, "response_header_spills")).toBeGreaterThanOrEqual(2);
+		expect(field(line, "response_header_max_count")).toBeGreaterThanOrEqual(24);
+		expect(field(line, "codec_field_spills")).toBeGreaterThan(0);
+		expect(field(line, "codec_arena_spills")).toBeGreaterThan(0);
+		expect(field(line, "codec_max_fields")).toBeGreaterThan(40);
+		expect(field(line, "codec_max_head_bytes")).toBeGreaterThan(1024);
 		expect(field(line, "request_state_scans")).toBe(0);
 		expect(field(line, "close_request_state_scans")).toBe(0);
 		expect(field(line, "request_remove_scans")).toBe(0);
 		expect(field(line, "dispatch_enqueues")).toBe(field(line, "dispatch_dequeues"));
 		expect(field(line, "completion_enqueues")).toBe(field(line, "completion_dequeues"));
 		expect(field(line, "request_inserts")).toBe(field(line, "request_removes"));
-		expect(field(line, "request_state_allocations")).toBe(85);
-		expect(field(line, "request_state_direct_frees")).toBe(85);
+		expect(field(line, "request_state_allocations")).toBe(86);
+		expect(field(line, "request_state_direct_frees")).toBe(86);
 		expect(field(line, "request_body_allocations")).toBe(1);
 		expect(field(line, "request_body_transfers")).toBe(1);
 		expect(field(line, "request_body_direct_frees")).toBe(0);
@@ -659,21 +680,21 @@ describe("node:http request bridge", () => {
 		expect(field(line, "request_copy_bytes")).toBeGreaterThan(
 			field(line, "request_copy_operations"),
 		);
-		expect(field(line, "bulk_shaped_objects")).toBe(85);
-		expect(field(line, "bulk_shaped_slots")).toBe(510);
-		expect(field(line, "property_definitions_avoided")).toBe(510);
-		expect(field(line, "shape_transitions_avoided")).toBe(510);
-		expect(field(line, "incoming_message_shape_append_batches")).toBe(84);
-		expect(field(line, "incoming_message_shape_append_slots")).toBe(1176);
+		expect(field(line, "bulk_shaped_objects")).toBe(86);
+		expect(field(line, "bulk_shaped_slots")).toBe(516);
+		expect(field(line, "property_definitions_avoided")).toBe(516);
+		expect(field(line, "shape_transitions_avoided")).toBe(516);
+		expect(field(line, "incoming_message_shape_append_batches")).toBe(85);
+		expect(field(line, "incoming_message_shape_append_slots")).toBe(1190);
 		expect(field(line, "incoming_message_shape_append_fallbacks")).toBe(1);
-		expect(field(line, "incoming_message_slot_growths_avoided")).toBe(1092);
-		expect(field(line, "response_constructor_shape_append_batches")).toBe(85);
-		expect(field(line, "response_constructor_shape_append_slots")).toBe(510);
+		expect(field(line, "incoming_message_slot_growths_avoided")).toBe(1105);
+		expect(field(line, "response_constructor_shape_append_batches")).toBe(86);
+		expect(field(line, "response_constructor_shape_append_slots")).toBe(516);
 		expect(field(line, "response_constructor_shape_append_fallbacks")).toBe(1);
-		expect(field(line, "response_constructor_slot_growths_avoided")).toBe(425);
-		expect(field(line, "response_shape_append_batches")).toBe(84);
-		expect(field(line, "response_shape_append_slots")).toBe(168);
+		expect(field(line, "response_constructor_slot_growths_avoided")).toBe(430);
+		expect(field(line, "response_shape_append_batches")).toBe(85);
+		expect(field(line, "response_shape_append_slots")).toBe(170);
 		expect(field(line, "response_shape_append_fallbacks")).toBe(1);
-		expect(field(line, "response_slot_growths_avoided")).toBe(84);
+		expect(field(line, "response_slot_growths_avoided")).toBe(85);
 	});
 });

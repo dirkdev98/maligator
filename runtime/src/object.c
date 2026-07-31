@@ -252,6 +252,7 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     object->is_prototype = false;
     object->watched_method_proto = false;
     object->slots_owned = false;
+    object->has_captured_stack = false;
     mal_object_mark_as_prototype(prototype);
 }
 

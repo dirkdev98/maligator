@@ -7,6 +7,13 @@
 #define MAL_HTTP_CODEC_FIELD_MAX (16 * 1024)
 #define MAL_HTTP_CODEC_FIELDS_MAX 256
 #define MAL_HTTP_CODEC_BODY_MAX (64 * 1024)
+/*
+ * Keep realistic request heads allocation-free without baking the protocol
+ * limits into every request allocation. Both buffers spill geometrically up to
+ * the hard limits above, so larger proxy/browser requests remain first-class.
+ */
+#define MAL_HTTP_CODEC_INLINE_FIELDS 16
+#define MAL_HTTP_CODEC_INLINE_ARENA 1024
 
 typedef struct MalHttpCodecField {
     usize name_offset;
@@ -17,15 +24,17 @@ typedef struct MalHttpCodecField {
 
 typedef struct MalHttpCodecHead {
     byte *arena;
+    MalHttpCodecField *fields;
     usize arena_length;
+    usize arena_capacity;
+    usize field_count;
+    usize field_capacity;
     usize method_offset;
     usize method_length;
     usize target_offset;
     usize target_length;
     usize status_offset;
     usize status_length;
-    MalHttpCodecField fields[MAL_HTTP_CODEC_FIELDS_MAX];
-    usize field_count;
     i64 content_length;
     int status_code;
     int major_version;
@@ -33,6 +42,8 @@ typedef struct MalHttpCodecHead {
     bool chunked;
     bool keep_alive;
     bool upgrade;
+    MalHttpCodecField inline_fields[MAL_HTTP_CODEC_INLINE_FIELDS];
+    byte inline_arena[MAL_HTTP_CODEC_INLINE_ARENA];
 } MalHttpCodecHead;
 
 typedef enum MalHttpCodecEventKind {
@@ -55,7 +66,7 @@ typedef struct MalHttpCodec {
     MalHttpCodecHead *event_head;
     byte *event_body;
     usize event_body_length;
-    usize arena_capacity;
+    usize event_body_capacity;
     MalHttpCodecEventKind event;
     bool paused;
     bool complete_pending;

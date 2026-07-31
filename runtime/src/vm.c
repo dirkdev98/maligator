@@ -38,13 +38,11 @@ static u64 g_coroutine_buffer_peak_retained_bytes = 0;
 static u64 g_loaded_instruction_count = 0;
 static u64 g_loaded_instruction_data_count = 0;
 
-static void mal_vm_function_cache_init(MalVm *vm, i32 function_index) {
+void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
     MalPropertyCachePool *pool = &vm->property_cache[function_index];
     const MalFunction *function = &vm->definition->functions[function_index];
     i32 property_count = function->property_ic_count;
-    if (property_count <= 0) {
-        *pool = (MalPropertyCachePool){0};
-    } else {
+    if (property_count > 0 && pool->sites == nullptr) {
         // One zeroed allocation keeps the dense IC row and its sparse compiled-region
         // pointer row adjacent. The 72-byte site is pointer-aligned, so the trailing
         // pointer row remains naturally aligned.
@@ -52,10 +50,22 @@ static void mal_vm_function_cache_init(MalVm *vm, i32 function_index) {
             (usize) property_count,
             sizeof(MalInlineCache) + sizeof(MalObjectRegionCache *));
         pool->regions = (MalObjectRegionCache **) &pool->sites[property_count];
+        MAL_PERF_COUNT(function_property_cache_allocations);
+        MAL_PERF_ADD(
+            function_property_cache_bytes,
+            (u64) property_count
+                * (sizeof(MalInlineCache)
+                   + sizeof(MalObjectRegionCache *)));
     }
-    vm->literal_shape_cache[function_index] = function->literal_shape_count > 0
-        ? calloc((usize) function->literal_shape_count, sizeof(MalShape *))
-        : nullptr;
+    if (function->literal_shape_count > 0
+        && vm->literal_shape_cache[function_index] == nullptr) {
+        vm->literal_shape_cache[function_index] = calloc(
+            (usize) function->literal_shape_count, sizeof(MalShape *));
+        MAL_PERF_COUNT(function_literal_cache_allocations);
+        MAL_PERF_ADD(
+            function_literal_cache_bytes,
+            (u64) function->literal_shape_count * sizeof(MalShape *));
+    }
 }
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
@@ -463,11 +473,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
         calloc((usize) vm->function_capacity, sizeof(MalPropertyCachePool));
     vm->literal_shape_cache =
         calloc((usize) vm->function_capacity, sizeof(MalShape **));
-    for (i32 i = 0; i < function_count; i++) {
-        mal_vm_function_cache_init(vm, i);
-    }
-    vm->property_stub =
-        calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalPropertyStubEntry));
+    vm->property_stub = nullptr;
     vm->iterator_result_shape = nullptr;
     vm->regexp_instance_shape = nullptr;
     vm->regexp_result_shape = nullptr;
@@ -492,10 +498,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->node_http_server_response_parent_shape = nullptr;
     vm->node_http_server_response_constructor_shape = nullptr;
     vm->node_http_server_response_dispatch_shape = nullptr;
-    vm->interp_call_cache = calloc(
-        (usize) MAL_INTERP_CALL_CACHE_SIZE, sizeof(MalInterpCallCacheEntry));
-    vm->global_property_cache = calloc(
-        (usize) MAL_GLOBAL_PROPERTY_CACHE_SIZE, sizeof(MalGlobalPropertyCacheEntry));
+    vm->interp_call_cache = nullptr;
+    vm->global_property_cache = nullptr;
     mal_vm_invalidate_map_get_set_cache(vm);
     vm->global_capacity = definition->global_count > 0 ? definition->global_count : 1;
 #if !MAL_REALMS
@@ -536,8 +540,11 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->native_frame_capacity = 0;
     vm->frame_seq = 0;
     vm->captured_traces = nullptr;
+    vm->captured_trace_free_next = nullptr;
     vm->captured_trace_count = 0;
     vm->captured_trace_capacity = 0;
+    vm->captured_trace_free_head = -1;
+    vm->captured_trace_live_count = 0;
 
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
@@ -738,16 +745,16 @@ void mal_vm_free(MalVm *vm) {
     if (vm->property_cache != nullptr) {
         for (i32 i = 0; i < vm->definition->function_count; i++) {
             MalPropertyCachePool *pool = &vm->property_cache[i];
-            for (i32 j = 0; j < vm->definition->functions[i].property_ic_count; j++) {
-                mal_object_unregister_prototype_cache(&pool->sites[j]);
-            }
-            if (pool->regions != nullptr) {
+            if (pool->sites != nullptr) {
                 for (i32 j = 0; j < vm->definition->functions[i].property_ic_count; j++) {
-                    MalObjectRegionCache *region = pool->regions[j];
-                    if (region != nullptr) {
-                        free(region->keys);
-                        free(region->slots);
-                        free(region);
+                    mal_object_unregister_prototype_cache(&pool->sites[j]);
+                    if (pool->regions != nullptr) {
+                        MalObjectRegionCache *region = pool->regions[j];
+                        if (region != nullptr) {
+                            free(region->keys);
+                            free(region->slots);
+                            free(region);
+                        }
                     }
                 }
             }
@@ -810,9 +817,13 @@ void mal_vm_free(MalVm *vm) {
         mal_vm_free_stack_trace(vm->captured_traces[i]);
     }
     free(vm->captured_traces);
+    free(vm->captured_trace_free_next);
     vm->captured_traces = nullptr;
+    vm->captured_trace_free_next = nullptr;
     vm->captured_trace_count = 0;
     vm->captured_trace_capacity = 0;
+    vm->captured_trace_free_head = -1;
+    vm->captured_trace_live_count = 0;
 
     // These VM-global tables (unlike cell-owned tables, freed by finalizers) are
     // torn down here. Their buffers live in the heap's RAW space, so mal_table_free
@@ -1173,7 +1184,6 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     for (i32 i = fn_base; i < new_functions; i++) {
         vm->property_cache[i] = (MalPropertyCachePool){0};
         vm->literal_shape_cache[i] = nullptr;
-        mal_vm_function_cache_init(vm, i);
     }
 
     return fn_base;
@@ -1200,17 +1210,12 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     callable->instruction_pointer = 0;
     callable->return_register = -1;
     callable->caller_frame_index = -1;
-    callable->with_objects = nullptr;
-    callable->with_count = 0;
-    callable->with_capacity = 0;
-
     return callable;
 }
 
 void mal_vm_free_callable(MalCallable *callable) {
     free(callable->registers);
     free(callable->arguments);
-    free(callable->with_objects);
     free(callable);
 }
 
@@ -1231,13 +1236,6 @@ static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
     if (mal_gc_marking_active && frame->stack_base < 0) {
         mal_gc_satb_shade_frame(frame);
     }
-    // The with-object stack is heap-allocated independent of the register window,
-    // so release it on every teardown (it is null unless the frame entered a with).
-    free(frame->with_objects);
-    frame->with_objects = nullptr;
-    frame->with_count = 0;
-    frame->with_capacity = 0;
-
     if (frame->stack_base >= 0) {
         vm->value_stack_size = frame->stack_base;
     } else {
@@ -1524,9 +1522,6 @@ bool mal_vm_push_function_frame(
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
     frame->enter_seq = vm->frame_seq++;
-    frame->with_objects = nullptr;
-    frame->with_count = 0;
-    frame->with_capacity = 0;
 #if MAL_REALMS
     // Default stamp: the realm current at push time. Call/construct seams that cross
     // into a callee's realm switch to it BEFORE pushing (so this captures the callee
@@ -2977,12 +2972,33 @@ void mal_vm_free_stack_trace(MalStackTrace *trace) {
 }
 
 i32 mal_vm_store_stack_trace(MalVm *vm, MalStackTrace *trace) {
-    if (vm->captured_trace_count == vm->captured_trace_capacity) {
-        vm->captured_trace_capacity = vm->captured_trace_capacity == 0 ? 16 : vm->captured_trace_capacity * 2;
-        vm->captured_traces = realloc(vm->captured_traces, sizeof(MalStackTrace *) * (usize) vm->captured_trace_capacity);
+    i32 id;
+    if (vm->captured_trace_free_head >= 0) {
+        id = vm->captured_trace_free_head;
+        vm->captured_trace_free_head = vm->captured_trace_free_next[id];
+    } else {
+        if (vm->captured_trace_count == vm->captured_trace_capacity) {
+            vm->captured_trace_capacity = vm->captured_trace_capacity == 0
+                ? 16 : vm->captured_trace_capacity * 2;
+            vm->captured_traces = realloc(
+                vm->captured_traces,
+                sizeof(MalStackTrace *) * (usize) vm->captured_trace_capacity);
+            vm->captured_trace_free_next = realloc(
+                vm->captured_trace_free_next,
+                sizeof(i32) * (usize) vm->captured_trace_capacity);
+        }
+        id = vm->captured_trace_count++;
     }
-    i32 id = vm->captured_trace_count++;
     vm->captured_traces[id] = trace;
+    vm->captured_trace_free_next[id] = -1;
+    vm->captured_trace_live_count++;
+    MAL_PERF_COUNT(error_stack_trace_stores);
+    if (mal_perf_stats_enabled
+        && (u64) vm->captured_trace_live_count
+            > mal_perf_stats.error_stack_trace_peak_live) {
+        mal_perf_stats.error_stack_trace_peak_live =
+            (u64) vm->captured_trace_live_count;
+    }
     return id;
 }
 
@@ -2991,6 +3007,19 @@ MalStackTrace *mal_vm_stored_stack_trace(MalVm *vm, i32 id) {
         return nullptr;
     }
     return vm->captured_traces[id];
+}
+
+void mal_vm_release_stack_trace(MalVm *vm, i32 id) {
+    if (id < 0 || id >= vm->captured_trace_count
+        || vm->captured_traces[id] == nullptr) {
+        return;
+    }
+    mal_vm_free_stack_trace(vm->captured_traces[id]);
+    vm->captured_traces[id] = nullptr;
+    vm->captured_trace_free_next[id] = vm->captured_trace_free_head;
+    vm->captured_trace_free_head = id;
+    vm->captured_trace_live_count--;
+    MAL_PERF_COUNT(error_stack_trace_releases);
 }
 
 typedef MalU16Buffer MalStackBuf;

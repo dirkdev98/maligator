@@ -17,11 +17,17 @@ typedef struct MalHostTaskNode {
 
 typedef struct MalHostOperationSlot {
     MalHostTaskNode *terminal;
-    MalHostOperationState state;
+    void *owner;
     u64 generation;
     u32 next_free;
+    u8 state;
     bool occupied;
 } MalHostOperationSlot;
+
+static_assert(sizeof(MalHostTaskNode) <= 80,
+              "host task node outgrew its expected layout");
+static_assert(sizeof(MalHostOperationSlot) == 32,
+              "operation owner indexing should not enlarge slots");
 
 typedef struct MalHostPostedNode {
     struct MalHostPostedNode *next;
@@ -147,6 +153,7 @@ static bool mal_host_operations_grow(MalHostTasks *tasks) {
 static void mal_host_operation_retire(
     MalHostTasks *tasks, MalHostOperationSlot *slot, usize index) {
     slot->state = MAL_HOST_OPERATION_RELEASED;
+    slot->owner = nullptr;
     slot->occupied = false;
     slot->next_free = tasks->free_operation;
     tasks->free_operation = (u32) index + 1;
@@ -207,6 +214,7 @@ bool mal_host_operation_start(MalHostTasks *tasks, MalHostHandle *operation) {
     tasks->free_operation = slot->next_free;
     slot->next_free = 0;
     slot->terminal = terminal;
+    slot->owner = nullptr;
     slot->state = MAL_HOST_OPERATION_STARTING;
     slot->generation = mal_host_operation_generation();
     slot->occupied = true;
@@ -243,6 +251,30 @@ MalHostOperationState mal_host_operation_state(
     const MalHostTasks *tasks, MalHostHandle operation) {
     MalHostOperationSlot *slot = mal_host_operation_slot(tasks, operation, nullptr);
     return slot == nullptr ? MAL_HOST_OPERATION_INVALID : slot->state;
+}
+
+bool mal_host_operation_bind(
+    MalHostTasks *tasks, MalHostHandle operation, void *owner) {
+    if (owner == nullptr) return false;
+    MalHostOperationSlot *slot =
+        mal_host_operation_slot(tasks, operation, nullptr);
+    if (slot == nullptr || slot->owner != nullptr) return false;
+    slot->owner = owner;
+    return true;
+}
+
+void *mal_host_operation_owner(
+    const MalHostTasks *tasks, MalHostHandle operation) {
+    MalHostOperationSlot *slot =
+        mal_host_operation_slot(tasks, operation, nullptr);
+    return slot == nullptr ? nullptr : slot->owner;
+}
+
+void mal_host_operation_unbind(
+    MalHostTasks *tasks, MalHostHandle operation, void *owner) {
+    MalHostOperationSlot *slot =
+        mal_host_operation_slot(tasks, operation, nullptr);
+    if (slot != nullptr && slot->owner == owner) slot->owner = nullptr;
 }
 
 bool mal_host_operation_progress(

@@ -30,6 +30,9 @@ typedef struct MalPerfTableStats {
     u64 delete_slot_moves;
     u64 clears;
     u64 compactions;
+    u64 storage_allocations;
+    u64 storage_releases;
+    u64 entry_shrinks;
 } MalPerfTableStats;
 
 typedef struct MalPerfShapeStats {
@@ -85,6 +88,8 @@ typedef struct MalPerfStats {
     u64 property_ensure_calls;
     u64 property_ensure_inserts;
     u64 property_ensure_hits;
+    u64 property_accessor_sidecar_allocations;
+    u64 property_accessor_sidecar_frees;
     u64 copy_data_linear_exclusion_checks;
     u64 copy_data_shaped_hits;
     u64 copy_data_shaped_slots;
@@ -100,6 +105,16 @@ typedef struct MalPerfStats {
     u64 object_shaped_creations;
     u64 stack_object_initializations;
     u64 stack_object_materializations;
+    u64 error_stack_trace_stores;
+    u64 error_stack_trace_releases;
+    u64 error_stack_trace_peak_live;
+    u64 function_property_cache_allocations;
+    u64 function_property_cache_bytes;
+    u64 function_literal_cache_allocations;
+    u64 function_literal_cache_bytes;
+    u64 property_stub_cache_allocations;
+    u64 interp_call_cache_allocations;
+    u64 global_property_cache_allocations;
 
     u64 binary_number_arithmetic_hits;
     u64 binary_number_arithmetic_fallbacks;
@@ -186,6 +201,14 @@ typedef struct MalPerfStats {
     u64 http_response_header_insertions;
     u64 http_response_header_replacements;
     u64 http_response_header_allocation_free_lookups;
+    u64 http_response_header_spills;
+    u64 http_response_header_max_count;
+    u64 http_codec_head_allocations;
+    u64 http_codec_field_spills;
+    u64 http_codec_arena_spills;
+    u64 http_codec_body_growths;
+    u64 http_codec_max_fields;
+    u64 http_codec_max_head_bytes;
     u64 http_drain_calls;
     u64 http_request_state_scans;
     u64 http_close_scans;

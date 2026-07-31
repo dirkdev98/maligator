@@ -114,7 +114,10 @@ typedef struct MalFiber {
 #define MAL_FIBER_DEFAULT_STACK_SIZE ((usize) 256 * 1024)
 /* Default per-fiber value-stack capacity (entries). Much smaller than the main
  * fiber's — spawned fibers are not expected to reach deep interpreter recursion.
- * Right-sizing / pooling this is a documented Phase-3 follow-up. */
+ * The buffers and C stack are demand-paged by the host allocator/kernel, while
+ * their fixed virtual ranges preserve every live frame's register pointers and
+ * the existing stack-overflow contract. Do not shrink these semantic limits just
+ * to improve a shallow benchmark. */
 #define MAL_FIBER_DEFAULT_VALUE_STACK 8192
 
 /* The running fiber (isolate-local; set on every switch-in). SMP must make

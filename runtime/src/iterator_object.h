@@ -20,9 +20,9 @@ typedef enum MalIteratorKind : u8 {
 
 /**
  * Built-in iterator instance produced by the Map/Set/Array/String iteration
- * methods. Map/Set iterators walk the backing table's storage order (stable
- * because map tables never compact), so entries inserted during iteration
- * are visited and deleted entries are skipped, matching spec semantics.
+ * methods. Map/Set iterators pin and walk the backing table's storage order,
+ * so compaction is deferred while entries inserted during iteration must
+ * remain visible and deleted entries must be skipped.
  */
 typedef struct MalIteratorObject {
     MalObject object;
@@ -34,6 +34,8 @@ typedef struct MalIteratorObject {
      */
     u64 index;
 
+    /** Raw table kept alive by its pin if owner and iterator die together. */
+    MalTable *pinned_table;
     MalIteratorKind kind;
 
     /**
@@ -41,7 +43,12 @@ typedef struct MalIteratorObject {
      * afterwards.
      */
     bool done;
+    /** Map/Set storage cannot be renumbered while this iterator is live. */
+    bool table_pinned;
 } MalIteratorObject;
+
+static_assert(sizeof(MalIteratorObject) <= 72,
+              "built-in iterator outgrew its pinned-table layout");
 
 /**
  * Initialize iterator object state in caller-provided storage.
@@ -63,3 +70,6 @@ MalIteratorObject *mal_iterator_object_new(
     MalIteratorKind kind,
     MalValue target
 );
+
+/** Release a Map/Set table pin on exhaustion or GC finalization. */
+void mal_iterator_object_release_table_pin(MalIteratorObject *iterator);

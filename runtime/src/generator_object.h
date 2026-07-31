@@ -88,6 +88,9 @@ typedef struct MalGeneratorObject {
     bool terminal_yield_pending : 1;
 } MalGeneratorObject;
 
+static_assert(sizeof(MalGeneratorObject) <= (MAL_REALMS ? 240 : 232),
+              "generator state outgrew its packed frame-backed layout");
+
 /**
  * A queued next/throw/return on an async generator: the intrinsic Promise the
  * engine settles directly, its request realm's %Promise% constructor anchor,

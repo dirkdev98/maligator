@@ -198,11 +198,29 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-allocation-stats] empty_objects=%llu shaped_objects=%llu "
-        "stack_objects=%llu stack_materializations=%llu\n",
+        "stack_objects=%llu stack_materializations=%llu "
+        "accessor_sidecar_allocations=%llu accessor_sidecar_frees=%llu "
+        "error_trace_stores=%llu error_trace_releases=%llu error_trace_peak_live=%llu "
+        "function_property_cache_allocations=%llu function_property_cache_bytes=%llu "
+        "function_literal_cache_allocations=%llu function_literal_cache_bytes=%llu "
+        "property_stub_cache_allocations=%llu interp_call_cache_allocations=%llu "
+        "global_property_cache_allocations=%llu\n",
         (unsigned long long) mal_perf_stats.object_empty_creations,
         (unsigned long long) mal_perf_stats.object_shaped_creations,
         (unsigned long long) mal_perf_stats.stack_object_initializations,
-        (unsigned long long) mal_perf_stats.stack_object_materializations
+        (unsigned long long) mal_perf_stats.stack_object_materializations,
+        (unsigned long long) mal_perf_stats.property_accessor_sidecar_allocations,
+        (unsigned long long) mal_perf_stats.property_accessor_sidecar_frees,
+        (unsigned long long) mal_perf_stats.error_stack_trace_stores,
+        (unsigned long long) mal_perf_stats.error_stack_trace_releases,
+        (unsigned long long) mal_perf_stats.error_stack_trace_peak_live,
+        (unsigned long long) mal_perf_stats.function_property_cache_allocations,
+        (unsigned long long) mal_perf_stats.function_property_cache_bytes,
+        (unsigned long long) mal_perf_stats.function_literal_cache_allocations,
+        (unsigned long long) mal_perf_stats.function_literal_cache_bytes,
+        (unsigned long long) mal_perf_stats.property_stub_cache_allocations,
+        (unsigned long long) mal_perf_stats.interp_call_cache_allocations,
+        (unsigned long long) mal_perf_stats.global_property_cache_allocations
     );
     fprintf(
         stderr,
@@ -311,7 +329,11 @@ static void mal_perf_stats_print(void) {
         "response_index_rehashes=%llu response_header_name_coercions=%llu "
         "response_header_name_materializations=%llu response_header_insertions=%llu "
         "response_header_replacements=%llu "
-        "response_header_allocation_free_lookups=%llu drain_calls=%llu "
+        "response_header_allocation_free_lookups=%llu "
+        "response_header_spills=%llu response_header_max_count=%llu "
+        "codec_head_allocations=%llu codec_field_spills=%llu "
+        "codec_arena_spills=%llu codec_body_growths=%llu "
+        "codec_max_fields=%llu codec_max_head_bytes=%llu drain_calls=%llu "
         "request_state_scans=%llu "
         "close_scans=%llu close_request_state_scans=%llu request_remove_scans=%llu "
         "dispatch_enqueues=%llu dispatch_dequeues=%llu completion_enqueues=%llu "
@@ -346,6 +368,14 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_response_header_insertions,
         (unsigned long long) mal_perf_stats.http_response_header_replacements,
         (unsigned long long) mal_perf_stats.http_response_header_allocation_free_lookups,
+        (unsigned long long) mal_perf_stats.http_response_header_spills,
+        (unsigned long long) mal_perf_stats.http_response_header_max_count,
+        (unsigned long long) mal_perf_stats.http_codec_head_allocations,
+        (unsigned long long) mal_perf_stats.http_codec_field_spills,
+        (unsigned long long) mal_perf_stats.http_codec_arena_spills,
+        (unsigned long long) mal_perf_stats.http_codec_body_growths,
+        (unsigned long long) mal_perf_stats.http_codec_max_fields,
+        (unsigned long long) mal_perf_stats.http_codec_max_head_bytes,
         (unsigned long long) mal_perf_stats.http_drain_calls,
         (unsigned long long) mal_perf_stats.http_request_state_scans,
         (unsigned long long) mal_perf_stats.http_close_scans,
@@ -390,7 +420,8 @@ static void mal_perf_stats_print(void) {
             "upserts=%llu upsert_hits=%llu upsert_inserts=%llu find_calls=%llu "
             "probes=%llu max_probe=%llu string_queries=%llu rehashes=%llu "
             "rehash_entries=%llu slot_growths=%llu deletes=%llu delete_hits=%llu "
-            "delete_cluster_scans=%llu delete_slot_moves=%llu clears=%llu compactions=%llu\n",
+            "delete_cluster_scans=%llu delete_slot_moves=%llu clears=%llu compactions=%llu "
+            "storage_allocations=%llu storage_releases=%llu entry_shrinks=%llu\n",
             mal_perf_table_roles[i],
             (unsigned long long) stats->lookups,
             (unsigned long long) stats->lookup_hits,
@@ -410,7 +441,10 @@ static void mal_perf_stats_print(void) {
             (unsigned long long) stats->delete_cluster_scans,
             (unsigned long long) stats->delete_slot_moves,
             (unsigned long long) stats->clears,
-            (unsigned long long) stats->compactions
+            (unsigned long long) stats->compactions,
+            (unsigned long long) stats->storage_allocations,
+            (unsigned long long) stats->storage_releases,
+            (unsigned long long) stats->entry_shrinks
         );
     }
     for (u32 i = 0; i < MAL_PERF_SHAPE_CALLER_COUNT; i++) {

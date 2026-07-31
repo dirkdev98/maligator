@@ -194,6 +194,7 @@ static MalValue mal_builtin_set_prototype_for_each(MalVm *vm, MalValue this_valu
 
     MalValue this_arg = arg_count >= 2 ? args[1] : mal_value_new_undefined();
 
+    mal_table_pin(set->entries);
     MalTableIter iter;
     mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
 
@@ -212,6 +213,7 @@ static MalValue mal_builtin_set_prototype_for_each(MalVm *vm, MalValue this_valu
         }
     }
     mal_gc_native_rooted_end(vm);
+    mal_table_unpin(set->entries);
 
     return mal_value_new_undefined();
 }
@@ -450,6 +452,7 @@ static MalValue mal_builtin_set_prototype_intersection(MalVm *vm, MalValue this_
 
     if ((f64) mal_map_object_size(set) <= record.size) {
         // Walk the receiver's live entries; keep those other.has() accepts.
+        mal_table_pin(set->entries);
         MalTableIter iter;
         mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
         MalKey key;
@@ -457,6 +460,7 @@ static MalValue mal_builtin_set_prototype_intersection(MalVm *vm, MalValue this_
         while (mal_table_iter_next(&iter, &key, &entry)) {
             bool in_other;
             if (!mal_builtin_set_record_has(vm, &record, key.value, &in_other)) {
+                mal_table_unpin(set->entries);
                 return mal_value_new_undefined();
             }
             // has() may have mutated the receiver; only keep still-live keys.
@@ -464,6 +468,7 @@ static MalValue mal_builtin_set_prototype_intersection(MalVm *vm, MalValue this_
                 mal_map_object_set(result, key.value, key.value);
             }
         }
+        mal_table_unpin(set->entries);
     } else {
         // Walk other's keys; keep those the receiver still contains, deduped.
         MalIteratorRecord iter;
@@ -503,6 +508,7 @@ static MalValue mal_builtin_set_prototype_difference(MalVm *vm, MalValue this_va
 
     if ((f64) mal_map_object_size(set) <= record.size) {
         // Remove receiver elements that other.has() accepts.
+        mal_table_pin(set->entries);
         MalTableIter iter;
         mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
         MalKey key;
@@ -510,12 +516,14 @@ static MalValue mal_builtin_set_prototype_difference(MalVm *vm, MalValue this_va
         while (mal_table_iter_next(&iter, &key, &entry)) {
             bool in_other;
             if (!mal_builtin_set_record_has(vm, &record, key.value, &in_other)) {
+                mal_table_unpin(set->entries);
                 return mal_value_new_undefined();
             }
             if (in_other) {
                 mal_map_object_delete(result, key.value);
             }
         }
+        mal_table_unpin(set->entries);
     } else {
         // Remove every key other yields from the receiver's copy.
         MalIteratorRecord iter;
@@ -591,6 +599,7 @@ static MalValue mal_builtin_set_prototype_is_subset_of(MalVm *vm, MalValue this_
         return mal_value_new_boolean(false);
     }
 
+    mal_table_pin(set->entries);
     MalTableIter iter;
     mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
     MalKey key;
@@ -598,13 +607,16 @@ static MalValue mal_builtin_set_prototype_is_subset_of(MalVm *vm, MalValue this_
     while (mal_table_iter_next(&iter, &key, &entry)) {
         bool in_other;
         if (!mal_builtin_set_record_has(vm, &record, key.value, &in_other)) {
+            mal_table_unpin(set->entries);
             return mal_value_new_undefined();
         }
         if (!in_other) {
+            mal_table_unpin(set->entries);
             return mal_value_new_boolean(false);
         }
     }
 
+    mal_table_unpin(set->entries);
     return mal_value_new_boolean(true);
 }
 
@@ -656,6 +668,7 @@ static MalValue mal_builtin_set_prototype_is_disjoint_from(MalVm *vm, MalValue t
     }
 
     if ((f64) mal_map_object_size(set) <= record.size) {
+        mal_table_pin(set->entries);
         MalTableIter iter;
         mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
         MalKey key;
@@ -663,12 +676,15 @@ static MalValue mal_builtin_set_prototype_is_disjoint_from(MalVm *vm, MalValue t
         while (mal_table_iter_next(&iter, &key, &entry)) {
             bool in_other;
             if (!mal_builtin_set_record_has(vm, &record, key.value, &in_other)) {
+                mal_table_unpin(set->entries);
                 return mal_value_new_undefined();
             }
             if (in_other) {
+                mal_table_unpin(set->entries);
                 return mal_value_new_boolean(false);
             }
         }
+        mal_table_unpin(set->entries);
     } else {
         MalIteratorRecord iter;
         if (!mal_builtin_set_record_keys_iterator(vm, &record, &iter)) {

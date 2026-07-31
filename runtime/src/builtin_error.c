@@ -40,6 +40,19 @@ static MalKey mal_error_stack_key(MalVm *vm) {
     return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = MAL_ERROR_STACK_MARKER(vm)};
 }
 
+void mal_builtin_error_finalize_object(MalVm *vm, MalObject *object) {
+    if (!object->has_captured_stack
+        || mal_value_is_undefined(MAL_ERROR_STACK_MARKER(vm))) {
+        return;
+    }
+    MalPropertyLookup lookup =
+        mal_object_get_own(object, mal_error_stack_key(vm));
+    if (lookup.present && mal_value_is_int32(lookup.desc.value)) {
+        mal_vm_release_stack_trace(vm, mal_value_to_i32(lookup.desc.value));
+    }
+    object->has_captured_stack = false;
+}
+
 static void mal_error_mark_error_data(MalVm *vm, MalObject *error) {
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_new_boolean(true), MAL_PROPERTY_NONE);
     mal_object_define_own(error, mal_error_data_key(vm), &desc);
@@ -72,6 +85,7 @@ static void mal_error_capture_stack(MalVm *vm, MalObject *error) {
     i32 id = mal_vm_store_stack_trace(vm, trace);
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(id), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(error, mal_error_stack_key(vm), &desc);
+    error->has_captured_stack = true;
 }
 
 /**
@@ -648,25 +662,31 @@ static MalValue mal_builtin_error_capture_stack_trace(MalVm *vm, MalValue this_v
         )),
     };
     MalPropertyLookup previous_trace = mal_object_get_own(target_object, trace_key);
+    i32 trace_id = mal_vm_store_stack_trace(vm, trace);
     MalPropertyDesc trace_desc = mal_intrinsic_data_desc(
-        mal_value_from_i32(vm->captured_trace_count), MAL_PROPERTY_CONFIGURABLE);
+        mal_value_from_i32(trace_id), MAL_PROPERTY_CONFIGURABLE);
     if (mal_object_define_own(target_object, trace_key, &trace_desc) == MAL_DEFINE_OWN_REJECTED) {
-        mal_vm_free_stack_trace(trace);
+        mal_vm_release_stack_trace(vm, trace_id);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
         return mal_value_new_undefined();
     }
+    target_object->has_captured_stack = true;
     if (mal_object_define_own(target_object, stack_key, &stack_desc) == MAL_DEFINE_OWN_REJECTED) {
         if (previous_trace.present) {
             mal_object_define_own(target_object, trace_key, &previous_trace.desc);
         } else {
             mal_object_delete_own(target_object, trace_key);
+            target_object->has_captured_stack = false;
         }
-        mal_vm_free_stack_trace(trace);
+        mal_vm_release_stack_trace(vm, trace_id);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
         return mal_value_new_undefined();
     }
 
-    mal_vm_store_stack_trace(vm, trace);
+    if (previous_trace.present && mal_value_is_int32(previous_trace.desc.value)) {
+        mal_vm_release_stack_trace(
+            vm, mal_value_to_i32(previous_trace.desc.value));
+    }
     return mal_value_new_undefined();
 }
 

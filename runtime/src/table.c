@@ -1,13 +1,15 @@
 #include "./table.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "./gc.h"
 #include "./heap.h"
 #include "./heap_string.h"
 #include "./perf_stats.h"
 
-#define MAL_TABLE_MIN_CAPACITY 16
+#define MAL_TABLE_SMALL_MIN_CAPACITY 4
+#define MAL_TABLE_GLOBAL_MIN_CAPACITY 16
 #define MAL_TABLE_MAX_LOAD_NUMERATOR 3
 #define MAL_TABLE_MAX_LOAD_DENOMINATOR 4
 
@@ -21,6 +23,7 @@ typedef struct MalTableEntry {
     void *data;
     MalValue value;
     u32 hash_fingerprint;
+    u8 property_flags;
     bool live;
 } MalTableEntry;
 
@@ -34,8 +37,8 @@ static_assert(sizeof(MalTableEntry) <= 32, "MalTableEntry outgrew its 32-byte si
  * MAL_TABLE_EMPTY). Entry handles and iterators are therefore entry INDICES, not
  * pointers, so they survive a realloc of `entries` on growth; only mal_table_compact
  * renumbers, and (like the former per-entry-pointer scheme) it must not run while a
- * handle/iterator is outstanding — which is why an iterated table (Map/Set) never
- * compacts. This replaces the previous representation (an array of pointers to
+ * handle/iterator is outstanding. Pins defer compaction until the last active
+ * storage-order iterator finishes. This replaces the previous representation (an array of pointers to
  * individually malloc'd entries plus a parallel order array): one contiguous
  * allocation, no per-entry malloc, and 4-byte slot indices instead of 8-byte
  * pointers.
@@ -49,6 +52,8 @@ typedef struct MalTable {
     u32 slot_capacity;   // hash array length (power of two)
     u32 entry_count;     // used `entries` cells (live + tombstones); the append cursor
     u32 entry_capacity;  // allocated `entries` cells
+    u32 iterator_pins;   // persistent JS + transient native storage-order iterators
+    bool owner_released; // Map/Set finalizer ran; last iterator pin owns teardown
     i32 *slots;
     MalTableEntry *entries;
 } MalTable;
@@ -95,6 +100,7 @@ static inline u32 mal_table_hash_fingerprint(u64 hash) {
 // or the first empty slot on its probe chain (slots only ever reference live
 // entries — a delete rebuilds the chains — so probing stops at the first empty).
 static usize mal_table_find_slot(const MalTable *table, MalValue key, u64 hash) {
+    if (table->slot_capacity == 0) return 0;
     usize mask = table->slot_capacity - 1;
     usize index = hash & mask;
     u32 fingerprint = mal_table_hash_fingerprint(hash);
@@ -124,6 +130,25 @@ static usize mal_table_find_slot(const MalTable *table, MalValue key, u64 hash) 
     }
 
     return index;
+}
+
+static u32 mal_table_initial_capacity(const MalTable *table) {
+    return table->role == MAL_TABLE_ROLE_ATOMS
+            || table->role == MAL_TABLE_ROLE_SYMBOL_REGISTRY
+        ? MAL_TABLE_GLOBAL_MIN_CAPACITY : MAL_TABLE_SMALL_MIN_CAPACITY;
+}
+
+static void mal_table_allocate_storage(MalTable *table) {
+    if (table->slot_capacity != 0) return;
+    u32 capacity = mal_table_initial_capacity(table);
+    MalHeap *heap = mal_gc_current_heap();
+    table->slots = mal_heap_alloc_raw(heap, capacity * sizeof(*table->slots));
+    for (u32 i = 0; i < capacity; i++) table->slots[i] = MAL_TABLE_EMPTY;
+    table->entries =
+        mal_heap_alloc_raw(heap, capacity * sizeof(*table->entries));
+    table->slot_capacity = capacity;
+    table->entry_capacity = capacity;
+    MAL_PERF_COUNT(tables[table->role].storage_allocations);
 }
 
 static void mal_table_close_delete_hole(MalTable *table, usize hole) {
@@ -204,6 +229,12 @@ static void mal_table_grow_entries_if_needed(MalTable *table) {
         gc_realloc_raw(mal_gc_current_heap(), table->entries, sizeof(MalTableEntry) * table->entry_capacity);
 }
 
+static bool mal_table_should_compact(const MalTable *table) {
+    return table->role == MAL_TABLE_ROLE_MAP && table->iterator_pins == 0
+        && table->tombstone_count >= 16
+        && table->tombstone_count > table->size;
+}
+
 // All four allocations owned by a table (the struct, `slots`, `entries`, and each
 // entry's `data` descriptor blob) live in the GC RAW space so their bytes count
 // toward the collection trigger (big Maps/dictionaries used to under-trigger) and so
@@ -219,14 +250,13 @@ MalTable *mal_table_new(MalTableMode mode, MalTableRole role) {
     table->handle_epoch = 1;
     table->size = 0;
     table->tombstone_count = 0;
-    table->slot_capacity = MAL_TABLE_MIN_CAPACITY;
+    table->slot_capacity = 0;
     table->entry_count = 0;
-    table->entry_capacity = MAL_TABLE_MIN_CAPACITY;
-    table->slots = mal_heap_alloc_raw(heap, table->slot_capacity * sizeof(i32));
-    for (u32 i = 0; i < table->slot_capacity; i++) {
-        table->slots[i] = MAL_TABLE_EMPTY;
-    }
-    table->entries = mal_heap_alloc_raw(heap, table->entry_capacity * sizeof(MalTableEntry));
+    table->entry_capacity = 0;
+    table->iterator_pins = 0;
+    table->owner_released = false;
+    table->slots = nullptr;
+    table->entries = nullptr;
 
     return table;
 }
@@ -248,6 +278,15 @@ void mal_table_free(MalTable *table) {
     gc_free_raw(heap, table);
 }
 
+void mal_table_release_owner(MalTable *table) {
+    if (table == nullptr) return;
+    if (table->iterator_pins == 0) {
+        mal_table_free(table);
+    } else {
+        table->owner_released = true;
+    }
+}
+
 MalTableMode mal_table_mode(const MalTable *table) {
     return table->mode;
 }
@@ -260,6 +299,10 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.tables[table->role] : nullptr;
     if (stats != nullptr) {
         stats->lookups++;
+    }
+    if (table->size == 0) {
+        if (stats != nullptr) stats->lookup_misses++;
+        return (MalTableLookup) {.present = false, .entry = nullptr};
     }
     u64 hash = mal_table_hash_value(key.value);
     usize index = mal_table_find_slot(table, key.value, hash);
@@ -283,6 +326,8 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     if (stats != nullptr) {
         stats->upserts++;
     }
+    if (mal_table_should_compact(table)) mal_table_compact(table);
+    mal_table_allocate_storage(table);
     u64 hash = mal_table_hash_value(key.value);
     usize index = mal_table_find_slot(table, key.value, hash);
     if (table->slots[index] != MAL_TABLE_EMPTY) {
@@ -306,6 +351,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     entry->data = nullptr;
     entry->value = mal_value_new_undefined();
     entry->hash_fingerprint = mal_table_hash_fingerprint(hash);
+    entry->property_flags = 0;
     entry->live = true;
 
     table->slots[index] = (i32) entry_index;
@@ -323,6 +369,7 @@ bool mal_table_delete(MalTable *table, MalKey key) {
     if (stats != nullptr) {
         stats->deletes++;
     }
+    if (table->size == 0) return false;
     u64 hash = mal_table_hash_value(key.value);
     usize index = mal_table_find_slot(table, key.value, hash);
     i32 entry_index = table->slots[index];
@@ -359,6 +406,15 @@ void mal_table_clear(MalTable *table) {
     if (mal_perf_stats_enabled) {
         mal_perf_stats.tables[table->role].clears++;
     }
+    if (table->size == 0) {
+        // A sequence of individual deletes can leave an empty table backed by
+        // tombstones. An explicit clear is a useful release point when no
+        // iterator still depends on the stable insertion-order indices.
+        if (table->iterator_pins == 0 && table->tombstone_count != 0) {
+            mal_table_compact(table);
+        }
+        return;
+    }
     for (u32 e = 0; e < table->entry_count; e++) {
         if (table->entries[e].live) {
             // SATB: shade each dropped key/value (see mal_table_delete).
@@ -374,9 +430,11 @@ void mal_table_clear(MalTable *table) {
     for (u32 i = 0; i < table->slot_capacity; i++) {
         table->slots[i] = MAL_TABLE_EMPTY;
     }
+    if (table->iterator_pins == 0) mal_table_compact(table);
 }
 
 void mal_table_compact(MalTable *table) {
+    if (table->iterator_pins != 0 || table->tombstone_count == 0) return;
     if (mal_perf_stats_enabled) {
         mal_perf_stats.tables[table->role].compactions++;
     }
@@ -402,7 +460,52 @@ void mal_table_compact(MalTable *table) {
     if (table->handle_epoch == 0) {
         table->handle_epoch = 1;
     }
-    mal_table_rehash(table, table->slot_capacity);
+    if (table->size == 0) {
+        gc_free_raw(mal_gc_current_heap(), table->slots);
+        gc_free_raw(mal_gc_current_heap(), table->entries);
+        table->slots = nullptr;
+        table->entries = nullptr;
+        table->slot_capacity = 0;
+        table->entry_capacity = 0;
+        MAL_PERF_COUNT(tables[table->role].storage_releases);
+        return;
+    }
+
+    u32 target_entries = mal_table_initial_capacity(table);
+    while (target_entries < table->size) target_entries *= 2;
+    if (target_entries < table->entry_capacity) {
+        // gc_realloc_raw deliberately retains a buffer when the new request
+        // fits its existing size class. Compaction is a memory release point,
+        // so allocate the smaller class explicitly and return the old cell.
+        MalHeap *heap = mal_gc_current_heap();
+        MalTableEntry *entries = mal_heap_alloc_raw(
+            heap, sizeof(*entries) * target_entries);
+        memcpy(entries, table->entries,
+               sizeof(*entries) * table->entry_count);
+        gc_free_raw(heap, table->entries);
+        table->entries = entries;
+        table->entry_capacity = target_entries;
+        MAL_PERF_COUNT(tables[table->role].entry_shrinks);
+    }
+
+    u32 target_slots = mal_table_initial_capacity(table);
+    while (((usize) table->size + 1) * MAL_TABLE_MAX_LOAD_DENOMINATOR
+           > (usize) target_slots * MAL_TABLE_MAX_LOAD_NUMERATOR) {
+        target_slots *= 2;
+    }
+    mal_table_rehash(table, target_slots);
+}
+
+void mal_table_pin(MalTable *table) {
+    if (table != nullptr) table->iterator_pins++;
+}
+
+void mal_table_unpin(MalTable *table) {
+    if (table == nullptr || table->iterator_pins == 0) return;
+    table->iterator_pins--;
+    if (table->iterator_pins == 0 && table->owner_released) {
+        mal_table_free(table);
+    }
 }
 
 MalKey mal_table_entry_key(const MalTable *table, void *entry) {
@@ -415,6 +518,15 @@ void *mal_table_entry_data(const MalTable *table, void *entry) {
 
 void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data) {
     table->entries[mal_table_handle_index(entry)].data = data;
+}
+
+u8 mal_table_entry_property_flags(const MalTable *table, void *entry) {
+    return table->entries[mal_table_handle_index(entry)].property_flags;
+}
+
+void mal_table_entry_set_property_flags(
+    MalTable *table, void *entry, u8 flags) {
+    table->entries[mal_table_handle_index(entry)].property_flags = flags;
 }
 
 MalValue mal_table_entry_value(const MalTable *table, void *entry) {
