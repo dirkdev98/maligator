@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 
-const CACHE_SCHEMA = 6;
+const CACHE_SCHEMA = 7;
 const C2X_FLAGS = ["-std=c2x"];
 const LTO_FLAGS = ["-flto"];
 
@@ -312,7 +312,7 @@ function fingerprintFor(
 		lto: LTO_FLAGS,
 		strip:
 			tools.strip?.args?.[0] === "objcopy"
-				? [["--strip-all"]]
+				? [["-s"]]
 				: platform === "darwin"
 					? [["-x"], ["-S"]]
 					: [["--strip-all"], ["-s"]],
@@ -455,27 +455,35 @@ function probeCapabilities(
 	let strip = false;
 	let stripArgs: Array<string> = [];
 	if (tools.strip !== undefined && c2x) {
-		const candidates =
-			tools.strip.args?.[0] === "objcopy"
-				? [["--strip-all"]]
-				: platform === "darwin"
-					? [["-x"], ["-S"]]
-					: [["--strip-all"], ["-s"]];
-		for (const args of candidates) {
-			copyFileSync(path.join(probeDir, "c2x-probe"), path.join(probeDir, "strip-probe"));
-			const invocationArgs =
-				tools.strip.args?.[0] === "objcopy"
-					? [...args, "strip-probe", "strip-probe-output"]
-					: [...args, "strip-probe"];
-			if (
-				run(tools.strip.path, toolArguments(tools.strip, invocationArgs), {
-					cwd: probeDir,
-					env,
-				}).ok
-			) {
-				strip = true;
-				stripArgs = args;
-				break;
+		if (tools.strip.args?.[0] === "objcopy") {
+			// Zig objcopy can reject large LTO ELFs even after succeeding on a
+			// probe-sized binary. Probe and use the cc driver's link-time strip.
+			stripArgs = ["-s"];
+			strip = compile(
+				tools.cc,
+				[...C2X_FLAGS, "main.c", ...stripArgs, "-o", "strip-probe"],
+				probeDir,
+				env,
+			);
+			if (!strip) stripArgs = [];
+		} else {
+			const candidates =
+				platform === "darwin" ? [["-x"], ["-S"]] : [["--strip-all"], ["-s"]];
+			for (const args of candidates) {
+				copyFileSync(
+					path.join(probeDir, "c2x-probe"),
+					path.join(probeDir, "strip-probe"),
+				);
+				if (
+					run(tools.strip.path, toolArguments(tools.strip, [...args, "strip-probe"]), {
+						cwd: probeDir,
+						env,
+					}).ok
+				) {
+					strip = true;
+					stripArgs = args;
+					break;
+				}
 			}
 		}
 	}

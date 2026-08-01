@@ -86,8 +86,8 @@ export function buildLoadDriver(
 /** Link emitted generated C into a standalone binary using one resolved context. */
 export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	const { context } = options;
-	// Zig objcopy accepts the probe-sized binary but returns "unimplemented" for
-	// large LTO ELFs. Its cc driver supports portable link-time stripping instead.
+	// Zig's strip capability is probed and applied through its cc driver because
+	// objcopy can reject large LTO ELFs after succeeding on a small probe.
 	const zigLinkTimeStrip =
 		context.plan.strip && context.toolchain.tools.strip?.args?.[0] === "objcopy";
 	const artifacts = ensureNativeArtifacts(context, options.verbose);
@@ -131,7 +131,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			cPath,
 			options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c"),
 			...artifacts.linkArgs,
-			...(zigLinkTimeStrip ? ["-s"] : []),
+			...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),
 			"-o",
 			binaryPath,
 		]),

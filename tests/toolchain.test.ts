@@ -242,6 +242,7 @@ describe("native toolchain discovery", () => {
 		expect(toolchain.tools.ar.args).toEqual(["ar"]);
 		expect(toolchain.tools.cxx?.args).toEqual(["c++", "-target", "x86_64-linux-gnu"]);
 		expect(toolchain.tools.strip?.args).toEqual(["objcopy"]);
+		expect(toolchain.probes.stripArgs).toEqual(["-s"]);
 		expect(formatToolchainReport(report, "linux", true)).toContain(
 			"build mode: Zig cross-build",
 		);
