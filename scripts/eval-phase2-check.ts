@@ -96,7 +96,7 @@ function run(cmd: string, args: Array<string>): RunResult {
 		stderr: result.stderr,
 		code: result.status ?? 1,
 		error:
-			(result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+			result.error?.code === "ENOENT"
 				? `command not found: ${cmd}`
 				: undefined,
 	};
