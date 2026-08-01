@@ -393,7 +393,7 @@ test("direct arguments reads avoid eager object materialization", () => {
 	});
 	expect(instructionsOf(first)).toContainEqual({
 		type: "loadStaticArgument",
-		registers: [2, 0, 1],
+		registers: [2, 1, 0, 1],
 		index: 0,
 	});
 	expect(count.argumentsObjectRegister).toBeUndefined();

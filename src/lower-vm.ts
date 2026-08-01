@@ -1472,8 +1472,8 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "LOAD_STATIC_ARGUMENT",
 				dst: instruction.registers[0],
-				direct: instruction.registers[1],
-				fallback: instruction.registers[2],
+				direct: instruction.registers[2],
+				fallback: instruction.registers[1],
 				index: instruction.index,
 			};
 		case "loadThis":

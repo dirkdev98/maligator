@@ -131,7 +131,11 @@ missingReceiver = undefined;
 assert(twoMissingStatic() === 42, "missing static reads share arguments identity");
 delete Object.prototype[0];
 delete Object.prototype[1];
-assert(repeatedSnapshots() === 73, "omitted repeated snapshots");
+const omittedRepeatedSnapshots = repeatedSnapshots();
+assert(
+	omittedRepeatedSnapshots === 73,
+	"omitted repeated snapshots: " + omittedRepeatedSnapshots,
+);
 assert(repeatedSnapshots(2, 3, 4, 5, 6) === 5528, "wide repeated snapshots");
 assert(defaultFromArguments() === 9, "omitted default parameter");
 assert(defaultFromArguments(7) === 15, "provided default parameter");

@@ -17,6 +17,8 @@ const expected = ["arguments-static PASS"];
 describe("static arguments access", () => {
 	let compiled: string;
 	let interpreted: string;
+	let compiledStress: string;
+	let interpretedStress: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -35,19 +37,33 @@ describe("static arguments access", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+		compiledStress = buildNativeBinary({
+			fixture: "tests/local/arguments-static-stress.js",
+			name: "arguments-static-stress",
+			compiled: true,
+			mainFile: HOST_MAIN,
+			outDir,
+		});
+		interpretedStress = buildNativeBinary({
+			fixture: "tests/local/arguments-static-stress.js",
+			name: "arguments-static-stress-ni",
+			compiled: false,
+			mainFile: HOST_MAIN,
+			outDir,
+		});
 	});
 
-	for (const [name, binary] of [
-		["compiled", () => compiled],
-		["interpreted", () => interpreted],
+	for (const [name, binary, stressBinary] of [
+		["compiled", () => compiled, () => compiledStress],
+		["interpreted", () => interpreted, () => interpretedStress],
 	] as const) {
 		it(`${name} preserves direct and object arguments semantics`, () => {
 			assertExactLines(runToStdout(binary()), expected);
 		});
 		it(`${name} preserves arguments lifetimes under GC stress`, () => {
 			assertExactLines(
-				runToStdout(binary(), { env: STRESS_ENV, timeoutMs: 60000 }),
-				expected,
+				runToStdout(stressBinary(), { env: STRESS_ENV, timeoutMs: 60000 }),
+				["arguments-static-stress PASS"],
 			);
 		});
 		it(`${name} reports snapshot move costs`, () => {

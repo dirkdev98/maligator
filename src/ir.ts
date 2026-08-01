@@ -809,14 +809,16 @@ export type IRInstruction =
 			registers: [number];
 			index: number;
 	  }
-	| {
+		| {
 			// Direct static index read. Supplied indexes use the optional live mapped
 			// value; missing indexes lazily materialize and cache the arguments object.
 			type: "loadStaticArgument";
-			// [destination, mapped value or -1, in-place fallback cache]
-			registers: [number, number, number];
+			// [destination, updated fallback cache, mapped value or -1,
+			// previous fallback cache]. The duplicated cache operand makes its
+			// read/write contract explicit to liveness and register allocation.
+			registers: [number, number, number, number];
 			index: number;
-	  }
+		  }
 	| {
 			type: "loadThis";
 
@@ -11286,7 +11288,7 @@ function compileStaticArgumentsMember(
 	const result = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "loadStaticArgument",
-		registers: [result, direct, fallbackRegister],
+		registers: [result, fallbackRegister, direct, fallbackRegister],
 		index: access.index,
 	});
 	return result;

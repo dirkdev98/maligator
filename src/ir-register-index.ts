@@ -37,6 +37,7 @@ const TWO_DESTINATIONS = new Set<IRInstruction["type"]>([
 	"iteratorStep",
 	"yield",
 	"await",
+	"loadStaticArgument",
 ]);
 
 /** Number of leading register operands defined by an instruction. */

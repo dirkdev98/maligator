@@ -1613,7 +1613,7 @@ function inlineInstruction(
 	if (instruction.type === "loadStaticArgument") {
 		return {
 			type: "move",
-			registers: [instruction.registers[0] + offset, instruction.registers[1] + offset],
+			registers: [instruction.registers[0] + offset, instruction.registers[2] + offset],
 		};
 	}
 	return withRegisterOffset(instruction, offset);
