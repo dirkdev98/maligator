@@ -294,6 +294,8 @@ describe("native toolchain discovery", () => {
 			`cargo-cxx ${realpathSync(path.join(fake.bin, "zig"))} c++ -target x86_64-linux-gnu`,
 		);
 		expect(invocations).toContain(" -lm");
+		expect(invocations).toContain(" -s -o ");
+		expect(invocations).not.toContain("zig objcopy");
 	});
 
 	it("rejects unsupported Zig cross targets before probing tools", () => {
