@@ -1,15 +1,19 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
+import { createBuildArtifact } from "./build-artifact.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
+import { selectNativeBuildPlan } from "./build-flags.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
+import { requireToolchain } from "./toolchain.ts";
 import { stripTypesWithTypeScript } from "./typescript-strip.ts";
+import { MALIGATOR_VERSION } from "./version.ts";
 
 export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 	"host_main.c",
@@ -31,6 +35,7 @@ export function productCliConfig(
 	return resolveBuildConfig({
 		assets: {
 			compilerWire: { type: "file", path: path.resolve(compilerWirePath) },
+			license: { type: "file", path: path.resolve(repositoryRoot, "LICENSE") },
 			runtime: {
 				type: "directory",
 				path: path.resolve(repositoryRoot, "runtime"),
@@ -46,6 +51,9 @@ export interface BuildProductCliOptions {
 	repositoryRoot: string;
 	outDir: string;
 	name?: string;
+	target?: string;
+	production?: boolean;
+	artifactDirectory?: string;
 }
 
 /** Build the redistributable CLI and bake all resources it needs outside the checkout. */
@@ -80,18 +88,40 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		maligatorSurface: config.surface.maligator,
 	});
 	const derivation = buildDerivationFromConfig(config);
+	const toolchain = requireToolchain({
+		needsCxx: config.surface.webPlatform,
+		rustDir: path.join(runtimeDirectory, "rust"),
+		target: options.target,
+	});
+	const production = options.production ?? true;
+	const plan = selectNativeBuildPlan(toolchain, production);
 	const context = resolveNativeBuildContext({
+		toolchain,
+		plan,
 		runtimeDirectory,
 		features: derivation.features,
 		compilerBake: { kind: "prebuilt", path: compilerWirePath },
 	});
-	return buildLocalBinary({
+	const executableName = options.name ?? "maligator";
+	const binaryPath = buildLocalBinary({
 		context,
-		name: options.name ?? "maligator-product",
+		name: executableName,
 		cSource,
 		verbose: false,
 		mainFile: path.join(runtimeDirectory, "host_main.c"),
 		outDir,
 		cacheSuffix: derivation.cacheSuffix,
 	}).binaryPath;
+	if (options.artifactDirectory !== undefined) {
+		createBuildArtifact({
+			binaryPath,
+			directory: options.artifactDirectory,
+			executableName,
+			licensePath: path.join(repositoryRoot, "LICENSE"),
+			version: MALIGATOR_VERSION,
+			target: toolchain.rustTarget,
+			production,
+		});
+	}
+	return binaryPath;
 }

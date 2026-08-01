@@ -1,6 +1,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
+import { createBuildArtifact } from "./build-artifact.ts";
 import {
 	assertEvalPolicy,
 	assertRegexpPolicy,
@@ -54,6 +55,8 @@ export interface CommandContext {
 export interface CompilerInstallation {
 	/** Absolute runtime source tree owned by this compiler installation. */
 	runtimeDirectory: string;
+	/** License notice copied into deployable artifacts. */
+	licensePath?: string;
 	evalCompiler:
 		| { kind: "source"; sourceDirectory: string; entrypoint: string }
 		| { kind: "prebuilt"; wirePath: string };
@@ -65,6 +68,7 @@ export function developmentCompilerInstallation(
 	const sourceDirectory = path.resolve(moduleDirectory);
 	return {
 		runtimeDirectory: path.resolve(sourceDirectory, "../runtime"),
+		licensePath: path.resolve(sourceDirectory, "../LICENSE"),
 		evalCompiler: {
 			kind: "source",
 			sourceDirectory,
@@ -76,9 +80,11 @@ export function developmentCompilerInstallation(
 export function productCompilerInstallation(
 	runtimeDirectory: string,
 	compilerWirePath: string,
+	licensePath?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
+		...(licensePath === undefined ? {} : { licensePath: path.resolve(licensePath) }),
 		evalCompiler: { kind: "prebuilt", wirePath: path.resolve(compilerWirePath) },
 	};
 }
@@ -86,6 +92,7 @@ export function productCompilerInstallation(
 export interface BuildCommandResult {
 	binaryPath?: string;
 	serializedPath?: string;
+	artifactDirectory?: string;
 }
 
 class CommandError extends Error {
@@ -187,6 +194,20 @@ function compileAndBuild(
 		command.target !== undefined
 	) {
 		commandError("error: '--target' is not applicable to portable wire output");
+	}
+	if (
+		command.kind === "build" &&
+		command.internal.serializePath !== undefined &&
+		command.artifactDirectory !== undefined
+	) {
+		commandError("error: '--artifact' is not applicable to portable wire output");
+	}
+	if (
+		command.kind === "build" &&
+		command.artifactDirectory !== undefined &&
+		!command.production
+	) {
+		commandError("error: '--artifact' requires '--production'");
 	}
 	let assets: ReturnType<typeof includeConfiguredAssets>;
 	try {
@@ -311,6 +332,25 @@ function compileAndBuild(
 	});
 	buildTiming();
 	log.info(`Binary: ${binaryPath}`);
+	if (command.kind === "build" && command.artifactDirectory !== undefined) {
+		let artifact: ReturnType<typeof createBuildArtifact>;
+		try {
+			artifact = createBuildArtifact({
+				binaryPath,
+				directory: command.artifactDirectory,
+				licensePath: context.installation.licensePath,
+				version: MALIGATOR_VERSION,
+				target: nativeContext.toolchain.rustTarget,
+				production: true,
+			});
+		} catch (error) {
+			commandError(
+				`error: could not create artifact: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		log.info(`Artifact: ${artifact.directory}`);
+		return { binaryPath, artifactDirectory: artifact.directory };
+	}
 	return { binaryPath };
 }
 

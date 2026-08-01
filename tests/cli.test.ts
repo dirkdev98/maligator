@@ -45,6 +45,8 @@ describe("parseCliArgs", () => {
 			"--production",
 			"--target",
 			"x86_64-unknown-linux-gnu",
+			"--artifact",
+			"dist/release",
 		]);
 		expect(command).toMatchObject({
 			kind: "build",
@@ -52,6 +54,7 @@ describe("parseCliArgs", () => {
 			configPath: "other.json",
 			production: true,
 			target: "x86_64-unknown-linux-gnu",
+			artifactDirectory: "dist/release",
 		});
 	});
 
@@ -117,6 +120,7 @@ describe("command shell", () => {
 		const installation = developmentCompilerInstallation(path.join(repoRoot, "src"));
 		expect(installation).toEqual({
 			runtimeDirectory: path.join(repoRoot, "runtime"),
+			licensePath: path.join(repoRoot, "LICENSE"),
 			evalCompiler: {
 				kind: "source",
 				sourceDirectory: path.join(repoRoot, "src"),
@@ -157,6 +161,10 @@ describe("command shell", () => {
 		expect(productConfig.assets.runtime).toMatchObject({
 			path: path.join(repoRoot, "runtime"),
 			include: PRODUCT_RUNTIME_ASSET_INCLUDE,
+		});
+		expect(productConfig.assets.license).toEqual({
+			type: "file",
+			path: path.join(repoRoot, "LICENSE"),
 		});
 	});
 

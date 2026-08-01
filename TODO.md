@@ -23,10 +23,10 @@ run a production application binary.
 
 - [x] Support application `build --production` with `-O2`, capability-probed LTO,
       and capability-probed symbol stripping.
-- [ ] Add a deterministic release command around the existing product-CLI builder.
-- [ ] Make the package version, `maligator --version`, and artifact version come
+- [x] Add a deterministic release command around the existing product-CLI builder.
+- [x] Make the package version, `maligator --version`, and artifact version come
       from one source of truth.
-- [ ] Define release artifact names and archive layout, and emit checksums.
+- [x] Define release artifact names and archive layout, and emit checksums.
 - [ ] Smoke-test the production CLI without the repository or Node.js on `PATH`,
       including `--help`, `--version`, `doctor`, `init`, `build --production`, and
       running the resulting application.
@@ -40,27 +40,29 @@ run a production application binary.
 - [ ] Build the product CLI natively for every supported target in CI.
 - [ ] Run the release smoke test on every artifact, including a clean host with the
       documented C/C++ and Rust toolchain requirements.
-- [ ] Decide and document the signing/notarization policy for each platform.
+- [x] Decide and document the signing/notarization policy for each platform.
 
 ### Publish to npm
 
-- [ ] Choose the npm distribution layout: platform packages plus a small launcher,
+- [x] Choose the npm distribution layout: platform packages plus a small launcher,
       or one package containing all supported binaries.
-- [ ] Complete publishable package metadata: remove `private`, add a description,
-      license, keywords, supported platforms/CPU policy, and an explicit `files`
-      allowlist.
-- [ ] Make installation select the correct binary and fail clearly on unsupported
+- [x] Complete publishable staged-package metadata: omit `private`, add a
+      description, license, keywords, supported platforms/CPU policy, and an
+      explicit `files` allowlist.
+- [x] Make installation select the correct binary and fail clearly on unsupported
       hosts; document whether a source-build fallback exists.
-- [ ] Verify `npm pack` contents and install the tarball in a clean temporary
+- [x] Verify `npm pack` contents and install the tarball in a clean temporary
       project before publishing.
 - [ ] Publish prereleases with SemVer alpha versions under the npm `alpha` dist-tag,
       leaving `latest` untouched.
 
 ### Release gates and operations
 
-- [ ] Add a tag-driven release workflow that runs the release-candidate gate,
-      builds all artifacts once, and publishes those exact tested artifacts using
-      npm trusted publishing.
+- [x] Add guarded local alpha release automation that builds artifacts once, packs
+      exact-version platform packages, verifies tarball digests, publishes platform
+      packages before the launcher, and leaves `latest` untouched.
+- [ ] Move publishing to a tag-driven workflow with npm trusted publishing after
+      the local alpha process has stabilized.
 - [ ] Run `npm run test:full:report` for a release candidate and resolve or record
       every failure; this remains approval-only.
 - [ ] Write concise release notes with the supported matrix, required application

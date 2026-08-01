@@ -10,5 +10,6 @@ runCli(process.argv.slice(2), {
 	installation: productCompilerInstallation(
 		assets.materialize("runtime"),
 		assets.materialize("compilerWire"),
+		assets.materialize("license"),
 	),
 });

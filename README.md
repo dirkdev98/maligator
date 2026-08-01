@@ -31,7 +31,7 @@ the command layer; native stages do not infer runtime ownership from the applica
 ```text
 maligator init
 maligator doctor [--verbose] [--target rust-triple]
-maligator build [entry] [--production] [--target rust-triple] [--config path]
+maligator build [entry] [--production] [--artifact directory] [--target rust-triple] [--config path]
 maligator run [entry] [--config path] [-- args...]
 ```
 
@@ -44,6 +44,21 @@ when neither source supplies an entry.
 `run` builds in development mode, forwards every argument after `--` without
 re-parsing it, and propagates the executable's exit status or terminating signal.
 Use `build --production` and launch the reported binary directly for production.
+Adding `--artifact <directory>` creates a deployable artifact and therefore requires
+`--production`. The destination must be absent or empty. Its build-owned layout is:
+
+```text
+artifact/
+├── artifact.json
+├── LICENSE
+├── SHA256SUMS
+└── bin/
+    └── <application>
+```
+
+The manifest records the Maligator version, Rust target triple, production status,
+binary size, and SHA-256 digest. Release tooling may archive this directory but does
+not reconstruct its contents.
 
 Use `maligator --help` and `maligator --version` for command help and version output.
 Unknown options, missing option values, and extra positional arguments are errors.
@@ -201,6 +216,50 @@ The distributed self-hosted CLI embeds the runtime C sources, Rust crate, and a
 prebuilt eval compiler wire. It materializes those content-addressed assets on
 startup, so the copied compiler can run the full native pipeline outside a Maligator
 checkout and without Node.js. `npm run selfhost:cli` exercises that transfer path.
+
+## Alpha releases
+
+The initial npm support matrix is macOS and glibc-based Linux on arm64 and x64.
+Windows is deferred because the native host/runtime currently depends on POSIX APIs.
+The first alpha binaries are unsigned; macOS artifacts are not notarized. Minimum OS
+versions will be fixed after the release artifacts have run on the clean-host
+validation matrix.
+
+`@maligator/cli` is a small Node.js launcher with exact-version optional dependencies
+on these native packages:
+
+- `@maligator/cli-darwin-arm64`
+- `@maligator/cli-darwin-x64`
+- `@maligator/cli-linux-arm64`
+- `@maligator/cli-linux-x64`
+
+There is no source-build fallback. An unsupported host or installation without its
+optional platform package fails with an actionable message.
+
+Releases are local during the alpha phase. `package.json` is the version source of
+truth; `src/version.ts` is generated and checked before building or publishing.
+
+```shell
+# After publishing the current alpha, prepare the next numeric alpha version.
+npm run version:alpha
+
+# Build the four Zig-cross-compiled product CLI artifacts and stage npm packages.
+npm run release:build
+
+# Validate npm's exact file allowlists and create the five package tarballs.
+npm run release:pack
+
+# Explicit confirmation plus a clean worktree are required; latest is untouched.
+npm run release:publish -- --confirm 0.1.0-alpha.1
+```
+
+`release:publish` verifies every packed tarball against `packages.json`, publishes
+the four platform packages first, and publishes `@maligator/cli` last under the
+`alpha` dist-tag.
+
+During development, `release:build` and `release:pack` both accept
+`-- --target <rust-triple>`. Packing a native-host target also installs the two
+tarballs into a clean temporary project and verifies the installed launcher.
 
 Applications with `surface.webPlatform: true` link `host_main.c`, which installs the
 web globals and drives the host event loop. Non-web applications retain the lean

@@ -1,12 +1,13 @@
 {
 	"name": "maligator",
-	"version": "0.0.1",
+	"version": "0.1.0-alpha.1",
 	"private": true,
-	"description": "",
+	"description": "Ahead-of-time JavaScript compiler and native runtime",
 	"homepage": "https://github.com/dirkdev98/maligator#readme",
 	"bugs": {
 		"url": "https://github.com/dirkdev98/maligator/issues"
 	},
+	"license": "MIT",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/dirkdev98/maligator.git"
@@ -26,6 +27,9 @@
 		"format": "oxfmt",
 		"lint": "eslint . --concurrency=auto --fix --cache --cache-location .cache/eslint/ && oxfmt",
 		"lint:ci": "eslint . --concurrency=auto && oxfmt --check",
+		"release:build": "node ./scripts/release.ts build",
+		"release:pack": "node ./scripts/release.ts pack",
+		"release:publish": "node ./scripts/release.ts publish",
 		"selfhost:cli": "node ./scripts/selfhost-cli-check.ts",
 		"selfhost:frontend": "node ./scripts/selfhost-frontend-check.ts",
 		"selfhost:native": "node ./scripts/selfhost-native-build-check.ts",
@@ -47,7 +51,8 @@
 		"test:wpt:matrix-report": "node ./scripts/wpt.ts --canonical --mode normal --mode gc-stress --backend compiled --backend interpreted --policy complete",
 		"test:wpt:report": "node ./scripts/wpt.ts --canonical --mode normal --backend compiled --policy complete",
 		"type-check": "tsc",
-		"update": "npx npm-check --update --save-exact"
+		"update": "npx npm-check --update --save-exact",
+		"version:alpha": "node ./scripts/release.ts version-alpha"
 	},
 	"dependencies": {
 		"meriyah": "7.1.0",

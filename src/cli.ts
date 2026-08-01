@@ -1,4 +1,4 @@
-export const MALIGATOR_VERSION = "0.0.1";
+export { MALIGATOR_VERSION } from "./version.ts";
 
 export interface InternalBuildOptions {
 	name?: string;
@@ -20,6 +20,7 @@ export interface BuildCommand {
 	entry?: string;
 	configPath?: string;
 	target?: string;
+	artifactDirectory?: string;
 	production: boolean;
 	internal: InternalBuildOptions;
 }
@@ -58,6 +59,7 @@ Options:
   --config <path>              Use an explicit build configuration
   --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
+  --artifact <directory>       Create a deployable production artifact
   -h, --help                   Show help
   -V, --version                Show the version`;
 
@@ -147,6 +149,11 @@ function parseBuild(args: Array<string>): CliCommand {
 		}
 		if (argument === "--target") {
 			command.target = optionValue(args, index, argument);
+			index++;
+			continue;
+		}
+		if (argument === "--artifact") {
+			command.artifactDirectory = optionValue(args, index, argument);
 			index++;
 			continue;
 		}

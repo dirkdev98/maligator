@@ -10,7 +10,7 @@ export default defineConfig(
 	},
 	{
 		// CLI/dev scripts print to stdout/stderr by design — console is their output.
-		files: ["scripts/**"],
+		files: ["scripts/**", "npm/cli/bin/**"],
 		rules: { "no-console": "off" },
 	},
 );
