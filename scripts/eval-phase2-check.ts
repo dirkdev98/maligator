@@ -96,9 +96,9 @@ function run(cmd: string, args: Array<string>): RunResult {
 		stderr: result.stderr,
 		code: result.status ?? 1,
 		error:
-			result.error?.code === "ENOENT"
-				? `command not found: ${cmd}`
-				: undefined,
+			result.error === undefined
+				? undefined
+				: `could not run ${cmd}: ${result.error.message}`,
 	};
 }
 

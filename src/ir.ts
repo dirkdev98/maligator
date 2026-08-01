@@ -809,7 +809,7 @@ export type IRInstruction =
 			registers: [number];
 			index: number;
 	  }
-		| {
+	| {
 			// Direct static index read. Supplied indexes use the optional live mapped
 			// value; missing indexes lazily materialize and cache the arguments object.
 			type: "loadStaticArgument";
@@ -818,7 +818,7 @@ export type IRInstruction =
 			// read/write contract explicit to liveness and register allocation.
 			registers: [number, number, number, number];
 			index: number;
-		  }
+	  }
 	| {
 			type: "loadThis";
 
