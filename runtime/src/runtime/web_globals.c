@@ -166,7 +166,10 @@ static MalValue mal_web_text_encoder_encode_into(
         return mal_value_new_undefined();
     }
     MalTypedArrayObject *ta = mal_value_to_typed_array_object(args[1]);
-    byte *dst = ta->buffer != nullptr ? (byte *) ta->buffer->data + ta->byte_offset : nullptr;
+    byte *dst = nullptr;
+    if (ta->buffer != nullptr && ta->buffer->data != nullptr) {
+        dst = (byte *) ta->buffer->data + ta->byte_offset;
+    }
     usize cap = mal_typed_array_object_byte_length(ta);
 
     const c16 *u = mal_string_code_units(str);
