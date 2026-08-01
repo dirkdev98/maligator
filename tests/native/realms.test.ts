@@ -103,7 +103,17 @@ describe("generic realm runtime API", () => {
 		["interpreted", () => dynamicInterpreted],
 	] as const)("roots %s dynamic-function realms under GC stress", (_name, binary) => {
 		assertPassLine(
-			runToStdout(binary(), { env: { ...STRESS_ENV, MAL_TEST262: "1" } }),
+			runToStdout(binary(), {
+				env: {
+					...STRESS_ENV,
+					// The self-hosted compiler has thousands of safepoints. A
+					// bounded interval still collects repeatedly throughout every
+					// dynamic-function family without turning this focused realm
+					// test into a compiler stress benchmark.
+					MAL_GC_STRESS: "10",
+					MAL_TEST262: "1",
+				},
+			}),
 			"dynamic-function-cross-realm",
 		);
 	});

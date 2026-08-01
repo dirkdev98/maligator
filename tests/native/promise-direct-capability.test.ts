@@ -78,7 +78,14 @@ describe("direct Promise.prototype.then capabilities", () => {
 	});
 
 	it("preserves active jobs and fallback pairs under compiled GC stress", () => {
-		run(compiled, { ...STRESS_ENV, MAL_HOST_GC: "1" });
+		run(compiled, {
+			...STRESS_ENV,
+			// This broad fixture traverses hundreds of promise safepoints. Keep
+			// repeated verified collections while avoiding a redundant
+			// collect-at-every-poll timeout.
+			MAL_GC_STRESS: "10",
+			MAL_HOST_GC: "1",
+		});
 	});
 
 	it("preserves capability semantics in interpreted code", () => {
@@ -86,7 +93,11 @@ describe("direct Promise.prototype.then capabilities", () => {
 	});
 
 	it("preserves interpreted jobs and reactions under GC stress", () => {
-		run(interpreted, { ...STRESS_ENV, MAL_HOST_GC: "1" });
+		run(interpreted, {
+			...STRESS_ENV,
+			MAL_GC_STRESS: "10",
+			MAL_HOST_GC: "1",
+		});
 	});
 
 	it("preserves direct targets under concurrent GC", () => {
