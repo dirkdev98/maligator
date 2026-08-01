@@ -54,15 +54,18 @@ export interface BuildProductCliOptions {
 	target?: string;
 	production?: boolean;
 	artifactDirectory?: string;
+	onProgress?: (message: string) => void;
 }
 
 /** Build the redistributable CLI and bake all resources it needs outside the checkout. */
 export function buildProductCli(options: BuildProductCliOptions): string {
+	const progress = options.onProgress ?? (() => {});
 	const repositoryRoot = path.resolve(options.repositoryRoot);
 	const outDir = path.resolve(options.outDir);
 	const runtimeDirectory = path.join(repositoryRoot, "runtime");
 	const compilerWirePath = path.join(outDir, "compiler.malw");
 	mkdirSync(outDir, { recursive: true });
+	progress("compiling the embedded eval compiler");
 	writeFileSync(
 		compilerWirePath,
 		compileEntrypointToBuffer(path.join(repositoryRoot, "src/eval-compiler-entry.mts"), {
@@ -71,6 +74,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	);
 
 	const config = productCliConfig(repositoryRoot, compilerWirePath);
+	progress("analyzing and compiling the product CLI");
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
 		path.join(repositoryRoot, "src/product-cli-entry.mts"),
 		{ buildConfig: config, stripTypes: stripTypesWithTypeScript },
@@ -88,6 +92,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		maligatorSurface: config.surface.maligator,
 	});
 	const derivation = buildDerivationFromConfig(config);
+	progress("selecting the native toolchain");
 	const toolchain = requireToolchain({
 		needsCxx: config.surface.webPlatform,
 		rustDir: path.join(runtimeDirectory, "rust"),
@@ -101,8 +106,11 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		runtimeDirectory,
 		features: derivation.features,
 		compilerBake: { kind: "prebuilt", path: compilerWirePath },
+		onCacheEvent: (event) =>
+			progress(`${event.artifact} cache ${event.hit ? "hit" : "miss"}: ${event.path}`),
 	});
 	const executableName = options.name ?? "maligator";
+	progress("linking the product CLI");
 	const binaryPath = buildLocalBinary({
 		context,
 		name: executableName,
@@ -113,6 +121,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		cacheSuffix: derivation.cacheSuffix,
 	}).binaryPath;
 	if (options.artifactDirectory !== undefined) {
+		progress("creating the deployable artifact");
 		createBuildArtifact({
 			binaryPath,
 			directory: options.artifactDirectory,
@@ -123,5 +132,6 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 			production,
 		});
 	}
+	progress(`product CLI ready: ${binaryPath}`);
 	return binaryPath;
 }

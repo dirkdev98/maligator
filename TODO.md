@@ -61,6 +61,8 @@ run a production application binary.
 - [x] Add guarded local alpha release automation that builds artifacts once, packs
       exact-version platform packages, verifies tarball digests, publishes platform
       packages before the launcher, and leaves `latest` untouched.
+- [x] Report per-target release progress and timings; default later local alphas to
+      Apple Silicon macOS while retaining an explicit complete-matrix option.
 - [ ] Move publishing to a tag-driven workflow with npm trusted publishing after
       the local alpha process has stabilized.
 - [ ] Run `npm run test:full:report` for a release candidate and resolve or record

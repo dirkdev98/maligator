@@ -8,5 +8,7 @@ Install the alpha globally:
 npm install --global @maligator/cli@alpha
 ```
 
-The package selects a platform-specific native binary for macOS or Linux on
-arm64 or x64. Windows is not supported by the initial alpha.
+The package selects a platform-specific native binary included with that alpha
+release. The initial alpha includes macOS and Linux on arm64 and x64; subsequent
+local alpha releases currently default to Apple Silicon macOS. Windows is not
+supported.

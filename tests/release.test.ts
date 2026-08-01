@@ -6,6 +6,7 @@ import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { createReleaseArchive, deterministicTar } from "../scripts/release-archive.ts";
 import { nextAlphaVersion } from "../scripts/release-version.ts";
+import { selectReleaseTargetTriples } from "../scripts/release.ts";
 import { createBuildArtifact } from "../src/build-artifact.ts";
 import { MALIGATOR_VERSION } from "../src/version.ts";
 
@@ -121,6 +122,30 @@ describe("alpha versions", () => {
 		for (const version of ["0.1.0", "0.1.0-beta.1", "0.1.0-alpha"]) {
 			expect(() => nextAlphaVersion(version)).toThrow("must be an alpha prerelease");
 		}
+	});
+});
+
+describe("release targets", () => {
+	it("defaults to Apple Silicon macOS and retains an explicit complete matrix", () => {
+		expect(selectReleaseTargetTriples([])).toEqual(["aarch64-apple-darwin"]);
+		expect(selectReleaseTargetTriples(["--all-targets"])).toEqual([
+			"aarch64-apple-darwin",
+			"x86_64-apple-darwin",
+			"aarch64-unknown-linux-gnu",
+			"x86_64-unknown-linux-gnu",
+		]);
+	});
+
+	it("accepts one known target and rejects ambiguous selections", () => {
+		expect(selectReleaseTargetTriples(["--target", "x86_64-unknown-linux-gnu"])).toEqual([
+			"x86_64-unknown-linux-gnu",
+		]);
+		expect(() => selectReleaseTargetTriples(["--target", "unknown"])).toThrow(
+			"unsupported release target",
+		);
+		expect(() => selectReleaseTargetTriples(["--all-targets", "--target"])).toThrow(
+			"usage",
+		);
 	});
 });
 

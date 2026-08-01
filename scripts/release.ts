@@ -20,6 +20,20 @@ const packagePath = path.join(repositoryRoot, "package.json");
 const packageLockPath = path.join(repositoryRoot, "package-lock.json");
 const versionSourcePath = path.join(repositoryRoot, "src/version.ts");
 const releaseRoot = path.join(repositoryRoot, "dist/release");
+const releaseSelectionPath = path.join(releaseRoot, "selection.json");
+const releaseStartedAt = performance.now();
+
+function formatDuration(milliseconds: number): string {
+	const seconds = Math.round(milliseconds / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function releaseLog(message: string): void {
+	console.log(
+		`[release +${formatDuration(performance.now() - releaseStartedAt)}] ${message}`,
+	);
+}
 
 function npmEnvironment(): NodeJS.ProcessEnv {
 	return {
@@ -54,6 +68,7 @@ const targets = [
 		packageName: "@maligator/cli-linux-x64",
 	},
 ];
+const defaultTargets = [targets[0]!];
 
 interface PackageJson {
 	name: string;
@@ -152,7 +167,7 @@ function stagePlatformPackage(
 	return directory;
 }
 
-function stageLauncherPackage(version: string): string {
+function stageLauncherPackage(version: string, selected: typeof targets): string {
 	const directory = path.join(releaseRoot, "npm/cli");
 	mkdirSync(path.join(directory, "bin"), { recursive: true });
 	copyFileSync(
@@ -172,20 +187,27 @@ function stageLauncherPackage(version: string): string {
 		files: ["bin/maligator.js", "README.md", "LICENSE"],
 		bin: { maligator: "bin/maligator.js" },
 		optionalDependencies: Object.fromEntries(
-			targets.map((target) => [target.packageName, version]),
+			selected.map((target) => [target.packageName, version]),
 		),
 	});
 	return directory;
 }
 
 function selectedTargets(args: Array<string>): typeof targets {
-	if (args.length === 0) return targets;
+	if (args.length === 0) return defaultTargets;
+	if (args.length === 1 && args[0] === "--all-targets") return targets;
 	if (args.length !== 2 || args[0] !== "--target") {
-		throw new Error("usage: npm run release:build -- [--target <rust-triple>]");
+		throw new Error(
+			"usage: npm run release:build -- [--all-targets | --target <rust-triple>]",
+		);
 	}
 	const selected = targets.find((target) => target.rust === args[1]);
 	if (selected === undefined) throw new Error(`unsupported release target: ${args[1]}`);
 	return [selected];
+}
+
+export function selectReleaseTargetTriples(args: Array<string>): Array<string> {
+	return selectedTargets(args).map((target) => target.rust);
 }
 
 function buildRelease(args: Array<string>): void {
@@ -194,7 +216,13 @@ function buildRelease(args: Array<string>): void {
 	const selected = selectedTargets(args);
 	rmSync(releaseRoot, { recursive: true, force: true });
 	mkdirSync(path.join(releaseRoot, "artifacts"), { recursive: true });
-	for (const target of selected) {
+	releaseLog(
+		`building ${version} for ${selected.length} target${selected.length === 1 ? "" : "s"}: ${selected.map((target) => target.rust).join(", ")}`,
+	);
+	for (const [index, target] of selected.entries()) {
+		const targetStartedAt = performance.now();
+		const prefix = `[${index + 1}/${selected.length} ${target.rust}]`;
+		releaseLog(`${prefix} build started`);
 		const rootName = `maligator-v${version}-${target.rust}`;
 		const artifactDirectory = path.join(releaseRoot, "artifacts", rootName);
 		buildProductCli({
@@ -204,16 +232,27 @@ function buildRelease(args: Array<string>): void {
 			target: target.rust,
 			production: true,
 			artifactDirectory,
+			onProgress: (message) => releaseLog(`${prefix} ${message}`),
 		});
+		releaseLog(`${prefix} creating deterministic archive`);
 		createReleaseArchive(
 			artifactDirectory,
 			path.join(releaseRoot, "artifacts", `${rootName}.tar.gz`),
 			rootName,
 		);
+		releaseLog(`${prefix} staging ${target.packageName}`);
 		stagePlatformPackage(target, version, artifactDirectory);
+		releaseLog(
+			`${prefix} complete in ${formatDuration(performance.now() - targetStartedAt)}`,
+		);
 	}
-	stageLauncherPackage(version);
-	console.log(`Release artifacts: ${releaseRoot}`);
+	stageLauncherPackage(version, selected);
+	writeJson(releaseSelectionPath, {
+		schema: 1,
+		version,
+		targets: selected.map((target) => target.rust),
+	});
+	releaseLog(`release artifacts ready: ${releaseRoot}`);
 }
 
 function smokeRelease(): void {
@@ -327,13 +366,27 @@ function packRelease(args: Array<string>): void {
 	const version = packageVersion();
 	assertVersionSynchronized(version);
 	const selected = selectedTargets(args);
+	const selection = readJson(releaseSelectionPath);
+	const selectedNames = selected.map((target) => target.rust);
+	if (
+		selection.version !== version ||
+		JSON.stringify(selection.targets) !== JSON.stringify(selectedNames)
+	) {
+		throw new Error(
+			"packed targets must match the preceding release build; rebuild with the same target options",
+		);
+	}
 	const npmRoot = path.join(releaseRoot, "npm");
 	const packs = path.join(releaseRoot, "packs");
 	rmSync(packs, { recursive: true, force: true });
 	mkdirSync(packs, { recursive: true });
 	const packedPackages: Array<{ name: string; file: string; sha256: string }> = [];
 	const platformTarballs = new Map<string, string>();
-	for (const target of selected) {
+	releaseLog(
+		`packing ${selected.length + 1} npm package${selected.length === 0 ? "" : "s"}`,
+	);
+	for (const [index, target] of selected.entries()) {
+		releaseLog(`[${index + 1}/${selected.length + 1}] packing ${target.packageName}`);
 		const directory = path.join(npmRoot, target.packageName.split("/")[1]!);
 		if (!existsSync(directory)) {
 			throw new Error("build the complete target matrix before packing");
@@ -348,6 +401,7 @@ function packRelease(args: Array<string>): void {
 	}
 	const launcher = path.join(npmRoot, "cli");
 	if (!existsSync(launcher)) throw new Error("launcher package is missing");
+	releaseLog(`[${selected.length + 1}/${selected.length + 1}] packing @maligator/cli`);
 	const packedLauncher = packDirectory(launcher, packs, [
 		"LICENSE",
 		"README.md",
@@ -359,6 +413,9 @@ function packRelease(args: Array<string>): void {
 		sha256: hash("sha256", readFileSync(packedLauncher), "hex"),
 	});
 	for (const target of selected) {
+		if (target.platform === process.platform && target.arch === process.arch) {
+			releaseLog(`smoke-testing packed launcher for ${target.rust}`);
+		}
 		smokePackedLauncher(
 			target,
 			platformTarballs.get(target.rust)!,
@@ -367,11 +424,12 @@ function packRelease(args: Array<string>): void {
 		);
 	}
 	writeJson(path.join(packs, "packages.json"), {
-		schema: 1,
+		schema: 2,
 		version,
+		targets: selectedNames,
 		packages: packedPackages,
 	});
-	console.log(`npm tarballs: ${packs}`);
+	releaseLog(`npm tarballs ready: ${packs}`);
 }
 
 function publishRelease(args: Array<string>): void {
@@ -386,24 +444,51 @@ function publishRelease(args: Array<string>): void {
 	});
 	if (status.trim() !== "") throw new Error("refusing to publish from a dirty worktree");
 	const manifest = readJson(path.join(releaseRoot, "packs/packages.json"));
-	if (manifest.version !== version || !Array.isArray(manifest.packages)) {
+	if (
+		manifest.schema !== 2 ||
+		manifest.version !== version ||
+		!Array.isArray(manifest.targets) ||
+		!Array.isArray(manifest.packages)
+	) {
 		throw new Error("packed package manifest does not match the release version");
 	}
-	if (manifest.packages.length !== targets.length + 1) {
-		throw new Error("refusing to publish an incomplete target matrix");
+	const selected = manifest.targets.map((rust) => {
+		if (typeof rust !== "string") throw new Error("invalid release target manifest");
+		const target = targets.find((candidate) => candidate.rust === rust);
+		if (target === undefined) throw new Error(`unsupported release target: ${rust}`);
+		return target;
+	});
+	const expectedNames = [
+		...selected.map((target) => target.packageName),
+		"@maligator/cli",
+	];
+	const actualNames = manifest.packages.map((entry) =>
+		typeof entry === "object" && entry !== null
+			? (entry as Record<string, unknown>).name
+			: undefined,
+	);
+	if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
+		throw new Error("refusing to publish an incomplete or unordered package set");
 	}
-	for (const entry of manifest.packages as Array<Record<string, unknown>>) {
+	releaseLog(`publishing ${expectedNames.length} packages under the alpha tag`);
+	for (const [index, entry] of (
+		manifest.packages as Array<Record<string, unknown>>
+	).entries()) {
 		if (typeof entry.file !== "string")
 			throw new Error("invalid packed package manifest");
 		const tarball = path.join(releaseRoot, "packs", entry.file);
 		const digest = hash("sha256", readFileSync(tarball), "hex");
 		if (digest !== entry.sha256) throw new Error(`packed tarball changed: ${entry.file}`);
+		releaseLog(
+			`[${index + 1}/${expectedNames.length}] publishing ${expectedNames[index]}`,
+		);
 		execFileSync("npm", ["publish", tarball, "--access", "public", "--tag", "alpha"], {
 			cwd: repositoryRoot,
 			stdio: "inherit",
 			env: npmEnvironment(),
 		});
 	}
+	releaseLog(`published ${version} under the alpha tag`);
 }
 
 function usage(): never {
@@ -412,10 +497,12 @@ function usage(): never {
 	);
 }
 
-const command = process.argv[2];
-if (command === "version-alpha") incrementAlpha();
-else if (command === "build") buildRelease(process.argv.slice(3));
-else if (command === "pack") packRelease(process.argv.slice(3));
-else if (command === "publish") publishRelease(process.argv.slice(3));
-else if (command === "smoke") smokeRelease();
-else usage();
+if (import.meta.main) {
+	const command = process.argv[2];
+	if (command === "version-alpha") incrementAlpha();
+	else if (command === "build") buildRelease(process.argv.slice(3));
+	else if (command === "pack") packRelease(process.argv.slice(3));
+	else if (command === "publish") publishRelease(process.argv.slice(3));
+	else if (command === "smoke") smokeRelease();
+	else usage();
+}

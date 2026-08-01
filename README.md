@@ -244,26 +244,32 @@ truth; `src/version.ts` is generated and checked before building or publishing.
 # After publishing the current alpha, prepare the next numeric alpha version.
 npm run version:alpha
 
-# Build the four Zig-cross-compiled product CLI artifacts and stage npm packages.
+# Build the normal alpha target (Apple Silicon macOS) and stage npm packages.
 npm run release:build
+
+# This first alpha keeps the complete four-target matrix.
+npm run release:build -- --all-targets
 
 # Execute the already-built production artifact for the current host.
 npm run release:smoke
 
-# Validate npm's exact file allowlists and create the five package tarballs.
-npm run release:pack
+# Pack the same target selection used by release:build.
+npm run release:pack -- --all-targets
 
 # Explicit confirmation plus a clean worktree are required; latest is untouched.
 npm run release:publish -- --confirm 0.1.0-alpha.1
 ```
 
-`release:publish` verifies every packed tarball against `packages.json`, publishes
-the four platform packages first, and publishes `@maligator/cli` last under the
-`alpha` dist-tag.
+`release:publish` verifies every selected tarball against `packages.json`, publishes
+the platform packages first, and publishes `@maligator/cli` last under the `alpha`
+dist-tag. Build, pack, and publish log per-target progress and elapsed time.
 
-During development, `release:build` and `release:pack` both accept
-`-- --target <rust-triple>`. Packing a native-host target also installs the two
-tarballs into a clean temporary project and verifies the installed launcher.
+After the complete first alpha, `release:build` and `release:pack` default to
+`aarch64-apple-darwin` so a local release only builds Apple Silicon macOS.
+Pass `-- --all-targets` for the complete matrix or
+`-- --target <rust-triple>` for one explicit target. Build and pack must use the
+same selection. Packing a native-host target also installs the two tarballs into
+a clean temporary project and verifies the installed launcher.
 
 Applications with `surface.webPlatform: true` link `host_main.c`, which installs the
 web globals and drives the host event loop. Non-web applications retain the lean
