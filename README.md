@@ -246,6 +246,9 @@ npm run version:alpha
 # Build the four Zig-cross-compiled product CLI artifacts and stage npm packages.
 npm run release:build
 
+# Execute the already-built production artifact for the current host.
+npm run release:smoke
+
 # Validate npm's exact file allowlists and create the five package tarballs.
 npm run release:pack
 

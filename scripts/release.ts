@@ -216,6 +216,40 @@ function buildRelease(args: Array<string>): void {
 	console.log(`Release artifacts: ${releaseRoot}`);
 }
 
+function smokeRelease(): void {
+	const target = targets.find(
+		(candidate) =>
+			candidate.platform === process.platform && candidate.arch === process.arch,
+	);
+	if (target === undefined) {
+		throw new Error(
+			`release smoke is unsupported on ${process.platform}-${process.arch}`,
+		);
+	}
+
+	const version = packageVersion();
+	assertVersionSynchronized(version);
+	const binary = path.join(
+		releaseRoot,
+		"artifacts",
+		`maligator-v${version}-${target.rust}`,
+		"bin/maligator",
+	);
+	if (!existsSync(binary)) {
+		throw new Error(
+			`host release binary is missing; run \`npm run release:build -- --target ${target.rust}\``,
+		);
+	}
+	const output = execFileSync(binary, ["--version"], {
+		cwd: releaseRoot,
+		encoding: "utf-8",
+	});
+	if (output.trim() !== version) {
+		throw new Error(`host release binary reported ${output.trim()}, expected ${version}`);
+	}
+	console.log(`Host release smoke passed: ${target.rust}`);
+}
+
 interface PackedPackage {
 	name: string;
 	filename: string;
@@ -374,7 +408,7 @@ function publishRelease(args: Array<string>): void {
 
 function usage(): never {
 	throw new Error(
-		"usage: node scripts/release.ts <version-alpha|build|pack|publish> [options]",
+		"usage: node scripts/release.ts <version-alpha|build|pack|publish|smoke> [options]",
 	);
 }
 
@@ -383,4 +417,5 @@ if (command === "version-alpha") incrementAlpha();
 else if (command === "build") buildRelease(process.argv.slice(3));
 else if (command === "pack") packRelease(process.argv.slice(3));
 else if (command === "publish") publishRelease(process.argv.slice(3));
+else if (command === "smoke") smokeRelease();
 else usage();

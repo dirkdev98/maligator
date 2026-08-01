@@ -30,6 +30,7 @@
 		"release:build": "node ./scripts/release.ts build",
 		"release:pack": "node ./scripts/release.ts pack",
 		"release:publish": "node ./scripts/release.ts publish",
+		"release:smoke": "node ./scripts/release.ts smoke",
 		"selfhost:cli": "node ./scripts/selfhost-cli-check.ts",
 		"selfhost:frontend": "node ./scripts/selfhost-frontend-check.ts",
 		"selfhost:native": "node ./scripts/selfhost-native-build-check.ts",
