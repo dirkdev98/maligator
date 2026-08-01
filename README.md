@@ -191,12 +191,13 @@ installation. The initial supported targets are:
 - `x86_64-unknown-linux-gnu`
 
 Maligator maps the Rust triple to Zig's target syntax and consistently uses `zig
-cc`, `zig c++`, `zig ar`, and `zig objcopy` for the C runtime, Cargo native
-dependencies, final link, and optional stripping. Install the matching Rust standard
-library first with `rustup target add <rust-triple>`. Use `maligator doctor --target
-<rust-triple> --verbose` to validate both halves of the cross toolchain. Cross-built
-outputs live under `.cache/mal-build/<mode>/<rust-triple>/`; `maligator run` remains
-a native-host command.
+cc`, `zig c++`, and `zig ar` for the C runtime, Cargo native dependencies, and final
+link; optional production stripping is applied by `zig cc` during that link. Install
+the matching Rust standard library first with `rustup target add <rust-triple>`. Use
+`maligator doctor --target <rust-triple> --verbose` to validate both halves of the
+cross toolchain. Cross-built outputs live under
+`.cache/mal-build/<mode>/<rust-triple>/`; `maligator run` remains a native-host
+command.
 
 Discovery, normalized feature booleans, build plan, installation roots, environment
 snapshot, and cache root are frozen into one `NativeBuildContext`. The C archive,
