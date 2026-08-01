@@ -20,6 +20,8 @@ export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 	"rust/rust-toolchain.toml",
 	"rust/src/**",
 	"rust/include/**",
+	"vendor/llhttp/include/**",
+	"vendor/llhttp/src/**",
 ];
 
 export function productCliConfig(

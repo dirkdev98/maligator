@@ -38,6 +38,7 @@ import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
 import {
 	formatToolchainReport,
+	formatToolCommand,
 	inspectToolchain,
 	requireToolchain,
 	ToolchainError,
@@ -140,12 +141,13 @@ function selectToolchain(
 		const toolchain = requireToolchain({
 			needsCxx: config.surface.webPlatform,
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
+			target: command.kind === "build" ? command.target : undefined,
 		});
 		const plan = selectNativeBuildPlan(
 			toolchain,
 			command.kind === "build" && command.production,
 		);
-		log.info(`Toolchain: ${toolchain.tools.cc.path} (${toolchain.target})`);
+		log.info(`Toolchain: ${formatToolCommand(toolchain.tools.cc)} (${toolchain.target})`);
 		log.info(`Toolchain cache: ${toolchain.cacheHit ? "hit" : "miss"}`);
 		for (const warning of plan.warnings) log.info(`warning: ${warning}`);
 		return { toolchain, plan };
@@ -178,6 +180,13 @@ function compileAndBuild(
 		Object.keys(buildConfig.assets).length > 0
 	) {
 		commandError("error: configured assets are not supported by portable wire output");
+	}
+	if (
+		command.kind === "build" &&
+		command.internal.serializePath !== undefined &&
+		command.target !== undefined
+	) {
+		commandError("error: '--target' is not applicable to portable wire output");
 	}
 	let assets: ReturnType<typeof includeConfiguredAssets>;
 	try {
@@ -354,8 +363,15 @@ export function runCli(args: Array<string>, context: CommandContext): void {
 		if (command.kind === "doctor") {
 			const report = inspectToolchain({
 				rustDir: path.join(context.installation.runtimeDirectory, "rust"),
+				target: command.target,
 			});
-			log.info(formatToolchainReport(report, process.platform, command.verbose));
+			log.info(
+				formatToolchainReport(
+					report,
+					report.platform ?? process.platform,
+					command.verbose,
+				),
+			);
 			if (report.toolchain === undefined) process.exit(1);
 			return;
 		}

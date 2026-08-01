@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
@@ -7,6 +7,7 @@ import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { ensureNativeArtifacts } from "./runtime-build.ts";
 import type { NativeArtifacts } from "./runtime-build.ts";
+import { toolArguments } from "./toolchain.ts";
 
 const BUILD_DIRECTORY = ".cache/mal-build";
 
@@ -53,9 +54,13 @@ export function buildLoadDriver(
 
 	execFileSync(
 		context.toolchain.tools.cc.path,
-		[
+		toolArguments(context.toolchain.tools.cc, [
 			"-std=c2x",
-			...ccExtraFlags(context.plan, context.environment),
+			...ccExtraFlags(
+				context.plan,
+				context.environment,
+				context.toolchain.platform ?? process.platform,
+			),
 			"-I",
 			path.join(context.runtimeDirectory, "src"),
 			"-I",
@@ -71,7 +76,7 @@ export function buildLoadDriver(
 			...artifacts.linkArgs,
 			"-o",
 			binaryPath,
-		],
+		]),
 		{ env: context.environment, stdio: verbose ? "inherit" : "pipe" },
 	);
 
@@ -86,7 +91,13 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		options.cacheSuffix ?? "",
 		context.environment,
 	)}`;
-	const outputDirectory = options.outDir ?? path.join(BUILD_DIRECTORY, context.plan.mode);
+	const outputDirectory =
+		options.outDir ??
+		path.join(
+			BUILD_DIRECTORY,
+			context.plan.mode,
+			...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
+		);
 	mkdirSync(outputDirectory, { recursive: true });
 	const cPath = path.join(outputDirectory, `${artifactName}.c`);
 	const binaryPath = path.join(outputDirectory, artifactName);
@@ -94,9 +105,13 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 
 	execFileSync(
 		context.toolchain.tools.cc.path,
-		[
+		toolArguments(context.toolchain.tools.cc, [
 			"-std=c2x",
-			...ccExtraFlags(context.plan, context.environment),
+			...ccExtraFlags(
+				context.plan,
+				context.environment,
+				context.toolchain.platform ?? process.platform,
+			),
 			...context.features.cDefines,
 			"-I",
 			path.join(context.runtimeDirectory, "src"),
@@ -114,17 +129,27 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			...artifacts.linkArgs,
 			"-o",
 			binaryPath,
-		],
+		]),
 		{ env: context.environment, stdio: options.verbose ? "inherit" : "pipe" },
 	);
 	if (context.plan.strip && context.toolchain.tools.strip !== undefined) {
+		const objcopy =
+			context.toolchain.tools.strip.args?.[0] === "objcopy"
+				? `${binaryPath}.stripped`
+				: undefined;
 		try {
 			execFileSync(
 				context.toolchain.tools.strip.path,
-				[...context.toolchain.probes.stripArgs, binaryPath],
+				toolArguments(context.toolchain.tools.strip, [
+					...context.toolchain.probes.stripArgs,
+					binaryPath,
+					...(objcopy === undefined ? [] : [objcopy]),
+				]),
 				{ env: context.environment, stdio: options.verbose ? "inherit" : "pipe" },
 			);
+			if (objcopy !== undefined) renameSync(objcopy, binaryPath);
 		} catch (error) {
+			if (objcopy !== undefined) rmSync(objcopy, { force: true });
 			options.onWarning?.(
 				`production symbol stripping failed after a successful probe; leaving the binary unstripped: ${error instanceof Error ? error.message : String(error)}`,
 			);

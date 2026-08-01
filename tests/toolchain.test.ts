@@ -60,9 +60,11 @@ function createFakeToolchain(
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-toolchain-"));
 	const bin = path.join(root, "bin");
 	const rustDir = path.join(root, "runtime/rust");
+	const rustTargetLib = path.join(root, "rust-targets/x86_64-unknown-linux-gnu/lib");
 	const logPath = path.join(root, "cc.log");
 	mkdirSync(bin);
 	mkdirSync(rustDir, { recursive: true });
+	mkdirSync(rustTargetLib, { recursive: true });
 	writeFileSync(logPath, "");
 
 	executable(
@@ -79,18 +81,56 @@ printf '!<arch>\\n' > "$2"
 `,
 	);
 	executable(
+		path.join(bin, "zig"),
+		`printf 'zig %s\\n' "$*" >> '${logPath}'
+if [ "$1" = "version" ]; then printf '%s\\n' "0.15.2"; exit 0; fi
+subcommand="$1"
+shift
+if [ "$subcommand" = "cc" ] || [ "$subcommand" = "c++" ]; then
+	if [ "$1" = "-target" ]; then zig_target="$2"; shift 2; fi
+	if [ "$1" = "-dumpmachine" ]; then printf '%s\\n' "$zig_target"; exit 0; fi
+	out=''
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = "-o" ]; then shift; out="$1"; fi
+		shift
+	done
+	if [ -n "$out" ]; then /usr/bin/touch "$out"; /bin/chmod +x "$out"; fi
+	exit 0
+fi
+if [ "$subcommand" = "ar" ]; then
+	printf '!<arch>\\n' > "$2"
+	exit 0
+fi
+if [ "$subcommand" = "objcopy" ]; then /bin/cp "$2" "$3"; exit 0; fi
+exit 1
+`,
+	);
+	executable(
 		path.join(bin, "cargo"),
 		`if [ "$1" = "--version" ]; then printf '%s\\n' "cargo 1.96.0"; exit 0; fi
 printf 'cargo %s\\n' "$*" >> '${logPath}'
 printf 'cargo-home %s\\n' "$CARGO_HOME" >> '${logPath}'
 printf 'cargo-env %s\\n' "$MAL_TEST_BUILD_ENV" >> '${logPath}'
-/bin/mkdir -p "$CARGO_TARGET_DIR/release"
-printf '!<arch>\\n' > "$CARGO_TARGET_DIR/release/libmal_rust.a"
+printf 'cargo-cc %s\\n' "$CC" >> '${logPath}'
+printf 'cargo-cxx %s\\n' "$CXX" >> '${logPath}'
+printf 'cargo-ar %s\\n' "$AR" >> '${logPath}'
+cargo_output="$CARGO_TARGET_DIR/release"
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "--target" ]; then shift; cargo_output="$CARGO_TARGET_DIR/$1/release"; fi
+	shift
+done
+/bin/mkdir -p "$cargo_output"
+printf '!<arch>\\n' > "$cargo_output/libmal_rust.a"
 `,
 	);
 	executable(
 		path.join(bin, "rustc"),
-		'if [ "$1" = "--version" ]; then printf \'%s\\n\' "rustc 1.96.0"; elif [ "$1" = "-vV" ]; then printf \'%s\\n\' "rustc 1.96.0" "host: fake-rust-target"; fi\n',
+		`if [ "$1" = "--version" ]; then printf '%s\\n' "rustc 1.96.0"
+elif [ "$1" = "-vV" ]; then printf '%s\\n' "rustc 1.96.0" "host: fake-rust-target"
+elif [ "$1" = "--print" ] && [ "$2" = "target-libdir" ] && [ "$4" = "x86_64-unknown-linux-gnu" ]; then printf '%s\\n' '${rustTargetLib}'
+else exit 1
+fi
+`,
 	);
 	executable(
 		path.join(bin, "rustup"),
@@ -174,6 +214,124 @@ describe("native toolchain discovery", () => {
 		expect(summary).toContain("[ok] C compiler");
 		expect(summary).toContain("[ok] Rust compiler");
 		expect(formatToolchainReport(report, "linux", true)).toContain("fake cc 1");
+	});
+
+	it("cross-builds C, C++, archives, Rust, and the final link through Zig", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const rustTarget = "x86_64-unknown-linux-gnu";
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: { ...fake.env, CC: "missing-native-cc", CXX: "missing-native-cxx" },
+			needsCxx: true,
+			platform: "darwin",
+			arch: "arm64",
+			target: rustTarget,
+		});
+
+		expect(report.toolchain).toBeDefined();
+		expect(report).toMatchObject({
+			cross: true,
+			platform: "linux",
+			rustTarget,
+			zigTarget: "x86_64-linux-gnu",
+		});
+		const toolchain = report.toolchain!;
+		expect(toolchain.tools.cc.args).toEqual(["cc", "-target", "x86_64-linux-gnu"]);
+		expect(toolchain.tools.ar.args).toEqual(["ar"]);
+		expect(toolchain.tools.cxx?.args).toEqual(["c++", "-target", "x86_64-linux-gnu"]);
+		expect(toolchain.tools.strip?.args).toEqual(["objcopy"]);
+		expect(formatToolchainReport(report, "linux", true)).toContain(
+			"build mode: Zig cross-build",
+		);
+
+		writeFileSync(fake.logPath, "");
+		const context = resolveNativeBuildContext({
+			toolchain,
+			runtimeDirectory,
+			cacheDirectory: path.join(fake.root, "cross-cache"),
+			features: { evalEnabled: false, webPlatformEnabled: false },
+			production: true,
+		});
+		expect(context.plan).toMatchObject({ mode: "production", lto: true, strip: true });
+		expect(context.environment.ZIG_GLOBAL_CACHE_DIR).toContain(
+			path.join(fake.root, ".cache/mal-cache/zig"),
+		);
+		const artifacts = resolveRustArtifacts(context);
+		expect(artifacts.cargoArguments).toContain(rustTarget);
+		expect(artifacts.library).toContain(
+			`${path.sep}${rustTarget}${path.sep}release${path.sep}`,
+		);
+		expect(artifacts.linkArgs).toEqual([artifacts.library, "-lm", "-lunwind"]);
+		expect(artifacts.nativeToolEnvironment).toMatchObject({
+			CC_KNOWN_WRAPPER_CUSTOM: "zig",
+			CRATE_CC_NO_DEFAULTS: "1",
+			CXXFLAGS: "-fno-sanitize=undefined",
+		});
+		const result = buildLocalBinary({
+			context,
+			name: "cross-output",
+			cSource: "int value;",
+			verbose: false,
+			outDir: path.join(fake.root, "output"),
+		});
+		expect(result.binaryPath).toBe(path.join(fake.root, "output", "cross-output"));
+
+		const invocations = readFileSync(fake.logPath, "utf-8");
+		expect(invocations).toContain("zig cc -target x86_64-linux-gnu");
+		expect(invocations).toContain("zig ar rcs");
+		expect(invocations).toContain(
+			`cargo build --release --no-default-features --target ${rustTarget}`,
+		);
+		expect(invocations).toContain(
+			`cargo-cc ${realpathSync(path.join(fake.bin, "zig"))} cc -target x86_64-linux-gnu`,
+		);
+		expect(invocations).toContain(
+			`cargo-ar ${realpathSync(path.join(fake.bin, "zig"))} ar`,
+		);
+		expect(invocations).toContain(
+			`cargo-cxx ${realpathSync(path.join(fake.bin, "zig"))} c++ -target x86_64-linux-gnu`,
+		);
+		expect(invocations).toContain(" -lm");
+	});
+
+	it("rejects unsupported Zig cross targets before probing tools", () => {
+		const fake = createFakeToolchain();
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			target: "x86_64-pc-windows-msvc",
+		});
+		expect(report.toolchain).toBeUndefined();
+		expect(report.issues).toContainEqual(
+			expect.objectContaining({
+				tool: "target",
+				required: true,
+			}),
+		);
+		expect(report.issues.find((issue) => issue.tool === "target")?.message).toContain(
+			"unsupported cross-build target",
+		);
+	});
+
+	it("reports a supported but uninstalled Rust cross target", () => {
+		const fake = createFakeToolchain();
+		const rustTarget = "aarch64-unknown-linux-gnu";
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			target: rustTarget,
+		});
+		expect(report.toolchain).toBeUndefined();
+		expect(report.issues).toContainEqual(
+			expect.objectContaining({ tool: "rust-target", required: true }),
+		);
+		const formatted = formatToolchainReport(report, "linux", true);
+		expect(formatted).toContain(`[missing] rust-target`);
+		expect(formatted).toContain(`rustup target add ${rustTarget}`);
 	});
 
 	it("caches probes and invalidates when an executable identity/version changes", () => {
@@ -753,7 +911,11 @@ describe("native toolchain discovery", () => {
 			...artifacts.c.linkArgs,
 			...artifacts.rust.linkArgs,
 		]);
-		expect(artifacts.linkArgs.every((artifact) => existsSync(artifact))).toBe(true);
+		expect(
+			artifacts.linkArgs
+				.filter((artifact) => !artifact.startsWith("-"))
+				.every((artifact) => existsSync(artifact)),
+		).toBe(true);
 	});
 
 	it("reports reusable runtime cache misses and hits", () => {

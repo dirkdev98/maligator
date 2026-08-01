@@ -19,6 +19,7 @@ export interface BuildCommand {
 	kind: "build";
 	entry?: string;
 	configPath?: string;
+	target?: string;
 	production: boolean;
 	internal: InternalBuildOptions;
 }
@@ -34,7 +35,7 @@ export type CliCommand =
 	| { kind: "help" }
 	| { kind: "version" }
 	| { kind: "init" }
-	| { kind: "doctor"; verbose: boolean }
+	| { kind: "doctor"; verbose: boolean; target?: string }
 	| BuildCommand
 	| RunCommand;
 
@@ -55,6 +56,7 @@ Commands:
 
 Options:
   --config <path>              Use an explicit build configuration
+  --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
   -h, --help                   Show help
   -V, --version                Show the version`;
@@ -75,16 +77,32 @@ function unexpectedArgument(command: string, argument: string): never {
 }
 
 function parseSimpleCommand(kind: "init" | "doctor", args: Array<string>): CliCommand {
-	if (args.length === 1) {
-		return kind === "doctor" ? { kind, verbose: false } : { kind };
+	if (kind === "init") {
+		if (args.length === 1) return { kind };
+		if (args.length === 2 && (args[1] === "--help" || args[1] === "-h")) {
+			return { kind: "help" };
+		}
+		return unexpectedArgument(kind, args[1]!);
 	}
-	if (args.length === 2 && (args[1] === "--help" || args[1] === "-h")) {
-		return { kind: "help" };
+	const command: Extract<CliCommand, { kind: "doctor" }> = {
+		kind: "doctor",
+		verbose: false,
+	};
+	for (let index = 1; index < args.length; index++) {
+		const argument = args[index]!;
+		if (argument === "--help" || argument === "-h") return { kind: "help" };
+		if (argument === "--verbose") {
+			command.verbose = true;
+			continue;
+		}
+		if (argument === "--target") {
+			command.target = optionValue(args, index, argument);
+			index++;
+			continue;
+		}
+		return unexpectedArgument(kind, argument);
 	}
-	if (kind === "doctor" && args.length === 2 && args[1] === "--verbose") {
-		return { kind, verbose: true };
-	}
-	return unexpectedArgument(kind, args[1]!);
+	return command;
 }
 
 function parseBuild(args: Array<string>): CliCommand {
@@ -125,6 +143,11 @@ function parseBuild(args: Array<string>): CliCommand {
 		}
 		if (argument === "--production") {
 			command.production = true;
+			continue;
+		}
+		if (argument === "--target") {
+			command.target = optionValue(args, index, argument);
+			index++;
 			continue;
 		}
 		if (argument === "--name") {

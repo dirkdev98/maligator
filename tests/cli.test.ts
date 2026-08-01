@@ -43,12 +43,15 @@ describe("parseCliArgs", () => {
 			"other.json",
 			"src/main.ts",
 			"--production",
+			"--target",
+			"x86_64-unknown-linux-gnu",
 		]);
 		expect(command).toMatchObject({
 			kind: "build",
 			entry: "src/main.ts",
 			configPath: "other.json",
 			production: true,
+			target: "x86_64-unknown-linux-gnu",
 		});
 	});
 
@@ -66,6 +69,13 @@ describe("parseCliArgs", () => {
 		expect(parseCliArgs(["doctor"])).toEqual({ kind: "doctor", verbose: false });
 		expect(parseCliArgs(["doctor", "--verbose"])).toEqual({
 			kind: "doctor",
+			verbose: true,
+		});
+		expect(
+			parseCliArgs(["doctor", "--target", "aarch64-unknown-linux-gnu", "--verbose"]),
+		).toEqual({
+			kind: "doctor",
+			target: "aarch64-unknown-linux-gnu",
 			verbose: true,
 		});
 	});
@@ -138,6 +148,8 @@ describe("command shell", () => {
 		);
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("host_main.c");
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("test262_main.c");
+		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/include/**");
+		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/src/**");
 		const productConfig = productCliConfig(
 			repoRoot,
 			path.join(repoRoot, "compiler.malw"),

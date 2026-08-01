@@ -37,6 +37,8 @@ export interface NativeBuildContextOptions {
 	toolchain?: Toolchain;
 	plan?: NativeBuildPlan;
 	production?: boolean;
+	/** Rust target triple. Explicit targets are cross-built through Zig. */
+	target?: string;
 	compilerBake?: CompilerBakeInput;
 	/** Environment snapshot used for discovery and all native subprocesses. */
 	environment?: NodeJS.ProcessEnv;
@@ -47,9 +49,11 @@ const BUILD_ENVIRONMENT_NAMES = new Set([
 	"AR",
 	"ARCHS",
 	"CC",
+	"CC_KNOWN_WRAPPER_CUSTOM",
 	"CFLAGS",
 	"CPPFLAGS",
 	"CPATH",
+	"CRATE_CC_NO_DEFAULTS",
 	"CXX",
 	"CXXFLAGS",
 	"C_INCLUDE_PATH",
@@ -75,6 +79,7 @@ const BUILD_ENVIRONMENT_NAMES = new Set([
 	"SDKROOT",
 	"STRIP",
 	"SYSROOT",
+	"ZIG",
 ]);
 
 function isCargoBuildVariable(name: string): boolean {
@@ -105,7 +110,7 @@ export function resolveNativeBuildContext(
 ): NativeBuildContext {
 	const runtimeDirectory = path.resolve(options.runtimeDirectory ?? "runtime");
 	const cacheDirectory = path.resolve(options.cacheDirectory ?? ".cache/mal-cache");
-	const environment = Object.freeze({ ...(options.environment ?? process.env) });
+	const baseEnvironment = options.environment ?? process.env;
 	const normalizedFeatures =
 		options.features === undefined
 			? normalizeNativeFeatures()
@@ -119,10 +124,15 @@ export function resolveNativeBuildContext(
 	const toolchain =
 		options.toolchain ??
 		requireToolchain({
-			env: environment,
+			env: baseEnvironment,
 			needsCxx: features.webPlatformEnabled,
 			rustDir: path.join(runtimeDirectory, "rust"),
+			target: options.target,
 		});
+	const environment = Object.freeze({
+		...baseEnvironment,
+		...(toolchain.environmentOverrides ?? {}),
+	});
 	const selectedPlan =
 		options.plan ?? selectNativeBuildPlan(toolchain, options.production ?? false);
 	const plan = Object.freeze({

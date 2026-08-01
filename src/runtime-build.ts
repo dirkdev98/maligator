@@ -18,6 +18,7 @@ import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
+import { toolArguments } from "./toolchain.ts";
 
 function runtimeSourceHash(runtimeDirectory: string): string {
 	const root = path.resolve(runtimeDirectory);
@@ -99,7 +100,12 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		compilerWire = ensureCompilerWire(context.compilerBake);
 	}
 	const flags = [
-		...runtimeCcFlags({}, context.plan, context.environment),
+		...runtimeCcFlags(
+			{},
+			context.plan,
+			context.environment,
+			context.toolchain.platform ?? process.platform,
+		),
 		...context.features.cDefines,
 		...(compilerWire === undefined ? [] : [`-DMAL_COMPILER_WIRE="${compilerWire}"`]),
 	];
@@ -275,7 +281,7 @@ function buildRuntimeCache(
 				const objectPath = path.join(objectDirectory, `${source.name.slice(0, -2)}.o`);
 				execFileSync(
 					context.toolchain.tools.cc.path,
-					[
+					toolArguments(context.toolchain.tools.cc, [
 						"-std=c2x",
 						...layout.flags,
 						...layout.includeArguments,
@@ -285,15 +291,19 @@ function buildRuntimeCache(
 						source.path,
 						"-o",
 						objectPath,
-					],
+					]),
 					{ env: context.environment, stdio: verbose ? "inherit" : "pipe" },
 				);
 				return objectPath;
 			});
-			execFileSync(context.toolchain.tools.ar.path, ["rcs", layer.archive, ...objects], {
-				env: context.environment,
-				stdio: verbose ? "inherit" : "pipe",
-			});
+			execFileSync(
+				context.toolchain.tools.ar.path,
+				toolArguments(context.toolchain.tools.ar, ["rcs", layer.archive, ...objects]),
+				{
+					env: context.environment,
+					stdio: verbose ? "inherit" : "pipe",
+				},
+			);
 		}
 		if (
 			!archives.linkArgs.every((archive) => {

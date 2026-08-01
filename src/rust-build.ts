@@ -14,6 +14,7 @@ import { platformLinkArgs } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
 import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
+import { formatToolCommand, toolArguments } from "./toolchain.ts";
 
 export { resolvePathExecutable } from "./toolchain.ts";
 
@@ -31,6 +32,7 @@ export function rustSourceDigest(rustDirectory: string): string {
 export interface RustArtifactKeyInputs {
 	cargoArguments: Array<string>;
 	environmentFingerprint: string;
+	nativeToolEnvironment: Array<[string, string]>;
 	sourceDigest: string;
 	toolchainFingerprint: string;
 	rustTarget: string;
@@ -47,7 +49,32 @@ export interface RustArtifacts {
 	linkArgs: Array<string>;
 	cargoArguments: Array<string>;
 	cargoFeatures: Array<string>;
+	nativeToolEnvironment: Readonly<Record<string, string>>;
 	features: Readonly<NativeFeatureSpec>;
+}
+
+function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string, string> {
+	const environment: Record<string, string> = {
+		CC: formatToolCommand(context.toolchain.tools.cc),
+		AR: formatToolCommand(context.toolchain.tools.ar),
+	};
+	if (context.toolchain.tools.cxx !== undefined) {
+		environment.CXX = formatToolCommand(context.toolchain.tools.cxx);
+	}
+	if (context.toolchain.cross === true) {
+		// cc-rs recognizes Zig as a compiler wrapper only when told its basename.
+		// Its Rust-triple defaults would otherwise append a second,
+		// Zig-incompatible `--target`; the tool command already carries the
+		// canonical Zig target. Zig C++ also enables undefined-behavior checks for
+		// some optimized constructs by default, so turn them off for ordinary
+		// production dependencies rather than leaving unresolved UBSan calls.
+		environment.CC_KNOWN_WRAPPER_CUSTOM = path.basename(context.toolchain.tools.cc.path);
+		environment.CRATE_CC_NO_DEFAULTS = "1";
+		environment.CXXFLAGS = [context.environment.CXXFLAGS, "-fno-sanitize=undefined"]
+			.filter((value) => value !== undefined && value !== "")
+			.join(" ");
+	}
+	return environment;
 }
 
 /** Resolve exact Cargo arguments and content-addressed paths from one native context. */
@@ -55,18 +82,30 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 	const rustDirectory = path.join(context.runtimeDirectory, "rust");
 	const cargoFeatures = [...context.features.cargoFeatures];
 	const cargoArguments = ["build", "--release", "--no-default-features"];
+	if (context.toolchain.cross === true) {
+		cargoArguments.push("--target", context.toolchain.rustTarget);
+	}
 	if (cargoFeatures.length > 0) {
 		cargoArguments.push("--features", cargoFeatures.join(","));
 	}
+	const nativeToolEnvironment = cargoNativeToolEnvironment(context);
 	const cacheKey = rustArtifactKey({
 		cargoArguments,
 		environmentFingerprint: context.environmentFingerprint,
+		nativeToolEnvironment: Object.entries(nativeToolEnvironment).sort(([a], [b]) =>
+			a < b ? -1 : a > b ? 1 : 0,
+		),
 		sourceDigest: rustSourceDigest(rustDirectory),
 		toolchainFingerprint: context.toolchain.fingerprint,
 		rustTarget: context.toolchain.rustTarget,
 	});
 	const targetDirectory = path.join(context.cacheDirectory, "rust", cacheKey, "target");
-	const library = path.join(targetDirectory, "release", "libmal_rust.a");
+	const library = path.join(
+		targetDirectory,
+		...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
+		"release",
+		"libmal_rust.a",
+	);
 	return {
 		cacheKey,
 		targetDirectory,
@@ -76,10 +115,14 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 			...(context.features.webPlatformEnabled
 				? context.toolchain.probes.cxxLinkArgs
 				: []),
-			...platformLinkArgs(),
+			...platformLinkArgs(
+				context.toolchain.platform ?? process.platform,
+				context.toolchain.cross === true,
+			),
 		],
 		cargoArguments,
 		cargoFeatures,
+		nativeToolEnvironment,
 		features: context.features,
 	};
 }
@@ -139,21 +182,22 @@ export function ensureRustArtifacts(
 	const cargoPath = context.toolchain.tools.cargo.path;
 	const toolchainBin = path.dirname(cargoPath);
 
-	execFileSync(cargoPath, artifacts.cargoArguments, {
-		cwd: path.join(context.runtimeDirectory, "rust"),
-		env: {
-			...context.environment,
-			PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
-			CC: context.toolchain.tools.cc.path,
-			...(context.toolchain.tools.cxx === undefined
-				? {}
-				: { CXX: context.toolchain.tools.cxx.path }),
-			CARGO_HOME: path.join(context.cacheDirectory, "cargo"),
-			CARGO_TARGET_DIR: artifacts.targetDirectory,
-			RUSTC: context.toolchain.tools.rustc.path,
+	execFileSync(
+		cargoPath,
+		toolArguments(context.toolchain.tools.cargo, artifacts.cargoArguments),
+		{
+			cwd: path.join(context.runtimeDirectory, "rust"),
+			env: {
+				...context.environment,
+				...artifacts.nativeToolEnvironment,
+				PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
+				CARGO_HOME: path.join(context.cacheDirectory, "cargo"),
+				CARGO_TARGET_DIR: artifacts.targetDirectory,
+				RUSTC: context.toolchain.tools.rustc.path,
+			},
+			stdio: verbose ? "inherit" : "pipe",
 		},
-		stdio: verbose ? "inherit" : "pipe",
-	});
+	);
 	let librarySize = 0;
 	try {
 		const stats = statSync(artifacts.library);

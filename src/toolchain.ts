@@ -12,13 +12,15 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 
-const CACHE_SCHEMA = 3;
+const CACHE_SCHEMA = 6;
 const C2X_FLAGS = ["-std=c2x"];
 const LTO_FLAGS = ["-flto"];
 
 export interface ToolExecutable {
 	path: string;
 	version: string;
+	/** Arguments selecting a subcommand/target before invocation-specific arguments. */
+	args?: Array<string>;
 }
 
 export interface ToolchainTools {
@@ -29,6 +31,7 @@ export interface ToolchainTools {
 	cargo: ToolExecutable;
 	rustc: ToolExecutable;
 	strip?: ToolExecutable;
+	zig?: ToolExecutable;
 }
 
 export interface ToolchainProbes {
@@ -50,6 +53,13 @@ export interface Toolchain {
 	tools: ToolchainTools;
 	target: string;
 	rustTarget: string;
+	/** Target operating system; defaults to the host for legacy callers. */
+	platform?: NodeJS.Platform;
+	/** Whether the C/C++ stages are driven by Zig for an explicit target. */
+	cross?: boolean;
+	zigTarget?: string;
+	/** Build-process environment required by the selected driver. */
+	environmentOverrides?: Readonly<NodeJS.ProcessEnv>;
 	probes: ToolchainProbes;
 	fingerprint: string;
 	cacheHit: boolean;
@@ -59,6 +69,9 @@ export interface ToolchainReport {
 	tools: Partial<ToolchainTools>;
 	target?: string;
 	rustTarget?: string;
+	platform?: NodeJS.Platform;
+	cross?: boolean;
+	zigTarget?: string;
 	probes?: ToolchainProbes;
 	fingerprint?: string;
 	cacheHit: boolean;
@@ -73,6 +86,62 @@ export interface InspectToolchainOptions {
 	platform?: NodeJS.Platform;
 	arch?: string;
 	needsCxx?: boolean;
+	/** Rust target triple. Explicit targets are cross-built through Zig. */
+	target?: string;
+}
+
+interface ZigCrossTarget {
+	rustTarget: string;
+	zigTarget: string;
+	platform: "darwin" | "linux";
+	arch: "arm64" | "x64";
+}
+
+const ZIG_CROSS_TARGETS: Record<string, Omit<ZigCrossTarget, "rustTarget">> = {
+	"aarch64-apple-darwin": {
+		zigTarget: "aarch64-macos",
+		platform: "darwin",
+		arch: "arm64",
+	},
+	"x86_64-apple-darwin": {
+		zigTarget: "x86_64-macos",
+		platform: "darwin",
+		arch: "x64",
+	},
+	"aarch64-unknown-linux-gnu": {
+		zigTarget: "aarch64-linux-gnu",
+		platform: "linux",
+		arch: "arm64",
+	},
+	"x86_64-unknown-linux-gnu": {
+		zigTarget: "x86_64-linux-gnu",
+		platform: "linux",
+		arch: "x64",
+	},
+};
+
+export const SUPPORTED_ZIG_CROSS_TARGETS = Object.freeze(
+	Object.keys(ZIG_CROSS_TARGETS).sort(),
+);
+
+export function resolveZigCrossTarget(rustTarget: string): ZigCrossTarget {
+	const target = ZIG_CROSS_TARGETS[rustTarget];
+	if (target === undefined) {
+		throw new Error(
+			`unsupported cross-build target '${rustTarget}'; supported targets: ${SUPPORTED_ZIG_CROSS_TARGETS.join(", ")}`,
+		);
+	}
+	return { rustTarget, ...target };
+}
+
+/** Prefix a tool's fixed subcommand/target arguments. */
+export function toolArguments(tool: ToolExecutable, args: Array<string>): Array<string> {
+	return [...(tool.args ?? []), ...args];
+}
+
+/** Human-readable executable plus its fixed subcommand/target arguments. */
+export function formatToolCommand(tool: ToolExecutable): string {
+	return [tool.path, ...(tool.args ?? [])].join(" ");
 }
 
 interface CachedProbes {
@@ -207,7 +276,10 @@ function selectedRustTool(
 	rustDir: string,
 	env: NodeJS.ProcessEnv,
 ): ToolExecutable | undefined {
-	const selected = run(rustup.path, ["which", name], { cwd: rustDir, env });
+	const selected = run(rustup.path, toolArguments(rustup, ["which", name]), {
+		cwd: rustDir,
+		env,
+	});
 	if (!selected.ok) return undefined;
 	const selectedPath = selected.stdout.trim();
 	if (!selectedPath) return undefined;
@@ -219,6 +291,7 @@ function executableIdentity(tool: ToolExecutable): object {
 	return {
 		path: realpathSync(tool.path),
 		version: tool.version,
+		args: tool.args ?? [],
 		dev: stats.dev,
 		ino: stats.ino,
 		size: stats.size,
@@ -237,7 +310,12 @@ function fingerprintFor(
 	const testedFlags = {
 		c2x: C2X_FLAGS,
 		lto: LTO_FLAGS,
-		strip: platform === "darwin" ? [["-x"], ["-S"]] : [["--strip-all"], ["-s"]],
+		strip:
+			tools.strip?.args?.[0] === "objcopy"
+				? [["--strip-all"]]
+				: platform === "darwin"
+					? [["-x"], ["-S"]]
+					: [["--strip-all"], ["-s"]],
 		cxxLink: needsCxx ? [["-lc++"], ["-lstdc++"]] : [],
 	};
 	const identities = Object.fromEntries(
@@ -267,7 +345,7 @@ function compile(
 	cwd: string,
 	env: NodeJS.ProcessEnv,
 ): boolean {
-	return run(cc.path, args, { cwd, env }).ok;
+	return run(cc.path, toolArguments(cc, args), { cwd, env }).ok;
 }
 
 function probeCapabilities(
@@ -332,7 +410,10 @@ function probeCapabilities(
 		);
 	const ltoArchive =
 		ltoCompile &&
-		run(tools.ar.path, ["rcs", "liblto-probe.a", "lto-lib.o"], { cwd: probeDir, env }).ok;
+		run(tools.ar.path, toolArguments(tools.ar, ["rcs", "liblto-probe.a", "lto-lib.o"]), {
+			cwd: probeDir,
+			env,
+		}).ok;
 	const lto =
 		ltoArchive &&
 		compile(
@@ -375,10 +456,23 @@ function probeCapabilities(
 	let stripArgs: Array<string> = [];
 	if (tools.strip !== undefined && c2x) {
 		const candidates =
-			platform === "darwin" ? [["-x"], ["-S"]] : [["--strip-all"], ["-s"]];
+			tools.strip.args?.[0] === "objcopy"
+				? [["--strip-all"]]
+				: platform === "darwin"
+					? [["-x"], ["-S"]]
+					: [["--strip-all"], ["-s"]];
 		for (const args of candidates) {
 			copyFileSync(path.join(probeDir, "c2x-probe"), path.join(probeDir, "strip-probe"));
-			if (run(tools.strip.path, [...args, "strip-probe"], { cwd: probeDir, env }).ok) {
+			const invocationArgs =
+				tools.strip.args?.[0] === "objcopy"
+					? [...args, "strip-probe", "strip-probe-output"]
+					: [...args, "strip-probe"];
+			if (
+				run(tools.strip.path, toolArguments(tools.strip, invocationArgs), {
+					cwd: probeDir,
+					env,
+				}).ok
+			) {
 				strip = true;
 				stripArgs = args;
 				break;
@@ -394,9 +488,30 @@ function rustHostTarget(
 	rustDir: string,
 	env: NodeJS.ProcessEnv,
 ): string | undefined {
-	const result = run(rustc.path, ["-vV"], { cwd: rustDir, env });
+	const result = run(rustc.path, toolArguments(rustc, ["-vV"]), { cwd: rustDir, env });
 	if (!result.ok) return undefined;
 	return /^host:\s*(.+)$/m.exec(result.stdout)?.[1];
+}
+
+function rustTargetInstalled(
+	rustc: ToolExecutable,
+	rustTarget: string,
+	rustDir: string,
+	env: NodeJS.ProcessEnv,
+): boolean {
+	const result = run(
+		rustc.path,
+		toolArguments(rustc, ["--print", "target-libdir", "--target", rustTarget]),
+		{ cwd: rustDir, env },
+	);
+	if (!result.ok) return false;
+	const targetLibDir = result.stdout.trim();
+	if (!targetLibDir) return false;
+	try {
+		return statSync(targetLibDir).isDirectory();
+	} catch {
+		return false;
+	}
 }
 
 function addMissingIssue(
@@ -411,44 +526,115 @@ function addMissingIssue(
 export function inspectToolchain(options: InspectToolchainOptions = {}): ToolchainReport {
 	const rootDir = path.resolve(options.rootDir ?? process.cwd());
 	const rustDir = path.resolve(options.rustDir ?? path.join(rootDir, "runtime/rust"));
-	const env = options.env ?? process.env;
+	let env = options.env ?? process.env;
 	const searchPath = env.PATH ?? "";
-	const platform = options.platform ?? process.platform;
-	const arch = options.arch ?? process.arch;
+	const hostPlatform = options.platform ?? process.platform;
+	const hostArch = options.arch ?? process.arch;
 	const needsCxx = options.needsCxx ?? true;
 	const issues: Array<ToolchainIssue> = [];
 	const tools: Partial<ToolchainTools> = {};
-
-	const ccName = env.CC?.trim() || "cc";
-	const cc = inspectExecutable(ccName, searchPath, rootDir, env);
-	if (cc === undefined) {
-		addMissingIssue(
-			issues,
-			"cc",
-			env.CC
-				? `CC points to an unavailable compiler: ${env.CC}`
-				: "a C compiler was not found on PATH",
-		);
-	} else tools.cc = cc;
-
-	if (needsCxx) {
-		const cxxName = env.CXX?.trim() || "c++";
-		const cxx = inspectExecutable(cxxName, searchPath, rootDir, env);
-		if (cxx === undefined) {
+	let crossTarget: ZigCrossTarget | undefined;
+	if (options.target !== undefined) {
+		try {
+			crossTarget = resolveZigCrossTarget(options.target);
+		} catch (error) {
 			addMissingIssue(
 				issues,
-				"cxx",
-				env.CXX
-					? `CXX points to an unavailable compiler: ${env.CXX}`
-					: "a C++ compiler was not found on PATH (required by the web-platform runtime)",
+				"target",
+				error instanceof Error ? error.message : String(error),
 			);
-		} else tools.cxx = cxx;
+			return { tools, cacheHit: false, issues, cross: true };
+		}
+	}
+	const platform = crossTarget?.platform ?? hostPlatform;
+	const arch = crossTarget?.arch ?? hostArch;
+	const environmentOverrides: NodeJS.ProcessEnv = {};
+	if (crossTarget !== undefined) {
+		const zigCacheRoot = path.join(rootDir, ".cache/mal-cache/zig");
+		environmentOverrides.ZIG_GLOBAL_CACHE_DIR =
+			env.ZIG_GLOBAL_CACHE_DIR ?? path.join(zigCacheRoot, "global");
+		environmentOverrides.ZIG_LOCAL_CACHE_DIR =
+			env.ZIG_LOCAL_CACHE_DIR ?? path.join(zigCacheRoot, "local");
+		env = { ...env, ...environmentOverrides };
 	}
 
-	const ar = inspectExecutable("ar", searchPath, rootDir, env, ["--version"], true);
-	if (ar === undefined)
-		addMissingIssue(issues, "ar", "a static archive tool was not found on PATH");
-	else tools.ar = ar;
+	const zigName = env.ZIG?.trim() || "zig";
+	const zig = inspectExecutable(zigName, searchPath, rootDir, env, ["version"]);
+	if (zig !== undefined) tools.zig = zig;
+
+	if (crossTarget !== undefined) {
+		if (zig === undefined) {
+			addMissingIssue(
+				issues,
+				"zig",
+				env.ZIG
+					? `ZIG points to an unavailable executable: ${env.ZIG}`
+					: "Zig was not found on PATH (required for cross-builds)",
+			);
+		} else {
+			tools.cc = {
+				path: zig.path,
+				version: `zig cc ${zig.version}`,
+				args: ["cc", "-target", crossTarget.zigTarget],
+			};
+			if (needsCxx) {
+				tools.cxx = {
+					path: zig.path,
+					version: `zig c++ ${zig.version}`,
+					args: ["c++", "-target", crossTarget.zigTarget],
+				};
+			}
+			tools.ar = { path: zig.path, version: `zig ar ${zig.version}`, args: ["ar"] };
+			tools.strip = {
+				path: zig.path,
+				version: `zig objcopy ${zig.version}`,
+				args: ["objcopy"],
+			};
+		}
+	} else {
+		const ccName = env.CC?.trim() || "cc";
+		const cc = inspectExecutable(ccName, searchPath, rootDir, env);
+		if (cc === undefined) {
+			addMissingIssue(
+				issues,
+				"cc",
+				env.CC
+					? `CC points to an unavailable compiler: ${env.CC}`
+					: "a C compiler was not found on PATH",
+			);
+		} else tools.cc = cc;
+
+		if (needsCxx) {
+			const cxxName = env.CXX?.trim() || "c++";
+			const cxx = inspectExecutable(cxxName, searchPath, rootDir, env);
+			if (cxx === undefined) {
+				addMissingIssue(
+					issues,
+					"cxx",
+					env.CXX
+						? `CXX points to an unavailable compiler: ${env.CXX}`
+						: "a C++ compiler was not found on PATH (required by the web-platform runtime)",
+				);
+			} else tools.cxx = cxx;
+		}
+
+		const ar = inspectExecutable("ar", searchPath, rootDir, env, ["--version"], true);
+		if (ar === undefined)
+			addMissingIssue(issues, "ar", "a static archive tool was not found on PATH");
+		else tools.ar = ar;
+
+		const strip = inspectExecutable(
+			"strip",
+			searchPath,
+			rootDir,
+			env,
+			["--version"],
+			true,
+		);
+		if (strip === undefined)
+			addMissingIssue(issues, "strip", "symbol stripping is unavailable", false);
+		else tools.strip = strip;
+	}
 
 	const rustup = inspectExecutable("rustup", searchPath, rustDir, env);
 	if (rustup === undefined) {
@@ -473,20 +659,38 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		} else tools.rustc = rustc;
 	}
 
-	const strip = inspectExecutable("strip", searchPath, rootDir, env, ["--version"], true);
-	if (strip === undefined)
-		addMissingIssue(issues, "strip", "symbol stripping is unavailable", false);
-	else tools.strip = strip;
-
-	const report: ToolchainReport = { tools, cacheHit: false, issues };
+	const report: ToolchainReport = {
+		tools,
+		cacheHit: false,
+		issues,
+		platform,
+		cross: crossTarget !== undefined,
+		...(crossTarget === undefined ? {} : { zigTarget: crossTarget.zigTarget }),
+	};
+	if (
+		crossTarget !== undefined &&
+		tools.rustc !== undefined &&
+		!rustTargetInstalled(tools.rustc, crossTarget.rustTarget, rustDir, env)
+	) {
+		addMissingIssue(
+			issues,
+			"rust-target",
+			`Rust standard library target '${crossTarget.rustTarget}' is not installed`,
+		);
+	}
 	if (
 		tools.cc === undefined ||
 		tools.ar === undefined ||
 		tools.rustup === undefined ||
 		tools.cargo === undefined ||
 		tools.rustc === undefined ||
-		(needsCxx && tools.cxx === undefined)
+		(needsCxx && tools.cxx === undefined) ||
+		issues.some((issue) => issue.required)
 	) {
+		if (crossTarget !== undefined) {
+			report.rustTarget = crossTarget.rustTarget;
+			report.target = crossTarget.zigTarget;
+		}
 		return report;
 	}
 
@@ -498,16 +702,24 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		rustc: tools.rustc,
 		...(tools.cxx === undefined ? {} : { cxx: tools.cxx }),
 		...(tools.strip === undefined ? {} : { strip: tools.strip }),
+		...(tools.zig === undefined ? {} : { zig: tools.zig }),
 	};
-	const ccTargetResult = run(completeTools.cc.path, ["-dumpmachine"], {
-		cwd: rootDir,
-		env,
-	});
+	const ccTargetResult = run(
+		completeTools.cc.path,
+		toolArguments(completeTools.cc, ["-dumpmachine"]),
+		{
+			cwd: rootDir,
+			env,
+		},
+	);
 	const target =
 		ccTargetResult.ok && ccTargetResult.stdout.trim()
 			? ccTargetResult.stdout.trim()
 			: `${arch}-${platform}`;
-	const rustTarget = rustHostTarget(completeTools.rustc, rustDir, env) ?? "unknown";
+	const rustTarget =
+		crossTarget?.rustTarget ??
+		rustHostTarget(completeTools.rustc, rustDir, env) ??
+		"unknown";
 	report.target = target;
 	report.rustTarget = rustTarget;
 	const fingerprint = fingerprintFor(
@@ -570,6 +782,10 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		tools: completeTools,
 		target,
 		rustTarget,
+		platform,
+		cross: crossTarget !== undefined,
+		...(crossTarget === undefined ? {} : { zigTarget: crossTarget.zigTarget }),
+		...(crossTarget === undefined ? {} : { environmentOverrides }),
 		probes,
 		fingerprint,
 		cacheHit: report.cacheHit,
@@ -581,7 +797,10 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 export function requireToolchain(options: InspectToolchainOptions = {}): Toolchain {
 	const report = inspectToolchain(options);
 	if (report.toolchain === undefined) {
-		throw new ToolchainError(report, options.platform ?? process.platform);
+		throw new ToolchainError(
+			report,
+			report.platform ?? options.platform ?? process.platform,
+		);
 	}
 	return report.toolchain;
 }
@@ -610,7 +829,9 @@ function installationSuggestions(
 		suggestions.push(
 			"The C compiler is too old for the C23 features the runtime uses (the bool/true/false keywords, nullptr, #embed).",
 		);
-		if (platform === "linux")
+		if (report.cross === true)
+			suggestions.push("Update Zig and rerun the target-specific doctor check.");
+		else if (platform === "linux")
 			suggestions.push(
 				"Install clang >= 19 (or gcc >= 15) and select it: sudo apt install clang-19 && export CC=clang-19 CXX=clang++-19",
 			);
@@ -623,6 +844,14 @@ function installationSuggestions(
 		);
 		suggestions.push(
 			"Then install the pinned toolchain: (cd runtime/rust && rustup show)",
+		);
+	}
+	if (missing.has("zig")) {
+		suggestions.push("Install Zig and ensure 'zig' is on PATH, or set ZIG.");
+	}
+	if (missing.has("rust-target") && report.rustTarget !== undefined) {
+		suggestions.push(
+			`Install the Rust target: (cd runtime/rust && rustup target add ${report.rustTarget})`,
 		);
 	}
 	return suggestions;
@@ -672,9 +901,19 @@ export function formatToolchainReport(
 		appendToolchainReportTail(lines, report, platform);
 		return lines.join("\n");
 	}
-	for (const name of ["cc", "cxx", "ar", "rustup", "cargo", "rustc", "strip"] as const) {
+	for (const name of [
+		"zig",
+		"cc",
+		"cxx",
+		"ar",
+		"rustup",
+		"cargo",
+		"rustc",
+		"strip",
+	] as const) {
 		const tool = report.tools[name];
-		if (tool !== undefined) lines.push(`[ok] ${name}: ${tool.path} (${tool.version})`);
+		if (tool !== undefined)
+			lines.push(`[ok] ${name}: ${formatToolCommand(tool)} (${tool.version})`);
 		else {
 			const issue = report.issues.find((candidate) => candidate.tool === name);
 			if (issue !== undefined)
@@ -683,6 +922,8 @@ export function formatToolchainReport(
 				);
 		}
 	}
+	if (report.cross === true) lines.push("[ok] build mode: Zig cross-build");
+	if (report.zigTarget !== undefined) lines.push(`[ok] Zig target: ${report.zigTarget}`);
 	if (report.target !== undefined) lines.push(`[ok] C target: ${report.target}`);
 	if (report.rustTarget !== undefined)
 		lines.push(`[ok] Rust target: ${report.rustTarget}`);
@@ -697,7 +938,21 @@ export function formatToolchainReport(
 	}
 	for (const issue of report.issues) {
 		if (issue.tool === "strip" || issue.tool === "lto") continue;
-		if (!issue.required) lines.push(`warning: ${issue.message}`);
+		const representedByTool = [
+			"zig",
+			"cc",
+			"cxx",
+			"ar",
+			"rustup",
+			"cargo",
+			"rustc",
+			"strip",
+		].includes(issue.tool);
+		if (!representedByTool) {
+			lines.push(
+				`[${issue.required ? "missing" : "optional"}] ${issue.tool}: ${issue.message}`,
+			);
+		} else if (!issue.required) lines.push(`warning: ${issue.message}`);
 	}
 	appendToolchainReportTail(lines, report, platform);
 	return lines.join("\n");

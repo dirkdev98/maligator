@@ -30,8 +30,8 @@ the command layer; native stages do not infer runtime ownership from the applica
 
 ```text
 maligator init
-maligator doctor [--verbose]
-maligator build [entry] [--production] [--config path]
+maligator doctor [--verbose] [--target rust-triple]
+maligator build [entry] [--production] [--target rust-triple] [--config path]
 maligator run [entry] [--config path] [-- args...]
 ```
 
@@ -126,6 +126,8 @@ export default defineBuild({
 				"rust/rust-toolchain.toml",
 				"rust/src/**",
 				"rust/include/**",
+				"vendor/llhttp/include/**",
+				"vendor/llhttp/src/**",
 			],
 		},
 	},
@@ -164,6 +166,22 @@ requires:
 `CC` and `CXX` override compiler selection. Otherwise tools are resolved strictly
 from `PATH`. `maligator doctor --verbose` reports resolved paths, versions, C and
 Rust targets, tested capabilities, and probe-cache status.
+
+An explicit `build --target <rust-triple>` cross-builds through a detected Zig
+installation. The initial supported targets are:
+
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+- `aarch64-unknown-linux-gnu`
+- `x86_64-unknown-linux-gnu`
+
+Maligator maps the Rust triple to Zig's target syntax and consistently uses `zig
+cc`, `zig c++`, `zig ar`, and `zig objcopy` for the C runtime, Cargo native
+dependencies, final link, and optional stripping. Install the matching Rust standard
+library first with `rustup target add <rust-triple>`. Use `maligator doctor --target
+<rust-triple> --verbose` to validate both halves of the cross toolchain. Cross-built
+outputs live under `.cache/mal-build/<mode>/<rust-triple>/`; `maligator run` remains
+a native-host command.
 
 Discovery, normalized feature booleans, build plan, installation roots, environment
 snapshot, and cache root are frozen into one `NativeBuildContext`. The C archive,

@@ -401,9 +401,10 @@ export function runtimeCcFlags(
 	opts: FeatureDefineOpts = {},
 	plan?: NativeBuildPlan,
 	env: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform,
 ): Array<string> {
 	return [
-		...platformCcFlags(),
+		...platformCcFlags(platform),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...gcDefines(env),
@@ -416,9 +417,10 @@ export function runtimeCcFlags(
 export function ccExtraFlags(
 	plan?: NativeBuildPlan,
 	env: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform,
 ): Array<string> {
 	return [
-		...platformCcFlags(),
+		...platformCcFlags(platform),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...gcDefines(env),
@@ -455,13 +457,16 @@ export function platformCcFlags(
  * System libraries appended at the very end of every final link. macOS folds libm
  * (and pthread/dl) into libSystem, so nothing is needed there; glibc keeps libm
  * separate, so the runtime's <math.h> users (builtin_math.c et al.) need an
- * explicit `-lm`. These must trail the runtime archives so the linker resolves the
- * archives' math references left-to-right.
+ * explicit `-lm`. A Zig-linked Linux Rust staticlib also needs Zig's `libunwind`
+ * made explicit; native cc drivers normally add their platform unwind runtime
+ * themselves. These must trail the runtime archives so the linker resolves the
+ * archives' references left-to-right.
  */
 export function platformLinkArgs(
 	platform: NodeJS.Platform = process.platform,
+	zigCross = false,
 ): Array<string> {
-	return platform === "linux" ? ["-lm"] : [];
+	return platform === "linux" ? ["-lm", ...(zigCross ? ["-lunwind"] : [])] : [];
 }
 
 const GMALLOC_PATH = "/usr/lib/libgmalloc.dylib";
