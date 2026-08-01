@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -81,25 +81,25 @@ const BASE_FIXTURE = `
 
 interface RunResult {
 	stdout: string;
+	stderr: string;
 	code: number;
 	error?: string;
 }
 
 function run(cmd: string, args: Array<string>): RunResult {
-	try {
-		const stdout = execFileSync(cmd, args, {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		return { stdout, code: 0 };
-	} catch (error) {
-		const e = error as { code?: string; stdout?: string; status?: number };
-		return {
-			stdout: e.stdout ?? "",
-			code: e.status ?? 1,
-			error: e.code === "ENOENT" ? `command not found: ${cmd}` : undefined,
-		};
-	}
+	const result = spawnSync(cmd, args, {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	return {
+		stdout: result.stdout,
+		stderr: result.stderr,
+		code: result.status ?? 1,
+		error:
+			(result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+				? `command not found: ${cmd}`
+				: undefined,
+	};
 }
 
 function build(jsPath: string, name: string): string {
@@ -147,6 +147,7 @@ for (const [name, source] of Object.entries(FIXTURES)) {
 		const e = error as { message?: string; status?: number };
 		baked = {
 			stdout: "",
+			stderr: "",
 			code: -1,
 			error: `build failed${e.status === undefined ? "" : ` (exit ${e.status})`}: ${e.message ?? String(error)}`,
 		};
@@ -173,6 +174,12 @@ for (const [name, source] of Object.entries(FIXTURES)) {
 		);
 		console.log(`    loaded  (exit ${loaded.code}): ${JSON.stringify(loaded.stdout)}`);
 		console.log(`    spliced (exit ${spliced.code}): ${JSON.stringify(spliced.stdout)}`);
+		if (loaded.stderr !== "") {
+			console.log(`    loaded stderr:  ${JSON.stringify(loaded.stderr)}`);
+		}
+		if (spliced.stderr !== "") {
+			console.log(`    spliced stderr: ${JSON.stringify(spliced.stderr)}`);
+		}
 	}
 }
 

@@ -1207,7 +1207,8 @@ typedef struct MalVm {
     /**
      * VM-owned, mutable definition that `definition` points at. Initialized as a
      * shallow copy of the program definition with its function / string-constant /
-     * bigint-constant / literal-template tables relocated into growable VM-owned
+     * bigint-constant / literal-template / CommonJS module tables relocated into
+     * growable VM-owned
      * storage (the
      * instruction, handler, and code-unit data the rows point at stays in place —
      * static, or a loader arena). Runtime eval splices more functions, globals,
@@ -1219,7 +1220,15 @@ typedef struct MalVm {
     i32 string_capacity;
     i32 bigint_capacity;
     i32 literal_template_capacity;
+    i32 cjs_module_capacity;
     i32 global_capacity;
+
+    /**
+     * Definition-local CommonJS ids are rebased at the require seam. Runtime
+     * splices remain interpreted, so the active frame identifies which module
+     * table segment an id belongs to without rewriting numeric operands.
+     */
+    i32 *function_cjs_module_bases;
 
     /**
      * Per-function, VM-owned property-site caches shared by compiled and

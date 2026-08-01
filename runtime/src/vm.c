@@ -469,6 +469,21 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     }
     vm->live_definition.literal_template_data = literal_templates;
 
+    i32 cjs_module_count = definition->cjs_module_count;
+    vm->cjs_module_capacity = cjs_module_count > 0 ? cjs_module_count : 1;
+    i32 *cjs_module_function_indices =
+        malloc(sizeof(i32) * (usize) vm->cjs_module_capacity);
+    if (cjs_module_count > 0) {
+        memcpy(
+            cjs_module_function_indices,
+            definition->cjs_module_function_indices,
+            sizeof(i32) * (usize) cjs_module_count);
+    }
+    vm->live_definition.cjs_module_function_indices =
+        cjs_module_function_indices;
+    vm->function_cjs_module_bases =
+        calloc((usize) vm->function_capacity, sizeof(i32));
+
     vm->property_cache =
         calloc((usize) vm->function_capacity, sizeof(MalPropertyCachePool));
     vm->literal_shape_cache =
@@ -631,6 +646,11 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 }
 
 MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
+    if (vm->frame_count > 0) {
+        i32 caller_function_index =
+            vm->frames[vm->frame_count - 1].function_index;
+        id += vm->function_cjs_module_bases[caller_function_index];
+    }
     if (id < 0 || id >= vm->definition->cjs_module_count) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "invalid CommonJS module id");
         return mal_value_new_undefined();
@@ -787,6 +807,7 @@ void mal_vm_free(MalVm *vm) {
     free(vm->globals);
 #endif
     free(vm->cjs_registry);
+    free(vm->function_cjs_module_bases);
 
     // The VM-owned constant/template tables (the instruction/code-unit data their
     // rows point at is owned elsewhere — static, or the caller's loaded definition).
@@ -795,6 +816,7 @@ void mal_vm_free(MalVm *vm) {
     free((MalString *) vm->live_definition.string_constants);
     free((MalBigInt *) vm->live_definition.bigint_constants);
     free((u32 *) vm->live_definition.literal_template_data);
+    free((i32 *) vm->live_definition.cjs_module_function_indices);
 
     // Free any microtasks left queued (e.g. the program exited with pending
     // jobs). The MalValues they hold live in the heap, freed below.
@@ -883,6 +905,9 @@ static void mal_vm_rebase_instruction(
     switch (in->opcode) {
         case MAL_OP_CREATE_FUNCTION:
             in->as.create_function.function_index += fn_base;
+            break;
+        case MAL_OP_GUARD_FUNCTION_INDEX:
+            in->as.guard_function_index.function_index += fn_base;
             break;
         // owner_function_index is either a real function index (>= 0, rebased
         // like every other) or a synthetic per-iteration loop-scope id (< 0,
@@ -1056,6 +1081,7 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     i32 string_base = live->string_constant_count;
     i32 bigint_base = live->bigint_constant_count;
     i32 template_base = live->literal_template_data_count;
+    i32 cjs_module_base = live->cjs_module_count;
 
     // String/BigInt constant cells must not move (values point at them), so their
     // arrays are fixed-capacity and never reallocated. Refuse a splice that would
@@ -1167,6 +1193,36 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     }
     live->function_count = new_functions;
 
+    // CommonJS module ids are definition-local numeric values. Append the
+    // module-to-function rows here; the caller function's segment base is
+    // applied by mal_vm_cjs_require so no instruction data needs rewriting.
+    i32 new_cjs_module_count =
+        cjs_module_base + loaded->cjs_module_count;
+    if (new_cjs_module_count > vm->cjs_module_capacity) {
+        vm->cjs_module_capacity = new_cjs_module_count;
+        live->cjs_module_function_indices = realloc(
+            (i32 *) live->cjs_module_function_indices,
+            sizeof(i32) * (usize) new_cjs_module_count);
+    }
+    i32 *cjs_module_function_indices =
+        (i32 *) live->cjs_module_function_indices;
+    for (i32 i = 0; i < loaded->cjs_module_count; i++) {
+        cjs_module_function_indices[cjs_module_base + i] =
+            loaded->cjs_module_function_indices[i] + fn_base;
+    }
+    if (new_cjs_module_count > cjs_module_base) {
+        vm->cjs_registry = realloc(
+            vm->cjs_registry,
+            sizeof(MalCjsModuleSlot) * (usize) new_cjs_module_count);
+        for (i32 i = cjs_module_base; i < new_cjs_module_count; i++) {
+            vm->cjs_registry[i] = (MalCjsModuleSlot) {
+                .module_object = mal_value_new_undefined(),
+                .loaded = false,
+            };
+        }
+    }
+    live->cjs_module_count = new_cjs_module_count;
+
     // The realloc above may have moved the function table out from under any
     // frame that is live across this splice (the eval'ing frame itself, plus
     // its callers). Re-resolve each from its `function_index` source of truth so
@@ -1181,9 +1237,12 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
         realloc(vm->property_cache, sizeof(MalPropertyCachePool) * (usize) new_functions);
     vm->literal_shape_cache = realloc(
         vm->literal_shape_cache, sizeof(MalShape **) * (usize) new_functions);
+    vm->function_cjs_module_bases = realloc(
+        vm->function_cjs_module_bases, sizeof(i32) * (usize) new_functions);
     for (i32 i = fn_base; i < new_functions; i++) {
         vm->property_cache[i] = (MalPropertyCachePool){0};
         vm->literal_shape_cache[i] = nullptr;
+        vm->function_cjs_module_bases[i] = cjs_module_base;
     }
 
     return fn_base;
