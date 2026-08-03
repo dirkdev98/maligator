@@ -154,6 +154,7 @@ describe("command shell", () => {
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("test262_main.c");
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/include/**");
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/src/**");
+		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/sqlite/**");
 		const productConfig = productCliConfig(
 			repoRoot,
 			path.join(repoRoot, "compiler.malw"),

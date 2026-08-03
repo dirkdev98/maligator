@@ -261,6 +261,13 @@ const ZLIB: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:zlib"),
 };
 
+const SQLITE: HostModuleSpec = {
+	id: "node:sqlite",
+	named: ["DatabaseSync", "StatementSync"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:sqlite"),
+};
+
 /** Supported `node:*` built-ins, keyed by canonical specifier. */
 export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 	[
@@ -284,6 +291,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		OS,
 		STRING_DECODER,
 		ZLIB,
+		SQLITE,
 	].map((spec) => [spec.id, spec]),
 );
 
@@ -370,6 +378,9 @@ export function lookupHostModule(specifier: string): HostModuleSpec | undefined 
 /** Canonical catalog id for a Node built-in spelling, if supported. */
 export function canonicalNodeHostModuleId(specifier: string): string | undefined {
 	const id = isNodeSpecifier(specifier) ? specifier : `node:${specifier}`;
+	if (!isNodeSpecifier(specifier) && NODE_PREFIX_ONLY_BUILTIN_IDS.has(id)) {
+		return undefined;
+	}
 	return HOST_MODULES.has(id) ? id : undefined;
 }
 

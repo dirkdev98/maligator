@@ -26,6 +26,7 @@ export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 	"rust/include/**",
 	"vendor/llhttp/include/**",
 	"vendor/llhttp/src/**",
+	"vendor/sqlite/**",
 ];
 
 export function productCliConfig(

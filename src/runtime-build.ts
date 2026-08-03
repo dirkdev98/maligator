@@ -20,9 +20,10 @@ import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
 import { toolArguments } from "./toolchain.ts";
 
-function runtimeSourceHash(runtimeDirectory: string): string {
+function runtimeSourceHash(runtimeDirectory: string, nodeEnabled: boolean): string {
 	const root = path.resolve(runtimeDirectory);
 	const llhttp = path.join(root, "vendor/llhttp");
+	const sqlite = path.join(root, "vendor/sqlite");
 	return hashDirectoryTrees({
 		root,
 		directories: [
@@ -31,6 +32,7 @@ function runtimeSourceHash(runtimeDirectory: string): string {
 			...(existsSync(llhttp)
 				? [path.join(llhttp, "include"), path.join(llhttp, "src")]
 				: []),
+			...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
 		],
 		include: (entry) => /\.[ch]$/.test(entry.name),
 		compareNames: legacyLocaleNameComparator,
@@ -111,6 +113,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 	];
 	const sourceRoot = path.join(context.runtimeDirectory, "src");
 	const llhttpRoot = path.join(context.runtimeDirectory, "vendor/llhttp");
+	const sqliteRoot = path.join(context.runtimeDirectory, "vendor/sqlite");
 	const includeArguments = [
 		"-I",
 		sourceRoot,
@@ -121,6 +124,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		"-I",
 		path.join(context.runtimeDirectory, "rust/include"),
 		...(existsSync(llhttpRoot) ? ["-I", path.join(llhttpRoot, "include")] : []),
+		...(context.features.nodeEnabled && existsSync(sqliteRoot) ? ["-I", sqliteRoot] : []),
 	];
 	const identityFlags = flags.map((flag) =>
 		flag.startsWith("-DMAL_COMPILER_WIRE=") ? "-DMAL_COMPILER_WIRE=<content>" : flag,
@@ -147,8 +151,9 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 			path.join(sourceRoot, "host"),
 			path.join(sourceRoot, "runtime"),
 			...(existsSync(llhttpRoot) ? [path.join(llhttpRoot, "src")] : []),
+			...(context.features.nodeEnabled && existsSync(sqliteRoot) ? [sqliteRoot] : []),
 		],
-		sourceHash: runtimeSourceHash(context.runtimeDirectory),
+		sourceHash: runtimeSourceHash(context.runtimeDirectory, context.features.nodeEnabled),
 		toolchainFingerprint: context.toolchain.fingerprint,
 		target: context.toolchain.target,
 	});
@@ -250,6 +255,7 @@ function buildRuntimeCache(
 	try {
 		const sourceRoot = path.join(context.runtimeDirectory, "src");
 		const llhttpSource = path.join(context.runtimeDirectory, "vendor/llhttp/src");
+		const sqliteSource = path.join(context.runtimeDirectory, "vendor/sqlite/sqlite3.c");
 		const archives = runtimeArchives(temporaryDirectory);
 		const layers = [
 			{ name: "engine", source: sourceRoot, archive: archives.engine },
@@ -276,6 +282,13 @@ function buildRuntimeCache(
 					.sort()) {
 					sources.push({ name: `llhttp-${name}`, path: path.join(llhttpSource, name) });
 				}
+			}
+			if (
+				layer.name === "host" &&
+				context.features.nodeEnabled &&
+				existsSync(sqliteSource)
+			) {
+				sources.push({ name: "sqlite3.c", path: sqliteSource });
 			}
 			const objects = sources.map((source) => {
 				const objectPath = path.join(objectDirectory, `${source.name.slice(0, -2)}.o`);

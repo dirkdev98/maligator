@@ -631,6 +631,28 @@ test("does not treat prefix-only node:test as a bare core module", () => {
 	).toThrow(/Cannot resolve 'test'/);
 });
 
+test("resolves prefix-only node:sqlite without treating bare sqlite as core", () => {
+	write(
+		"node-sqlite.mjs",
+		`import { DatabaseSync, StatementSync } from "node:sqlite";\n` +
+			`globalThis.sink = [DatabaseSync, StatementSync];\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "node-sqlite.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get("node:sqlite")?.host?.named).toEqual([
+		"DatabaseSync",
+		"StatementSync",
+	]);
+
+	write("bare-sqlite.cjs", `module.exports = require("sqlite");\n`);
+	expect(() =>
+		buildModuleGraph(path.join(root, "bare-sqlite.cjs"), {
+			buildConfig: nodeOn,
+		}),
+	).toThrow(/Cannot resolve 'sqlite'/);
+});
+
 test("canonicalizes bare string_decoder instead of resolving an ancestor shim", () => {
 	write("bare-decoder.cjs", `module.exports = require("string_decoder");\n`);
 	const graph = buildModuleGraph(path.join(root, "bare-decoder.cjs"), {

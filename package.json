@@ -62,6 +62,7 @@
 	"devDependencies": {
 		"@lightbase/eslint-config": "4.3.2",
 		"@vitest/coverage-v8": "4.1.7",
+		"drizzle-orm": "1.0.0-rc.4",
 		"express": "5.2.1",
 		"oxfmt": "0.52.0",
 		"postgres": "3.4.9",

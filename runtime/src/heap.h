@@ -297,6 +297,10 @@ typedef enum MalHeapType : u8 {
      * codec handle. See runtime/node_zlib_object.h.
      */
     MAL_HEAP_NODE_ZLIB_OBJECT,
+    /** node:sqlite DatabaseSync instances. See runtime/node_sqlite_object.h. */
+    MAL_HEAP_NODE_SQLITE_DATABASE_OBJECT,
+    /** node:sqlite StatementSync instances. See runtime/node_sqlite_object.h. */
+    MAL_HEAP_NODE_SQLITE_STATEMENT_OBJECT,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked
