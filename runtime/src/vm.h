@@ -118,6 +118,7 @@ typedef enum MalOpcode {
     MAL_OP_CONSTRUCT_SUPER_EXPLICIT,
     MAL_OP_SET_THIS,
     MAL_OP_LOAD_STATIC_ARGUMENT,
+    MAL_OP_CALL_SPREAD_ITERABLE,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -673,6 +674,15 @@ typedef struct MalInstruction {
         struct {
             i32 dst, callee, this_value, arguments_array;
         } call_spread;
+
+        /**
+         * A call whose argument list is exactly one spread iterable. The runtime
+         * can marshal a proven builtin dense Array iterator directly and falls
+         * back to materialization for every observable/custom iterator case.
+         */
+        struct {
+            i32 dst, callee, this_value, iterable;
+        } call_spread_iterable;
 
         struct {
             i32 dst, callee, arguments_array;

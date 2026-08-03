@@ -1117,6 +1117,13 @@ export type IRInstruction =
 			registers: [number, number, number, number];
 	  }
 	| {
+			type: "callSpreadIterable";
+
+			// [destination, callee, this, iterable] — used when the entire
+			// argument list is one spread element.
+			registers: [number, number, number, number];
+	  }
+	| {
 			type: "constructSpread";
 
 			// [destination, callee, arguments_array]
@@ -9460,6 +9467,20 @@ function compileChainElement(
 		}
 
 		if (node.arguments.some((arg) => arg.type === "SpreadElement")) {
+			if (node.arguments.length === 1 && node.arguments[0]?.type === "SpreadElement") {
+				const iterable = compileExpression(
+					program,
+					fn,
+					cursor,
+					node.arguments[0].argument,
+				);
+				const destination = nextRegisterDestination(fn);
+				cursor.block.instructions.push({
+					type: "callSpreadIterable",
+					registers: [destination, callee, thisRegister, iterable],
+				});
+				return destination;
+			}
 			const argumentsArray = compileSpreadArgumentsArray(
 				program,
 				fn,
@@ -12324,6 +12345,23 @@ function compileCall(
 		thisRegister = compileUndefined(fn, cursor);
 	}
 	if (callExpression.arguments.some((arg) => arg.type === "SpreadElement")) {
+		if (
+			callExpression.arguments.length === 1 &&
+			callExpression.arguments[0]?.type === "SpreadElement"
+		) {
+			const iterable = compileExpression(
+				program,
+				fn,
+				cursor,
+				callExpression.arguments[0].argument,
+			);
+			const destination = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "callSpreadIterable",
+				registers: [destination, callee, thisRegister, iterable],
+			});
+			return destination;
+		}
 		const argumentsArray = compileSpreadArgumentsArray(
 			program,
 			fn,

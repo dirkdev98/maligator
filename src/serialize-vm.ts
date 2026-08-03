@@ -127,6 +127,7 @@ export const WIRE_OPCODES = [
 	"CONSTRUCT_SUPER_EXPLICIT",
 	"SET_THIS",
 	"LOAD_STATIC_ARGUMENT",
+	"CALL_SPREAD_ITERABLE",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -940,6 +941,12 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.thisValue);
 			w.i32(i.argumentsArray);
 			return;
+		case "CALL_SPREAD_ITERABLE":
+			w.i32(i.dst);
+			w.i32(i.callee);
+			w.i32(i.thisValue);
+			w.i32(i.iterable);
+			return;
 		case "CONSTRUCT_SPREAD":
 			w.i32(i.dst);
 			w.i32(i.callee);
@@ -1534,6 +1541,14 @@ function readInstruction(r: Reader): VmInstruction {
 				callee: r.i32(),
 				thisValue: r.i32(),
 				argumentsArray: r.i32(),
+			};
+		case "CALL_SPREAD_ITERABLE":
+			return {
+				opcode,
+				dst: r.i32(),
+				callee: r.i32(),
+				thisValue: r.i32(),
+				iterable: r.i32(),
 			};
 		case "CONSTRUCT_SPREAD":
 			return { opcode, dst: r.i32(), callee: r.i32(), argumentsArray: r.i32() };

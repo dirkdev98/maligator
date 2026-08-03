@@ -156,6 +156,7 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "LOAD_NEW_TARGET":
 		case "LOAD_CALLEE":
 		case "CALL_SPREAD":
+		case "CALL_SPREAD_ITERABLE":
 		case "CONSTRUCT_SPREAD":
 		case "CONSTRUCT_SUPER":
 		case "CONSTRUCT_SUPER_EXPLICIT":

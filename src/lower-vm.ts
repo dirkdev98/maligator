@@ -727,6 +727,13 @@ export type VmInstruction =
 			argumentsArray: number;
 	  }
 	| {
+			opcode: "CALL_SPREAD_ITERABLE";
+			dst: number;
+			callee: number;
+			thisValue: number;
+			iterable: number;
+	  }
+	| {
 			opcode: "CONSTRUCT_SPREAD";
 			dst: number;
 			callee: number;
@@ -1743,6 +1750,14 @@ function lowerInstructionToVmInstruction(
 				callee: instruction.registers[1],
 				thisValue: instruction.registers[2],
 				argumentsArray: instruction.registers[3],
+			};
+		case "callSpreadIterable":
+			return {
+				opcode: "CALL_SPREAD_ITERABLE",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				thisValue: instruction.registers[2],
+				iterable: instruction.registers[3],
 			};
 		case "constructSpread":
 			return {

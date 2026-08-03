@@ -1854,6 +1854,121 @@ static i32 mal_vm_marshal_spread(MalVm *vm, MalValue array_value) {
     return (i32) length;
 }
 
+/**
+ * Marshal a single spread iterable. GetIterator is always observed first. A
+ * captured builtin Array-values iterator over a fully dense Array has no
+ * user-code checkpoints while it advances, so its elements can be copied
+ * directly to the value stack. Every custom iterator, holey/deoptimized Array,
+ * and over-capacity case follows the materializing path used by the general
+ * spread lowering.
+ */
+static bool mal_vm_try_marshal_dense_array(
+    MalVm *vm, MalArrayObject *array,
+    MalIteratorObject *iterator, i32 *count_out) {
+    u32 length = array->length;
+    i32 available =
+        vm->value_stack_capacity - vm->value_stack_size;
+    bool dense = array->elements != nullptr
+        && array->dense_count >= length
+        && length <= (u32) available;
+    for (u32 i = 0; dense && i < length; i++) {
+        if (mal_value_is_array_hole(array->elements[i])) {
+            dense = false;
+        }
+    }
+    if (!dense) return false;
+
+    i32 base = vm->value_stack_size;
+    memcpy(
+        &vm->value_stack[base], array->elements,
+        (usize) length * sizeof(MalValue));
+    vm->value_stack_size = base + (i32) length;
+    if (iterator != nullptr) {
+        iterator->index = length;
+        iterator->done = true;
+    }
+    *count_out = (i32) length;
+    return true;
+}
+
+static i32 mal_vm_marshal_spread_iterable(
+    MalVm *vm, MalValue iterable) {
+    MalValue method;
+    if (!mal_vm_get_property(
+            vm, iterable,
+            mal_intrinsic_symbol_key(
+                vm, MAL_INTRINSIC_SYMBOL_ITERATOR),
+            &method)) {
+        return -1;
+    }
+    if (mal_value_is_array_object(iterable)
+        && mal_value_is_native_function_object(method)
+        && mal_native_function_object_callback(
+            mal_value_to_native_function_object(method))
+            == mal_array_values_callback) {
+        i32 count;
+        if (mal_vm_try_marshal_dense_array(
+                vm, mal_value_to_array_object(iterable),
+                nullptr, &count)) {
+            return count;
+        }
+    }
+
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator_from_method(
+            vm, iterable, method, &record)) {
+        return -1;
+    }
+
+    MalValue roots[4] = {
+        record.iterator, record.next_method,
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, countof(roots));
+
+    if (mal_value_is_iterator_object(record.iterator)
+        && mal_value_is_native_function_object(record.next_method)
+        && mal_native_function_object_callback(
+            mal_value_to_native_function_object(record.next_method))
+            == mal_array_iterator_next_callback) {
+        MalIteratorObject *iterator =
+            mal_value_to_iterator_object(record.iterator);
+        if (iterator->kind == MAL_ITERATOR_ARRAY_VALUES
+            && mal_value_is_heap_type(
+                iterator->target, MAL_HEAP_ARRAY_OBJECT)) {
+            MalArrayObject *array =
+                (MalArrayObject *) mal_value_to_heap(iterator->target);
+            i32 count;
+            if (mal_vm_try_marshal_dense_array(
+                    vm, array, iterator, &count)) {
+                mal_gc_unroot(&roots_span);
+                return count;
+            }
+        }
+    }
+
+    MalArrayObject *arguments = mal_intrinsic_new_array(vm, 0);
+    roots[2] = mal_value_from_array_object(arguments);
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step_fast(
+                vm, &record, &roots[3], &done)) {
+            mal_gc_unroot(&roots_span);
+            return -1;
+        }
+        if (done) break;
+        if (!mal_array_object_fresh_dense_append(arguments, roots[3])) {
+            mal_vm_throw_allocation_error(vm);
+            mal_gc_unroot(&roots_span);
+            return -1;
+        }
+    }
+
+    i32 count = mal_vm_marshal_spread(vm, roots[2]);
+    mal_gc_unroot(&roots_span);
+    return count;
+}
+
 void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     i32 caller_function_index = callable->function_index;
@@ -1902,6 +2017,28 @@ void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction
     mal_vm_call_dispatch(vm, callee, this_value, base, argument_count, dst);
 }
 
+void mal_op_call_spread_iterable(
+    MalCallable *callable, const MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue callee =
+        callable->registers[instruction->as.call_spread_iterable.callee];
+    MalValue this_value =
+        callable->registers[
+            instruction->as.call_spread_iterable.this_value];
+    MalValue iterable =
+        callable->registers[
+            instruction->as.call_spread_iterable.iterable];
+    i32 dst = instruction->as.call_spread_iterable.dst;
+
+    i32 base = vm->value_stack_size;
+    i32 argument_count =
+        mal_vm_marshal_spread_iterable(vm, iterable);
+    if (argument_count < 0) return;
+
+    mal_vm_call_dispatch(
+        vm, callee, this_value, base, argument_count, dst);
+}
+
 // Shared spread call/construct for the native backend: marshal the spread array's
 // elements onto the value stack (bounds-checked — RangeError on overflow), dispatch
 // through the compiled calling convention, then pop the marshaled window and return
@@ -1918,6 +2055,20 @@ MalCompletion mal_vm_op_call_spread(
     }
     MalCompletion completion =
         mal_vm_call_value(vm, callee, this_value, &vm->value_stack[base], argument_count);
+    vm->value_stack_size = base;
+    return completion;
+}
+
+MalCompletion mal_vm_op_call_spread_iterable(
+    MalVm *vm, MalValue callee, MalValue this_value,
+    MalValue iterable) {
+    i32 base = vm->value_stack_size;
+    i32 argument_count =
+        mal_vm_marshal_spread_iterable(vm, iterable);
+    if (argument_count < 0) return vm->completion;
+    MalCompletion completion = mal_vm_call_value(
+        vm, callee, this_value, &vm->value_stack[base],
+        argument_count);
     vm->value_stack_size = base;
     return completion;
 }

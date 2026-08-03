@@ -20,6 +20,8 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+MalNativeFunctionCallback mal_array_values_callback = nullptr;
+
 static bool mal_builtin_array_throw_string_length(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     return false;
@@ -3464,6 +3466,7 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "keys", 0, mal_builtin_array_keys);
     mal_intrinsic_define_method_n(vm, prototype, "entries", 0, mal_builtin_array_entries);
     MalValue values = mal_intrinsic_define_method_n(vm, prototype, "values", 0, mal_builtin_array_values);
+    mal_array_values_callback = mal_builtin_array_values;
 
     // Array.prototype[Symbol.iterator] === Array.prototype.values
     MalPropertyDesc iterator_desc = mal_intrinsic_data_desc(values, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);

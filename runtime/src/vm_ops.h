@@ -230,6 +230,9 @@ void mal_op_call(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction);
 
+void mal_op_call_spread_iterable(
+    MalCallable *callable, const MalInstruction *instruction);
+
 void mal_op_construct(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instruction);
@@ -1562,6 +1565,14 @@ MalValue mal_vm_op_has_private(MalVm *vm, MalValue object_value, MalValue key_va
  */
 MalCompletion mal_vm_op_call_spread(
     MalVm *vm, MalValue callee, MalValue this_value, MalValue arguments_array
+);
+
+/**
+ * Single-spread call `f(...iterable)`: observe the iterable protocol, marshal a
+ * proven builtin dense Array directly, and materialize every other case.
+ */
+MalCompletion mal_vm_op_call_spread_iterable(
+    MalVm *vm, MalValue callee, MalValue this_value, MalValue iterable
 );
 
 /** Spread construct `new C(...args)` for the native backend; see call_spread. */

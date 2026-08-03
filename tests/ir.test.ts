@@ -124,6 +124,21 @@ test("canonicalizes a computed object-rest exclusion once", () => {
 	expect(copy?.registers.slice(2)).toContain(canonicalKey);
 });
 
+test("a single spread argument lowers without an intermediate array", () => {
+	const program = compileScript(`
+		function single(fn, values) { return fn(...values); }
+		function mixed(fn, values) { return fn(1, ...values); }
+	`);
+
+	const single = instructionsOf(functionNamed(program, "single"));
+	expect(single).toContainEqual(expect.objectContaining({ type: "callSpreadIterable" }));
+	expect(single).not.toContainEqual(expect.objectContaining({ type: "createArray" }));
+
+	const mixed = instructionsOf(functionNamed(program, "mixed"));
+	expect(mixed).toContainEqual(expect.objectContaining({ type: "callSpread" }));
+	expect(mixed).toContainEqual(expect.objectContaining({ type: "createArray" }));
+});
+
 test("generator class computed keys suspend in class-element source order", () => {
 	const program = compileScript(`
 		function* define() {

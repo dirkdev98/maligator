@@ -257,7 +257,11 @@ function callMethodName(
 	ctx: FunctionContext,
 	call: IRInstruction,
 ): string | undefined {
-	if (call.type !== "call" && call.type !== "callSpread") {
+	if (
+		call.type !== "call" &&
+		call.type !== "callSpread" &&
+		call.type !== "callSpreadIterable"
+	) {
 		return undefined;
 	}
 	const calleeDef = ctx.singleDefs.get(call.registers[1]);
@@ -350,7 +354,8 @@ export function escapeOfRegister(
 					break;
 				}
 				case "call":
-				case "callSpread": {
+				case "callSpread":
+				case "callSpreadIterable": {
 					raise(escapeThroughCall(program, fn, ctx, instruction, position, summaries));
 					break;
 				}
@@ -367,12 +372,12 @@ export function escapeOfRegister(
 	return result;
 }
 
-/** Escape contribution of a value used at `position` of a `call`/`callSpread`. */
+/** Escape contribution of a value used by a call instruction. */
 function escapeThroughCall(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	ctx: FunctionContext,
-	call: Extract<IRInstruction, { type: "call" | "callSpread" }>,
+	call: Extract<IRInstruction, { type: "call" | "callSpread" | "callSpreadIterable" }>,
 	position: number,
 	summaries: ReadonlyMap<number, EffectSummary>,
 ): EscapeKind {
@@ -384,7 +389,7 @@ function escapeThroughCall(
 
 	// A spread call hides the individual arguments in an array; if our value is that
 	// array its elements flow to the callee — conservatively retained.
-	if (call.type === "callSpread") {
+	if (call.type === "callSpread" || call.type === "callSpreadIterable") {
 		return position === 2
 			? receiverEscapeOfCall(program, fn, ctx, call, summaries)
 			: "retained";
@@ -412,7 +417,7 @@ function resolveCallSummary(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	ctx: FunctionContext,
-	call: Extract<IRInstruction, { type: "call" | "callSpread" }>,
+	call: Extract<IRInstruction, { type: "call" | "callSpread" | "callSpreadIterable" }>,
 	summaries: ReadonlyMap<number, EffectSummary>,
 ): ResolvedSummary | undefined {
 	const method = callMethodName(program, ctx, call);
@@ -440,7 +445,7 @@ function receiverEscapeOfCall(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	ctx: FunctionContext,
-	call: Extract<IRInstruction, { type: "call" | "callSpread" }>,
+	call: Extract<IRInstruction, { type: "call" | "callSpread" | "callSpreadIterable" }>,
 	summaries: ReadonlyMap<number, EffectSummary>,
 ): EscapeKind {
 	return resolveCallSummary(program, fn, ctx, call, summaries)?.receiver ?? "retained";
@@ -488,6 +493,7 @@ function structuralEffects(fn: IRFunction): {
 			if (
 				type === "call" ||
 				type === "callSpread" ||
+				type === "callSpreadIterable" ||
 				type === "construct" ||
 				type === "constructSpread" ||
 				type === "constructSuper" ||
@@ -800,7 +806,8 @@ function classifyShapedStackAlloc(
 					break;
 				}
 				case "call":
-				case "callSpread": {
+				case "callSpread":
+				case "callSpreadIterable": {
 					// The escape lattice proved this callee neither retains the value nor is
 					// a reassignable binding, else the register would have escaped and never
 					// reached here. Identity flows to the callee → not scalar-replaceable.

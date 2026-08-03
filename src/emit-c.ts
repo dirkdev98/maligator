@@ -2789,6 +2789,17 @@ function emitInstruction(
 				poll, // call-return safepoint
 			];
 		}
+		case "CALL_SPREAD_ITERABLE": {
+			// `f(...iterable)` with no other arguments: observe GetIterator,
+			// then let the runtime use its guarded dense-Array path.
+			const tmp = `call_spread_iterable_${ip}`;
+			return [
+				`MalCompletion ${tmp} = mal_vm_op_call_spread_iterable(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.iterable)});`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`r${instruction.dst} = ${tmp}.value;`,
+				poll, // call-return safepoint
+			];
+		}
 		case "CONSTRUCT_SPREAD": {
 			// `new C(...args)`: marshal the spread array and dispatch, mirroring CONSTRUCT.
 			const tmp = `construct_spread_${ip}`;

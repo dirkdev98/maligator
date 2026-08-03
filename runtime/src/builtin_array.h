@@ -4,6 +4,9 @@
 #include "intrinsics.h"
 #include "vm.h"
 
+/** Builtin Array.prototype.values callback used by guarded iterator fast paths. */
+extern MalNativeFunctionCallback mal_array_values_callback;
+
 /**
  * Create the Array constructor and install the Array builtins on the
  * constructor and %Array.prototype%.

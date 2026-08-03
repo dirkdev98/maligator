@@ -120,6 +120,7 @@ typedef enum WireOp {
     WIRE_CONSTRUCT_SUPER_EXPLICIT,
     WIRE_SET_THIS,
     WIRE_LOAD_STATIC_ARGUMENT,
+    WIRE_CALL_SPREAD_ITERABLE,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -847,6 +848,13 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.call_spread.callee = rd_i32(r);
             o->as.call_spread.this_value = rd_i32(r);
             o->as.call_spread.arguments_array = rd_i32(r);
+            return;
+        case WIRE_CALL_SPREAD_ITERABLE:
+            o->opcode = MAL_OP_CALL_SPREAD_ITERABLE;
+            o->as.call_spread_iterable.dst = rd_i32(r);
+            o->as.call_spread_iterable.callee = rd_i32(r);
+            o->as.call_spread_iterable.this_value = rd_i32(r);
+            o->as.call_spread_iterable.iterable = rd_i32(r);
             return;
         case WIRE_CONSTRUCT_SPREAD:
             o->opcode = MAL_OP_CONSTRUCT_SPREAD;
