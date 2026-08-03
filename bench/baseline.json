@@ -305,6 +305,30 @@
     "collections": 20,
     "allocatedMb": 93.86085510253906
   },
+  "prototypeCache": {
+    "iterations": 20000000,
+    "mal": {
+      "iterations": 20000000,
+      "runtimeMs": 62,
+      "userlandDirectMs": 700,
+      "userlandDeepMs": 795,
+      "postMutationMs": 803
+    },
+    "node": {
+      "iterations": 20000000,
+      "runtimeMs": 6,
+      "userlandDirectMs": 6,
+      "userlandDeepMs": 6,
+      "postMutationMs": 6
+    },
+    "runtimeRatio": 10.333333333333334,
+    "userlandDirectRatio": 116.66666666666667,
+    "userlandDeepRatio": 132.5,
+    "postMutationRatio": 133.83333333333334,
+    "inheritedHits": 20019998,
+    "inheritedFills": 2,
+    "inheritedRejectChain": 60060002
+  },
   "gc": {
     "cli": {
       "wallMs": 28.723959,
