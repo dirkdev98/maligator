@@ -42,6 +42,10 @@
  *               execution with zero parameters, four numbers, and four strings.
  *               Internal monotonic timings isolate binding overhead from process
  *               startup and compare the embedded node:sqlite adapter with Node.
+ *   - prototype-cache bench/prototype-cache.mjs: inherited method loads through
+ *               runtime-owned and one-/two-link userland prototype chains, plus
+ *               the refilled steady state after a prototype method replacement.
+ *               Wall time is compared with Node; IC counters verify the mechanism.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
  *               + MAL_GC_STATS). No V8 compare.
@@ -308,6 +312,25 @@ interface SqliteBindingMetrics {
 	collections: number;
 	allocatedMb: number;
 }
+interface PrototypeCacheFixtureMetrics {
+	iterations: number;
+	runtimeMs: number;
+	userlandDirectMs: number;
+	userlandDeepMs: number;
+	postMutationMs: number;
+}
+interface PrototypeCacheMetrics {
+	iterations: number;
+	mal: PrototypeCacheFixtureMetrics;
+	node: PrototypeCacheFixtureMetrics;
+	runtimeRatio: number;
+	userlandDirectRatio: number;
+	userlandDeepRatio: number;
+	postMutationRatio: number;
+	inheritedHits: number;
+	inheritedFills: number;
+	inheritedRejectChain: number;
+}
 interface GcWorkload {
 	wallMs: number;
 	rssMb: number;
@@ -344,6 +367,7 @@ interface BenchmarkSnapshot {
 	stackObject?: StackObjectMetrics;
 	interpreter?: InterpreterMetrics;
 	sqliteBinding?: SqliteBindingMetrics;
+	prototypeCache?: PrototypeCacheMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics;
 }
@@ -1241,6 +1265,116 @@ function benchSqliteBinding(runs: number): SqliteBindingMetrics {
 	};
 }
 
+// ---- inherited prototype cache (vs Node) ----------------------------------
+
+function parsePrototypeCacheResult(
+	stdout: string,
+	command: string,
+): PrototypeCacheFixtureMetrics {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout.trim());
+	} catch {
+		throw new Error(`invalid prototype-cache output from ${command}: ${stdout.trim()}`);
+	}
+	if (
+		typeof parsed !== "object" ||
+		parsed === null ||
+		!("iterations" in parsed) ||
+		!("runtimeMs" in parsed) ||
+		!("userlandDirectMs" in parsed) ||
+		!("userlandDeepMs" in parsed) ||
+		!("postMutationMs" in parsed)
+	) {
+		throw new Error(`incomplete prototype-cache output from ${command}`);
+	}
+	const metrics = parsed as PrototypeCacheFixtureMetrics;
+	for (const [name, value] of Object.entries(metrics)) {
+		if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+			throw new Error(`invalid prototype-cache ${name} from ${command}: ${value}`);
+		}
+	}
+	return metrics;
+}
+
+function runPrototypeCacheFixture(
+	command: string,
+	args: Array<string>,
+	runs: number,
+): PrototypeCacheFixtureMetrics {
+	const results: Array<PrototypeCacheFixtureMetrics> = [];
+	for (let run = 0; run < runs; run++) {
+		const result = spawnSync(command, args, {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		if (result.status !== 0) {
+			throw new Error(
+				`prototype-cache command failed: ${command} ${args.join(" ")} (status ${result.status})\n${result.stderr ?? ""}`,
+			);
+		}
+		results.push(
+			parsePrototypeCacheResult(result.stdout ?? "", `${command} ${args.join(" ")}`),
+		);
+	}
+	const first = results[0]!;
+	return {
+		iterations: first.iterations,
+		runtimeMs: median(results.map((result) => result.runtimeMs)),
+		userlandDirectMs: median(results.map((result) => result.userlandDirectMs)),
+		userlandDeepMs: median(results.map((result) => result.userlandDeepMs)),
+		postMutationMs: median(results.map((result) => result.postMutationMs)),
+	};
+}
+
+function parsePerfIcStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes("[perf-ic-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
+function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
+	const fixture = "bench/prototype-cache.mjs";
+	const binary = buildNativeBinary({
+		fixture,
+		name: "bench-prototype-cache",
+	});
+	const mal = runPrototypeCacheFixture(binary, [], runs);
+	const node = runPrototypeCacheFixture("node", [fixture], runs);
+	if (mal.iterations !== node.iterations) {
+		throw new Error(
+			"prototype-cache fixture metadata differs between Maligator and Node",
+		);
+	}
+
+	const instrumented = buildNativeBinary({
+		fixture,
+		name: "bench-prototype-cache-stats",
+		environment: { ...process.env, MAL_PERF_STATS: "1" },
+	});
+	const stats = spawnSync(instrumented, [], {
+		env: { ...process.env, MAL_PERF_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	if (stats.status !== 0) {
+		throw new Error(`instrumented prototype-cache run failed: ${stats.stderr ?? ""}`);
+	}
+	const stderr = stats.stderr ?? "";
+	return {
+		iterations: mal.iterations,
+		mal,
+		node,
+		runtimeRatio: mal.runtimeMs / node.runtimeMs,
+		userlandDirectRatio: mal.userlandDirectMs / node.userlandDirectMs,
+		userlandDeepRatio: mal.userlandDeepMs / node.userlandDeepMs,
+		postMutationRatio: mal.postMutationMs / node.postMutationMs,
+		inheritedHits: parsePerfIcStat(stderr, "load_inherited_hits"),
+		inheritedFills: parsePerfIcStat(stderr, "inherited_fills"),
+		inheritedRejectChain: parsePerfIcStat(stderr, "inherited_reject_chain"),
+	};
+}
+
 // ---- gc -------------------------------------------------------------------
 
 function parseGcMaxPause(stderr: string): number {
@@ -1972,6 +2106,26 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  managed   ${current.collections} collections, ${current.allocatedMb.toFixed(1)}MB allocated${delta(current.allocatedMb, prior?.allocatedMb)}`,
 		);
 	}
+	if (entry.prototypeCache) {
+		const current = entry.prototypeCache;
+		const prior = previous?.prototypeCache;
+		console.log("prototype-cache (inherited method loads; vs Node):");
+		console.log(
+			`  runtime   maligator ${current.mal.runtimeMs.toFixed(1)}ms${delta(current.mal.runtimeMs, prior?.mal.runtimeMs)}  node ${current.node.runtimeMs.toFixed(1)}ms  ratio ${current.runtimeRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  user 1x   maligator ${current.mal.userlandDirectMs.toFixed(1)}ms${delta(current.mal.userlandDirectMs, prior?.mal.userlandDirectMs)}  node ${current.node.userlandDirectMs.toFixed(1)}ms  ratio ${current.userlandDirectRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  user 2x   maligator ${current.mal.userlandDeepMs.toFixed(1)}ms${delta(current.mal.userlandDeepMs, prior?.mal.userlandDeepMs)}  node ${current.node.userlandDeepMs.toFixed(1)}ms  ratio ${current.userlandDeepRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  mutated   maligator ${current.mal.postMutationMs.toFixed(1)}ms${delta(current.mal.postMutationMs, prior?.mal.postMutationMs)}  node ${current.node.postMutationMs.toFixed(1)}ms  ratio ${current.postMutationRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  IC        ${current.inheritedHits} inherited hits, ${current.inheritedFills} fills, ${current.inheritedRejectChain} chain rejects`,
+		);
+	}
 	if (entry.gc) {
 		console.log("gc (generational):");
 		for (const [name, w] of Object.entries(entry.gc)) {
@@ -2042,6 +2196,7 @@ const which =
 				"stack-object",
 				"interpreter",
 				"sqlite-binding",
+				"prototype-cache",
 				"gc",
 				"http",
 			];
@@ -2059,6 +2214,7 @@ if (which.includes("arguments")) entry.arguments = benchArguments(runs);
 if (which.includes("stack-object")) entry.stackObject = benchStackObject(runs);
 if (which.includes("interpreter")) entry.interpreter = benchInterpreter(runs);
 if (which.includes("sqlite-binding")) entry.sqliteBinding = benchSqliteBinding(runs);
+if (which.includes("prototype-cache")) entry.prototypeCache = benchPrototypeCache(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) {
 	const http = benchHttp(httpSeconds, 50);
