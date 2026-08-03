@@ -26,6 +26,8 @@ describe("inherited built-in method and native call caches", () => {
 	let slotInterpreted: string;
 	let localValidityCompiled: string;
 	let localValidityInterpreted: string;
+	let userlandCompiled: string;
+	let userlandInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -110,6 +112,20 @@ describe("inherited built-in method and native call caches", () => {
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+		userlandCompiled = buildNativeBinary({
+			fixture: "tests/local/inherited-userland-cache.js",
+			name: "inherited-userland-cache",
+			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		userlandInterpreted = buildNativeBinary({
+			fixture: "tests/local/inherited-userland-cache.js",
+			name: "inherited-userland-cache-ni",
+			compiled: false,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
 	});
 
 	it("handles repeated loads/calls, shadows, prototypes, realms, and completions", () => {
@@ -182,6 +198,42 @@ describe("inherited built-in method and native call caches", () => {
 		expect(field("inherited_fills")).toBe(1);
 		expect(field("load_inherited_hits")).toBe(14);
 		expect(field("prototype_epoch_invalidations")).toBeGreaterThan(0);
+	});
+
+	it.each([
+		["compiled", () => userlandCompiled],
+		["interpreted", () => userlandInterpreted],
+	])(
+		"selectively caches mutable userland prototype chains in %s mode",
+		(_name, binary) => {
+			const result = spawnSync(binary(), [], {
+				env: { ...process.env, MAL_HOST_GC: "1", MAL_PERF_STATS: "1" },
+				encoding: "utf-8",
+			});
+			expect(result.status, result.stderr || result.stdout).toBe(0);
+			assertExactLines(result.stdout, ["inherited-userland-cache PASS"]);
+			const stats = result.stderr
+				.split("\n")
+				.find((line) => line.startsWith("[perf-ic-stats]"));
+			expect(stats).toBeDefined();
+			const field = (name: string): number => {
+				const match = stats?.match(new RegExp(`${name}=([0-9]+)`));
+				return match ? Number(match[1]) : 0;
+			};
+			expect(field("load_inherited_hits")).toBeGreaterThan(4000);
+			expect(field("inherited_fills")).toBeGreaterThan(5);
+			expect(field("inherited_reject_chain")).toBeGreaterThan(0);
+		},
+	);
+
+	it("keeps selective userland guards sound under GC stress", () => {
+		assertExactLines(
+			runToStdout(userlandCompiled, {
+				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+				timeoutMs: 60_000,
+			}),
+			["inherited-userland-cache PASS"],
+		);
 	});
 
 	it.each([
