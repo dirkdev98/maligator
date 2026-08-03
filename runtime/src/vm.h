@@ -1295,6 +1295,9 @@ typedef struct MalVm {
     struct MalShape *node_http_server_response_constructor_shape;
     struct MalShape *node_http_server_response_dispatch_shape;
 
+    /** Canonical null-prototype `{ changes, lastInsertRowid }` result layout. */
+    struct MalShape *node_sqlite_run_result_shape;
+
     /** Bounded plain interpreted-function call cache; see vm_ops.c. */
     MalInterpCallCacheEntry *interp_call_cache;
 

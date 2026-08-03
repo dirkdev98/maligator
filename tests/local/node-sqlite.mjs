@@ -32,7 +32,15 @@ check(insert instanceof StatementSync, "prepare returns StatementSync");
 let result = insert.run(1n, "Ada", new Uint8Array([1, 2, 3]));
 equal(result.changes, 1, "run reports changes");
 equal(result.lastInsertRowid, 1, "run reports lastInsertRowid");
-insert.run(2n, "Grace", new Uint8Array([4, 5]));
+const secondResult = insert.run(2n, "Grace", new Uint8Array([4, 5]));
+check(result !== secondResult, "run returns a fresh summary");
+equal(Object.getPrototypeOf(result), null, "run summary has null prototype");
+
+const text = db.prepare("SELECT ? AS value");
+equal(text.get("alpha").value, "alpha", "ASCII text bind");
+equal(text.get("bravo").value, "bravo", "ASCII rebind uses fresh storage");
+equal(text.get("Grüße 🚀").value, "Grüße 🚀", "UTF-16 text bind");
+equal(text.get("").value, "", "empty text bind");
 
 const byId = db.prepare("SELECT id, name, payload FROM users WHERE id = $id");
 let row = byId.get({ id: 1n });

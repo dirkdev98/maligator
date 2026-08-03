@@ -161,6 +161,16 @@ i32 mal_sqlite_statement_bind(
             return sqlite3_bind_text(
                 statement->handle, index, (const char *) value->as.bytes.data,
                 (i32) value->as.bytes.length, SQLITE_TRANSIENT);
+        case MAL_SQLITE_VALUE_TEXT_UTF8_STATIC:
+            if (value->as.bytes.length > INT32_MAX) return SQLITE_TOOBIG;
+            return sqlite3_bind_text(
+                statement->handle, index, (const char *) value->as.bytes.data,
+                (i32) value->as.bytes.length, SQLITE_STATIC);
+        case MAL_SQLITE_VALUE_TEXT_UTF16:
+            if (value->as.bytes.length > INT32_MAX) return SQLITE_TOOBIG;
+            return sqlite3_bind_text16(
+                statement->handle, index, value->as.bytes.data,
+                (i32) value->as.bytes.length, SQLITE_TRANSIENT);
         case MAL_SQLITE_VALUE_BLOB:
             if (value->as.bytes.length > INT32_MAX) return SQLITE_TOOBIG;
             if (value->as.bytes.length == 0) {

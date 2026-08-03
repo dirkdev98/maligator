@@ -513,6 +513,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->node_http_server_response_parent_shape = nullptr;
     vm->node_http_server_response_constructor_shape = nullptr;
     vm->node_http_server_response_dispatch_shape = nullptr;
+    vm->node_sqlite_run_result_shape = nullptr;
     vm->interp_call_cache = nullptr;
     vm->global_property_cache = nullptr;
     mal_vm_invalidate_map_get_set_cache(vm);

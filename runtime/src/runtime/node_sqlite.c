@@ -127,6 +127,13 @@ static void sqlite_statement_finalize(MalHeapHeader *cell) {
         (MalNodeSqliteStatementObject *) cell;
     mal_sqlite_statement_release(statement->statement);
     statement->statement = nullptr;
+    for (i32 i = 0; i < statement->bind_scratch_count; i++) {
+        free(statement->bind_scratch[i].data[0]);
+        free(statement->bind_scratch[i].data[1]);
+    }
+    free(statement->bind_scratch);
+    statement->bind_scratch = nullptr;
+    statement->bind_scratch_count = 0;
 }
 
 static bool sqlite_get_option(
@@ -425,6 +432,18 @@ static MalValue sqlite_database_prepare(
         sqlite_throw_database(vm, database, status);
         return mal_value_new_undefined();
     }
+    i32 parameter_count =
+        mal_sqlite_statement_parameter_count(handle);
+    MalNodeSqliteBindScratch *bind_scratch = parameter_count == 0
+        ? nullptr
+        : calloc(
+            (usize) parameter_count,
+            sizeof(MalNodeSqliteBindScratch));
+    if (parameter_count > 0 && bind_scratch == nullptr) {
+        mal_sqlite_statement_release(handle);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     MalNodeSqliteStatementObject *statement = mal_heap_alloc(
         &vm->heap, sizeof(MalNodeSqliteStatementObject),
         MAL_HEAP_NODE_SQLITE_STATEMENT_OBJECT);
@@ -434,6 +453,8 @@ static MalValue sqlite_database_prepare(
         mal_value_to_object(
             vm->intrinsics[MAL_INTRINSIC_NODE_SQLITE_STATEMENT_PROTOTYPE]));
     statement->statement = handle;
+    statement->bind_scratch = bind_scratch;
+    statement->bind_scratch_count = parameter_count;
     statement->read_bigints = database->read_bigints;
     statement->return_arrays = database->return_arrays;
     statement->allow_bare_named_parameters =
@@ -444,8 +465,8 @@ static MalValue sqlite_database_prepare(
 }
 
 static bool sqlite_value_from_js(
-    MalVm *vm, MalValue input, MalSqliteValue *value, byte **owned) {
-    *owned = nullptr;
+    MalVm *vm, MalNodeSqliteStatementObject *statement,
+    i32 index, MalValue input, MalSqliteValue *value) {
     if (mal_value_is_null(input)) {
         value->kind = MAL_SQLITE_VALUE_NULL;
         return true;
@@ -473,15 +494,43 @@ static bool sqlite_value_from_js(
         return true;
     }
     if (mal_value_is_string(input)) {
-        usize length;
-        *owned = mal_string_to_utf8(mal_value_to_string(input), &length);
-        if (*owned == nullptr) {
+        MalString *string = mal_value_to_string(input);
+        MalNodeSqliteBindScratch *scratch =
+            &statement->bind_scratch[index - 1];
+        usize unit_count = mal_string_length(string);
+        const c16 *units = mal_string_code_units(string);
+        if (unit_count > SIZE_MAX / sizeof(c16)) {
             mal_vm_throw_allocation_error(vm);
             return false;
         }
-        value->kind = MAL_SQLITE_VALUE_TEXT;
-        value->as.bytes.data = *owned;
-        value->as.bytes.length = length;
+        scratch->pending = (u8) (scratch->active ^ 1u);
+        usize required = unit_count == 0 ? 1 : unit_count;
+        if (scratch->capacity[scratch->pending] < required) {
+            byte *data =
+                realloc(scratch->data[scratch->pending], required);
+            if (data == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                return false;
+            }
+            scratch->data[scratch->pending] = data;
+            scratch->capacity[scratch->pending] = required;
+        }
+        usize ascii_length = 0;
+        while (ascii_length < unit_count
+            && units[ascii_length] <= 0x7F) {
+            scratch->data[scratch->pending][ascii_length] =
+                (byte) units[ascii_length];
+            ascii_length++;
+        }
+        if (ascii_length == unit_count) {
+            value->kind = MAL_SQLITE_VALUE_TEXT_UTF8_STATIC;
+            value->as.bytes.data = scratch->data[scratch->pending];
+            value->as.bytes.length = unit_count;
+        } else {
+            value->kind = MAL_SQLITE_VALUE_TEXT_UTF16;
+            value->as.bytes.data = (const byte *) units;
+            value->as.bytes.length = unit_count * sizeof(c16);
+        }
         return true;
     }
     MalBufferSourceSpan span;
@@ -501,14 +550,19 @@ static bool sqlite_bind_one(
     MalVm *vm, MalNodeSqliteStatementObject *statement,
     i32 index, MalValue input) {
     MalSqliteValue value;
-    byte *owned;
-    if (!sqlite_value_from_js(vm, input, &value, &owned)) return false;
+    if (!sqlite_value_from_js(vm, statement, index, input, &value)) {
+        return false;
+    }
     i32 status =
         mal_sqlite_statement_bind(statement->statement, index, &value);
-    free(owned);
     if (status != MAL_SQLITE_OK) {
         sqlite_throw_statement(vm, statement, status);
         return false;
+    }
+    if (value.kind == MAL_SQLITE_VALUE_TEXT_UTF8_STATIC) {
+        MalNodeSqliteBindScratch *scratch =
+            &statement->bind_scratch[index - 1];
+        scratch->active = scratch->pending;
     }
     return true;
 }
@@ -538,16 +592,6 @@ static bool sqlite_named_value(
 static bool sqlite_bind(
     MalVm *vm, MalNodeSqliteStatementObject *statement,
     const MalValue *args, i32 argc) {
-    i32 status = mal_sqlite_statement_reset(statement->statement);
-    if (status != MAL_SQLITE_OK) {
-        sqlite_throw_statement(vm, statement, status);
-        return false;
-    }
-    status = mal_sqlite_statement_clear_bindings(statement->statement);
-    if (status != MAL_SQLITE_OK) {
-        sqlite_throw_statement(vm, statement, status);
-        return false;
-    }
     bool named = argc > 0 && sqlite_is_named_parameter_object(args[0]);
     i32 positional = named ? 1 : 0;
     i32 count =
@@ -574,6 +618,11 @@ static bool sqlite_bind(
         if (!sqlite_bind_one(vm, statement, index, value)) return false;
     }
     return true;
+}
+
+static i32 sqlite_reset(
+    MalNodeSqliteStatementObject *statement) {
+    return mal_sqlite_statement_reset(statement->statement);
 }
 
 static MalValue sqlite_int64(
@@ -632,6 +681,10 @@ static MalValue sqlite_column_value(
         case MAL_SQLITE_VALUE_TEXT:
             return sqlite_string(
                 vm, value.as.bytes.data, value.as.bytes.length);
+        case MAL_SQLITE_VALUE_TEXT_UTF8_STATIC:
+            return mal_value_new_undefined();
+        case MAL_SQLITE_VALUE_TEXT_UTF16:
+            return mal_value_new_undefined();
         case MAL_SQLITE_VALUE_BLOB:
             return sqlite_blob(
                 vm, value.as.bytes.data, value.as.bytes.length);
@@ -695,8 +748,11 @@ static MalValue sqlite_execute(
     SqliteQueryMode mode) {
     MalNodeSqliteStatementObject *statement =
         sqlite_require_statement(vm, receiver);
-    if (statement == nullptr
-        || !sqlite_bind(vm, statement, args, argc)) {
+    if (statement == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (!sqlite_bind(vm, statement, args, argc)) {
+        (void) sqlite_reset(statement);
         return mal_value_new_undefined();
     }
     MalValue result = mode == SQLITE_QUERY_ALL
@@ -727,32 +783,31 @@ static MalValue sqlite_execute(
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW
         && mode == SQLITE_QUERY_RUN) {
-        MalObject *summary = mal_object_new(&vm->heap, nullptr);
-        result = mal_value_from_object(summary);
-        MalRootSpan summary_root;
-        mal_gc_root(&summary_root, &result, 1);
-        MalValue changes = sqlite_int64(
+        MalValue values[2] = {
+            mal_value_new_undefined(), mal_value_new_undefined()};
+        MalRootSpan values_root;
+        mal_gc_root(&values_root, values, countof(values));
+        values[0] = sqlite_int64(
             vm, mal_sqlite_statement_changes(statement->statement),
             statement->read_bigints);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
-            mal_object_set(
-                summary, mal_intrinsic_string_key(vm, (const byte *) "changes"),
-                changes);
-            MalValue rowid = sqlite_int64(
+            values[1] = sqlite_int64(
                 vm,
                 mal_sqlite_statement_last_insert_rowid(statement->statement),
                 statement->read_bigints);
             if (vm->completion.kind != MAL_COMPLETION_THROW) {
-                mal_object_set(
-                    summary,
-                    mal_intrinsic_string_key(
-                        vm, (const byte *) "lastInsertRowid"),
-                    rowid);
+                result = mal_value_from_object(mal_object_new_shaped(
+                    &vm->heap, nullptr, vm->node_sqlite_run_result_shape,
+                    values, countof(values)));
             }
         }
-        mal_gc_unroot(&summary_root);
+        mal_gc_unroot(&values_root);
     }
-    mal_sqlite_statement_reset(statement->statement);
+    i32 cleanup_status = sqlite_reset(statement);
+    if (cleanup_status != MAL_SQLITE_OK
+        && vm->completion.kind != MAL_COMPLETION_THROW) {
+        sqlite_throw_statement(vm, statement, cleanup_status);
+    }
     mal_gc_unroot(&result_root);
     return result;
 }
@@ -863,6 +918,14 @@ void mal_host_install_node_sqlite(
     mal_gc_register_finalizer(
         MAL_HEAP_NODE_SQLITE_STATEMENT_OBJECT,
         sqlite_statement_finalize);
+    if (vm->node_sqlite_run_result_shape == nullptr) {
+        MalString *keys[] = {
+            mal_intrinsic_ascii(vm, (const byte *) "changes"),
+            mal_intrinsic_ascii(vm, (const byte *) "lastInsertRowid"),
+        };
+        vm->node_sqlite_run_result_shape =
+            mal_shape_from_string_keys(keys, countof(keys));
+    }
 
     MalValue roots[5] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
