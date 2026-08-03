@@ -146,6 +146,37 @@ function commonPackageFields(name: string, version: string): PackageJson {
 	};
 }
 
+const launcherPackageFiles = [
+	"bin/maligator.js",
+	"index.js",
+	"index.d.ts",
+	"README.md",
+	"LICENSE",
+];
+
+export function createLauncherPackageJson(
+	version: string,
+	platformPackageNames: Array<string>,
+): PackageJson {
+	return {
+		...commonPackageFields("@maligator/cli", version),
+		type: "module",
+		engines: { node: ">=20.0.0" },
+		files: launcherPackageFiles,
+		bin: { maligator: "bin/maligator.js" },
+		types: "./index.d.ts",
+		exports: {
+			".": {
+				types: "./index.d.ts",
+				import: "./index.js",
+			},
+		},
+		optionalDependencies: Object.fromEntries(
+			platformPackageNames.map((packageName) => [packageName, version]),
+		),
+	};
+}
+
 function stagePlatformPackage(
 	target: (typeof targets)[number],
 	version: string,
@@ -179,17 +210,22 @@ function stageLauncherPackage(version: string, selected: typeof targets): string
 		path.join(repositoryRoot, "npm/cli/README.md"),
 		path.join(directory, "README.md"),
 	);
+	copyFileSync(
+		path.join(repositoryRoot, "npm/cli/index.js"),
+		path.join(directory, "index.js"),
+	);
+	copyFileSync(
+		path.join(repositoryRoot, "src/public-api.d.ts"),
+		path.join(directory, "index.d.ts"),
+	);
 	copyFileSync(path.join(repositoryRoot, "LICENSE"), path.join(directory, "LICENSE"));
-	writeJson(path.join(directory, "package.json"), {
-		...commonPackageFields("@maligator/cli", version),
-		type: "module",
-		engines: { node: ">=20.0.0" },
-		files: ["bin/maligator.js", "README.md", "LICENSE"],
-		bin: { maligator: "bin/maligator.js" },
-		optionalDependencies: Object.fromEntries(
-			selected.map((target) => [target.packageName, version]),
+	writeJson(
+		path.join(directory, "package.json"),
+		createLauncherPackageJson(
+			version,
+			selected.map((target) => target.packageName),
 		),
-	});
+	);
 	return directory;
 }
 
@@ -402,11 +438,7 @@ function packRelease(args: Array<string>): void {
 	const launcher = path.join(npmRoot, "cli");
 	if (!existsSync(launcher)) throw new Error("launcher package is missing");
 	releaseLog(`[${selected.length + 1}/${selected.length + 1}] packing @maligator/cli`);
-	const packedLauncher = packDirectory(launcher, packs, [
-		"LICENSE",
-		"README.md",
-		"bin/maligator.js",
-	]);
+	const packedLauncher = packDirectory(launcher, packs, launcherPackageFiles);
 	packedPackages.push({
 		name: "@maligator/cli",
 		file: path.basename(packedLauncher),

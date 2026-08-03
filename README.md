@@ -68,10 +68,10 @@ Unknown options, missing option values, and extra positional arguments are error
 `maligator.build.ts` is executable, trusted TypeScript configuration. It is stripped
 in place, evaluated on every command invocation, and strictly validated after
 evaluation. Ordinary locals, functions, conditions, and environment reads are
-allowed. The only supported import is `defineBuild` from `maligator`:
+allowed. The only supported import is `defineBuild` from `@maligator/cli`:
 
 ```typescript
-import { defineBuild } from "maligator";
+import { defineBuild } from "@maligator/cli";
 
 const productionNodeSurface = process.env.MAL_NODE === "1";
 
@@ -96,6 +96,13 @@ export default defineBuild({
 	},
 });
 ```
+
+The npm package ships TypeScript declarations for this configuration and for
+Maligator's runtime globals. Including `maligator.build.ts` in the TypeScript project
+loads the global `mal.assets` and `Mal.serve` types. Projects that exclude the build
+file can add `@maligator/cli` to `compilerOptions.types` instead. The declarations
+describe optional surfaces even when a particular build disables them; the
+configuration remains the runtime authority.
 
 All fields are optional. Product defaults are:
 

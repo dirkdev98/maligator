@@ -28,7 +28,7 @@ export function initProject(cwd: string = process.cwd()): string {
 	const entry = detectInitialEntry(cwd);
 	writeFileSync(
 		configPath,
-		`import { defineBuild } from "maligator";\n\nexport default defineBuild({\n\tentry: ${JSON.stringify(entry)},\n});\n`,
+		`import { defineBuild } from "@maligator/cli";\n\nexport default defineBuild({\n\tentry: ${JSON.stringify(entry)},\n});\n`,
 	);
 	return configPath;
 }

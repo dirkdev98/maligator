@@ -4,9 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { defineBuild } from "../npm/cli/index.js";
 import { createReleaseArchive, deterministicTar } from "../scripts/release-archive.ts";
 import { nextAlphaVersion } from "../scripts/release-version.ts";
-import { selectReleaseTargetTriples } from "../scripts/release.ts";
+import {
+	createLauncherPackageJson,
+	selectReleaseTargetTriples,
+} from "../scripts/release.ts";
 import { createBuildArtifact } from "../src/build-artifact.ts";
 import { MALIGATOR_VERSION } from "../src/version.ts";
 
@@ -150,6 +154,32 @@ describe("release targets", () => {
 });
 
 describe("npm launcher", () => {
+	it("publishes the helper runtime and TypeScript declarations", () => {
+		const config = { entry: "src/index.ts" };
+		expect(defineBuild(config)).toBe(config);
+
+		const manifest = createLauncherPackageJson("0.1.0-alpha.2", [
+			"@maligator/cli-darwin-arm64",
+		]);
+		expect(manifest.types).toBe("./index.d.ts");
+		expect(manifest.exports).toEqual({
+			".": {
+				types: "./index.d.ts",
+				import: "./index.js",
+			},
+		});
+		expect(manifest.files).toEqual([
+			"bin/maligator.js",
+			"index.js",
+			"index.d.ts",
+			"README.md",
+			"LICENSE",
+		]);
+		expect(manifest.optionalDependencies).toEqual({
+			"@maligator/cli-darwin-arm64": "0.1.0-alpha.2",
+		});
+	});
+
 	it.runIf(process.platform === "darwin" || process.platform === "linux")(
 		"executes the current platform package without changing arguments",
 		() => {

@@ -7,7 +7,10 @@ import type { NativeFeatureSpec } from "./build-flags.ts";
 import { defineBuild as defineBuildIdentity } from "./build.ts";
 import { stripCompactTypes } from "./compact-type-strip.ts";
 import { parseModule } from "./parser.ts";
+import type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
 import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-analysis.ts";
+
+export type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
 
 /**
  * The `maligator.build.ts` build configuration (GitHub issue #2). The file is
@@ -23,37 +26,6 @@ import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-anal
  * disable it explicitly). Internal tooling (the native test harness, the eval
  * self-host scripts, the test262 runner) opts back in explicitly.
  */
-export interface MaligatorBuildConfig {
-	entry?: string;
-	outputName?: string;
-	assets?: Record<string, AssetInclusion>;
-	engine?: {
-		eval?: boolean;
-		/** The Realm surface (Realm global / callable boundary). Defaults OFF. */
-		realms?: boolean;
-		/** WHATWG RegExp (the regress engine). Core language, so defaults ON. */
-		regexp?: boolean;
-		intl?: {
-			enabled?: boolean;
-			/** Selected ECMA-402 services (see INTL_SERVICES); omitted/[] = all. */
-			features?: Array<string>;
-			languages?: Array<string>;
-		};
-	};
-	host?: {
-		scheduler?: "single" | "multiprocessing";
-	};
-	surface?: {
-		webPlatform?: boolean;
-		node?: boolean;
-		maligator?: boolean;
-	};
-}
-
-export type AssetInclusion =
-	| { type: "file"; path: string }
-	| { type: "directory"; path: string; include: Array<string> };
-
 /** A build config with every default applied — what the compiler consumes. */
 export interface ResolvedBuildConfig {
 	entry: string | undefined;
@@ -429,7 +401,8 @@ function evaluateBuildConfig(
 	for (const statement of ast.body) {
 		if (statement.type === "ImportDeclaration") {
 			const validImport =
-				statement.source.value === "maligator" &&
+				(statement.source.value === "@maligator/cli" ||
+					statement.source.value === "maligator") &&
 				statement.specifiers.length === 1 &&
 				statement.specifiers[0]?.type === "ImportSpecifier" &&
 				statement.specifiers[0].imported.type === "Identifier" &&
@@ -437,7 +410,7 @@ function evaluateBuildConfig(
 				statement.specifiers[0].local.name === "defineBuild";
 			if (!validImport) {
 				throw new BuildConfigError(
-					'maligator.build.ts: only `import { defineBuild } from "maligator"` is supported',
+					'maligator.build.ts: only `import { defineBuild } from "@maligator/cli"` is supported',
 				);
 			}
 			const range = configStatementRange(stripped, statement);

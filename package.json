@@ -18,7 +18,7 @@
 	"type": "module",
 	"exports": {
 		".": {
-			"types": "./src/build.ts",
+			"types": "./src/public-api.d.ts",
 			"import": "./src/build.ts"
 		}
 	},

@@ -31,7 +31,7 @@ function tmpdir(): string {
 function writeConfig(dir: string, contents: string): void {
 	writeFileSync(
 		path.join(dir, "maligator.build.ts"),
-		`import { defineBuild } from "maligator";\nexport default defineBuild(${contents});\n`,
+		`import { defineBuild } from "@maligator/cli";\nexport default defineBuild(${contents});\n`,
 	);
 }
 
@@ -205,7 +205,7 @@ describe("loadBuildConfig", () => {
 		const dir = tmpdir();
 		writeFileSync(
 			path.join(dir, "maligator.build.ts"),
-			`import { defineBuild } from "maligator";
+			`import { defineBuild } from "@maligator/cli";
 const enabled: boolean = [1, 2, 3].length === 3;
 function entry(): string { return "src/main.ts"; }
 export default defineBuild({ entry: entry(), engine: { eval: enabled } });
@@ -222,7 +222,16 @@ export default defineBuild({ entry: entry(), engine: { eval: enabled } });
 		expect(() => loadBuildConfig(undefined, dir)).toThrow(/missing default export/);
 	});
 
-	it("rejects imports other than defineBuild from maligator", () => {
+	it("accepts the legacy maligator module spelling", () => {
+		const dir = tmpdir();
+		writeFileSync(
+			path.join(dir, "maligator.build.ts"),
+			`import { defineBuild } from "maligator";\nexport default defineBuild({ entry: "legacy.ts" });\n`,
+		);
+		expect(loadBuildConfig(undefined, dir).entry).toBe("legacy.ts");
+	});
+
+	it("rejects imports other than defineBuild from @maligator/cli", () => {
 		const dir = tmpdir();
 		writeFileSync(
 			path.join(dir, "maligator.build.ts"),
@@ -235,7 +244,7 @@ export default defineBuild({ entry: entry(), engine: { eval: enabled } });
 		const dir = tmpdir();
 		writeFileSync(
 			path.join(dir, "maligator.build.ts"),
-			`import { defineBuild } from "maligator";
+			`import { defineBuild } from "@maligator/cli";
 const message = "broken";
 throw new Error(message);
 export default defineBuild({});

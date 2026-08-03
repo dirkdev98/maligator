@@ -47,7 +47,7 @@ console.log(buf.length + " " + a + " " + b + " " + buf[0] + " " + buf[buf.length
 	);
 	writeFileSync(
 		config,
-		`import { defineBuild } from "maligator";
+		`import { defineBuild } from "@maligator/cli";
 export default defineBuild({
 	engine: {
 		eval: true,

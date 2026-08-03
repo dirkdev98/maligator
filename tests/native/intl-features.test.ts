@@ -2,6 +2,7 @@ import { mkdtempSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { MaligatorIntlFeature } from "../../src/public-api.d.ts";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -21,7 +22,7 @@ const CORE = [
 	"date-time-format",
 	"plural-rules",
 	"list-format",
-];
+] satisfies Array<MaligatorIntlFeature>;
 
 describe("engine.intl.features (service subset)", () => {
 	let subsetBin: string;

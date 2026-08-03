@@ -272,7 +272,7 @@ describe("maligator init", () => {
 		const configPath = path.join(dir, BUILD_CONFIG_NAME);
 		expect(result.stdout).toContain(configPath);
 		expect(readFileSync(configPath, "utf-8")).toBe(
-			`import { defineBuild } from "maligator";\n\nexport default defineBuild({\n\tentry: "src/index.ts",\n});\n`,
+			`import { defineBuild } from "@maligator/cli";\n\nexport default defineBuild({\n\tentry: "src/index.ts",\n});\n`,
 		);
 	});
 

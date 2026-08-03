@@ -26,6 +26,7 @@ import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
 import type { ModuleGoal } from "./module-graph.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
+import type { MaligatorIntlFeature } from "./public-api.d.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { stripTypesWithTypeScript } from "./typescript-strip.ts";
 
@@ -78,7 +79,7 @@ export interface BuildOptions {
 	 * A subset drops the rest's icu sub-crate + baked data. Ignored if intlEnabled is
 	 * false.
 	 */
-	intlFeatures?: Array<string>;
+	intlFeatures?: Array<MaligatorIntlFeature>;
 	/**
 	 * Include the WHATWG URL (ada) surface. Defaults to true — internal tooling opts
 	 * in. Set false to build the `surface.webPlatform: false` archive (no ada / URL,

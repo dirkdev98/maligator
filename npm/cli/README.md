@@ -80,7 +80,7 @@ directly; neither Node.js nor the Maligator CLI is needed at runtime.
 looks like this:
 
 ```typescript
-import { defineBuild } from "maligator";
+import { defineBuild } from "@maligator/cli";
 
 export default defineBuild({
 	entry: "src/index.ts",
@@ -101,6 +101,44 @@ the configuration requests them. See the
 [full configuration reference](https://github.com/dirkdev98/maligator#configuration)
 for assets, Intl features, Node compatibility, web-platform support, and target
 selection.
+
+## TypeScript
+
+The package includes declarations for `maligator.build.ts` and Maligator's runtime
+globals. Keeping the generated build file inside your TypeScript project makes the
+types available automatically:
+
+```typescript
+const path = mal.assets.materialize("templates", {
+	baseDirectory: ".cache/my-application",
+});
+
+const server = Mal.serve({
+	hostname: "127.0.0.1",
+	port: 3000,
+	async fetch(request) {
+		return new Response(`Hello from ${request.url}`);
+	},
+});
+
+console.log(path, server.port);
+```
+
+`mal` is present when `surface.maligator` is enabled. `Mal` and `Mal.serve` are
+present when `surface.webPlatform` is enabled. The declarations describe both
+optional surfaces, while `maligator.build.ts` controls which globals exist in the
+compiled application.
+
+If your `tsconfig.json` excludes `maligator.build.ts`, load the declarations
+explicitly:
+
+```json
+{
+	"compilerOptions": {
+		"types": ["@maligator/cli"]
+	}
+}
+```
 
 ## Build toolchain
 

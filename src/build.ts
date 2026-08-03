@@ -1,7 +1,19 @@
-import type { MaligatorBuildConfig } from "./build-config.ts";
+import type { MaligatorBuildConfig } from "./public-api.d.ts";
 
-export type { AssetInclusion, MaligatorBuildConfig } from "./build-config.ts";
+export type {
+	AssetInclusion,
+	MaligatorAssets,
+	MaligatorBuildConfig,
+	MaligatorIntlFeature,
+	MaligatorMaterializeOptions,
+	MaligatorRuntime,
+	MaligatorServeOptions,
+	MaligatorServer,
+	MaligatorWebRuntime,
+} from "./public-api.d.ts";
 
-export function defineBuild(config: MaligatorBuildConfig): MaligatorBuildConfig {
+export function defineBuild<const Config extends MaligatorBuildConfig>(
+	config: Config,
+): Config {
 	return config;
 }
