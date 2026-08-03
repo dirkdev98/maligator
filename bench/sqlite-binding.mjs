@@ -1,10 +1,14 @@
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 
-const iterations = 500_000;
+const iterations = Number(process.argv[2] ?? 500_000);
 const parametersPerCall = 4;
 const warmupIterations = 10_000;
 const textValues = ["alpha", "bravo", "charlie", "delta"];
+
+if (!Number.isSafeInteger(iterations) || iterations <= 0) {
+	throw new Error("sqlite-binding iterations must be a positive safe integer");
+}
 
 const database = new DatabaseSync(":memory:");
 const unbound = database.prepare("SELECT 1");

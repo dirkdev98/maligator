@@ -41,6 +41,32 @@ equal(text.get("alpha").value, "alpha", "ASCII text bind");
 equal(text.get("bravo").value, "bravo", "ASCII rebind uses fresh storage");
 equal(text.get("Grüße 🚀").value, "Grüße 🚀", "UTF-16 text bind");
 equal(text.get("").value, "", "empty text bind");
+const customSpread = ["ignored"];
+customSpread[Symbol.iterator] = () => {
+	let done = false;
+	return {
+		next() {
+			if (done) return { done: true };
+			done = true;
+			return { value: "custom iterator", done: false };
+		},
+	};
+};
+equal(
+	text.get(...customSpread).value,
+	"custom iterator",
+	"spread binding observes a custom Array iterator",
+);
+
+const secondRowFails = db.prepare(`
+	WITH rows(value) AS (VALUES (1), (2))
+	SELECT CASE value
+		WHEN 1 THEN 0
+		ELSE abs(-9223372036854775808)
+	END
+	FROM rows
+`);
+secondRowFails.run();
 
 const byId = db.prepare("SELECT id, name, payload FROM users WHERE id = $id");
 let row = byId.get({ id: 1n });
@@ -68,6 +94,15 @@ try {
 check(rejectedUnsafe, "unsafe INTEGER rejects as Number");
 big.setReadBigInts(true);
 equal(big.get().value, 9007199254740992n, "setReadBigInts returns BigInt");
+const bigintRun = db.prepare("SELECT 1");
+bigintRun.setReadBigInts(true);
+const bigintSummary = bigintRun.run();
+equal(typeof bigintSummary.changes, "bigint", "run changes honors readBigInts");
+equal(
+	typeof bigintSummary.lastInsertRowid,
+	"bigint",
+	"run lastInsertRowid honors readBigInts",
+);
 
 db.exec("BEGIN");
 check(db.isTransaction, "BEGIN enters transaction");

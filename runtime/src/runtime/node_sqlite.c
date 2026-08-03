@@ -759,34 +759,45 @@ static MalValue sqlite_execute(
         ? mal_value_from_array_object(mal_intrinsic_new_array(vm, 0))
         : mal_value_new_undefined();
     MalRootSpan result_root;
-    mal_gc_root(&result_root, &result, 1);
+    bool result_rooted = mode == SQLITE_QUERY_ALL;
+    if (result_rooted) mal_gc_root(&result_root, &result, 1);
     u32 row_index = 0;
-    while (true) {
+    if (mode == SQLITE_QUERY_RUN) {
         i32 status = mal_sqlite_statement_step(statement->statement);
-        if (status == MAL_SQLITE_DONE) break;
-        if (status != MAL_SQLITE_ROW) {
+        if (status != MAL_SQLITE_DONE && status != MAL_SQLITE_ROW) {
             sqlite_throw_statement(vm, statement, status);
-            break;
         }
-        if (mode == SQLITE_QUERY_RUN) continue;
-        MalValue row = sqlite_row(vm, statement);
-        if (vm->completion.kind == MAL_COMPLETION_THROW) break;
-        if (mode == SQLITE_QUERY_GET) {
-            result = row;
-            break;
+    } else {
+        while (true) {
+            i32 status = mal_sqlite_statement_step(statement->statement);
+            if (status == MAL_SQLITE_DONE) break;
+            if (status != MAL_SQLITE_ROW) {
+                sqlite_throw_statement(vm, statement, status);
+                break;
+            }
+            MalValue row = sqlite_row(vm, statement);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) break;
+            if (mode == SQLITE_QUERY_GET) {
+                result = row;
+                break;
+            }
+            MalRootSpan row_root;
+            mal_gc_root(&row_root, &row, 1);
+            mal_array_object_set(
+                mal_value_to_array_object(result), mal_key_index(row_index++),
+                row);
+            mal_gc_unroot(&row_root);
         }
-        MalRootSpan row_root;
-        mal_gc_root(&row_root, &row, 1);
-        mal_array_object_set(
-            mal_value_to_array_object(result), mal_key_index(row_index++), row);
-        mal_gc_unroot(&row_root);
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW
         && mode == SQLITE_QUERY_RUN) {
         MalValue values[2] = {
             mal_value_new_undefined(), mal_value_new_undefined()};
         MalRootSpan values_root;
-        mal_gc_root(&values_root, values, countof(values));
+        bool values_rooted = statement->read_bigints;
+        if (values_rooted) {
+            mal_gc_root(&values_root, values, countof(values));
+        }
         values[0] = sqlite_int64(
             vm, mal_sqlite_statement_changes(statement->statement),
             statement->read_bigints);
@@ -801,14 +812,14 @@ static MalValue sqlite_execute(
                     values, countof(values)));
             }
         }
-        mal_gc_unroot(&values_root);
+        if (values_rooted) mal_gc_unroot(&values_root);
     }
     i32 cleanup_status = sqlite_reset(statement);
     if (cleanup_status != MAL_SQLITE_OK
         && vm->completion.kind != MAL_COMPLETION_THROW) {
         sqlite_throw_statement(vm, statement, cleanup_status);
     }
-    mal_gc_unroot(&result_root);
+    if (result_rooted) mal_gc_unroot(&result_root);
     return result;
 }
 
