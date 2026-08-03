@@ -38,6 +38,10 @@
  *               bytecode, and binary size establish the pre-stack-allocation floor.
  *   - interpreter bench/language.js forced through bytecode: wide dispatch wall
  *               time, RSS, and exact loaded MalInstruction footprint.
+ *   - sqlite-binding bench/sqlite-binding.mjs: prepared StatementSync.run()
+ *               execution with zero parameters, four numbers, and four strings.
+ *               Internal monotonic timings isolate binding overhead from process
+ *               startup and compare the embedded node:sqlite adapter with Node.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
  *               + MAL_GC_STATS). No V8 compare.
@@ -280,6 +284,30 @@ interface InterpreterMetrics {
 	instructionDataBytes?: number;
 	bytecodeBytes?: number;
 }
+interface SqliteBindingFixtureMetrics {
+	iterations: number;
+	parametersPerCall: number;
+	unboundMs: number;
+	numberMs: number;
+	textMs: number;
+}
+interface SqliteBindingMetrics {
+	iterations: number;
+	parametersPerCall: number;
+	mal: SqliteBindingFixtureMetrics;
+	node: SqliteBindingFixtureMetrics;
+	unboundRatio: number;
+	numberRatio: number;
+	textRatio: number;
+	malNumberNsPerBind: number;
+	nodeNumberNsPerBind: number;
+	malTextNsPerBind: number;
+	nodeTextNsPerBind: number;
+	numberBindingRatio: number;
+	textBindingRatio: number;
+	collections: number;
+	allocatedMb: number;
+}
 interface GcWorkload {
 	wallMs: number;
 	rssMb: number;
@@ -315,6 +343,7 @@ interface BenchmarkSnapshot {
 	arguments?: ArgumentsMetrics;
 	stackObject?: StackObjectMetrics;
 	interpreter?: InterpreterMetrics;
+	sqliteBinding?: SqliteBindingMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics;
 }
@@ -1069,6 +1098,149 @@ function benchInterpreter(runs: number): InterpreterMetrics {
 	};
 }
 
+// ---- sqlite binding (prepared StatementSync.run; vs Node) -----------------
+
+function parseSqliteBindingResult(
+	stdout: string,
+	command: string,
+): SqliteBindingFixtureMetrics {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout.trim());
+	} catch {
+		throw new Error(`invalid sqlite-binding output from ${command}: ${stdout.trim()}`);
+	}
+	if (
+		typeof parsed !== "object" ||
+		parsed === null ||
+		!("iterations" in parsed) ||
+		!("parametersPerCall" in parsed) ||
+		!("unboundMs" in parsed) ||
+		!("numberMs" in parsed) ||
+		!("textMs" in parsed)
+	) {
+		throw new Error(`incomplete sqlite-binding output from ${command}`);
+	}
+	const metrics = parsed as SqliteBindingFixtureMetrics;
+	for (const [name, value] of Object.entries(metrics)) {
+		if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+			throw new Error(`invalid sqlite-binding ${name} from ${command}: ${value}`);
+		}
+	}
+	return metrics;
+}
+
+function runSqliteBindingFixture(
+	command: string,
+	args: Array<string>,
+	runs: number,
+	env?: NodeJS.ProcessEnv,
+): SqliteBindingFixtureMetrics {
+	const results: Array<SqliteBindingFixtureMetrics> = [];
+	for (let run = 0; run < runs; run++) {
+		const result = spawnSync(command, args, {
+			env: { ...process.env, ...env },
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		if (result.status !== 0) {
+			throw new Error(
+				`sqlite-binding command failed: ${command} ${args.join(" ")} (status ${result.status})\n${result.stderr ?? ""}`,
+			);
+		}
+		results.push(
+			parseSqliteBindingResult(result.stdout ?? "", `${command} ${args.join(" ")}`),
+		);
+	}
+	const first = results[0]!;
+	return {
+		iterations: first.iterations,
+		parametersPerCall: first.parametersPerCall,
+		unboundMs: median(results.map((result) => result.unboundMs)),
+		numberMs: median(results.map((result) => result.numberMs)),
+		textMs: median(results.map((result) => result.textMs)),
+	};
+}
+
+function bindingNsPerParameter(
+	boundMs: number,
+	unboundMs: number,
+	iterations: number,
+	parametersPerCall: number,
+): number {
+	return (Math.max(0, boundMs - unboundMs) * 1e6) / (iterations * parametersPerCall);
+}
+
+function benchSqliteBinding(runs: number): SqliteBindingMetrics {
+	const fixture = "bench/sqlite-binding.mjs";
+	const binary = buildNativeBinary({
+		fixture,
+		name: "bench-sqlite-binding",
+		mainFile: HOST_MAIN,
+		nodeEnabled: true,
+	});
+	const mal = runSqliteBindingFixture(binary, [], runs);
+	const node = runSqliteBindingFixture("node", ["--no-warnings", fixture], runs);
+	if (
+		mal.iterations !== node.iterations ||
+		mal.parametersPerCall !== node.parametersPerCall
+	) {
+		throw new Error("sqlite-binding fixture metadata differs between Maligator and Node");
+	}
+	const instrumented = spawnSync(binary, [], {
+		env: { ...process.env, MAL_GC_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	if (instrumented.status !== 0) {
+		throw new Error(
+			`instrumented sqlite-binding run failed: ${instrumented.stderr ?? ""}`,
+		);
+	}
+	const malNumberNsPerBind = bindingNsPerParameter(
+		mal.numberMs,
+		mal.unboundMs,
+		mal.iterations,
+		mal.parametersPerCall,
+	);
+	const nodeNumberNsPerBind = bindingNsPerParameter(
+		node.numberMs,
+		node.unboundMs,
+		node.iterations,
+		node.parametersPerCall,
+	);
+	const malTextNsPerBind = bindingNsPerParameter(
+		mal.textMs,
+		mal.unboundMs,
+		mal.iterations,
+		mal.parametersPerCall,
+	);
+	const nodeTextNsPerBind = bindingNsPerParameter(
+		node.textMs,
+		node.unboundMs,
+		node.iterations,
+		node.parametersPerCall,
+	);
+	const stderr = instrumented.stderr ?? "";
+	return {
+		iterations: mal.iterations,
+		parametersPerCall: mal.parametersPerCall,
+		mal,
+		node,
+		unboundRatio: mal.unboundMs / node.unboundMs,
+		numberRatio: mal.numberMs / node.numberMs,
+		textRatio: mal.textMs / node.textMs,
+		malNumberNsPerBind,
+		nodeNumberNsPerBind,
+		malTextNsPerBind,
+		nodeTextNsPerBind,
+		numberBindingRatio: malNumberNsPerBind / nodeNumberNsPerBind,
+		textBindingRatio: malTextNsPerBind / nodeTextNsPerBind,
+		collections: parseGcStat(stderr, "collections"),
+		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
+	};
+}
+
 // ---- gc -------------------------------------------------------------------
 
 function parseGcMaxPause(stderr: string): number {
@@ -1777,6 +1949,29 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			);
 		}
 	}
+	if (entry.sqliteBinding) {
+		const current = entry.sqliteBinding;
+		const prior = previous?.sqliteBinding;
+		console.log("sqlite-binding (StatementSync.run; vs Node):");
+		console.log(
+			`  unbound   maligator ${current.mal.unboundMs.toFixed(1)}ms${delta(current.mal.unboundMs, prior?.mal.unboundMs)}  node ${current.node.unboundMs.toFixed(1)}ms  ratio ${current.unboundRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  numbers   maligator ${current.mal.numberMs.toFixed(1)}ms${delta(current.mal.numberMs, prior?.mal.numberMs)}  node ${current.node.numberMs.toFixed(1)}ms  ratio ${current.numberRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`            incremental ${current.malNumberNsPerBind.toFixed(1)}ns/bind${delta(current.malNumberNsPerBind, prior?.malNumberNsPerBind)} vs Node ${current.nodeNumberNsPerBind.toFixed(1)}ns/bind  ratio ${current.numberBindingRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  text      maligator ${current.mal.textMs.toFixed(1)}ms${delta(current.mal.textMs, prior?.mal.textMs)}  node ${current.node.textMs.toFixed(1)}ms  ratio ${current.textRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`            incremental ${current.malTextNsPerBind.toFixed(1)}ns/bind${delta(current.malTextNsPerBind, prior?.malTextNsPerBind)} vs Node ${current.nodeTextNsPerBind.toFixed(1)}ns/bind  ratio ${current.textBindingRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  managed   ${current.collections} collections, ${current.allocatedMb.toFixed(1)}MB allocated${delta(current.allocatedMb, prior?.allocatedMb)}`,
+		);
+	}
 	if (entry.gc) {
 		console.log("gc (generational):");
 		for (const [name, w] of Object.entries(entry.gc)) {
@@ -1846,6 +2041,7 @@ const which =
 				"arguments",
 				"stack-object",
 				"interpreter",
+				"sqlite-binding",
 				"gc",
 				"http",
 			];
@@ -1862,6 +2058,7 @@ if (which.includes("coroutine")) entry.coroutine = benchCoroutine(runs);
 if (which.includes("arguments")) entry.arguments = benchArguments(runs);
 if (which.includes("stack-object")) entry.stackObject = benchStackObject(runs);
 if (which.includes("interpreter")) entry.interpreter = benchInterpreter(runs);
+if (which.includes("sqlite-binding")) entry.sqliteBinding = benchSqliteBinding(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) {
 	const http = benchHttp(httpSeconds, 50);
