@@ -309,10 +309,10 @@
     "iterations": 20000000,
     "mal": {
       "iterations": 20000000,
-      "runtimeMs": 62,
-      "userlandDirectMs": 700,
-      "userlandDeepMs": 795,
-      "postMutationMs": 803
+      "runtimeMs": 53,
+      "userlandDirectMs": 55,
+      "userlandDeepMs": 60,
+      "postMutationMs": 60
     },
     "node": {
       "iterations": 20000000,
@@ -321,13 +321,13 @@
       "userlandDeepMs": 6,
       "postMutationMs": 6
     },
-    "runtimeRatio": 10.333333333333334,
-    "userlandDirectRatio": 116.66666666666667,
-    "userlandDeepRatio": 132.5,
-    "postMutationRatio": 133.83333333333334,
-    "inheritedHits": 20019998,
-    "inheritedFills": 2,
-    "inheritedRejectChain": 60060002
+    "runtimeRatio": 8.833333333333334,
+    "userlandDirectRatio": 9.166666666666666,
+    "userlandDeepRatio": 10,
+    "postMutationRatio": 10,
+    "inheritedHits": 80079992,
+    "inheritedFills": 10,
+    "inheritedRejectChain": 0
   },
   "gc": {
     "cli": {
