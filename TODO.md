@@ -6,63 +6,39 @@ active checklists. Test262 verdict counts live only in `scripts/test262.json`.
 
 ## Current priorities
 
-1. First alpha release.
+1. Alpha release stabilization.
 2. Safety and bounded resource use.
 3. AOT throughput and allocation elimination.
 4. Outbound I/O and server-runtime APIs.
 5. ECMAScript correctness and runtime usability.
 6. Actors, SMP, GUI embedding, and freestanding targets.
 
-## First alpha release
+## Alpha release stabilization
 
-The alpha is ready when a user on every supported host can install Maligator from
-npm, run the prebuilt product CLI outside this checkout, and use it to produce and
-run a production application binary.
+The alpha channel is ready for broader use when a user on every supported host can
+install Maligator from npm, run the prebuilt product CLI outside this checkout, and
+use it to produce and run a production application binary.
 
 ### Production build creation
 
-- [x] Support application `build --production` with `-O2`, capability-probed LTO,
-      and capability-probed symbol stripping.
-- [x] Add a deterministic release command around the existing product-CLI builder.
-- [x] Make the package version, `maligator --version`, and artifact version come
-      from one source of truth.
-- [x] Define release artifact names and archive layout, and emit checksums.
 - [ ] Smoke-test the production CLI without the repository or Node.js on `PATH`,
       including `--help`, `--version`, `doctor`, `init`, `build --production`, and
       running the resulting application.
 
 ### Cross-platform native binaries
 
-- [x] Support target-specific Zig toolchain detection and cross-building for the
-      initial macOS/Linux x64/arm64 Rust target triples.
-- [ ] Declare the initial supported OS/architecture matrix and minimum host
-      versions; explicitly decide whether Windows is in the first alpha.
+- [ ] Validate and document minimum macOS and glibc-based Linux host versions for
+      the published arm64/x64 support matrix. Windows remains deferred.
 - [ ] Build the product CLI natively for every supported target in CI.
 - [ ] Run the release smoke test on every artifact, including a clean host with the
       documented C/C++ and Rust toolchain requirements.
-- [x] Decide and document the signing/notarization policy for each platform.
-
-### Publish to npm
-
-- [x] Choose the npm distribution layout: platform packages plus a small launcher,
-      or one package containing all supported binaries.
-- [x] Complete publishable staged-package metadata: omit `private`, add a
-      description, license, keywords, supported platforms/CPU policy, and an
-      explicit `files` allowlist.
-- [x] Make installation select the correct binary and fail clearly on unsupported
-      hosts; document whether a source-build fallback exists.
-- [x] Verify `npm pack` contents and install the tarball in a clean temporary
-      project before publishing.
-- [ ] Publish prereleases with SemVer alpha versions under the npm `alpha` dist-tag,
-      leaving `latest` untouched.
 
 ### Release gates and operations
 
-- [x] Add guarded local alpha release automation that builds artifacts once, packs
-      exact-version platform packages, verifies tarball digests, publishes platform
-      packages before the launcher, and leaves `latest` untouched.
-- [x] Report per-target release progress and timings; default later local alphas to
-      Apple Silicon macOS while retaining an explicit complete-matrix option.
+All prereleases must use SemVer alpha versions and publish explicitly under the npm
+`alpha` dist-tag. The local release process does not attempt to change or remove the
+registry's `latest` tag.
+
 - [ ] Move publishing to a tag-driven workflow with npm trusted publishing after
       the local alpha process has stabilized.
 - [ ] Run `npm run test:full:report` for a release candidate and resolve or record

@@ -142,7 +142,7 @@ function commonPackageFields(name: string, version: string): PackageJson {
 			url: "git+https://github.com/dirkdev98/maligator.git",
 		},
 		keywords: ["javascript", "compiler", "aot", "native", "runtime"],
-		publishConfig: { access: "public" },
+		publishConfig: { access: "public", tag: "alpha" },
 	};
 }
 

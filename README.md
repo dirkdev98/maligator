@@ -239,25 +239,23 @@ optional platform package fails with an actionable message.
 
 Releases are local during the alpha phase. `package.json` is the version source of
 truth; `src/version.ts` is generated and checked before building or publishing.
+Every prerelease is published explicitly under the npm `alpha` dist-tag. The release
+automation does not attempt to change or remove the registry's `latest` tag.
 
 ```shell
-# After publishing the current alpha, prepare the next numeric alpha version.
+# Verify npm authentication before doing the expensive build.
+npm whoami
+
+# Prepare the next numeric alpha version.
 npm run version:alpha
 
-# Build the normal alpha target (Apple Silicon macOS) and stage npm packages.
+# Build and pack the default Apple Silicon macOS release.
 npm run release:build
-
-# This first alpha keeps the complete four-target matrix.
-npm run release:build -- --all-targets
-
-# Execute the already-built production artifact for the current host.
 npm run release:smoke
+npm run release:pack
 
-# Pack the same target selection used by release:build.
-npm run release:pack -- --all-targets
-
-# Explicit confirmation plus a clean worktree are required; latest is untouched.
-npm run release:publish -- --confirm 0.1.0-alpha.1
+# Commit the version and release preparation, then publish from a clean worktree.
+npm run release:publish -- --confirm "$(node -p "require('./package.json').version")"
 ```
 
 `release:publish` verifies every selected tarball against `packages.json`, publishes
@@ -266,12 +264,11 @@ dist-tag. Each publish is a plain synchronous `npm publish` with the terminal's
 stdin/stdout/stderr inherited, so enter the OTP directly when npm prompts. Build,
 pack, and publish log per-target progress and elapsed time.
 
-After the complete first alpha, `release:build` and `release:pack` default to
-`aarch64-apple-darwin` so a local release only builds Apple Silicon macOS.
-Pass `-- --all-targets` for the complete matrix or
-`-- --target <rust-triple>` for one explicit target. Build and pack must use the
-same selection. Packing a native-host target also installs the two tarballs into
-a clean temporary project and verifies the installed launcher.
+`release:build` and `release:pack` default to `aarch64-apple-darwin` so a local
+release only builds Apple Silicon macOS. Pass `-- --all-targets` for the complete
+matrix or `-- --target <rust-triple>` for one explicit target. Build and pack must
+use the same selection. Packing a native-host target also installs the two tarballs
+into a clean temporary project and verifies the installed launcher.
 
 Applications with `surface.webPlatform: true` link `host_main.c`, which installs the
 web globals and drives the host event loop. Non-web applications retain the lean

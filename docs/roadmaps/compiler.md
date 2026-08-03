@@ -79,31 +79,9 @@ hit-path specialization and call/control-flow analysis before new allocation reg
 - [ ] Propagate stable field value classes through proven shapes and stores. Keep
       numeric values unboxed across property arithmetic only behind a sound guard and
       fallback/deoptimization contract.
-- [x] Generalize property-key interning beyond the intrinsic atom table. Property
-      names now converge on strongly rooted VM-lifetime atoms; heap-owned shapes,
-      dictionaries, static constants, and VM-owned inline caches can therefore use
-      stable pointer identity without crossing isolate lifetimes. Map/Set keys remain
-      in their separate ECMAScript value-key domain.
-- [x] Add chain-local validity dependencies for user-defined prototype chains.
-      Stable VM-owned IC rows register against the exact prototype objects they
-      depend on; rare structural mutations eagerly clear only those rows, while
-      inherited slot/table hits retain O(1) guards and unrelated chains stay warm.
-- [x] Cache ordinary fresh-property shape transitions. Repeated constructor-style
-      stores now apply the immutable old-shape-to-child-shape transition directly;
-      exact first-prototype guards plus chain-local eager invalidation preserve
-      accessors, read-only inherited data, exotic dispatch, and reparenting semantics.
-- [x] Share the VM-scoped megamorphic shaped-property stub between loads and
-      existing-slot stores. Cached descriptor attributes prevent read-only load
-      entries from becoming store hits, and full-bit hash mixing avoids heap
-      size-class address clustering in the direct-mapped table.
 
 ## Queued call and control-flow analysis
 
-- [x] Implement bounded polymorphic method inlining. Calls with up to three
-      same-name program method bodies retain the observable property load, then use
-      exact loaded-callee guards to select an inlined body with the original receiver
-      as `this`; unmatched, replaced, accessor-provided, and proxy-provided callees
-      retain the generic call fallback.
 - [ ] Generalize the module benchmark's TDZ-aware single-assignment callee resolution
       to proven immutable imports, single-assignment `let` bindings, stable closure
       fields, and constructor-derived methods.
