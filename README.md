@@ -262,7 +262,9 @@ npm run release:publish -- --confirm 0.1.0-alpha.1
 
 `release:publish` verifies every selected tarball against `packages.json`, publishes
 the platform packages first, and publishes `@maligator/cli` last under the `alpha`
-dist-tag. Build, pack, and publish log per-target progress and elapsed time.
+dist-tag. Each publish is a plain synchronous `npm publish` with the terminal's
+stdin/stdout/stderr inherited, so enter the OTP directly when npm prompts. Build,
+pack, and publish log per-target progress and elapsed time.
 
 After the complete first alpha, `release:build` and `release:pack` default to
 `aarch64-apple-darwin` so a local release only builds Apple Silicon macOS.

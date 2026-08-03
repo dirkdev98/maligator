@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { hash } from "node:crypto";
 import {
 	chmodSync,
@@ -482,11 +482,25 @@ function publishRelease(args: Array<string>): void {
 		releaseLog(
 			`[${index + 1}/${expectedNames.length}] publishing ${expectedNames[index]}`,
 		);
-		execFileSync("npm", ["publish", tarball, "--access", "public", "--tag", "alpha"], {
-			cwd: repositoryRoot,
-			stdio: "inherit",
-			env: npmEnvironment(),
-		});
+		const publish = spawnSync(
+			"npm",
+			["publish", tarball, "--access", "public", "--tag", "alpha"],
+			{
+				cwd: repositoryRoot,
+				// npm owns the complete interactive exchange. In particular, stdin
+				// remains attached to the terminal so its native OTP prompt works.
+				stdio: ["inherit", "inherit", "inherit"],
+				env: npmEnvironment(),
+			},
+		);
+		if (publish.error !== undefined) throw publish.error;
+		if (publish.status !== 0) {
+			throw new Error(
+				publish.signal === null
+					? `npm publish exited with status ${publish.status}`
+					: `npm publish terminated by ${publish.signal}`,
+			);
+		}
 	}
 	releaseLog(`published ${version} under the alpha tag`);
 }
