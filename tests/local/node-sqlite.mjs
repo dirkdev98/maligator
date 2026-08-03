@@ -104,6 +104,17 @@ equal(
 	"run lastInsertRowid honors readBigInts",
 );
 
+const originalRun = StatementSync.prototype.run;
+let patchedRunCalls = 0;
+StatementSync.prototype.run = function () {
+	patchedRunCalls++;
+	return { changes: 17, lastInsertRowid: 19 };
+};
+const patchedSummary = bigintRun.run();
+equal(patchedRunCalls, 1, "StatementSync.prototype.run replacement is observed");
+equal(patchedSummary.changes, 17, "patched run result is returned");
+StatementSync.prototype.run = originalRun;
+
 db.exec("BEGIN");
 check(db.isTransaction, "BEGIN enters transaction");
 db.exec("ROLLBACK");

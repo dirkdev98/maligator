@@ -594,17 +594,22 @@ static bool sqlite_bind(
     const MalValue *args, i32 argc) {
     bool named = argc > 0 && sqlite_is_named_parameter_object(args[0]);
     i32 positional = named ? 1 : 0;
-    i32 count =
-        mal_sqlite_statement_parameter_count(statement->statement);
+    i32 count = statement->bind_scratch_count;
     for (i32 index = 1; index <= count; index++) {
-        const char *name =
-            mal_sqlite_statement_parameter_name(statement->statement, index);
         MalValue value = mal_value_new_undefined();
-        if (named && name != nullptr && name[0] != '?') {
-            if (!sqlite_named_value(
-                    vm, args[0], name,
-                    statement->allow_bare_named_parameters, &value)) {
-                return false;
+        if (named) {
+            const char *name =
+                mal_sqlite_statement_parameter_name(
+                    statement->statement, index);
+            if (name != nullptr && name[0] != '?') {
+                if (!sqlite_named_value(
+                        vm, args[0], name,
+                        statement->allow_bare_named_parameters,
+                        &value)) {
+                    return false;
+                }
+            } else if (positional < argc) {
+                value = args[positional++];
             }
         } else if (positional < argc) {
             value = args[positional++];
@@ -993,6 +998,12 @@ void mal_host_install_node_sqlite(
     mal_intrinsic_define_method_n(
         vm, statement_prototype, (const byte *) "setReadBigInts", 1,
         sqlite_statement_set_read_bigints);
+
+    // These prototypes are installed once and then participate in the inherited
+    // method-value cache. Any later define/set/delete/reparent operation clears
+    // the monotonic protector before the mutation becomes observable.
+    database_prototype->watched_method_proto = true;
+    statement_prototype->watched_method_proto = true;
 
     roots[4] =
         mal_value_from_object(mal_intrinsic_new_object(vm));
