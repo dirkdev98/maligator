@@ -276,6 +276,35 @@
     "loadIcSyncFallbacks": 37874,
     "storeIcSyncFallbacks": 17285
   },
+  "sqliteBinding": {
+    "iterations": 500000,
+    "parametersPerCall": 4,
+    "mal": {
+      "iterations": 500000,
+      "parametersPerCall": 4,
+      "unboundMs": 159.29799999999997,
+      "numberMs": 196.02100000000002,
+      "textMs": 402.21100000000007
+    },
+    "node": {
+      "iterations": 500000,
+      "parametersPerCall": 4,
+      "unboundMs": 49.833875,
+      "numberMs": 84.528125,
+      "textMs": 139.85020799999998
+    },
+    "unboundRatio": 3.196580639173654,
+    "numberRatio": 2.3190032903249658,
+    "textRatio": 2.8760128837277104,
+    "malNumberNsPerBind": 18.36150000000002,
+    "nodeNumberNsPerBind": 17.347125000000005,
+    "malTextNsPerBind": 121.45650000000005,
+    "nodeTextNsPerBind": 45.00816649999999,
+    "numberBindingRatio": 1.0584751075466405,
+    "textBindingRatio": 2.698543607636185,
+    "collections": 34,
+    "allocatedMb": 148.3039093017578
+  },
   "gc": {
     "cli": {
       "wallMs": 28.723959,
