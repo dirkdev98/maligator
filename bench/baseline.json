@@ -282,26 +282,26 @@
     "mal": {
       "iterations": 500000,
       "parametersPerCall": 4,
-      "unboundMs": 73.459,
-      "numberMs": 107.86099999999999,
-      "textMs": 156.49899999999997
+      "unboundMs": 44.869,
+      "numberMs": 77.402,
+      "textMs": 120.469
     },
     "node": {
       "iterations": 500000,
       "parametersPerCall": 4,
-      "unboundMs": 52.919667000000004,
-      "numberMs": 91.21654199999999,
-      "textMs": 149.949833
+      "unboundMs": 52.991916,
+      "numberMs": 90.368791,
+      "textMs": 148.32620799999998
     },
-    "unboundRatio": 1.3881228693294687,
-    "numberRatio": 1.1824719248839755,
-    "textRatio": 1.0436757205324794,
-    "malNumberNsPerBind": 17.200999999999993,
-    "nodeNumberNsPerBind": 19.148437499999993,
-    "malTextNsPerBind": 41.51999999999998,
-    "nodeTextNsPerBind": 48.515083000000004,
-    "numberBindingRatio": 0.8982978376172991,
-    "textBindingRatio": 0.8558163241728346,
+    "unboundRatio": 0.8467140535171439,
+    "numberRatio": 0.8565125099438367,
+    "textRatio": 0.8121895760997275,
+    "malNumberNsPerBind": 16.2665,
+    "nodeNumberNsPerBind": 18.6884375,
+    "malTextNsPerBind": 37.8,
+    "nodeTextNsPerBind": 47.66714599999999,
+    "numberBindingRatio": 0.8704044947577881,
+    "textBindingRatio": 0.7929990186532252,
     "collections": 20,
     "allocatedMb": 93.86085510253906
   },
