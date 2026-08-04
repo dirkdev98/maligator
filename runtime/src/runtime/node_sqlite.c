@@ -940,7 +940,7 @@ void mal_host_install_node_sqlite(
             mal_intrinsic_ascii(vm, (const byte *) "lastInsertRowid"),
         };
         vm->node_sqlite_run_result_shape =
-            mal_shape_from_string_keys(keys, countof(keys));
+            mal_shape_from_string_keys(&vm->heap, keys, countof(keys));
     }
 
     MalValue roots[5] = {

@@ -222,7 +222,16 @@ describe("inherited built-in method and native call caches", () => {
 			};
 			expect(field("load_inherited_hits")).toBeGreaterThan(4000);
 			expect(field("inherited_fills")).toBeGreaterThan(5);
-			expect(field("inherited_reject_chain")).toBeGreaterThan(0);
+			const dependencies = result.stderr
+				.split("\n")
+				.find((line) => line.startsWith("[perf-prototype-dependency-stats]"));
+			expect(dependencies).toBeDefined();
+			const dependencyField = (name: string): number => {
+				const match = dependencies?.match(new RegExp(`${name}=([0-9]+)`));
+				return match ? Number(match[1]) : 0;
+			};
+			expect(dependencyField("register_calls")).toBeGreaterThan(0);
+			expect(dependencyField("register_nodes")).toBeGreaterThan(0);
 		},
 	);
 
