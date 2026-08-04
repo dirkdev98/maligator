@@ -3655,7 +3655,8 @@ static void mal_perf_ic_note_replacement(const MalInlineCache *ic, u8 next_mode)
 }
 
 static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
-    if (ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
+    if ((ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0) ||
+        ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
         (ic->mode == MAL_IC_MODE_TRANSITION && ic->obj != nullptr) ||
         (ic->mode == MAL_IC_MODE_MISSING &&
@@ -3773,7 +3774,8 @@ static bool mal_ic_record_local_prototype_chain(
         return false;
     }
     bool same_positive_chain =
-        (ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
+        ((ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0) ||
+         ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
          ic->mode == MAL_IC_MODE_INHERITED_TABLE) &&
         ic->poly_count > 0 &&
         ic->proto_object[0] == receiver->prototype &&
@@ -3887,8 +3889,22 @@ static bool mal_ic_try_record_inherited_slot(
         return false;
     }
 
+    if (mal_ic_record_local_prototype_chain(object, resolution.holder, ic)) {
+        mal_perf_ic_note_replacement(ic, MAL_IC_MODE_INHERITED_VALUE);
+        ic->shape = object->shape;
+        ic->key = key_value;
+        ic->value = resolution.desc.value;
+        ic->slot = MAL_IC_VALUE_SLOT;
+        ic->prim_kind = 0;
+        ic->megamorphic = false;
+        ic->mode = MAL_IC_MODE_INHERITED_VALUE;
+        ic->receiver_type = MAL_HEAP_OBJECT;
+        MAL_PERF_COUNT(ic_inherited_fills);
+        return true;
+    }
+
     u8 mode;
-    u32 slot = MAL_IC_VALUE_SLOT;
+    u32 slot;
     if (resolution.holder->overflow == nullptr) {
         i32 index = mal_shape_find(
             resolution.holder->shape, key, MAL_SHAPE_FIND_LOAD_IC);
@@ -3911,15 +3927,13 @@ static bool mal_ic_try_record_inherited_slot(
     ic->key = key_value;
     ic->slot = slot;
     ic->prim_kind = 0;
-    if (!mal_ic_record_local_prototype_chain(object, resolution.holder, ic)) {
-        if (mal_prototype_chain_epoch == 0) {
-            return false;
-        }
-        ic->proto_object[0] = object->prototype;
-        ic->proto_object[1] = resolution.holder;
-        mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
-        ic->poly_count = 0;
+    if (mal_prototype_chain_epoch == 0) {
+        return false;
     }
+    ic->proto_object[0] = object->prototype;
+    ic->proto_object[1] = resolution.holder;
+    mal_ic_set_recorded_prototype_epoch(ic, mal_prototype_chain_epoch);
+    ic->poly_count = 0;
     ic->megamorphic = false;
     ic->mode = mode;
     ic->receiver_type = MAL_HEAP_OBJECT;
@@ -4385,6 +4399,9 @@ void mal_vm_op_store_property_ic(
                     MAL_PERF_COUNT(ic_store_shape_fills);
                 } else {
                     MAL_PERF_COUNT(ic_store_shape_uncacheable);
+                }
+                if (mal_object_note_prototype_mutation(object)) {
+                    MAL_PERF_COUNT(prototype_epoch_define_invalidations);
                 }
                 mal_gc_write_barrier(object->slots[prop->slot]);
                 object->slots[prop->slot] = value;

@@ -317,6 +317,8 @@ interface PrototypeCacheFixtureMetrics {
 	runtimeMs: number;
 	userlandDirectMs: number;
 	userlandDeepMs: number;
+	userlandFourLinkMs: number;
+	userlandEightLinkMs: number;
 	postMutationMs: number;
 }
 interface PrototypeCacheMetrics {
@@ -326,6 +328,8 @@ interface PrototypeCacheMetrics {
 	runtimeRatio: number;
 	userlandDirectRatio: number;
 	userlandDeepRatio: number;
+	userlandFourLinkRatio: number;
+	userlandEightLinkRatio: number;
 	postMutationRatio: number;
 	inheritedHits: number;
 	inheritedFills: number;
@@ -1284,6 +1288,8 @@ function parsePrototypeCacheResult(
 		!("runtimeMs" in parsed) ||
 		!("userlandDirectMs" in parsed) ||
 		!("userlandDeepMs" in parsed) ||
+		!("userlandFourLinkMs" in parsed) ||
+		!("userlandEightLinkMs" in parsed) ||
 		!("postMutationMs" in parsed)
 	) {
 		throw new Error(`incomplete prototype-cache output from ${command}`);
@@ -1323,6 +1329,8 @@ function runPrototypeCacheFixture(
 		runtimeMs: median(results.map((result) => result.runtimeMs)),
 		userlandDirectMs: median(results.map((result) => result.userlandDirectMs)),
 		userlandDeepMs: median(results.map((result) => result.userlandDeepMs)),
+		userlandFourLinkMs: median(results.map((result) => result.userlandFourLinkMs)),
+		userlandEightLinkMs: median(results.map((result) => result.userlandEightLinkMs)),
 		postMutationMs: median(results.map((result) => result.postMutationMs)),
 	};
 }
@@ -1368,6 +1376,8 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 		runtimeRatio: mal.runtimeMs / node.runtimeMs,
 		userlandDirectRatio: mal.userlandDirectMs / node.userlandDirectMs,
 		userlandDeepRatio: mal.userlandDeepMs / node.userlandDeepMs,
+		userlandFourLinkRatio: mal.userlandFourLinkMs / node.userlandFourLinkMs,
+		userlandEightLinkRatio: mal.userlandEightLinkMs / node.userlandEightLinkMs,
 		postMutationRatio: mal.postMutationMs / node.postMutationMs,
 		inheritedHits: parsePerfIcStat(stderr, "load_inherited_hits"),
 		inheritedFills: parsePerfIcStat(stderr, "inherited_fills"),
@@ -2118,6 +2128,12 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(
 			`  user 2x   maligator ${current.mal.userlandDeepMs.toFixed(1)}ms${delta(current.mal.userlandDeepMs, prior?.mal.userlandDeepMs)}  node ${current.node.userlandDeepMs.toFixed(1)}ms  ratio ${current.userlandDeepRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  user 4x   maligator ${current.mal.userlandFourLinkMs.toFixed(1)}ms${delta(current.mal.userlandFourLinkMs, prior?.mal.userlandFourLinkMs)}  node ${current.node.userlandFourLinkMs.toFixed(1)}ms  ratio ${current.userlandFourLinkRatio.toFixed(2)}x`,
+		);
+		console.log(
+			`  user 8x   maligator ${current.mal.userlandEightLinkMs.toFixed(1)}ms${delta(current.mal.userlandEightLinkMs, prior?.mal.userlandEightLinkMs)}  node ${current.node.userlandEightLinkMs.toFixed(1)}ms  ratio ${current.userlandEightLinkRatio.toFixed(2)}x`,
 		);
 		console.log(
 			`  mutated   maligator ${current.mal.postMutationMs.toFixed(1)}ms${delta(current.mal.postMutationMs, prior?.mal.postMutationMs)}  node ${current.node.postMutationMs.toFixed(1)}ms  ratio ${current.postMutationRatio.toFixed(2)}x`,

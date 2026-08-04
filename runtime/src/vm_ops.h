@@ -606,7 +606,8 @@ typedef struct MalInlineCache {
     // Exact VM-lifetime string atom cached. A computed-key site (o[k]) may vary;
     // its slow probe canonicalizes collectable strings before comparing here.
     MalValue key;
-    // `value` caches a resolved property value for the two protector-gated modes:
+    // `value` caches a resolved property value for protector-gated modes and
+    // dependency-registered inherited rows:
     //  - primitive-method: `mode == MAL_IC_MODE_PRIMITIVE_VALUE` — `value` is
     //    `key` on that primitive kind's (unmodified) prototype chain.
     //  - watched-intrinsic own property: `prim_kind` 0 and `slot == MAL_IC_VALUE_SLOT`
@@ -659,12 +660,11 @@ typedef struct MalInlineCache {
     byte poly_data[8];
     u8 prim_kind;
     u8 poly_count;
-    // In inherited slot/table modes, receiver shape + null overflow guard own
-    // absence; exact first-prototype identity and the prototype-chain epoch validate
-    // the whole remaining chain in O(1), and positive entries re-read the holder's
-    // live slot/table value. Missing mode uses either that exact-chain guard or the
-    // bounded shaped-chain guard described above. MAL_IC_MODE_INHERITED_VALUE
-    // retains the watched built-in value fallback.
+    // In inherited modes, receiver shape + null overflow guard own absence.
+    // A positive dependency-registered value row has poly_count > 0; exact
+    // first-prototype identity plus eager chain invalidation keeps its cached value
+    // sound at arbitrary depth. The poly_count == 0 value row retains the watched
+    // built-in protector fallback. Slot/table rows are the global-epoch fallback.
     u8 mode;
     u8 receiver_type;
     bool megamorphic;
@@ -925,6 +925,34 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
         return false;
     }
 
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {
+        if (ic->poly_count > 0) {
+            if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+                return false;
+            }
+            const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
+            if (object->shape != ic->shape ||
+                object->prototype != ic->proto_object[0] ||
+                object->overflow != nullptr) {
+                return false;
+            }
+            *out = ic->value;
+            mal_perf_ic_load_inherited_hit();
+            return true;
+        }
+        if (!mal_primitive_method_protector || !mal_value_is_object(receiver)) {
+            return false;
+        }
+        const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
+        if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
+            object->prototype != ic->obj || object->overflow != nullptr) {
+            return false;
+        }
+        *out = ic->value;
+        mal_perf_ic_load_inherited_hit();
+        return true;
+    }
+
     if (ic->mode == MAL_IC_MODE_MISSING) {
         if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
             return false;
@@ -961,20 +989,6 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
         }
         *out = mal_value_new_undefined();
         MAL_PERF_COUNT(ic_load_missing_hits);
-        return true;
-    }
-
-    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {
-        if (!mal_primitive_method_protector || !mal_value_is_object(receiver)) {
-            return false;
-        }
-        const MalObject *object = mal_value_to_object(receiver);
-        if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
-            object->prototype != ic->obj || object->overflow != nullptr) {
-            return false;
-        }
-        *out = ic->value;
-        mal_perf_ic_load_inherited_hit();
         return true;
     }
 
@@ -1095,9 +1109,14 @@ static inline bool mal_vm_special_try_load_static(MalVm *vm, MalValue receiver,
 /** Apply only a proven, nonallocating property-load cache hit. */
 static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalValue key,
                                             const MalInlineCache *ic, MalValue *out) {
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE ||
+        ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
+        ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
+        ic->mode == MAL_IC_MODE_MISSING) {
+        return mal_vm_inherited_try_load(receiver, key, ic, out);
+    }
     MalObject *object = mal_vm_as_object(receiver);
     return (object != nullptr && mal_vm_object_try_load(object, key, ic, out)) ||
-        mal_vm_inherited_try_load(receiver, key, ic, out) ||
         mal_vm_watched_try_load(receiver, key, ic, out) ||
         mal_vm_special_try_load(vm, receiver, key, ic, out);
 }
@@ -1105,9 +1124,14 @@ static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalVal
 /** Static-name property probe: the site identity supplies the key guard. */
 static inline bool mal_vm_property_try_load_static(MalVm *vm, MalValue receiver,
                                                    const MalInlineCache *ic, MalValue *out) {
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE ||
+        ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
+        ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
+        ic->mode == MAL_IC_MODE_MISSING) {
+        return mal_vm_inherited_try_load_static(receiver, ic, out);
+    }
     MalObject *object = mal_vm_as_object(receiver);
     return (object != nullptr && mal_vm_object_try_load_static(object, ic, out)) ||
-        mal_vm_inherited_try_load_static(receiver, ic, out) ||
         mal_vm_watched_try_load_static(receiver, ic, out) ||
         mal_vm_special_try_load_static(vm, receiver, ic, out);
 }
@@ -1123,6 +1147,9 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
     if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key &&
         ic->slot != MAL_IC_VALUE_SLOT) {
         mal_perf_ic_store_mono_hit();
+        if (mal_object_note_prototype_mutation(object)) {
+            MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+        }
         mal_gc_write_barrier(object->slots[ic->slot]);
         object->slots[ic->slot] = value;
         mal_gc_card(&object->header, value);
@@ -1134,6 +1161,9 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
             if (object->shape == ic->poly_shape[i]) {
                 MAL_PERF_COUNT(ic_store_poly_hits);
                 u8 slot = mal_ic_poly_slot(ic, i);
+                if (mal_object_note_prototype_mutation(object)) {
+                    MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+                }
                 mal_gc_write_barrier(object->slots[slot]);
                 object->slots[slot] = value;
                 mal_gc_card(&object->header, value);
@@ -1191,6 +1221,9 @@ static inline bool mal_vm_property_try_store_static(MalValue receiver, MalValue 
  * writable data slot on this object's shape (so this runs no user code).
  */
 static inline void mal_vm_object_slot_store(MalObject *object, u32 slot, MalValue value) {
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+    }
     mal_gc_write_barrier(object->slots[slot]);
     object->slots[slot] = value;
     mal_gc_card(&object->header, value);

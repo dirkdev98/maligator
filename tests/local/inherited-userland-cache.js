@@ -80,10 +80,25 @@ const five2 = Object.create(five3);
 const five1 = Object.create(five2);
 const fiveReceiver = Object.create(five1);
 for (let index = 0; index < 20; index++) {
-	ok("five-link fallback", loadDeep(fiveReceiver) === original);
+	ok("five-link chain", loadDeep(fiveReceiver) === original);
 }
 fiveHolder.method = replacement;
-ok("five-link fallback invalidation", loadDeep(fiveReceiver) === replacement);
+ok("five-link invalidation", loadDeep(fiveReceiver) === replacement);
+
+const eightHolder = { method: original };
+const eight7 = Object.create(eightHolder);
+const eight6 = Object.create(eight7);
+const eight5 = Object.create(eight6);
+const eight4 = Object.create(eight5);
+const eight3 = Object.create(eight4);
+const eight2 = Object.create(eight3);
+const eight1 = Object.create(eight2);
+const eightReceiver = Object.create(eight1);
+for (let index = 0; index < 100; index++) {
+	ok("eight-link chain", loadDeep(eightReceiver) === original);
+}
+eightHolder.method = replacement;
+ok("eight-link invalidation", loadDeep(eightReceiver) === replacement);
 
 const gc = globalThis.__mal_collect_garbage;
 function churn(receiver) {

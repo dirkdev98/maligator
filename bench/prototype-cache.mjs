@@ -20,6 +20,14 @@ holder.method = originalMethod;
 const directReceiver = Object.create(holder);
 const middle = Object.create(holder);
 const deepReceiver = Object.create(middle);
+let fourLinkReceiver = holder;
+for (let depth = 0; depth < 4; depth++) {
+	fourLinkReceiver = Object.create(fourLinkReceiver);
+}
+let eightLinkReceiver = holder;
+for (let depth = 0; depth < 8; depth++) {
+	eightLinkReceiver = Object.create(eightLinkReceiver);
+}
 
 function loadRuntime(receiver, count) {
 	let value;
@@ -39,6 +47,18 @@ function loadDeep(receiver, count) {
 	return value;
 }
 
+function loadFourLinks(receiver, count) {
+	let value;
+	for (let index = 0; index < count; index++) value = receiver.method;
+	return value;
+}
+
+function loadEightLinks(receiver, count) {
+	let value;
+	for (let index = 0; index < count; index++) value = receiver.method;
+	return value;
+}
+
 function loadAfterMutation(receiver, count) {
 	let value;
 	for (let index = 0; index < count; index++) value = receiver.method;
@@ -48,6 +68,8 @@ function loadAfterMutation(receiver, count) {
 loadRuntime(runtimeReceiver, warmupIterations);
 loadDirect(directReceiver, warmupIterations);
 loadDeep(deepReceiver, warmupIterations);
+loadFourLinks(fourLinkReceiver, warmupIterations);
+loadEightLinks(eightLinkReceiver, warmupIterations);
 
 let start = Date.now();
 const runtimeResult = loadRuntime(runtimeReceiver, iterations);
@@ -61,10 +83,20 @@ start = Date.now();
 const deepResult = loadDeep(deepReceiver, iterations);
 const userlandDeepMs = Date.now() - start;
 
+start = Date.now();
+const fourLinkResult = loadFourLinks(fourLinkReceiver, iterations);
+const userlandFourLinkMs = Date.now() - start;
+
+start = Date.now();
+const eightLinkResult = loadEightLinks(eightLinkReceiver, iterations);
+const userlandEightLinkMs = Date.now() - start;
+
 holder.method = replacementMethod;
 if (
 	directReceiver.method !== replacementMethod ||
-	deepReceiver.method !== replacementMethod
+	deepReceiver.method !== replacementMethod ||
+	fourLinkReceiver.method !== replacementMethod ||
+	eightLinkReceiver.method !== replacementMethod
 ) {
 	throw new Error("prototype-cache mutation probe failed");
 }
@@ -78,6 +110,8 @@ if (
 	runtimeResult !== Array.prototype.values ||
 	directResult !== originalMethod ||
 	deepResult !== originalMethod ||
+	fourLinkResult !== originalMethod ||
+	eightLinkResult !== originalMethod ||
 	mutationResult !== replacementMethod
 ) {
 	throw new Error("prototype-cache result probe failed");
@@ -89,6 +123,8 @@ console.log(
 		runtimeMs,
 		userlandDirectMs,
 		userlandDeepMs,
+		userlandFourLinkMs,
+		userlandEightLinkMs,
 		postMutationMs,
 	}),
 );
