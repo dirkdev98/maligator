@@ -95,6 +95,22 @@ for (let i = 0; i < fanoutKeys.length; i++) {
 const counter = new Counter(3);
 const stringMethod = String.prototype.charCodeAt;
 const numberMethod = Number.prototype.toFixed;
+function concatenate(left, right) {
+	return left + right;
+}
+const inlineConsProbe = concatenate("a", "b");
+if (inlineConsProbe !== "ab") throw new Error("broken inline concat");
+const consProbe = concatenate("perf-", "stats");
+if (consProbe.charCodeAt(5) !== 115) throw new Error("broken cons flatten");
+if (consProbe.slice(1, 5) !== "erf-") throw new Error("broken inline slice");
+if (consProbe.slice(1, 8) !== "erf-sta") throw new Error("broken dependent slice");
+if (
+	consProbe.lastIndexOf("stats") !== 5 ||
+	consProbe.lastIndexOf("s", 8) !== 5 ||
+	consProbe.lastIndexOf("missing") !== -1
+) {
+	throw new Error("broken reverse string search");
+}
 
 function loadStringMethod(value) {
 	return value.charCodeAt;

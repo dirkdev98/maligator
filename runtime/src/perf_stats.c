@@ -120,6 +120,10 @@ static void mal_perf_stats_print(void) {
         "search_calls=%llu search_multi_unit_calls=%llu search_candidates=%llu "
         "search_first_unit_rejects=%llu search_last_unit_rejects=%llu "
         "search_memcmp_calls=%llu search_memcmp_code_units=%llu "
+        "reverse_search_calls=%llu reverse_search_candidates=%llu "
+        "reverse_search_first_unit_rejects=%llu "
+        "reverse_search_last_unit_rejects=%llu "
+        "reverse_search_memcmp_calls=%llu reverse_search_memcmp_code_units=%llu "
         "split_planned_matches=%llu split_plan_overflows=%llu "
         "char_code_at_direct_hits=%llu char_code_at_direct_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.key_equals_calls,
@@ -144,10 +148,70 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_search_last_unit_rejects,
         (unsigned long long) mal_perf_stats.string_search_memcmp_calls,
         (unsigned long long) mal_perf_stats.string_search_memcmp_code_units,
+        (unsigned long long) mal_perf_stats.string_reverse_search_calls,
+        (unsigned long long) mal_perf_stats.string_reverse_search_candidates,
+        (unsigned long long) mal_perf_stats.string_reverse_search_first_unit_rejects,
+        (unsigned long long) mal_perf_stats.string_reverse_search_last_unit_rejects,
+        (unsigned long long) mal_perf_stats.string_reverse_search_memcmp_calls,
+        (unsigned long long) mal_perf_stats.string_reverse_search_memcmp_code_units,
         (unsigned long long) mal_perf_stats.string_split_planned_matches,
         (unsigned long long) mal_perf_stats.string_split_plan_overflows,
         (unsigned long long) mal_perf_stats.string_char_code_at_direct_hits,
         (unsigned long long) mal_perf_stats.string_char_code_at_direct_fallbacks
+    );
+    fprintf(
+        stderr,
+        "[perf-string-allocation-stats] allocations=%llu code_units=%llu "
+        "length_0=%llu length_1=%llu length_2_4=%llu length_5_8=%llu "
+        "length_9_16=%llu length_17_32=%llu length_33_64=%llu length_65_plus=%llu "
+        "inline_allocations=%llu inline_code_units=%llu inline_concat_results=%llu "
+        "copy_allocations=%llu copy_code_units=%llu "
+        "ascii_allocations=%llu ascii_code_units=%llu "
+        "owned_allocations=%llu owned_code_units=%llu "
+        "external_allocations=%llu external_code_units=%llu "
+        "dependent_allocations=%llu dependent_code_units=%llu "
+        "dependent_retained_code_units=%llu cons_allocations=%llu cons_code_units=%llu "
+        "slice_calls=%llu slice_requested_code_units=%llu slice_empty_results=%llu "
+        "slice_full_reuses=%llu slice_dependent_results=%llu slice_copy_results=%llu "
+        "flatten_calls=%llu flatten_code_units=%llu flatten_cons_nodes=%llu "
+        "flatten_flat_leaves=%llu flatten_shared_copies=%llu\n",
+        (unsigned long long) mal_perf_stats.string_allocations,
+        (unsigned long long) mal_perf_stats.string_code_units,
+        (unsigned long long) mal_perf_stats.string_length_0_allocations,
+        (unsigned long long) mal_perf_stats.string_length_1_allocations,
+        (unsigned long long) mal_perf_stats.string_length_2_4_allocations,
+        (unsigned long long) mal_perf_stats.string_length_5_8_allocations,
+        (unsigned long long) mal_perf_stats.string_length_9_16_allocations,
+        (unsigned long long) mal_perf_stats.string_length_17_32_allocations,
+        (unsigned long long) mal_perf_stats.string_length_33_64_allocations,
+        (unsigned long long) mal_perf_stats.string_length_65_plus_allocations,
+        (unsigned long long) mal_perf_stats.string_inline_allocations,
+        (unsigned long long) mal_perf_stats.string_inline_code_units,
+        (unsigned long long) mal_perf_stats.string_inline_concat_results,
+        (unsigned long long) mal_perf_stats.string_copy_allocations,
+        (unsigned long long) mal_perf_stats.string_copy_code_units,
+        (unsigned long long) mal_perf_stats.string_ascii_allocations,
+        (unsigned long long) mal_perf_stats.string_ascii_code_units,
+        (unsigned long long) mal_perf_stats.string_owned_allocations,
+        (unsigned long long) mal_perf_stats.string_owned_code_units,
+        (unsigned long long) mal_perf_stats.string_external_allocations,
+        (unsigned long long) mal_perf_stats.string_external_code_units,
+        (unsigned long long) mal_perf_stats.string_dependent_allocations,
+        (unsigned long long) mal_perf_stats.string_dependent_code_units,
+        (unsigned long long) mal_perf_stats.string_dependent_retained_code_units,
+        (unsigned long long) mal_perf_stats.string_cons_allocations,
+        (unsigned long long) mal_perf_stats.string_cons_code_units,
+        (unsigned long long) mal_perf_stats.string_slice_calls,
+        (unsigned long long) mal_perf_stats.string_slice_requested_code_units,
+        (unsigned long long) mal_perf_stats.string_slice_empty_results,
+        (unsigned long long) mal_perf_stats.string_slice_full_reuses,
+        (unsigned long long) mal_perf_stats.string_slice_dependent_results,
+        (unsigned long long) mal_perf_stats.string_slice_copy_results,
+        (unsigned long long) mal_perf_stats.string_flatten_calls,
+        (unsigned long long) mal_perf_stats.string_flatten_code_units,
+        (unsigned long long) mal_perf_stats.string_flatten_cons_nodes,
+        (unsigned long long) mal_perf_stats.string_flatten_flat_leaves,
+        (unsigned long long) mal_perf_stats.string_flatten_shared_copies
     );
     fprintf(
         stderr,

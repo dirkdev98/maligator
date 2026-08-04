@@ -221,6 +221,63 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     return -1;
 }
 
+/**
+ * Find the last occurrence of search at or before from. The caller clamps from
+ * to the largest possible start position.
+ */
+static i64 mal_builtin_string_reverse_find(
+    const MalString *string,
+    const MalString *search,
+    usize from
+) {
+    MAL_PERF_COUNT(string_reverse_search_calls);
+    usize search_length = mal_string_length(search);
+    if (search_length == 0) {
+        return (i64) from;
+    }
+
+    const c16 *string_units = mal_string_code_units(string);
+    const c16 *search_units = mal_string_code_units(search);
+    c16 first_unit = search_units[0];
+    if (search_length == 1) {
+        for (usize position = from;; position--) {
+            MAL_PERF_COUNT(string_reverse_search_candidates);
+            if (string_units[position] == first_unit) {
+                return (i64) position;
+            }
+            MAL_PERF_COUNT(string_reverse_search_first_unit_rejects);
+            if (position == 0) break;
+        }
+        return -1;
+    }
+
+    usize last_offset = search_length - 1;
+    usize interior_length = search_length - 2;
+    c16 last_unit = search_units[last_offset];
+    for (usize position = from;; position--) {
+        MAL_PERF_COUNT(string_reverse_search_candidates);
+        if (string_units[position] != first_unit) {
+            MAL_PERF_COUNT(string_reverse_search_first_unit_rejects);
+        } else if (string_units[position + last_offset] != last_unit) {
+            MAL_PERF_COUNT(string_reverse_search_last_unit_rejects);
+        } else if (interior_length == 0) {
+            return (i64) position;
+        } else {
+            MAL_PERF_COUNT(string_reverse_search_memcmp_calls);
+            MAL_PERF_ADD(string_reverse_search_memcmp_code_units, interior_length);
+            if (memcmp(
+                    string_units + position + 1,
+                    search_units + 1,
+                    sizeof(c16) * interior_length
+                ) == 0) {
+                return (i64) position;
+            }
+        }
+        if (position == 0) break;
+    }
+    return -1;
+}
+
 static MalValue mal_builtin_string_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -527,23 +584,35 @@ static MalValue mal_builtin_string_prototype_index_of(MalVm *vm, MalValue this_v
 static MalValue mal_builtin_string_prototype_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    f64 raw_position = arg_count >= 2
+        ? mal_builtin_string_arg_to_number(vm, args[1])
+        : NAN;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
     usize length = mal_string_length(string);
     usize search_length = mal_string_length(search);
     if (search_length > length) {
         return mal_value_from_i32(-1);
     }
 
-    for (usize position = length - search_length;; position--) {
-        if (mal_builtin_string_matches_at(string, search, position)) {
-            return mal_value_from_i32((i32) position);
-        }
-
-        if (position == 0) {
-            break;
+    usize max_start = length - search_length;
+    usize start;
+    if (isnan(raw_position)) {
+        start = max_start;
+    } else {
+        f64 position = mal_ops_number_to_integer_or_infinity(raw_position);
+        if (position <= 0) {
+            start = 0;
+        } else if (position >= (f64) max_start) {
+            start = max_start;
+        } else {
+            start = (usize) position;
         }
     }
-
-    return mal_value_from_i32(-1);
+    return mal_value_from_i32(
+        (i32) mal_builtin_string_reverse_find(string, search, start)
+    );
 }
 
 // Defined later (near the @@-protocol dispatch); forward-declared so the
@@ -809,7 +878,9 @@ static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_val
 
     MalStringStorage storage = mal_string_storage(string);
     if (result_length >= MAL_STRING_REPEAT_LAZY_MIN_CODE_UNITS &&
-        (storage == MAL_STRING_STORAGE_OWNED || storage == MAL_STRING_STORAGE_EXTERNAL)) {
+        (storage == MAL_STRING_STORAGE_OWNED ||
+         storage == MAL_STRING_STORAGE_INLINE ||
+         storage == MAL_STRING_STORAGE_EXTERNAL)) {
         MalValue roots[2] = {
             mal_value_from_string(string),
             mal_value_from_string(string),

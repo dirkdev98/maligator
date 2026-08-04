@@ -9,6 +9,7 @@
  */
 typedef enum MalStringStorage : u8 {
     MAL_STRING_STORAGE_OWNED,
+    MAL_STRING_STORAGE_INLINE,
     MAL_STRING_STORAGE_EXTERNAL,
     MAL_STRING_STORAGE_DEPENDENT,
     MAL_STRING_STORAGE_CONS,
@@ -32,12 +33,15 @@ typedef struct MalString {
     usize length;
     union {
         const c16 *code_units;
+        /** Cell-local storage for strings of at most four UTF-16 code units. */
+        c16 inline_code_units[4];
         /** Right child of a lazy concatenation. */
         struct MalString *right;
     };
 } MalString;
 
 static_assert(sizeof(MalString) <= 32, "MalString outgrew its 32-byte size class");
+#define MAL_STRING_INLINE_CODE_UNITS ((usize) 4)
 
 /** Engine string lengths are measured in UTF-16 code units. */
 #define MAL_STRING_MAX_CODE_UNITS ((usize) 16 * 1024 * 1024)
@@ -102,6 +106,9 @@ const c16 *mal_string_flatten(MalString *string);
  * keep that access local and leave the allocating cons-string path out of line.
  */
 static inline const c16 *mal_string_code_units(const MalString *string) {
+    if (string->storage == MAL_STRING_STORAGE_INLINE) {
+        return string->inline_code_units;
+    }
     if (string->storage != MAL_STRING_STORAGE_CONS) {
         return string->code_units;
     }

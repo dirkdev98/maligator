@@ -56,6 +56,9 @@
  *               route, JSON, and form workloads. Each runs in a fresh instrumented
  *               process and resets counters after warmup. Diagnostic only: never
  *               written to the saved benchmark baseline.
+ *   - string-profile allocation/storage/flattening counters for every executable
+ *               non-server benchmark workload. Diagnostic only: never written to
+ *               the saved benchmark baseline. Pair with http-profile for servers.
  *
  * `bench/baseline.json` is one unattributed snapshot. A run never changes it unless
  * `--update` is present; an update atomically replaces only the selected top-level
@@ -168,8 +171,19 @@ interface StringMetrics {
 	searchLastUnitRejects: number;
 	searchMemcmpCalls: number;
 	searchMemcmpCodeUnits: number;
+	reverseSearchCalls: number;
+	reverseSearchCandidates: number;
+	reverseSearchFirstUnitRejects: number;
+	reverseSearchLastUnitRejects: number;
+	reverseSearchMemcmpCalls: number;
+	reverseSearchMemcmpCodeUnits: number;
 	splitPlannedMatches: number;
 	splitPlanOverflows: number;
+	stringAllocations: number;
+	inlineStringAllocations: number;
+	dependentStringAllocations: number;
+	consStringAllocations: number;
+	stringFlattenCalls: number;
 }
 interface PromiseMetrics {
 	malMs: number;
@@ -637,6 +651,14 @@ function parsePerfStringStat(stderr: string, field: string): number {
 	return match ? Number(match[1]) : 0;
 }
 
+function parsePerfStringAllocationStat(stderr: string, field: string): number {
+	const line = stderr
+		.split("\n")
+		.find((value) => value.includes("[perf-string-allocation-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
 function benchModule(runs: number): ModuleMetrics {
 	const binary = buildNativeBinary({
 		fixture: "bench/module-alloc.mjs",
@@ -711,8 +733,37 @@ function benchString(runs: number): StringMetrics {
 		searchLastUnitRejects: parsePerfStringStat(perfStderr, "search_last_unit_rejects"),
 		searchMemcmpCalls: parsePerfStringStat(perfStderr, "search_memcmp_calls"),
 		searchMemcmpCodeUnits: parsePerfStringStat(perfStderr, "search_memcmp_code_units"),
+		reverseSearchCalls: parsePerfStringStat(perfStderr, "reverse_search_calls"),
+		reverseSearchCandidates: parsePerfStringStat(perfStderr, "reverse_search_candidates"),
+		reverseSearchFirstUnitRejects: parsePerfStringStat(
+			perfStderr,
+			"reverse_search_first_unit_rejects",
+		),
+		reverseSearchLastUnitRejects: parsePerfStringStat(
+			perfStderr,
+			"reverse_search_last_unit_rejects",
+		),
+		reverseSearchMemcmpCalls: parsePerfStringStat(
+			perfStderr,
+			"reverse_search_memcmp_calls",
+		),
+		reverseSearchMemcmpCodeUnits: parsePerfStringStat(
+			perfStderr,
+			"reverse_search_memcmp_code_units",
+		),
 		splitPlannedMatches: parsePerfStringStat(perfStderr, "split_planned_matches"),
 		splitPlanOverflows: parsePerfStringStat(perfStderr, "split_plan_overflows"),
+		stringAllocations: parsePerfStringAllocationStat(perfStderr, "allocations"),
+		inlineStringAllocations: parsePerfStringAllocationStat(
+			perfStderr,
+			"inline_allocations",
+		),
+		dependentStringAllocations: parsePerfStringAllocationStat(
+			perfStderr,
+			"dependent_allocations",
+		),
+		consStringAllocations: parsePerfStringAllocationStat(perfStderr, "cons_allocations"),
+		stringFlattenCalls: parsePerfStringAllocationStat(perfStderr, "flatten_calls"),
 	};
 }
 
@@ -1444,6 +1495,121 @@ function benchGc(runs: number): Record<string, GcWorkload> {
 	return result;
 }
 
+// ---- cross-benchmark string allocation profile ----------------------------
+
+interface StringProfileTarget {
+	name: string;
+	fixture: string;
+	compiled?: boolean;
+	mainFile?: string;
+	nodeEnabled?: boolean;
+	buildEnvironment?: NodeJS.ProcessEnv;
+}
+
+function stringProfileRow(name: string, stderr: string): void {
+	const allocations = perfReportFields(stderr, "[perf-string-allocation-stats]");
+	const total = allocations.allocations ?? 0;
+	const short =
+		(allocations.length_0 ?? 0) +
+		(allocations.length_1 ?? 0) +
+		(allocations.length_2_4 ?? 0);
+	const copied =
+		(allocations.copy_code_units ?? 0) +
+		(allocations.ascii_code_units ?? 0) +
+		(allocations.flatten_code_units ?? 0);
+	const averageLength = total === 0 ? 0 : (allocations.code_units ?? 0) / total;
+	const shortPercent = total === 0 ? 0 : (short * 100) / total;
+	console.log(
+		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}`,
+	);
+}
+
+function runStringProfileTarget(target: StringProfileTarget): void {
+	const buildEnvironment = {
+		...process.env,
+		...target.buildEnvironment,
+		MAL_PERF_STATS: "1",
+	};
+	const binary = buildNativeBinary({
+		fixture: target.fixture,
+		name: `bench-string-profile-${target.name}`,
+		compiled: target.compiled,
+		mainFile: target.mainFile,
+		nodeEnabled: target.nodeEnabled,
+		environment: buildEnvironment,
+	});
+	const result = spawnSync(binary, [], {
+		env: buildEnvironment,
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	if (result.status !== 0) {
+		throw new Error(
+			`string-profile target ${target.name} failed (status ${result.status}):\n${result.stderr ?? ""}`,
+		);
+	}
+	stringProfileRow(target.name, result.stderr ?? "");
+}
+
+function benchStringProfile(): void {
+	const targets: Array<StringProfileTarget> = [
+		{ name: "language-compiled", fixture: "bench/language.js", compiled: true },
+		{ name: "language-interpreted", fixture: "bench/language.js", compiled: false },
+		{ name: "module", fixture: "bench/module-alloc.mjs" },
+		{ name: "string", fixture: "bench/string.js" },
+		{ name: "promise", fixture: "bench/promise.js" },
+		{ name: "coroutine-compiled", fixture: "bench/coroutine.js", compiled: true },
+		{
+			name: "coroutine-interpreted",
+			fixture: "bench/coroutine.js",
+			compiled: false,
+		},
+		{ name: "arguments-compiled", fixture: "bench/arguments.js", compiled: true },
+		{
+			name: "arguments-interpreted",
+			fixture: "bench/arguments.js",
+			compiled: false,
+		},
+		{
+			name: "stack-object-compiled",
+			fixture: "bench/stack-object.js",
+			compiled: true,
+		},
+		{
+			name: "stack-object-interpreted",
+			fixture: "bench/stack-object.js",
+			compiled: false,
+		},
+		{
+			name: "sqlite-binding",
+			fixture: "bench/sqlite-binding.mjs",
+			mainFile: HOST_MAIN,
+			nodeEnabled: true,
+		},
+		{ name: "prototype-cache", fixture: "bench/prototype-cache.mjs" },
+		{
+			name: "gc-cli",
+			fixture: "bench/gc/cli.js",
+			buildEnvironment: { MAL_GC_GENERATIONAL: "1" },
+		},
+		{
+			name: "gc-desktop",
+			fixture: "bench/gc/desktop.js",
+			buildEnvironment: { MAL_GC_GENERATIONAL: "1" },
+		},
+		{
+			name: "gc-server",
+			fixture: "bench/gc/server.js",
+			buildEnvironment: { MAL_GC_GENERATIONAL: "1" },
+		},
+	];
+	console.log("string-profile (one instrumented execution per runtime workload):");
+	console.log(
+		"  workload                    strings   short          inline   average       copied/dependent/cons/flatten activity",
+	);
+	for (const target of targets) runStringProfileTarget(target);
+}
+
 // ---- http (vs Node) -------------------------------------------------------
 
 function ohaAvailable(): boolean {
@@ -1744,6 +1910,10 @@ function benchHttpProfile(requests: number, conc: number): void {
 				]);
 				const stderr = waitForPerfReport(stderrFile);
 				const strings = perfReportFields(stderr, "[perf-string-stats]");
+				const stringAllocations = perfReportFields(
+					stderr,
+					"[perf-string-allocation-stats]",
+				);
 				const properties = perfReportFields(stderr, "[perf-property-stats]");
 				const transitions = perfReportFields(stderr, "[perf-shape-transition-stats]");
 				const calls = perfReportFields(stderr, "[perf-call-cache-stats]");
@@ -1783,6 +1953,12 @@ function benchHttpProfile(requests: number, conc: number): void {
 				);
 				console.log(
 					`    direct charCodeAt   ${perfPerRequest(strings, "char_code_at_direct_hits", requests).toFixed(1)} hits, ${perfPerRequest(strings, "char_code_at_direct_fallbacks", requests).toFixed(1)} fallbacks/request`,
+				);
+				console.log(
+					`    strings/request     ${perfPerRequest(stringAllocations, "allocations", requests).toFixed(1)} allocations, ${perfPerRequest(stringAllocations, "code_units", requests).toFixed(1)} logical units, ${perfPerRequest(stringAllocations, "copy_code_units", requests).toFixed(1)} copied, ${perfPerRequest(stringAllocations, "ascii_code_units", requests).toFixed(1)} widened`,
+				);
+				console.log(
+					`    string storage      ${perfPerRequest(stringAllocations, "inline_allocations", requests).toFixed(1)} inline, ${perfPerRequest(stringAllocations, "dependent_allocations", requests).toFixed(1)} dependent, ${perfPerRequest(stringAllocations, "cons_allocations", requests).toFixed(1)} cons, ${perfPerRequest(stringAllocations, "flatten_calls", requests).toFixed(1)} flatten calls/request`,
 				);
 				console.log(
 					`    native call leaders ${perfNativeCallRows(stderr)
@@ -1930,7 +2106,16 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  filter    ${entry.string.searchFirstUnitRejects} first-unit rejects, ${entry.string.searchLastUnitRejects} last-unit rejects, ${entry.string.searchMemcmpCalls} interior compares (${entry.string.searchMemcmpCodeUnits} code units)`,
 		);
 		console.log(
+			`  reverse   ${entry.string.reverseSearchCalls} calls, ${entry.string.reverseSearchCandidates} candidates, ${entry.string.reverseSearchFirstUnitRejects} first-unit rejects, ${entry.string.reverseSearchLastUnitRejects} last-unit rejects`,
+		);
+		console.log(
+			`            ${entry.string.reverseSearchMemcmpCalls} interior compares (${entry.string.reverseSearchMemcmpCodeUnits} code units)`,
+		);
+		console.log(
 			`  split     ${entry.string.splitPlannedMatches} planned matches, ${entry.string.splitPlanOverflows} overflow fallbacks`,
+		);
+		console.log(
+			`  strings   ${entry.string.stringAllocations} allocations: ${entry.string.inlineStringAllocations} inline, ${entry.string.dependentStringAllocations} dependent, ${entry.string.consStringAllocations} cons; ${entry.string.stringFlattenCalls} flatten calls`,
 		);
 	}
 	if (entry.promise) {
@@ -2237,6 +2422,7 @@ if (which.includes("http")) {
 	if (http !== null) entry.http = http;
 }
 if (which.includes("http-profile")) benchHttpProfile(httpRequests, 50);
+if (which.includes("string-profile")) benchStringProfile();
 
 const baseline = readBenchmarkBaseline<BenchmarkSnapshot>(BASELINE_FILE);
 report(entry, baseline);

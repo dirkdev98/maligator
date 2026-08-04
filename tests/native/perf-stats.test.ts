@@ -108,6 +108,24 @@ describe("opt-in performance statistics", () => {
 		expect(field(strings, "key_equals_calls")).toBeGreaterThan(0);
 		expect(field(strings, "key_string_fallbacks")).toBeGreaterThan(0);
 		expect(field(strings, "string_memcmp_calls")).toBeGreaterThan(0);
+		expect(field(strings, "reverse_search_calls")).toBeGreaterThan(0);
+		expect(field(strings, "reverse_search_candidates")).toBeGreaterThan(0);
+		expect(field(strings, "reverse_search_first_unit_rejects")).toBeGreaterThan(0);
+		expect(field(strings, "reverse_search_memcmp_calls")).toBeGreaterThan(0);
+
+		const stringAllocations = reportLine(result.stderr, "[perf-string-allocation-stats]");
+		expect(
+			field(stringAllocations, "copy_allocations") +
+				field(stringAllocations, "ascii_allocations") +
+				field(stringAllocations, "owned_allocations"),
+		).toBeGreaterThan(0);
+		expect(field(stringAllocations, "inline_allocations")).toBeGreaterThan(0);
+		expect(field(stringAllocations, "inline_concat_results")).toBeGreaterThan(0);
+		expect(field(stringAllocations, "slice_calls")).toBeGreaterThan(0);
+		expect(field(stringAllocations, "slice_dependent_results")).toBeGreaterThan(0);
+		expect(field(stringAllocations, "cons_allocations")).toBeGreaterThan(0);
+		expect(field(stringAllocations, "flatten_calls")).toBeGreaterThan(0);
+		expect(field(stringAllocations, "flatten_cons_nodes")).toBeGreaterThan(0);
 
 		const intrinsics = reportLine(result.stderr, "[perf-intrinsic-stats]");
 		expect(field(intrinsics, "calls")).toBeGreaterThan(0);

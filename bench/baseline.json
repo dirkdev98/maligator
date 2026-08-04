@@ -110,8 +110,19 @@
     "searchLastUnitRejects": 255200,
     "searchMemcmpCalls": 422400,
     "searchMemcmpCodeUnits": 1584000,
+    "reverseSearchCalls": 105600,
+    "reverseSearchCandidates": 4752000,
+    "reverseSearchFirstUnitRejects": 4475075,
+    "reverseSearchLastUnitRejects": 171325,
+    "reverseSearchMemcmpCalls": 105600,
+    "reverseSearchMemcmpCodeUnits": 633600,
     "splitPlannedMatches": 842600,
-    "splitPlanOverflows": 0
+    "splitPlanOverflows": 0,
+    "stringAllocations": 2589715,
+    "inlineStringAllocations": 311839,
+    "dependentStringAllocations": 1804000,
+    "consStringAllocations": 8448,
+    "stringFlattenCalls": 384
   },
   "promise": {
     "malMs": 181.642834,
