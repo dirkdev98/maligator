@@ -116,6 +116,12 @@ const C_HEADER_LINES = [
 	"",
 ];
 
+const COMPILED_FUNCTION_DECLARATION =
+	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state)";
+
+/** Keep native/self-hosted compiler strings comfortably below the 16 MiB engine limit. */
+export const DEFAULT_TRANSLATION_UNIT_CODE_UNITS = 4 * 1024 * 1024;
+
 function stringCodeUnitsBody(constant: Array<number>): string {
 	return `{ ${constant.length > 0 ? constant.join(", ") : "0"} }`;
 }
@@ -283,6 +289,19 @@ function handlerArrayBody(fn: VmDefinition["functions"][number]): string {
  * Emit a C translation unit with the static MalVmDefinition data.
  */
 export function emitVmDefinition(definition: VmDefinition, options: EmitOptions = {}) {
+	return emitVmDefinitionSource(definition, options, false).source;
+}
+
+interface EmittedVmSource {
+	source: string;
+	compiled: Array<CompiledFunction | null>;
+}
+
+function emitVmDefinitionSource(
+	definition: VmDefinition,
+	options: EmitOptions,
+	splitCompiledFunctions: boolean,
+): EmittedVmSource {
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
@@ -298,7 +317,10 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	}
 
 	if (definition.stringConstants.length > 0) {
-		lines.push("", `static MalString mal_strings${suffix}[] = {`);
+		lines.push(
+			"",
+			`${splitCompiledFunctions ? "" : "static "}MalString mal_strings${suffix}[] = {`,
+		);
 		for (let i = 0; i < definition.stringConstants.length; ++i) {
 			const constant = definition.stringConstants[i]!;
 			lines.push(malStringRow(`mal_string_${i}_code_units${suffix}`, constant.length));
@@ -308,7 +330,9 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 
 	if (definition.bigintConstants.length > 0) {
 		// Immortal bigint constants with their 128-bit value baked at compile time.
-		lines.push(`static MalBigInt mal_bigints${suffix}[] = {`);
+		lines.push(
+			`${splitCompiledFunctions ? "" : "static "}MalBigInt mal_bigints${suffix}[] = {`,
+		);
 		for (const value of definition.bigintConstants) {
 			lines.push(
 				`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .value = ${emitBigintValue(value)} },`,
@@ -321,11 +345,31 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	// references their symbols) and after the constant pools (which they may
 	// reference). The bytecode is still emitted below as a fallback / for `new`.
 	const compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) =>
-		useCompiled ? emitCompiledFunction(fn, i, suffix, debug) : null,
+		useCompiled
+			? emitCompiledFunction(
+					fn,
+					i,
+					suffix,
+					debug,
+					undefined,
+					splitCompiledFunctions ? "external" : "static",
+				)
+			: null,
 	);
-	for (const fn of compiled) {
-		if (fn !== null) {
-			lines.push(fn.source, "");
+	if (splitCompiledFunctions) {
+		for (const fn of compiled) {
+			if (fn !== null) {
+				lines.push(`MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
+			}
+		}
+		if (compiled.some((fn) => fn !== null)) {
+			lines.push("");
+		}
+	} else {
+		for (const fn of compiled) {
+			if (fn !== null) {
+				lines.push(fn.source, "");
+			}
 		}
 	}
 
@@ -425,7 +469,68 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 
 	lines.push(...malVmDefinitionStruct(definition, suffix, debug, undefined, options));
 
-	return lines.join("\n");
+	return { source: lines.join("\n"), compiled };
+}
+
+/**
+ * Emit one definition/data translation unit plus bounded compiled-function units.
+ *
+ * The native product compiler cannot materialize strings above 16 MiB. Keeping
+ * compiled functions out of the definition unit avoids that ceiling and lets the
+ * C driver compile large programs as independent translation units. A single
+ * generated function is indivisible; reject one that exceeds the configured
+ * budget with a bounded diagnostic instead of building an oversized group.
+ */
+export function emitVmTranslationUnits(
+	definition: VmDefinition,
+	options: EmitOptions = {},
+	maxCodeUnits = DEFAULT_TRANSLATION_UNIT_CODE_UNITS,
+): Array<string> {
+	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
+		throw new RangeError("translation-unit code-unit budget must be a positive integer");
+	}
+	const emitted = emitVmDefinitionSource(definition, options, true);
+	if (emitted.source.length > maxCodeUnits) {
+		throw new RangeError(
+			`generated definition translation unit has ${emitted.source.length} code units; ` +
+				`maximum is ${maxCodeUnits}`,
+		);
+	}
+
+	const suffix = options.symbolSuffix ?? "";
+	const sharedDeclarations = [
+		...(definition.stringConstants.length > 0
+			? [`extern MalString mal_strings${suffix}[];`]
+			: []),
+		...(definition.bigintConstants.length > 0
+			? [`extern MalBigInt mal_bigints${suffix}[];`]
+			: []),
+	];
+	const header = [...C_HEADER_LINES, ...sharedDeclarations, ""].join("\n");
+	const units = [emitted.source];
+	let parts = [header];
+	let length = header.length;
+	const flush = (): void => {
+		if (parts.length === 1) return;
+		units.push(parts.join("\n"));
+		parts = [header];
+		length = header.length;
+	};
+	for (const fn of emitted.compiled) {
+		if (fn === null) continue;
+		const additional = fn.source.length + 1;
+		if (header.length + additional > maxCodeUnits) {
+			throw new RangeError(
+				`compiled function '${fn.symbol}' has ${fn.source.length} generated code units; ` +
+					`translation-unit maximum is ${maxCodeUnits}`,
+			);
+		}
+		if (length + additional > maxCodeUnits) flush();
+		parts.push(fn.source);
+		length += additional;
+	}
+	flush();
+	return units;
 }
 
 function malVmDefinitionStruct(

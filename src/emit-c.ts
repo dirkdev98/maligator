@@ -472,6 +472,7 @@ export function emitCompiledFunction(
 	// Set when emitting the boxed fallback variant (see below): a fixed symbol and
 	// an empty promotable set (no speculation, no guard, no further fallback).
 	override?: { symbol: string; promotable: Set<number> },
+	linkage: "static" | "external" = "static",
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -659,7 +660,7 @@ export function emitCompiledFunction(
 	const lines: Array<string> = [];
 
 	lines.push(
-		`static MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {`,
+		`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);

@@ -18,8 +18,8 @@ export interface LocalBuildOptions {
 	context: NativeBuildContext;
 	/** Base name for the emitted `.c` and linked binary. */
 	name: string;
-	/** Emitted translation unit (must already include `vm.h`). */
-	cSource: string;
+	/** Emitted translation unit(s), each of which must already include `vm.h`. */
+	cSource: string | ReadonlyArray<string>;
 	/** Surface compiler/archive output instead of swallowing it. */
 	verbose: boolean;
 	/** Entry-point translation unit; defaults to the test262 harness main. */
@@ -105,7 +105,17 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	mkdirSync(outputDirectory, { recursive: true });
 	const cPath = path.join(outputDirectory, `${artifactName}.c`);
 	const binaryPath = path.join(outputDirectory, artifactName);
-	writeFileSync(cPath, options.cSource);
+	const sources =
+		typeof options.cSource === "string" ? [options.cSource] : [...options.cSource];
+	if (sources.length === 0) {
+		throw new Error("buildLocalBinary requires at least one C translation unit");
+	}
+	const cPaths = sources.map((source, index) => {
+		const sourcePath =
+			index === 0 ? cPath : path.join(outputDirectory, `${artifactName}.part-${index}.c`);
+		writeFileSync(sourcePath, source);
+		return sourcePath;
+	});
 
 	execFileSync(
 		context.toolchain.tools.cc.path,
@@ -128,7 +138,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			...(existsSync(path.join(context.runtimeDirectory, "vendor/llhttp/include"))
 				? ["-I", path.join(context.runtimeDirectory, "vendor/llhttp/include")]
 				: []),
-			cPath,
+			...cPaths,
 			options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c"),
 			...artifacts.linkArgs,
 			...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),

@@ -19,7 +19,7 @@ import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.
 import type { BuildCommand, RunCommand } from "./cli.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
-import { emitVmDefinition } from "./emit-vm.ts";
+import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
 import {
 	debugHofInlineSites,
@@ -281,12 +281,12 @@ function compileAndBuild(
 		return { serializedPath: serializePath };
 	}
 
-	const output = emitVmDefinition(vmDefinition, {
+	const output = emitVmTranslationUnits(vmDefinition, {
 		compiled: command.kind === "run" || command.internal.compiled,
 		assets,
 		maligatorSurface: buildConfig.surface.maligator,
 	});
-	if (command.kind === "build" && command.internal.emitC) log.info(output);
+	if (command.kind === "build" && command.internal.emitC) log.info(output.join("\n"));
 
 	const name =
 		command.kind === "build"

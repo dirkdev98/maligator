@@ -407,7 +407,7 @@ describe("native toolchain discovery", () => {
 		const result = buildLocalBinary({
 			context,
 			name: "fake-output",
-			cSource: "int value;",
+			cSource: ["int value;", "int other_value;"],
 			verbose: false,
 			outDir: fake.root,
 		});
@@ -422,6 +422,7 @@ describe("native toolchain discovery", () => {
 		expect(invocations).toContain("runtime/src/vm.c");
 		expect(invocations).toContain("ar rcs");
 		expect(invocations).toContain(`${binary}.c`);
+		expect(invocations).toContain(`${binary}.part-1.c`);
 		expect(invocations).toContain(`-o ${binary}`);
 		expect(existsSync(`${binary}.c`)).toBe(true);
 	});

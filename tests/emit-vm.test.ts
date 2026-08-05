@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { emitBatch, emitVmDefinition } from "../src/emit-vm.ts";
+import { emitBatch, emitVmDefinition, emitVmTranslationUnits } from "../src/emit-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -175,6 +175,41 @@ describe("emit-vm instruction packing", () => {
 		expect(output).toContain("mal_vm_op_create_private_names(vm, env, 0, 2");
 		expect(output).toContain("mal_vm_op_init_private_fields(vm, r6, 2");
 		expect(output).toContain("mal_vm_typeof_compare(r6, MAL_TYPEOF_NUMBER)");
+	});
+
+	it("splits compiled functions into bounded external translation units", () => {
+		const functions = Array.from({ length: 12 }, () => ({
+			...fn,
+			instructions: [...fn.instructions],
+		}));
+		const splitDefinition = {
+			...definition,
+			functionCount: functions.length,
+			functions,
+		};
+		const generous = emitVmTranslationUnits(splitDefinition, {}, Number.MAX_SAFE_INTEGER);
+		const budget = generous[0]!.length + 1_000;
+		const units = emitVmTranslationUnits(splitDefinition, {}, budget);
+
+		expect(units.length).toBeGreaterThan(2);
+		expect(units.every((unit) => unit.length <= budget)).toBe(true);
+		expect(units[0]).toContain("MalValue mal_compiled_0(MalVm *vm, MalValue this_value");
+		expect(units[0]).not.toContain(
+			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {",
+		);
+		expect(units.slice(1).join("\n")).toContain(
+			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value",
+		);
+		expect(units.slice(1).join("\n")).not.toContain(
+			"static MalValue mal_compiled_0(MalVm *vm",
+		);
+	});
+
+	it("rejects an invalid translation-unit budget", () => {
+		expect(() => emitVmTranslationUnits(definition, {}, 0)).toThrow(/positive integer/);
+		expect(() => emitVmTranslationUnits(definition, {}, 100)).toThrow(
+			/generated definition translation unit/,
+		);
 	});
 
 	it("uses a null side table when a function has no variable operands", () => {

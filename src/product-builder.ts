@@ -7,7 +7,7 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { selectNativeBuildPlan } from "./build-flags.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
-import { emitVmDefinition } from "./emit-vm.ts";
+import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
@@ -87,7 +87,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		throw new Error("Product compilerWire asset must contain exactly one file");
 	}
 	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
-	const cSource = emitVmDefinition(definition, {
+	const cSource = emitVmTranslationUnits(definition, {
 		compiled: true,
 		assets,
 		maligatorSurface: config.surface.maligator,
