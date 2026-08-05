@@ -31,13 +31,19 @@ export type TestEvent =
 			todo: number;
 			durationMs: number;
 	  }
-	| { type: "suite-start" | "suite-end"; sequence: number; name: string }
-	| { type: "test-start"; sequence: number; name: string }
+	| {
+			type: "suite-start" | "suite-end";
+			sequence: number;
+			name: string;
+			file?: string;
+	  }
+	| { type: "test-start"; sequence: number; name: string; file?: string }
 	| {
 			type: "test-pass";
 			sequence: number;
 			name: string;
 			durationMs: number;
+			file?: string;
 	  }
 	| {
 			type: "test-fail";
@@ -45,14 +51,21 @@ export type TestEvent =
 			name: string;
 			durationMs: number;
 			failures: Array<TestFailure>;
+			file?: string;
 	  }
-	| { type: "test-skip" | "test-todo"; sequence: number; name: string }
+	| {
+			type: "test-skip" | "test-todo";
+			sequence: number;
+			name: string;
+			file?: string;
+	  }
 	| {
 			type: "hook-fail";
 			sequence: number;
 			name: string;
 			hook: "beforeAll" | "afterAll" | "beforeEach" | "afterEach";
 			failure: TestFailure;
+			file?: string;
 	  }
 	| {
 			type: "diagnostic";
@@ -71,6 +84,14 @@ export interface TestRunOptions {
 
 export interface TestRunResult {
 	events: Array<TestEvent>;
+	files: Array<{
+		file: string;
+		passed: number;
+		failed: number;
+		skipped: number;
+		todo: number;
+		durationMs: number;
+	}>;
 	passed: number;
 	failed: number;
 	skipped: number;

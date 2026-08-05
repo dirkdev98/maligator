@@ -15,6 +15,44 @@ beforeEach(() => runtime.__reset());
 afterEach(() => runtime.__reset());
 
 describe("registration and lifecycle", () => {
+	test("keeps implicit test-file hooks and results separate in a shared realm", async () => {
+		const calls: Array<string> = [];
+		runtime.__beginFile("a.test.ts");
+		runtime.beforeEach(() => calls.push("a beforeEach"));
+		runtime.test("first", () => calls.push("a test"));
+		runtime.__endFile();
+		runtime.__beginFile("b.test.ts");
+		runtime.beforeEach(() => calls.push("b beforeEach"));
+		runtime.test("second", () => calls.push("b test"));
+		runtime.__endFile();
+
+		const result = await run();
+		expect(calls).toEqual(["a beforeEach", "a test", "b beforeEach", "b test"]);
+		expect(result.files).toEqual([
+			{
+				file: "a.test.ts",
+				passed: 1,
+				failed: 0,
+				skipped: 0,
+				todo: 0,
+				durationMs: expect.any(Number),
+			},
+			{
+				file: "b.test.ts",
+				passed: 1,
+				failed: 0,
+				skipped: 0,
+				todo: 0,
+				durationMs: expect.any(Number),
+			},
+		]);
+		expect(
+			result.events.find(
+				(event) => event.type === "test-pass" && event.name.endsWith("first"),
+			),
+		).toMatchObject({ file: "a.test.ts" });
+	});
+
 	test("registers nested names and orders hooks", async () => {
 		const calls: Array<string> = [];
 		runtime.beforeAll(() => calls.push("outer beforeAll"));

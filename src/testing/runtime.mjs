@@ -403,11 +403,12 @@ expect.arrayContaining = function arrayContaining(value) {
 
 let registrationIndex = 0;
 
-function createSuite(name, parent, mode = "normal") {
+function createSuite(name, parent, mode = "normal", file = parent?.file) {
 	return {
 		name,
 		parent,
 		mode,
+		file,
 		index: registrationIndex++,
 		suites: [],
 		tests: [],
@@ -417,6 +418,36 @@ function createSuite(name, parent, mode = "normal") {
 
 let root = createSuite("", null);
 let currentSuite = root;
+let currentFile;
+
+/**
+ * Establish the implicit top-level suite for one test-image entry. These
+ * globals are intentionally internal: the compiler-injected file boundary is
+ * independent from the public matcher/registration API.
+ */
+export function __beginFile(file) {
+	if (typeof file !== "string" || file.length === 0) {
+		throw new TypeError("test file identity must be a non-empty string");
+	}
+	if (currentSuite !== root || currentFile !== undefined) {
+		throw new Error("test file registration boundaries cannot overlap");
+	}
+	const suite = createSuite(file, root, "normal", file);
+	root.suites.push(suite);
+	currentSuite = suite;
+	currentFile = file;
+}
+
+export function __endFile() {
+	if (currentFile === undefined || currentSuite.parent !== root) {
+		throw new Error("test file registration boundary is not active");
+	}
+	currentSuite = root;
+	currentFile = undefined;
+}
+
+globalThis.__maligatorTestBeginFile = __beginFile;
+globalThis.__maligatorTestEndFile = __endFile;
 
 function requireCallback(kind, callback) {
 	if (typeof callback !== "function") throw new TypeError(`${kind} requires a callback`);
@@ -626,6 +657,7 @@ export async function __run(options) {
 	const emit = (event) => events.push({ ...event, sequence: sequence++ });
 	const result = {
 		events,
+		files: [],
 		passed: 0,
 		failed: 0,
 		skipped: 0,
@@ -635,6 +667,23 @@ export async function __run(options) {
 	};
 	const random =
 		options.shuffleSeed === undefined ? undefined : seededRandom(options.shuffleSeed);
+	const fileResults = new Map();
+	const fileResult = (file) => {
+		if (file === undefined) return undefined;
+		let value = fileResults.get(file);
+		if (value === undefined) {
+			value = {
+				file,
+				passed: 0,
+				failed: 0,
+				skipped: 0,
+				todo: 0,
+				durationMs: 0,
+			};
+			fileResults.set(file, value);
+		}
+		return value;
+	};
 	if (result.focused) {
 		emit({
 			type: "diagnostic",
@@ -643,7 +692,7 @@ export async function __run(options) {
 		});
 	}
 
-	const runHook = async (hook, hookName, ownerName) => {
+	const runHook = async (hook, hookName, ownerName, file) => {
 		try {
 			await callWithTimeout(hook.callback, options.timeoutMs);
 			return undefined;
@@ -652,28 +701,38 @@ export async function __run(options) {
 				error,
 				error?.name === "TimeoutError" ? "timeout" : "hook",
 			);
-			emit({ type: "hook-fail", name: ownerName, hook: hookName, failure });
+			emit({
+				type: "hook-fail",
+				name: ownerName,
+				hook: hookName,
+				failure,
+				...(file === undefined ? {} : { file }),
+			});
 			return failure;
 		}
 	};
 
 	const runTest = async (testCase) => {
 		const name = fullTestName(testCase);
+		const file = testCase.suite.file;
+		const perFile = fileResult(file);
 		if (testCase.mode === "todo") {
 			result.todo++;
-			emit({ type: "test-todo", name });
+			if (perFile) perFile.todo++;
+			emit({ type: "test-todo", name, ...(file === undefined ? {} : { file }) });
 			return;
 		}
 		if (testCase.mode === "skip" || suiteOrAncestorMode(testCase.suite, "skip")) {
 			result.skipped++;
-			emit({ type: "test-skip", name });
+			if (perFile) perFile.skipped++;
+			emit({ type: "test-skip", name, ...(file === undefined ? {} : { file }) });
 			return;
 		}
 		const testStartedAt = Date.now();
 		const failures = [];
-		emit({ type: "test-start", name });
+		emit({ type: "test-start", name, ...(file === undefined ? {} : { file }) });
 		for (const hook of hookChain(testCase.suite, "beforeEach")) {
-			const hookFailure = await runHook(hook, "beforeEach", name);
+			const hookFailure = await runHook(hook, "beforeEach", name, file);
 			if (hookFailure) failures.push(hookFailure);
 		}
 		if (failures.length === 0) {
@@ -686,27 +745,50 @@ export async function __run(options) {
 			}
 		}
 		for (const hook of hookChain(testCase.suite, "afterEach")) {
-			const hookFailure = await runHook(hook, "afterEach", name);
+			const hookFailure = await runHook(hook, "afterEach", name, file);
 			if (hookFailure) failures.push(hookFailure);
 		}
 		const durationMs = Date.now() - testStartedAt;
 		if (failures.length === 0) {
 			result.passed++;
-			emit({ type: "test-pass", name, durationMs });
+			if (perFile) perFile.passed++;
+			emit({
+				type: "test-pass",
+				name,
+				durationMs,
+				...(file === undefined ? {} : { file }),
+			});
 		} else {
 			result.failed++;
-			emit({ type: "test-fail", name, durationMs, failures });
+			if (perFile) perFile.failed++;
+			emit({
+				type: "test-fail",
+				name,
+				durationMs,
+				failures,
+				...(file === undefined ? {} : { file }),
+			});
 		}
 	};
 
 	const runSuite = async (suite) => {
 		const suiteName = fullSuiteName(suite);
-		if (suite.parent) emit({ type: "suite-start", name: suiteName });
+		const file = suite.file;
+		const topLevelFile = file !== undefined && suite.parent === root;
+		const suiteStartedAt = topLevelFile ? Date.now() : 0;
+		if (suite.parent)
+			emit({
+				type: "suite-start",
+				name: suiteName,
+				...(file === undefined ? {} : { file }),
+			});
 		let beforeAllFailed = false;
 		for (const hook of suite.hooks.beforeAll) {
-			if (await runHook(hook, "beforeAll", suiteName)) {
+			if (await runHook(hook, "beforeAll", suiteName, file)) {
 				beforeAllFailed = true;
 				result.failed++;
+				const perFile = fileResult(file);
+				if (perFile) perFile.failed++;
 			}
 		}
 		if (!beforeAllFailed) {
@@ -729,9 +811,19 @@ export async function __run(options) {
 			}
 		}
 		for (const hook of suite.hooks.afterAll) {
-			if (await runHook(hook, "afterAll", suiteName)) result.failed++;
+			if (await runHook(hook, "afterAll", suiteName, file)) {
+				result.failed++;
+				const perFile = fileResult(file);
+				if (perFile) perFile.failed++;
+			}
 		}
-		if (suite.parent) emit({ type: "suite-end", name: suiteName });
+		if (topLevelFile) fileResult(file).durationMs += Date.now() - suiteStartedAt;
+		if (suite.parent)
+			emit({
+				type: "suite-end",
+				name: suiteName,
+				...(file === undefined ? {} : { file }),
+			});
 	};
 
 	for (let repeat = 1; repeat <= options.repeat; repeat++) {
@@ -740,6 +832,7 @@ export async function __run(options) {
 		if (options.bail && result.failed > 0) break;
 	}
 	result.durationMs = Date.now() - startedAt;
+	result.files = [...fileResults.values()];
 	emit({
 		type: "run-end",
 		passed: result.passed,
@@ -755,4 +848,5 @@ export function __reset() {
 	registrationIndex = 0;
 	root = createSuite("", null);
 	currentSuite = root;
+	currentFile = undefined;
 }

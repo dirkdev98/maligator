@@ -102,12 +102,21 @@ export type RuntimeTestEvent = {
 	type: string;
 	sequence: number;
 	name?: string;
+	file?: string;
 	message?: string;
 	failures?: Array<RuntimeTestFailure>;
 };
 
 export interface RuntimeRunResult {
 	events: Array<RuntimeTestEvent>;
+	files: Array<{
+		file: string;
+		passed: number;
+		failed: number;
+		skipped: number;
+		todo: number;
+		durationMs: number;
+	}>;
 	passed: number;
 	failed: number;
 	skipped: number;
@@ -117,4 +126,6 @@ export interface RuntimeRunResult {
 }
 
 export function __run(options: RuntimeRunOptions): Promise<RuntimeRunResult>;
+export function __beginFile(file: string): void;
+export function __endFile(): void;
 export function __reset(): void;
