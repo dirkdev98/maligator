@@ -21,6 +21,7 @@ export function stripCompactTypes(source: string, filePath = "<typescript>"): st
 	blankGenericSyntax(source, code, output, words, filePath);
 	blankVariableAnnotations(source, code, output, words, filePath);
 	blankFunctionAnnotations(source, code, output, words, filePath);
+	blankMethodAnnotations(source, code, output, filePath);
 	blankArrowAnnotations(source, code, output, filePath);
 	blankTypeAssertions(source, code, output, words, filePath);
 	blankNonNullAssertions(source, code, output);
@@ -1037,6 +1038,63 @@ function blankFunctionAnnotations(
 			const end = findTypeEnd(source, code, after + 1, ["{"], filePath);
 			blank(output, source, after, end);
 		}
+	}
+}
+
+function parameterListHasAnnotation(
+	source: string,
+	code: Array<boolean>,
+	open: number,
+	close: number,
+): boolean {
+	let nested = 0;
+	let initialized = false;
+	for (let i = open + 1; i < close; i++) {
+		if (!code[i]) continue;
+		const char = source[i]!;
+		if (char === "(" || char === "[" || char === "{") nested++;
+		else if (char === ")" || char === "]" || char === "}") nested--;
+		else if (nested === 0 && char === "=" && source[i + 1] !== ">") initialized = true;
+		else if (nested === 0 && char === ",") initialized = false;
+		else if (nested === 0 && !initialized && char === ":") return true;
+	}
+	return false;
+}
+
+/**
+ * Erase annotations on object-literal methods. Class methods are handled by
+ * blankClassMembers and `function` declarations by blankFunctionAnnotations;
+ * this scanner recognizes the remaining `name(parameters) [: Return] {` shape.
+ */
+function blankMethodAnnotations(
+	source: string,
+	code: Array<boolean>,
+	output: Array<string>,
+	filePath: string,
+): void {
+	const controlWords = new Set(["if", "for", "while", "switch", "catch", "with"]);
+	for (let open = 0; open < source.length; open++) {
+		if (!code[open] || source[open] !== "(") continue;
+		const preceding = wordAtPreviousCode(source, code, open);
+		if (preceding === undefined || controlWords.has(preceding.text)) continue;
+		const close = matching(source, code, open, "(", ")", filePath);
+		const after = nextCodeIndex(source, code, close + 1);
+		let returnTypeEnd = -1;
+		if (source[after] === ":") {
+			returnTypeEnd = findTypeEnd(source, code, after + 1, ["{"], filePath);
+			if (source[returnTypeEnd] !== "{") continue;
+		} else if (source[after] !== "{") {
+			continue;
+		}
+		if (
+			returnTypeEnd < 0 &&
+			!parameterListHasAnnotation(source, code, open, close)
+		) {
+			continue;
+		}
+		blankParameterAnnotations(source, code, output, open, close, filePath);
+		if (returnTypeEnd >= 0) blank(output, source, after, returnTypeEnd);
+		open = close;
 	}
 }
 

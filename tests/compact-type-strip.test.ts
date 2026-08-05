@@ -213,6 +213,22 @@ const validateExercise = (
 		).toThrow(/parameter properties/);
 	});
 
+	test("strips object method parameters and return annotations", () => {
+		const source = `export const store = {
+	set(name: string, value: number): void {
+		void name;
+		void value;
+	},
+	async load(name: string): Promise<number | undefined> {
+		return name.length;
+	},
+};
+`;
+		expect(stripCompactTypes(source, "object-methods.ts")).toBe(
+			stripTypesWithTypeScript(source, "object-methods.ts"),
+		);
+	});
+
 	test("strips ambient and type-only namespaces but rejects runtime namespaces", () => {
 		const source = `declare const ambient: string;
 export declare function load<Value>(value: Value): Value;
