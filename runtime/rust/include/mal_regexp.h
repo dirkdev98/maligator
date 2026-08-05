@@ -21,8 +21,9 @@ extern "C" {
 #endif
 
 /* Bump alongside MAL_REGEXP_ABI_VERSION in regexp.rs on breaking changes.
- * v2: added mal_regexp_free (GC finalization). */
-#define MAL_REGEXP_ABI_VERSION 2u
+ * v2: added mal_regexp_free (GC finalization).
+ * v3: added immutable-subject identity and execution-path reporting. */
+#define MAL_REGEXP_ABI_VERSION 3u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -35,6 +36,12 @@ uint32_t mal_regexp_abi_version(void);
 #define MAL_REGEXP_FLAG_UNICODE      (1u << 3) /* u */
 #define MAL_REGEXP_FLAG_UNICODE_SETS (1u << 4) /* v */
 
+/* Execution-path flags written by mal_regexp_exec. */
+#define MAL_REGEXP_EXEC_ASCII       (1u << 0)
+#define MAL_REGEXP_EXEC_CACHE_HIT   (1u << 1)
+#define MAL_REGEXP_EXEC_CACHE_FILL  (1u << 2)
+#define MAL_REGEXP_EXEC_NON_ASCII   (1u << 3)
+
 /* Compile `pattern` (UTF-16) with `flags`. Returns an opaque, leaked handle, or
  * NULL when the pattern is invalid (the C side throws SyntaxError). The handle
  * lives as long as the owning RegExp object; freed by mal_regexp_free. */
@@ -45,14 +52,19 @@ void *mal_regexp_compile(const uint16_t *pattern, size_t pattern_len, uint32_t f
 void mal_regexp_free(void *handle);
 
 /* Execute `handle` against `subject` (UTF-16) starting at code-unit index
- * `start`. Returns the capture-group count (>= 1, including group 0) on a match,
+ * `start`. `subject_identity` is the owning immutable MalString cell; the heap
+ * identity/epoch pair prevents stale cache hits after an address is reclaimed.
+ * Returns the capture-group count (>= 1, including group 0) on a match,
  * 0 on no match, -1 on error. On a match, writes (start,end) code-unit index
  * pairs for groups 0..N into caps_out (2 int32 per group; -1,-1 for a group that
  * did not participate), up to caps_cap slots, and retains the match for the
  * named-group queries below. If the return exceeds caps_cap/2 the buffer was too
  * small — grow it and call mal_regexp_copy_captures (no re-match). */
 int32_t mal_regexp_exec(void *handle, const uint16_t *subject, size_t subject_len,
-                        size_t start, int32_t *caps_out, int32_t caps_cap);
+                        size_t start, const void *subject_identity,
+                        uint64_t heap_identity, uint32_t heap_epoch,
+                        int32_t *caps_out, int32_t caps_cap,
+                        uint32_t *execution_flags_out);
 
 /* Copy the most recent successful match's capture pairs into caps_out without
  * re-matching; returns the group count, or 0 if no match is retained. */

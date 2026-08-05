@@ -27,7 +27,13 @@ use crate::ffi::{nullable_u16_slice, write_utf8};
 
 /// ABI version, mirrored by MAL_REGEXP_ABI_VERSION in mal_regexp.h.
 /// v2: added `mal_regexp_free` (GC finalization, gc_todo.md D2).
-pub const MAL_REGEXP_ABI_VERSION: u32 = 2;
+/// v3: added immutable-subject identity and execution-path reporting.
+pub const MAL_REGEXP_ABI_VERSION: u32 = 3;
+
+const EXEC_ASCII: u32 = 1 << 0;
+const EXEC_CACHE_HIT: u32 = 1 << 1;
+const EXEC_CACHE_FILL: u32 = 1 << 2;
+const EXEC_NON_ASCII: u32 = 1 << 3;
 
 // Flag bits, mirrored by MAL_REGEXP_FLAG_* in mal_regexp.h. g/y/d are
 // engine-external and deliberately absent.
@@ -43,6 +49,7 @@ const COMPILE_FLAGS: u32 = FLAG_IGNORE_CASE
     | FLAG_UNICODE_SETS;
 
 const PATTERN_CACHE_CAPACITY: usize = 24;
+const ASCII_SUBJECT_CACHE_MAX_BYTES: usize = 64 * 1024;
 
 #[derive(PartialEq, Eq)]
 struct PatternCacheKey {
@@ -72,7 +79,24 @@ struct CompiledPattern {
     re: Arc<Regex>,
     /// `u`/`v` patterns match over code points; everything else over code units.
     unicode_mode: bool,
+    /// The ASCII backend can use regress's anchored and literal-prefix searchers.
+    /// Ignore-case stays on UTF-16 because that backend documents only ASCII
+    /// folding, while ECMAScript may require Unicode-aware canonicalization.
+    ascii_eligible: bool,
+    subject_cache: Option<SubjectCache>,
     last: Option<Match>,
+}
+
+struct SubjectCache {
+    heap_identity: u64,
+    heap_epoch: u32,
+    string_identity: usize,
+    /// Defer the O(n) ASCII classification until the same immutable subject is
+    /// executed a second time. One-shot exec/search calls stay zero-copy UTF-16.
+    classified: bool,
+    /// None is a negative cache entry for a non-ASCII or deliberately uncached
+    /// oversized subject.
+    ascii: Option<String>,
 }
 
 /// Returns the ABI version baked into this archive.
@@ -168,6 +192,8 @@ pub unsafe extern "C" fn mal_regexp_compile(
             let boxed = Box::new(CompiledPattern {
                 re,
                 unicode_mode,
+                ascii_eligible: flags & FLAG_IGNORE_CASE == 0,
+                subject_cache: None,
                 last: None,
             });
             Box::into_raw(boxed) as *mut core::ffi::c_void
@@ -224,9 +250,16 @@ pub unsafe extern "C" fn mal_regexp_exec(
     subject: *const u16,
     subject_len: usize,
     start: usize,
+    subject_identity: *const core::ffi::c_void,
+    heap_identity: u64,
+    heap_epoch: u32,
     caps_out: *mut i32,
     caps_cap: i32,
+    execution_flags_out: *mut u32,
 ) -> i32 {
+    if !execution_flags_out.is_null() {
+        unsafe { *execution_flags_out = 0 };
+    }
     if handle.is_null() {
         return -1;
     }
@@ -240,11 +273,65 @@ pub unsafe extern "C" fn mal_regexp_exec(
     // lone surrogates and Unicode mode can apply its own pair handling.
     let subj = unsafe { nullable_u16_slice(subject, subject_len) };
 
-    let found = if cp.unicode_mode {
+    let mut execution_flags = 0;
+    let found = if cp.ascii_eligible {
+        let string_identity = subject_identity as usize;
+        let cache_hit = cp.subject_cache.as_ref().is_some_and(|cache| {
+            cache.heap_identity == heap_identity
+                && cache.heap_epoch == heap_epoch
+                && cache.string_identity == string_identity
+        });
+        if !cache_hit {
+            cp.subject_cache = Some(SubjectCache {
+                heap_identity,
+                heap_epoch,
+                string_identity,
+                classified: false,
+                ascii: None,
+            });
+            execution_flags |= EXEC_CACHE_FILL;
+            if cp.unicode_mode {
+                cp.re.find_from_utf16(subj, start).next()
+            } else {
+                cp.re.find_from_ucs2(subj, start).next()
+            }
+        } else {
+            let cache = cp.subject_cache.as_mut().expect("cache key matched");
+            if !cache.classified {
+                cache.ascii = if subj.len() <= ASCII_SUBJECT_CACHE_MAX_BYTES
+                    && subj.iter().all(|unit| *unit <= 0x7f)
+                {
+                    let bytes = subj.iter().map(|unit| *unit as u8).collect::<Vec<_>>();
+                    Some(unsafe { String::from_utf8_unchecked(bytes) })
+                } else {
+                    None
+                };
+                cache.classified = true;
+                execution_flags |= EXEC_CACHE_FILL;
+            } else {
+                execution_flags |= EXEC_CACHE_HIT;
+            }
+
+            if let Some(ascii) = cache.ascii.as_ref() {
+                execution_flags |= EXEC_ASCII;
+                cp.re.find_from_ascii(ascii, start).next()
+            } else {
+                execution_flags |= EXEC_NON_ASCII;
+                if cp.unicode_mode {
+                    cp.re.find_from_utf16(subj, start).next()
+                } else {
+                    cp.re.find_from_ucs2(subj, start).next()
+                }
+            }
+        }
+    } else if cp.unicode_mode {
         cp.re.find_from_utf16(subj, start).next()
     } else {
         cp.re.find_from_ucs2(subj, start).next()
     };
+    if !execution_flags_out.is_null() {
+        unsafe { *execution_flags_out = execution_flags };
+    }
 
     match found {
         Some(m) => {
@@ -379,6 +466,8 @@ mod tests {
         let second_subject = utf16("a");
         let mut first_caps = [-1; 6];
         let mut second_caps = [-1; 6];
+        let mut first_flags = 0;
+        let mut second_flags = 0;
 
         assert_eq!(
             unsafe {
@@ -387,8 +476,12 @@ mod tests {
                     first_subject.as_ptr(),
                     first_subject.len(),
                     0,
+                    first_subject.as_ptr().cast(),
+                    1,
+                    0,
                     first_caps.as_mut_ptr(),
                     first_caps.len() as i32,
+                    &mut first_flags,
                 )
             },
             3
@@ -400,14 +493,20 @@ mod tests {
                     second_subject.as_ptr(),
                     second_subject.len(),
                     0,
+                    second_subject.as_ptr().cast(),
+                    1,
+                    0,
                     second_caps.as_mut_ptr(),
                     second_caps.len() as i32,
+                    &mut second_flags,
                 )
             },
             3
         );
         assert_eq!(first_caps, [0, 2, 0, 1, 1, 2]);
         assert_eq!(second_caps, [0, 1, 0, 1, -1, -1]);
+        assert_eq!(first_flags, EXEC_CACHE_FILL);
+        assert_eq!(second_flags, EXEC_CACHE_FILL);
 
         let mut retained = [-1; 6];
         assert_eq!(
@@ -426,6 +525,83 @@ mod tests {
             mal_regexp_free(first);
             mal_regexp_free(second);
         }
+    }
+
+    #[test]
+    fn repeated_immutable_subjects_use_ascii_after_one_utf16_probe() {
+        clear_cache();
+        let pattern = utf16("value=([0-9]+)");
+        let subject = utf16("prefix value=42 suffix");
+        let compiled = unsafe { handle(&pattern, 0) };
+        let mut caps = [-1; 4];
+        let mut flags = 0;
+
+        for (expected_flags, epoch) in [
+            (EXEC_CACHE_FILL, 7),
+            (EXEC_ASCII | EXEC_CACHE_FILL, 7),
+            (EXEC_ASCII | EXEC_CACHE_HIT, 7),
+            (EXEC_CACHE_FILL, 8),
+        ] {
+            assert_eq!(
+                unsafe {
+                    mal_regexp_exec(
+                        compiled,
+                        subject.as_ptr(),
+                        subject.len(),
+                        0,
+                        subject.as_ptr().cast(),
+                        11,
+                        epoch,
+                        caps.as_mut_ptr(),
+                        caps.len() as i32,
+                        &mut flags,
+                    )
+                },
+                2
+            );
+            assert_eq!(flags, expected_flags);
+            assert_eq!(caps, [7, 15, 13, 15]);
+        }
+
+        unsafe { mal_regexp_free(compiled) };
+    }
+
+    #[test]
+    fn repeated_non_ascii_subjects_remain_on_utf16_without_rescanning() {
+        clear_cache();
+        let pattern = utf16(".");
+        let subject = utf16("é");
+        let compiled = unsafe { handle(&pattern, 0) };
+        let mut caps = [-1; 2];
+        let mut flags = 0;
+
+        for expected_flags in [
+            EXEC_CACHE_FILL,
+            EXEC_NON_ASCII | EXEC_CACHE_FILL,
+            EXEC_NON_ASCII | EXEC_CACHE_HIT,
+        ] {
+            assert_eq!(
+                unsafe {
+                    mal_regexp_exec(
+                        compiled,
+                        subject.as_ptr(),
+                        subject.len(),
+                        0,
+                        subject.as_ptr().cast(),
+                        11,
+                        7,
+                        caps.as_mut_ptr(),
+                        caps.len() as i32,
+                        &mut flags,
+                    )
+                },
+                1
+            );
+            assert_eq!(flags, expected_flags);
+            assert_eq!(caps, [0, 1]);
+        }
+
+        unsafe { mal_regexp_free(compiled) };
     }
 
     #[test]

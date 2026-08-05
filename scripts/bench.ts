@@ -179,6 +179,15 @@ interface StringMetrics {
 	reverseSearchMemcmpCodeUnits: number;
 	splitPlannedMatches: number;
 	splitPlanOverflows: number;
+	caseCalls: number;
+	caseInputCodeUnits: number;
+	caseReuses: number;
+	caseChangedAllocations: number;
+	regexpExecCalls: number;
+	regexpAsciiExecCalls: number;
+	regexpAsciiCacheHits: number;
+	regexpAsciiCacheFills: number;
+	regexpUtf16ExecCalls: number;
 	stringAllocations: number;
 	inlineStringAllocations: number;
 	dependentStringAllocations: number;
@@ -659,6 +668,12 @@ function parsePerfStringAllocationStat(stderr: string, field: string): number {
 	return match ? Number(match[1]) : 0;
 }
 
+function parsePerfRegexpStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes("[perf-regexp-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
 function benchModule(runs: number): ModuleMetrics {
 	const binary = buildNativeBinary({
 		fixture: "bench/module-alloc.mjs",
@@ -753,6 +768,15 @@ function benchString(runs: number): StringMetrics {
 		),
 		splitPlannedMatches: parsePerfStringStat(perfStderr, "split_planned_matches"),
 		splitPlanOverflows: parsePerfStringStat(perfStderr, "split_plan_overflows"),
+		caseCalls: parsePerfStringStat(perfStderr, "case_calls"),
+		caseInputCodeUnits: parsePerfStringStat(perfStderr, "case_input_code_units"),
+		caseReuses: parsePerfStringStat(perfStderr, "case_reuses"),
+		caseChangedAllocations: parsePerfStringStat(perfStderr, "case_changed_allocations"),
+		regexpExecCalls: parsePerfRegexpStat(perfStderr, "exec_calls"),
+		regexpAsciiExecCalls: parsePerfRegexpStat(perfStderr, "ascii_exec_calls"),
+		regexpAsciiCacheHits: parsePerfRegexpStat(perfStderr, "ascii_cache_hits"),
+		regexpAsciiCacheFills: parsePerfRegexpStat(perfStderr, "ascii_cache_fills"),
+		regexpUtf16ExecCalls: parsePerfRegexpStat(perfStderr, "utf16_exec_calls"),
 		stringAllocations: parsePerfStringAllocationStat(perfStderr, "allocations"),
 		inlineStringAllocations: parsePerfStringAllocationStat(
 			perfStderr,
@@ -1507,7 +1531,9 @@ interface StringProfileTarget {
 }
 
 function stringProfileRow(name: string, stderr: string): void {
+	const strings = perfReportFields(stderr, "[perf-string-stats]");
 	const allocations = perfReportFields(stderr, "[perf-string-allocation-stats]");
+	const regexp = perfReportFields(stderr, "[perf-regexp-stats]");
 	const total = allocations.allocations ?? 0;
 	const short =
 		(allocations.length_0 ?? 0) +
@@ -1520,7 +1546,7 @@ function stringProfileRow(name: string, stderr: string): void {
 	const averageLength = total === 0 ? 0 : (allocations.code_units ?? 0) / total;
 	const shortPercent = total === 0 ? 0 : (short * 100) / total;
 	console.log(
-		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}`,
+		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}  case ${String(strings.case_calls ?? 0).padStart(8)} / ${String(strings.case_reuses ?? 0).padStart(8)} reuse  regexp ${String(regexp.exec_calls ?? 0).padStart(8)} / ${String(regexp.ascii_exec_calls ?? 0).padStart(8)} ASCII`,
 	);
 }
 
@@ -1605,7 +1631,7 @@ function benchStringProfile(): void {
 	];
 	console.log("string-profile (one instrumented execution per runtime workload):");
 	console.log(
-		"  workload                    strings   short          inline   average       copied/dependent/cons/flatten activity",
+		"  workload                    strings   short          inline   average       copied/dependent/cons/flatten activity           case calls / reuse              regexp exec / ASCII",
 	);
 	for (const target of targets) runStringProfileTarget(target);
 }
@@ -1914,6 +1940,7 @@ function benchHttpProfile(requests: number, conc: number): void {
 					stderr,
 					"[perf-string-allocation-stats]",
 				);
+				const regexp = perfReportFields(stderr, "[perf-regexp-stats]");
 				const properties = perfReportFields(stderr, "[perf-property-stats]");
 				const transitions = perfReportFields(stderr, "[perf-shape-transition-stats]");
 				const calls = perfReportFields(stderr, "[perf-call-cache-stats]");
@@ -1956,6 +1983,12 @@ function benchHttpProfile(requests: number, conc: number): void {
 				);
 				console.log(
 					`    strings/request     ${perfPerRequest(stringAllocations, "allocations", requests).toFixed(1)} allocations, ${perfPerRequest(stringAllocations, "code_units", requests).toFixed(1)} logical units, ${perfPerRequest(stringAllocations, "copy_code_units", requests).toFixed(1)} copied, ${perfPerRequest(stringAllocations, "ascii_code_units", requests).toFixed(1)} widened`,
+				);
+				console.log(
+					`    case/request        ${perfPerRequest(strings, "case_calls", requests).toFixed(1)} calls, ${perfPerRequest(strings, "case_reuses", requests).toFixed(1)} reused, ${perfPerRequest(strings, "case_changed_allocations", requests).toFixed(1)} changed allocations`,
+				);
+				console.log(
+					`    regexp/request      ${perfPerRequest(regexp, "exec_calls", requests).toFixed(1)} exec, ${perfPerRequest(regexp, "ascii_exec_calls", requests).toFixed(1)} ASCII, ${perfPerRequest(regexp, "ascii_cache_hits", requests).toFixed(1)} ASCII cache hits`,
 				);
 				console.log(
 					`    string storage      ${perfPerRequest(stringAllocations, "inline_allocations", requests).toFixed(1)} inline, ${perfPerRequest(stringAllocations, "dependent_allocations", requests).toFixed(1)} dependent, ${perfPerRequest(stringAllocations, "cons_allocations", requests).toFixed(1)} cons, ${perfPerRequest(stringAllocations, "flatten_calls", requests).toFixed(1)} flatten calls/request`,
@@ -2113,6 +2146,12 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(
 			`  split     ${entry.string.splitPlannedMatches} planned matches, ${entry.string.splitPlanOverflows} overflow fallbacks`,
+		);
+		console.log(
+			`  case      ${entry.string.caseCalls} calls over ${entry.string.caseInputCodeUnits} code units, ${entry.string.caseReuses} reused, ${entry.string.caseChangedAllocations} changed allocations`,
+		);
+		console.log(
+			`  regexp    ${entry.string.regexpExecCalls} execs: ${entry.string.regexpAsciiExecCalls} ASCII (${entry.string.regexpAsciiCacheHits} cache hits, ${entry.string.regexpAsciiCacheFills} fills), ${entry.string.regexpUtf16ExecCalls} UTF-16`,
 		);
 		console.log(
 			`  strings   ${entry.string.stringAllocations} allocations: ${entry.string.inlineStringAllocations} inline, ${entry.string.dependentStringAllocations} dependent, ${entry.string.consStringAllocations} cons; ${entry.string.stringFlattenCalls} flatten calls`,

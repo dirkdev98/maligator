@@ -125,7 +125,9 @@ static void mal_perf_stats_print(void) {
         "reverse_search_last_unit_rejects=%llu "
         "reverse_search_memcmp_calls=%llu reverse_search_memcmp_code_units=%llu "
         "split_planned_matches=%llu split_plan_overflows=%llu "
-        "char_code_at_direct_hits=%llu char_code_at_direct_fallbacks=%llu\n",
+        "char_code_at_direct_hits=%llu char_code_at_direct_fallbacks=%llu "
+        "case_calls=%llu case_input_code_units=%llu case_reuses=%llu "
+        "case_changed_allocations=%llu case_changed_code_units=%llu\n",
         (unsigned long long) mal_perf_stats.key_equals_calls,
         (unsigned long long) mal_perf_stats.key_pointer_hits,
         (unsigned long long) mal_perf_stats.key_string_fallbacks,
@@ -157,7 +159,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_split_planned_matches,
         (unsigned long long) mal_perf_stats.string_split_plan_overflows,
         (unsigned long long) mal_perf_stats.string_char_code_at_direct_hits,
-        (unsigned long long) mal_perf_stats.string_char_code_at_direct_fallbacks
+        (unsigned long long) mal_perf_stats.string_char_code_at_direct_fallbacks,
+        (unsigned long long) mal_perf_stats.string_case_calls,
+        (unsigned long long) mal_perf_stats.string_case_input_code_units,
+        (unsigned long long) mal_perf_stats.string_case_reuses,
+        (unsigned long long) mal_perf_stats.string_case_changed_allocations,
+        (unsigned long long) mal_perf_stats.string_case_changed_code_units
     );
     fprintf(
         stderr,
@@ -212,6 +219,19 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_flatten_cons_nodes,
         (unsigned long long) mal_perf_stats.string_flatten_flat_leaves,
         (unsigned long long) mal_perf_stats.string_flatten_shared_copies
+    );
+    fprintf(
+        stderr,
+        "[perf-regexp-stats] exec_calls=%llu ascii_exec_calls=%llu "
+        "ascii_cache_hits=%llu ascii_cache_fills=%llu utf16_exec_calls=%llu "
+        "utf16_cache_hits=%llu utf16_cache_fills=%llu\n",
+        (unsigned long long) mal_perf_stats.regexp_exec_calls,
+        (unsigned long long) mal_perf_stats.regexp_ascii_exec_calls,
+        (unsigned long long) mal_perf_stats.regexp_ascii_cache_hits,
+        (unsigned long long) mal_perf_stats.regexp_ascii_cache_fills,
+        (unsigned long long) mal_perf_stats.regexp_utf16_exec_calls,
+        (unsigned long long) mal_perf_stats.regexp_utf16_cache_hits,
+        (unsigned long long) mal_perf_stats.regexp_utf16_cache_fills
     );
     fprintf(
         stderr,

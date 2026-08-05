@@ -111,6 +111,18 @@ if (
 ) {
 	throw new Error("broken reverse string search");
 }
+if (
+	"already-lower".toLowerCase() !== "already-lower" ||
+	"mixed-Case".toLowerCase() !== "mixed-case" ||
+	"ALREADY-UPPER".toUpperCase() !== "ALREADY-UPPER" ||
+	"mixed-Case".toUpperCase() !== "MIXED-CASE"
+) {
+	throw new Error("broken string case conversion");
+}
+const regexpProbe = /stats/;
+if (!regexpProbe.test("perf-stats") || !regexpProbe.test("perf-stats")) {
+	throw new Error("broken regexp ASCII execution cache");
+}
 
 function loadStringMethod(value) {
 	return value.charCodeAt;

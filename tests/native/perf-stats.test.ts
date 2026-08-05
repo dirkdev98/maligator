@@ -112,6 +112,17 @@ describe("opt-in performance statistics", () => {
 		expect(field(strings, "reverse_search_candidates")).toBeGreaterThan(0);
 		expect(field(strings, "reverse_search_first_unit_rejects")).toBeGreaterThan(0);
 		expect(field(strings, "reverse_search_memcmp_calls")).toBeGreaterThan(0);
+		expect(field(strings, "case_calls")).toBe(4);
+		expect(field(strings, "case_input_code_units")).toBeGreaterThan(0);
+		expect(field(strings, "case_reuses")).toBe(2);
+		expect(field(strings, "case_changed_allocations")).toBe(2);
+		expect(field(strings, "case_changed_code_units")).toBeGreaterThan(0);
+
+		const regexp = reportLine(result.stderr, "[perf-regexp-stats]");
+		expect(field(regexp, "exec_calls")).toBeGreaterThan(0);
+		expect(field(regexp, "ascii_exec_calls")).toBeGreaterThan(0);
+		expect(field(regexp, "ascii_cache_fills")).toBeGreaterThan(0);
+		expect(field(regexp, "utf16_exec_calls")).toBe(1);
 
 		const stringAllocations = reportLine(result.stderr, "[perf-string-allocation-stats]");
 		expect(

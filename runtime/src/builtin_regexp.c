@@ -500,9 +500,35 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
 
     int32_t stack_caps[64];
     int32_t *caps = stack_caps;
+    u32 execution_flags = 0;
     int32_t ngroups = mal_regexp_exec(
-        re->matcher, (const uint16_t *) mal_string_code_units(s), length, (size_t) last_index, caps, 64
+        re->matcher,
+        (const uint16_t *) mal_string_code_units(s),
+        length,
+        (size_t) last_index,
+        s,
+        vm->heap.identity,
+        vm->heap.epoch,
+        caps,
+        64,
+        &execution_flags
     );
+    MAL_PERF_COUNT(regexp_exec_calls);
+    if ((execution_flags & MAL_REGEXP_EXEC_ASCII) != 0) {
+        MAL_PERF_COUNT(regexp_ascii_exec_calls);
+        if ((execution_flags & MAL_REGEXP_EXEC_CACHE_HIT) != 0) {
+            MAL_PERF_COUNT(regexp_ascii_cache_hits);
+        } else if ((execution_flags & MAL_REGEXP_EXEC_CACHE_FILL) != 0) {
+            MAL_PERF_COUNT(regexp_ascii_cache_fills);
+        }
+    } else {
+        MAL_PERF_COUNT(regexp_utf16_exec_calls);
+        if ((execution_flags & MAL_REGEXP_EXEC_CACHE_HIT) != 0) {
+            MAL_PERF_COUNT(regexp_utf16_cache_hits);
+        } else if ((execution_flags & MAL_REGEXP_EXEC_CACHE_FILL) != 0) {
+            MAL_PERF_COUNT(regexp_utf16_cache_fills);
+        }
+    }
     if (ngroups < 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "regular expression execution failed");
         return mal_value_new_undefined();

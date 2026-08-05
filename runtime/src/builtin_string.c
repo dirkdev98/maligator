@@ -972,17 +972,47 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     usize length = mal_string_length(string);
     const c16 *source = mal_string_code_units(string);
-    c16 *code_units = malloc(sizeof(c16) * length);
+    MAL_PERF_COUNT(string_case_calls);
+    MAL_PERF_ADD(string_case_input_code_units, length);
 
-    for (usize i = 0; i < length; i++) {
-        c16 code_unit = source[i];
-        code_unit = to_upper ? mal_ascii_to_upper(code_unit) : mal_ascii_to_lower(code_unit);
-        code_units[i] = code_unit;
+    usize changed_at = 0;
+    while (changed_at < length) {
+        c16 source_unit = source[changed_at];
+        c16 mapped_unit =
+            to_upper ? mal_ascii_to_upper(source_unit) : mal_ascii_to_lower(source_unit);
+        if (mapped_unit != source_unit) break;
+        changed_at++;
+    }
+    if (changed_at == length) {
+        MAL_PERF_COUNT(string_case_reuses);
+        return mal_value_from_string(string);
     }
 
-    MalValue result = mal_builtin_string_from_units(vm, code_units, length);
-    free(code_units);
-    return result;
+    MAL_PERF_COUNT(string_case_changed_allocations);
+    MAL_PERF_ADD(string_case_changed_code_units, length);
+    if (length <= MAL_STRING_INLINE_CODE_UNITS) {
+        c16 code_units[MAL_STRING_INLINE_CODE_UNITS];
+        if (changed_at > 0) {
+            memcpy(code_units, source, sizeof(c16) * changed_at);
+        }
+        for (usize i = changed_at; i < length; i++) {
+            code_units[i] =
+                to_upper ? mal_ascii_to_upper(source[i]) : mal_ascii_to_lower(source[i]);
+        }
+        return mal_builtin_string_from_units(vm, code_units, length);
+    }
+
+    c16 *code_units = mal_heap_alloc_raw(&vm->heap, sizeof(c16) * length);
+    if (changed_at > 0) {
+        memcpy(code_units, source, sizeof(c16) * changed_at);
+    }
+    for (usize i = changed_at; i < length; i++) {
+        code_units[i] =
+            to_upper ? mal_ascii_to_upper(source[i]) : mal_ascii_to_lower(source[i]);
+    }
+    return mal_value_from_string(
+        mal_string_new_owned(&vm->heap, code_units, length)
+    );
 }
 
 static MalValue mal_builtin_string_prototype_to_upper_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
