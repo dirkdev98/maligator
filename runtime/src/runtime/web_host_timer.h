@@ -6,6 +6,7 @@
 
 typedef struct MalVm MalVm;
 typedef struct MalObject MalObject;
+typedef struct MalAsyncContext MalAsyncContext;
 typedef bool (*MalHostMacrotaskDrain)(MalVm *vm);
 
 /*
@@ -29,6 +30,9 @@ typedef struct MalHostTimer {
     MalValue callback;
     MalValue *args; /* heap copy of setTimeout extra args (nullptr if none) */
     i32 arg_count;
+#if MAL_NODE
+    MalAsyncContext *async_context;
+#endif
     i64 repeat_ms;  /* normalized setInterval period, including zero */
     bool repeating; /* distinguishes zero-delay intervals from one-shot timers */
     bool ready;     /* timer fired; callback awaits the macrotask phase */

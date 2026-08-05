@@ -301,6 +301,15 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_NODE_SQLITE_DATABASE_OBJECT,
     /** node:sqlite StatementSync instances. See runtime/node_sqlite_object.h. */
     MAL_HEAP_NODE_SQLITE_STATEMENT_OBJECT,
+    /**
+     * Internal immutable AsyncLocalStorage context frame. This is not exposed to
+     * JavaScript; it is boxed only while carried by native closure slots.
+     */
+    MAL_HEAP_ASYNC_CONTEXT,
+    /** Internal mutable state for one AsyncLocalStorage instance. */
+    MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE,
+    /** Internal captured execution context for one AsyncResource instance. */
+    MAL_HEAP_ASYNC_RESOURCE_STATE,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked

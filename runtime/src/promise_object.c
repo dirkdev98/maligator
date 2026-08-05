@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "async_context.h"
 #include "gc.h"
 #include "microtask.h"
 #include "vm.h"
@@ -124,6 +125,9 @@ static void mal_promise_append_reaction_internal(
     reaction->cap_reject = cap_reject;
     reaction->on_fulfilled = on_fulfilled;
     reaction->on_rejected = on_rejected;
+#if MAL_NODE
+    reaction->async_context = mal_async_context_capture(vm);
+#endif
 
     if (promise->reactions_tail == nullptr) {
         promise->reactions_head = reaction;
@@ -138,6 +142,11 @@ static void mal_promise_append_reaction_internal(
     mal_gc_card(&promise->object.header, on_rejected);
     mal_gc_card(&promise->object.header, cap_resolve);
     mal_gc_card(&promise->object.header, cap_reject);
+#if MAL_NODE
+    mal_gc_card(
+        &promise->object.header,
+        mal_async_internal_value((MalHeapHeader *) reaction->async_context));
+#endif
 }
 
 void mal_promise_append_reaction(
@@ -189,10 +198,17 @@ void mal_promise_free_reactions(MalVm *vm, MalPromiseReaction *list) {
         mal_gc_write_barrier(list->on_rejected);
         mal_gc_write_barrier(list->cap_resolve);
         mal_gc_write_barrier(list->cap_reject);
+#if MAL_NODE
+        mal_gc_write_barrier(
+            mal_async_internal_value((MalHeapHeader *) list->async_context));
+#endif
         list->on_fulfilled = mal_value_new_undefined();
         list->on_rejected = mal_value_new_undefined();
         list->cap_resolve = mal_value_new_undefined();
         list->cap_reject = mal_value_new_undefined();
+#if MAL_NODE
+        list->async_context = nullptr;
+#endif
         mal_promise_release_reaction(vm, list);
         list = next;
     }
@@ -203,10 +219,17 @@ static void mal_promise_recycle_reaction(MalVm *vm, MalPromiseReaction *reaction
     mal_gc_write_barrier(reaction->on_rejected);
     mal_gc_write_barrier(reaction->cap_resolve);
     mal_gc_write_barrier(reaction->cap_reject);
+#if MAL_NODE
+    mal_gc_write_barrier(
+        mal_async_internal_value((MalHeapHeader *) reaction->async_context));
+#endif
     reaction->on_fulfilled = mal_value_new_undefined();
     reaction->on_rejected = mal_value_new_undefined();
     reaction->cap_resolve = mal_value_new_undefined();
     reaction->cap_reject = mal_value_new_undefined();
+#if MAL_NODE
+    reaction->async_context = nullptr;
+#endif
 
     if (vm->reaction_pool_count >= MAL_PROMISE_REACTION_POOL_LIMIT) {
         mal_promise_release_reaction(vm, reaction);
@@ -244,18 +267,39 @@ static void mal_promise_trigger_reactions(MalVm *vm, MalPromiseReaction *list, b
     while (list != nullptr) {
         MalPromiseReaction *next = list->next;
         if (list->cap_resolve == mal_promise_await_reaction_tag()) {
+#if MAL_NODE
+            mal_vm_enqueue_await_job_in_context(
+                vm, list->cap_reject, is_reject, argument, list->async_context);
+#else
             mal_vm_enqueue_await_job(vm, list->cap_reject, is_reject, argument);
+#endif
         } else if (list->cap_resolve == mal_promise_async_generator_return_reaction_tag()) {
+#if MAL_NODE
+            mal_vm_enqueue_async_generator_return_job_in_context(
+                vm,
+                list->cap_reject,
+                list->on_fulfilled,
+                is_reject,
+                argument,
+                list->async_context);
+#else
             mal_vm_enqueue_async_generator_return_job(
                 vm,
                 list->cap_reject,
                 list->on_fulfilled,
                 is_reject,
                 argument);
+#endif
         } else {
             MalValue handler = is_reject ? list->on_rejected : list->on_fulfilled;
+#if MAL_NODE
+            mal_vm_enqueue_reaction_job_in_context(
+                vm, handler, is_reject, list->cap_resolve, list->cap_reject,
+                argument, list->async_context);
+#else
             mal_vm_enqueue_reaction_job(
                 vm, handler, is_reject, list->cap_resolve, list->cap_reject, argument);
+#endif
         }
         mal_promise_recycle_reaction(vm, list);
         list = next;

@@ -188,6 +188,10 @@ MalFiber *mal_fiber_create(
     f->exec.frame_seq = 0;
     f->exec.completion = (MalCompletion) {
         .kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+#if MAL_NODE
+    /* A newly spawned execution inherits the context active at creation. */
+    f->exec.async_context = vm->async_context;
+#endif
     f->exec.root_frame_head = nullptr;
     f->exec.root_span_head = nullptr;
 #if MAL_REALMS
@@ -261,6 +265,9 @@ void mal_fiber_save_exec(MalFiber *f, MalVm *vm) {
     f->exec.gc_native_frames = vm->gc_native_frames;
     f->exec.frame_seq = vm->frame_seq;
     f->exec.completion = vm->completion;
+#if MAL_NODE
+    f->exec.async_context = vm->async_context;
+#endif
     f->exec.root_frame_head = mal_root_frame_head;
     f->exec.root_span_head = mal_root_span_head;
 #if MAL_REALMS
@@ -284,6 +291,9 @@ void mal_fiber_load_exec(MalFiber *f, MalVm *vm) {
     vm->gc_native_frames = f->exec.gc_native_frames;
     vm->frame_seq = f->exec.frame_seq;
     vm->completion = f->exec.completion;
+#if MAL_NODE
+    vm->async_context = f->exec.async_context;
+#endif
     mal_root_frame_head = f->exec.root_frame_head;
     mal_root_span_head = f->exec.root_span_head;
 #if MAL_REALMS

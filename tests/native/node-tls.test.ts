@@ -12,7 +12,12 @@ const ca = readFileSync("tests/fixtures/tls/localhost-cert.pem", "utf8");
 const certificate = readFileSync("tests/fixtures/tls/localhost-server-cert.pem", "utf8");
 const key = readFileSync("tests/fixtures/tls/localhost-server-key.pem", "utf8");
 
-async function run(binary: string, insecure: boolean, stress: boolean): Promise<string> {
+async function run(
+	binary: string,
+	insecure: boolean,
+	stress: boolean,
+	args: Array<string> = [],
+): Promise<string> {
 	const server = createServer({ cert: certificate, key }, (socket: TLSSocket) => {
 		socket.on("data", (chunk: Buffer) => {
 			if (chunk.toString("utf8") !== "ping")
@@ -31,7 +36,7 @@ async function run(binary: string, insecure: boolean, stress: boolean): Promise<
 		return await new Promise<string>((resolve, reject) => {
 			execFile(
 				binary,
-				[],
+				args,
 				{
 					encoding: "utf8",
 					env: {
@@ -78,6 +83,9 @@ describe("node:tls socket wrapping", () => {
 	}, 600_000);
 
 	it("wraps an existing socket with verified and insecure TLS", async () => {
+		expect(
+			await run(process.execPath, false, false, ["tests/local/node-tls-socket.cjs"]),
+		).toContain("NODE TLS PASS");
 		for (const binary of binaries) {
 			expect(await run(binary, true, false)).toContain("NODE TLS PASS");
 			expect(await run(binary, false, false)).toContain("NODE TLS PASS");

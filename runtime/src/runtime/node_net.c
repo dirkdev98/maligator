@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "async_context.h"
 #include "function_object.h"
 #include "dns.h"
 #include "gc.h"
@@ -42,12 +43,15 @@ typedef struct MalNodeNetWrite {
     usize length;
     usize offset;
     MalValue callback;
+    MalAsyncContext *async_context;
     struct MalNodeNetWrite *next;
 } MalNodeNetWrite;
 
 typedef struct MalNodeNetSocketState {
     MalVm *vm;
     MalValue receiver;
+    MalAsyncContext *async_context;
+    MalAsyncContext *tls_context;
 #if MAL_REALMS
     MalRealm *realm;
 #endif
@@ -304,6 +308,7 @@ static MalValue net_socket_connect(
     }
     state->vm = vm;
     state->receiver = receiver;
+    state->async_context = mal_async_context_capture(vm);
     state->destroy_error = mal_value_new_undefined();
     state->next_write_token = 1;
 #if MAL_REALMS
@@ -440,6 +445,7 @@ static MalValue net_socket_write(
     write->bytes = bytes;
     write->length = length;
     write->callback = callback;
+    write->async_context = mal_async_context_capture(vm);
     if (state->write_tail == nullptr) state->write_head = write;
     else state->write_tail->next = write;
     state->write_tail = write;
@@ -593,9 +599,15 @@ static void net_scan_roots(MalVm *vm, void *data) {
         if (state->vm != vm) continue;
         mal_gc_mark_value(state->receiver);
         mal_gc_mark_value(state->destroy_error);
+        mal_gc_mark_value(
+            mal_async_internal_value((MalHeapHeader *) state->async_context));
+        mal_gc_mark_value(
+            mal_async_internal_value((MalHeapHeader *) state->tls_context));
         for (MalNodeNetWrite *write = state->write_head;
              write != nullptr; write = write->next) {
             mal_gc_mark_value(write->callback);
+            mal_gc_mark_value(
+                mal_async_internal_value((MalHeapHeader *) write->async_context));
         }
     }
 }
@@ -611,12 +623,16 @@ static void net_write_complete(MalVm *vm, MalNodeNetSocketState *state, u64 toke
         state->write_head = write->next;
         if (state->write_head == nullptr) state->write_tail = nullptr;
         MalValue callback = write->callback;
+        MalAsyncContext *async_context = write->async_context;
         free(write->bytes);
         free(write);
         if (!mal_value_is_undefined(callback)) {
             MalRootSpan root;
             mal_gc_root(&root, &callback, 1);
+            MalAsyncContextScope scope;
+            mal_async_context_scope_enter(vm, &scope, async_context);
             mal_vm_call_value(vm, callback, mal_value_new_undefined(), nullptr, 0);
+            mal_async_context_scope_exit(vm, &scope);
             mal_gc_unroot(&root);
         }
     }
@@ -632,7 +648,7 @@ static void net_write_complete(MalVm *vm, MalNodeNetSocketState *state, u64 toke
     }
 }
 
-static void net_dispatch_progress(
+static void net_dispatch_progress_in_context(
     MalVm *vm, MalNodeNetSocketState *state, MalTcpProgress *progress) {
     if (progress->kind == MAL_TCP_SECURE_CONNECTED) {
         net_set(vm, state->receiver, "encrypted", mal_value_new_boolean(true));
@@ -668,17 +684,39 @@ static void net_dispatch_progress(
     }
 }
 
+static void net_dispatch_progress(
+    MalVm *vm, MalNodeNetSocketState *state, MalTcpProgress *progress) {
+    MalAsyncContext *context =
+        state->tls_context != nullptr
+            && (progress->kind == MAL_TCP_SECURE_CONNECTED
+                || progress->kind == MAL_TCP_DATA)
+        ? state->tls_context
+        : state->async_context;
+    MalAsyncContextScope scope;
+    mal_async_context_scope_enter(vm, &scope, context);
+    net_dispatch_progress_in_context(vm, state, progress);
+    mal_async_context_scope_exit(vm, &scope);
+}
+
 bool mal_node_net_start_tls(
     MalVm *vm, MalValue socket,
     const byte *server_name, usize server_name_length,
     const byte *ca_pem, usize ca_pem_length,
     const byte *alpn, usize alpn_length, bool insecure) {
     MalNodeNetSocketState *state = net_state(socket);
-    return state != nullptr && state->vm == vm && state->connected
-        && !state->destroyed && !state->resolving
-        && mal_tcp_start_tls(mal_host(vm), state->operation,
+    if (state == nullptr || state->vm != vm || !state->connected
+        || state->destroyed || state->resolving
+        || !mal_tcp_start_tls(mal_host(vm), state->operation,
             server_name, server_name_length, ca_pem, ca_pem_length,
-            alpn, alpn_length, insecure);
+            alpn, alpn_length, insecure)) {
+        return false;
+    }
+    /* TLSWrap is a new async resource even though this adapter reuses the
+     * JavaScript socket object. TLS handshake/data progress inherits the context
+     * active at tls.connect(); the underlying handle still owns terminal events,
+     * and queued writes retain their per-write captures. */
+    state->tls_context = mal_async_context_capture(vm);
+    return true;
 }
 
 static void net_dispatch_terminal(
@@ -762,6 +800,8 @@ bool mal_node_net_drain(MalVm *vm) {
     MalRealm *saved_realm = vm->current_realm;
     mal_realm_switch(vm, state->realm);
 #endif
+    MalAsyncContextScope async_scope;
+    mal_async_context_scope_enter(vm, &async_scope, state->async_context);
     if (state->resolving) {
         bool resolved = !state->destroyed && task.kind == MAL_HOST_TASK_TERMINAL
             && task.result == MAL_HOST_TERMINAL_OK && data != nullptr
@@ -774,6 +814,7 @@ bool mal_node_net_drain(MalVm *vm) {
 #if MAL_REALMS
             mal_realm_switch(vm, saved_realm);
 #endif
+            mal_async_context_scope_exit(vm, &async_scope);
             return true;
         }
         MalHostTask failed = {
@@ -789,6 +830,7 @@ bool mal_node_net_drain(MalVm *vm) {
 #if MAL_REALMS
         mal_realm_switch(vm, saved_realm);
 #endif
+        mal_async_context_scope_exit(vm, &async_scope);
         return true;
     }
     if (task.kind == MAL_HOST_TASK_TERMINAL
@@ -802,6 +844,7 @@ bool mal_node_net_drain(MalVm *vm) {
 #if MAL_REALMS
             mal_realm_switch(vm, saved_realm);
 #endif
+            mal_async_context_scope_exit(vm, &async_scope);
             return true;
         }
         MalTcpTerminal terminal = {.error = EHOSTUNREACH};
@@ -812,6 +855,7 @@ bool mal_node_net_drain(MalVm *vm) {
 #if MAL_REALMS
         mal_realm_switch(vm, saved_realm);
 #endif
+        mal_async_context_scope_exit(vm, &async_scope);
         return true;
     }
     if (task.kind == MAL_HOST_TASK_PROGRESS) {
@@ -825,6 +869,7 @@ bool mal_node_net_drain(MalVm *vm) {
 #if MAL_REALMS
     mal_realm_switch(vm, saved_realm);
 #endif
+    mal_async_context_scope_exit(vm, &async_scope);
     mal_tcp_progress_free(task.kind == MAL_HOST_TASK_PROGRESS ? data : nullptr);
     mal_tcp_terminal_free(task.kind == MAL_HOST_TASK_TERMINAL ? data : nullptr);
     mal_host_task_release(&host->tasks, &task);

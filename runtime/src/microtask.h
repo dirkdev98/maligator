@@ -4,6 +4,7 @@
 #include "value.h"
 
 typedef struct MalVm MalVm;
+typedef struct MalAsyncContext MalAsyncContext;
 
 /**
  * Promise jobs and typed async continuations enqueued on the microtask queue.
@@ -24,6 +25,10 @@ typedef struct MalJob {
     struct MalJob *next;
     MalJobKind kind;
     bool is_reject;
+#if MAL_NODE
+    /** Execution context captured when this job was registered. */
+    MalAsyncContext *async_context;
+#endif
     union {
         /** Promise reaction or typed async-await payload. */
         struct {
@@ -43,7 +48,11 @@ typedef struct MalJob {
     } as;
 } MalJob;
 
+#if MAL_NODE
+static_assert(sizeof(MalJob) == 56, "Node MalJob must remain a 56-byte pooled node");
+#else
 static_assert(sizeof(MalJob) == 48, "MalJob must remain a 48-byte pooled node");
+#endif
 
 /** Process-wide Promise pool counters used by the benchmark tracker. */
 u64 mal_promise_job_allocation_count(void);
@@ -65,6 +74,17 @@ void mal_vm_enqueue_reaction_job(
     MalValue cap_reject,
     MalValue argument
 );
+#if MAL_NODE
+void mal_vm_enqueue_reaction_job_in_context(
+    MalVm *vm,
+    MalValue handler,
+    bool is_reject,
+    MalValue cap_resolve,
+    MalValue cap_reject,
+    MalValue argument,
+    MalAsyncContext *context
+);
+#endif
 
 /** Append a typed async-await resumption job to the microtask queue. */
 void mal_vm_enqueue_await_job(
@@ -73,6 +93,15 @@ void mal_vm_enqueue_await_job(
     bool is_reject,
     MalValue argument
 );
+#if MAL_NODE
+void mal_vm_enqueue_await_job_in_context(
+    MalVm *vm,
+    MalValue state,
+    bool is_reject,
+    MalValue argument,
+    MalAsyncContext *context
+);
+#endif
 
 /** Append an AsyncGeneratorAwaitReturn fulfillment/rejection continuation. */
 void mal_vm_enqueue_async_generator_return_job(
@@ -82,6 +111,16 @@ void mal_vm_enqueue_async_generator_return_job(
     bool is_reject,
     MalValue argument
 );
+#if MAL_NODE
+void mal_vm_enqueue_async_generator_return_job_in_context(
+    MalVm *vm,
+    MalValue generator,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument,
+    MalAsyncContext *context
+);
+#endif
 
 /** Append a resolve-thenable job to the microtask queue. */
 void mal_vm_enqueue_thenable_job(

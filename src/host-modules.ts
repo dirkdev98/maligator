@@ -188,7 +188,7 @@ const ASSERT_STRICT: HostModuleSpec = {
 
 const ASYNC_HOOKS: HostModuleSpec = {
 	id: "node:async_hooks",
-	named: ["AsyncResource"],
+	named: ["AsyncLocalStorage", "AsyncResource"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:async_hooks"),
 };

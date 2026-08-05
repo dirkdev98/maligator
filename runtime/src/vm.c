@@ -563,6 +563,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->captured_trace_live_count = 0;
 
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+#if MAL_NODE
+    vm->async_context = nullptr;
+#endif
 
     vm->job_head = nullptr;
     vm->job_tail = nullptr;

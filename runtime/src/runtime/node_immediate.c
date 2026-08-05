@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "async_context.h"
 #include "gc.h"
 #include "intrinsics.h"
 #include "object.h"
@@ -18,6 +19,7 @@ typedef struct MalNodeImmediate {
     MalValue callback;
     MalValue *args;
     i32 arg_count;
+    MalAsyncContext *async_context;
     struct MalNodeImmediate *previous;
     struct MalNodeImmediate *next;
 } MalNodeImmediate;
@@ -41,6 +43,8 @@ static void node_immediate_scan_roots(MalVm *vm, void *data) {
         if (immediate->vm != vm) continue;
         mal_gc_mark_value(immediate->callback);
         mal_gc_mark_values(immediate->args, immediate->arg_count);
+        mal_gc_mark_value(
+            mal_async_internal_value((MalHeapHeader *) immediate->async_context));
     }
 }
 
@@ -53,12 +57,16 @@ static bool node_immediate_drain(MalVm *vm) {
     MalValue callback = immediate->callback;
     MalValue *args = immediate->args;
     i32 arg_count = immediate->arg_count;
+    MalAsyncContext *async_context = immediate->async_context;
     free(immediate);
     MalRootSpan callback_root;
     mal_gc_root(&callback_root, &callback, 1);
     MalRootSpan args_root;
     if (arg_count > 0) mal_gc_root(&args_root, args, arg_count);
+    MalAsyncContextScope async_scope;
+    mal_async_context_scope_enter(vm, &async_scope, async_context);
     mal_vm_call_value(vm, callback, mal_value_new_undefined(), args, arg_count);
+    mal_async_context_scope_exit(vm, &async_scope);
     if (arg_count > 0) mal_gc_unroot(&args_root);
     mal_gc_unroot(&callback_root);
     free(args);
@@ -84,6 +92,7 @@ static MalValue node_set_immediate(
     immediate->id = node_immediate_next_id++;
     immediate->vm = vm;
     immediate->callback = args[0];
+    immediate->async_context = mal_async_context_capture(vm);
     immediate->arg_count = argc - 1;
     if (immediate->arg_count > 0) {
         immediate->args = malloc(sizeof(MalValue) * (usize) immediate->arg_count);

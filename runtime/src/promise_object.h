@@ -6,6 +6,7 @@
 
 typedef struct MalVm MalVm;
 typedef struct MalGeneratorObject MalGeneratorObject;
+typedef struct MalAsyncContext MalAsyncContext;
 
 /**
  * [[PromiseState]]. A promise is settled at most once: the state transitions
@@ -33,10 +34,19 @@ typedef struct MalPromiseReaction {
     MalValue cap_reject;
     MalValue on_fulfilled;
     MalValue on_rejected;
+#if MAL_NODE
+    /** Context captured when PerformPromiseThen/await registered this reaction. */
+    MalAsyncContext *async_context;
+#endif
 } MalPromiseReaction;
 
+#if MAL_NODE
+static_assert(sizeof(MalPromiseReaction) == 48,
+              "Node MalPromiseReaction must remain a 48-byte slab node");
+#else
 static_assert(sizeof(MalPromiseReaction) == 40,
               "MalPromiseReaction must remain a 40-byte slab node");
+#endif
 
 typedef struct MalPromiseObject {
     MalObject object;

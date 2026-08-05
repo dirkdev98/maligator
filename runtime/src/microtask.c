@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "async_context.h"
 #include "builtin_async_generator.h"
 #include "builtin_promise.h"
 #include "gc.h"
@@ -112,6 +113,9 @@ static MalJob *mal_job_new(MalVm *vm, MalJobKind kind) {
     job->next = nullptr;
     job->kind = kind;
     job->is_reject = false;
+#if MAL_NODE
+    job->async_context = mal_async_context_capture(vm);
+#endif
     return job;
 }
 
@@ -169,6 +173,11 @@ static void mal_job_recycle(MalVm *vm, MalJob *job) {
         job->as.thenable.resolve_fn = mal_value_new_undefined();
         job->as.thenable.reject_fn = mal_value_new_undefined();
     }
+#if MAL_NODE
+    mal_gc_write_barrier(
+        mal_async_internal_value((MalHeapHeader *) job->async_context));
+    job->async_context = nullptr;
+#endif
 
     // The deleted root edges are shaded and cleared; stop publishing the node
     // before it can be freed by the bounded-pool overflow path.
@@ -199,6 +208,29 @@ static void mal_vm_enqueue(MalVm *vm, MalJob *job) {
     vm->job_tail = job;
 }
 
+static void mal_vm_enqueue_reaction_job_with_context(
+    MalVm *vm,
+    MalValue handler,
+    bool is_reject,
+    MalValue cap_resolve,
+    MalValue cap_reject,
+    MalValue argument
+#if MAL_NODE
+    , MalAsyncContext *context
+#endif
+) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_REACTION);
+#if MAL_NODE
+    job->async_context = context;
+#endif
+    job->as.reaction.handler = handler;
+    job->is_reject = is_reject;
+    job->as.reaction.cap_resolve = cap_resolve;
+    job->as.reaction.cap_reject = cap_reject;
+    job->as.reaction.argument = argument;
+    mal_vm_enqueue(vm, job);
+}
+
 void mal_vm_enqueue_reaction_job(
     MalVm *vm,
     MalValue handler,
@@ -207,12 +239,48 @@ void mal_vm_enqueue_reaction_job(
     MalValue cap_reject,
     MalValue argument
 ) {
-    MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_REACTION);
-    job->as.reaction.handler = handler;
+    mal_vm_enqueue_reaction_job_with_context(
+        vm, handler, is_reject, cap_resolve, cap_reject, argument
+#if MAL_NODE
+        , mal_async_context_capture(vm)
+#endif
+    );
+}
+
+#if MAL_NODE
+void mal_vm_enqueue_reaction_job_in_context(
+    MalVm *vm,
+    MalValue handler,
+    bool is_reject,
+    MalValue cap_resolve,
+    MalValue cap_reject,
+    MalValue argument,
+    MalAsyncContext *context
+) {
+    mal_vm_enqueue_reaction_job_with_context(
+        vm, handler, is_reject, cap_resolve, cap_reject, argument, context);
+}
+#endif
+
+static void mal_vm_enqueue_await_job_with_context(
+    MalVm *vm,
+    MalValue state,
+    bool is_reject,
+    MalValue argument
+#if MAL_NODE
+    , MalAsyncContext *context
+#endif
+) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_ASYNC_AWAIT);
+#if MAL_NODE
+    job->async_context = context;
+#endif
+    job->as.reaction.handler = state;
     job->is_reject = is_reject;
-    job->as.reaction.cap_resolve = cap_resolve;
-    job->as.reaction.cap_reject = cap_reject;
+    job->as.reaction.cap_resolve = mal_value_new_undefined();
+    job->as.reaction.cap_reject = mal_value_new_undefined();
     job->as.reaction.argument = argument;
+    MAL_PERF_COUNT(promise_await_typed_jobs);
     mal_vm_enqueue(vm, job);
 }
 
@@ -222,13 +290,45 @@ void mal_vm_enqueue_await_job(
     bool is_reject,
     MalValue argument
 ) {
-    MalJob *job = mal_job_new(vm, MAL_JOB_ASYNC_AWAIT);
-    job->as.reaction.handler = state;
+    mal_vm_enqueue_await_job_with_context(
+        vm, state, is_reject, argument
+#if MAL_NODE
+        , mal_async_context_capture(vm)
+#endif
+    );
+}
+
+#if MAL_NODE
+void mal_vm_enqueue_await_job_in_context(
+    MalVm *vm,
+    MalValue state,
+    bool is_reject,
+    MalValue argument,
+    MalAsyncContext *context
+) {
+    mal_vm_enqueue_await_job_with_context(vm, state, is_reject, argument, context);
+}
+#endif
+
+static void mal_vm_enqueue_async_generator_return_job_with_context(
+    MalVm *vm,
+    MalValue generator,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument
+#if MAL_NODE
+    , MalAsyncContext *context
+#endif
+) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_ASYNC_GENERATOR_RETURN);
+#if MAL_NODE
+    job->async_context = context;
+#endif
+    job->as.reaction.handler = generator;
     job->is_reject = is_reject;
-    job->as.reaction.cap_resolve = mal_value_new_undefined();
+    job->as.reaction.cap_resolve = realm_anchor;
     job->as.reaction.cap_reject = mal_value_new_undefined();
     job->as.reaction.argument = argument;
-    MAL_PERF_COUNT(promise_await_typed_jobs);
     mal_vm_enqueue(vm, job);
 }
 
@@ -239,14 +339,27 @@ void mal_vm_enqueue_async_generator_return_job(
     bool is_reject,
     MalValue argument
 ) {
-    MalJob *job = mal_job_new(vm, MAL_JOB_ASYNC_GENERATOR_RETURN);
-    job->as.reaction.handler = generator;
-    job->is_reject = is_reject;
-    job->as.reaction.cap_resolve = realm_anchor;
-    job->as.reaction.cap_reject = mal_value_new_undefined();
-    job->as.reaction.argument = argument;
-    mal_vm_enqueue(vm, job);
+    mal_vm_enqueue_async_generator_return_job_with_context(
+        vm, generator, realm_anchor, is_reject, argument
+#if MAL_NODE
+        , mal_async_context_capture(vm)
+#endif
+    );
 }
+
+#if MAL_NODE
+void mal_vm_enqueue_async_generator_return_job_in_context(
+    MalVm *vm,
+    MalValue generator,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument,
+    MalAsyncContext *context
+) {
+    mal_vm_enqueue_async_generator_return_job_with_context(
+        vm, generator, realm_anchor, is_reject, argument, context);
+}
+#endif
 
 void mal_vm_enqueue_thenable_job(
     MalVm *vm,
@@ -442,6 +555,10 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         // Keep the dequeued job's MalValues reachable: the handler can trigger a
         // collection, and its capabilities are settled afterwards.
         vm->active_job = job;
+#if MAL_NODE
+        MalAsyncContextScope async_scope;
+        mal_async_context_scope_enter(vm, &async_scope, job->async_context);
+#endif
         switch (job->kind) {
             case MAL_JOB_PROMISE_REACTION:
                 mal_vm_run_reaction_job(vm, job);
@@ -456,6 +573,9 @@ void mal_vm_drain_microtasks(MalVm *vm) {
                 mal_vm_run_async_generator_return_job(vm, job);
                 break;
         }
+#if MAL_NODE
+        mal_async_context_scope_exit(vm, &async_scope);
+#endif
         mal_job_recycle(vm, job);
 
         // A job must not leave a pending throw behind to poison the next job's

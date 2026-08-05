@@ -1352,6 +1352,14 @@ typedef struct MalVm {
     /** Preallocated, permanently rooted exception used when allocation cannot continue. */
     MalValue allocation_error;
 
+#if MAL_NODE
+    /**
+     * Current immutable AsyncLocalStorage binding chain. It belongs to the
+     * executing fiber and is captured by async resources at creation time.
+     */
+    struct MalAsyncContext *async_context;
+#endif
+
     /**
      * PromiseJobs microtask queue (singly-linked FIFO). Settling a promise and
      * Promise.prototype.then append jobs here; the top-level loop drains them to

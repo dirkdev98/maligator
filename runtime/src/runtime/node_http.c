@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "ascii.h"
+#include "async_context.h"
 #include "array_object.h"
 #include "array_buffer_object.h"
 #include "function_object.h"
@@ -111,6 +112,7 @@ static const MalNodeHttpStatus http_statuses[] = {
 typedef struct MalNodeHttpServerState {
     MalVm *vm;
     MalValue receiver;
+    MalAsyncContext *async_context;
     MalHttpServer *native;
     u16 port;
     char host[16];
@@ -158,6 +160,7 @@ typedef struct MalNodeHttpResponseWrite {
     usize length;
     usize offset;
     MalValue callback;
+    MalAsyncContext *async_context;
     bool end_write;
     struct MalNodeHttpResponseWrite *next;
 } MalNodeHttpResponseWrite;
@@ -171,6 +174,8 @@ typedef struct MalNodeHttpRequestBody {
 typedef struct MalNodeHttpRequestState {
     MalVm *vm;
     MalValue server_receiver;
+    MalAsyncContext *async_context;
+    MalAsyncContext *end_context;
 #if MAL_REALMS
     MalRealm *realm;
 #endif
@@ -239,6 +244,8 @@ static_assert(sizeof(MalNodeHttpRequestState) <= 512,
 
 typedef struct MalNodeHttpClientState {
     MalVm *vm;
+    MalAsyncContext *async_context;
+    MalAsyncContext *end_context;
 #if MAL_REALMS
     MalRealm *realm;
 #endif
@@ -728,6 +735,7 @@ static void http_queue_request(
     MAL_PERF_COUNT(http_request_state_allocations);
     state->vm = server->vm;
     state->server_receiver = server->receiver;
+    state->async_context = server->async_context;
 #if MAL_REALMS
     state->realm = server->realm;
 #endif
@@ -1688,6 +1696,7 @@ static bool http_response_enqueue(
     write->bytes = bytes;
     write->length = length;
     write->callback = callback;
+    write->async_context = mal_async_context_capture(vm);
     write->end_write = end_write;
     if (state->write_tail == nullptr) state->write_head = write;
     else state->write_tail->next = write;
@@ -2216,6 +2225,7 @@ static bool http_client_enqueue(
     write->bytes = bytes;
     write->length = length;
     write->callback = callback;
+    write->async_context = mal_async_context_capture(vm);
     write->end_write = end_write;
     if (state->write_tail == nullptr) state->write_head = write;
     else state->write_tail->next = write;
@@ -2457,11 +2467,16 @@ static MalValue http_client_end(
     }
     state->end_callback = argc > 0 && mal_value_is_callable(args[argc - 1])
         ? args[argc - 1] : mal_value_new_undefined();
-    if (!mal_value_is_undefined(state->end_callback)
-        && !http_once(vm, receiver, "finish", state->end_callback)) {
-        http_client_cancel(vm, state, false, vm->completion.value);
-        state->ending = false;
-        return mal_value_new_undefined();
+    state->end_context = mal_async_context_capture(vm);
+    if (!mal_value_is_undefined(state->end_callback)) {
+        MalValue bound = mal_async_context_bind_callback(
+            vm, state->end_callback, state->end_context);
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !http_once(vm, receiver, "finish", bound)) {
+            http_client_cancel(vm, state, false, vm->completion.value);
+            state->ending = false;
+            return mal_value_new_undefined();
+        }
     }
     if (!http_client_pump(vm, state)) {
         state->ending = false;
@@ -2726,17 +2741,22 @@ static void http_response_dispatch_write(
     state->active_write_bytes = 0;
     state->write_in_flight = false;
     MalValue callback = mal_value_new_undefined();
+    MalAsyncContext *callback_context = nullptr;
     if (write->offset == write->length) {
         state->write_head = write->next;
         if (state->write_head == nullptr) state->write_tail = nullptr;
         callback = write->callback;
+        callback_context = write->async_context;
         free(write->bytes);
         free(write);
     }
     MalRootSpan root;
     mal_gc_root(&root, &callback, 1);
     if (!mal_value_is_undefined(callback)) {
+        MalAsyncContextScope scope;
+        mal_async_context_scope_enter(vm, &scope, callback_context);
         mal_vm_call_value(vm, callback, mal_value_new_undefined(), nullptr, 0);
+        mal_async_context_scope_exit(vm, &scope);
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW
         && state->backpressured
@@ -2843,15 +2863,23 @@ static void http_response_dispatch_terminal(
              write = write->next) {
             roots[1] = write->callback;
             if (!mal_value_is_undefined(roots[1])) {
+                MalAsyncContextScope scope;
+                mal_async_context_scope_enter(
+                    vm, &scope, write->async_context);
                 mal_vm_call_value(
                     vm, roots[1], mal_value_new_undefined(), roots, 1);
+                mal_async_context_scope_exit(vm, &scope);
             }
         }
         roots[1] = request->end_callback;
         if (vm->completion.kind != MAL_COMPLETION_THROW
             && !mal_value_is_undefined(roots[1])) {
+            MalAsyncContextScope scope;
+            mal_async_context_scope_enter(
+                vm, &scope, request->end_context);
             mal_vm_call_value(
                 vm, roots[1], request->response, roots, 1);
+            mal_async_context_scope_exit(vm, &scope);
         }
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
             http_emit(vm, request->response, "close");
@@ -2925,11 +2953,16 @@ static MalValue http_response_end(
     }
     state->end_callback = argc > 0 && mal_value_is_callable(args[argc - 1])
         ? args[argc - 1] : mal_value_new_undefined();
-    if (!mal_value_is_undefined(state->end_callback)
-        && !http_once(vm, receiver, "finish", state->end_callback)) {
-        mal_http_conn_abort(state->conn);
-        state->ending = false;
-        return mal_value_new_undefined();
+    state->end_context = mal_async_context_capture(vm);
+    if (!mal_value_is_undefined(state->end_callback)) {
+        MalValue bound = mal_async_context_bind_callback(
+            vm, state->end_callback, state->end_context);
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !http_once(vm, receiver, "finish", bound)) {
+            mal_http_conn_abort(state->conn);
+            state->ending = false;
+            return mal_value_new_undefined();
+        }
     }
     if (!http_response_pump(state)) {
         state->ending = false;
@@ -2945,7 +2978,11 @@ static void http_scan_roots(MalVm *vm, void *data) {
     (void) data;
     for (MalNodeHttpServerState *state = http_servers; state != nullptr;
          state = state->next) {
-        if (state->vm == vm) mal_gc_mark_value(state->receiver);
+        if (state->vm == vm) {
+            mal_gc_mark_value(state->receiver);
+            mal_gc_mark_value(mal_async_internal_value(
+                (MalHeapHeader *) state->async_context));
+        }
     }
     for (MalNodeHttpRequestState *state = http_requests; state != nullptr;
          state = state->next) {
@@ -2955,12 +2992,18 @@ static void http_scan_roots(MalVm *vm, void *data) {
         mal_gc_mark_value(state->response);
         mal_gc_mark_value(state->end_callback);
         mal_gc_mark_value(state->request_destroy_error);
+        mal_gc_mark_value(mal_async_internal_value(
+            (MalHeapHeader *) state->async_context));
+        mal_gc_mark_value(mal_async_internal_value(
+            (MalHeapHeader *) state->end_context));
         for (usize i = 0; i < state->response_header_count; i++) {
             mal_gc_mark_value(state->response_headers[i].value);
         }
         for (MalNodeHttpResponseWrite *write = state->write_head;
              write != nullptr; write = write->next) {
             mal_gc_mark_value(write->callback);
+            mal_gc_mark_value(mal_async_internal_value(
+                (MalHeapHeader *) write->async_context));
         }
     }
     for (MalNodeHttpClientState *state = http_clients; state != nullptr;
@@ -2971,9 +3014,15 @@ static void http_scan_roots(MalVm *vm, void *data) {
             mal_gc_mark_value(state->end_callback);
             mal_gc_mark_value(state->destroy_error);
             mal_gc_mark_value(state->response_destroy_error);
+            mal_gc_mark_value(mal_async_internal_value(
+                (MalHeapHeader *) state->async_context));
+            mal_gc_mark_value(mal_async_internal_value(
+                (MalHeapHeader *) state->end_context));
             for (MalNodeHttpResponseWrite *write = state->write_head;
                  write != nullptr; write = write->next) {
                 mal_gc_mark_value(write->callback);
+                mal_gc_mark_value(mal_async_internal_value(
+                    (MalHeapHeader *) write->async_context));
             }
         }
     }
@@ -3375,17 +3424,22 @@ static void http_client_dispatch_write(
     state->active_write_bytes = 0;
     state->write_in_flight = false;
     MalValue callback = mal_value_new_undefined();
+    MalAsyncContext *callback_context = nullptr;
     if (write->offset == write->length) {
         state->write_head = write->next;
         if (state->write_head == nullptr) state->write_tail = nullptr;
         callback = write->callback;
+        callback_context = write->async_context;
         free(write->bytes);
         free(write);
     }
     MalRootSpan root;
     mal_gc_root(&root, &callback, 1);
     if (!mal_value_is_undefined(callback)) {
+        MalAsyncContextScope scope;
+        mal_async_context_scope_enter(vm, &scope, callback_context);
         mal_vm_call_value(vm, callback, mal_value_new_undefined(), nullptr, 0);
+        mal_async_context_scope_exit(vm, &scope);
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW && progress->end_stream) {
         state->upload_complete = true;
@@ -3571,24 +3625,33 @@ static void http_client_dispatch_terminal(
         }
         MalValue *callbacks = callback_count == 0 || callback_count > INT32_MAX
             ? nullptr : malloc(callback_count * sizeof(*callbacks));
-        if (callbacks != nullptr) {
+        MalAsyncContext **callback_contexts =
+            callbacks == nullptr ? nullptr
+                                 : malloc(callback_count * sizeof(*callback_contexts));
+        if (callbacks != nullptr && callback_contexts != nullptr) {
             usize callback_index = 0;
             for (MalNodeHttpResponseWrite *write = state->write_head;
                  write != nullptr; write = write->next) {
                 if (mal_value_is_undefined(write->callback)) continue;
                 callbacks[callback_index++] = write->callback;
+                callback_contexts[callback_index - 1] = write->async_context;
                 write->callback = mal_value_new_undefined();
             }
             MalRootSpan callbacks_root;
             mal_gc_root(&callbacks_root, callbacks, (i32) callback_count);
             for (usize i = 0; i < callback_count; i++) {
+                MalAsyncContextScope scope;
+                mal_async_context_scope_enter(
+                    vm, &scope, callback_contexts[i]);
                 mal_vm_call_value(
                     vm, callbacks[i], mal_value_new_undefined(), &error, 1);
+                mal_async_context_scope_exit(vm, &scope);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) break;
             }
             mal_gc_unroot(&callbacks_root);
-            free(callbacks);
         }
+        free(callback_contexts);
+        free(callbacks);
     }
     if (state->aborted && vm->completion.kind != MAL_COMPLETION_THROW) {
         http_emit(vm, state->request, "abort");
@@ -3650,12 +3713,16 @@ static bool http_client_drain(MalVm *vm) {
         };
         MalRootSpan root;
         mal_gc_root(&root, roots, countof(roots));
+        MalAsyncContextScope async_scope;
+        mal_async_context_scope_enter(
+            vm, &async_scope, state->async_context);
         *pending_link = state->next;
         MalHostTask task = {
             .kind = MAL_HOST_TASK_TERMINAL,
             .result = MAL_HOST_TERMINAL_CANCELLED,
         };
         http_client_dispatch_terminal(vm, state, &task, nullptr);
+        mal_async_context_scope_exit(vm, &async_scope);
         http_client_free(state);
         mal_gc_unroot(&root);
         return true;
@@ -3676,6 +3743,8 @@ static bool http_client_drain(MalVm *vm) {
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    MalAsyncContextScope async_scope;
+    mal_async_context_scope_enter(vm, &async_scope, state->async_context);
     void *data = mal_host_task_take_data(&host->tasks, &task);
     if (task.kind == MAL_HOST_TASK_PROGRESS) {
 #if MAL_REALMS
@@ -3702,6 +3771,7 @@ static bool http_client_drain(MalVm *vm) {
         http_client_free(state);
         mal_http_client_result_free(data);
     }
+    mal_async_context_scope_exit(vm, &async_scope);
     mal_host_task_release(&host->tasks, &task);
     mal_gc_unroot(&root);
     return true;
@@ -3719,7 +3789,10 @@ bool mal_node_http_drain(MalVm *vm) {
         }
         if (state->listening_pending) {
             state->listening_pending = false;
+            MalAsyncContextScope scope;
+            mal_async_context_scope_enter(vm, &scope, state->async_context);
             http_emit(vm, state->receiver, "listening");
+            mal_async_context_scope_exit(vm, &scope);
             return true;
         }
         if (state->close_ready) {
@@ -3729,11 +3802,15 @@ bool mal_node_http_drain(MalVm *vm) {
                 continue;
             }
             MalValue receiver = state->receiver;
+            MalAsyncContext *async_context = state->async_context;
             MalRootSpan root;
             mal_gc_root(&root, &receiver, 1);
             *link = state->next;
             free(state);
+            MalAsyncContextScope scope;
+            mal_async_context_scope_enter(vm, &scope, async_context);
             http_emit(vm, receiver, "close");
+            mal_async_context_scope_exit(vm, &scope);
             mal_gc_unroot(&root);
             return true;
         }
@@ -3749,6 +3826,9 @@ bool mal_node_http_drain(MalVm *vm) {
         MalNodeHttpRequestReadyKind kind = request->ready_kind;
         request->ready_kind = HTTP_REQUEST_READY_NONE;
         request->ready_next = nullptr;
+        MalAsyncContextScope async_scope;
+        mal_async_context_scope_enter(
+            vm, &async_scope, request->async_context);
         if (kind == HTTP_REQUEST_READY_DISPATCH) {
             MAL_PERF_COUNT(http_dispatch_dequeues);
             if (request->finish_pending) {
@@ -3804,6 +3884,7 @@ bool mal_node_http_drain(MalVm *vm) {
             MAL_PERF_COUNT(http_completion_dequeues);
             http_request_remove(request);
         }
+        mal_async_context_scope_exit(vm, &async_scope);
         return true;
     }
     return false;
@@ -3871,6 +3952,7 @@ static MalValue http_server_listen(
     }
     state->vm = vm;
     state->receiver = receiver;
+    state->async_context = mal_async_context_capture(vm);
 #if MAL_REALMS
     state->realm = vm->current_realm;
 #endif
@@ -3945,7 +4027,10 @@ static MalValue http_server_close(
                                "The callback argument must be a function");
             return mal_value_new_undefined();
         }
-        if (!http_once(vm, receiver, "close", args[0])) {
+        MalValue bound = mal_async_context_bind_callback(
+            vm, args[0], mal_async_context_capture(vm));
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !http_once(vm, receiver, "close", bound)) {
             return mal_value_new_undefined();
         }
     }
@@ -4221,6 +4306,7 @@ static MalValue http_request(
         goto fail;
     }
     state->vm = vm;
+    state->async_context = mal_async_context_capture(vm);
     state->request = mal_value_new_undefined();
     state->response = mal_value_new_undefined();
     state->end_callback = mal_value_new_undefined();

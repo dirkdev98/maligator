@@ -16,6 +16,12 @@ The pinned Express behavior baseline and its benchmark lane are established.
 `node:assert/strict` module remains a three-method harness subset, not a general Node
 assertion surface.
 
+`node:async_hooks` now provides the Node 18 `AsyncLocalStorage` surface
+(`run`, `exit`, `enterWith`, `getStore`, `disable`, `bind`, and `snapshot`) and
+context-aware `AsyncResource` execution. Context follows Promise reactions,
+async/await, microtasks, timers, immediates, filesystem callbacks, raw sockets,
+TLS, and HTTP client/server work in both compiled and interpreted programs.
+
 ## Active compatibility work
 
 - [ ] Complete `package.json#exports` wildcard matching, null targets, target

@@ -6,6 +6,7 @@
 #include "./array_buffer_object.h"
 #include "./array_object.h"
 #include "./arguments_object.h"
+#include "./async_context.h"
 #include "./bound_function_object.h"
 #include "./builtin_error.h"
 #include "./builtin_async_generator.h"
@@ -662,6 +663,26 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             mal_gc_mark_values(env->slots, env->slot_count);
             return;
         }
+        case MAL_HEAP_ASYNC_CONTEXT: {
+            MalAsyncContext *context = (MalAsyncContext *) cell;
+            if (context->parent != nullptr) {
+                mal_gc_shade(&context->parent->header);
+            }
+            if (context->storage != nullptr) {
+                mal_gc_shade(&context->storage->header);
+            }
+            mal_gc_mark_value(context->store);
+            return;
+        }
+        case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
+            return;
+        case MAL_HEAP_ASYNC_RESOURCE_STATE: {
+            MalAsyncResourceState *state = (MalAsyncResourceState *) cell;
+            if (state->context != nullptr) {
+                mal_gc_shade(&state->context->header);
+            }
+            return;
+        }
         default:
             break;
     }
@@ -847,6 +868,11 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 mal_gc_mark_value(r->cap_reject);
                 mal_gc_mark_value(r->on_fulfilled);
                 mal_gc_mark_value(r->on_rejected);
+#if MAL_NODE
+                if (r->async_context != nullptr) {
+                    mal_gc_shade(&r->async_context->header);
+                }
+#endif
             }
             if (promise->async_owner != nullptr) {
                 mal_gc_shade(&promise->async_owner->object.header);
@@ -863,6 +889,11 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
 
 /** Trace a microtask job's live MalValue fields (queued or currently running). */
 static void mal_gc_mark_job(MalJob *job) {
+#if MAL_NODE
+    if (job->async_context != nullptr) {
+        mal_gc_shade(&job->async_context->header);
+    }
+#endif
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
         job->kind == MAL_JOB_ASYNC_AWAIT ||
         job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN) {
@@ -942,10 +973,20 @@ static void mal_gc_scan_roots(MalVm *vm) {
             f->exec.completion.value,
             f->exec.root_frame_head,
             f->exec.root_span_head);
+#if MAL_NODE
+        if (f->exec.async_context != nullptr) {
+            mal_gc_shade(&f->exec.async_context->header);
+        }
+#endif
     }
 
     // Isolate-shared roots (one per isolate, not per fiber).
     mal_gc_mark_value(vm->allocation_error);
+#if MAL_NODE
+    if (vm->async_context != nullptr) {
+        mal_gc_shade(&vm->async_context->header);
+    }
+#endif
 #if MAL_REALMS
     mal_gc_mark_value(vm->error_data_marker);
     mal_gc_mark_value(vm->error_stack_marker);
@@ -1007,6 +1048,9 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_SYMBOL:
         case MAL_HEAP_BIGINT:
         case MAL_HEAP_ENV:
+        case MAL_HEAP_ASYNC_CONTEXT:
+        case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
+        case MAL_HEAP_ASYNC_RESOURCE_STATE:
             return; // no owned side allocations (env slots are inline, not a MalObject)
         default:
             break;
