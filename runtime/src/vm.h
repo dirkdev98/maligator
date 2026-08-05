@@ -1231,6 +1231,8 @@ typedef struct MalVm {
     i32 bigint_capacity;
     i32 literal_template_capacity;
     i32 cjs_module_capacity;
+    i32 file_capacity;
+    i32 source_position_capacity;
     i32 global_capacity;
 
     /**
@@ -1908,6 +1910,9 @@ void mal_vm_free(MalVm *vm);
  * running frame's function pointer.
  */
 i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded);
+
+/** Retain a loaded arena after a successful splice until VM teardown. */
+void mal_vm_retain_loaded_definition(MalVm *vm, MalLoadedDefinition *loaded);
 
 /** Allocate a captured-slot environment node (parent chain + `count` slots
  * initialized to undefined) as a GC cell. Used by both the interpreter and

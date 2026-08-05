@@ -10,8 +10,10 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "posix_fs.h"
+#include "typed_array_object.h"
 #include "utf8.h"
 #include "value.h"
+#include "vm_load.h"
 #include "vm_ops.h"
 
 #define MAL_ASSET_COMPLETION_MARKER ".maligator-asset-complete"
@@ -71,6 +73,46 @@ static void mal_asset_throw_errno(MalVm *vm, int err, const char *operation, con
     mal_asset_throw_utf8(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
         message != nullptr ? message : "mal.assets.materialize failed");
     free(message);
+}
+
+static MalValue mal_test_run_wire(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 1 || !mal_value_is_typed_array_object(args[0])) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "mal._runWire requires a Uint8Array");
+        return mal_value_new_undefined();
+    }
+
+    MalTypedArrayObject *wire = mal_value_to_typed_array_object(args[0]);
+    usize length = mal_typed_array_object_byte_length(wire);
+    const u8 *bytes = wire->buffer->data + wire->byte_offset;
+    const char *error = "invalid VM wire";
+    MalLoadedDefinition *loaded =
+        mal_vm_load_definition(bytes, length, &error);
+    if (loaded == nullptr) {
+        mal_asset_throw_utf8(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, error);
+        return mal_value_new_undefined();
+    }
+
+    mal_vm_retain_loaded_definition(vm, loaded);
+    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
+    if (entry < 0) return mal_value_new_undefined();
+
+    MalValue callable = mal_vm_op_create_function(vm, entry, nullptr);
+    MalRootSpan root;
+    mal_gc_root(&root, &callable, 1);
+    MalCompletion completion = mal_vm_call_value(
+        vm, callable, mal_value_new_undefined(), nullptr, 0);
+    mal_gc_unroot(&root);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion = completion;
+        return mal_value_new_undefined();
+    }
+    return completion.value;
 }
 
 static char *mal_asset_join(const char *left, const char *right) {
@@ -350,6 +392,8 @@ void mal_host_install_maligator(
         vm, assets, (const byte *) "materialize", 1, mal_assets_materialize);
     mal_intrinsic_define_data(
         vm, mal, (const byte *) "assets", roots[1], MAL_ASSET_VISIBLE);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_runWire", 1, mal_test_run_wire);
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_intrinsic_define_data(
         vm, global_this, (const byte *) "mal", roots[0], MAL_ASSET_VISIBLE);

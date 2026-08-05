@@ -22,17 +22,6 @@
 // compiler's `__compile` closure and eval'd functions that outlive a call remain
 // owned by vm->compiler_fn (a traced root) and vm->loaded_defs.
 
-// Retain a runtime-spliced definition so its arena outlives the spliced
-// functions, which reference their instruction data in-place within it.
-static void retain_loaded(MalVm *vm, MalLoadedDefinition *loaded) {
-    if (vm->loaded_def_count == vm->loaded_def_capacity) {
-        vm->loaded_def_capacity = vm->loaded_def_capacity == 0 ? 4 : vm->loaded_def_capacity * 2;
-        vm->loaded_defs =
-            realloc(vm->loaded_defs, sizeof(MalLoadedDefinition *) * (usize) vm->loaded_def_capacity);
-    }
-    vm->loaded_defs[vm->loaded_def_count++] = loaded;
-}
-
 // Install the baked compiler on first use: splice it, run its top level (which
 // assigns globalThis.__compile), capture that into the rooted vm->compiler_fn,
 // then delete the global so eval leaves nothing on globalThis. Returns false
@@ -67,7 +56,7 @@ static bool ensure_compiler(MalVm *vm) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, "eval: baked compiler failed to load");
         goto done;
     }
-    retain_loaded(vm, loaded);
+    mal_vm_retain_loaded_definition(vm, loaded);
     i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
     if (entry < 0) {
         goto done; // splice set a pending RangeError (constant-table overflow)
@@ -155,7 +144,7 @@ static MalValue run_loaded_source(
     mal_gc_root(&root_span, roots, 3);
     MalValue result = mal_value_new_undefined();
 
-    retain_loaded(vm, loaded);
+    mal_vm_retain_loaded_definition(vm, loaded);
     i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
     if (entry < 0) {
         goto done;
@@ -256,7 +245,7 @@ MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
         goto done;
     }
 
-    retain_loaded(vm, loaded);
+    mal_vm_retain_loaded_definition(vm, loaded);
     i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
     if (entry < 0) {
         *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_SANITIZE;
@@ -300,7 +289,7 @@ MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, b
     if (loaded == nullptr) {
         goto done;
     }
-    retain_loaded(vm, loaded);
+    mal_vm_retain_loaded_definition(vm, loaded);
     i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
     if (entry < 0) {
         goto done;

@@ -216,6 +216,30 @@ describe("emit-vm instruction packing", () => {
 		);
 	});
 
+	it("gives split async functions external linkage", () => {
+		const asyncFunction: VmFunction = {
+			...fn,
+			isAsync: true,
+			registerCount: 1,
+			instructions: [
+				{ opcode: "ASYNC_START" },
+				{ opcode: "CREATE_UNDEFINED", dst: 0 },
+				{ opcode: "RETURN", value: 0 },
+			],
+		};
+		const units = emitVmTranslationUnits(
+			{ ...definition, functions: [asyncFunction] },
+			{},
+			Number.MAX_SAFE_INTEGER,
+		);
+		expect(units.slice(1).join("\n")).toContain(
+			"MalValue mal_compiled_0(MalVm *vm",
+		);
+		expect(units.slice(1).join("\n")).not.toContain(
+			"static MalValue mal_compiled_0(MalVm *vm",
+		);
+	});
+
 	it("splits bytecode and debug leaf arrays into bounded translation units", () => {
 		const functions = Array.from({ length: 20 }, () => ({
 			...fn,

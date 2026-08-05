@@ -481,6 +481,24 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     }
     vm->live_definition.cjs_module_function_indices =
         cjs_module_function_indices;
+    i32 file_count = definition->file_count;
+    vm->file_capacity = file_count > 0 ? file_count : 1;
+    const char **files = malloc(sizeof(char *) * (usize) vm->file_capacity);
+    if (file_count > 0) {
+        memcpy(files, definition->files, sizeof(char *) * (usize) file_count);
+    }
+    vm->live_definition.files = files;
+
+    i32 source_position_count = definition->source_position_count;
+    vm->source_position_capacity =
+        source_position_count > 0 ? source_position_count : 1;
+    MalSourcePos *source_positions = malloc(
+        sizeof(MalSourcePos) * (usize) vm->source_position_capacity);
+    if (source_position_count > 0) {
+        memcpy(source_positions, definition->source_positions,
+               sizeof(MalSourcePos) * (usize) source_position_count);
+    }
+    vm->live_definition.source_positions = source_positions;
     vm->function_cjs_module_bases =
         calloc((usize) vm->function_capacity, sizeof(i32));
 
@@ -821,6 +839,8 @@ void mal_vm_free(MalVm *vm) {
     free((MalBigInt *) vm->live_definition.bigint_constants);
     free((u32 *) vm->live_definition.literal_template_data);
     free((i32 *) vm->live_definition.cjs_module_function_indices);
+    free((char **) vm->live_definition.files);
+    free((MalSourcePos *) vm->live_definition.source_positions);
 
     // Free any microtasks left queued (e.g. the program exited with pending
     // jobs). The MalValues they hold live in the heap, freed below.
@@ -1086,6 +1106,8 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     i32 bigint_base = live->bigint_constant_count;
     i32 template_base = live->literal_template_data_count;
     i32 cjs_module_base = live->cjs_module_count;
+    i32 file_base = live->file_count;
+    i32 source_position_base = live->source_position_count;
 
     // String/BigInt constant cells must not move (values point at them), so their
     // arrays are fixed-capacity and never reallocated. Refuse a splice that would
@@ -1167,9 +1189,44 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
 #endif
     live->global_count = new_globals;
 
-    // Functions: append rebased copies. The instruction/handler data is referenced
-    // in place (rebased) in the loaded arena; spliced debug info is dropped (its
-    // file/pos ids index the loaded def's tables, not the merged ones).
+    // Debug tables: append definition-local paths and source positions. Inline
+    // chains refer to function/source-position indices and must be rebased just
+    // like bytecode operands.
+    i32 new_file_count = file_base + loaded->file_count;
+    if (new_file_count > vm->file_capacity) {
+        vm->file_capacity = new_file_count;
+        live->files = realloc(
+            (char **) live->files, sizeof(char *) * (usize) new_file_count);
+    }
+    const char **files = (const char **) live->files;
+    for (i32 i = 0; i < loaded->file_count; i++) {
+        files[file_base + i] = loaded->files[i];
+    }
+    live->file_count = new_file_count;
+
+    i32 new_source_position_count =
+        source_position_base + loaded->source_position_count;
+    if (new_source_position_count > vm->source_position_capacity) {
+        vm->source_position_capacity = new_source_position_count;
+        live->source_positions = realloc(
+            (MalSourcePos *) live->source_positions,
+            sizeof(MalSourcePos) * (usize) new_source_position_count);
+    }
+    MalSourcePos *source_positions = (MalSourcePos *) live->source_positions;
+    for (i32 i = 0; i < loaded->source_position_count; i++) {
+        MalSourcePos position = loaded->source_positions[i];
+        if (position.inlined_function_index >= 0) {
+            position.inlined_function_index += fn_base;
+        }
+        if (position.caller_pos_id >= 0) {
+            position.caller_pos_id += source_position_base;
+        }
+        source_positions[source_position_base + i] = position;
+    }
+    live->source_position_count = new_source_position_count;
+
+    // Functions: append rebased copies. Instruction/handler/position runs remain
+    // owned by the loaded arena and are safely mutated once during this splice.
     i32 new_functions = fn_base + loaded->function_count;
     if (new_functions > vm->function_capacity) {
         vm->function_capacity = new_functions;
@@ -1182,9 +1239,13 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
         g_loaded_instruction_count += (u64) fn.instruction_count;
         g_loaded_instruction_data_count += (u64) fn.instruction_data_count;
         fn.compiled = nullptr;
-        fn.file_index = 0;
-        fn.position_count = 0;
-        fn.positions = nullptr;
+        if (fn.position_count > 0) {
+            fn.file_index += file_base;
+            MalLineEntry *positions = (MalLineEntry *) fn.positions;
+            for (i32 p = 0; p < fn.position_count; p++) {
+                positions[p].pos_id += source_position_base;
+            }
+        }
         if (fn.name_string_index >= 0) {
             fn.name_string_index += string_base;
         }
@@ -1250,6 +1311,17 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     }
 
     return fn_base;
+}
+
+void mal_vm_retain_loaded_definition(MalVm *vm, MalLoadedDefinition *loaded) {
+    if (vm->loaded_def_count == vm->loaded_def_capacity) {
+        vm->loaded_def_capacity =
+            vm->loaded_def_capacity == 0 ? 4 : vm->loaded_def_capacity * 2;
+        vm->loaded_defs = realloc(
+            vm->loaded_defs,
+            sizeof(MalLoadedDefinition *) * (usize) vm->loaded_def_capacity);
+    }
+    vm->loaded_defs[vm->loaded_def_count++] = loaded;
 }
 
 MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
