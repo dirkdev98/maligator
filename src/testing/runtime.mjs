@@ -10,8 +10,7 @@ class MaligatorAssertionError extends Error {
 		this.diff = details.diff;
 		if (captured && typeof captured.stack === "string") {
 			const firstNewline = captured.stack.indexOf("\n");
-			const frames =
-				firstNewline < 0 ? "" : captured.stack.slice(firstNewline);
+			const frames = firstNewline < 0 ? "" : captured.stack.slice(firstNewline);
 			this.stack = `${this.name}: ${this.message}${frames}`;
 		}
 	}
