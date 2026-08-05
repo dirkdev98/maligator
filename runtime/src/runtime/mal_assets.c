@@ -99,8 +99,11 @@ static MalValue mal_test_run_wire(
     }
 
     mal_vm_retain_loaded_definition(vm, loaded);
-    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
+    const MalVmDefinition *definition = mal_loaded_definition_get(loaded);
+    i32 entry = mal_vm_splice_definition(vm, definition);
     if (entry < 0) return mal_value_new_undefined();
+    mal_vm_run_definition_host_installs(vm, definition, &vm->launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
 
     MalValue callable = mal_vm_op_create_function(vm, entry, nullptr);
     MalRootSpan root;

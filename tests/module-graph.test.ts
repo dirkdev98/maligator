@@ -667,6 +667,32 @@ test("canonicalizes strict assert and exposes the smoke-runner assertions", () =
 	});
 });
 
+test("resolves a toolchain-owned virtual ESM module", () => {
+	write(
+		"virtual-entry.mts",
+		`import { test } from "maligator:test"; test("ok", () => {});`,
+	);
+	const graph = buildModuleGraph(path.join(root, "virtual-entry.mts"), {
+		stripTypes: (source) => source,
+		virtualModules: new Map([
+			[
+				"maligator:test",
+				{
+					source: `export function test(name, callback) { callback(name); }\n`,
+				},
+			],
+		]),
+	});
+
+	expect(graph.evaluationOrder).toEqual(["maligator:test", graph.entry]);
+	expect(graph.modules.get("maligator:test")).toMatchObject({
+		path: "maligator:test",
+		goal: "module",
+		virtual: true,
+		dependencies: [],
+	});
+});
+
 test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
 	write("node-unknown.mjs", `import "node:https";\n`);
 	expect(() =>

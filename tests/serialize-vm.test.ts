@@ -508,10 +508,9 @@ describe("serialize-vm", () => {
 		expect(() => deserializeVmDefinition(buf)).toThrow(/bad magic/);
 	});
 
-	it("rejects definitions with host installs", () => {
-		expect(() => serializeVmDefinition(hostDefinition)).toThrow(
-			/host installs are not supported in portable wire definitions/,
-		);
+	it("round-trips portable host install manifests", () => {
+		const restored = deserializeVmDefinition(serializeVmDefinition(hostDefinition));
+		expect(restored.hostInstalls).toEqual(hostDefinition.hostInstalls);
 	});
 
 	it("rejects string constants above the runtime UTF-16 limit", () => {
@@ -524,18 +523,17 @@ describe("serialize-vm", () => {
 		);
 	});
 
-	it("rejects host installs before producing a stripped wire definition", () => {
-		expect(() => serializeVmDefinition(hostDefinition, { debugInfo: false })).toThrow(
-			/host installs are not supported in portable wire definitions/,
+	it("retains host installs in a stripped wire definition", () => {
+		const restored = deserializeVmDefinition(
+			serializeVmDefinition(hostDefinition, { debugInfo: false }),
 		);
+		expect(restored.hostInstalls).toEqual(hostDefinition.hostInstalls);
 	});
 
-	it("rejects a wire buffer with a nonzero host-install count", () => {
+	it("rejects a truncated host-install manifest", () => {
 		const buffer = serializeVmDefinition(definition);
 		buffer[buffer.byteLength - 1] = 1;
-		expect(() => deserializeVmDefinition(buffer)).toThrow(
-			/host installs are not supported in portable wire definitions/,
-		);
+		expect(() => deserializeVmDefinition(buffer)).toThrow(/truncated|corrupt|read/);
 	});
 
 	it("round-trips an ordinary wire definition with an empty manifest", () => {

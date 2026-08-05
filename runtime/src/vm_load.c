@@ -6,6 +6,7 @@
 #include "endian.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
+#include "host_registry.h"
 
 /*
  * Inverse of src/emit-vm.ts + src/serialize-vm.ts: decode the flat wire buffer
@@ -16,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 15u        // mapped Arguments metadata
+#define WIRE_VERSION 16u        // portable host-install manifests
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1476,13 +1477,41 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
         def->source_positions = source_positions;
     }
 
-    // Wire v3 has a host-install count, but a portable definition cannot resolve
-    // native installer pointers without a registry. Reject instead of silently
-    // loading null installers that leave host globals undefined.
     u32 host_install_count = rd_u32(&r);
-    if (r.ok && host_install_count > 0) {
-        err = "host installs are not supported in portable wire definitions";
-        goto fail;
+    MalHostInstall *host_installs = arena_array(
+        L, &r, host_install_count, sizeof(MalHostInstall), alignof(MalHostInstall));
+    def->host_install_count = (i32) host_install_count;
+    def->host_installs = host_installs;
+    for (u32 i = 0; r.ok && i < host_install_count; i++) {
+        u32 installer_length = rd_count(&r, 1);
+        char *installer_name = arena(
+            L, &r, (usize) installer_length + 1, alignof(char));
+        for (u32 byte = 0; r.ok && byte < installer_length; byte++) {
+            installer_name[byte] = (char) rd_u8(&r);
+        }
+        host_installs[i].installer =
+            mal_host_resolve_installer(installer_name, installer_length);
+        if (r.ok && host_installs[i].installer == nullptr) {
+            err = "unsupported host installer";
+            goto fail;
+        }
+        // The wire stores each slot as a length-prefixed UTF-8 name plus a
+        // varint destination. Runtime structs are pointer-sized and therefore
+        // much larger than their serialized form.
+        u32 slot_count = rd_count(&r, 2);
+        MalHostInstallSlot *slots = arena_array(
+            L, &r, slot_count, sizeof(MalHostInstallSlot), alignof(MalHostInstallSlot));
+        host_installs[i].slots = slots;
+        host_installs[i].slot_count = (i32) slot_count;
+        for (u32 slot = 0; r.ok && slot < slot_count; slot++) {
+            u32 name_length = rd_count(&r, 1);
+            char *name = arena(L, &r, (usize) name_length + 1, alignof(char));
+            for (u32 byte = 0; r.ok && byte < name_length; byte++) {
+                name[byte] = (char) rd_u8(&r);
+            }
+            slots[slot].name = name;
+            slots[slot].slot = rd_i32(&r);
+        }
     }
 
     if (!r.ok || r.pos != r.len) {

@@ -32,13 +32,26 @@ export interface RunCommand {
 	programArgs: Array<string>;
 }
 
+export interface TestCommand {
+	kind: "test";
+	paths: Array<string>;
+	configPath?: string;
+	nameFilter?: string;
+	shuffle?: true | number;
+	repeat: number;
+	bail: boolean;
+	timeoutMs: number;
+	compileConcurrency: number;
+}
+
 export type CliCommand =
 	| { kind: "help" }
 	| { kind: "version" }
 	| { kind: "init" }
 	| { kind: "doctor"; verbose: boolean; target?: string }
 	| BuildCommand
-	| RunCommand;
+	| RunCommand
+	| TestCommand;
 
 export class CliUsageError extends Error {
 	constructor(message: string) {
@@ -54,12 +67,17 @@ Commands:
   doctor                       Check native build toolchains
   build [entry]                Compile an application
   run [entry] [-- args...]     Compile and run an application
+  test [path ...]              Discover and interpret tests
 
 Options:
   --config <path>              Use an explicit build configuration
   --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
   --artifact <directory>       Create a deployable production artifact
+  --run <name>                 Filter tests by hierarchical name
+  --shuffle [seed]             Shuffle deterministically and print the seed
+  --repeat <count>             Repeat selected tests without recompiling
+  --bail                       Stop after the first failure
   -h, --help                   Show help
   -V, --version                Show the version`;
 
@@ -254,6 +272,75 @@ function parseRun(args: Array<string>): CliCommand {
 	return command;
 }
 
+function positiveInteger(value: string, option: string): number {
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+		throw new CliUsageError(`option '${option}' requires a positive integer`);
+	}
+	return parsed;
+}
+
+function parseTest(args: Array<string>): CliCommand {
+	const command: TestCommand = {
+		kind: "test",
+		paths: [],
+		repeat: 1,
+		bail: false,
+		timeoutMs: 5000,
+		compileConcurrency: 1,
+	};
+
+	for (let index = 1; index < args.length; index++) {
+		const argument = args[index]!;
+		if (argument === "--help" || argument === "-h") return { kind: "help" };
+		if (argument === "--config") {
+			command.configPath = optionValue(args, index, argument);
+			index++;
+			continue;
+		}
+		if (argument === "--run") {
+			command.nameFilter = optionValue(args, index, argument);
+			index++;
+			continue;
+		}
+		if (argument === "--shuffle") {
+			const seed = args[index + 1];
+			if (seed !== undefined && !seed.startsWith("-")) {
+				command.shuffle = positiveInteger(seed, argument);
+				index++;
+			} else {
+				command.shuffle = true;
+			}
+			continue;
+		}
+		if (argument === "--repeat") {
+			command.repeat = positiveInteger(optionValue(args, index, argument), argument);
+			index++;
+			continue;
+		}
+		if (argument === "--timeout") {
+			command.timeoutMs = positiveInteger(optionValue(args, index, argument), argument);
+			index++;
+			continue;
+		}
+		if (argument === "--compile-concurrency") {
+			command.compileConcurrency = positiveInteger(
+				optionValue(args, index, argument),
+				argument,
+			);
+			index++;
+			continue;
+		}
+		if (argument === "--bail") {
+			command.bail = true;
+			continue;
+		}
+		if (argument.startsWith("-")) return unexpectedArgument("test", argument);
+		command.paths.push(argument);
+	}
+	return command;
+}
+
 export function parseCliArgs(args: Array<string>): CliCommand {
 	const command = args[0];
 	if (command === undefined) {
@@ -280,9 +367,12 @@ export function parseCliArgs(args: Array<string>): CliCommand {
 	if (command === "run") {
 		return parseRun(args);
 	}
+	if (command === "test") {
+		return parseTest(args);
+	}
 
 	const suggestion = command.startsWith("-")
 		? `unknown option '${command}'`
 		: `unknown command '${command}'`;
-	throw new CliUsageError(`${suggestion}; expected init, doctor, build, or run`);
+	throw new CliUsageError(`${suggestion}; expected init, doctor, build, run, or test`);
 }

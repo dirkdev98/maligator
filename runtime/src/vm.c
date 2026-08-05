@@ -507,6 +507,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->literal_shape_cache =
         calloc((usize) vm->function_capacity, sizeof(MalShape **));
     vm->property_stub = nullptr;
+    vm->launch = (MalHostLaunchContext) {0};
     vm->iterator_result_shape = nullptr;
     vm->regexp_instance_shape = nullptr;
     vm->regexp_result_shape = nullptr;
@@ -1188,6 +1189,16 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     }
 #endif
     live->global_count = new_globals;
+
+    // Portable host exports are definition-local global slots. Rebase their
+    // loader-owned slot tables so the embedding can install them after splice.
+    for (i32 i = 0; i < loaded->host_install_count; i++) {
+        MalHostInstall *install = (MalHostInstall *) &loaded->host_installs[i];
+        MalHostInstallSlot *slots = (MalHostInstallSlot *) install->slots;
+        for (i32 slot = 0; slot < install->slot_count; slot++) {
+            slots[slot].slot += global_base;
+        }
+    }
 
     // Debug tables: append definition-local paths and source positions. Inline
     // chains refer to function/source-position indices and must be rebased just

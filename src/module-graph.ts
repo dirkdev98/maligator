@@ -77,6 +77,8 @@ export interface ModuleRecord {
 	 * has no user source (empty parse) and is skipped by semantic analysis.
 	 */
 	host?: HostModuleSpec;
+	/** In-memory source supplied by the embedding toolchain (for example maligator:test). */
+	virtual?: true;
 }
 
 export interface ModuleGraph {
@@ -141,6 +143,16 @@ export interface BuildModuleGraphOptions {
 	 * only under `surface.node`. Defaults to the product defaults (node OFF).
 	 */
 	buildConfig?: ResolvedBuildConfig;
+
+	/**
+	 * Toolchain-owned modules that resolve without a package or filesystem entry.
+	 * Their public specifier is also their stable graph identity. This is an
+	 * embedding seam, not a user alias mechanism.
+	 */
+	virtualModules?: ReadonlyMap<
+		string,
+		{ source: string; goal?: Exclude<ModuleGoal, "cjs"> }
+	>;
 }
 
 /**
@@ -187,7 +199,12 @@ export function buildModuleGraph(
 		conditions: exportConditions(nodeEnabled, "import"),
 	};
 
-	const load = (filePath: string, goal: ModuleGoal, sourceOverride?: string) => {
+	const load = (
+		filePath: string,
+		goal: ModuleGoal,
+		sourceOverride?: string,
+		virtual = false,
+	) => {
 		if (modules.has(filePath)) {
 			return;
 		}
@@ -216,6 +233,15 @@ export function buildModuleGraph(
 					// A computed import/require cannot be resolved while building the
 					// graph. Preserve the edge for later lowering/runtime handling.
 					return { ...dependency, resolvedPath: null };
+				}
+				const virtualModule = options.virtualModules?.get(dependency.specifier);
+				if (virtualModule !== undefined) {
+					if (dependency.kind === "dynamic" || dependency.kind === "require") {
+						throw new SyntaxError(
+							`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
+						);
+					}
+					return { ...dependency, resolvedPath: dependency.specifier };
 				}
 				const canonicalHostId = canonicalNodeHostModuleId(dependency.specifier);
 				const canonicalBuiltinId = canonicalNodeBuiltinId(dependency.specifier);
@@ -274,7 +300,14 @@ export function buildModuleGraph(
 
 		// Record before recursing so a cyclic back-import finds this module and
 		// stops, rather than looping forever.
-		modules.set(filePath, { path: filePath, goal, source, parsed, dependencies });
+		modules.set(filePath, {
+			path: filePath,
+			goal,
+			source,
+			parsed,
+			dependencies,
+			...(virtual ? { virtual: true as const } : {}),
+		});
 
 		for (const dependency of dependencies) {
 			const resolvedPath = dependency.resolvedPath;
@@ -286,6 +319,11 @@ export function buildModuleGraph(
 			const host = lookupHostModule(resolvedPath);
 			if (host) {
 				modules.set(resolvedPath, hostModuleRecord(host));
+				continue;
+			}
+			const virtualModule = options.virtualModules?.get(resolvedPath);
+			if (virtualModule !== undefined) {
+				load(resolvedPath, virtualModule.goal ?? "module", virtualModule.source, true);
 				continue;
 			}
 			load(

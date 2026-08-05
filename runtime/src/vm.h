@@ -1269,6 +1269,9 @@ typedef struct MalVm {
      */
     struct MalPropertyStubEntry *property_stub;
 
+    /** Process launch context retained for host modules loaded from portable wire. */
+    MalHostLaunchContext launch;
+
     /** Shared final shape for CreateIterResultObject's `{ value, done }` layout. */
     struct MalShape *iterator_result_shape;
 
@@ -1882,14 +1885,19 @@ void mal_vm_free_coroutine_buffer_pool(MalVm *vm);
  * ordinary program) or an installer is unresolved (a from-wire definition), so it
  * is safe to call unconditionally.
  */
-static inline void mal_vm_run_host_installs(MalVm *vm, const MalHostLaunchContext *launch) {
-    const MalVmDefinition *definition = vm->definition;
+static inline void mal_vm_run_definition_host_installs(
+    MalVm *vm, const MalVmDefinition *definition, const MalHostLaunchContext *launch) {
     for (i32 i = 0; i < definition->host_install_count; i++) {
         const MalHostInstall *install = &definition->host_installs[i];
         if (install->installer != nullptr) {
             install->installer(vm, install->slots, install->slot_count, launch);
         }
     }
+}
+
+static inline void mal_vm_run_host_installs(MalVm *vm, const MalHostLaunchContext *launch) {
+    if (launch != nullptr) vm->launch = *launch;
+    mal_vm_run_definition_host_installs(vm, vm->definition, launch);
 }
 
 void mal_vm_free(MalVm *vm);

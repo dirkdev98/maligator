@@ -17,6 +17,7 @@ const root = path.join(repositoryRoot, ".cache/mal-build/selfhost-cli-product");
 const tools = path.join(root, "tools");
 const project = path.join(root, "isolated-project");
 const distribution = path.join(root, "distribution");
+const noTools = path.join(root, "no-tools");
 const configPath = path.join(project, "maligator.build.ts");
 const fixture = "entry.mts";
 const originalPath = process.env.PATH ?? "";
@@ -28,6 +29,7 @@ rmSync(root, { recursive: true, force: true });
 mkdirSync(tools, { recursive: true });
 mkdirSync(project, { recursive: true });
 mkdirSync(distribution, { recursive: true });
+mkdirSync(noTools, { recursive: true });
 
 const rustup = resolvePathExecutable("rustup", originalPath);
 const selectedCargo = execFileSync(rustup, ["which", "cargo"], {
@@ -88,10 +90,10 @@ copyFileSync(cli, distributedCli);
 chmodSync(distributedCli, 0o755);
 console.log(`ok   compiled self-contained product CLI (${distributedCli})`);
 
-function invoke(args: Array<string>): string {
+function invoke(args: Array<string>, envOverrides: Record<string, string> = {}): string {
 	return execFileSync(distributedCli, args, {
 		cwd: project,
-		env: isolatedEnv,
+		env: { ...isolatedEnv, ...envOverrides },
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
 	});
@@ -147,6 +149,43 @@ try {
 	}
 	console.log(
 		"ok   target materialized binary assets, executed eval, and forwarded arguments",
+	);
+
+	writeFileSync(
+		path.join(project, "example.test.ts"),
+		`import { beforeEach, expect, test } from "maligator:test";
+import { basename, join } from "node:path";
+
+let value: string;
+beforeEach(() => {
+\tvalue = join("one", "two", "answer.ts");
+});
+test("interprets async tests with host dependencies", async () => {
+\tawait expect(Promise.resolve(basename(value))).resolves.toBe("answer.ts");
+});
+`,
+	);
+	const testOnlyEnv = {
+		PATH: noTools,
+		CC: path.join(noTools, "unavailable-cc"),
+		CXX: path.join(noTools, "unavailable-cxx"),
+	};
+	const coldTestOutput = invoke(["test", "example.test.ts"], testOnlyEnv);
+	if (
+		!coldTestOutput.includes("1 passed, 0 failed") ||
+		!coldTestOutput.includes("cache miss")
+	) {
+		throw new Error(`cold interpreted test run was not successful:\n${coldTestOutput}`);
+	}
+	const warmTestOutput = invoke(["test", "example.test.ts"], testOnlyEnv);
+	if (
+		!warmTestOutput.includes("1 passed, 0 failed") ||
+		!warmTestOutput.includes("cache hit")
+	) {
+		throw new Error(`warm interpreted test run did not reuse wire:\n${warmTestOutput}`);
+	}
+	console.log(
+		"ok   test interpreted TypeScript and node:path without an available native compiler",
 	);
 } finally {
 	if (createdConfig) rmSync(configPath, { force: true });

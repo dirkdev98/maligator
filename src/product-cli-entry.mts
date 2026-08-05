@@ -5,11 +5,12 @@ const { assets } = Reflect.get(globalThis, "mal") as {
 	assets: { materialize(name: string): string };
 };
 
-runCli(process.argv.slice(2), {
+await runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,
 	installation: productCompilerInstallation(
 		assets.materialize("runtime"),
 		assets.materialize("compilerWire"),
+		assets.materialize("testRuntime"),
 		assets.materialize("license"),
 	),
 });

@@ -522,11 +522,17 @@ function hasOnly() {
 
 function selected(testCase, options, focused) {
 	if (
+		options.nameFilter !== undefined &&
+		!fullTestName(testCase).includes(options.nameFilter)
+	) {
+		return false;
+	}
+	if (
 		testCase.mode === "skip" ||
 		testCase.mode === "todo" ||
 		suiteOrAncestorMode(testCase.suite, "skip")
 	) {
-		return true;
+		return !focused || suiteOrAncestorMode(testCase.suite, "only");
 	}
 	if (
 		focused &&
@@ -535,10 +541,7 @@ function selected(testCase, options, focused) {
 	) {
 		return false;
 	}
-	return (
-		options.nameFilter === undefined ||
-		fullTestName(testCase).includes(options.nameFilter)
-	);
+	return true;
 }
 
 function shuffled(values, random) {

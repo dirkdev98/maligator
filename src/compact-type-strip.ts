@@ -1079,6 +1079,13 @@ function blankMethodAnnotations(
 		if (preceding === undefined || controlWords.has(preceding.text)) continue;
 		const close = matching(source, code, open, "(", ")", filePath);
 		const after = nextCodeIndex(source, code, close + 1);
+		// A typed arrow property has the same `name: (parameters): Return`
+		// prefix as an object method. Leave it for blankArrowAnnotations so the
+		// runtime `=>` token is never consumed as part of the return type.
+		if (findArrowAfterParameters(source, code, close) >= 0) {
+			open = close;
+			continue;
+		}
 		let returnTypeEnd = -1;
 		if (source[after] === ":") {
 			returnTypeEnd = findTypeEnd(source, code, after + 1, ["{"], filePath);
@@ -1086,10 +1093,7 @@ function blankMethodAnnotations(
 		} else if (source[after] !== "{") {
 			continue;
 		}
-		if (
-			returnTypeEnd < 0 &&
-			!parameterListHasAnnotation(source, code, open, close)
-		) {
+		if (returnTypeEnd < 0 && !parameterListHasAnnotation(source, code, open, close)) {
 			continue;
 		}
 		blankParameterAnnotations(source, code, output, open, close, filePath);

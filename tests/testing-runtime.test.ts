@@ -93,9 +93,68 @@ describe("registration and lifecycle", () => {
 
 		expect(first.focused).toBe(true);
 		expect(first.passed).toBe(4);
+		expect(first.skipped).toBe(0);
+		expect(first.todo).toBe(0);
+		expect(first.events).toContainEqual(
+			expect.objectContaining({
+				type: "diagnostic",
+				level: "warning",
+				message: expect.stringContaining(".only"),
+			}),
+		);
 		expect(firstOrder).toEqual(order);
 		expect(first.events.map((event) => event.type)).toEqual(
 			second.events.map((event) => event.type),
+		);
+	});
+
+	test("filters skipped and todo tests by hierarchical name", async () => {
+		runtime.describe("router", () => {
+			runtime.test.skip("skipped", () => {});
+			runtime.test.todo("later");
+		});
+		runtime.describe("store", () => {
+			runtime.test.skip("skipped", () => {});
+			runtime.test.todo("later");
+		});
+
+		const result = await run({ nameFilter: "router" });
+		expect(result.skipped).toBe(1);
+		expect(result.todo).toBe(1);
+		expect(
+			result.events
+				.filter((event) => event.type === "test-skip" || event.type === "test-todo")
+				.every((event) => event.name.startsWith("router >")),
+		).toBe(true);
+	});
+
+	test("classifies timeouts and suite hook failures", async () => {
+		runtime.describe("broken setup", () => {
+			runtime.beforeAll(() => {
+				throw new Error("suite setup failed");
+			});
+			runtime.test("does not run", () => {
+				throw new Error("unreachable");
+			});
+		});
+		runtime.test("times out", () => new Promise(() => {}));
+
+		const result = await run({ timeoutMs: 5 });
+		expect(result.failed).toBe(2);
+		expect(result.events).toContainEqual(
+			expect.objectContaining({
+				type: "hook-fail",
+				name: "broken setup",
+				hook: "beforeAll",
+				failure: expect.objectContaining({ kind: "hook" }),
+			}),
+		);
+		expect(result.events).toContainEqual(
+			expect.objectContaining({
+				type: "test-fail",
+				name: "times out",
+				failures: [expect.objectContaining({ kind: "timeout" })],
+			}),
 		);
 	});
 });

@@ -68,6 +68,36 @@ describe("parseCliArgs", () => {
 		});
 	});
 
+	it("parses first-class test selection and execution controls", () => {
+		expect(
+			parseCliArgs([
+				"test",
+				"src/router",
+				"src/cache.test.ts",
+				"--run",
+				"router > parameters",
+				"--shuffle",
+				"18492",
+				"--repeat",
+				"10",
+				"--bail",
+			]),
+		).toEqual({
+			kind: "test",
+			paths: ["src/router", "src/cache.test.ts"],
+			nameFilter: "router > parameters",
+			shuffle: 18492,
+			repeat: 10,
+			bail: true,
+			timeoutMs: 5000,
+			compileConcurrency: 1,
+		});
+		expect(parseCliArgs(["test", "--shuffle"])).toMatchObject({
+			kind: "test",
+			shuffle: true,
+		});
+	});
+
 	it("parses verbose doctor output", () => {
 		expect(parseCliArgs(["doctor"])).toEqual({ kind: "doctor", verbose: false });
 		expect(parseCliArgs(["doctor", "--verbose"])).toEqual({
@@ -109,6 +139,7 @@ describe("parseCliArgs", () => {
 		[["build", "--config"], "option '--config' requires a value"],
 		[["build", "one.ts", "two.ts"], "unexpected argument 'two.ts'"],
 		[["run", "one.ts", "two.ts"], "unexpected argument 'two.ts'"],
+		[["test", "--repeat", "0"], "requires a positive integer"],
 	])("rejects malformed arguments %#", (args, message) => {
 		expect(() => parseCliArgs(args)).toThrow(CliUsageError);
 		expect(() => parseCliArgs(args)).toThrow(message);
@@ -121,6 +152,8 @@ describe("command shell", () => {
 		expect(installation).toEqual({
 			runtimeDirectory: path.join(repoRoot, "runtime"),
 			licensePath: path.join(repoRoot, "LICENSE"),
+			testModulePath: path.join(repoRoot, "src/testing/runtime.mjs"),
+			frontendIdentity: "typescript-strip-v1",
 			evalCompiler: {
 				kind: "source",
 				sourceDirectory: path.join(repoRoot, "src"),
@@ -131,8 +164,14 @@ describe("command shell", () => {
 	});
 
 	it("normalizes materialized product compiler resources to absolute paths", () => {
-		const installation = productCompilerInstallation("relative-runtime", "compiler.malw");
+		const installation = productCompilerInstallation(
+			"relative-runtime",
+			"compiler.malw",
+			"test-runtime.mjs",
+		);
 		expect(installation.runtimeDirectory).toBe(path.resolve("relative-runtime"));
+		expect(installation.testModulePath).toBe(path.resolve("test-runtime.mjs"));
+		expect(installation.frontendIdentity).toBe("compact-type-strip-v1");
 		expect(installation.evalCompiler).toEqual({
 			kind: "prebuilt",
 			wirePath: path.resolve("compiler.malw"),
@@ -166,6 +205,10 @@ describe("command shell", () => {
 		expect(productConfig.assets.license).toEqual({
 			type: "file",
 			path: path.join(repoRoot, "LICENSE"),
+		});
+		expect(productConfig.assets.testRuntime).toEqual({
+			type: "file",
+			path: path.join(repoRoot, "src/testing/runtime.mjs"),
 		});
 	});
 

@@ -229,6 +229,17 @@ const validateExercise = (
 		);
 	});
 
+	test("strips typed async arrow properties without erasing the arrow", () => {
+		const source = `export const store = {
+	load: async (name: string): Promise<number | undefined> => name.length,
+	insert: async (name: string, value: number): Promise<number> => value,
+};
+`;
+		expect(stripCompactTypes(source, "object-arrows.ts")).toBe(
+			stripTypesWithTypeScript(source, "object-arrows.ts"),
+		);
+	});
+
 	test("strips ambient and type-only namespaces but rejects runtime namespaces", () => {
 		const source = `declare const ambient: string;
 export declare function load<Value>(value: Value): Value;

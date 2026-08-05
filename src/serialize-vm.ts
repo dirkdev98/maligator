@@ -17,8 +17,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 15 for mapped Arguments function metadata.
-export const WIRE_VERSION = 15;
+// Bumped to 16 for portable host-install manifests.
+export const WIRE_VERSION = 16;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -349,17 +349,25 @@ class Reader {
 	constructor(bytes: Uint8Array) {
 		this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	}
+	private ensure(bytes: number): void {
+		if (bytes < 0 || this.pos + bytes > this.view.byteLength) {
+			throw new RangeError("serialize-vm: truncated or corrupt buffer");
+		}
+	}
 	u8(): number {
+		this.ensure(1);
 		const v = this.view.getUint8(this.pos);
 		this.pos += 1;
 		return v;
 	}
 	u16(): number {
+		this.ensure(2);
 		const v = this.view.getUint16(this.pos, true);
 		this.pos += 2;
 		return v;
 	}
 	fixedU32(): number {
+		this.ensure(4);
 		const v = this.view.getUint32(this.pos, true);
 		this.pos += 4;
 		return v;
@@ -386,11 +394,13 @@ class Reader {
 		return value % 2 === 0 ? value / 2 : -(value + 1) / 2;
 	}
 	f64(): number {
+		this.ensure(8);
 		const v = this.view.getFloat64(this.pos, true);
 		this.pos += 8;
 		return v;
 	}
 	u64(): bigint {
+		this.ensure(8);
 		const v = this.view.getBigUint64(this.pos, true);
 		this.pos += 8;
 		return v;
@@ -487,11 +497,6 @@ export function serializeVmDefinition(
 	def: VmDefinition,
 	options: { debugInfo?: boolean } = {},
 ): Uint8Array {
-	if (def.hostInstalls.length > 0) {
-		throw new Error(
-			"serialize-vm: host installs are not supported in portable wire definitions",
-		);
-	}
 	const debug = options.debugInfo !== false;
 	const w = new Writer();
 
@@ -557,9 +562,19 @@ export function serializeVmDefinition(
 		w.u32(0); // source positions
 	}
 
-	// The wire reserves this section for host installs, but portable definitions
-	// cannot resolve native installer pointers without a registry.
-	w.u32(0);
+	w.u32(def.hostInstalls.length);
+	for (const install of def.hostInstalls) {
+		const installer = utf8Encode(install.installer);
+		w.u32(installer.length);
+		for (const byte of installer) w.u8(byte);
+		w.u32(install.exports.length);
+		for (const entry of install.exports) {
+			const name = utf8Encode(entry.name);
+			w.u32(name.length);
+			for (const byte of name) w.u8(byte);
+			w.i32(entry.slot);
+		}
+	}
 
 	return w.finish();
 }
@@ -1177,10 +1192,22 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	void debug;
 
 	const hostInstallCount = r.u32();
-	if (hostInstallCount > 0) {
-		throw new Error(
-			"serialize-vm: host installs are not supported in portable wire definitions",
-		);
+	const hostInstalls: VmDefinition["hostInstalls"] = [];
+	for (let index = 0; index < hostInstallCount; index++) {
+		const installerLength = r.count(1);
+		const installerBytes = new Array<number>(installerLength);
+		for (let byte = 0; byte < installerLength; byte++) {
+			installerBytes[byte] = r.u8();
+		}
+		const hostExports = [];
+		const exportCount = r.count(1);
+		for (let exportIndex = 0; exportIndex < exportCount; exportIndex++) {
+			const nameLength = r.count(1);
+			const nameBytes = new Array<number>(nameLength);
+			for (let byte = 0; byte < nameLength; byte++) nameBytes[byte] = r.u8();
+			hostExports.push({ name: utf8Decode(nameBytes), slot: r.i32() });
+		}
+		hostInstalls.push({ installer: utf8Decode(installerBytes), exports: hostExports });
 	}
 	if (r.remaining() !== 0) {
 		throw new Error("serialize-vm: trailing data");
@@ -1193,7 +1220,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		bigintConstants,
 		literalTemplateData,
 		globalCount,
-		hostInstalls: [],
+		hostInstalls,
 		files,
 		sourcePositions,
 		cjsModuleFunctionIndices,

@@ -36,6 +36,10 @@ export function productCliConfig(
 	return resolveBuildConfig({
 		assets: {
 			compilerWire: { type: "file", path: path.resolve(compilerWirePath) },
+			testRuntime: {
+				type: "file",
+				path: path.resolve(repositoryRoot, "src/testing/runtime.mjs"),
+			},
 			license: { type: "file", path: path.resolve(repositoryRoot, "LICENSE") },
 			runtime: {
 				type: "directory",

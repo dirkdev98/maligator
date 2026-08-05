@@ -1,4 +1,8 @@
-import type { BuildModuleGraphOptions, ModuleRecord } from "./module-graph.ts";
+import type {
+	BuildModuleGraphOptions,
+	ModuleGraph,
+	ModuleRecord,
+} from "./module-graph.ts";
 import { buildModuleGraph } from "./module-graph.ts";
 import { analyzeFile, debugSemanticProgram } from "./semantic-analysis.ts";
 import type { SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
@@ -19,7 +23,11 @@ export function loadEntrypointAndRunSemanticAnalysis(
 	options: BuildModuleGraphOptions = {},
 ): SemanticProgram {
 	const graph = buildModuleGraph(entrypointPath, options);
+	return runSemanticAnalysisForGraph(graph);
+}
 
+/** Analyze an already-built graph so cache-aware tooling does not parse twice. */
+export function runSemanticAnalysisForGraph(graph: ModuleGraph): SemanticProgram {
 	const program: SemanticProgram = {
 		entrypointPath: graph.entry,
 		files: [],

@@ -16,7 +16,7 @@ import type { NativeBuildPlan } from "./build-flags.ts";
 import { initProject, InitError } from "./cli-init.ts";
 import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
-import type { BuildCommand, RunCommand } from "./cli.ts";
+import type { BuildCommand, RunCommand, TestCommand } from "./cli.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
@@ -37,6 +37,7 @@ import {
 } from "./semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
+import { executeTestCommand } from "./testing/command.ts";
 import {
 	formatToolchainReport,
 	formatToolCommand,
@@ -57,6 +58,10 @@ export interface CompilerInstallation {
 	runtimeDirectory: string;
 	/** License notice copied into deployable artifacts. */
 	licensePath?: string;
+	/** Source implementation supplied for the virtual maligator:test module. */
+	testModulePath: string;
+	/** Cache identity of the active TypeScript erasure frontend. */
+	frontendIdentity: string;
 	evalCompiler:
 		| { kind: "source"; sourceDirectory: string; entrypoint: string }
 		| { kind: "prebuilt"; wirePath: string };
@@ -69,6 +74,8 @@ export function developmentCompilerInstallation(
 	return {
 		runtimeDirectory: path.resolve(sourceDirectory, "../runtime"),
 		licensePath: path.resolve(sourceDirectory, "../LICENSE"),
+		testModulePath: path.join(sourceDirectory, "testing/runtime.mjs"),
+		frontendIdentity: "typescript-strip-v1",
 		evalCompiler: {
 			kind: "source",
 			sourceDirectory,
@@ -80,11 +87,14 @@ export function developmentCompilerInstallation(
 export function productCompilerInstallation(
 	runtimeDirectory: string,
 	compilerWirePath: string,
+	testModulePath: string,
 	licensePath?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
 		...(licensePath === undefined ? {} : { licensePath: path.resolve(licensePath) }),
+		testModulePath: path.resolve(testModulePath),
+		frontendIdentity: "compact-type-strip-v1",
 		evalCompiler: { kind: "prebuilt", wirePath: path.resolve(compilerWirePath) },
 	};
 }
@@ -110,7 +120,7 @@ function commandError(message: string, exitCode = 1): never {
 }
 
 function loadCommandConfig(
-	command: BuildCommand | RunCommand,
+	command: BuildCommand | RunCommand | TestCommand,
 	stripTypes: BuildConfigTypeStripper,
 ): ResolvedBuildConfig {
 	try {
@@ -380,7 +390,10 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 }
 
 /** Product command dispatcher shared by the Node CLI and the compiled bootstrap. */
-export function runCli(args: Array<string>, context: CommandContext): void {
+export async function runCli(
+	args: Array<string>,
+	context: CommandContext,
+): Promise<void> {
 	try {
 		const command = parseCliArgs(args);
 		if (command.kind === "help") {
@@ -415,8 +428,23 @@ export function runCli(args: Array<string>, context: CommandContext): void {
 			if (report.toolchain === undefined) process.exit(1);
 			return;
 		}
-		if (command.kind === "build") buildCommand(command, context);
-		else runCommand(command, context);
+		if (command.kind === "build") {
+			buildCommand(command, context);
+		} else if (command.kind === "run") {
+			runCommand(command, context);
+		} else {
+			let result: Awaited<ReturnType<typeof executeTestCommand>>;
+			try {
+				result = await executeTestCommand(
+					command,
+					context,
+					loadCommandConfig(command, context.stripTypes),
+				);
+			} catch (error) {
+				commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			if (result.exitCode !== 0) process.exit(result.exitCode);
+		}
 	} catch (error) {
 		if (error instanceof CliUsageError) {
 			// eslint-disable-next-line no-console -- usage failures belong on stderr.
