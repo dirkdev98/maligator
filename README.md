@@ -33,6 +33,7 @@ maligator init
 maligator doctor [--verbose] [--target rust-triple]
 maligator build [entry] [--production] [--artifact directory] [--target rust-triple] [--config path]
 maligator run [entry] [--config path] [-- args...]
+maligator test [path ...] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
 ```
 
 The working directory is always the project root. Relative entries and `--config`
@@ -62,6 +63,51 @@ not reconstruct its contents.
 
 Use `maligator --help` and `maligator --version` for command help and version output.
 Unknown options, missing option values, and extra positional arguments are errors.
+
+## Application tests
+
+`maligator test` is an interpreter-only toolchain path. It discovers
+`*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`, builds each module graph,
+serializes VM input, and runs it in the interpreter already embedded in the
+Maligator executable. It never emits C or invokes a native compiler/linker. The
+content-addressed cache stores frontend wire artifacts, not successful results;
+every selected test executes on every command.
+
+```typescript
+import { beforeEach, describe, expect, test } from "maligator:test";
+import { createStore } from "./store.ts";
+
+describe("store", () => {
+	let store: ReturnType<typeof createStore>;
+
+	beforeEach(() => {
+		store = createStore();
+	});
+
+	test("returns inserted values", () => {
+		store.set("answer", 42);
+		expect(store.get("answer")).toBe(42);
+	});
+
+	test("loads asynchronously", async () => {
+		store.set("answer", 42);
+		await expect(store.load("answer")).resolves.toEqual(42);
+	});
+});
+```
+
+The initial API includes nested suites; `beforeAll`, `afterAll`, `beforeEach`, and
+`afterEach`; synchronous and async callbacks; `skip`, `todo`, `only`, and `each`;
+scalar/structural/throw matchers; `.not`, `.resolves`, `.rejects`; and the
+`any`, `anything`, `stringMatching`, `objectContaining`, and `arrayContaining`
+asymmetric matchers. A focused `.only` run prints a warning.
+
+Selections are stable and serial by default. `--run` filters hierarchical names,
+`--shuffle` reports its reproducible seed, `--repeat` reruns the registered suite
+without recompiling, and `--bail` opts out of the default complete policy. The MVP
+uses one shared Realm/isolate across files; globals, intrinsic prototypes, host
+state, and uncancelled async resources are therefore shared. Per-file Realm
+isolation and worker scheduling are deferred rather than simulated.
 
 ## Configuration
 

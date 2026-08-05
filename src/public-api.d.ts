@@ -1,5 +1,7 @@
 /// <reference lib="dom" />
 
+import "./test-api.d.ts";
+
 export type MaligatorIntlFeature =
 	| "collator"
 	| "number-format"

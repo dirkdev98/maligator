@@ -24,6 +24,10 @@ describe("@maligator/cli public TypeScript API", () => {
 			path.join(packageDirectory, "index.d.ts"),
 		);
 		copyFileSync(
+			path.resolve(import.meta.dirname, "../src/test-api.d.ts"),
+			path.join(packageDirectory, "test-api.d.ts"),
+		);
+		copyFileSync(
 			path.resolve(import.meta.dirname, "../npm/cli/index.js"),
 			path.join(packageDirectory, "index.js"),
 		);
@@ -80,6 +84,16 @@ defineBuild({
 	MaligatorServeOptions,
 	MaligatorServer,
 } from "@maligator/cli";
+import { beforeEach, describe, expect, test } from "maligator:test";
+
+describe("public types", () => {
+	beforeEach(async () => Promise.resolve());
+	test("supports matchers", async () => {
+		expect({ answer: 42 }).toMatchObject({ answer: expect.any(Number) });
+		await expect(Promise.resolve(42)).resolves.toBe(42);
+	});
+	test.todo("future");
+});
 
 const materializeOptions: MaligatorMaterializeOptions = {
 	baseDirectory: ".cache/application",

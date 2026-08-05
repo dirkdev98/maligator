@@ -50,10 +50,35 @@ maligator init
 maligator doctor [--verbose] [--target rust-triple]
 maligator build [entry] [--production] [--artifact directory] [--target rust-triple] [--config path]
 maligator run [entry] [--config path] [-- args...]
+maligator test [path ...] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
 ```
 
 Run commands from the project root. Maligator does not search parent directories
 for configuration.
+
+## Testing
+
+`maligator test` discovers conventional JavaScript and erasable-TypeScript test
+files and runs them through Maligator's embedded interpreter. Test runs do not
+generate C or invoke the native toolchain. Import the Maligator-owned API from
+`maligator:test`:
+
+```typescript
+import { describe, expect, test } from "maligator:test";
+
+describe("router", () => {
+	test("matches parameters", async () => {
+		await expect(Promise.resolve({ id: 42 })).resolves.toMatchObject({
+			id: expect.any(Number),
+		});
+	});
+});
+```
+
+Use `--run` for hierarchical-name filtering, `--shuffle [seed]` for reproducible
+ordering, `--repeat` for repeated execution without recompilation, and `--bail`
+to stop after the first failure. Frontend bytecode is cached by source and
+transitive dependency content; test results are never cached.
 
 ## Production builds
 

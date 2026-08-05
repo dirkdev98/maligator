@@ -95,13 +95,9 @@ describe("registration and lifecycle", () => {
 		expect(first.passed).toBe(4);
 		expect(first.skipped).toBe(0);
 		expect(first.todo).toBe(0);
-		expect(first.events).toContainEqual(
-			expect.objectContaining({
-				type: "diagnostic",
-				level: "warning",
-				message: expect.stringContaining(".only"),
-			}),
-		);
+		const diagnostic = first.events.find((event) => event.type === "diagnostic");
+		expect(diagnostic).toMatchObject({ type: "diagnostic", level: "warning" });
+		expect(diagnostic?.message).toContain(".only");
 		expect(firstOrder).toEqual(order);
 		expect(first.events.map((event) => event.type)).toEqual(
 			second.events.map((event) => event.type),
@@ -124,7 +120,7 @@ describe("registration and lifecycle", () => {
 		expect(
 			result.events
 				.filter((event) => event.type === "test-skip" || event.type === "test-todo")
-				.every((event) => event.name.startsWith("router >")),
+				.every((event) => event.name?.startsWith("router >") === true),
 		).toBe(true);
 	});
 
@@ -141,21 +137,21 @@ describe("registration and lifecycle", () => {
 
 		const result = await run({ timeoutMs: 5 });
 		expect(result.failed).toBe(2);
-		expect(result.events).toContainEqual(
-			expect.objectContaining({
-				type: "hook-fail",
-				name: "broken setup",
-				hook: "beforeAll",
-				failure: expect.objectContaining({ kind: "hook" }),
-			}),
+		const hookFailure = result.events.find((event) => event.type === "hook-fail");
+		expect(hookFailure).toMatchObject({
+			type: "hook-fail",
+			name: "broken setup",
+			hook: "beforeAll",
+			failure: { kind: "hook" },
+		});
+		const timeoutFailure = result.events.find(
+			(event) => event.type === "test-fail" && event.name === "times out",
 		);
-		expect(result.events).toContainEqual(
-			expect.objectContaining({
-				type: "test-fail",
-				name: "times out",
-				failures: [expect.objectContaining({ kind: "timeout" })],
-			}),
-		);
+		expect(timeoutFailure).toMatchObject({
+			type: "test-fail",
+			name: "times out",
+			failures: [{ kind: "timeout" }],
+		});
 	});
 });
 

@@ -1,6 +1,6 @@
 # First-class testing
 
-Status: MVP implementation roadmap
+Status: MVP implemented
 
 ## Product contract
 
@@ -106,13 +106,21 @@ The cache stores serialized VM input, never a test result. Its identity includes
 - the TypeScript stripping implementation identity.
 
 A small per-entry manifest records dependency paths, sizes, mtimes, and content
-digests. An unchanged warm run validates stat signatures and loads wire without
-rebuilding the graph. Any changed signature rebuilds the graph and hashes all
-reachable content before publishing a new content-addressed artifact. Execution
-always happens after a cache hit.
+digests. An unchanged warm run validates both stat signatures and source digests,
+then loads wire without rebuilding the graph. Any changed content rebuilds the
+graph and hashes all reachable modules before publishing a new
+content-addressed artifact. Execution always happens after a cache hit.
 
 Cold, warm, changed-entry, changed-shared-dependency, many-file, and async-heavy
-fixtures report discovery, frontend/cache, and execution time separately.
+fixtures report discovery, frontend/cache, and execution time separately. The
+reproducible exercise is:
+
+```sh
+node scripts/test-runner-performance.ts /path/to/maligator
+```
+
+It generates 20 small files plus an async-heavy file in a temporary project,
+measures each cache case, and removes the project afterward.
 
 ## Diagnostics
 

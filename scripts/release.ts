@@ -152,6 +152,7 @@ const launcherPackageFiles = [
 	"bin/maligator.js",
 	"index.js",
 	"index.d.ts",
+	"test-api.d.ts",
 	"README.md",
 	"LICENSE",
 ];
@@ -219,6 +220,10 @@ function stageLauncherPackage(version: string, selected: typeof targets): string
 	copyFileSync(
 		path.join(repositoryRoot, "src/public-api.d.ts"),
 		path.join(directory, "index.d.ts"),
+	);
+	copyFileSync(
+		path.join(repositoryRoot, "src/test-api.d.ts"),
+		path.join(directory, "test-api.d.ts"),
 	);
 	copyFileSync(path.join(repositoryRoot, "LICENSE"), path.join(directory, "LICENSE"));
 	writeJson(
