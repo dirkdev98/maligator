@@ -43,7 +43,7 @@ registry's `latest` tag.
       the local alpha process has stabilized.
 - [ ] Run `npm run test:full:report` for a release candidate and resolve or record
       every failure; this remains approval-only.
-- [ ] Write concise release notes with the supported matrix, required application
+- [x] Write concise release notes with the supported matrix, required application
       build toolchains, known limitations, and an issue-reporting path.
 - [ ] Define the failed-release procedure: stop the workflow, deprecate a broken npm
       version rather than reusing it, fix forward, and publish a new alpha.

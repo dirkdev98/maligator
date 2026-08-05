@@ -1,6 +1,6 @@
 {
 	"name": "maligator",
-	"version": "0.1.0-alpha.1",
+	"version": "0.1.0-alpha.2",
 	"private": true,
 	"description": "Ahead-of-time JavaScript compiler and native runtime",
 	"homepage": "https://github.com/dirkdev98/maligator#readme",

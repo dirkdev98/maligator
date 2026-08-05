@@ -367,34 +367,38 @@ function smokePackedLauncher(
 	const smokeRoot = path.join(releaseRoot, "pack-smoke");
 	mkdirSync(smokeRoot, { recursive: true });
 	const project = mkdtempSync(path.join(smokeRoot, "project-"));
-	writeJson(path.join(project, "package.json"), {
-		name: "maligator-release-smoke",
-		version: "0.0.0",
-		private: true,
-	});
-	const installArguments = [
-		"install",
-		"--ignore-scripts",
-		"--no-audit",
-		"--no-fund",
-		"--omit=optional",
-		"--offline",
-	];
-	execFileSync("npm", [...installArguments, launcherTarball, platformTarball], {
-		cwd: project,
-		stdio: "pipe",
-		env: npmEnvironment(),
-	});
-	const output = execFileSync(
-		path.join(project, "node_modules/.bin/maligator"),
-		["--version"],
-		{
+	try {
+		writeJson(path.join(project, "package.json"), {
+			name: "maligator-release-smoke",
+			version: "0.0.0",
+			private: true,
+		});
+		const installArguments = [
+			"install",
+			"--ignore-scripts",
+			"--no-audit",
+			"--no-fund",
+			"--omit=optional",
+			"--offline",
+		];
+		execFileSync("npm", [...installArguments, launcherTarball, platformTarball], {
 			cwd: project,
-			encoding: "utf-8",
-		},
-	);
-	if (output.trim() !== version) {
-		throw new Error(`packed launcher reported ${output.trim()}, expected ${version}`);
+			stdio: "pipe",
+			env: npmEnvironment(),
+		});
+		const output = execFileSync(
+			path.join(project, "node_modules/.bin/maligator"),
+			["--version"],
+			{
+				cwd: project,
+				encoding: "utf-8",
+			},
+		);
+		if (output.trim() !== version) {
+			throw new Error(`packed launcher reported ${output.trim()}, expected ${version}`);
+		}
+	} finally {
+		rmSync(project, { recursive: true, force: true });
 	}
 }
 

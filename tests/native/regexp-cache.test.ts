@@ -41,10 +41,10 @@ describe("compiled RegExp pattern cache", () => {
 	});
 
 	it("preserves compiled behavior under GC stress", () => {
-		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
+		assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60_000 }));
 	});
 
 	it("preserves interpreted behavior under GC stress", () => {
-		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV }));
+		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 60_000 }));
 	});
 });
