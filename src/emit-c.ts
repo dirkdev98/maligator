@@ -480,7 +480,7 @@ export function emitCompiledFunction(
 	// is only ever set for the boxed fallback of a promoting normal function, never a
 	// coroutine.)
 	if (fn.isGenerator || fn.isAsync) {
-		return emitResumableFunction(fn, index, suffix, debug);
+		return emitResumableFunction(fn, index, suffix, debug, linkage);
 	}
 
 	// A function with its own captured slots needs a per-activation MalEnv node
@@ -825,6 +825,7 @@ function emitResumableFunction(
 	index: number,
 	suffix: string,
 	debug: boolean,
+	linkage: "static" | "external",
 ): CompiledFunction | null {
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
@@ -883,7 +884,7 @@ function emitResumableFunction(
 	const lines: Array<string> = [];
 
 	lines.push(
-		`static MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {`,
+		`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);

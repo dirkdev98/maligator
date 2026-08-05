@@ -178,8 +178,9 @@ describe("emit-vm instruction packing", () => {
 	});
 
 	it("splits compiled functions into bounded external translation units", () => {
-		const functions = Array.from({ length: 12 }, () => ({
+		const functions = Array.from({ length: 12 }, (_, index) => ({
 			...fn,
+			isAsync: index === 1,
 			instructions: [...fn.instructions],
 		}));
 		const splitDefinition = {
@@ -202,6 +203,11 @@ describe("emit-vm instruction packing", () => {
 		);
 		expect(units.slice(1).join("\n")).not.toContain(
 			"static MalValue mal_compiled_0(MalVm *vm",
+		);
+		expect(units[0]).toContain("MalValue mal_compiled_1(MalVm *vm");
+		expect(units.slice(1).join("\n")).toContain("MalValue mal_compiled_1(MalVm *vm");
+		expect(units.slice(1).join("\n")).not.toContain(
+			"static MalValue mal_compiled_1(MalVm *vm",
 		);
 	});
 
