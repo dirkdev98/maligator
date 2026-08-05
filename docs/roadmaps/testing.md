@@ -14,13 +14,13 @@ The public authoring module is owned by Maligator:
 
 ```js
 import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	test,
 } from "maligator:test";
 ```
 
