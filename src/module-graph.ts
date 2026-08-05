@@ -53,6 +53,11 @@ export interface ModuleDependency {
 	 * calls throw during graph construction rather than landing here.
 	 */
 	resolvedPath: string | null;
+	/**
+	 * A missing literal CommonJS require whose synchronous resolution error is
+	 * caught by a surrounding try/catch in the same execution context.
+	 */
+	catchableMissing?: true;
 }
 
 export interface ModuleRecord {
@@ -249,6 +254,13 @@ export function buildModuleGraph(
 					if (dependency.kind === "dynamic" && !resolved.hard) {
 						return { ...dependency, resolvedPath: null };
 					}
+					if (
+						dependency.kind === "require" &&
+						dependency.catchableMissing &&
+						!resolved.hard
+					) {
+						return { ...dependency, resolvedPath: null };
+					}
 					// A static import that cannot resolve fails the graph — the
 					// resolution-phase SyntaxError of 16.2.1.6.1.
 					throw new SyntaxError(
@@ -372,6 +384,33 @@ function findNearestPackageType(
 interface ExtractedDependency {
 	specifier: string | null;
 	kind: ModuleDependencyKind;
+	catchableMissing?: true;
+}
+
+function requireErrorIsCatchable(
+	call: ESTree.CallExpression,
+	parents: ReadonlyMap<ESTree.Node, ESTree.Node>,
+): boolean {
+	let current: ESTree.Node = call;
+	for (let parent = parents.get(current); parent; parent = parents.get(current)) {
+		if (
+			parent.type === "FunctionDeclaration" ||
+			parent.type === "FunctionExpression" ||
+			parent.type === "ArrowFunctionExpression" ||
+			(parent.type === "PropertyDefinition" && !parent.static)
+		) {
+			return false;
+		}
+		if (
+			parent.type === "TryStatement" &&
+			parent.block === current &&
+			parent.handler !== null
+		) {
+			return true;
+		}
+		current = parent;
+	}
+	return false;
 }
 
 /**
@@ -389,8 +428,10 @@ function extractDependencies(
 	goal: ModuleGoal,
 ): Array<ExtractedDependency> {
 	const dependencies: Array<ExtractedDependency> = [];
+	const parents = new Map<ESTree.Node, ESTree.Node>();
 
-	traverseEstree(ast.body, (node) => {
+	traverseEstree(ast.body, (node, { parent }) => {
+		if (parent) parents.set(node, parent);
 		switch (node.type) {
 			case "ImportDeclaration":
 				dependencies.push({ specifier: literalString(node.source), kind: "import" });
@@ -421,6 +462,9 @@ function extractDependencies(
 					dependencies.push({
 						specifier: literalString(node.arguments[0]),
 						kind: "require",
+						...(requireErrorIsCatchable(node, parents)
+							? { catchableMissing: true as const }
+							: {}),
 					});
 				}
 				break;

@@ -2729,6 +2729,15 @@ function tryCompileCjsRequireCall(
 		return undefined;
 	}
 	const cjsPath = resolveCjsModulePath(program, fn.semanticFile, specifier.value);
+	if (cjsPath === null) {
+		return emitMissingCjsModuleThrow(
+			program,
+			fn,
+			cursor,
+			specifier.value,
+			fn.semanticFile.path,
+		);
+	}
 	if (
 		cjsPath === undefined ||
 		(!program.cjsModuleId.has(cjsPath) &&
@@ -2740,21 +2749,54 @@ function tryCompileCjsRequireCall(
 	return emitCjsModuleExports(program, fn, cursor, cjsPath);
 }
 
-/** Resolve a `require` specifier to the target module's resolved path via the graph. */
+function emitMissingCjsModuleThrow(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	specifier: string,
+	requesterPath: string,
+): number {
+	const constructor = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadIntrinsic",
+		registers: [constructor],
+		intrinsic: "Error",
+	});
+	const message = compileStaticString(
+		program,
+		fn,
+		cursor,
+		`Cannot find module '${specifier}'\nRequire stack:\n- ${requesterPath}`,
+	);
+	const error = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "construct",
+		registers: [error, constructor, message],
+	});
+	const code = compileStaticString(program, fn, cursor, "MODULE_NOT_FOUND");
+	emitStoreProperty(program, fn, cursor, error, "code", code);
+	cursor.block.instructions.push({ type: "throw", registers: [error] });
+	return error;
+}
+
+/**
+ * Resolve a `require` specifier through the graph. `null` means the missing
+ * module was retained specifically so its Node-shaped error can be caught.
+ */
 function resolveCjsModulePath(
 	program: IntermediateProgram,
 	file: SemanticFile,
 	specifier: string,
-): string | undefined {
+): string | null | undefined {
 	const dependency = program.semantic.graph?.modules
 		.get(file.path)
 		?.dependencies.find(
 			(candidate) =>
 				candidate.kind === "require" &&
 				candidate.specifier === specifier &&
-				candidate.resolvedPath !== null,
+				(candidate.resolvedPath !== null || candidate.catchableMissing),
 		);
-	return dependency?.resolvedPath ?? undefined;
+	return dependency?.resolvedPath;
 }
 
 /**

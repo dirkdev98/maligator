@@ -268,6 +268,53 @@ test("extracts require() dependencies from a CommonJS module", () => {
 	expect(order.indexOf("cjs-b.cjs")).toBeLessThan(order.indexOf("cjs-entry.cjs"));
 });
 
+test("retains a missing literal require caught in the same execution context", () => {
+	write(
+		"optional-require.cjs",
+		`function probe() {
+	try {
+		return require("missing-optional-package");
+	} catch (error) {
+		return error;
+	}
+}
+module.exports = probe();
+`,
+	);
+	const graph = buildModuleGraph(path.join(root, "optional-require.cjs"));
+	expect(graph.modules.get(graph.entry)!.dependencies).toContainEqual({
+		specifier: "missing-optional-package",
+		kind: "require",
+		resolvedPath: null,
+		catchableMissing: true,
+	});
+});
+
+test("rejects missing requires not dynamically protected by a catch", () => {
+	write(
+		"optional-nested-function.cjs",
+		`try {
+	const later = () => require("missing-from-nested-function");
+	globalThis.later = later;
+} catch {}
+`,
+	);
+	expect(() => buildModuleGraph(path.join(root, "optional-nested-function.cjs"))).toThrow(
+		/Cannot resolve 'missing-from-nested-function'/,
+	);
+
+	write(
+		"optional-finally.cjs",
+		`try {
+	require("missing-from-try-finally");
+} finally {}
+`,
+	);
+	expect(() => buildModuleGraph(path.join(root, "optional-finally.cjs"))).toThrow(
+		/Cannot resolve 'missing-from-try-finally'/,
+	);
+});
+
 test("resolves node: CommonJS built-ins to their canonical host identity", () => {
 	write("cjs-node.cjs", `module.exports = require("node:path");\n`);
 	const graph = buildModuleGraph(path.join(root, "cjs-node.cjs"), {

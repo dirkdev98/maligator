@@ -51,6 +51,23 @@ check(data.answer === 42 && data.nested.ok === true);
 check(data.__proto__.own === true);
 check(Object.getPrototypeOf(data) === Object.prototype);
 
+function probeOptionalDependency() {
+	try {
+		require("definitely-missing-maligator-probe");
+	} catch (error) {
+		return error;
+	}
+	return undefined;
+}
+const missingDependency = probeOptionalDependency();
+check(missingDependency instanceof Error);
+check(missingDependency.code === "MODULE_NOT_FOUND");
+check(
+	missingDependency.message.startsWith(
+		"Cannot find module 'definitely-missing-maligator-probe'",
+	),
+);
+
 const filenames = require("./commonjs-filenames.cjs");
 check(__filename === __dirname + "/commonjs.cjs");
 check(filenames.filename === __dirname + "/commonjs-filenames.cjs");
