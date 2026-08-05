@@ -10,7 +10,11 @@ import type { VmDefinition } from "../src/lower-vm.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
-import { serializeVmDefinition, WIRE_OPCODES } from "../src/serialize-vm.ts";
+import {
+	deserializeVmDefinition,
+	serializeVmDefinition,
+	WIRE_OPCODES,
+} from "../src/serialize-vm.ts";
 
 /**
  * End-to-end coverage of the `node:*` host-built-in / `process` install manifest:
@@ -322,14 +326,13 @@ describe("host-install manifest", () => {
 		expect(c).toContain(".host_installs = nullptr,");
 	});
 
-	it("rejects a compiled host program from the portable wire format", () => {
+	it("round-trips a compiled host program through the portable wire format", () => {
 		const def = compile(
 			`import { join } from "node:path";\nglobalThis.sink = [join("a"), process.pid];\n`,
 			{ node: true },
 		);
 		expect(def.hostInstalls.length).toBeGreaterThan(0);
-		expect(() => serializeVmDefinition(def)).toThrow(
-			/host installs are not supported in portable wire definitions/,
-		);
+		const restored = deserializeVmDefinition(serializeVmDefinition(def));
+		expect(restored.hostInstalls).toEqual(def.hostInstalls);
 	});
 });

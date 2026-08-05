@@ -27,6 +27,7 @@ describe("test suite planner", () => {
 		expect(full).toContain("full: self-hosted frontend");
 		expect(full).toContain("full: Test262 interpreted GC verification");
 		expect(smoke).toContain("  npm run type-check\n");
+		expect(smoke).not.toContain("tests/fixtures/maligator-test");
 	});
 
 	it("advertises approval boundaries and focused lanes", () => {

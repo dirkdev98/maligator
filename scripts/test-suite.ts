@@ -219,7 +219,10 @@ if (unknownWpt.length > 0) {
 
 const allUnit = listFilesRecursively(
 	"tests",
-	(file) => file.endsWith(".test.ts") && !file.startsWith("tests/native/"),
+	(file) =>
+		file.endsWith(".test.ts") &&
+		!file.startsWith("tests/fixtures/") &&
+		!file.startsWith("tests/native/"),
 ).sort();
 for (const entry of fullOnlyUnit) {
 	if (!allUnit.includes(entry)) throw new Error(`unknown full-only unit test: ${entry}`);
