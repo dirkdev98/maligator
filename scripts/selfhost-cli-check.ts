@@ -99,6 +99,23 @@ function invoke(args: Array<string>, envOverrides: Record<string, string> = {}):
 	});
 }
 
+function invokeFailure(
+	args: Array<string>,
+	envOverrides: Record<string, string> = {},
+): string {
+	const result = spawnSync(distributedCli, args, {
+		cwd: project,
+		env: { ...isolatedEnv, ...envOverrides },
+		encoding: "utf-8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (result.error) throw result.error;
+	if (result.status === 0) {
+		throw new Error(`command unexpectedly succeeded: maligator ${args.join(" ")}`);
+	}
+	return `${result.stdout}\n${result.stderr}`;
+}
+
 if (existsSync(configPath)) {
 	throw new Error(`integration refuses to overwrite existing ${configPath}`);
 }
@@ -177,9 +194,22 @@ test("interprets async tests with host dependencies", async () => {
 	) {
 		throw new Error(`cold interpreted test run was not successful:\n${coldTestOutput}`);
 	}
-	const warmTestOutput = invoke(["test", "example.test.ts"], testOnlyEnv);
+	const warmTestOutput = invoke(
+		[
+			"test",
+			"example.test.ts",
+			"--run",
+			"interprets async",
+			"--shuffle",
+			"18492",
+			"--repeat",
+			"2",
+		],
+		testOnlyEnv,
+	);
 	if (
-		!warmTestOutput.includes("1 passed, 0 failed") ||
+		!warmTestOutput.includes("Shuffle seed: 18492") ||
+		!warmTestOutput.includes("2 passed, 0 failed") ||
 		!warmTestOutput.includes("cache hit")
 	) {
 		throw new Error(`warm interpreted test run did not reuse wire:\n${warmTestOutput}`);
@@ -187,6 +217,48 @@ test("interprets async tests with host dependencies", async () => {
 	console.log(
 		"ok   test interpreted TypeScript and node:path without an available native compiler",
 	);
+
+	writeFileSync(
+		path.join(project, "syntax.test.ts"),
+		`import { test } from "maligator:test";\ntest("broken", () => {\n`,
+	);
+	const syntaxOutput = invokeFailure(["test", "syntax.test.ts"], testOnlyEnv);
+	if (!syntaxOutput.includes("SyntaxError")) {
+		throw new Error(`syntax failures were not categorized:\n${syntaxOutput}`);
+	}
+
+	writeFileSync(
+		path.join(project, "module-load.test.ts"),
+		`import { test } from "maligator:test";
+throw new Error("module load sentinel");
+test("unreachable", () => {});
+`,
+	);
+	const moduleLoadOutput = invokeFailure(["test", "module-load.test.ts"], testOnlyEnv);
+	if (
+		!moduleLoadOutput.includes("ModuleLoadError") ||
+		!moduleLoadOutput.includes("module load sentinel")
+	) {
+		throw new Error(`module-load failures were not categorized:\n${moduleLoadOutput}`);
+	}
+
+	writeFileSync(
+		path.join(project, "assertion.test.ts"),
+		`import { expect, test } from "maligator:test";
+test("reports source positions", () => {
+\tconst received = { status: 200 };
+\texpect(received).toEqual({ status: 400 });
+});
+`,
+	);
+	const assertionOutput = invokeFailure(["test", "assertion.test.ts"], testOnlyEnv);
+	if (
+		!assertionOutput.includes("AssertionError") ||
+		!assertionOutput.includes("assertion.test.ts:4")
+	) {
+		throw new Error(`assertion failures lost source diagnostics:\n${assertionOutput}`);
+	}
+	console.log("ok   test categorized syntax, module-load, and assertion failures");
 } finally {
 	if (createdConfig) rmSync(configPath, { force: true });
 }
