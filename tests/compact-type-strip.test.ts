@@ -38,7 +38,8 @@ function render(model: Model, prefix: string): string {
 	});
 
 	test("strips Node-compatible inline type specifiers", () => {
-		const source = `import { type Model, value, type Other as Alias } from "./model.ts";
+		const source = `import DefaultModel, { type Model } from "./default-model.ts";
+import { type Model, value, type Other as Alias } from "./model.ts";
 export { type Model, value };
 `;
 		const stripped = stripCompactTypes(source, "imports.ts");

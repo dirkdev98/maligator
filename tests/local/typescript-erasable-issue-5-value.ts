@@ -5,3 +5,7 @@ export type Value = {
 export const value: Value = {
 	label: "compact",
 };
+
+export default value;
+
+export const ok = <const ValueType>(value: ValueType) => ({ value });

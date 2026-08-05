@@ -562,7 +562,14 @@ function blankInlineTypeSpecifiers(
 	for (let wi = 0; wi < words.length; wi++) {
 		const word = words[wi]!;
 		if (word.text !== "import" && word.text !== "export") continue;
-		const open = nextCodeIndex(source, code, word.end);
+		let open = nextCodeIndex(source, code, word.end);
+		if (word.text === "import" && source[open] !== "{") {
+			const defaultBinding = wordAt(source, code, open);
+			if (defaultBinding === undefined) continue;
+			const comma = nextCodeIndex(source, code, defaultBinding.end);
+			if (source[comma] !== ",") continue;
+			open = nextCodeIndex(source, code, comma + 1);
+		}
 		if (source[open] !== "{") continue;
 		const close = matching(source, code, open, "{", "}", filePath);
 		let i = nextCodeIndex(source, code, open + 1);
