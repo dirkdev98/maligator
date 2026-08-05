@@ -80,7 +80,7 @@ test("answer", () => {
 		);
 		const options = {
 			file: entry,
-			config: resolveBuildConfig({}),
+			config: resolveBuildConfig({ engine: { regexp: false } }),
 			stripTypes: stripTypesWithTypeScript,
 			stripperIdentity: "test-typescript-strip",
 			testModuleSource,
