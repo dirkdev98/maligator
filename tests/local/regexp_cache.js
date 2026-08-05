@@ -41,6 +41,60 @@ check(
 	!new RegExp("a").test("A") && new RegExp("a", "i").test("A"),
 );
 
+const fastRecord = /^level=([A-Z]+);user=([a-z]+)-([0-9]+);action=([a-z]+);/.exec(
+	"level=INFO;user=alpha-17;action=read;tail",
+);
+check(
+	"literal and range captures preserve exact ranges",
+	fastRecord[0] === "level=INFO;user=alpha-17;action=read;" &&
+		fastRecord[1] === "INFO" &&
+		fastRecord[2] === "alpha" &&
+		fastRecord[3] === "17" &&
+		fastRecord[4] === "read",
+);
+
+const fastGlobal = /value=([0-9]+)/g;
+const fastGlobalFirst = fastGlobal.exec("value=12;value=345");
+const fastGlobalSecond = fastGlobal.exec("value=12;value=345");
+const fastGlobalDone = fastGlobal.exec("value=12;value=345");
+check(
+	"literal and range plans preserve global lastIndex",
+	fastGlobalFirst.index === 0 &&
+		fastGlobalFirst[1] === "12" &&
+		fastGlobalSecond.index === 9 &&
+		fastGlobalSecond[1] === "345" &&
+		fastGlobalDone === null &&
+		fastGlobal.lastIndex === 0,
+);
+
+const fastSticky = /[a-z]+/y;
+fastSticky.lastIndex = 1;
+const fastStickyMatch = fastSticky.exec("0alpha");
+fastSticky.lastIndex = 0;
+const fastStickyMiss = fastSticky.exec("0alpha");
+check(
+	"range plans preserve sticky anchoring",
+	fastStickyMatch[0] === "alpha" &&
+		fastStickyMatch.index === 1 &&
+		fastStickyMiss === null &&
+		fastSticky.lastIndex === 0,
+);
+
+const fastIndices = /value=([0-9]+)/d.exec("prefix value=42 suffix");
+check(
+	"literal and range plans preserve match indices",
+	fastIndices.indices[0][0] === 7 &&
+		fastIndices.indices[0][1] === 15 &&
+		fastIndices.indices[1][0] === 13 &&
+		fastIndices.indices[1][1] === 15,
+);
+
+check(
+	"backtracking-sensitive plans retain general semantics",
+	/([a-z]+)a/.exec("za")[1] === "z",
+);
+check("negated classes retain general semantics", /[^-z]+/.exec("ABC")[0] === "ABC");
+
 check(
 	"canonical flags preserve specification order",
 	new RegExp("a", "ymig").flags === "gimy",

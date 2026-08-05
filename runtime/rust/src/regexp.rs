@@ -28,12 +28,14 @@ use crate::ffi::{nullable_u16_slice, write_utf8};
 /// ABI version, mirrored by MAL_REGEXP_ABI_VERSION in mal_regexp.h.
 /// v2: added `mal_regexp_free` (GC finalization, gc_todo.md D2).
 /// v3: added immutable-subject identity and execution-path reporting.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 3;
+/// v4: added conservative allocation-free literal/class execution plans.
+pub const MAL_REGEXP_ABI_VERSION: u32 = 4;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
 const EXEC_CACHE_FILL: u32 = 1 << 2;
 const EXEC_NON_ASCII: u32 = 1 << 3;
+const EXEC_FAST: u32 = 1 << 4;
 
 // Flag bits, mirrored by MAL_REGEXP_FLAG_* in mal_regexp.h. g/y/d are
 // engine-external and deliberately absent.
@@ -42,14 +44,238 @@ const FLAG_MULTILINE: u32 = 1 << 1; // m
 const FLAG_DOT_ALL: u32 = 1 << 2; // s
 const FLAG_UNICODE: u32 = 1 << 3; // u
 const FLAG_UNICODE_SETS: u32 = 1 << 4; // v
-const COMPILE_FLAGS: u32 = FLAG_IGNORE_CASE
-    | FLAG_MULTILINE
-    | FLAG_DOT_ALL
-    | FLAG_UNICODE
-    | FLAG_UNICODE_SETS;
+const COMPILE_FLAGS: u32 =
+    FLAG_IGNORE_CASE | FLAG_MULTILINE | FLAG_DOT_ALL | FLAG_UNICODE | FLAG_UNICODE_SETS;
 
 const PATTERN_CACHE_CAPACITY: usize = 24;
 const ASCII_SUBJECT_CACHE_MAX_BYTES: usize = 64 * 1024;
+const FAST_CAPTURE_CAPACITY: usize = 31;
+const FAST_CAPTURE_SLOTS: usize = (FAST_CAPTURE_CAPACITY + 1) * 2;
+
+#[derive(Debug)]
+enum FastToken {
+    Literal(Box<[u16]>),
+    ClassPlus {
+        first: u16,
+        last: u16,
+        capture: Option<usize>,
+    },
+}
+
+#[derive(Debug)]
+struct FastPattern {
+    anchored_start: bool,
+    tokens: Box<[FastToken]>,
+    capture_count: usize,
+}
+
+struct FastMatch {
+    start: usize,
+    end: usize,
+    captures: [Option<(usize, usize)>; FAST_CAPTURE_CAPACITY],
+}
+
+impl FastPattern {
+    fn literal_matches_at(literal: &[u16], subject: &[u16], position: usize) -> bool {
+        if position + literal.len() > subject.len() {
+            return false;
+        }
+        if literal.len() > 16 {
+            return subject[position..position + literal.len()] == *literal;
+        }
+        literal
+            .iter()
+            .enumerate()
+            .all(|(offset, expected)| subject[position + offset] == *expected)
+    }
+
+    fn token_starts_at(token: &FastToken, subject: &[u16], position: usize) -> bool {
+        match token {
+            FastToken::Literal(literal) => subject
+                .get(position)
+                .is_some_and(|unit| *unit == literal[0]),
+            FastToken::ClassPlus { first, last, .. } => subject
+                .get(position)
+                .is_some_and(|unit| (*first..=*last).contains(unit)),
+        }
+    }
+
+    fn next_candidate(&self, subject: &[u16], from: usize) -> Option<usize> {
+        let first_token = self.tokens.first()?;
+        (from..subject.len())
+            .find(|position| Self::token_starts_at(first_token, subject, *position))
+    }
+
+    fn match_at(&self, subject: &[u16], start: usize) -> Option<FastMatch> {
+        let mut position = start;
+        let mut captures = [None; FAST_CAPTURE_CAPACITY];
+        for token in self.tokens.iter() {
+            match token {
+                FastToken::Literal(literal) => {
+                    if !Self::literal_matches_at(literal, subject, position) {
+                        return None;
+                    }
+                    position += literal.len();
+                }
+                FastToken::ClassPlus {
+                    first,
+                    last,
+                    capture,
+                } => {
+                    let capture_start = position;
+                    while subject
+                        .get(position)
+                        .is_some_and(|unit| (*first..=*last).contains(unit))
+                    {
+                        position += 1;
+                    }
+                    if position == capture_start {
+                        return None;
+                    }
+                    if let Some(index) = capture {
+                        captures[*index] = Some((capture_start, position));
+                    }
+                }
+            }
+        }
+        Some(FastMatch {
+            start,
+            end: position,
+            captures,
+        })
+    }
+
+    fn find(&self, subject: &[u16], start: usize) -> Option<FastMatch> {
+        if self.anchored_start {
+            return (start == 0).then(|| self.match_at(subject, 0)).flatten();
+        }
+
+        let mut candidate = start;
+        while candidate < subject.len() {
+            candidate = self.next_candidate(subject, candidate)?;
+            if let Some(found) = self.match_at(subject, candidate) {
+                return Some(found);
+            }
+            candidate += 1;
+        }
+        None
+    }
+}
+
+fn is_regexp_meta(unit: u16) -> bool {
+    matches!(
+        unit,
+        0x2e | 0x5e
+            | 0x24
+            | 0x2a
+            | 0x2b
+            | 0x3f
+            | 0x7b
+            | 0x7d
+            | 0x5b
+            | 0x5d
+            | 0x28
+            | 0x29
+            | 0x7c
+            | 0x5c
+    )
+}
+
+fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
+    if units.is_empty() || flags & COMPILE_FLAGS != 0 || units.iter().any(|unit| *unit > 0x7f) {
+        return None;
+    }
+
+    let mut position = 0;
+    let anchored_start = units.first() == Some(&(b'^' as u16));
+    if anchored_start {
+        position += 1;
+    }
+    let mut tokens = Vec::new();
+    let mut literal = Vec::new();
+    let mut capture_count = 0;
+
+    while position < units.len() {
+        let capture = units[position] == b'(' as u16;
+        let class_start = position + usize::from(capture);
+        if class_start < units.len() && units[class_start] == b'[' as u16 {
+            let class_length = if capture { 8 } else { 6 };
+            if position + class_length > units.len()
+                || units[class_start + 2] != b'-' as u16
+                || units[class_start + 4] != b']' as u16
+                || units[class_start + 5] != b'+' as u16
+                || (capture && units[class_start + 6] != b')' as u16)
+            {
+                return None;
+            }
+            let first = units[class_start + 1];
+            let last = units[class_start + 3];
+            // Keep the structural recognizer deliberately narrow: punctuation
+            // can introduce negation, escapes, or other class grammar that is
+            // not equivalent to a raw inclusive code-unit range.
+            if first > last
+                || !(first as u8).is_ascii_alphanumeric()
+                || !(last as u8).is_ascii_alphanumeric()
+            {
+                return None;
+            }
+            if !literal.is_empty() {
+                tokens.push(FastToken::Literal(core::mem::take(&mut literal).into()));
+            }
+            let capture_index = if capture {
+                if capture_count == FAST_CAPTURE_CAPACITY {
+                    return None;
+                }
+                let index = capture_count;
+                capture_count += 1;
+                Some(index)
+            } else {
+                None
+            };
+            tokens.push(FastToken::ClassPlus {
+                first,
+                last,
+                capture: capture_index,
+            });
+            position += class_length;
+            continue;
+        }
+
+        if is_regexp_meta(units[position]) {
+            return None;
+        }
+        literal.push(units[position]);
+        position += 1;
+    }
+
+    if !literal.is_empty() {
+        tokens.push(FastToken::Literal(literal.into()));
+    }
+    if position != units.len() || tokens.is_empty() {
+        return None;
+    }
+
+    // The fast executor consumes a class greedily without backtracking. Retain
+    // only plans where the following literal begins outside that class, making
+    // the greedy result equivalent to the general engine.
+    for pair in tokens.windows(2) {
+        let FastToken::ClassPlus { first, last, .. } = &pair[0] else {
+            continue;
+        };
+        let FastToken::Literal(literal) = &pair[1] else {
+            return None;
+        };
+        if (*first..=*last).contains(&literal[0]) {
+            return None;
+        }
+    }
+
+    Some(FastPattern {
+        anchored_start,
+        tokens: tokens.into(),
+        capture_count,
+    })
+}
 
 #[derive(PartialEq, Eq)]
 struct PatternCacheKey {
@@ -77,6 +303,7 @@ thread_local! {
 /// retain past the exec call.
 struct CompiledPattern {
     re: Arc<Regex>,
+    fast: Option<FastPattern>,
     /// `u`/`v` patterns match over code points; everything else over code units.
     unicode_mode: bool,
     /// The ASCII backend can use regress's anchored and literal-prefix searchers.
@@ -85,6 +312,8 @@ struct CompiledPattern {
     ascii_eligible: bool,
     subject_cache: Option<SubjectCache>,
     last: Option<Match>,
+    fast_last_groups: i32,
+    fast_last_captures: [i32; FAST_CAPTURE_SLOTS],
 }
 
 struct SubjectCache {
@@ -191,10 +420,13 @@ pub unsafe extern "C" fn mal_regexp_compile(
         Some((re, unicode_mode)) => {
             let boxed = Box::new(CompiledPattern {
                 re,
+                fast: compile_fast_pattern(units, flags),
                 unicode_mode,
                 ascii_eligible: flags & FLAG_IGNORE_CASE == 0,
                 subject_cache: None,
                 last: None,
+                fast_last_groups: 0,
+                fast_last_captures: [-1; FAST_CAPTURE_SLOTS],
             });
             Box::into_raw(boxed) as *mut core::ffi::c_void
         }
@@ -242,6 +474,36 @@ fn write_captures(m: &Match, out: *mut i32, cap: i32) -> i32 {
     ngroups as i32
 }
 
+fn cache_fast_captures(
+    pattern: &FastPattern,
+    found: &FastMatch,
+    cached: &mut [i32; FAST_CAPTURE_SLOTS],
+) -> i32 {
+    cached.fill(-1);
+    cached[0] = found.start as i32;
+    cached[1] = found.end as i32;
+    for index in 0..pattern.capture_count {
+        if let Some((start, end)) = found.captures[index] {
+            cached[(index + 1) * 2] = start as i32;
+            cached[(index + 1) * 2 + 1] = end as i32;
+        }
+    }
+    (pattern.capture_count + 1) as i32
+}
+
+unsafe fn copy_cached_captures(
+    cached: &[i32; FAST_CAPTURE_SLOTS],
+    groups: i32,
+    out: *mut i32,
+    cap: i32,
+) -> i32 {
+    let slots = ((groups.max(0) as usize) * 2).min(cap.max(0) as usize);
+    if !out.is_null() && slots > 0 {
+        unsafe { core::ptr::copy_nonoverlapping(cached.as_ptr(), out, slots) };
+    }
+    groups
+}
+
 /// Execute against `subject` (UTF-16) starting at code-unit index `start`.
 /// Returns the group count (>= 1) on a match, 0 on no match, -1 on error.
 #[no_mangle]
@@ -267,11 +529,35 @@ pub unsafe extern "C" fn mal_regexp_exec(
 
     if start > subject_len {
         cp.last = None;
+        cp.fast_last_groups = 0;
         return 0;
     }
     // regress receives the original code units so non-Unicode mode can match
     // lone surrogates and Unicode mode can apply its own pair handling.
     let subj = unsafe { nullable_u16_slice(subject, subject_len) };
+
+    if cp.fast.is_some() {
+        let found = cp.fast.as_ref().and_then(|fast| fast.find(subj, start));
+        cp.last = None;
+        if !execution_flags_out.is_null() {
+            unsafe { *execution_flags_out = EXEC_FAST };
+        }
+        return match found {
+            Some(found) => {
+                let groups = cache_fast_captures(
+                    cp.fast.as_ref().expect("fast plan exists"),
+                    &found,
+                    &mut cp.fast_last_captures,
+                );
+                cp.fast_last_groups = groups;
+                unsafe { copy_cached_captures(&cp.fast_last_captures, groups, caps_out, caps_cap) }
+            }
+            None => {
+                cp.fast_last_groups = 0;
+                0
+            }
+        };
+    }
 
     let mut execution_flags = 0;
     let found = if cp.ascii_eligible {
@@ -336,10 +622,12 @@ pub unsafe extern "C" fn mal_regexp_exec(
     match found {
         Some(m) => {
             let n = write_captures(&m, caps_out, caps_cap);
+            cp.fast_last_groups = 0;
             cp.last = Some(m);
             n
         }
         None => {
+            cp.fast_last_groups = 0;
             cp.last = None;
             0
         }
@@ -358,6 +646,16 @@ pub unsafe extern "C" fn mal_regexp_copy_captures(
         return -1;
     }
     let cp = unsafe { &*(handle as *const CompiledPattern) };
+    if cp.fast_last_groups > 0 {
+        return unsafe {
+            copy_cached_captures(
+                &cp.fast_last_captures,
+                cp.fast_last_groups,
+                caps_out,
+                caps_cap,
+            )
+        };
+    }
     match &cp.last {
         Some(m) => write_captures(m, caps_out, caps_cap),
         None => 0,
@@ -511,11 +809,7 @@ mod tests {
         let mut retained = [-1; 6];
         assert_eq!(
             unsafe {
-                mal_regexp_copy_captures(
-                    first,
-                    retained.as_mut_ptr(),
-                    retained.len() as i32,
-                )
+                mal_regexp_copy_captures(first, retained.as_mut_ptr(), retained.len() as i32)
             },
             3
         );
@@ -530,7 +824,7 @@ mod tests {
     #[test]
     fn repeated_immutable_subjects_use_ascii_after_one_utf16_probe() {
         clear_cache();
-        let pattern = utf16("value=([0-9]+)");
+        let pattern = utf16("value=([0-9]{1,})");
         let subject = utf16("prefix value=42 suffix");
         let compiled = unsafe { handle(&pattern, 0) };
         let mut caps = [-1; 4];
@@ -564,6 +858,60 @@ mod tests {
         }
 
         unsafe { mal_regexp_free(compiled) };
+    }
+
+    #[test]
+    fn fast_literal_and_class_plan_writes_captures_without_a_match_allocation() {
+        clear_cache();
+        let pattern = utf16("^level=([A-Z]+);user=([a-z]+)-([0-9]+);action=([a-z]+);");
+        let subject = utf16("level=INFO;user=alpha-17;action=read;");
+        let compiled = unsafe { handle(&pattern, 0) };
+        let compiled_pattern = unsafe { &*(compiled as *const CompiledPattern) };
+        assert!(compiled_pattern.fast.is_some());
+
+        let mut captures = [-1; 10];
+        let mut flags = 0;
+        assert_eq!(
+            unsafe {
+                mal_regexp_exec(
+                    compiled,
+                    subject.as_ptr(),
+                    subject.len(),
+                    0,
+                    subject.as_ptr().cast(),
+                    1,
+                    0,
+                    captures.as_mut_ptr(),
+                    captures.len() as i32,
+                    &mut flags,
+                )
+            },
+            5
+        );
+        assert_eq!(flags, EXEC_FAST);
+        assert_eq!(captures, [0, 37, 6, 10, 16, 21, 22, 24, 32, 36]);
+
+        let mut retained = [-1; 10];
+        assert_eq!(
+            unsafe {
+                mal_regexp_copy_captures(compiled, retained.as_mut_ptr(), retained.len() as i32)
+            },
+            5
+        );
+        assert_eq!(retained, captures);
+        unsafe { mal_regexp_free(compiled) };
+    }
+
+    #[test]
+    fn fast_plan_is_conservative_about_flags_and_greedy_backtracking() {
+        assert!(compile_fast_pattern(&utf16("value=([0-9]+)"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("payload=[a-z]+"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("value="), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("[a-z]+a"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("[^-z]+"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("value$"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("value=([0-9]+)"), FLAG_IGNORE_CASE).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:value)"), 0).is_none());
     }
 
     #[test]
@@ -614,10 +962,7 @@ mod tests {
         assert!(!Arc::ptr_eq(&plain, &ignore_case));
         assert_eq!(cache_len(), 2);
         assert!(plain.find_from_ucs2(&utf16("A"), 0).next().is_none());
-        assert!(ignore_case
-            .find_from_ucs2(&utf16("A"), 0)
-            .next()
-            .is_some());
+        assert!(ignore_case.find_from_ucs2(&utf16("A"), 0).next().is_some());
     }
 
     #[test]

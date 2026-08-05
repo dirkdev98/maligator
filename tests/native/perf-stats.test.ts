@@ -123,6 +123,7 @@ describe("opt-in performance statistics", () => {
 
 		const regexp = reportLine(result.stderr, "[perf-regexp-stats]");
 		expect(field(regexp, "exec_calls")).toBeGreaterThan(0);
+		expect(field(regexp, "fast_exec_calls")).toBeGreaterThan(0);
 		expect(field(regexp, "ascii_exec_calls")).toBeGreaterThan(0);
 		expect(field(regexp, "ascii_cache_fills")).toBeGreaterThan(0);
 		expect(field(regexp, "utf16_exec_calls")).toBe(1);

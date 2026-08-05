@@ -227,10 +227,11 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
-        "[perf-regexp-stats] exec_calls=%llu ascii_exec_calls=%llu "
+        "[perf-regexp-stats] exec_calls=%llu fast_exec_calls=%llu ascii_exec_calls=%llu "
         "ascii_cache_hits=%llu ascii_cache_fills=%llu utf16_exec_calls=%llu "
         "utf16_cache_hits=%llu utf16_cache_fills=%llu\n",
         (unsigned long long) mal_perf_stats.regexp_exec_calls,
+        (unsigned long long) mal_perf_stats.regexp_fast_exec_calls,
         (unsigned long long) mal_perf_stats.regexp_ascii_exec_calls,
         (unsigned long long) mal_perf_stats.regexp_ascii_cache_hits,
         (unsigned long long) mal_perf_stats.regexp_ascii_cache_fills,

@@ -120,9 +120,13 @@ if (
 ) {
 	throw new Error("broken string case conversion");
 }
-const regexpProbe = /stats/;
+const regexpProbe = /(?:stats)/;
 if (!regexpProbe.test("perf-stats") || !regexpProbe.test("perf-stats")) {
 	throw new Error("broken regexp ASCII execution cache");
+}
+const fastRegexpMatch = /value=([0-9]+)/.exec("prefix value=42 suffix");
+if (fastRegexpMatch[0] !== "value=42" || fastRegexpMatch[1] !== "42") {
+	throw new Error("broken regexp fast execution plan");
 }
 
 function loadStringMethod(value) {

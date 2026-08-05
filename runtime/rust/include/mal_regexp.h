@@ -22,8 +22,9 @@ extern "C" {
 
 /* Bump alongside MAL_REGEXP_ABI_VERSION in regexp.rs on breaking changes.
  * v2: added mal_regexp_free (GC finalization).
- * v3: added immutable-subject identity and execution-path reporting. */
-#define MAL_REGEXP_ABI_VERSION 3u
+ * v3: added immutable-subject identity and execution-path reporting.
+ * v4: added conservative allocation-free literal/class execution plans. */
+#define MAL_REGEXP_ABI_VERSION 4u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -41,6 +42,7 @@ uint32_t mal_regexp_abi_version(void);
 #define MAL_REGEXP_EXEC_CACHE_HIT   (1u << 1)
 #define MAL_REGEXP_EXEC_CACHE_FILL  (1u << 2)
 #define MAL_REGEXP_EXEC_NON_ASCII   (1u << 3)
+#define MAL_REGEXP_EXEC_FAST        (1u << 4)
 
 /* Compile `pattern` (UTF-16) with `flags`. Returns an opaque, leaked handle, or
  * NULL when the pattern is invalid (the C side throws SyntaxError). The handle

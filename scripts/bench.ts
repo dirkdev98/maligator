@@ -187,6 +187,7 @@ interface StringMetrics {
 	caseReuses: number;
 	caseChangedAllocations: number;
 	regexpExecCalls: number;
+	regexpFastExecCalls: number;
 	regexpAsciiExecCalls: number;
 	regexpAsciiCacheHits: number;
 	regexpAsciiCacheFills: number;
@@ -785,6 +786,7 @@ function benchString(runs: number): StringMetrics {
 		caseReuses: parsePerfStringStat(perfStderr, "case_reuses"),
 		caseChangedAllocations: parsePerfStringStat(perfStderr, "case_changed_allocations"),
 		regexpExecCalls: parsePerfRegexpStat(perfStderr, "exec_calls"),
+		regexpFastExecCalls: parsePerfRegexpStat(perfStderr, "fast_exec_calls"),
 		regexpAsciiExecCalls: parsePerfRegexpStat(perfStderr, "ascii_exec_calls"),
 		regexpAsciiCacheHits: parsePerfRegexpStat(perfStderr, "ascii_cache_hits"),
 		regexpAsciiCacheFills: parsePerfRegexpStat(perfStderr, "ascii_cache_fills"),
@@ -1558,7 +1560,7 @@ function stringProfileRow(name: string, stderr: string): void {
 	const averageLength = total === 0 ? 0 : (allocations.code_units ?? 0) / total;
 	const shortPercent = total === 0 ? 0 : (short * 100) / total;
 	console.log(
-		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}  scan ${String(strings.unit_scan_word_blocks ?? 0).padStart(9)}x4  case ${String(strings.case_calls ?? 0).padStart(8)} / ${String(strings.case_reuses ?? 0).padStart(8)} reuse  regexp ${String(regexp.exec_calls ?? 0).padStart(8)} / ${String(regexp.ascii_exec_calls ?? 0).padStart(8)} ASCII`,
+		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}  scan ${String(strings.unit_scan_word_blocks ?? 0).padStart(9)}x4  case ${String(strings.case_calls ?? 0).padStart(8)} / ${String(strings.case_reuses ?? 0).padStart(8)} reuse  regexp ${String(regexp.exec_calls ?? 0).padStart(8)} / ${String(regexp.fast_exec_calls ?? 0).padStart(8)} fast`,
 	);
 }
 
@@ -2003,7 +2005,7 @@ function benchHttpProfile(requests: number, conc: number): void {
 					`    case/request        ${perfPerRequest(strings, "case_calls", requests).toFixed(1)} calls, ${perfPerRequest(strings, "case_reuses", requests).toFixed(1)} reused, ${perfPerRequest(strings, "case_changed_allocations", requests).toFixed(1)} changed allocations`,
 				);
 				console.log(
-					`    regexp/request      ${perfPerRequest(regexp, "exec_calls", requests).toFixed(1)} exec, ${perfPerRequest(regexp, "ascii_exec_calls", requests).toFixed(1)} ASCII, ${perfPerRequest(regexp, "ascii_cache_hits", requests).toFixed(1)} ASCII cache hits`,
+					`    regexp/request      ${perfPerRequest(regexp, "exec_calls", requests).toFixed(1)} exec, ${perfPerRequest(regexp, "fast_exec_calls", requests).toFixed(1)} fast, ${perfPerRequest(regexp, "ascii_exec_calls", requests).toFixed(1)} ASCII, ${perfPerRequest(regexp, "ascii_cache_hits", requests).toFixed(1)} ASCII cache hits`,
 				);
 				console.log(
 					`    string storage      ${perfPerRequest(stringAllocations, "inline_allocations", requests).toFixed(1)} inline, ${perfPerRequest(stringAllocations, "dependent_allocations", requests).toFixed(1)} dependent, ${perfPerRequest(stringAllocations, "cons_allocations", requests).toFixed(1)} cons, ${perfPerRequest(stringAllocations, "flatten_calls", requests).toFixed(1)} flatten calls/request`,
@@ -2169,7 +2171,7 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  case      ${entry.string.caseCalls} calls over ${entry.string.caseInputCodeUnits} code units, ${entry.string.caseReuses} reused, ${entry.string.caseChangedAllocations} changed allocations`,
 		);
 		console.log(
-			`  regexp    ${entry.string.regexpExecCalls} execs: ${entry.string.regexpAsciiExecCalls} ASCII (${entry.string.regexpAsciiCacheHits} cache hits, ${entry.string.regexpAsciiCacheFills} fills), ${entry.string.regexpUtf16ExecCalls} UTF-16`,
+			`  regexp    ${entry.string.regexpExecCalls} execs: ${entry.string.regexpFastExecCalls} fast, ${entry.string.regexpAsciiExecCalls} ASCII (${entry.string.regexpAsciiCacheHits} cache hits, ${entry.string.regexpAsciiCacheFills} fills), ${entry.string.regexpUtf16ExecCalls} UTF-16`,
 		);
 		console.log(
 			`  strings   ${entry.string.stringAllocations} allocations: ${entry.string.inlineStringAllocations} inline, ${entry.string.dependentStringAllocations} dependent, ${entry.string.consStringAllocations} cons; ${entry.string.stringFlattenCalls} flatten calls`,

@@ -514,7 +514,9 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
         &execution_flags
     );
     MAL_PERF_COUNT(regexp_exec_calls);
-    if ((execution_flags & MAL_REGEXP_EXEC_ASCII) != 0) {
+    if ((execution_flags & MAL_REGEXP_EXEC_FAST) != 0) {
+        MAL_PERF_COUNT(regexp_fast_exec_calls);
+    } else if ((execution_flags & MAL_REGEXP_EXEC_ASCII) != 0) {
         MAL_PERF_COUNT(regexp_ascii_exec_calls);
         if ((execution_flags & MAL_REGEXP_EXEC_CACHE_HIT) != 0) {
             MAL_PERF_COUNT(regexp_ascii_cache_hits);
