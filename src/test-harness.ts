@@ -17,6 +17,7 @@ import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
+import type { BuildConfigTypeStripper } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
@@ -107,6 +108,8 @@ export interface BuildOptions {
 	compilerBake?: CompilerBakeInput;
 	/** Override native build environment, primarily for compile-time instrument tests. */
 	environment?: NodeJS.ProcessEnv;
+	/** Override application type erasure, primarily for compact product-stripper tests. */
+	stripTypes?: BuildConfigTypeStripper;
 }
 
 export type BuildNativeBinaryResult = LocalBuildResult;
@@ -144,7 +147,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 		path.resolve(options.fixture),
 		{
 			buildConfig: config,
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: options.stripTypes ?? stripTypesWithTypeScript,
 			entryGoal: options.entryGoal,
 		},
 	);
