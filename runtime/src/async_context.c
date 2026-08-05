@@ -13,6 +13,8 @@ MalAsyncLocalStorageState *mal_async_local_storage_state_new(MalVm *vm) {
         &vm->heap, sizeof(MalAsyncLocalStorageState),
         MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE);
     state->generation = 0;
+    state->default_value = mal_value_new_undefined();
+    state->name = mal_value_new_undefined();
     state->enabled = false;
     return state;
 }
@@ -25,6 +27,20 @@ MalAsyncResourceState *mal_async_resource_state_new(MalVm *vm) {
 #else
     state->context = nullptr;
 #endif
+    return state;
+}
+
+MalAsyncRunScopeState *mal_async_run_scope_state_new(
+    MalVm *vm,
+    MalAsyncLocalStorageState *storage,
+    MalValue previous_store
+) {
+    MalAsyncRunScopeState *state = mal_heap_alloc(
+        &vm->heap, sizeof(MalAsyncRunScopeState),
+        MAL_HEAP_ASYNC_RUN_SCOPE_STATE);
+    state->storage = storage;
+    state->previous_store = previous_store;
+    state->disposed = false;
     return state;
 }
 
@@ -41,6 +57,12 @@ MalAsyncLocalStorageState *mal_async_local_storage_state_from_value(MalValue val
 MalAsyncResourceState *mal_async_resource_state_from_value(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_ASYNC_RESOURCE_STATE)
         ? (MalAsyncResourceState *) mal_value_to_heap(value)
+        : nullptr;
+}
+
+MalAsyncRunScopeState *mal_async_run_scope_state_from_value(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_ASYNC_RUN_SCOPE_STATE)
+        ? (MalAsyncRunScopeState *) mal_value_to_heap(value)
         : nullptr;
 }
 

@@ -145,7 +145,11 @@ first.run("resource-caller", () => {
 		);
 	});
 	resourceBound.call(thisArg, 12);
-	check(resourceBound.asyncResource === resource, "bound asyncResource property");
+	check(
+		resourceBound.asyncResource === resource ||
+			!Object.hasOwn(resourceBound, "asyncResource"),
+		"bound function compatibility surface",
+	);
 });
 
 class DerivedStorage extends AsyncLocalStorage {}

@@ -20,6 +20,8 @@ describe("node:async_hooks context compatibility", () => {
 	let storageCompiled: string;
 	let storageInterpreted: string;
 	let storageExpected: string;
+	let storageV26Binaries: Array<string>;
+	let storageV26Expected: string | undefined;
 	let httpStorageBinaries: Array<string>;
 	let httpStorageExpected: string;
 	let netStorageBinaries: Array<string>;
@@ -68,6 +70,25 @@ describe("node:async_hooks context compatibility", () => {
 			["tests/local/node-async-local-storage.mjs"],
 			{ encoding: "utf-8" },
 		);
+		storageV26Binaries = [true, false].map((compiled) =>
+			buildNativeBinary({
+				fixture: "tests/local/node-async-local-storage-v26.mjs",
+				name: compiled
+					? "node-async-local-storage-v26-compiled"
+					: "node-async-local-storage-v26-interpreted",
+				mainFile: HOST_MAIN,
+				outDir,
+				nodeEnabled: true,
+				compiled,
+			}),
+		);
+		if (Number.parseInt(process.versions.node, 10) >= 26) {
+			storageV26Expected = execFileSync(
+				process.execPath,
+				["tests/local/node-async-local-storage-v26.mjs"],
+				{ encoding: "utf-8" },
+			);
+		}
 		httpStorageBinaries = [true, false].map((compiled) =>
 			buildNativeBinary({
 				fixture: "tests/local/node-async-local-storage-http.cjs",
@@ -139,6 +160,22 @@ describe("node:async_hooks context compatibility", () => {
 	it("passes AsyncLocalStorage under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		expect(runToStdout(storageCompiled, { env: STRESS_ENV })).toBe(storageExpected);
 		expect(runToStdout(storageInterpreted, { env: STRESS_ENV })).toBe(storageExpected);
+	});
+
+	it("supports the Node 26 AsyncLocalStorage surface", () => {
+		for (const binary of storageV26Binaries) {
+			const output = runToStdout(binary);
+			if (storageV26Expected === undefined) assertResultPass(output);
+			else expect(output).toBe(storageV26Expected);
+		}
+	});
+
+	it("keeps Node 26 disposable scopes rooted under GC stress", () => {
+		for (const binary of storageV26Binaries) {
+			const output = runToStdout(binary, { env: STRESS_ENV });
+			if (storageV26Expected === undefined) assertResultPass(output);
+			else expect(output).toBe(storageV26Expected);
+		}
 	});
 
 	it("isolates overlapping HTTP request contexts like real Node", () => {

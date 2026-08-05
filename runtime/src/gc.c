@@ -674,13 +674,26 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             mal_gc_mark_value(context->store);
             return;
         }
-        case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
+        case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE: {
+            MalAsyncLocalStorageState *state =
+                (MalAsyncLocalStorageState *) cell;
+            mal_gc_mark_value(state->default_value);
+            mal_gc_mark_value(state->name);
             return;
+        }
         case MAL_HEAP_ASYNC_RESOURCE_STATE: {
             MalAsyncResourceState *state = (MalAsyncResourceState *) cell;
             if (state->context != nullptr) {
                 mal_gc_shade(&state->context->header);
             }
+            return;
+        }
+        case MAL_HEAP_ASYNC_RUN_SCOPE_STATE: {
+            MalAsyncRunScopeState *state = (MalAsyncRunScopeState *) cell;
+            if (state->storage != nullptr) {
+                mal_gc_shade(&state->storage->header);
+            }
+            mal_gc_mark_value(state->previous_store);
             return;
         }
         default:
@@ -1051,6 +1064,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_ASYNC_CONTEXT:
         case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
         case MAL_HEAP_ASYNC_RESOURCE_STATE:
+        case MAL_HEAP_ASYNC_RUN_SCOPE_STATE:
             return; // no owned side allocations (env slots are inline, not a MalObject)
         default:
             break;

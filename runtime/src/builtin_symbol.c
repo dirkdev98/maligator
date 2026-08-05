@@ -187,6 +187,7 @@ void mal_builtin_symbol_install(MalVm *vm) {
     mal_builtin_symbol_well_known(vm, (MalObject *) constructor, MAL_INTRINSIC_SYMBOL_SEARCH, "search", "Symbol.search");
     mal_builtin_symbol_well_known(vm, (MalObject *) constructor, MAL_INTRINSIC_SYMBOL_SPLIT, "split", "Symbol.split");
     mal_builtin_symbol_well_known(vm, (MalObject *) constructor, MAL_INTRINSIC_SYMBOL_UNSCOPABLES, "unscopables", "Symbol.unscopables");
+    mal_builtin_symbol_well_known(vm, (MalObject *) constructor, MAL_INTRINSIC_SYMBOL_DISPOSE, "dispose", "Symbol.dispose");
 
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "for", 1, mal_builtin_symbol_for);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "keyFor", 1, mal_builtin_symbol_key_for);

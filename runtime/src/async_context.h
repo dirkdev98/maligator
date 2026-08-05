@@ -14,6 +14,8 @@ typedef struct MalVm MalVm;
 typedef struct MalAsyncLocalStorageState {
     MalHeapHeader header;
     u64 generation;
+    MalValue default_value;
+    MalValue name;
     bool enabled;
 } MalAsyncLocalStorageState;
 
@@ -33,15 +35,26 @@ typedef struct MalAsyncResourceState {
     MalAsyncContext *context;
 } MalAsyncResourceState;
 
+/** Mutable private state for the disposable object returned by withScope(). */
+typedef struct MalAsyncRunScopeState {
+    MalHeapHeader header;
+    MalAsyncLocalStorageState *storage;
+    MalValue previous_store;
+    bool disposed;
+} MalAsyncRunScopeState;
+
 static_assert(
-    sizeof(MalAsyncLocalStorageState) == 24,
-    "AsyncLocalStorage identity must remain a 24-byte GC cell");
+    sizeof(MalAsyncLocalStorageState) == 40,
+    "AsyncLocalStorage identity must remain a 40-byte GC cell");
 static_assert(
     sizeof(MalAsyncContext) == 48,
     "AsyncLocalStorage context must remain a 48-byte immutable GC cell");
 static_assert(
     sizeof(MalAsyncResourceState) == 16,
     "AsyncResource state must remain a 16-byte GC cell");
+static_assert(
+    sizeof(MalAsyncRunScopeState) == 32,
+    "AsyncLocalStorage RunScope state must remain a 32-byte GC cell");
 
 /**
  * A scoped context switch. Both sides are rooted through the existing C root-span
@@ -56,10 +69,16 @@ typedef struct MalAsyncContextScope {
 
 MalAsyncLocalStorageState *mal_async_local_storage_state_new(MalVm *vm);
 MalAsyncResourceState *mal_async_resource_state_new(MalVm *vm);
+MalAsyncRunScopeState *mal_async_run_scope_state_new(
+    MalVm *vm,
+    MalAsyncLocalStorageState *storage,
+    MalValue previous_store
+);
 
 MalValue mal_async_internal_value(MalHeapHeader *cell);
 MalAsyncLocalStorageState *mal_async_local_storage_state_from_value(MalValue value);
 MalAsyncResourceState *mal_async_resource_state_from_value(MalValue value);
+MalAsyncRunScopeState *mal_async_run_scope_state_from_value(MalValue value);
 
 MalAsyncContext *mal_async_context_capture(const MalVm *vm);
 MalAsyncContext *mal_async_context_push(

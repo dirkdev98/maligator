@@ -310,6 +310,8 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE,
     /** Internal captured execution context for one AsyncResource instance. */
     MAL_HEAP_ASYNC_RESOURCE_STATE,
+    /** Private mutable state for AsyncLocalStorage.withScope() results. */
+    MAL_HEAP_ASYNC_RUN_SCOPE_STATE,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked
