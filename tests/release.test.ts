@@ -9,6 +9,7 @@ import { createReleaseArchive, deterministicTar } from "../scripts/release-archi
 import { nextAlphaVersion } from "../scripts/release-version.ts";
 import {
 	createLauncherPackageJson,
+	NPM_WEB_LOGIN_ARGUMENTS,
 	selectReleaseTargetTriples,
 } from "../scripts/release.ts";
 import { createBuildArtifact } from "../src/build-artifact.ts";
@@ -154,6 +155,10 @@ describe("release targets", () => {
 });
 
 describe("npm launcher", () => {
+	it("requires web authentication before release publishing", () => {
+		expect(NPM_WEB_LOGIN_ARGUMENTS).toEqual(["login", "--auth-type", "web"]);
+	});
+
 	it("publishes the helper runtime and TypeScript declarations", () => {
 		const config = { entry: "src/index.ts" };
 		expect(defineBuild(config)).toBe(config);

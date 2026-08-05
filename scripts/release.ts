@@ -23,6 +23,8 @@ const releaseRoot = path.join(repositoryRoot, "dist/release");
 const releaseSelectionPath = path.join(releaseRoot, "selection.json");
 const releaseStartedAt = performance.now();
 
+export const NPM_WEB_LOGIN_ARGUMENTS = ["login", "--auth-type", "web"] as const;
+
 function formatDuration(milliseconds: number): string {
 	const seconds = Math.round(milliseconds / 1000);
 	if (seconds < 60) return `${seconds}s`;
@@ -505,6 +507,20 @@ function publishRelease(args: Array<string>): void {
 	);
 	if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
 		throw new Error("refusing to publish an incomplete or unordered package set");
+	}
+	releaseLog("authenticating to npm with web login");
+	const login = spawnSync("npm", [...NPM_WEB_LOGIN_ARGUMENTS], {
+		cwd: repositoryRoot,
+		stdio: ["inherit", "inherit", "inherit"],
+		env: npmEnvironment(),
+	});
+	if (login.error !== undefined) throw login.error;
+	if (login.status !== 0) {
+		throw new Error(
+			login.signal === null
+				? `npm web login exited with status ${login.status}`
+				: `npm web login terminated by ${login.signal}`,
+		);
 	}
 	releaseLog(`publishing ${expectedNames.length} packages under the alpha tag`);
 	for (const [index, entry] of (
