@@ -6,7 +6,6 @@
 #include "endian.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
-#include "host_registry.h"
 
 /*
  * Inverse of src/emit-vm.ts + src/serialize-vm.ts: decode the flat wire buffer
@@ -1344,7 +1343,11 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     }
 }
 
-MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char **out_err) {
+MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
+    const u8 *buf,
+    usize len,
+    const char **out_err,
+    MalHostInstallerResolver resolver) {
     const char *err = "ok";
     MalLoadedDefinition *L = calloc(1, sizeof(MalLoadedDefinition));
     if (L == nullptr) {
@@ -1489,8 +1492,9 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
         for (u32 byte = 0; r.ok && byte < installer_length; byte++) {
             installer_name[byte] = (char) rd_u8(&r);
         }
-        host_installs[i].installer =
-            mal_host_resolve_installer(installer_name, installer_length);
+        host_installs[i].installer = resolver == nullptr
+            ? nullptr
+            : resolver(installer_name, installer_length);
         if (r.ok && host_installs[i].installer == nullptr) {
             err = "unsupported host installer";
             goto fail;
@@ -1527,6 +1531,10 @@ fail:
     }
     mal_vm_loaded_definition_free(L);
     return nullptr;
+}
+
+MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char **out_err) {
+    return mal_vm_load_definition_with_host_resolver(buf, len, out_err, nullptr);
 }
 
 const MalVmDefinition *mal_loaded_definition_get(const MalLoadedDefinition *loaded) {

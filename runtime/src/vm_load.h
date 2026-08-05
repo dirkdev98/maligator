@@ -16,6 +16,7 @@
  * IMMORTAL (the GC never traces or sweeps them), matching the baked path.
  */
 typedef struct MalLoadedDefinition MalLoadedDefinition;
+typedef MalHostInstaller (*MalHostInstallerResolver)(const char *name, usize length);
 
 /**
  * Parse `buf` (length `len`) into freshly allocated runtime structs. `buf` need
@@ -25,6 +26,18 @@ typedef struct MalLoadedDefinition MalLoadedDefinition;
  * untouched on success). Pass a null out_err to ignore the reason.
  */
 MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char **out_err);
+
+/**
+ * Load a definition whose host-install manifest may name portable installers.
+ * Engine-only embeddings use mal_vm_load_definition; a product embedding passes
+ * its explicit runtime registry here so the engine archive has no host-layer
+ * link dependency.
+ */
+MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
+    const u8 *buf,
+    usize len,
+    const char **out_err,
+    MalHostInstallerResolver resolver);
 
 /** The public definition a loaded buffer exposes (for mal_vm_init / splice). */
 const MalVmDefinition *mal_loaded_definition_get(const MalLoadedDefinition *loaded);

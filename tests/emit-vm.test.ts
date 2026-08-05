@@ -232,9 +232,7 @@ describe("emit-vm instruction packing", () => {
 			{},
 			Number.MAX_SAFE_INTEGER,
 		);
-		expect(units.slice(1).join("\n")).toContain(
-			"MalValue mal_compiled_0(MalVm *vm",
-		);
+		expect(units.slice(1).join("\n")).toContain("MalValue mal_compiled_0(MalVm *vm");
 		expect(units.slice(1).join("\n")).not.toContain(
 			"static MalValue mal_compiled_0(MalVm *vm",
 		);

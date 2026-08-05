@@ -7,6 +7,7 @@
 
 #include "gc.h"
 #include "heap_string.h"
+#include "host_registry.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "posix_fs.h"
@@ -91,8 +92,8 @@ static MalValue mal_test_run_wire(
     usize length = mal_typed_array_object_byte_length(wire);
     const u8 *bytes = wire->buffer->data + wire->byte_offset;
     const char *error = "invalid VM wire";
-    MalLoadedDefinition *loaded =
-        mal_vm_load_definition(bytes, length, &error);
+    MalLoadedDefinition *loaded = mal_vm_load_definition_with_host_resolver(
+        bytes, length, &error, mal_host_resolve_installer);
     if (loaded == nullptr) {
         mal_asset_throw_utf8(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, error);
         return mal_value_new_undefined();
