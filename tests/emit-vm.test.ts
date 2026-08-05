@@ -205,6 +205,46 @@ describe("emit-vm instruction packing", () => {
 		);
 	});
 
+	it("splits bytecode and debug leaf arrays into bounded translation units", () => {
+		const functions = Array.from({ length: 20 }, () => ({
+			...fn,
+			instructions: [...fn.instructions],
+			positions: instructions.map((_, index) => index),
+		}));
+		const splitDefinition = {
+			...definition,
+			functionCount: functions.length,
+			functions,
+			sourcePositions: instructions.map((_, index) => ({
+				line: index + 1,
+				column: index,
+			})),
+		};
+		const generous = emitVmTranslationUnits(
+			splitDefinition,
+			{ compiled: false },
+			Number.MAX_SAFE_INTEGER,
+		);
+		const budget = generous[0]!.length + 1_000;
+		const units = emitVmTranslationUnits(splitDefinition, { compiled: false }, budget);
+		const data = units.slice(1).join("\n");
+
+		expect(units.length).toBeGreaterThan(2);
+		expect(units.every((unit) => unit.length <= budget)).toBe(true);
+		expect(units[0]).toContain(
+			"extern const MalInstruction mal_function_0_instructions[];",
+		);
+		expect(units[0]).not.toContain(
+			"static const MalInstruction mal_function_0_instructions[] = {",
+		);
+		expect(data).toContain("const MalInstruction mal_function_0_instructions[] = {");
+		expect(data).not.toContain(
+			"static const MalInstruction mal_function_0_instructions[] = {",
+		);
+		expect(units[0]).toContain("extern const MalSourcePos mal_source_positions[];");
+		expect(data).toContain("const MalSourcePos mal_source_positions[] = {");
+	});
+
 	it("rejects an invalid translation-unit budget", () => {
 		expect(() => emitVmTranslationUnits(definition, {}, 0)).toThrow(/positive integer/);
 		expect(() => emitVmTranslationUnits(definition, {}, 100)).toThrow(

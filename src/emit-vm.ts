@@ -297,6 +297,63 @@ interface EmittedVmSource {
 	compiled: Array<CompiledFunction | null>;
 }
 
+interface ExternalDataDefinition {
+	symbol: string;
+	source: string;
+}
+
+interface SplitDataSource {
+	source: string;
+	definitions: Array<ExternalDataDefinition>;
+}
+
+/**
+ * Move independent generated arrays out of the definition translation unit.
+ *
+ * The retained aggregate tables (`mal_strings`, `mal_functions`, assets, host
+ * installs) contain pointers to other generated symbols and stay beside the VM
+ * definition. Their leaf arrays become externally linked definitions that can be
+ * packed into bounded translation units without changing the runtime layout.
+ */
+function externalizeLeafDataArrays(source: string): SplitDataSource {
+	const lines = source.split("\n");
+	const output: Array<string> = [];
+	const definitions: Array<ExternalDataDefinition> = [];
+	const dependentTables = new Set([
+		"mal_strings",
+		"mal_functions",
+		"mal_assets",
+		"mal_host_installs",
+	]);
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index]!;
+		const match = /^(?:static )?(.+?) (mal_[A-Za-z0-9_]+)\[\] = (.*)$/.exec(line);
+		if (match === null) {
+			output.push(line);
+			continue;
+		}
+		const type = match[1]!;
+		const symbol = match[2]!;
+		if (dependentTables.has(symbol) || /^mal_asset_\d+_files/.test(symbol)) {
+			output.push(line);
+			continue;
+		}
+
+		const definitionLines = [line];
+		while (!definitionLines.at(-1)!.trimEnd().endsWith(";")) {
+			index++;
+			if (index >= lines.length) {
+				throw new Error(`unterminated generated data definition '${symbol}'`);
+			}
+			definitionLines.push(lines[index]!);
+		}
+		definitionLines[0] = definitionLines[0]!.replace(/^static /, "");
+		definitions.push({ symbol, source: definitionLines.join("\n") });
+		output.push(`extern ${type} ${symbol}[];`);
+	}
+	return { source: output.join("\n"), definitions };
+}
+
 function emitVmDefinitionSource(
 	definition: VmDefinition,
 	options: EmitOptions,
@@ -473,13 +530,14 @@ function emitVmDefinitionSource(
 }
 
 /**
- * Emit one definition/data translation unit plus bounded compiled-function units.
+ * Emit one definition/table translation unit plus bounded data and
+ * compiled-function units.
  *
  * The native product compiler cannot materialize strings above 16 MiB. Keeping
- * compiled functions out of the definition unit avoids that ceiling and lets the
- * C driver compile large programs as independent translation units. A single
- * generated function is indivisible; reject one that exceeds the configured
- * budget with a bounded diagnostic instead of building an oversized group.
+ * compiled functions and leaf data arrays out of the definition unit avoids that
+ * ceiling and lets the C driver compile large programs as independent translation
+ * units. A single generated function or array is indivisible; reject one that
+ * exceeds the configured budget with a bounded diagnostic.
  */
 export function emitVmTranslationUnits(
 	definition: VmDefinition,
@@ -490,9 +548,10 @@ export function emitVmTranslationUnits(
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
 	const emitted = emitVmDefinitionSource(definition, options, true);
-	if (emitted.source.length > maxCodeUnits) {
+	const splitData = externalizeLeafDataArrays(emitted.source);
+	if (splitData.source.length > maxCodeUnits) {
 		throw new RangeError(
-			`generated definition translation unit has ${emitted.source.length} code units; ` +
+			`generated definition translation unit has ${splitData.source.length} code units; ` +
 				`maximum is ${maxCodeUnits}`,
 		);
 	}
@@ -507,7 +566,7 @@ export function emitVmTranslationUnits(
 			: []),
 	];
 	const header = [...C_HEADER_LINES, ...sharedDeclarations, ""].join("\n");
-	const units = [emitted.source];
+	const units = [splitData.source];
 	let parts = [header];
 	let length = header.length;
 	const flush = (): void => {
@@ -516,6 +575,19 @@ export function emitVmTranslationUnits(
 		parts = [header];
 		length = header.length;
 	};
+	for (const data of splitData.definitions) {
+		const additional = data.source.length + 1;
+		if (header.length + additional > maxCodeUnits) {
+			throw new RangeError(
+				`generated data array '${data.symbol}' has ${data.source.length} code units; ` +
+					`translation-unit maximum is ${maxCodeUnits}`,
+			);
+		}
+		if (length + additional > maxCodeUnits) flush();
+		parts.push(data.source);
+		length += additional;
+	}
+	flush();
 	for (const fn of emitted.compiled) {
 		if (fn === null) continue;
 		const additional = fn.source.length + 1;
