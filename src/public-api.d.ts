@@ -20,7 +20,12 @@ export interface MaligatorBuildConfig {
 	outputName?: string;
 	assets?: Record<string, AssetInclusion>;
 	engine?: {
-		eval?: boolean;
+		/**
+		 * `true` embeds the runtime compiler. `false` keeps eval/Function present
+		 * but makes dynamic compilation throw at runtime. `"compile-check"` also
+		 * rejects statically visible eval/Function calls during the build.
+		 */
+		eval?: boolean | "compile-check";
 		realms?: boolean;
 		regexp?: boolean;
 		intl?: {

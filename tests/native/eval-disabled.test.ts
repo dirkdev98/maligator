@@ -10,11 +10,10 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// The runtime half of `engine.eval: false` (the compile-time static check is
-// covered by tests/build-config.test.ts). Builds the fixture into the eval-off
-// archive (no compiler embed, -DMAL_EVAL=0); every dynamic-code path must throw
-// EvalError at runtime, including the aliased indirect eval the static check can't
-// see. The eval-off build selects its own content-addressed runtime artifacts.
+// The runtime behavior of `engine.eval: false`. The separate `"compile-check"`
+// source audit is covered by tests/build-config.test.ts. This builds the fixture
+// into the eval-off archive (no compiler embed, -DMAL_EVAL=0); every dynamic-code
+// path must throw EvalError at runtime, including aliased indirect eval.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-eval-off-"));
 
 describe("engine.eval: false runtime gate", () => {

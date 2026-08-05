@@ -106,21 +106,21 @@ configuration remains the runtime authority.
 
 All fields are optional. Product defaults are:
 
-| Field                   | Default    | Meaning                                                                   |
-| ----------------------- | ---------- | ------------------------------------------------------------------------- |
-| `entry`                 | none       | Project-relative entry module                                             |
-| `outputName`            | inferred   | Safe single-component executable name                                     |
-| `assets`                | `{}`       | Unconditionally embedded file and directory resources                     |
-| `engine.eval`           | `false`    | Include `eval`, `Function`, and the baked compiler                        |
-| `engine.realms`         | `false`    | Include Realm support                                                     |
-| `engine.regexp`         | `true`     | Include the RegExp engine                                                 |
-| `engine.intl.enabled`   | `false`    | Include Intl and ICU4X data                                               |
-| `engine.intl.features`  | `[]`       | All Intl services when Intl is enabled; a non-empty list selects services |
-| `engine.intl.languages` | `[]`       | All locales; locale subsetting is not implemented yet                     |
-| `host.scheduler`        | `"single"` | Host scheduler selection; multiprocessing is reserved                     |
-| `surface.webPlatform`   | `false`    | Include the WinterTC/web host surface                                     |
-| `surface.node`          | `false`    | Include Maligator's curated `node:*` compatibility surface                |
-| `surface.maligator`     | `true`     | Include the Maligator host surface                                        |
+| Field                   | Default    | Meaning                                                                                         |
+| ----------------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `entry`                 | none       | Project-relative entry module                                                                   |
+| `outputName`            | inferred   | Safe single-component executable name                                                           |
+| `assets`                | `{}`       | Unconditionally embedded file and directory resources                                           |
+| `engine.eval`           | `false`    | Runtime-disabled by default; `true` embeds the compiler; `"compile-check"` rejects visible uses |
+| `engine.realms`         | `false`    | Include Realm support                                                                           |
+| `engine.regexp`         | `true`     | Include the RegExp engine                                                                       |
+| `engine.intl.enabled`   | `false`    | Include Intl and ICU4X data                                                                     |
+| `engine.intl.features`  | `[]`       | All Intl services when Intl is enabled; a non-empty list selects services                       |
+| `engine.intl.languages` | `[]`       | All locales; locale subsetting is not implemented yet                                           |
+| `host.scheduler`        | `"single"` | Host scheduler selection; multiprocessing is reserved                                           |
+| `surface.webPlatform`   | `false`    | Include the WinterTC/web host surface                                                           |
+| `surface.node`          | `false`    | Include Maligator's curated `node:*` compatibility surface                                      |
+| `surface.maligator`     | `true`     | Include the Maligator host surface                                                              |
 
 Supported Intl feature names are `collator`, `number-format`, `date-time-format`,
 `plural-rules`, `list-format`, `segmenter`, `display-names`,
@@ -326,7 +326,7 @@ native artifacts remain under the explicitly selected cache root.
 - `no entrypoint ... run 'maligator init'`: add `entry` to the config or pass an explicit entry.
 - `config file not found`: `--config` is relative to the current project root; no ancestor search occurs.
 - `node:* ... surface.node is disabled`: set `surface.node: true` only for programs needing the curated Node surface.
-- `eval is disabled`: set `engine.eval: true`; this increases binary size and disables whole-program dead-code elimination around dynamic code.
+- `eval is disabled`: the default `engine.eval: false` compiles the call site but throws if it executes. Set `true` to embed the runtime compiler, or `"compile-check"` to reject statically visible uses during the build.
 - `RegExp is disabled`: remove `engine.regexp: false` or avoid regular expressions.
 - `Toolchain is not ready`: run `maligator doctor --verbose`, check `CC`/`CXX`, `PATH`, and the platform-specific installation suggestions.
 - A stale or suspect native artifact: remove the relevant directory under `.cache/mal-cache` and rebuild; cache identity changes normally invalidate it automatically.

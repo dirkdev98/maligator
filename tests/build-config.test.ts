@@ -53,6 +53,9 @@ describe("resolveBuildConfig defaults", () => {
 	it("honors explicit values", () => {
 		const config = resolveBuildConfig({ engine: { eval: true } });
 		expect(config.engine.eval).toBe(true);
+		expect(resolveBuildConfig({ engine: { eval: "compile-check" } }).engine.eval).toBe(
+			"compile-check",
+		);
 	});
 });
 
@@ -147,7 +150,7 @@ describe("loadBuildConfig", () => {
 		const dir = tmpdir();
 		writeConfig(dir, JSON.stringify({ engine: { eval: "yes" } }));
 		expect(() => loadBuildConfig(undefined, dir)).toThrow(
-			/'engine\.eval' must be a boolean/,
+			/'engine\.eval' must be a boolean or "compile-check"/,
 		);
 	});
 
@@ -353,6 +356,16 @@ describe("buildConfigCacheSuffix", () => {
 		expect(buildConfigCacheSuffix(off)).toBe(suffix);
 	});
 
+	it("compile-check shares eval-off runtime features and cache identity", () => {
+		const off = resolveBuildConfig({ engine: { eval: false } });
+		const checked = resolveBuildConfig({ engine: { eval: "compile-check" } });
+		expect(buildDerivationFromConfig(checked).features.evalEnabled).toBe(false);
+		expect(buildDerivationFromConfig(checked).features).toEqual(
+			buildDerivationFromConfig(off).features,
+		);
+		expect(buildConfigCacheSuffix(checked)).toBe(buildConfigCacheSuffix(off));
+	});
+
 	it("webPlatform-off gets a distinct non-empty output suffix", () => {
 		const canonical = resolveBuildConfig({
 			engine: { eval: true, intl: { enabled: true } },
@@ -529,6 +542,7 @@ function analyze(source: string) {
 
 const evalOff = resolveBuildConfig({ engine: { eval: false } });
 const evalOn = resolveBuildConfig({ engine: { eval: true } });
+const evalCompileCheck = resolveBuildConfig({ engine: { eval: "compile-check" } });
 
 describe("collectDisallowedEvalUsage (narrow static check)", () => {
 	it("flags a direct eval call", () => {
@@ -569,14 +583,21 @@ describe("collectDisallowedEvalUsage (narrow static check)", () => {
 });
 
 describe("assertEvalPolicy", () => {
-	it("throws with the offending sites when eval is disabled", () => {
+	it("throws with the offending sites in compile-check mode", () => {
 		const usages = collectDisallowedEvalUsage(analyze(`eval("x");`));
-		expect(() => assertEvalPolicy(evalOff, usages)).toThrow(/engine\.eval is false/);
+		expect(() => assertEvalPolicy(evalCompileCheck, usages)).toThrow(
+			/engine\.eval is "compile-check"/,
+		);
 	});
 
 	it("is a no-op when eval is enabled", () => {
 		const usages = collectDisallowedEvalUsage(analyze(`eval("x");`));
 		expect(() => assertEvalPolicy(evalOn, usages)).not.toThrow();
+	});
+
+	it("is a no-op when eval is runtime-disabled", () => {
+		const usages = collectDisallowedEvalUsage(analyze(`eval("x");`));
+		expect(() => assertEvalPolicy(evalOff, usages)).not.toThrow();
 	});
 
 	it("is a no-op when nothing was flagged", () => {

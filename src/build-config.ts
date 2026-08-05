@@ -32,7 +32,7 @@ export interface ResolvedBuildConfig {
 	outputName: string | undefined;
 	assets: Record<string, AssetInclusion>;
 	engine: {
-		eval: boolean;
+		eval: boolean | "compile-check";
 		realms: boolean;
 		regexp: boolean;
 		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
@@ -116,6 +116,14 @@ function expect(condition: boolean, at: string, expected: string): void {
 const booleanLeaf: Leaf = {
 	leaf: (value, at) => expect(typeof value === "boolean", at, "a boolean"),
 };
+const evalLeaf: Leaf = {
+	leaf: (value, at) =>
+		expect(
+			typeof value === "boolean" || value === "compile-check",
+			at,
+			`a boolean or "compile-check"`,
+		),
+};
 const stringLeaf: Leaf = {
 	leaf: (value, at) => expect(typeof value === "string", at, "a string"),
 };
@@ -193,7 +201,7 @@ const CONFIG_SCHEMA: ObjectSchema = {
 		assets: assetsLeaf,
 		engine: {
 			object: {
-				eval: booleanLeaf,
+				eval: evalLeaf,
 				realms: booleanLeaf,
 				regexp: booleanLeaf,
 				intl: {
@@ -271,17 +279,15 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 }
 
 /**
- * The compile-time half of `engine.eval: false` enforcement (the runtime gate in
- * builtin_eval.c is the other). Given the statically-detected dynamic-code uses
- * (from `collectDisallowedEvalUsage`), throw a {@link BuildConfigError} pointing at
- * each site and the config knob to flip. A no-op when eval is enabled or nothing
- * was found.
+ * Enforce the opt-in `engine.eval: "compile-check"` source audit. Runtime-disabled
+ * `false` builds deliberately compile dynamic-code call sites and let the runtime
+ * gate throw when execution reaches one.
  */
 export function assertEvalPolicy(
 	config: ResolvedBuildConfig,
 	usages: Array<DisallowedEvalUsage>,
 ): void {
-	if (config.engine.eval || usages.length === 0) {
+	if (config.engine.eval !== "compile-check" || usages.length === 0) {
 		return;
 	}
 	const sites = usages
@@ -291,8 +297,9 @@ export function assertEvalPolicy(
 		})
 		.join("\n");
 	throw new BuildConfigError(
-		`eval is disabled by your build config (engine.eval is false):\n${sites}\n` +
-			`Enable it with { engine: { eval: true } } in maligator.build.ts to use eval / new Function.`,
+		`dynamic code is rejected by your build config (engine.eval is "compile-check"):\n${sites}\n` +
+			`Use { engine: { eval: false } } to defer these sites to the runtime EvalError gate, ` +
+			`or { engine: { eval: true } } to enable eval / new Function.`,
 	);
 }
 
@@ -610,7 +617,7 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	const node = config.surface.node;
 	const realms = config.engine.realms;
 	if (
-		config.engine.eval &&
+		config.engine.eval === true &&
 		realms &&
 		config.engine.intl.enabled &&
 		services.length === 0 &&
@@ -621,7 +628,7 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		return "";
 	}
 	return shortHash({
-		eval: config.engine.eval,
+		eval: config.engine.eval === true,
 		intl: config.engine.intl.enabled,
 		services,
 		web,
@@ -650,7 +657,7 @@ export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDer
 	const intlFeatures = intlCargoFeatures(config);
 	const intlServiceDefines = intlDisabledDefines(config);
 	const features = normalizeNativeFeatures({
-		evalEnabled: config.engine.eval,
+		evalEnabled: config.engine.eval === true,
 		realmsEnabled: config.engine.realms,
 		intlEnabled: config.engine.intl.enabled,
 		intlServiceDefines,

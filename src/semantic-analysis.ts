@@ -670,7 +670,7 @@ export interface DisallowedEvalUsage {
 }
 
 /**
- * The narrow, call-site-specific half of the `engine.eval: false` enforcement:
+ * The narrow, call-site-specific `engine.eval: "compile-check"` audit:
  * flag `eval(...)` calls and `Function(...)` / `new Function(...)` constructions
  * where the callee is the global (undeclared) binding. Bare references
  * (`typeof eval`, `x instanceof Function`, `Function.prototype`) are intentionally
@@ -705,7 +705,7 @@ function collectFileEvalUsage(
 /**
  * Collect every disallowed dynamic-code use across a program's files (see
  * {@link collectFileEvalUsage}). Consumed by the compiler entry points when
- * `engine.eval` is false to fail the build with a pointer at the config.
+ * `engine.eval` is `"compile-check"` to fail the build with a pointer at the config.
  */
 export function collectDisallowedEvalUsage(
 	program: SemanticProgram,

@@ -60,8 +60,9 @@ export interface BuildOptions {
 	outDir?: string;
 	/**
 	 * Include runtime eval / new Function (embed the baked compiler). Defaults to
-	 * true — internal tooling opts in. Set false to build the `engine.eval: false`
-	 * archive (no compiler embed, eval/Function throw EvalError at runtime).
+	 * true — internal tooling opts in. Set false to build the runtime-disabled
+	 * `engine.eval: false` / `"compile-check"` archive (no compiler embed;
+	 * eval/Function throw EvalError at runtime).
 	 */
 	evalEnabled?: boolean;
 	/**

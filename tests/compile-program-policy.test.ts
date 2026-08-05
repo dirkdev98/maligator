@@ -28,12 +28,20 @@ describe("compileEntrypoint build policy", () => {
 		).not.toThrow();
 	});
 
-	test("rejects eval when a resolved config disables it", () => {
+	test("compiles eval when disabled so the runtime gate can throw on execution", () => {
 		expect(() =>
 			compileEntrypointToBuffer(entrypoint('eval("1 + 1");'), {
 				buildConfig: resolveBuildConfig({ engine: { eval: false } }),
 			}),
-		).toThrow(/engine\.eval is false/);
+		).not.toThrow();
+	});
+
+	test("rejects eval in compile-check mode", () => {
+		expect(() =>
+			compileEntrypointToBuffer(entrypoint('eval("1 + 1");'), {
+				buildConfig: resolveBuildConfig({ engine: { eval: "compile-check" } }),
+			}),
+		).toThrow(/engine\.eval is "compile-check"/);
 	});
 
 	test("rejects RegExp when a resolved config disables it", () => {
