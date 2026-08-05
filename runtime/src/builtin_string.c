@@ -160,6 +160,86 @@ static bool mal_builtin_string_matches_at(const MalString *string, const MalStri
     ) == 0;
 }
 
+#define MAL_STRING_UNIT_SCAN_LANES ((usize) 4)
+#define MAL_STRING_UNIT_NOT_FOUND ((usize) -1)
+
+/**
+ * Test four UTF-16 code units at once for a possible match. The subtraction
+ * may mark an adjacent lane after a zero lane, so callers confirm the four
+ * units before returning; it cannot miss an equal lane.
+ */
+static inline bool mal_builtin_string_word_may_contain_unit(u64 word, c16 unit) {
+    const u64 lane_ones = 0x0001000100010001ULL;
+    const u64 lane_high_bits = 0x8000800080008000ULL;
+    u64 different = word ^ ((u64) unit * lane_ones);
+    return ((different - lane_ones) & ~different & lane_high_bits) != 0;
+}
+
+/**
+ * Find one UTF-16 code unit in [from, end). Fixed-size memcpy permits
+ * unaligned input while still compiling to a single word load.
+ */
+static usize mal_builtin_string_find_unit(
+    const c16 *units,
+    usize from,
+    usize end,
+    c16 unit
+) {
+    while (end - from >= MAL_STRING_UNIT_SCAN_LANES) {
+        MAL_PERF_COUNT(string_unit_scan_word_blocks);
+        u64 word;
+        memcpy(&word, units + from, sizeof(word));
+        if (mal_builtin_string_word_may_contain_unit(word, unit)) {
+            MAL_PERF_COUNT(string_unit_scan_candidate_blocks);
+            for (usize lane = 0; lane < MAL_STRING_UNIT_SCAN_LANES; lane++) {
+                if (units[from + lane] == unit) {
+                    return from + lane;
+                }
+            }
+        }
+        from += MAL_STRING_UNIT_SCAN_LANES;
+    }
+    while (from < end) {
+        MAL_PERF_COUNT(string_unit_scan_scalar_code_units);
+        if (units[from] == unit) return from;
+        from++;
+    }
+    return end;
+}
+
+/**
+ * Find one UTF-16 code unit backwards in [0, end). Returns the sentinel when
+ * absent so index zero remains a valid result.
+ */
+static usize mal_builtin_string_reverse_find_unit(
+    const c16 *units,
+    usize end,
+    c16 unit
+) {
+    while (end >= MAL_STRING_UNIT_SCAN_LANES) {
+        MAL_PERF_COUNT(string_unit_scan_word_blocks);
+        usize start = end - MAL_STRING_UNIT_SCAN_LANES;
+        u64 word;
+        memcpy(&word, units + start, sizeof(word));
+        if (mal_builtin_string_word_may_contain_unit(word, unit)) {
+            MAL_PERF_COUNT(string_unit_scan_candidate_blocks);
+            for (usize lane = MAL_STRING_UNIT_SCAN_LANES; lane > 0; lane--) {
+                usize position = start + lane - 1;
+                if (units[position] == unit) {
+                    return position;
+                }
+            }
+        }
+        end = start;
+    }
+    while (end > 0) {
+        MAL_PERF_COUNT(string_unit_scan_scalar_code_units);
+        end--;
+        if (units[end] == unit) return end;
+    }
+    return MAL_STRING_UNIT_NOT_FOUND;
+}
+
 /**
  * Find the first occurrence of search at or after from. Returns -1 when not
  * found. An empty search matches immediately.
@@ -179,12 +259,10 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     if (search_length == 1) {
         const c16 *string_units = mal_string_code_units(string);
         c16 search_unit = mal_string_code_units(search)[0];
-        for (usize position = from; position < length; position++) {
-            if (string_units[position] == search_unit) {
-                return (i64) position;
-            }
-        }
-        return -1;
+        usize position = mal_builtin_string_find_unit(
+            string_units, from, length, search_unit
+        );
+        return position == length ? -1 : (i64) position;
     }
 
     MAL_PERF_COUNT(string_search_multi_unit_calls);
@@ -194,27 +272,35 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
     c16 last_unit = search_units[search_length - 1];
     usize last_offset = search_length - 1;
     usize interior_length = search_length - 2;
-    for (usize position = from; position + search_length <= length; position++) {
-        MAL_PERF_COUNT(string_search_candidates);
-        if (string_units[position] != first_unit) {
-            MAL_PERF_COUNT(string_search_first_unit_rejects);
-            continue;
+    usize end = length - search_length + 1;
+    usize position = from;
+    while (position < end) {
+        usize candidate = mal_builtin_string_find_unit(
+            string_units, position, end, first_unit
+        );
+        if (candidate == end) {
+            MAL_PERF_ADD(string_search_candidates, end - position);
+            MAL_PERF_ADD(string_search_first_unit_rejects, end - position);
+            break;
         }
-        if (string_units[position + last_offset] != last_unit) {
+        MAL_PERF_ADD(string_search_candidates, candidate - position + 1);
+        MAL_PERF_ADD(string_search_first_unit_rejects, candidate - position);
+        position = candidate + 1;
+        if (string_units[candidate + last_offset] != last_unit) {
             MAL_PERF_COUNT(string_search_last_unit_rejects);
             continue;
         }
         if (interior_length == 0) {
-            return (i64) position;
+            return (i64) candidate;
         }
         MAL_PERF_COUNT(string_search_memcmp_calls);
         MAL_PERF_ADD(string_search_memcmp_code_units, interior_length);
         if (memcmp(
-                string_units + position + 1,
+                string_units + candidate + 1,
                 search_units + 1,
                 sizeof(c16) * interior_length
             ) == 0) {
-            return (i64) position;
+            return (i64) candidate;
         }
     }
 
@@ -240,25 +326,36 @@ static i64 mal_builtin_string_reverse_find(
     const c16 *search_units = mal_string_code_units(search);
     c16 first_unit = search_units[0];
     if (search_length == 1) {
-        for (usize position = from;; position--) {
-            MAL_PERF_COUNT(string_reverse_search_candidates);
-            if (string_units[position] == first_unit) {
-                return (i64) position;
-            }
-            MAL_PERF_COUNT(string_reverse_search_first_unit_rejects);
-            if (position == 0) break;
+        usize position = mal_builtin_string_reverse_find_unit(
+            string_units, from + 1, first_unit
+        );
+        if (position == MAL_STRING_UNIT_NOT_FOUND) {
+            MAL_PERF_ADD(string_reverse_search_candidates, from + 1);
+            MAL_PERF_ADD(string_reverse_search_first_unit_rejects, from + 1);
+            return -1;
         }
-        return -1;
+        MAL_PERF_ADD(string_reverse_search_candidates, from - position + 1);
+        MAL_PERF_ADD(string_reverse_search_first_unit_rejects, from - position);
+        return (i64) position;
     }
 
     usize last_offset = search_length - 1;
     usize interior_length = search_length - 2;
     c16 last_unit = search_units[last_offset];
-    for (usize position = from;; position--) {
-        MAL_PERF_COUNT(string_reverse_search_candidates);
-        if (string_units[position] != first_unit) {
-            MAL_PERF_COUNT(string_reverse_search_first_unit_rejects);
-        } else if (string_units[position + last_offset] != last_unit) {
+    usize end = from + 1;
+    while (end > 0) {
+        usize position = mal_builtin_string_reverse_find_unit(
+            string_units, end, first_unit
+        );
+        if (position == MAL_STRING_UNIT_NOT_FOUND) {
+            MAL_PERF_ADD(string_reverse_search_candidates, end);
+            MAL_PERF_ADD(string_reverse_search_first_unit_rejects, end);
+            return -1;
+        }
+        MAL_PERF_ADD(string_reverse_search_candidates, end - position);
+        MAL_PERF_ADD(string_reverse_search_first_unit_rejects, end - position - 1);
+        end = position;
+        if (string_units[position + last_offset] != last_unit) {
             MAL_PERF_COUNT(string_reverse_search_last_unit_rejects);
         } else if (interior_length == 0) {
             return (i64) position;
@@ -273,7 +370,6 @@ static i64 mal_builtin_string_reverse_find(
                 return (i64) position;
             }
         }
-        if (position == 0) break;
     }
     return -1;
 }
@@ -1300,10 +1396,10 @@ static bool mal_builtin_string_split_plan_matches(
         const c16 separator_unit = mal_string_code_units(separator)[0];
         const c16 *string_units = mal_string_code_units(string);
         while (position < length) {
-            if (string_units[position] != separator_unit) {
-                position++;
-                continue;
-            }
+            position = mal_builtin_string_find_unit(
+                string_units, position, length, separator_unit
+            );
+            if (position == length) break;
             if (*match_count == MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY) {
                 MAL_PERF_COUNT(string_split_plan_overflows);
                 return false;

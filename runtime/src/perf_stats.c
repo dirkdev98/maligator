@@ -124,6 +124,8 @@ static void mal_perf_stats_print(void) {
         "reverse_search_first_unit_rejects=%llu "
         "reverse_search_last_unit_rejects=%llu "
         "reverse_search_memcmp_calls=%llu reverse_search_memcmp_code_units=%llu "
+        "unit_scan_word_blocks=%llu unit_scan_candidate_blocks=%llu "
+        "unit_scan_scalar_code_units=%llu "
         "split_planned_matches=%llu split_plan_overflows=%llu "
         "char_code_at_direct_hits=%llu char_code_at_direct_fallbacks=%llu "
         "case_calls=%llu case_input_code_units=%llu case_reuses=%llu "
@@ -156,6 +158,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_reverse_search_last_unit_rejects,
         (unsigned long long) mal_perf_stats.string_reverse_search_memcmp_calls,
         (unsigned long long) mal_perf_stats.string_reverse_search_memcmp_code_units,
+        (unsigned long long) mal_perf_stats.string_unit_scan_word_blocks,
+        (unsigned long long) mal_perf_stats.string_unit_scan_candidate_blocks,
+        (unsigned long long) mal_perf_stats.string_unit_scan_scalar_code_units,
         (unsigned long long) mal_perf_stats.string_split_planned_matches,
         (unsigned long long) mal_perf_stats.string_split_plan_overflows,
         (unsigned long long) mal_perf_stats.string_char_code_at_direct_hits,

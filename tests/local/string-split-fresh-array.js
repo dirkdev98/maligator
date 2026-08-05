@@ -160,6 +160,19 @@ check(
 		"axcabc".indexOf("abc") === 3,
 );
 check(
+	"one-unit searches preserve word-block boundaries and UTF-16 units",
+	"0123456789".indexOf("3") === 3 &&
+		"0123456789".indexOf("4") === 4 &&
+		"0123456789".indexOf("9") === 9 &&
+		"0123456789".indexOf("x") === -1 &&
+		"ab\u03a9cd\u03a9".includes("\u03a9", 3) &&
+		"\ud83dA\ude00\ud83d".indexOf("\ud83d", 1) === 3 &&
+		"01230123".lastIndexOf("0", 6) === 4 &&
+		"01230123".lastIndexOf("3", 6) === 3 &&
+		"01230123".lastIndexOf("x", 6) === -1 &&
+		"ab\u03a9cd\u03a9".lastIndexOf("\u03a9") === 5,
+);
+check(
 	"multi-unit search and split preserve embedded NUL",
 	"xxa\0bxx".indexOf("a\0b") === 2 && "a\0ba\0b".split("a\0b").join("|") === "||",
 );

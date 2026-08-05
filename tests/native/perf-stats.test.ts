@@ -112,6 +112,9 @@ describe("opt-in performance statistics", () => {
 		expect(field(strings, "reverse_search_candidates")).toBeGreaterThan(0);
 		expect(field(strings, "reverse_search_first_unit_rejects")).toBeGreaterThan(0);
 		expect(field(strings, "reverse_search_memcmp_calls")).toBeGreaterThan(0);
+		expect(field(strings, "unit_scan_word_blocks")).toBeGreaterThan(0);
+		expect(field(strings, "unit_scan_candidate_blocks")).toBeGreaterThan(0);
+		expect(field(strings, "unit_scan_scalar_code_units")).toBeGreaterThan(0);
 		expect(field(strings, "case_calls")).toBe(4);
 		expect(field(strings, "case_input_code_units")).toBeGreaterThan(0);
 		expect(field(strings, "case_reuses")).toBe(2);

@@ -77,6 +77,9 @@ typedef struct MalPerfStats {
     u64 string_reverse_search_last_unit_rejects;
     u64 string_reverse_search_memcmp_calls;
     u64 string_reverse_search_memcmp_code_units;
+    u64 string_unit_scan_word_blocks;
+    u64 string_unit_scan_candidate_blocks;
+    u64 string_unit_scan_scalar_code_units;
     u64 string_split_planned_matches;
     u64 string_split_plan_overflows;
     u64 string_char_code_at_direct_hits;

@@ -177,6 +177,9 @@ interface StringMetrics {
 	reverseSearchLastUnitRejects: number;
 	reverseSearchMemcmpCalls: number;
 	reverseSearchMemcmpCodeUnits: number;
+	unitScanWordBlocks: number;
+	unitScanCandidateBlocks: number;
+	unitScanScalarCodeUnits: number;
 	splitPlannedMatches: number;
 	splitPlanOverflows: number;
 	caseCalls: number;
@@ -765,6 +768,15 @@ function benchString(runs: number): StringMetrics {
 		reverseSearchMemcmpCodeUnits: parsePerfStringStat(
 			perfStderr,
 			"reverse_search_memcmp_code_units",
+		),
+		unitScanWordBlocks: parsePerfStringStat(perfStderr, "unit_scan_word_blocks"),
+		unitScanCandidateBlocks: parsePerfStringStat(
+			perfStderr,
+			"unit_scan_candidate_blocks",
+		),
+		unitScanScalarCodeUnits: parsePerfStringStat(
+			perfStderr,
+			"unit_scan_scalar_code_units",
 		),
 		splitPlannedMatches: parsePerfStringStat(perfStderr, "split_planned_matches"),
 		splitPlanOverflows: parsePerfStringStat(perfStderr, "split_plan_overflows"),
@@ -1546,7 +1558,7 @@ function stringProfileRow(name: string, stderr: string): void {
 	const averageLength = total === 0 ? 0 : (allocations.code_units ?? 0) / total;
 	const shortPercent = total === 0 ? 0 : (short * 100) / total;
 	console.log(
-		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}  case ${String(strings.case_calls ?? 0).padStart(8)} / ${String(strings.case_reuses ?? 0).padStart(8)} reuse  regexp ${String(regexp.exec_calls ?? 0).padStart(8)} / ${String(regexp.ascii_exec_calls ?? 0).padStart(8)} ASCII`,
+		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}  scan ${String(strings.unit_scan_word_blocks ?? 0).padStart(9)}x4  case ${String(strings.case_calls ?? 0).padStart(8)} / ${String(strings.case_reuses ?? 0).padStart(8)} reuse  regexp ${String(regexp.exec_calls ?? 0).padStart(8)} / ${String(regexp.ascii_exec_calls ?? 0).padStart(8)} ASCII`,
 	);
 }
 
@@ -1982,6 +1994,9 @@ function benchHttpProfile(requests: number, conc: number): void {
 					`    direct charCodeAt   ${perfPerRequest(strings, "char_code_at_direct_hits", requests).toFixed(1)} hits, ${perfPerRequest(strings, "char_code_at_direct_fallbacks", requests).toFixed(1)} fallbacks/request`,
 				);
 				console.log(
+					`    string unit scan    ${perfPerRequest(strings, "unit_scan_word_blocks", requests).toFixed(1)} word blocks, ${perfPerRequest(strings, "unit_scan_candidate_blocks", requests).toFixed(1)} candidate blocks, ${perfPerRequest(strings, "unit_scan_scalar_code_units", requests).toFixed(1)} scalar tail units/request`,
+				);
+				console.log(
 					`    strings/request     ${perfPerRequest(stringAllocations, "allocations", requests).toFixed(1)} allocations, ${perfPerRequest(stringAllocations, "code_units", requests).toFixed(1)} logical units, ${perfPerRequest(stringAllocations, "copy_code_units", requests).toFixed(1)} copied, ${perfPerRequest(stringAllocations, "ascii_code_units", requests).toFixed(1)} widened`,
 				);
 				console.log(
@@ -2143,6 +2158,9 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(
 			`            ${entry.string.reverseSearchMemcmpCalls} interior compares (${entry.string.reverseSearchMemcmpCodeUnits} code units)`,
+		);
+		console.log(
+			`  unit scan ${entry.string.unitScanWordBlocks} word blocks (${entry.string.unitScanCandidateBlocks} candidates), ${entry.string.unitScanScalarCodeUnits} scalar tail units`,
 		);
 		console.log(
 			`  split     ${entry.string.splitPlannedMatches} planned matches, ${entry.string.splitPlanOverflows} overflow fallbacks`,

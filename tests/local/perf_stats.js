@@ -107,7 +107,8 @@ if (consProbe.slice(1, 8) !== "erf-sta") throw new Error("broken dependent slice
 if (
 	consProbe.lastIndexOf("stats") !== 5 ||
 	consProbe.lastIndexOf("s", 8) !== 5 ||
-	consProbe.lastIndexOf("missing") !== -1
+	consProbe.lastIndexOf("missing") !== -1 ||
+	"abcdef".indexOf("z") !== -1
 ) {
 	throw new Error("broken reverse string search");
 }

@@ -97,6 +97,9 @@ describe("String.prototype.split fresh dense results", () => {
 		expect(perfField(stderr, "search_last_unit_rejects")).toBeGreaterThan(0);
 		expect(perfField(stderr, "search_memcmp_calls")).toBeGreaterThan(0);
 		expect(perfField(stderr, "search_memcmp_code_units")).toBeGreaterThan(0);
+		expect(perfField(stderr, "unit_scan_word_blocks")).toBeGreaterThan(0);
+		expect(perfField(stderr, "unit_scan_candidate_blocks")).toBeGreaterThan(0);
+		expect(perfField(stderr, "unit_scan_scalar_code_units")).toBeGreaterThan(0);
 		expect(perfField(stderr, "split_planned_matches")).toBeGreaterThan(0);
 		expect(perfField(stderr, "split_plan_overflows")).toBe(3);
 	});
