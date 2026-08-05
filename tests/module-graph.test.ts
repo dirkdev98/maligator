@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { buildModuleGraph } from "../src/module-graph.ts";
 import type { ModuleGraph } from "../src/module-graph.ts";
 import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
@@ -210,6 +211,32 @@ test("requires an explicit stripper for TypeScript and applies it across the gra
 	expect(
 		graph.modules.get(path.join(root, "typed-dep.ts"))!.parsed.ast.body,
 	).toHaveLength(1);
+});
+
+test("parses Node-compatible erasable TypeScript through the compact product path", () => {
+	write(
+		"compact-entry.mts",
+		`import { value, type Value } from "./compact-dep.ts";
+interface Dependencies {
+	readonly value: Value;
+}
+const select = <Selected,>({ value }: Dependencies): Selected =>
+	value as Selected;
+select<Value>({ value });
+`,
+	);
+	write(
+		"compact-dep.ts",
+		`export type Value = { readonly name: string };
+export const value: Value = { name: "compact" };
+`,
+	);
+
+	const graph = buildModuleGraph(path.join(root, "compact-entry.mts"), {
+		dependencyGoalOverride: "module",
+		stripTypes: stripCompactTypes,
+	});
+	expect(graph.modules.size).toBe(2);
 });
 
 test("records dependency specifiers, kinds, and resolutions", () => {

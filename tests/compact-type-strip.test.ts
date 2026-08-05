@@ -37,22 +37,96 @@ function render(model: Model, prefix: string): string {
 		expect(stripped.split("\n")[1]).toBe("type = sideEffect();");
 	});
 
-	test("rejects unsupported non-braced import type declarations", () => {
+	test("strips Node-compatible inline type specifiers", () => {
+		const source = `import { type Model, value, type Other as Alias } from "./model.ts";
+export { type Model, value };
+`;
+		const stripped = stripCompactTypes(source, "imports.ts");
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "imports.ts"));
+	});
+
+	test("strips typed destructured arrow parameters", () => {
+		const source = `interface Dependencies {
+	readonly service: Service;
+}
+export const createController = ({ service }: Dependencies) => service;
+`;
+		const stripped = stripCompactTypes(source, "controller.ts");
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "controller.ts"));
+	});
+
+	test("strips generic declarations with compound types", () => {
+		const source = `export type Result<ErrorType, ValueType> =
+	| { ok: true; value: ValueType }
+	| { ok: false; error: ErrorType };
+interface Container<ValueType> extends Iterable<ValueType> {
+	readonly value?: ValueType;
+}
+`;
+		const stripped = stripCompactTypes(source, "result.ts");
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "result.ts"));
+	});
+
+	test("strips common erasable expression and function syntax", () => {
+		const source = `function identity<Value>(value?: Value): Value | undefined {
+	return value;
+}
+const arrow = <Value,>(value: Value): Value => value;
+const selected = identity<string>("ok") as string satisfies string;
+const length = selected!.length;
+const message = \`value:${"${selected as string}"}\`;
+`;
+		const stripped = stripCompactTypes(source, "erasable.ts");
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "erasable.ts"));
+	});
+
+	test("strips generic class syntax without accepting parameter properties", () => {
+		const source = `abstract class Box<Value> extends Base<Value> implements Container<Value> {
+	readonly value!: Value;
+	protected count: number = 0;
+	abstract parse<Input>(input?: Input): Input;
+	public map<Output>(callback: (value: Value) => Output): Output {
+		return callback(this.value);
+	}
+}
+`;
+		const stripped = stripCompactTypes(source, "class.ts");
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "class.ts"));
 		expect(() =>
-			stripCompactTypes('import type Model from "./model.js";', "bad.ts"),
-		).toThrow(/non-braced import type declarations/);
+			stripCompactTypes(
+				"class Box { constructor(readonly value: string) {} }",
+				"parameter-property.ts",
+			),
+		).toThrow(/parameter properties/);
+	});
+
+	test("strips ambient and type-only namespaces but rejects runtime namespaces", () => {
+		const source = `declare const ambient: string;
+export declare function load<Value>(value: Value): Value;
+export namespace Types {
+	// Type-only namespaces are erasable in Node's strip-only mode.
+	export type Item<Value> = { value: Value };
+	export interface Named {
+		readonly name: string;
+	}
+}
+`;
+		const stripped = stripCompactTypes(source, "ambient.ts");
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "ambient.ts"));
+		expect(() =>
+			stripCompactTypes("namespace Runtime { export const value = 1; }", "runtime.ts"),
+		).toThrow(/runtime code/);
+	});
+
+	test("does not treat TypeScript contextual words as declarations", () => {
+		const source =
+			"const enumValue = { enum: 1, namespace: 2, module: 3, declare: 4 }; const pattern = /as string satisfies Type/;";
+		expect(stripCompactTypes(source, "ordinary.ts")).toBe(source);
 	});
 
 	test.each([
-		["generics", "function id<T>(value: T): T { return value; }"],
-		["assertions", "const value = input as string;"],
-		["non-null", "const value = input!.name;"],
-		["satisfies", "const value = input satisfies Shape;"],
-		["optionals", "function f(value?: string): void {}"],
 		["enums", "enum Mode { One }"],
-		["namespaces", "namespace N { export const x = 1; }"],
 		["decorators", "@sealed class Box {}"],
-		["class fields", "class Box { value: string; }"],
 	])("rejects unsupported %s syntax", (_name, source) => {
 		expect(() => stripCompactTypes(source, "bad.ts")).toThrow(/does not support/);
 	});
