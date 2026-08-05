@@ -76,6 +76,34 @@ struct FastMatch {
 }
 
 impl FastPattern {
+    fn find_literal_candidate(subject: &[u16], from: usize, needle: u16) -> Option<usize> {
+        const LANE_ONES: u64 = 0x0001_0001_0001_0001;
+        const LANE_HIGH_BITS: u64 = 0x8000_8000_8000_8000;
+
+        let repeated = u64::from(needle) * LANE_ONES;
+        let mut position = from;
+        while position + 4 <= subject.len() {
+            let word = unsafe {
+                subject
+                    .as_ptr()
+                    .add(position)
+                    .cast::<u64>()
+                    .read_unaligned()
+            };
+            let difference = word ^ repeated;
+            let candidates = difference.wrapping_sub(LANE_ONES) & !difference & LANE_HIGH_BITS;
+            if candidates != 0 {
+                for offset in 0..4 {
+                    if subject[position + offset] == needle {
+                        return Some(position + offset);
+                    }
+                }
+            }
+            position += 4;
+        }
+        (position..subject.len()).find(|index| subject[*index] == needle)
+    }
+
     fn literal_matches_at(literal: &[u16], subject: &[u16], position: usize) -> bool {
         if position + literal.len() > subject.len() {
             return false;
@@ -102,6 +130,9 @@ impl FastPattern {
 
     fn next_candidate(&self, subject: &[u16], from: usize) -> Option<usize> {
         let first_token = self.tokens.first()?;
+        if let FastToken::Literal(literal) = first_token {
+            return Self::find_literal_candidate(subject, from, literal[0]);
+        }
         (from..subject.len())
             .find(|position| Self::token_starts_at(first_token, subject, *position))
     }
@@ -912,6 +943,32 @@ mod tests {
         assert!(compile_fast_pattern(&utf16("value$"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("value=([0-9]+)"), FLAG_IGNORE_CASE).is_none());
         assert!(compile_fast_pattern(&utf16("(?:value)"), 0).is_none());
+    }
+
+    #[test]
+    fn fast_literal_candidate_scan_covers_unaligned_blocks_and_scalar_tails() {
+        for target in 0..13 {
+            let mut subject = vec![b'x' as u16; 13];
+            subject[target] = b'v' as u16;
+            assert_eq!(
+                FastPattern::find_literal_candidate(&subject, 0, b'v' as u16),
+                Some(target)
+            );
+            assert_eq!(
+                FastPattern::find_literal_candidate(&subject, target + 1, b'v' as u16),
+                None
+            );
+        }
+
+        let subject = utf16("x---v---");
+        assert_eq!(
+            FastPattern::find_literal_candidate(&subject, 1, b'v' as u16),
+            Some(4)
+        );
+        assert_eq!(
+            FastPattern::find_literal_candidate(&subject, 1, b'z' as u16),
+            None
+        );
     }
 
     #[test]
