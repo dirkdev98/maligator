@@ -348,6 +348,7 @@ Maligator keeps reusable inputs separate from project outputs:
 ```text
 .cache/mal-cache/toolchains/    tool identity and capability probes
 .cache/mal-cache/build-frontend/ portable normal-build frontend definitions
+.cache/mal-cache/generated-c/   compiled generated-C and driver objects
 .cache/mal-cache/runtime/       C runtime archives
 .cache/mal-cache/rust/          keyed Rust static libraries
 .cache/mal-cache/cargo/         Cargo downloads/cache
@@ -360,8 +361,11 @@ Cache keys include relevant source content, normalized feature config, target,
 selected toolchain identity, build environment, and exact compile or Cargo arguments.
 Normal builds restore cached VM definitions before generated-C emission, skipping
 unchanged graph, semantic, optimization, allocation, and lowering work while
-preserving native-code metadata. Normal output reports frontend, toolchain, and
-native cache hit/miss status plus the final executable path. Removing
+preserving native-code metadata. Generated translation units and the driver are
+then compiled to independently content-addressed objects; unchanged objects are
+relinked without invoking their C compilation again. Normal output reports
+frontend, generated-C, toolchain, and native cache hit/miss status plus the final
+executable path. Removing
 `.cache/mal-build` forces project output regeneration; removing a specific
 `.cache/mal-cache` subtree forces that reusable artifact to be reprobed or rebuilt.
 

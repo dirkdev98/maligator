@@ -1,5 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { hash } from "node:crypto";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as path from "node:path";
 import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
@@ -29,6 +39,7 @@ export interface LocalBuildOptions {
 	/** Human-facing binary filename decoration only; never part of archive identity. */
 	cacheSuffix?: string;
 	onWarning?: (message: string) => void;
+	onGeneratedObjectCacheEvent?: (event: { hit: boolean; path: string }) => void;
 }
 
 /** Exact inputs and output of one final native link. */
@@ -36,6 +47,136 @@ export interface LocalBuildResult {
 	binaryPath: string;
 	artifacts: NativeArtifacts;
 	context: NativeBuildContext;
+}
+
+interface GeneratedObjectManifest {
+	schema: 1;
+	key: string;
+	size: number;
+	digest: string;
+}
+
+function applicationCompileArguments(context: NativeBuildContext): Array<string> {
+	return [
+		"-std=c2x",
+		...ccExtraFlags(
+			context.plan,
+			context.environment,
+			context.toolchain.platform ?? process.platform,
+		),
+		...context.features.cDefines,
+		"-I",
+		path.join(context.runtimeDirectory, "src"),
+		"-I",
+		path.join(context.runtimeDirectory, "src/host"),
+		"-I",
+		path.join(context.runtimeDirectory, "src/runtime"),
+		"-I",
+		path.join(context.runtimeDirectory, "rust/include"),
+		...(existsSync(path.join(context.runtimeDirectory, "vendor/llhttp/include"))
+			? ["-I", path.join(context.runtimeDirectory, "vendor/llhttp/include")]
+			: []),
+	];
+}
+
+function validGeneratedObject(directory: string, key: string): boolean {
+	try {
+		const objectPath = path.join(directory, "unit.o");
+		const manifest = JSON.parse(
+			readFileSync(path.join(directory, "artifact.json"), "utf-8"),
+		) as GeneratedObjectManifest;
+		const stats = statSync(objectPath);
+		return (
+			manifest.schema === 1 &&
+			manifest.key === key &&
+			stats.isFile() &&
+			stats.size > 0 &&
+			manifest.size === stats.size &&
+			manifest.digest === hash("sha256", readFileSync(objectPath), "hex")
+		);
+	} catch {
+		return false;
+	}
+}
+
+function ensureGeneratedObject(
+	context: NativeBuildContext,
+	runtimeArtifactPath: string,
+	sourcePath: string,
+	source: string,
+	compileArguments: Array<string>,
+	verbose: boolean,
+	onCacheEvent?: (event: { hit: boolean; path: string }) => void,
+): string {
+	const key = hash(
+		"sha256",
+		JSON.stringify({
+			schema: 1,
+			sourcePath,
+			source: hash("sha256", source, "hex"),
+			compileArguments,
+			runtimeArtifactDirectory: path.dirname(runtimeArtifactPath),
+			environment: context.environmentFingerprint,
+			toolchain: context.toolchain.fingerprint,
+			target: context.toolchain.target,
+		}),
+		"hex",
+	).slice(0, 32);
+	const parent = path.join(context.cacheDirectory, "generated-c");
+	const directory = path.join(parent, key);
+	const objectPath = path.join(directory, "unit.o");
+	if (validGeneratedObject(directory, key)) {
+		onCacheEvent?.({ hit: true, path: objectPath });
+		return objectPath;
+	}
+
+	mkdirSync(parent, { recursive: true });
+	rmSync(directory, { recursive: true, force: true });
+	const temporaryDirectory = mkdtempSync(path.join(parent, ".build-"));
+	const temporaryObject = path.join(temporaryDirectory, "unit.o");
+	try {
+		execFileSync(
+			context.toolchain.tools.cc.path,
+			toolArguments(context.toolchain.tools.cc, [
+				...compileArguments,
+				"-c",
+				sourcePath,
+				"-o",
+				temporaryObject,
+			]),
+			{ env: context.environment, stdio: verbose ? "inherit" : "pipe" },
+		);
+		const bytes = readFileSync(temporaryObject);
+		if (bytes.length === 0)
+			throw new Error(`compiler produced an empty object: ${sourcePath}`);
+		writeFileSync(
+			path.join(temporaryDirectory, "artifact.json"),
+			`${JSON.stringify({
+				schema: 1,
+				key,
+				size: bytes.length,
+				digest: hash("sha256", bytes, "hex"),
+			} satisfies GeneratedObjectManifest)}\n`,
+		);
+		try {
+			renameSync(temporaryDirectory, directory);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (
+				(code !== "EEXIST" && code !== "ENOTEMPTY") ||
+				!validGeneratedObject(directory, key)
+			) {
+				throw error;
+			}
+		}
+	} finally {
+		rmSync(temporaryDirectory, { recursive: true, force: true });
+	}
+	if (!validGeneratedObject(directory, key)) {
+		throw new Error(`generated object cache publication failed: ${objectPath}`);
+	}
+	onCacheEvent?.({ hit: false, path: objectPath });
+	return objectPath;
 }
 
 /** Build the serialized-definition development driver. */
@@ -116,30 +257,36 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		writeFileSync(sourcePath, source);
 		return sourcePath;
 	});
+	const compileArguments = applicationCompileArguments(context);
+	const objectPaths = cPaths.map((sourcePath, index) =>
+		ensureGeneratedObject(
+			context,
+			artifacts.c.runtime,
+			sourcePath,
+			sources[index]!,
+			compileArguments,
+			options.verbose,
+			options.onGeneratedObjectCacheEvent,
+		),
+	);
+	const mainFile =
+		options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c");
+	const mainObject = ensureGeneratedObject(
+		context,
+		artifacts.c.runtime,
+		mainFile,
+		readFileSync(mainFile, "utf-8"),
+		compileArguments,
+		options.verbose,
+		options.onGeneratedObjectCacheEvent,
+	);
 
 	execFileSync(
 		context.toolchain.tools.cc.path,
 		toolArguments(context.toolchain.tools.cc, [
-			"-std=c2x",
-			...ccExtraFlags(
-				context.plan,
-				context.environment,
-				context.toolchain.platform ?? process.platform,
-			),
-			...context.features.cDefines,
-			"-I",
-			path.join(context.runtimeDirectory, "src"),
-			"-I",
-			path.join(context.runtimeDirectory, "src/host"),
-			"-I",
-			path.join(context.runtimeDirectory, "src/runtime"),
-			"-I",
-			path.join(context.runtimeDirectory, "rust/include"),
-			...(existsSync(path.join(context.runtimeDirectory, "vendor/llhttp/include"))
-				? ["-I", path.join(context.runtimeDirectory, "vendor/llhttp/include")]
-				: []),
-			...cPaths,
-			options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c"),
+			...compileArguments,
+			...objectPaths,
+			mainObject,
 			...artifacts.linkArgs,
 			...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),
 			"-o",

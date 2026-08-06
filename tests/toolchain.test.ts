@@ -49,7 +49,7 @@ while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-o" ]; then shift; out="$1"; fi
 	shift
 done
-if [ -n "$out" ]; then /usr/bin/touch "$out"; /bin/chmod +x "$out"; fi
+if [ -n "$out" ]; then printf 'x' > "$out"; /bin/chmod +x "$out"; fi
 exit 0
 `;
 }
@@ -94,7 +94,7 @@ if [ "$subcommand" = "cc" ] || [ "$subcommand" = "c++" ]; then
 		if [ "$1" = "-o" ]; then shift; out="$1"; fi
 		shift
 	done
-	if [ -n "$out" ]; then /usr/bin/touch "$out"; /bin/chmod +x "$out"; fi
+	if [ -n "$out" ]; then printf 'x' > "$out"; /bin/chmod +x "$out"; fi
 	exit 0
 fi
 if [ "$subcommand" = "ar" ]; then
@@ -167,6 +167,10 @@ function createMinimalRuntime(fake: FakeToolchain): string {
 	writeFileSync(
 		path.join(runtimeDirectory, "src/runtime/runtime.c"),
 		"int runtime_value = 1;\n",
+	);
+	writeFileSync(
+		path.join(runtimeDirectory, "test262_main.c"),
+		"int main(void) { return 0; }\n",
 	);
 	writeFileSync(path.join(runtimeDirectory, "rust/include/mal.h"), "#pragma once\n");
 	writeFileSync(
@@ -425,6 +429,50 @@ describe("native toolchain discovery", () => {
 		expect(invocations).toContain(`${binary}.part-1.c`);
 		expect(invocations).toContain(`-o ${binary}`);
 		expect(existsSync(`${binary}.c`)).toBe(true);
+	});
+
+	it("reuses content-addressed generated C objects independently", () => {
+		const fake = createFakeToolchain();
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		});
+		const context = resolveNativeBuildContext({
+			toolchain: report.toolchain!,
+			cacheDirectory: path.join(fake.root, "cache"),
+			features: { evalEnabled: false, webPlatformEnabled: false },
+		});
+		const events: Array<{ hit: boolean; path: string }> = [];
+		const build = (secondSource: string) =>
+			buildLocalBinary({
+				context,
+				name: "generated-cache",
+				cSource: ["int first_value;", secondSource],
+				verbose: false,
+				outDir: fake.root,
+				onGeneratedObjectCacheEvent: (event) => events.push(event),
+			});
+
+		build("int second_value;");
+		expect(events.map((event) => event.hit)).toEqual([false, false, false]);
+
+		events.length = 0;
+		writeFileSync(fake.logPath, "");
+		build("int second_value;");
+		expect(events.map((event) => event.hit)).toEqual([true, true, true]);
+		expect(readFileSync(fake.logPath, "utf-8")).not.toContain(" -c ");
+
+		writeFileSync(events[0]!.path, "corrupt");
+		events.length = 0;
+		build("int second_value;");
+		expect(events.map((event) => event.hit)).toEqual([false, true, true]);
+
+		events.length = 0;
+		build("int changed_value;");
+		expect(events.map((event) => event.hit)).toEqual([true, false, true]);
 	});
 
 	it("uses one production plan for archive/final LTO and post-link stripping", () => {

@@ -171,6 +171,9 @@ try {
 	if (!runOutput.includes("Cache frontend: hit")) {
 		throw new Error(`run did not reuse the normal-build frontend:\n${runOutput}`);
 	}
+	if (!runOutput.includes("Cache generated C: hit")) {
+		throw new Error(`run did not reuse generated native objects:\n${runOutput}`);
+	}
 	console.log(
 		"ok   target materialized binary assets, executed eval, and forwarded arguments",
 	);

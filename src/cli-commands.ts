@@ -329,6 +329,8 @@ function compileAndBuild(
 		cSource: output,
 		verbose,
 		onWarning: (warning) => log.info(`warning: ${warning}`),
+		onGeneratedObjectCacheEvent: (event) =>
+			log.info(`Cache generated C: ${event.hit ? "hit" : "miss"} (${event.path})`),
 		mainFile: applicationDriverPath(
 			context.installation,
 			buildConfig.surface.webPlatform,

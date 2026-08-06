@@ -147,13 +147,18 @@ Normal `maligator build` and `maligator run` commands use the same portable VM
 definition format for their frontend cache. On a valid hit, Maligator skips
 parsing, module-graph construction, semantic analysis, optimization, register
 allocation, and VM lowering, then emits the same native translation units from
-the restored definition. Native runtime and Rust archives remain separately
-content-addressed.
+the restored definition. Generated translation units and the native driver are
+compiled into independently content-addressed objects, so unchanged objects can
+be relinked without repeating C compilation. The final link still runs, and
+native runtime and Rust archives remain separately content-addressed.
 
 Build cache invalidation includes source and transitive dependency content,
 package-resolution metadata, relevant configuration, the TypeScript erasure
-frontend, and compiler/wire versions. Compiler diagnostic dump flags deliberately
-recompile because they require live semantic and IR objects.
+frontend, and compiler/wire versions. Generated-object identity additionally
+includes the exact C source, source identity, native headers/runtime artifact,
+compiler/toolchain, target, flags, and build environment. Compiler diagnostic
+dump flags deliberately recompile the frontend because they require live
+semantic and IR objects.
 
 ## Production builds
 
