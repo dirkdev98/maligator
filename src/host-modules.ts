@@ -179,6 +179,27 @@ const BUFFER: HostModuleSpec = {
 	installer: BUFFER_INSTALLER_SYMBOL,
 };
 
+const PROCESS: HostModuleSpec = {
+	id: "node:process",
+	named: [
+		"arch",
+		"argv",
+		"cwd",
+		"emitWarning",
+		"env",
+		"exit",
+		"kill",
+		"pid",
+		"platform",
+		"stderr",
+		"stdout",
+	],
+	hasDefault: true,
+	// The module and the free global deliberately share one cached installer so
+	// every Node spelling observes the same mutable process object.
+	installer: PROCESS_INSTALLER_SYMBOL,
+};
+
 const ASSERT_STRICT: HostModuleSpec = {
 	id: "node:assert/strict",
 	named: ["equal", "deepEqual", "match"],
@@ -281,6 +302,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		TTY,
 		UTIL,
 		BUFFER,
+		PROCESS,
 		ASSERT_STRICT,
 		ASYNC_HOOKS,
 		STREAM,

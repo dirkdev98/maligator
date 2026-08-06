@@ -10,6 +10,12 @@
 // `process` is a free global here (no node:process import), resolved through the
 // global object property installed under the node surface.
 
+import importedProcess, {
+	emitWarning as importedEmitWarning,
+	env as importedEnv,
+} from "node:process";
+import requiredProcesses from "./node-process-require.cjs";
+
 const MARKER = "NODE_PROCESS_MARKER";
 const UNDEF = "__undef__";
 
@@ -45,6 +51,16 @@ function check(name: string, ok: boolean): void {
 
 check("process is object", typeof process === "object" && process !== null);
 check("process has global identity", globalThis.process === process);
+check("node:process default has global identity", importedProcess === process);
+check("node:process named env has global identity", importedEnv === process.env);
+check(
+	"node:process named emitWarning has method identity",
+	importedEmitWarning === process.emitWarning,
+);
+check(
+	"bare and canonical CommonJS process have global identity",
+	requiredProcesses.bare === process && requiredProcesses.canonical === process,
+);
 check("argv is array", Array.isArray(process.argv));
 check("argv has argv0 + placeholder", process.argv.length >= 2);
 check("argv[1] is <compiled> placeholder", process.argv[1] === "<compiled>");
@@ -77,6 +93,11 @@ check("stdout isTTY", typeof process.stdout.isTTY === "boolean");
 check("stderr isTTY", typeof process.stderr.isTTY === "boolean");
 check("stdout write", process.stdout.write("") === true);
 check("stderr write", process.stderr.write("") === true);
+check("emitWarning is a function", typeof process.emitWarning === "function");
+
+if (process.env.NODE_PROCESS_WARN === "1") {
+	importedEmitWarning("module-warning");
+}
 
 function checkExitRangeError(name: string, code: number): void {
 	try {

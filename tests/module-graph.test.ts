@@ -727,6 +727,31 @@ test("resolves prefix-only node:sqlite without treating bare sqlite as core", ()
 	).toThrow(/Cannot resolve 'sqlite'/);
 });
 
+test("canonicalizes node:process and bare process to the shared host module", () => {
+	write(
+		"node-process.mjs",
+		`import process, { emitWarning, env } from "node:process";\n` +
+			`globalThis.sink = [process, emitWarning, env];\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "node-process.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get("node:process")?.host).toEqual(
+		expect.objectContaining({
+			hasDefault: true,
+			installer: "mal_host_install_process",
+		}),
+	);
+
+	write("bare-process.cjs", `module.exports = require("process");\n`);
+	const bareGraph = buildModuleGraph(path.join(root, "bare-process.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(bareGraph.modules.get(bareGraph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:process",
+	);
+});
+
 test("canonicalizes bare string_decoder instead of resolving an ancestor shim", () => {
 	write("bare-decoder.cjs", `module.exports = require("string_decoder");\n`);
 	const graph = buildModuleGraph(path.join(root, "bare-decoder.cjs"), {

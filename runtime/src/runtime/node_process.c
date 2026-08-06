@@ -16,6 +16,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
 #include "property_store.h"
@@ -297,6 +298,39 @@ static MalValue mal_process_stdio_write(
     return mal_value_new_boolean(true);
 }
 
+static MalValue mal_process_emit_warning(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 1) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The \"warning\" argument is required");
+        return mal_value_new_undefined();
+    }
+    MalString *warning;
+    if (!mal_vm_to_string(vm, args[0], &warning)) {
+        return mal_value_new_undefined();
+    }
+    usize length;
+    byte *bytes = mal_string_to_utf8(warning, &length);
+    if (bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    usize offset = 0;
+    while (offset < length) {
+        ssize_t written = write(STDERR_FILENO, bytes + offset, length - offset);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) break;
+        offset += (usize) written;
+    }
+    free(bytes);
+    const byte newline = '\n';
+    while (write(STDERR_FILENO, &newline, 1) < 0 && errno == EINTR) {}
+    return mal_value_new_undefined();
+}
+
 static MalValue mal_process_build_stdio(MalVm *vm, int fd) {
     const MalPropertyFlags flags =
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
@@ -316,8 +350,11 @@ static MalValue mal_process_build_stdio(MalVm *vm, int fd) {
 
 void mal_host_install_process(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
-    (void) slots;
-    (void) count;
+    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_PROCESS_MODULE];
+    if (!mal_value_is_undefined(cached)) {
+        mal_node_module_publish(vm, slots, count, cached);
+        return;
+    }
     MalValue process_val = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan root;
     mal_gc_root(&root, &process_val, 1);
@@ -360,6 +397,8 @@ void mal_host_install_process(
     mal_gc_unroot(&stderr_root);
 
     mal_intrinsic_define_method_n(vm, process, (const byte *) "cwd", 0, mal_process_cwd);
+    mal_intrinsic_define_method_n(
+        vm, process, (const byte *) "emitWarning", 1, mal_process_emit_warning);
     mal_intrinsic_define_method_n(vm, process, (const byte *) "exit", 1, mal_process_exit);
     mal_intrinsic_define_method_n(vm, process, (const byte *) "kill", 2, mal_process_kill);
     mal_intrinsic_define_data(
@@ -392,6 +431,8 @@ void mal_host_install_process(
     mal_intrinsic_define_data(
         vm, global_this, (const byte *) "process", process_val, data_flags);
 
+    vm->intrinsics[MAL_INTRINSIC_NODE_PROCESS_MODULE] = process_val;
+    mal_node_module_publish(vm, slots, count, process_val);
     mal_gc_unroot(&root);
 }
 

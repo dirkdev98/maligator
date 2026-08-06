@@ -21,9 +21,10 @@
  *   - platform/arch metadata used by native toolchain diagnostics.
  *   - stdout/stderr stream-like objects with fd, isTTY, and write().
  *
- * No node:process module or signal event surface. `launch` carries the OS command
- * line (argc/argv) the driver's `main`
- * received; the driver threads its own argc/argv through mal_vm_run_host_installs.
+ * The same cached object is also the default `node:process` / bare `process`
+ * module export. `launch` carries the OS command line (argc/argv) the driver's
+ * `main` received; the driver threads its own argc/argv through
+ * mal_vm_run_host_installs.
  */
 void mal_host_install_process(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);

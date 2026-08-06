@@ -66,6 +66,7 @@ function argvItems(lines: Array<string>): Array<string | undefined> {
 
 describe("native process global", () => {
 	let bin: string;
+	let yamlBin: string;
 	beforeAll(() => {
 		bin = buildNativeBinary({
 			fixture: FIXTURE,
@@ -74,7 +75,14 @@ describe("native process global", () => {
 			outDir,
 			nodeEnabled: true,
 		});
-	});
+		yamlBin = buildNativeBinary({
+			fixture: "tests/local/node-process-yaml.cjs",
+			name: "node-process-yaml",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+		});
+	}, 300_000);
 
 	it("forwards OS argv as [argv0, <compiled>, ...rest]", () => {
 		const r = run(bin, ["alpha", "beta gamma"], { env: { NODE_PROCESS_MARKER: "m" } });
@@ -104,6 +112,21 @@ describe("native process global", () => {
 		const r = run(bin, [], { cwd: outDir, env: { NODE_PROCESS_MARKER: "m" } });
 		expect(r.status).toBe(0);
 		expect(field(r.lines, "CWD")).toBe(dir);
+	});
+
+	it("publishes emitWarning through the shared module/global object", () => {
+		const r = run(bin, [], {
+			env: { NODE_PROCESS_MARKER: "m", NODE_PROCESS_WARN: "1" },
+		});
+		expect(r.status).toBe(0);
+		expect(r.stderr).toContain("module-warning");
+		assertResultPass(r.stdout);
+	});
+
+	it("loads YAML through its bare process dependency", () => {
+		const r = run(yamlBin, [], { env: { NODE_PROCESS_MARKER: "m" } });
+		expect(r.status).toBe(0);
+		assertResultPass(r.stdout);
 	});
 
 	it("exits with the status passed to process.exit(code)", () => {
