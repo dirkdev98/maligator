@@ -6,6 +6,11 @@ import type { TestCommand } from "../cli.ts";
 import { compileTestImage, TestCompilationSession } from "./cache.ts";
 import type { CompiledTestImage, TestFrontendPhases } from "./cache.ts";
 import { discoverTestFiles } from "./discovery.ts";
+import {
+	compileRelocatableTestImage,
+	UnsupportedRelocatableTestImageError,
+} from "./fragment-cache.ts";
+import type { CompiledRelocatableTestImage } from "./fragment-cache.ts";
 import type { TestEvent, TestFailure, TestRunResult } from "./protocol.ts";
 
 interface TestRuntimeBridge {
@@ -37,6 +42,8 @@ export interface TestCommandSummary {
 	executionMs: number;
 	cacheHits: number;
 	cacheMisses: number;
+	artifactHits: number;
+	artifactMisses: number;
 }
 
 function output(message = ""): void {
@@ -95,7 +102,7 @@ function reportFailures(file: string, events: Array<TestEvent>): void {
 
 interface CompiledGroup {
 	files: Array<string>;
-	compiled: CompiledTestImage;
+	compiled: CompiledTestImage | CompiledRelocatableTestImage;
 }
 
 interface FrontendFailure {
@@ -176,6 +183,8 @@ export async function executeTestCommand(
 	let executionMs = 0;
 	let cacheHits = 0;
 	let cacheMisses = 0;
+	let artifactHits = 0;
+	let artifactMisses = 0;
 	const startedAt = Date.now();
 	const phases = emptyPhases();
 	const session = new TestCompilationSession();
@@ -184,18 +193,22 @@ export async function executeTestCommand(
 
 	const recordCompilation = (
 		entries: Array<string>,
-		compiled: CompiledTestImage,
+		compiled: CompiledTestImage | CompiledRelocatableTestImage,
 	): void => {
 		frontendMs += compiled.frontendMs;
 		addPhases(phases, compiled.phases);
 		if (compiled.cache === "hit") cacheHits++;
 		else cacheMisses++;
+		if ("artifactHits" in compiled) {
+			artifactHits += compiled.artifactHits;
+			artifactMisses += compiled.artifactMisses;
+		}
 		groups.push({ files: entries, compiled });
 	};
 
 	const compileGroup = (entries: Array<string>, allowSupersetCache = true): void => {
 		try {
-			const compiled = compileTestImage({
+			const options = {
 				files: entries,
 				config,
 				stripTypes: context.stripTypes,
@@ -203,7 +216,14 @@ export async function executeTestCommand(
 				testModuleSource: moduleSource,
 				session,
 				allowSupersetCache,
-			});
+			};
+			let compiled: CompiledTestImage | CompiledRelocatableTestImage;
+			try {
+				compiled = compileRelocatableTestImage(options);
+			} catch (error) {
+				if (!(error instanceof UnsupportedRelocatableTestImageError)) throw error;
+				compiled = compileTestImage(options);
+			}
 			recordCompilation(entries, compiled);
 		} catch (error) {
 			if (entries.length > 1) {
@@ -237,7 +257,11 @@ export async function executeTestCommand(
 		globals.__maligatorTestOptions = { ...runOptions, files: group.files };
 		delete globals.__maligatorTestResult;
 		try {
-			await globals.mal._runWire(group.compiled.wire);
+			const wires =
+				"wires" in group.compiled
+					? group.compiled.wires.map((wire) => wire.wire)
+					: [group.compiled.wire];
+			for (const wire of wires) await globals.mal._runWire(wire);
 		} catch (error) {
 			if (!command.bail && group.files.length > 1) {
 				const middle = Math.floor(group.files.length / 2);
@@ -322,6 +346,9 @@ export async function executeTestCommand(
 			1,
 		)}ms, execution ${executionMs.toFixed(1)}ms; cache ${cacheHits} hit/${cacheMisses} miss`,
 	);
+	if (artifactHits + artifactMisses > 0) {
+		output(`Artifacts: ${artifactHits} hit/${artifactMisses} miss`);
+	}
 	output(
 		`Frontend: validation ${phases.validationMs.toFixed(1)}ms, graph ${phases.graphMs.toFixed(
 			1,
@@ -341,5 +368,7 @@ export async function executeTestCommand(
 		executionMs,
 		cacheHits,
 		cacheMisses,
+		artifactHits,
+		artifactMisses,
 	};
 }

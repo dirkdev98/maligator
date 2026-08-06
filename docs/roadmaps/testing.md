@@ -105,8 +105,32 @@ not used as a reason to suppress a future compiler-worker pool.
 
 ## Cache boundaries
 
-The cache stores serialized VM test images, never a test result. Its identity
-includes:
+The cache stores serialized VM test artifacts, never a test result. A linked
+image has three layers:
+
+1. A base artifact initializes `maligator:test`, application dependencies, host
+   modules, and a registry of live module namespace objects.
+2. One independently cached registration fragment per test file binds its
+   imports through a small facade and registers callbacks inside the implicit
+   file suite.
+3. A stable runner fragment invokes the internal execution protocol after every
+   selected registration fragment has loaded.
+
+VM definitions remain self-contained and position independent:
+`mal_vm_splice_definition` rebases their function, global, constant, CommonJS,
+and debug tables when loading them into the shared interpreter. The link ABI
+between definitions is the toolchain-owned namespace registry on `globalThis`;
+it contains no process address, native object handle, or cache-local slot
+number.
+
+Named/default imports in a relocatable test fragment are snapshots taken after
+the base dependency graph has initialized. This is the intentional fast-test
+semantic for stable application APIs. Namespace imports, re-exports, dynamic
+imports, `require`, CommonJS test entries, and test-to-test imports retain
+ordinary module semantics through the whole-image fallback. Adding a new
+fragment strategy does not require changing the public `maligator:test` API.
+
+Cache identity includes:
 
 - the stable sorted test-entry set and synthetic image entry source;
 - the content of every transitive on-disk module;
@@ -115,20 +139,24 @@ includes:
 - the compiler/runtime version and VM wire version; and
 - the TypeScript stripping implementation identity.
 
-A manifest records image entries plus dependency paths, sizes, mtimes, and
-content digests. An unchanged warm run validates both stat signatures and source
-digests, then loads wire without rebuilding the graph. Per-entry aliases allow a
-narrow selection to reuse an already-compiled superset image. Any changed
-content rebuilds the union graph and hashes all reachable modules before
-publishing a new content-addressed artifact. Execution always happens after a
-cache hit.
+A manifest records image entries, base/fragment/runner artifact hashes, plus
+dependency paths, sizes, mtimes, and content digests. An unchanged warm run
+validates both stat signatures and source digests, then loads wire without
+rebuilding the graph. Per-entry aliases allow a narrow selection to reuse an
+already-compiled superset base while loading only requested registration
+fragments. Any changed content rebuilds the union planning graph and hashes all
+reachable modules before publishing affected content-addressed artifacts.
+Execution always happens after a cache hit.
 
 One `TestCompilationSession` owns the command's filesystem snapshot, so a shared
 dependency is read and hashed once even during failure-containment compilation.
 Its explicit `invalidate(path)` operation is the watcher seam: a future file
 watcher retains the session, invalidates reported paths, rediscovers affected
-entry identities, and requests a new image. Correctness does not depend on
-mtime-only invalidation.
+entry identities, and requests a new image. A changed test file normally
+invalidates one registration fragment; a changed application dependency
+invalidates the base while preserving every registration fragment whose source
+and import facade are unchanged. Correctness does not depend on mtime-only
+invalidation.
 
 Frontend failures are contained by recursively dividing the entry set, allowing
 healthy groups to compile and execute. Module-initialization failures use exact
@@ -179,7 +207,7 @@ browser environments, parallel test workers, process-per-file isolation,
 benchmarks, fuzzing, or a plugin system. Asymmetric matchers are intentionally
 represented by a tagged protocol so more can be added without changing deep
 comparison. Reporter selection and compile/execution concurrency remain explicit
-coordinator seams. A future multi-entry wire format can selectively initialize
-one cached entry without changing discovery, file identities, invalidation,
-registration, events, or reporter contracts; the current scope-hoisted image
-initializes every module in a reused superset before filtering test execution.
+coordinator seams. Relocatable fragments already load only selected test
+entries. The whole-image fallback remains for module shapes that need full live
+ESM linkage; it initializes every module in a reused superset before filtering
+test execution.

@@ -26,7 +26,7 @@ const TEST_CACHE_DIRECTORY = ".cache/mal-cache/test";
 const TEST_MODULE_ID = "maligator:test";
 const TEST_IMAGE_TRANSFORM = 1;
 
-interface DependencyIdentity {
+export interface DependencyIdentity {
 	path: string;
 	size: number;
 	mtimeMs: number;

@@ -856,3 +856,20 @@ export function __reset() {
 	currentSuite = root;
 	currentFile = undefined;
 }
+
+// Stable internal ABI used by relocatable test fragments. Public authoring
+// continues to import maligator:test; fragments bind those imports to this
+// preinitialized namespace instead of recompiling the matcher runtime.
+globalThis.__maligatorTestApi = {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	test,
+	__beginFile,
+	__endFile,
+	__reset,
+	__run,
+};
