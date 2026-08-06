@@ -188,8 +188,7 @@ describe("emit-vm instruction packing", () => {
 			functionCount: functions.length,
 			functions,
 		};
-		const generous = emitVmTranslationUnits(splitDefinition, {}, Number.MAX_SAFE_INTEGER);
-		const budget = generous[0]!.length + 1_000;
+		const budget = 20_000;
 		const units = emitVmTranslationUnits(splitDefinition, {}, budget);
 
 		expect(units.length).toBeGreaterThan(2);
@@ -200,6 +199,12 @@ describe("emit-vm instruction packing", () => {
 		);
 		expect(units.slice(1).join("\n")).toContain(
 			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value",
+		);
+		const metadataUnit = units.find((unit) =>
+			unit.includes("const MalFunction mal_functions[]"),
+		);
+		expect(metadataUnit).toContain(
+			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state);",
 		);
 		expect(units.slice(1).join("\n")).not.toContain(
 			"static MalValue mal_compiled_0(MalVm *vm",
@@ -226,12 +231,7 @@ describe("emit-vm instruction packing", () => {
 				column: index,
 			})),
 		};
-		const generous = emitVmTranslationUnits(
-			splitDefinition,
-			{ compiled: false },
-			Number.MAX_SAFE_INTEGER,
-		);
-		const budget = generous[0]!.length + 1_000;
+		const budget = 30_000;
 		const units = emitVmTranslationUnits(splitDefinition, { compiled: false }, budget);
 		const data = units.slice(1).join("\n");
 
@@ -264,7 +264,7 @@ describe("emit-vm instruction packing", () => {
 			functions: [{ ...fn, instructions: [{ opcode: "RETURN", value: 0 } as const] }],
 		};
 		expect(emitVmDefinition(simple, { compiled: false })).toContain(
-			".instruction_data_count = 0,\n        .instruction_data = nullptr",
+			".instruction_data_count = 0, .instruction_data = nullptr",
 		);
 	});
 

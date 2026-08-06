@@ -156,40 +156,39 @@ function malFunctionRow(
 	debug: { positionsSymbol: string; positionCount: number; fileIndex: number },
 	omitBytecode = false,
 ): Array<string> {
-	return [
-		"    {",
-		`        .name_string_index = ${fn.nameStringIndex},`,
-		`        .kind = ${malFunctionKind(fn)},`,
-		`        .parameter_count = ${fn.parameterCount},`,
-		`        .length = ${fn.length},`,
-		`        .register_count = ${fn.registerCount},`,
-		`        .captured_count = ${fn.capturedCount},`,
-		`        .strict = ${fn.strict},`,
-		`        .needs_arguments = ${fn.needsArguments},`,
-		`        .argument_retention_limit = ${computeArgumentRetentionLimit(fn)},`,
-		`        .argument_snapshot_count = ${fn.argumentSnapshotCount},`,
-		`        .argument_snapshot_plan_count = ${argumentSnapshotPlanCount},`,
-		`        .argument_snapshot_plan = ${argumentSnapshotPlanSymbol},`,
-		`        .mapped_arguments = ${fn.mappedArguments},`,
-		`        .mapped_argument_count = ${mappedArgumentSlotsSymbol === "nullptr" ? 0 : fn.mappedArgumentSlots.length},`,
-		`        .mapped_argument_slots = ${mappedArgumentSlotsSymbol},`,
-		`        .is_derived_constructor = ${fn.isDerivedConstructor},`,
-		`        .is_class_constructor = ${fn.isClassConstructor},`,
-		`        .has_prototype = ${fn.hasPrototype},`,
-		`        .property_ic_count = ${countPropertyIcSites(fn.instructions)},`,
-		`        .literal_shape_count = ${countLiteralShapeSites(fn.instructions)},`,
-		`        .instruction_count = ${omitBytecode ? 0 : fn.instructions.length},`,
-		`        .instructions = ${omitBytecode ? "nullptr" : instructionsSymbol},`,
-		`        .instruction_data_count = ${omitBytecode ? 0 : instructionDataCount},`,
-		`        .instruction_data = ${omitBytecode ? "nullptr" : instructionDataSymbol},`,
-		`        .handler_count = ${omitBytecode ? 0 : fn.handlers.length},`,
-		`        .handlers = ${omitBytecode ? "nullptr" : handlersSymbol},`,
-		`        .compiled = ${compiledSymbol},`,
-		`        .file_index = ${debug.fileIndex},`,
-		`        .position_count = ${debug.positionCount},`,
-		`        .positions = ${debug.positionsSymbol},`,
-		"    },",
+	const fields = [
+		`.name_string_index = ${fn.nameStringIndex}`,
+		`.kind = ${malFunctionKind(fn)}`,
+		`.parameter_count = ${fn.parameterCount}`,
+		`.length = ${fn.length}`,
+		`.register_count = ${fn.registerCount}`,
+		`.captured_count = ${fn.capturedCount}`,
+		`.strict = ${fn.strict}`,
+		`.needs_arguments = ${fn.needsArguments}`,
+		`.argument_retention_limit = ${computeArgumentRetentionLimit(fn)}`,
+		`.argument_snapshot_count = ${fn.argumentSnapshotCount}`,
+		`.argument_snapshot_plan_count = ${argumentSnapshotPlanCount}`,
+		`.argument_snapshot_plan = ${argumentSnapshotPlanSymbol}`,
+		`.mapped_arguments = ${fn.mappedArguments}`,
+		`.mapped_argument_count = ${mappedArgumentSlotsSymbol === "nullptr" ? 0 : fn.mappedArgumentSlots.length}`,
+		`.mapped_argument_slots = ${mappedArgumentSlotsSymbol}`,
+		`.is_derived_constructor = ${fn.isDerivedConstructor}`,
+		`.is_class_constructor = ${fn.isClassConstructor}`,
+		`.has_prototype = ${fn.hasPrototype}`,
+		`.property_ic_count = ${countPropertyIcSites(fn.instructions)}`,
+		`.literal_shape_count = ${countLiteralShapeSites(fn.instructions)}`,
+		`.instruction_count = ${omitBytecode ? 0 : fn.instructions.length}`,
+		`.instructions = ${omitBytecode ? "nullptr" : instructionsSymbol}`,
+		`.instruction_data_count = ${omitBytecode ? 0 : instructionDataCount}`,
+		`.instruction_data = ${omitBytecode ? "nullptr" : instructionDataSymbol}`,
+		`.handler_count = ${omitBytecode ? 0 : fn.handlers.length}`,
+		`.handlers = ${omitBytecode ? "nullptr" : handlersSymbol}`,
+		`.compiled = ${compiledSymbol}`,
+		`.file_index = ${debug.fileIndex}`,
+		`.position_count = ${debug.positionCount}`,
+		`.positions = ${debug.positionsSymbol}`,
 	];
+	return [`    { ${fields.join(", ")} },`];
 }
 
 function argumentSnapshotPlanBody(fn: VmFunction): string {
@@ -308,23 +307,17 @@ interface SplitDataSource {
 }
 
 /**
- * Move independent generated arrays out of the definition translation unit.
+ * Move generated arrays out of the definition translation unit.
  *
- * The retained aggregate tables (`mal_strings`, `mal_functions`, assets, host
- * installs) contain pointers to other generated symbols and stay beside the VM
- * definition. Their leaf arrays become externally linked definitions that can be
- * packed into bounded translation units without changing the runtime layout.
+ * Aggregate tables can point at other generated symbols, so secondary units also
+ * receive the complete generated extern preamble. Keeping every array external
+ * lets large contiguous metadata tables retain their runtime ABI without making
+ * the small `MalVmDefinition` source cross the native compiler's string ceiling.
  */
-function externalizeLeafDataArrays(source: string): SplitDataSource {
+function externalizeDataArrays(source: string): SplitDataSource {
 	const lines = source.split("\n");
 	const output: Array<string> = [];
 	const definitions: Array<ExternalDataDefinition> = [];
-	const dependentTables = new Set([
-		"mal_strings",
-		"mal_functions",
-		"mal_assets",
-		"mal_host_installs",
-	]);
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index]!;
 		const match = /^(?:static )?(.+?) (mal_[A-Za-z0-9_]+)\[\] = (.*)$/.exec(line);
@@ -334,10 +327,6 @@ function externalizeLeafDataArrays(source: string): SplitDataSource {
 		}
 		const type = match[1]!;
 		const symbol = match[2]!;
-		if (dependentTables.has(symbol) || /^mal_asset_\d+_files/.test(symbol)) {
-			output.push(line);
-			continue;
-		}
 
 		const definitionLines = [line];
 		while (!definitionLines.at(-1)!.trimEnd().endsWith(";")) {
@@ -548,7 +537,7 @@ export function emitVmTranslationUnits(
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
 	const emitted = emitVmDefinitionSource(definition, options, true);
-	const splitData = externalizeLeafDataArrays(emitted.source);
+	const splitData = externalizeDataArrays(emitted.source);
 	if (splitData.source.length > maxCodeUnits) {
 		throw new RangeError(
 			`generated definition translation unit has ${splitData.source.length} code units; ` +
@@ -556,16 +545,20 @@ export function emitVmTranslationUnits(
 		);
 	}
 
-	const suffix = options.symbolSuffix ?? "";
-	const sharedDeclarations = [
-		...(definition.stringConstants.length > 0
-			? [`extern MalString mal_strings${suffix}[];`]
-			: []),
-		...(definition.bigintConstants.length > 0
-			? [`extern MalBigInt mal_bigints${suffix}[];`]
-			: []),
-	];
-	const header = [...C_HEADER_LINES, ...sharedDeclarations, ""].join("\n");
+	const generatedDeclarations = splitData.source
+		.split("\n")
+		.filter(
+			(line) =>
+				line.startsWith("extern ") ||
+				(line.startsWith("MalValue mal_compiled_") && line.endsWith(";")),
+		);
+	const header = [...C_HEADER_LINES, ...generatedDeclarations, ""].join("\n");
+	if (header.length > maxCodeUnits) {
+		throw new RangeError(
+			`generated shared declaration header has ${header.length} code units; ` +
+				`maximum is ${maxCodeUnits}`,
+		);
+	}
 	const units = [splitData.source];
 	let parts = [header];
 	let length = header.length;
