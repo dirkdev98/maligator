@@ -67,11 +67,12 @@ Unknown options, missing option values, and extra positional arguments are error
 ## Application tests
 
 `maligator test` is an interpreter-only toolchain path. It discovers
-`*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`, builds each module graph,
-serializes VM input, and runs it in the interpreter already embedded in the
-Maligator executable. It never emits C or invokes a native compiler/linker. The
-content-addressed cache stores frontend wire artifacts, not successful results;
-every selected test executes on every command.
+`*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`, loads a shared dependency
+base plus independently cached registration fragments, and runs them in the
+interpreter already embedded in the Maligator executable. It never emits C or
+invokes a native compiler/linker. The content-addressed cache stores frontend
+wire artifacts, not successful results; every selected test executes on every
+command.
 
 ```typescript
 import { beforeEach, describe, expect, test } from "maligator:test";
@@ -346,6 +347,7 @@ Maligator keeps reusable inputs separate from project outputs:
 
 ```text
 .cache/mal-cache/toolchains/    tool identity and capability probes
+.cache/mal-cache/build-frontend/ portable normal-build frontend definitions
 .cache/mal-cache/runtime/       C runtime archives
 .cache/mal-cache/rust/          keyed Rust static libraries
 .cache/mal-cache/cargo/         Cargo downloads/cache
@@ -356,10 +358,12 @@ Maligator keeps reusable inputs separate from project outputs:
 
 Cache keys include relevant source content, normalized feature config, target,
 selected toolchain identity, build environment, and exact compile or Cargo arguments.
-Normal output reports toolchain and cache hit/miss status plus the final executable
-path. Removing `.cache/mal-build` forces project output regeneration; removing a
-specific `.cache/mal-cache` subtree forces that reusable artifact to be reprobed or
-rebuilt.
+Normal builds restore cached VM definitions before generated-C emission, skipping
+unchanged graph, semantic, optimization, allocation, and lowering work while
+preserving native-code metadata. Normal output reports frontend, toolchain, and
+native cache hit/miss status plus the final executable path. Removing
+`.cache/mal-build` forces project output regeneration; removing a specific
+`.cache/mal-cache` subtree forces that reusable artifact to be reprobed or rebuilt.
 
 C and Rust artifacts are published only after validation and an atomic completion
 manifest. Invalid C archive bundles are quarantined before rebuilding, and incomplete

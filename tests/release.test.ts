@@ -186,6 +186,27 @@ describe("npm launcher", () => {
 		});
 	});
 
+	it("ships documented test declarations and runner guidance", () => {
+		const declarations = readFileSync(
+			path.resolve(import.meta.dirname, "../src/test-api.d.ts"),
+			"utf-8",
+		);
+		expect(declarations).toContain('declare module "maligator:test"');
+		expect(declarations).toContain("Returned promises are awaited by the runner");
+		expect(declarations).toContain("focused test");
+		expect(declarations).toContain("zero-based row");
+
+		const readme = readFileSync(
+			path.resolve(import.meta.dirname, "../npm/cli/README.md"),
+			"utf-8",
+		);
+		expect(readme).toContain("## Testing");
+		expect(readme).toContain('from "maligator:test"');
+		expect(readme).toContain("maligator test --shuffle 18492");
+		expect(readme).toContain("Test results are never cached");
+		expect(readme).toContain("## Build cache");
+	});
+
 	it.runIf(process.platform === "darwin" || process.platform === "linux")(
 		"executes the current platform package without changing arguments",
 		() => {

@@ -84,15 +84,48 @@ defineBuild({
 	MaligatorServeOptions,
 	MaligatorServer,
 } from "@maligator/cli";
-import { beforeEach, describe, expect, test } from "maligator:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	test,
+} from "maligator:test";
 
 describe("public types", () => {
+	beforeAll(() => undefined);
 	beforeEach(async () => Promise.resolve());
+	afterEach(() => undefined);
+	afterAll(async () => Promise.resolve());
 	test("supports matchers", async () => {
 		expect({ answer: 42 }).toMatchObject({ answer: expect.any(Number) });
+		expect(["router", 42]).toEqual([
+			expect.stringMatching(/^route/),
+			expect.anything(),
+		]);
+		expect({ answer: 42, nested: true }).toEqual(
+			expect.objectContaining({ answer: 42 }),
+		);
+		expect([1, 2, 3]).toEqual(expect.arrayContaining([2, 1]));
+		expect(undefined).not.toBeDefined();
 		await expect(Promise.resolve(42)).resolves.toBe(42);
+		await expect(Promise.reject(new Error("expected"))).rejects.toThrow("expected");
 	});
+	test.skip("skipped", () => undefined);
 	test.todo("future");
+	test.each([
+		[1, 2, 3],
+		[2, 3, 5],
+	] as const)("adds row %#", (left, right, total) => {
+		expect(left + right).toBe(total);
+	});
+});
+
+describe.skip("skipped suite", () => undefined);
+describe.only("focused suite", () => {
+	test.only("focused test", () => undefined);
 });
 
 const materializeOptions: MaligatorMaterializeOptions = {

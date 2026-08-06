@@ -64,21 +64,96 @@ generate C or invoke the native toolchain. Import the Maligator-owned API from
 `maligator:test`:
 
 ```typescript
-import { describe, expect, test } from "maligator:test";
+import { beforeEach, describe, expect, test } from "maligator:test";
+import { createRouter, RouteError, type Router } from "./router.ts";
 
 describe("router", () => {
+	let router: Router;
+
+	beforeEach(() => {
+		router = createRouter();
+	});
+
 	test("matches parameters", async () => {
-		await expect(Promise.resolve({ id: 42 })).resolves.toMatchObject({
+		await expect(router.match("/users/42")).resolves.toMatchObject({
 			id: expect.any(Number),
 		});
+	});
+
+	test("rejects malformed parameters", async () => {
+		await expect(router.match("/users/nope")).rejects.toThrow(RouteError);
 	});
 });
 ```
 
-Use `--run` for hierarchical-name filtering, `--shuffle [seed]` for reproducible
-ordering, `--repeat` for repeated execution without recompilation, and `--bail`
-to stop after the first failure. Frontend bytecode is cached by source and
-transitive dependency content; test results are never cached.
+By default, discovery includes `*.test.js`, `*.test.mjs`, `*.test.ts`,
+`*.test.mts`, and the corresponding `*.spec.*` names. Pass files, directories,
+or both:
+
+```shell
+maligator test
+maligator test src/router
+maligator test src/router/router.test.ts
+maligator test --run "router > parameters"
+maligator test --shuffle
+maligator test --shuffle 18492
+maligator test --repeat 10
+maligator test --bail
+```
+
+`--run` filters hierarchical suite and test names. `--shuffle [seed]` changes
+execution order reproducibly and always prints the seed. `--repeat` executes the
+selected tests again while reusing unchanged compilation artifacts. The default
+policy completes the selected suite; `--bail` stops scheduling after the first
+failure.
+
+The authoring API includes nested `describe` suites, `beforeAll`, `afterAll`,
+`beforeEach`, `afterEach`, synchronous and promise-returning callbacks,
+`test.skip`, `test.todo`, `test.only`, and `test.each`. A committed `.only`
+focuses execution and prints a warning. Matchers include identity, structural
+equality, truthiness, containment, length, string/regular-expression matching,
+partial-object matching, throwing, `.not`, `.resolves`, `.rejects`, and the
+`expect.any`, `expect.anything`, `expect.stringMatching`,
+`expect.objectContaining`, and `expect.arrayContaining` asymmetric helpers.
+Maligator owns this API and does not claim Jest, Vitest, or `node:test`
+compatibility.
+
+Test files currently execute serially in one Realm. Registration and lifecycle
+state are separated by test file, but globals, prototypes, imported module
+singletons, host state, and asynchronous work left running by a test can be
+shared. Do not rely on process-per-file isolation.
+
+Frontend bytecode is content-addressed by source, transitive dependencies,
+resolution metadata, relevant build configuration, and compiler/runtime format
+versions. A warm run restores a shared base plus independently cached test-file
+registration fragments. Test results are never cached: every selected test
+executes on every invocation.
+
+The package ships documented declarations for `maligator:test`. Projects whose
+TypeScript configuration does not include `maligator.build.ts` should load the
+package declarations explicitly:
+
+```json
+{
+	"compilerOptions": {
+		"types": ["@maligator/cli"]
+	}
+}
+```
+
+## Build cache
+
+Normal `maligator build` and `maligator run` commands use the same portable VM
+definition format for their frontend cache. On a valid hit, Maligator skips
+parsing, module-graph construction, semantic analysis, optimization, register
+allocation, and VM lowering, then emits the same native translation units from
+the restored definition. Native runtime and Rust archives remain separately
+content-addressed.
+
+Build cache invalidation includes source and transitive dependency content,
+package-resolution metadata, relevant configuration, the TypeScript erasure
+frontend, and compiler/wire versions. Compiler diagnostic dump flags deliberately
+recompile because they require live semantic and IR objects.
 
 ## Production builds
 
