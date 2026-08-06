@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 16u        // portable host-install manifests
+#define WIRE_VERSION 17u        // compiler metadata retained for frontend caches
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1515,6 +1515,47 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             }
             slots[slot].name = name;
             slots[slot].slot = rd_i32(&r);
+        }
+    }
+
+    /*
+     * Compiler-only metadata is retained in the portable wire so Node-hosted
+     * tooling can deserialize an AOT-equivalent VmDefinition from its frontend
+     * cache. The interpreter does not use these tables, but validates and skips
+     * them to keep one canonical wire contract.
+     */
+    u32 compiler_function_count = rd_count(&r, 1);
+    if (compiler_function_count != function_count) {
+        r.ok = false;
+    }
+    for (u32 i = 0; r.ok && i < compiler_function_count; i++) {
+        u8 has_gc_roots = rd_u8(&r);
+        u32 gc_root_count = rd_count(&r, 1);
+        if (has_gc_roots > 1 || (has_gc_roots == 0 && gc_root_count != 0)) {
+            r.ok = false;
+        }
+        for (u32 root = 0; r.ok && root < gc_root_count; root++) {
+            (void) rd_i32(&r);
+        }
+
+        u32 stack_site_count = rd_count(&r, 2);
+        for (u32 site = 0; r.ok && site < stack_site_count; site++) {
+            (void) rd_i32(&r);
+            (void) rd_i32(&r);
+        }
+
+        u32 stack_access_count = rd_count(&r, 3);
+        for (u32 access = 0; r.ok && access < stack_access_count; access++) {
+            (void) rd_i32(&r);
+            (void) rd_i32(&r);
+            (void) rd_i32(&r);
+        }
+
+        u32 materialization_count = rd_count(&r, 2);
+        for (u32 materialization = 0; r.ok && materialization < materialization_count;
+             materialization++) {
+            (void) rd_i32(&r);
+            (void) rd_i32(&r);
         }
     }
 

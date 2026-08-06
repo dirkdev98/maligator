@@ -18,7 +18,7 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Bumped to 16 for portable host-install manifests.
-export const WIRE_VERSION = 16;
+export const WIRE_VERSION = 17;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -573,6 +573,35 @@ export function serializeVmDefinition(
 			w.u32(name.length);
 			for (const byte of name) w.u8(byte);
 			w.i32(entry.slot);
+		}
+	}
+
+	// Native-code generation needs metadata that the interpreter ignores. Keep it
+	// in the portable definition so a content-addressed frontend cache can restore
+	// a byte-for-byte equivalent AOT input instead of rerunning analysis and IR
+	// lowering. The C loader validates and skips this tail.
+	w.u32(def.functions.length);
+	for (const fn of def.functions) {
+		w.u8(fn.gcRootRegisters === undefined ? 0 : 1);
+		w.i32Array([...(fn.gcRootRegisters ?? [])]);
+
+		w.u32(fn.stackObjectSites?.length ?? 0);
+		for (const site of fn.stackObjectSites ?? []) {
+			w.i32(site.instructionIndex);
+			w.i32(site.slotCount);
+		}
+
+		w.u32(fn.stackObjectAccesses?.length ?? 0);
+		for (const access of fn.stackObjectAccesses ?? []) {
+			w.i32(access.instructionIndex);
+			w.i32(access.allocationInstructionIndex);
+			w.i32(access.slot);
+		}
+
+		w.u32(fn.stackObjectMaterializations?.length ?? 0);
+		for (const materialization of fn.stackObjectMaterializations ?? []) {
+			w.i32(materialization.returnInstructionIndex);
+			w.i32(materialization.allocationInstructionIndex);
 		}
 	}
 
@@ -1208,6 +1237,50 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			hostExports.push({ name: utf8Decode(nameBytes), slot: r.i32() });
 		}
 		hostInstalls.push({ installer: utf8Decode(installerBytes), exports: hostExports });
+	}
+
+	const compilerMetadataFunctionCount = r.count(1);
+	if (compilerMetadataFunctionCount !== functions.length) {
+		throw new Error("serialize-vm: compiler metadata function count mismatch");
+	}
+	for (const fn of functions) {
+		const hasGcRootRegisters = r.u8();
+		if (hasGcRootRegisters > 1) {
+			throw new Error("serialize-vm: invalid GC-root metadata");
+		}
+		const gcRootRegisters = r.i32Array();
+		if (hasGcRootRegisters === 0 && gcRootRegisters.length !== 0) {
+			throw new Error("serialize-vm: invalid GC-root metadata");
+		}
+		if (hasGcRootRegisters === 1) fn.gcRootRegisters = gcRootRegisters;
+
+		const stackObjectSiteCount = r.count(2);
+		if (stackObjectSiteCount > 0) {
+			fn.stackObjectSites = Array.from({ length: stackObjectSiteCount }, () => ({
+				instructionIndex: r.i32(),
+				slotCount: r.i32(),
+			}));
+		}
+
+		const stackObjectAccessCount = r.count(3);
+		if (stackObjectAccessCount > 0) {
+			fn.stackObjectAccesses = Array.from({ length: stackObjectAccessCount }, () => ({
+				instructionIndex: r.i32(),
+				allocationInstructionIndex: r.i32(),
+				slot: r.i32(),
+			}));
+		}
+
+		const stackObjectMaterializationCount = r.count(2);
+		if (stackObjectMaterializationCount > 0) {
+			fn.stackObjectMaterializations = Array.from(
+				{ length: stackObjectMaterializationCount },
+				() => ({
+					returnInstructionIndex: r.i32(),
+					allocationInstructionIndex: r.i32(),
+				}),
+			);
+		}
 	}
 	if (r.remaining() !== 0) {
 		throw new Error("serialize-vm: trailing data");

@@ -3,8 +3,6 @@ import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
 import {
-	assertEvalPolicy,
-	assertRegexpPolicy,
 	BuildConfigError,
 	buildDerivationFromConfig,
 	loadBuildConfig,
@@ -13,11 +11,11 @@ import {
 import type { BuildConfigTypeStripper, ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv, selectNativeBuildPlan } from "./build-flags.ts";
 import type { NativeBuildPlan } from "./build-flags.ts";
+import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { initProject, InitError } from "./cli-init.ts";
 import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
 import type { BuildCommand, RunCommand, TestCommand } from "./cli.ts";
-import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
@@ -31,12 +29,6 @@ import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { vmDefinitionStats } from "./lower-vm.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
-import {
-	collectDisallowedEvalUsage,
-	collectDisallowedRegexpUsage,
-} from "./semantic-analysis.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
-import { serializeVmDefinition } from "./serialize-vm.ts";
 import { executeTestCommand } from "./testing/command.ts";
 import {
 	formatToolchainReport,
@@ -46,7 +38,7 @@ import {
 	ToolchainError,
 } from "./toolchain.ts";
 import type { Toolchain } from "./toolchain.ts";
-import { log } from "./utils.ts";
+import { debugEnabled, log } from "./utils.ts";
 
 export interface CommandContext {
 	stripTypes: BuildConfigTypeStripper;
@@ -228,56 +220,58 @@ function compileAndBuild(
 	}
 	const { toolchain, plan } = selectToolchain(command, buildConfig, context);
 
-	const semTiming = log.time("semantic analysis");
-	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypointPath, {
-		buildConfig,
-		stripTypes: context.stripTypes,
-	});
-	semTiming();
-
-	if (!(command.kind === "build" && command.internal.serializePath !== undefined)) {
-		try {
-			assertEvalPolicy(buildConfig, collectDisallowedEvalUsage(semanticProgram));
-			assertRegexpPolicy(buildConfig, collectDisallowedRegexpUsage(semanticProgram));
-		} catch (error) {
-			if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
-			throw error;
-		}
+	const compilerDiagnostics =
+		command.kind === "build" &&
+		(command.internal.dumpLiveness ||
+			command.internal.dumpInline ||
+			command.internal.dumpHof ||
+			command.internal.dumpSpeculative ||
+			command.internal.dumpMethods ||
+			command.internal.dumpEscape ||
+			command.internal.dumpStackAlloc);
+	let frontend: ReturnType<typeof compileBuildFrontend>;
+	try {
+		frontend = compileBuildFrontend({
+			entrypoint: entrypointPath,
+			config: buildConfig,
+			stripTypes: context.stripTypes,
+			stripperIdentity: context.installation.frontendIdentity,
+			forceCompile: debugEnabled || compilerDiagnostics,
+			afterOptimization: (irProgram) => {
+				if (command.kind === "build" && command.internal.dumpLiveness) {
+					log.info(debugProgramLiveness(irProgram));
+				}
+				if (command.kind === "build" && command.internal.dumpInline) {
+					debugInlinableCalls(irProgram);
+				}
+				if (command.kind === "build" && command.internal.dumpHof) {
+					debugHofInlineSites(irProgram);
+				}
+				if (command.kind === "build" && command.internal.dumpSpeculative) {
+					debugSpeculativeInlineSites(irProgram);
+				}
+				if (command.kind === "build" && command.internal.dumpMethods) {
+					debugMethodInlineSites(irProgram);
+				}
+				if (command.kind === "build" && command.internal.dumpEscape) {
+					dumpProgramEscape(irProgram);
+				}
+				if (command.kind === "build" && command.internal.dumpStackAlloc) {
+					dumpStackAlloc(irProgram);
+				}
+			},
+		});
+	} catch (error) {
+		if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
+		throw error;
 	}
-
-	const vmDefinition = compileSemanticProgramToVmDefinition(semanticProgram, {
-		runPhase: (phase, run) => {
-			const endTiming = log.time(phase);
-			try {
-				return run();
-			} finally {
-				endTiming();
-			}
-		},
-		afterOptimization: (irProgram) => {
-			if (command.kind === "build" && command.internal.dumpLiveness) {
-				log.info(debugProgramLiveness(irProgram));
-			}
-			if (command.kind === "build" && command.internal.dumpInline) {
-				debugInlinableCalls(irProgram);
-			}
-			if (command.kind === "build" && command.internal.dumpHof) {
-				debugHofInlineSites(irProgram);
-			}
-			if (command.kind === "build" && command.internal.dumpSpeculative) {
-				debugSpeculativeInlineSites(irProgram);
-			}
-			if (command.kind === "build" && command.internal.dumpMethods) {
-				debugMethodInlineSites(irProgram);
-			}
-			if (command.kind === "build" && command.internal.dumpEscape) {
-				dumpProgramEscape(irProgram);
-			}
-			if (command.kind === "build" && command.internal.dumpStackAlloc) {
-				dumpStackAlloc(irProgram);
-			}
-		},
-	});
+	const vmDefinition = frontend.definition;
+	log.info(`Cache frontend: ${frontend.cache} (${frontend.frontendMs}ms)`);
+	log.debug(
+		`Frontend: validation ${frontend.phases.validationMs}ms, graph ${frontend.phases.graphMs}ms, ` +
+			`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +
+			`serialize ${frontend.phases.serializeMs}ms`,
+	);
 
 	const stats = vmDefinitionStats(vmDefinition);
 	log.info(`Functions: ${stats.functionCount}, instructions: ${stats.instructionCount}`);
@@ -285,9 +279,8 @@ function compileAndBuild(
 	const serializePath =
 		command.kind === "build" ? command.internal.serializePath : undefined;
 	if (serializePath !== undefined) {
-		const buffer = serializeVmDefinition(vmDefinition);
-		writeFileSync(serializePath, buffer);
-		log.info(`Serialized: ${serializePath} (${buffer.length} bytes)`);
+		writeFileSync(serializePath, frontend.wire);
+		log.info(`Serialized: ${serializePath} (${frontend.wire.length} bytes)`);
 		return { serializedPath: serializePath };
 	}
 

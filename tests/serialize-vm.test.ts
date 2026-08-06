@@ -219,6 +219,30 @@ describe("serialize-vm", () => {
 		expect(restored).toEqual(definition);
 	});
 
+	it("retains native-code generation metadata for frontend cache hits", () => {
+		const cachedDefinition: VmDefinition = {
+			...definition,
+			functionCount: 1,
+			functions: [
+				{
+					...mainFn,
+					gcRootRegisters: [0, 3, 7],
+					stackObjectSites: [{ instructionIndex: 4, slotCount: 2 }],
+					stackObjectAccesses: [
+						{ instructionIndex: 8, allocationInstructionIndex: 4, slot: 1 },
+					],
+					stackObjectMaterializations: [
+						{ returnInstructionIndex: 10, allocationInstructionIndex: 4 },
+					],
+				},
+			],
+		};
+
+		expect(deserializeVmDefinition(serializeVmDefinition(cachedDefinition))).toEqual(
+			cachedDefinition,
+		);
+	});
+
 	it("requires dense property IC ordinals while keeping them implicit on the wire", () => {
 		const invalidInstructions = instructions.map((instruction) =>
 			instruction.opcode === "LOAD_PROPERTY_STATIC"
