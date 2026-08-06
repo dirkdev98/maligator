@@ -9,3 +9,4 @@ export const value: Value = {
 export default value;
 
 export const ok = <const ValueType>(value: ValueType) => ({ value });
+export const err = <const ErrorType>(error: ErrorType) => ({ error });

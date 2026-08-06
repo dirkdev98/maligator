@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { stripCompactTypes } from "../src/compact-type-strip.ts";
+import { parseScript } from "../src/parser.ts";
 import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 describe("stripCompactTypes", () => {
@@ -81,6 +82,80 @@ const message = \`value:${"${selected as string}"}\`;
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "erasable.ts"));
 	});
 
+	test.each([
+		[
+			"typed recursive block body",
+			`const visit = (ruleId: string, path: readonly string[]): void => {
+	visit(ruleId, path);
+};`,
+		],
+		[
+			"multiline expression body with an untyped nested arrow",
+			`const findMigrationFiles = (folder: string): readonly MigrationFile[] =>
+	readdirSync(folder).map((name) => ({ name }));`,
+		],
+		[
+			"generic expression body with a typed nested arrow",
+			`const map = <const Input extends readonly unknown[], Output = Input[number]>(
+	values: Input,
+	callback: (value: Input[number]) => Output,
+): readonly Output[] => values.map((value: Input[number]): Output => callback(value));`,
+		],
+		[
+			"async generic arrow with optional input",
+			`const load = async <Value extends object>(
+	path: string,
+	fallback?: Value,
+): Promise<Value> => (await read(path)) as Value;`,
+		],
+		[
+			"destructured and rest parameters",
+			`const collect = (
+	{ value = 1 }: { readonly value?: number },
+	...rest: readonly string[]
+): readonly [number, ...string[]] => [value, ...rest];`,
+		],
+		[
+			"type predicate return",
+			`const isString = (value: unknown): value is string => typeof value === "string";`,
+		],
+		[
+			"assertion return",
+			`const assertString = (value: unknown): asserts value is string => {
+	if (typeof value !== "string") throw new Error();
+};`,
+		],
+	])("matches TypeScript for %s", (_name, source) => {
+		const stripped = stripCompactTypes(source, "arrow-matrix.ts");
+		expect(stripped).toHaveLength(source.length);
+		expect(stripped.split("\n")).toHaveLength(source.split("\n").length);
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
+	test.each([
+		[
+			"object return types",
+			`const make = (value: string): { readonly value: string } => ({ value });`,
+		],
+		[
+			"conditional return types",
+			`const choose = <Value>(value: Value): Value extends string ? string : Value =>
+	value as never;`,
+		],
+		[
+			"this parameters",
+			`function call(this: Context, value: string): void {
+	this.use(value);
+}`,
+		],
+		["instantiation expressions", `const specialized = identity<string>;`],
+		["class method declarations", `class Box { method?(value: string): number; }`],
+	])("strips adjacent erasable syntax: %s", (_name, source) => {
+		const stripped = stripCompactTypes(source, "adjacent-erasable.ts");
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "adjacent-erasable.ts"));
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
 	test("strips generic class syntax without accepting parameter properties", () => {
 		const source = `abstract class Box<Value> extends Base<Value> implements Container<Value> {
 	readonly value!: Value;
@@ -119,6 +194,13 @@ export namespace Types {
 		).toThrow(/runtime code/);
 	});
 
+	test("strips type-only star exports", () => {
+		const source = `export type * from "./types.ts";`;
+		expect(stripCompactTypes(source, "exports.ts")).toBe(
+			stripTypesWithTypeScript(source, "exports.ts"),
+		);
+	});
+
 	test("does not treat TypeScript contextual words as declarations", () => {
 		const source =
 			"const enumValue = { enum: 1, namespace: 2, module: 3, declare: 4 }; const pattern = /as string satisfies Type/;";
@@ -128,6 +210,7 @@ export namespace Types {
 	test.each([
 		["enums", "enum Mode { One }"],
 		["decorators", "@sealed class Box {}"],
+		["auto-accessor class fields", `class Box { accessor value: string = "x"; }`],
 	])("rejects unsupported %s syntax", (_name, source) => {
 		expect(() => stripCompactTypes(source, "bad.ts")).toThrow(/does not support/);
 	});

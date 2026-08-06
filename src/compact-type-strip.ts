@@ -477,6 +477,19 @@ function blankTopLevelTypeDeclarations(
 			nextCodeIndex(source, code, word.end) === next.start
 		) {
 			const afterType = nextCodeIndex(source, code, next.end);
+			if (source[afterType] === "*") {
+				const from = wordAt(source, code, nextCodeIndex(source, code, afterType + 1));
+				if (from?.text !== "from") {
+					fail(filePath, word.start, "export type star declarations without 'from'");
+				}
+				blank(
+					output,
+					source,
+					start,
+					moduleSpecifierStatementEnd(source, code, from.end, filePath),
+				);
+				continue;
+			}
 			if (source[afterType] === "{") {
 				const close = matching(source, code, afterType, "{", "}", filePath);
 				validateNamedTypeSpecifiers(source, code, afterType, close, filePath);
@@ -679,11 +692,24 @@ function blankClassMembers(
 		const char = source[i]!;
 		if (braces === 0 && parentheses === 0 && brackets === 0 && char === "(") {
 			const close = matching(source, code, i, "(", ")", filePath);
-			blankParameterAnnotations(source, code, output, i, close, filePath);
 			const after = nextCodeIndex(source, code, close + 1);
+			let memberEnd = after;
 			if (source[after] === ":") {
-				const end = findTypeEnd(source, code, after + 1, ["{", ";"], filePath);
-				blank(output, source, after, end);
+				memberEnd = findTypeEnd(source, code, after + 1, ["{", ";"], filePath);
+			}
+			if (source[memberEnd] === ";") {
+				blank(
+					output,
+					source,
+					findClassMemberStart(source, code, bodyOpen, i),
+					memberEnd + 1,
+				);
+				i = memberEnd;
+				continue;
+			}
+			blankParameterAnnotations(source, code, output, i, close, filePath);
+			if (source[after] === ":") {
+				blank(output, source, after, memberEnd);
 			}
 			i = close;
 			continue;
@@ -698,6 +724,9 @@ function blankClassMembers(
 
 		if (isIdentifierStart(char)) {
 			const word = wordAt(source, code, i)!;
+			if (word.text === "accessor") {
+				fail(filePath, word.start, "auto-accessor class fields");
+			}
 			if (word.text === "abstract") {
 				const end = findClassMemberSemicolon(source, code, word.start, bodyClose);
 				if (end < 0) fail(filePath, word.start, "malformed abstract class members");
@@ -724,6 +753,21 @@ function blankClassMembers(
 			continue;
 		}
 	}
+}
+
+function findClassMemberStart(
+	source: string,
+	code: Array<boolean>,
+	bodyOpen: number,
+	position: number,
+): number {
+	for (let i = position - 1; i > bodyOpen; i--) {
+		if (!code[i]) continue;
+		if (source[i] === ";" || source[i] === "}") {
+			return nextCodeIndex(source, code, i + 1);
+		}
+	}
+	return nextCodeIndex(source, code, bodyOpen + 1);
 }
 
 function findClassMemberSemicolon(
@@ -813,7 +857,12 @@ function blankGenericSyntax(
 		const close = matchingOrMinusOne(source, code, open, "<", ">");
 		if (close < 0) continue;
 		const after = nextCodeIndex(source, code, close + 1);
-		if (source[after] !== "(" && source[after] !== "`") continue;
+		const instantiationExpressionFollower =
+			after >= source.length ||
+			"([`.,;)]}?!+-*/%&|^".includes(source[after]!) ||
+			source[after] === "\n" ||
+			source[after] === "\r";
+		if (!instantiationExpressionFollower) continue;
 		blank(output, source, open, close + 1);
 		open = close;
 	}
@@ -849,7 +898,7 @@ function findArrowAfterParameters(
 		const char = source[i]!;
 		const topLevel = parentheses === 0 && brackets === 0 && braces === 0 && angles === 0;
 		if (topLevel && char === "=" && source[i + 1] === ">") return i;
-		if (topLevel && (char === ";" || char === "{")) return -1;
+		if (topLevel && char === ";") return -1;
 		if (char === "(") parentheses++;
 		else if (char === ")" && parentheses > 0) parentheses--;
 		else if (char === "[") brackets++;
@@ -1085,31 +1134,31 @@ function blankArrowAnnotations(
 ): void {
 	for (let arrow = 0; arrow < source.length - 1; arrow++) {
 		if (!code[arrow] || source[arrow] !== "=" || source[arrow + 1] !== ">") continue;
-		let before = previousCodeIndex(source, code, arrow - 1);
-		let returnColon = before;
-		while (returnColon >= 0 && source[returnColon] !== ":") {
-			if (
-				code[returnColon] &&
-				(source[returnColon] === ";" ||
-					source[returnColon] === "{" ||
-					source[returnColon] === "}")
-			)
-				break;
-			returnColon--;
-		}
-		if (returnColon >= 0 && source[returnColon] === ":") {
-			const parametersClose = previousCodeIndex(source, code, returnColon - 1);
-			if (source[parametersClose] === ")") {
-				blank(output, source, returnColon, arrow);
-				before = parametersClose;
+		const head = findParenthesizedArrowHead(source, code, arrow);
+		if (head !== undefined) {
+			if (head.returnColon !== undefined) {
+				blank(output, source, head.returnColon, arrow);
 			}
-		}
-		if (source[before] === ")") {
-			const open = matchingBackward(source, code, before, "(", ")", filePath);
-			blankParameterAnnotations(source, code, output, open, before, filePath);
+			const open = matchingBackward(
+				source,
+				code,
+				head.parametersClose,
+				"(",
+				")",
+				filePath,
+			);
+			blankParameterAnnotations(
+				source,
+				code,
+				output,
+				open,
+				head.parametersClose,
+				filePath,
+			);
 			continue;
 		}
 
+		const before = previousCodeIndex(source, code, arrow - 1);
 		let colon = before;
 		while (colon >= 0 && source[colon] !== ":") {
 			if (
@@ -1117,7 +1166,9 @@ function blankArrowAnnotations(
 				(source[colon] === "," ||
 					source[colon] === ";" ||
 					source[colon] === "{" ||
-					source[colon] === "}")
+					source[colon] === "}" ||
+					(source[colon] === ">" &&
+						source[previousCodeIndex(source, code, colon - 1)] === "="))
 			)
 				break;
 			colon--;
@@ -1128,6 +1179,50 @@ function blankArrowAnnotations(
 			blank(output, source, colon, arrow);
 		}
 	}
+}
+
+function findParenthesizedArrowHead(
+	source: string,
+	code: Array<boolean>,
+	arrow: number,
+): { parametersClose: number; returnColon?: number } | undefined {
+	const before = previousCodeIndex(source, code, arrow - 1);
+	if (source[before] === ")") return { parametersClose: before };
+
+	let parentheses = 0;
+	let brackets = 0;
+	let braces = 0;
+	let angles = 0;
+	for (let i = before; i >= 0; i = previousCodeIndex(source, code, i - 1)) {
+		const char = source[i]!;
+		if (char === ")") parentheses++;
+		else if (char === "(" && parentheses > 0) parentheses--;
+		else if (char === "]") brackets++;
+		else if (char === "[" && brackets > 0) brackets--;
+		else if (char === "}") braces++;
+		else if (char === "{" && braces > 0) braces--;
+		else if (char === ">") {
+			if (
+				parentheses === 0 &&
+				brackets === 0 &&
+				braces === 0 &&
+				angles === 0 &&
+				source[previousCodeIndex(source, code, i - 1)] === "="
+			) {
+				return undefined;
+			}
+			angles++;
+		} else if (char === "<" && angles > 0) angles--;
+
+		if (parentheses !== 0 || brackets !== 0 || braces !== 0 || angles !== 0) continue;
+		if (char === ";") return undefined;
+		if (char !== ":") continue;
+		const parametersClose = previousCodeIndex(source, code, i - 1);
+		if (source[parametersClose] === ")") {
+			return { parametersClose, returnColon: i };
+		}
+	}
+	return undefined;
 }
 
 function blankParameterAnnotations(
@@ -1142,6 +1237,20 @@ function blankParameterAnnotations(
 	for (let i = open + 1; i < close; i++) {
 		if (!code[i]) continue;
 		const char = source[i]!;
+		if (nested === 0 && isIdentifierStart(char)) {
+			const word = wordAt(source, code, i)!;
+			if (word.text === "this") {
+				const colon = nextCodeIndex(source, code, word.end);
+				if (source[colon] === ":") {
+					const end = findTypeEnd(source, code, colon + 1, [",", ")"], filePath);
+					blank(output, source, word.start, source[end] === "," ? end + 1 : end);
+					i = end;
+					continue;
+				}
+			}
+			i = word.end - 1;
+			continue;
+		}
 		if (char === "(" || char === "[" || char === "{") nested++;
 		if (char === ")" || char === "]" || char === "}") nested--;
 		if (nested === 0 && char === "?") {
