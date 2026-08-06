@@ -45,4 +45,32 @@ if (visited[0] !== "root/leaf" || findLabels([value]).join(",") !== "compact") {
 	throw new Error("typed arrow erasure changed recursive or concise-body semantics");
 }
 
+type Exercise =
+	| { type: "matching"; prompts: readonly string[] }
+	| { type: "ordering"; items: readonly string[] }
+	| { type: "text_input"; answers: readonly string[] };
+
+const validateExercise = (exercise: Exercise): readonly string[] => {
+	const issues: string[] = [];
+	switch (exercise.type) {
+		case "matching": {
+			if (exercise.prompts.length === 0) issues.push("prompts");
+			break;
+		}
+		case "ordering": {
+			if (exercise.items.length === 0) issues.push("items");
+			break;
+		}
+		case "text_input": {
+			if (exercise.answers.length === 0) issues.push("answers");
+			break;
+		}
+	}
+	return issues;
+};
+
+if (validateExercise({ type: "matching", prompts: [] }).join(",") !== "prompts") {
+	throw new Error("typed union switch case labels were stripped");
+}
+
 console.log("TYPESCRIPT_ERASABLE_ISSUE_5_PASS");

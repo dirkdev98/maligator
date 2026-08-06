@@ -132,6 +132,43 @@ const message = \`value:${"${selected as string}"}\`;
 		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
 	});
 
+	test("preserves switch case labels inside a typed union arrow", () => {
+		const source = `type Exercise =
+	| { type: "matching"; prompts: readonly string[] }
+	| { type: "ordering"; items: readonly string[] }
+	| { type: "text_input"; answers: readonly string[] };
+interface ContentIssue {
+	readonly code: string;
+}
+const validateExercise = (
+	exercise: Exercise,
+): readonly ContentIssue[] => {
+	const issues: ContentIssue[] = [];
+	switch (exercise.type) {
+		case "matching": {
+			if (exercise.prompts.length === 0) issues.push({ code: "prompts" });
+			break;
+		}
+		case "ordering": {
+			if (exercise.items.length === 0) issues.push({ code: "items" });
+			break;
+		}
+		case "text_input": {
+			if (exercise.answers.length === 0) issues.push({ code: "answers" });
+			break;
+		}
+	}
+	return issues;
+};`;
+		const stripped = stripCompactTypes(source, "content-validation.ts");
+
+		expect(stripped).toContain('case "matching":');
+		expect(stripped).toContain('case "ordering":');
+		expect(stripped).toContain('case "text_input":');
+		expect(stripped).toContain("return issues;");
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
 	test.each([
 		[
 			"object return types",
