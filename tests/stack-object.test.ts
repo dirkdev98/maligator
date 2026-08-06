@@ -410,25 +410,23 @@ describe("stack-object native metadata and C emission", () => {
 		expect(source).toMatch(/mal_ops_construct_result\(materialized_ret_\d+/);
 	});
 
-	it("does not serialize compile-only stack site metadata", () => {
+	it("serializes native stack metadata for frontend cache reuse", () => {
 		const decoded = deserializeVmDefinition(
 			compileSourceToBuffer(
 				`function f(escape) { const o = { x: 1 }; if (escape) return o; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
 			),
 		);
-		expect(decoded.functions.every((fn) => fn.stackObjectSites === undefined)).toBe(true);
-		expect(decoded.functions.every((fn) => fn.stackObjectAccesses === undefined)).toBe(
+		expect(decoded.functions.some((fn) => (fn.stackObjectSites?.length ?? 0) > 0)).toBe(
 			true,
 		);
 		expect(
-			decoded.functions.every((fn) => fn.stackObjectMaterializations === undefined),
+			decoded.functions.some((fn) => (fn.stackObjectAccesses?.length ?? 0) > 0),
 		).toBe(true);
 		expect(
-			decoded.functions.some((fn) =>
-				fn.instructions.some(
-					(instruction) => instruction.opcode === "CREATE_OBJECT_SHAPED",
-				),
-			),
+			decoded.functions.some((fn) => (fn.stackObjectMaterializations?.length ?? 0) > 0),
 		).toBe(true);
+		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
+			"MalObject __stack_object_",
+		);
 	});
 });
