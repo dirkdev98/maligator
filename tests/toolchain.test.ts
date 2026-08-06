@@ -272,6 +272,7 @@ describe("native toolchain discovery", () => {
 		expect(artifacts.nativeToolEnvironment).toMatchObject({
 			CC_KNOWN_WRAPPER_CUSTOM: "zig",
 			CRATE_CC_NO_DEFAULTS: "1",
+			CFLAGS: "-fno-sanitize=undefined",
 			CXXFLAGS: "-fno-sanitize=undefined",
 		});
 		const result = buildLocalBinary({

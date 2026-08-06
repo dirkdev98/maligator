@@ -65,11 +65,14 @@ function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string,
 		// cc-rs recognizes Zig as a compiler wrapper only when told its basename.
 		// Its Rust-triple defaults would otherwise append a second,
 		// Zig-incompatible `--target`; the tool command already carries the
-		// canonical Zig target. Zig C++ also enables undefined-behavior checks for
-		// some optimized constructs by default, so turn them off for ordinary
+		// canonical Zig target. Zig C and C++ also enable undefined-behavior checks
+		// for some optimized constructs by default, so turn them off for ordinary
 		// production dependencies rather than leaving unresolved UBSan calls.
 		environment.CC_KNOWN_WRAPPER_CUSTOM = path.basename(context.toolchain.tools.cc.path);
 		environment.CRATE_CC_NO_DEFAULTS = "1";
+		environment.CFLAGS = [context.environment.CFLAGS, "-fno-sanitize=undefined"]
+			.filter((value) => value !== undefined && value !== "")
+			.join(" ");
 		environment.CXXFLAGS = [context.environment.CXXFLAGS, "-fno-sanitize=undefined"]
 			.filter((value) => value !== undefined && value !== "")
 			.join(" ");
