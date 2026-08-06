@@ -232,6 +232,26 @@ describe("matchers", () => {
 			]);
 	});
 
+	test("matches object properties recursively while preserving exact arrays", () => {
+		void runtime
+			.expect({ extra: true, value: { detail: "kept", score: 1 } })
+			.toMatchObject({ value: { score: 1 } });
+		void runtime
+			.expect({ rows: [{ detail: "kept", score: 1 }] })
+			.toMatchObject({ rows: [{ score: 1 }] });
+
+		expect(() => {
+			void runtime
+				.expect({ rows: [{ score: 1 }, { score: 2 }] })
+				.toMatchObject({ rows: [{ score: 1 }] });
+		}).toThrow(/toMatchObject failed/);
+		expect(() => {
+			void runtime
+				.expect({ value: { detail: "kept", score: 1 } })
+				.toMatchObject({ value: { score: 2 } });
+		}).toThrow(/toMatchObject failed/);
+	});
+
 	test("supports resolves, rejects, and throw matching", async () => {
 		await runtime.expect(Promise.resolve({ answer: 42 })).resolves.toEqual({
 			answer: 42,

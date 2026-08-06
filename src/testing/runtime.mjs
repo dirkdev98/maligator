@@ -88,11 +88,11 @@ function deepEqual(received, expected, strict, seen = new Map(), subset = false)
 	}
 	if (Array.isArray(received) || Array.isArray(expected)) {
 		if (!Array.isArray(received) || !Array.isArray(expected)) return false;
-		if (!subset && received.length !== expected.length) return false;
-		if (subset && received.length < expected.length) return false;
+		if (received.length !== expected.length) return false;
 		for (let index = 0; index < expected.length; index++) {
 			if (strict && index in received !== index in expected) return false;
-			if (!deepEqual(received[index], expected[index], strict, seen)) return false;
+			if (!deepEqual(received[index], expected[index], strict, seen, subset))
+				return false;
 		}
 		return true;
 	}
@@ -104,7 +104,7 @@ function deepEqual(received, expected, strict, seen = new Map(), subset = false)
 	if (!subset && receivedKeys.length !== expectedKeys.length) return false;
 	for (const key of expectedKeys) {
 		if (!Object.prototype.hasOwnProperty.call(received, key)) return false;
-		if (!deepEqual(received[key], expected[key], strict, seen)) return false;
+		if (!deepEqual(received[key], expected[key], strict, seen, subset)) return false;
 	}
 	return true;
 }
