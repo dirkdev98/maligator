@@ -149,13 +149,13 @@ measures each cache case, and removes the project afterward.
 The 2026-08-06 local product-build comparison that introduced shared images
 measured:
 
-| Scenario | Per-file graphs | Shared image |
-| --- | ---: | ---: |
-| Cold, 21 files / 60 tests | 20,376 ms | 1,412 ms |
-| Warm unchanged | 15 ms | 3 ms |
-| One changed selected test | 950 ms | 912 ms |
-| Changed shared dependency | 19,257 ms | 1,427 ms |
-| Warm async-heavy selection | 40 ms | 2 ms |
+| Scenario                   | Per-file graphs | Shared image |
+| -------------------------- | --------------: | -----------: |
+| Cold, 21 files / 60 tests  |       20,376 ms |     1,412 ms |
+| Warm unchanged             |           15 ms |         3 ms |
+| One changed selected test  |          950 ms |       912 ms |
+| Changed shared dependency  |       19,257 ms |     1,427 ms |
+| Warm async-heavy selection |           40 ms |         2 ms |
 
 The shared-image cold breakdown was 56 ms graph construction, 22 ms semantic
 analysis, 1,317 ms compilation/optimization/lowering, 9 ms serialization, and
