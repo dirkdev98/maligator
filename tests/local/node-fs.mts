@@ -47,6 +47,9 @@ check("recursive mkdir accepts an existing directory", statSync(nested).isDirect
 
 writeFileSync(textFile, "héllo 😀");
 eq("readFileSync decodes UTF-8", readFileSync(textFile, "utf8"), "héllo 😀");
+const textBuffer = readFileSync(textFile);
+check("readFileSync returns Buffer without encoding", Buffer.isBuffer(textBuffer));
+eq("readFileSync Buffer decodes UTF-8 by default", textBuffer.toString(), "héllo 😀");
 
 const framed = new Uint8Array([9, 65, 0, 66, 9]);
 writeFileSync(byteFile, framed.subarray(1, 4));
@@ -54,10 +57,7 @@ eq("readFileSync preserves embedded NUL", readFileSync(byteFile, "utf8"), "A\0B"
 const binary = new Uint8Array([0, 0xff, 0xc3, 0x28, 65]);
 writeFileSync(byteFile, binary);
 const binaryRead = readFileSync(byteFile);
-check(
-	"readFileSync returns Uint8Array without encoding",
-	binaryRead instanceof Uint8Array,
-);
+check("readFileSync Buffer inherits from Uint8Array", binaryRead instanceof Uint8Array);
 eq("readFileSync preserves binary length", binaryRead.length, binary.length);
 check(
 	"readFileSync preserves arbitrary bytes",
