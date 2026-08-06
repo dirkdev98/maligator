@@ -152,7 +152,11 @@ try {
 	console.log("ok   doctor found the isolated native toolchain");
 
 	const buildOutput = invoke(["build"]);
-	if (!buildOutput.includes("Binary:") || !buildOutput.includes("selfhost-cli-app")) {
+	if (
+		!buildOutput.includes("Binary:") ||
+		!buildOutput.includes("selfhost-cli-app") ||
+		!buildOutput.includes("Cache frontend: miss")
+	) {
 		throw new Error(`build did not report its output:\n${buildOutput}`);
 	}
 	console.log("ok   distributed compiler built the configured application");
@@ -163,6 +167,9 @@ try {
 	}
 	if (!runOutput.includes("Exit: 0")) {
 		throw new Error(`run did not report success:\n${runOutput}`);
+	}
+	if (!runOutput.includes("Cache frontend: hit")) {
+		throw new Error(`run did not reuse the normal-build frontend:\n${runOutput}`);
 	}
 	console.log(
 		"ok   target materialized binary assets, executed eval, and forwarded arguments",

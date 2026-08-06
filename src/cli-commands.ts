@@ -236,6 +236,9 @@ function compileAndBuild(
 			config: buildConfig,
 			stripTypes: context.stripTypes,
 			stripperIdentity: context.installation.frontendIdentity,
+			enforcePolicies: !(
+				command.kind === "build" && command.internal.serializePath !== undefined
+			),
 			forceCompile: debugEnabled || compilerDiagnostics,
 			afterOptimization: (irProgram) => {
 				if (command.kind === "build" && command.internal.dumpLiveness) {

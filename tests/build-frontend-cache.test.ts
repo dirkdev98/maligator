@@ -94,4 +94,23 @@ describe("normal build frontend cache", () => {
 
 		expect(compile(entrypoint, cacheDirectory, session).cache).toBe("miss");
 	});
+
+	it("does not reuse policy-unchecked portable output for a checked native build", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(entrypoint, `eval("1");\n`);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({ engine: { eval: "compile-check" } }),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-frontend-cache-test",
+			cacheDirectory,
+		};
+
+		expect(compileBuildFrontend({ ...options, enforcePolicies: false }).cache).toBe(
+			"miss",
+		);
+		expect(() => compileBuildFrontend(options)).toThrow(/dynamic code is rejected/);
+	});
 });

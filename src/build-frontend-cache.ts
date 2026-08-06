@@ -74,6 +74,8 @@ export interface CompileBuildFrontendOptions {
 	stripperIdentity: string;
 	cacheDirectory?: string;
 	session?: BuildCompilationSession;
+	/** Apply build-time eval/RegExp policy checks. Defaults to true. */
+	enforcePolicies?: boolean;
 	/**
 	 * Recompile even if the content-addressed artifact is valid. Used by
 	 * compiler diagnostics that need the live semantic/IR objects.
@@ -136,6 +138,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			version: MALIGATOR_VERSION,
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
+			enforcePolicies: options.enforcePolicies !== false,
 			engine: options.config.engine,
 			host: options.config.host,
 			surface: options.config.surface,
@@ -325,8 +328,10 @@ export function compileBuildFrontend(
 
 	const semanticStartedAt = Date.now();
 	const semantic = runSemanticAnalysisForGraph(graph);
-	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
-	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	if (options.enforcePolicies !== false) {
+		assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
+		assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	}
 	phases.semanticMs = Date.now() - semanticStartedAt;
 
 	const definition = compileSemanticProgramToVmDefinition(semantic, {
