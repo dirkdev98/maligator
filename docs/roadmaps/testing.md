@@ -174,22 +174,24 @@ node scripts/test-runner-performance.ts /path/to/maligator
 It generates 20 small files plus an async-heavy file in a temporary project,
 measures each cache case, and removes the project afterward.
 
-The 2026-08-06 local product-build comparison that introduced shared images
-measured:
+The 2026-08-06 local product-build comparisons measured:
 
-| Scenario                   | Per-file graphs | Shared image |
-| -------------------------- | --------------: | -----------: |
-| Cold, 21 files / 60 tests  |       20,376 ms |     1,412 ms |
-| Warm unchanged             |           15 ms |         3 ms |
-| One changed selected test  |          950 ms |       912 ms |
-| Changed shared dependency  |       19,257 ms |     1,427 ms |
-| Warm async-heavy selection |           40 ms |         2 ms |
+| Scenario                   | Per-file graphs | Shared image | Relocatable fragments |
+| -------------------------- | --------------: | -----------: | --------------------: |
+| Cold, 21 files / 60 tests  |       20,376 ms |     1,412 ms |              1,358 ms |
+| Warm unchanged             |           15 ms |         3 ms |                  4 ms |
+| One changed selected test  |          950 ms |       912 ms |                 50 ms |
+| Changed shared dependency  |       19,257 ms |     1,427 ms |              1,089 ms |
+| Warm async-heavy selection |           40 ms |         2 ms |                  2 ms |
 
-The shared-image cold breakdown was 56 ms graph construction, 22 ms semantic
-analysis, 1,317 ms compilation/optimization/lowering, 9 ms serialization, and
-2 ms execution. These numbers are revision- and machine-specific; the script is
-the contract, not the absolute values. The retained change removes repeated
-whole-graph work rather than relying on a timing threshold.
+The relocatable cold breakdown was 130 ms graph construction, 48 ms semantic
+analysis, 1,160 ms compilation/optimization/lowering, 8 ms serialization, and
+1 ms execution, publishing 23 artifacts. Changing one test reused the base and
+runner artifacts and rebuilt one fragment in 50 ms. Changing the shared
+dependency reused 21 test fragments plus the runner and rebuilt only the base
+in 1,089 ms. These numbers are revision- and machine-specific; the script is the
+contract, not the absolute values. Retained changes remove repeated work rather
+than relying on a timing threshold.
 
 ## Diagnostics
 

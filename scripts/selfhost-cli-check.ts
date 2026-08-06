@@ -219,6 +219,20 @@ test("interprets async tests with host dependencies", async () => {
 	);
 
 	writeFileSync(
+		path.join(project, "namespace.test.ts"),
+		`import { expect, test } from "maligator:test";
+import * as path from "node:path";
+test("preserves namespace import semantics through fallback", () => {
+\texpect(path.basename("/one/two.ts")).toBe("two.ts");
+});
+`,
+	);
+	const namespaceOutput = invoke(["test", "namespace.test.ts"], testOnlyEnv);
+	if (!namespaceOutput.includes("1 passed, 0 failed")) {
+		throw new Error(`namespace-import whole-image fallback failed:\n${namespaceOutput}`);
+	}
+
+	writeFileSync(
 		path.join(project, "syntax.test.ts"),
 		`import { test } from "maligator:test";\ntest("broken", () => {\n`,
 	);

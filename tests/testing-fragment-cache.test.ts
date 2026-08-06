@@ -121,4 +121,29 @@ test("namespace", () => shared.answer);
 			}),
 		).toThrow(UnsupportedRelocatableTestImageError);
 	});
+
+	test("validates real dependency exports before generating facades", () => {
+		const root = temporaryDirectory();
+		const entry = path.join(root, "missing-export.test.ts");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(path.join(root, "shared.ts"), `export const other = 42;\n`);
+		write(
+			entry,
+			`import { test } from "maligator:test";
+import { answer } from "./shared.ts";
+test("missing", () => answer);
+`,
+		);
+
+		expect(() =>
+			compileRelocatableTestImage({
+				files: [entry],
+				config: resolveBuildConfig({}),
+				stripTypes: stripTypesWithTypeScript,
+				stripperIdentity: "fragment-test-stripper",
+				testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
+				cacheDirectory: path.join(root, "cache"),
+			}),
+		).toThrow(/does not export 'answer'/);
+	});
 });

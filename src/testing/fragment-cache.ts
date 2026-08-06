@@ -5,6 +5,7 @@ import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
+import { linkModules } from "../linker.ts";
 import type { ModuleGraph } from "../module-graph.ts";
 import { buildModuleGraph } from "../module-graph.ts";
 import {
@@ -537,6 +538,12 @@ export function compileRelocatableTestImage(
 	const graphStartedAt = Date.now();
 	const selectedFiles = new Set(entries);
 	const planning = planningGraph(entries, options);
+	phases.graphMs = Date.now() - graphStartedAt;
+	const planningSemanticStartedAt = Date.now();
+	const planningSemantic = runSemanticAnalysisForGraph(planning);
+	linkModules(planningSemantic);
+	phases.semanticMs = Date.now() - planningSemanticStartedAt;
+	const fragmentGraphsStartedAt = Date.now();
 	const plans = entries.map((file) => planEntry(file, planning, selectedFiles));
 	const base = baseGraph(plans, options);
 	const fragments = plans.map((plan) => ({
@@ -544,7 +551,7 @@ export function compileRelocatableTestImage(
 		graph: fragmentGraph(plan, options),
 	}));
 	const runner = runnerGraph(entries[0]!, options);
-	phases.graphMs = Date.now() - graphStartedAt;
+	phases.graphMs += Date.now() - fragmentGraphsStartedAt;
 
 	const baseArtifact = compileArtifact(
 		root,
