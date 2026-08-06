@@ -80,6 +80,7 @@ export function beforeEach(callback: HookCallback): void;
 export function afterEach(callback: HookCallback): void;
 
 export interface RuntimeRunOptions {
+	files?: Array<string>;
 	nameFilter?: string;
 	shuffleSeed?: number;
 	repeat: number;

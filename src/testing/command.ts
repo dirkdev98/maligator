@@ -3,7 +3,8 @@ import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import type { CommandContext } from "../cli-commands.ts";
 import type { TestCommand } from "../cli.ts";
-import { compileTestFile } from "./cache.ts";
+import { compileTestImage, TestCompilationSession } from "./cache.ts";
+import type { CompiledTestImage, TestFrontendPhases } from "./cache.ts";
 import { discoverTestFiles } from "./discovery.ts";
 import type { TestEvent, TestFailure, TestRunResult } from "./protocol.ts";
 
@@ -13,6 +14,7 @@ interface TestRuntimeBridge {
 
 interface TestGlobals {
 	__maligatorTestOptions?: {
+		files?: Array<string>;
 		nameFilter?: string;
 		shuffleSeed?: number;
 		repeat: number;
@@ -74,16 +76,49 @@ function reportFailures(file: string, events: Array<TestEvent>): void {
 	output();
 	output(`FAIL ${relative(file)}`);
 	for (const event of failures) {
+		const name = event.name.startsWith(`${file} > `)
+			? event.name.slice(file.length + 3)
+			: event.name === file
+				? path.basename(file)
+				: event.name;
 		if (event.type === "test-fail") {
-			output(`  ${event.name}`);
+			output(`  ${name}`);
 			for (const failure of event.failures) {
 				for (const line of formatFailure(failure)) output(line);
 			}
 		} else {
-			output(`  ${event.name} (${event.hook})`);
+			output(`  ${name} (${event.hook})`);
 			for (const line of formatFailure(event.failure)) output(line);
 		}
 	}
+}
+
+interface CompiledGroup {
+	files: Array<string>;
+	compiled: CompiledTestImage;
+}
+
+interface FrontendFailure {
+	file: string;
+	error: unknown;
+}
+
+function emptyPhases(): TestFrontendPhases {
+	return {
+		validationMs: 0,
+		graphMs: 0,
+		semanticMs: 0,
+		compileMs: 0,
+		serializeMs: 0,
+	};
+}
+
+function addPhases(target: TestFrontendPhases, value: TestFrontendPhases): void {
+	target.validationMs += value.validationMs;
+	target.graphMs += value.graphMs;
+	target.semanticMs += value.semanticMs;
+	target.compileMs += value.compileMs;
+	target.serializeMs += value.serializeMs;
 }
 
 function randomSeed(): number {
@@ -142,42 +177,67 @@ export async function executeTestCommand(
 	let cacheHits = 0;
 	let cacheMisses = 0;
 	const startedAt = Date.now();
+	const phases = emptyPhases();
+	const session = new TestCompilationSession();
+	const groups: Array<CompiledGroup> = [];
+	const frontendFailures: Array<FrontendFailure> = [];
 
-	for (const file of files) {
-		let compiled: ReturnType<typeof compileTestFile>;
+	const compileGroup = (entries: Array<string>): void => {
 		try {
-			compiled = compileTestFile({
-				file,
+			const compiled = compileTestImage({
+				files: entries,
 				config,
 				stripTypes: context.stripTypes,
 				stripperIdentity: context.installation.frontendIdentity,
 				testModuleSource: moduleSource,
+				session,
 			});
 			frontendMs += compiled.frontendMs;
+			addPhases(phases, compiled.phases);
 			if (compiled.cache === "hit") cacheHits++;
 			else cacheMisses++;
+			groups.push({ files: entries, compiled });
 		} catch (error) {
-			failed++;
-			output(`✗ ${relative(file)}       frontend error`);
-			output();
-			output(`FAIL ${relative(file)}`);
-			output(
-				`  ${error instanceof SyntaxError ? "SyntaxError" : "ModuleLoadError"}: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			if (command.bail) break;
-			continue;
+			if (entries.length > 1) {
+				const middle = Math.floor(entries.length / 2);
+				compileGroup(entries.slice(0, middle));
+				if (!command.bail || frontendFailures.length === 0) {
+					compileGroup(entries.slice(middle));
+				}
+			} else {
+				frontendFailures.push({ file: entries[0]!, error });
+			}
 		}
+	};
+	compileGroup(files);
 
+	for (const failure of frontendFailures) {
+		failed++;
+		output(`✗ ${relative(failure.file)}       frontend error`);
+		output();
+		output(`FAIL ${relative(failure.file)}`);
+		output(
+			`  ${failure.error instanceof SyntaxError ? "SyntaxError" : "ModuleLoadError"}: ${
+				failure.error instanceof Error ? failure.error.message : String(failure.error)
+			}`,
+		);
+	}
+
+	for (const group of groups) {
 		const executionStartedAt = Date.now();
-		globals.__maligatorTestOptions = runOptions;
+		globals.__maligatorTestOptions = { ...runOptions, files: group.files };
 		delete globals.__maligatorTestResult;
 		try {
-			await globals.mal._runWire(compiled.wire);
+			await globals.mal._runWire(group.compiled.wire);
 		} catch (error) {
-			failed++;
-			output(`✗ ${relative(file)}       module-load error`);
+			failed += group.files.length;
+			const label =
+				group.files.length === 1
+					? relative(group.files[0]!)
+					: `${group.files.length}-file test image`;
+			output(`✗ ${label}       module-load error`);
 			output();
-			output(`FAIL ${relative(file)}`);
+			output(`FAIL ${label}`);
 			output(
 				`  ModuleLoadError: ${error instanceof Error ? error.message : String(error)}`,
 			);
@@ -190,8 +250,8 @@ export async function executeTestCommand(
 		const result = Reflect.get(globals, "__maligatorTestResult");
 		delete globals.__maligatorTestResult;
 		if (result === undefined) {
-			failed++;
-			output(`✗ ${relative(file)}       runner infrastructure error`);
+			failed += group.files.length;
+			output(`✗ ${group.files.length}-file test image       runner infrastructure error`);
 			if (command.bail) break;
 			continue;
 		}
@@ -199,13 +259,21 @@ export async function executeTestCommand(
 		failed += result.failed;
 		skipped += result.skipped;
 		todo += result.todo;
-		const status = result.failed === 0 ? "✓" : "✗";
-		const testCount = result.passed + result.failed + result.skipped + result.todo;
-		output(
-			`${status} ${relative(file)}       ${plural(testCount, "test")}   ` +
-				`${result.durationMs}ms   cache ${compiled.cache}`,
-		);
-		reportFailures(file, result.events);
+		for (const fileResult of result.files) {
+			const status = fileResult.failed === 0 ? "✓" : "✗";
+			const testCount =
+				fileResult.passed + fileResult.failed + fileResult.skipped + fileResult.todo;
+			output(
+				`${status} ${relative(fileResult.file)}       ${plural(testCount, "test")}   ` +
+					`${fileResult.durationMs}ms   image cache ${group.compiled.cache}`,
+			);
+			reportFailures(
+				fileResult.file,
+				result.events.filter(
+					(event) => "file" in event && event.file === fileResult.file,
+				),
+			);
+		}
 		if (command.bail && result.failed > 0) break;
 	}
 
@@ -220,6 +288,13 @@ export async function executeTestCommand(
 		`Timing: discovery ${discoveryMs.toFixed(1)}ms, frontend ${frontendMs.toFixed(
 			1,
 		)}ms, execution ${executionMs.toFixed(1)}ms; cache ${cacheHits} hit/${cacheMisses} miss`,
+	);
+	output(
+		`Frontend: validation ${phases.validationMs.toFixed(1)}ms, graph ${phases.graphMs.toFixed(
+			1,
+		)}ms, semantic ${phases.semanticMs.toFixed(1)}ms, compile ${phases.compileMs.toFixed(
+			1,
+		)}ms, serialize ${phases.serializeMs.toFixed(1)}ms`,
 	);
 	return {
 		exitCode: failed === 0 ? 0 : 1,

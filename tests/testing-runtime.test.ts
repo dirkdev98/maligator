@@ -28,14 +28,13 @@ describe("registration and lifecycle", () => {
 
 		const result = await run();
 		expect(calls).toEqual(["a beforeEach", "a test", "b beforeEach", "b test"]);
-		expect(result.files).toEqual([
+		expect(result.files.map(({ durationMs: _durationMs, ...file }) => file)).toEqual([
 			{
 				file: "a.test.ts",
 				passed: 1,
 				failed: 0,
 				skipped: 0,
 				todo: 0,
-				durationMs: expect.any(Number),
 			},
 			{
 				file: "b.test.ts",
@@ -43,14 +42,19 @@ describe("registration and lifecycle", () => {
 				failed: 0,
 				skipped: 0,
 				todo: 0,
-				durationMs: expect.any(Number),
 			},
 		]);
+		expect(result.files.every((file) => typeof file.durationMs === "number")).toBe(true);
 		expect(
 			result.events.find(
-				(event) => event.type === "test-pass" && event.name.endsWith("first"),
+				(event) => event.type === "test-pass" && event.name?.endsWith("first") === true,
 			),
 		).toMatchObject({ file: "a.test.ts" });
+
+		calls.length = 0;
+		const selected = await run({ files: ["b.test.ts"] });
+		expect(calls).toEqual(["b beforeEach", "b test"]);
+		expect(selected.files.map((file) => file.file)).toEqual(["b.test.ts"]);
 	});
 
 	test("registers nested names and orders hooks", async () => {

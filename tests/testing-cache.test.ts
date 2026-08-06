@@ -12,7 +12,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { compileTestFile } from "../src/testing/cache.ts";
+import {
+	compileTestFile,
+	compileTestImage,
+	TestCompilationSession,
+} from "../src/testing/cache.ts";
 import { discoverTestFiles } from "../src/testing/discovery.ts";
 import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
@@ -98,6 +102,56 @@ test("answer", () => {
 		write(dependency, `export function answer(): number { return 43; }\n`);
 		utimesSync(dependency, originalTimes.atime, originalTimes.mtime);
 		const changed = compileTestFile(options);
+		expect(changed.cache).toBe("miss");
+		expect(changed.wire).not.toEqual(cold.wire);
+	});
+
+	test("compiles several entries as one image and exposes watcher invalidation", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const dependency = path.join(root, "shared.ts");
+		const first = path.join(root, "a.test.ts");
+		const second = path.join(root, "b.test.ts");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(dependency, `export const answer: number = 42;\n`);
+		for (const [file, name] of [
+			[first, "a"],
+			[second, "b"],
+		] as const) {
+			write(
+				file,
+				`import { expect, test } from "maligator:test";
+import { answer } from "./shared.ts";
+test(${JSON.stringify(name)}, () => expect(answer).toBe(42));
+`,
+			);
+		}
+		const session = new TestCompilationSession();
+		const options = {
+			files: [second, first],
+			config: resolveBuildConfig({ engine: { regexp: false } }),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "test-typescript-strip",
+			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
+			cacheDirectory,
+			session,
+		};
+
+		const cold = compileTestImage(options);
+		const warm = compileTestImage(options);
+		expect(cold.cache).toBe("miss");
+		expect(warm.cache).toBe("hit");
+		expect(cold.entries).toEqual([first, second]);
+		expect(cold.dependencies).toEqual([first, second, dependency].sort());
+		const selected = compileTestImage({ ...options, files: [first] });
+		expect(selected.cache).toBe("hit");
+		expect(selected.entries).toEqual([first, second]);
+
+		const originalTimes = statSync(dependency);
+		write(dependency, `export const answer: number = 43;\n`);
+		utimesSync(dependency, originalTimes.atime, originalTimes.mtime);
+		session.invalidate(dependency);
+		const changed = compileTestImage(options);
 		expect(changed.cache).toBe("miss");
 		expect(changed.wire).not.toEqual(cold.wire);
 	});

@@ -693,6 +693,19 @@ test("resolves a toolchain-owned virtual ESM module", () => {
 	});
 });
 
+test("toolchain source transforms preserve original module identities", () => {
+	const entry = path.join(root, "transformed-entry.mjs");
+	write("transformed-entry.mjs", `globalThis.events.push("body");\n`);
+	const graph = buildModuleGraph(entry, {
+		transformSource(source, filePath) {
+			return filePath === entry ? `globalThis.events.push("before");${source}` : source;
+		},
+	});
+	const record = graph.modules.get(entry)!;
+	expect(record.source).toBe(`globalThis.events.push("body");\n`);
+	expect(record.parsed.ast.body).toHaveLength(2);
+});
+
 test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
 	write("node-unknown.mjs", `import "node:https";\n`);
 	expect(() =>

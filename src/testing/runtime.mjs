@@ -550,7 +550,10 @@ function hasOnly() {
 	);
 }
 
-function selected(testCase, options, focused) {
+function selected(testCase, options, focused, selectedFiles) {
+	if (selectedFiles !== undefined && !selectedFiles.has(testCase.suite.file)) {
+		return false;
+	}
 	if (
 		options.nameFilter !== undefined &&
 		!fullTestName(testCase).includes(options.nameFilter)
@@ -667,6 +670,7 @@ export async function __run(options) {
 	};
 	const random =
 		options.shuffleSeed === undefined ? undefined : seededRandom(options.shuffleSeed);
+	const selectedFiles = options.files === undefined ? undefined : new Set(options.files);
 	const fileResults = new Map();
 	const fileResult = (file) => {
 		if (file === undefined) return undefined;
@@ -798,12 +802,12 @@ export async function __run(options) {
 			].sort((left, right) => left.value.index - right.value.index);
 			for (const entry of shuffled(entries, random)) {
 				if (entry.kind === "test") {
-					if (selected(entry.value, options, result.focused)) {
+					if (selected(entry.value, options, result.focused, selectedFiles)) {
 						await runTest(entry.value);
 					}
 				} else {
 					const selectedDescendants = collectTests(entry.value).some((testCase) =>
-						selected(testCase, options, result.focused),
+						selected(testCase, options, result.focused, selectedFiles),
 					);
 					if (selectedDescendants) await runSuite(entry.value);
 				}

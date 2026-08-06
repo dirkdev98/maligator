@@ -153,6 +153,13 @@ export interface BuildModuleGraphOptions {
 		string,
 		{ source: string; goal?: Exclude<ModuleGoal, "cjs"> }
 	>;
+
+	/**
+	 * Transform a module's parse input without changing its source identity.
+	 * Toolchain features use this to inject protocol-only evaluation boundaries
+	 * while caches and file watchers fingerprint the original source contents.
+	 */
+	transformSource?: (source: string, filePath: string) => string;
 }
 
 /**
@@ -225,6 +232,7 @@ export function buildModuleGraph(
 			}
 			parseSource = options.stripTypes(parseSource, filePath);
 		}
+		parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
 		const parsed = parseWithGoal(parseSource, goal);
 
 		const dependencies = extractDependencies(parsed.ast, goal).map(

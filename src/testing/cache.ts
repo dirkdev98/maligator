@@ -21,9 +21,10 @@ import { runSemanticAnalysisForGraph } from "../semantic-program.ts";
 import { serializeVmDefinition, WIRE_VERSION } from "../serialize-vm.ts";
 import { MALIGATOR_VERSION } from "../version.ts";
 
-const TEST_CACHE_SCHEMA = 1;
+const TEST_CACHE_SCHEMA = 3;
 const TEST_CACHE_DIRECTORY = ".cache/mal-cache/test";
 const TEST_MODULE_ID = "maligator:test";
+const TEST_IMAGE_TRANSFORM = 1;
 
 interface DependencyIdentity {
 	path: string;
@@ -33,38 +34,103 @@ interface DependencyIdentity {
 }
 
 interface TestCacheManifest {
-	schema: 1;
+	schema: 3;
 	identity: string;
 	contentKey: string;
 	wireDigest: string;
+	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
 }
 
-export interface CompileTestFileOptions {
-	file: string;
+interface CompileTestOptions {
 	config: ResolvedBuildConfig;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	testModuleSource: string;
 	cacheDirectory?: string;
+	session?: TestCompilationSession;
 }
 
-export interface CompiledTestFile {
+export interface CompileTestFileOptions extends CompileTestOptions {
+	file: string;
+}
+
+export interface CompileTestImageOptions extends CompileTestOptions {
+	files: Array<string>;
+}
+
+export interface TestFrontendPhases {
+	validationMs: number;
+	graphMs: number;
+	semanticMs: number;
+	compileMs: number;
+	serializeMs: number;
+}
+
+export interface CompiledTestImage {
 	wire: Uint8Array;
 	cache: "hit" | "miss";
 	frontendMs: number;
+	phases: TestFrontendPhases;
+	entries: Array<string>;
 	dependencies: Array<string>;
 }
 
+export type CompiledTestFile = CompiledTestImage;
+
 function digest(value: string | Uint8Array): string {
 	return hash("sha256", value, "hex");
+}
+
+/**
+ * One coherent filesystem view for a test command.
+ *
+ * A future watcher can retain this object and invalidate changed paths. A
+ * one-shot command gets the same benefit—shared dependencies are read and
+ * hashed once—even though several fallback compilation groups may inspect them.
+ */
+export class TestCompilationSession {
+	readonly #snapshots = new Map<string, DependencyIdentity>();
+
+	invalidate(file?: string): void {
+		if (file === undefined) {
+			this.#snapshots.clear();
+		} else {
+			this.#snapshots.delete(path.resolve(file));
+		}
+	}
+
+	snapshot(file: string, knownSource?: string): DependencyIdentity {
+		const resolved = path.resolve(file);
+		const cached = this.#snapshots.get(resolved);
+		if (cached !== undefined) return cached;
+		const stats = statSync(resolved);
+		if (!stats.isFile()) throw new Error(`test dependency is not a file: ${resolved}`);
+		const value = {
+			path: resolved,
+			size: stats.size,
+			mtimeMs: stats.mtimeMs,
+			digest:
+				knownSource === undefined
+					? digest(new Uint8Array(readFileSync(resolved)))
+					: digest(knownSource),
+		};
+		this.#snapshots.set(resolved, value);
+		return value;
+	}
 }
 
 function cacheRoot(override: string | undefined): string {
 	return path.resolve(override ?? TEST_CACHE_DIRECTORY);
 }
 
-function cacheIdentity(options: CompileTestFileOptions): string {
+function resolvedEntries(files: Array<string>): Array<string> {
+	return [...new Set(files.map((file) => path.resolve(file)))].sort((left, right) =>
+		left < right ? -1 : left > right ? 1 : 0,
+	);
+}
+
+function cacheIdentity(options: CompileTestOptions): string {
 	const flags = {
 		engine: options.config.engine,
 		host: options.config.host,
@@ -75,16 +141,16 @@ function cacheIdentity(options: CompileTestFileOptions): string {
 			schema: TEST_CACHE_SCHEMA,
 			version: MALIGATOR_VERSION,
 			wireVersion: WIRE_VERSION,
-			entry: path.resolve(options.file),
 			stripper: options.stripperIdentity,
 			flags,
 			testModule: digest(options.testModuleSource),
+			testImageTransform: TEST_IMAGE_TRANSFORM,
 		}),
 	);
 }
 
-function manifestPath(root: string, file: string): string {
-	return path.join(root, "entries", `${digest(path.resolve(file))}.json`);
+function manifestPath(root: string, entries: Array<string>): string {
+	return path.join(root, "entries", `${digest(JSON.stringify(entries))}.json`);
 }
 
 function wirePath(root: string, contentKey: string): string {
@@ -99,15 +165,17 @@ function readManifest(filePath: string): TestCacheManifest | undefined {
 	}
 }
 
-function dependenciesUnchanged(dependencies: Array<DependencyIdentity>): boolean {
+function dependenciesUnchanged(
+	dependencies: Array<DependencyIdentity>,
+	session: TestCompilationSession,
+): boolean {
 	return dependencies.every((dependency) => {
 		try {
-			const stats = statSync(dependency.path);
+			const current = session.snapshot(dependency.path);
 			return (
-				stats.isFile() &&
-				stats.size === dependency.size &&
-				stats.mtimeMs === dependency.mtimeMs &&
-				digest(new Uint8Array(readFileSync(dependency.path))) === dependency.digest
+				current.size === dependency.size &&
+				current.mtimeMs === dependency.mtimeMs &&
+				current.digest === dependency.digest
 			);
 		} catch {
 			return false;
@@ -118,12 +186,15 @@ function dependenciesUnchanged(dependencies: Array<DependencyIdentity>): boolean
 function cachedWire(
 	root: string,
 	identity: string,
+	requestedEntries: Array<string>,
 	manifest: TestCacheManifest | undefined,
+	session: TestCompilationSession,
 ): Uint8Array | undefined {
 	if (
 		manifest?.schema !== TEST_CACHE_SCHEMA ||
 		manifest.identity !== identity ||
-		!dependenciesUnchanged(manifest.dependencies)
+		!requestedEntries.every((entry) => manifest.entries.includes(entry)) ||
+		!dependenciesUnchanged(manifest.dependencies, session)
 	) {
 		return undefined;
 	}
@@ -133,40 +204,48 @@ function cachedWire(
 	return digest(wire) === manifest.wireDigest ? wire : undefined;
 }
 
-function syntheticEntry(file: string): string {
+function syntheticEntry(entries: Array<string>): string {
+	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
 	return `import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
-import ${JSON.stringify(path.resolve(file))};
+${imports}
 globalThis.__maligatorTestResult = await __run(globalThis.__maligatorTestOptions);
 `;
 }
 
-function buildTestGraph(options: CompileTestFileOptions): ModuleGraph {
-	const entry = path.join(
-		path.dirname(path.resolve(options.file)),
-		".maligator-test-entry.mts",
-	);
+function wrapTestEntry(source: string, file: string): string {
+	return `globalThis.__maligatorTestBeginFile(${JSON.stringify(
+		file,
+	)});${source}\nglobalThis.__maligatorTestEndFile();`;
+}
+
+function buildTestGraph(
+	options: CompileTestImageOptions,
+	entries: Array<string>,
+): ModuleGraph {
+	const entrySet = new Set(entries);
+	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-image-entry.mts");
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
-		entrySource: syntheticEntry(options.file),
+		entrySource: syntheticEntry(entries),
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
 		]),
+		transformSource(source, filePath) {
+			return entrySet.has(filePath) ? wrapTestEntry(source, filePath) : source;
+		},
 	});
 }
 
-function dependencyIdentities(graph: ModuleGraph): Array<DependencyIdentity> {
+function dependencyIdentities(
+	graph: ModuleGraph,
+	session: TestCompilationSession,
+): Array<DependencyIdentity> {
 	const dependencies: Array<DependencyIdentity> = [];
 	for (const record of graph.modules.values()) {
 		if (record.virtual || record.host || record.path === graph.entry) continue;
-		const stats = statSync(record.path);
-		dependencies.push({
-			path: record.path,
-			size: stats.size,
-			mtimeMs: stats.mtimeMs,
-			digest: digest(record.source),
-		});
+		dependencies.push(session.snapshot(record.path, record.source));
 	}
 	dependencies.sort((left, right) =>
 		left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
@@ -181,29 +260,63 @@ function publish(filePath: string, contents: string | Uint8Array): void {
 	renameSync(temporary, filePath);
 }
 
-/** Compile one test graph to interpreted wire, reusing only frontend artifacts. */
-export function compileTestFile(options: CompileTestFileOptions): CompiledTestFile {
+function publishManifest(
+	root: string,
+	manifest: TestCacheManifest,
+	requestedEntries: Array<string>,
+): void {
+	const contents = `${JSON.stringify(manifest)}\n`;
+	publish(manifestPath(root, requestedEntries), contents);
+	if (manifest.entries.length === 1) return;
+	for (const entry of manifest.entries) {
+		const aliasPath = manifestPath(root, [entry]);
+		const existing = readManifest(aliasPath);
+		if (existing?.schema === TEST_CACHE_SCHEMA && existing.entries.length === 1) {
+			continue;
+		}
+		publish(aliasPath, contents);
+	}
+}
+
+/** Compile a stable set of test entrypoints into one interpreted test image. */
+export function compileTestImage(options: CompileTestImageOptions): CompiledTestImage {
 	const startedAt = Date.now();
+	const entries = resolvedEntries(options.files);
+	if (entries.length === 0) throw new Error("a test image requires at least one entry");
+	const phases: TestFrontendPhases = {
+		validationMs: 0,
+		graphMs: 0,
+		semanticMs: 0,
+		compileMs: 0,
+		serializeMs: 0,
+	};
+	const session = options.session ?? new TestCompilationSession();
 	const root = cacheRoot(options.cacheDirectory);
 	const identity = cacheIdentity(options);
-	const entryManifestPath = manifestPath(root, options.file);
+	const entryManifestPath = manifestPath(root, entries);
+	const validationStartedAt = Date.now();
 	const manifest = readManifest(entryManifestPath);
-	const hit = cachedWire(root, identity, manifest);
+	const hit = cachedWire(root, identity, entries, manifest, session);
+	phases.validationMs = Date.now() - validationStartedAt;
 	if (hit !== undefined) {
 		return {
 			wire: hit,
 			cache: "hit",
 			frontendMs: Date.now() - startedAt,
+			phases,
+			entries: manifest!.entries,
 			dependencies: manifest!.dependencies.map((dependency) => dependency.path),
 		};
 	}
 
-	const graph = buildTestGraph(options);
-	const dependencies = dependencyIdentities(graph);
+	const graphStartedAt = Date.now();
+	const graph = buildTestGraph(options, entries);
+	phases.graphMs = Date.now() - graphStartedAt;
+	const dependencies = dependencyIdentities(graph, session);
 	const contentKey = digest(
 		JSON.stringify({
 			identity,
-			entrySource: syntheticEntry(options.file),
+			entrySource: syntheticEntry(entries),
 			dependencies: dependencies.map(({ path: file, digest: contentDigest }) => ({
 				file,
 				digest: contentDigest,
@@ -215,10 +328,17 @@ export function compileTestFile(options: CompileTestFileOptions): CompiledTestFi
 	if (existsSync(artifactPath)) {
 		wire = new Uint8Array(readFileSync(artifactPath));
 	} else {
+		const semanticStartedAt = Date.now();
 		const semantic = runSemanticAnalysisForGraph(graph);
+		phases.semanticMs = Date.now() - semanticStartedAt;
+		const compileStartedAt = Date.now();
 		assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 		assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-		wire = serializeVmDefinition(compileSemanticProgramToVmDefinition(semantic));
+		const definition = compileSemanticProgramToVmDefinition(semantic);
+		phases.compileMs = Date.now() - compileStartedAt;
+		const serializeStartedAt = Date.now();
+		wire = serializeVmDefinition(definition);
+		phases.serializeMs = Date.now() - serializeStartedAt;
 		publish(artifactPath, wire);
 	}
 	const nextManifest: TestCacheManifest = {
@@ -226,13 +346,22 @@ export function compileTestFile(options: CompileTestFileOptions): CompiledTestFi
 		identity,
 		contentKey,
 		wireDigest: digest(wire),
+		entries,
 		dependencies,
 	};
-	publish(entryManifestPath, `${JSON.stringify(nextManifest)}\n`);
+	publishManifest(root, nextManifest, entries);
 	return {
 		wire,
 		cache: "miss",
 		frontendMs: Date.now() - startedAt,
+		phases,
+		entries,
 		dependencies: dependencies.map((dependency) => dependency.path),
 	};
+}
+
+/** Compatibility helper for callers that intentionally compile one test entry. */
+export function compileTestFile(options: CompileTestFileOptions): CompiledTestFile {
+	const { file, ...shared } = options;
+	return compileTestImage({ ...shared, files: [file] });
 }

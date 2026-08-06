@@ -75,6 +75,7 @@ export type TestEvent =
 	  };
 
 export interface TestRunOptions {
+	files?: Array<string>;
 	nameFilter?: string;
 	shuffleSeed?: number;
 	repeat: number;
