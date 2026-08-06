@@ -20,10 +20,11 @@ function write(relativePath: string, source: string): void {
 
 function smallTest(index: number, revision: number): string {
 	return `import { expect, test } from "maligator:test";
-import { shared } from "./shared.ts";
+import { shared, sharedInitializationCount } from "./shared.ts";
 
 test("small ${index}", () => {
 \texpect(shared(${index})).toBe(${index + 1});
+\texpect(sharedInitializationCount).toBe(1);
 });
 // revision ${revision}
 `;
@@ -40,7 +41,14 @@ function run(label: string, selections: Array<string>): void {
 
 try {
 	write("package.json", `{"type":"module"}\n`);
-	write("shared.ts", `export const shared = (value: number): number => value + 1;\n`);
+	write(
+		"shared.ts",
+		`const prior = Number(Reflect.get(globalThis, "__maligatorSharedInitCount") ?? 0);
+export const sharedInitializationCount = prior + 1;
+Reflect.set(globalThis, "__maligatorSharedInitCount", sharedInitializationCount);
+export const shared = (value: number): number => value + 1;
+`,
+	);
 	for (let index = 0; index < 20; index++) {
 		write(`small-${String(index).padStart(2, "0")}.test.ts`, smallTest(index, 0));
 	}
@@ -66,7 +74,12 @@ ${asyncTests}
 
 	write(
 		"shared.ts",
-		`export const shared = (value: number): number => value + 1;\n// dependency revision 1\n`,
+		`const prior = Number(Reflect.get(globalThis, "__maligatorSharedInitCount") ?? 0);
+export const sharedInitializationCount = prior + 1;
+Reflect.set(globalThis, "__maligatorSharedInitCount", sharedInitializationCount);
+export const shared = (value: number): number => value + 1;
+// dependency revision 1
+`,
 	);
 	run("changed shared dependency", ["."]);
 	run("warm async-heavy", ["async-heavy.test.ts"]);

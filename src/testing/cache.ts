@@ -49,6 +49,8 @@ interface CompileTestOptions {
 	testModuleSource: string;
 	cacheDirectory?: string;
 	session?: TestCompilationSession;
+	/** Require an artifact with exactly these entries during failure containment. */
+	allowSupersetCache?: boolean;
 }
 
 export interface CompileTestFileOptions extends CompileTestOptions {
@@ -187,6 +189,7 @@ function cachedWire(
 	root: string,
 	identity: string,
 	requestedEntries: Array<string>,
+	allowSuperset: boolean,
 	manifest: TestCacheManifest | undefined,
 	session: TestCompilationSession,
 ): Uint8Array | undefined {
@@ -194,6 +197,7 @@ function cachedWire(
 		manifest?.schema !== TEST_CACHE_SCHEMA ||
 		manifest.identity !== identity ||
 		!requestedEntries.every((entry) => manifest.entries.includes(entry)) ||
+		(!allowSuperset && manifest.entries.length !== requestedEntries.length) ||
 		!dependenciesUnchanged(manifest.dependencies, session)
 	) {
 		return undefined;
@@ -296,7 +300,14 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	const entryManifestPath = manifestPath(root, entries);
 	const validationStartedAt = Date.now();
 	const manifest = readManifest(entryManifestPath);
-	const hit = cachedWire(root, identity, entries, manifest, session);
+	const hit = cachedWire(
+		root,
+		identity,
+		entries,
+		options.allowSupersetCache !== false,
+		manifest,
+		session,
+	);
 	phases.validationMs = Date.now() - validationStartedAt;
 	if (hit !== undefined) {
 		return {

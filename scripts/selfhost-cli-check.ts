@@ -241,6 +241,42 @@ test("unreachable", () => {});
 	) {
 		throw new Error(`module-load failures were not categorized:\n${moduleLoadOutput}`);
 	}
+	const containedModuleLoadOutput = invokeFailure(
+		["test", "example.test.ts", "module-load.test.ts"],
+		testOnlyEnv,
+	);
+	if (
+		!containedModuleLoadOutput.includes("1 passed, 1 failed") ||
+		!containedModuleLoadOutput.includes("example.test.ts")
+	) {
+		throw new Error(
+			`an image module-load failure did not preserve healthy entries:\n${containedModuleLoadOutput}`,
+		);
+	}
+
+	for (const [file, value] of [
+		["hook-a.test.ts", "a"],
+		["hook-b.test.ts", "b"],
+	] as const) {
+		writeFileSync(
+			path.join(project, file),
+			`import { beforeEach, expect, test } from "maligator:test";
+beforeEach(() => {
+\tglobalThis.__testImageHookOwner = ${JSON.stringify(value)};
+});
+test("keeps root hooks inside the file", () => {
+\texpect(globalThis.__testImageHookOwner).toBe(${JSON.stringify(value)});
+});
+`,
+		);
+	}
+	const hookBoundaryOutput = invoke(
+		["test", "hook-a.test.ts", "hook-b.test.ts"],
+		testOnlyEnv,
+	);
+	if (!hookBoundaryOutput.includes("2 passed, 0 failed")) {
+		throw new Error(`test-image hooks crossed file boundaries:\n${hookBoundaryOutput}`);
+	}
 
 	writeFileSync(
 		path.join(project, "assertion.test.ts"),
@@ -258,7 +294,9 @@ test("reports source positions", () => {
 	) {
 		throw new Error(`assertion failures lost source diagnostics:\n${assertionOutput}`);
 	}
-	console.log("ok   test categorized syntax, module-load, and assertion failures");
+	console.log(
+		"ok   test isolated file hooks and categorized contained module/assertion failures",
+	);
 } finally {
 	if (createdConfig) rmSync(configPath, { force: true });
 }

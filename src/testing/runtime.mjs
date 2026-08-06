@@ -544,9 +544,11 @@ function collectTests(suite, output = []) {
 	return output;
 }
 
-function hasOnly() {
+function hasOnly(selectedFiles) {
 	return collectTests(root).some(
-		(testCase) => testCase.mode === "only" || suiteOrAncestorMode(testCase.suite, "only"),
+		(testCase) =>
+			(selectedFiles === undefined || selectedFiles.has(testCase.suite.file)) &&
+			(testCase.mode === "only" || suiteOrAncestorMode(testCase.suite, "only")),
 	);
 }
 
@@ -658,6 +660,7 @@ export async function __run(options) {
 	const events = [];
 	let sequence = 0;
 	const emit = (event) => events.push({ ...event, sequence: sequence++ });
+	const selectedFiles = options.files === undefined ? undefined : new Set(options.files);
 	const result = {
 		events,
 		files: [],
@@ -666,11 +669,10 @@ export async function __run(options) {
 		skipped: 0,
 		todo: 0,
 		durationMs: 0,
-		focused: hasOnly(),
+		focused: hasOnly(selectedFiles),
 	};
 	const random =
 		options.shuffleSeed === undefined ? undefined : seededRandom(options.shuffleSeed);
-	const selectedFiles = options.files === undefined ? undefined : new Set(options.files);
 	const fileResults = new Map();
 	const fileResult = (file) => {
 		if (file === undefined) return undefined;

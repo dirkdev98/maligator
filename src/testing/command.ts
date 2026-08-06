@@ -182,7 +182,18 @@ export async function executeTestCommand(
 	const groups: Array<CompiledGroup> = [];
 	const frontendFailures: Array<FrontendFailure> = [];
 
-	const compileGroup = (entries: Array<string>): void => {
+	const recordCompilation = (
+		entries: Array<string>,
+		compiled: CompiledTestImage,
+	): void => {
+		frontendMs += compiled.frontendMs;
+		addPhases(phases, compiled.phases);
+		if (compiled.cache === "hit") cacheHits++;
+		else cacheMisses++;
+		groups.push({ files: entries, compiled });
+	};
+
+	const compileGroup = (entries: Array<string>, allowSupersetCache = true): void => {
 		try {
 			const compiled = compileTestImage({
 				files: entries,
@@ -191,12 +202,9 @@ export async function executeTestCommand(
 				stripperIdentity: context.installation.frontendIdentity,
 				testModuleSource: moduleSource,
 				session,
+				allowSupersetCache,
 			});
-			frontendMs += compiled.frontendMs;
-			addPhases(phases, compiled.phases);
-			if (compiled.cache === "hit") cacheHits++;
-			else cacheMisses++;
-			groups.push({ files: entries, compiled });
+			recordCompilation(entries, compiled);
 		} catch (error) {
 			if (entries.length > 1) {
 				const middle = Math.floor(entries.length / 2);
@@ -222,6 +230,7 @@ export async function executeTestCommand(
 			}`,
 		);
 	}
+	if (command.bail && frontendFailures.length > 0) groups.length = 0;
 
 	for (const group of groups) {
 		const executionStartedAt = Date.now();
@@ -230,6 +239,30 @@ export async function executeTestCommand(
 		try {
 			await globals.mal._runWire(group.compiled.wire);
 		} catch (error) {
+			if (!command.bail && group.files.length > 1) {
+				const middle = Math.floor(group.files.length / 2);
+				for (const entries of [group.files.slice(0, middle), group.files.slice(middle)]) {
+					try {
+						const compiled = compileTestImage({
+							files: entries,
+							config,
+							stripTypes: context.stripTypes,
+							stripperIdentity: context.installation.frontendIdentity,
+							testModuleSource: moduleSource,
+							session,
+							allowSupersetCache: false,
+						});
+						recordCompilation(entries, compiled);
+					} catch (compileError) {
+						for (const file of entries) {
+							frontendFailures.push({ file, error: compileError });
+							failed++;
+							output(`✗ ${relative(file)}       frontend error`);
+						}
+					}
+				}
+				continue;
+			}
 			failed += group.files.length;
 			const label =
 				group.files.length === 1

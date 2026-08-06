@@ -57,6 +57,21 @@ describe("registration and lifecycle", () => {
 		expect(selected.files.map((file) => file.file)).toEqual(["b.test.ts"]);
 	});
 
+	test("ignores focused tests outside a selected cached-image entry", async () => {
+		const calls: Array<string> = [];
+		runtime.__beginFile("focused.test.ts");
+		runtime.test.only("focused elsewhere", () => calls.push("focused"));
+		runtime.__endFile();
+		runtime.__beginFile("selected.test.ts");
+		runtime.test("selected", () => calls.push("selected"));
+		runtime.__endFile();
+
+		const result = await run({ files: ["selected.test.ts"] });
+		expect(result.focused).toBe(false);
+		expect(result.passed).toBe(1);
+		expect(calls).toEqual(["selected"]);
+	});
+
 	test("registers nested names and orders hooks", async () => {
 		const calls: Array<string> = [];
 		runtime.beforeAll(() => calls.push("outer beforeAll"));
