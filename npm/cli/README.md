@@ -124,10 +124,10 @@ singletons, host state, and asynchronous work left running by a test can be
 shared. Do not rely on process-per-file isolation.
 
 Frontend bytecode is content-addressed by source, transitive dependencies,
-resolution metadata, relevant build configuration, and compiler/runtime format
-versions. A warm run restores a shared base plus independently cached test-file
-registration fragments. Test results are never cached: every selected test
-executes on every invocation.
+resolved module identities, relevant build configuration, and compiler/runtime
+format versions. A warm run restores a shared base plus independently cached
+test-file registration fragments. Test results are never cached: every selected
+test executes on every invocation.
 
 The package ships documented declarations for `maligator:test`. Projects whose
 TypeScript configuration does not include `maligator.build.ts` should load the
