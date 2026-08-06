@@ -721,6 +721,37 @@ test("captured block functions reserve storage before compiling nested direct ev
 	);
 });
 
+test("captured block recursive closures keep storage in their owning activation", () => {
+	const program = compileScript(`
+		function makeRunner() {
+			return {
+				run(value) {
+					if (value) {
+						const visit = (remaining) => {
+							if (remaining > 0) visit(remaining - 1);
+						};
+						return typeof visit;
+					}
+					return "skipped";
+				},
+			};
+		}
+		globalThis.makeRunner = makeRunner;
+	`);
+	const run = functionNamed(program, "run");
+	const visit = functionNamed(program, "visit");
+	const bindingStorage = [...program.bindingToStorage.entries()].find(
+		([binding]) => binding.name === "visit",
+	)?.[1];
+
+	expect(bindingStorage).toEqual({
+		type: "captured",
+		functionIndex: run.functionIndex,
+		index: 0,
+	});
+	expect(run.functionIndex).not.toBe(visit.functionIndex);
+});
+
 test("register allocation keeps distinct call operands live through the instruction", () => {
 	const call: IRInstruction = { type: "call", registers: [2, 3, 1, 4] };
 	const fn = {

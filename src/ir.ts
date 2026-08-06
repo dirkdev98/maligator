@@ -6136,6 +6136,29 @@ function compileStatementsToBlock(
 	// Store the first block index so we can return that to allow jumping to that block.
 	const blockIdx = fn.blocks.push(block) - 1;
 
+	const firstStatement = statements[0];
+	const firstScope = firstStatement
+		? fn.semanticFile.nodeToScope.get(firstStatement)
+		: undefined;
+	// Statements normally map to their containing lexical scope. Declarations
+	// that introduce their own nested scope map to that scope instead, so step
+	// back to the scope whose bindings are initialized by this statement list.
+	const enclosingScope =
+		firstScope && firstScope.node === firstStatement
+			? (firstScope.parent ?? undefined)
+			: firstScope;
+
+	// A captured block binding must belong to the activation executing this
+	// statement list. Its initializer can be a closure that reads the binding
+	// recursively; compiling that closure first would otherwise let the child
+	// function claim the storage slot for itself. Reserve direct block bindings
+	// before compiling any initializer, just as function-body hoisting does.
+	for (const binding of enclosingScope?.bindings ?? []) {
+		if (binding.scopedTo === "captured") {
+			getOrCreateBindingLocation(program, fn, binding);
+		}
+	}
+
 	// Hoisting pre-pass: bind every top-level function declaration up front so the
 	// loop below can skip re-emitting them at their textual position.
 	const hoistedDeclarations = new Set<ESTree.Node>();
@@ -6163,16 +6186,6 @@ function compileStatementsToBlock(
 			functionNames.add(name);
 			functionsToInitialize.unshift(declaration);
 		}
-		const firstStatement = statements[0];
-		const firstScope = firstStatement
-			? fn.semanticFile.nodeToScope.get(firstStatement)
-			: undefined;
-		// Function/class declarations map to their own nested scope; declaration
-		// instantiation belongs to the surrounding body.
-		const enclosingScope =
-			firstScope && firstScope.node === firstStatement
-				? (firstScope.parent ?? undefined)
-				: firstScope;
 		const declarationScopes: Array<Scope> = [];
 		for (
 			let scope: Scope | null | undefined = enclosingScope;
