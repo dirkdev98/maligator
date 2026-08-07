@@ -999,6 +999,7 @@ throwsTypeError("argon2Sync rejects a null associatedData with a TypeError", () 
 // Never differential: Node cannot survive these inputs to disagree with.
 const HOST_MAX_MEMORY_KIB = 262144;
 const HOST_MAX_TAG_LENGTH = 16777216;
+const HOST_MAX_PASSES = 8;
 // The ceiling is compared against the *rounded* block count, which is what the
 // derivation actually allocates, so exceeding it means clearing the next
 // 4*parallelism-block step (16 blocks at the parallelism of 4 used here) rather
@@ -1015,6 +1016,17 @@ throwsError("argon2Sync refuses a tagLength above the host ceiling", () =>
 );
 throwsError("argon2Sync refuses the maximum tagLength Node documents", () =>
 	argon2Sync("argon2id", rfc9106({ tagLength: 4294967295 })),
+);
+// `passes` is the ceiling that bounds *uninterruptible* work: an over-budget
+// memory request fails fast, but an over-budget pass count simply runs, holding
+// a worker that shutdown then has to join. The parameter is also the one an
+// application is least likely to choose for itself — the standard Argon2 verify
+// flow reads m/t/p back out of the stored credential record.
+throwsError("argon2Sync refuses passes above the host ceiling", () =>
+	argon2Sync("argon2id", rfc9106({ passes: HOST_MAX_PASSES + 1 })),
+);
+throwsError("argon2Sync refuses the maximum passes Node documents", () =>
+	argon2Sync("argon2id", rfc9106({ passes: 4294967295 })),
 );
 // A resource refusal is an Error, not a RangeError: the value was inside the
 // range Node documents, so reporting it as out of range would be wrong.
@@ -1036,6 +1048,10 @@ check(
 	"a tagLength just inside the ceiling still derives",
 	argon2Sync("argon2id", rfc9106({ tagLength: 4096 })).length === 4096,
 );
+check(
+	"the passes ceiling itself still derives",
+	argon2Sync("argon2id", rfc9106({ passes: HOST_MAX_PASSES })).length === 32,
+);
 throwsError("argon2 refuses an over-policy memory request", () =>
 	(argon2 as (...args: unknown[]) => unknown)(
 		"argon2id",
@@ -1047,6 +1063,13 @@ throwsError("argon2 refuses an over-policy tagLength", () =>
 	(argon2 as (...args: unknown[]) => unknown)(
 		"argon2id",
 		rfc9106({ tagLength: HOST_MAX_TAG_LENGTH + 1 }),
+		() => undefined,
+	),
+);
+throwsError("argon2 refuses an over-policy passes", () =>
+	(argon2 as (...args: unknown[]) => unknown)(
+		"argon2id",
+		rfc9106({ passes: HOST_MAX_PASSES + 1 }),
 		() => undefined,
 	),
 );

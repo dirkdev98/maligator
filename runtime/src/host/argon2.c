@@ -48,7 +48,34 @@ typedef struct MalArgon2Job {
     MalArgon2Result *result;
     bool cancelled;
     bool completed;
+    /* Held by a worker thread from dequeue until it publishes who frees the
+     * record. Guarded by MalArgon2State::mutex; the reaper must not take a
+     * record while it is set. */
+    bool worker_owned;
 } MalArgon2Job;
+
+/* Every resource ceiling, carried together so no call site can check a subset
+ * of them. Adding a ceiling to the struct forces it through mal_argon2_policy,
+ * which is the single gate all five entry points share. */
+typedef struct MalArgon2Limits {
+    u32 max_memory_kib;
+    u32 max_tag_length;
+    u32 max_passes;
+} MalArgon2Limits;
+
+static const MalArgon2Limits MAL_ARGON2_DEFAULT_LIMITS = {
+    .max_memory_kib = MAL_ARGON2_DEFAULT_MAX_MEMORY_KIB,
+    .max_tag_length = MAL_ARGON2_DEFAULT_MAX_TAG_LENGTH,
+    .max_passes = MAL_ARGON2_DEFAULT_MAX_PASSES,
+};
+
+/* Everything a derivation needs from the configuration, snapshotted under the
+ * mutex so a worker reads no shared field while it runs. */
+typedef struct MalArgon2Runtime {
+    MalArgon2Limits limits;
+    MalArgon2Derive derive;
+    void *derive_data;
+} MalArgon2Runtime;
 
 typedef struct MalArgon2State {
     pthread_mutex_t mutex;
@@ -62,8 +89,7 @@ typedef struct MalArgon2State {
     usize thread_count;
     usize queue_capacity;
     usize queued;
-    u32 max_memory_kib;
-    u32 max_tag_length;
+    MalArgon2Limits limits;
     MalArgon2Derive derive;
     void *derive_data;
     bool pool_started;
@@ -164,9 +190,14 @@ i32 mal_argon2_result_status(const MalArgon2Result *result) {
  * block count, so it matches what the derivation will actually allocate. Runs
  * before any allocation and before the backend is entered. */
 static i32 mal_argon2_policy(
-    const MalArgon2Params *params, u32 max_memory_kib, u32 max_tag_length) {
+    const MalArgon2Params *params, const MalArgon2Limits *limits) {
     if (params == nullptr) return MAL_ARGON2_STATUS_INVALID_ARGUMENT;
-    if (max_tag_length != 0 && params->tag_length > max_tag_length) {
+    if (limits->max_tag_length != 0 && params->tag_length > limits->max_tag_length) {
+        return MAL_ARGON2_STATUS_POLICY;
+    }
+    // Checked without the backend too: `passes` is the ceiling that bounds
+    // uninterruptible work, and that property must not depend on a feature flag.
+    if (limits->max_passes != 0 && params->passes > limits->max_passes) {
         return MAL_ARGON2_STATUS_POLICY;
     }
 #if MAL_NODE
@@ -175,34 +206,28 @@ static i32 mal_argon2_policy(
         != MAL_ARGON2_STATUS_OK) {
         return MAL_ARGON2_STATUS_INVALID_ARGUMENT;
     }
-    if (max_memory_kib != 0 && blocks > (u64) max_memory_kib) {
+    if (limits->max_memory_kib != 0 && blocks > (u64) limits->max_memory_kib) {
         return MAL_ARGON2_STATUS_POLICY;
     }
-#else
-    // Without the backend there is no block-count helper; the tag ceiling above
-    // is still enforced so the policy surface does not depend on the feature.
-    (void) max_memory_kib;
 #endif
     return MAL_ARGON2_STATUS_OK;
 }
 
-static void mal_argon2_state_limits(
-    MalArgon2State *state, u32 *max_memory_kib, u32 *max_tag_length);
+static MalArgon2Limits mal_argon2_state_limits(MalArgon2State *state);
 
 i32 mal_argon2_check_policy(MalArgon2 *argon2, const MalArgon2Params *params) {
-    u32 max_memory_kib = MAL_ARGON2_DEFAULT_MAX_MEMORY_KIB;
-    u32 max_tag_length = MAL_ARGON2_DEFAULT_MAX_TAG_LENGTH;
+    MalArgon2Limits limits = MAL_ARGON2_DEFAULT_LIMITS;
     if (argon2 != nullptr && argon2->state != nullptr) {
-        mal_argon2_state_limits(argon2->state, &max_memory_kib, &max_tag_length);
+        limits = mal_argon2_state_limits(argon2->state);
     }
-    return mal_argon2_policy(params, max_memory_kib, max_tag_length);
+    return mal_argon2_policy(params, &limits);
 }
 
 /* The one call into the Rust backend. */
 static i32 mal_argon2_backend_derive(
     const MalArgon2Params *params, byte *out, usize out_len,
-    u32 max_memory_kib, u32 max_tag_length) {
-    i32 policy = mal_argon2_policy(params, max_memory_kib, max_tag_length);
+    const MalArgon2Limits *limits) {
+    i32 policy = mal_argon2_policy(params, limits);
     if (policy != MAL_ARGON2_STATUS_OK) return policy;
 #if MAL_NODE
     // mal_argon2_init refuses a mismatched archive up front; this repeats the
@@ -235,17 +260,17 @@ static i32 mal_argon2_backend_derive(
 }
 
 /* Injected derive hooks stand in for the backend, but the resource policy is the
- * host's and applies to them too. */
+ * host's and applies to them too. Runs off a snapshot rather than off `state`,
+ * so a derivation in progress reads no field another thread may write. */
 static i32 mal_argon2_run(
-    MalArgon2State *state, const MalArgon2Params *params, byte *out, usize out_len) {
-    if (state->derive != nullptr) {
-        i32 policy = mal_argon2_policy(
-            params, state->max_memory_kib, state->max_tag_length);
+    const MalArgon2Runtime *runtime, const MalArgon2Params *params, byte *out,
+    usize out_len) {
+    if (runtime->derive != nullptr) {
+        i32 policy = mal_argon2_policy(params, &runtime->limits);
         if (policy != MAL_ARGON2_STATUS_OK) return policy;
-        return state->derive(params, out, out_len, state->derive_data);
+        return runtime->derive(params, out, out_len, runtime->derive_data);
     }
-    return mal_argon2_backend_derive(
-        params, out, out_len, state->max_memory_kib, state->max_tag_length);
+    return mal_argon2_backend_derive(params, out, out_len, &runtime->limits);
 }
 
 static void mal_argon2_remove_request(MalArgon2State *state, MalArgon2Job *request) {
@@ -304,6 +329,18 @@ static void *mal_argon2_worker(void *data) {
         }
         state->queued--;
         bool cancelled = request->cancelled;
+        // Claimed: from here until the worker publishes a decision, this record
+        // belongs to this thread and nothing on the reactor side may free it.
+        // Without the claim the reaper could take the record between the
+        // "completed" publication below and the worker's own free — the record
+        // is completed, and a concurrent cancel leaves the operation no longer
+        // ACTIVE, which is exactly the reaper's condition.
+        request->worker_owned = true;
+        MalArgon2Runtime runtime = {
+            .limits = state->limits,
+            .derive = state->derive,
+            .derive_data = state->derive_data,
+        };
         pthread_mutex_unlock(&state->mutex);
 
         MalHostHandle operation = request->operation;
@@ -311,7 +348,7 @@ static void *mal_argon2_worker(void *data) {
         MalHostTerminalResult terminal = MAL_HOST_TERMINAL_ERROR;
         if (!cancelled) {
             result->status = mal_argon2_run(
-                state, &request->params, result->tag, result->tag_length);
+                &runtime, &request->params, result->tag, result->tag_length);
             terminal = result->status == MAL_ARGON2_STATUS_OK
                 ? MAL_HOST_TERMINAL_OK
                 : MAL_HOST_TERMINAL_ERROR;
@@ -335,12 +372,19 @@ static void *mal_argon2_worker(void *data) {
             state->host, operation, terminal, result, mal_argon2_result_destroy);
         if (!posted) {
             mal_argon2_result_release(result);
-            if (!cancelled) {
-                pthread_mutex_lock(&state->mutex);
-                mal_argon2_remove_request(state, request);
-                pthread_mutex_unlock(&state->mutex);
-            }
         }
+
+        // One release of the claim, and it decides the owner. A posted record
+        // stays on the list for the reaper; anything else leaves the list here
+        // and is freed by this thread. Either way `request` is untouched after
+        // the unlock.
+        pthread_mutex_lock(&state->mutex);
+        if (!posted && !cancelled) {
+            mal_argon2_remove_request(state, request);
+        }
+        request->worker_owned = false;
+        pthread_mutex_unlock(&state->mutex);
+
         (void) mal_reactor_release_work(&state->host->reactor);
         if (!posted) {
             free(request);
@@ -397,8 +441,7 @@ bool mal_argon2_init(MalArgon2 *argon2, MalHost *host) {
     state->host = host;
     state->thread_limit = MAL_ARGON2_DEFAULT_WORKERS;
     state->queue_capacity = MAL_ARGON2_DEFAULT_QUEUE_CAPACITY;
-    state->max_memory_kib = MAL_ARGON2_DEFAULT_MAX_MEMORY_KIB;
-    state->max_tag_length = MAL_ARGON2_DEFAULT_MAX_TAG_LENGTH;
+    state->limits = MAL_ARGON2_DEFAULT_LIMITS;
     state->accepting = true;
     argon2->state = state;
     return true;
@@ -415,12 +458,15 @@ bool mal_argon2_configure(MalArgon2 *argon2, const MalArgon2Config *config) {
     if (configurable) {
         state->thread_limit = config->worker_count;
         state->queue_capacity = config->queue_capacity;
-        state->max_memory_kib = config->max_memory_kib == 0
+        state->limits.max_memory_kib = config->max_memory_kib == 0
             ? MAL_ARGON2_DEFAULT_MAX_MEMORY_KIB
             : config->max_memory_kib;
-        state->max_tag_length = config->max_tag_length == 0
+        state->limits.max_tag_length = config->max_tag_length == 0
             ? MAL_ARGON2_DEFAULT_MAX_TAG_LENGTH
             : config->max_tag_length;
+        state->limits.max_passes = config->max_passes == 0
+            ? MAL_ARGON2_DEFAULT_MAX_PASSES
+            : config->max_passes;
         state->derive = config->derive;
         state->derive_data = config->derive_data;
     }
@@ -435,31 +481,29 @@ i32 mal_argon2_derive_sync(
         return MAL_ARGON2_STATUS_INVALID_ARGUMENT;
     }
     if (argon2 == nullptr || argon2->state == nullptr) {
-        return mal_argon2_backend_derive(params, out, out_len,
-            MAL_ARGON2_DEFAULT_MAX_MEMORY_KIB, MAL_ARGON2_DEFAULT_MAX_TAG_LENGTH);
+        // Hostless embeddings get the compiled defaults, not an exemption.
+        return mal_argon2_backend_derive(
+            params, out, out_len, &MAL_ARGON2_DEFAULT_LIMITS);
     }
     MalArgon2State *state = argon2->state;
     pthread_mutex_lock(&state->mutex);
     MalArgon2Derive derive = state->derive;
     void *derive_data = state->derive_data;
-    u32 max_memory_kib = state->max_memory_kib;
-    u32 max_tag_length = state->max_tag_length;
+    MalArgon2Limits limits = state->limits;
     pthread_mutex_unlock(&state->mutex);
-    i32 policy = mal_argon2_policy(params, max_memory_kib, max_tag_length);
+    i32 policy = mal_argon2_policy(params, &limits);
     if (policy != MAL_ARGON2_STATUS_OK) return policy;
     if (derive != nullptr) {
         return derive(params, out, out_len, derive_data);
     }
-    return mal_argon2_backend_derive(
-        params, out, out_len, max_memory_kib, max_tag_length);
+    return mal_argon2_backend_derive(params, out, out_len, &limits);
 }
 
-static void mal_argon2_state_limits(
-    MalArgon2State *state, u32 *max_memory_kib, u32 *max_tag_length) {
+static MalArgon2Limits mal_argon2_state_limits(MalArgon2State *state) {
     pthread_mutex_lock(&state->mutex);
-    *max_memory_kib = state->max_memory_kib;
-    *max_tag_length = state->max_tag_length;
+    MalArgon2Limits limits = state->limits;
     pthread_mutex_unlock(&state->mutex);
+    return limits;
 }
 
 MalArgon2StartResult mal_argon2_start(
@@ -477,11 +521,8 @@ MalArgon2StartResult mal_argon2_start(
     }
     // Before the tag buffer, the input copies, and the queue slot: a request the
     // policy will refuse must cost nothing.
-    u32 max_memory_kib;
-    u32 max_tag_length;
-    mal_argon2_state_limits(state, &max_memory_kib, &max_tag_length);
-    if (mal_argon2_policy(params, max_memory_kib, max_tag_length)
-        != MAL_ARGON2_STATUS_OK) {
+    MalArgon2Limits limits = mal_argon2_state_limits(state);
+    if (mal_argon2_policy(params, &limits) != MAL_ARGON2_STATUS_OK) {
         return MAL_ARGON2_START_POLICY;
     }
 
@@ -593,7 +634,10 @@ void mal_argon2_reap_completed(MalArgon2 *argon2) {
     MalArgon2Job **link = &state->requests;
     while (*link != nullptr) {
         MalArgon2Job *request = *link;
-        if (!request->completed
+        // `worker_owned` is the ownership half of the test and `completed` only
+        // the progress half: a completed record whose worker has not yet decided
+        // who frees it is still that worker's.
+        if (request->worker_owned || !request->completed
             || mal_host_operation_state(&state->host->tasks, request->operation)
                 == MAL_HOST_OPERATION_ACTIVE) {
             link = &request->all_next;

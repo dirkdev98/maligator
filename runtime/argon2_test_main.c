@@ -2,6 +2,8 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +35,11 @@ typedef struct Argon2Gate {
     pthread_cond_t ready;
     bool block;
     bool entered;
+    /* Set once a derivation has left the gate. A test that re-arms the gate for
+     * another round must wait for this first: re-arming while the previous
+     * worker is still inside would park it again on the round it already
+     * finished, and nothing would ever release it. */
+    bool exited;
     int calls;
     /* Set when a job observed inputs that did not match its own parameters. */
     bool mismatched;
@@ -65,6 +72,22 @@ static void argon2_gate_release(Argon2Gate *gate) {
     pthread_mutex_unlock(&gate->mutex);
 }
 
+static void argon2_gate_wait_exited(Argon2Gate *gate) {
+    pthread_mutex_lock(&gate->mutex);
+    while (!gate->exited) {
+        pthread_cond_wait(&gate->ready, &gate->mutex);
+    }
+    pthread_mutex_unlock(&gate->mutex);
+}
+
+static void argon2_gate_rearm(Argon2Gate *gate) {
+    pthread_mutex_lock(&gate->mutex);
+    gate->block = true;
+    gate->entered = false;
+    gate->exited = false;
+    pthread_mutex_unlock(&gate->mutex);
+}
+
 static void *argon2_delayed_gate_release(void *data) {
     struct timespec delay = {.tv_nsec = 10 * 1000000};
     while (nanosleep(&delay, &delay) < 0 && errno == EINTR) {
@@ -90,6 +113,8 @@ static i32 argon2_test_derive(
     while (gate->block) {
         pthread_cond_wait(&gate->ready, &gate->mutex);
     }
+    gate->exited = true;
+    pthread_cond_broadcast(&gate->ready);
     pthread_mutex_unlock(&gate->mutex);
     for (usize i = 0; i < out_len; i++) {
         out[i] = (byte) (params->message[i % params->message_len] + (byte) i);
@@ -479,9 +504,152 @@ static bool argon2_zero_config_selects_the_defaults(void) {
     params.tag_length = MAL_ARGON2_DEFAULT_MAX_TAG_LENGTH + 1;
     ok = ok && mal_argon2_check_policy(argon2, &params) == MAL_ARGON2_STATUS_POLICY;
 
+    params.tag_length = 32;
+    params.passes = MAL_ARGON2_DEFAULT_MAX_PASSES;
+    ok = ok && mal_argon2_check_policy(argon2, &params) == MAL_ARGON2_STATUS_OK;
+    params.passes = MAL_ARGON2_DEFAULT_MAX_PASSES + 1;
+    ok = ok && mal_argon2_check_policy(argon2, &params) == MAL_ARGON2_STATUS_POLICY;
+
     // A null pool falls back to the same compiled defaults.
     ok = ok && mal_argon2_check_policy(nullptr, &params) == MAL_ARGON2_STATUS_POLICY;
     argon2_test_host_free(&context);
+    return ok;
+}
+
+/* `passes` is the ceiling that bounds uninterruptible work, so it has to hold on
+ * every entry point: the pre-check, the synchronous derivation, the worker
+ * start, and the injected hook — which must be refused before it is ever
+ * entered, not after. */
+static bool argon2_passes_ceiling_refuses_every_path(void) {
+    Argon2Gate gate;
+    Argon2TestHost context = {0};
+    argon2_gate_init(&gate, false);
+    context.host = mal_host_init(&context.storage) ? &context.storage : nullptr;
+    MalArgon2Config config = {
+        .worker_count = 1,
+        .queue_capacity = 4,
+        .max_passes = 4,
+        .derive = argon2_test_derive,
+        .derive_data = &gate,
+    };
+    bool ok = context.host != nullptr
+        && mal_argon2_configure(&context.host->argon2, &config);
+    MalArgon2 *argon2 = ok ? &context.host->argon2 : nullptr;
+    byte message[8] = {5, 5, 5, 5, 5, 5, 5, 5};
+    byte tag[32] = {0};
+    MalArgon2Params params = argon2_test_params(message, sizeof(message));
+
+    params.passes = 5;
+    ok = ok && mal_argon2_check_policy(argon2, &params) == MAL_ARGON2_STATUS_POLICY
+        && mal_argon2_derive_sync(argon2, &params, tag, 32) == MAL_ARGON2_STATUS_POLICY;
+    // Refused before a job, a tag, or a queue slot exists.
+    MalHostHandle refused = 99;
+    ok = ok && mal_argon2_start(context.host, &params, &refused) == MAL_ARGON2_START_POLICY
+        && refused == 0 && mal_argon2_queued(argon2) == 0
+        && mal_host_tasks_pending(&context.host->tasks) == 0
+        && mal_host_operations_pending(&context.host->tasks) == 0;
+    // The injected hook is subject to the host's policy, not exempt from it: no
+    // derivation ran on any of the refused paths.
+    ok = ok && gate.calls == 0;
+
+    // Exactly at the ceiling the same call derives normally.
+    params.passes = 4;
+    ok = ok && mal_argon2_check_policy(argon2, &params) == MAL_ARGON2_STATUS_OK
+        && mal_argon2_derive_sync(argon2, &params, tag, 32) == MAL_ARGON2_STATUS_OK
+        && gate.calls == 1;
+    argon2_test_host_free(&context);
+    argon2_gate_free(&gate);
+    return ok;
+}
+
+typedef struct Argon2Reaper {
+    MalArgon2 *argon2;
+    atomic_bool stop;
+} Argon2Reaper;
+
+static void *argon2_reaper_spin(void *data) {
+    Argon2Reaper *reaper = data;
+    while (!atomic_load_explicit(&reaper->stop, memory_order_acquire)) {
+        mal_argon2_reap_completed(reaper->argon2);
+        // The reap takes the pool mutex, and the window this is hunting for sits
+        // between two acquisitions of that same mutex on the worker. Yielding
+        // keeps the spin from starving the thread it is racing.
+        sched_yield();
+    }
+    return nullptr;
+}
+
+/*
+ * The completed-job ownership protocol, driven through the one interleaving
+ * that used to double-free.
+ *
+ * Shutting the posted queue first is what forces it: the worker's terminal post
+ * then fails, which is the only branch where the worker frees the record
+ * itself. Cancelling the in-flight job moves the operation out of ACTIVE, which
+ * is the reaper's trigger. So from the moment the worker publishes `completed`
+ * until it frees, a concurrently spinning reaper sees a record that satisfies
+ * every condition it used to free on — and both threads would free it.
+ *
+ * The repeats are there because the window is a mutex round-trip wide; the
+ * assertions below hold on every run regardless, and under ASan a regression
+ * aborts rather than merely failing them.
+ */
+static bool argon2_completed_job_is_freed_exactly_once(void) {
+    Argon2Gate gate;
+    Argon2TestHost context = {0};
+    argon2_gate_init(&gate, true);
+    bool ok = argon2_test_host_init(&context, &gate, 1, 4);
+    byte message[8] = {4, 4, 4, 4, 4, 4, 4, 4};
+    MalArgon2Params params = argon2_test_params(message, sizeof(message));
+    if (!ok) {
+        argon2_test_host_free(&context);
+        argon2_gate_free(&gate);
+        return false;
+    }
+    // Posted terminals stop being accepted, so every worker below takes the
+    // "post failed, this thread owns the record" path.
+    (void) mal_host_posted_shutdown(&context.host->posted_tasks, &context.host->tasks);
+
+    Argon2Reaper reaper = {.argon2 = &context.host->argon2};
+    atomic_store(&reaper.stop, false);
+    pthread_t reaper_thread;
+    if (pthread_create(&reaper_thread, nullptr, argon2_reaper_spin, &reaper) != 0) {
+        argon2_test_host_free(&context);
+        argon2_gate_free(&gate);
+        return false;
+    }
+
+    int cancelled_terminals = 0;
+    const int rounds = 32;
+    for (int round = 0; ok && round < rounds; round++) {
+        argon2_gate_rearm(&gate);
+        MalHostHandle operation = 0;
+        ok = mal_argon2_start(context.host, &params, &operation) == MAL_ARGON2_START_OK;
+        if (!ok) break;
+        argon2_gate_wait_entered(&gate);
+        // In flight, so this cannot dequeue the job — it flags it and retires
+        // the operation while the worker is still holding the record.
+        ok = mal_argon2_cancel(context.host, operation);
+        argon2_gate_release(&gate);
+        argon2_gate_wait_exited(&gate);
+
+        MalHostTask task = {0};
+        while (mal_host_next_task(&context.host->tasks, &task)) {
+            if (task.result == MAL_HOST_TERMINAL_CANCELLED) cancelled_terminals++;
+            mal_host_task_release(&context.host->tasks, &task);
+        }
+    }
+    atomic_store_explicit(&reaper.stop, true, memory_order_release);
+    ok = pthread_join(reaper_thread, nullptr) == 0 && ok;
+
+    // Cancellation queues the terminal synchronously, so every round delivered
+    // exactly one and nothing is left holding an operation slot.
+    mal_argon2_reap_completed(&context.host->argon2);
+    ok = ok && cancelled_terminals == rounds && gate.calls == rounds
+        && mal_argon2_queued(&context.host->argon2) == 0
+        && mal_host_operations_pending(&context.host->tasks) == 0;
+    argon2_test_host_free(&context);
+    argon2_gate_free(&gate);
     return ok;
 }
 
@@ -547,6 +715,10 @@ int main(void) {
             argon2_resource_policy_refuses_without_allocating()},
         {"a zero in the config selects each compiled default ceiling",
             argon2_zero_config_selects_the_defaults()},
+        {"the passes ceiling refuses every entry point before any work runs",
+            argon2_passes_ceiling_refuses_every_path()},
+        {"a completed job is freed exactly once when cancel and reap race it",
+            argon2_completed_job_is_freed_exactly_once()},
         {"the linked backend reproduces the RFC 9106 argon2id vector",
             argon2_backend_matches_the_rfc_vector()},
     };

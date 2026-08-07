@@ -1,9 +1,12 @@
 #include "builtin_math.h"
 
 #include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "builtin_iterator.h"
 #include "float16.h"
@@ -742,7 +745,94 @@ static MalValue mal_builtin_math_sum_precise(MalVm *vm, MalValue this_value, con
     return result;
 }
 
-static u64 mal_builtin_math_random_state;
+/*
+ * Math.random's generator. Non-cryptographic by specification and by choice —
+ * xorshift64* leaks its whole state through two consecutive outputs, so nothing
+ * that needs unpredictability may read from here. It is the *seed* that matters:
+ * a clock-only seed made the stream guessable without observing any output at
+ * all, which turns every application-level misuse of Math.random into a remote
+ * prediction. The seed below is therefore drawn from the host CSPRNG whenever a
+ * program links one, and from process/context divergence otherwise.
+ */
+static _Atomic(u64) mal_builtin_math_random_state;
+
+/*
+ * Seeding happens at installation and again whenever a host registers a source,
+ * both of which precede any user code — so the draw itself is left exactly as it
+ * was, with no per-call check on a hot path.
+ *
+ * The flag is atomic and the seeding is under a mutex because an embedder may
+ * stand up isolates on several threads: two of them installing at once would
+ * otherwise race on the state. Seeding is idempotent in effect but not free of
+ * ordering, and a torn 64-bit state is worth ruling out.
+ */
+static atomic_bool mal_builtin_math_seeded;
+static pthread_mutex_t mal_builtin_math_seed_mutex = PTHREAD_MUTEX_INITIALIZER;
+static MalMathSeedSource mal_builtin_math_seed_source;
+
+/* SplitMix64's finalizer: diffuses the low-entropy fallback inputs so that
+ * correlated values (two timestamps a microsecond apart) do not produce
+ * correlated seeds. */
+static u64 mal_builtin_math_mix(u64 value) {
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31);
+}
+
+/*
+ * The no-host-CSPRNG fallback. None of these are secrets, but together they
+ * cost an attacker the nanosecond of process start *and* the PIE/stack ASLR
+ * slides, rather than the one-second guess a bare time() seed cost. A program
+ * that links either crypto surface never reaches this path.
+ */
+static u64 mal_builtin_math_fallback_seed(void) {
+    u64 seed = 0;
+    struct timespec now;
+    if (clock_gettime(CLOCK_REALTIME, &now) == 0) {
+        seed ^= mal_builtin_math_mix((u64) now.tv_sec * 1000000000ULL + (u64) now.tv_nsec);
+    }
+    if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) {
+        seed ^= mal_builtin_math_mix((u64) now.tv_sec * 1000000000ULL + (u64) now.tv_nsec);
+    }
+    seed ^= mal_builtin_math_mix((u64) getpid());
+    // Three independent ASLR slides: the stack, the data segment, and the text
+    // segment under PIE.
+    u64 stack_slot = 0;
+    seed ^= mal_builtin_math_mix((u64) (uintptr_t) &stack_slot);
+    seed ^= mal_builtin_math_mix((u64) (uintptr_t) &mal_builtin_math_random_state);
+    seed ^= mal_builtin_math_mix((u64) (uintptr_t) (void *) &mal_builtin_math_install);
+    return seed;
+}
+
+/* `force` re-seeds an already-seeded generator, which is what registering a
+ * source does: the CSPRNG must win over the fallback drawn at installation,
+ * whichever order the two happened in. */
+static void mal_builtin_math_seed(bool force) {
+    pthread_mutex_lock(&mal_builtin_math_seed_mutex);
+    if (force || !atomic_load_explicit(&mal_builtin_math_seeded, memory_order_relaxed)) {
+        u64 seed = 0;
+        if (mal_builtin_math_seed_source == nullptr
+            || mal_builtin_math_seed_source(&seed, sizeof(seed)) != 0) {
+            seed = mal_builtin_math_fallback_seed();
+        }
+        // xorshift64* degenerates to a fixed point at zero, which the seed
+        // sources can legitimately produce.
+        atomic_store_explicit(
+            &mal_builtin_math_random_state,
+            seed == 0 ? 0x9e3779b97f4a7c15ULL : seed,
+            memory_order_release);
+        atomic_store_explicit(&mal_builtin_math_seeded, true, memory_order_release);
+    }
+    pthread_mutex_unlock(&mal_builtin_math_seed_mutex);
+}
+
+void mal_builtin_math_set_seed_source(MalMathSeedSource source) {
+    pthread_mutex_lock(&mal_builtin_math_seed_mutex);
+    mal_builtin_math_seed_source = source;
+    pthread_mutex_unlock(&mal_builtin_math_seed_mutex);
+    mal_builtin_math_seed(true);
+}
 
 static MalValue mal_builtin_math_random(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
@@ -753,19 +843,29 @@ static MalValue mal_builtin_math_random(MalVm *vm, MalValue this_value, const Ma
     (void) callee;
 
     // xorshift64*: fast and plenty for a non-cryptographic Math.random.
-    u64 x = mal_builtin_math_random_state;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    mal_builtin_math_random_state = x;
+    // Several isolates may execute on different host threads. Advance the shared
+    // process generator with a CAS so concurrent draws cannot race, repeat a state,
+    // or invoke undefined behavior through an unsynchronized C data race.
+    u64 previous = atomic_load_explicit(
+        &mal_builtin_math_random_state, memory_order_relaxed);
+    u64 x;
+    do {
+        x = previous;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+    } while (!atomic_compare_exchange_weak_explicit(
+        &mal_builtin_math_random_state, &previous, x,
+        memory_order_relaxed, memory_order_relaxed));
 
     return mal_value_from_f64((f64) ((x * 0x2545F4914F6CDD1DULL) >> 11) / (f64) (1ULL << 53));
 }
 
 void mal_builtin_math_install(MalVm *vm) {
-    if (mal_builtin_math_random_state == 0) {
-        mal_builtin_math_random_state = (u64) time(nullptr) | 1;
-    }
+    // Seeded here so the generator is never usable in an unseeded state. A host
+    // that later registers a CSPRNG re-seeds over this; a program that links
+    // none keeps it.
+    mal_builtin_math_seed(false);
 
     MalObject *math = mal_intrinsic_new_object(vm);
     vm->intrinsics[MAL_INTRINSIC_MATH] = mal_value_from_object(math);

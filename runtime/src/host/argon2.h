@@ -15,9 +15,11 @@
  *
  * Two properties are deliberate and load-bearing:
  *   * An in-flight derivation is NOT cancellable — Argon2 has no cancellation
- *     point. Shutdown blocks for at most one derivation per worker, so
- *     max_memory_kib and the application's `passes` policy are what bound
- *     worst-case shutdown latency.
+ *     point. Shutdown blocks for at most one derivation per worker, so the
+ *     product max_passes x max_memory_kib is what bounds worst-case shutdown
+ *     latency. Both factors are host policy (see MalArgon2Config); neither is
+ *     left to the application, because an application that reads its cost
+ *     parameters out of a stored credential record does not choose them either.
  *   * Peak footprint is worker_count x max_memory_kib, so the defaults below
  *     bound a two-worker pool at 512 MiB of Argon2 matrix. Raising the ceiling
  *     raises that product; an embedder that does so owns the consequence.
@@ -73,21 +75,24 @@ typedef i32 (*MalArgon2Derive)(
 typedef struct MalArgon2Config {
     usize worker_count;
     usize queue_capacity;
-    /* Resource policy. Both ceilings are checked before anything is allocated
-     * and before the backend is entered; over either one the derivation is
+    /* Resource policy. Every ceiling is checked before anything is allocated
+     * and before the backend is entered; over any one of them the derivation is
      * refused with MAL_ARGON2_STATUS_POLICY. Zero selects the default. */
     u32 max_memory_kib;
     u32 max_tag_length;
+    /* Bounds the one cost parameter whose price is unbounded and whose work
+     * cannot be interrupted once started. */
+    u32 max_passes;
     MalArgon2Derive derive;
     void *derive_data;
 } MalArgon2Config;
 
 /*
- * Authentication-grade defaults. Node's documented ranges go to 2^32-1 for both
- * `memory` (4 TiB) and `tagLength` (4 GiB); honouring them literally means a
- * single call can exhaust the machine, and with `panic = "abort"` in the Rust
- * profile an allocator failure inside the derivation takes the process with it.
- * Node's own answer to that request is a SIGKILL.
+ * Authentication-grade defaults. Node's documented ranges go to 2^32-1 for
+ * `memory` (4 TiB), `tagLength` (4 GiB), and `passes`; honouring them literally
+ * means a single call can exhaust the machine, and with `panic = "abort"` in the
+ * Rust profile an allocator failure inside the derivation takes the process with
+ * it. Node's own answer to that request is a SIGKILL.
  *
  * So the host imposes a policy on top of Node's validation: the parameter
  * *range* stays exactly Node's, and a request inside that range but past these
@@ -96,10 +101,21 @@ typedef struct MalArgon2Config {
  * half a gigabyte with the default two workers. 16 MiB of tag is ~500 000x any
  * real credential tag.
  *
+ * `passes` needs the same treatment and for a sharper reason: its cost is linear
+ * and unbounded, and unlike an oversized `memory` it cannot fail fast — the
+ * derivation simply runs, uninterruptibly, holding a worker and blocking
+ * shutdown's join. 8 still leaves headroom over the largest common Argon2id
+ * recommendation (t=3), while pinning worst-case uninterruptible work at eight
+ * passes over 256 MiB per worker.
+ * The parameter is the one an application is least likely to choose for itself:
+ * the standard verify flow reads m/t/p back out of the stored credential record,
+ * so whoever can write that record picks the cost.
+ *
  * An embedder that genuinely needs more raises them through mal_argon2_configure.
  */
 #define MAL_ARGON2_DEFAULT_MAX_MEMORY_KIB 262144u
 #define MAL_ARGON2_DEFAULT_MAX_TAG_LENGTH 16777216u
+#define MAL_ARGON2_DEFAULT_MAX_PASSES 8u
 
 bool mal_argon2_init(MalArgon2 *argon2, MalHost *host);
 void mal_argon2_shutdown(MalArgon2 *argon2);

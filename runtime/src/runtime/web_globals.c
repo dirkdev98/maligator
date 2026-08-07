@@ -9,6 +9,7 @@
 #include "array_object.h"
 #include "base64.h"
 #include "builtin_data_view.h"
+#include "builtin_math.h"
 #include "checked_size.h"
 #include "date_object.h"
 #include "entropy.h"
@@ -851,14 +852,24 @@ static MalValue mal_web_crypto_get_random_values(
             "TypeMismatchError");
         return mal_value_new_undefined();
     }
-    u32 byte_len = mal_typed_array_object_byte_length(ta);
-    if (byte_len > 65536) {
+    // The shared validated path, as every other entropy sink uses: a detached
+    // buffer and a view left out of bounds by a resizable buffer both compute a
+    // zero byte length, so testing the length alone would silently "succeed"
+    // having written nothing and hand back an array the caller believes is
+    // random. Refuse instead.
+    MalBufferSourceSpan span;
+    if (mal_buffer_source_span(args[0], &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.getRandomValues: detached or out-of-bounds TypedArray");
+        return mal_value_new_undefined();
+    }
+    if (span.length > 65536) {
         mal_dom_exception_throw(vm, "getRandomValues: byteLength exceeds 65536",
             "QuotaExceededError");
         return mal_value_new_undefined();
     }
-    if (byte_len > 0 && ta->buffer != nullptr) {
-        if (mal_host_entropy((byte *) ta->buffer->data + ta->byte_offset, byte_len) != 0) {
+    if (span.length > 0) {
+        if (mal_host_entropy((byte *) span.data, span.length) != 0) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                 "crypto.getRandomValues: host entropy unavailable");
             return mal_value_new_undefined();
@@ -1193,7 +1204,11 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, global_this, (const byte *) "performance",
         mal_value_from_object(performance), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    // crypto (randomUUID / getRandomValues).
+    // crypto (randomUUID / getRandomValues). This program already links the
+    // entropy boundary, so Math.random's generator can be seeded from it rather
+    // than from process divergence. Math.random remains non-cryptographic; see
+    // builtin_math.h.
+    mal_builtin_math_set_seed_source(mal_host_entropy);
     MalObject *crypto = mal_intrinsic_new_object(vm);
     mal_intrinsic_define_method_n(vm, crypto, (const byte *) "randomUUID", 0,
         mal_web_crypto_random_uuid);

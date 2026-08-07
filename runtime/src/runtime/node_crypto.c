@@ -12,6 +12,7 @@
 #include "async_context.h"
 #include "base64.h"
 #include "builtin_data_view.h"
+#include "builtin_math.h"
 #include "function_object.h"
 #include "gc.h"
 #include "entropy.h"
@@ -541,6 +542,19 @@ static void crypto_throw_out_of_range(
  * Shared argument helpers.
  * --------------------------------------------------------------------------- */
 
+/* Overwrite key-derived bytes before their storage is released or reused. The
+ * volatile cursor keeps the stores from being optimized away as dead. */
+static void crypto_scrub(byte *bytes, usize length) {
+    if (bytes == nullptr) return;
+    volatile byte *cursor = (volatile byte *) bytes;
+    for (usize i = 0; i < length; i++) cursor[i] = 0;
+}
+
+static void crypto_scrub_free(byte *bytes, usize length) {
+    crypto_scrub(bytes, length);
+    free(bytes);
+}
+
 /* True when `str` is exactly the ASCII literal `ascii` of length `n`. Used for the
  * algorithm and output-encoding checks — both must match one fixed lowercase word,
  * so a code-unit-wise compare (no allocation, no ToLower) is enough. */
@@ -665,7 +679,8 @@ static MalValue mal_node_crypto_update(
             return mal_value_new_undefined();
         }
         mal_node_crypto_state_update(state, (const u8 *) bytes, length);
-        free(bytes);
+        // Absorbed, and this copy is ours. A passcode reaches HMAC through here.
+        crypto_scrub_free(bytes, length);
         return receiver;
     }
 
@@ -709,7 +724,15 @@ static MalValue mal_node_crypto_digest(
         mal_sha256_update(&outer, inner, sizeof(inner));
         mal_sha256_final(&outer, result);
         length = 32;
+        crypto_scrub((byte *) inner, sizeof(inner));
+        crypto_scrub((byte *) &outer, sizeof(outer));
     }
+    // `result` already holds the digest, so the absorbing state is spent. For
+    // HMAC it is the outer pad — the key XOR 0x5c, and so the key — which
+    // otherwise outlived the object in the freed backing store. Only the union
+    // is cleared: `kind` and `finalized` must survive to keep refusing a second
+    // digest() on this receiver.
+    crypto_scrub((byte *) &state->digest, sizeof(state->digest));
     MalValue encoding = argc > 0 ? args[0] : mal_value_new_undefined();
     // Node's ParseEncoding falls back to BUFFER here, so an unrecognized
     // encoding returns the raw digest instead of throwing. crypto.hash() below
@@ -783,6 +806,7 @@ static void mal_node_crypto_hmac_init_bytes(
         mal_sha256_init(&key_hash);
         mal_sha256_update(&key_hash, key, length);
         mal_sha256_final(&key_hash, key_block);
+        crypto_scrub((byte *) &key_hash, sizeof(key_hash));
     } else if (length > 0) {
         memcpy(key_block, key, length);
     }
@@ -795,6 +819,11 @@ static void mal_node_crypto_hmac_init_bytes(
         state->digest.hmac.outer_pad[i] = key_block[i] ^ 0x5c;
     }
     mal_sha256_update(&state->digest.hmac.inner, inner_pad, sizeof(inner_pad));
+    // The key block is the key (or its digest), and the inner pad is one XOR
+    // away from it. Both are absorbed by now; only the two pads inside `state`
+    // must survive, and those the caller scrubs when it finalizes.
+    crypto_scrub(key_block, sizeof(key_block));
+    crypto_scrub(inner_pad, sizeof(inner_pad));
 }
 
 static bool mal_node_crypto_hmac_init(
@@ -809,7 +838,8 @@ static bool mal_node_crypto_hmac_init(
             return false;
         }
         mal_node_crypto_hmac_init_bytes(state, (const u8 *) bytes, length);
-        free(bytes);
+        // This is the HMAC key, materialized by us from a JavaScript string.
+        crypto_scrub_free(bytes, length);
         return true;
     }
     MalBufferSourceSpan span;
@@ -826,8 +856,12 @@ static void mal_node_crypto_hmac_final(MalNodeCryptoState *state, u8 result[32])
     mal_sha256_update(&outer, state->digest.hmac.outer_pad, 64);
     mal_sha256_update(&outer, inner, sizeof(inner));
     mal_sha256_final(&outer, result);
+    crypto_scrub((byte *) inner, sizeof(inner));
+    crypto_scrub((byte *) &outer, sizeof(outer));
 }
 
+/* One-shot HMAC over a caller-owned state. `result` is filled before the
+ * keyed state is cleared, so the caller always gets its tag. */
 static void mal_node_crypto_hmac_bytes(
     const u8 *key, usize key_length, const u8 *first, usize first_length,
     const u8 *second, usize second_length, u8 result[32]) {
@@ -836,6 +870,7 @@ static void mal_node_crypto_hmac_bytes(
     if (first_length > 0) mal_node_crypto_state_update(&state, first, first_length);
     if (second_length > 0) mal_node_crypto_state_update(&state, second, second_length);
     mal_node_crypto_hmac_final(&state, result);
+    crypto_scrub((byte *) &state, sizeof(state));
 }
 
 static MalValue mal_node_crypto_create_hmac(
@@ -909,19 +944,6 @@ static bool crypto_random_size(MalVm *vm, MalValue value, usize *out) {
     }
     *out = (usize) trunc(size);
     return true;
-}
-
-/* Overwrite key-derived bytes before their storage is released. The volatile
- * cursor keeps the stores from being optimized away as dead. */
-static void crypto_scrub(byte *bytes, usize length) {
-    if (bytes == nullptr) return;
-    volatile byte *cursor = (volatile byte *) bytes;
-    for (usize i = 0; i < length; i++) cursor[i] = 0;
-}
-
-static void crypto_scrub_free(byte *bytes, usize length) {
-    crypto_scrub(bytes, length);
-    free(bytes);
 }
 
 /* Rejection sampling over whole bytes: draw the smallest byte count that covers
@@ -1508,13 +1530,13 @@ static MalValue mal_node_crypto_pbkdf2_sync(
     if (!mal_node_crypto_input_bytes(vm, args[1],
             "crypto.pbkdf2Sync: salt must be a string or ArrayBufferView",
             &salt, &owned_salt)) {
-        free(owned_password);
+        crypto_scrub_free(owned_password, password.length);
         return mal_value_new_undefined();
     }
     byte *output = key_length == 0 ? nullptr : malloc(key_length);
     if (key_length > 0 && output == nullptr) {
-        free(owned_password);
-        free(owned_salt);
+        crypto_scrub_free(owned_password, password.length);
+        crypto_scrub_free(owned_salt, salt.length);
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
@@ -1537,10 +1559,17 @@ static MalValue mal_node_crypto_pbkdf2_sync(
         usize offset = (block - 1) * 32;
         usize selected = key_length - offset;
         if (selected > sizeof(accumulated)) selected = sizeof(accumulated);
+        // The derived block reaches `output` first; only then are the working
+        // registers cleared. `value` is U_c and `accumulated` the folded block,
+        // and both are key material for the block just written.
         memcpy(output + offset, accumulated, selected);
+        crypto_scrub((byte *) value, sizeof(value));
+        crypto_scrub((byte *) accumulated, sizeof(accumulated));
     }
-    free(owned_password);
-    free(owned_salt);
+    // The password is materialized by us when it arrives as a string; a borrowed
+    // ArrayBufferView is the caller's and is left alone (`owned_*` is null).
+    crypto_scrub_free(owned_password, password.length);
+    crypto_scrub_free(owned_salt, salt.length);
     return mal_node_buffer_from_owned_bytes(vm, output, key_length);
 }
 
@@ -1634,11 +1663,12 @@ static MalValue mal_node_crypto_hash(
             return mal_value_new_undefined();
         }
         mal_sha256_update(&ctx, (const u8 *) bytes, byte_len);
-        free(bytes);
+        crypto_scrub_free(bytes, byte_len);
     }
 
     u8 digest[32];
     mal_sha256_final(&ctx, digest);
+    crypto_scrub((byte *) &ctx, sizeof(ctx));
 
     if (mal_value_is_undefined(encoding)) {
         char hex[64];
@@ -2077,6 +2107,10 @@ void mal_host_install_node_crypto(
     if (!crypto_roots_installed) {
         mal_gc_register_root_source(crypto_scan_roots, nullptr);
         mal_host_register_macrotask_drain(mal_node_crypto_drain, false);
+        // This program already links the entropy boundary, so Math.random's
+        // generator can be seeded from it rather than from process divergence.
+        // Math.random remains non-cryptographic; see builtin_math.h.
+        mal_builtin_math_set_seed_source(mal_host_entropy);
         crypto_roots_installed = true;
     }
     vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE] = roots[6];

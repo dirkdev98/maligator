@@ -8,6 +8,35 @@
  */
 void mal_builtin_math_install(MalVm *vm);
 
+/**
+ * Fill `buffer[0..length)` with unpredictable bytes. Returns 0 on success or a
+ * positive errno — the signature of `mal_host_entropy`, so a host registers its
+ * CSPRNG directly with no adapter.
+ */
+typedef int (*MalMathSeedSource)(void *buffer, usize length);
+
+/**
+ * Supply the seed source for `Math.random`'s generator.
+ *
+ * `Math.random` stays non-cryptographic whatever is registered here: the
+ * generator is xorshift64*, whose state two consecutive outputs reveal. What a
+ * source buys is that the stream cannot be predicted *without* observing it,
+ * which a clock-derived seed could not promise.
+ *
+ * This indirection exists for layering, not taste. The engine may not name the
+ * host entropy boundary: a direct call would pull entropy.o into the static
+ * link of every program that touches Math, including those that install no
+ * crypto surface at all. Instead the two translation units that already depend
+ * on that boundary (node:crypto and the web crypto global) register it, so the
+ * dependency stays exactly as wide as the program's own use of it.
+ *
+ * Safe to call from any thread, and order-independent with respect to
+ * installation: registering re-seeds, so the CSPRNG wins over the process
+ * divergence used at install time either way. Passing `nullptr` re-seeds from
+ * the fallback.
+ */
+void mal_builtin_math_set_seed_source(MalMathSeedSource source);
+
 typedef enum MalMathUnaryOp {
     MAL_MATH_UNARY_NONE,
     MAL_MATH_UNARY_ABS,
