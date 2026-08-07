@@ -31,6 +31,15 @@ typedef void (*MalHttpServerStreamHandler)(
     MalHttpConn *conn,
     const MalHttpCodecHead *head);
 
+/* Transport resource policy. Zero selects the secure default for each field.
+ * Configure immediately after start, before the event loop accepts connections. */
+typedef struct MalHttpServerLimits {
+    u32 headers_timeout_ms;
+    u32 request_timeout_ms;
+    u32 keep_alive_timeout_ms;
+    usize max_connections;
+} MalHttpServerLimits;
+
 /* Start listening on host:port (host numeric, null => 0.0.0.0; port 0 => ephemeral)
  * with the built-in fixed-response handler, and register the accept op on the
  * isolate's reactor. Transport smoke test only. Returns the server, or null on
@@ -45,6 +54,9 @@ MalHttpServer *mal_http_server_start_stream_handler(
     u16 port,
     MalHttpServerStreamHandler handler,
     void *data);
+
+bool mal_http_server_configure_limits(
+    MalHttpServer *server, const MalHttpServerLimits *limits);
 
 /* The bound port (host byte order). */
 u16 mal_http_server_port(const MalHttpServer *server);

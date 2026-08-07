@@ -25,6 +25,18 @@ int main(void) {
         fprintf(stderr, "listen failed\n");
         return 1;
     }
+    if (getenv("MAL_HTTP_TEST_LIMITS") != nullptr) {
+        MalHttpServerLimits limits = {
+            .headers_timeout_ms = 150,
+            .request_timeout_ms = 150,
+            .keep_alive_timeout_ms = 150,
+            .max_connections = 1,
+        };
+        if (!mal_http_server_configure_limits(server, &limits)) {
+            fprintf(stderr, "limit configuration failed\n");
+            return 1;
+        }
+    }
     printf("PORT %u\n", mal_http_server_port(server));
     fflush(stdout);
 

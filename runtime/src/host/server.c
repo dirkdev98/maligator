@@ -18,6 +18,17 @@
 #define MAL_HTTP_WRITE_TURN (64 * 1024)
 #define MAL_HTTP_WRITE_MAX (256 * 1024)
 #define MAL_HTTP_WRITE_IOV 16
+#define MAL_HTTP_DEFAULT_HEADERS_TIMEOUT_MS 60000u
+#define MAL_HTTP_DEFAULT_REQUEST_TIMEOUT_MS 300000u
+#define MAL_HTTP_DEFAULT_KEEP_ALIVE_TIMEOUT_MS 5000u
+#define MAL_HTTP_DEFAULT_MAX_CONNECTIONS 1024u
+
+typedef enum MalHttpTimeoutPhase {
+    MAL_HTTP_TIMEOUT_NONE,
+    MAL_HTTP_TIMEOUT_HEADERS,
+    MAL_HTTP_TIMEOUT_REQUEST,
+    MAL_HTTP_TIMEOUT_KEEP_ALIVE,
+} MalHttpTimeoutPhase;
 
 struct MalHttpServer {
     MalVm *vm;
@@ -27,6 +38,10 @@ struct MalHttpServer {
     void *handler_data;
     struct MalHttpConn *connections;
     usize connection_count;
+    i64 headers_timeout_ns;
+    i64 request_timeout_ns;
+    i64 keep_alive_timeout_ns;
+    usize max_connections;
     bool closing;
     MalHttpServerCloseCallback close_callback;
     void *close_data;
@@ -54,6 +69,8 @@ typedef struct MalHttpConn {
     int fd;
     MalOp read_op;
     MalOp write_op;
+    MalTimer timeout;
+    MalHttpTimeoutPhase timeout_phase;
 
     /* Transport staging only: bytes are handed to the codec and compacted out
      * every turn, so this never has to hold a whole message. Capped at
@@ -105,6 +122,46 @@ static bool conn_arm_read(MalHttpConn *c);
 static bool conn_arm_write(MalHttpConn *c);
 static void conn_process_stream(MalHttpConn *c);
 static void conn_stream_reset_request(MalHttpConn *c);
+static void conn_close(MalHttpConn *c);
+
+static i64 server_timeout_ns(u32 configured, u32 fallback) {
+    u32 milliseconds = configured == 0 ? fallback : configured;
+    return (i64) milliseconds * 1000000;
+}
+
+static void conn_cancel_timeout(MalHttpConn *c) {
+    mal_reactor_cancel_timer(conn_reactor(c), &c->timeout);
+    c->timeout_phase = MAL_HTTP_TIMEOUT_NONE;
+}
+
+static void conn_timeout_cb(void *data) {
+    MalHttpConn *c = data;
+    c->timeout_phase = MAL_HTTP_TIMEOUT_NONE;
+    conn_close(c);
+}
+
+static void conn_arm_timeout(
+    MalHttpConn *c, MalHttpTimeoutPhase phase, i64 duration_ns) {
+    mal_reactor_cancel_timer(conn_reactor(c), &c->timeout);
+    i64 now = mal_reactor_now_ns();
+    c->timeout.deadline_ns = duration_ns > INT64_MAX - now
+        ? INT64_MAX : now + duration_ns;
+    c->timeout.waker = (MalWaker) {.fn = conn_timeout_cb, .data = c};
+    c->timeout_phase = phase;
+    mal_reactor_add_timer(conn_reactor(c), &c->timeout);
+}
+
+static void conn_arm_headers_timeout(MalHttpConn *c) {
+    conn_arm_timeout(c, MAL_HTTP_TIMEOUT_HEADERS, c->server->headers_timeout_ns);
+}
+
+static void conn_arm_request_timeout(MalHttpConn *c) {
+    conn_arm_timeout(c, MAL_HTTP_TIMEOUT_REQUEST, c->server->request_timeout_ns);
+}
+
+static void conn_arm_keep_alive_timeout(MalHttpConn *c) {
+    conn_arm_timeout(c, MAL_HTTP_TIMEOUT_KEEP_ALIVE, c->server->keep_alive_timeout_ns);
+}
 
 static void server_finish_close(MalHttpServer *server) {
     MalHttpServerCloseCallback callback = server->close_callback;
@@ -121,6 +178,7 @@ static void conn_close(MalHttpConn *c) {
         return;
     }
     MalHttpServer *server = c->server;
+    conn_cancel_timeout(c);
     (void) mal_reactor_cancel_op(conn_reactor(c), &c->read_op);
     (void) mal_reactor_cancel_op(conn_reactor(c), &c->write_op);
     mal_net_close(c->fd);
@@ -457,10 +515,12 @@ void mal_http_conn_request_release(MalHttpConn *c) {
         return;
     }
     conn_stream_reset_request(c);
+    conn_arm_keep_alive_timeout(c);
     conn_process_stream(c);
 }
 
 static void conn_send_error(MalHttpConn *c, int status, const char *reason) {
+    conn_cancel_timeout(c);
     c->keep_alive = false;
     mal_http_conn_respond(c, status, reason, nullptr, 0, reason, strlen(reason));
 }
@@ -518,6 +578,7 @@ static bool conn_stream_handle_event(MalHttpConn *c) {
         c->request_discard = false;
         c->request_released = false;
         c->response_finished = false;
+        conn_arm_request_timeout(c);
         c->in_handler = true;
         c->server->stream_handler(
             c->server->handler_data, c->vm, c, head);
@@ -566,6 +627,7 @@ static bool conn_stream_handle_event(MalHttpConn *c) {
         }
         c->request_stream_open = false;
         c->request_message_complete = true;
+        conn_cancel_timeout(c);
         MalHttpRequestEndCallback callback = c->request_end_callback;
         void *data = c->request_data;
         c->request_data_callback = nullptr;
@@ -584,6 +646,7 @@ static bool conn_stream_handle_event(MalHttpConn *c) {
             return false;
         }
         conn_stream_reset_request(c);
+        conn_arm_keep_alive_timeout(c);
         return true;
     }
     return true;
@@ -680,6 +743,9 @@ static void conn_read_cb(void *data) {
         ssize_t n = read(c->fd, c->rbuf + c->rlen, available);
         if (n > 0) {
             usize count = (usize) n;
+            if (c->timeout_phase == MAL_HTTP_TIMEOUT_KEEP_ALIVE) {
+                conn_arm_headers_timeout(c);
+            }
             c->rlen += count;
             turn += count;
             continue;
@@ -746,6 +812,7 @@ static void conn_write_cb(void *data) {
             if (c->request_message_complete) {
                 if (c->request_released) {
                     conn_stream_reset_request(c);
+                    conn_arm_keep_alive_timeout(c);
                     conn_process_stream(c);
                 }
                 return;
@@ -832,6 +899,10 @@ static void server_accept_cb(void *data) {
         if (fd < 0) {
             break;
         }
+        if (server->connection_count >= server->max_connections) {
+            mal_net_close(fd);
+            continue;
+        }
         MalHttpConn *c = calloc(1, sizeof(MalHttpConn));
         if (c == nullptr) {
             mal_net_close(fd);
@@ -848,6 +919,7 @@ static void server_accept_cb(void *data) {
         c->rcap = MAL_HTTP_RBUF_INIT;
         c->rlen = 0;
         c->server = server;
+        c->timeout.heap_index = -1;
         if (!mal_http_codec_init(&c->codec, HTTP_REQUEST)) {
             mal_net_close(fd);
             free(c->rbuf);
@@ -858,6 +930,7 @@ static void server_accept_cb(void *data) {
         c->next = server->connections;
         server->connections = c;
         server->connection_count++;
+        conn_arm_headers_timeout(c);
         if (!conn_arm_read(c)) {
             conn_close(c);
         }
@@ -890,6 +963,11 @@ static MalHttpServer *server_start(
     server->listen_fd = fd;
     server->stream_handler = stream_handler;
     server->handler_data = handler_data;
+    server->headers_timeout_ns = server_timeout_ns(0, MAL_HTTP_DEFAULT_HEADERS_TIMEOUT_MS);
+    server->request_timeout_ns = server_timeout_ns(0, MAL_HTTP_DEFAULT_REQUEST_TIMEOUT_MS);
+    server->keep_alive_timeout_ns = server_timeout_ns(
+        0, MAL_HTTP_DEFAULT_KEEP_ALIVE_TIMEOUT_MS);
+    server->max_connections = MAL_HTTP_DEFAULT_MAX_CONNECTIONS;
     server->accept_op.fd = fd;
     server->accept_op.interest = MAL_IO_READ;
     server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
@@ -927,6 +1005,23 @@ MalHttpServer *mal_http_server_start_stream_handler(
     void *data) {
     if (handler == nullptr) return nullptr;
     return server_start(vm, host, port, handler, data);
+}
+
+bool mal_http_server_configure_limits(
+    MalHttpServer *server, const MalHttpServerLimits *limits) {
+    if (server == nullptr || limits == nullptr || server->closing
+        || server->connection_count != 0) {
+        return false;
+    }
+    server->headers_timeout_ns = server_timeout_ns(
+        limits->headers_timeout_ms, MAL_HTTP_DEFAULT_HEADERS_TIMEOUT_MS);
+    server->request_timeout_ns = server_timeout_ns(
+        limits->request_timeout_ms, MAL_HTTP_DEFAULT_REQUEST_TIMEOUT_MS);
+    server->keep_alive_timeout_ns = server_timeout_ns(
+        limits->keep_alive_timeout_ms, MAL_HTTP_DEFAULT_KEEP_ALIVE_TIMEOUT_MS);
+    server->max_connections = limits->max_connections == 0
+        ? MAL_HTTP_DEFAULT_MAX_CONNECTIONS : limits->max_connections;
+    return true;
 }
 
 u16 mal_http_server_port(const MalHttpServer *server) {
