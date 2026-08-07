@@ -956,7 +956,7 @@ void mal_host_install_node_net(
     vm->intrinsics[MAL_INTRINSIC_NODE_NET_MODULE] = roots[0];
     if (!net_roots_installed) {
         mal_gc_register_root_source(net_scan_roots, nullptr);
-        mal_host_register_macrotask_drain(mal_node_net_drain);
+        mal_host_register_macrotask_drain(mal_node_net_drain, false);
         net_roots_installed = true;
     }
     mal_node_module_publish(vm, slots, count, roots[0]);

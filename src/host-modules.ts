@@ -181,16 +181,33 @@ const BUFFER: HostModuleSpec = {
 
 const PROCESS: HostModuleSpec = {
 	id: "node:process",
+	// `process` inherits from EventEmitter.prototype, so the listener methods are
+	// bindable named exports even though they are not own properties of it.
 	named: [
+		"addListener",
 		"arch",
 		"argv",
 		"cwd",
+		"emit",
 		"emitWarning",
 		"env",
+		"eventNames",
 		"exit",
+		"getMaxListeners",
 		"kill",
+		"listenerCount",
+		"listeners",
+		"off",
+		"on",
+		"once",
 		"pid",
 		"platform",
+		"prependListener",
+		"prependOnceListener",
+		"rawListeners",
+		"removeAllListeners",
+		"removeListener",
+		"setMaxListeners",
 		"stderr",
 		"stdout",
 	],

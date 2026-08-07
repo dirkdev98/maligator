@@ -13,14 +13,28 @@
 #define MAL_HOST_MAX_MACROTASK_DRAINS 8
 static MalHostMacrotaskDrain mal_host_macrotask_drains[MAL_HOST_MAX_MACROTASK_DRAINS];
 static i32 mal_host_macrotask_drain_count;
+static MalHostIdleNotify mal_host_idle_notify;
 
-void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain) {
+void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain, bool priority) {
     for (i32 i = 0; i < mal_host_macrotask_drain_count; i++) {
         if (mal_host_macrotask_drains[i] == drain) return;
     }
-    if (mal_host_macrotask_drain_count < MAL_HOST_MAX_MACROTASK_DRAINS) {
-        mal_host_macrotask_drains[mal_host_macrotask_drain_count++] = drain;
+    if (mal_host_macrotask_drain_count >= MAL_HOST_MAX_MACROTASK_DRAINS) {
+        return;
     }
+    if (priority) {
+        for (i32 i = mal_host_macrotask_drain_count; i > 0; i--) {
+            mal_host_macrotask_drains[i] = mal_host_macrotask_drains[i - 1];
+        }
+        mal_host_macrotask_drains[0] = drain;
+        mal_host_macrotask_drain_count++;
+        return;
+    }
+    mal_host_macrotask_drains[mal_host_macrotask_drain_count++] = drain;
+}
+
+void mal_host_register_idle_notify(MalHostIdleNotify notify) {
+    mal_host_idle_notify = notify;
 }
 
 static bool mal_host_run_runtime_macrotask(MalVm *vm) {
@@ -202,23 +216,39 @@ static bool mal_host_run_one_ready(MalVm *vm) {
 }
 
 void mal_host_run_event_loop(MalVm *vm) {
+    // Tracks whether the loop did anything since the last idle notification, so a
+    // `beforeExit` listener that schedules new work is notified again next time
+    // the loop drains, while one that schedules nothing does not spin forever.
+    // Seeded true so the first drain always notifies.
+    bool progressed = true;
     for (;;) {
         // Microtasks first (promise jobs), then one macrotask, then repeat.
         mal_vm_drain_microtasks(vm);
         if (mal_host_run_runtime_macrotask(vm)) {
+            progressed = true;
             if (mal_gc_poll) mal_gc_safepoint(vm);
             continue;
         }
         if (mal_host_run_one_ready(vm)) {
+            progressed = true;
             if (mal_gc_poll) mal_gc_safepoint(vm);
             continue;
         }
         // No callback is ready. If the reactor still holds timers/fd ops, block
-        // until the next fires; otherwise the isolate is idle -> done.
-        if (!mal_reactor_has_pending(&mal_host(vm)->reactor)) {
+        // until the next fires; otherwise the isolate is idle.
+        if (mal_reactor_has_pending(&mal_host(vm)->reactor)) {
+            progressed = true;
+            mal_reactor_wait(&mal_host(vm)->reactor);
+            continue;
+        }
+        if (!progressed || mal_host_idle_notify == nullptr) {
             break;
         }
-        mal_reactor_wait(&mal_host(vm)->reactor);
+        progressed = false;
+        if (!mal_host_idle_notify(vm)) {
+            break;
+        }
+        if (mal_gc_poll) mal_gc_safepoint(vm);
     }
 }
 

@@ -20,6 +20,9 @@
  *   - exit(code), plus pid/kill for child-signal propagation.
  *   - platform/arch metadata used by native toolchain diagnostics.
  *   - stdout/stderr stream-like objects with fd, isTTY, and write().
+ *   - the whole EventEmitter surface, inherited from %EventEmitter.prototype%
+ *     (`process instanceof EventEmitter`), carrying `beforeExit` and the
+ *     SIGINT / SIGTERM signal events.
  *
  * The same cached object is also the default `node:process` / bare `process`
  * module export. `launch` carries the OS command line (argc/argv) the driver's

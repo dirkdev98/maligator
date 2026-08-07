@@ -15,10 +15,13 @@
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "host.h"
 #include "intrinsics.h"
+#include "node_events.h"
 #include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
+#include "posix_signal.h"
 #include "property_store.h"
 #include "table.h"
 #include "utf8.h"
@@ -27,6 +30,7 @@
 #include "vm.h"
 #include "vm_ops.h"
 #include "web_globals.h"
+#include "web_host_timer.h"
 
 // The process environment. On Darwin the real environ of an executable is reached
 // through _NSGetEnviron(); the bare `extern char **environ` only resolves in a
@@ -331,6 +335,113 @@ static MalValue mal_process_emit_warning(
     return mal_value_new_undefined();
 }
 
+/* --- EventEmitter surface: beforeExit + POSIX signals ---------------------- */
+
+/*
+ * `process` inherits from %EventEmitter.prototype%, so on/once/off and friends
+ * are the node:events implementations rather than a second copy. Two of its
+ * events are host-driven:
+ *
+ *   beforeExit — emitted from the event loop's idle notification, so it fires at
+ *     genuine idle and again whenever a listener schedules more work. A direct
+ *     `process.exit()` calls exit(3) and a fatal signal terminates the process,
+ *     and neither unwinds through the loop, so neither emits it.
+ *
+ *   SIGINT / SIGTERM — the POSIX handler only flags and wakes the reactor
+ *     (posix_signal.h); the listeners run here, on the main VM thread, as an
+ *     ordinary macrotask. Dispositions follow the listener count, so removing
+ *     the last listener restores the default terminate-on-signal action.
+ *
+ * As in Node, a signal listener does not by itself keep the loop alive: the
+ * disposition is not reactor work, so a program whose only remaining interest is
+ * a signal still exits.
+ */
+
+static bool mal_process_hooks_registered;
+
+/* The installed process object. Read from the intrinsic rather than globalThis
+ * so a program that reassigns the `process` global keeps its emitter identity. */
+static MalValue mal_process_object(MalVm *vm) {
+    return vm->intrinsics[MAL_INTRINSIC_NODE_PROCESS_MODULE];
+}
+
+/* Call the JS-visible `emit`, so a subclassed or patched emit still sees the
+ * host-originated events. */
+static void mal_process_emit(MalVm *vm, const char *event, MalValue argument) {
+    MalValue roots[] = {mal_process_object(vm), mal_value_new_undefined(),
+                        mal_value_new_undefined(), argument};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_object(roots[0])) {
+        roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) event));
+        if (mal_vm_get_property(
+                vm, roots[0], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_EMIT), &roots[1])
+            && mal_value_is_callable(roots[1])) {
+            mal_vm_call_value(vm, roots[1], roots[0], roots + 2, 2);
+        }
+    }
+    mal_gc_unroot(&root);
+}
+
+static void mal_process_sync_signal(MalVm *vm, MalHostSignal signal) {
+    MalHost *host = mal_host(vm);
+    if (host == nullptr) {
+        return;
+    }
+    u32 listeners = mal_node_events_listener_count(
+        vm, mal_process_object(vm), mal_host_signal_name(signal));
+    if (listeners > 0) {
+        (void) mal_host_signal_listen(&host->reactor, signal);
+    } else {
+        mal_host_signal_unlisten(signal);
+    }
+}
+
+/* node:events change hook: re-derive both dispositions from the current listener
+ * counts. Re-deriving rather than tracking transitions is what makes
+ * removeAllListeners() — which clears every event at once — come out right. */
+static void mal_process_listeners_changed(MalVm *vm, MalValue receiver) {
+    MalValue process = mal_process_object(vm);
+    if (!mal_value_is_object(process) || !mal_value_is_object(receiver)
+        || mal_value_to_object(receiver) != mal_value_to_object(process)) {
+        return;
+    }
+    for (int i = 0; i < MAL_HOST_SIGNAL_COUNT; i++) {
+        mal_process_sync_signal(vm, (MalHostSignal) i);
+    }
+}
+
+/* Macrotask source: deliver at most one flagged signal per turn so microtasks
+ * drain between deliveries, like any other macrotask. */
+static bool mal_process_drain_signals(MalVm *vm) {
+    for (int i = 0; i < MAL_HOST_SIGNAL_COUNT; i++) {
+        MalHostSignal signal = (MalHostSignal) i;
+        if (!mal_host_signal_take(signal)) {
+            continue;
+        }
+        const char *name = mal_host_signal_name(signal);
+        MalValue argument =
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) name));
+        MalRootSpan root;
+        mal_gc_root(&root, &argument, 1);
+        mal_process_emit(vm, name, argument);
+        mal_gc_unroot(&root);
+        return true;
+    }
+    return false;
+}
+
+static bool mal_process_emit_before_exit(MalVm *vm) {
+    // An uncaught top-level exception is a fatal error, not a clean drain.
+    if (vm->completion.kind == MAL_COMPLETION_THROW
+        || mal_node_events_listener_count(vm, mal_process_object(vm), "beforeExit") == 0) {
+        return false;
+    }
+    // Node passes the pending exit code; this slice has no settable exitCode.
+    mal_process_emit(vm, "beforeExit", mal_value_from_i32(0));
+    return true;
+}
+
 static MalValue mal_process_build_stdio(MalVm *vm, int fd) {
     const MalPropertyFlags flags =
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
@@ -355,11 +466,27 @@ void mal_host_install_process(
         mal_node_module_publish(vm, slots, count, cached);
         return;
     }
-    MalValue process_val = mal_value_from_object(mal_intrinsic_new_object(vm));
+    // Materialize the realm's EventEmitter first so `process` can inherit from it
+    // whichever of the two installers the program's manifest reaches first.
+    mal_host_install_node_events(vm, nullptr, 0, launch);
+    MalValue emitter_prototype = vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE];
+    MalObject *process_prototype = mal_value_is_object(emitter_prototype)
+        ? mal_value_to_object(emitter_prototype)
+        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+
+    MalValue process_val =
+        mal_value_from_object(mal_object_new(&vm->heap, process_prototype));
     MalRootSpan root;
     mal_gc_root(&root, &process_val, 1);
     MalObject *process = mal_value_to_object(process_val);
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+
+    if (!mal_process_hooks_registered) {
+        mal_node_events_set_change_hook(mal_process_listeners_changed);
+        mal_host_register_macrotask_drain(mal_process_drain_signals, true);
+        mal_host_register_idle_notify(mal_process_emit_before_exit);
+        mal_process_hooks_registered = true;
+    }
 
 #if !MAL_WEB_PLATFORM
     mal_text_encoding_globals_install(vm, global_this);

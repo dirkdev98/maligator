@@ -8,6 +8,7 @@ typedef struct MalVm MalVm;
 typedef struct MalObject MalObject;
 typedef struct MalAsyncContext MalAsyncContext;
 typedef bool (*MalHostMacrotaskDrain)(MalVm *vm);
+typedef bool (*MalHostIdleNotify)(MalVm *vm);
 
 /*
  * Host timers (the JS-visible surface of the reactor).
@@ -59,8 +60,17 @@ void mal_host_clear_timeout(MalVm *vm, i64 id);
 void mal_host_run_event_loop(MalVm *vm);
 
 /* Register an optional runtime macrotask source without making the host loop
- * reference that runtime directly. Duplicate function pointers are ignored. */
-void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain);
+ * reference that runtime directly. Duplicate function pointers are ignored.
+ * A `priority` source is polled before the ordinary ones, so a host interrupt
+ * (a delivered POSIX signal) cannot be starved by a setImmediate chain. */
+void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain, bool priority);
+
+/* Register the runtime's "the loop just went idle" notification (node:process's
+ * `beforeExit`). It runs only when nothing else can make progress, and returns
+ * true when it actually notified someone; the loop then gives the notified code
+ * one more chance to schedule work before exiting. Same indirection rationale as
+ * the macrotask drains: the host loop must not name a runtime module. */
+void mal_host_register_idle_notify(MalHostIdleNotify notify);
 
 /* Free all remaining timer tasks (teardown). */
 void mal_host_timers_free(MalVm *vm);

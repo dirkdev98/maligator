@@ -4732,7 +4732,7 @@ void mal_host_install_node_http(
         http_object_property_count(mal_value_to_object(roots[2]));
     if (!http_roots_installed) {
         mal_gc_register_root_source(http_scan_roots, nullptr);
-        mal_host_register_macrotask_drain(mal_node_http_drain);
+        mal_host_register_macrotask_drain(mal_node_http_drain, false);
         http_roots_installed = true;
     }
     http_install_exports(vm, slots, count, roots[0]);

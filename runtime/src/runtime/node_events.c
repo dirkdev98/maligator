@@ -22,8 +22,20 @@
 
 #define EE_WEC (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
+static MalNodeEventsChangeHook ee_change_hook;
+
+void mal_node_events_set_change_hook(MalNodeEventsChangeHook hook) {
+    ee_change_hook = hook;
+}
+
 static MalKey ee_name_key(MalVm *vm, const char *name) {
     return mal_intrinsic_string_key(vm, (const byte *) name);
+}
+
+static void ee_notify_changed(MalVm *vm, MalValue receiver) {
+    if (ee_change_hook != nullptr) {
+        ee_change_hook(vm, receiver);
+    }
 }
 
 static MalKey ee_hot_key(MalVm *vm, MalHotIntrinsicKey key) {
@@ -303,6 +315,7 @@ static MalValue ee_add(
         MalValue next = ee_copy_listener_array(vm, old, -1, roots[3], prepend);
         ee_store_listener(vm, roots[0], events, event, next, false);
     }
+    ee_notify_changed(vm, roots[0]);
     mal_gc_unroot(&root);
     return receiver;
 }
@@ -348,6 +361,9 @@ static bool ee_remove_one(
             ee_copy_listener_array(vm, old, found, mal_value_new_empty(), false);
         ee_store_listener(vm, receiver, events, event, next, false);
     }
+    // Before the meta event: a `removeListener` handler must observe the state
+    // the removal already produced, including any host registration it drives.
+    ee_notify_changed(vm, receiver);
 
     if (emit_meta && ee_has_listeners(vm, receiver, "removeListener")) {
         MalValue meta_args[] = {ee_key_value(vm, event), roots[1]};
@@ -564,6 +580,7 @@ static MalValue ee_remove_all_listeners(
         mal_gc_root(&root, &fresh, 1);
         mal_object_set(mal_value_to_object(receiver), ee_hot_key(vm, MAL_HOT_KEY_EVENTS), fresh);
         ee_set_event_count(vm, receiver, 0);
+        ee_notify_changed(vm, receiver);
         mal_gc_unroot(&root);
         return receiver;
     }
@@ -732,6 +749,19 @@ static MalValue ee_get_max_listeners(
         mal_object_get_own(object, ee_name_key(vm, "_maxListeners"));
     return lookup.present && mal_ops_is_number(lookup.desc.value) ? lookup.desc.value
                                                                   : mal_value_from_i32(10);
+}
+
+u32 mal_node_events_listener_count(MalVm *vm, MalValue receiver, const char *event) {
+    if (!mal_value_is_object(receiver)) {
+        return 0;
+    }
+    MalPropertyLookup lookup = mal_object_get_own(
+        mal_value_to_object(receiver), ee_hot_key(vm, MAL_HOT_KEY_EVENTS));
+    if (!lookup.present || !mal_value_is_object(lookup.desc.value)) {
+        return 0;
+    }
+    return ee_listener_length(ee_listener_value(
+        mal_value_to_object(lookup.desc.value), ee_name_key(vm, event)));
 }
 
 typedef struct MalNodeEventsMethod {

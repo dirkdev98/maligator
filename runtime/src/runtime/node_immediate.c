@@ -135,7 +135,7 @@ static MalValue node_clear_immediate(
 void mal_node_immediates_install(MalVm *vm, MalObject *global_this) {
     if (!node_immediate_roots_installed) {
         mal_gc_register_root_source(node_immediate_scan_roots, nullptr);
-        mal_host_register_macrotask_drain(node_immediate_drain);
+        mal_host_register_macrotask_drain(node_immediate_drain, false);
         node_immediate_roots_installed = true;
     }
     mal_intrinsic_define_method_n(vm, global_this, "setImmediate", 1, node_set_immediate);

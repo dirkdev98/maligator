@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "http_client.h"
+#include "posix_signal.h"
 #include "tcp.h"
 
 static bool mal_host_wake(void *data) {
@@ -50,6 +51,9 @@ void mal_host_free(MalHost *host) {
         return;
     }
     mal_host_shutdown(host);
+    // Before the reactor goes: a POSIX handler still bridging into it would wake
+    // freed memory on the next Ctrl-C.
+    mal_host_signal_reset();
     mal_reactor_set_waker(&host->reactor, (MalWaker) {0});
     mal_dns_free(&host->dns);
     mal_host_posted_tasks_free(&host->posted_tasks);
