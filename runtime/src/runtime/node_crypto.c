@@ -2,11 +2,14 @@
 
 #include <limits.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "ascii.h"
+#include "argon2.h"
 #include "array_buffer_object.h"
+#include "async_context.h"
 #include "base64.h"
 #include "builtin_data_view.h"
 #include "function_object.h"
@@ -15,6 +18,7 @@
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "hex.h"
+#include "host.h"
 #include "intrinsics.h"
 #include "node_buffer.h"
 #include "node_module.h"
@@ -23,10 +27,14 @@
 #include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
+#include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
+#include "web_host_timer.h"
 
 #if MAL_NODE
+
+#include "mal_argon2.h"
 
 /* ---------------------------------------------------------------------------
  * SHA-256 (FIPS 180-4). Self-contained: no OpenSSL, no Rust FFI. Operates on a
@@ -344,7 +352,193 @@ static void mal_md5_final(MalMd5 *ctx, u8 out[16]) {
 }
 
 /* ---------------------------------------------------------------------------
- * The `hash` export.
+ * Node-shaped errors.
+ *
+ * These messages are compared verbatim against the supported Node release by
+ * tests/local/node-crypto-differential.mts, so the wording, punctuation, and
+ * the "Received ..." clause are all load-bearing.
+ * --------------------------------------------------------------------------- */
+
+#define CRYPTO_MESSAGE_CAPACITY 512
+
+/* The byte-source list Node names in its Argon2 / hash type errors. */
+#define CRYPTO_BYTE_SOURCE_TEXT \
+    "of type string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView"
+
+static void crypto_throw(MalVm *vm, MalIntrinsic prototype, const char *message) {
+    mal_vm_throw_error(vm, prototype, (const byte *) message);
+}
+
+static void crypto_copy_string(const MalString *string, char *out, usize capacity) {
+    usize length = 0;
+    byte *utf8 = mal_string_to_utf8((MalString *) string, &length);
+    if (utf8 == nullptr) {
+        out[0] = '\0';
+        return;
+    }
+    if (length >= capacity) length = capacity - 1;
+    memcpy(out, utf8, length);
+    out[length] = '\0';
+    free(utf8);
+}
+
+/* Node renders `${value}` for numbers, i.e. Number::toString. */
+static void crypto_number_text(MalVm *vm, MalValue value, char *out, usize capacity) {
+    crypto_copy_string(mal_ops_to_string(&vm->heap, value), out, capacity);
+}
+
+/* ERR_OUT_OF_RANGE groups an integer received value in threes, but only above
+ * 2^32 (`281_474_976_710_656`, yet a plain `2147483648`). */
+static void crypto_received_number(MalVm *vm, MalValue value, char *out, usize capacity) {
+    char plain[128];
+    crypto_number_text(vm, value, plain, sizeof(plain));
+    if (!mal_ops_is_number(value)) {
+        snprintf(out, capacity, "%s", plain);
+        return;
+    }
+    f64 raw = mal_ops_number_as_f64(value);
+    if (!isfinite(raw) || trunc(raw) != raw
+        || (raw <= 4294967296.0 && raw >= -4294967296.0)) {
+        snprintf(out, capacity, "%s", plain);
+        return;
+    }
+    // Group the digits (not the sign) in threes from the right.
+    usize start = plain[0] == '-' ? 1 : 0;
+    usize digits = strlen(plain) - start;
+    usize written = 0;
+    for (usize i = 0; i < start && written + 1 < capacity; i++) out[written++] = plain[i];
+    for (usize i = 0; i < digits && written + 2 < capacity; i++) {
+        if (i > 0 && (digits - i) % 3 == 0) out[written++] = '_';
+        out[written++] = plain[start + i];
+    }
+    out[written] = '\0';
+}
+
+static bool crypto_constructor_name(MalVm *vm, MalValue value, char *out, usize capacity) {
+    MalValue constructor;
+    MalKey constructor_key = mal_key_from_value(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "constructor")));
+    if (!mal_vm_get_property(vm, value, constructor_key, &constructor)) {
+        vm->completion.kind = MAL_COMPLETION_NORMAL;
+        return false;
+    }
+    if (!mal_value_is_object(constructor)) return false;
+    MalValue name;
+    MalKey name_key = mal_key_from_value(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "name")));
+    if (!mal_vm_get_property(vm, constructor, name_key, &name)) {
+        vm->completion.kind = MAL_COMPLETION_NORMAL;
+        return false;
+    }
+    if (!mal_value_is_string(name) || mal_string_length(mal_value_to_string(name)) == 0) {
+        return false;
+    }
+    crypto_copy_string(mal_value_to_string(name), out, capacity);
+    return true;
+}
+
+/* The clause Node appends after "Received ". Mirrors lib/internal/errors.js:
+ * nullish values print bare, objects print their constructor, and every other
+ * primitive prints `type <typeof> (<inspected>)` with the inspected form
+ * truncated at 25 characters. */
+static void crypto_received(MalVm *vm, MalValue value, char *out, usize capacity) {
+    if (mal_value_is_null(value)) {
+        snprintf(out, capacity, "null");
+        return;
+    }
+    if (mal_value_is_undefined(value)) {
+        snprintf(out, capacity, "undefined");
+        return;
+    }
+    if (mal_value_is_callable(value)) {
+        char name[128] = {0};
+        MalValue function_name;
+        MalKey name_key = mal_key_from_value(
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "name")));
+        if (mal_vm_get_property(vm, value, name_key, &function_name)
+            && mal_value_is_string(function_name)
+            && mal_string_length(mal_value_to_string(function_name)) > 0) {
+            crypto_copy_string(mal_value_to_string(function_name), name, sizeof(name));
+            snprintf(out, capacity, "function %s", name);
+            return;
+        }
+        vm->completion.kind = MAL_COMPLETION_NORMAL;
+    }
+    if (mal_value_is_object(value)) {
+        char name[128] = {0};
+        if (crypto_constructor_name(vm, value, name, sizeof(name))) {
+            snprintf(out, capacity, "an instance of %s", name);
+        } else {
+            snprintf(out, capacity, "[Object: null prototype] {}");
+        }
+        return;
+    }
+    char inspected[64] = {0};
+    const char *type_name = "object";
+    if (mal_value_is_boolean(value)) {
+        type_name = "boolean";
+        snprintf(inspected, sizeof(inspected), "%s",
+            mal_value_is_truthy(value) ? "true" : "false");
+    } else if (mal_value_is_string(value)) {
+        type_name = "string";
+        char text[64] = {0};
+        crypto_copy_string(mal_value_to_string(value), text, sizeof(text));
+        snprintf(inspected, sizeof(inspected), "'%s'", text);
+    } else if (mal_value_is_symbol(value)) {
+        type_name = "symbol";
+        snprintf(inspected, sizeof(inspected), "Symbol()");
+    } else if (mal_value_is_bigint(value)) {
+        type_name = "bigint";
+        char text[48] = {0};
+        crypto_copy_string(mal_ops_to_string(&vm->heap, value), text, sizeof(text));
+        snprintf(inspected, sizeof(inspected), "%sn", text);
+    } else {
+        type_name = "number";
+        crypto_number_text(vm, value, inspected, sizeof(inspected));
+    }
+    if (strlen(inspected) > 25) {
+        inspected[25] = '\0';
+        snprintf(out, capacity, "type %s (%s...)", type_name, inspected);
+        return;
+    }
+    snprintf(out, capacity, "type %s (%s)", type_name, inspected);
+}
+
+/* ERR_INVALID_ARG_TYPE for a positional argument. */
+static void crypto_throw_arg_type(
+    MalVm *vm, const char *name, const char *expected, MalValue actual) {
+    char received[CRYPTO_MESSAGE_CAPACITY / 2];
+    crypto_received(vm, actual, received, sizeof(received));
+    char message[CRYPTO_MESSAGE_CAPACITY];
+    snprintf(message, sizeof(message), "The \"%s\" argument must be %s. Received %s",
+        name, expected, received);
+    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+}
+
+/* ERR_INVALID_ARG_TYPE for an option-bag property. */
+static void crypto_throw_property_type(
+    MalVm *vm, const char *name, const char *expected, MalValue actual) {
+    char received[CRYPTO_MESSAGE_CAPACITY / 2];
+    crypto_received(vm, actual, received, sizeof(received));
+    char message[CRYPTO_MESSAGE_CAPACITY];
+    snprintf(message, sizeof(message), "The \"%s\" property must be %s. Received %s",
+        name, expected, received);
+    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+}
+
+static void crypto_throw_out_of_range(
+    MalVm *vm, const char *name, const char *range, MalValue actual) {
+    char received[CRYPTO_MESSAGE_CAPACITY / 2];
+    crypto_received_number(vm, actual, received, sizeof(received));
+    char message[CRYPTO_MESSAGE_CAPACITY];
+    snprintf(message, sizeof(message),
+        "The value of \"%s\" is out of range. It must be %s. Received %s",
+        name, range, received);
+    crypto_throw(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message);
+}
+
+/* ---------------------------------------------------------------------------
+ * Shared argument helpers.
  * --------------------------------------------------------------------------- */
 
 /* True when `str` is exactly the ASCII literal `ascii` of length `n`. Used for the
@@ -354,20 +548,35 @@ static bool mal_node_crypto_str_is(const MalString *str, const char *ascii, usiz
     return strlen(ascii) == n && mal_string_equals_ascii(str, ascii);
 }
 
-static bool mal_node_crypto_str_is_utf8(const MalString *str) {
-    return mal_string_equals_ascii_ci(str, "utf8") ||
-        mal_string_equals_ascii_ci(str, "utf-8");
-}
-
 // Validate the complete view before applying its byte offset. In particular,
 // detached stores have null data, so even adding a zero offset would be undefined.
 static bool mal_node_crypto_byte_span(MalVm *vm, MalValue value, MalBufferSourceSpan *out) {
     if (mal_buffer_source_span(value, out) == MAL_BUFFER_SOURCE_SPAN_OK) {
         return true;
     }
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-        (const byte *) "crypto.hash: detached or out-of-bounds byte source");
+    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "crypto: detached or out-of-bounds byte source");
     return false;
+}
+
+static bool crypto_is_byte_source(MalValue value) {
+    return mal_value_is_typed_array_object(value) || mal_value_is_data_view_object(value)
+        || mal_value_is_array_buffer_object(value);
+}
+
+/* Node accepts an ArrayBuffer wherever it accepts a view for these APIs
+ * (timingSafeEqual, the HMAC key, every Argon2 byte input). */
+static bool crypto_byte_source_span(
+    MalVm *vm, MalValue value, const char *name, MalBufferSourceSpan *out) {
+    if (!crypto_is_byte_source(value)) {
+        char message[CRYPTO_MESSAGE_CAPACITY];
+        snprintf(message, sizeof(message),
+            "The \"%s\" argument must be an instance of ArrayBuffer, Buffer, "
+            "TypedArray, or DataView.", name);
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+        return false;
+    }
+    return mal_node_crypto_byte_span(vm, value, out);
 }
 
 typedef enum {
@@ -391,17 +600,6 @@ typedef struct {
     } digest;
 } MalNodeCryptoState;
 
-static bool mal_node_crypto_array_buffer_view_span(
-    MalVm *vm, MalValue value, MalBufferSourceSpan *out
-) {
-    if (!mal_value_is_typed_array_object(value) && !mal_value_is_data_view_object(value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto: value must be an ArrayBufferView");
-        return false;
-    }
-    return mal_node_crypto_byte_span(vm, value, out);
-}
-
 static MalKey mal_node_crypto_state_key(MalValue callee) {
     MalValue marker = mal_native_function_object_get_slot(
         mal_value_to_native_function_object(callee), 0);
@@ -421,15 +619,14 @@ static MalNodeCryptoState *mal_node_crypto_read_state(
             }
         }
     }
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-        (const byte *) "crypto digest method called on incompatible receiver");
+    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "crypto digest method called on incompatible receiver");
     return nullptr;
 }
 
 static bool mal_node_crypto_require_active(MalVm *vm, MalNodeCryptoState *state) {
     if (!state->finalized) return true;
-    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-        (const byte *) "Digest already called");
+    crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Digest already called");
     return false;
 }
 
@@ -458,17 +655,11 @@ static MalValue mal_node_crypto_update(
     }
     MalValue data = argc > 0 ? args[0] : mal_value_new_undefined();
     if (mal_value_is_string(data)) {
-        if (argc > 1 && !mal_value_is_undefined(args[1])) {
-            if (!mal_value_is_string(args[1])
-                || !mal_node_crypto_str_is_utf8(mal_value_to_string(args[1]))) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                    (const byte *) "crypto.update: only utf8 string input is supported");
-                return mal_value_new_undefined();
-            }
-        }
-        MalString *string = mal_value_to_string(data);
-        usize length;
-        byte *bytes = mal_string_to_utf8(string, &length);
+        // Any Buffer encoding is accepted; an unrecognized one falls back to
+        // UTF-8 rather than throwing, matching Node's StringBytes::Write.
+        MalValue encoding = argc > 1 ? args[1] : mal_value_new_undefined();
+        usize length = 0;
+        byte *bytes = mal_node_buffer_decode_string(vm, data, encoding, &length);
         if (bytes == nullptr) {
             mal_vm_throw_allocation_error(vm);
             return mal_value_new_undefined();
@@ -479,50 +670,13 @@ static MalValue mal_node_crypto_update(
     }
 
     MalBufferSourceSpan span;
-    if (!mal_node_crypto_array_buffer_view_span(vm, data, &span)) {
+    if (!crypto_byte_source_span(vm, data, "data", &span)) {
         return mal_value_new_undefined();
     }
-    if (span.length > 0) mal_node_crypto_state_update(state, span.data, span.length);
+    if (span.length > 0) {
+        mal_node_crypto_state_update(state, (const u8 *) span.data, span.length);
+    }
     return receiver;
-}
-
-static MalValue mal_node_crypto_base64(MalVm *vm, const u8 *bytes, usize length) {
-    char encoded[44];
-    usize output = mal_base64_encode(
-        (const byte *) bytes, length, MAL_BASE64_ALPHABET_STANDARD, true, encoded);
-    return mal_value_from_string(
-        mal_string_new_ascii(&vm->heap, (const byte *) encoded, output));
-}
-
-static MalValue mal_node_crypto_digest_bytes(
-    MalVm *vm, const u8 *bytes, usize length, MalValue encoding) {
-    if (mal_value_is_undefined(encoding)) {
-        byte *owned = length == 0 ? nullptr : malloc(length);
-        if (length > 0 && owned == nullptr) {
-            mal_vm_throw_allocation_error(vm);
-            return mal_value_new_undefined();
-        }
-        if (length > 0) memcpy(owned, bytes, length);
-        return mal_node_buffer_from_owned_bytes(vm, owned, length);
-    }
-    if (!mal_value_is_string(encoding)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.digest: encoding must be a string");
-        return mal_value_new_undefined();
-    }
-    MalString *name = mal_value_to_string(encoding);
-    if (mal_node_crypto_str_is(name, "base64", 6)) {
-        return mal_node_crypto_base64(vm, bytes, length);
-    }
-    if (mal_node_crypto_str_is(name, "hex", 3)) {
-        char encoded[64];
-        mal_hex_encode_lower((const byte *) bytes, length, encoded);
-        return mal_value_from_string(
-            mal_string_new_ascii(&vm->heap, (const byte *) encoded, length * 2));
-    }
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-        (const byte *) "crypto.digest: unsupported output encoding");
-    return mal_value_new_undefined();
 }
 
 static MalValue mal_node_crypto_digest(
@@ -557,7 +711,10 @@ static MalValue mal_node_crypto_digest(
         length = 32;
     }
     MalValue encoding = argc > 0 ? args[0] : mal_value_new_undefined();
-    return mal_node_crypto_digest_bytes(vm, result, length, encoding);
+    // Node's ParseEncoding falls back to BUFFER here, so an unrecognized
+    // encoding returns the raw digest instead of throwing. crypto.hash() below
+    // is the call site that does throw.
+    return mal_node_buffer_encode_bytes(vm, (const byte *) result, length, encoding, false);
 }
 
 static MalValue mal_node_crypto_new_state(
@@ -595,8 +752,8 @@ static MalValue mal_node_crypto_create_hash(
     (void) receiver;
     (void) new_target;
     if (argc < 1 || !mal_value_is_string(args[0])) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.createHash: algorithm must be a string");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.createHash: algorithm must be a string");
         return mal_value_new_undefined();
     }
     MalString *algorithm = mal_value_to_string(args[0]);
@@ -611,57 +768,11 @@ static MalValue mal_node_crypto_create_hash(
         state.kind = MAL_NODE_CRYPTO_MD5;
         mal_md5_init(&state.digest.md5);
     } else {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.createHash: unsupported algorithm");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.createHash: unsupported algorithm");
         return mal_value_new_undefined();
     }
     return mal_node_crypto_new_state(vm, callee, &state);
-}
-
-static bool mal_node_crypto_hmac_init(
-    MalVm *vm, MalNodeCryptoState *state, MalValue key
-) {
-    u8 key_block[64] = {0};
-    if (mal_value_is_string(key)) {
-        MalString *string = mal_value_to_string(key);
-        usize length;
-        byte *bytes = mal_string_to_utf8(string, &length);
-        if (bytes == nullptr) {
-            mal_vm_throw_allocation_error(vm);
-            return false;
-        }
-        if (length > sizeof(key_block)) {
-            MalSha256 key_hash;
-            mal_sha256_init(&key_hash);
-            mal_sha256_update(&key_hash, (const u8 *) bytes, length);
-            mal_sha256_final(&key_hash, key_block);
-        } else if (length > 0) {
-            memcpy(key_block, bytes, length);
-        }
-        free(bytes);
-    } else {
-        MalBufferSourceSpan span;
-        if (!mal_node_crypto_array_buffer_view_span(vm, key, &span)) return false;
-        if (span.length > sizeof(key_block)) {
-            MalSha256 key_hash;
-            mal_sha256_init(&key_hash);
-            mal_sha256_update(&key_hash, span.data, span.length);
-            mal_sha256_final(&key_hash, key_block);
-        } else if (span.length > 0) {
-            memcpy(key_block, span.data, span.length);
-        }
-    }
-
-    state->kind = MAL_NODE_CRYPTO_HMAC_SHA256;
-    state->finalized = false;
-    mal_sha256_init(&state->digest.hmac.inner);
-    u8 inner_pad[64];
-    for (usize i = 0; i < sizeof(key_block); i++) {
-        inner_pad[i] = key_block[i] ^ 0x36;
-        state->digest.hmac.outer_pad[i] = key_block[i] ^ 0x5c;
-    }
-    mal_sha256_update(&state->digest.hmac.inner, inner_pad, sizeof(inner_pad));
-    return true;
 }
 
 static void mal_node_crypto_hmac_init_bytes(
@@ -684,6 +795,27 @@ static void mal_node_crypto_hmac_init_bytes(
         state->digest.hmac.outer_pad[i] = key_block[i] ^ 0x5c;
     }
     mal_sha256_update(&state->digest.hmac.inner, inner_pad, sizeof(inner_pad));
+}
+
+static bool mal_node_crypto_hmac_init(
+    MalVm *vm, MalNodeCryptoState *state, MalValue key
+) {
+    if (mal_value_is_string(key)) {
+        MalString *string = mal_value_to_string(key);
+        usize length;
+        byte *bytes = mal_string_to_utf8(string, &length);
+        if (bytes == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        mal_node_crypto_hmac_init_bytes(state, (const u8 *) bytes, length);
+        free(bytes);
+        return true;
+    }
+    MalBufferSourceSpan span;
+    if (!crypto_byte_source_span(vm, key, "key", &span)) return false;
+    mal_node_crypto_hmac_init_bytes(state, (const u8 *) span.data, span.length);
+    return true;
 }
 
 static void mal_node_crypto_hmac_final(MalNodeCryptoState *state, u8 result[32]) {
@@ -713,18 +845,18 @@ static MalValue mal_node_crypto_create_hmac(
     (void) receiver;
     (void) new_target;
     if (argc < 1 || !mal_value_is_string(args[0])) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.createHmac: algorithm must be a string");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.createHmac: algorithm must be a string");
         return mal_value_new_undefined();
     }
     if (!mal_node_crypto_str_is(mal_value_to_string(args[0]), "sha256", 6)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.createHmac: only sha256 is supported");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.createHmac: only sha256 is supported");
         return mal_value_new_undefined();
     }
     if (argc < 2) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.createHmac: key is required");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.createHmac: key is required");
         return mal_value_new_undefined();
     }
     MalNodeCryptoState state = {0};
@@ -734,19 +866,421 @@ static MalValue mal_node_crypto_create_hmac(
     return mal_node_crypto_new_state(vm, callee, &state);
 }
 
-static bool mal_node_crypto_integer(
-    MalVm *vm, MalValue value, f64 minimum, f64 maximum, const char *message,
-    usize *result) {
-    f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) return false;
-    if (!isfinite(number) || trunc(number) != number
-        || number < minimum || number > maximum) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            (const byte *) message);
+/* ---------------------------------------------------------------------------
+ * Randomness.
+ * --------------------------------------------------------------------------- */
+
+/* Node's validateNumber: a primitive number, never coerced. */
+static bool crypto_require_number(MalVm *vm, MalValue value, const char *name, f64 *out) {
+    if (!mal_ops_is_number(value)) {
+        crypto_throw_arg_type(vm, name, "of type number", value);
         return false;
     }
-    *result = (usize) number;
+    *out = mal_ops_number_as_f64(value);
     return true;
+}
+
+static bool crypto_require_safe_integer(
+    MalVm *vm, MalValue value, const char *name, f64 *out) {
+    if (!mal_ops_is_number(value)) {
+        crypto_throw_arg_type(vm, name, "a safe integer", value);
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || trunc(number) != number
+        || number > 9007199254740991.0 || number < -9007199254740991.0) {
+        crypto_throw_arg_type(vm, name, "a safe integer", value);
+        return false;
+    }
+    *out = number;
+    return true;
+}
+
+#define CRYPTO_ENTROPY_UNAVAILABLE "Host entropy unavailable"
+
+/* size must be a primitive number in [0, 2^31-1]; a fractional size truncates
+ * (`randomBytes(1.5)` is a one-byte Buffer), it does not throw. */
+static bool crypto_random_size(MalVm *vm, MalValue value, usize *out) {
+    f64 size;
+    if (!crypto_require_number(vm, value, "size", &size)) return false;
+    if (!(size >= 0) || size > 2147483647.0) {
+        crypto_throw_out_of_range(vm, "size", ">= 0 && <= 2147483647", value);
+        return false;
+    }
+    *out = (usize) trunc(size);
+    return true;
+}
+
+/* Overwrite key-derived bytes before their storage is released. The volatile
+ * cursor keeps the stores from being optimized away as dead. */
+static void crypto_scrub(byte *bytes, usize length) {
+    if (bytes == nullptr) return;
+    volatile byte *cursor = (volatile byte *) bytes;
+    for (usize i = 0; i < length; i++) cursor[i] = 0;
+}
+
+static void crypto_scrub_free(byte *bytes, usize length) {
+    crypto_scrub(bytes, length);
+    free(bytes);
+}
+
+/* Rejection sampling over whole bytes: draw the smallest byte count that covers
+ * `range`, discard the values above the largest exact multiple, retry. Never a
+ * bare modulo, which would bias the low end of the range — for a range of 200,
+ * 256 % 200 = 56, so modulo would hand out 0..55 twice as often as 56..199. */
+/* Reports a platform failure rather than throwing, so the callback form can
+ * deliver it through the callback instead of out of the call. */
+static bool crypto_random_below(u64 range, u64 *out) {
+    usize bytes = 1;
+    u64 span = 256;
+    while (span < range) {
+        bytes++;
+        span <<= 8;
+    }
+    u64 limit = span - (span % range);
+    for (;;) {
+        u8 draw[8] = {0};
+        if (mal_host_entropy(draw, bytes) != 0) return false;
+        u64 value = 0;
+        for (usize i = 0; i < bytes; i++) value = (value << 8) | draw[i];
+        if (value < limit) {
+            *out = value % range;
+            return true;
+        }
+    }
+}
+
+/*
+ * randomInt([min, ]max[, callback]).
+ *
+ * Node's shape detection is `minNotSpecified = typeof max === 'undefined' ||
+ * typeof max === 'function'`, which shifts the arguments down and makes the
+ * second one the callback. It then validates the callback *before* the numeric
+ * bounds, so `randomInt(5, 4, 5)` is a callback TypeError, not a bounds
+ * RangeError. Everything below runs before a single byte of entropy is drawn.
+ */
+typedef struct {
+    MalValue min;
+    MalValue max;
+    MalValue callback;
+} CryptoRandomIntArguments;
+
+static CryptoRandomIntArguments crypto_random_int_shape(
+    const MalValue *args, i32 argc) {
+    MalValue first = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue second = argc >= 2 ? args[1] : mal_value_new_undefined();
+    MalValue third = argc >= 3 ? args[2] : mal_value_new_undefined();
+    if (mal_value_is_undefined(second) || mal_value_is_callable(second)) {
+        // `min` omitted: the second argument is the callback and the third is
+        // ignored outright, exactly as Node ignores it.
+        return (CryptoRandomIntArguments) {
+            .min = mal_ops_number_value(0), .max = first, .callback = second};
+    }
+    return (CryptoRandomIntArguments) {.min = first, .max = second, .callback = third};
+}
+
+static bool crypto_random_int_bounds(
+    MalVm *vm, const CryptoRandomIntArguments *shape, f64 *min_out, f64 *max_out) {
+    f64 min;
+    f64 max;
+    if (!crypto_require_safe_integer(vm, shape->min, "min", &min)
+        || !crypto_require_safe_integer(vm, shape->max, "max", &max)) {
+        return false;
+    }
+    if (max <= min) {
+        char range[96];
+        char minimum[48];
+        crypto_number_text(vm, mal_ops_number_value(min), minimum, sizeof(minimum));
+        snprintf(range, sizeof(range),
+            "greater than the value of \"min\" (%s)", minimum);
+        crypto_throw_out_of_range(vm, "max", range, mal_ops_number_value(max));
+        return false;
+    }
+    if (max - min > 281474976710655.0) {
+        crypto_throw_out_of_range(vm, "max - min", "<= 281474976710655",
+            mal_ops_number_value(max - min));
+        return false;
+    }
+    *min_out = min;
+    *max_out = max;
+    return true;
+}
+
+/* ---------------------------------------------------------------------------
+ * Asynchronous completion.
+ *
+ * One state list, one GC root source, and one macrotask drain serve all three
+ * asynchronous entry points. The callback is unreachable from JavaScript
+ * between the call returning and the drain, so without crypto_scan_roots a
+ * collection in that window would free it.
+ * --------------------------------------------------------------------------- */
+
+typedef enum {
+    CRYPTO_ASYNC_ARGON2,
+    CRYPTO_ASYNC_RANDOM_BYTES,
+    CRYPTO_ASYNC_RANDOM_INT,
+} CryptoAsyncKind;
+
+/* Payload for the two entry points that need no worker: the value is produced
+ * on the main thread and posted so the callback still lands as a macrotask.
+ * `failed` carries a platform entropy failure to the callback instead of
+ * throwing it out of a call that already promised to call back. */
+typedef struct {
+    byte *bytes;
+    usize length;
+    f64 number;
+    bool failed;
+} CryptoImmediateResult;
+
+typedef struct MalNodeCryptoAsync {
+    MalVm *vm;
+    CryptoAsyncKind kind;
+    MalHostHandle operation;
+    MalValue callback;
+    MalAsyncContext *async_context;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+    struct MalNodeCryptoAsync *next;
+} MalNodeCryptoAsync;
+
+static MalNodeCryptoAsync *crypto_async_states;
+static bool crypto_roots_installed;
+
+/* Runs on the drain path and as the task's destructor (a payload dropped at
+ * shutdown). Bytes still owned here never reached JavaScript, so they are
+ * scrubbed; once ownership has transferred to a Buffer the pointer is already
+ * null and the user's bytes are left alone. */
+static void crypto_immediate_destroy(void *data) {
+    CryptoImmediateResult *result = data;
+    if (result == nullptr) return;
+    crypto_scrub_free(result->bytes, result->length);
+    free(result);
+}
+
+static void crypto_scan_roots(MalVm *vm, void *data) {
+    (void) data;
+    for (MalNodeCryptoAsync *state = crypto_async_states; state != nullptr;
+        state = state->next) {
+        if (state->vm != vm) continue;
+        mal_gc_mark_value(state->callback);
+        mal_gc_mark_value(
+            mal_async_internal_value((MalHeapHeader *) state->async_context));
+    }
+}
+
+static MalNodeCryptoAsync *crypto_async_new(MalVm *vm, CryptoAsyncKind kind, MalValue callback) {
+    MalNodeCryptoAsync *state = calloc(1, sizeof(MalNodeCryptoAsync));
+    if (state == nullptr) return nullptr;
+    state->vm = vm;
+    state->kind = kind;
+    state->callback = callback;
+    state->async_context = mal_async_context_capture(vm);
+#if MAL_REALMS
+    state->realm = vm->current_realm;
+#endif
+    return state;
+}
+
+static void crypto_async_link(MalNodeCryptoAsync *state, MalHostHandle operation) {
+    state->operation = operation;
+    state->next = crypto_async_states;
+    crypto_async_states = state;
+}
+
+/*
+ * Post an already-computed value so the callback runs as a macrotask, after the
+ * microtask checkpoint — the ordering Node produces for randomBytes/randomInt.
+ *
+ * Returns true when a terminal task now exists for `state`, i.e. the callback
+ * is guaranteed to fire exactly once (with the value, or with an error if the
+ * completion had to be cancelled). It returns false only when nothing was
+ * started at all, and only then does the caller still own `state` and `result`.
+ *
+ * The state is linked before the terminal is published, so no terminal can ever
+ * reach the queue without an owner — an unowned task would sit at the head of
+ * the cooperative, head-only drain and stall every later crypto callback.
+ */
+static bool crypto_complete_immediately(
+    MalVm *vm, MalNodeCryptoAsync *state, CryptoImmediateResult *result) {
+    MalHost *host = mal_host(vm);
+    MalHostHandle operation = 0;
+    if (host == nullptr || !mal_host_operation_start(&host->tasks, &operation)) {
+        return false;
+    }
+    if (!mal_host_operation_activate(&host->tasks, operation)) {
+        (void) mal_host_operation_abort_start(&host->tasks, operation);
+        return false;
+    }
+    crypto_async_link(state, operation);
+    if (!mal_host_operation_complete(&host->tasks, operation, MAL_HOST_TERMINAL_OK,
+            result, crypto_immediate_destroy)) {
+        // Ownership did not transfer, so the payload is ours to destroy; the
+        // cancellation's terminal reaches the linked state as a callback error.
+        crypto_immediate_destroy(result);
+        (void) mal_host_operation_cancel(&host->tasks, operation);
+    }
+    return true;
+}
+
+/* Every callback form lands as a host macrotask, so an embedding without a host
+ * context (the bare test262 entry, for instance) has nowhere to deliver it. */
+static bool crypto_require_host(MalVm *vm) {
+    if (mal_host(vm) != nullptr) return true;
+    crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+        "Asynchronous crypto requires a host event loop");
+    return false;
+}
+
+static const char *crypto_argon2_status_message(i32 status) {
+    // Fixed literals only: a status must never carry a parameter value, a key,
+    // or a derived tag into a JavaScript error message.
+    if (status == MAL_ARGON2_STATUS_POLICY) {
+        return "Argon2 parameters exceed the host resource policy";
+    }
+    return status == MAL_ARGON2_STATUS_MEMORY
+        ? "Argon2 memory allocation failed"
+        : "Argon2 derivation failed";
+}
+
+/* Build the (error, value) callback arguments for one completed operation.
+ * `args[0]` is `null` for randomBytes/argon2 and `undefined` for randomInt —
+ * an asymmetry Node really has. */
+static bool crypto_async_arguments(
+    MalVm *vm, MalNodeCryptoAsync *state, const MalHostTask *task, void *data,
+    MalValue *args) {
+    args[0] = state->kind == CRYPTO_ASYNC_RANDOM_INT
+        ? mal_value_new_undefined()
+        : mal_value_new_null();
+    args[1] = mal_value_new_undefined();
+    if (task->kind != MAL_HOST_TASK_TERMINAL || task->result == MAL_HOST_TERMINAL_CANCELLED) {
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Crypto operation cancelled");
+        return false;
+    }
+    if (state->kind == CRYPTO_ASYNC_ARGON2) {
+        MalArgon2Result *result = data;
+        i32 status = mal_argon2_result_status(result);
+        if (task->result != MAL_HOST_TERMINAL_OK || status != MAL_ARGON2_STATUS_OK) {
+            crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                crypto_argon2_status_message(status));
+            return false;
+        }
+        usize length = 0;
+        const byte *tag = mal_argon2_result_tag(result, &length);
+        byte *owned = length == 0 ? nullptr : malloc(length);
+        if (length > 0 && owned == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        if (length > 0) memcpy(owned, tag, length);
+        args[1] = mal_node_buffer_from_owned_bytes(vm, owned, length);
+        return vm->completion.kind != MAL_COMPLETION_THROW;
+    }
+    CryptoImmediateResult *result = data;
+    if (result == nullptr || result->failed) {
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            result == nullptr ? "Crypto operation failed" : CRYPTO_ENTROPY_UNAVAILABLE);
+        return false;
+    }
+    if (state->kind == CRYPTO_ASYNC_RANDOM_INT) {
+        args[1] = mal_ops_number_value(result->number);
+        return true;
+    }
+    // from_owned_bytes consumes the allocation on both paths, so clear the
+    // payload's pointer before the destructor can double-free it.
+    byte *bytes = result->bytes;
+    usize length = result->length;
+    result->bytes = nullptr;
+    result->length = 0;
+    args[1] = mal_node_buffer_from_owned_bytes(vm, bytes, length);
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
+bool mal_node_crypto_drain(MalVm *vm) {
+    MalHost *host = mal_host(vm);
+    if (host == nullptr || mal_host_tasks_pending(&host->tasks) == 0) return false;
+    MalHostTask peek;
+    if (!mal_host_peek_task(&host->tasks, &peek)) return false;
+    // Head-only, cooperative: another module's task must be left for its own
+    // drain rather than consumed or skipped here.
+    MalNodeCryptoAsync **link = &crypto_async_states;
+    while (*link != nullptr
+        && ((*link)->vm != vm || (*link)->operation != peek.operation)) {
+        link = &(*link)->next;
+    }
+    MalNodeCryptoAsync *state = *link;
+    if (state == nullptr) return false;
+    MalHostTask task;
+    if (!mal_host_next_task(&host->tasks, &task)) return false;
+    void *data = mal_host_task_take_data(&host->tasks, &task);
+
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_realm_switch(vm, state->realm);
+#endif
+    // The result is built while `state` is still linked, so a collection during
+    // the Buffer allocation still reaches the callback through crypto_scan_roots.
+    MalValue args[2];
+    CryptoAsyncKind kind = state->kind;
+    bool ready = crypto_async_arguments(vm, state, &task, data, args);
+    if (!ready) {
+        // A failed completion is delivered as the callback's first argument, not
+        // rethrown: the callback must run exactly once either way.
+        args[0] = vm->completion.value;
+        args[1] = mal_value_new_undefined();
+        vm->completion.kind = MAL_COMPLETION_NORMAL;
+    }
+    // take_data moved ownership out of the task, so the payload is released here.
+    if (kind == CRYPTO_ASYNC_ARGON2) {
+        mal_argon2_result_release(data);
+    } else {
+        crypto_immediate_destroy(data);
+    }
+    MalValue callback = state->callback;
+    MalAsyncContext *async_context = state->async_context;
+    *link = state->next;
+    free(state);
+
+    MalValue roots[] = {callback, args[0], args[1],
+        mal_async_internal_value((MalHeapHeader *) async_context)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalAsyncContextScope scope;
+    mal_async_context_scope_enter(vm, &scope, async_context);
+    mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), &roots[1], 2);
+    mal_async_context_scope_exit(vm, &scope);
+    mal_gc_unroot(&root);
+#if MAL_REALMS
+    mal_realm_switch(vm, saved_realm);
+#endif
+
+    mal_host_task_release(&host->tasks, &task);
+    return true;
+}
+
+void mal_node_crypto_free(MalVm *vm) {
+    MalNodeCryptoAsync **link = &crypto_async_states;
+    while (*link != nullptr) {
+        MalNodeCryptoAsync *state = *link;
+        if (state->vm != vm) {
+            link = &state->next;
+            continue;
+        }
+        *link = state->next;
+        free(state);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * randomBytes / randomInt / randomUUID.
+ * --------------------------------------------------------------------------- */
+
+/* An absent or undefined callback selects the synchronous form; anything else
+ * must be callable. */
+static bool crypto_check_callback(MalVm *vm, MalValue callback) {
+    if (mal_value_is_undefined(callback) || mal_value_is_callable(callback)) return true;
+    crypto_throw_arg_type(vm, "callback", "of type function", callback);
+    return false;
 }
 
 static MalValue mal_node_crypto_random_bytes(
@@ -756,22 +1290,169 @@ static MalValue mal_node_crypto_random_bytes(
     (void) new_target;
     (void) callee;
     usize length;
-    if (argc < 1 || !mal_node_crypto_integer(vm, args[0], 0, INT32_MAX,
-            "crypto.randomBytes: size is out of range", &length)) {
+    // Node validates `size` before `callback` here (the reverse of randomInt).
+    if (!crypto_random_size(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), &length)) {
         return mal_value_new_undefined();
     }
+    MalValue callback = argc >= 2 ? args[1] : mal_value_new_undefined();
+    // Argument errors throw synchronously even in the callback form.
+    if (!crypto_check_callback(vm, callback)) return mal_value_new_undefined();
+    bool async = !mal_value_is_undefined(callback);
+    if (async && !crypto_require_host(vm)) return mal_value_new_undefined();
+
     byte *bytes = length == 0 ? nullptr : malloc(length);
     if (length > 0 && bytes == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    if (mal_host_entropy(bytes, length) != 0) {
-        free(bytes);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-            (const byte *) "crypto.randomBytes: host entropy unavailable");
+    // The draw itself is synchronous even in the callback form; see the
+    // "asynchrony" note in node_crypto.h. A platform failure must still reach
+    // the callback exactly once rather than escape as a synchronous throw.
+    bool drawn = mal_host_entropy(bytes, length) == 0;
+    if (!async) {
+        if (!drawn) {
+            crypto_scrub_free(bytes, length);
+            crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, CRYPTO_ENTROPY_UNAVAILABLE);
+            return mal_value_new_undefined();
+        }
+        return mal_node_buffer_from_owned_bytes(vm, bytes, length);
+    }
+
+    CryptoImmediateResult *result = calloc(1, sizeof(CryptoImmediateResult));
+    MalNodeCryptoAsync *state = crypto_async_new(vm, CRYPTO_ASYNC_RANDOM_BYTES, callback);
+    if (result == nullptr || state == nullptr) {
+        free(result);
+        free(state);
+        crypto_scrub_free(bytes, length);
+        mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    return mal_node_buffer_from_owned_bytes(vm, bytes, length);
+    result->failed = !drawn;
+    if (drawn) {
+        result->bytes = bytes;
+        result->length = length;
+    } else {
+        crypto_scrub_free(bytes, length);
+    }
+    if (!crypto_complete_immediately(vm, state, result)) {
+        crypto_immediate_destroy(result);
+        free(state);
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Crypto operation failed");
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_node_crypto_random_int(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
+    MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    CryptoRandomIntArguments shape = crypto_random_int_shape(args, argc);
+    // Callback first, then the bounds: Node's order, and it means an invalid
+    // call is refused before any entropy is drawn.
+    if (!crypto_check_callback(vm, shape.callback)) return mal_value_new_undefined();
+    f64 min = 0;
+    f64 max = 0;
+    if (!crypto_random_int_bounds(vm, &shape, &min, &max)) {
+        return mal_value_new_undefined();
+    }
+    bool async = !mal_value_is_undefined(shape.callback);
+    if (async && !crypto_require_host(vm)) return mal_value_new_undefined();
+    u64 drawn = 0;
+    bool ok = crypto_random_below((u64) (max - min), &drawn);
+    f64 value = min + (f64) drawn;
+    if (!async) {
+        if (!ok) {
+            crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, CRYPTO_ENTROPY_UNAVAILABLE);
+            return mal_value_new_undefined();
+        }
+        return mal_ops_number_value(value);
+    }
+    CryptoImmediateResult *result = calloc(1, sizeof(CryptoImmediateResult));
+    MalNodeCryptoAsync *state = crypto_async_new(
+        vm, CRYPTO_ASYNC_RANDOM_INT, shape.callback);
+    if (result == nullptr || state == nullptr) {
+        free(result);
+        free(state);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    result->failed = !ok;
+    result->number = value;
+    if (!crypto_complete_immediately(vm, state, result)) {
+        crypto_immediate_destroy(result);
+        free(state);
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Crypto operation failed");
+    }
+    return mal_value_new_undefined();
+}
+
+/* RFC 4122 version 4 UUID using the engine-neutral host entropy boundary. */
+static MalValue mal_node_crypto_random_uuid(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue new_target,
+    MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+
+    bool fresh = false;
+    MalValue options = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_undefined(options)) {
+        if (!mal_value_is_object(options)) {
+            crypto_throw_arg_type(vm, "options", "of type object", options);
+            return mal_value_new_undefined();
+        }
+        MalValue disable;
+        MalKey key = mal_key_from_value(mal_value_from_string(
+            mal_intrinsic_ascii(vm, (const byte *) "disableEntropyCache")));
+        if (!mal_vm_get_property(vm, options, key, &disable)) {
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(disable)) {
+            if (!mal_value_is_boolean(disable)) {
+                crypto_throw_property_type(vm, "options.disableEntropyCache",
+                    "of type boolean", disable);
+                return mal_value_new_undefined();
+            }
+            fresh = mal_value_is_truthy(disable);
+        }
+    }
+
+    u8 bytes[16];
+    if (mal_host_entropy_uuid(bytes, fresh) != 0) {
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, CRYPTO_ENTROPY_UNAVAILABLE);
+        return mal_value_new_undefined();
+    }
+
+    char uuid[36];
+    usize out = 0;
+    for (usize i = 0; i < countof(bytes); i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) {
+            uuid[out++] = '-';
+        }
+        mal_hex_encode_byte_lower((byte) bytes[i], uuid + out);
+        out += 2;
+    }
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) uuid, out));
+}
+
+/* ---------------------------------------------------------------------------
+ * pbkdf2Sync, timingSafeEqual, hash.
+ * --------------------------------------------------------------------------- */
+
+static bool mal_node_crypto_integer(
+    MalVm *vm, MalValue value, f64 minimum, f64 maximum, const char *message,
+    usize *result) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || trunc(number) != number
+        || number < minimum || number > maximum) {
+        crypto_throw(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message);
+        return false;
+    }
+    *result = (usize) number;
+    return true;
 }
 
 static bool mal_node_crypto_input_bytes(
@@ -789,8 +1470,7 @@ static bool mal_node_crypto_input_bytes(
         return true;
     }
     if (!mal_value_is_typed_array_object(value) && !mal_value_is_data_view_object(value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) message);
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
         return false;
     }
     return mal_node_crypto_byte_span(vm, value, span);
@@ -804,8 +1484,8 @@ static MalValue mal_node_crypto_pbkdf2_sync(
     (void) callee;
     if (argc < 5 || !mal_value_is_string(args[4])
         || !mal_node_crypto_str_is(mal_value_to_string(args[4]), "sha256", 6)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.pbkdf2Sync: only sha256 is supported");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.pbkdf2Sync: only sha256 is supported");
         return mal_value_new_undefined();
     }
     usize iterations;
@@ -846,11 +1526,11 @@ static MalValue mal_node_crypto_pbkdf2_sync(
         };
         u8 value[32];
         u8 accumulated[32];
-        mal_node_crypto_hmac_bytes(password.data, password.length,
-            salt.data, salt.length, index, sizeof(index), value);
+        mal_node_crypto_hmac_bytes((const u8 *) password.data, password.length,
+            (const u8 *) salt.data, salt.length, index, sizeof(index), value);
         memcpy(accumulated, value, sizeof(accumulated));
         for (usize round = 1; round < iterations; round++) {
-            mal_node_crypto_hmac_bytes(password.data, password.length,
+            mal_node_crypto_hmac_bytes((const u8 *) password.data, password.length,
                 value, sizeof(value), nullptr, 0, value);
             for (usize i = 0; i < sizeof(accumulated); i++) accumulated[i] ^= value[i];
         }
@@ -873,19 +1553,21 @@ static MalValue mal_node_crypto_timing_safe_equal(
     (void) callee;
     MalBufferSourceSpan left;
     MalBufferSourceSpan right;
-    if (argc < 1 || !mal_node_crypto_array_buffer_view_span(vm, args[0], &left)) {
+    if (!crypto_byte_source_span(
+            vm, argc >= 1 ? args[0] : mal_value_new_undefined(), "buf1", &left)) {
         return mal_value_new_undefined();
     }
-    if (argc < 2 || !mal_node_crypto_array_buffer_view_span(vm, args[1], &right)) {
+    if (!crypto_byte_source_span(
+            vm, argc >= 2 ? args[1] : mal_value_new_undefined(), "buf2", &right)) {
         return mal_value_new_undefined();
     }
     if (left.length != right.length) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            (const byte *) "Input buffers must have the same byte length");
+        crypto_throw(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Input buffers must have the same byte length");
         return mal_value_new_undefined();
     }
-    const volatile u8 *left_bytes = left.data;
-    const volatile u8 *right_bytes = right.data;
+    const volatile u8 *left_bytes = (const volatile u8 *) left.data;
+    const volatile u8 *right_bytes = (const volatile u8 *) right.data;
     volatile u8 difference = 0;
     for (usize i = 0; i < left.length; i++) {
         difference |= left_bytes[i] ^ right_bytes[i];
@@ -906,38 +1588,28 @@ static MalValue mal_node_crypto_hash(
 
     // Algorithm: a primitive string exactly equal to "sha256".
     if (!mal_value_is_string(algorithm)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.hash: algorithm must be a string");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.hash: algorithm must be a string");
         return mal_value_new_undefined();
     }
     MalString *algorithm_str = mal_value_to_string(algorithm);
     if (!mal_node_crypto_str_is(algorithm_str, "sha256", 6)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.hash: only the \"sha256\" algorithm is supported");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.hash: only the \"sha256\" algorithm is supported");
         return mal_value_new_undefined();
     }
 
-    // Output encoding: a primitive string exactly equal to lowercase "hex".
-    // Validate it before extracting any raw byte pointer below.
-    if (!mal_value_is_undefined(encoding)) {
-        if (!mal_value_is_string(encoding)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                (const byte *) "crypto.hash: output encoding must be a string");
-            return mal_value_new_undefined();
-        }
-        MalString *encoding_str = mal_value_to_string(encoding);
-        if (!mal_node_crypto_str_is(encoding_str, "hex", 3)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                (const byte *) "crypto.hash: only the \"hex\" output encoding is supported");
-            return mal_value_new_undefined();
-        }
+    // Validate the output encoding before extracting any raw byte pointer below.
+    // A non-string, non-undefined third argument is Node's `options` slot.
+    if (!mal_value_is_undefined(encoding) && !mal_value_is_string(encoding)) {
+        crypto_throw_arg_type(vm, "options", "of type object", encoding);
+        return mal_value_new_undefined();
     }
 
-    bool data_is_byte_source = mal_value_is_typed_array_object(data)
-        || mal_value_is_data_view_object(data) || mal_value_is_array_buffer_object(data);
+    bool data_is_byte_source = crypto_is_byte_source(data);
     if (!mal_value_is_string(data) && !data_is_byte_source) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            (const byte *) "crypto.hash: data must be a string or byte source");
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "crypto.hash: data must be a string or byte source");
         return mal_value_new_undefined();
     }
 
@@ -951,7 +1623,7 @@ static MalValue mal_node_crypto_hash(
             return mal_value_new_undefined();
         }
         if (span.length > 0) {
-            mal_sha256_update(&ctx, span.data, span.length);
+            mal_sha256_update(&ctx, (const u8 *) span.data, span.length);
         }
     } else {
         MalString *data_str = mal_value_to_string(data);
@@ -968,41 +1640,355 @@ static MalValue mal_node_crypto_hash(
     u8 digest[32];
     mal_sha256_final(&ctx, digest);
 
-    char hex[64];
-    mal_hex_encode_lower((const byte *) digest, countof(digest), hex);
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) hex, 64));
-}
-
-/* RFC 4122 version 4 UUID using the engine-neutral host entropy boundary. */
-static MalValue mal_node_crypto_random_uuid(
-    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue new_target,
-    MalValue callee) {
-    (void) this_value;
-    (void) args;
-    (void) argc;
-    (void) new_target;
-    (void) callee;
-
-    u8 bytes[16];
-    if (mal_host_entropy(bytes, sizeof(bytes)) != 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-            (const byte *) "crypto.randomUUID: host entropy unavailable");
+    if (mal_value_is_undefined(encoding)) {
+        char hex[64];
+        mal_hex_encode_lower((const byte *) digest, countof(digest), hex);
+        return mal_value_from_string(
+            mal_string_new_ascii(&vm->heap, (const byte *) hex, 64));
+    }
+    if (mal_string_equals_ascii_ci(mal_value_to_string(encoding), "buffer")) {
+        return mal_node_buffer_encode_bytes(
+            vm, (const byte *) digest, countof(digest), mal_value_new_undefined(), false);
+    }
+    // Unlike digest(), crypto.hash() rejects an unrecognized encoding.
+    if (!mal_node_buffer_encoding_is_known(encoding)) {
+        char received[128];
+        crypto_copy_string(mal_value_to_string(encoding), received, sizeof(received));
+        char message[CRYPTO_MESSAGE_CAPACITY];
+        snprintf(message, sizeof(message),
+            "The argument 'outputEncoding' is invalid. Received '%s'", received);
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
         return mal_value_new_undefined();
     }
-    bytes[6] = (u8) ((bytes[6] & 0x0f) | 0x40);
-    bytes[8] = (u8) ((bytes[8] & 0x3f) | 0x80);
-
-    char uuid[36];
-    usize out = 0;
-    for (usize i = 0; i < countof(bytes); i++) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) {
-            uuid[out++] = '-';
-        }
-        mal_hex_encode_byte_lower((byte) bytes[i], uuid + out);
-        out += 2;
-    }
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) uuid, out));
+    return mal_node_buffer_encode_bytes(
+        vm, (const byte *) digest, countof(digest), encoding, true);
 }
+
+/* ---------------------------------------------------------------------------
+ * Argon2.
+ * --------------------------------------------------------------------------- */
+
+typedef struct {
+    u32 variant;
+    u32 parallelism;
+    u32 passes;
+    u32 memory_kib;
+    u32 tag_length;
+    MalBufferSourceSpan message;
+    MalBufferSourceSpan nonce;
+    MalBufferSourceSpan secret;
+    MalBufferSourceSpan associated_data;
+    byte *owned_message;
+    byte *owned_nonce;
+    byte *owned_secret;
+    byte *owned_associated_data;
+} CryptoArgon2Args;
+
+/* The owned buffers are this layer's own UTF-8 materializations of a passcode,
+ * pepper, or nonce, so they are scrubbed rather than merely freed. A span whose
+ * `owned` pointer is null borrows the caller's byte source and is left alone —
+ * those bytes are still the user's. */
+static void crypto_argon2_args_free(CryptoArgon2Args *parsed) {
+    if (parsed->owned_message != nullptr) {
+        crypto_scrub_free(parsed->owned_message, parsed->message.length);
+    }
+    if (parsed->owned_nonce != nullptr) {
+        crypto_scrub_free(parsed->owned_nonce, parsed->nonce.length);
+    }
+    if (parsed->owned_secret != nullptr) {
+        crypto_scrub_free(parsed->owned_secret, parsed->secret.length);
+    }
+    if (parsed->owned_associated_data != nullptr) {
+        crypto_scrub_free(
+            parsed->owned_associated_data, parsed->associated_data.length);
+    }
+    memset(parsed, 0, sizeof(*parsed));
+}
+
+static bool crypto_argon2_variant(MalVm *vm, MalValue algorithm, u32 *out) {
+    if (!mal_value_is_string(algorithm)) {
+        crypto_throw_arg_type(vm, "algorithm", "of type string", algorithm);
+        return false;
+    }
+    MalString *name = mal_value_to_string(algorithm);
+    if (mal_node_crypto_str_is(name, "argon2d", 7)) {
+        *out = MAL_ARGON2_VARIANT_D;
+        return true;
+    }
+    if (mal_node_crypto_str_is(name, "argon2i", 7)) {
+        *out = MAL_ARGON2_VARIANT_I;
+        return true;
+    }
+    if (mal_node_crypto_str_is(name, "argon2id", 8)) {
+        *out = MAL_ARGON2_VARIANT_ID;
+        return true;
+    }
+    char received[64];
+    crypto_copy_string(name, received, sizeof(received));
+    char message[CRYPTO_MESSAGE_CAPACITY];
+    snprintf(message, sizeof(message),
+        "The argument 'algorithm' must be one of: 'argon2d', 'argon2i', "
+        "'argon2id'. Received '%s'", received);
+    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+    return false;
+}
+
+/* Materialize one byte input. Strings are measured and hashed as UTF-8; every
+ * byte-source form (ArrayBuffer, Buffer, TypedArray, DataView) is accepted. */
+static bool crypto_argon2_bytes(
+    MalVm *vm, MalValue value, const char *name, MalBufferSourceSpan *span, byte **owned) {
+    if (mal_value_is_string(value)) {
+        usize length = 0;
+        *owned = mal_string_to_utf8(mal_value_to_string(value), &length);
+        if (*owned == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        *span = (MalBufferSourceSpan) {.data = *owned, .length = length};
+        return true;
+    }
+    if (!crypto_is_byte_source(value)
+        || mal_buffer_source_span(value, span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        crypto_throw_property_type(vm, name, CRYPTO_BYTE_SOURCE_TEXT, value);
+        return false;
+    }
+    return true;
+}
+
+/* The numeric ladder Node applies to each Argon2 parameter: primitive number,
+ * then integer, then range — each with its own message shape. */
+static bool crypto_argon2_number(
+    MalVm *vm, MalValue value, const char *name, f64 minimum, f64 maximum, u32 *out) {
+    if (!mal_ops_is_number(value)) {
+        crypto_throw_property_type(vm, name, "of type number", value);
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || trunc(number) != number) {
+        crypto_throw_out_of_range(vm, name, "an integer", value);
+        return false;
+    }
+    if (number < minimum || number > maximum) {
+        char range[96];
+        snprintf(range, sizeof(range), ">= %.0f && <= %.0f", minimum, maximum);
+        crypto_throw_out_of_range(vm, name, range, value);
+        return false;
+    }
+    *out = (u32) number;
+    return true;
+}
+
+/* Reads every property once, in Node's measured order, before validating any of
+ * them, so a getter cannot observe a different sequence. */
+static bool crypto_argon2_parse(
+    MalVm *vm, MalValue algorithm, MalValue parameters, CryptoArgon2Args *parsed) {
+    memset(parsed, 0, sizeof(*parsed));
+    if (!crypto_argon2_variant(vm, algorithm, &parsed->variant)) return false;
+    if (!mal_value_is_object(parameters)) {
+        crypto_throw_arg_type(vm, "parameters", "of type object", parameters);
+        return false;
+    }
+
+    static const char *names[] = {
+        "parallelism", "tagLength", "memory", "passes",
+        "message", "nonce", "secret", "associatedData",
+    };
+    MalValue values[countof(names)];
+    for (usize i = 0; i < countof(names); i++) values[i] = mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, values, countof(values));
+    for (usize i = 0; i < countof(names); i++) {
+        MalKey key = mal_key_from_value(
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) names[i])));
+        if (!mal_vm_get_property(vm, parameters, key, &values[i])) {
+            mal_gc_unroot(&root);
+            return false;
+        }
+    }
+
+    bool ok = false;
+    do {
+        if (!mal_value_is_string(values[4]) && !crypto_is_byte_source(values[4])) {
+            crypto_throw_property_type(
+                vm, "parameters.message", CRYPTO_BYTE_SOURCE_TEXT, values[4]);
+            break;
+        }
+        if (!mal_value_is_string(values[5]) && !crypto_is_byte_source(values[5])) {
+            crypto_throw_property_type(
+                vm, "parameters.nonce", CRYPTO_BYTE_SOURCE_TEXT, values[5]);
+            break;
+        }
+        if (!crypto_argon2_bytes(
+                vm, values[5], "parameters.nonce", &parsed->nonce, &parsed->owned_nonce)) {
+            break;
+        }
+        if (parsed->nonce.length < 8 || parsed->nonce.length > 4294967295u) {
+            crypto_throw_out_of_range(vm, "parameters.nonce.byteLength",
+                ">= 8 && <= 4294967295", mal_ops_number_value((f64) parsed->nonce.length));
+            break;
+        }
+        if (!crypto_argon2_number(vm, values[0], "parameters.parallelism",
+                1, 16777215, &parsed->parallelism)
+            || !crypto_argon2_number(vm, values[1], "parameters.tagLength",
+                4, 4294967295.0, &parsed->tag_length)) {
+            break;
+        }
+        // The lower memory bound is max(8, 8 * parallelism), and Node embeds the
+        // computed value in the message.
+        f64 memory_floor = parsed->parallelism > 1 ? 8.0 * parsed->parallelism : 8.0;
+        if (!crypto_argon2_number(vm, values[2], "parameters.memory",
+                memory_floor, 4294967295.0, &parsed->memory_kib)
+            || !crypto_argon2_number(vm, values[3], "parameters.passes",
+                1, 4294967295.0, &parsed->passes)) {
+            break;
+        }
+        // Node 24.14.1 raises ERR_INTERNAL_ASSERTION here for a wrongly typed
+        // optional input; a proper TypeError is a deliberate divergence.
+        if (!mal_value_is_undefined(values[6])
+            && !crypto_argon2_bytes(vm, values[6], "parameters.secret",
+                &parsed->secret, &parsed->owned_secret)) {
+            break;
+        }
+        if (!mal_value_is_undefined(values[7])
+            && !crypto_argon2_bytes(vm, values[7], "parameters.associatedData",
+                &parsed->associated_data, &parsed->owned_associated_data)) {
+            break;
+        }
+        if (!crypto_argon2_bytes(vm, values[4], "parameters.message",
+                &parsed->message, &parsed->owned_message)) {
+            break;
+        }
+        ok = true;
+    } while (false);
+    mal_gc_unroot(&root);
+    if (!ok) crypto_argon2_args_free(parsed);
+    return ok;
+}
+
+static MalArgon2Params crypto_argon2_params(const CryptoArgon2Args *parsed) {
+    return (MalArgon2Params) {
+        .variant = parsed->variant,
+        .parallelism = parsed->parallelism,
+        .passes = parsed->passes,
+        .memory_kib = parsed->memory_kib,
+        .tag_length = parsed->tag_length,
+        .message = parsed->message.data,
+        .message_len = parsed->message.length,
+        .nonce = parsed->nonce.data,
+        .nonce_len = parsed->nonce.length,
+        .secret = parsed->secret.data,
+        .secret_len = parsed->secret.length,
+        .associated_data = parsed->associated_data.data,
+        .associated_data_len = parsed->associated_data.length,
+    };
+}
+
+static MalValue mal_node_crypto_argon2_sync(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
+    MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    CryptoArgon2Args parsed;
+    if (!crypto_argon2_parse(vm, argc >= 1 ? args[0] : mal_value_new_undefined(),
+            argc >= 2 ? args[1] : mal_value_new_undefined(), &parsed)) {
+        return mal_value_new_undefined();
+    }
+    MalArgon2Params params = crypto_argon2_params(&parsed);
+    MalHost *host = mal_host(vm);
+    MalArgon2 *argon2 = host == nullptr ? nullptr : &host->argon2;
+    // The host resource policy is checked before the tag buffer exists, so a
+    // `tagLength` Node accepts but this host refuses costs no allocation.
+    i32 status = mal_argon2_check_policy(argon2, &params);
+    if (status != MAL_ARGON2_STATUS_OK) {
+        crypto_argon2_args_free(&parsed);
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            crypto_argon2_status_message(status));
+        return mal_value_new_undefined();
+    }
+    byte *tag = malloc(parsed.tag_length);
+    if (tag == nullptr) {
+        crypto_argon2_args_free(&parsed);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    status = mal_argon2_derive_sync(argon2, &params, tag, parsed.tag_length);
+    usize tag_length = parsed.tag_length;
+    crypto_argon2_args_free(&parsed);
+    if (status != MAL_ARGON2_STATUS_OK) {
+        // A failed derivation can still have written partial key-derived state.
+        crypto_scrub_free(tag, tag_length);
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            crypto_argon2_status_message(status));
+        return mal_value_new_undefined();
+    }
+    return mal_node_buffer_from_owned_bytes(vm, tag, tag_length);
+}
+
+static MalValue mal_node_crypto_argon2(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
+    MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalValue algorithm = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue parameters = argc >= 2 ? args[1] : mal_value_new_undefined();
+    MalValue callback = argc >= 3 ? args[2] : mal_value_new_undefined();
+    // algorithm, then parameters, then the callback — all synchronous throws,
+    // never delivered to the callback.
+    u32 variant;
+    if (!crypto_argon2_variant(vm, algorithm, &variant)) return mal_value_new_undefined();
+    if (!mal_value_is_object(parameters)) {
+        crypto_throw_arg_type(vm, "parameters", "of type object", parameters);
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_callable(callback)) {
+        crypto_throw_arg_type(vm, "callback", "of type function", callback);
+        return mal_value_new_undefined();
+    }
+    if (!crypto_require_host(vm)) return mal_value_new_undefined();
+    CryptoArgon2Args parsed;
+    if (!crypto_argon2_parse(vm, algorithm, parameters, &parsed)) {
+        return mal_value_new_undefined();
+    }
+
+    // Ownership order matters here. The state is allocated *before* the job is
+    // started, because a state allocation that failed afterwards would leave a
+    // queued operation whose terminal task has no entry in crypto_async_states
+    // — and the drain is head-only, so that task would sit at the head forever
+    // and stall every later crypto callback. crypto_async_new only callocs and
+    // reads vm->async_context / vm->current_realm, so it cannot allocate on the
+    // JS heap and cannot invalidate the raw spans `parsed` still holds.
+    MalNodeCryptoAsync *state = crypto_async_new(vm, CRYPTO_ASYNC_ARGON2, callback);
+    if (state == nullptr) {
+        crypto_argon2_args_free(&parsed);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    MalArgon2Params params = crypto_argon2_params(&parsed);
+    MalArgon2StartResult started = mal_argon2_start(mal_host(vm), &params, &state->operation);
+    crypto_argon2_args_free(&parsed);
+    if (started != MAL_ARGON2_START_OK) {
+        // No operation exists on any failure path, so the state is simply
+        // dropped and nothing is ever linked.
+        free(state);
+        const char *reason = "Argon2 job could not be started";
+        if (started == MAL_ARGON2_START_SATURATED) reason = "Argon2 queue is full";
+        if (started == MAL_ARGON2_START_SHUTDOWN) reason = "Argon2 is shutting down";
+        if (started == MAL_ARGON2_START_SYSTEM_ERROR) reason = "Argon2 worker unavailable";
+        if (started == MAL_ARGON2_START_POLICY) {
+            reason = crypto_argon2_status_message(MAL_ARGON2_STATUS_POLICY);
+        }
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, reason);
+        return mal_value_new_undefined();
+    }
+    crypto_async_link(state, state->operation);
+    return mal_value_new_undefined();
+}
+
+/* ---------------------------------------------------------------------------
+ * Installation.
+ * --------------------------------------------------------------------------- */
 
 static MalNativeFunctionObject *mal_node_crypto_function_with_slots(
     MalVm *vm, const char *name, i32 length, MalNativeFunctionCallback callback,
@@ -1014,6 +2000,25 @@ static MalNativeFunctionObject *mal_node_crypto_function_with_slots(
         mal_intrinsic_ascii(vm, (const byte *) name), length, callback, slots, slot_count);
 }
 
+typedef struct {
+    const char *name;
+    i32 length;
+    MalNativeFunctionCallback callback;
+} CryptoExport;
+
+/* The flat exports (everything that needs no private-symbol slot). Lengths match
+ * Node's, which the fixture pins. */
+static const CryptoExport CRYPTO_EXPORTS[] = {
+    {"argon2", 3, mal_node_crypto_argon2},
+    {"argon2Sync", 2, mal_node_crypto_argon2_sync},
+    {"hash", 3, mal_node_crypto_hash},
+    {"pbkdf2Sync", 5, mal_node_crypto_pbkdf2_sync},
+    {"randomBytes", 2, mal_node_crypto_random_bytes},
+    {"randomInt", 3, mal_node_crypto_random_int},
+    {"randomUUID", 1, mal_node_crypto_random_uuid},
+    {"timingSafeEqual", 0, mal_node_crypto_timing_safe_equal},
+};
+
 void mal_host_install_node_crypto(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) launch;
@@ -1023,7 +2028,7 @@ void mal_host_install_node_crypto(
         return;
     }
 
-    MalValue roots[8];
+    MalValue roots[7];
     for (usize i = 0; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -1050,56 +2055,32 @@ void mal_host_install_node_crypto(
     roots[5] = mal_value_from_native_function_object(mal_node_crypto_function_with_slots(
         vm, "createHmac", 3, mal_node_crypto_create_hmac, factory_slots,
         countof(factory_slots)));
-    roots[6] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, (const byte *) "timingSafeEqual"), 0,
-        mal_node_crypto_timing_safe_equal));
 
-    roots[7] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
-        (const byte *) "createHash", roots[4], method_flags);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
-        (const byte *) "createHmac", roots[5], method_flags);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
-        (const byte *) "timingSafeEqual", roots[6], method_flags);
+    roots[6] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalObject *module = mal_value_to_object(roots[6]);
+    mal_intrinsic_define_data(vm, module, (const byte *) "createHash", roots[4], method_flags);
+    mal_intrinsic_define_data(vm, module, (const byte *) "createHmac", roots[5], method_flags);
+    for (usize i = 0; i < countof(CRYPTO_EXPORTS); i++) {
+        const CryptoExport *export_entry = &CRYPTO_EXPORTS[i];
+        MalValue function = mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, (const byte *) export_entry->name),
+                export_entry->length, export_entry->callback));
+        MalRootSpan function_root;
+        mal_gc_root(&function_root, &function, 1);
+        mal_intrinsic_define_data(
+            vm, module, (const byte *) export_entry->name, function, method_flags);
+        mal_gc_unroot(&function_root);
+    }
 
-    MalObject *function_prototype =
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalValue scratch = mal_value_from_native_function_object(
-        mal_native_function_object_new_arity(&vm->heap, function_prototype,
-            mal_intrinsic_ascii(vm, (const byte *) "hash"), 3, mal_node_crypto_hash));
-    MalRootSpan scratch_root;
-    mal_gc_root(&scratch_root, &scratch, 1);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
-        (const byte *) "hash", scratch, method_flags);
-    mal_gc_unroot(&scratch_root);
-    scratch = mal_value_from_native_function_object(
-        mal_native_function_object_new_arity(&vm->heap, function_prototype,
-            mal_intrinsic_ascii(vm, (const byte *) "pbkdf2Sync"), 5,
-            mal_node_crypto_pbkdf2_sync));
-    mal_gc_root(&scratch_root, &scratch, 1);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
-        (const byte *) "pbkdf2Sync", scratch, method_flags);
-    mal_gc_unroot(&scratch_root);
-    scratch = mal_value_from_native_function_object(
-        mal_native_function_object_new_arity(&vm->heap, function_prototype,
-            mal_intrinsic_ascii(vm, (const byte *) "randomBytes"), 2,
-            mal_node_crypto_random_bytes));
-    mal_gc_root(&scratch_root, &scratch, 1);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
-        (const byte *) "randomBytes", scratch, method_flags);
-    mal_gc_unroot(&scratch_root);
-    scratch = mal_value_from_native_function_object(
-        mal_native_function_object_new_arity(&vm->heap, function_prototype,
-            mal_intrinsic_ascii(vm, (const byte *) "randomUUID"), 1,
-            mal_node_crypto_random_uuid));
-    mal_gc_root(&scratch_root, &scratch, 1);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
-        (const byte *) "randomUUID", scratch, method_flags);
-    mal_gc_unroot(&scratch_root);
-    vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE] = roots[7];
-    mal_node_module_publish(vm, slots, count, roots[7]);
+    if (!crypto_roots_installed) {
+        mal_gc_register_root_source(crypto_scan_roots, nullptr);
+        mal_host_register_macrotask_drain(mal_node_crypto_drain, false);
+        crypto_roots_installed = true;
+    }
+    vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE] = roots[6];
+    mal_node_module_publish(vm, slots, count, roots[6]);
     mal_gc_unroot(&root);
 }
 

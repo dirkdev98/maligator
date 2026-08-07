@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "argon2.h"
 #include "dns.h"
 #include "host_task.h"
 #include "reactor.h"
@@ -22,6 +23,7 @@ typedef struct MalHost {
     MalHostTasks tasks;
     MalHostPostedTasks posted_tasks;
     MalDns dns;
+    MalArgon2 argon2;
     struct MalHttpClient *http_clients;
     struct MalTcpConnection *tcp_connections;
     struct MalHostTimer *timers;

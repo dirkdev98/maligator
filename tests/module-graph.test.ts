@@ -555,11 +555,14 @@ test("host catalog includes path and postgres.js loading companions", () => {
 
 	const cryptoSpec = graph.modules.get("node:crypto")!.host!;
 	expect(cryptoSpec.named).toEqual([
+		"argon2",
+		"argon2Sync",
 		"createHash",
 		"createHmac",
 		"hash",
 		"pbkdf2Sync",
 		"randomBytes",
+		"randomInt",
 		"randomUUID",
 		"timingSafeEqual",
 	]);

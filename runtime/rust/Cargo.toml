@@ -69,6 +69,13 @@ rustls = { version = "0.23", default-features = false, features = [
 	"tls12",
 ], optional = true }
 rustls-pemfile = { version = "2", optional = true }
+# Argon2 (RFC 9106) for node:crypto's argon2/argon2Sync. `sru-systems/rust-argon2`
+# rather than RustCrypto's `argon2`: the latter caps associated data at 32 bytes
+# (Params::MAX_DATA_LEN), while Node accepts up to 2^32-1, which would be a
+# parity break. `default-features = false` drops crossbeam-utils and forces
+# ThreadMode::Sequential — output is bit-identical to the parallel mode and the
+# derivation already runs on Maligator's own worker thread.
+rust-argon2 = { version = "3", default-features = false, optional = true }
 
 [features]
 # On by default so dev/test262 builds carry the full Intl + web + RegExp surface.
@@ -89,6 +96,7 @@ regexp = ["dep:regress"]
 # outside this feature; Node builds select it through normalizeNativeFeatures.
 node-zlib = ["dep:flate2", "dep:brotli-decompressor"]
 node-tls = ["dep:rustls", "dep:rustls-pemfile"]
+node-argon2 = ["dep:rust-argon2"]
 
 # The always-on Intl floor: locale parsing/negotiation (Intl.Locale,
 # getCanonicalLocales, maximize/minimize) + result stringification. Every service

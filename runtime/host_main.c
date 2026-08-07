@@ -7,6 +7,7 @@
 #include "web_events_object.h"
 #include "web_fetch.h"
 #include "host.h"
+#include "node_crypto.h"
 #include "node_immediate.h"
 #include "web_host_timer.h"
 #include "web_readable_stream_object.h"
@@ -71,6 +72,7 @@ int main(int argc, char **argv) {
         mal_vm_free_callable(callable);
 #if MAL_NODE
         mal_node_immediates_free(&vm);
+        mal_node_crypto_free(&vm);
 #endif
         mal_host_timers_free(&vm); // runtime cleanup (before the host reactor goes)
         mal_host_detach(&vm);

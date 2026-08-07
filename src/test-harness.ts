@@ -38,6 +38,8 @@ export const REACTOR_MAIN = "runtime/reactor_test_main.c";
 export const NET_MAIN = "runtime/net_test_main.c";
 export const HTTP_MAIN = "runtime/http_test_main.c";
 export const SERVER_MAIN = "runtime/server_test_main.c";
+export const ARGON2_MAIN = "runtime/argon2_test_main.c";
+export const ENTROPY_MAIN = "runtime/entropy_test_main.c";
 
 /**
  * Collect at every safepoint + poison freed cells: GCs land while callbacks,

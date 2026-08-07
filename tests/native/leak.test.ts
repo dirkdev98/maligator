@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "vitest";
-import { buildNativeBinary } from "../../src/test-harness.ts";
+import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-leak-"));
 
@@ -28,8 +28,12 @@ function parseLeaks(output: string): { leaks: number; bytes: number } {
  * on failure the surfaced backtrace names the owned-allocation kind that leaked
  * (e.g. `MalMapEntry`, `MalModuleNamespaceExport`, the owned-concat `malloc`).
  */
-function assertNoLeaks(fixture: string, name: string): void {
-	const binary = buildNativeBinary({ fixture, name, outDir });
+function assertNoLeaks(
+	fixture: string,
+	name: string,
+	extra: { nodeEnabled?: boolean; mainFile?: string } = {},
+): void {
+	const binary = buildNativeBinary({ fixture, name, outDir, ...extra });
 
 	let output = "";
 	try {
@@ -67,5 +71,19 @@ describe.skipIf(!enabled)("GC leak audit (macOS `leaks`)", () => {
 	// malloc'd exports array (freed by the MAL_HEAP_MODULE_NAMESPACE_OBJECT finalizer).
 	it("leaks zero bytes at shutdown (module-namespace exports)", () => {
 		assertNoLeaks("tests/local/leakmodule.mjs", "leakcheck-leakmodule");
+	});
+
+	// Argon2 is the one path that hands allocations across a thread boundary: the
+	// job's copied inputs, its tag buffer, the posted result, and the per-call
+	// async state all have to survive the round trip and then be freed. A worker
+	// that posts after shutdown, or a drain that forgets the taken payload, shows
+	// up here and nowhere else.
+	// The host entry rather than test262_main: the callback forms deliver through
+	// the event loop, which only the host entry runs.
+	it("leaks zero bytes at shutdown (argon2 worker jobs)", () => {
+		assertNoLeaks("tests/local/leakargon2.mjs", "leakcheck-leakargon2", {
+			nodeEnabled: true,
+			mainFile: HOST_MAIN,
+		});
 	});
 });

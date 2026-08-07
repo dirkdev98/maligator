@@ -39,24 +39,9 @@ static bool mal_buffer_ascii_equal_ci(const MalString *string, const char *ascii
     return mal_string_equals_ascii_ci(string, ascii);
 }
 
-static bool mal_buffer_encoding(
-    MalVm *vm, MalValue value, MalBufferEncoding fallback,
-    bool fallback_non_string, bool fallback_unknown, MalBufferEncoding *out
-) {
-    if (mal_value_is_undefined(value)) {
-        *out = fallback;
-        return true;
-    }
-    if (!mal_value_is_string(value)) {
-        if (fallback_non_string) {
-            *out = fallback;
-            return true;
-        }
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "The encoding argument must be a string");
-        return false;
-    }
-    MalString *string = mal_value_to_string(value);
+/* Name-only lookup, with no VM and no throwing, so callers that must *observe*
+ * "not a known encoding" (rather than turn it into an error) can. */
+static bool mal_buffer_encoding_named(const MalString *string, MalBufferEncoding *out) {
     if (mal_buffer_ascii_equal_ci(string, "utf8") ||
         mal_buffer_ascii_equal_ci(string, "utf-8")) {
         *out = MAL_BUFFER_UTF8;
@@ -77,6 +62,29 @@ static bool mal_buffer_encoding(
                mal_buffer_ascii_equal_ci(string, "utf-16le")) {
         *out = MAL_BUFFER_UTF16LE;
     } else {
+        return false;
+    }
+    return true;
+}
+
+static bool mal_buffer_encoding(
+    MalVm *vm, MalValue value, MalBufferEncoding fallback,
+    bool fallback_non_string, bool fallback_unknown, MalBufferEncoding *out
+) {
+    if (mal_value_is_undefined(value)) {
+        *out = fallback;
+        return true;
+    }
+    if (!mal_value_is_string(value)) {
+        if (fallback_non_string) {
+            *out = fallback;
+            return true;
+        }
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The encoding argument must be a string");
+        return false;
+    }
+    if (!mal_buffer_encoding_named(mal_value_to_string(value), out)) {
         if (fallback_unknown) {
             *out = fallback;
             return true;
@@ -449,6 +457,51 @@ MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length) 
         backing, 0, (u32) length);
     mal_gc_unroot(&root);
     return result;
+}
+
+MalValue mal_node_buffer_encode_bytes(
+    MalVm *vm, const byte *bytes, usize length, MalValue encoding,
+    bool throw_on_unknown
+) {
+    if (mal_value_is_undefined(encoding)) {
+        byte *owned = length == 0 ? nullptr : malloc(length);
+        if (length > 0 && owned == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        if (length > 0) memcpy(owned, bytes, length);
+        return mal_node_buffer_from_owned_bytes(vm, owned, length);
+    }
+    MalBufferEncoding resolved;
+    if (!mal_value_is_string(encoding)
+        || !mal_buffer_encoding_named(mal_value_to_string(encoding), &resolved)) {
+        if (throw_on_unknown) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "Unknown Buffer encoding");
+            return mal_value_new_undefined();
+        }
+        // Node's ParseEncoding falls back to BUFFER, so digest() returns the raw
+        // bytes for an unrecognized (or non-string) encoding rather than throwing.
+        return mal_node_buffer_encode_bytes(
+            vm, bytes, length, mal_value_new_undefined(), false);
+    }
+    return mal_buffer_string_from_bytes(vm, bytes, length, resolved);
+}
+
+bool mal_node_buffer_encoding_is_known(MalValue encoding) {
+    MalBufferEncoding resolved;
+    return mal_value_is_string(encoding)
+        && mal_buffer_encoding_named(mal_value_to_string(encoding), &resolved);
+}
+
+byte *mal_node_buffer_decode_string(
+    MalVm *vm, MalValue string, MalValue encoding, usize *length_out
+) {
+    MalBufferEncoding resolved;
+    // update(data, encoding) never throws for an unknown encoding: Node hashes
+    // the string's UTF-8 form instead.
+    (void) mal_buffer_encoding(vm, encoding, MAL_BUFFER_UTF8, true, true, &resolved);
+    return mal_buffer_encode_string(mal_value_to_string(string), resolved, length_out);
 }
 
 static MalTypedArrayObject *mal_buffer_receiver(MalVm *vm, MalValue value) {

@@ -121,15 +121,20 @@ const CHILD_PROCESS: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:child_process"),
 };
 
-// Curated hashing helpers used by the runtime and pinned Express dependencies.
+// The authentication-grade slice: hashing, HMAC, PBKDF2, Argon2 (sync and
+// off-event-loop), and the CSPRNG helpers, plus what pinned Express
+// dependencies reach for.
 const CRYPTO: HostModuleSpec = {
 	id: "node:crypto",
 	named: [
+		"argon2",
+		"argon2Sync",
 		"createHash",
 		"createHmac",
 		"hash",
 		"pbkdf2Sync",
 		"randomBytes",
+		"randomInt",
 		"randomUUID",
 		"timingSafeEqual",
 	],

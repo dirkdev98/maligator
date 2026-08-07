@@ -1,18 +1,24 @@
-// node:crypto acceptance fixture (behind surface.node). Exercises `hash` against
-// known SHA-256 vectors over string,
-// UTF-8, and byte-source (TypedArray / DataView / ArrayBuffer) inputs, plus the
-// compiler-shaped `hash("sha256", JSON.stringify(x), "hex")` call, lowercase-hex
-// output shape, and explicit TypeErrors for every unsupported argument form.
+// node:crypto acceptance fixture (behind surface.node). Covers the synchronous
+// surface: `hash` against known SHA-256 vectors over string, UTF-8, and
+// byte-source (TypedArray / DataView / ArrayBuffer) inputs; streaming
+// hash/HMAC with the full Buffer encoding set; PBKDF2; timingSafeEqual across
+// every accepted source form; the CSPRNG helpers; and Argon2d/i/id known-answer
+// vectors, per-parameter divergence, and the whole invalid-input table.
+// Asynchronous behaviour lives in node-crypto-async.mjs; message-for-message
+// agreement with Node lives in node-crypto-differential.mts.
 // Runs on the host entry; prints one line per check and a final "RESULT
 // <passed>/<total>" line the native runner asserts.
 
 import * as crypto from "node:crypto";
 import {
+	argon2,
+	argon2Sync,
 	createHash,
 	createHmac,
 	hash,
 	pbkdf2Sync,
 	randomBytes,
+	randomInt,
 	randomUUID,
 	timingSafeEqual,
 } from "node:crypto";
@@ -408,25 +414,15 @@ throwsTypeError("rejects non-string output encoding", () =>
 	hashUnchecked("sha256", "abc", coercibleObject),
 );
 check("does not coerce object arguments", toStringCalls === 0);
-throwsTypeError("rejects non-hex output encoding", () => hash("sha256", "abc", "base64"));
+throwsTypeError("hash rejects an unknown output encoding", () =>
+	hash("sha256", "abc", "bogus"),
+);
 throwsTypeError("createHash rejects unsupported algorithm", () => createHash("sha512"));
 throwsTypeError("createHmac rejects unsupported algorithm", () =>
 	createHmac("sha1", "key"),
 );
 throwsTypeError("createHmac requires a key", () =>
 	(createHmac as (...args: unknown[]) => unknown)("sha256"),
-);
-throwsTypeError("createHmac rejects non-byte key", () =>
-	(createHmac as (...args: unknown[]) => unknown)("sha256", new ArrayBuffer(1)),
-);
-throwsTypeError("stream update rejects ArrayBuffer", () =>
-	createHash("sha1").update(new ArrayBuffer(1) as never),
-);
-throwsTypeError("stream update rejects unsupported encoding", () =>
-	createHash("sha1").update("61", "hex"),
-);
-throwsTypeError("digest rejects unsupported encoding", () =>
-	createHash("sha1").digest("base64url"),
 );
 throwsRangeError("randomBytes rejects negative size", () => randomBytes(-1));
 throwsRangeError("pbkdf2 rejects zero iterations", () =>
@@ -451,11 +447,8 @@ const finalizedHmac = createHmac("sha256", "key");
 finalizedHmac.digest("base64");
 throwsError("finalized HMAC rejects update", () => finalizedHmac.update("again"));
 throwsError("finalized HMAC rejects digest", () => finalizedHmac.digest("base64"));
-throwsTypeError("timingSafeEqual requires views", () =>
-	(timingSafeEqual as (...args: unknown[]) => boolean)(
-		new ArrayBuffer(1),
-		new Uint8Array(1),
-	),
+throwsTypeError("timingSafeEqual rejects a string", () =>
+	(timingSafeEqual as (...args: unknown[]) => boolean)("a", "b"),
 );
 throwsRangeError("timingSafeEqual rejects unequal lengths", () =>
 	timingSafeEqual(new Uint8Array(1), new Uint8Array(2)),
@@ -509,6 +502,577 @@ eq(
 	"hashes resized length-tracking DataView",
 	trackingDataView,
 	"dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986",
+);
+
+// --- encoding parity: digest, one-shot hash, and string updates -------------
+const abcSha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+const abcSha256Base64 = "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=";
+const abcSha256Base64Url = "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0";
+check("digest hex", createHash("sha256").update("abc").digest("hex") === abcSha256);
+check(
+	"digest base64",
+	createHash("sha256").update("abc").digest("base64") === abcSha256Base64,
+);
+check(
+	"digest base64url omits padding",
+	createHash("sha256").update("abc").digest("base64url") === abcSha256Base64Url,
+);
+check(
+	"digest latin1 keeps one char per byte",
+	createHash("sha256").update("abc").digest("latin1").length === 32,
+);
+// Node's ParseEncoding falls back to BUFFER, so an unrecognized digest encoding
+// returns the raw bytes instead of throwing. crypto.hash() is the call site that
+// does throw; both behaviours are pinned in the differential fixture.
+const bogusDigest = createHash("sha256")
+	.update("abc")
+	.digest("bogus" as never);
+check(
+	"digest falls back to a Buffer for an unknown encoding",
+	Buffer.isBuffer(bogusDigest) && bogusDigest.toString("hex") === abcSha256,
+);
+const numericDigest = createHash("sha256")
+	.update("abc")
+	.digest(5 as never) as unknown as Buffer;
+check(
+	"digest falls back to a Buffer for a non-string encoding",
+	Buffer.isBuffer(numericDigest) && numericDigest.toString("hex") === abcSha256,
+);
+check("hash base64url", hash("sha256", "abc", "base64url") === abcSha256Base64Url);
+check("hash base64", hash("sha256", "abc", "base64") === abcSha256Base64);
+check(
+	'hash "buffer" encoding returns bytes',
+	Buffer.isBuffer(hash("sha256", "abc", "buffer") as never) &&
+		(hash("sha256", "abc", "buffer") as never as Buffer).toString("hex") === abcSha256,
+);
+check(
+	"update decodes hex like Buffer.from",
+	createHash("sha256").update("616263", "hex").digest("hex") === abcSha256,
+);
+check(
+	"update decodes base64",
+	createHash("sha256").update("YWJj", "base64").digest("hex") === abcSha256,
+);
+check(
+	"update decodes base64url",
+	createHash("sha256").update("YWJj", "base64url").digest("hex") === abcSha256,
+);
+check(
+	"update decodes latin1",
+	createHash("sha256").update("abc", "latin1").digest("hex") === abcSha256,
+);
+check(
+	"update falls back to utf8 for an unknown encoding",
+	createHash("sha256")
+		.update("abc", "bogus" as never)
+		.digest("hex") === abcSha256,
+);
+check(
+	"update accepts an ArrayBuffer",
+	createHash("sha256")
+		.update(new Uint8Array([0x61, 0x62, 0x63]).buffer as never)
+		.digest("hex") === abcSha256,
+);
+check(
+	"createHmac accepts an ArrayBuffer key",
+	createHmac("sha256", new Uint8Array([1, 2, 3, 4]).buffer as never)
+		.update("abc")
+		.digest("hex") ===
+		createHmac("sha256", new Uint8Array([1, 2, 3, 4]))
+			.update("abc")
+			.digest("hex"),
+);
+// Incremental and one-shot must agree over a block boundary.
+const incremental = createHash("sha256");
+for (let i = 0; i < 200; i++) incremental.update("x");
+check(
+	"incremental equals one-shot",
+	incremental.digest("hex") === hash("sha256", "x".repeat(200), "hex"),
+);
+const incrementalHmac = createHmac("sha256", "k");
+incrementalHmac.update("ab");
+incrementalHmac.update("c");
+check(
+	"incremental HMAC equals one-shot",
+	incrementalHmac.digest("hex") === createHmac("sha256", "k").update("abc").digest("hex"),
+);
+
+// --- timingSafeEqual over every accepted source form ------------------------
+const tseBytes = [1, 2, 3, 4, 5, 6, 7, 8];
+const tseBuffer = new Uint8Array(tseBytes).buffer;
+const tseForms: Array<[string, ArrayBufferView | ArrayBuffer]> = [
+	["ArrayBuffer", tseBuffer],
+	["Uint8Array", new Uint8Array(tseBytes)],
+	["Int8Array", new Int8Array(new Uint8Array(tseBytes).buffer)],
+	["Uint16Array", new Uint16Array(new Uint8Array(tseBytes).buffer)],
+	["Float64Array", new Float64Array(new Uint8Array(tseBytes).buffer)],
+	["DataView", new DataView(new Uint8Array(tseBytes).buffer)],
+	["Buffer", Buffer.from(tseBytes)],
+];
+let tseAllEqual = true;
+for (const [, form] of tseForms) {
+	for (const [, other] of tseForms) {
+		if (!timingSafeEqual(form as never, other as never)) tseAllEqual = false;
+	}
+}
+check("timingSafeEqual accepts every byte-source pairing", tseAllEqual);
+check(
+	"timingSafeEqual respects a subarray window",
+	timingSafeEqual(
+		new Uint8Array([9, 1, 2, 3, 9]).subarray(1, 4),
+		new Uint8Array([1, 2, 3]),
+	),
+);
+check(
+	"timingSafeEqual reports a single differing byte",
+	!timingSafeEqual(new Uint8Array([1, 2, 3]), new Uint8Array([1, 2, 4])),
+);
+
+// --- randomBytes / randomInt / randomUUID -----------------------------------
+check("randomBytes truncates a fractional size", randomBytes(1.5).length === 1);
+check("randomBytes truncates 3.9 to 3", randomBytes(3.9).length === 3);
+throwsTypeError("randomBytes rejects a numeric string", () =>
+	(randomBytes as (...args: unknown[]) => unknown)("8"),
+);
+throwsTypeError("randomBytes rejects null", () =>
+	(randomBytes as (...args: unknown[]) => unknown)(null),
+);
+throwsTypeError("randomBytes rejects a missing size", () =>
+	(randomBytes as (...args: unknown[]) => unknown)(),
+);
+throwsRangeError("randomBytes rejects NaN", () => randomBytes(NaN));
+throwsRangeError("randomBytes rejects Infinity", () => randomBytes(Infinity));
+throwsRangeError("randomBytes rejects 2^31", () => randomBytes(2147483648));
+throwsTypeError("randomBytes rejects a non-function callback", () =>
+	(randomBytes as (...args: unknown[]) => unknown)(16, 5),
+);
+
+// 200 is the range that makes the rejection loop observable: a single byte
+// covers it, and 256 % 200 = 56, so a bare `draw % 200` would hand out 0..55
+// twice as often as 56..199. With 40 000 samples the uniform expectation is 200
+// per bucket (sd ~14); the modulo-biased low buckets would sit near 312. The
+// bounds below are wide enough that a correct implementation effectively never
+// trips them and narrow enough that the bug cannot hide. This is a smoke check
+// on the loop, not a statistical certification — the loop's correctness is
+// established by reading crypto_random_below and its driver coverage.
+let randomIntInRange = true;
+const randomIntCounts = new Map<number, number>();
+for (let i = 0; i < 40000; i++) {
+	const value = randomInt(0, 200);
+	if (!Number.isInteger(value) || value < 0 || value >= 200) randomIntInRange = false;
+	randomIntCounts.set(value, (randomIntCounts.get(value) ?? 0) + 1);
+}
+check("randomInt stays in [min, max)", randomIntInRange);
+let randomIntSpread = randomIntCounts.size === 200;
+for (const count of randomIntCounts.values()) {
+	if (count < 120 || count > 290) randomIntSpread = false;
+}
+check("randomInt shows no modulo bias over a range of 200", randomIntSpread);
+// The same range through the wider draw path: a range needing two bytes must
+// reject just as carefully.
+let wideInRange = true;
+for (let i = 0; i < 2000; i++) {
+	const value = randomInt(0, 70000);
+	if (!Number.isInteger(value) || value < 0 || value >= 70000) wideInRange = false;
+}
+check("randomInt stays in range across a multi-byte draw", wideInRange);
+check(
+	"randomInt defaults min to 0",
+	(() => {
+		let ok = true;
+		for (let i = 0; i < 200; i++) {
+			const value = randomInt(3);
+			if (value < 0 || value >= 3) ok = false;
+		}
+		return ok;
+	})(),
+);
+check(
+	"randomInt accepts a negative min",
+	(() => {
+		let ok = true;
+		for (let i = 0; i < 200; i++) {
+			const value = randomInt(-5, -1);
+			if (value < -5 || value >= -1) ok = false;
+		}
+		return ok;
+	})(),
+);
+check(
+	"randomInt spans the maximum permitted range",
+	Number.isInteger(randomInt(0, 281474976710655)),
+);
+throwsTypeError("randomInt rejects a fractional max", () => randomInt(1.5));
+throwsTypeError("randomInt rejects a numeric string", () =>
+	(randomInt as (...args: unknown[]) => unknown)("5"),
+);
+throwsTypeError("randomInt rejects an unsafe integer", () =>
+	randomInt(Number.MAX_SAFE_INTEGER + 1),
+);
+throwsRangeError("randomInt rejects max <= min", () => randomInt(5, 4));
+throwsRangeError("randomInt rejects an equal min and max", () => randomInt(1, 1));
+throwsRangeError("randomInt rejects a range above 2^48-1", () =>
+	randomInt(0, 281474976710656),
+);
+// Node validates the callback before the numeric bounds, so a call that is
+// wrong in both ways reports the callback. Getting this backwards would also
+// mean drawing entropy for a call that is about to throw.
+throwsTypeError("randomInt reports a bad callback before bad bounds", () =>
+	(randomInt as (...args: unknown[]) => unknown)(5, 4, 5),
+);
+throwsTypeError("randomInt reports a bad callback before a bad min", () =>
+	(randomInt as (...args: unknown[]) => unknown)(1.5, 5, 5),
+);
+throwsTypeError("randomInt reports a bad callback before an over-wide range", () =>
+	(randomInt as (...args: unknown[]) => unknown)(0, 281474976710656, 5),
+);
+throwsTypeError("randomInt still reports a bad min when the callback is valid", () =>
+	(randomInt as (...args: unknown[]) => unknown)(1.5, 5, () => undefined),
+);
+// `max === undefined` shifts the arguments down, so the third argument is not a
+// callback and is ignored outright.
+check(
+	"randomInt ignores a third argument when max is undefined",
+	Number.isInteger((randomInt as (...args: unknown[]) => number)(5, undefined, 5)),
+);
+check("randomInt metadata", randomInt.name === "randomInt" && randomInt.length === 3);
+
+throwsTypeError("randomUUID rejects null options", () =>
+	(randomUUID as (...args: unknown[]) => unknown)(null),
+);
+throwsTypeError("randomUUID rejects non-object options", () =>
+	(randomUUID as (...args: unknown[]) => unknown)(5),
+);
+throwsTypeError("randomUUID rejects a non-boolean disableEntropyCache", () =>
+	(randomUUID as (...args: unknown[]) => unknown)({ disableEntropyCache: 1 }),
+);
+check(
+	"randomUUID accepts an explicit options bag",
+	randomUUID({ disableEntropyCache: true }).length === 36 &&
+		randomUUID({ disableEntropyCache: false }).length === 36 &&
+		randomUUID({}).length === 36,
+);
+const uncachedUuids = new Set<string>();
+for (let i = 0; i < 32; i++) uncachedUuids.add(randomUUID({ disableEntropyCache: true }));
+check("randomUUID stays unique with the cache disabled", uncachedUuids.size === 32);
+
+// --- Argon2: RFC 9106 known-answer vectors ----------------------------------
+type Argon2Parameters = Parameters<typeof argon2Sync>[1];
+function rfc9106(overrides: Partial<Argon2Parameters> = {}): Argon2Parameters {
+	return {
+		message: Buffer.alloc(32, 0x01),
+		nonce: Buffer.alloc(16, 0x02),
+		secret: Buffer.alloc(8, 0x03),
+		associatedData: Buffer.alloc(12, 0x04),
+		parallelism: 4,
+		tagLength: 32,
+		memory: 32,
+		passes: 3,
+		...overrides,
+	} as Argon2Parameters;
+}
+const KAT: Array<[string, string]> = [
+	["argon2d", "512b391b6f1162975371d30919734294f868e3be3984f3c1a13a4db9fabe4acb"],
+	["argon2i", "c814d9d1dc7f37aa13f0d77f2494bda1c8de6b016dd388d29952a4c4672b6ce8"],
+	["argon2id", "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659"],
+];
+for (const [algorithm, expected] of KAT) {
+	check(
+		"RFC 9106 vector " + algorithm,
+		argon2Sync(algorithm as never, rfc9106()).toString("hex") === expected,
+	);
+}
+const baseline = argon2Sync("argon2id", rfc9106()).toString("hex");
+// One parameter at a time: every input must reach the derivation.
+const divergences: Array<[string, Partial<Argon2Parameters>]> = [
+	["message", { message: Buffer.alloc(32, 0x02) }],
+	["nonce", { nonce: Buffer.alloc(16, 0x03) }],
+	["secret", { secret: Buffer.alloc(8, 0x04) }],
+	["associatedData", { associatedData: Buffer.alloc(12, 0x05) }],
+	["passes", { passes: 4 }],
+	["memory", { memory: 33 }],
+	["parallelism", { parallelism: 2 }],
+	["tagLength", { tagLength: 33 }],
+];
+for (const [name, override] of divergences) {
+	check(
+		"argon2 " + name + " changes the tag",
+		argon2Sync("argon2id", rfc9106(override)).toString("hex") !== baseline,
+	);
+}
+check(
+	"argon2 variants differ from one another",
+	new Set(KAT.map(([, expected]) => expected)).size === 3,
+);
+// Argon2 hashes the un-rounded `memory` into H0 while rounding only the block
+// count, so 8/9/11 (all eight blocks at p=1) still produce different tags.
+const rounded = [8, 9, 11, 12].map((memory) =>
+	argon2Sync("argon2id", {
+		message: "pw",
+		nonce: "0123456789abcdef",
+		parallelism: 1,
+		tagLength: 32,
+		memory,
+		passes: 1,
+	} as never).toString("hex"),
+);
+check("argon2 does not pre-round memory", new Set(rounded).size === 4);
+check(
+	"argon2 honours tagLength",
+	argon2Sync("argon2id", rfc9106({ tagLength: 4 })).length === 4 &&
+		argon2Sync("argon2id", rfc9106({ tagLength: 64 })).length === 64,
+);
+check(
+	"argon2 accepts every byte-source form",
+	(() => {
+		const parameters = {
+			parallelism: 1,
+			tagLength: 32,
+			memory: 32,
+			passes: 2,
+		};
+		const fromView = argon2Sync("argon2id", {
+			...parameters,
+			message: new Uint8Array([1, 2, 3]),
+			nonce: new Uint8Array(8).fill(2),
+		} as never).toString("hex");
+		const fromArrayBuffer = argon2Sync("argon2id", {
+			...parameters,
+			message: new Uint8Array([1, 2, 3]).buffer,
+			nonce: new Uint8Array(8).fill(2).buffer,
+		} as never).toString("hex");
+		const fromDataView = argon2Sync("argon2id", {
+			...parameters,
+			message: new DataView(new Uint8Array([1, 2, 3]).buffer),
+			nonce: new DataView(new Uint8Array(8).fill(2).buffer),
+		} as never).toString("hex");
+		return fromView === fromArrayBuffer && fromView === fromDataView;
+	})(),
+);
+check(
+	"argon2 measures string inputs as UTF-8",
+	argon2Sync("argon2id", {
+		message: "password",
+		nonce: "01234567",
+		parallelism: 1,
+		tagLength: 32,
+		memory: 32,
+		passes: 2,
+	} as never).toString("hex") ===
+		argon2Sync("argon2id", {
+			message: Buffer.from("password", "utf8"),
+			nonce: Buffer.from("01234567", "utf8"),
+			parallelism: 1,
+			tagLength: 32,
+			memory: 32,
+			passes: 2,
+		} as never).toString("hex"),
+);
+check(
+	"argon2 ignores unknown parameter keys",
+	argon2Sync("argon2id", rfc9106({ bogus: 1 } as never)).toString("hex") === baseline,
+);
+check(
+	"argon2 treats an absent optional input as empty",
+	argon2Sync("argon2id", {
+		message: "pw",
+		nonce: "0123456789abcdef",
+		secret: undefined,
+		associatedData: undefined,
+		parallelism: 1,
+		tagLength: 32,
+		memory: 32,
+		passes: 1,
+	} as never).toString("hex") ===
+		argon2Sync("argon2id", {
+			message: "pw",
+			nonce: "0123456789abcdef",
+			parallelism: 1,
+			tagLength: 32,
+			memory: 32,
+			passes: 1,
+		} as never).toString("hex"),
+);
+// Associated data past 32 bytes is the exact bound RustCrypto's argon2 caps at,
+// so this is the guard against a backend swap silently breaking Node parity.
+check(
+	"argon2 accepts associated data past 32 bytes",
+	new Set(
+		[32, 33, 1000].map((size) =>
+			argon2Sync("argon2id", rfc9106({ associatedData: Buffer.alloc(size, 4) })).toString(
+				"hex",
+			),
+		),
+	).size === 3,
+);
+
+// --- Argon2 property read order ---------------------------------------------
+// Node reads all eight in this order before validating any of them, so a getter
+// cannot observe a partially validated bag. (Node re-reads secret and
+// associatedData a second time on the synchronous path; Maligator reads each
+// once, which the differential fixture compares as first-occurrence order.)
+const readOrder: Array<string> = [];
+const probed = new Proxy(rfc9106() as unknown as Record<string, unknown>, {
+	get(target, key): unknown {
+		if (typeof key === "string" && !readOrder.includes(key)) readOrder.push(key);
+		return target[key];
+	},
+});
+argon2Sync("argon2id", probed as never);
+check(
+	"argon2 reads parameters in Node's order",
+	readOrder.join(",") ===
+		"parallelism,tagLength,memory,passes,message,nonce,secret,associatedData",
+);
+
+// --- Argon2 invalid inputs ---------------------------------------------------
+throwsTypeError("argon2Sync rejects a non-string algorithm", () =>
+	(argon2Sync as (...args: unknown[]) => unknown)(5, rfc9106()),
+);
+throwsTypeError("argon2Sync rejects an unknown algorithm", () =>
+	(argon2Sync as (...args: unknown[]) => unknown)("argon2x", rfc9106()),
+);
+throwsTypeError("argon2Sync rejects non-object parameters", () =>
+	(argon2Sync as (...args: unknown[]) => unknown)("argon2id", 5),
+);
+throwsTypeError("argon2Sync rejects missing parameters", () =>
+	(argon2Sync as (...args: unknown[]) => unknown)("argon2id"),
+);
+throwsTypeError("argon2Sync rejects a numeric message", () =>
+	argon2Sync("argon2id", rfc9106({ message: 5 as never })),
+);
+throwsTypeError("argon2Sync rejects a numeric nonce", () =>
+	argon2Sync("argon2id", rfc9106({ nonce: 5 as never })),
+);
+throwsRangeError("argon2Sync rejects a short nonce", () =>
+	argon2Sync("argon2id", rfc9106({ nonce: Buffer.alloc(7) })),
+);
+throwsTypeError("argon2Sync rejects a string parallelism", () =>
+	argon2Sync("argon2id", rfc9106({ parallelism: "4" as never })),
+);
+throwsRangeError("argon2Sync rejects a fractional parallelism", () =>
+	argon2Sync("argon2id", rfc9106({ parallelism: 1.5 })),
+);
+throwsRangeError("argon2Sync rejects parallelism 0", () =>
+	argon2Sync("argon2id", rfc9106({ parallelism: 0 })),
+);
+throwsRangeError("argon2Sync rejects parallelism above 2^24-1", () =>
+	argon2Sync("argon2id", rfc9106({ parallelism: 16777216 })),
+);
+throwsRangeError("argon2Sync rejects tagLength below 4", () =>
+	argon2Sync("argon2id", rfc9106({ tagLength: 3 })),
+);
+throwsRangeError("argon2Sync rejects a fractional tagLength", () =>
+	argon2Sync("argon2id", rfc9106({ tagLength: 1.5 })),
+);
+throwsRangeError("argon2Sync rejects memory below 8 * parallelism", () =>
+	argon2Sync("argon2id", rfc9106({ parallelism: 2, memory: 8 })),
+);
+throwsRangeError("argon2Sync rejects memory above 2^32-1", () =>
+	argon2Sync("argon2id", rfc9106({ memory: 4294967296 })),
+);
+throwsRangeError("argon2Sync rejects passes 0", () =>
+	argon2Sync("argon2id", rfc9106({ passes: 0 })),
+);
+throwsRangeError("argon2Sync rejects a fractional passes", () =>
+	argon2Sync("argon2id", rfc9106({ passes: 1.5 })),
+);
+// Deliberate divergence: Node 24.14.1 raises ERR_INTERNAL_ASSERTION ("'name'
+// must be a string ... open an issue") for these; a proper TypeError is the
+// correct behaviour and is excluded from the differential fixture.
+throwsTypeError("argon2Sync rejects a null secret with a TypeError", () =>
+	argon2Sync("argon2id", rfc9106({ secret: null as never })),
+);
+throwsTypeError("argon2Sync rejects a numeric secret with a TypeError", () =>
+	argon2Sync("argon2id", rfc9106({ secret: 5 as never })),
+);
+throwsTypeError("argon2Sync rejects a null associatedData with a TypeError", () =>
+	argon2Sync("argon2id", rfc9106({ associatedData: null as never })),
+);
+// --- host resource policy ----------------------------------------------------
+// Deliberate divergence, and the only one that is a policy rather than a bug
+// workaround: Node's documented ranges reach 4 TiB of `memory` and 4 GiB of
+// `tagLength`, and a request anywhere near either gets Node's process SIGKILLed.
+// Maligator keeps Node's *validation* range verbatim — everything below is a
+// plain Error, never a RangeError — and then refuses what its own resource
+// policy will not fund. Defaults: 256 MiB of matrix, 16 MiB of tag.
+// Never differential: Node cannot survive these inputs to disagree with.
+const HOST_MAX_MEMORY_KIB = 262144;
+const HOST_MAX_TAG_LENGTH = 16777216;
+// The ceiling is compared against the *rounded* block count, which is what the
+// derivation actually allocates, so exceeding it means clearing the next
+// 4*parallelism-block step (16 blocks at the parallelism of 4 used here) rather
+// than merely adding one KiB.
+const OVER_MEMORY_POLICY = HOST_MAX_MEMORY_KIB + 16;
+throwsError("argon2Sync refuses memory above the host ceiling", () =>
+	argon2Sync("argon2id", rfc9106({ memory: OVER_MEMORY_POLICY })),
+);
+throwsError("argon2Sync refuses the maximum memory Node documents", () =>
+	argon2Sync("argon2id", rfc9106({ memory: 4294967295 })),
+);
+throwsError("argon2Sync refuses a tagLength above the host ceiling", () =>
+	argon2Sync("argon2id", rfc9106({ tagLength: HOST_MAX_TAG_LENGTH + 1 })),
+);
+throwsError("argon2Sync refuses the maximum tagLength Node documents", () =>
+	argon2Sync("argon2id", rfc9106({ tagLength: 4294967295 })),
+);
+// A resource refusal is an Error, not a RangeError: the value was inside the
+// range Node documents, so reporting it as out of range would be wrong.
+check(
+	"a policy refusal is a plain Error, not a RangeError",
+	(() => {
+		try {
+			argon2Sync("argon2id", rfc9106({ memory: OVER_MEMORY_POLICY }));
+		} catch (error) {
+			return error instanceof Error && !(error instanceof RangeError);
+		}
+		return false;
+	})(),
+);
+// The boundary itself still derives: the ceiling is inclusive, and a value one
+// step inside it is ordinary work. (Only the tag ceiling is cheap enough to
+// exercise directly; a 256 MiB matrix is left to the C driver.)
+check(
+	"a tagLength just inside the ceiling still derives",
+	argon2Sync("argon2id", rfc9106({ tagLength: 4096 })).length === 4096,
+);
+throwsError("argon2 refuses an over-policy memory request", () =>
+	(argon2 as (...args: unknown[]) => unknown)(
+		"argon2id",
+		rfc9106({ memory: OVER_MEMORY_POLICY }),
+		() => undefined,
+	),
+);
+throwsError("argon2 refuses an over-policy tagLength", () =>
+	(argon2 as (...args: unknown[]) => unknown)(
+		"argon2id",
+		rfc9106({ tagLength: HOST_MAX_TAG_LENGTH + 1 }),
+		() => undefined,
+	),
+);
+
+throwsTypeError("argon2 rejects a missing callback", () =>
+	(argon2 as (...args: unknown[]) => unknown)("argon2id", rfc9106()),
+);
+throwsTypeError("argon2 rejects a non-function callback", () =>
+	(argon2 as (...args: unknown[]) => unknown)("argon2id", rfc9106(), 5),
+);
+throwsTypeError("argon2 validates the algorithm before the callback", () =>
+	(argon2 as (...args: unknown[]) => unknown)(5, rfc9106(), 5),
+);
+
+check(
+	"argon2 export metadata",
+	argon2.name === "argon2" &&
+		argon2.length === 3 &&
+		argon2Sync.name === "argon2Sync" &&
+		argon2Sync.length === 2,
+);
+check(
+	"namespace exposes the new named exports",
+	crypto.argon2 === argon2 &&
+		crypto.argon2Sync === argon2Sync &&
+		crypto.randomInt === randomInt,
 );
 
 let passed = 0;

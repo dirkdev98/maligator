@@ -5,17 +5,33 @@
 /*
  * node:crypto host built-in (runtime layer, behind surface.node / MAL_NODE).
  *
- * A deliberately tiny slice: one-shot SHA-256 `hash`, streaming SHA-1
- * `createHash`, streaming SHA-256 `createHmac`, `timingSafeEqual`, and
- * `randomUUID`. The digest cores are pure, self-contained C (FIPS 180-4) with
- * no OpenSSL / Rust dependency.
+ * Covers the authentication-grade surface: SHA-1/SHA-256/MD5 `createHash`,
+ * SHA-256 `createHmac`, one-shot `hash`, `pbkdf2Sync`, `timingSafeEqual`,
+ * `randomBytes`/`randomInt`/`randomUUID` (sync and callback where Node has
+ * one), and Argon2d/i/id via `argon2Sync` and the off-event-loop `argon2`.
+ * The digest cores are pure, self-contained C (FIPS 180-4) with no OpenSSL
+ * dependency; Argon2 goes through the host worker pool onto a Rust primitive.
  *
- * The streaming slice accepts only createHash("sha1") and
- * createHmac("sha256", string-or-ArrayBufferView), UTF-8 strings (using utf8 or
- * utf-8, case-insensitively) or ArrayBufferView updates, and digest("base64").
- * The one-shot helper remains
- * hash("sha256", string-or-byte-source, "hex"). Detached and out-of-bounds
- * views are rejected, and finalized streaming state cannot be reused.
+ * Deliberate divergences from Node 24.14.1, all pinned in
+ * tests/local/node-crypto.mts:
+ *   * `parameters.secret` / `parameters.associatedData` of a wrong type throw a
+ *     proper TypeError rather than Node's ERR_INTERNAL_ASSERTION bug.
+ *   * Argon2 `memory` and `tagLength` accept Node's full documented range and
+ *     are then subject to a host resource policy (see MalArgon2Config). A
+ *     request inside Node's range but past the ceilings is a fixed JavaScript
+ *     Error; Node's answer to the same request is a SIGKILLed process.
+ * Still narrower than Node: only sha1/sha256/md5 digests, only sha256 HMAC and
+ * pbkdf2, and `crypto.hash` accepts an ArrayBuffer input that Node rejects.
+ *
+ * Asynchrony, stated plainly: only Argon2 leaves the event loop. `argon2` runs
+ * on the host worker pool; `randomBytes(size, cb)` and `randomInt(..., cb)` draw
+ * their entropy synchronously on the calling thread and then post the finished
+ * value, so the callback lands as a macrotask with Node's ordering but the draw
+ * itself is not off-loop. Node uses its threadpool for both. For the 16-32 byte
+ * draws this surface targets the difference is unobservable; a multi-gigabyte
+ * `randomBytes` would stall the loop here where Node's would not. Moving them
+ * to a worker is a separate increment — it needs a second pool, and issue #16
+ * only requires Argon2 off the loop.
  */
 
 typedef struct MalVm MalVm;
@@ -31,3 +47,14 @@ typedef struct MalHostLaunchContext MalHostLaunchContext;
 void mal_host_install_node_crypto(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
 );
+
+/**
+ * Macrotask source for the asynchronous crypto callbacks (`argon2`,
+ * `randomBytes(cb)`, `randomInt(cb)`). Returns false when the head host task
+ * belongs to another runtime module, so the cooperative drain protocol keeps
+ * net/http from being starved.
+ */
+bool mal_node_crypto_drain(MalVm *vm);
+
+/** Release pending asynchronous crypto state for an isolate (teardown). */
+void mal_node_crypto_free(MalVm *vm);
