@@ -24,7 +24,7 @@
 #include "web_readable_stream_object.h"
 #include "web_request_object.h"
 #include "web_response_object.h"
-#include "server.h" // host: mal_http_handler, mal_http_conn_respond, MalHttpRequest
+#include "server.h" // host: mal_http_server_start_stream_handler, mal_http_conn_respond
 #include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
@@ -1236,19 +1236,169 @@ request_error:
     return mal_value_new_undefined();
 }
 
-static MalValue mal_fetch_make_request(
-    MalVm *vm, const MalHttpRequest *req, const char *body, usize body_len) {
+/* ---------------------------------------------------------------------------
+ * Mal.serve request state.
+ *
+ * Inbound framing is llhttp's (MalHttpCodec) — this layer only buffers the decoded
+ * body so the WinterTC handler can see a whole Request. Two bounds matter: the total
+ * buffered body (413 past MAL_FETCH_REQUEST_BODY_MAX) and the request target
+ * (414 past MAL_FETCH_TARGET_MAX); per-turn read bounds stay in the transport.
+ * --------------------------------------------------------------------------- */
+
+#define MAL_FETCH_REQUEST_BODY_MAX ((usize) 16 * 1024 * 1024)
+#define MAL_FETCH_TARGET_MAX ((usize) 8 * 1024)
+#define MAL_FETCH_URL_MAX ((usize) 16 * 1024)
+
+typedef struct MalFetchSnapshotHeader {
+    const char *name;
+    usize name_len;
+    const char *value;
+    usize value_len;
+} MalFetchSnapshotHeader;
+
+/*
+ * Per-request host state, packed into one allocation (struct, header array, then
+ * NUL-terminated field bytes). It deliberately outlives MalHttpConn: a handler's
+ * promise can settle after the peer disconnected or the response already flushed,
+ * so `conn` is cleared the instant the transport reports completion or failure and
+ * `refs` (transport + pending promise reaction) keeps the struct itself alive.
+ * Nothing may dereference `conn` without a null check.
+ */
+typedef struct MalFetchRequest {
+    MalVm *vm;
+    MalHttpConn *conn;
+    int refs;
+    bool responded;
+    bool head_request;
+    bool body_overflow;
+    bool body_failed;
+    byte *body;
+    usize body_len;
+    usize body_cap;
+    const char *method;
+    usize method_len;
+    const char *target;
+    usize target_len;
+    MalFetchSnapshotHeader *headers;
+    usize header_count;
+} MalFetchRequest;
+
+static bool mal_fetch_snapshot_add(usize *total, usize length) {
+    if (length == SIZE_MAX || *total > SIZE_MAX - (length + 1)) return false;
+    *total += length + 1;
+    return true;
+}
+
+static const char *mal_fetch_snapshot_copy(
+    char **cursor, const char *bytes, usize length) {
+    char *copy = *cursor;
+    if (length > 0) memcpy(copy, bytes, length);
+    copy[length] = '\0';
+    *cursor += length + 1;
+    return copy;
+}
+
+static bool mal_fetch_snapshot_header(
+    const MalFetchRequest *req, const char *name, const char **value, usize *value_len) {
+    usize name_len = strlen(name);
+    for (usize i = 0; i < req->header_count; i++) {
+        if (req->headers[i].name_len != name_len) continue;
+        bool equal = true;
+        for (usize j = 0; j < name_len; j++) {
+            if (mal_ascii_to_lower((u8) req->headers[i].name[j]) != (u8) name[j]) {
+                equal = false;
+                break;
+            }
+        }
+        if (equal) {
+            *value = req->headers[i].value;
+            *value_len = req->headers[i].value_len;
+            return true;
+        }
+    }
+    return false;
+}
+
+static MalFetchRequest *mal_fetch_request_new(
+    MalVm *vm, MalHttpConn *conn, const MalHttpCodecHead *head) {
+    usize total = (usize) sizeof(MalFetchRequest);
+    usize header_size = (usize) sizeof(MalFetchSnapshotHeader);
+    if (head->field_count > (SIZE_MAX - total) / header_size) return nullptr;
+    total += head->field_count * header_size;
+    if (!mal_fetch_snapshot_add(&total, head->method_length)
+        || !mal_fetch_snapshot_add(&total, head->target_length)) {
+        return nullptr;
+    }
+    for (usize i = 0; i < head->field_count; i++) {
+        if (!mal_fetch_snapshot_add(&total, head->fields[i].name_length)
+            || !mal_fetch_snapshot_add(&total, head->fields[i].value_length)) {
+            return nullptr;
+        }
+    }
+    MalFetchRequest *req = calloc(1, total);
+    if (req == nullptr) return nullptr;
+    req->vm = vm;
+    req->conn = conn;
+    req->refs = 1; // the transport's reference
+    req->headers = (MalFetchSnapshotHeader *) (req + 1);
+    req->header_count = head->field_count;
+    char *cursor = (char *) &req->headers[head->field_count];
+    req->method_len = head->method_length;
+    req->method = mal_fetch_snapshot_copy(
+        &cursor, (const char *) mal_http_codec_head_method(head), head->method_length);
+    req->target_len = head->target_length;
+    req->target = mal_fetch_snapshot_copy(
+        &cursor, (const char *) mal_http_codec_head_target(head), head->target_length);
+    for (usize i = 0; i < head->field_count; i++) {
+        const MalHttpCodecField *field = &head->fields[i];
+        req->headers[i].name_len = field->name_length;
+        req->headers[i].name = mal_fetch_snapshot_copy(
+            &cursor, (const char *) mal_http_codec_field_name(head, field),
+            field->name_length);
+        req->headers[i].value_len = field->value_length;
+        req->headers[i].value = mal_fetch_snapshot_copy(
+            &cursor, (const char *) mal_http_codec_field_value(head, field),
+            field->value_length);
+    }
+    req->head_request = req->method_len == 4 && memcmp(req->method, "HEAD", 4) == 0;
+    return req;
+}
+
+static void mal_fetch_request_retain(MalFetchRequest *req) {
+    req->refs++;
+}
+
+static void mal_fetch_request_release(MalFetchRequest *req) {
+    if (--req->refs > 0) return;
+    free(req->body);
+    free(req);
+}
+
+/* The transport is gone (peer disconnect, abort, or a flushed response): drop the
+ * connection pointer so a later promise settlement cannot reach freed memory. */
+static void mal_fetch_response_complete(void *data, bool success) {
+    (void) success;
+    MalFetchRequest *req = data;
+    req->conn = nullptr;
+    mal_fetch_request_release(req);
+}
+
+static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REQUEST_PROTOTYPE]);
     MalRequestObject *r = mal_request_object_new(&vm->heap, proto);
-    if (body_len > 0) {
-        r->body = malloc(body_len);
+    MalValue result = mal_value_from_request_object(r);
+    MalRootSpan rs;
+    mal_gc_root(&rs, &result, 1);
+    if (req->body_len > 0) {
+        r->body = malloc(req->body_len);
         if (r->body == nullptr) {
+            mal_gc_unroot(&rs);
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                 "Request body allocation failed");
             return mal_value_new_undefined();
         }
-        memcpy(r->body, body, body_len);
-        r->body_len = body_len;
+        memcpy(r->body, req->body, req->body_len);
+        r->body_len = req->body_len;
     }
 
     MalString *method = mal_string_new_ascii(&vm->heap, req->method, req->method_len);
@@ -1256,45 +1406,61 @@ static MalValue mal_fetch_make_request(
         mal_value_from_string(method));
 
     // url = "http://" + Host + request-target (spec wants an absolute URL string).
+    // Sized exactly: snprintf reports the untruncated length, so measuring into a
+    // fixed stack buffer would hand the over-long remainder to the JS string.
     const char *host_hdr;
     usize host_len;
-    if (!mal_http_header(req, "host", &host_hdr, &host_len)) {
+    if (!mal_fetch_snapshot_header(req, "host", &host_hdr, &host_len)) {
         host_hdr = "localhost";
         host_len = 9;
     }
-    char urlbuf[2048];
-    int un = snprintf(urlbuf, sizeof(urlbuf), "http://%.*s%.*s", (int) host_len, host_hdr,
-        (int) req->target_len, req->target);
-    MalString *url = mal_string_new_ascii(&vm->heap, urlbuf, un > 0 ? (usize) un : 0);
+    static const char scheme[] = "http://";
+    usize scheme_len = sizeof(scheme) - 1;
+    usize url_len = scheme_len + host_len + req->target_len;
+    char *urlbuf = malloc(url_len == 0 ? 1 : url_len);
+    if (urlbuf == nullptr) {
+        mal_gc_unroot(&rs);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Request URL allocation failed");
+        return mal_value_new_undefined();
+    }
+    memcpy(urlbuf, scheme, scheme_len);
+    if (host_len > 0) memcpy(urlbuf + scheme_len, host_hdr, host_len);
+    if (req->target_len > 0) {
+        memcpy(urlbuf + scheme_len + host_len, req->target, req->target_len);
+    }
+    MalString *url = mal_string_new_ascii(&vm->heap, (const byte *) urlbuf, url_len);
+    free(urlbuf);
     mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "url"),
         mal_value_from_string(url));
 
     // request.headers (a Headers instance built from the parsed headers).
     MalHeadersObject *headers = mal_headers_create(vm);
     for (usize i = 0; i < req->header_count; i++) {
-        mal_headers_append_bytes(vm, headers, req->headers[i].name, req->headers[i].name_len,
-            req->headers[i].value, req->headers[i].value_len);
+        mal_headers_append_bytes(vm, headers, req->headers[i].name,
+            req->headers[i].name_len, req->headers[i].value, req->headers[i].value_len);
     }
     mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "headers"),
         mal_value_from_headers_object(headers));
 
-    return mal_value_from_request_object(r);
+    mal_gc_unroot(&rs);
+    return result;
 }
 
 /* ---------------------------------------------------------------------------
  * The handler hook + Mal.serve.
  * --------------------------------------------------------------------------- */
 
-/* The connection is a host C struct (not a GC cell) that stays alive across the
- * async gap — nothing closes it while a response is pending — so we can carry the
- * pointer through a native reaction's slot boxed as an f64 (48-bit pointers are
- * exact in a double). */
-static MalValue mal_fetch_box_conn(MalHttpConn *conn) {
-    return mal_value_from_f64((f64) (uptr) conn);
+/* MalFetchRequest is a host C struct (not a GC cell), so a native reaction carries
+ * the pointer in a slot boxed as an f64 (48-bit pointers are exact in a double).
+ * The reaction pair holds a reference for as long as it can run, so the pointer is
+ * always live when it is unboxed — but `req->conn` may already be null by then. */
+static MalValue mal_fetch_box_request(MalFetchRequest *req) {
+    return mal_value_from_f64((f64) (uptr) req);
 }
 
-static MalHttpConn *mal_fetch_unbox_conn(MalValue value) {
-    return (MalHttpConn *) (uptr) mal_value_to_f64(value);
+static MalFetchRequest *mal_fetch_unbox_request(MalValue value) {
+    return (MalFetchRequest *) (uptr) mal_value_to_f64(value);
 }
 
 /* Case-insensitive match of a header name (UTF-16) against a lowercase ASCII literal. */
@@ -1305,9 +1471,11 @@ static bool mal_fetch_name_is(const MalString *name, const char *ascii) {
 /* Serialize a Response's Headers into an HTTP header block ("Name: Value\r\n" per
  * line), skipping host-managed framing headers and ensuring a Content-Type. Returns
  * malloc'd bytes + len (caller frees), or null (=> host default) when there is no
- * Headers object. */
-static char *mal_fetch_serialize_headers(MalResponseObject *r, usize *out_len) {
+ * Headers object. Clears *ok when the block could not be allocated. */
+static char *mal_fetch_serialize_headers(
+    MalResponseObject *r, usize *out_len, bool *ok) {
     static const char default_ct[] = "Content-Type: text/plain; charset=utf-8\r\n";
+    *ok = true;
     if (!mal_value_is_headers_object(r->headers)) {
         *out_len = 0;
         return nullptr;
@@ -1332,6 +1500,11 @@ static char *mal_fetch_serialize_headers(MalResponseObject *r, usize *out_len) {
     }
 
     char *buf = malloc(size == 0 ? 1 : size);
+    if (buf == nullptr) {
+        *ok = false;
+        *out_len = 0;
+        return nullptr;
+    }
     usize o = 0;
     if (!has_ct) {
         memcpy(buf, default_ct, strlen(default_ct));
@@ -1363,16 +1536,35 @@ static char *mal_fetch_serialize_headers(MalResponseObject *r, usize *out_len) {
     return buf;
 }
 
+/* Send a fixed-text reply, honouring the request method's body rules. */
+static void mal_fetch_respond_text(
+    MalFetchRequest *req, int status, const char *reason, const char *body, usize body_len) {
+    if (req->conn == nullptr || req->responded) return;
+    req->responded = true;
+    if (req->head_request) {
+        mal_http_conn_respond_framed(
+            req->conn, status, reason, nullptr, 0, "", 0, (i64) body_len);
+        return;
+    }
+    mal_http_conn_respond(req->conn, status, reason, nullptr, 0, body, body_len);
+}
+
 /* Serialize a settled handler result (a Response, or a 500 if it isn't one). */
-static void mal_fetch_respond_with(MalHttpConn *conn, MalValue result) {
+static void mal_fetch_respond_with(MalFetchRequest *req, MalValue result) {
+    if (req->conn == nullptr || req->responded) return;
     if (!mal_value_is_response_object(result)) {
-        mal_http_conn_respond(conn, 500, "Internal Server Error", nullptr, 0,
+        mal_fetch_respond_text(req, 500, "Internal Server Error",
             "handler must return a Response", 30);
         return;
     }
     MalResponseObject *r = mal_value_to_response_object(result);
     usize hlen = 0;
-    char *block = mal_fetch_serialize_headers(r, &hlen);
+    bool serialized = false;
+    char *block = mal_fetch_serialize_headers(r, &hlen, &serialized);
+    if (!serialized) {
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
+        return;
+    }
     const char *reason = mal_fetch_reason(r->status);
     char *custom_reason = nullptr;
     if (mal_value_is_string(r->status_text)) {
@@ -1388,8 +1580,22 @@ static void mal_fetch_respond_with(MalHttpConn *conn, MalValue result) {
             }
         }
     }
-    mal_http_conn_respond(conn, r->status, reason, block, hlen,
-        r->body != nullptr ? r->body : "", r->body_len);
+
+    // A body on HEAD or an entity-forbidden status desynchronizes the response queue
+    // of every keep-alive peer, so transmit nothing and only advertise the length
+    // where RFC 9110 still expects one (HEAD mirrors GET; 1xx/204/304 carry none).
+    bool entity_forbidden =
+        (r->status >= 100 && r->status < 200) || r->status == 204 || r->status == 304;
+    req->responded = true;
+    if (entity_forbidden) {
+        mal_http_conn_respond_framed(req->conn, r->status, reason, block, hlen, "", 0, -1);
+    } else if (req->head_request) {
+        mal_http_conn_respond_framed(
+            req->conn, r->status, reason, block, hlen, "", 0, (i64) r->body_len);
+    } else {
+        mal_http_conn_respond(req->conn, r->status, reason, block, hlen,
+            r->body != nullptr ? r->body : "", r->body_len);
+    }
     free(custom_reason);
     free(block);
 }
@@ -1401,8 +1607,10 @@ static MalValue mal_fetch_on_fulfilled(
     (void) this_value;
     (void) nt;
     MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
-    MalHttpConn *conn = mal_fetch_unbox_conn(mal_native_function_object_get_slot(self, 0));
-    mal_fetch_respond_with(conn, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    MalFetchRequest *req =
+        mal_fetch_unbox_request(mal_native_function_object_get_slot(self, 0));
+    mal_fetch_respond_with(req, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    mal_fetch_request_release(req);
     return mal_value_new_undefined();
 }
 
@@ -1415,50 +1623,194 @@ static MalValue mal_fetch_on_rejected(
     (void) arg_count;
     (void) nt;
     MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
-    MalHttpConn *conn = mal_fetch_unbox_conn(mal_native_function_object_get_slot(self, 0));
-    mal_http_conn_respond(conn, 500, "Internal Server Error", nullptr, 0, "handler rejected", 16);
+    MalFetchRequest *req =
+        mal_fetch_unbox_request(mal_native_function_object_get_slot(self, 0));
+    mal_fetch_respond_text(req, 500, "Internal Server Error", "handler rejected", 16);
+    mal_fetch_request_release(req);
     return mal_value_new_undefined();
 }
 
-static void mal_fetch_request_hook(
-    MalVm *vm, MalHttpConn *conn, const MalHttpRequest *req, const char *body, usize body_len) {
+/* Run the WinterTC handler now that the whole request is buffered. */
+static void mal_fetch_dispatch(MalVm *vm, MalFetchRequest *req) {
+    if (req->responded || req->conn == nullptr) return;
+    if (req->body_overflow) {
+        mal_http_conn_close_after_response(req->conn);
+        mal_fetch_respond_text(req, 413, "Content Too Large", "request body too large", 22);
+        return;
+    }
+    if (req->body_failed) {
+        mal_http_conn_close_after_response(req->conn);
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
+        return;
+    }
     MalValue handler = vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER];
     if (!mal_value_is_callable(handler)) {
-        mal_http_conn_respond(conn, 500, "Internal Server Error", nullptr, 0, "no handler", 10);
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "no handler", 10);
         return;
     }
 
-    MalValue request = mal_fetch_make_request(vm, req, body, body_len);
-    MalCompletion c = mal_vm_call_value(vm, handler, mal_value_new_undefined(), &request, 1);
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, countof(roots));
+    roots[0] = mal_fetch_make_request(vm, req);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion =
+            (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        mal_gc_unroot(&rs);
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
+        return;
+    }
+    MalCompletion c = mal_vm_call_value(vm, handler, mal_value_new_undefined(), &roots[0], 1);
     if (c.kind == MAL_COMPLETION_THROW) {
         // Swallow the handler's synchronous throw so it doesn't leak into the loop.
         vm->completion =
             (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        mal_http_conn_respond(conn, 500, "Internal Server Error", nullptr, 0, "handler error", 13);
+        mal_gc_unroot(&rs);
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
         return;
     }
 
     // Normalize the result to a promise and respond when it settles — covers a
     // sync Response and an async Promise<Response> through one path.
+    roots[1] = c.value;
     MalValue promise;
-    if (!mal_promise_resolve_value(vm, c.value, &promise)) {
+    if (!mal_promise_resolve_value(vm, roots[1], &promise)) {
         vm->completion =
             (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        mal_http_conn_respond(conn, 500, "Internal Server Error", nullptr, 0, "handler error", 13);
+        mal_gc_unroot(&rs);
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
         return;
     }
+    roots[1] = promise;
 
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalString *name = mal_intrinsic_ascii(vm, (const byte *) "");
-    MalValue conn_slot = mal_fetch_box_conn(conn);
+    MalValue request_slot = mal_fetch_box_request(req);
     MalNativeFunctionObject *on_fulfilled = mal_native_function_object_new_with_slots(
-        &vm->heap, fn_proto, name, mal_fetch_on_fulfilled, &conn_slot, 1);
+        &vm->heap, fn_proto, name, mal_fetch_on_fulfilled, &request_slot, 1);
     MalNativeFunctionObject *on_rejected = mal_native_function_object_new_with_slots(
-        &vm->heap, fn_proto, name, mal_fetch_on_rejected, &conn_slot, 1);
-    mal_promise_perform_then(vm, promise,
+        &vm->heap, fn_proto, name, mal_fetch_on_rejected, &request_slot, 1);
+    // Exactly one reaction runs, so one reference covers the pair.
+    mal_fetch_request_retain(req);
+    mal_promise_perform_then(vm, roots[1],
         mal_value_from_native_function_object(on_fulfilled),
         mal_value_from_native_function_object(on_rejected),
         mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&rs);
+}
+
+/* Transport → buffer. The codec owns framing; this only bounds the total body. */
+static void mal_fetch_request_data(void *data, byte *owned_bytes, usize length) {
+    MalFetchRequest *req = data;
+    if (req->body_overflow || req->body_failed) {
+        free(owned_bytes);
+        return;
+    }
+    if (length > MAL_FETCH_REQUEST_BODY_MAX - req->body_len) {
+        req->body_overflow = true;
+        free(owned_bytes);
+        if (req->conn != nullptr) mal_http_conn_request_discard(req->conn);
+        return;
+    }
+    usize required = req->body_len + length;
+    if (required > req->body_cap) {
+        usize capacity = req->body_cap == 0 ? 1024 : req->body_cap;
+        while (capacity < required) {
+            if (capacity > MAL_FETCH_REQUEST_BODY_MAX / 2) {
+                capacity = MAL_FETCH_REQUEST_BODY_MAX;
+                break;
+            }
+            capacity *= 2;
+        }
+        byte *grown = realloc(req->body, capacity);
+        if (grown == nullptr) {
+            req->body_failed = true;
+            free(owned_bytes);
+            if (req->conn != nullptr) mal_http_conn_request_discard(req->conn);
+            return;
+        }
+        req->body = grown;
+        req->body_cap = capacity;
+    }
+    memcpy(req->body + req->body_len, owned_bytes, length);
+    req->body_len = required;
+    free(owned_bytes);
+}
+
+static void mal_fetch_request_end(void *data, bool success) {
+    MalFetchRequest *req = data;
+    if (req->conn == nullptr) return;
+    // conn_close invokes the request-end callback after freeing the transport and
+    // invokes the response-complete callback (which clears req->conn) afterwards.
+    // On failure the transport is therefore already gone; touching req->conn here
+    // would recreate the disconnect use-after-free this state is meant to prevent.
+    if (!success) return;
+    mal_http_conn_request_release(req->conn);
+    mal_fetch_dispatch(req->vm, req);
+}
+
+static void mal_fetch_stream_handler(
+    void *data, MalVm *vm, MalHttpConn *conn, const MalHttpCodecHead *head) {
+    (void) data;
+    // Reject over-long targets before composing an absolute URL from them; leaving
+    // the stream callbacks unregistered makes the transport discard the body.
+    const char *host = nullptr;
+    usize host_len = 0;
+    usize host_count = 0;
+    for (usize i = 0; i < head->field_count; i++) {
+        const MalHttpCodecField *field = &head->fields[i];
+        if (field->name_length != 4) continue;
+        const char *name = (const char *) mal_http_codec_field_name(head, field);
+        if (mal_ascii_to_lower((u8) name[0]) != 'h'
+            || mal_ascii_to_lower((u8) name[1]) != 'o'
+            || mal_ascii_to_lower((u8) name[2]) != 's'
+            || mal_ascii_to_lower((u8) name[3]) != 't') {
+            continue;
+        }
+        host = (const char *) mal_http_codec_field_value(head, field);
+        host_len = field->value_length;
+        host_count++;
+    }
+    // Origin servers need one unambiguous authority. In particular, do not let a
+    // proxy and the application disagree about duplicate Host fields or about an
+    // absolute/authority-form target that this fetch adapter cannot normalize.
+    const byte *target = mal_http_codec_head_target(head);
+    if ((head->minor_version >= 1 && (host_count != 1 || host_len == 0))
+        || head->target_length == 0 || target[0] != '/') {
+        mal_http_conn_close_after_response(conn);
+        mal_http_conn_respond(conn, 400, "Bad Request", nullptr, 0, "Bad Request", 11);
+        return;
+    }
+    if (head->target_length > MAL_FETCH_TARGET_MAX
+        || head->target_length + host_len + 7 > MAL_FETCH_URL_MAX) {
+        (void) host;
+        mal_http_conn_close_after_response(conn);
+        mal_http_conn_respond(conn, 414, "URI Too Long", nullptr, 0, "URI too long", 12);
+        return;
+    }
+    // A declared length past the cap is refused before a single body byte is read;
+    // an undeclared (chunked) body is bounded while it accumulates instead.
+    if (head->content_length > (i64) MAL_FETCH_REQUEST_BODY_MAX) {
+        mal_http_conn_close_after_response(conn);
+        mal_http_conn_respond(
+            conn, 413, "Content Too Large", nullptr, 0, "request body too large", 22);
+        return;
+    }
+
+    MalFetchRequest *req = mal_fetch_request_new(vm, conn, head);
+    if (req == nullptr) {
+        mal_http_conn_close_after_response(conn);
+        mal_http_conn_respond(conn, 500, "Internal Server Error", nullptr, 0,
+            "request allocation failed", 25);
+        return;
+    }
+    mal_http_conn_on_request_stream(
+        conn, mal_fetch_request_data, mal_fetch_request_end, req);
+    mal_http_conn_on_response_complete(conn, mal_fetch_response_complete, req);
+    // Buffered semantics: consume the body as fast as the transport delivers it.
+    // The per-turn read budget and the codec's body-event cap still apply; the total
+    // is bounded by MAL_FETCH_REQUEST_BODY_MAX in mal_fetch_request_data.
+    mal_http_conn_request_autoread(conn);
 }
 
 static MalValue mal_serve(
@@ -1507,9 +1859,9 @@ static MalValue mal_serve(
 
     // Store the handler in a rooted intrinsic slot and install the transport hook.
     vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER] = fetch_val;
-    mal_http_handler = mal_fetch_request_hook;
 
-    MalHttpServer *server = mal_http_server_start(vm, host, port);
+    MalHttpServer *server =
+        mal_http_server_start_stream_handler(vm, host, port, mal_fetch_stream_handler, nullptr);
     if (server == nullptr) {
         return mal_value_new_undefined(); // The required exception remains unsupported.
     }

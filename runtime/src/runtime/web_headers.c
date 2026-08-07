@@ -55,14 +55,14 @@ static bool mal_headers_validate_value(MalVm *vm, const MalString *value) {
 static MalString *mal_headers_lowercase_name(MalVm *vm, const MalString *name) {
     usize len = mal_string_length(name);
     const c16 *units = mal_string_code_units(name);
-    c16 *out = malloc(sizeof(c16) * (len == 0 ? 1 : len));
+    // Heap-owned rather than malloc'd: mal_heap_alloc_raw cannot return null, so
+    // there is no allocation-failure path to leave the buffer unwritten.
+    c16 *out = mal_heap_alloc_raw(&vm->heap, sizeof(c16) * (len == 0 ? 1 : len));
     for (usize i = 0; i < len; i++) {
         c16 unit = units[i];
         out[i] = unit >= 'A' && unit <= 'Z' ? (c16) (unit + ('a' - 'A')) : unit;
     }
-    MalString *result = mal_string_new_copy(&vm->heap, out, len);
-    free(out);
-    return result;
+    return mal_string_new_owned(&vm->heap, out, len);
 }
 
 static MalString *mal_headers_trim_value(MalVm *vm, const MalString *value) {
@@ -122,16 +122,23 @@ static bool mal_headers_name_equals_bytes_ci(
     return true;
 }
 
-void mal_headers_append_entry(MalHeadersObject *h, MalString *name, MalString *value) {
+bool mal_headers_append_entry(MalHeadersObject *h, MalString *name, MalString *value) {
     if (h->count == h->cap) {
-        h->cap = h->cap == 0 ? 8 : h->cap * 2;
-        h->entries = realloc(h->entries, sizeof(MalHeaderEntry) * (usize) h->cap);
+        // Grow into a temporary: committing cap before the realloc would leave the
+        // list claiming capacity it does not have when the allocation fails.
+        i32 cap = h->cap == 0 ? 8 : h->cap * 2;
+        MalHeaderEntry *entries =
+            realloc(h->entries, sizeof(MalHeaderEntry) * (usize) cap);
+        if (entries == nullptr) return false;
+        h->entries = entries;
+        h->cap = cap;
     }
     h->entries[h->count].name = name;
     h->entries[h->count].value = value;
     h->count++;
     mal_gc_card(&h->object.header, mal_value_from_string(name));
     mal_gc_card(&h->object.header, mal_value_from_string(value));
+    return true;
 }
 
 void mal_headers_append_bytes(
@@ -165,7 +172,9 @@ void mal_headers_append_bytes(
     }
     MalString *v = mal_string_new_ascii(&vm->heap, (const byte *) value + value_start,
         value_end - value_start);
-    mal_headers_append_entry(h, mal_value_to_string(roots[1]), v);
+    if (!mal_headers_append_entry(h, mal_value_to_string(roots[1]), v)) {
+        mal_vm_throw_allocation_error(vm);
+    }
     mal_gc_unroot(&rs);
 }
 
@@ -236,8 +245,9 @@ static bool mal_headers_append_values(
         return false;
     }
     bool mutable = mal_headers_can_mutate(vm, h);
-    if (mutable) {
-        mal_headers_append_entry(h, name, value);
+    if (mutable && !mal_headers_append_entry(h, name, value)) {
+        mal_vm_throw_allocation_error(vm);
+        mutable = false;
     }
     mal_gc_unroot(&rs);
     return mutable;
@@ -571,8 +581,8 @@ static MalValue mal_headers_method_set(
             }
         }
         h->count = w;
-        if (first < 0) {
-            mal_headers_append_entry(h, name, value);
+        if (first < 0 && !mal_headers_append_entry(h, name, value)) {
+            mal_vm_throw_allocation_error(vm);
         }
     }
     mal_gc_unroot(&rs);
@@ -644,7 +654,7 @@ static MalValue mal_headers_join(MalVm *vm, MalHeadersObject *h, const MalString
         return mal_value_new_null();
     }
     total += (usize) (matches - 1) * 2;
-    c16 *buf = malloc(sizeof(c16) * (total == 0 ? 1 : total));
+    c16 *buf = mal_heap_alloc_raw(&vm->heap, sizeof(c16) * (total == 0 ? 1 : total));
     usize offset = 0;
     i32 seen = 0;
     for (i32 i = 0; i < h->count; i++) {
@@ -660,9 +670,7 @@ static MalValue mal_headers_join(MalVm *vm, MalHeadersObject *h, const MalString
         memcpy(buf + offset, units, sizeof(c16) * len);
         offset += len;
     }
-    MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, buf, offset));
-    free(buf);
-    return result;
+    return mal_value_from_string(mal_string_new_owned(&vm->heap, buf, offset));
 }
 
 static MalValue mal_headers_method_get(

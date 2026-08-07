@@ -1,7 +1,6 @@
 #pragma once
 
 #include "./defaults.h"
-#include "http.h"
 #include "http_codec.h"
 
 typedef struct MalVm MalVm;
@@ -11,10 +10,12 @@ typedef struct MalHttpConn MalHttpConn;
  * Callback-driven HTTP/1.1 server (host layer). Runs on the isolate's reactor +
  * event loop (mal_host_run_event_loop): a persistent accept op spawns a
  * per-connection state machine (read → parse → respond → keep-alive), all via
- * reactor readiness callbacks on the main context — no fibers. This is the
- * transport the WinterTC fetch handler (Mal.serve) will plug into; for now it
- * replies with a fixed response so the loop can be tested end-to-end against a real
- * HTTP client before the JS Request/Response objects exist.
+ * reactor readiness callbacks on the main context — no fibers.
+ *
+ * Every connection parses through MalHttpCodec (llhttp) in strict mode. That is
+ * the single security boundary for inbound framing: a second parser with its own
+ * interpretation of bare LF, obs-fold, duplicate Content-Length or Transfer-Encoding
+ * is a request-smuggling differential, so `node:http` and `Mal.serve` share this one.
  */
 
 typedef struct MalHttpServer MalHttpServer;
@@ -29,34 +30,14 @@ typedef void (*MalHttpServerStreamHandler)(
     MalVm *vm,
     MalHttpConn *conn,
     const MalHttpCodecHead *head);
-typedef void (*MalHttpServerHandler)(
-    void *data,
-    MalVm *vm,
-    MalHttpConn *conn,
-    const MalHttpRequest *req,
-    const char *body,
-    usize body_len);
 
 /* Start listening on host:port (host numeric, null => 0.0.0.0; port 0 => ephemeral)
- * and register the accept op on the isolate's reactor. Returns the server, or null
- * on error. The caller then runs mal_host_run_event_loop(vm) to serve. */
+ * with the built-in fixed-response handler, and register the accept op on the
+ * isolate's reactor. Transport smoke test only. Returns the server, or null on
+ * error. The caller then runs mal_host_run_event_loop(vm) to serve. */
 MalHttpServer *mal_http_server_start(MalVm *vm, const char *host, u16 port);
 
-/* Start a listener that closes requests without dispatching them. */
-MalHttpServer *mal_http_server_start_unhandled(
-    MalVm *vm, const char *host, u16 port);
-
-/* Start a listener with an explicit per-server handler. The handler runs from the
- * reactor path and must not enter JavaScript; request pointers are borrowed only
- * for the call. `data` remains borrowed until close completion. */
-MalHttpServer *mal_http_server_start_handler(
-    MalVm *vm,
-    const char *host,
-    u16 port,
-    MalHttpServerHandler handler,
-    void *data);
-
-/* Node-style streaming handler. The head is borrowed for the callback. Body
+/* Streaming handler. The head is borrowed for the callback. Body
  * buffers are transferred to the registered data callback under explicit credit. */
 MalHttpServer *mal_http_server_start_stream_handler(
     MalVm *vm,
@@ -76,19 +57,6 @@ void mal_http_server_close(
 
 /* Host-only convenience wrapper when no close completion is needed. */
 void mal_http_server_stop(MalHttpServer *server);
-
-/*
- * Request handler hook, set by the runtime (Mal.serve). Called with a fully-parsed
- * request; `body`/`body_len` point into the connection's read buffer and are valid
- * only during the call (copy what you keep). The hook must arrange for
- * mal_http_conn_respond to be called on `conn`. The handler is captured when the
- * server starts; when null, mal_http_server_start uses the built-in fixed response
- * for the transport smoke test. Keeps the host layer free of any runtime
- * (Request/Response) type dependency.
- */
-typedef void (*MalHttpHandler)(
-    MalVm *vm, MalHttpConn *conn, const MalHttpRequest *req, const char *body, usize body_len);
-extern MalHttpHandler mal_http_handler;
 
 /*
  * Send a response on the connection: status line + the given header block (each
@@ -146,6 +114,14 @@ void mal_http_conn_on_request_stream(
     MalHttpRequestEndCallback end_callback,
     void *data);
 bool mal_http_conn_request_read_credit(MalHttpConn *conn, usize bytes);
+
+/* Keep the request-body credit topped up from the transport's own loop for the rest
+ * of this message. Buffered consumers want the whole body and must not call
+ * mal_http_conn_request_read_credit from inside a transport callback — that
+ * re-enters the connection's drain loop underneath an active frame. Per-turn read
+ * budgets and the codec's body-event cap still apply; a total-size limit is the
+ * consumer's responsibility. */
+void mal_http_conn_request_autoread(MalHttpConn *conn);
 void mal_http_conn_request_discard(MalHttpConn *conn);
 void mal_http_conn_request_release(MalHttpConn *conn);
 

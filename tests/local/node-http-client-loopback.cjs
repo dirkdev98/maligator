@@ -118,6 +118,18 @@ server.listen(0, "127.0.0.1", () => {
 		() => http.request({ hostname: "example.com", port }),
 		/hostname/,
 	);
+	// The authority reaches the resolver and the serialized Host line, so control
+	// bytes have to be refused while parsing the URL, before either sees them.
+	expectThrow(
+		"url authority control bytes",
+		() => http.request("http://127.0.0.1\r\nX-Injected: 1/"),
+		/authority/i,
+	);
+	expectThrow(
+		"url authority space",
+		() => http.request("http://127.0.0.1 evil/"),
+		/authority/i,
+	);
 	expectThrow(
 		"header name",
 		() => http.request({ hostname: "localhost", port, headers: { "bad name": "x" } }),

@@ -8,36 +8,21 @@
 #include <unistd.h>
 
 #include "host.h"
-#include "http.h"
 #include "net.h"
 #include "reactor.h"
 #include "vm.h"
 
 #define MAL_HTTP_RBUF_INIT 4096
-#define MAL_HTTP_HEADERS_MAX (64 * 1024) // reject header blocks larger than this
 #define MAL_HTTP_READ_TURN (64 * 1024)
 #define MAL_HTTP_READ_CREDIT_MAX (256 * 1024)
 #define MAL_HTTP_WRITE_TURN (64 * 1024)
 #define MAL_HTTP_WRITE_MAX (256 * 1024)
 #define MAL_HTTP_WRITE_IOV 16
 
-MalHttpHandler mal_http_handler = nullptr;
-
-typedef enum MalHttpRequestBehavior {
-    MAL_HTTP_REQUEST_FIXED,
-    MAL_HTTP_REQUEST_HANDLER,
-    MAL_HTTP_REQUEST_SERVER_HANDLER,
-    MAL_HTTP_REQUEST_STREAM_HANDLER,
-    MAL_HTTP_REQUEST_CLOSE,
-} MalHttpRequestBehavior;
-
 struct MalHttpServer {
     MalVm *vm;
     int listen_fd;
     MalOp accept_op;
-    MalHttpRequestBehavior request_behavior;
-    MalHttpHandler handler;
-    MalHttpServerHandler server_handler;
     MalHttpServerStreamHandler stream_handler;
     void *handler_data;
     struct MalHttpConn *connections;
@@ -70,7 +55,10 @@ typedef struct MalHttpConn {
     MalOp read_op;
     MalOp write_op;
 
-    char *rbuf; // inbound bytes (request line + headers + body), growable
+    /* Transport staging only: bytes are handed to the codec and compacted out
+     * every turn, so this never has to hold a whole message. Capped at
+     * MAL_HTTP_READ_TURN — message-size limits belong to the codec. */
+    char *rbuf;
     usize rcap;
     usize rlen;
 
@@ -80,6 +68,7 @@ typedef struct MalHttpConn {
     bool request_stream_open;
     bool request_message_complete;
     bool request_has_body;
+    bool request_autoread;
     bool request_discard;
     bool request_released;
     bool response_finished;
@@ -114,7 +103,6 @@ static MalReactor *conn_reactor(MalHttpConn *c) {
 
 static bool conn_arm_read(MalHttpConn *c);
 static bool conn_arm_write(MalHttpConn *c);
-static void conn_process(MalHttpConn *c);
 static void conn_process_stream(MalHttpConn *c);
 static void conn_stream_reset_request(MalHttpConn *c);
 
@@ -430,9 +418,7 @@ void mal_http_conn_on_request_stream(
     MalHttpRequestDataCallback data_callback,
     MalHttpRequestEndCallback end_callback,
     void *data) {
-    if (c == nullptr || c->server->request_behavior != MAL_HTTP_REQUEST_STREAM_HANDLER) {
-        return;
-    }
+    if (c == nullptr) return;
     c->request_data_callback = data_callback;
     c->request_end_callback = end_callback;
     c->request_data = data;
@@ -447,6 +433,12 @@ bool mal_http_conn_request_read_credit(MalHttpConn *c, usize bytes) {
     c->request_read_credit += bytes;
     conn_process_stream(c);
     return true;
+}
+
+void mal_http_conn_request_autoread(MalHttpConn *c) {
+    if (c == nullptr || !c->request_stream_open || c->request_message_complete) return;
+    c->request_autoread = true;
+    // Credit is refreshed inside conn_process_stream, never from a callback frame.
 }
 
 void mal_http_conn_request_discard(MalHttpConn *c) {
@@ -494,6 +486,7 @@ static void conn_stream_reset_request(MalHttpConn *c) {
     c->request_stream_open = false;
     c->request_message_complete = false;
     c->request_has_body = false;
+    c->request_autoread = false;
     c->request_discard = false;
     c->request_released = false;
     c->response_finished = false;
@@ -521,6 +514,7 @@ static bool conn_stream_handle_event(MalHttpConn *c) {
         c->request_message_complete = false;
         c->request_has_body = head->chunked || head->content_length > 0;
         c->request_read_credit = 0;
+        c->request_autoread = false;
         c->request_discard = false;
         c->request_released = false;
         c->response_finished = false;
@@ -596,10 +590,7 @@ static bool conn_stream_handle_event(MalHttpConn *c) {
 }
 
 static void conn_process_stream(MalHttpConn *c) {
-    if (!c->codec_initialized || c->server->request_behavior
-        != MAL_HTTP_REQUEST_STREAM_HANDLER) {
-        return;
-    }
+    if (!c->codec_initialized) return;
     usize turn = 0;
     while (turn < MAL_HTTP_READ_TURN) {
         MalHttpCodecEventKind pending = mal_http_codec_event(&c->codec);
@@ -608,6 +599,10 @@ static void conn_process_stream(MalHttpConn *c) {
             continue;
         }
         if (c->request_message_complete) return;
+        if (c->request_autoread && c->request_stream_open && !c->request_discard
+            && c->request_read_credit < MAL_HTTP_READ_CREDIT_MAX) {
+            c->request_read_credit = MAL_HTTP_READ_CREDIT_MAX;
+        }
         bool body_blocked = c->request_stream_open && c->request_has_body
             && !c->request_discard && c->request_read_credit == 0;
         if (body_blocked) return;
@@ -656,135 +651,19 @@ static void conn_process_stream(MalHttpConn *c) {
     }
 }
 
-/* Try to handle one complete request currently buffered in rbuf. */
-static void conn_process(MalHttpConn *c) {
-    if (c->server->request_behavior == MAL_HTTP_REQUEST_STREAM_HANDLER) {
-        conn_process_stream(c);
-        return;
-    }
-    MalHttpRequest req;
-    usize consumed;
-    MalHttpParse p = mal_http_parse_request(c->rbuf, c->rlen, &req, &consumed);
-
-    if (p == MAL_HTTP_INCOMPLETE) {
-        if (c->read_ended) {
-            conn_close(c);
-            return;
-        }
-        if (c->rlen > MAL_HTTP_HEADERS_MAX) {
-            conn_send_error(c, 431, "Request Header Fields Too Large");
-            return;
-        }
-        if (!conn_arm_read(c)) {
-            conn_close(c);
-        }
-        return;
-    }
-    if (p == MAL_HTTP_ERROR) {
-        conn_send_error(c, 400, "Bad Request");
-        return;
-    }
-
-    // Determine the body extent: Content-Length, or decode a chunked body in place.
-    // body_len = decoded body length at rbuf+consumed; need = raw bytes this request
-    // occupies (headers + framed body).
-    usize body_len;
-    usize need;
-    if (req.chunked) {
-        usize decoded;
-        usize raw;
-        MalHttpParse dp =
-            mal_http_dechunk(c->rbuf + consumed, c->rlen - consumed, &decoded, &raw);
-        if (dp == MAL_HTTP_INCOMPLETE) {
-            if (c->read_ended) {
-                conn_close(c);
-                return;
-            }
-            if (!conn_arm_read(c)) {
-                conn_close(c);
-            }
-            return;
-        }
-        if (dp == MAL_HTTP_ERROR) {
-            conn_send_error(c, 400, "Bad Request");
-            return;
-        }
-        body_len = decoded;
-        need = consumed + raw;
-    } else {
-        usize content_length = req.content_length > 0 ? (usize) req.content_length : 0;
-        if (c->rlen < consumed + content_length) {
-            if (c->read_ended) {
-                conn_close(c);
-                return;
-            }
-            if (!conn_arm_read(c)) { // wait for the rest of the body
-                conn_close(c);
-            }
-            return;
-        }
-        body_len = content_length;
-        need = consumed + content_length;
-    }
-
-    c->keep_alive = req.keep_alive && !c->read_ended;
-
-    // Dispatch using behavior captured by this server when it started.
-    c->awaiting_response = true;
-    c->in_handler = true;
-    if (c->server->request_behavior == MAL_HTTP_REQUEST_HANDLER) {
-        c->server->handler(c->vm, c, &req, c->rbuf + consumed, body_len);
-    } else if (c->server->request_behavior == MAL_HTTP_REQUEST_SERVER_HANDLER) {
-        c->server->server_handler(
-            c->server->handler_data, c->vm, c, &req,
-            c->rbuf + consumed, body_len);
-    } else if (c->server->request_behavior == MAL_HTTP_REQUEST_FIXED) {
-        char msg[512];
-        int n = snprintf(
-            msg,
-            sizeof(msg),
-            "Maligator: %.*s %.*s\n",
-            (int) req.method_len,
-            req.method,
-            (int) req.target_len,
-            req.target);
-        mal_http_conn_respond(c, 200, "OK", nullptr, 0, msg, n > 0 ? (usize) n : 0);
-    } else {
-        c->in_handler = false;
-        conn_close(c);
-        return;
-    }
-    c->in_handler = false;
-    if (c->close_pending) {
-        conn_close(c);
-        return;
-    }
-
-    // Consume this request; leftover is a pipelined follow-up handled after the
-    // write completes.
-    usize leftover = c->rlen - need;
-    memmove(c->rbuf, c->rbuf + need, leftover);
-    c->rlen = leftover;
-    if (!c->read_ended && !c->read_op.active && !conn_arm_read(c)) conn_close(c);
-}
-
 static void conn_read_cb(void *data) {
     MalHttpConn *c = data;
     usize turn = 0;
 
-    // Drain the socket (one-shot op fired: read until EAGAIN).
-    for (;;) {
-        if (c->rlen == c->rcap) {
-            if ((c->awaiting_response || c->response_started)
-                && c->rcap >= MAL_HTTP_HEADERS_MAX) {
-                conn_close(c);
-                return;
-            }
+    // Drain the socket (one-shot op fired: read until EAGAIN or the turn budget).
+    // rbuf is staging, never a message accumulator: the codec consumes and
+    // conn_consume_read compacts every turn, so a full buffer means the codec is
+    // credit-blocked and we simply stop reading until credit is granted. The
+    // reactor op is level-triggered one-shot, so unread bytes re-fire on re-arm.
+    while (turn < MAL_HTTP_READ_TURN) {
+        if (c->rlen == c->rcap && c->rcap < MAL_HTTP_READ_TURN) {
             usize ncap = c->rcap * 2;
-            if ((c->awaiting_response || c->response_started)
-                && ncap > MAL_HTTP_HEADERS_MAX) {
-                ncap = MAL_HTTP_HEADERS_MAX;
-            }
+            if (ncap > MAL_HTTP_READ_TURN) ncap = MAL_HTTP_READ_TURN;
             char *nbuf = realloc(c->rbuf, ncap);
             if (nbuf == nullptr) {
                 conn_close(c);
@@ -794,8 +673,7 @@ static void conn_read_cb(void *data) {
             c->rcap = ncap;
         }
         usize available = c->rcap - c->rlen;
-        if (c->server->request_behavior == MAL_HTTP_REQUEST_STREAM_HANDLER
-            && available > MAL_HTTP_READ_TURN - turn) {
+        if (available > MAL_HTTP_READ_TURN - turn) {
             available = MAL_HTTP_READ_TURN - turn;
         }
         if (available == 0) break;
@@ -804,10 +682,6 @@ static void conn_read_cb(void *data) {
             usize count = (usize) n;
             c->rlen += count;
             turn += count;
-            if (c->server->request_behavior == MAL_HTTP_REQUEST_STREAM_HANDLER
-                && turn == MAL_HTTP_READ_TURN) {
-                break;
-            }
             continue;
         }
         if (n == 0) { // peer finished its request side
@@ -815,6 +689,7 @@ static void conn_read_cb(void *data) {
             c->keep_alive = false;
             break;
         }
+        if (errno == EINTR) continue;
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             break;
         }
@@ -822,16 +697,7 @@ static void conn_read_cb(void *data) {
         return;
     }
 
-    if (c->server->request_behavior == MAL_HTTP_REQUEST_STREAM_HANDLER) {
-        conn_process_stream(c);
-        return;
-    }
-
-    if (c->awaiting_response || c->response_started) {
-        if (!c->read_ended && !conn_arm_read(c)) conn_close(c);
-        return;
-    }
-    conn_process(c);
+    conn_process_stream(c);
 }
 
 static void conn_write_cb(void *data) {
@@ -872,31 +738,19 @@ static void conn_write_cb(void *data) {
                 conn_close(c);
                 return;
             }
-            if (c->server->request_behavior == MAL_HTTP_REQUEST_STREAM_HANDLER
-                && c->request_message_complete && !c->request_released) {
-                return;
-            }
+            if (c->request_message_complete && !c->request_released) return;
             if (!c->keep_alive || c->server->closing) {
                 conn_close(c);
                 return;
             }
-            if (c->server->request_behavior == MAL_HTTP_REQUEST_STREAM_HANDLER) {
-                if (c->request_message_complete) {
-                    if (c->request_released) {
-                        conn_stream_reset_request(c);
-                        conn_process_stream(c);
-                    }
-                    return;
+            if (c->request_message_complete) {
+                if (c->request_released) {
+                    conn_stream_reset_request(c);
+                    conn_process_stream(c);
                 }
-                conn_process_stream(c);
                 return;
             }
-            if (c->rlen > 0) {
-                (void) mal_reactor_cancel_op(conn_reactor(c), &c->read_op);
-                conn_process(c);
-            } else if (!c->read_op.active && !conn_arm_read(c)) {
-                conn_close(c);
-            }
+            conn_process_stream(c);
             return;
         }
 
@@ -994,15 +848,13 @@ static void server_accept_cb(void *data) {
         c->rcap = MAL_HTTP_RBUF_INIT;
         c->rlen = 0;
         c->server = server;
-        if (server->request_behavior == MAL_HTTP_REQUEST_STREAM_HANDLER) {
-            if (!mal_http_codec_init(&c->codec, HTTP_REQUEST)) {
-                mal_net_close(fd);
-                free(c->rbuf);
-                free(c);
-                continue;
-            }
-            c->codec_initialized = true;
+        if (!mal_http_codec_init(&c->codec, HTTP_REQUEST)) {
+            mal_net_close(fd);
+            free(c->rbuf);
+            free(c);
+            continue;
         }
+        c->codec_initialized = true;
         c->next = server->connections;
         server->connections = c;
         server->connection_count++;
@@ -1023,8 +875,6 @@ static void server_accept_cb(void *data) {
 
 static MalHttpServer *server_start(
     MalVm *vm, const char *host, u16 port,
-    MalHttpRequestBehavior request_behavior, MalHttpHandler handler,
-    MalHttpServerHandler server_handler,
     MalHttpServerStreamHandler stream_handler,
     void *handler_data) {
     int fd = mal_net_listen(host, port, 128);
@@ -1038,9 +888,6 @@ static MalHttpServer *server_start(
     }
     server->vm = vm;
     server->listen_fd = fd;
-    server->request_behavior = request_behavior;
-    server->handler = handler;
-    server->server_handler = server_handler;
     server->stream_handler = stream_handler;
     server->handler_data = handler_data;
     server->accept_op.fd = fd;
@@ -1054,31 +901,22 @@ static MalHttpServer *server_start(
     return server;
 }
 
+/* Transport smoke-test handler: echoes the request line so the accept → parse →
+ * respond → keep-alive loop can be driven by a real HTTP client without a VM. */
+static void server_fixed_handler(
+    void *data, MalVm *vm, MalHttpConn *conn, const MalHttpCodecHead *head) {
+    (void) data;
+    (void) vm;
+    char msg[512];
+    int n = snprintf(
+        msg, sizeof(msg), "Maligator: %.*s %.*s\n",
+        (int) head->method_length, (const char *) mal_http_codec_head_method(head),
+        (int) head->target_length, (const char *) mal_http_codec_head_target(head));
+    mal_http_conn_respond(conn, 200, "OK", nullptr, 0, msg, n > 0 ? (usize) n : 0);
+}
+
 MalHttpServer *mal_http_server_start(MalVm *vm, const char *host, u16 port) {
-    MalHttpHandler handler = mal_http_handler;
-    return server_start(
-        vm, host, port,
-        handler == nullptr ? MAL_HTTP_REQUEST_FIXED : MAL_HTTP_REQUEST_HANDLER,
-        handler, nullptr, nullptr, nullptr);
-}
-
-MalHttpServer *mal_http_server_start_unhandled(
-    MalVm *vm, const char *host, u16 port) {
-    return server_start(
-        vm, host, port, MAL_HTTP_REQUEST_CLOSE,
-        nullptr, nullptr, nullptr, nullptr);
-}
-
-MalHttpServer *mal_http_server_start_handler(
-    MalVm *vm,
-    const char *host,
-    u16 port,
-    MalHttpServerHandler handler,
-    void *data) {
-    if (handler == nullptr) return nullptr;
-    return server_start(
-        vm, host, port, MAL_HTTP_REQUEST_SERVER_HANDLER,
-        nullptr, handler, nullptr, data);
+    return server_start(vm, host, port, server_fixed_handler, nullptr);
 }
 
 MalHttpServer *mal_http_server_start_stream_handler(
@@ -1088,9 +926,7 @@ MalHttpServer *mal_http_server_start_stream_handler(
     MalHttpServerStreamHandler handler,
     void *data) {
     if (handler == nullptr) return nullptr;
-    return server_start(
-        vm, host, port, MAL_HTTP_REQUEST_STREAM_HANDLER,
-        nullptr, nullptr, handler, data);
+    return server_start(vm, host, port, handler, data);
 }
 
 u16 mal_http_server_port(const MalHttpServer *server) {
@@ -1114,8 +950,7 @@ void mal_http_server_close(
         MalHttpConn *next = conn->next;
         if (!conn->awaiting_response && conn->write_head == nullptr
             && !conn->response_started && !conn->request_stream_open
-            && !(conn->server->request_behavior == MAL_HTTP_REQUEST_STREAM_HANDLER
-                 && conn->request_message_complete && !conn->request_released)) {
+            && !(conn->request_message_complete && !conn->request_released)) {
             if (server->connection_count == 1) {
                 conn_close(conn);
                 return;

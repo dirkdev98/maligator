@@ -139,6 +139,7 @@ typedef struct MalNodeHttpResponseHeader {
 } MalNodeHttpResponseHeader;
 
 #define MAL_NODE_HTTP_INLINE_RESPONSE_HEADERS 8
+#define MAL_NODE_HTTP_MAX_RESPONSE_HEADERS 64
 
 typedef struct MalNodeHttpResponseNameView {
     const c16 *units;
@@ -1439,11 +1440,11 @@ static i64 http_response_header_view_index(
 
 static bool http_response_headers_reserve(
     MalNodeHttpRequestState *state, usize required) {
-    if (required > MAL_HTTP_MAX_HEADERS) return false;
+    if (required > MAL_NODE_HTTP_MAX_RESPONSE_HEADERS) return false;
     if (required <= state->response_header_capacity) return true;
     usize capacity = state->response_header_capacity * 2;
     while (capacity < required) capacity *= 2;
-    if (capacity > MAL_HTTP_MAX_HEADERS) capacity = MAL_HTTP_MAX_HEADERS;
+    if (capacity > MAL_NODE_HTTP_MAX_RESPONSE_HEADERS) capacity = MAL_NODE_HTTP_MAX_RESPONSE_HEADERS;
     MalNodeHttpResponseHeader *headers;
     if (state->response_headers == state->inline_response_headers) {
         headers = malloc(capacity * sizeof(*headers));
@@ -1494,7 +1495,7 @@ static MalValue http_response_set_header(
     }
     i64 index = http_response_header_view_index(state, &name);
     if (index < 0) {
-        if (state->response_header_count == MAL_HTTP_MAX_HEADERS) {
+        if (state->response_header_count == MAL_NODE_HTTP_MAX_RESPONSE_HEADERS) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Too many response headers");
             return mal_value_new_undefined();
@@ -1993,6 +1994,15 @@ static bool http_client_parse_url(
            && *authority_end != '?' && *authority_end != '#') {
         authority_end++;
     }
+    // The authority reaches both the resolver and the serialized `Host:` line, so a
+    // control byte here would inject a header (or a whole request) into the wire.
+    for (const char *cursor = authority; cursor < authority_end; cursor++) {
+        unsigned char ch = (unsigned char) *cursor;
+        if (ch <= 0x20 || ch == 0x7f) {
+            free(protocol);
+            goto invalid_authority;
+        }
+    }
     char *colon = memchr(authority, ':', (usize) (authority_end - authority));
     char *host_end = colon == nullptr ? authority_end : colon;
     if (host_end == authority) {
@@ -2080,6 +2090,11 @@ invalid_path:
     free(url);
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                        "HTTP path contains invalid characters");
+    return false;
+invalid_authority:
+    free(url);
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                       "HTTP authority contains invalid characters");
     return false;
 invalid_url:
     free(url);

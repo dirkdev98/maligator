@@ -49,7 +49,8 @@ static_assert(sizeof(MalHeadersObject) <= 64,
 MalHeadersObject *mal_headers_object_new(MalHeap *heap, MalObject *prototype);
 
 /* Low-level append for already-normalized entries. name/value are traced. */
-void mal_headers_append_entry(MalHeadersObject *headers, MalString *name, MalString *value);
+/* Returns false when the entry list could not grow; the list is left unchanged. */
+bool mal_headers_append_entry(MalHeadersObject *headers, MalString *name, MalString *value);
 
 /* Create an empty Headers using the intrinsic prototype. */
 MalHeadersObject *mal_headers_create(MalVm *vm);
