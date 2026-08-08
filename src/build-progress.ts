@@ -15,10 +15,12 @@ function writeLine(stream: NodeJS.WriteStream, message: string): void {
 /** Human-facing build progress. Status belongs on stderr; stdout is the result. */
 export class BuildReporter {
 	readonly verbose: boolean;
+	readonly compact: boolean;
 	readonly #startedAt = performance.now();
 
-	constructor(verbose: boolean) {
+	constructor(verbose: boolean, compact = false) {
 		this.verbose = verbose;
+		this.compact = compact;
 	}
 
 	start(
@@ -26,6 +28,7 @@ export class BuildReporter {
 		mode: "development" | "production",
 		action: "Building" | "Preparing" = "Building",
 	): void {
+		if (this.compact) return;
 		writeLine(process.stderr, `${action} ${name} (${mode})`);
 	}
 
@@ -35,6 +38,7 @@ export class BuildReporter {
 		detail?: (result: Result) => string | undefined,
 	): Result {
 		const startedAt = performance.now();
+		if (this.compact) return run();
 		if (this.verbose) {
 			writeLine(
 				process.stderr,
@@ -92,6 +96,10 @@ export class BuildReporter {
 		resultPath: string,
 		emitResult: boolean,
 	): void {
+		if (this.compact) {
+			if (emitResult) writeLine(process.stdout, resultPath);
+			return;
+		}
 		writeLine(
 			process.stderr,
 			`${label} ${resultPath} in ${formatDuration(performance.now() - this.#startedAt)}`,

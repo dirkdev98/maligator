@@ -154,6 +154,7 @@ static MalValue mal_dev_spawn(
 
     pid_t pid = fork();
     if (pid == 0) {
+        (void) setpgid(0, 0);
         execv(executable, child_argv);
         _exit(127);
     }
@@ -161,6 +162,7 @@ static MalValue mal_dev_spawn(
         mal_host_throw_errno(vm, errno, "mal.dev", "cannot spawn", executable);
         goto fail;
     }
+    (void) setpgid(pid, pid);
     for (u32 i = 0; i < argument_count; i++) free(child_argv[i + 1]);
     free(child_argv);
     free(executable);
@@ -196,7 +198,8 @@ static MalValue mal_dev_kill(
     (void) callee;
     pid_t pid;
     if (argc < 1 || !mal_dev_pid(vm, args[0], &pid)) return mal_value_new_undefined();
-    if (kill(pid, SIGTERM) != 0 && errno != ESRCH) {
+    bool force = argc >= 2 && mal_value_is_boolean(args[1]) && mal_value_to_boolean(args[1]);
+    if (kill(-pid, force ? SIGKILL : SIGTERM) != 0 && errno != ESRCH) {
         mal_host_throw_errno(vm, errno, "mal.dev", "cannot terminate process", "");
         return mal_value_new_undefined();
     }
@@ -507,7 +510,7 @@ void mal_host_install_maligator(
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_spawnDevelopmentProcess", 2, mal_dev_spawn);
     mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_killDevelopmentProcess", 1, mal_dev_kill);
+        vm, mal, (const byte *) "_killDevelopmentProcess", 2, mal_dev_kill);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_developmentProcessStatus", 1, mal_dev_process_status);
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);

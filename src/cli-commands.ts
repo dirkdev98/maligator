@@ -52,7 +52,7 @@ export interface CommandContext {
 
 export interface DevelopmentProcessHost {
 	spawn(executablePath: string, args: Array<string>): unknown;
-	kill(handle: unknown): void;
+	kill(handle: unknown, force?: boolean): void;
 	/** Undefined while running, otherwise the conventional process exit code. */
 	status(handle: unknown): number | undefined;
 }
@@ -242,6 +242,7 @@ export function applicationDriverPath(
 function compileAndBuild(
 	command: BuildCommand | RunCommand | DevCommand,
 	context: CommandContext,
+	compact = false,
 ): BuildCommandResult {
 	const buildConfig = loadCommandConfig(command, context.stripTypes);
 	const entrypointPath = resolveEntrypoint(command, buildConfig);
@@ -250,7 +251,7 @@ function compileAndBuild(
 			? (command.internal.name ?? resolveOutputName(buildConfig))
 			: resolveOutputName(buildConfig);
 	const verbose = command.kind === "build" ? command.internal.verbose : command.verbose;
-	const reporter = new BuildReporter(verbose);
+	const reporter = new BuildReporter(verbose, compact && !verbose);
 	reporter.start(
 		name,
 		command.kind === "build" && command.production ? "production" : "development",
@@ -690,12 +691,21 @@ async function stopDevelopmentProcess(
 	host: DevelopmentProcessHost,
 	handle: unknown,
 ): Promise<void> {
-	host.kill(handle);
-	for (let attempt = 0; attempt < 100; attempt++) {
+	host.kill(handle, false);
+	for (let attempt = 0; attempt < 50; attempt++) {
 		if (host.status(handle) !== undefined) return;
 		await delay(10);
 	}
-	throw new Error("development application did not stop within one second");
+	host.kill(handle, true);
+	for (let attempt = 0; attempt < 50; attempt++) {
+		if (host.status(handle) !== undefined) return;
+		await delay(10);
+	}
+	throw new Error("development application did not stop after forced termination");
+}
+
+function formatDevelopmentDuration(durationMs: number): string {
+	return durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`;
 }
 
 /** Retain frontend identities while restarting a fresh application VM on edits. */
@@ -709,7 +719,8 @@ export async function devCommand(
 	}
 	const session = context.frontendSession ?? new FrontendCompilationSession();
 	const retainedContext = { ...context, frontendSession: session };
-	let result = compileAndBuild(command, retainedContext);
+	const initialBuildStartedAt = Date.now();
+	let result = compileAndBuild(command, retainedContext, true);
 	let states = watchedFiles(command, result.dependencies ?? []);
 	let child: unknown = processHost.spawn(
 		result.binaryPath!,
@@ -721,7 +732,9 @@ export async function devCommand(
 	};
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);
-	writeStderr(`Watching ${states.length} files. Press Ctrl+C to stop.`);
+	writeStderr(
+		`Ready in ${formatDevelopmentDuration(Date.now() - initialBuildStartedAt)} · watching ${states.length} files · press Ctrl+C to stop`,
+	);
 	let poll = 0;
 
 	try {
@@ -731,17 +744,23 @@ export async function devCommand(
 			if (changed.length === 0) {
 				const status = child === undefined ? undefined : processHost.status(child);
 				if (child !== undefined && status !== undefined) {
-					writeStderr(`Application exited with code ${status}; waiting for changes.`);
+					writeStderr(
+						`Application ${status === 0 ? "stopped" : "crashed"} with code ${status}; waiting for changes.`,
+					);
 					child = undefined;
 				}
 				continue;
 			}
 
+			await delay(25);
+			const settledChanges = new Set(changed);
+			for (const file of changedFiles(states, true)) settledChanges.add(file);
+			const changedPaths = [...settledChanges];
 			writeStderr(
-				`Changed ${changed.map((file) => path.relative(process.cwd(), file)).join(", ")}`,
+				`Changed ${changedPaths.map((file) => path.relative(process.cwd(), file)).join(", ")}`,
 			);
-			for (const file of changed) session.invalidate(file);
-			if (changed.includes(path.resolve(command.configPath ?? BUILD_CONFIG_NAME))) {
+			for (const file of changedPaths) session.invalidate(file);
+			if (changedPaths.includes(path.resolve(command.configPath ?? BUILD_CONFIG_NAME))) {
 				session.invalidate();
 			}
 			states = states.map((state) => ({
@@ -749,7 +768,8 @@ export async function devCommand(
 				identity: watchIdentity(state.file),
 			}));
 			try {
-				result = compileAndBuild(command, retainedContext);
+				const rebuildStartedAt = Date.now();
+				result = compileAndBuild(command, retainedContext, true);
 				states = watchedFiles(command, result.dependencies ?? []);
 				if (child !== undefined) {
 					await stopDevelopmentProcess(processHost, child);
@@ -758,6 +778,9 @@ export async function devCommand(
 				child = processHost.spawn(
 					result.binaryPath!,
 					result.runArguments ?? command.programArgs,
+				);
+				writeStderr(
+					`Compiled in ${formatDevelopmentDuration(Date.now() - rebuildStartedAt)} · restarted`,
 				);
 			} catch (error) {
 				writeStderr(
