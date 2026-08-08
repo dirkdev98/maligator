@@ -16,7 +16,7 @@ import { runtimeCcFlags } from "./build-flags.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
 import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
-import { runNativeCommand } from "./native-command.ts";
+import { runNativeCommand, runNativeCommands } from "./native-command.ts";
 import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
 import { toolArguments } from "./toolchain.ts";
@@ -292,12 +292,20 @@ function buildRuntimeCache(
 			) {
 				sources.push({ name: "sqlite3.c", path: sqliteSource });
 			}
-			const objects = sources.map((source) => {
-				const objectPath = path.join(objectDirectory, `${source.name.slice(0, -2)}.o`);
-				runNativeCommand(
-					context,
-					context.toolchain.tools.cc.path,
-					toolArguments(context.toolchain.tools.cc, [
+			const objects = sources.map((source) =>
+				path.join(objectDirectory, `${source.name.slice(0, -2)}.o`),
+			);
+			const compilationUnits = sources
+				.map((source, index) => ({ source, objectPath: objects[index]! }))
+				.sort(
+					(left, right) =>
+						statSync(right.source.path).size - statSync(left.source.path).size,
+				);
+			runNativeCommands(
+				context,
+				compilationUnits.map(({ source, objectPath }) => ({
+					tool: context.toolchain.tools.cc.path,
+					args: toolArguments(context.toolchain.tools.cc, [
 						"-std=c2x",
 						...layout.flags,
 						...layout.includeArguments,
@@ -308,10 +316,9 @@ function buildRuntimeCache(
 						"-o",
 						objectPath,
 					]),
-					{ verbose },
-				);
-				return objectPath;
-			});
+				})),
+				{ verbose },
+			);
 			runNativeCommand(
 				context,
 				context.toolchain.tools.ar.path,

@@ -19,6 +19,8 @@ import {
 	nativeBuildEnvironmentFingerprint,
 	resolveNativeBuildContext,
 } from "../src/native-build-context.ts";
+import type { NativeBuildContext } from "../src/native-build-context.ts";
+import { nativeBuildJobs, runNativeCommands } from "../src/native-command.ts";
 import { ensureNativeArtifacts, runtimeArtifactKey } from "../src/runtime-build.ts";
 import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
 import { formatToolchainReport, inspectToolchain } from "../src/toolchain.ts";
@@ -191,6 +193,65 @@ function compileInvocationCount(logPath: string): number {
 }
 
 describe("native toolchain discovery", () => {
+	it("runs independent native commands with bounded concurrency", () => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "mal-native-command-pool-"));
+		const quotedRoot = path.join(root, "quoted'path");
+		mkdirSync(quotedRoot);
+		const runner = path.join(quotedRoot, "barrier");
+		const checker = path.join(quotedRoot, "checker");
+		const first = path.join(quotedRoot, "first");
+		const second = path.join(quotedRoot, "second");
+		const firstDone = path.join(quotedRoot, "first-done");
+		const secondDone = path.join(quotedRoot, "second-done");
+		const third = path.join(quotedRoot, "third");
+		const fourth = path.join(quotedRoot, "fourth");
+		executable(
+			runner,
+			`/usr/bin/touch "$1"
+i=0
+while [ "$i" -lt 100 ]; do
+	if [ -f "$2" ]; then /usr/bin/touch "$3"; exit 0; fi
+	i=$((i + 1))
+	/bin/sleep 0.01
+done
+exit 7
+`,
+		);
+		executable(
+			checker,
+			`[ -f "$1" ] || exit 8
+/usr/bin/touch "$2"
+`,
+		);
+		const commands: Array<string> = [];
+		const environment = { ...process.env, MAL_BUILD_JOBS: "2" };
+		const context = {
+			environment,
+			onCommand: (command: { tool: string }) => {
+				commands.push(command.tool);
+			},
+		} as unknown as NativeBuildContext;
+		runNativeCommands(
+			context,
+			[
+				{ tool: runner, args: [first, second, firstDone] },
+				{ tool: runner, args: [second, first, secondDone] },
+				{ tool: checker, args: [firstDone, third] },
+				{ tool: checker, args: [secondDone, fourth] },
+			],
+			{ verbose: false, env: environment },
+		);
+		expect(existsSync(first)).toBe(true);
+		expect(existsSync(second)).toBe(true);
+		expect(existsSync(third)).toBe(true);
+		expect(existsSync(fourth)).toBe(true);
+		expect(commands).toEqual([runner, runner, checker, checker]);
+		expect(nativeBuildJobs(environment)).toBe(2);
+		expect(() => nativeBuildJobs({ MAL_BUILD_JOBS: "0" })).toThrow(
+			"MAL_BUILD_JOBS must be a positive integer",
+		);
+	});
+
 	it("honors CC/CXX and resolves the rustup-selected pinned tools", () => {
 		const fake = createFakeToolchain();
 		const report = inspectToolchain({

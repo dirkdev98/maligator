@@ -16,7 +16,7 @@ import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
-import { runNativeCommand } from "./native-command.ts";
+import { runNativeCommand, runNativeCommands } from "./native-command.ts";
 import { ensureNativeArtifacts } from "./runtime-build.ts";
 import type { NativeArtifacts } from "./runtime-build.ts";
 import { toolArguments } from "./toolchain.ts";
@@ -202,85 +202,132 @@ function stableRuntimeArgument(context: NativeBuildContext, argument: string): s
 	return argument;
 }
 
-function ensureGeneratedObject(
+interface GeneratedObjectInput {
+	sourcePath: string;
+	source: string;
+}
+
+interface PendingGeneratedObject {
+	index: number;
+	key: string;
+	directory: string;
+	objectPath: string;
+	temporaryDirectory: string;
+	temporaryObject: string;
+	sourcePath: string;
+	sourceSize: number;
+}
+
+function ensureGeneratedObjects(
 	context: NativeBuildContext,
 	runtimeArtifactPath: string,
-	sourcePath: string,
-	source: string,
+	inputs: ReadonlyArray<GeneratedObjectInput>,
 	compileArguments: Array<string>,
 	verbose: boolean,
 	onCacheEvent?: (event: { hit: boolean; path: string }) => void,
-): string {
-	const key = hash(
-		"sha256",
-		JSON.stringify({
-			schema: 1,
-			sourcePath,
-			source: hash("sha256", source, "hex"),
-			compileArguments,
-			runtimeArtifactDirectory: path.dirname(runtimeArtifactPath),
-			environment: context.environmentFingerprint,
-			toolchain: context.toolchain.fingerprint,
-			target: context.toolchain.target,
-		}),
-		"hex",
-	).slice(0, 32);
+): Array<string> {
 	const parent = path.join(context.cacheDirectory, "generated-c");
-	const directory = path.join(parent, key);
-	const objectPath = path.join(directory, "unit.o");
-	if (validGeneratedObject(directory, key)) {
-		onCacheEvent?.({ hit: true, path: objectPath });
-		return objectPath;
+	const results: Array<string | undefined> = new Array(inputs.length);
+	const cacheHits: Array<boolean | undefined> = new Array(inputs.length);
+	const pending: Array<PendingGeneratedObject> = [];
+	for (const [index, input] of inputs.entries()) {
+		const key = hash(
+			"sha256",
+			JSON.stringify({
+				schema: 1,
+				sourcePath: input.sourcePath,
+				source: hash("sha256", input.source, "hex"),
+				compileArguments,
+				runtimeArtifactDirectory: path.dirname(runtimeArtifactPath),
+				environment: context.environmentFingerprint,
+				toolchain: context.toolchain.fingerprint,
+				target: context.toolchain.target,
+			}),
+			"hex",
+		).slice(0, 32);
+		const directory = path.join(parent, key);
+		const objectPath = path.join(directory, "unit.o");
+		if (validGeneratedObject(directory, key)) {
+			results[index] = objectPath;
+			cacheHits[index] = true;
+			continue;
+		}
+
+		mkdirSync(parent, { recursive: true });
+		rmSync(directory, { recursive: true, force: true });
+		const temporaryDirectory = mkdtempSync(path.join(parent, ".build-"));
+		pending.push({
+			index,
+			key,
+			directory,
+			objectPath,
+			temporaryDirectory,
+			temporaryObject: path.join(temporaryDirectory, "unit.o"),
+			sourcePath: input.sourcePath,
+			sourceSize: input.source.length,
+		});
 	}
 
-	mkdirSync(parent, { recursive: true });
-	rmSync(directory, { recursive: true, force: true });
-	const temporaryDirectory = mkdtempSync(path.join(parent, ".build-"));
-	const temporaryObject = path.join(temporaryDirectory, "unit.o");
 	try {
-		runNativeCommand(
+		runNativeCommands(
 			context,
-			context.toolchain.tools.cc.path,
-			toolArguments(context.toolchain.tools.cc, [
-				...compileArguments,
-				"-c",
-				sourcePath,
-				"-o",
-				temporaryObject,
-			]),
+			[...pending]
+				.sort((left, right) => right.sourceSize - left.sourceSize)
+				.map((entry) => ({
+					tool: context.toolchain.tools.cc.path,
+					args: toolArguments(context.toolchain.tools.cc, [
+						...compileArguments,
+						"-c",
+						entry.sourcePath,
+						"-o",
+						entry.temporaryObject,
+					]),
+				})),
 			{ verbose },
 		);
-		const bytes = readFileSync(temporaryObject);
-		if (bytes.length === 0)
-			throw new Error(`compiler produced an empty object: ${sourcePath}`);
-		writeFileSync(
-			path.join(temporaryDirectory, "artifact.json"),
-			`${JSON.stringify({
-				schema: 1,
-				key,
-				size: bytes.length,
-				digest: hash("sha256", bytes, "hex"),
-			} satisfies GeneratedObjectManifest)}\n`,
-		);
-		try {
-			renameSync(temporaryDirectory, directory);
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (
-				(code !== "EEXIST" && code !== "ENOTEMPTY") ||
-				!validGeneratedObject(directory, key)
-			) {
-				throw error;
+		for (const entry of pending) {
+			const bytes = readFileSync(entry.temporaryObject);
+			if (bytes.length === 0) {
+				throw new Error(`compiler produced an empty object: ${entry.sourcePath}`);
 			}
+			writeFileSync(
+				path.join(entry.temporaryDirectory, "artifact.json"),
+				`${JSON.stringify({
+					schema: 1,
+					key: entry.key,
+					size: bytes.length,
+					digest: hash("sha256", bytes, "hex"),
+				} satisfies GeneratedObjectManifest)}\n`,
+			);
+			try {
+				renameSync(entry.temporaryDirectory, entry.directory);
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (
+					(code !== "EEXIST" && code !== "ENOTEMPTY") ||
+					!validGeneratedObject(entry.directory, entry.key)
+				) {
+					throw error;
+				}
+			}
+			if (!validGeneratedObject(entry.directory, entry.key)) {
+				throw new Error(`generated object cache publication failed: ${entry.objectPath}`);
+			}
+			results[entry.index] = entry.objectPath;
+			cacheHits[entry.index] = false;
 		}
 	} finally {
-		rmSync(temporaryDirectory, { recursive: true, force: true });
+		for (const entry of pending) {
+			rmSync(entry.temporaryDirectory, { recursive: true, force: true });
+		}
 	}
-	if (!validGeneratedObject(directory, key)) {
-		throw new Error(`generated object cache publication failed: ${objectPath}`);
-	}
-	onCacheEvent?.({ hit: false, path: objectPath });
-	return objectPath;
+	return results.map((objectPath, index) => {
+		if (objectPath === undefined) {
+			throw new Error(`generated object result missing for ${inputs[index]?.sourcePath}`);
+		}
+		onCacheEvent?.({ hit: cacheHits[index]!, path: objectPath });
+		return objectPath;
+	});
 }
 
 /** Build the serialized-definition development driver. */
@@ -369,28 +416,24 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	});
 	const compileArguments = applicationCompileArguments(context);
 	phaseStartedAt = performance.now();
-	const objectPaths = cPaths.map((sourcePath, index) =>
-		ensureGeneratedObject(
-			context,
-			artifacts.c.runtime,
-			sourcePath,
-			sources[index]!,
-			compileArguments,
-			options.verbose,
-			options.onGeneratedObjectCacheEvent,
-		),
-	);
 	const mainFile =
 		options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c");
-	const mainObject = ensureGeneratedObject(
+	const generatedObjects = ensureGeneratedObjects(
 		context,
 		artifacts.c.runtime,
-		mainFile,
-		readFileSync(mainFile, "utf-8"),
+		[
+			...cPaths.map((sourcePath, index) => ({
+				sourcePath,
+				source: sources[index]!,
+			})),
+			{ sourcePath: mainFile, source: readFileSync(mainFile, "utf-8") },
+		],
 		compileArguments,
 		options.verbose,
 		options.onGeneratedObjectCacheEvent,
 	);
+	const mainObject = generatedObjects.at(-1)!;
+	const objectPaths = generatedObjects.slice(0, -1);
 	context.onBuildPhase?.({
 		phase: "generated C objects",
 		durationMs: performance.now() - phaseStartedAt,

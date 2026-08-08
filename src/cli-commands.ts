@@ -30,6 +30,7 @@ import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { vmDefinitionStats } from "./lower-vm.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
+import { nativeBuildJobs } from "./native-command.ts";
 import { executeTestCommand } from "./testing/command.ts";
 import {
 	formatToolchainReport,
@@ -374,6 +375,7 @@ function compileAndBuild(
 			? "(none)"
 			: derivation.features.cargoFeatures.join(", "),
 	);
+	reporter.detail("Native compile jobs", nativeBuildJobs(process.env));
 	const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
 	let generatedObjects = 0;
 	let generatedObjectHits = 0;
