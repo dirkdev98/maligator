@@ -36,16 +36,16 @@ function buildAndRun(tsPath: string, name: string): RunResult {
 			error: `build failed${e.status === undefined ? "" : ` (exit ${e.status})`}`,
 		};
 	}
-	// buildLocalBinary appends a content hash to --name, so read the path it printed.
-	const match = buildOutput.match(/^Binary: (.+)$/m);
-	if (match === null) {
+	// Build stdout is a scripting contract: exactly the resulting binary path.
+	const binaryPath = buildOutput.trim();
+	if (binaryPath === "") {
 		return {
 			stdout: "",
 			code: -1,
 			error: `build produced no binary path:\n${buildOutput}`,
 		};
 	}
-	const binary = path.resolve(match[1]!);
+	const binary = path.resolve(binaryPath);
 	try {
 		const stdout = execFileSync(binary, [], {
 			encoding: "utf8",

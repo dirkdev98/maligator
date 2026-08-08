@@ -107,12 +107,12 @@ function build(jsPath: string, name: string): string {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "ignore"],
 	});
-	// buildLocalBinary appends a content hash to --name, so read the path it printed.
-	const match = output.match(/^Binary: (.+)$/m);
-	if (match === null) {
+	// Build stdout is a scripting contract: exactly the resulting binary path.
+	const binaryPath = output.trim();
+	if (binaryPath === "") {
 		throw new Error(`no binary path in build output:\n${output}`);
 	}
-	return path.resolve(match[1]!);
+	return path.resolve(binaryPath);
 }
 
 const driver = buildLoadDriver(false, {

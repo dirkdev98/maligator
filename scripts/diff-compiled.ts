@@ -31,12 +31,12 @@ function build(name: string, extraArgs: Array<string>): string {
 		...extraArgs,
 	];
 	const output = execFileSync("node", args, { cwd: repoRoot, encoding: "utf-8" });
-	// buildLocalBinary appends a content hash to --name, so read the path it printed.
-	const match = output.match(/^Binary: (.+)$/m);
-	if (match === null) {
+	// Build stdout is a scripting contract: exactly the resulting binary path.
+	const binaryPath = output.trim();
+	if (binaryPath === "") {
 		throw new Error(`no binary path in build output:\n${output}`);
 	}
-	return path.resolve(repoRoot, match[1]!);
+	return path.resolve(repoRoot, binaryPath);
 }
 
 function run(binary: string): { out: string; code: number } {

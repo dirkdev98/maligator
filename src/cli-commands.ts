@@ -12,6 +12,7 @@ import type { BuildConfigTypeStripper, ResolvedBuildConfig } from "./build-confi
 import { gmallocEnabled, runEnv, selectNativeBuildPlan } from "./build-flags.ts";
 import type { NativeBuildPlan } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
+import { BuildReporter } from "./build-progress.ts";
 import { initProject, InitError } from "./cli-init.ts";
 import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
@@ -156,9 +157,6 @@ function selectToolchain(
 			toolchain,
 			command.kind === "build" && command.production,
 		);
-		log.info(`Toolchain: ${formatToolCommand(toolchain.tools.cc)} (${toolchain.target})`);
-		log.info(`Toolchain cache: ${toolchain.cacheHit ? "hit" : "miss"}`);
-		for (const warning of plan.warnings) log.info(`warning: ${warning}`);
 		return { toolchain, plan };
 	} catch (error) {
 		if (error instanceof ToolchainError) commandError(error.message);
@@ -183,6 +181,16 @@ function compileAndBuild(
 ): BuildCommandResult {
 	const buildConfig = loadCommandConfig(command, context.stripTypes);
 	const entrypointPath = resolveEntrypoint(command, buildConfig);
+	const name =
+		command.kind === "build"
+			? (command.internal.name ?? resolveOutputName(buildConfig))
+			: resolveOutputName(buildConfig);
+	const verbose = command.kind === "build" ? command.internal.verbose : command.verbose;
+	const reporter = new BuildReporter(verbose);
+	reporter.start(
+		name,
+		command.kind === "build" && command.production ? "production" : "development",
+	);
 	if (
 		command.kind === "build" &&
 		command.internal.serializePath !== undefined &&
@@ -211,14 +219,23 @@ function compileAndBuild(
 	) {
 		commandError("error: '--artifact' requires '--production'");
 	}
-	let assets: ReturnType<typeof includeConfiguredAssets>;
-	try {
-		assets = includeConfiguredAssets(buildConfig.assets);
-	} catch (error) {
-		if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
-		throw error;
+	const assets = reporter.phase("Collect assets", () => {
+		try {
+			return includeConfiguredAssets(buildConfig.assets);
+		} catch (error) {
+			if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
+			throw error;
+		}
+	});
+	const { toolchain, plan } = reporter.phase("Resolve toolchain", () =>
+		selectToolchain(command, buildConfig, context),
+	);
+	if (toolchain !== undefined) {
+		reporter.detail("Target", toolchain.target);
+		reporter.detail("C compiler", formatToolCommand(toolchain.tools.cc));
+		reporter.detail("Toolchain cache", toolchain.cacheHit ? "hit" : "miss");
 	}
-	const { toolchain, plan } = selectToolchain(command, buildConfig, context);
+	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 
 	const compilerDiagnostics =
 		command.kind === "build" &&
@@ -229,77 +246,87 @@ function compileAndBuild(
 			command.internal.dumpMethods ||
 			command.internal.dumpEscape ||
 			command.internal.dumpStackAlloc);
-	let frontend: ReturnType<typeof compileBuildFrontend>;
-	try {
-		frontend = compileBuildFrontend({
-			entrypoint: entrypointPath,
-			config: buildConfig,
-			stripTypes: context.stripTypes,
-			stripperIdentity: context.installation.frontendIdentity,
-			enforcePolicies: !(
-				command.kind === "build" && command.internal.serializePath !== undefined
-			),
-			forceCompile: debugEnabled || compilerDiagnostics,
-			afterOptimization: (irProgram) => {
-				if (command.kind === "build" && command.internal.dumpLiveness) {
-					log.info(debugProgramLiveness(irProgram));
-				}
-				if (command.kind === "build" && command.internal.dumpInline) {
-					debugInlinableCalls(irProgram);
-				}
-				if (command.kind === "build" && command.internal.dumpHof) {
-					debugHofInlineSites(irProgram);
-				}
-				if (command.kind === "build" && command.internal.dumpSpeculative) {
-					debugSpeculativeInlineSites(irProgram);
-				}
-				if (command.kind === "build" && command.internal.dumpMethods) {
-					debugMethodInlineSites(irProgram);
-				}
-				if (command.kind === "build" && command.internal.dumpEscape) {
-					dumpProgramEscape(irProgram);
-				}
-				if (command.kind === "build" && command.internal.dumpStackAlloc) {
-					dumpStackAlloc(irProgram);
-				}
-			},
-		});
-	} catch (error) {
-		if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
-		throw error;
-	}
+	const frontend = reporter.phase(
+		"Compile modules",
+		() => {
+			try {
+				return compileBuildFrontend({
+					entrypoint: entrypointPath,
+					config: buildConfig,
+					stripTypes: context.stripTypes,
+					stripperIdentity: context.installation.frontendIdentity,
+					enforcePolicies: !(
+						command.kind === "build" && command.internal.serializePath !== undefined
+					),
+					forceCompile: debugEnabled || compilerDiagnostics,
+					afterOptimization: (irProgram) => {
+						if (command.kind === "build" && command.internal.dumpLiveness) {
+							log.info(debugProgramLiveness(irProgram));
+						}
+						if (command.kind === "build" && command.internal.dumpInline) {
+							debugInlinableCalls(irProgram);
+						}
+						if (command.kind === "build" && command.internal.dumpHof) {
+							debugHofInlineSites(irProgram);
+						}
+						if (command.kind === "build" && command.internal.dumpSpeculative) {
+							debugSpeculativeInlineSites(irProgram);
+						}
+						if (command.kind === "build" && command.internal.dumpMethods) {
+							debugMethodInlineSites(irProgram);
+						}
+						if (command.kind === "build" && command.internal.dumpEscape) {
+							dumpProgramEscape(irProgram);
+						}
+						if (command.kind === "build" && command.internal.dumpStackAlloc) {
+							dumpStackAlloc(irProgram);
+						}
+					},
+				});
+			} catch (error) {
+				if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
+				throw error;
+			}
+		},
+		(result) => `frontend cache ${result.cache}`,
+	);
 	const vmDefinition = frontend.definition;
-	log.info(`Cache frontend: ${frontend.cache} (${frontend.frontendMs}ms)`);
-	log.debug(
-		`Frontend: validation ${frontend.phases.validationMs}ms, graph ${frontend.phases.graphMs}ms, ` +
+	reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
+	reporter.detail(
+		"Frontend phases",
+		`validation ${frontend.phases.validationMs}ms, graph ${frontend.phases.graphMs}ms, ` +
 			`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +
 			`serialize ${frontend.phases.serializeMs}ms`,
 	);
 
 	const stats = vmDefinitionStats(vmDefinition);
-	log.info(`Functions: ${stats.functionCount}, instructions: ${stats.instructionCount}`);
+	reporter.detail("Functions", stats.functionCount);
+	reporter.detail("Instructions", stats.instructionCount);
 
 	const serializePath =
 		command.kind === "build" ? command.internal.serializePath : undefined;
 	if (serializePath !== undefined) {
-		writeFileSync(serializePath, frontend.wire);
-		log.info(`Serialized: ${serializePath} (${frontend.wire.length} bytes)`);
+		reporter.phase("Write portable definition", () =>
+			writeFileSync(serializePath, frontend.wire),
+		);
+		reporter.detail("Serialized bytes", frontend.wire.length);
+		reporter.complete("Serialized", serializePath, true);
 		return { serializedPath: serializePath };
 	}
 
-	const output = emitVmTranslationUnits(vmDefinition, {
-		compiled: command.kind === "run" || command.internal.compiled,
-		assets,
-		maligatorSurface: buildConfig.surface.maligator,
-	});
+	const output = reporter.phase("Generate native code", () =>
+		emitVmTranslationUnits(vmDefinition, {
+			compiled: command.kind === "run" || command.internal.compiled,
+			assets,
+			maligatorSurface: buildConfig.surface.maligator,
+		}),
+	);
 	if (command.kind === "build" && command.internal.emitC) log.info(output.join("\n"));
-
-	const name =
-		command.kind === "build"
-			? (command.internal.name ?? resolveOutputName(buildConfig))
-			: resolveOutputName(buildConfig);
-	const verbose = command.kind === "build" && command.internal.verbose;
-	const buildTiming = log.time("build binary");
+	reporter.detail("Translation units", output.length);
+	reporter.detail(
+		"Generated C bytes",
+		output.reduce((total, source) => total + source.length, 0),
+	);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -314,51 +341,83 @@ function compileAndBuild(
 				}
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 	const derivation = buildDerivationFromConfig(buildConfig);
+	const nativeCache = new Map<"runtime" | "rust", boolean>();
+	let generatedObjects = 0;
+	let generatedObjectHits = 0;
 	const nativeContext = resolveNativeBuildContext({
 		toolchain,
 		plan,
 		runtimeDirectory: context.installation.runtimeDirectory,
 		features: derivation.features,
 		compilerBake,
-		onCacheEvent: (event) =>
-			log.info(`Cache ${event.artifact}: ${event.hit ? "hit" : "miss"} (${event.path})`),
-	});
-	const { binaryPath } = buildLocalBinary({
-		context: nativeContext,
-		name,
-		cSource: output,
-		verbose,
-		onWarning: (warning) => log.info(`warning: ${warning}`),
-		onGeneratedObjectCacheEvent: (event) =>
-			log.info(`Cache generated C: ${event.hit ? "hit" : "miss"} (${event.path})`),
-		mainFile: applicationDriverPath(
-			context.installation,
-			buildConfig.surface.webPlatform,
-			buildConfig.surface.node,
-		),
-		cacheSuffix: derivation.cacheSuffix,
-	});
-	buildTiming();
-	log.info(`Binary: ${binaryPath}`);
-	if (command.kind === "build" && command.artifactDirectory !== undefined) {
-		let artifact: ReturnType<typeof createBuildArtifact>;
-		try {
-			artifact = createBuildArtifact({
-				binaryPath,
-				directory: command.artifactDirectory,
-				licensePath: context.installation.licensePath,
-				version: MALIGATOR_VERSION,
-				target: nativeContext.toolchain.rustTarget,
-				production: true,
-			});
-		} catch (error) {
-			commandError(
-				`error: could not create artifact: ${error instanceof Error ? error.message : String(error)}`,
+		onCacheEvent: (event) => {
+			nativeCache.set(event.artifact, event.hit);
+			reporter.detail(
+				`${event.artifact === "rust" ? "Rust" : "Runtime"} cache`,
+				`${event.hit ? "hit" : "miss"} (${event.path})`,
 			);
-		}
-		log.info(`Artifact: ${artifact.directory}`);
+		},
+	});
+	const binaryPath = reporter.phase(
+		"Build native binary",
+		() =>
+			buildLocalBinary({
+				context: nativeContext,
+				name,
+				cSource: output,
+				verbose,
+				onWarning: (warning) => reporter.warning(warning),
+				onGeneratedObjectCacheEvent: (event) => {
+					generatedObjects++;
+					if (event.hit) generatedObjectHits++;
+					reporter.detail(
+						"Generated object cache",
+						`${event.hit ? "hit" : "miss"} (${event.path})`,
+					);
+				},
+				mainFile: applicationDriverPath(
+					context.installation,
+					buildConfig.surface.webPlatform,
+					buildConfig.surface.node,
+				),
+				cacheSuffix: derivation.cacheSuffix,
+			}).binaryPath,
+		() => {
+			const caches = (["runtime", "rust"] as const)
+				.map((artifact) =>
+					nativeCache.has(artifact)
+						? `${artifact} ${nativeCache.get(artifact) ? "hit" : "miss"}`
+						: undefined,
+				)
+				.filter((value) => value !== undefined);
+			caches.push(`${generatedObjectHits}/${generatedObjects} objects cached`);
+			return caches.join(" · ");
+		},
+	);
+	let resultPath = binaryPath;
+	if (command.kind === "build" && command.artifactDirectory !== undefined) {
+		const artifactDirectory = command.artifactDirectory;
+		const artifact = reporter.phase("Create artifact", () => {
+			try {
+				return createBuildArtifact({
+					binaryPath,
+					directory: artifactDirectory,
+					licensePath: context.installation.licensePath,
+					version: MALIGATOR_VERSION,
+					target: nativeContext.toolchain.rustTarget,
+					production: true,
+				});
+			} catch (error) {
+				commandError(
+					`error: could not create artifact: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		});
+		resultPath = artifact.directory;
+		reporter.complete("Built", resultPath, true);
 		return { binaryPath, artifactDirectory: artifact.directory };
 	}
+	reporter.complete("Built", resultPath, command.kind === "build");
 	return { binaryPath };
 }
 
@@ -377,11 +436,11 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
 	const outcome = executeBinary(binaryPath, command.programArgs, runEnv());
 	if (outcome.status === 0) {
-		log.info("Exit: 0");
+		console.error("Exited with code 0");
 		return;
 	}
-	log.info(
-		`Exit: ${outcome.signal ? `signal ${outcome.signal}` : (outcome.status ?? "error")}`,
+	console.error(
+		`Exited with ${outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.status ?? "unknown"}`}`,
 	);
 	if (outcome.signal !== undefined) process.kill(process.pid, outcome.signal);
 	process.exit(outcome.status ?? 1);
@@ -392,8 +451,13 @@ export async function runCli(
 	args: Array<string>,
 	context: CommandContext,
 ): Promise<void> {
+	let verbose = false;
 	try {
 		const command = parseCliArgs(args);
+		verbose =
+			(command.kind === "build" && command.internal.verbose) ||
+			(command.kind === "run" && command.verbose) ||
+			(command.kind === "doctor" && command.verbose);
 		if (command.kind === "help") {
 			log.info(CLI_HELP);
 			return;
@@ -452,9 +516,15 @@ export async function runCli(
 			process.exit(2);
 		}
 		if (error instanceof CommandError) {
-			log.info(error.message);
+			console.error(error.message);
 			process.exit(error.exitCode);
 		}
-		throw error;
+		if (verbose && error instanceof Error && error.stack !== undefined) {
+			console.error(error.stack);
+		} else {
+			console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+			console.error("Run again with '--verbose' for diagnostic details.");
+		}
+		process.exit(1);
 	}
 }

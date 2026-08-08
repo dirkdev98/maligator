@@ -29,6 +29,7 @@ export interface RunCommand {
 	kind: "run";
 	entry?: string;
 	configPath?: string;
+	verbose: boolean;
 	programArgs: Array<string>;
 }
 
@@ -74,6 +75,7 @@ Options:
   --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
   --artifact <directory>       Create a deployable production artifact
+  --verbose                    Show detailed build diagnostics (build and run)
   --run <name>                 Filter tests by hierarchical name
   --shuffle [seed]             Shuffle deterministically and print the seed
   --repeat <count>             Repeat selected tests without recompiling
@@ -243,6 +245,7 @@ function parseBuild(args: Array<string>): CliCommand {
 function parseRun(args: Array<string>): CliCommand {
 	const command: RunCommand = {
 		kind: "run",
+		verbose: false,
 		programArgs: [],
 	};
 
@@ -258,6 +261,10 @@ function parseRun(args: Array<string>): CliCommand {
 		if (argument === "--config") {
 			command.configPath = optionValue(args, index, argument);
 			index++;
+			continue;
+		}
+		if (argument === "--verbose") {
+			command.verbose = true;
 			continue;
 		}
 		if (argument.startsWith("-")) {

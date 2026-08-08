@@ -65,11 +65,11 @@ export default defineBuild({
 		["src/index.ts", "build", entry, "--name", "selfhost_check", "--config", config],
 		{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
 	);
-	const binaryMatch = buildOutput.match(/^Binary: (.+)$/m);
-	if (binaryMatch === null) {
+	const binaryPath = buildOutput.trim();
+	if (binaryPath === "") {
 		throw new Error(`build produced no binary path:\n${buildOutput}`);
 	}
-	out = execFileSync(path.resolve(binaryMatch[1]!), { encoding: "utf8" }).trim();
+	out = execFileSync(path.resolve(binaryPath), { encoding: "utf8" }).trim();
 } finally {
 	// Not in a process.exit() path — that would skip this cleanup.
 	rmSync(tempDir, { force: true, recursive: true });

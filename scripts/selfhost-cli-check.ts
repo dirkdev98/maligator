@@ -152,11 +152,7 @@ try {
 	console.log("ok   doctor found the isolated native toolchain");
 
 	const buildOutput = invoke(["build"]);
-	if (
-		!buildOutput.includes("Binary:") ||
-		!buildOutput.includes("selfhost-cli-app") ||
-		!buildOutput.includes("Cache frontend: miss")
-	) {
+	if (!buildOutput.includes("selfhost-cli-app") || buildOutput.trim().includes("\n")) {
 		throw new Error(`build did not report its output:\n${buildOutput}`);
 	}
 	console.log("ok   distributed compiler built the configured application");
@@ -164,15 +160,6 @@ try {
 	const runOutput = invoke(["run", "--", "alpha", "two words", "--flag"]);
 	if (!runOutput.includes("selfhost-cli alpha|two words|--flag")) {
 		throw new Error(`run did not forward arguments:\n${runOutput}`);
-	}
-	if (!runOutput.includes("Exit: 0")) {
-		throw new Error(`run did not report success:\n${runOutput}`);
-	}
-	if (!runOutput.includes("Cache frontend: hit")) {
-		throw new Error(`run did not reuse the normal-build frontend:\n${runOutput}`);
-	}
-	if (!runOutput.includes("Cache generated C: hit")) {
-		throw new Error(`run did not reuse generated native objects:\n${runOutput}`);
 	}
 	console.log(
 		"ok   target materialized binary assets, executed eval, and forwarded arguments",

@@ -24,6 +24,6 @@ describe("Node CLI Drizzle SQLite integration", () => {
 
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		expect(result.stdout.split("\n")).toContain("RESULT 7/7");
-		expect(result.stdout).toContain("Exit: 0");
+		expect(result.stderr).toContain("Exited with code 0");
 	}, 300_000);
 });

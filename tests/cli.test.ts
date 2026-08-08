@@ -64,7 +64,12 @@ describe("parseCliArgs", () => {
 		).toEqual({
 			kind: "run",
 			entry: "src/main.ts",
+			verbose: false,
 			programArgs: ["--flag", "two words", "-x"],
+		});
+		expect(parseCliArgs(["run", "src/main.ts", "--verbose"])).toMatchObject({
+			kind: "run",
+			verbose: true,
 		});
 	});
 
@@ -235,7 +240,7 @@ describe("command shell", () => {
 	it("suggests init when build has no explicit or configured entry", () => {
 		const result = invokeCli(["build"]);
 		expect(result.status).toBe(1);
-		expect(result.stdout).toContain("run 'maligator init'");
+		expect(result.stderr).toContain("run 'maligator init'");
 	});
 
 	it("skips disabled-feature policy for portable serialization", () => {
@@ -249,6 +254,9 @@ describe("command shell", () => {
 		const result = invokeCli(["build", entry, "--config", config, "--serialize", output]);
 
 		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout.trim()).toBe(output);
+		expect(result.stderr).toContain("Compile modules");
+		expect(result.stderr).toContain("Serialized");
 		expect(readFileSync(output).length).toBeGreaterThan(0);
 	});
 
@@ -325,6 +333,6 @@ describe("maligator init", () => {
 		initProject(dir);
 		const result = invokeCli(["init"], dir);
 		expect(result.status).toBe(1);
-		expect(result.stdout).toContain("build config already exists");
+		expect(result.stderr).toContain("build config already exists");
 	});
 });

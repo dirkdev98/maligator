@@ -11,6 +11,7 @@ describe("combined Express, Valibot, and Drizzle product build", () => {
 			[
 				path.join(repositoryRoot, "src/index.ts"),
 				"build",
+				"--verbose",
 				"--config",
 				"tests/fixtures/express-5/combined-dependency-build.build.mts",
 			],
@@ -23,7 +24,7 @@ describe("combined Express, Valibot, and Drizzle product build", () => {
 		);
 
 		expect(result.status, result.stderr || result.stdout).toBe(0);
-		expect(result.stdout).toContain("Functions:");
-		expect(result.stdout).toContain("Binary:");
+		expect(result.stderr).toContain("Functions:");
+		expect(result.stdout.trim()).toContain("combined-dependency-build");
 	}, 300_000);
 });
