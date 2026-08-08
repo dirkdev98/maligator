@@ -22,6 +22,23 @@ export function allocateRegisters(program: IntermediateProgram) {
 }
 
 /**
+ * Linear, semantics-first allocation for interpreted development images.
+ *
+ * Every virtual register gets a distinct dense physical register, apart from
+ * required parameter and argument-snapshot precolors. This avoids liveness,
+ * interference, and representation analysis on the edit path. The resulting
+ * frames are larger, but register identities cannot alias incorrectly and the
+ * production allocator remains unchanged.
+ */
+export function allocateDevelopmentRegisters(program: IntermediateProgram): void {
+	for (const fn of program.functions) {
+		allocateDense(fn, allVirtualRegisters(fn));
+	}
+
+	if (debugEnabled) debugIntermediateProgram(program);
+}
+
+/**
  * How a register's value is held downstream (drives rep-aware allocation). Must
  * mirror emit-c's rep lattice (its `inferReps`/`producedRep`) exactly: a physical
  * register is kept to a single rep so the native backend can hold `number`

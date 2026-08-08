@@ -4,7 +4,7 @@ import { compileSemanticProgramToIr } from "./ir.ts";
 import type { IntermediateProgram } from "./ir.ts";
 import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
 import type { VmDefinition } from "./lower-vm.ts";
-import { allocateRegisters } from "./register-alloc.ts";
+import { allocateDevelopmentRegisters, allocateRegisters } from "./register-alloc.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
 
 export type CompileCorePhase =
@@ -40,6 +40,10 @@ export function compileSemanticProgramToVmDefinition(
 			: executeIROptimizations(ir),
 	);
 	options.afterOptimization?.(ir);
-	runPhase("register allocation", () => allocateRegisters(ir));
+	runPhase("register allocation", () =>
+		options.optimization === "development"
+			? allocateDevelopmentRegisters(ir)
+			: allocateRegisters(ir),
+	);
 	return runPhase("lower to vm", () => lowerIrProgramToVmDefinition(ir));
 }

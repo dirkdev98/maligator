@@ -313,32 +313,19 @@ export function executeIROptimizations(program: IntermediateProgram) {
 /**
  * Correctness-preserving development pipeline.
  *
- * Whole-program inlining, escape analysis, scalar replacement, and native-site
- * annotations are valuable for shipped binaries but dominate edit latency on a
- * dependency-sized graph. Development builds retain the canonical CFG/local
- * cleanup required by later compiler stages and leave expensive specialization
- * to production builds.
+ * Development images need local-slot lowering before VM lowering. A single
+ * linear cleanup pass also removes the bulk of redundant moves and dead IR
+ * without running a whole-program fixpoint. Shipped binaries continue through
+ * the production pipeline above.
  */
 export function executeIRDevelopmentOptimizations(program: IntermediateProgram): void {
-	optEliminateRedundantTdzChecks(program);
-	const passes = [
-		optDropInstructionsAfterJumpsOrReturns,
-		optDropUnreferencedBlocks,
-		optLocalsToRegister,
-		optCopyPropagation,
-		optFoldPrimitiveConstants,
-		optDeadInstructionElimination,
-		optCombineLinearBlocks,
-		optPatchJumpsToDirectJumpBlocks,
-	];
-	for (let round = 0; round < 8; round++) {
-		let changed = false;
-		for (const pass of passes) changed = pass(program) || changed;
-		if (!changed) break;
-	}
-	optCommonPrimitiveConstants(program);
+	optDropInstructionsAfterJumpsOrReturns(program);
+	optDropUnreferencedBlocks(program);
+	optLocalsToRegister(program);
 	optCopyPropagation(program);
 	optDeadInstructionElimination(program);
+	optCombineLinearBlocks(program);
+	optPatchJumpsToDirectJumpBlocks(program);
 	annotateTerminalYieldSites(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);

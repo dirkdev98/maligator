@@ -1,6 +1,9 @@
 import { expect, test } from "vitest";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.ts";
-import { allocateRegisters } from "../src/register-alloc.ts";
+import {
+	allocateDevelopmentRegisters,
+	allocateRegisters,
+} from "../src/register-alloc.ts";
 
 function allocate(
 	blocks: Array<Array<IRInstruction>>,
@@ -116,6 +119,32 @@ test("reserves parameter colors and preserves dense argument snapshots", () => {
 	expect(countSnapshot.registers[0]).toBe(2);
 	expect(valueSnapshot.registers[0]).toBe(3);
 	expect(temporary.registers[0]).toBeGreaterThanOrEqual(2);
+});
+
+test("development allocation keeps every virtual value distinct", () => {
+	const countSnapshot: IRInstruction = { type: "loadArgumentCount", registers: [5] };
+	const valueSnapshot: IRInstruction = { type: "loadArgument", registers: [6], index: 0 };
+	const loopValue: IRInstruction = { type: "createObject", registers: [7] };
+	const loopResult: IRInstruction = { type: "move", registers: [8, 7] };
+	const fn = {
+		parameterCount: 2,
+		nextRegisterDestination: 9,
+		blocks: [
+			{
+				instructions: [countSnapshot, valueSnapshot, { type: "jump", blocks: [1] }],
+			},
+			{
+				instructions: [loopValue, loopResult, { type: "jump", blocks: [1] }],
+			},
+		],
+	} as unknown as IRFunction;
+
+	allocateDevelopmentRegisters({ functions: [fn] } as unknown as IntermediateProgram);
+
+	expect(countSnapshot.registers[0]).toBe(2);
+	expect(valueSnapshot.registers[0]).toBe(3);
+	expect(loopValue.registers[0]).not.toBe(loopResult.registers[0]);
+	expect(fn.nextRegisterDestination).toBe(6);
 });
 
 test("never shares a physical register across representation classes", () => {
