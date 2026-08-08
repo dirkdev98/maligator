@@ -368,7 +368,7 @@ function compileAndBuild(
 				}
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 	const derivation = buildDerivationFromConfig(buildConfig);
-	const nativeCache = new Map<"runtime" | "rust", boolean>();
+	const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
 	let generatedObjects = 0;
 	let generatedObjectHits = 0;
 	const nativeContext = resolveNativeBuildContext({
@@ -380,7 +380,7 @@ function compileAndBuild(
 		onCacheEvent: (event) => {
 			nativeCache.set(event.artifact, event.hit);
 			reporter.detail(
-				`${event.artifact === "rust" ? "Rust" : "Runtime"} cache`,
+				`${event.artifact === "rust" ? "Rust" : event.artifact === "runtime" ? "Runtime" : "Binary"} cache`,
 				`${event.hit ? "hit" : "miss"} (${event.path})`,
 			);
 		},
@@ -430,7 +430,7 @@ function compileAndBuild(
 				cacheSuffix: derivation.cacheSuffix,
 			}).binaryPath,
 		() => {
-			const caches = (["runtime", "rust"] as const)
+			const caches = (["runtime", "rust", "binary"] as const)
 				.map((artifact) =>
 					nativeCache.has(artifact)
 						? `${artifact} ${nativeCache.get(artifact) ? "hit" : "miss"}`

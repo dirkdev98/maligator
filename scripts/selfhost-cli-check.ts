@@ -156,6 +156,22 @@ try {
 		throw new Error(`build did not report its output:\n${buildOutput}`);
 	}
 	console.log("ok   distributed compiler built the configured application");
+	const cachedBuild = spawnSync(distributedCli, ["build", "--verbose"], {
+		cwd: project,
+		env: isolatedEnv,
+		encoding: "utf-8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (
+		cachedBuild.status !== 0 ||
+		cachedBuild.stdout !== buildOutput ||
+		!cachedBuild.stderr.includes("Binary cache: hit")
+	) {
+		throw new Error(
+			`cached build did not restore the linked binary:\n${cachedBuild.stdout}\n${cachedBuild.stderr}`,
+		);
+	}
+	console.log("ok   distributed compiler restored the cached linked binary");
 
 	const runOutput = invoke(["run", "--", "alpha", "two words", "--flag"]);
 	if (!runOutput.includes("selfhost-cli alpha|two words|--flag")) {

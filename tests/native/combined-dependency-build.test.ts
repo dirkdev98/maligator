@@ -27,7 +27,7 @@ describe("combined Express, Valibot, and Drizzle product build", () => {
 		expect(result.stderr).toContain("Functions:");
 		expect(result.stderr).toContain("Native phase · runtime:");
 		expect(result.stderr).toContain("Native phase · link:");
-		expect(result.stderr).toContain("Command:");
+		expect(result.stderr).toContain("Binary cache:");
 		expect(result.stdout.trim().split("\n")).toHaveLength(1);
 		expect(result.stdout.trim()).toContain("express-valibot-drizzle-issue-12");
 	}, 300_000);

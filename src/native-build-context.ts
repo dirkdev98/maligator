@@ -11,7 +11,7 @@ import { requireToolchain } from "./toolchain.ts";
 import type { Toolchain } from "./toolchain.ts";
 
 export interface BuildCacheEvent {
-	artifact: "runtime" | "rust";
+	artifact: "runtime" | "rust" | "binary";
 	hit: boolean;
 	path: string;
 }
@@ -23,7 +23,8 @@ export interface NativeBuildPhaseEvent {
 		| "write generated C"
 		| "generated C objects"
 		| "link"
-		| "strip";
+		| "strip"
+		| "publish binary";
 	durationMs: number;
 	cache?: "hit" | "miss";
 	path?: string;

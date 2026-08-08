@@ -1,5 +1,6 @@
 import { hash } from "node:crypto";
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -57,6 +58,84 @@ interface GeneratedObjectManifest {
 	digest: string;
 }
 
+interface LinkedBinaryManifest {
+	schema: 1;
+	key: string;
+	size: number;
+	mode: number;
+	digest: string;
+}
+
+function validLinkedBinary(directory: string, key: string): boolean {
+	try {
+		const binaryPath = path.join(directory, "binary");
+		const manifest = JSON.parse(
+			readFileSync(path.join(directory, "artifact.json"), "utf-8"),
+		) as LinkedBinaryManifest;
+		const stats = statSync(binaryPath);
+		return (
+			manifest.schema === 1 &&
+			manifest.key === key &&
+			stats.isFile() &&
+			stats.size > 0 &&
+			manifest.size === stats.size &&
+			typeof manifest.mode === "number" &&
+			manifest.digest === hash("sha256", readFileSync(binaryPath), "hex")
+		);
+	} catch {
+		return false;
+	}
+}
+
+function publishLinkedBinary(directory: string, key: string, binaryPath: string): void {
+	const parent = path.dirname(directory);
+	mkdirSync(parent, { recursive: true });
+	const temporaryDirectory = mkdtempSync(path.join(parent, ".build-"));
+	try {
+		const temporaryBinary = path.join(temporaryDirectory, "binary");
+		copyFileSync(binaryPath, temporaryBinary);
+		const stats = statSync(temporaryBinary);
+		writeFileSync(
+			path.join(temporaryDirectory, "artifact.json"),
+			`${JSON.stringify({
+				schema: 1,
+				key,
+				size: stats.size,
+				mode: stats.mode & 0o777,
+				digest: hash("sha256", readFileSync(temporaryBinary), "hex"),
+			} satisfies LinkedBinaryManifest)}\n`,
+		);
+		try {
+			renameSync(temporaryDirectory, directory);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (
+				(code !== "EEXIST" && code !== "ENOTEMPTY") ||
+				!validLinkedBinary(directory, key)
+			) {
+				throw error;
+			}
+		}
+	} finally {
+		rmSync(temporaryDirectory, { recursive: true, force: true });
+	}
+	if (!validLinkedBinary(directory, key)) {
+		throw new Error(`linked binary cache publication failed: ${directory}`);
+	}
+}
+
+function restoreLinkedBinary(directory: string, binaryPath: string): void {
+	const cachedBinary = path.join(directory, "binary");
+	const manifest = JSON.parse(
+		readFileSync(path.join(directory, "artifact.json"), "utf-8"),
+	) as LinkedBinaryManifest;
+	rmSync(binaryPath, { force: true });
+	copyFileSync(cachedBinary, binaryPath);
+	if ((statSync(binaryPath).mode & 0o777) !== manifest.mode) {
+		throw new Error(`linked binary cache restored the wrong file mode: ${binaryPath}`);
+	}
+}
+
 function applicationCompileArguments(context: NativeBuildContext): Array<string> {
 	return [
 		"-std=c2x",
@@ -98,6 +177,29 @@ function validGeneratedObject(directory: string, key: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function generatedObjectDigest(objectPath: string): string {
+	const manifest = JSON.parse(
+		readFileSync(path.join(path.dirname(objectPath), "artifact.json"), "utf-8"),
+	) as GeneratedObjectManifest;
+	if (!validGeneratedObject(path.dirname(objectPath), manifest.key)) {
+		throw new Error(`generated object became invalid before linking: ${objectPath}`);
+	}
+	return manifest.digest;
+}
+
+function stableRuntimeArgument(context: NativeBuildContext, argument: string): string {
+	const relative = path.relative(context.runtimeDirectory, argument);
+	if (relative === "") return "<runtime>";
+	if (
+		!relative.startsWith(`..${path.sep}`) &&
+		relative !== ".." &&
+		!path.isAbsolute(relative)
+	) {
+		return path.join("<runtime>", relative);
+	}
+	return argument;
 }
 
 function ensureGeneratedObject(
@@ -293,26 +395,70 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		phase: "generated C objects",
 		durationMs: performance.now() - phaseStartedAt,
 	});
-
+	const linkArguments = toolArguments(context.toolchain.tools.cc, [
+		...compileArguments,
+		...objectPaths,
+		mainObject,
+		...artifacts.linkArgs,
+		...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),
+	]);
+	const linkKey = hash(
+		"sha256",
+		JSON.stringify({
+			schema: 1,
+			compileArguments: compileArguments.map((argument) =>
+				stableRuntimeArgument(context, argument),
+			),
+			objects: [...objectPaths, mainObject].map(generatedObjectDigest),
+			artifacts: artifacts.linkArgs,
+			zigStripArgs: zigLinkTimeStrip ? context.toolchain.probes.stripArgs : [],
+			strip:
+				context.plan.strip && !zigLinkTimeStrip
+					? {
+							tool: context.toolchain.tools.strip,
+							args: context.toolchain.probes.stripArgs,
+						}
+					: undefined,
+			environment: context.environmentFingerprint,
+			toolchain: context.toolchain.fingerprint,
+			target: context.toolchain.target,
+		}),
+		"hex",
+	).slice(0, 32);
+	const linkCacheDirectory = path.join(
+		context.cacheDirectory,
+		"linked-binaries",
+		linkKey,
+	);
+	const cachedBinaryPath = path.join(linkCacheDirectory, "binary");
 	phaseStartedAt = performance.now();
+	if (validLinkedBinary(linkCacheDirectory, linkKey)) {
+		context.onCacheEvent?.({ artifact: "binary", hit: true, path: cachedBinaryPath });
+		restoreLinkedBinary(linkCacheDirectory, binaryPath);
+		context.onBuildPhase?.({
+			phase: "link",
+			durationMs: performance.now() - phaseStartedAt,
+			cache: "hit",
+			path: cachedBinaryPath,
+		});
+		return { binaryPath, artifacts, context };
+	}
+	context.onCacheEvent?.({ artifact: "binary", hit: false, path: cachedBinaryPath });
+	rmSync(linkCacheDirectory, { recursive: true, force: true });
+
 	runNativeCommand(
 		context,
 		context.toolchain.tools.cc.path,
-		toolArguments(context.toolchain.tools.cc, [
-			...compileArguments,
-			...objectPaths,
-			mainObject,
-			...artifacts.linkArgs,
-			...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),
-			"-o",
-			binaryPath,
-		]),
+		[...linkArguments, "-o", binaryPath],
 		{ verbose: options.verbose },
 	);
 	context.onBuildPhase?.({
 		phase: "link",
 		durationMs: performance.now() - phaseStartedAt,
+		cache: "miss",
+		path: cachedBinaryPath,
 	});
+	let cacheable = true;
 	if (
 		context.plan.strip &&
 		context.toolchain.tools.strip !== undefined &&
@@ -340,11 +486,21 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			});
 			if (objcopy !== undefined) renameSync(objcopy, binaryPath);
 		} catch (error) {
+			cacheable = false;
 			if (objcopy !== undefined) rmSync(objcopy, { force: true });
 			options.onWarning?.(
 				`production symbol stripping failed after a successful probe; leaving the binary unstripped: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
+	}
+	if (cacheable) {
+		phaseStartedAt = performance.now();
+		publishLinkedBinary(linkCacheDirectory, linkKey, binaryPath);
+		context.onBuildPhase?.({
+			phase: "publish binary",
+			durationMs: performance.now() - phaseStartedAt,
+			path: cachedBinaryPath,
+		});
 	}
 
 	return { binaryPath, artifacts, context };

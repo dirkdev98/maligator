@@ -401,8 +401,10 @@ describe("native toolchain discovery", () => {
 		});
 		expect(report.toolchain).toBeDefined();
 		const toolchain = report.toolchain!;
-		const phases: Array<{ phase: string; durationMs: number }> = [];
+		const phases: Array<{ phase: string; durationMs: number; cache?: "hit" | "miss" }> =
+			[];
 		const commands: Array<{ tool: string; args: ReadonlyArray<string> }> = [];
+		const binaryEvents: Array<{ hit: boolean; path: string }> = [];
 		const context = resolveNativeBuildContext({
 			toolchain,
 			cacheDirectory: path.join(fake.root, "cache"),
@@ -412,6 +414,9 @@ describe("native toolchain discovery", () => {
 			},
 			onBuildPhase: (event) => phases.push(event),
 			onCommand: (event) => commands.push(event),
+			onCacheEvent: (event) => {
+				if (event.artifact === "binary") binaryEvents.push(event);
+			},
 		});
 		const result = buildLocalBinary({
 			context,
@@ -440,6 +445,7 @@ describe("native toolchain discovery", () => {
 			"write generated C",
 			"generated C objects",
 			"link",
+			"publish binary",
 		]);
 		expect(phases.every((phase) => phase.durationMs >= 0)).toBe(true);
 		expect(commands.some((command) => command.tool === toolchain.tools.cargo.path)).toBe(
@@ -451,6 +457,53 @@ describe("native toolchain discovery", () => {
 					command.tool === toolchain.tools.cc.path && command.args.includes("-c"),
 			),
 		).toBe(true);
+		expect(binaryEvents.map((event) => event.hit)).toEqual([false]);
+
+		phases.length = 0;
+		commands.length = 0;
+		binaryEvents.length = 0;
+		writeFileSync(binary, "corrupt");
+		writeFileSync(fake.logPath, "");
+		buildLocalBinary({
+			context,
+			name: "fake-output",
+			cSource: ["int value;", "int other_value;"],
+			verbose: false,
+			outDir: fake.root,
+		});
+		expect(binaryEvents.map((event) => event.hit)).toEqual([true]);
+		expect(phases.find((phase) => phase.phase === "link")?.cache).toBe("hit");
+		expect(commands).toEqual([]);
+		expect(readFileSync(binary, "utf-8")).not.toBe("corrupt");
+
+		writeFileSync(binaryEvents[0]!.path, "corrupt");
+		commands.length = 0;
+		binaryEvents.length = 0;
+		buildLocalBinary({
+			context,
+			name: "fake-output",
+			cSource: ["int value;", "int other_value;"],
+			verbose: false,
+			outDir: fake.root,
+		});
+		expect(binaryEvents.map((event) => event.hit)).toEqual([false]);
+		expect(commands.some((command) => command.args.includes("-o"))).toBe(true);
+
+		commands.length = 0;
+		binaryEvents.length = 0;
+		buildLocalBinary({
+			context,
+			name: "same-content-different-output",
+			cSource: ["int value;", "int other_value;"],
+			verbose: false,
+			outDir: fake.root,
+		});
+		expect(binaryEvents.map((event) => event.hit)).toEqual([true]);
+		expect(
+			commands.some(
+				(command) => command.args.includes("-o") && !command.args.includes("-c"),
+			),
+		).toBe(false);
 	});
 
 	it("reuses content-addressed generated C objects independently", () => {
@@ -527,6 +580,16 @@ describe("native toolchain discovery", () => {
 		expect(invocations).toMatch(/-O2 -flto .*runtime\/src\/vm\.c/);
 		expect(invocations).toContain(`-O2 -flto`);
 		expect(invocations).toContain(`strip --strip-all ${binary}`);
+
+		writeFileSync(fake.logPath, "");
+		buildLocalBinary({
+			context,
+			name: "production-output",
+			cSource: "int value;",
+			verbose: false,
+			outDir: fake.root,
+		});
+		expect(readFileSync(fake.logPath, "utf-8")).toBe("");
 	});
 
 	it("keeps development at O2 unstripped and falls back when production options fail probes", () => {
@@ -854,7 +917,10 @@ describe("native toolchain discovery", () => {
 					throw new Error("eval-off build baked the compiler wire");
 				},
 			},
-			onCacheEvent: (event: { artifact: "runtime" | "rust"; hit: boolean }) => {
+			onCacheEvent: (event: {
+				artifact: "runtime" | "rust" | "binary";
+				hit: boolean;
+			}) => {
 				if (event.artifact === "runtime") events.push(event.hit);
 			},
 		});
@@ -1016,7 +1082,10 @@ describe("native toolchain discovery", () => {
 				evalEnabled: false,
 				webPlatformEnabled: false,
 			},
-			onCacheEvent: (event: { artifact: "runtime" | "rust"; hit: boolean }) => {
+			onCacheEvent: (event: {
+				artifact: "runtime" | "rust" | "binary";
+				hit: boolean;
+			}) => {
 				if (event.artifact === "runtime") runtimeEvents.push(event.hit);
 			},
 		});
