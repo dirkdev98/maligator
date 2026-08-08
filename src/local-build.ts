@@ -376,6 +376,22 @@ export function buildLoadDriver(
 	return binaryPath;
 }
 
+/** Build or restore the stable host-aware development wire runner. */
+export function buildDevelopmentRunner(
+	context: NativeBuildContext,
+	verbose: boolean,
+	cacheSuffix?: string,
+): LocalBuildResult {
+	return buildLocalBinary({
+		context,
+		name: "MaligatorDev",
+		cSource: '#include "vm.h"\n',
+		verbose,
+		mainFile: path.join(context.runtimeDirectory, "dev_main.c"),
+		cacheSuffix,
+	});
+}
+
 /** Link emitted generated C into a standalone binary using one resolved context. */
 export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	const { context } = options;

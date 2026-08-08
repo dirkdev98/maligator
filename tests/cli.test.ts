@@ -195,6 +195,7 @@ describe("command shell", () => {
 			path.join(repoRoot, "runtime/test262_main.c"),
 		);
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("host_main.c");
+		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("dev_main.c");
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("test262_main.c");
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/include/**");
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/src/**");

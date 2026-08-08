@@ -20,6 +20,7 @@ import type { BuildCommand, RunCommand, TestCommand } from "./cli.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
+import { cacheFrontendWire } from "./frontend-cache.ts";
 import {
 	debugHofInlineSites,
 	debugInlinableCalls,
@@ -27,7 +28,7 @@ import {
 	debugSpeculativeInlineSites,
 } from "./inline.ts";
 import { debugProgramLiveness } from "./liveness.ts";
-import { buildLocalBinary } from "./local-build.ts";
+import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { vmDefinitionStats } from "./lower-vm.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
@@ -97,6 +98,7 @@ export interface BuildCommandResult {
 	binaryPath?: string;
 	serializedPath?: string;
 	artifactDirectory?: string;
+	runArguments?: Array<string>;
 }
 
 class CommandError extends Error {
@@ -346,19 +348,6 @@ function compileAndBuild(
 		return { serializedPath: serializePath };
 	}
 
-	const output = reporter.phase("Generate native code", () =>
-		emitVmTranslationUnits(vmDefinition, {
-			compiled: command.kind === "run" || command.internal.compiled,
-			assets,
-			maligatorSurface: buildConfig.surface.maligator,
-		}),
-	);
-	if (command.kind === "build" && command.internal.emitC) log.info(output.join("\n"));
-	reporter.detail("Translation units", output.length);
-	reporter.detail(
-		"Generated C bytes",
-		output.reduce((total, source) => total + source.length, 0),
-	);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -421,6 +410,51 @@ function compileAndBuild(
 			);
 		},
 	});
+	if (command.kind === "run" && assets.length === 0) {
+		const wirePath = reporter.phase("Cache development image", () =>
+			cacheFrontendWire(frontend.wire),
+		);
+		reporter.detail("Execution backend", "interpreted development image");
+		reporter.detail("Development image", wirePath);
+		const binaryPath = reporter.phase(
+			"Prepare development runtime",
+			() =>
+				buildDevelopmentRunner(
+					nativeContext,
+					verbose,
+					derivation.cacheSuffix,
+				).binaryPath,
+			() => {
+				const caches = (["runtime", "rust", "binary"] as const)
+					.map((artifact) =>
+						nativeCache.has(artifact)
+							? `${artifact} ${nativeCache.get(artifact) ? "hit" : "miss"}`
+							: undefined,
+					)
+					.filter((value) => value !== undefined);
+				return caches.join(" · ");
+			},
+		);
+		reporter.complete("Built", binaryPath, false);
+		return {
+			binaryPath,
+			runArguments: [wirePath, ...command.programArgs],
+		};
+	}
+
+	const output = reporter.phase("Generate native code", () =>
+		emitVmTranslationUnits(vmDefinition, {
+			compiled: command.kind === "run" || command.internal.compiled,
+			assets,
+			maligatorSurface: buildConfig.surface.maligator,
+		}),
+	);
+	if (command.kind === "build" && command.internal.emitC) log.info(output.join("\n"));
+	reporter.detail("Translation units", output.length);
+	reporter.detail(
+		"Generated C bytes",
+		output.reduce((total, source) => total + source.length, 0),
+	);
 	const binaryPath = reporter.phase(
 		"Build native binary",
 		() =>
@@ -497,7 +531,11 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 	const result = compileAndBuild(command, context);
 	const binaryPath = result.binaryPath!;
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
-	const outcome = executeBinary(binaryPath, command.programArgs, runEnv());
+	const outcome = executeBinary(
+		binaryPath,
+		result.runArguments ?? command.programArgs,
+		runEnv(),
+	);
 	if (outcome.status === 0) {
 		writeStderr("Exited with code 0");
 		return;
