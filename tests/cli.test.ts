@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	applicationDriverPath,
+	devCommand,
 	developmentCompilerInstallation,
 	productCompilerInstallation,
 } from "../src/cli-commands.ts";
@@ -15,6 +16,7 @@ import {
 	PRODUCT_RUNTIME_ASSET_INCLUDE,
 	productCliConfig,
 } from "../src/product-builder.ts";
+import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliEntry = path.join(repoRoot, "src/index.ts");
@@ -70,6 +72,17 @@ describe("parseCliArgs", () => {
 		expect(parseCliArgs(["run", "src/main.ts", "--verbose"])).toMatchObject({
 			kind: "run",
 			verbose: true,
+		});
+	});
+
+	it("parses the retained development loop with run-compatible arguments", () => {
+		expect(
+			parseCliArgs(["dev", "src/main.ts", "--verbose", "--", "--flag", "two words"]),
+		).toEqual({
+			kind: "dev",
+			entry: "src/main.ts",
+			verbose: true,
+			programArgs: ["--flag", "two words"],
 		});
 	});
 
@@ -336,6 +349,54 @@ describe("executeBinary", () => {
 			"ignore",
 		);
 		expect(outcome).toEqual({ status: undefined, signal: "SIGTERM" });
+	});
+});
+
+describe("development coordinator", () => {
+	it("invalidates an edited file and restarts a fresh application process", async () => {
+		const directory = tmpdir();
+		const entry = path.join(directory, "entry.ts");
+		writeFileSync(entry, "console.log(1);\n");
+		let spawns = 0;
+		const handles: Array<{ running: boolean }> = [];
+		const processHost = {
+			spawn() {
+				const handle = { running: true };
+				handles.push(handle);
+				spawns++;
+				if (spawns === 1) {
+					setTimeout(() => writeFileSync(entry, "console.log(2);\n"), 25);
+				} else {
+					setTimeout(() => process.emit("SIGINT"), 25);
+				}
+				return handle;
+			},
+			kill(handle: unknown) {
+				(handle as { running: boolean }).running = false;
+			},
+			status(handle: unknown) {
+				return (handle as { running: boolean }).running ? undefined : 0;
+			},
+		};
+		const installation = productCompilerInstallation(
+			directory,
+			path.join(directory, "compiler.malw"),
+			path.join(directory, "test-runtime.mjs"),
+			undefined,
+			process.execPath,
+		);
+
+		await devCommand(
+			{ kind: "dev", entry, verbose: false, programArgs: [] },
+			{
+				stripTypes: stripTypesWithTypeScript,
+				installation,
+				developmentProcesses: processHost,
+			},
+		);
+
+		expect(spawns).toBe(2);
+		expect(handles.every((handle) => !handle.running)).toBe(true);
 	});
 });
 

@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
 	chmodSync,
 	copyFileSync,
@@ -122,6 +122,22 @@ function invokeFailure(
 	return `${result.stdout}\n${result.stderr}`;
 }
 
+async function waitForOutput(
+	read: () => string,
+	expected: string,
+	timeoutMs = 10_000,
+): Promise<void> {
+	const startedAt = Date.now();
+	while (!read().includes(expected)) {
+		if (Date.now() - startedAt > timeoutMs) {
+			throw new Error(`timed out waiting for ${JSON.stringify(expected)}:\n${read()}`);
+		}
+		await new Promise((resolve) => {
+			setTimeout(resolve, 25);
+		});
+	}
+}
+
 if (existsSync(configPath)) {
 	throw new Error(`integration refuses to overwrite existing ${configPath}`);
 }
@@ -175,6 +191,47 @@ setTimeout(() => {
 		throw new Error(`toolchain-free development run failed:\n${developmentOutput}`);
 	}
 	console.log("ok   packaged CLI ran Node and Web development code without a toolchain");
+
+	const watchEntry = path.join(project, "watch.mts");
+	const watchSource = (revision: number) =>
+		`console.log("watch revision ${revision}");\nsetInterval(() => {}, 1000);\n`;
+	writeFileSync(watchEntry, watchSource(0));
+	const watcher = spawn(
+		distributedCli,
+		["dev", watchEntry, "--config", developmentConfigPath],
+		{
+			cwd: project,
+			env: { ...isolatedEnv, ...testOnlyEnv },
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+	let watchOutput = "";
+	watcher.stdout.setEncoding("utf-8");
+	watcher.stderr.setEncoding("utf-8");
+	watcher.stdout.on("data", (chunk: string) => {
+		watchOutput += chunk;
+	});
+	watcher.stderr.on("data", (chunk: string) => {
+		watchOutput += chunk;
+	});
+	await waitForOutput(() => watchOutput, "watch revision 0");
+	writeFileSync(watchEntry, watchSource(1));
+	await waitForOutput(() => watchOutput, "watch revision 1");
+	watcher.kill("SIGTERM");
+	const watchExit = await new Promise<number | null>((resolve, reject) => {
+		const timeout = setTimeout(
+			() => reject(new Error(`watcher did not stop:\n${watchOutput}`)),
+			5000,
+		);
+		watcher.once("exit", (code) => {
+			clearTimeout(timeout);
+			resolve(code);
+		});
+	});
+	if (watchExit !== 0) {
+		throw new Error(`watcher exited with ${watchExit}:\n${watchOutput}`);
+	}
+	console.log("ok   development watcher rebuilt and restarted without a toolchain");
 
 	const doctorOutput = invoke(["doctor", "--verbose"]);
 	if (!doctorOutput.includes("Toolchain is ready.")) {

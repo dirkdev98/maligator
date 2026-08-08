@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
@@ -13,14 +13,14 @@ import { gmallocEnabled, runEnv, selectNativeBuildPlan } from "./build-flags.ts"
 import type { NativeBuildPlan } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { BuildReporter } from "./build-progress.ts";
-import { initProject, InitError } from "./cli-init.ts";
+import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
 import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
-import type { BuildCommand, RunCommand, TestCommand } from "./cli.ts";
+import type { BuildCommand, DevCommand, RunCommand, TestCommand } from "./cli.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
-import { cacheFrontendWire } from "./frontend-cache.ts";
+import { cacheFrontendWire, FrontendCompilationSession } from "./frontend-cache.ts";
 import {
 	debugHofInlineSites,
 	debugInlinableCalls,
@@ -46,6 +46,15 @@ import { debugEnabled, log } from "./utils.ts";
 export interface CommandContext {
 	stripTypes: BuildConfigTypeStripper;
 	installation: CompilerInstallation;
+	developmentProcesses?: DevelopmentProcessHost;
+	frontendSession?: FrontendCompilationSession;
+}
+
+export interface DevelopmentProcessHost {
+	spawn(executablePath: string, args: Array<string>): unknown;
+	kill(handle: unknown): void;
+	/** Undefined while running, otherwise the conventional process exit code. */
+	status(handle: unknown): number | undefined;
 }
 
 export interface CompilerInstallation {
@@ -121,6 +130,7 @@ export interface BuildCommandResult {
 	serializedPath?: string;
 	artifactDirectory?: string;
 	runArguments?: Array<string>;
+	dependencies?: Array<string>;
 }
 
 class CommandError extends Error {
@@ -142,7 +152,7 @@ function writeStderr(message: string): void {
 }
 
 function loadCommandConfig(
-	command: BuildCommand | RunCommand | TestCommand,
+	command: BuildCommand | RunCommand | DevCommand | TestCommand,
 	stripTypes: BuildConfigTypeStripper,
 ): ResolvedBuildConfig {
 	try {
@@ -154,7 +164,7 @@ function loadCommandConfig(
 }
 
 function resolveEntrypoint(
-	command: BuildCommand | RunCommand,
+	command: BuildCommand | RunCommand | DevCommand,
 	config: ResolvedBuildConfig,
 ): string {
 	const entrypoint = command.entry ?? config.entry;
@@ -171,13 +181,13 @@ function resolveEntrypoint(
 }
 
 function selectToolchain(
-	command: BuildCommand | RunCommand,
+	command: BuildCommand | RunCommand | DevCommand,
 	config: ResolvedBuildConfig,
 	context: CommandContext,
 ): { toolchain?: Toolchain; plan?: NativeBuildPlan } {
 	if (command.kind === "build" && command.internal.serializePath !== undefined) return {};
 	if (
-		command.kind === "run" &&
+		command.kind !== "build" &&
 		compatibleDevelopmentRunner(config, context) !== undefined
 	) {
 		return {};
@@ -230,7 +240,7 @@ export function applicationDriverPath(
 }
 
 function compileAndBuild(
-	command: BuildCommand | RunCommand,
+	command: BuildCommand | RunCommand | DevCommand,
 	context: CommandContext,
 ): BuildCommandResult {
 	const buildConfig = loadCommandConfig(command, context.stripTypes);
@@ -244,7 +254,7 @@ function compileAndBuild(
 	reporter.start(
 		name,
 		command.kind === "build" && command.production ? "production" : "development",
-		command.kind === "run" ? "Preparing" : "Building",
+		command.kind !== "build" ? "Preparing" : "Building",
 	);
 	reporter.detail("Entrypoint", entrypointPath);
 	reporter.detail("Config", command.configPath ?? "automatic/default");
@@ -324,6 +334,7 @@ function compileAndBuild(
 					config: buildConfig,
 					stripTypes: context.stripTypes,
 					stripperIdentity: context.installation.frontendIdentity,
+					session: context.frontendSession,
 					optimization:
 						command.kind === "build" && command.production ? "full" : "development",
 					enforcePolicies: !(
@@ -391,14 +402,14 @@ function compileAndBuild(
 		);
 		reporter.detail("Serialized bytes", frontend.wire.length);
 		reporter.complete("Serialized", serializePath, true);
-		return { serializedPath: serializePath };
+		return { serializedPath: serializePath, dependencies: frontend.dependencies };
 	}
 
 	const packagedRunner =
-		command.kind === "run"
+		command.kind !== "build"
 			? compatibleDevelopmentRunner(buildConfig, context)
 			: undefined;
-	if (command.kind === "run" && packagedRunner !== undefined) {
+	if (command.kind !== "build" && packagedRunner !== undefined) {
 		const wirePath = reporter.phase("Cache development image", () =>
 			cacheFrontendWire(frontend.wire),
 		);
@@ -415,6 +426,7 @@ function compileAndBuild(
 				wirePath,
 				...command.programArgs,
 			],
+			dependencies: frontend.dependencies,
 		};
 	}
 
@@ -480,7 +492,7 @@ function compileAndBuild(
 			);
 		},
 	});
-	if (command.kind === "run" && assets.length === 0) {
+	if (command.kind !== "build" && assets.length === 0) {
 		const wirePath = reporter.phase("Cache development image", () =>
 			cacheFrontendWire(frontend.wire),
 		);
@@ -505,12 +517,13 @@ function compileAndBuild(
 		return {
 			binaryPath,
 			runArguments: [wirePath, ...command.programArgs],
+			dependencies: frontend.dependencies,
 		};
 	}
 
 	const output = reporter.phase("Generate native code", () =>
 		emitVmTranslationUnits(vmDefinition, {
-			compiled: command.kind === "run" || command.internal.compiled,
+			compiled: command.kind !== "build" || command.internal.compiled,
 			assets,
 			maligatorSurface: buildConfig.surface.maligator,
 		}),
@@ -578,14 +591,18 @@ function compileAndBuild(
 		});
 		resultPath = artifact.directory;
 		reporter.complete("Built", resultPath, true);
-		return { binaryPath, artifactDirectory: artifact.directory };
+		return {
+			binaryPath,
+			artifactDirectory: artifact.directory,
+			dependencies: frontend.dependencies,
+		};
 	}
 	reporter.complete(
-		command.kind === "run" ? "Ready" : "Built",
+		command.kind !== "build" ? "Ready" : "Built",
 		resultPath,
 		command.kind === "build",
 	);
-	return { binaryPath };
+	return { binaryPath, dependencies: frontend.dependencies };
 }
 
 /** Compile and link one parsed `build` command without owning process dispatch. */
@@ -617,6 +634,142 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 	process.exit(outcome.status ?? 1);
 }
 
+interface WatchedFileState {
+	file: string;
+	identity: string | undefined;
+	external: boolean;
+}
+
+function watchIdentity(file: string): string | undefined {
+	try {
+		const stats = statSync(file);
+		return stats.isFile() ? `${stats.size}:${stats.mtimeMs}` : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function watchedFiles(
+	command: DevCommand,
+	dependencies: Array<string>,
+): Array<WatchedFileState> {
+	const configPath = path.resolve(command.configPath ?? BUILD_CONFIG_NAME);
+	const files = new Set(dependencies);
+	if (existsSync(configPath) || command.configPath !== undefined) files.add(configPath);
+	return [...files].sort().map((file) => ({
+		file,
+		identity: watchIdentity(file),
+		external: file.split(path.sep).includes("node_modules"),
+	}));
+}
+
+function changedFiles(
+	states: Array<WatchedFileState>,
+	includeExternal: boolean,
+): Array<string> {
+	return states
+		.filter(
+			(state) =>
+				(includeExternal || !state.external) &&
+				watchIdentity(state.file) !== state.identity,
+		)
+		.map((state) => state.file);
+}
+
+function delay(durationMs: number): Promise<void> {
+	return new Promise((resolve) => {
+		setTimeout(resolve, durationMs);
+	});
+}
+
+async function stopDevelopmentProcess(
+	host: DevelopmentProcessHost,
+	handle: unknown,
+): Promise<void> {
+	host.kill(handle);
+	for (let attempt = 0; attempt < 100; attempt++) {
+		if (host.status(handle) !== undefined) return;
+		await delay(10);
+	}
+	throw new Error("development application did not stop within one second");
+}
+
+/** Retain frontend identities while restarting a fresh application VM on edits. */
+export async function devCommand(
+	command: DevCommand,
+	context: CommandContext,
+): Promise<void> {
+	const processHost = context.developmentProcesses;
+	if (processHost === undefined) {
+		commandError("error: this Maligator installation does not provide watch processes");
+	}
+	const session = context.frontendSession ?? new FrontendCompilationSession();
+	const retainedContext = { ...context, frontendSession: session };
+	let result = compileAndBuild(command, retainedContext);
+	let states = watchedFiles(command, result.dependencies ?? []);
+	let child: unknown = processHost.spawn(
+		result.binaryPath!,
+		result.runArguments ?? command.programArgs,
+	);
+	let stopping = false;
+	const stop = () => {
+		stopping = true;
+	};
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
+	writeStderr(`Watching ${states.length} files. Press Ctrl+C to stop.`);
+	let poll = 0;
+
+	try {
+		while (!stopping) {
+			await delay(75);
+			const changed = changedFiles(states, poll++ % 14 === 0);
+			if (changed.length === 0) {
+				const status = child === undefined ? undefined : processHost.status(child);
+				if (child !== undefined && status !== undefined) {
+					writeStderr(`Application exited with code ${status}; waiting for changes.`);
+					child = undefined;
+				}
+				continue;
+			}
+
+			writeStderr(
+				`Changed ${changed.map((file) => path.relative(process.cwd(), file)).join(", ")}`,
+			);
+			if (child !== undefined) {
+				await stopDevelopmentProcess(processHost, child);
+				child = undefined;
+			}
+			for (const file of changed) session.invalidate(file);
+			if (changed.includes(path.resolve(command.configPath ?? BUILD_CONFIG_NAME))) {
+				session.invalidate();
+			}
+			states = states.map((state) => ({
+				...state,
+				identity: watchIdentity(state.file),
+			}));
+			try {
+				result = compileAndBuild(command, retainedContext);
+				states = watchedFiles(command, result.dependencies ?? []);
+				child = processHost.spawn(
+					result.binaryPath!,
+					result.runArguments ?? command.programArgs,
+				);
+			} catch (error) {
+				writeStderr(
+					`Rebuild failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+	} finally {
+		process.removeListener("SIGINT", stop);
+		process.removeListener("SIGTERM", stop);
+		if (child !== undefined && processHost.status(child) === undefined) {
+			await stopDevelopmentProcess(processHost, child);
+		}
+	}
+}
+
 /** Product command dispatcher shared by the Node CLI and the compiled bootstrap. */
 export async function runCli(
 	args: Array<string>,
@@ -627,7 +780,7 @@ export async function runCli(
 		const command = parseCliArgs(args);
 		verbose =
 			(command.kind === "build" && command.internal.verbose) ||
-			(command.kind === "run" && command.verbose) ||
+			((command.kind === "run" || command.kind === "dev") && command.verbose) ||
 			(command.kind === "doctor" && command.verbose);
 		if (command.kind === "help") {
 			log.info(CLI_HELP);
@@ -665,6 +818,8 @@ export async function runCli(
 			buildCommand(command, context);
 		} else if (command.kind === "run") {
 			runCommand(command, context);
+		} else if (command.kind === "dev") {
+			await devCommand(command, context);
 		} else {
 			let result: Awaited<ReturnType<typeof executeTestCommand>>;
 			try {

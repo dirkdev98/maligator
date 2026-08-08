@@ -33,6 +33,7 @@ maligator init
 maligator doctor [--verbose] [--target rust-triple]
 maligator build [entry] [--production] [--artifact directory] [--target rust-triple] [--config path]
 maligator run [entry] [--config path] [-- args...]
+maligator dev [entry] [--config path] [-- args...]
 maligator test [path ...] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
 ```
 
@@ -48,6 +49,13 @@ asset-free, Intl-disabled development profile does not require a C or Rust
 toolchain. It forwards every
 argument after `--` without re-parsing it and propagates the application's exit
 status or terminating signal.
+
+`dev` keeps the compiler session alive, watches the application dependency graph,
+and restarts a fresh VM after each successful rebuild. Project files are checked
+at interactive cadence while dependencies under `node_modules` are checked less
+frequently. A compilation error leaves the watcher running so the next edit can
+recover. This is process restart, not in-process hot-module replacement.
+
 Use `build --production` and launch the reported binary directly for production.
 Adding `--artifact <directory>` creates a deployable artifact and therefore requires
 `--production`. The destination must be absent or empty. Its build-owned layout is:

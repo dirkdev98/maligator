@@ -50,11 +50,18 @@ maligator init
 maligator doctor [--verbose] [--target rust-triple]
 maligator build [entry] [--production] [--artifact directory] [--target rust-triple] [--config path]
 maligator run [entry] [--config path] [-- args...]
+maligator dev [entry] [--config path] [-- args...]
 maligator test [path ...] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
 ```
 
 Run commands from the project root. Maligator does not search parent directories
 for configuration.
+
+`run` and `dev` use the runtime embedded in the platform package for the supported
+single-process, asset-free, Intl-disabled development profile, so they do not need
+a local native toolchain. `dev` retains compiler identities between edits and
+restarts a fresh application VM after every successful rebuild. Build failures keep
+the watcher alive for recovery on the next edit.
 
 ## Testing
 

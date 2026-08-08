@@ -4,7 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
+#include "array_object.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "host_registry.h"
@@ -63,16 +68,16 @@ static char *mal_asset_to_cstr(MalVm *vm, MalValue value, const char *argument) 
     return bytes;
 }
 
-static void mal_asset_throw_errno(MalVm *vm, int err, const char *operation, const char *path) {
+static void mal_host_throw_errno(
+    MalVm *vm, int err, const char *scope, const char *operation, const char *path) {
     const char *description = strerror(err);
     usize length = strlen(operation) + strlen(path) + strlen(description) + 32;
     char *message = malloc(length);
     if (message != nullptr) {
-        snprintf(message, length, "mal.assets.materialize: %s '%s': %s",
-            operation, path, description);
+        snprintf(message, length, "%s: %s '%s': %s", scope, operation, path, description);
     }
     mal_asset_throw_utf8(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-        message != nullptr ? message : "mal.assets.materialize failed");
+        message != nullptr ? message : "Maligator host operation failed");
     free(message);
 }
 
@@ -117,6 +122,106 @@ static MalValue mal_test_run_wire(
         return mal_value_new_undefined();
     }
     return completion.value;
+}
+
+static MalValue mal_dev_spawn(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 2 || !mal_value_is_array_object(args[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "mal._spawnDevelopmentProcess requires an executable and argument array");
+        return mal_value_new_undefined();
+    }
+
+    char *executable = mal_asset_to_cstr(vm, args[0], "executable");
+    if (executable == nullptr) return mal_value_new_undefined();
+    u32 argument_count = mal_array_object_length(mal_value_to_array_object(args[1]));
+    char **child_argv = calloc((usize) argument_count + 2, sizeof(char *));
+    if (child_argv == nullptr) {
+        free(executable);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    child_argv[0] = executable;
+    for (u32 i = 0; i < argument_count; i++) {
+        MalValue argument;
+        if (!mal_vm_get_property(vm, args[1], mal_key_index(i), &argument)) goto fail;
+        child_argv[i + 1] = mal_asset_to_cstr(vm, argument, "argument");
+        if (child_argv[i + 1] == nullptr) goto fail;
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execv(executable, child_argv);
+        _exit(127);
+    }
+    if (pid < 0) {
+        mal_host_throw_errno(vm, errno, "mal.dev", "cannot spawn", executable);
+        goto fail;
+    }
+    for (u32 i = 0; i < argument_count; i++) free(child_argv[i + 1]);
+    free(child_argv);
+    free(executable);
+    return mal_value_from_f64((f64) pid);
+
+fail:
+    for (u32 i = 0; i < argument_count; i++) free(child_argv[i + 1]);
+    free(child_argv);
+    free(executable);
+    return mal_value_new_undefined();
+}
+
+static bool mal_dev_pid(MalVm *vm, MalValue value, pid_t *pid) {
+    if (!mal_value_is_f64(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "development process handle must be a number");
+        return false;
+    }
+    f64 number = mal_value_to_f64(value);
+    if (number <= 0 || number > (f64) INT32_MAX || number != (f64) (pid_t) number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "invalid development process handle");
+        return false;
+    }
+    *pid = (pid_t) number;
+    return true;
+}
+
+static MalValue mal_dev_kill(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    pid_t pid;
+    if (argc < 1 || !mal_dev_pid(vm, args[0], &pid)) return mal_value_new_undefined();
+    if (kill(pid, SIGTERM) != 0 && errno != ESRCH) {
+        mal_host_throw_errno(vm, errno, "mal.dev", "cannot terminate process", "");
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_dev_process_status(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    pid_t pid;
+    if (argc < 1 || !mal_dev_pid(vm, args[0], &pid)) return mal_value_new_undefined();
+    int status = 0;
+    pid_t result = waitpid(pid, &status, WNOHANG);
+    if (result == 0) return mal_value_new_undefined();
+    if (result < 0) {
+        if (errno == ECHILD) return mal_value_from_f64(0);
+        mal_host_throw_errno(vm, errno, "mal.dev", "cannot wait for process", "");
+        return mal_value_new_undefined();
+    }
+    int code = WIFEXITED(status) ? WEXITSTATUS(status)
+        : WIFSIGNALED(status) ? 128 + WTERMSIG(status)
+                              : 1;
+    return mal_value_from_f64((f64) code);
 }
 
 static char *mal_asset_join(const char *left, const char *right) {
@@ -367,7 +472,8 @@ static MalValue mal_assets_materialize(
     char *materialized = nullptr;
     int err = mal_asset_materialize(asset, base, &materialized);
     if (err != 0) {
-        mal_asset_throw_errno(vm, err, "cannot materialize into", base);
+        mal_host_throw_errno(
+            vm, err, "mal.assets.materialize", "cannot materialize into", base);
         free(owned_base);
         free(materialized);
         return mal_value_new_undefined();
@@ -398,6 +504,12 @@ void mal_host_install_maligator(
         vm, mal, (const byte *) "assets", roots[1], MAL_ASSET_VISIBLE);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_runWire", 1, mal_test_run_wire);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_spawnDevelopmentProcess", 2, mal_dev_spawn);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_killDevelopmentProcess", 1, mal_dev_kill);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_developmentProcessStatus", 1, mal_dev_process_status);
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_intrinsic_define_data(
         vm, global_this, (const byte *) "mal", roots[0], MAL_ASSET_VISIBLE);

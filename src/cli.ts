@@ -33,6 +33,14 @@ export interface RunCommand {
 	programArgs: Array<string>;
 }
 
+export interface DevCommand {
+	kind: "dev";
+	entry?: string;
+	configPath?: string;
+	verbose: boolean;
+	programArgs: Array<string>;
+}
+
 export interface TestCommand {
 	kind: "test";
 	paths: Array<string>;
@@ -52,6 +60,7 @@ export type CliCommand =
 	| { kind: "doctor"; verbose: boolean; target?: string }
 	| BuildCommand
 	| RunCommand
+	| DevCommand
 	| TestCommand;
 
 export class CliUsageError extends Error {
@@ -68,6 +77,7 @@ Commands:
   doctor                       Check native build toolchains
   build [entry]                Compile an application
   run [entry] [-- args...]     Compile and run an application
+  dev [entry] [-- args...]     Watch, rebuild, and restart an application
   test [path ...]              Discover and interpret tests
 
 Options:
@@ -154,7 +164,7 @@ function parseBuild(args: Array<string>): CliCommand {
 			const trailing = args[index + 1];
 			throw new CliUsageError(
 				trailing === undefined
-					? "'--' is only valid for 'maligator run'"
+					? "'--' is only valid for 'maligator run' or 'maligator dev'"
 					: `unexpected argument '${trailing}' for 'build'`,
 			);
 		}
@@ -242,9 +252,9 @@ function parseBuild(args: Array<string>): CliCommand {
 	return command;
 }
 
-function parseRun(args: Array<string>): CliCommand {
-	const command: RunCommand = {
-		kind: "run",
+function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
+	const command: RunCommand | DevCommand = {
+		kind,
 		verbose: false,
 		programArgs: [],
 	};
@@ -268,10 +278,10 @@ function parseRun(args: Array<string>): CliCommand {
 			continue;
 		}
 		if (argument.startsWith("-")) {
-			return unexpectedArgument("run", argument);
+			return unexpectedArgument(kind, argument);
 		}
 		if (command.entry !== undefined) {
-			return unexpectedArgument("run", argument);
+			return unexpectedArgument(kind, argument);
 		}
 		command.entry = argument;
 	}
@@ -372,7 +382,10 @@ export function parseCliArgs(args: Array<string>): CliCommand {
 		return parseBuild(args);
 	}
 	if (command === "run") {
-		return parseRun(args);
+		return parseRun(args, "run");
+	}
+	if (command === "dev") {
+		return parseRun(args, "dev");
 	}
 	if (command === "test") {
 		return parseTest(args);
@@ -381,5 +394,7 @@ export function parseCliArgs(args: Array<string>): CliCommand {
 	const suggestion = command.startsWith("-")
 		? `unknown option '${command}'`
 		: `unknown command '${command}'`;
-	throw new CliUsageError(`${suggestion}; expected init, doctor, build, run, or test`);
+	throw new CliUsageError(
+		`${suggestion}; expected init, doctor, build, run, dev, or test`,
+	);
 }
