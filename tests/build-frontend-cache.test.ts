@@ -155,7 +155,10 @@ describe("normal build frontend cache", () => {
 			path.join(dependencyDirectory, "package.json"),
 			`{"type":"module","exports":"./index.mjs"}\n`,
 		);
-		write(path.join(dependencyDirectory, "index.mjs"), `export const answer = 42;\n`);
+		write(
+			path.join(dependencyDirectory, "index.mjs"),
+			`export let answer = 41;\nanswer++;\n`,
+		);
 		write(
 			entrypoint,
 			`import { answer } from "example-dependency";\nconsole.log(answer, 0);\n`,
@@ -186,7 +189,10 @@ describe("normal build frontend cache", () => {
 		expect(changed.wires![0]).toEqual(cold.wires![0]);
 		expect(changed.wires![1]).not.toEqual(cold.wires![1]);
 
-		write(path.join(dependencyDirectory, "index.mjs"), `export const answer = 43;\n`);
+		write(
+			path.join(dependencyDirectory, "index.mjs"),
+			`export let answer = 42;\nanswer++;\n`,
+		);
 		session.invalidate(path.join(dependencyDirectory, "index.mjs"));
 		const changedDependency = compileBuildFrontend(options);
 		expect(changedDependency.fragmentArtifacts).toEqual({ hits: 1, misses: 1 });
@@ -223,6 +229,40 @@ describe("normal build frontend cache", () => {
 
 		expect(compiled.wires).toBeUndefined();
 		expect(compiled.fragmentFallback).toContain("namespace import");
+	});
+
+	it("falls back when a dependency export has a live mutable binding", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.mjs");
+		const dependencyDirectory = path.join(root, "node_modules/example-dependency");
+		mkdirSync(dependencyDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(dependencyDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(
+			path.join(dependencyDirectory, "index.mjs"),
+			`export let answer = 42;\nexport function update() { answer++; }\n`,
+		);
+		write(
+			entrypoint,
+			`import { answer, update } from "example-dependency";\nupdate();\nconsole.log(answer);\n`,
+		);
+
+		const compiled = compileBuildFrontend({
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-fragment-live-binding-test",
+			cacheDirectory,
+			optimization: "development",
+			relocatable: true,
+		});
+
+		expect(compiled.wires).toBeUndefined();
+		expect(compiled.fragmentFallback).toContain("live export 'answer'");
 	});
 
 	it("does not reuse policy-unchecked portable output for a checked native build", () => {

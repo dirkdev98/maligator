@@ -15,6 +15,7 @@ import {
 } from "./frontend-cache.ts";
 import type { FrontendCompilationSession } from "./frontend-cache.ts";
 import { linkModules } from "./linker.ts";
+import type { ModuleLinkage } from "./linker.ts";
 import type {
 	BuildModuleGraphOptions,
 	ModuleGraph,
@@ -25,6 +26,7 @@ import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
 } from "./semantic-analysis.ts";
+import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "./semantic-program.ts";
 import {
 	deserializeVmDefinition,
@@ -33,7 +35,7 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const FRAGMENT_SCHEMA = 1;
+const FRAGMENT_SCHEMA = 2;
 const CACHE_DIRECTORY = ".cache/mal-cache/build-fragments";
 const LINKED_MODULES_GLOBAL = "__maligatorDevelopmentLinkedModules";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
@@ -395,17 +397,132 @@ function linkageKey(identity: string, graph: ModuleGraph): string {
 	);
 }
 
+function addPatternTargets(node: ESTree.Node, targets: Set<ESTree.Node>): void {
+	switch (node.type) {
+		case "Identifier":
+			targets.add(node);
+			break;
+		case "ArrayPattern":
+			for (const element of node.elements) {
+				if (element !== null) addPatternTargets(element, targets);
+			}
+			break;
+		case "ObjectPattern":
+			for (const property of node.properties) {
+				if ("argument" in property) {
+					addPatternTargets(property.argument, targets);
+				} else if ("value" in property) {
+					addPatternTargets(property.value, targets);
+				}
+			}
+			break;
+		case "AssignmentPattern":
+			addPatternTargets(node.left, targets);
+			break;
+		case "RestElement":
+			addPatternTargets(node.argument, targets);
+			break;
+	}
+}
+
+function lateAssignmentTargets(file: SemanticFile): Set<ESTree.Node> {
+	const targets = new Set<ESTree.Node>();
+	const parents = new Map<ESTree.Node, ESTree.Node>();
+	traverseEstree(file.ast.body, (node, at) => {
+		if (at.parent !== null) parents.set(node, at.parent);
+		if (node.type === "AssignmentExpression") {
+			addPatternTargets(node.left, targets);
+		} else if (node.type === "UpdateExpression") {
+			addPatternTargets(node.argument, targets);
+		} else if (
+			(node.type === "ForInStatement" || node.type === "ForOfStatement") &&
+			node.left.type !== "VariableDeclaration"
+		) {
+			addPatternTargets(node.left, targets);
+		}
+	});
+	return new Set(
+		[...targets].filter((target) => {
+			let ancestor = parents.get(target);
+			while (ancestor !== undefined) {
+				if (
+					ancestor.type === "FunctionDeclaration" ||
+					ancestor.type === "FunctionExpression" ||
+					ancestor.type === "ArrowFunctionExpression"
+				) {
+					return true;
+				}
+				ancestor = parents.get(ancestor);
+			}
+			return false;
+		}),
+	);
+}
+
+function bindingOwner(
+	program: SemanticProgram,
+	binding: Binding,
+): SemanticFile | undefined {
+	return program.files.find((file) =>
+		file.scopes.some((scope) => scope.bindings.includes(binding)),
+	);
+}
+
+function assertSnapshotSafeExports(
+	program: SemanticProgram,
+	linkage: ModuleLinkage,
+	plans: Array<PlannedImport>,
+): void {
+	const targetsByFile = new Map<SemanticFile, Set<ESTree.Node>>();
+	for (const plan of plans) {
+		if (program.graph?.modules.get(plan.target)?.goal === "cjs") continue;
+		const namespace = linkage.moduleNamespaces.get(plan.target) ?? [];
+		for (const name of plan.names) {
+			const exporter = namespace.find((candidate) => candidate.name === name)?.exporter;
+			if (exporter === undefined) continue; // The linker reports the missing export.
+			if (exporter.kind === "const") continue;
+			const owner = bindingOwner(program, exporter);
+			if (owner === undefined) {
+				throw new UnsupportedBuildFragmentsError(
+					`export '${name}' from '${plan.specifier}' has no stable owner`,
+				);
+			}
+			if (owner.hasDirectEval.has(owner.ast)) {
+				throw new UnsupportedBuildFragmentsError(
+					`mutable export '${name}' from '${plan.specifier}' requires the whole-image fallback`,
+				);
+			}
+			let targets = targetsByFile.get(owner);
+			if (targets === undefined) {
+				// The dependency image publishes its namespaces only after synchronous
+				// module evaluation, so top-level initialization writes are already
+				// reflected in the snapshot. Writes enclosed by callable code can occur
+				// later and therefore require true live-binding storage.
+				targets = lateAssignmentTargets(owner);
+				targetsByFile.set(owner, targets);
+			}
+			if (exporter.usageNodes.some((usage) => targets.has(usage))) {
+				throw new UnsupportedBuildFragmentsError(
+					`live export '${name}' from '${plan.specifier}' requires the whole-image fallback`,
+				);
+			}
+		}
+	}
+}
+
 function validateLinkage(
 	root: string,
 	identity: string,
 	options: CompileBuildFragmentsOptions,
+	plans: Array<PlannedImport>,
 ): void {
 	const key = linkageKey(identity, options.graph);
 	const marker = path.join(root, "linkages", `${key}.valid`);
 	if (existsSync(marker)) return;
 	const startedAt = Date.now();
 	const semantic = runSemanticAnalysisForGraph(options.graph);
-	linkModules(semantic);
+	const linkage = linkModules(semantic);
+	assertSnapshotSafeExports(semantic, linkage, plans);
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	options.phases.semanticMs += Date.now() - startedAt;
@@ -421,7 +538,7 @@ export function compileBuildFragments(
 	const identity = environmentIdentity(options);
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
-	validateLinkage(root, identity, options);
+	validateLinkage(root, identity, options, plans);
 	const graphStartedAt = Date.now();
 	const base = baseGraph(plans, options, options.session.moduleParses);
 	const application = applicationGraph(plans, options, options.session.moduleParses);
