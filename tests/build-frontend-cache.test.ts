@@ -156,5 +156,8 @@ describe("normal build frontend cache", () => {
 		expect(compileBuildFrontend({ ...options, optimization: "full" }).cache).toBe(
 			"miss",
 		);
+		expect(
+			compileBuildFrontend({ ...options, optimization: "development" }).cache,
+		).toBe("hit");
 	});
 });

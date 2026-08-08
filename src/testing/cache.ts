@@ -1,16 +1,21 @@
-import { hash } from "node:crypto";
 import {
-	existsSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
+import {
+	cacheFrontendWire,
+	frontendArtifactCacheRoot,
+	FrontendCompilationSession,
+	frontendDigest,
+	frontendWirePath,
+} from "../frontend-cache.ts";
+import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import type { BuildModuleGraphOptions, ModuleGraph } from "../module-graph.ts";
 import { buildModuleGraph } from "../module-graph.ts";
 import {
@@ -21,20 +26,15 @@ import { runSemanticAnalysisForGraph } from "../semantic-program.ts";
 import { serializeVmDefinition, WIRE_VERSION } from "../serialize-vm.ts";
 import { MALIGATOR_VERSION } from "../version.ts";
 
-const TEST_CACHE_SCHEMA = 3;
+const TEST_CACHE_SCHEMA = 4;
 const TEST_CACHE_DIRECTORY = ".cache/mal-cache/test";
 const TEST_MODULE_ID = "maligator:test";
 const TEST_IMAGE_TRANSFORM = 1;
 
-export interface DependencyIdentity {
-	path: string;
-	size: number;
-	mtimeMs: number;
-	digest: string;
-}
+export type DependencyIdentity = FrontendDependencyIdentity;
 
 interface TestCacheManifest {
-	schema: 3;
+	schema: 4;
 	identity: string;
 	contentKey: string;
 	wireDigest: string;
@@ -48,7 +48,7 @@ interface CompileTestOptions {
 	stripperIdentity: string;
 	testModuleSource: string;
 	cacheDirectory?: string;
-	session?: TestCompilationSession;
+	session?: FrontendCompilationSession;
 	/** Require an artifact with exactly these entries during failure containment. */
 	allowSupersetCache?: boolean;
 }
@@ -81,7 +81,7 @@ export interface CompiledTestImage {
 export type CompiledTestFile = CompiledTestImage;
 
 function digest(value: string | Uint8Array): string {
-	return hash("sha256", value, "hex");
+	return frontendDigest(value);
 }
 
 /**
@@ -91,36 +91,7 @@ function digest(value: string | Uint8Array): string {
  * one-shot command gets the same benefit—shared dependencies are read and
  * hashed once—even though several fallback compilation groups may inspect them.
  */
-export class TestCompilationSession {
-	readonly #snapshots = new Map<string, DependencyIdentity>();
-
-	invalidate(file?: string): void {
-		if (file === undefined) {
-			this.#snapshots.clear();
-		} else {
-			this.#snapshots.delete(path.resolve(file));
-		}
-	}
-
-	snapshot(file: string, knownSource?: string): DependencyIdentity {
-		const resolved = path.resolve(file);
-		const cached = this.#snapshots.get(resolved);
-		if (cached !== undefined) return cached;
-		const stats = statSync(resolved);
-		if (!stats.isFile()) throw new Error(`test dependency is not a file: ${resolved}`);
-		const value = {
-			path: resolved,
-			size: stats.size,
-			mtimeMs: stats.mtimeMs,
-			digest:
-				knownSource === undefined
-					? digest(new Uint8Array(readFileSync(resolved)))
-					: digest(knownSource),
-		};
-		this.#snapshots.set(resolved, value);
-		return value;
-	}
-}
+export class TestCompilationSession extends FrontendCompilationSession {}
 
 function cacheRoot(override: string | undefined): string {
 	return path.resolve(override ?? TEST_CACHE_DIRECTORY);
@@ -144,6 +115,7 @@ function cacheIdentity(options: CompileTestOptions): string {
 			version: MALIGATOR_VERSION,
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
+			optimization: "development",
 			flags,
 			testModule: digest(options.testModuleSource),
 			testImageTransform: TEST_IMAGE_TRANSFORM,
@@ -151,12 +123,17 @@ function cacheIdentity(options: CompileTestOptions): string {
 	);
 }
 
-function manifestPath(root: string, entries: Array<string>): string {
-	return path.join(root, "entries", `${digest(JSON.stringify(entries))}.json`);
+function manifestPath(root: string, entries: Array<string>, identity: string): string {
+	return path.join(
+		root,
+		"entries",
+		digest(JSON.stringify(entries)),
+		`${identity}.json`,
+	);
 }
 
-function wirePath(root: string, contentKey: string): string {
-	return path.join(root, "artifacts", `${contentKey}.malw`);
+function artifactReferencePath(root: string, contentKey: string): string {
+	return path.join(root, "artifacts", `${contentKey}.json`);
 }
 
 function readManifest(filePath: string): TestCacheManifest | undefined {
@@ -169,7 +146,7 @@ function readManifest(filePath: string): TestCacheManifest | undefined {
 
 function dependenciesUnchanged(
 	dependencies: Array<DependencyIdentity>,
-	session: TestCompilationSession,
+	session: FrontendCompilationSession,
 ): boolean {
 	return dependencies.every((dependency) => {
 		try {
@@ -186,12 +163,12 @@ function dependenciesUnchanged(
 }
 
 function cachedWire(
-	root: string,
+	artifactRoot: string,
 	identity: string,
 	requestedEntries: Array<string>,
 	allowSuperset: boolean,
 	manifest: TestCacheManifest | undefined,
-	session: TestCompilationSession,
+	session: FrontendCompilationSession,
 ): Uint8Array | undefined {
 	if (
 		manifest?.schema !== TEST_CACHE_SCHEMA ||
@@ -202,10 +179,14 @@ function cachedWire(
 	) {
 		return undefined;
 	}
-	const artifact = wirePath(root, manifest.contentKey);
-	if (!existsSync(artifact)) return undefined;
-	const wire = new Uint8Array(readFileSync(artifact));
-	return digest(wire) === manifest.wireDigest ? wire : undefined;
+	try {
+		const wire = new Uint8Array(
+			readFileSync(frontendWirePath(manifest.wireDigest, artifactRoot)),
+		);
+		return digest(wire) === manifest.wireDigest ? wire : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function syntheticEntry(entries: Array<string>): string {
@@ -244,7 +225,7 @@ function buildTestGraph(
 
 function dependencyIdentities(
 	graph: ModuleGraph,
-	session: TestCompilationSession,
+	session: FrontendCompilationSession,
 ): Array<DependencyIdentity> {
 	const dependencies: Array<DependencyIdentity> = [];
 	for (const record of graph.modules.values()) {
@@ -270,10 +251,10 @@ function publishManifest(
 	requestedEntries: Array<string>,
 ): void {
 	const contents = `${JSON.stringify(manifest)}\n`;
-	publish(manifestPath(root, requestedEntries), contents);
+	publish(manifestPath(root, requestedEntries, manifest.identity), contents);
 	if (manifest.entries.length === 1) return;
 	for (const entry of manifest.entries) {
-		const aliasPath = manifestPath(root, [entry]);
+		const aliasPath = manifestPath(root, [entry], manifest.identity);
 		const existing = readManifest(aliasPath);
 		if (existing?.schema === TEST_CACHE_SCHEMA && existing.entries.length === 1) {
 			continue;
@@ -296,12 +277,13 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	};
 	const session = options.session ?? new TestCompilationSession();
 	const root = cacheRoot(options.cacheDirectory);
+	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = cacheIdentity(options);
-	const entryManifestPath = manifestPath(root, entries);
+	const entryManifestPath = manifestPath(root, entries, identity);
 	const validationStartedAt = Date.now();
 	const manifest = readManifest(entryManifestPath);
 	const hit = cachedWire(
-		root,
+		artifactRoot,
 		identity,
 		entries,
 		options.allowSupersetCache !== false,
@@ -334,23 +316,41 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 			})),
 		}),
 	);
-	const artifactPath = wirePath(root, contentKey);
 	let wire: Uint8Array;
-	if (existsSync(artifactPath)) {
-		wire = new Uint8Array(readFileSync(artifactPath));
-	} else {
+	const referencePath = artifactReferencePath(root, contentKey);
+	let referencedDigest: string | undefined;
+	try {
+		referencedDigest = (JSON.parse(readFileSync(referencePath, "utf-8")) as {
+			digest?: string;
+		}).digest;
+	} catch {
+		// A missing content mapping is a normal cold-cache path.
+	}
+	try {
+		if (referencedDigest === undefined) throw new Error("missing artifact reference");
+		wire = new Uint8Array(
+			readFileSync(frontendWirePath(referencedDigest, artifactRoot)),
+		);
+		if (digest(wire) !== referencedDigest) throw new Error("corrupt artifact");
+	} catch {
 		const semanticStartedAt = Date.now();
 		const semantic = runSemanticAnalysisForGraph(graph);
 		phases.semanticMs = Date.now() - semanticStartedAt;
 		const compileStartedAt = Date.now();
 		assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 		assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-		const definition = compileSemanticProgramToVmDefinition(semantic);
+		const definition = compileSemanticProgramToVmDefinition(semantic, {
+			optimization: "development",
+		});
 		phases.compileMs = Date.now() - compileStartedAt;
 		const serializeStartedAt = Date.now();
 		wire = serializeVmDefinition(definition);
 		phases.serializeMs = Date.now() - serializeStartedAt;
-		publish(artifactPath, wire);
+		const cachedPath = cacheFrontendWire(wire, artifactRoot);
+		publish(
+			referencePath,
+			`${JSON.stringify({ digest: path.basename(cachedPath, ".malw") })}\n`,
+		);
 	}
 	const nextManifest: TestCacheManifest = {
 		schema: TEST_CACHE_SCHEMA,

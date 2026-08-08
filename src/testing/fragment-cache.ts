@@ -1,10 +1,16 @@
-import { hash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
+import {
+	cacheFrontendWire,
+	frontendArtifactCacheRoot,
+	frontendDigest,
+	frontendWirePath,
+} from "../frontend-cache.ts";
+import type { FrontendCompilationSession } from "../frontend-cache.ts";
 import { linkModules } from "../linker.ts";
 import type { ModuleGraph } from "../module-graph.ts";
 import { buildModuleGraph } from "../module-graph.ts";
@@ -22,7 +28,7 @@ import type {
 } from "./cache.ts";
 import { TestCompilationSession } from "./cache.ts";
 
-const FRAGMENT_SCHEMA = 1;
+const FRAGMENT_SCHEMA = 2;
 const TEST_MODULE_ID = "maligator:test";
 const CACHE_DIRECTORY = ".cache/mal-cache/test";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
@@ -37,7 +43,7 @@ interface FragmentReference extends ArtifactReference {
 }
 
 interface FragmentManifest {
-	schema: 1;
+	schema: 2;
 	identity: string;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
@@ -88,7 +94,7 @@ export class UnsupportedRelocatableTestImageError extends Error {
 }
 
 function digest(value: string | Uint8Array): string {
-	return hash("sha256", value, "hex");
+	return frontendDigest(value);
 }
 
 function cacheRoot(override: string | undefined): string {
@@ -101,12 +107,17 @@ function resolvedEntries(files: Array<string>): Array<string> {
 	);
 }
 
-function manifestPath(root: string, entries: Array<string>): string {
-	return path.join(root, "fragment-entries", `${digest(JSON.stringify(entries))}.json`);
+function manifestPath(root: string, entries: Array<string>, identity: string): string {
+	return path.join(
+		root,
+		"fragment-entries",
+		digest(JSON.stringify(entries)),
+		`${identity}.json`,
+	);
 }
 
 function artifactPath(root: string, key: string): string {
-	return path.join(root, "fragment-artifacts", `${key}.malw`);
+	return path.join(root, "fragment-artifacts", `${key}.json`);
 }
 
 function readManifest(file: string): FragmentManifest | undefined {
@@ -137,6 +148,7 @@ function environmentIdentity(options: CompileTestImageOptions): string {
 			version: MALIGATOR_VERSION,
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
+			optimization: "development",
 			flags: {
 				engine: options.config.engine,
 				host: options.config.host,
@@ -149,7 +161,7 @@ function environmentIdentity(options: CompileTestImageOptions): string {
 
 function dependenciesUnchanged(
 	dependencies: Array<DependencyIdentity>,
-	session: TestCompilationSession,
+	session: FrontendCompilationSession,
 ): boolean {
 	return dependencies.every((dependency) => {
 		try {
@@ -167,10 +179,17 @@ function dependenciesUnchanged(
 
 function readArtifact(
 	root: string,
+	artifactRoot: string,
 	reference: ArtifactReference,
 ): Uint8Array | undefined {
 	try {
-		const wire = new Uint8Array(readFileSync(artifactPath(root, reference.key)));
+		const mapping = JSON.parse(readFileSync(artifactPath(root, reference.key), "utf-8")) as {
+			digest?: string;
+		};
+		if (mapping.digest !== reference.digest) return undefined;
+		const wire = new Uint8Array(
+			readFileSync(frontendWirePath(reference.digest, artifactRoot)),
+		);
 		return digest(wire) === reference.digest ? wire : undefined;
 	} catch {
 		return undefined;
@@ -179,11 +198,12 @@ function readArtifact(
 
 function manifestHit(
 	root: string,
+	artifactRoot: string,
 	identity: string,
 	requested: Array<string>,
 	allowSuperset: boolean,
 	manifest: FragmentManifest | undefined,
-	session: TestCompilationSession,
+	session: FrontendCompilationSession,
 ): CompiledRelocatableTestImage | undefined {
 	if (
 		manifest?.schema !== FRAGMENT_SCHEMA ||
@@ -194,14 +214,14 @@ function manifestHit(
 	) {
 		return undefined;
 	}
-	const base = readArtifact(root, manifest.base);
-	const runner = readArtifact(root, manifest.runner);
+	const base = readArtifact(root, artifactRoot, manifest.base);
+	const runner = readArtifact(root, artifactRoot, manifest.runner);
 	if (base === undefined || runner === undefined) return undefined;
 	const fragments: Array<RelocatableTestWire> = [];
 	for (const file of requested) {
 		const reference = manifest.fragments.find((fragment) => fragment.file === file);
 		if (reference === undefined) return undefined;
-		const wire = readArtifact(root, reference);
+		const wire = readArtifact(root, artifactRoot, reference);
 		if (wire === undefined) return undefined;
 		fragments.push({ kind: "entry", file, wire });
 	}
@@ -229,7 +249,7 @@ function emptyPhases(): TestFrontendPhases {
 
 function dependencyIdentities(
 	graphs: Array<ModuleGraph>,
-	session: TestCompilationSession,
+	session: FrontendCompilationSession,
 ): Array<DependencyIdentity> {
 	const byPath = new Map<string, DependencyIdentity>();
 	for (const graph of graphs) {
@@ -268,6 +288,7 @@ function graphKey(identity: string, kind: string, graph: ModuleGraph): string {
 
 function compileArtifact(
 	root: string,
+	artifactRoot: string,
 	identity: string,
 	kind: string,
 	graph: ModuleGraph,
@@ -276,9 +297,18 @@ function compileArtifact(
 ): CompiledArtifact {
 	const key = graphKey(identity, kind, graph);
 	const file = artifactPath(root, key);
-	if (existsSync(file)) {
-		const wire = new Uint8Array(readFileSync(file));
-		return { key, digest: digest(wire), wire, cache: "hit" };
+	try {
+		const reference = JSON.parse(readFileSync(file, "utf-8")) as {
+			digest?: string;
+		};
+		if (reference.digest === undefined) throw new Error("missing artifact digest");
+		const wire = new Uint8Array(
+			readFileSync(frontendWirePath(reference.digest, artifactRoot)),
+		);
+		if (digest(wire) !== reference.digest) throw new Error("corrupt artifact");
+		return { key, digest: reference.digest, wire, cache: "hit" };
+	} catch {
+		// Compile below when either the graph mapping or shared artifact is absent.
 	}
 	const semanticStartedAt = Date.now();
 	const semantic = runSemanticAnalysisForGraph(graph);
@@ -286,13 +316,17 @@ function compileArtifact(
 	const compileStartedAt = Date.now();
 	assertEvalPolicy(config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(config, collectDisallowedRegexpUsage(semantic));
-	const definition = compileSemanticProgramToVmDefinition(semantic);
+	const definition = compileSemanticProgramToVmDefinition(semantic, {
+		optimization: "development",
+	});
 	phases.compileMs += Date.now() - compileStartedAt;
 	const serializeStartedAt = Date.now();
 	const wire = serializeVmDefinition(definition);
 	phases.serializeMs += Date.now() - serializeStartedAt;
-	publish(file, wire);
-	return { key, digest: digest(wire), wire, cache: "miss" };
+	const wireDigest = digest(wire);
+	cacheFrontendWire(wire, artifactRoot);
+	publish(file, `${JSON.stringify({ digest: wireDigest })}\n`);
+	return { key, digest: wireDigest, wire, cache: "miss" };
 }
 
 function importedName(specifier: ESTree.ImportSpecifier): string {
@@ -495,10 +529,10 @@ function publishManifest(
 	requested: Array<string>,
 ): void {
 	const contents = `${JSON.stringify(manifest)}\n`;
-	publish(manifestPath(root, requested), contents);
+	publish(manifestPath(root, requested, manifest.identity), contents);
 	if (manifest.entries.length === 1) return;
 	for (const entry of manifest.entries) {
-		const alias = manifestPath(root, [entry]);
+		const alias = manifestPath(root, [entry], manifest.identity);
 		const existing = readManifest(alias);
 		if (existing?.schema === FRAGMENT_SCHEMA && existing.entries.length === 1) {
 			continue;
@@ -515,13 +549,15 @@ export function compileRelocatableTestImage(
 	const entries = resolvedEntries(options.files);
 	if (entries.length === 0) throw new Error("a test image requires at least one entry");
 	const root = cacheRoot(options.cacheDirectory);
+	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = environmentIdentity(options);
 	const session = options.session ?? new TestCompilationSession();
 	const phases = emptyPhases();
 	const validationStartedAt = Date.now();
-	const existing = readManifest(manifestPath(root, entries));
+	const existing = readManifest(manifestPath(root, entries, identity));
 	const hit = manifestHit(
 		root,
+		artifactRoot,
 		identity,
 		entries,
 		options.allowSupersetCache !== false,
@@ -555,6 +591,7 @@ export function compileRelocatableTestImage(
 
 	const baseArtifact = compileArtifact(
 		root,
+		artifactRoot,
 		identity,
 		"base",
 		base,
@@ -565,6 +602,7 @@ export function compileRelocatableTestImage(
 		file: plan.file,
 		...compileArtifact(
 			root,
+			artifactRoot,
 			identity,
 			`entry:${plan.file}`,
 			graph,
@@ -574,6 +612,7 @@ export function compileRelocatableTestImage(
 	}));
 	const runnerArtifact = compileArtifact(
 		root,
+		artifactRoot,
 		identity,
 		"runner",
 		runner,

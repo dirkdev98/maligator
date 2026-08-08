@@ -6,7 +6,6 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
@@ -15,6 +14,13 @@ import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
 import type { IntermediateProgram } from "./ir.ts";
+import {
+	cacheFrontendWire,
+	frontendArtifactCacheRoot,
+	FrontendCompilationSession,
+	frontendWirePath,
+} from "./frontend-cache.ts";
+import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { BuildModuleGraphOptions, ModuleGraph } from "./module-graph.ts";
 import { buildModuleGraph } from "./module-graph.ts";
@@ -34,12 +40,7 @@ const BUILD_FRONTEND_CACHE_SCHEMA = 1;
 const BUILD_FRONTEND_PIPELINE_VERSION = 1;
 const BUILD_FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/build-frontend";
 
-export interface BuildDependencyIdentity {
-	path: string;
-	size: number;
-	mtimeMs: number;
-	digest: string;
-}
+export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
 	schema: 1;
@@ -74,7 +75,7 @@ export interface CompileBuildFrontendOptions {
 	stripperIdentity: string;
 	optimization?: "development" | "full";
 	cacheDirectory?: string;
-	session?: BuildCompilationSession;
+	session?: FrontendCompilationSession;
 	/** Apply build-time eval/RegExp policy checks. Defaults to true. */
 	enforcePolicies?: boolean;
 	/**
@@ -96,36 +97,7 @@ function digest(value: string | Uint8Array): string {
  * A watcher invalidates the changed path; unchanged dependency digests are then
  * reused without coupling filesystem observation to compilation scheduling.
  */
-export class BuildCompilationSession {
-	readonly #snapshots = new Map<string, BuildDependencyIdentity>();
-
-	invalidate(file?: string): void {
-		if (file === undefined) {
-			this.#snapshots.clear();
-		} else {
-			this.#snapshots.delete(path.resolve(file));
-		}
-	}
-
-	snapshot(file: string, knownSource?: string): BuildDependencyIdentity {
-		const resolved = path.resolve(file);
-		const cached = this.#snapshots.get(resolved);
-		if (cached !== undefined) return cached;
-		const stats = statSync(resolved);
-		if (!stats.isFile()) throw new Error(`build dependency is not a file: ${resolved}`);
-		const identity = {
-			path: resolved,
-			size: stats.size,
-			mtimeMs: stats.mtimeMs,
-			digest:
-				knownSource === undefined
-					? digest(new Uint8Array(readFileSync(resolved)))
-					: digest(knownSource),
-		};
-		this.#snapshots.set(resolved, identity);
-		return identity;
-	}
-}
+export class BuildCompilationSession extends FrontendCompilationSession {}
 
 function cacheRoot(override: string | undefined): string {
 	return path.resolve(override ?? BUILD_FRONTEND_CACHE_DIRECTORY);
@@ -148,12 +120,8 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 	);
 }
 
-function manifestPath(root: string, entrypoint: string): string {
-	return path.join(root, "entries", `${digest(entrypoint)}.json`);
-}
-
-function wirePath(root: string, contentKey: string): string {
-	return path.join(root, "artifacts", `${contentKey}.malw`);
+function manifestPath(root: string, entrypoint: string, identity: string): string {
+	return path.join(root, "entries", digest(entrypoint), `${identity}.json`);
 }
 
 function readManifest(file: string): BuildFrontendManifest | undefined {
@@ -166,7 +134,7 @@ function readManifest(file: string): BuildFrontendManifest | undefined {
 
 function dependenciesUnchanged(
 	dependencies: Array<BuildDependencyIdentity>,
-	session: BuildCompilationSession,
+	session: FrontendCompilationSession,
 ): boolean {
 	return dependencies.every((dependency) => {
 		try {
@@ -184,9 +152,10 @@ function dependenciesUnchanged(
 
 function loadCached(
 	root: string,
+	artifactRoot: string,
 	entrypoint: string,
 	identity: string,
-	session: BuildCompilationSession,
+	session: FrontendCompilationSession,
 ):
 	| {
 			definition: VmDefinition;
@@ -194,7 +163,7 @@ function loadCached(
 			dependencies: Array<BuildDependencyIdentity>;
 	  }
 	| undefined {
-	const manifest = readManifest(manifestPath(root, entrypoint));
+	const manifest = readManifest(manifestPath(root, entrypoint, identity));
 	if (
 		manifest?.schema !== BUILD_FRONTEND_CACHE_SCHEMA ||
 		manifest.entrypoint !== entrypoint ||
@@ -204,7 +173,9 @@ function loadCached(
 		return undefined;
 	}
 	try {
-		const wire = new Uint8Array(readFileSync(wirePath(root, manifest.contentKey)));
+		const wire = new Uint8Array(
+			readFileSync(frontendWirePath(manifest.wireDigest, artifactRoot)),
+		);
 		if (digest(wire) !== manifest.wireDigest) return undefined;
 		return {
 			definition: deserializeVmDefinition(wire),
@@ -234,7 +205,7 @@ function packageResolutionInputs(graph: ModuleGraph): Array<string> {
 
 function graphDependencies(
 	graph: ModuleGraph,
-	session: BuildCompilationSession,
+	session: FrontendCompilationSession,
 ): Array<BuildDependencyIdentity> {
 	const dependencies = new Map<string, BuildDependencyIdentity>();
 	for (const record of graph.modules.values()) {
@@ -302,12 +273,13 @@ export function compileBuildFrontend(
 	};
 	const entrypoint = path.resolve(options.entrypoint);
 	const root = cacheRoot(options.cacheDirectory);
+	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = cacheIdentity(options);
 	const session = options.session ?? new BuildCompilationSession();
 
 	if (!options.forceCompile) {
 		const validationStartedAt = Date.now();
-		const cached = loadCached(root, entrypoint, identity, session);
+		const cached = loadCached(root, artifactRoot, entrypoint, identity, session);
 		phases.validationMs = Date.now() - validationStartedAt;
 		if (cached !== undefined) {
 			return {
@@ -356,11 +328,10 @@ export function compileBuildFrontend(
 	phases.serializeMs = Date.now() - serializeStartedAt;
 	const dependencies = graphDependencies(graph, session);
 	const key = contentKey(identity, entrypoint, dependencies);
-	const artifactPath = wirePath(root, key);
 	const wireDigest = digest(wire);
-	if (!existsSync(artifactPath)) publish(artifactPath, wire);
+	cacheFrontendWire(wire, artifactRoot);
 	publish(
-		manifestPath(root, entrypoint),
+		manifestPath(root, entrypoint, identity),
 		`${JSON.stringify({
 			schema: BUILD_FRONTEND_CACHE_SCHEMA,
 			identity,
