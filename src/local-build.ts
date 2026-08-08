@@ -227,8 +227,8 @@ function ensureGeneratedObjects(
 	onCacheEvent?: (event: { hit: boolean; path: string }) => void,
 ): Array<string> {
 	const parent = path.join(context.cacheDirectory, "generated-c");
-	const results: Array<string | undefined> = new Array(inputs.length);
-	const cacheHits: Array<boolean | undefined> = new Array(inputs.length);
+	const results = new Array<string | undefined>(inputs.length);
+	const cacheHits = new Array<boolean | undefined>(inputs.length);
 	const pending: Array<PendingGeneratedObject> = [];
 	for (const [index, input] of inputs.entries()) {
 		const key = hash(
