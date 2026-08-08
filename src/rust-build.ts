@@ -12,22 +12,43 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { platformLinkArgs } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
-import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
+import {
+	hashDirectoryTrees,
+	hashDirectoryTreesCached,
+	legacyLocaleNameComparator,
+} from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { runNativeCommand } from "./native-command.ts";
 import { formatToolCommand, toolArguments } from "./toolchain.ts";
 
 export { resolvePathExecutable } from "./toolchain.ts";
 
+function rustSourceHashOptions(rustRoot: string) {
+	return {
+		root: rustRoot,
+		directories: [rustRoot],
+		include: (entry: { name: string }) => /\.(?:rs|toml|lock)$/.test(entry.name),
+		compareNames: legacyLocaleNameComparator,
+		descend: (entry: { dirent: { name: string }; relativeSegments: Array<string> }) =>
+			entry.relativeSegments.length !== 1 ||
+			(entry.dirent.name !== ".cache" && entry.dirent.name !== "target"),
+	};
+}
+
 /** Digest every Rust source and Cargo input under a runtime's rust directory. */
 export function rustSourceDigest(rustDirectory: string): string {
 	const rustRoot = path.resolve(rustDirectory);
-	return hashDirectoryTrees({
-		root: rustRoot,
-		directories: [rustRoot],
-		include: (entry) => /\.(?:rs|toml|lock)$/.test(entry.name),
-		compareNames: legacyLocaleNameComparator,
-	});
+	return hashDirectoryTrees(rustSourceHashOptions(rustRoot));
+}
+
+function cachedRustSourceDigest(rustDirectory: string, cacheDirectory: string): string {
+	const rustRoot = path.resolve(rustDirectory);
+	const rootKey = hash("sha256", rustRoot, "hex").slice(0, 16);
+	return hashDirectoryTreesCached(
+		rustSourceHashOptions(rustRoot),
+		path.join(cacheDirectory, "source-digests", `rust-${rootKey}.json`),
+		"rust-source-v1",
+	).digest;
 }
 
 export interface RustArtifactKeyInputs {
@@ -40,7 +61,7 @@ export interface RustArtifactKeyInputs {
 }
 
 export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
-	return hash("sha256", JSON.stringify({ schema: 5, ...inputs }), "hex").slice(0, 24);
+	return hash("sha256", JSON.stringify({ schema: 6, ...inputs }), "hex").slice(0, 24);
 }
 
 export interface RustArtifacts {
@@ -99,7 +120,7 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 		nativeToolEnvironment: Object.entries(nativeToolEnvironment).sort(([a], [b]) =>
 			a < b ? -1 : a > b ? 1 : 0,
 		),
-		sourceDigest: rustSourceDigest(rustDirectory),
+		sourceDigest: cachedRustSourceDigest(rustDirectory, context.cacheDirectory),
 		toolchainFingerprint: context.toolchain.fingerprint,
 		rustTarget: context.toolchain.rustTarget,
 	});

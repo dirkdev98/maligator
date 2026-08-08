@@ -1,10 +1,19 @@
 import { hash } from "node:crypto";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	statSync,
+	symlinkSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	hashDirectoryTrees,
+	hashDirectoryTreesCached,
 	legacyLocaleNameComparator,
 	walkDirectoryTree,
 } from "../src/file-tree.ts";
@@ -54,6 +63,57 @@ describe("deterministic file trees", () => {
 		walkDirectoryTree(root, ({ dirent }) => visited.push(dirent.name));
 
 		expect(visited).toEqual(["!.ts", ",.ts"]);
+	});
+
+	it("can prune generated directory subtrees", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "mal-file-tree-prune-"));
+		mkdirSync(path.join(root, "target"));
+		writeFileSync(path.join(root, "source.rs"), "source\n");
+		writeFileSync(path.join(root, "target", "generated.rs"), "generated\n");
+
+		const digest = hashDirectoryTrees({
+			root,
+			directories: [root],
+			include: (entry) => entry.name.endsWith(".rs"),
+			descend: (entry) => entry.dirent.name !== "target",
+		});
+
+		expect(digest).toBe(
+			hash("sha256", framedFile("source.rs", "source\n").join(""), "hex"),
+		);
+	});
+
+	it("reuses persistent file digests and invalidates metadata-preserving edits", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "mal-file-tree-cache-"));
+		const source = path.join(root, "source.rs");
+		const manifest = path.join(root, "cache", "digests.json");
+		writeFileSync(source, "first\n");
+		const options = {
+			root,
+			directories: [root],
+			include: (entry: { name: string }) => entry.name.endsWith(".rs"),
+		};
+
+		const first = hashDirectoryTreesCached(options, manifest, "test-v1");
+		expect(first).toMatchObject({ reusedFiles: 0, hashedFiles: 1 });
+		expect(first.digest).toBe(hashDirectoryTrees(options));
+		const manifestMtime = statSync(manifest).mtimeMs;
+
+		const second = hashDirectoryTreesCached(options, manifest, "test-v1");
+		expect(second).toEqual({ digest: first.digest, reusedFiles: 1, hashedFiles: 0 });
+		expect(statSync(manifest).mtimeMs).toBe(manifestMtime);
+
+		const originalTimes = statSync(source);
+		writeFileSync(source, "other\n");
+		utimesSync(source, originalTimes.atime, originalTimes.mtime);
+		const changed = hashDirectoryTreesCached(options, manifest, "test-v1");
+		expect(changed).toMatchObject({ reusedFiles: 0, hashedFiles: 1 });
+		expect(changed.digest).not.toBe(first.digest);
+		expect(JSON.parse(readFileSync(manifest, "utf-8"))).toMatchObject({
+			schema: 1,
+			identity: "test-v1",
+			root,
+		});
 	});
 
 	it("keeps old locale cross-name order with deterministic lexical ties", () => {
