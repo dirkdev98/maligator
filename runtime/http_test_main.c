@@ -323,6 +323,9 @@ int main(void) {
         check(!codec_accepts(
                   "POST / HTTP/1.1\r\nTransfer-Encoding: chunked, gzip\r\n\r\n"),
               "codec rejects chunked that is not the final coding");
+        check(!codec_accepts(
+                  "POST / HTTP/1.1\r\nTransfer-Encoding:\r\n\r\n"),
+              "codec rejects an empty transfer-encoding value");
         check(!codec_accepts("GET /a\rb HTTP/1.1\r\nHost: x\r\n\r\n"),
               "codec rejects control bytes in the request target");
         check(!codec_accepts("GET / HTTP/1.1\r\nHost: a\rb\r\n\r\n"),

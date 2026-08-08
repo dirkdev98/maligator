@@ -1,3 +1,3 @@
-v9.4.2
-source: https://github.com/nodejs/llhttp/tree/release/v9.4.2
-commit: f831650b4f693bc1b4a6fe08f1b8ae25196e9f6a
+v9.4.3
+source: https://github.com/nodejs/llhttp/tree/release/v9.4.3
+commit: 0e815792b167a9bd8ace259b95b7da953776c288
