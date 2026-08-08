@@ -16,6 +16,15 @@ void mal_host_install_node_buffer(
 MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length);
 
 /**
+ * As mal_node_buffer_from_owned_bytes, but the resulting Buffer's backing store
+ * is marked secret-bearing, so it is scrubbed before release instead of being
+ * plain-freed. For crypto key/token output only (randomBytes, PBKDF2, Argon2
+ * tags) — not for ordinary Buffers, whose bytes are not secrets and whose scrub
+ * would be pure cost.
+ */
+MalValue mal_node_buffer_from_owned_secret_bytes(MalVm *vm, byte *bytes, usize length);
+
+/**
  * Render bytes as a string in a Buffer encoding (`utf8`, `latin1`/`binary`,
  * `ascii`, `hex`, `base64`, `base64url`, `ucs2`/`utf16le`; case-insensitive).
  * An `undefined` encoding returns a Buffer over a copy of the bytes.
@@ -26,6 +35,15 @@ MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length);
  * undefined with a pending exception on failure.
  */
 MalValue mal_node_buffer_encode_bytes(
+    MalVm *vm, const byte *bytes, usize length, MalValue encoding,
+    bool throw_on_unknown);
+
+/**
+ * As mal_node_buffer_encode_bytes, but any Buffer it returns owns a
+ * secret-bearing backing store (see mal_node_buffer_from_owned_secret_bytes).
+ * A string result cannot be scrubbed and is unaffected.
+ */
+MalValue mal_node_buffer_encode_secret_bytes(
     MalVm *vm, const byte *bytes, usize length, MalValue encoding,
     bool throw_on_unknown);
 

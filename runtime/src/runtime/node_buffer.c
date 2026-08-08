@@ -19,6 +19,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
+#include "secure_scrub.h"
 #include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
@@ -421,8 +422,11 @@ static MalValue mal_buffer_new(MalVm *vm, MalObject *prototype, u32 length) {
     return result;
 }
 
-MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length) {
+static MalValue mal_node_buffer_adopt_bytes(
+    MalVm *vm, byte *bytes, usize length, bool sensitive
+) {
     if (length > INT32_MAX || (length > 0 && bytes == nullptr)) {
+        if (sensitive) mal_secure_scrub(bytes, length);
         free(bytes);
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                            "Buffer allocation failed");
@@ -432,6 +436,9 @@ MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length) 
             vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
         mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            // Ownership is consumed on failure too, and these bytes never
+            // reached JavaScript, so a secret allocation is cleared here.
+            if (sensitive) mal_secure_scrub(bytes, length);
             free(bytes);
             return mal_value_new_undefined();
         }
@@ -441,13 +448,10 @@ MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length) 
         free(bytes);
         bytes = nullptr;
     }
-    MalArrayBufferObject *backing = mal_array_buffer_object_new(
+    MalArrayBufferObject *backing = mal_array_buffer_object_adopt(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        0, 0, false, false);
-    backing->data = bytes;
-    backing->byte_length = (u32) length;
-    backing->max_byte_length = (u32) length;
+        bytes, (u32) length, sensitive);
     MalValue root_value = mal_value_from_array_buffer_object(backing);
     MalRootSpan root;
     mal_gc_root(&root, &root_value, 1);
@@ -459,9 +463,17 @@ MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length) 
     return result;
 }
 
-MalValue mal_node_buffer_encode_bytes(
+MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length) {
+    return mal_node_buffer_adopt_bytes(vm, bytes, length, false);
+}
+
+MalValue mal_node_buffer_from_owned_secret_bytes(MalVm *vm, byte *bytes, usize length) {
+    return mal_node_buffer_adopt_bytes(vm, bytes, length, true);
+}
+
+static MalValue mal_node_buffer_encode(
     MalVm *vm, const byte *bytes, usize length, MalValue encoding,
-    bool throw_on_unknown
+    bool throw_on_unknown, bool sensitive
 ) {
     if (mal_value_is_undefined(encoding)) {
         byte *owned = length == 0 ? nullptr : malloc(length);
@@ -470,7 +482,7 @@ MalValue mal_node_buffer_encode_bytes(
             return mal_value_new_undefined();
         }
         if (length > 0) memcpy(owned, bytes, length);
-        return mal_node_buffer_from_owned_bytes(vm, owned, length);
+        return mal_node_buffer_adopt_bytes(vm, owned, length, sensitive);
     }
     MalBufferEncoding resolved;
     if (!mal_value_is_string(encoding)
@@ -482,10 +494,24 @@ MalValue mal_node_buffer_encode_bytes(
         }
         // Node's ParseEncoding falls back to BUFFER, so digest() returns the raw
         // bytes for an unrecognized (or non-string) encoding rather than throwing.
-        return mal_node_buffer_encode_bytes(
-            vm, bytes, length, mal_value_new_undefined(), false);
+        return mal_node_buffer_encode(
+            vm, bytes, length, mal_value_new_undefined(), false, sensitive);
     }
     return mal_buffer_string_from_bytes(vm, bytes, length, resolved);
+}
+
+MalValue mal_node_buffer_encode_bytes(
+    MalVm *vm, const byte *bytes, usize length, MalValue encoding,
+    bool throw_on_unknown
+) {
+    return mal_node_buffer_encode(vm, bytes, length, encoding, throw_on_unknown, false);
+}
+
+MalValue mal_node_buffer_encode_secret_bytes(
+    MalVm *vm, const byte *bytes, usize length, MalValue encoding,
+    bool throw_on_unknown
+) {
+    return mal_node_buffer_encode(vm, bytes, length, encoding, throw_on_unknown, true);
 }
 
 bool mal_node_buffer_encoding_is_known(MalValue encoding) {

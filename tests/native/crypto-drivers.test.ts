@@ -8,13 +8,15 @@ import {
 	buildNativeBinary,
 	ENTROPY_MAIN,
 	runToStdout,
+	SECRET_BUFFER_MAIN,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 // C-driver acceptance tests for the crypto host layer: the Argon2 worker pool's
 // lifecycle (exactly-once terminals, reactor retention, saturation,
-// cancellation, shutdown, the memory ceiling) and the CSPRNG boundary itself.
-// Neither is observable from JavaScript.
+// cancellation, shutdown, the memory ceiling, a start that creates no workers),
+// the CSPRNG boundary itself, and the scrub a secret-bearing ArrayBuffer store
+// gets before it is released. None of it is observable from JavaScript.
 //
 // Kept out of drivers.test.ts because the Argon2 driver needs the node-enabled
 // archive, and that file runs inside the smoke tier's fixed time budget.
@@ -24,6 +26,8 @@ const DRIVERS = [
 	// The Argon2 pool links the Rust backend, which is behind surface.node.
 	{ tag: "argon2test", mainFile: ARGON2_MAIN, nodeEnabled: true },
 	{ tag: "entropytest", mainFile: ENTROPY_MAIN, nodeEnabled: false },
+	// The backing-store contract is an engine one; node is off to keep it there.
+	{ tag: "secretbuffertest", mainFile: SECRET_BUFFER_MAIN, nodeEnabled: false },
 ];
 
 describe.each(DRIVERS)("$tag", ({ tag, mainFile, nodeEnabled }) => {

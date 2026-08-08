@@ -384,6 +384,9 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
         resizable,
         false
     );
+    // The contents move, so the scrub-before-release contract moves with them:
+    // transferring a derived key must not leave an unscrubbed copy behind.
+    result->sensitive = buffer->sensitive;
     u32 copy = new_length < buffer->byte_length ? new_length : buffer->byte_length;
     if (copy > 0) {
         memcpy(result->data, buffer->data, copy);
@@ -451,6 +454,7 @@ static MalValue mal_builtin_array_buffer_transfer_to_immutable(MalVm *vm, MalVal
         false
     );
     result->immutable = true;
+    result->sensitive = buffer->sensitive;
     u32 copy = new_length < buffer->byte_length ? new_length : buffer->byte_length;
     if (copy > 0) {
         memcpy(result->data, buffer->data, copy);
@@ -504,6 +508,7 @@ static MalValue mal_builtin_array_buffer_slice_to_immutable(MalVm *vm, MalValue 
         false
     );
     result->immutable = true;
+    result->sensitive = buffer->sensitive;
     if (new_length > 0) {
         memcpy(result->data, buffer->data + first, new_length);
     }

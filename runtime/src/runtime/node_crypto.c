@@ -25,6 +25,7 @@
 #include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
+#include "secure_scrub.h"
 #include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
@@ -542,16 +543,8 @@ static void crypto_throw_out_of_range(
  * Shared argument helpers.
  * --------------------------------------------------------------------------- */
 
-/* Overwrite key-derived bytes before their storage is released or reused. The
- * volatile cursor keeps the stores from being optimized away as dead. */
-static void crypto_scrub(byte *bytes, usize length) {
-    if (bytes == nullptr) return;
-    volatile byte *cursor = (volatile byte *) bytes;
-    for (usize i = 0; i < length; i++) cursor[i] = 0;
-}
-
 static void crypto_scrub_free(byte *bytes, usize length) {
-    crypto_scrub(bytes, length);
+    mal_secure_scrub(bytes, length);
     free(bytes);
 }
 
@@ -724,24 +717,40 @@ static MalValue mal_node_crypto_digest(
         mal_sha256_update(&outer, inner, sizeof(inner));
         mal_sha256_final(&outer, result);
         length = 32;
-        crypto_scrub((byte *) inner, sizeof(inner));
-        crypto_scrub((byte *) &outer, sizeof(outer));
+        mal_secure_scrub((byte *) inner, sizeof(inner));
+        mal_secure_scrub((byte *) &outer, sizeof(outer));
     }
     // `result` already holds the digest, so the absorbing state is spent. For
     // HMAC it is the outer pad — the key XOR 0x5c, and so the key — which
     // otherwise outlived the object in the freed backing store. Only the union
     // is cleared: `kind` and `finalized` must survive to keep refusing a second
     // digest() on this receiver.
-    crypto_scrub((byte *) &state->digest, sizeof(state->digest));
+    mal_secure_scrub((byte *) &state->digest, sizeof(state->digest));
     MalValue encoding = argc > 0 ? args[0] : mal_value_new_undefined();
     // Node's ParseEncoding falls back to BUFFER here, so an unrecognized
     // encoding returns the raw digest instead of throwing. crypto.hash() below
     // is the call site that does throw.
-    return mal_node_buffer_encode_bytes(vm, (const byte *) result, length, encoding, false);
+    // A Buffer result is secret-bearing: an HMAC digest is an authentication
+    // tag, and a session token is exactly what this returns.
+    MalValue encoded = mal_node_buffer_encode_secret_bytes(
+        vm, (const byte *) result, length, encoding, false);
+    // The returned Buffer owns a separate sensitive store. Do not leave the tag
+    // in this native frame after it has been materialized (string results cannot
+    // be scrubbed, but this temporary copy still can).
+    mal_secure_scrub(result, sizeof(result));
+    return encoded;
 }
 
+/*
+ * Publish a digest state as a fresh object holding it in a private-symbol slot.
+ *
+ * `initial` is the caller's stack copy and is scrubbed before this returns on
+ * every path — for HMAC it is the outer pad, which is the key XOR 0x5c. Taking
+ * it by non-const pointer and clearing it here is what keeps a caller from
+ * forgetting: createHmac cannot leave the key on its frame.
+ */
 static MalValue mal_node_crypto_new_state(
-    MalVm *vm, MalValue callee, const MalNodeCryptoState *initial
+    MalVm *vm, MalValue callee, MalNodeCryptoState *initial
 ) {
     MalValue roots[] = {
         mal_value_new_undefined(),
@@ -753,10 +762,18 @@ static MalValue mal_node_crypto_new_state(
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    MalArrayBufferObject *buffer = mal_array_buffer_object_new(&vm->heap,
+    // Sensitive: the store outlives the object only as freed memory otherwise,
+    // and for HMAC it holds the key-derived pads for the receiver's whole life.
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new_sensitive(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        (u32) sizeof(*initial), (u32) sizeof(*initial), false, false);
+        (u32) sizeof(*initial));
     roots[0] = mal_value_from_array_buffer_object(buffer);
+    if (buffer->data == nullptr) {
+        mal_gc_unroot(&root);
+        mal_secure_scrub((byte *) initial, sizeof(*initial));
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     memcpy(buffer->data, initial, sizeof(*initial));
     roots[1] = mal_value_from_object(
         mal_object_new(&vm->heap, mal_value_to_object(roots[3])));
@@ -765,6 +782,7 @@ static MalValue mal_node_crypto_new_state(
         (MalKey) {.kind = MAL_KEY_SYMBOL, .value = roots[2]}, &state_desc);
     MalValue result = roots[1];
     mal_gc_unroot(&root);
+    mal_secure_scrub((byte *) initial, sizeof(*initial));
     return result;
 }
 
@@ -806,7 +824,7 @@ static void mal_node_crypto_hmac_init_bytes(
         mal_sha256_init(&key_hash);
         mal_sha256_update(&key_hash, key, length);
         mal_sha256_final(&key_hash, key_block);
-        crypto_scrub((byte *) &key_hash, sizeof(key_hash));
+        mal_secure_scrub((byte *) &key_hash, sizeof(key_hash));
     } else if (length > 0) {
         memcpy(key_block, key, length);
     }
@@ -822,8 +840,8 @@ static void mal_node_crypto_hmac_init_bytes(
     // The key block is the key (or its digest), and the inner pad is one XOR
     // away from it. Both are absorbed by now; only the two pads inside `state`
     // must survive, and those the caller scrubs when it finalizes.
-    crypto_scrub(key_block, sizeof(key_block));
-    crypto_scrub(inner_pad, sizeof(inner_pad));
+    mal_secure_scrub(key_block, sizeof(key_block));
+    mal_secure_scrub(inner_pad, sizeof(inner_pad));
 }
 
 static bool mal_node_crypto_hmac_init(
@@ -856,8 +874,8 @@ static void mal_node_crypto_hmac_final(MalNodeCryptoState *state, u8 result[32])
     mal_sha256_update(&outer, state->digest.hmac.outer_pad, 64);
     mal_sha256_update(&outer, inner, sizeof(inner));
     mal_sha256_final(&outer, result);
-    crypto_scrub((byte *) inner, sizeof(inner));
-    crypto_scrub((byte *) &outer, sizeof(outer));
+    mal_secure_scrub((byte *) inner, sizeof(inner));
+    mal_secure_scrub((byte *) &outer, sizeof(outer));
 }
 
 /* One-shot HMAC over a caller-owned state. `result` is filled before the
@@ -870,7 +888,7 @@ static void mal_node_crypto_hmac_bytes(
     if (first_length > 0) mal_node_crypto_state_update(&state, first, first_length);
     if (second_length > 0) mal_node_crypto_state_update(&state, second, second_length);
     mal_node_crypto_hmac_final(&state, result);
-    crypto_scrub((byte *) &state, sizeof(state));
+    mal_secure_scrub((byte *) &state, sizeof(state));
 }
 
 static MalValue mal_node_crypto_create_hmac(
@@ -1041,17 +1059,24 @@ typedef enum {
     CRYPTO_ASYNC_ARGON2,
     CRYPTO_ASYNC_RANDOM_BYTES,
     CRYPTO_ASYNC_RANDOM_INT,
+    /* An operation that failed before it could be handed to a worker, carrying
+     * only the reason. Shares the immediate payload and drain path below. */
+    CRYPTO_ASYNC_FAILURE,
 } CryptoAsyncKind;
 
-/* Payload for the two entry points that need no worker: the value is produced
- * on the main thread and posted so the callback still lands as a macrotask.
- * `failed` carries a platform entropy failure to the callback instead of
- * throwing it out of a call that already promised to call back. */
+/* Payload for the entry points that need no worker: the value is produced on
+ * the main thread and posted so the callback still lands as a macrotask.
+ * `failed` carries a platform entropy failure, or a transient job-start
+ * failure, to the callback instead of throwing it out of a call that already
+ * promised to call back. */
 typedef struct {
     byte *bytes;
     usize length;
     f64 number;
     bool failed;
+    /* Fixed literal only — never a parameter value, a key, or a derived tag.
+     * Null falls back to the entropy message the randomness paths use. */
+    const char *error;
 } CryptoImmediateResult;
 
 typedef struct MalNodeCryptoAsync {
@@ -1145,6 +1170,29 @@ static bool crypto_complete_immediately(
     return true;
 }
 
+/*
+ * Retarget an already-allocated async state at a terminal failure, so a call
+ * that has accepted a callback reports through it exactly once instead of
+ * throwing out of a call that already promised to call back.
+ *
+ * Returns false when nothing could be queued at all (allocation or host task
+ * failure), and only then does the caller still own `state` and must fall back
+ * to a synchronous throw. `reason` must be a fixed literal.
+ */
+static bool crypto_fail_through_callback(
+    MalVm *vm, MalNodeCryptoAsync *state, const char *reason) {
+    CryptoImmediateResult *result = calloc(1, sizeof(CryptoImmediateResult));
+    if (result == nullptr) return false;
+    result->failed = true;
+    result->error = reason;
+    state->kind = CRYPTO_ASYNC_FAILURE;
+    if (!crypto_complete_immediately(vm, state, result)) {
+        crypto_immediate_destroy(result);
+        return false;
+    }
+    return true;
+}
+
 /* Every callback form lands as a host macrotask, so an embedding without a host
  * context (the bare test262 entry, for instance) has nowhere to deliver it. */
 static bool crypto_require_host(MalVm *vm) {
@@ -1195,13 +1243,16 @@ static bool crypto_async_arguments(
             return false;
         }
         if (length > 0) memcpy(owned, tag, length);
-        args[1] = mal_node_buffer_from_owned_bytes(vm, owned, length);
+        args[1] = mal_node_buffer_from_owned_secret_bytes(vm, owned, length);
         return vm->completion.kind != MAL_COMPLETION_THROW;
     }
     CryptoImmediateResult *result = data;
     if (result == nullptr || result->failed) {
-        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-            result == nullptr ? "Crypto operation failed" : CRYPTO_ENTROPY_UNAVAILABLE);
+        const char *message = "Crypto operation failed";
+        if (result != nullptr) {
+            message = result->error != nullptr ? result->error : CRYPTO_ENTROPY_UNAVAILABLE;
+        }
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message);
         return false;
     }
     if (state->kind == CRYPTO_ASYNC_RANDOM_INT) {
@@ -1214,7 +1265,7 @@ static bool crypto_async_arguments(
     usize length = result->length;
     result->bytes = nullptr;
     result->length = 0;
-    args[1] = mal_node_buffer_from_owned_bytes(vm, bytes, length);
+    args[1] = mal_node_buffer_from_owned_secret_bytes(vm, bytes, length);
     return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
@@ -1337,7 +1388,7 @@ static MalValue mal_node_crypto_random_bytes(
             crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, CRYPTO_ENTROPY_UNAVAILABLE);
             return mal_value_new_undefined();
         }
-        return mal_node_buffer_from_owned_bytes(vm, bytes, length);
+        return mal_node_buffer_from_owned_secret_bytes(vm, bytes, length);
     }
 
     CryptoImmediateResult *result = calloc(1, sizeof(CryptoImmediateResult));
@@ -1563,14 +1614,14 @@ static MalValue mal_node_crypto_pbkdf2_sync(
         // registers cleared. `value` is U_c and `accumulated` the folded block,
         // and both are key material for the block just written.
         memcpy(output + offset, accumulated, selected);
-        crypto_scrub((byte *) value, sizeof(value));
-        crypto_scrub((byte *) accumulated, sizeof(accumulated));
+        mal_secure_scrub((byte *) value, sizeof(value));
+        mal_secure_scrub((byte *) accumulated, sizeof(accumulated));
     }
     // The password is materialized by us when it arrives as a string; a borrowed
     // ArrayBufferView is the caller's and is left alone (`owned_*` is null).
     crypto_scrub_free(owned_password, password.length);
     crypto_scrub_free(owned_salt, salt.length);
-    return mal_node_buffer_from_owned_bytes(vm, output, key_length);
+    return mal_node_buffer_from_owned_secret_bytes(vm, output, key_length);
 }
 
 static MalValue mal_node_crypto_timing_safe_equal(
@@ -1668,7 +1719,7 @@ static MalValue mal_node_crypto_hash(
 
     u8 digest[32];
     mal_sha256_final(&ctx, digest);
-    crypto_scrub((byte *) &ctx, sizeof(ctx));
+    mal_secure_scrub((byte *) &ctx, sizeof(ctx));
 
     if (mal_value_is_undefined(encoding)) {
         char hex[64];
@@ -1677,7 +1728,7 @@ static MalValue mal_node_crypto_hash(
             mal_string_new_ascii(&vm->heap, (const byte *) hex, 64));
     }
     if (mal_string_equals_ascii_ci(mal_value_to_string(encoding), "buffer")) {
-        return mal_node_buffer_encode_bytes(
+        return mal_node_buffer_encode_secret_bytes(
             vm, (const byte *) digest, countof(digest), mal_value_new_undefined(), false);
     }
     // Unlike digest(), crypto.hash() rejects an unrecognized encoding.
@@ -1952,7 +2003,7 @@ static MalValue mal_node_crypto_argon2_sync(
             crypto_argon2_status_message(status));
         return mal_value_new_undefined();
     }
-    return mal_node_buffer_from_owned_bytes(vm, tag, tag_length);
+    return mal_node_buffer_from_owned_secret_bytes(vm, tag, tag_length);
 }
 
 static MalValue mal_node_crypto_argon2(
@@ -1999,9 +2050,8 @@ static MalValue mal_node_crypto_argon2(
     MalArgon2StartResult started = mal_argon2_start(mal_host(vm), &params, &state->operation);
     crypto_argon2_args_free(&parsed);
     if (started != MAL_ARGON2_START_OK) {
-        // No operation exists on any failure path, so the state is simply
-        // dropped and nothing is ever linked.
-        free(state);
+        // No argon2 operation exists on any failure path, so nothing is linked
+        // yet and the state is still this function's to place or drop.
         const char *reason = "Argon2 job could not be started";
         if (started == MAL_ARGON2_START_SATURATED) reason = "Argon2 queue is full";
         if (started == MAL_ARGON2_START_SHUTDOWN) reason = "Argon2 is shutting down";
@@ -2009,6 +2059,19 @@ static MalValue mal_node_crypto_argon2(
         if (started == MAL_ARGON2_START_POLICY) {
             reason = crypto_argon2_status_message(MAL_ARGON2_STATUS_POLICY);
         }
+        // A full queue and an unavailable worker are transient host conditions,
+        // not bad arguments and not a refused policy: the caller has already
+        // handed over a callback and cannot also be expected to wrap the call in
+        // a try/catch, so they are reported through the callback. Argument and
+        // policy errors above stay synchronous, as they were before the call
+        // ever reached the pool. The synchronous throw remains the last resort
+        // for when even a terminal task cannot be queued.
+        if ((started == MAL_ARGON2_START_SATURATED
+                || started == MAL_ARGON2_START_SYSTEM_ERROR)
+            && crypto_fail_through_callback(vm, state, reason)) {
+            return mal_value_new_undefined();
+        }
+        free(state);
         crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, reason);
         return mal_value_new_undefined();
     }

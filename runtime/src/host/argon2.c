@@ -1,6 +1,7 @@
 #include "argon2.h"
 
 #include "host.h"
+#include "secure_scrub.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -95,20 +96,13 @@ typedef struct MalArgon2State {
     bool pool_started;
     bool accepting;
     bool stopping;
+    /* Test seam (mal_argon2_test_fail_next_pool_start); cleared as it is used. */
+    bool fail_next_pool_start;
 } MalArgon2State;
-
-/* Overwrite secret-bearing storage before it is released. The volatile store
- * keeps this from being optimized away as dead. */
-static void mal_argon2_scrub(byte *bytes, usize length) {
-    volatile byte *cursor = (volatile byte *) bytes;
-    for (usize i = 0; i < length; i++) {
-        cursor[i] = 0;
-    }
-}
 
 static void mal_argon2_scrub_free(byte *bytes, usize length) {
     if (bytes == nullptr) return;
-    mal_argon2_scrub(bytes, length);
+    mal_secure_scrub(bytes, length);
     free(bytes);
 }
 
@@ -353,7 +347,7 @@ static void *mal_argon2_worker(void *data) {
                 ? MAL_HOST_TERMINAL_OK
                 : MAL_HOST_TERMINAL_ERROR;
             if (result->status != MAL_ARGON2_STATUS_OK) {
-                mal_argon2_scrub(result->tag, result->tag_length);
+                mal_secure_scrub(result->tag, result->tag_length);
             }
         }
         // The inputs carry the password, pepper, and nonce; they are done the
@@ -392,24 +386,43 @@ static void *mal_argon2_worker(void *data) {
     }
 }
 
+/*
+ * Bring the lazy worker pool up, under the state mutex.
+ *
+ * The latch is set only once at least one worker exists. A start that produces
+ * no workers at all leaves the pool exactly as it found it — no thread array, no
+ * latch — so the transient condition that caused it (a failed allocation, a
+ * process at its thread limit) does not permanently wedge every later
+ * derivation against an empty pool that can never be retried or reconfigured.
+ * A partial pool is a success: the workers that did start drain the queue.
+ */
 static bool mal_argon2_start_pool(MalArgon2State *state) {
     if (state->pool_started) {
         return state->thread_count > 0;
     }
-    state->pool_started = true;
-    state->threads = calloc(state->thread_limit, sizeof(pthread_t));
-    if (state->threads == nullptr) {
+    pthread_t *threads = calloc(state->thread_limit, sizeof(pthread_t));
+    if (threads == nullptr) {
         return false;
     }
+    usize started = 0;
     for (usize i = 0; i < state->thread_limit; i++) {
-        if (pthread_create(
-                &state->threads[state->thread_count], nullptr, mal_argon2_worker, state)
-            != 0) {
+        if (state->fail_next_pool_start
+            || pthread_create(&threads[started], nullptr, mal_argon2_worker, state) != 0) {
             break;
         }
-        state->thread_count++;
+        started++;
     }
-    return state->thread_count > 0;
+    state->fail_next_pool_start = false;
+    if (started == 0) {
+        free(threads);
+        return false;
+    }
+    // Published after the loop: a worker blocks on this mutex until the caller
+    // releases it, so it observes a fully-formed pool or none.
+    state->threads = threads;
+    state->thread_count = started;
+    state->pool_started = true;
+    return true;
 }
 
 bool mal_argon2_init(MalArgon2 *argon2, MalHost *host) {
@@ -715,6 +728,16 @@ void mal_argon2_free(MalArgon2 *argon2) {
     pthread_mutex_destroy(&state->mutex);
     free(state);
     argon2->state = nullptr;
+}
+
+void mal_argon2_test_fail_next_pool_start(MalArgon2 *argon2) {
+    if (argon2 == nullptr || argon2->state == nullptr) {
+        return;
+    }
+    MalArgon2State *state = argon2->state;
+    pthread_mutex_lock(&state->mutex);
+    state->fail_next_pool_start = true;
+    pthread_mutex_unlock(&state->mutex);
 }
 
 usize mal_argon2_queued(MalArgon2 *argon2) {

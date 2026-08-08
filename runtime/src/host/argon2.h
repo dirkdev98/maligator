@@ -150,6 +150,15 @@ const byte *mal_argon2_result_tag(const MalArgon2Result *result, usize *length);
 i32 mal_argon2_result_status(const MalArgon2Result *result);
 void mal_argon2_result_release(MalArgon2Result *result);
 
+/*
+ * Test seam: make the next lazy pool start create no workers, exactly as a
+ * failed pthread_create would. Real thread exhaustion is not reproducible on
+ * demand, and this is the one path where the pool must leave itself retryable
+ * rather than latch an empty pool. Cleared as it is consumed, so the start after
+ * it brings the pool up normally.
+ */
+void mal_argon2_test_fail_next_pool_start(MalArgon2 *argon2);
+
 usize mal_argon2_queued(MalArgon2 *argon2);
 usize mal_argon2_workers(MalArgon2 *argon2);
 bool mal_argon2_accepting(MalArgon2 *argon2);

@@ -562,6 +562,61 @@ static bool argon2_passes_ceiling_refuses_every_path(void) {
     return ok;
 }
 
+/*
+ * A pool that comes up with no workers must leave itself exactly as it was.
+ *
+ * The latch is the whole point: if a start that produced no threads marked the
+ * pool started anyway, every later derivation would return SYSTEM_ERROR against
+ * an empty pool forever, and mal_argon2_configure would refuse to reconfigure
+ * it — a transient thread shortage at the first credential check would take
+ * Argon2 out for the life of the process.
+ */
+static bool argon2_a_failed_pool_start_stays_retryable(void) {
+    Argon2Gate gate;
+    Argon2TestHost context = {0};
+    argon2_gate_init(&gate, false);
+    bool ok = argon2_test_host_init(&context, &gate, 2, 4);
+    byte message[8] = {6, 6, 6, 6, 6, 6, 6, 6};
+    MalArgon2Params params = argon2_test_params(message, sizeof(message));
+
+    mal_argon2_test_fail_next_pool_start(&context.host->argon2);
+    MalHostHandle refused = 99;
+    ok = ok && mal_argon2_start(context.host, &params, &refused) == MAL_ARGON2_START_SYSTEM_ERROR
+        // A refused start leaves no operation, no queue slot, and no worker.
+        && refused == 0 && mal_argon2_workers(&context.host->argon2) == 0
+        && mal_argon2_queued(&context.host->argon2) == 0
+        && mal_host_tasks_pending(&context.host->tasks) == 0
+        && mal_host_operations_pending(&context.host->tasks) == 0;
+
+    // The pool never latched, so it is still configurable.
+    MalArgon2Config config = {
+        .worker_count = 1,
+        .queue_capacity = 4,
+        .derive = argon2_test_derive,
+        .derive_data = &gate,
+    };
+    ok = ok && mal_argon2_configure(&context.host->argon2, &config);
+
+    // And the next start brings it up for real and derives.
+    MalHostHandle operation = 0;
+    ok = ok && mal_argon2_start(context.host, &params, &operation) == MAL_ARGON2_START_OK
+        && operation != 0 && mal_argon2_workers(&context.host->argon2) == 1;
+    MalHostTask task = {0};
+    ok = ok && argon2_next_terminal(context.host, operation, &task)
+        && task.result == MAL_HOST_TERMINAL_OK;
+    if (task._node != nullptr) mal_host_task_release(&context.host->tasks, &task);
+    mal_reactor_wait(&context.host->reactor);
+    ok = ok && gate.calls == 1 && !gate.mismatched
+        && !mal_reactor_has_pending(&context.host->reactor)
+        && mal_host_operations_pending(&context.host->tasks) == 0;
+
+    // Once it is up the latch does hold: a configuration change is refused.
+    ok = ok && !mal_argon2_configure(&context.host->argon2, &config);
+    argon2_test_host_free(&context);
+    argon2_gate_free(&gate);
+    return ok;
+}
+
 typedef struct Argon2Reaper {
     MalArgon2 *argon2;
     atomic_bool stop;
@@ -717,6 +772,8 @@ int main(void) {
             argon2_zero_config_selects_the_defaults()},
         {"the passes ceiling refuses every entry point before any work runs",
             argon2_passes_ceiling_refuses_every_path()},
+        {"a pool start that creates no workers stays retryable and configurable",
+            argon2_a_failed_pool_start_stays_retryable()},
         {"a completed job is freed exactly once when cancel and reap race it",
             argon2_completed_job_is_freed_exactly_once()},
         {"the linked backend reproduces the RFC 9106 argon2id vector",

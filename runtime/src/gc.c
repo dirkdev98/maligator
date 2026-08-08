@@ -1101,9 +1101,11 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         }
         case MAL_HEAP_ARRAY_BUFFER_OBJECT: {
             MalArrayBufferObject *buffer = (MalArrayBufferObject *) cell;
-            if (!buffer->detached && buffer->data != nullptr) {
-                free(buffer->data);
-                buffer->data = nullptr;
+            if (!buffer->detached) {
+                // Shared with detach so a sensitive store is scrubbed on the
+                // sweep too — the path most secret-bearing buffers actually take,
+                // since nothing detaches a digest state or a derived tag.
+                mal_array_buffer_object_release_store(buffer);
                 buffer->detached = true;
             }
             break;
