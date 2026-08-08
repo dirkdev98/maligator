@@ -1,13 +1,19 @@
 #include "mal_assets.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#include <sys/event.h>
+#endif
 
 #include "array_object.h"
 #include "gc.h"
@@ -225,6 +231,71 @@ static MalValue mal_dev_process_status(
         : WIFSIGNALED(status) ? 128 + WTERMSIG(status)
                               : 1;
     return mal_value_from_f64((f64) code);
+}
+
+static MalValue mal_dev_wait_change(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 2 || !mal_value_is_array_object(args[0])
+        || (!mal_value_is_int32(args[1]) && !mal_value_is_f64(args[1]))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "mal._waitDevelopmentChange requires a directory array and timeout");
+        return mal_value_new_undefined();
+    }
+    f64 timeout_number = mal_value_is_int32(args[1])
+        ? (f64) mal_value_to_i32(args[1]) : mal_value_to_f64(args[1]);
+    if (timeout_number < 0 || timeout_number > 60000) timeout_number = 1000;
+    long timeout_ms = (long) timeout_number;
+
+#if defined(__APPLE__)
+    u32 count = mal_array_object_length(mal_value_to_array_object(args[0]));
+    int queue = kqueue();
+    int *descriptors = calloc(count == 0 ? 1 : count, sizeof(int));
+    struct kevent *changes = calloc(count == 0 ? 1 : count, sizeof(struct kevent));
+    if (queue >= 0 && descriptors != nullptr && changes != nullptr) {
+        u32 registered = 0;
+        for (u32 i = 0; i < count; i++) {
+            MalValue value;
+            if (!mal_vm_get_property(vm, args[0], mal_key_index(i), &value)) break;
+            char *directory = mal_asset_to_cstr(vm, value, "directory");
+            if (directory == nullptr) break;
+            int descriptor = open(directory, O_EVTONLY);
+            free(directory);
+            if (descriptor < 0) continue;
+            descriptors[registered] = descriptor;
+            EV_SET(&changes[registered], (uintptr_t) descriptor, EVFILT_VNODE,
+                EV_ADD | EV_ENABLE | EV_ONESHOT,
+                NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_ATTRIB | NOTE_EXTEND,
+                0, nullptr);
+            registered++;
+        }
+        struct kevent event;
+        struct timespec timeout = {
+            .tv_sec = timeout_ms / 1000,
+            .tv_nsec = (timeout_ms % 1000) * 1000000,
+        };
+        (void) kevent(queue, changes, (int) registered, &event, 1, &timeout);
+        for (u32 i = 0; i < registered; i++) close(descriptors[i]);
+    } else {
+        struct timespec timeout = {
+            .tv_sec = timeout_ms / 1000,
+            .tv_nsec = (timeout_ms % 1000) * 1000000,
+        };
+        (void) nanosleep(&timeout, nullptr);
+    }
+    if (queue >= 0) close(queue);
+    free(descriptors);
+    free(changes);
+#else
+    struct timespec timeout = {
+        .tv_sec = timeout_ms / 1000,
+        .tv_nsec = (timeout_ms % 1000) * 1000000,
+    };
+    (void) nanosleep(&timeout, nullptr);
+#endif
+    return mal_value_new_undefined();
 }
 
 static char *mal_asset_join(const char *left, const char *right) {
@@ -513,6 +584,8 @@ void mal_host_install_maligator(
         vm, mal, (const byte *) "_killDevelopmentProcess", 2, mal_dev_kill);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_developmentProcessStatus", 1, mal_dev_process_status);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_waitDevelopmentChange", 2, mal_dev_wait_change);
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_intrinsic_define_data(
         vm, global_this, (const byte *) "mal", roots[0], MAL_ASSET_VISIBLE);

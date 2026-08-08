@@ -47,8 +47,16 @@ export interface CommandContext {
 	stripTypes: BuildConfigTypeStripper;
 	installation: CompilerInstallation;
 	developmentProcesses?: DevelopmentProcessHost;
+	developmentWatcher?: DevelopmentWatchHost;
 	frontendSession?: FrontendCompilationSession;
 	developmentCache?: DevelopmentBuildCache;
+}
+
+export interface DevelopmentWatchHost {
+	create(files: Array<string>): unknown;
+	update(handle: unknown, files: Array<string>): void;
+	wait(handle: unknown, timeoutMs: number): Promise<void>;
+	close(handle: unknown): void;
 }
 
 interface DevelopmentBuildCache {
@@ -749,15 +757,16 @@ export async function devCommand(
 	const retainedContext = {
 		...context,
 		frontendSession: session,
-		developmentCache:
-			context.developmentCache ?? {
-				toolchains: new Map(),
-				runners: new Map(),
-			},
+		developmentCache: context.developmentCache ?? {
+			toolchains: new Map(),
+			runners: new Map(),
+		},
 	};
 	const initialBuildStartedAt = Date.now();
 	let result = compileAndBuild(command, retainedContext, true);
 	let states = watchedFiles(command, result.dependencies ?? []);
+	const watchHost = context.developmentWatcher;
+	const watchHandle = watchHost?.create(states.map((state) => state.file));
 	let child: unknown = processHost.spawn(
 		result.binaryPath!,
 		result.runArguments ?? command.programArgs,
@@ -771,12 +780,18 @@ export async function devCommand(
 	writeStderr(
 		`Ready in ${formatDevelopmentDuration(Date.now() - initialBuildStartedAt)} · watching ${states.length} files · press Ctrl+C to stop`,
 	);
+	if (command.verbose) {
+		writeStderr(
+			`Watcher: ${watchHost === undefined ? "polling fallback" : "filesystem events"}`,
+		);
+	}
 	let poll = 0;
 
 	try {
 		while (!stopping) {
-			await delay(75);
-			const changed = changedFiles(states, poll++ % 14 === 0);
+			if (watchHost === undefined) await delay(75);
+			else await watchHost.wait(watchHandle, 1000);
+			const changed = changedFiles(states, watchHost !== undefined || poll++ % 14 === 0);
 			if (changed.length === 0) {
 				const status = child === undefined ? undefined : processHost.status(child);
 				if (child !== undefined && status !== undefined) {
@@ -807,6 +822,10 @@ export async function devCommand(
 				const rebuildStartedAt = Date.now();
 				result = compileAndBuild(command, retainedContext, true);
 				states = watchedFiles(command, result.dependencies ?? []);
+				watchHost?.update(
+					watchHandle,
+					states.map((state) => state.file),
+				);
 				if (child !== undefined) {
 					await stopDevelopmentProcess(processHost, child);
 					child = undefined;
@@ -829,6 +848,7 @@ export async function devCommand(
 	} finally {
 		process.removeListener("SIGINT", stop);
 		process.removeListener("SIGTERM", stop);
+		watchHost?.close(watchHandle);
 		if (child !== undefined && processHost.status(child) === undefined) {
 			await stopDevelopmentProcess(processHost, child);
 		}
