@@ -21,6 +21,7 @@ describe("Test262 native build inputs", () => {
 				probes: {
 					c2x: true,
 					lto: false,
+					ltoFlags: [],
 					strip: false,
 					cxxLink: false,
 					stripArgs: [],

@@ -12,9 +12,9 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 
-const CACHE_SCHEMA = 7;
+const CACHE_SCHEMA = 8;
 const C2X_FLAGS = ["-std=c2x"];
-const LTO_FLAGS = ["-flto"];
+const LTO_FLAG_CANDIDATES = [["-flto=thin"], ["-flto"]];
 
 export interface ToolExecutable {
 	path: string;
@@ -37,6 +37,7 @@ export interface ToolchainTools {
 export interface ToolchainProbes {
 	c2x: boolean;
 	lto: boolean;
+	ltoFlags: Array<string>;
 	strip: boolean;
 	cxxLink: boolean;
 	stripArgs: Array<string>;
@@ -166,6 +167,8 @@ function isCachedProbes(value: unknown, fingerprint: string): value is CachedPro
 		probes !== undefined &&
 		typeof probes.c2x === "boolean" &&
 		typeof probes.lto === "boolean" &&
+		Array.isArray(probes.ltoFlags) &&
+		probes.ltoFlags.every((item) => typeof item === "string") &&
 		typeof probes.strip === "boolean" &&
 		typeof probes.cxxLink === "boolean" &&
 		Array.isArray(probes.stripArgs) &&
@@ -309,7 +312,7 @@ function fingerprintFor(
 ): string {
 	const testedFlags = {
 		c2x: C2X_FLAGS,
-		lto: LTO_FLAGS,
+		lto: LTO_FLAG_CANDIDATES,
 		strip:
 			tools.strip?.args?.[0] === "objcopy"
 				? [["-s"]]
@@ -395,33 +398,45 @@ function probeCapabilities(
 		path.join(probeDir, "lto-main.c"),
 		"int mal_lto_probe(void); int main(void) { return mal_lto_probe(); }\n",
 	);
-	const ltoCompile =
-		compile(
-			tools.cc,
-			[...C2X_FLAGS, ...LTO_FLAGS, "-c", "lto-lib.c", "-o", "lto-lib.o"],
-			probeDir,
-			env,
-		) &&
-		compile(
-			tools.cc,
-			[...C2X_FLAGS, ...LTO_FLAGS, "-c", "lto-main.c", "-o", "lto-main.o"],
-			probeDir,
-			env,
+	const probeLto = (flags: Array<string>): boolean => {
+		const ltoCompile =
+			compile(
+				tools.cc,
+				[...C2X_FLAGS, ...flags, "-c", "lto-lib.c", "-o", "lto-lib.o"],
+				probeDir,
+				env,
+			) &&
+			compile(
+				tools.cc,
+				[...C2X_FLAGS, ...flags, "-c", "lto-main.c", "-o", "lto-main.o"],
+				probeDir,
+				env,
+			);
+		const ltoArchive =
+			ltoCompile &&
+			run(
+				tools.ar.path,
+				toolArguments(tools.ar, ["rcs", "liblto-probe.a", "lto-lib.o"]),
+				{ cwd: probeDir, env },
+			).ok;
+		return (
+			ltoArchive &&
+			compile(
+				tools.cc,
+				[...C2X_FLAGS, ...flags, "lto-main.o", "liblto-probe.a", "-o", "lto-probe"],
+				probeDir,
+				env,
+			)
 		);
-	const ltoArchive =
-		ltoCompile &&
-		run(tools.ar.path, toolArguments(tools.ar, ["rcs", "liblto-probe.a", "lto-lib.o"]), {
-			cwd: probeDir,
-			env,
-		}).ok;
-	const lto =
-		ltoArchive &&
-		compile(
-			tools.cc,
-			[...C2X_FLAGS, ...LTO_FLAGS, "lto-main.o", "liblto-probe.a", "-o", "lto-probe"],
-			probeDir,
-			env,
-		);
+	};
+	let ltoFlags: Array<string> = [];
+	for (const candidate of LTO_FLAG_CANDIDATES) {
+		if (probeLto(candidate)) {
+			ltoFlags = candidate;
+			break;
+		}
+	}
+	const lto = ltoFlags.length > 0;
 
 	let cxxLink = !needsCxx;
 	let cxxLinkArgs: Array<string> = [];
@@ -488,7 +503,7 @@ function probeCapabilities(
 		}
 	}
 
-	return { c2x, lto, strip, cxxLink, stripArgs, cxxLinkArgs };
+	return { c2x, lto, ltoFlags, strip, cxxLink, stripArgs, cxxLinkArgs };
 }
 
 function rustHostTarget(

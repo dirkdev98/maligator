@@ -50,6 +50,7 @@ export type SanitizerMode = "none" | "asan" | "ubsan";
 export interface NativeBuildPlan {
 	mode: "development" | "production";
 	lto: boolean;
+	ltoFlags: ReadonlyArray<string>;
 	strip: boolean;
 	warnings: Array<string>;
 }
@@ -186,7 +187,7 @@ export function selectNativeBuildPlan(
 	production: boolean,
 ): NativeBuildPlan {
 	if (!production) {
-		return { mode: "development", lto: false, strip: false, warnings: [] };
+		return { mode: "development", lto: false, ltoFlags: [], strip: false, warnings: [] };
 	}
 	const warnings: Array<string> = [];
 	if (!toolchain.probes.lto) {
@@ -202,6 +203,7 @@ export function selectNativeBuildPlan(
 	return {
 		mode: "production",
 		lto: toolchain.probes.lto,
+		ltoFlags: toolchain.probes.ltoFlags,
 		strip: toolchain.probes.strip && toolchain.tools.strip !== undefined,
 		warnings,
 	};
@@ -340,7 +342,7 @@ export function optFlags(
 	if (sanitizerMode(env) !== "none") {
 		return ["-O1", "-g"];
 	}
-	return plan?.lto === true ? ["-O2", "-flto"] : ["-O2"];
+	return plan?.lto === true ? ["-O2", ...plan.ltoFlags] : ["-O2"];
 }
 
 /**

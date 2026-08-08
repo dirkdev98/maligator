@@ -39,13 +39,19 @@ function executable(filePath: string, body: string): void {
 	chmodSync(filePath, 0o755);
 }
 
-function compilerScript(version: string, logPath: string, lto = true): string {
+function compilerScript(
+	version: string,
+	logPath: string,
+	lto = true,
+	thinLto = true,
+): string {
 	return `
 printf '%s\n' "$*" >> '${logPath}'
 printf 'cc-env %s\n' "$MAL_TEST_BUILD_ENV" >> '${logPath}'
 if [ "$1" = "--version" ]; then printf '%s\n' '${version}'; exit 0; fi
 if [ "$1" = "-dumpmachine" ]; then printf '%s\n' 'fake-target'; exit 0; fi
-${lto ? "" : 'case " $* " in *" -flto "*) exit 1;; esac'}
+${thinLto ? "" : 'case " $* " in *" -flto=thin "*) exit 1;; esac'}
+${lto ? "" : 'case " $* " in *" -flto"*) exit 1;; esac'}
 out=''
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-o" ]; then shift; out="$1"; fi
@@ -57,7 +63,7 @@ exit 0
 }
 
 function createFakeToolchain(
-	options: { lto?: boolean; strip?: boolean } = {},
+	options: { lto?: boolean; thinLto?: boolean; strip?: boolean } = {},
 ): FakeToolchain {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-toolchain-"));
 	const bin = path.join(root, "bin");
@@ -71,7 +77,7 @@ function createFakeToolchain(
 
 	executable(
 		path.join(bin, "fake-cc"),
-		compilerScript("fake cc 1", logPath, options.lto ?? true),
+		compilerScript("fake cc 1", logPath, options.lto ?? true, options.thinLto ?? true),
 	);
 	executable(path.join(bin, "fake-cxx"), compilerScript("fake cxx 1", logPath));
 	executable(
@@ -272,6 +278,7 @@ exit 7
 		expect(report.probes).toMatchObject({
 			c2x: true,
 			lto: true,
+			ltoFlags: ["-flto=thin"],
 			strip: true,
 			cxxLink: true,
 		});
@@ -641,8 +648,8 @@ exit 7
 		});
 
 		const invocations = readFileSync(fake.logPath, "utf-8");
-		expect(invocations).toMatch(/-O2 -flto .*runtime\/src\/vm\.c/);
-		expect(invocations).toContain(`-O2 -flto`);
+		expect(invocations).toMatch(/-O2 -flto=thin .*runtime\/src\/vm\.c/);
+		expect(invocations).toContain(`-O2 -flto=thin`);
 		expect(invocations).toContain(`strip --strip-all ${binary}`);
 
 		writeFileSync(fake.logPath, "");
@@ -712,6 +719,22 @@ exit 7
 		expect(invocation).not.toContain("-flto");
 		expect(invocation).not.toContain("strip ");
 	}, 10_000);
+
+	it("falls back to full LTO when ThinLTO is unavailable", () => {
+		const fake = createFakeToolchain({ thinLto: false });
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		});
+		expect(report.probes).toMatchObject({ lto: true, ltoFlags: ["-flto"] });
+		expect(selectNativeBuildPlan(report.toolchain!, true)).toMatchObject({
+			lto: true,
+			ltoFlags: ["-flto"],
+		});
+	});
 
 	it("separates runtime cache keys by source, config, toolchain, and environment", () => {
 		const base = {

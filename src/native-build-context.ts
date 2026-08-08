@@ -165,6 +165,7 @@ export function resolveNativeBuildContext(
 		options.plan ?? selectNativeBuildPlan(toolchain, options.production ?? false);
 	const plan = Object.freeze({
 		...selectedPlan,
+		ltoFlags: Object.freeze([...selectedPlan.ltoFlags]),
 		warnings: Object.freeze([...selectedPlan.warnings]),
 	}) as NativeBuildPlan;
 	const compilerBake =
