@@ -66,6 +66,7 @@ export interface CompiledBuildFrontend {
 	frontendMs: number;
 	phases: BuildFrontendPhases;
 	dependencies: Array<string>;
+	moduleParses: { hits: number; misses: number };
 }
 
 export interface CompileBuildFrontendOptions {
@@ -276,6 +277,14 @@ export function compileBuildFrontend(
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = cacheIdentity(options);
 	const session = options.session ?? new BuildCompilationSession();
+	const parseStatsBefore = session.moduleParses.statistics();
+	const moduleParseStats = () => {
+		const current = session.moduleParses.statistics();
+		return {
+			hits: current.hits - parseStatsBefore.hits,
+			misses: current.misses - parseStatsBefore.misses,
+		};
+	};
 
 	if (!options.forceCompile) {
 		const validationStartedAt = Date.now();
@@ -289,6 +298,7 @@ export function compileBuildFrontend(
 				frontendMs: Date.now() - startedAt,
 				phases,
 				dependencies: cached.dependencies.map((dependency) => dependency.path),
+				moduleParses: moduleParseStats(),
 			};
 		}
 	}
@@ -297,6 +307,7 @@ export function compileBuildFrontend(
 	const graph = buildModuleGraph(entrypoint, {
 		buildConfig: options.config,
 		stripTypes: options.stripTypes,
+		parseCache: session.moduleParses,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
 
@@ -349,5 +360,6 @@ export function compileBuildFrontend(
 		frontendMs: Date.now() - startedAt,
 		phases,
 		dependencies: dependencies.map((dependency) => dependency.path),
+		moduleParses: moduleParseStats(),
 	};
 }

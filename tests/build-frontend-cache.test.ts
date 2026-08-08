@@ -115,6 +115,34 @@ describe("normal build frontend cache", () => {
 		expect(compile(entrypoint, cacheDirectory, session).cache).toBe("miss");
 	});
 
+	it("reuses unchanged module parses across forced edit compilations", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.ts");
+		const dependency = path.join(root, "answer.ts");
+		const session = new BuildCompilationSession();
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(dependency, `export const answer = 1;\n`);
+		write(entrypoint, `import { answer } from "./answer.ts";\nvoid answer;\n`);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-frontend-cache-test",
+			cacheDirectory,
+			session,
+			forceCompile: true,
+			optimization: "development" as const,
+		};
+
+		expect(compileBuildFrontend(options).moduleParses).toEqual({ hits: 0, misses: 2 });
+		expect(compileBuildFrontend(options).moduleParses).toEqual({ hits: 2, misses: 0 });
+
+		write(dependency, `export const answer = 2;\n`);
+		session.invalidate(dependency);
+		expect(compileBuildFrontend(options).moduleParses).toEqual({ hits: 1, misses: 1 });
+	});
+
 	it("does not reuse policy-unchecked portable output for a checked native build", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

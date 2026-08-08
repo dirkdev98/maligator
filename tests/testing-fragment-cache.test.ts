@@ -68,6 +68,7 @@ describe("relocatable test fragment cache", () => {
 		};
 
 		const cold = compileRelocatableTestImage(options);
+		const coldParses = session.moduleParses.statistics();
 		const warm = compileRelocatableTestImage(options);
 		expect(cold.cache).toBe("miss");
 		expect(cold.wires.map((wire) => wire.kind)).toEqual([
@@ -77,6 +78,8 @@ describe("relocatable test fragment cache", () => {
 			"runner",
 		]);
 		expect(cold.artifactMisses).toBe(4);
+		expect(coldParses.hits).toBeGreaterThan(0);
+		expect(coldParses.misses).toBeGreaterThan(0);
 		expect(warm.cache).toBe("hit");
 		expect(warm.artifactHits).toBe(4);
 

@@ -196,6 +196,7 @@ function wrapTestEntry(source: string, file: string): string {
 function buildTestGraph(
 	options: CompileTestImageOptions,
 	entries: Array<string>,
+	session: FrontendCompilationSession,
 ): ModuleGraph {
 	const entrySet = new Set(entries);
 	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-image-entry.mts");
@@ -204,6 +205,7 @@ function buildTestGraph(
 		entrySource: syntheticEntry(entries),
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		parseCache: session.moduleParses,
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
 		]),
@@ -293,7 +295,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	}
 
 	const graphStartedAt = Date.now();
-	const graph = buildTestGraph(options, entries);
+	const graph = buildTestGraph(options, entries, session);
 	phases.graphMs = Date.now() - graphStartedAt;
 	const dependencies = dependencyIdentities(graph, session);
 	const contentKey = digest(

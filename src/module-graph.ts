@@ -105,6 +105,58 @@ export interface ModuleGraph {
 	cycles: Array<Array<string>>;
 }
 
+interface CachedModuleParse {
+	source: string;
+	goal: ModuleGoal;
+	parsed: ModuleRecord["parsed"];
+	dependencies: Array<ExtractedDependency>;
+}
+
+/** Retained, single-revision parse cache keyed by stable module path and goal. */
+export class ModuleParseCache {
+	readonly #records = new Map<string, CachedModuleParse>();
+	#hits = 0;
+	#misses = 0;
+
+	invalidate(file?: string): void {
+		if (file === undefined) {
+			this.#records.clear();
+			return;
+		}
+		const resolved = path.resolve(file);
+		for (const goal of ["script", "module", "cjs"] as const) {
+			this.#records.delete(`${goal}\0${resolved}`);
+		}
+	}
+
+	statistics(): { hits: number; misses: number } {
+		return { hits: this.#hits, misses: this.#misses };
+	}
+
+	parse(
+		file: string,
+		source: string,
+		goal: ModuleGoal,
+		compute: () => Pick<CachedModuleParse, "parsed" | "dependencies">,
+	): Pick<CachedModuleParse, "parsed" | "dependencies"> {
+		const key = `${goal}\0${file}`;
+		const cached = this.#records.get(key);
+		if (cached !== undefined && cached.source === source) {
+			this.#hits++;
+			return cached;
+		}
+
+		this.#misses++;
+		const result = compute();
+		this.#records.set(key, {
+			source,
+			goal,
+			...result,
+		});
+		return result;
+	}
+}
+
 export interface BuildModuleGraphOptions {
 	/**
 	 * Blank TypeScript syntax in place. Required when any `.ts`, `.mts`, or
@@ -160,6 +212,9 @@ export interface BuildModuleGraphOptions {
 	 * while caches and file watchers fingerprint the original source contents.
 	 */
 	transformSource?: (source: string, filePath: string) => string;
+
+	/** In-process parse reuse for retained compiler/test sessions. */
+	parseCache?: ModuleParseCache;
 }
 
 /**
@@ -233,78 +288,82 @@ export function buildModuleGraph(
 			parseSource = options.stripTypes(parseSource, filePath);
 		}
 		parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
-		const parsed = parseWithGoal(parseSource, goal);
+		const parse = () => {
+			const parsed = parseWithGoal(parseSource, goal);
+			return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
+		};
+		const parsedModule =
+			options.parseCache?.parse(filePath, source, goal, parse) ?? parse();
+		const parsed = parsedModule.parsed;
 
-		const dependencies = extractDependencies(parsed.ast, goal).map(
-			(dependency): ModuleDependency => {
-				if (dependency.specifier === null) {
-					// A computed import/require cannot be resolved while building the
-					// graph. Preserve the edge for later lowering/runtime handling.
-					return { ...dependency, resolvedPath: null };
-				}
-				const virtualModule = options.virtualModules?.get(dependency.specifier);
-				if (virtualModule !== undefined) {
-					if (dependency.kind === "dynamic" || dependency.kind === "require") {
-						throw new SyntaxError(
-							`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
-						);
-					}
-					return { ...dependency, resolvedPath: dependency.specifier };
-				}
-				const canonicalHostId = canonicalNodeHostModuleId(dependency.specifier);
-				const canonicalBuiltinId = canonicalNodeBuiltinId(dependency.specifier);
-				const resolved = resolveSpecifier(
-					canonicalHostId ?? canonicalBuiltinId ?? dependency.specifier,
-					filePath,
-					{
-						...ctx,
-						conditions: exportConditions(
-							ctx.nodeEnabled,
-							dependency.kind === "require" ? "require" : "import",
-						),
-					},
-				);
-				if ("host" in resolved) {
-					if (dependency.kind === "dynamic") {
-						// A host built-in's exports are synthesized into global slots at link
-						// time and filled by a native installer before execution — there is
-						// no runtime module object for `import()` to resolve to a namespace in
-						// this slice. Reject a literal dynamic import rather than resolve it to
-						// a namespace that cannot be built; a static import is the supported
-						// form.
-						throw new SyntaxError(
-							`Cannot dynamically import node built-in '${resolved.host.id}' from ${filePath}: ` +
-								`node built-ins support static import only`,
-						);
-					}
-					// A supported `node:*` built-in: identity is its canonical specifier.
-					return { ...dependency, resolvedPath: resolved.host.id };
-				}
-				if ("error" in resolved) {
-					// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
-					// rejects even a literal dynamic import rather than silently deferring,
-					// so an unsupported host import fails loudly at build time. A plain
-					// dynamic resolution failure (missing file) still defers to the graph.
-					if (dependency.kind === "dynamic" && !resolved.hard) {
-						return { ...dependency, resolvedPath: null };
-					}
-					if (
-						dependency.kind === "require" &&
-						dependency.catchableMissing &&
-						!resolved.hard
-					) {
-						return { ...dependency, resolvedPath: null };
-					}
-					// A static import that cannot resolve fails the graph — the
-					// resolution-phase SyntaxError of 16.2.1.6.1.
+		const dependencies = parsedModule.dependencies.map((dependency): ModuleDependency => {
+			if (dependency.specifier === null) {
+				// A computed import/require cannot be resolved while building the
+				// graph. Preserve the edge for later lowering/runtime handling.
+				return { ...dependency, resolvedPath: null };
+			}
+			const virtualModule = options.virtualModules?.get(dependency.specifier);
+			if (virtualModule !== undefined) {
+				if (dependency.kind === "dynamic" || dependency.kind === "require") {
 					throw new SyntaxError(
-						`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
+						`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
 					);
 				}
+				return { ...dependency, resolvedPath: dependency.specifier };
+			}
+			const canonicalHostId = canonicalNodeHostModuleId(dependency.specifier);
+			const canonicalBuiltinId = canonicalNodeBuiltinId(dependency.specifier);
+			const resolved = resolveSpecifier(
+				canonicalHostId ?? canonicalBuiltinId ?? dependency.specifier,
+				filePath,
+				{
+					...ctx,
+					conditions: exportConditions(
+						ctx.nodeEnabled,
+						dependency.kind === "require" ? "require" : "import",
+					),
+				},
+			);
+			if ("host" in resolved) {
+				if (dependency.kind === "dynamic") {
+					// A host built-in's exports are synthesized into global slots at link
+					// time and filled by a native installer before execution — there is
+					// no runtime module object for `import()` to resolve to a namespace in
+					// this slice. Reject a literal dynamic import rather than resolve it to
+					// a namespace that cannot be built; a static import is the supported
+					// form.
+					throw new SyntaxError(
+						`Cannot dynamically import node built-in '${resolved.host.id}' from ${filePath}: ` +
+							`node built-ins support static import only`,
+					);
+				}
+				// A supported `node:*` built-in: identity is its canonical specifier.
+				return { ...dependency, resolvedPath: resolved.host.id };
+			}
+			if ("error" in resolved) {
+				// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
+				// rejects even a literal dynamic import rather than silently deferring,
+				// so an unsupported host import fails loudly at build time. A plain
+				// dynamic resolution failure (missing file) still defers to the graph.
+				if (dependency.kind === "dynamic" && !resolved.hard) {
+					return { ...dependency, resolvedPath: null };
+				}
+				if (
+					dependency.kind === "require" &&
+					dependency.catchableMissing &&
+					!resolved.hard
+				) {
+					return { ...dependency, resolvedPath: null };
+				}
+				// A static import that cannot resolve fails the graph — the
+				// resolution-phase SyntaxError of 16.2.1.6.1.
+				throw new SyntaxError(
+					`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
+				);
+			}
 
-				return { ...dependency, resolvedPath: resolved.path };
-			},
-		);
+			return { ...dependency, resolvedPath: resolved.path };
+		});
 
 		// Record before recursing so a cyclic back-import finds this module and
 		// stops, rather than looping forever.

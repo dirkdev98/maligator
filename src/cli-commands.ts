@@ -378,6 +378,10 @@ function compileAndBuild(
 	const vmDefinition = frontend.definition;
 	reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
 	reporter.detail(
+		"Module parses",
+		`${frontend.moduleParses.hits} reused, ${frontend.moduleParses.misses} parsed`,
+	);
+	reporter.detail(
 		"Frontend phases",
 		`validation ${frontend.phases.validationMs}ms, graph ${frontend.phases.graphMs}ms, ` +
 			`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +

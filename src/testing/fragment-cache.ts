@@ -12,7 +12,7 @@ import {
 } from "../frontend-cache.ts";
 import type { FrontendCompilationSession } from "../frontend-cache.ts";
 import { linkModules } from "../linker.ts";
-import type { ModuleGraph } from "../module-graph.ts";
+import type { ModuleGraph, ModuleParseCache } from "../module-graph.ts";
 import { buildModuleGraph } from "../module-graph.ts";
 import {
 	collectDisallowedEvalUsage,
@@ -416,6 +416,7 @@ function planEntry(
 function planningGraph(
 	entries: Array<string>,
 	options: CompileTestImageOptions,
+	parseCache: ModuleParseCache,
 ): ModuleGraph {
 	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-fragment-plan.mts");
 	return buildModuleGraph(entry, {
@@ -425,6 +426,7 @@ function planningGraph(
 			.join("\n")}\n`,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		parseCache,
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
 		]),
@@ -454,7 +456,11 @@ function wrapTestEntry(source: string, file: string): string {
 	)});${source}\nglobalThis.__maligatorTestEndFile();`;
 }
 
-function fragmentGraph(plan: EntryPlan, options: CompileTestImageOptions): ModuleGraph {
+function fragmentGraph(
+	plan: EntryPlan,
+	options: CompileTestImageOptions,
+	parseCache: ModuleParseCache,
+): ModuleGraph {
 	const virtualModules = new Map<
 		string,
 		{ source: string; goal?: "module" | "script" }
@@ -468,6 +474,7 @@ function fragmentGraph(plan: EntryPlan, options: CompileTestImageOptions): Modul
 	return buildModuleGraph(plan.file, {
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		parseCache,
 		virtualModules,
 		transformSource(source, filePath) {
 			return filePath === plan.file ? wrapTestEntry(source, plan.file) : source;
@@ -478,6 +485,7 @@ function fragmentGraph(plan: EntryPlan, options: CompileTestImageOptions): Modul
 function baseGraph(
 	plans: Array<EntryPlan>,
 	options: CompileTestImageOptions,
+	parseCache: ModuleParseCache,
 ): ModuleGraph {
 	const targets = new Set<string>([TEST_MODULE_ID]);
 	for (const plan of plans) {
@@ -507,13 +515,18 @@ globalThis.__maligatorTestLinkedModules = __maligatorModules;
 		entrySource: source,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		parseCache,
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
 		]),
 	});
 }
 
-function runnerGraph(firstFile: string, options: CompileTestImageOptions): ModuleGraph {
+function runnerGraph(
+	firstFile: string,
+	options: CompileTestImageOptions,
+	parseCache: ModuleParseCache,
+): ModuleGraph {
 	const entry = path.join(path.dirname(firstFile), ".maligator-test-runner.mts");
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
@@ -522,6 +535,7 @@ function runnerGraph(firstFile: string, options: CompileTestImageOptions): Modul
 			"globalThis.__maligatorTestApi.__run(globalThis.__maligatorTestOptions);\n",
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
+		parseCache,
 	});
 }
 
@@ -575,7 +589,7 @@ export function compileRelocatableTestImage(
 
 	const graphStartedAt = Date.now();
 	const selectedFiles = new Set(entries);
-	const planning = planningGraph(entries, options);
+	const planning = planningGraph(entries, options, session.moduleParses);
 	phases.graphMs = Date.now() - graphStartedAt;
 	const planningSemanticStartedAt = Date.now();
 	const planningSemantic = runSemanticAnalysisForGraph(planning);
@@ -583,12 +597,12 @@ export function compileRelocatableTestImage(
 	phases.semanticMs = Date.now() - planningSemanticStartedAt;
 	const fragmentGraphsStartedAt = Date.now();
 	const plans = entries.map((file) => planEntry(file, planning, selectedFiles));
-	const base = baseGraph(plans, options);
+	const base = baseGraph(plans, options, session.moduleParses);
 	const fragments = plans.map((plan) => ({
 		plan,
-		graph: fragmentGraph(plan, options),
+		graph: fragmentGraph(plan, options, session.moduleParses),
 	}));
-	const runner = runnerGraph(entries[0]!, options);
+	const runner = runnerGraph(entries[0]!, options, session.moduleParses);
 	phases.graphMs += Date.now() - fragmentGraphsStartedAt;
 
 	const baseArtifact = compileArtifact(

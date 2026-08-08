@@ -10,6 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { ModuleParseCache } from "./module-graph.ts";
 
 export const FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/frontend";
 
@@ -38,12 +39,16 @@ export function frontendWirePath(
  */
 export class FrontendCompilationSession {
 	readonly #snapshots = new Map<string, FrontendDependencyIdentity>();
+	readonly moduleParses = new ModuleParseCache();
 
 	invalidate(file?: string): void {
 		if (file === undefined) {
 			this.#snapshots.clear();
+			this.moduleParses.invalidate();
 		} else {
-			this.#snapshots.delete(path.resolve(file));
+			const resolved = path.resolve(file);
+			this.#snapshots.delete(resolved);
+			this.moduleParses.invalidate(resolved);
 		}
 	}
 

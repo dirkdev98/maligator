@@ -138,6 +138,7 @@ test(${JSON.stringify(name)}, () => expect(answer).toBe(42));
 		};
 
 		const cold = compileTestImage(options);
+		const coldParses = session.moduleParses.statistics();
 		const warm = compileTestImage(options);
 		expect(cold.cache).toBe("miss");
 		expect(warm.cache).toBe("hit");
@@ -154,5 +155,8 @@ test(${JSON.stringify(name)}, () => expect(answer).toBe(42));
 		const changed = compileTestImage(options);
 		expect(changed.cache).toBe("miss");
 		expect(changed.wire).not.toEqual(cold.wire);
+		const changedParses = session.moduleParses.statistics();
+		expect(changedParses.hits).toBeGreaterThan(coldParses.hits);
+		expect(changedParses.misses - coldParses.misses).toBe(1);
 	});
 });
