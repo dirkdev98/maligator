@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { buildModuleGraph } from "../src/module-graph.ts";
+import { buildModuleGraph, ModuleParseCache } from "../src/module-graph.ts";
 import type { ModuleGraph } from "../src/module-graph.ts";
 import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
@@ -707,6 +707,23 @@ test("toolchain source transforms preserve original module identities", () => {
 	const record = graph.modules.get(entry)!;
 	expect(record.source).toBe(`globalThis.events.push("body");\n`);
 	expect(record.parsed.ast.body).toHaveLength(2);
+});
+
+test("parse caches distinguish transformed source from the on-disk module", () => {
+	const entry = path.join(root, "cached-transformed-entry.mjs");
+	write("cached-transformed-entry.mjs", `globalThis.events.push("body");\n`);
+	const parseCache = new ModuleParseCache();
+	const plain = buildModuleGraph(entry, { parseCache });
+	const transformed = buildModuleGraph(entry, {
+		parseCache,
+		transformSource(source, filePath) {
+			return filePath === entry ? `globalThis.events.push("before");${source}` : source;
+		},
+	});
+
+	expect(plain.modules.get(entry)!.parsed.ast.body).toHaveLength(1);
+	expect(transformed.modules.get(entry)!.parsed.ast.body).toHaveLength(2);
+	expect(parseCache.statistics()).toEqual({ hits: 0, misses: 2 });
 });
 
 test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {

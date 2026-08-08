@@ -293,7 +293,7 @@ export function buildModuleGraph(
 			return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
 		};
 		const parsedModule =
-			options.parseCache?.parse(filePath, source, goal, parse) ?? parse();
+			options.parseCache?.parse(filePath, parseSource, goal, parse) ?? parse();
 		const parsed = parsedModule.parsed;
 
 		const dependencies = parsedModule.dependencies.map((dependency): ModuleDependency => {

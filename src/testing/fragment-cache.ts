@@ -28,7 +28,7 @@ import type {
 } from "./cache.ts";
 import { TestCompilationSession } from "./cache.ts";
 
-const FRAGMENT_SCHEMA = 2;
+const FRAGMENT_SCHEMA = 3;
 const TEST_MODULE_ID = "maligator:test";
 const CACHE_DIRECTORY = ".cache/mal-cache/test";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
@@ -43,7 +43,7 @@ interface FragmentReference extends ArtifactReference {
 }
 
 interface FragmentManifest {
-	schema: 2;
+	schema: 3;
 	identity: string;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
@@ -392,7 +392,11 @@ function planEntry(
 		if (planned === undefined) {
 			planned = {
 				specifier,
-				target: dependency.resolvedPath,
+				// Keep the virtual test runtime's public identity. Publishing the
+				// resolver's backing file path as a second base target would instantiate
+				// runtime.mjs twice: file-boundary globals would update one suite tree
+				// while imported test() registered into the other.
+				target: specifier === TEST_MODULE_ID ? TEST_MODULE_ID : dependency.resolvedPath,
 				names: [],
 			};
 			imports.set(specifier, planned);
