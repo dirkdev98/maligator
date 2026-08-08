@@ -23,6 +23,10 @@ const server = Mal.serve({
 		if (path === "/not-modified") {
 			return new Response(null, { status: 304 });
 		}
+		// A network-error Response has status 0 and is not serializable onto a wire.
+		if (path === "/network-error") {
+			return Response.error();
+		}
 		// A handler that only settles after an await: the peer may be long gone by
 		// the time the promise resolves.
 		if (path === "/slow") {

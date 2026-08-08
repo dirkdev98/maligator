@@ -1248,6 +1248,8 @@ request_error:
 #define MAL_FETCH_REQUEST_BODY_MAX ((usize) 16 * 1024 * 1024)
 #define MAL_FETCH_TARGET_MAX ((usize) 8 * 1024)
 #define MAL_FETCH_URL_MAX ((usize) 16 * 1024)
+/* uri-host (253 for a maximal DNS name) plus ":65535". */
+#define MAL_FETCH_HOST_MAX ((usize) 259)
 
 typedef struct MalFetchSnapshotHeader {
     const char *name;
@@ -1408,6 +1410,8 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     // url = "http://" + Host + request-target (spec wants an absolute URL string).
     // Sized exactly: snprintf reports the untruncated length, so measuring into a
     // fixed stack buffer would hand the over-long remainder to the JS string.
+    // mal_fetch_stream_handler refused duplicates, so this first match is the same
+    // field it validated as a URI authority; the fallback covers only HTTP/1.0.
     const char *host_hdr;
     usize host_len;
     if (!mal_fetch_snapshot_header(req, "host", &host_hdr, &host_len)) {
@@ -1558,6 +1562,14 @@ static void mal_fetch_respond_with(MalFetchRequest *req, MalValue result) {
         return;
     }
     MalResponseObject *r = mal_value_to_response_object(result);
+    // Response.error() is a network error, not a message: status 0 has no status
+    // line and its statusText/headers are not answers to this request. Anything
+    // outside the wire range would emit "HTTP/1.1 0 ..." and desynchronize the peer.
+    if (r->status < 100 || r->status > 599) {
+        mal_fetch_respond_text(req, 500, "Internal Server Error",
+            "handler returned a network error response", 41);
+        return;
+    }
     usize hlen = 0;
     bool serialized = false;
     char *block = mal_fetch_serialize_headers(r, &hlen, &serialized);
@@ -1749,6 +1761,70 @@ static void mal_fetch_request_end(void *data, bool success) {
     mal_fetch_dispatch(req->vm, req);
 }
 
+/* Bytes that may appear in a reg-name. Everything a URL parser treats as a
+ * component boundary is excluded, so the composed "http://" + Host + target can
+ * never resolve to an authority other than the one the peer sent. */
+static bool mal_fetch_host_reg_char(byte c) {
+    if (c <= 0x20 || c >= 0x7f) return false;
+    switch (c) {
+        case '"': case '#': case '%': case '\'': case '/': case ':': case '<':
+        case '>': case '?': case '@': case '[': case '\\': case ']': case '^':
+        case '`': case '{': case '|': case '}':
+            return false;
+        default: return true;
+    }
+}
+
+/* Validate a Host field as RFC 9110 `uri-host [ ":" port ]`. Userinfo, embedded
+ * path/query/fragment delimiters, whitespace, control bytes, an unbracketed IPv6
+ * literal, and an empty or out-of-range port are all rejected rather than
+ * normalized, because every one of them makes the origin the application derives
+ * from request.url differ from the origin a proxy in front of it derived. */
+static bool mal_fetch_host_valid(const char *value, usize length) {
+    if (length == 0 || length > MAL_FETCH_HOST_MAX) return false;
+    usize host_end;
+    if (value[0] == '[') {
+        usize close = 0;
+        bool colon = false;
+        for (usize i = 1; i < length; i++) {
+            byte c = (byte) value[i];
+            if (c == ']') {
+                close = i;
+                break;
+            }
+            if (c == ':') {
+                colon = true;
+                continue;
+            }
+            bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+                || (c >= 'A' && c <= 'F');
+            if (!hex && c != '.') return false;
+        }
+        if (close < 2 || !colon) return false;
+        host_end = close + 1;
+    } else {
+        host_end = length;
+        for (usize i = 0; i < length; i++) {
+            if (value[i] == ':') {
+                host_end = i;
+                break;
+            }
+            if (!mal_fetch_host_reg_char((byte) value[i])) return false;
+        }
+        if (host_end == 0) return false;
+    }
+    if (host_end == length) return true;
+    if (value[host_end] != ':') return false;
+    usize digits = length - host_end - 1;
+    if (digits == 0 || digits > 5) return false;
+    u32 port = 0;
+    for (usize i = host_end + 1; i < length; i++) {
+        if (value[i] < '0' || value[i] > '9') return false;
+        port = port * 10 + (u32) (value[i] - '0');
+    }
+    return port <= 65535;
+}
+
 static void mal_fetch_stream_handler(
     void *data, MalVm *vm, MalHttpConn *conn, const MalHttpCodecHead *head) {
     (void) data;
@@ -1767,15 +1843,23 @@ static void mal_fetch_stream_handler(
             || mal_ascii_to_lower((u8) name[3]) != 't') {
             continue;
         }
-        host = (const char *) mal_http_codec_field_value(head, field);
-        host_len = field->value_length;
+        if (host_count == 0) {
+            host = (const char *) mal_http_codec_field_value(head, field);
+            host_len = field->value_length;
+        }
         host_count++;
     }
-    // Origin servers need one unambiguous authority. In particular, do not let a
-    // proxy and the application disagree about duplicate Host fields or about an
-    // absolute/authority-form target that this fetch adapter cannot normalize.
+    // Origin servers need one unambiguous authority. A duplicate Host is refused for
+    // every version so a proxy and the application can never disagree about which
+    // copy wins; 1.1 additionally requires the field. Only a missing 1.0 Host falls
+    // back to "localhost", and the first (now: only) field is both what is validated
+    // here and what mal_fetch_make_request composes the URL from. An absolute or
+    // authority-form target is refused too: this adapter cannot normalize it.
+    bool host_required = head->major_version > 1 || head->minor_version >= 1;
     const byte *target = mal_http_codec_head_target(head);
-    if ((head->minor_version >= 1 && (host_count != 1 || host_len == 0))
+    if (host_count > 1
+        || (host_count == 1 && !mal_fetch_host_valid(host, host_len))
+        || (host_count == 0 && host_required)
         || head->target_length == 0 || target[0] != '/') {
         mal_http_conn_close_after_response(conn);
         mal_http_conn_respond(conn, 400, "Bad Request", nullptr, 0, "Bad Request", 11);
@@ -1783,7 +1867,6 @@ static void mal_fetch_stream_handler(
     }
     if (head->target_length > MAL_FETCH_TARGET_MAX
         || head->target_length + host_len + 7 > MAL_FETCH_URL_MAX) {
-        (void) host;
         mal_http_conn_close_after_response(conn);
         mal_http_conn_respond(conn, 414, "URI Too Long", nullptr, 0, "URI too long", 12);
         return;
@@ -1811,6 +1894,28 @@ static void mal_fetch_stream_handler(
     // The per-turn read budget and the codec's body-event cap still apply; the total
     // is bounded by MAL_FETCH_REQUEST_BODY_MAX in mal_fetch_request_data.
     mal_http_conn_request_autoread(conn);
+}
+
+/* Read one transport limit from the options bag. Absent leaves the caller's value
+ * (0) in place, which the transport reads as "use the secure default" — a limit is
+ * never disabled, only retuned. Anything that is not an exact non-negative integer
+ * is a configuration mistake and throws rather than silently degrading the bound. */
+static bool mal_serve_limit(
+    MalVm *vm, MalValue opts, const char *name, u32 *out) {
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, opts, mal_intrinsic_string_key(vm, (const byte *) name), &value)
+        || mal_value_is_undefined(value)) {
+        return true;
+    }
+    f64 number = mal_ops_is_number(value) ? mal_ops_to_number(value) : (f64) NAN;
+    if (!(number >= 0) || number > 2147483647.0 || floor(number) != number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Mal.serve limits must be integers from 0 through 2147483647");
+        return false;
+    }
+    *out = (u32) number;
+    return true;
 }
 
 static MalValue mal_serve(
@@ -1857,6 +1962,16 @@ static MalValue mal_serve(
         }
     }
 
+    MalHttpServerLimits limits = {0};
+    u32 max_connections = 0;
+    if (!mal_serve_limit(vm, opts, "headersTimeout", &limits.headers_timeout_ms)
+        || !mal_serve_limit(vm, opts, "requestTimeout", &limits.request_timeout_ms)
+        || !mal_serve_limit(vm, opts, "keepAliveTimeout", &limits.keep_alive_timeout_ms)
+        || !mal_serve_limit(vm, opts, "maxConnections", &max_connections)) {
+        return mal_value_new_undefined();
+    }
+    limits.max_connections = max_connections;
+
     // Store the handler in a rooted intrinsic slot and install the transport hook.
     vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER] = fetch_val;
 
@@ -1864,6 +1979,14 @@ static MalValue mal_serve(
         mal_http_server_start_stream_handler(vm, host, port, mal_fetch_stream_handler, nullptr);
     if (server == nullptr) {
         return mal_value_new_undefined(); // The required exception remains unsupported.
+    }
+    // The reactor cannot accept before this JS turn yields, so the policy is in
+    // force for every connection this server will ever see.
+    if (!mal_http_server_configure_limits(server, &limits)) {
+        mal_http_server_stop(server);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "Failed to configure Mal.serve limits");
+        return mal_value_new_undefined();
     }
 
     MalObject *handle = mal_intrinsic_new_object(vm);

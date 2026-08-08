@@ -31,8 +31,10 @@ typedef void (*MalHttpServerStreamHandler)(
     MalHttpConn *conn,
     const MalHttpCodecHead *head);
 
-/* Transport resource policy. Zero selects the secure default for each field.
- * Configure immediately after start, before the event loop accepts connections. */
+/* Transport resource policy. Zero selects the secure default for each field —
+ * a limit can be widened or tightened but never disabled. Reconfiguration is
+ * allowed while the server runs; it governs newly armed deadlines and subsequent
+ * accepts, leaving the deadlines of connections already in flight untouched. */
 typedef struct MalHttpServerLimits {
     u32 headers_timeout_ms;
     u32 request_timeout_ms;

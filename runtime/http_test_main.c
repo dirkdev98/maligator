@@ -465,6 +465,57 @@ int main(void) {
         free(wire);
     }
 
+    // 14. The per-field limits are the same invariant as the arena one, and llhttp
+    // 9.4.3 keeps reporting header bytes after a limit is hit. Truncating instead of
+    // failing would silently drop whichever framing header sits past the cutoff, so
+    // the two ends of the connection could frame the same bytes differently.
+    {
+        usize capacity = 32 * 1024;
+        char *wire = malloc(capacity);
+        check(wire != nullptr, "field-limit fixture allocates");
+        if (wire != nullptr) {
+            usize length = (usize) snprintf(
+                wire, capacity, "POST /pad HTTP/1.1\r\nHost: x\r\n");
+            for (usize i = 0; i <= MAL_HTTP_CODEC_FIELDS_MAX && length < capacity; i++) {
+                int written = snprintf(
+                    wire + length, capacity - length, "X-Pad-%zu: v\r\n", i);
+                if (written <= 0 || (usize) written >= capacity - length) break;
+                length += (usize) written;
+            }
+            int written = snprintf(
+                wire + length, capacity - length,
+                "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
+            length += written > 0 ? (usize) written : 0;
+            MalHttpCodec codec;
+            mal_http_codec_init(&codec, HTTP_REQUEST);
+            usize consumed = 0;
+            MalHttpCodecResult result = mal_http_codec_execute(
+                &codec, (const byte *) wire, length, &consumed);
+            check(result == MAL_HTTP_CODEC_ERROR,
+                  "a framing header past the field-count limit fails the message");
+            mal_http_codec_free(&codec);
+
+            length = (usize) snprintf(
+                wire, capacity, "POST /pad HTTP/1.1\r\nHost: x\r\nX-Pad: ");
+            usize padding = MAL_HTTP_CODEC_FIELD_MAX + 16;
+            if (length + padding + 32 < capacity) {
+                memset(wire + length, 'v', padding);
+                length += padding;
+                written = snprintf(
+                    wire + length, capacity - length, "\r\nContent-Length: 0\r\n\r\n");
+                length += written > 0 ? (usize) written : 0;
+            }
+            mal_http_codec_init(&codec, HTTP_REQUEST);
+            consumed = 0;
+            result = mal_http_codec_execute(
+                &codec, (const byte *) wire, length, &consumed);
+            check(result == MAL_HTTP_CODEC_ERROR,
+                  "an over-long field value fails rather than truncating the head");
+            mal_http_codec_free(&codec);
+        }
+        free(wire);
+    }
+
     printf("httptest: %d/%d checks\n", g_pass, g_total);
     printf("httptest PASS %d/%d\n", g_pass, g_total);
     return g_pass == g_total ? 0 : 1;

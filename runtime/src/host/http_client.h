@@ -8,6 +8,9 @@ typedef struct MalHost MalHost;
 
 typedef struct MalHttpClientResult {
     char *error;
+    /* The deadline fired rather than the peer or the socket failing, so the
+     * runtime can emit the timeout half of its API contract before the error. */
+    bool timed_out;
 } MalHttpClientResult;
 
 typedef enum MalHttpClientProgressKind {
@@ -34,7 +37,10 @@ typedef enum MalHttpClientWriteResult {
 
 /* Start one streamed HTTP/1.1 request to a numeric IPv4 address. The host takes
  * ownership of request_head on success. A negative content length selects chunked
- * framing; nonnegative lengths are validated across accepted writes. */
+ * framing; nonnegative lengths are validated across accepted writes.
+ *
+ * timeout_ms bounds inactivity across connect, response headers, and every gap
+ * between reads; zero selects the built-in default, so no request is unbounded. */
 bool mal_http_client_start(
     MalHost *host,
     const char *host_name,
@@ -43,7 +49,13 @@ bool mal_http_client_start(
     usize request_head_len,
     i64 content_length,
     bool head_request,
+    u32 timeout_ms,
     MalHostHandle *operation);
+
+/* Retune the inactivity deadline of a running request (zero selects the default).
+ * The new window starts now. False means the operation is no longer active. */
+bool mal_http_client_set_timeout(
+    MalHost *host, MalHostHandle operation, u32 timeout_ms);
 MalHttpClientWriteResult mal_http_client_write_owned(
     MalHost *host,
     MalHostHandle operation,

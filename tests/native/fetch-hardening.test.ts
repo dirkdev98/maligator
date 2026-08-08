@@ -1,5 +1,6 @@
 import { mkdtempSync } from "node:fs";
 import { connect } from "node:net";
+import type { Socket } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -74,12 +75,68 @@ function statusLine(response: string): string {
 // keeps serving afterwards — never that some smuggled request becomes reachable.
 describe("Mal.serve hardening", () => {
 	let bin: string;
+	let limitsBin: string;
 	beforeAll(() => {
 		bin = buildNativeBinary({
 			fixture: "tests/local/fetch_server_hardening.js",
 			name: "fetch-hardening",
 			mainFile: HOST_MAIN,
 			outDir,
+		});
+		limitsBin = buildNativeBinary({
+			fixture: "tests/local/fetch_server_limits.js",
+			name: "fetch-limits",
+			mainFile: HOST_MAIN,
+			outDir,
+		});
+	});
+
+	// The transport bounds used to be reachable only from the native test main, so a
+	// JS application had no way to tighten them. Zero still selects the engine
+	// default for each field — a bound can be retuned but never switched off.
+	it("applies validated Mal.serve transport limits", async () => {
+		await withServer(limitsBin, {}, async (base) => {
+			const url = new URL(base);
+			const open = (): Promise<Socket> =>
+				new Promise((resolve, reject) => {
+					const socket = connect(Number(url.port), url.hostname);
+					socket.once("connect", () => resolve(socket));
+					socket.once("error", reject);
+				});
+			const collect = (socket: Socket, quietMs: number): Promise<string> =>
+				new Promise((resolve) => {
+					const chunks: Array<Buffer> = [];
+					const timer = setTimeout(() => {
+						socket.destroy();
+						resolve(Buffer.concat(chunks).toString("latin1"));
+					}, quietMs);
+					socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+					socket.on("error", () => undefined);
+					socket.once("close", () => {
+						clearTimeout(timer);
+						resolve(Buffer.concat(chunks).toString("latin1"));
+					});
+				});
+
+			const held = await open();
+			held.write("GET /limits HTTP/1.1\r\nHost: x\r\n\r\n");
+			const body = collect(held, 3000);
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, 100);
+			});
+
+			// maxConnections: 1 — the slot is taken, so this socket is dropped unread.
+			const refused = await open();
+			expect(await collect(refused, 1500)).toBe("");
+
+			// keepAliveTimeout: 400 — well under the 5s engine default, so an idle
+			// reusable connection is reaped inside the collect window above.
+			const response = await body;
+			expect(response).toContain("HTTP/1.1 200");
+			expect(response.slice(response.indexOf("\r\n\r\n") + 4)).toBe(
+				"TypeError,TypeError,TypeError,TypeError,TypeError,TypeError",
+			);
+			expect(held.destroyed).toBe(true);
 		});
 	});
 
@@ -204,6 +261,141 @@ describe("Mal.serve hardening", () => {
 				`GET /url?${"q".repeat(9000)} HTTP/1.1\r\nHost: x\r\n\r\n`,
 			);
 			expect(statusLine(tooLong)).toContain("414");
+
+			expect(await (await fetch(`${base}/ok`)).text()).toBe("ok");
+		});
+	});
+
+	// request.url is the origin the application authorizes against. Anything that
+	// could make it parse as a different origin than the bytes on the wire — or that
+	// leaves two Host fields for a proxy and the application to disagree over — is
+	// refused before a handler ever sees it.
+	it("validates the Host header as a single URI authority", async () => {
+		await withServer(bin, {}, async (base) => {
+			const rejected = [
+				"Host: probe.test/evil",
+				"Host: probe.test#evil",
+				"Host: probe.test?evil",
+				"Host: user@probe.test",
+				"Host: probe test",
+				"Host: probe.test:",
+				"Host: probe.test:0x50",
+				"Host: probe.test:99999",
+				"Host: [::1",
+				"Host: ::1",
+				"Host: probe\ttest",
+				"Host:",
+			];
+			for (const header of rejected) {
+				const response = await rawExchange(
+					base,
+					`GET /url HTTP/1.1\r\n${header}\r\nConnection: close\r\n\r\n`,
+				);
+				expect(statusLine(response), header).toContain("400");
+			}
+
+			// Duplicate Host is refused on every version, so no proxy/application
+			// split is possible — not even where HTTP/1.0 permits a missing field.
+			const duplicate11 = await rawExchange(
+				base,
+				"GET /url HTTP/1.1\r\nHost: a.test\r\nHost: b.test\r\n\r\n",
+			);
+			expect(statusLine(duplicate11)).toContain("400");
+			const duplicate10 = await rawExchange(
+				base,
+				"GET /url HTTP/1.0\r\nHost: a.test\r\nHost: b.test\r\n\r\n",
+			);
+			expect(statusLine(duplicate10)).toContain("400");
+
+			// A missing HTTP/1.0 Host keeps the localhost fallback; the bound URL and
+			// the composed URL are the same selection in every accepted case.
+			const legacy = await rawExchange(base, "GET /url HTTP/1.0\r\n\r\n");
+			expect(statusLine(legacy)).toContain("200");
+			expect(legacy.slice(legacy.indexOf("\r\n\r\n") + 4)).toBe("http://localhost/url");
+
+			for (const authority of ["probe.test:8080", "[::1]:8080", "[2001:db8::1]"]) {
+				const accepted = await rawExchange(
+					base,
+					`GET /url HTTP/1.1\r\nHost: ${authority}\r\nConnection: close\r\n\r\n`,
+				);
+				expect(statusLine(accepted), authority).toContain("200");
+				expect(accepted.slice(accepted.indexOf("\r\n\r\n") + 4)).toBe(
+					`http://${authority}/url`,
+				);
+			}
+
+			expect(await (await fetch(`${base}/ok`)).text()).toBe("ok");
+		});
+	});
+
+	// Response.error() is status 0: serializing it verbatim emits "HTTP/1.1 0" and
+	// desynchronizes the peer's response queue.
+	it("answers a network-error Response with a real 5xx", async () => {
+		await withServer(bin, {}, async (base) => {
+			const response = await rawExchange(
+				base,
+				"GET /network-error HTTP/1.1\r\nHost: x\r\n\r\n" +
+					"GET /ok HTTP/1.1\r\nHost: x\r\n\r\n",
+			);
+			expect(statusLine(response)).toMatch(/^HTTP\/1\.1 5\d\d/);
+			// The queue never shifted: the follow-up request still lines up.
+			expect(response.split("HTTP/1.1 ").filter((p) => p.length > 0).length).toBe(2);
+
+			const direct = await fetch(`${base}/network-error`);
+			expect(direct.status).toBe(500);
+		});
+	});
+
+	// llhttp reports framing errors after the head too (a bad chunk size, a body that
+	// contradicts its declared length). A bare FIN there is indistinguishable from a
+	// crashed server, so the peer gets a status line as long as none was sent yet.
+	it("answers a post-head framing error with 400 before closing", async () => {
+		await withServer(bin, {}, async (base) => {
+			const badChunk = await rawExchange(base, [
+				"POST /len HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n",
+				"zz\r\nHELLO\r\n",
+			]);
+			expect(statusLine(badChunk)).toContain("400");
+			// Exactly one response: the 400 must not be followed by the handler's.
+			expect(badChunk.split("HTTP/1.1 ").filter((p) => p.length > 0).length).toBe(1);
+
+			// The same error after the application already answered can only close,
+			// because a second status line would desynchronize the peer.
+			const afterResponse = await rawExchange(base, [
+				"GET /ok HTTP/1.1\r\nHost: x\r\n\r\n",
+				"GET /ok HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n" +
+					"Transfer-Encoding: chunked\r\n\r\n",
+			]);
+			expect(statusLine(afterResponse)).toContain("200");
+			expect(afterResponse.split("HTTP/1.1 ").filter((p) => p.length > 0).length).toBe(2);
+
+			expect(await (await fetch(`${base}/ok`)).text()).toBe("ok");
+		});
+	});
+
+	// llhttp 9.4.3 keeps reporting every header byte, so a codec limit must fail the
+	// message rather than silently drop the tail: a hidden Content-Length or
+	// Transfer-Encoding past the cutoff is exactly how a request smuggles framing.
+	it("fails rather than truncating a head past the codec limits", async () => {
+		await withServer(bin, {}, async (base) => {
+			const manyFields = [
+				"GET /ok HTTP/1.1\r\nHost: x\r\n",
+				...Array.from({ length: 300 }, (_, i) => `X-Pad-${i}: v\r\n`),
+				"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+			].join("");
+			expect(statusLine(await rawExchange(base, manyFields))).toContain("400");
+
+			const hugeValue =
+				`GET /ok HTTP/1.1\r\nHost: x\r\nX-Pad: ${"v".repeat(32 * 1024)}\r\n` +
+				"Content-Length: 0\r\n\r\n";
+			expect(statusLine(await rawExchange(base, hugeValue))).toContain("400");
+
+			const hugeHead = [
+				"GET /ok HTTP/1.1\r\nHost: x\r\n",
+				...Array.from({ length: 200 }, (_, i) => `X-Pad-${i}: ${"v".repeat(512)}\r\n`),
+				"Content-Length: 0\r\n\r\n",
+			].join("");
+			expect(statusLine(await rawExchange(base, hugeHead))).toContain("400");
 
 			expect(await (await fetch(`${base}/ok`)).text()).toBe("ok");
 		});

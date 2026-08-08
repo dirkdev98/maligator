@@ -14,6 +14,7 @@
 #define MAL_HTTP_CLIENT_READ_INIT 4096
 #define MAL_HTTP_CLIENT_READ_MAX (256 * 1024)
 #define MAL_HTTP_CLIENT_WRITE_MAX (256 * 1024)
+#define MAL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS 300000u
 
 typedef struct MalHttpClientWireWrite {
     byte prefix[32];
@@ -38,6 +39,8 @@ typedef struct MalHttpClient {
     int fd;
     MalOp read_op;
     MalOp write_op;
+    MalTimer timeout;
+    i64 timeout_ns;
 
     MalHttpCodec codec;
     byte *read_buffer;
@@ -102,6 +105,9 @@ static void client_destroy(MalHttpClient *client) {
     MalHttpClient **link = &client->host->http_clients;
     while (*link != nullptr && *link != client) link = &(*link)->next;
     if (*link == client) *link = client->next;
+    // The single teardown path for every terminal, cancel and failed-start route,
+    // so the deadline can never outlive the transport it was guarding.
+    mal_reactor_cancel_timer(&client->host->reactor, &client->timeout);
     (void) mal_reactor_cancel_op(&client->host->reactor, &client->read_op);
     (void) mal_reactor_cancel_op(&client->host->reactor, &client->write_op);
     if (client->fd >= 0) mal_net_close(client->fd);
@@ -134,6 +140,30 @@ static void client_complete(
 static void client_fail(MalHttpClient *client, const char *message) {
     MalHttpClientResult *result = calloc(1, sizeof(*result));
     if (result != nullptr) result->error = client_copy(message, strlen(message));
+    client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
+}
+
+/*
+ * One inactivity deadline covers the whole exchange: the connect handshake, the
+ * wait for response headers, and every gap between response body reads. Socket
+ * progress in either direction re-arms it, so a transfer that is merely large stays
+ * alive while a peer that accepts the connection and then goes silent does not.
+ */
+static void client_arm_timeout(MalHttpClient *client) {
+    mal_reactor_cancel_timer(&client->host->reactor, &client->timeout);
+    i64 now = mal_reactor_now_ns();
+    client->timeout.deadline_ns = client->timeout_ns > INT64_MAX - now
+        ? INT64_MAX : now + client->timeout_ns;
+    mal_reactor_add_timer(&client->host->reactor, &client->timeout);
+}
+
+static void client_timeout_cb(void *data) {
+    MalHttpClient *client = data;
+    MalHttpClientResult *result = calloc(1, sizeof(*result));
+    if (result != nullptr) {
+        result->error = client_copy("HTTP request timed out", 22);
+        result->timed_out = true;
+    }
     client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
 }
 
@@ -322,6 +352,7 @@ static void client_read_ready(void *data) {
             ssize_t count = read(client->fd, discard, sizeof(discard));
             if (count > 0) {
                 turn += (usize) count;
+                client_arm_timeout(client);
                 continue;
             }
             if (count == 0) {
@@ -372,6 +403,7 @@ static void client_read_ready(void *data) {
             usize length = (usize) count;
             client->read_length += length;
             turn += length;
+            client_arm_timeout(client);
             continue;
         }
         if (count == 0) {
@@ -395,6 +427,7 @@ static void client_write_ready(void *data) {
             return;
         }
         client->connecting = false;
+        client_arm_timeout(client);
         if (!client_arm_read(client)) {
             client_fail(client, "Failed to wait for HTTP response");
             return;
@@ -454,6 +487,7 @@ static void client_write_ready(void *data) {
         if (count > 0) {
             usize length = (usize) count;
             turn += length;
+            client_arm_timeout(client);
             if (write->prefix_offset < write->prefix_length) {
                 write->prefix_offset += length;
             } else if (body) {
@@ -484,7 +518,7 @@ static void client_write_ready(void *data) {
 bool mal_http_client_start(
     MalHost *host, const char *host_name, u16 port, byte *request_head,
     usize request_head_len, i64 content_length, bool head_request,
-    MalHostHandle *operation) {
+    u32 timeout_ms, MalHostHandle *operation) {
     if (host == nullptr || host_name == nullptr || request_head == nullptr
         || request_head_len == 0 || content_length < -1 || operation == nullptr
         || !mal_host_operation_start(&host->tasks, operation)) {
@@ -495,6 +529,10 @@ bool mal_http_client_start(
     client->host = host;
     client->operation = *operation;
     client->fd = -1;
+    client->timeout.heap_index = -1;
+    client->timeout.waker = (MalWaker) {.fn = client_timeout_cb, .data = client};
+    client->timeout_ns = (i64) (timeout_ms == 0
+        ? MAL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS : timeout_ms) * 1000000;
     client->head_request = head_request;
     client->request_chunked = content_length < 0;
     client->request_remaining = content_length;
@@ -543,6 +581,7 @@ bool mal_http_client_start(
     }
     client->next = host->http_clients;
     host->http_clients = client;
+    client_arm_timeout(client); // the connect handshake is already in flight
     if (!client_arm_write(client)
         || !mal_host_operation_activate(&host->tasks, *operation)) {
         goto fail_linked;
@@ -609,6 +648,16 @@ MalHttpClientWriteResult mal_http_client_write_owned(
     client_queue_write(client, write);
     if (was_empty && !client->connecting) client_write_ready(client);
     return MAL_HTTP_CLIENT_WRITE_ACCEPTED;
+}
+
+bool mal_http_client_set_timeout(
+    MalHost *host, MalHostHandle operation, u32 timeout_ms) {
+    MalHttpClient *client = client_find(host, operation);
+    if (client == nullptr) return false;
+    client->timeout_ns = (i64) (timeout_ms == 0
+        ? MAL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS : timeout_ms) * 1000000;
+    client_arm_timeout(client);
+    return true;
 }
 
 bool mal_http_client_read_credit(

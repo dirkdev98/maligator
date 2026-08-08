@@ -116,6 +116,10 @@ typedef struct MalNodeHttpServerState {
     MalHttpServer *native;
     u16 port;
     char host[16];
+    u32 headers_timeout_ms;
+    u32 request_timeout_ms;
+    u32 keep_alive_timeout_ms;
+    u32 max_connections;
     bool listening_pending;
     bool closing;
     bool close_ready;
@@ -268,6 +272,7 @@ typedef struct MalNodeHttpClientState {
     usize active_write_bytes;
     u64 next_write_token;
     i64 content_length;
+    u32 timeout_ms;
     MalValue destroy_error;
     MalValue response_destroy_error;
     bool has_content_length;
@@ -2302,7 +2307,7 @@ static bool http_client_start_request(
             mal_host(vm), connect_host, state->port, request, request_len,
             content_length,
             state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0,
-            &state->operation)) {
+            state->timeout_ms, &state->operation)) {
         free(request);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Failed to start HTTP request");
@@ -2418,6 +2423,64 @@ static MalValue http_client_destroy(
     if (state == nullptr) return receiver;
     MalValue error = argc > 0 ? args[0] : mal_value_new_undefined();
     http_client_cancel(vm, state, false, error);
+    return receiver;
+}
+
+/* Milliseconds of permitted socket inactivity. Zero is Node's "disable the socket
+ * timeout", which this transport deliberately cannot express — every outbound
+ * request stays bounded — so it is refused instead of silently reinterpreted. */
+static bool http_client_timeout_ms(MalVm *vm, MalValue value, u32 *out) {
+    f64 number = mal_ops_is_number(value) ? mal_ops_number_as_f64(value) : (f64) NAN;
+    if (!isfinite(number) || floor(number) != number || number < 1
+        || number > 2147483647.0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "HTTP request timeout must be an integer from 1 through "
+                           "2147483647 milliseconds");
+        return false;
+    }
+    *out = (u32) number;
+    return true;
+}
+
+static MalValue http_client_set_timeout(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpClientState *state = http_client_state(receiver);
+    if (state == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Request is not active");
+        return mal_value_new_undefined();
+    }
+    u32 timeout_ms;
+    if (argc < 1 || !http_client_timeout_ms(vm, args[0], &timeout_ms)) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The timeout argument must be a number");
+        }
+        return mal_value_new_undefined();
+    }
+    if (argc > 1 && !mal_value_is_undefined(args[1])) {
+        if (!mal_value_is_callable(args[1])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The callback argument must be a function");
+            return mal_value_new_undefined();
+        }
+        MalValue bound = mal_async_context_bind_callback(
+            vm, args[1], mal_async_context_capture(vm));
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !http_once(vm, receiver, "timeout", bound)) {
+            return mal_value_new_undefined();
+        }
+    }
+    state->timeout_ms = timeout_ms;
+    // Before the head is committed the value travels with the request; afterwards
+    // it retunes the live transport, so both orderings reach the same deadline.
+    if (state->operation != 0 && !state->cancelled) {
+        (void) mal_http_client_set_timeout(
+            mal_host(vm), state->operation, timeout_ms);
+    }
     return receiver;
 }
 
@@ -3631,6 +3694,18 @@ static void http_client_dispatch_terminal(
                 mal_value_from_string(
                     mal_intrinsic_ascii(vm, (const byte *) "ECONNRESET")));
         }
+        if (result != nullptr && result->timed_out) {
+            http_define(vm, error, "code",
+                mal_value_from_string(
+                    mal_intrinsic_ascii(vm, (const byte *) "ETIMEDOUT")));
+        }
+    }
+    // Node's contract for a socket deadline: 'timeout' first, then the error the
+    // deadline caused, then 'close'. This runs once per request, so a listener that
+    // destroys the request from 'timeout' cannot produce a second terminal pass.
+    if (!success && result != nullptr && result->timed_out
+        && vm->completion.kind != MAL_COMPLETION_THROW) {
+        http_emit(vm, state->request, "timeout");
     }
     if (!success && !mal_value_is_nil(error)) {
         usize callback_count = 0;
@@ -3905,6 +3980,158 @@ bool mal_node_http_drain(MalVm *vm) {
     return false;
 }
 
+/*
+ * The transport resource policy, exposed under Node's property names. Before
+ * listen() these are ordinary writable properties on the server; listen() latches
+ * them into the transport and swaps them for accessors so a later assignment
+ * retunes the running server instead of being silently ignored.
+ *
+ * Zero means "the engine default", matching MalHttpServerLimits: these bounds can
+ * be retuned but never switched off, so Node's "0 disables the timeout" reading is
+ * deliberately not carried over.
+ */
+typedef enum MalNodeHttpLimit {
+    HTTP_LIMIT_HEADERS_TIMEOUT,
+    HTTP_LIMIT_REQUEST_TIMEOUT,
+    HTTP_LIMIT_KEEP_ALIVE_TIMEOUT,
+    HTTP_LIMIT_MAX_CONNECTIONS,
+} MalNodeHttpLimit;
+
+static const char *const http_limit_names[] = {
+    "headersTimeout", "requestTimeout", "keepAliveTimeout", "maxConnections",
+};
+static const u32 http_limit_defaults[] = {60000, 300000, 5000, 0};
+
+static u32 *http_limit_field(
+    MalNodeHttpServerState *state, MalNodeHttpLimit limit) {
+    switch (limit) {
+        case HTTP_LIMIT_HEADERS_TIMEOUT: return &state->headers_timeout_ms;
+        case HTTP_LIMIT_REQUEST_TIMEOUT: return &state->request_timeout_ms;
+        case HTTP_LIMIT_KEEP_ALIVE_TIMEOUT: return &state->keep_alive_timeout_ms;
+        default: return &state->max_connections;
+    }
+}
+
+static bool http_server_limit_value(MalVm *vm, MalValue value, u32 *out) {
+    f64 number = mal_ops_is_number(value) ? mal_ops_number_as_f64(value) : (f64) NAN;
+    if (!isfinite(number) || floor(number) != number || number < 0
+        || number > 2147483647.0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "HTTP server limits must be integers from 0 through "
+                           "2147483647");
+        return false;
+    }
+    *out = (u32) number;
+    return true;
+}
+
+static bool http_server_push_limits(MalNodeHttpServerState *state) {
+    MalHttpServerLimits limits = {
+        .headers_timeout_ms = state->headers_timeout_ms,
+        .request_timeout_ms = state->request_timeout_ms,
+        .keep_alive_timeout_ms = state->keep_alive_timeout_ms,
+        .max_connections = state->max_connections,
+    };
+    return mal_http_server_configure_limits(state->native, &limits);
+}
+
+static MalValue http_server_limit_get(
+    MalVm *vm, MalValue receiver, MalNodeHttpLimit limit) {
+    (void) vm;
+    MalNodeHttpServerState *state = http_server_state(receiver);
+    if (state == nullptr) return mal_value_new_undefined();
+    return mal_value_from_f64((f64) *http_limit_field(state, limit));
+}
+
+static MalValue http_server_limit_set(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalNodeHttpLimit limit) {
+    MalNodeHttpServerState *state = http_server_state(receiver);
+    if (state == nullptr || state->native == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Server is not running");
+        return mal_value_new_undefined();
+    }
+    u32 parsed;
+    if (argc < 1 || !http_server_limit_value(vm, args[0], &parsed)) {
+        return mal_value_new_undefined();
+    }
+    u32 *field = http_limit_field(state, limit);
+    u32 previous = *field;
+    *field = parsed;
+    if (!http_server_push_limits(state)) {
+        *field = previous;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Failed to configure the HTTP server limit");
+    }
+    return mal_value_new_undefined();
+}
+
+#define HTTP_SERVER_LIMIT_ACCESSORS(suffix, limit)                            \
+    static MalValue http_server_get_##suffix(                                 \
+        MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,         \
+        MalValue new_target, MalValue callee) {                               \
+        (void) args;                                                          \
+        (void) argc;                                                          \
+        (void) new_target;                                                    \
+        (void) callee;                                                        \
+        return http_server_limit_get(vm, receiver, limit);                    \
+    }                                                                         \
+    static MalValue http_server_set_##suffix(                                 \
+        MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,         \
+        MalValue new_target, MalValue callee) {                               \
+        (void) new_target;                                                    \
+        (void) callee;                                                        \
+        return http_server_limit_set(vm, receiver, args, argc, limit);        \
+    }
+
+HTTP_SERVER_LIMIT_ACCESSORS(headers_timeout, HTTP_LIMIT_HEADERS_TIMEOUT)
+HTTP_SERVER_LIMIT_ACCESSORS(request_timeout, HTTP_LIMIT_REQUEST_TIMEOUT)
+HTTP_SERVER_LIMIT_ACCESSORS(keep_alive_timeout, HTTP_LIMIT_KEEP_ALIVE_TIMEOUT)
+HTTP_SERVER_LIMIT_ACCESSORS(max_connections, HTTP_LIMIT_MAX_CONNECTIONS)
+#undef HTTP_SERVER_LIMIT_ACCESSORS
+
+static void http_server_install_limit_accessors(MalVm *vm, MalValue receiver) {
+    static const MalNativeFunctionCallback getters[] = {
+        http_server_get_headers_timeout, http_server_get_request_timeout,
+        http_server_get_keep_alive_timeout, http_server_get_max_connections,
+    };
+    static const MalNativeFunctionCallback setters[] = {
+        http_server_set_headers_timeout, http_server_set_request_timeout,
+        http_server_set_keep_alive_timeout, http_server_set_max_connections,
+    };
+    for (usize i = 0; i < countof(http_limit_names); i++) {
+        mal_intrinsic_define_accessor_n(
+            vm, mal_value_to_object(receiver),
+            mal_intrinsic_string_key(vm, (const byte *) http_limit_names[i]),
+            (const byte *) http_limit_names[i], 0, getters[i],
+            (const byte *) http_limit_names[i], 1, setters[i],
+            MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
+}
+
+/* Read the limits the application configured (constructor options or plain
+ * assignment) into the state that backs the accessors installed afterwards. */
+static bool http_server_collect_limits(
+    MalVm *vm, MalValue receiver, MalNodeHttpServerState *state) {
+    for (usize i = 0; i < countof(http_limit_names); i++) {
+        MalValue value;
+        if (!mal_vm_get_property(
+                vm, receiver,
+                mal_intrinsic_string_key(vm, (const byte *) http_limit_names[i]),
+                &value)) {
+            return false;
+        }
+        u32 parsed = http_limit_defaults[i];
+        if (!mal_value_is_undefined(value)
+            && !http_server_limit_value(vm, value, &parsed)) {
+            return false;
+        }
+        *http_limit_field(state, (MalNodeHttpLimit) i) = parsed;
+    }
+    return true;
+}
+
 static bool http_ipv4_host(MalValue value, char out[16]) {
     if (!mal_value_is_string(value)) return false;
     MalString *string = mal_value_to_string(value);
@@ -3971,6 +4198,10 @@ static MalValue http_server_listen(
 #if MAL_REALMS
     state->realm = vm->current_realm;
 #endif
+    if (!http_server_collect_limits(vm, receiver, state)) {
+        free(state);
+        return mal_value_new_undefined();
+    }
     MalHttpServer *native = mal_http_server_start_stream_handler(
         vm, host, (u16) number, http_queue_request, state);
     if (native == nullptr) {
@@ -3985,6 +4216,14 @@ static MalValue http_server_listen(
     state->listening_pending = true;
     state->next = http_servers;
     http_servers = state;
+    // In force before the reactor can accept: this call precedes the first yield.
+    if (!http_server_push_limits(state)) {
+        mal_http_server_close(native, http_native_close_complete, state);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Failed to configure the HTTP server limits");
+        return mal_value_new_undefined();
+    }
+    http_server_install_limit_accessors(vm, receiver);
 
     if (!mal_value_is_undefined(callback)
         && !http_once(vm, receiver, "listening", callback)) {
@@ -4154,6 +4393,7 @@ static MalValue http_server_constructor(
     MalValue new_target, MalValue callee) {
     (void) receiver;
     MalValue listener = mal_value_new_undefined();
+    MalValue options = mal_value_new_undefined();
     if (argc > 0 && mal_value_is_callable(args[0])) {
         listener = args[0];
     } else {
@@ -4163,7 +4403,24 @@ static MalValue http_server_constructor(
                                "The options argument must be an object");
             return mal_value_new_undefined();
         }
+        if (argc > 0 && mal_value_is_object(args[0])) options = args[0];
         if (argc > 1) listener = args[1];
+    }
+    u32 limits[countof(http_limit_names)];
+    for (usize i = 0; i < countof(http_limit_names); i++) {
+        MalValue value = mal_value_new_undefined();
+        limits[i] = http_limit_defaults[i];
+        if (mal_value_is_object(options)
+            && !mal_vm_get_property(
+                vm, options,
+                mal_intrinsic_string_key(vm, (const byte *) http_limit_names[i]),
+                &value)) {
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(value)
+            && !http_server_limit_value(vm, value, &limits[i])) {
+            return mal_value_new_undefined();
+        }
     }
     if (!mal_value_is_undefined(listener) && !mal_value_is_callable(listener)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -4186,6 +4443,12 @@ static MalValue http_server_constructor(
     mal_vm_call_value(vm,
         vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR],
         roots[4], nullptr, 0);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        for (usize i = 0; i < countof(http_limit_names); i++) {
+            http_define_own(vm, roots[4], http_limit_names[i],
+                            mal_value_from_f64((f64) limits[i]));
+        }
+    }
     if (vm->completion.kind != MAL_COMPLETION_THROW
         && !mal_value_is_undefined(roots[2])) {
         roots[5] = mal_value_from_string(
@@ -4430,6 +4693,11 @@ static MalValue http_request(
             goto fail_state;
         }
     }
+    if (!http_client_option(vm, roots[0], "timeout", &roots[6])) goto fail_state;
+    if (!mal_value_is_undefined(roots[6])
+        && !http_client_timeout_ms(vm, roots[6], &state->timeout_ms)) {
+        goto fail_state;
+    }
     if (!http_client_option(vm, roots[0], "headers", &roots[3])
         || !http_client_serialize_headers(
             vm, roots[3], &state->headers, &state->headers_len,
@@ -4662,6 +4930,9 @@ void mal_host_install_node_http(
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[9]), (const byte *) "abort", 0,
         http_client_abort);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[9]), (const byte *) "setTimeout", 2,
+        http_client_set_timeout);
     roots[10] = http_constructor(vm, "ClientRequest", 3,
                                   http_client_request_constructor, roots[9]);
     mal_object_set_prototype(mal_value_to_object(roots[10]), mal_value_to_object(

@@ -23,6 +23,16 @@
 #define MAL_HTTP_DEFAULT_KEEP_ALIVE_TIMEOUT_MS 5000u
 #define MAL_HTTP_DEFAULT_MAX_CONNECTIONS 1024u
 
+/*
+ * Every connection is always inside exactly one armed phase, so no state can park
+ * a socket indefinitely:
+ *   HEADERS    accepted (or first byte of a reused connection) until the head parses
+ *   REQUEST    the whole transaction: head parsed until the response has flushed,
+ *              including a stalled write and an application that never releases
+ *   KEEP_ALIVE response flushed until the next request's first byte
+ * REQUEST is an absolute deadline. Refreshing it on socket activity would let a peer
+ * that reads its response one byte at a time hold a connection slot forever.
+ */
 typedef enum MalHttpTimeoutPhase {
     MAL_HTTP_TIMEOUT_NONE,
     MAL_HTTP_TIMEOUT_HEADERS,
@@ -520,7 +530,8 @@ void mal_http_conn_request_release(MalHttpConn *c) {
 }
 
 static void conn_send_error(MalHttpConn *c, int status, const char *reason) {
-    conn_cancel_timeout(c);
+    // The error response still has to reach a peer that may never read it.
+    conn_arm_request_timeout(c);
     c->keep_alive = false;
     mal_http_conn_respond(c, status, reason, nullptr, 0, reason, strlen(reason));
 }
@@ -532,9 +543,12 @@ static void conn_consume_read(MalHttpConn *c, usize consumed) {
     c->rlen = remaining;
 }
 
+/* A framing error is diagnosable only while this transaction still owns the write
+ * side: a bare FIN is indistinguishable from a crashed server, so answer 400 and
+ * close after it flushes. Once any response byte has been queued or sent, a second
+ * status line would desynchronize the peer, so the only safe move left is to close. */
 static void conn_stream_error(MalHttpConn *c) {
-    if (!c->request_stream_open && !c->request_message_complete
-        && !c->response_started && !c->response_finished) {
+    if (!c->response_started && !c->response_ended && !c->response_finished) {
         conn_send_error(c, 400, "Bad Request");
     } else {
         conn_close(c);
@@ -627,7 +641,9 @@ static bool conn_stream_handle_event(MalHttpConn *c) {
         }
         c->request_stream_open = false;
         c->request_message_complete = true;
-        conn_cancel_timeout(c);
+        // The transaction deadline stays armed: a fully received request whose
+        // response is still queued, stalled on a full socket, or held by an
+        // application that never releases it must not own a slot indefinitely.
         MalHttpRequestEndCallback callback = c->request_end_callback;
         void *data = c->request_data;
         c->request_data_callback = nullptr;
@@ -1009,8 +1025,7 @@ MalHttpServer *mal_http_server_start_stream_handler(
 
 bool mal_http_server_configure_limits(
     MalHttpServer *server, const MalHttpServerLimits *limits) {
-    if (server == nullptr || limits == nullptr || server->closing
-        || server->connection_count != 0) {
+    if (server == nullptr || limits == nullptr || server->closing) {
         return false;
     }
     server->headers_timeout_ns = server_timeout_ns(
