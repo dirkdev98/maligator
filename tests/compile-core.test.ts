@@ -47,4 +47,18 @@ describe("compileSemanticProgramToVmDefinition", () => {
 
 		expect(observed).toEqual({ evalCompletion: true, evalDirect: true });
 	});
+
+	it("supports the correctness-focused development optimization profile", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			"const answer = 40 + 2; answer",
+			"development.js",
+		);
+
+		const definition = compileSemanticProgramToVmDefinition(semantic, {
+			optimization: "development",
+		});
+
+		expect(definition.functions.length).toBeGreaterThan(0);
+		expect(definition.functionCount).toBe(definition.functions.length);
+	});
 });

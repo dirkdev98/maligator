@@ -133,4 +133,28 @@ describe("normal build frontend cache", () => {
 		);
 		expect(() => compileBuildFrontend(options)).toThrow(/dynamic code is rejected/);
 	});
+
+	it("does not mix development and full optimization artifacts", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(entrypoint, `console.log(40 + 2);\n`);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-frontend-cache-test",
+			cacheDirectory,
+		};
+
+		expect(
+			compileBuildFrontend({ ...options, optimization: "development" }).cache,
+		).toBe("miss");
+		expect(
+			compileBuildFrontend({ ...options, optimization: "development" }).cache,
+		).toBe("hit");
+		expect(compileBuildFrontend({ ...options, optimization: "full" }).cache).toBe(
+			"miss",
+		);
+	});
 });

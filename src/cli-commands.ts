@@ -274,6 +274,10 @@ function compileAndBuild(
 					config: buildConfig,
 					stripTypes: context.stripTypes,
 					stripperIdentity: context.installation.frontendIdentity,
+					optimization:
+						command.kind === "build" && command.production
+							? "full"
+							: "development",
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),

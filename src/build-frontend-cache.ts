@@ -72,6 +72,7 @@ export interface CompileBuildFrontendOptions {
 	config: ResolvedBuildConfig;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
+	optimization?: "development" | "full";
 	cacheDirectory?: string;
 	session?: BuildCompilationSession;
 	/** Apply build-time eval/RegExp policy checks. Defaults to true. */
@@ -138,6 +139,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			version: MALIGATOR_VERSION,
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
+			optimization: options.optimization ?? "full",
 			enforcePolicies: options.enforcePolicies !== false,
 			engine: options.config.engine,
 			host: options.config.host,
@@ -335,6 +337,7 @@ export function compileBuildFrontend(
 	phases.semanticMs = Date.now() - semanticStartedAt;
 
 	const definition = compileSemanticProgramToVmDefinition(semantic, {
+		optimization: options.optimization,
 		afterOptimization: options.afterOptimization,
 		runPhase(phase, run) {
 			const phaseStartedAt = Date.now();

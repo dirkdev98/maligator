@@ -1,5 +1,8 @@
 import type { DirectEvalContext } from "./direct-eval-context.ts";
-import { executeIROptimizations } from "./ir-opt.ts";
+import {
+	executeIRDevelopmentOptimizations,
+	executeIROptimizations,
+} from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
 import type { IntermediateProgram } from "./ir.ts";
 import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
@@ -14,6 +17,7 @@ export type CompileCorePhase =
 	| "lower to vm";
 
 export interface CompileCoreOptions {
+	optimization?: "development" | "full";
 	ir?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -33,7 +37,11 @@ export function compileSemanticProgramToVmDefinition(
 	const ir = runPhase("compile to ir", () =>
 		compileSemanticProgramToIr(semantic, options.ir),
 	);
-	runPhase("ir optimizations", () => executeIROptimizations(ir));
+	runPhase("ir optimizations", () =>
+		options.optimization === "development"
+			? executeIRDevelopmentOptimizations(ir)
+			: executeIROptimizations(ir),
+	);
 	options.afterOptimization?.(ir);
 	runPhase("register allocation", () => allocateRegisters(ir));
 	return runPhase("lower to vm", () => lowerIrProgramToVmDefinition(ir));
