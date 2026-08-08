@@ -1,8 +1,10 @@
 #include "vm.h"
 #include "perf_stats.h"
+#include "dev_runner.h"
 
 #include <stdio.h>  // setvbuf
 #include <stdlib.h> // getenv
+#include <string.h>
 
 #include "web_events_object.h"
 #include "web_fetch.h"
@@ -20,7 +22,35 @@
 // uses, as opposed to test262_main which only runs the synchronous body.
 extern const MalVmDefinition mal_vm_definition;
 
+static const char development_wire_command[] = "--maligator-internal-run-wire";
+
+static int run_development_wire(int argc, char **argv) {
+    if (argc < 4 || strlen(argv[2]) != 1 ||
+        argv[2][0] < '0' || argv[2][0] > '3') {
+        fprintf(stderr, "invalid internal development wire invocation\n");
+        return 2;
+    }
+    int surface_mask = argv[2][0] - '0';
+    int program_argc = argc - 3;
+    char **program_argv = malloc((size_t) program_argc * sizeof(char *));
+    if (program_argv == nullptr) {
+        return 2;
+    }
+    program_argv[0] = argv[0];
+    for (int i = 1; i < program_argc; i++) {
+        program_argv[i] = argv[i + 3];
+    }
+    int code = mal_dev_run_wire(
+        argv[3], program_argc, program_argv,
+        (surface_mask & 1) != 0, (surface_mask & 2) != 0);
+    free(program_argv);
+    return code;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], development_wire_command) == 0) {
+        return run_development_wire(argc, argv);
+    }
     // Line-buffer stdout: a server logs then blocks in the event loop indefinitely,
     // so fully-buffered output (the default when stdout is a pipe) would never be
     // seen. Line buffering flushes each console.log promptly.

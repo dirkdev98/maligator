@@ -21,8 +21,12 @@ export class BuildReporter {
 		this.verbose = verbose;
 	}
 
-	start(name: string, mode: "development" | "production"): void {
-		writeLine(process.stderr, `Building ${name} (${mode})`);
+	start(
+		name: string,
+		mode: "development" | "production",
+		action: "Building" | "Preparing" = "Building",
+	): void {
+		writeLine(process.stderr, `${action} ${name} (${mode})`);
 	}
 
 	phase<Result>(
@@ -83,7 +87,11 @@ export class BuildReporter {
 		writeLine(process.stderr, `warning: ${message}`);
 	}
 
-	complete(label: "Built" | "Serialized", resultPath: string, emitResult: boolean): void {
+	complete(
+		label: "Built" | "Ready" | "Serialized",
+		resultPath: string,
+		emitResult: boolean,
+	): void {
 		writeLine(
 			process.stderr,
 			`${label} ${resultPath} in ${formatDuration(performance.now() - this.#startedAt)}`,

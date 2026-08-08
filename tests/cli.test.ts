@@ -173,6 +173,8 @@ describe("command shell", () => {
 			"relative-runtime",
 			"compiler.malw",
 			"test-runtime.mjs",
+			undefined,
+			"bin/maligator",
 		);
 		expect(installation.runtimeDirectory).toBe(path.resolve("relative-runtime"));
 		expect(installation.testModulePath).toBe(path.resolve("test-runtime.mjs"));
@@ -180,6 +182,14 @@ describe("command shell", () => {
 		expect(installation.evalCompiler).toEqual({
 			kind: "prebuilt",
 			wirePath: path.resolve("compiler.malw"),
+		});
+		expect(installation.developmentRunner).toEqual({
+			executablePath: path.resolve("bin/maligator"),
+			webPlatform: true,
+			node: true,
+			realms: true,
+			intl: false,
+			scheduler: "single",
 		});
 	});
 
@@ -204,6 +214,9 @@ describe("command shell", () => {
 			repoRoot,
 			path.join(repoRoot, "compiler.malw"),
 		);
+		expect(productConfig.engine.realms).toBe(true);
+		expect(productConfig.surface.webPlatform).toBe(true);
+		expect(productConfig.surface.node).toBe(true);
 		expect(productConfig.assets.runtime).toMatchObject({
 			path: path.join(repoRoot, "runtime"),
 			include: PRODUCT_RUNTIME_ASSET_INCLUDE,

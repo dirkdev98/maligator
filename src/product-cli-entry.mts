@@ -12,5 +12,6 @@ await runCli(process.argv.slice(2), {
 		assets.materialize("compilerWire"),
 		assets.materialize("testRuntime"),
 		assets.materialize("license"),
+		process.argv[0],
 	),
 });

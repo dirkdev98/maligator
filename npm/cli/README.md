@@ -143,11 +143,14 @@ package declarations explicitly:
 
 ## Build cache
 
-Normal `maligator build` and `maligator run` commands use the same portable VM
-definition format for their frontend cache. On a valid hit, Maligator skips
+Normal `maligator build`, `maligator run`, and `maligator test` commands share a
+content-addressed portable VM definition store. On a valid hit, Maligator skips
 parsing, module-graph construction, semantic analysis, optimization, register
-allocation, and VM lowering, then emits the same native translation units from
-the restored definition. Generated translation units and the native driver are
+allocation, and VM lowering. For the single-process, asset-free, Intl-disabled
+development profile, `run` executes the restored definition with the isolated
+runtime embedded in the platform CLI; it does not generate C or invoke a native
+toolchain. Normal and production `build` commands emit
+native translation units from the same restored definition. Those units and the native driver are
 compiled into independently content-addressed objects, so unchanged objects can
 be relinked without repeating C compilation. The final link still runs, and
 native runtime and Rust archives remain separately content-addressed.
@@ -247,7 +250,9 @@ explicitly:
 
 ## Build toolchain
 
-The compiler CLI is prebuilt, but compiling an application requires:
+`maligator test` and supported `maligator run` profiles use the development runtime
+embedded in the platform CLI and do not require a native toolchain. Native `build`
+commands—and development runs using bundled assets, Intl, or multiprocessing—require:
 
 - A C23 compiler and archive tool: Apple clang, clang 19 or newer, or GCC 15 or
   newer

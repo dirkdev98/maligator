@@ -57,6 +57,15 @@ export interface CompilerInstallation {
 	testModulePath: string;
 	/** Cache identity of the active TypeScript erasure frontend. */
 	frontendIdentity: string;
+	/** Prebuilt multi-call executable capable of running development wire images. */
+	developmentRunner?: {
+		executablePath: string;
+		webPlatform: boolean;
+		node: boolean;
+		realms: boolean;
+		intl: boolean;
+		scheduler: "single" | "multiprocessing";
+	};
 	evalCompiler:
 		| { kind: "source"; sourceDirectory: string; entrypoint: string }
 		| { kind: "prebuilt"; wirePath: string };
@@ -84,12 +93,25 @@ export function productCompilerInstallation(
 	compilerWirePath: string,
 	testModulePath: string,
 	licensePath?: string,
+	developmentRunnerPath?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
 		...(licensePath === undefined ? {} : { licensePath: path.resolve(licensePath) }),
 		testModulePath: path.resolve(testModulePath),
 		frontendIdentity: "compact-type-strip-v1",
+		...(developmentRunnerPath === undefined
+			? {}
+			: {
+					developmentRunner: {
+						executablePath: path.resolve(developmentRunnerPath),
+						webPlatform: true,
+						node: true,
+						realms: true,
+						intl: false,
+						scheduler: "single" as const,
+					},
+				}),
 		evalCompiler: { kind: "prebuilt", wirePath: path.resolve(compilerWirePath) },
 	};
 }
@@ -154,6 +176,12 @@ function selectToolchain(
 	context: CommandContext,
 ): { toolchain?: Toolchain; plan?: NativeBuildPlan } {
 	if (command.kind === "build" && command.internal.serializePath !== undefined) return {};
+	if (
+		command.kind === "run" &&
+		compatibleDevelopmentRunner(config, context) !== undefined
+	) {
+		return {};
+	}
 	try {
 		const toolchain = requireToolchain({
 			needsCxx: config.surface.webPlatform,
@@ -169,6 +197,25 @@ function selectToolchain(
 		if (error instanceof ToolchainError) commandError(error.message);
 		throw error;
 	}
+}
+
+function compatibleDevelopmentRunner(
+	config: ResolvedBuildConfig,
+	context: CommandContext,
+): NonNullable<CompilerInstallation["developmentRunner"]> | undefined {
+	const runner = context.installation.developmentRunner;
+	if (
+		runner === undefined ||
+		Object.keys(config.assets).length > 0 ||
+		(config.surface.webPlatform && !runner.webPlatform) ||
+		(config.surface.node && !runner.node) ||
+		(config.engine.realms && !runner.realms) ||
+		(config.engine.intl.enabled && !runner.intl) ||
+		config.host.scheduler !== runner.scheduler
+	) {
+		return undefined;
+	}
+	return runner;
 }
 
 export function applicationDriverPath(
@@ -197,6 +244,7 @@ function compileAndBuild(
 	reporter.start(
 		name,
 		command.kind === "build" && command.production ? "production" : "development",
+		command.kind === "run" ? "Preparing" : "Building",
 	);
 	reporter.detail("Entrypoint", entrypointPath);
 	reporter.detail("Config", command.configPath ?? "automatic/default");
@@ -346,6 +394,30 @@ function compileAndBuild(
 		return { serializedPath: serializePath };
 	}
 
+	const packagedRunner =
+		command.kind === "run"
+			? compatibleDevelopmentRunner(buildConfig, context)
+			: undefined;
+	if (command.kind === "run" && packagedRunner !== undefined) {
+		const wirePath = reporter.phase("Cache development image", () =>
+			cacheFrontendWire(frontend.wire),
+		);
+		const surfaceMask =
+			(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
+		reporter.detail("Execution backend", "packaged development runtime");
+		reporter.detail("Development image", wirePath);
+		reporter.complete("Ready", packagedRunner.executablePath, false);
+		return {
+			binaryPath: packagedRunner.executablePath,
+			runArguments: [
+				"--maligator-internal-run-wire",
+				String(surfaceMask),
+				wirePath,
+				...command.programArgs,
+			],
+		};
+	}
+
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -429,7 +501,7 @@ function compileAndBuild(
 				return caches.join(" · ");
 			},
 		);
-		reporter.complete("Built", binaryPath, false);
+		reporter.complete("Ready", binaryPath, false);
 		return {
 			binaryPath,
 			runArguments: [wirePath, ...command.programArgs],
@@ -508,7 +580,11 @@ function compileAndBuild(
 		reporter.complete("Built", resultPath, true);
 		return { binaryPath, artifactDirectory: artifact.directory };
 	}
-	reporter.complete("Built", resultPath, command.kind === "build");
+	reporter.complete(
+		command.kind === "run" ? "Ready" : "Built",
+		resultPath,
+		command.kind === "build",
+	);
 	return { binaryPath };
 }
 

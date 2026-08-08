@@ -48,8 +48,8 @@ export function productCliConfig(
 				include: [...PRODUCT_RUNTIME_ASSET_INCLUDE],
 			},
 		},
-		engine: { eval: true, realms: false, regexp: true, intl: { enabled: false } },
-		surface: { webPlatform: false, node: true, maligator: true },
+		engine: { eval: true, realms: true, regexp: true, intl: { enabled: false } },
+		surface: { webPlatform: true, node: true, maligator: true },
 	});
 }
 

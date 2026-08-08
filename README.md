@@ -42,8 +42,12 @@ explicit entry overrides `config.entry`. Without a config, an explicit entry use
 the conservative product defaults. `build` and `run` fail with an `init` suggestion
 when neither source supplies an entry.
 
-`run` builds in development mode, forwards every argument after `--` without
-re-parsing it, and propagates the executable's exit status or terminating signal.
+`run` compiles to a portable development image and executes it in a fresh VM using
+the runtime embedded in the distributed platform CLI. The single-process,
+asset-free, Intl-disabled development profile does not require a C or Rust
+toolchain. It forwards every
+argument after `--` without re-parsing it and propagates the application's exit
+status or terminating signal.
 Use `build --production` and launch the reported binary directly for production.
 Adding `--artifact <directory>` creates a deployable artifact and therefore requires
 `--production`. The destination must be absent or empty. Its build-owned layout is:
@@ -219,6 +223,9 @@ The output name is selected from `outputName`, then the unscoped portion of
 `.`/`..`, or contain path separators.
 
 ## Native Toolchain
+
+The distributed CLI runs development images and application tests without these
+tools. They are required when producing a standalone native binary with `build`.
 
 Every native build performs the same discovery and capability checks used by
 `doctor`; running `doctor` first is optional. Runtime translation units are compiled

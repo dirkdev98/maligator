@@ -19,6 +19,7 @@ const project = path.join(root, "isolated-project");
 const distribution = path.join(root, "distribution");
 const noTools = path.join(root, "no-tools");
 const configPath = path.join(project, "maligator.build.ts");
+const developmentConfigPath = path.join(project, "maligator.development.build.ts");
 const fixture = "entry.mts";
 const originalPath = process.env.PATH ?? "";
 
@@ -71,6 +72,11 @@ const isolatedEnv = {
 	CC: path.join(tools, "cc"),
 	CXX: path.join(tools, "c++"),
 	SELFHOST_CLI_NODE: "1",
+};
+const testOnlyEnv = {
+	PATH: noTools,
+	CC: path.join(noTools, "unavailable-cc"),
+	CXX: path.join(noTools, "unavailable-cxx"),
 };
 const missingNode = spawnSync("node", ["--version"], { env: isolatedEnv });
 if (
@@ -144,6 +150,31 @@ try {
 		path.join(project, fixture),
 		`import { readFileSync } from "node:fs";\nimport helperDefault, { ok, type HelperValue } from "./helper.ts";\n\nconst expected = [0, 255, 195, 40, 65];\nconst payload = readFileSync(globalThis.mal.assets.materialize("payload"));\nif (payload.length !== expected.length || payload.some((value, index) => value !== expected[index])) process.exit(18);\nif (eval("20 + 22") !== 42) process.exit(19);\nconst genericResult: { value: HelperValue } = ok(helperDefault);\nif (genericResult.value.label !== "compact") process.exit(20);\nconst actual = process.argv.slice(2);\nconsole.log(\`selfhost-cli \${actual.join("|")}\`);\n`,
 	);
+	writeFileSync(
+		developmentConfigPath,
+		`export default {
+	entry: "development.mts",
+	surface: { webPlatform: true, node: true },
+};
+`,
+	);
+	writeFileSync(
+		path.join(project, "development.mts"),
+		`import { basename } from "node:path";
+const expected = process.argv.slice(2).join("|");
+setTimeout(() => {
+	console.log(\`toolchain-free \${basename("/one/two.ts")} \${new URL("https://example.test/path").hostname} \${expected}\`);
+}, 0);
+`,
+	);
+	const developmentOutput = invoke(
+		["run", "--config", developmentConfigPath, "--", "alpha", "two words"],
+		testOnlyEnv,
+	);
+	if (!developmentOutput.includes("toolchain-free two.ts example.test alpha|two words")) {
+		throw new Error(`toolchain-free development run failed:\n${developmentOutput}`);
+	}
+	console.log("ok   packaged CLI ran Node and Web development code without a toolchain");
 
 	const doctorOutput = invoke(["doctor", "--verbose"]);
 	if (!doctorOutput.includes("Toolchain is ready.")) {
@@ -195,11 +226,6 @@ test("interprets async tests with host dependencies", async () => {
 });
 `,
 	);
-	const testOnlyEnv = {
-		PATH: noTools,
-		CC: path.join(noTools, "unavailable-cc"),
-		CXX: path.join(noTools, "unavailable-cxx"),
-	};
 	const coldTestOutput = invoke(["test", "example.test.ts"], testOnlyEnv);
 	if (
 		!coldTestOutput.includes("1 passed, 0 failed") ||
