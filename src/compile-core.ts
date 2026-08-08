@@ -1,8 +1,5 @@
 import type { DirectEvalContext } from "./direct-eval-context.ts";
-import {
-	executeIRDevelopmentOptimizations,
-	executeIROptimizations,
-} from "./ir-opt.ts";
+import { executeIRDevelopmentOptimizations, executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
 import type { IntermediateProgram } from "./ir.ts";
 import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";

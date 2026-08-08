@@ -14,7 +14,7 @@ describe("development wire runner", () => {
 		writeFileSync(
 			entrypoint,
 			'import process from "node:process";\n' +
-				'setTimeout(() => console.log(JSON.stringify(process.argv.slice(1))), 1);\n',
+				"setTimeout(() => console.log(JSON.stringify(process.argv.slice(1))), 1);\n",
 		);
 		writeFileSync(config, "export default { surface: { node: true } };\n");
 

@@ -183,7 +183,9 @@ function readArtifact(
 	reference: ArtifactReference,
 ): Uint8Array | undefined {
 	try {
-		const mapping = JSON.parse(readFileSync(artifactPath(root, reference.key), "utf-8")) as {
+		const mapping = JSON.parse(
+			readFileSync(artifactPath(root, reference.key), "utf-8"),
+		) as {
 			digest?: string;
 		};
 		if (mapping.digest !== reference.digest) return undefined;

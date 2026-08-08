@@ -147,17 +147,15 @@ describe("normal build frontend cache", () => {
 			cacheDirectory,
 		};
 
-		expect(
-			compileBuildFrontend({ ...options, optimization: "development" }).cache,
-		).toBe("miss");
-		expect(
-			compileBuildFrontend({ ...options, optimization: "development" }).cache,
-		).toBe("hit");
-		expect(compileBuildFrontend({ ...options, optimization: "full" }).cache).toBe(
+		expect(compileBuildFrontend({ ...options, optimization: "development" }).cache).toBe(
 			"miss",
 		);
-		expect(
-			compileBuildFrontend({ ...options, optimization: "development" }).cache,
-		).toBe("hit");
+		expect(compileBuildFrontend({ ...options, optimization: "development" }).cache).toBe(
+			"hit",
+		);
+		expect(compileBuildFrontend({ ...options, optimization: "full" }).cache).toBe("miss");
+		expect(compileBuildFrontend({ ...options, optimization: "development" }).cache).toBe(
+			"hit",
+		);
 	});
 });

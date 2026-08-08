@@ -277,9 +277,7 @@ function compileAndBuild(
 					stripTypes: context.stripTypes,
 					stripperIdentity: context.installation.frontendIdentity,
 					optimization:
-						command.kind === "build" && command.production
-							? "full"
-							: "development",
+						command.kind === "build" && command.production ? "full" : "development",
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
@@ -419,11 +417,7 @@ function compileAndBuild(
 		const binaryPath = reporter.phase(
 			"Prepare development runtime",
 			() =>
-				buildDevelopmentRunner(
-					nativeContext,
-					verbose,
-					derivation.cacheSuffix,
-				).binaryPath,
+				buildDevelopmentRunner(nativeContext, verbose, derivation.cacheSuffix).binaryPath,
 			() => {
 				const caches = (["runtime", "rust", "binary"] as const)
 					.map((artifact) =>

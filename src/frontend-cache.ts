@@ -24,7 +24,10 @@ export function frontendDigest(contents: string | Uint8Array): string {
 	return hash("sha256", contents, "hex");
 }
 
-export function frontendWirePath(digest: string, root = FRONTEND_CACHE_DIRECTORY): string {
+export function frontendWirePath(
+	digest: string,
+	root = FRONTEND_CACHE_DIRECTORY,
+): string {
 	return path.resolve(root, "artifacts", `${digest}.malw`);
 }
 
@@ -49,7 +52,8 @@ export class FrontendCompilationSession {
 		const cached = this.#snapshots.get(resolved);
 		if (cached !== undefined) return cached;
 		const stats = statSync(resolved);
-		if (!stats.isFile()) throw new Error(`frontend dependency is not a file: ${resolved}`);
+		if (!stats.isFile())
+			throw new Error(`frontend dependency is not a file: ${resolved}`);
 		const identity = {
 			path: resolved,
 			size: stats.size,

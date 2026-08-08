@@ -13,7 +13,6 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
-import type { IntermediateProgram } from "./ir.ts";
 import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
@@ -21,6 +20,7 @@ import {
 	frontendWirePath,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
+import type { IntermediateProgram } from "./ir.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { BuildModuleGraphOptions, ModuleGraph } from "./module-graph.ts";
 import { buildModuleGraph } from "./module-graph.ts";

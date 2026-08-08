@@ -1,9 +1,4 @@
-import {
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
@@ -124,12 +119,7 @@ function cacheIdentity(options: CompileTestOptions): string {
 }
 
 function manifestPath(root: string, entries: Array<string>, identity: string): string {
-	return path.join(
-		root,
-		"entries",
-		digest(JSON.stringify(entries)),
-		`${identity}.json`,
-	);
+	return path.join(root, "entries", digest(JSON.stringify(entries)), `${identity}.json`);
 }
 
 function artifactReferencePath(root: string, contentKey: string): string {
@@ -320,17 +310,17 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	const referencePath = artifactReferencePath(root, contentKey);
 	let referencedDigest: string | undefined;
 	try {
-		referencedDigest = (JSON.parse(readFileSync(referencePath, "utf-8")) as {
-			digest?: string;
-		}).digest;
+		referencedDigest = (
+			JSON.parse(readFileSync(referencePath, "utf-8")) as {
+				digest?: string;
+			}
+		).digest;
 	} catch {
 		// A missing content mapping is a normal cold-cache path.
 	}
 	try {
 		if (referencedDigest === undefined) throw new Error("missing artifact reference");
-		wire = new Uint8Array(
-			readFileSync(frontendWirePath(referencedDigest, artifactRoot)),
-		);
+		wire = new Uint8Array(readFileSync(frontendWirePath(referencedDigest, artifactRoot)));
 		if (digest(wire) !== referencedDigest) throw new Error("corrupt artifact");
 	} catch {
 		const semanticStartedAt = Date.now();
