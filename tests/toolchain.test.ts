@@ -401,6 +401,8 @@ describe("native toolchain discovery", () => {
 		});
 		expect(report.toolchain).toBeDefined();
 		const toolchain = report.toolchain!;
+		const phases: Array<{ phase: string; durationMs: number }> = [];
+		const commands: Array<{ tool: string; args: ReadonlyArray<string> }> = [];
 		const context = resolveNativeBuildContext({
 			toolchain,
 			cacheDirectory: path.join(fake.root, "cache"),
@@ -408,6 +410,8 @@ describe("native toolchain discovery", () => {
 				evalEnabled: false,
 				webPlatformEnabled: false,
 			},
+			onBuildPhase: (event) => phases.push(event),
+			onCommand: (event) => commands.push(event),
 		});
 		const result = buildLocalBinary({
 			context,
@@ -430,6 +434,23 @@ describe("native toolchain discovery", () => {
 		expect(invocations).toContain(`${binary}.part-1.c`);
 		expect(invocations).toContain(`-o ${binary}`);
 		expect(existsSync(`${binary}.c`)).toBe(true);
+		expect(phases.map((phase) => phase.phase)).toEqual([
+			"runtime",
+			"rust",
+			"write generated C",
+			"generated C objects",
+			"link",
+		]);
+		expect(phases.every((phase) => phase.durationMs >= 0)).toBe(true);
+		expect(commands.some((command) => command.tool === toolchain.tools.cargo.path)).toBe(
+			true,
+		);
+		expect(
+			commands.some(
+				(command) =>
+					command.tool === toolchain.tools.cc.path && command.args.includes("-c"),
+			),
+		).toBe(true);
 	});
 
 	it("reuses content-addressed generated C objects independently", () => {

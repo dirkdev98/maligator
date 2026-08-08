@@ -16,6 +16,25 @@ export interface BuildCacheEvent {
 	path: string;
 }
 
+export interface NativeBuildPhaseEvent {
+	phase:
+		| "runtime"
+		| "rust"
+		| "write generated C"
+		| "generated C objects"
+		| "link"
+		| "strip";
+	durationMs: number;
+	cache?: "hit" | "miss";
+	path?: string;
+}
+
+export interface NativeBuildCommandEvent {
+	tool: string;
+	args: ReadonlyArray<string>;
+	cwd?: string;
+}
+
 /** Every resolved input shared by the C archive, Rust archive, and final linker. */
 export interface NativeBuildContext {
 	readonly runtimeDirectory: string;
@@ -27,6 +46,8 @@ export interface NativeBuildContext {
 	readonly environment: Readonly<NodeJS.ProcessEnv>;
 	readonly environmentFingerprint: string;
 	readonly onCacheEvent?: (event: BuildCacheEvent) => void;
+	readonly onBuildPhase?: (event: NativeBuildPhaseEvent) => void;
+	readonly onCommand?: (event: NativeBuildCommandEvent) => void;
 }
 
 export interface NativeBuildContextOptions {
@@ -43,6 +64,8 @@ export interface NativeBuildContextOptions {
 	/** Environment snapshot used for discovery and all native subprocesses. */
 	environment?: NodeJS.ProcessEnv;
 	onCacheEvent?: (event: BuildCacheEvent) => void;
+	onBuildPhase?: (event: NativeBuildPhaseEvent) => void;
+	onCommand?: (event: NativeBuildCommandEvent) => void;
 }
 
 const BUILD_ENVIRONMENT_NAMES = new Set([
@@ -157,5 +180,7 @@ export function resolveNativeBuildContext(
 		environment,
 		environmentFingerprint: nativeBuildEnvironmentFingerprint(environment),
 		onCacheEvent: options.onCacheEvent,
+		onBuildPhase: options.onBuildPhase,
+		onCommand: options.onCommand,
 	});
 }

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { hash } from "node:crypto";
 import {
 	existsSync,
@@ -11,10 +10,12 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { performance } from "node:perf_hooks";
 import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
+import { runNativeCommand } from "./native-command.ts";
 import { ensureNativeArtifacts } from "./runtime-build.ts";
 import type { NativeArtifacts } from "./runtime-build.ts";
 import { toolArguments } from "./toolchain.ts";
@@ -135,7 +136,8 @@ function ensureGeneratedObject(
 	const temporaryDirectory = mkdtempSync(path.join(parent, ".build-"));
 	const temporaryObject = path.join(temporaryDirectory, "unit.o");
 	try {
-		execFileSync(
+		runNativeCommand(
+			context,
 			context.toolchain.tools.cc.path,
 			toolArguments(context.toolchain.tools.cc, [
 				...compileArguments,
@@ -144,7 +146,7 @@ function ensureGeneratedObject(
 				"-o",
 				temporaryObject,
 			]),
-			{ env: context.environment, stdio: verbose ? "inherit" : "pipe" },
+			{ verbose },
 		);
 		const bytes = readFileSync(temporaryObject);
 		if (bytes.length === 0)
@@ -193,7 +195,8 @@ export function buildLoadDriver(
 	);
 	mkdirSync(path.dirname(binaryPath), { recursive: true });
 
-	execFileSync(
+	runNativeCommand(
+		context,
 		context.toolchain.tools.cc.path,
 		toolArguments(context.toolchain.tools.cc, [
 			"-std=c2x",
@@ -218,7 +221,7 @@ export function buildLoadDriver(
 			"-o",
 			binaryPath,
 		]),
-		{ env: context.environment, stdio: verbose ? "inherit" : "pipe" },
+		{ verbose },
 	);
 
 	return binaryPath;
@@ -251,13 +254,19 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	if (sources.length === 0) {
 		throw new Error("buildLocalBinary requires at least one C translation unit");
 	}
+	let phaseStartedAt = performance.now();
 	const cPaths = sources.map((source, index) => {
 		const sourcePath =
 			index === 0 ? cPath : path.join(outputDirectory, `${artifactName}.part-${index}.c`);
 		writeFileSync(sourcePath, source);
 		return sourcePath;
 	});
+	context.onBuildPhase?.({
+		phase: "write generated C",
+		durationMs: performance.now() - phaseStartedAt,
+	});
 	const compileArguments = applicationCompileArguments(context);
+	phaseStartedAt = performance.now();
 	const objectPaths = cPaths.map((sourcePath, index) =>
 		ensureGeneratedObject(
 			context,
@@ -280,8 +289,14 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		options.verbose,
 		options.onGeneratedObjectCacheEvent,
 	);
+	context.onBuildPhase?.({
+		phase: "generated C objects",
+		durationMs: performance.now() - phaseStartedAt,
+	});
 
-	execFileSync(
+	phaseStartedAt = performance.now();
+	runNativeCommand(
+		context,
 		context.toolchain.tools.cc.path,
 		toolArguments(context.toolchain.tools.cc, [
 			...compileArguments,
@@ -292,8 +307,12 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			"-o",
 			binaryPath,
 		]),
-		{ env: context.environment, stdio: options.verbose ? "inherit" : "pipe" },
+		{ verbose: options.verbose },
 	);
+	context.onBuildPhase?.({
+		phase: "link",
+		durationMs: performance.now() - phaseStartedAt,
+	});
 	if (
 		context.plan.strip &&
 		context.toolchain.tools.strip !== undefined &&
@@ -304,15 +323,21 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 				? `${binaryPath}.stripped`
 				: undefined;
 		try {
-			execFileSync(
+			phaseStartedAt = performance.now();
+			runNativeCommand(
+				context,
 				context.toolchain.tools.strip.path,
 				toolArguments(context.toolchain.tools.strip, [
 					...context.toolchain.probes.stripArgs,
 					binaryPath,
 					...(objcopy === undefined ? [] : [objcopy]),
 				]),
-				{ env: context.environment, stdio: options.verbose ? "inherit" : "pipe" },
+				{ verbose: options.verbose },
 			);
+			context.onBuildPhase?.({
+				phase: "strip",
+				durationMs: performance.now() - phaseStartedAt,
+			});
 			if (objcopy !== undefined) renameSync(objcopy, binaryPath);
 		} catch (error) {
 			if (objcopy !== undefined) rmSync(objcopy, { force: true });

@@ -260,6 +260,23 @@ describe("command shell", () => {
 		expect(readFileSync(output).length).toBeGreaterThan(0);
 	});
 
+	it("keeps verbose build diagnostics on stderr", () => {
+		const dir = tmpdir();
+		const entry = path.join(dir, "entry.ts");
+		const output = path.join(dir, "entry.malw");
+		writeFileSync(entry, "const answer: number = 42; console.log(answer);");
+
+		const result = invokeCli(["build", entry, "--serialize", output, "--verbose"]);
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout).toBe(`${output}\n`);
+		expect(result.stderr).toContain("Compile modules completed");
+		expect(result.stderr).toContain("Entrypoint:");
+		expect(result.stderr).toContain("Frontend phases:");
+		expect(result.stderr).toContain("Dependencies: 1");
+		expect(result.stderr).toContain("Compiler phase · compile to ir:");
+	});
+
 	it("returns nonzero and actionable diagnostics when doctor cannot find tools", () => {
 		const result = invokeCli(["doctor"], repoRoot, { ...process.env, PATH: "" });
 		expect(result.status).toBe(1);

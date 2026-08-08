@@ -112,6 +112,10 @@ function commandError(message: string, exitCode = 1): never {
 	throw new CommandError(message, exitCode);
 }
 
+function writeStderr(message: string): void {
+	process.stderr.write(`${message}\n`);
+}
+
 function loadCommandConfig(
 	command: BuildCommand | RunCommand | TestCommand,
 	stripTypes: BuildConfigTypeStripper,
@@ -191,6 +195,12 @@ function compileAndBuild(
 		name,
 		command.kind === "build" && command.production ? "production" : "development",
 	);
+	reporter.detail("Entrypoint", entrypointPath);
+	reporter.detail("Config", command.configPath ?? "automatic/default");
+	reporter.detail(
+		"Surface",
+		`web ${buildConfig.surface.webPlatform ? "on" : "off"}, node ${buildConfig.surface.node ? "on" : "off"}, maligator ${buildConfig.surface.maligator ? "on" : "off"}`,
+	);
 	if (
 		command.kind === "build" &&
 		command.internal.serializePath !== undefined &&
@@ -232,7 +242,14 @@ function compileAndBuild(
 	);
 	if (toolchain !== undefined) {
 		reporter.detail("Target", toolchain.target);
-		reporter.detail("C compiler", formatToolCommand(toolchain.tools.cc));
+		reporter.detail(
+			"C compiler",
+			`${formatToolCommand(toolchain.tools.cc)} (${toolchain.tools.cc.version})`,
+		);
+		reporter.detail(
+			"Rust compiler",
+			`${formatToolCommand(toolchain.tools.rustc)} (${toolchain.tools.rustc.version})`,
+		);
 		reporter.detail("Toolchain cache", toolchain.cacheHit ? "hit" : "miss");
 	}
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
@@ -246,6 +263,7 @@ function compileAndBuild(
 			command.internal.dumpMethods ||
 			command.internal.dumpEscape ||
 			command.internal.dumpStackAlloc);
+	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontend = reporter.phase(
 		"Compile modules",
 		() => {
@@ -259,6 +277,9 @@ function compileAndBuild(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
 					forceCompile: debugEnabled || compilerDiagnostics,
+					onCompilePhase: (phase, durationMs) => {
+						compilerPhases.push({ phase, durationMs });
+					},
 					afterOptimization: (irProgram) => {
 						if (command.kind === "build" && command.internal.dumpLiveness) {
 							log.info(debugProgramLiveness(irProgram));
@@ -298,6 +319,12 @@ function compileAndBuild(
 			`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +
 			`serialize ${frontend.phases.serializeMs}ms`,
 	);
+	for (const phase of compilerPhases) {
+		reporter.timing(`Compiler phase · ${phase.phase}`, phase.durationMs);
+	}
+	reporter.detail("Dependencies", frontend.dependencies.length);
+	for (const dependency of frontend.dependencies)
+		reporter.detail("Dependency", dependency);
 
 	const stats = vmDefinitionStats(vmDefinition);
 	reporter.detail("Functions", stats.functionCount);
@@ -355,6 +382,26 @@ function compileAndBuild(
 			reporter.detail(
 				`${event.artifact === "rust" ? "Rust" : "Runtime"} cache`,
 				`${event.hit ? "hit" : "miss"} (${event.path})`,
+			);
+		},
+		onBuildPhase: (event) => {
+			reporter.timing(
+				`Native phase · ${event.phase}`,
+				event.durationMs,
+				[event.cache === undefined ? undefined : `cache ${event.cache}`, event.path]
+					.filter((value) => value !== undefined)
+					.join(" · ") || undefined,
+			);
+		},
+		onCommand: (event) => {
+			const commandLine = [event.tool, ...event.args]
+				.map((argument) =>
+					/^[A-Za-z0-9_./:@%+=,-]+$/.test(argument) ? argument : JSON.stringify(argument),
+				)
+				.join(" ");
+			reporter.detail(
+				"Command",
+				event.cwd === undefined ? commandLine : `(cd ${event.cwd}) ${commandLine}`,
 			);
 		},
 	});
@@ -436,10 +483,10 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
 	const outcome = executeBinary(binaryPath, command.programArgs, runEnv());
 	if (outcome.status === 0) {
-		console.error("Exited with code 0");
+		writeStderr("Exited with code 0");
 		return;
 	}
-	console.error(
+	writeStderr(
 		`Exited with ${outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.status ?? "unknown"}`}`,
 	);
 	if (outcome.signal !== undefined) process.kill(process.pid, outcome.signal);
@@ -509,21 +556,19 @@ export async function runCli(
 		}
 	} catch (error) {
 		if (error instanceof CliUsageError) {
-			// eslint-disable-next-line no-console -- usage failures belong on stderr.
-			console.error(`error: ${error.message}`);
-			// eslint-disable-next-line no-console -- usage failures belong on stderr.
-			console.error("Run 'maligator --help' for usage.");
+			writeStderr(`error: ${error.message}`);
+			writeStderr("Run 'maligator --help' for usage.");
 			process.exit(2);
 		}
 		if (error instanceof CommandError) {
-			console.error(error.message);
+			writeStderr(error.message);
 			process.exit(error.exitCode);
 		}
 		if (verbose && error instanceof Error && error.stack !== undefined) {
-			console.error(error.stack);
+			writeStderr(error.stack);
 		} else {
-			console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
-			console.error("Run again with '--verbose' for diagnostic details.");
+			writeStderr(`error: ${error instanceof Error ? error.message : String(error)}`);
+			writeStderr("Run again with '--verbose' for diagnostic details.");
 		}
 		process.exit(1);
 	}

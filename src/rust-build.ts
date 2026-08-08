@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { hash } from "node:crypto";
 import {
 	mkdirSync,
@@ -10,10 +9,12 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { performance } from "node:perf_hooks";
 import { platformLinkArgs } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
 import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
+import { runNativeCommand } from "./native-command.ts";
 import { formatToolCommand, toolArguments } from "./toolchain.ts";
 
 export { resolvePathExecutable } from "./toolchain.ts";
@@ -175,9 +176,16 @@ export function ensureRustArtifacts(
 	context: NativeBuildContext,
 	verbose = false,
 ): RustArtifacts {
+	const startedAt = performance.now();
 	const artifacts = resolveRustArtifacts(context);
 	if (validRustCache(artifacts)) {
 		context.onCacheEvent?.({ artifact: "rust", hit: true, path: artifacts.library });
+		context.onBuildPhase?.({
+			phase: "rust",
+			durationMs: performance.now() - startedAt,
+			cache: "hit",
+			path: artifacts.library,
+		});
 		return artifacts;
 	}
 	context.onCacheEvent?.({ artifact: "rust", hit: false, path: artifacts.library });
@@ -185,7 +193,8 @@ export function ensureRustArtifacts(
 	const cargoPath = context.toolchain.tools.cargo.path;
 	const toolchainBin = path.dirname(cargoPath);
 
-	execFileSync(
+	runNativeCommand(
+		context,
 		cargoPath,
 		toolArguments(context.toolchain.tools.cargo, artifacts.cargoArguments),
 		{
@@ -198,7 +207,7 @@ export function ensureRustArtifacts(
 				CARGO_TARGET_DIR: artifacts.targetDirectory,
 				RUSTC: context.toolchain.tools.rustc.path,
 			},
-			stdio: verbose ? "inherit" : "pipe",
+			verbose,
 		},
 	);
 	let librarySize = 0;
@@ -212,5 +221,11 @@ export function ensureRustArtifacts(
 		throw new Error(`cargo completed without producing ${artifacts.library}`);
 	}
 	publishRustManifest(artifacts, librarySize);
+	context.onBuildPhase?.({
+		phase: "rust",
+		durationMs: performance.now() - startedAt,
+		cache: "miss",
+		path: artifacts.library,
+	});
 	return artifacts;
 }

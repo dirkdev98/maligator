@@ -151,7 +151,7 @@ try {
 	}
 	console.log("ok   doctor found the isolated native toolchain");
 
-	const buildOutput = invoke(["build"]);
+	const buildOutput = invoke(["build", "--verbose"]);
 	if (!buildOutput.includes("selfhost-cli-app") || buildOutput.trim().includes("\n")) {
 		throw new Error(`build did not report its output:\n${buildOutput}`);
 	}

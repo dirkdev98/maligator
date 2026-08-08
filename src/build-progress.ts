@@ -8,6 +8,10 @@ function formatDuration(durationMs: number): string {
 	return `${minutes}m ${seconds}s`;
 }
 
+function writeLine(stream: NodeJS.WriteStream, message: string): void {
+	stream.write(`${message}\n`);
+}
+
 /** Human-facing build progress. Status belongs on stderr; stdout is the result. */
 export class BuildReporter {
 	readonly verbose: boolean;
@@ -18,7 +22,7 @@ export class BuildReporter {
 	}
 
 	start(name: string, mode: "development" | "production"): void {
-		console.error(`Building ${name} (${mode})`);
+		writeLine(process.stderr, `Building ${name} (${mode})`);
 	}
 
 	phase<Result>(
@@ -28,7 +32,10 @@ export class BuildReporter {
 	): Result {
 		const startedAt = performance.now();
 		if (this.verbose) {
-			console.error(`[+${formatDuration(startedAt - this.#startedAt)}] ${label} started`);
+			writeLine(
+				process.stderr,
+				`[+${formatDuration(startedAt - this.#startedAt)}] ${label} started`,
+			);
 		} else {
 			process.stderr.write(`  ${label}... `);
 		}
@@ -37,7 +44,8 @@ export class BuildReporter {
 			const elapsed = formatDuration(performance.now() - startedAt);
 			const suffix = detail?.(result);
 			if (this.verbose) {
-				console.error(
+				writeLine(
+					process.stderr,
 					`[+${formatDuration(performance.now() - this.#startedAt)}] ${label} completed in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}`,
 				);
 			} else {
@@ -49,7 +57,8 @@ export class BuildReporter {
 		} catch (error) {
 			const elapsed = formatDuration(performance.now() - startedAt);
 			if (this.verbose) {
-				console.error(
+				writeLine(
+					process.stderr,
 					`[+${formatDuration(performance.now() - this.#startedAt)}] ${label} failed after ${elapsed}`,
 				);
 			} else {
@@ -60,17 +69,25 @@ export class BuildReporter {
 	}
 
 	detail(label: string, value: string | number): void {
-		if (this.verbose) console.error(`    ${label}: ${value}`);
+		if (this.verbose) writeLine(process.stderr, `    ${label}: ${value}`);
+	}
+
+	timing(label: string, durationMs: number, detail?: string): void {
+		this.detail(
+			label,
+			`${formatDuration(durationMs)}${detail === undefined ? "" : ` · ${detail}`}`,
+		);
 	}
 
 	warning(message: string): void {
-		console.error(`warning: ${message}`);
+		writeLine(process.stderr, `warning: ${message}`);
 	}
 
 	complete(label: "Built" | "Serialized", resultPath: string, emitResult: boolean): void {
-		console.error(
+		writeLine(
+			process.stderr,
 			`${label} ${resultPath} in ${formatDuration(performance.now() - this.#startedAt)}`,
 		);
-		if (emitResult) console.log(resultPath);
+		if (emitResult) writeLine(process.stdout, resultPath);
 	}
 }

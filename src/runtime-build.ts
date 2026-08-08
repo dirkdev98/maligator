@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { hash } from "node:crypto";
 import {
 	existsSync,
@@ -12,10 +11,12 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { performance } from "node:perf_hooks";
 import { runtimeCcFlags } from "./build-flags.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
 import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
+import { runNativeCommand } from "./native-command.ts";
 import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
 import { toolArguments } from "./toolchain.ts";
@@ -292,7 +293,8 @@ function buildRuntimeCache(
 			}
 			const objects = sources.map((source) => {
 				const objectPath = path.join(objectDirectory, `${source.name.slice(0, -2)}.o`);
-				execFileSync(
+				runNativeCommand(
+					context,
 					context.toolchain.tools.cc.path,
 					toolArguments(context.toolchain.tools.cc, [
 						"-std=c2x",
@@ -305,17 +307,15 @@ function buildRuntimeCache(
 						"-o",
 						objectPath,
 					]),
-					{ env: context.environment, stdio: verbose ? "inherit" : "pipe" },
+					{ verbose },
 				);
 				return objectPath;
 			});
-			execFileSync(
+			runNativeCommand(
+				context,
 				context.toolchain.tools.ar.path,
 				toolArguments(context.toolchain.tools.ar, ["rcs", layer.archive, ...objects]),
-				{
-					env: context.environment,
-					stdio: verbose ? "inherit" : "pipe",
-				},
+				{ verbose },
 			);
 		}
 		if (
@@ -345,6 +345,7 @@ export function ensureNativeArtifacts(
 	context: NativeBuildContext,
 	verbose = false,
 ): NativeArtifacts {
+	const startedAt = performance.now();
 	const layout = runtimeLayout(context);
 	const cacheHit = validRuntimeCache(layout.buildDirectory, layout.cacheKey);
 	context.onCacheEvent?.({
@@ -353,6 +354,12 @@ export function ensureNativeArtifacts(
 		path: layout.buildDirectory,
 	});
 	if (!cacheHit) buildRuntimeCache(context, layout, verbose);
+	context.onBuildPhase?.({
+		phase: "runtime",
+		durationMs: performance.now() - startedAt,
+		cache: cacheHit ? "hit" : "miss",
+		path: layout.buildDirectory,
+	});
 	const rust = ensureRustArtifacts(context, verbose);
 	const c = runtimeArchives(layout.buildDirectory);
 	return { c, rust, linkArgs: [...c.linkArgs, ...rust.linkArgs] };
