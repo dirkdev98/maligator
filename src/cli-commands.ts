@@ -368,6 +368,12 @@ function compileAndBuild(
 				}
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 	const derivation = buildDerivationFromConfig(buildConfig);
+	reporter.detail(
+		"Rust features",
+		derivation.features.cargoFeatures.length === 0
+			? "(none)"
+			: derivation.features.cargoFeatures.join(", "),
+	);
 	const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
 	let generatedObjects = 0;
 	let generatedObjectHits = 0;
@@ -388,7 +394,11 @@ function compileAndBuild(
 			reporter.timing(
 				`Native phase · ${event.phase}`,
 				event.durationMs,
-				[event.cache === undefined ? undefined : `cache ${event.cache}`, event.path]
+				[
+					event.cache === undefined ? undefined : `cache ${event.cache}`,
+					event.units === undefined ? undefined : `${event.units} units`,
+					event.path,
+				]
 					.filter((value) => value !== undefined)
 					.join(" · ") || undefined,
 			);

@@ -440,6 +440,9 @@ describe("native toolchain discovery", () => {
 		expect(invocations).toContain(`-o ${binary}`);
 		expect(existsSync(`${binary}.c`)).toBe(true);
 		expect(phases.map((phase) => phase.phase)).toEqual([
+			"runtime C · engine",
+			"runtime C · host",
+			"runtime C · runtime",
 			"runtime",
 			"rust",
 			"write generated C",

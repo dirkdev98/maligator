@@ -19,6 +19,9 @@ export interface BuildCacheEvent {
 export interface NativeBuildPhaseEvent {
 	phase:
 		| "runtime"
+		| "runtime C · engine"
+		| "runtime C · host"
+		| "runtime C · runtime"
 		| "rust"
 		| "write generated C"
 		| "generated C objects"
@@ -26,6 +29,7 @@ export interface NativeBuildPhaseEvent {
 		| "strip"
 		| "publish binary";
 	durationMs: number;
+	units?: number;
 	cache?: "hit" | "miss";
 	path?: string;
 }

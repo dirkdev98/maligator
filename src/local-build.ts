@@ -394,6 +394,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	context.onBuildPhase?.({
 		phase: "generated C objects",
 		durationMs: performance.now() - phaseStartedAt,
+		units: objectPaths.length + 1,
 	});
 	const linkArguments = toolArguments(context.toolchain.tools.cc, [
 		...compileArguments,

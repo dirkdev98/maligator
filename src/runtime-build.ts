@@ -268,6 +268,7 @@ function buildRuntimeCache(
 			},
 		];
 		for (const layer of layers) {
+			const layerStartedAt = performance.now();
 			const objectDirectory = path.join(temporaryDirectory, "objects", layer.name);
 			mkdirSync(objectDirectory, { recursive: true });
 			const sources = readdirSync(layer.source)
@@ -317,6 +318,15 @@ function buildRuntimeCache(
 				toolArguments(context.toolchain.tools.ar, ["rcs", layer.archive, ...objects]),
 				{ verbose },
 			);
+			context.onBuildPhase?.({
+				phase: `runtime C · ${layer.name}` as
+					| "runtime C · engine"
+					| "runtime C · host"
+					| "runtime C · runtime",
+				durationMs: performance.now() - layerStartedAt,
+				units: sources.length,
+				path: layer.archive,
+			});
 		}
 		if (
 			!archives.linkArgs.every((archive) => {
