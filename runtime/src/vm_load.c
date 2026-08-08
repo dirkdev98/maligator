@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 17u        // compiler metadata retained for frontend caches
+#define WIRE_VERSION 18u        // complete compiler metadata retained for frontend caches
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1556,6 +1556,33 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
              materialization++) {
             (void) rd_i32(&r);
             (void) rd_i32(&r);
+        }
+
+        u32 instruction_metadata_count = rd_count(&r, 2);
+        for (u32 metadata = 0; r.ok && metadata < instruction_metadata_count; metadata++) {
+            (void) rd_u32(&r); // instruction index
+            u8 tag = rd_u8(&r);
+            if (tag == 1) { // CALL
+                (void) rd_i32(&r);
+                (void) rd_i32(&r);
+                (void) rd_u8(&r);
+                (void) rd_u8(&r);
+            } else if (tag == 2) { // CONSTRUCT
+                (void) rd_i32(&r);
+            } else if (tag == 3) { // BINARY numeric fusion
+                u8 role = rd_u8(&r);
+                (void) rd_i32(&r);
+                if (role == 2) {
+                    (void) rd_i32(&r);
+                    (void) rd_i32(&r);
+                    (void) rd_i32(&r);
+                    (void) rd_u8(&r);
+                } else if (role != 1) {
+                    r.ok = false;
+                }
+            } else {
+                r.ok = false;
+            }
         }
     }
 

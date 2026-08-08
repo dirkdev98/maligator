@@ -220,12 +220,41 @@ describe("serialize-vm", () => {
 	});
 
 	it("retains native-code generation metadata for frontend cache hits", () => {
+		const metadataInstructions: Array<VmInstruction> = mainFn.instructions.map(
+			(instruction) => {
+				if (instruction.opcode === "CALL") {
+					return {
+						...instruction,
+						directFunctionIndex: 1,
+						directFunctionCall: true,
+						directCallTargetFunctionIndex: 1,
+						directArrayPush: true,
+						directStringCharCodeAt: true,
+						directCollectionOp: "mapSet",
+					};
+				}
+				if (instruction.opcode === "BINARY") {
+					return { ...instruction, nativeNumericFusion: { role: "start", id: 4 } };
+				}
+				return instruction;
+			},
+		);
+		metadataInstructions.push({
+			opcode: "CONSTRUCT",
+			dst: 1,
+			callee: 2,
+			argumentCount: 1,
+			arguments: [3],
+			directFunctionIndex: 1,
+		});
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
 			functions: [
 				{
 					...mainFn,
+					instructions: metadataInstructions,
+					positions: [...mainFn.positions, 2],
 					gcRootRegisters: [0, 3, 7],
 					stackObjectSites: [{ instructionIndex: 4, slotCount: 2 }],
 					stackObjectAccesses: [

@@ -17,8 +17,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 16 for portable host-install manifests.
-export const WIRE_VERSION = 17;
+// Bumped to 18 for complete native-code generation metadata.
+export const WIRE_VERSION = 18;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -602,6 +602,64 @@ export function serializeVmDefinition(
 		for (const materialization of fn.stackObjectMaterializations ?? []) {
 			w.i32(materialization.returnInstructionIndex);
 			w.i32(materialization.allocationInstructionIndex);
+		}
+
+		const instructionMetadata = fn.instructions
+			.map((instruction, instructionIndex) => ({ instruction, instructionIndex }))
+			.filter(({ instruction }) => {
+				if (instruction.opcode === "CALL") {
+					return (
+						instruction.directFunctionIndex !== undefined ||
+						instruction.directFunctionCall === true ||
+						instruction.directCallTargetFunctionIndex !== undefined ||
+						instruction.directArrayPush === true ||
+						instruction.directStringCharCodeAt === true ||
+						instruction.directCollectionOp !== undefined
+					);
+				}
+				if (instruction.opcode === "CONSTRUCT") {
+					return instruction.directFunctionIndex !== undefined;
+				}
+				return (
+					instruction.opcode === "BINARY" && instruction.nativeNumericFusion !== undefined
+				);
+			});
+		w.u32(instructionMetadata.length);
+		for (const { instruction, instructionIndex } of instructionMetadata) {
+			w.u32(instructionIndex);
+			if (instruction.opcode === "CALL") {
+				w.u8(1);
+				w.i32(instruction.directFunctionIndex ?? -1);
+				w.i32(instruction.directCallTargetFunctionIndex ?? -1);
+				w.u8(
+					(instruction.directFunctionCall === true ? 1 : 0) |
+						(instruction.directArrayPush === true ? 2 : 0) |
+						(instruction.directStringCharCodeAt === true ? 4 : 0),
+				);
+				w.u8(
+					instruction.directCollectionOp === undefined
+						? 0
+						: instruction.directCollectionOp === "mapGet"
+							? 1
+							: instruction.directCollectionOp === "mapSet"
+								? 2
+								: 3,
+				);
+			} else if (instruction.opcode === "CONSTRUCT") {
+				w.u8(2);
+				w.i32(instruction.directFunctionIndex!);
+			} else if (instruction.opcode === "BINARY") {
+				w.u8(3);
+				const fusion = instruction.nativeNumericFusion!;
+				w.u8(fusion.role === "start" ? 1 : 2);
+				w.i32(fusion.id);
+				if (fusion.role === "finish") {
+					w.i32(fusion.first.dst);
+					w.i32(fusion.first.left);
+					w.i32(fusion.first.right);
+					w.u8(BINOP_TAG.get(fusion.first.operator)!);
+				}
+			}
 		}
 	}
 
@@ -1280,6 +1338,80 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					allocationInstructionIndex: r.i32(),
 				}),
 			);
+		}
+
+		const instructionMetadataCount = r.count(2);
+		for (
+			let metadataIndex = 0;
+			metadataIndex < instructionMetadataCount;
+			metadataIndex++
+		) {
+			const instructionIndex = r.u32();
+			const instruction = fn.instructions[instructionIndex];
+			if (instruction === undefined) {
+				throw new RangeError(
+					"serialize-vm: compiler instruction metadata index out of range",
+				);
+			}
+			const tag = r.u8();
+			if (tag === 1 && instruction.opcode === "CALL") {
+				const directFunctionIndex = r.i32();
+				const directCallTargetFunctionIndex = r.i32();
+				const flags = r.u8();
+				const collectionTag = r.u8();
+				if (
+					directFunctionIndex < -1 ||
+					directCallTargetFunctionIndex < -1 ||
+					flags > 7 ||
+					collectionTag > 3
+				) {
+					throw new RangeError("serialize-vm: invalid CALL compiler metadata");
+				}
+				if (directFunctionIndex >= 0)
+					instruction.directFunctionIndex = directFunctionIndex;
+				if (directCallTargetFunctionIndex >= 0) {
+					instruction.directCallTargetFunctionIndex = directCallTargetFunctionIndex;
+				}
+				if ((flags & 1) !== 0) instruction.directFunctionCall = true;
+				if ((flags & 2) !== 0) instruction.directArrayPush = true;
+				if ((flags & 4) !== 0) instruction.directStringCharCodeAt = true;
+				if (collectionTag !== 0) {
+					instruction.directCollectionOp = (["mapGet", "mapSet", "setAdd"] as const)[
+						collectionTag - 1
+					];
+				}
+			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
+				const directFunctionIndex = r.i32();
+				if (directFunctionIndex < 0) {
+					throw new RangeError("serialize-vm: invalid CONSTRUCT compiler metadata");
+				}
+				instruction.directFunctionIndex = directFunctionIndex;
+			} else if (tag === 3 && instruction.opcode === "BINARY") {
+				const role = r.u8();
+				const id = r.i32();
+				if (role === 1) {
+					instruction.nativeNumericFusion = { role: "start", id };
+				} else if (role === 2) {
+					const dst = r.i32();
+					const left = r.i32();
+					const right = r.i32();
+					const operator = WIRE_BINOPS[r.u8()];
+					if (operator === undefined) {
+						throw new RangeError("serialize-vm: invalid numeric-fusion operator");
+					}
+					instruction.nativeNumericFusion = {
+						role: "finish",
+						id,
+						first: { dst, left, right, operator },
+					};
+				} else {
+					throw new RangeError("serialize-vm: invalid numeric-fusion role");
+				}
+			} else {
+				throw new RangeError(
+					"serialize-vm: compiler instruction metadata opcode mismatch",
+				);
+			}
 		}
 	}
 	if (r.remaining() !== 0) {

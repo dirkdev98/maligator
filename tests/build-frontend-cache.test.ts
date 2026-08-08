@@ -57,6 +57,26 @@ describe("normal build frontend cache", () => {
 		expect(warm.phases.compileMs).toBe(0);
 	});
 
+	it("retains native numeric fusion across a frontend cache hit", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			entrypoint,
+			readFileSync(path.resolve("tests/local/literal-template.js"), "utf-8"),
+		);
+
+		const cold = compile(entrypoint, cacheDirectory);
+		const warm = compile(entrypoint, cacheDirectory);
+
+		expect(cold.cache).toBe("miss");
+		expect(warm.cache).toBe("hit");
+		expect(emitVmTranslationUnits(warm.definition)).toEqual(
+			emitVmTranslationUnits(cold.definition),
+		);
+	});
+
 	it("invalidates changed sources and package-resolution inputs", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
