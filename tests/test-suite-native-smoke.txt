@@ -1,2 +1,2 @@
-# Broad C-driver, host-reactor, networking, HTTP, and GC coverage.
-tests/native/drivers.test.ts
+# Fast end-to-end compiler, wire, runtime, Node host, and process execution path.
+tests/native/development-runner.test.ts

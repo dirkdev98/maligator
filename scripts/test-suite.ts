@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { hashDirectoryTrees } from "../src/file-tree.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 type Tier = "smoke" | "check" | "full";
@@ -14,21 +15,45 @@ interface Command {
 }
 
 const root = path.resolve(import.meta.dirname, "..");
-const coldSmokeRun = [
-	".cache/mal-cache/compiler-wire",
-	".cache/mal-cache/runtime",
-	".cache/mal-cache/rust",
-	".cache/mal-cache/test262-artifacts",
-	".cache/test262/.git",
-	".cache/test262-cache.json",
-].some((entry) => !existsSync(path.join(root, entry)));
-const smokeFuseMs = coldSmokeRun ? 60_000 : 30_000;
+const smokeIdentity = hashDirectoryTrees({
+	root,
+	directories: [path.join(root, "src"), path.join(root, "runtime")],
+	include: (entry) => /\.(?:c|h|rs|ts|mts|json|toml)$/.test(entry.name),
+	prefix: [
+		process.platform,
+		process.arch,
+		process.version,
+		readFileSync(path.join(root, "package-lock.json"), "utf8"),
+		readFileSync(import.meta.filename, "utf8"),
+	],
+});
+const smokeStampPath = path.join(root, ".cache/mal-cache/test-suite-smoke.json");
+let previousSmokeIdentity: string | undefined;
+try {
+	const stamp = JSON.parse(readFileSync(smokeStampPath, "utf8")) as {
+		identity?: unknown;
+	};
+	if (typeof stamp.identity === "string") previousSmokeIdentity = stamp.identity;
+} catch {
+	// A missing or damaged stamp is conservatively cold.
+}
+const coldSmokeRun =
+	previousSmokeIdentity !== smokeIdentity ||
+	[
+		".cache/mal-cache/compiler-wire",
+		".cache/mal-cache/runtime",
+		".cache/mal-cache/rust",
+		".cache/mal-cache/test262-artifacts",
+		".cache/test262/.git",
+		".cache/test262-cache.json",
+	].some((entry) => !existsSync(path.join(root, entry)));
+const smokeFuseMs = coldSmokeRun ? 60_000 : 20_000;
 const usage = `usage: node scripts/test-suite.ts [smoke|check|full] [options]
 
 Tiers are cumulative: check starts with smoke; full starts with smoke and check.
 
 Commands:
-  npm run test:smoke          30-second warm / 60-second cold fail-fast fuse
+  npm run test:smoke          20-second warm / 60-second cold fail-fast fuse
   npm run test:check          approximately two-minute default developer gate
   npm run test:full           exhaustive fail-fast gate; approval required
   npm run test:full:report    exhaustive completion gate; approval required
@@ -197,6 +222,7 @@ function runCommand(command: Command): boolean {
 
 const { tier, policy, list } = parseArguments();
 const fullOnlyUnit = readManifest("tests/test-suite-unit-full-only.txt");
+const unitSmoke = readManifest("tests/test-suite-unit-smoke.txt");
 const nativeSmoke = readManifest("tests/test-suite-native-smoke.txt");
 const nativeCheck = readManifest("tests/test-suite-native-check.txt");
 const test262Smoke = readManifest("tests/test-suite-test262-smoke.txt");
@@ -211,11 +237,7 @@ const curatedWpt = JSON.parse(
 	readFileSync(path.join(root, "tests/wpt/curated.json"), "utf8"),
 ) as { tests: Array<{ path: string }> };
 const curatedWptPaths = curatedWpt.tests.map((entry) => entry.path);
-const selectedWpt = new Set([...wptSmoke, ...wptCheck]);
-const unknownWpt = [...selectedWpt].filter((entry) => !curatedWptPaths.includes(entry));
-if (unknownWpt.length > 0) {
-	throw new Error(`unknown WPT selection: ${unknownWpt.join(", ")}`);
-}
+assertCompleteSelection("WPT smoke/check", curatedWptPaths, [...wptSmoke, ...wptCheck]);
 
 const allUnit = listFilesRecursively(
 	"tests",
@@ -229,9 +251,13 @@ for (const entry of fullOnlyUnit) {
 }
 const fullOnlyUnitSet = new Set(fullOnlyUnit);
 const regularUnit = allUnit.filter((entry) => !fullOnlyUnitSet.has(entry));
-if (regularUnit.length === 0) {
-	throw new Error("smoke must include at least one regular unit test");
+assertDisjoint("unit smoke/full-only", unitSmoke, fullOnlyUnit);
+for (const entry of unitSmoke) {
+	if (!regularUnit.includes(entry)) throw new Error(`unknown smoke unit test: ${entry}`);
 }
+const unitSmokeSet = new Set(unitSmoke);
+const unitCheck = regularUnit.filter((entry) => !unitSmokeSet.has(entry));
+assertCompleteSelection("unit smoke/check", regularUnit, [...unitSmoke, ...unitCheck]);
 const allNative = listFilesRecursively("tests/native", (file) =>
 	file.endsWith(".test.ts"),
 ).sort();
@@ -253,7 +279,7 @@ const smokeCommands: Array<Command> = [
 		"--run",
 		...vitestPolicy,
 		"--sequence.seed=1",
-		...regularUnit,
+		...unitSmoke,
 	]),
 	npm("smoke: native runtime", "test:native", [...vitestPolicy, ...nativeSmoke]),
 	node("smoke: Test262 cross-section", "scripts/test262.ts", [
@@ -277,6 +303,12 @@ const smokeCommands: Array<Command> = [
 const qualityCommands: Array<Command> = [npm("check: lint and format", "lint:ci")];
 
 const checkMatrixCommands: Array<Command> = [
+	npm("check: unit complement", "test:unit", [
+		"--run",
+		...vitestPolicy,
+		"--sequence.seed=1",
+		...unitCheck,
+	]),
 	npm("check: native complement", "test:native", [...vitestPolicy, ...nativeCheck]),
 	node("check: Test262 regression complement", "scripts/test262.ts", [
 		"--canonical",
@@ -337,6 +369,10 @@ const test262FullMatrix: Array<Command> = [
 		"compiled",
 		"--mode",
 		"normal",
+		"--exclude-manifest",
+		"tests/test-suite-test262-smoke.txt",
+		"--exclude-manifest",
+		"tests/test-suite-test262-check.txt",
 		"--check",
 		...runnerPolicy,
 	]),
@@ -403,14 +439,26 @@ const fullCommands: Array<Command> = [
 		env: { MAL_GC_CONCURRENT: "1" },
 	},
 	npm("full: sanitizer suite", "test:sanitize", vitestPolicy),
-	npm("full: WPT backend and GC matrix", "test:wpt", [
+	npm("full: WPT compiled GC verification", "test:wpt", [
 		"--canonical",
-		"--mode",
-		"normal",
 		"--mode",
 		"gc-stress",
 		"--backend",
 		"compiled",
+		...runnerPolicy,
+	]),
+	npm("full: WPT interpreted", "test:wpt", [
+		"--canonical",
+		"--mode",
+		"normal",
+		"--backend",
+		"interpreted",
+		...runnerPolicy,
+	]),
+	npm("full: WPT interpreted GC verification", "test:wpt", [
+		"--canonical",
+		"--mode",
+		"gc-stress",
 		"--backend",
 		"interpreted",
 		...runnerPolicy,
@@ -427,6 +475,22 @@ const laterCommands =
 		: tier === "check"
 			? [...qualityCommands, ...checkMatrixCommands]
 			: [...qualityCommands, ...fullCommands];
+
+function assertUniqueCommands(commands: Array<Command>): void {
+	const names = new Set<string>();
+	const invocations = new Set<string>();
+	for (const command of commands) {
+		if (names.has(command.name)) throw new Error(`duplicate test stage: ${command.name}`);
+		names.add(command.name);
+		const invocation = formatCommand(command);
+		if (invocations.has(invocation)) {
+			throw new Error(`duplicate test invocation: ${invocation}`);
+		}
+		invocations.add(invocation);
+	}
+}
+
+assertUniqueCommands([...smokeCommands, ...laterCommands]);
 
 if (list) {
 	for (const command of [...smokeCommands, ...laterCommands]) {
@@ -456,6 +520,11 @@ if (Date.now() - smokeStarted > smokeFuseMs) {
 	console.error(`[test-suite] smoke fuse exceeded ${smokeFuseMs / 1000}s`);
 	failures++;
 	if (policy === "bail") process.exit(1);
+}
+
+if (failures === 0) {
+	mkdirSync(path.dirname(smokeStampPath), { recursive: true });
+	writeFileSync(smokeStampPath, `${JSON.stringify({ identity: smokeIdentity })}\n`);
 }
 
 for (const command of laterCommands) {

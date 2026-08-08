@@ -1,7 +1,2 @@
-# One normal/compiled path from each currently curated subsystem.
+# One high-density normal/compiled Web Platform integration path.
 dom/abort/AbortSignal.any.js
-encoding/api-basics.any.js
-fetch/api/headers/headers-basic.any.js
-html/webappapis/timers/cleartimeout-clearinterval.any.js
-streams/queuing-strategies.any.js
-url/urlsearchparams-delete.any.js

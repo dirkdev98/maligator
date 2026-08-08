@@ -415,7 +415,7 @@ node ./src/index.ts build path/to/entry.ts
 # Default developer gate; smoke is its fast initial fuse.
 npm run test:check
 
-# Standalone 30-second warm / 60-second cold fuse.
+# Standalone 20-second warm / 60-second cold fuse.
 npm run test:smoke
 
 # Exhaustive gates. Ask before running either command: they include full Test262.

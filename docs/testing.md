@@ -6,13 +6,16 @@ and the full tier is exhaustive rather than interactive.
 
 ## Tiers
 
-| Tier  | Command              | Policy                    | Intended use                                                                                  |
-| ----- | -------------------- | ------------------------- | --------------------------------------------------------------------------------------------- |
-| Smoke | `npm run test:smoke` | Bail, 30s warm / 60s cold | Fast compiler/native/Test262/WPT cross-section                                                |
-| Check | `npm run test:check` | Bail, about two minutes   | Default local and pre-push gate                                                               |
-| Full  | `npm run test:full`  | Bail, unbounded           | Self-hosting, complete native coverage, standards matrices, sanitizers, collectors, and leaks |
+| Tier  | Command              | Policy                    | Intended use                                                                                     |
+| ----- | -------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
+| Smoke | `npm run test:smoke` | Bail, 20s warm / 60s cold | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
+| Check | `npm run test:check` | Bail, about two minutes   | All regular unit tests, curated compiled/normal standards, and native regression complement      |
+| Full  | `npm run test:full`  | Bail, unbounded           | Self-hosting, remaining native coverage, standards dimensions, sanitizers, collectors, and leaks |
 
-`test:check` excludes every entry in `tests/test-suite-unit-full-only.txt`. The current
+Smoke and check own disjoint unit selections: the small
+`tests/test-suite-unit-smoke.txt` manifest is the capability proof and check derives
+the complete regular-unit complement. `test:check` excludes every entry in
+`tests/test-suite-unit-full-only.txt`. The current
 entry, `tests/toolchain.test.ts`, creates fake C/Rust toolchains and repeatedly
 exercises subprocess discovery, capability probes, cache invalidation,
 corruption recovery, and concurrent publication. It is valuable infrastructure
@@ -23,11 +26,17 @@ the broad native and standards matrices. The much slower whole-compiler
 differential follows the two-minute matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 
-The smoke fuse measures its cumulative stages and fails if they exceed 30
+The smoke fuse measures its cumulative stages and fails if they exceed 20
 seconds on a warm run. It allows 60 seconds when the reusable native or Test262
 cache roots are missing. It does not kill a native build in progress because
 terminating an npm wrapper can orphan compiler descendants. Both budgets include
 cache population rather than silently excluding it from the measurement.
+
+The compiled/normal Test262 smoke and check manifests are excluded from that
+dimension's full-corpus command because they have already run cumulatively. Check
+likewise owns every curated compiled/normal WPT; full adds only the interpreted and
+GC-stress dimensions. Manifest validation rejects overlap, unknown paths, omissions
+from the curated WPT set, and duplicate stage invocations.
 
 ## Policies
 
