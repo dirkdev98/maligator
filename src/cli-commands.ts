@@ -48,6 +48,12 @@ export interface CommandContext {
 	installation: CompilerInstallation;
 	developmentProcesses?: DevelopmentProcessHost;
 	frontendSession?: FrontendCompilationSession;
+	developmentCache?: DevelopmentBuildCache;
+}
+
+interface DevelopmentBuildCache {
+	toolchains: Map<string, { toolchain: Toolchain; plan: NativeBuildPlan }>;
+	runners: Map<string, string>;
 }
 
 export interface DevelopmentProcessHost {
@@ -192,6 +198,13 @@ function selectToolchain(
 	) {
 		return {};
 	}
+	const selectionKey = JSON.stringify({
+		needsCxx: config.surface.webPlatform,
+		target: command.kind === "build" ? command.target : undefined,
+		production: command.kind === "build" && command.production,
+	});
+	const retained = context.developmentCache?.toolchains.get(selectionKey);
+	if (retained !== undefined) return retained;
 	try {
 		const toolchain = requireToolchain({
 			needsCxx: config.surface.webPlatform,
@@ -202,7 +215,9 @@ function selectToolchain(
 			toolchain,
 			command.kind === "build" && command.production,
 		);
-		return { toolchain, plan };
+		const selection = { toolchain, plan };
+		context.developmentCache?.toolchains.set(selectionKey, selection);
+		return selection;
 	} catch (error) {
 		if (error instanceof ToolchainError) commandError(error.message);
 		throw error;
@@ -503,10 +518,23 @@ function compileAndBuild(
 		);
 		reporter.detail("Execution backend", "interpreted development image");
 		reporter.detail("Development image", wirePath);
+		const runnerKey = `${toolchain!.fingerprint}:${derivation.cacheSuffix}`;
+		const retainedRunner = context.developmentCache?.runners.get(runnerKey);
 		const binaryPath = reporter.phase(
 			"Prepare development runtime",
-			() =>
-				buildDevelopmentRunner(nativeContext, verbose, derivation.cacheSuffix).binaryPath,
+			() => {
+				if (retainedRunner !== undefined && existsSync(retainedRunner)) {
+					reporter.detail("Development runtime cache", "retained");
+					return retainedRunner;
+				}
+				const built = buildDevelopmentRunner(
+					nativeContext,
+					verbose,
+					derivation.cacheSuffix,
+				).binaryPath;
+				context.developmentCache?.runners.set(runnerKey, built);
+				return built;
+			},
 			() => {
 				const caches = (["runtime", "rust", "binary"] as const)
 					.map((artifact) =>
@@ -718,7 +746,15 @@ export async function devCommand(
 		commandError("error: this Maligator installation does not provide watch processes");
 	}
 	const session = context.frontendSession ?? new FrontendCompilationSession();
-	const retainedContext = { ...context, frontendSession: session };
+	const retainedContext = {
+		...context,
+		frontendSession: session,
+		developmentCache:
+			context.developmentCache ?? {
+				toolchains: new Map(),
+				runners: new Map(),
+			},
+	};
 	const initialBuildStartedAt = Date.now();
 	let result = compileAndBuild(command, retainedContext, true);
 	let states = watchedFiles(command, result.dependencies ?? []);
