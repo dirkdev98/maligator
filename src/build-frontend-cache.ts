@@ -11,6 +11,10 @@ import {
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
+import {
+	compileBuildFragments,
+	UnsupportedBuildFragmentsError,
+} from "./build-fragment-cache.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
 import {
@@ -36,17 +40,17 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 1;
-const BUILD_FRONTEND_PIPELINE_VERSION = 2;
+const BUILD_FRONTEND_CACHE_SCHEMA = 2;
+const BUILD_FRONTEND_PIPELINE_VERSION = 3;
 const BUILD_FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/build-frontend";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 1;
+	schema: 2;
 	identity: string;
 	contentKey: string;
-	wireDigest: string;
+	wireDigests: Array<string>;
 	entrypoint: string;
 	dependencies: Array<BuildDependencyIdentity>;
 }
@@ -67,6 +71,9 @@ export interface CompiledBuildFrontend {
 	phases: BuildFrontendPhases;
 	dependencies: Array<string>;
 	moduleParses: { hits: number; misses: number };
+	wires?: Array<Uint8Array>;
+	fragmentArtifacts?: { hits: number; misses: number };
+	fragmentFallback?: string;
 }
 
 export interface CompileBuildFrontendOptions {
@@ -84,6 +91,8 @@ export interface CompileBuildFrontendOptions {
 	 * compiler diagnostics that need the live semantic/IR objects.
 	 */
 	forceCompile?: boolean;
+	/** Split stable package dependencies into a separately cached development image. */
+	relocatable?: boolean;
 	afterOptimization?: (program: IntermediateProgram) => void;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 }
@@ -113,6 +122,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: options.optimization ?? "full",
+			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
 			engine: options.config.engine,
 			host: options.config.host,
@@ -161,6 +171,7 @@ function loadCached(
 	| {
 			definition: VmDefinition;
 			wire: Uint8Array;
+			wires: Array<Uint8Array>;
 			dependencies: Array<BuildDependencyIdentity>;
 	  }
 	| undefined {
@@ -174,13 +185,19 @@ function loadCached(
 		return undefined;
 	}
 	try {
-		const wire = new Uint8Array(
-			readFileSync(frontendWirePath(manifest.wireDigest, artifactRoot)),
+		if (manifest.wireDigests.length === 0) return undefined;
+		const wires = manifest.wireDigests.map(
+			(wireDigest) =>
+				new Uint8Array(readFileSync(frontendWirePath(wireDigest, artifactRoot))),
 		);
-		if (digest(wire) !== manifest.wireDigest) return undefined;
+		if (wires.some((wire, index) => digest(wire) !== manifest.wireDigests[index])) {
+			return undefined;
+		}
+		const wire = wires.at(-1)!;
 		return {
 			definition: deserializeVmDefinition(wire),
 			wire,
+			wires,
 			dependencies: manifest.dependencies,
 		};
 	} catch {
@@ -294,6 +311,7 @@ export function compileBuildFrontend(
 			return {
 				definition: cached.definition,
 				wire: cached.wire,
+				wires: cached.wires.length > 1 ? cached.wires : undefined,
 				cache: "hit",
 				frontendMs: Date.now() - startedAt,
 				phases,
@@ -312,14 +330,96 @@ export function compileBuildFrontend(
 	phases.graphMs = Date.now() - graphStartedAt;
 
 	const semanticStartedAt = Date.now();
-	const semantic = runSemanticAnalysisForGraph(graph);
-	if (options.enforcePolicies !== false) {
-		assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
-		assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	let definition: VmDefinition;
+	let wires: Array<Uint8Array>;
+	let fragmentArtifacts: { hits: number; misses: number } | undefined;
+	let fragmentFallback: string | undefined;
+	if (
+		options.relocatable === true &&
+		options.forceCompile !== true &&
+		options.optimization === "development" &&
+		options.enforcePolicies !== false
+	) {
+		try {
+			const fragments = compileBuildFragments({
+				graph,
+				config: options.config,
+				stripTypes: options.stripTypes,
+				stripperIdentity: options.stripperIdentity,
+				cacheDirectory: options.cacheDirectory,
+				session,
+				phases,
+				onCompilePhase: options.onCompilePhase,
+			});
+			definition = fragments.definition;
+			wires = fragments.wires;
+			fragmentArtifacts = {
+				hits: fragments.artifactHits,
+				misses: fragments.artifactMisses,
+			};
+		} catch (error) {
+			if (!(error instanceof UnsupportedBuildFragmentsError)) throw error;
+			fragmentFallback = error.message;
+			const semantic = runSemanticAnalysisForGraph(graph);
+			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
+			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+			phases.semanticMs += Date.now() - semanticStartedAt;
+			definition = compileDefinition(semantic, options, phases);
+			const serializeStartedAt = Date.now();
+			wires = [serializeVmDefinition(definition)];
+			phases.serializeMs += Date.now() - serializeStartedAt;
+		}
+	} else {
+		const semantic = runSemanticAnalysisForGraph(graph);
+		if (options.enforcePolicies !== false) {
+			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
+			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+		}
+		phases.semanticMs = Date.now() - semanticStartedAt;
+		definition = compileDefinition(semantic, options, phases);
+		const serializeStartedAt = Date.now();
+		wires = [serializeVmDefinition(definition)];
+		phases.serializeMs = Date.now() - serializeStartedAt;
 	}
-	phases.semanticMs = Date.now() - semanticStartedAt;
+	const wire = wires.at(-1)!;
+	const dependencies = graphDependencies(graph, session);
+	const key = contentKey(identity, entrypoint, dependencies);
+	const wireDigests = wires.map((fragmentWire) => {
+		cacheFrontendWire(fragmentWire, artifactRoot);
+		return digest(fragmentWire);
+	});
+	publish(
+		manifestPath(root, entrypoint, identity),
+		`${JSON.stringify({
+			schema: BUILD_FRONTEND_CACHE_SCHEMA,
+			identity,
+			contentKey: key,
+			wireDigests,
+			entrypoint,
+			dependencies,
+		} satisfies BuildFrontendManifest)}\n`,
+	);
 
-	const definition = compileSemanticProgramToVmDefinition(semantic, {
+	return {
+		definition,
+		wire,
+		wires: wires.length > 1 ? wires : undefined,
+		cache: "miss",
+		frontendMs: Date.now() - startedAt,
+		phases,
+		dependencies: dependencies.map((dependency) => dependency.path),
+		moduleParses: moduleParseStats(),
+		fragmentArtifacts,
+		fragmentFallback,
+	};
+}
+
+function compileDefinition(
+	semantic: Parameters<typeof compileSemanticProgramToVmDefinition>[0],
+	options: CompileBuildFrontendOptions,
+	phases: BuildFrontendPhases,
+): VmDefinition {
+	return compileSemanticProgramToVmDefinition(semantic, {
 		optimization: options.optimization,
 		afterOptimization: options.afterOptimization,
 		runPhase(phase, run) {
@@ -333,33 +433,4 @@ export function compileBuildFrontend(
 			}
 		},
 	});
-
-	const serializeStartedAt = Date.now();
-	const wire = serializeVmDefinition(definition);
-	phases.serializeMs = Date.now() - serializeStartedAt;
-	const dependencies = graphDependencies(graph, session);
-	const key = contentKey(identity, entrypoint, dependencies);
-	const wireDigest = digest(wire);
-	cacheFrontendWire(wire, artifactRoot);
-	publish(
-		manifestPath(root, entrypoint, identity),
-		`${JSON.stringify({
-			schema: BUILD_FRONTEND_CACHE_SCHEMA,
-			identity,
-			contentKey: key,
-			wireDigest,
-			entrypoint,
-			dependencies,
-		} satisfies BuildFrontendManifest)}\n`,
-	);
-
-	return {
-		definition,
-		wire,
-		cache: "miss",
-		frontendMs: Date.now() - startedAt,
-		phases,
-		dependencies: dependencies.map((dependency) => dependency.path),
-		moduleParses: moduleParseStats(),
-	};
 }

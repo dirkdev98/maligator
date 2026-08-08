@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -141,6 +141,88 @@ describe("normal build frontend cache", () => {
 		write(dependency, `export const answer = 2;\n`);
 		session.invalidate(dependency);
 		expect(compileBuildFrontend(options).moduleParses).toEqual({ hits: 1, misses: 1 });
+	});
+
+	it("reuses a dependency base while recompiling an edited application fragment", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.mjs");
+		const dependencyDirectory = path.join(root, "node_modules/example-dependency");
+		const session = new BuildCompilationSession();
+		mkdirSync(dependencyDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(dependencyDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(path.join(dependencyDirectory, "index.mjs"), `export const answer = 42;\n`);
+		write(
+			entrypoint,
+			`import { answer } from "example-dependency";\nconsole.log(answer, 0);\n`,
+		);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-fragment-cache-test",
+			cacheDirectory,
+			session,
+			optimization: "development" as const,
+			relocatable: true,
+		};
+
+		const cold = compileBuildFrontend(options);
+		expect(cold.wires).toHaveLength(2);
+		expect(cold.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
+
+		write(
+			entrypoint,
+			`import { answer } from "example-dependency";\nconsole.log(answer, 1);\n`,
+		);
+		session.invalidate(entrypoint);
+		const changed = compileBuildFrontend(options);
+		expect(changed.fragmentArtifacts).toEqual({ hits: 1, misses: 1 });
+		expect(changed.wires).toHaveLength(2);
+		expect(changed.wires![0]).toEqual(cold.wires![0]);
+		expect(changed.wires![1]).not.toEqual(cold.wires![1]);
+
+		write(path.join(dependencyDirectory, "index.mjs"), `export const answer = 43;\n`);
+		session.invalidate(path.join(dependencyDirectory, "index.mjs"));
+		const changedDependency = compileBuildFrontend(options);
+		expect(changedDependency.fragmentArtifacts).toEqual({ hits: 1, misses: 1 });
+		expect(changedDependency.wires![0]).not.toEqual(changed.wires![0]);
+		expect(changedDependency.wires![1]).toEqual(changed.wires![1]);
+	});
+
+	it("falls back to a whole image for namespace imports across the boundary", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.mjs");
+		const dependencyDirectory = path.join(root, "node_modules/example-dependency");
+		mkdirSync(dependencyDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(dependencyDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(path.join(dependencyDirectory, "index.mjs"), `export const answer = 42;\n`);
+		write(
+			entrypoint,
+			`import * as dependency from "example-dependency";\nvoid dependency.answer;\n`,
+		);
+
+		const compiled = compileBuildFrontend({
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-fragment-fallback-test",
+			cacheDirectory,
+			optimization: "development",
+			relocatable: true,
+		});
+
+		expect(compiled.wires).toBeUndefined();
+		expect(compiled.fragmentFallback).toContain("namespace import");
 	});
 
 	it("does not reuse policy-unchecked portable output for a checked native build", () => {

@@ -60,14 +60,16 @@ static MalLoadedDefinition *load_definition(const char *path) {
     return loaded;
 }
 
-int mal_dev_run_wire(
-    const char *wire_path,
+int mal_dev_run_wires(
+    const char *const *wire_paths,
+    int wire_count,
     int argc,
     char **argv,
     bool web_platform,
     bool node) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
-    MalLoadedDefinition *loaded = load_definition(wire_path);
+    if (wire_count < 1) return 2;
+    MalLoadedDefinition *loaded = load_definition(wire_paths[0]);
     if (loaded == nullptr) {
         return 2;
     }
@@ -101,17 +103,44 @@ int mal_dev_run_wire(
 #endif
 
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
-    mal_vm_run_host_installs(&vm, &launch);
-
-    MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_perf_stats_reset();
-    mal_vm_run(&vm, callable);
+    MalCallable **callables = calloc((usize) wire_count, sizeof(MalCallable *));
+    if (callables == nullptr) {
+        mal_vm_loaded_definition_free(loaded);
+        return 2;
+    }
+    for (int index = 0; index < wire_count; index++) {
+        i32 entry = 0;
+        const MalVmDefinition *definition = vm.definition;
+        if (index > 0) {
+            MalLoadedDefinition *fragment = load_definition(wire_paths[index]);
+            if (fragment == nullptr) {
+                vm.completion.kind = MAL_COMPLETION_THROW;
+                break;
+            }
+            definition = mal_loaded_definition_get(fragment);
+            entry = mal_vm_splice_definition(&vm, definition);
+            if (entry < 0) {
+                mal_vm_loaded_definition_free(fragment);
+                break;
+            }
+            mal_vm_retain_loaded_definition(&vm, fragment);
+        }
+        if (index == 0) mal_vm_run_host_installs(&vm, &launch);
+        else mal_vm_run_definition_host_installs(&vm, definition, &launch);
+        if (vm.completion.kind == MAL_COMPLETION_THROW) break;
+        callables[index] = mal_vm_create_callable(&vm, entry);
+        mal_vm_run(&vm, callables[index]);
+        if (vm.completion.kind == MAL_COMPLETION_THROW) break;
+    }
     mal_host_run_event_loop(&vm);
     int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);
-        mal_vm_free_callable(callable);
+        for (int index = 0; index < wire_count; index++) {
+            if (callables[index] != nullptr) mal_vm_free_callable(callables[index]);
+        }
 #if MAL_NODE
         if (node) {
             mal_node_immediates_free(&vm);
@@ -126,6 +155,7 @@ int mal_dev_run_wire(
         mal_host_detach(&vm);
         mal_vm_free(&vm);
     }
+    free(callables);
     mal_vm_loaded_definition_free(loaded);
     return code;
 }

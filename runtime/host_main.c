@@ -25,23 +25,30 @@ extern const MalVmDefinition mal_vm_definition;
 static const char development_wire_command[] = "--maligator-internal-run-wire";
 
 static int run_development_wire(int argc, char **argv) {
-    if (argc < 4 || strlen(argv[2]) != 1 ||
+    if (argc < 5 || strlen(argv[2]) != 1 ||
         argv[2][0] < '0' || argv[2][0] > '3') {
         fprintf(stderr, "invalid internal development wire invocation\n");
         return 2;
     }
     int surface_mask = argv[2][0] - '0';
-    int program_argc = argc - 3;
+    int wire_count = atoi(argv[3]);
+    int wire_offset = 4;
+    if (wire_count < 1 || wire_offset + wire_count > argc) {
+        fprintf(stderr, "invalid internal development wire count\n");
+        return 2;
+    }
+    int program_argc = argc - wire_offset - wire_count + 1;
     char **program_argv = malloc((size_t) program_argc * sizeof(char *));
     if (program_argv == nullptr) {
         return 2;
     }
     program_argv[0] = argv[0];
     for (int i = 1; i < program_argc; i++) {
-        program_argv[i] = argv[i + 3];
+        program_argv[i] = argv[wire_offset + wire_count + i - 1];
     }
-    int code = mal_dev_run_wire(
-        argv[3], program_argc, program_argv,
+    int code = mal_dev_run_wires(
+        (const char *const *) &argv[wire_offset], wire_count,
+        program_argc, program_argv,
         (surface_mask & 1) != 0, (surface_mask & 2) != 0);
     free(program_argv);
     return code;

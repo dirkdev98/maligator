@@ -365,6 +365,7 @@ function compileAndBuild(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
 					forceCompile: debugEnabled || compilerDiagnostics,
+					relocatable: command.kind !== "build" && assets.length === 0,
 					onCompilePhase: (phase, durationMs) => {
 						compilerPhases.push({ phase, durationMs });
 					},
@@ -411,6 +412,18 @@ function compileAndBuild(
 			`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +
 			`serialize ${frontend.phases.serializeMs}ms`,
 	);
+	if (frontend.fragmentArtifacts !== undefined) {
+		reporter.detail(
+			"Development fragments",
+			`${frontend.fragmentArtifacts.hits} reused, ${frontend.fragmentArtifacts.misses} compiled`,
+		);
+	}
+	if (frontend.fragmentFallback !== undefined) {
+		reporter.detail(
+			"Development fragments",
+			`whole-image fallback · ${frontend.fragmentFallback}`,
+		);
+	}
 	for (const phase of compilerPhases) {
 		reporter.timing(`Compiler phase · ${phase.phase}`, phase.durationMs);
 	}
@@ -438,20 +451,21 @@ function compileAndBuild(
 			? compatibleDevelopmentRunner(buildConfig, context)
 			: undefined;
 	if (command.kind !== "build" && packagedRunner !== undefined) {
-		const wirePath = reporter.phase("Cache development image", () =>
-			cacheFrontendWire(frontend.wire),
+		const wirePaths = reporter.phase("Cache development image", () =>
+			(frontend.wires ?? [frontend.wire]).map((wire) => cacheFrontendWire(wire)),
 		);
 		const surfaceMask =
 			(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
 		reporter.detail("Execution backend", "packaged development runtime");
-		reporter.detail("Development image", wirePath);
+		reporter.detail("Development images", wirePaths.join(", "));
 		reporter.complete("Ready", packagedRunner.executablePath, false);
 		return {
 			binaryPath: packagedRunner.executablePath,
 			runArguments: [
 				"--maligator-internal-run-wire",
 				String(surfaceMask),
-				wirePath,
+				String(wirePaths.length),
+				...wirePaths,
 				...command.programArgs,
 			],
 			dependencies: frontend.dependencies,
@@ -521,11 +535,11 @@ function compileAndBuild(
 		},
 	});
 	if (command.kind !== "build" && assets.length === 0) {
-		const wirePath = reporter.phase("Cache development image", () =>
-			cacheFrontendWire(frontend.wire),
+		const wirePaths = reporter.phase("Cache development image", () =>
+			(frontend.wires ?? [frontend.wire]).map((wire) => cacheFrontendWire(wire)),
 		);
 		reporter.detail("Execution backend", "interpreted development image");
-		reporter.detail("Development image", wirePath);
+		reporter.detail("Development images", wirePaths.join(", "));
 		const runnerKey = `${toolchain!.fingerprint}:${derivation.cacheSuffix}`;
 		const retainedRunner = context.developmentCache?.runners.get(runnerKey);
 		const binaryPath = reporter.phase(
@@ -557,7 +571,12 @@ function compileAndBuild(
 		reporter.complete("Ready", binaryPath, false);
 		return {
 			binaryPath,
-			runArguments: [wirePath, ...command.programArgs],
+			runArguments: [
+				"--maligator-internal-run-wires",
+				String(wirePaths.length),
+				...wirePaths,
+				...command.programArgs,
+			],
 			dependencies: frontend.dependencies,
 		};
 	}

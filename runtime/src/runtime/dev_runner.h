@@ -2,9 +2,10 @@
 
 #include "defaults.h"
 
-/** Load and execute one development wire image in a fresh host VM. */
-int mal_dev_run_wire(
-    const char *wire_path,
+/** Load and execute ordered development wire images in a fresh host VM. */
+int mal_dev_run_wires(
+    const char *const *wire_paths,
+    int wire_count,
     int argc,
     char **argv,
     bool web_platform,

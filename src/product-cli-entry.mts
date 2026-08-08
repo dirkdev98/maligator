@@ -52,7 +52,9 @@ await runCli(process.argv.slice(2), {
 				(handle as ProductDevelopmentWatcher).directories,
 				timeoutMs,
 			);
-			return new Promise<void>((resolve) => setTimeout(resolve, 0));
+			return new Promise<void>((resolve) => {
+				setTimeout(resolve, 0);
+			});
 		},
 		close() {},
 	},
