@@ -740,10 +740,6 @@ export async function devCommand(
 			writeStderr(
 				`Changed ${changed.map((file) => path.relative(process.cwd(), file)).join(", ")}`,
 			);
-			if (child !== undefined) {
-				await stopDevelopmentProcess(processHost, child);
-				child = undefined;
-			}
 			for (const file of changed) session.invalidate(file);
 			if (changed.includes(path.resolve(command.configPath ?? BUILD_CONFIG_NAME))) {
 				session.invalidate();
@@ -755,13 +751,19 @@ export async function devCommand(
 			try {
 				result = compileAndBuild(command, retainedContext);
 				states = watchedFiles(command, result.dependencies ?? []);
+				if (child !== undefined) {
+					await stopDevelopmentProcess(processHost, child);
+					child = undefined;
+				}
 				child = processHost.spawn(
 					result.binaryPath!,
 					result.runArguments ?? command.programArgs,
 				);
 			} catch (error) {
 				writeStderr(
-					`Rebuild failed: ${error instanceof Error ? error.message : String(error)}`,
+					`Rebuild failed: ${error instanceof Error ? error.message : String(error)}${
+						child === undefined ? "" : "; last successful application is still running"
+					}`,
 				);
 			}
 		}

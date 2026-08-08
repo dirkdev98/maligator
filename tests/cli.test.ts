@@ -398,6 +398,58 @@ describe("development coordinator", () => {
 		expect(spawns).toBe(2);
 		expect(handles.every((handle) => !handle.running)).toBe(true);
 	});
+
+	it("keeps the last successful application running across a failed rebuild", async () => {
+		const directory = tmpdir();
+		const entry = path.join(directory, "transactional-entry.ts");
+		writeFileSync(entry, "console.log(1);\n");
+		let spawns = 0;
+		let stoppedWhileInvalid = false;
+		const handles: Array<{ running: boolean }> = [];
+		const processHost = {
+			spawn() {
+				const handle = { running: true };
+				handles.push(handle);
+				spawns++;
+				if (spawns === 1) {
+					setTimeout(() => writeFileSync(entry, "const = ;\n"), 25);
+					setTimeout(() => writeFileSync(entry, "console.log(3);\n"), 180);
+				} else {
+					setTimeout(() => process.emit("SIGINT"), 25);
+				}
+				return handle;
+			},
+			kill(handle: unknown) {
+				if (readFileSync(entry, "utf-8").includes("const =")) {
+					stoppedWhileInvalid = true;
+				}
+				(handle as { running: boolean }).running = false;
+			},
+			status(handle: unknown) {
+				return (handle as { running: boolean }).running ? undefined : 0;
+			},
+		};
+		const installation = productCompilerInstallation(
+			directory,
+			path.join(directory, "compiler.malw"),
+			path.join(directory, "test-runtime.mjs"),
+			undefined,
+			process.execPath,
+		);
+
+		await devCommand(
+			{ kind: "dev", entry, verbose: false, programArgs: [] },
+			{
+				stripTypes: stripTypesWithTypeScript,
+				installation,
+				developmentProcesses: processHost,
+			},
+		);
+
+		expect(spawns).toBe(2);
+		expect(stoppedWhileInvalid).toBe(false);
+		expect(handles.every((handle) => !handle.running)).toBe(true);
+	});
 });
 
 describe("maligator init", () => {
