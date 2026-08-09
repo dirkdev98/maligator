@@ -13,6 +13,11 @@ import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import type { BuildFrontendPhases } from "./build-frontend-cache.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import {
+	compileDependencyFragments,
+	DEVELOPMENT_LINKED_MODULES_GLOBAL,
+	isExternalModule,
+} from "./dependency-fragment-cache.ts";
 import { ESTREE_SKIP, ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
 import {
 	cacheFrontendWire,
@@ -42,9 +47,8 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const FRAGMENT_SCHEMA = 4;
+const FRAGMENT_SCHEMA = 5;
 const CACHE_DIRECTORY = ".cache/mal-cache/build-fragments";
-const LINKED_MODULES_GLOBAL = "__maligatorDevelopmentLinkedModules";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 
 interface PlannedImport {
@@ -112,10 +116,6 @@ function publish(file: string, contents: string): void {
 	renameSync(temporary, file);
 }
 
-function externalModule(file: string): boolean {
-	return file.split(path.sep).includes("node_modules");
-}
-
 function importedName(specifier: ESTree.ImportSpecifier): string {
 	const imported = specifier.imported;
 	if (imported.type === "Identifier") return imported.name;
@@ -130,9 +130,12 @@ function importedName(specifier: ESTree.ImportSpecifier): string {
 function planBoundary(graph: ModuleGraph): Array<PlannedImport> {
 	const imports = new Map<string, PlannedImport>();
 	for (const record of graph.modules.values()) {
-		if (record.host || record.virtual || externalModule(record.path)) continue;
+		if (record.host || record.virtual || isExternalModule(record.path)) continue;
 		for (const dependency of record.dependencies) {
-			if (dependency.resolvedPath === null || !externalModule(dependency.resolvedPath)) {
+			if (
+				dependency.resolvedPath === null ||
+				!isExternalModule(dependency.resolvedPath)
+			) {
 				continue;
 			}
 			if (dependency.kind !== "import") {
@@ -150,7 +153,7 @@ function planBoundary(graph: ModuleGraph): Array<PlannedImport> {
 			if (
 				dependency?.resolvedPath === null ||
 				dependency === undefined ||
-				!externalModule(dependency.resolvedPath)
+				!isExternalModule(dependency.resolvedPath)
 			) {
 				continue;
 			}
@@ -191,7 +194,7 @@ function planBoundary(graph: ModuleGraph): Array<PlannedImport> {
 
 function assertNoBoundaryCycle(graph: ModuleGraph): void {
 	for (const record of graph.modules.values()) {
-		if (!externalModule(record.path)) continue;
+		if (!isExternalModule(record.path)) continue;
 		const topLevelAwait =
 			traverseEstree(record.parsed.ast.body, (node) => {
 				if (node.type === "AwaitExpression") return ESTREE_STOP;
@@ -214,7 +217,7 @@ function assertNoBoundaryCycle(graph: ModuleGraph): void {
 			record.dependencies.some(
 				(dependency) =>
 					dependency.resolvedPath !== null &&
-					!externalModule(dependency.resolvedPath) &&
+					!isExternalModule(dependency.resolvedPath) &&
 					!graph.modules.get(dependency.resolvedPath)?.host,
 			)
 		) {
@@ -228,7 +231,7 @@ function assertNoBoundaryCycle(graph: ModuleGraph): void {
 function facadeSource(target: string, names: Array<string>, commonjs: boolean): string {
 	if (names.length === 0) return "";
 	const lines = [
-		`const __module = globalThis[${JSON.stringify(LINKED_MODULES_GLOBAL)}][${JSON.stringify(target)}];`,
+		`const __module = globalThis[${JSON.stringify(DEVELOPMENT_LINKED_MODULES_GLOBAL)}][${JSON.stringify(target)}];`,
 	];
 	for (const [index, name] of names.entries()) {
 		const local = `__maligatorImport${index}`;
@@ -240,45 +243,6 @@ function facadeSource(target: string, names: Array<string>, commonjs: boolean): 
 		);
 	}
 	return `${lines.join("\n")}\n`;
-}
-
-function baseGraph(
-	plans: Array<PlannedImport>,
-	options: CompileBuildFragmentsOptions,
-	parseCache: ModuleParseCache,
-): ModuleGraph {
-	const targets = [
-		...new Map(plans.map((plan) => [plan.target, plan.commonjs])).entries(),
-	].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-	const imports = targets
-		.map(([target, commonjs], index) =>
-			commonjs
-				? `import __maligatorModule${index} from ${JSON.stringify(target)};`
-				: `import * as __maligatorModule${index} from ${JSON.stringify(target)};`,
-		)
-		.join("\n");
-	const publications = targets
-		.map(
-			([target], index) =>
-				`__maligatorModules[${JSON.stringify(target)}] = __maligatorModule${index};`,
-		)
-		.join("\n");
-	const source = `${imports}
-const __maligatorModules = Object.create(null);
-${publications}
-globalThis[${JSON.stringify(LINKED_MODULES_GLOBAL)}] = __maligatorModules;
-`;
-	const entry = path.join(
-		path.dirname(options.graph.entry),
-		".maligator-dependency-base.mts",
-	);
-	return buildModuleGraph(entry, {
-		entryGoal: "module",
-		entrySource: source,
-		stripTypes: options.stripTypes,
-		buildConfig: options.config,
-		parseCache,
-	});
 }
 
 function applicationGraph(
@@ -460,7 +424,7 @@ function linkageKey(
 			identity,
 			plans,
 			modules: [...graph.modules.values()]
-				.filter((record) => externalModule(record.path))
+				.filter((record) => isExternalModule(record.path))
 				.map((record) => ({
 					path: record.path,
 					goal: record.goal,
@@ -615,18 +579,20 @@ export function compileBuildFragments(
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	validateLinkage(root, identity, options, plans);
+	const dependencyArtifacts = compileDependencyFragments({
+		graph: options.graph,
+		targets: plans.map(({ target, commonjs }) => ({ target, commonjs })),
+		config: options.config,
+		stripTypes: options.stripTypes,
+		stripperIdentity: options.stripperIdentity,
+		cacheDirectory: options.cacheDirectory,
+		session: options.session,
+		phases: options.phases,
+		onCompilePhase: options.onCompilePhase,
+	});
 	const graphStartedAt = Date.now();
-	const base = baseGraph(plans, options, options.session.moduleParses);
 	const application = applicationGraph(plans, options, options.session.moduleParses);
 	options.phases.graphMs += Date.now() - graphStartedAt;
-	const baseArtifact = compileArtifact(
-		root,
-		artifactRoot,
-		identity,
-		"dependency-base",
-		base,
-		options,
-	);
 	const applicationArtifact = compileArtifact(
 		root,
 		artifactRoot,
@@ -635,16 +601,15 @@ export function compileBuildFragments(
 		application,
 		options,
 	);
-	const hits = [baseArtifact, applicationArtifact].filter(
-		(artifact) => artifact.cache === "hit",
-	).length;
+	const artifacts = [...dependencyArtifacts, applicationArtifact];
+	const hits = artifacts.filter((artifact) => artifact.cache === "hit").length;
 	return {
 		get wires() {
-			return [baseArtifact.wire, applicationArtifact.wire];
+			return artifacts.map((artifact) => artifact.wire);
 		},
-		artifacts: [baseArtifact.artifact, applicationArtifact.artifact],
+		artifacts: [...dependencyArtifacts, applicationArtifact.artifact],
 		definition: applicationArtifact.definition,
 		artifactHits: hits,
-		artifactMisses: 2 - hits,
+		artifactMisses: artifacts.length - hits,
 	};
 }

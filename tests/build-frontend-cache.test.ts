@@ -230,6 +230,62 @@ describe("normal build frontend cache", () => {
 		expect(changedDependency.wires![1]).toEqual(changed.wires![1]);
 	});
 
+	it("shares independent dependency islands across entrypoints and invalidates only one island", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const firstEntry = path.join(root, "first.mjs");
+		const secondEntry = path.join(root, "second.mjs");
+		const alphaDirectory = path.join(root, "node_modules/alpha");
+		const betaDirectory = path.join(root, "node_modules/beta");
+		const alpha = path.join(alphaDirectory, "index.mjs");
+		const session = new BuildCompilationSession();
+		mkdirSync(alphaDirectory, { recursive: true });
+		mkdirSync(betaDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(alphaDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(
+			path.join(betaDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(alpha, `export const alpha = 1;\n`);
+		write(path.join(betaDirectory, "index.mjs"), `export const beta = 2;\n`);
+		write(
+			firstEntry,
+			`import { alpha } from "alpha";\nimport { beta } from "beta";\nconsole.log(alpha, beta);\n`,
+		);
+		write(secondEntry, `import { beta } from "beta";\nconsole.log(beta);\n`);
+		const options = (entrypoint: string) => ({
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-fragment-island-test",
+			cacheDirectory,
+			session,
+			optimization: "development" as const,
+			relocatable: true,
+		});
+
+		const combined = compileBuildFrontend(options(firstEntry));
+		expect(combined.wires).toHaveLength(3);
+		expect(combined.fragmentArtifacts).toEqual({ hits: 0, misses: 3 });
+
+		const betaOnly = compileBuildFrontend(options(secondEntry));
+		expect(betaOnly.wires).toHaveLength(2);
+		expect(betaOnly.fragmentArtifacts).toEqual({ hits: 1, misses: 1 });
+		expect(betaOnly.wires![0]).toEqual(combined.wires![1]);
+
+		write(alpha, `export const alpha = 3;\n`);
+		session.invalidate(alpha);
+		const changedAlpha = compileBuildFrontend(options(firstEntry));
+		expect(changedAlpha.fragmentArtifacts).toEqual({ hits: 2, misses: 1 });
+		expect(changedAlpha.wires![0]).not.toEqual(combined.wires![0]);
+		expect(changedAlpha.wires![1]).toEqual(combined.wires![1]);
+		expect(changedAlpha.wires![2]).toEqual(combined.wires![2]);
+	});
+
 	it("retains dependency linkage validation across local exported-value edits", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
