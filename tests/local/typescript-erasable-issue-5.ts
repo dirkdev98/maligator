@@ -35,13 +35,18 @@ if (
 
 const visited: string[] = [];
 const visit = (label: string, path: readonly string[]): void => {
-	visited.push([...path, label].join("/"));
+	const next = [...path, label];
+	if (label === "branch") {
+		visit("leaf", next);
+		return;
+	}
+	visited.push(next.join("/"));
 };
-visit("leaf", ["root"]);
+visit("branch", ["root"]);
 
 const findLabels = (values: readonly Value[]): readonly string[] =>
 	values.map((item) => item.label);
-if (visited[0] !== "root/leaf" || findLabels([value]).join(",") !== "compact") {
+if (visited[0] !== "root/branch/leaf" || findLabels([value]).join(",") !== "compact") {
 	throw new Error("typed arrow erasure changed recursive or concise-body semantics");
 }
 
