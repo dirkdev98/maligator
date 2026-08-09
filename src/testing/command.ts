@@ -165,9 +165,10 @@ export async function executeTestCommand(
 		throw new Error("no test files were discovered");
 	}
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
-	const nodeGlobalsSource = context.installation.testNodeGlobalsPath === undefined
-		? undefined
-		: readFileSync(context.installation.testNodeGlobalsPath, "utf-8");
+	const nodeGlobalsSource =
+		context.installation.testNodeGlobalsPath === undefined
+			? undefined
+			: readFileSync(context.installation.testNodeGlobalsPath, "utf-8");
 	const runOptions = testConfig(command);
 	if (runOptions.shuffleSeed !== undefined)
 		output(`Shuffle seed: ${runOptions.shuffleSeed}`);

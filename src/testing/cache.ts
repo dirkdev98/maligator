@@ -214,7 +214,12 @@ function buildTestGraph(
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
 			...(options.config.surface.node
-				? [["maligator:node-globals", { source: options.nodeGlobalsSource ?? "", goal: "module" }] as const]
+				? [
+						[
+							"maligator:node-globals",
+							{ source: options.nodeGlobalsSource ?? "", goal: "module" },
+						] as const,
+					]
 				: []),
 		]),
 		transformSource(source, filePath) {

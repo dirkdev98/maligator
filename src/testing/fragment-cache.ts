@@ -439,7 +439,12 @@ function planningGraph(
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
 			...(options.config.surface.node
-				? [[NODE_GLOBALS_MODULE_ID, { source: options.nodeGlobalsSource ?? "", goal: "module" }] as const]
+				? [
+						[
+							NODE_GLOBALS_MODULE_ID,
+							{ source: options.nodeGlobalsSource ?? "", goal: "module" },
+						] as const,
+					]
 				: []),
 		]),
 	});
@@ -532,7 +537,12 @@ globalThis.__maligatorTestLinkedModules = __maligatorModules;
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
 			...(options.config.surface.node
-				? [[NODE_GLOBALS_MODULE_ID, { source: options.nodeGlobalsSource ?? "", goal: "module" }] as const]
+				? [
+						[
+							NODE_GLOBALS_MODULE_ID,
+							{ source: options.nodeGlobalsSource ?? "", goal: "module" },
+						] as const,
+					]
 				: []),
 		]),
 	});
