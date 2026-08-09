@@ -27,6 +27,17 @@ export const NPM_WEB_LOGIN_ARGUMENTS = ["login", "--auth-type", "web"] as const;
 
 export type NpmReleaseAuthentication = "web" | "trusted-publishing";
 
+export function expectedReleaseTag(version: string): string {
+	return `v${version}`;
+}
+
+export function assertReleaseTag(tag: string, version: string): void {
+	const expected = expectedReleaseTag(version);
+	if (tag !== expected) {
+		throw new Error(`release tag must be ${expected}, received ${tag}`);
+	}
+}
+
 export function parsePublishReleaseArguments(
 	args: Array<string>,
 	version: string,
@@ -43,6 +54,7 @@ export function parsePublishReleaseArguments(
 
 export function assertGitHubTrustedPublishingEnvironment(
 	environment: NodeJS.ProcessEnv,
+	version: string,
 ): void {
 	if (
 		environment.GITHUB_ACTIONS !== "true" ||
@@ -53,6 +65,13 @@ export function assertGitHubTrustedPublishingEnvironment(
 			"trusted publishing requires GitHub Actions with id-token: write permission",
 		);
 	}
+	if (
+		environment.GITHUB_REF_TYPE !== "tag" ||
+		environment.GITHUB_REF_NAME === undefined
+	) {
+		throw new Error("trusted publishing requires a GitHub tag ref");
+	}
+	assertReleaseTag(environment.GITHUB_REF_NAME, version);
 }
 
 function formatDuration(milliseconds: number): string {
@@ -159,6 +178,16 @@ function incrementAlpha(): void {
 	writeJson(packageLockPath, lock);
 	writeFileSync(versionSourcePath, generatedVersionSource(next));
 	console.log(`${current} -> ${next}`);
+}
+
+function verifyReleaseTag(args: Array<string>): void {
+	if (args.length !== 1) {
+		throw new Error("usage: npm run release:verify-tag -- <tag>");
+	}
+	const version = packageVersion();
+	assertVersionSynchronized(version);
+	assertReleaseTag(args[0]!, version);
+	console.log(`Release tag verified: ${args[0]}`);
 }
 
 function commonPackageFields(name: string, version: string): PackageJson {
@@ -368,6 +397,19 @@ interface PackedPackage {
 	files: Array<{ path: string }>;
 }
 
+export interface ReleasePackageEntry {
+	name: string;
+	file: string;
+	sha256: string;
+}
+
+export interface ReleaseManifest {
+	schema: 2;
+	version: string;
+	targets: Array<string>;
+	packages: Array<ReleasePackageEntry>;
+}
+
 function packDirectory(
 	directory: string,
 	destination: string,
@@ -505,6 +547,175 @@ function packRelease(args: Array<string>): void {
 	releaseLog(`npm tarballs ready: ${packs}`);
 }
 
+export function parseReleaseManifest(
+	manifest: Record<string, unknown>,
+	version: string,
+): ReleaseManifest {
+	if (
+		manifest.schema !== 2 ||
+		manifest.version !== version ||
+		!Array.isArray(manifest.targets) ||
+		!manifest.targets.every((target) => typeof target === "string") ||
+		!Array.isArray(manifest.packages)
+	) {
+		throw new Error("packed package manifest does not match the release version");
+	}
+	const packages = manifest.packages.map((value) => {
+		if (typeof value !== "object" || value === null) {
+			throw new Error("invalid packed package manifest");
+		}
+		const entry = value as Record<string, unknown>;
+		if (
+			typeof entry.name !== "string" ||
+			typeof entry.file !== "string" ||
+			entry.file !== path.basename(entry.file) ||
+			!entry.file.endsWith(".tgz") ||
+			typeof entry.sha256 !== "string" ||
+			!/^[a-f0-9]{64}$/.test(entry.sha256)
+		) {
+			throw new Error("invalid packed package manifest");
+		}
+		return entry as unknown as ReleasePackageEntry;
+	});
+	return {
+		schema: 2,
+		version,
+		targets: manifest.targets,
+		packages,
+	};
+}
+
+function readReleaseManifest(version: string): ReleaseManifest {
+	return parseReleaseManifest(
+		readJson(path.join(releaseRoot, "packs/packages.json")),
+		version,
+	);
+}
+
+function verifiedTarball(entry: ReleasePackageEntry): Buffer {
+	const tarball = path.join(releaseRoot, "packs", entry.file);
+	const bytes = readFileSync(tarball);
+	if (hash("sha256", bytes, "hex") !== entry.sha256) {
+		throw new Error(`packed tarball changed: ${entry.file}`);
+	}
+	return bytes;
+}
+
+function assertCleanWorktree(): void {
+	const status = execFileSync("git", ["status", "--porcelain"], {
+		cwd: repositoryRoot,
+		encoding: "utf-8",
+	});
+	if (status.trim() !== "") throw new Error("refusing to release from a dirty worktree");
+}
+
+function assertGitHubReleaseImmutability(): void {
+	const settings = JSON.parse(
+		execFileSync(
+			"gh",
+			[
+				"api",
+				"-H",
+				"X-GitHub-Api-Version: 2026-03-10",
+				"repos/dirkdev98/maligator/immutable-releases",
+			],
+			{ cwd: repositoryRoot, encoding: "utf-8" },
+		),
+	) as { enabled?: boolean };
+	if (settings.enabled !== true) {
+		throw new Error("enable GitHub immutable releases before uploading npm assets");
+	}
+}
+
+function createGitHubRelease(args: Array<string>): void {
+	const version = packageVersion();
+	if (args.length !== 2 || args[0] !== "--confirm" || args[1] !== version) {
+		throw new Error(`creating a GitHub release requires --confirm ${version}`);
+	}
+	assertVersionSynchronized(version);
+	assertCleanWorktree();
+	const head = execFileSync("git", ["rev-parse", "HEAD"], {
+		cwd: repositoryRoot,
+		encoding: "utf-8",
+	}).trim();
+	const remoteMain = execFileSync("git", ["rev-parse", "origin/main"], {
+		cwd: repositoryRoot,
+		encoding: "utf-8",
+	}).trim();
+	if (head !== remoteMain) {
+		throw new Error("GitHub releases require HEAD to equal the pushed origin/main");
+	}
+	assertGitHubReleaseImmutability();
+
+	const manifest = readReleaseManifest(version);
+	for (const entry of manifest.packages) verifiedTarball(entry);
+	const tag = expectedReleaseTag(version);
+	const assets = [
+		path.join(releaseRoot, "packs/packages.json"),
+		...manifest.packages.map((entry) => path.join(releaseRoot, "packs", entry.file)),
+	];
+	releaseLog(`creating draft GitHub prerelease ${tag} with ${assets.length} assets`);
+	execFileSync(
+		"gh",
+		[
+			"release",
+			"create",
+			tag,
+			...assets,
+			"--draft",
+			"--prerelease",
+			"--latest=false",
+			"--target",
+			head,
+			"--title",
+			`Maligator ${tag}`,
+			"--notes",
+			"Prepared npm alpha release assets.",
+		],
+		{ cwd: repositoryRoot, stdio: "inherit" },
+	);
+	const release = JSON.parse(
+		execFileSync(
+			"gh",
+			["release", "view", tag, "--json", "assets,isDraft,tagName,targetCommitish"],
+			{ cwd: repositoryRoot, encoding: "utf-8" },
+		),
+	) as {
+		assets?: Array<{ name?: string }>;
+		isDraft?: boolean;
+		tagName?: string;
+		targetCommitish?: string;
+	};
+	const expectedAssets = assets.map((asset) => path.basename(asset)).sort();
+	const actualAssets = (release.assets ?? [])
+		.map((asset) => asset.name)
+		.filter((name): name is string => name !== undefined)
+		.sort();
+	if (
+		release.isDraft !== true ||
+		release.tagName !== tag ||
+		release.targetCommitish !== head ||
+		JSON.stringify(actualAssets) !== JSON.stringify(expectedAssets)
+	) {
+		throw new Error(`draft GitHub release ${tag} did not retain the expected assets`);
+	}
+	releaseLog(`publishing GitHub prerelease ${tag}; this triggers npm publication`);
+	execFileSync("gh", ["release", "edit", tag, "--draft=false"], {
+		cwd: repositoryRoot,
+		stdio: "inherit",
+	});
+	const published = JSON.parse(
+		execFileSync("gh", ["release", "view", tag, "--json", "isImmutable,url"], {
+			cwd: repositoryRoot,
+			encoding: "utf-8",
+		}),
+	) as { isImmutable?: boolean; url?: string };
+	if (published.isImmutable !== true) {
+		throw new Error(`published GitHub release ${tag} is not immutable`);
+	}
+	releaseLog(`immutable GitHub release ready: ${published.url ?? tag}`);
+}
+
 export function preparedTarballIntegrity(bytes: Uint8Array): string {
 	return `sha512-${hash("sha512", bytes, "base64")}`;
 }
@@ -560,22 +771,9 @@ function publishRelease(args: Array<string>): void {
 	const version = packageVersion();
 	const authentication = parsePublishReleaseArguments(args, version);
 	assertVersionSynchronized(version);
-	const status = execFileSync("git", ["status", "--porcelain"], {
-		cwd: repositoryRoot,
-		encoding: "utf-8",
-	});
-	if (status.trim() !== "") throw new Error("refusing to publish from a dirty worktree");
-	const manifest = readJson(path.join(releaseRoot, "packs/packages.json"));
-	if (
-		manifest.schema !== 2 ||
-		manifest.version !== version ||
-		!Array.isArray(manifest.targets) ||
-		!Array.isArray(manifest.packages)
-	) {
-		throw new Error("packed package manifest does not match the release version");
-	}
+	assertCleanWorktree();
+	const manifest = readReleaseManifest(version);
 	const selected = manifest.targets.map((rust) => {
-		if (typeof rust !== "string") throw new Error("invalid release target manifest");
 		const target = targets.find((candidate) => candidate.rust === rust);
 		if (target === undefined) throw new Error(`unsupported release target: ${rust}`);
 		return target;
@@ -584,16 +782,12 @@ function publishRelease(args: Array<string>): void {
 		...selected.map((target) => target.packageName),
 		"@maligator/cli",
 	];
-	const actualNames = manifest.packages.map((entry) =>
-		typeof entry === "object" && entry !== null
-			? (entry as Record<string, unknown>).name
-			: undefined,
-	);
+	const actualNames = manifest.packages.map((entry) => entry.name);
 	if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
 		throw new Error("refusing to publish an incomplete or unordered package set");
 	}
 	if (authentication === "trusted-publishing") {
-		assertGitHubTrustedPublishingEnvironment(process.env);
+		assertGitHubTrustedPublishingEnvironment(process.env, version);
 		releaseLog("authenticating to npm with GitHub Actions trusted publishing");
 	} else {
 		releaseLog("authenticating to npm with web login");
@@ -612,15 +806,9 @@ function publishRelease(args: Array<string>): void {
 		}
 	}
 	releaseLog(`publishing ${expectedNames.length} packages under the alpha tag`);
-	for (const [index, entry] of (
-		manifest.packages as Array<Record<string, unknown>>
-	).entries()) {
-		if (typeof entry.file !== "string")
-			throw new Error("invalid packed package manifest");
+	for (const [index, entry] of manifest.packages.entries()) {
 		const tarball = path.join(releaseRoot, "packs", entry.file);
-		const tarballBytes = readFileSync(tarball);
-		const digest = hash("sha256", tarballBytes, "hex");
-		if (digest !== entry.sha256) throw new Error(`packed tarball changed: ${entry.file}`);
+		const tarballBytes = verifiedTarball(entry);
 		const packageName = expectedNames[index]!;
 		if (
 			matchingPublishedIntegrity(
@@ -660,15 +848,17 @@ function publishRelease(args: Array<string>): void {
 
 function usage(): never {
 	throw new Error(
-		"usage: node scripts/release.ts <version-alpha|build|pack|publish|smoke> [options]",
+		"usage: node scripts/release.ts <version-alpha|verify-tag|build|pack|create-github|publish|smoke> [options]",
 	);
 }
 
 if (import.meta.main) {
 	const command = process.argv[2];
 	if (command === "version-alpha") incrementAlpha();
+	else if (command === "verify-tag") verifyReleaseTag(process.argv.slice(3));
 	else if (command === "build") buildRelease(process.argv.slice(3));
 	else if (command === "pack") packRelease(process.argv.slice(3));
+	else if (command === "create-github") createGitHubRelease(process.argv.slice(3));
 	else if (command === "publish") publishRelease(process.argv.slice(3));
 	else if (command === "smoke") smokeRelease();
 	else usage();

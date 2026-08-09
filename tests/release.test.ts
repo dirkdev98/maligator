@@ -9,9 +9,12 @@ import { createReleaseArchive, deterministicTar } from "../scripts/release-archi
 import { nextAlphaVersion } from "../scripts/release-version.ts";
 import {
 	assertGitHubTrustedPublishingEnvironment,
+	assertReleaseTag,
 	createLauncherPackageJson,
+	expectedReleaseTag,
 	matchingPublishedIntegrity,
 	NPM_WEB_LOGIN_ARGUMENTS,
+	parseReleaseManifest,
 	parsePublishReleaseArguments,
 	preparedTarballIntegrity,
 	selectReleaseTargetTriples,
@@ -180,26 +183,87 @@ describe("npm launcher", () => {
 			),
 		).toThrow("--confirm 0.1.0-alpha.8");
 		expect(() =>
-			assertGitHubTrustedPublishingEnvironment({ GITHUB_ACTIONS: "true" }),
+			assertGitHubTrustedPublishingEnvironment(
+				{ GITHUB_ACTIONS: "true" },
+				"0.1.0-alpha.8",
+			),
 		).toThrow("id-token: write");
 		expect(() =>
-			assertGitHubTrustedPublishingEnvironment({
-				GITHUB_ACTIONS: "true",
-				ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc",
-				ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
-			}),
+			assertGitHubTrustedPublishingEnvironment(
+				{
+					GITHUB_ACTIONS: "true",
+					ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc",
+					ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+				},
+				"0.1.0-alpha.8",
+			),
+		).toThrow("tag ref");
+		expect(() =>
+			assertGitHubTrustedPublishingEnvironment(
+				{
+					GITHUB_ACTIONS: "true",
+					ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc",
+					ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+					GITHUB_REF_TYPE: "tag",
+					GITHUB_REF_NAME: "v0.1.0-alpha.8",
+				},
+				"0.1.0-alpha.8",
+			),
 		).not.toThrow();
 	});
 
-	it("keeps the GitHub release workflow token-free and OIDC-scoped", () => {
+	it("requires an exact v-prefixed tag for the package version", () => {
+		expect(expectedReleaseTag("0.1.0-alpha.8")).toBe("v0.1.0-alpha.8");
+		expect(() => assertReleaseTag("v0.1.0-alpha.8", "0.1.0-alpha.8")).not.toThrow();
+		expect(() => assertReleaseTag("v0.1.0-alpha.7", "0.1.0-alpha.8")).toThrow(
+			"release tag must be v0.1.0-alpha.8",
+		);
+	});
+
+	it("rejects unsafe or malformed release asset manifests", () => {
+		const valid = {
+			schema: 2,
+			version: "0.1.0-alpha.8",
+			targets: ["aarch64-apple-darwin"],
+			packages: [
+				{
+					name: "@maligator/cli-darwin-arm64",
+					file: "maligator-cli-darwin-arm64-0.1.0-alpha.8.tgz",
+					sha256: "a".repeat(64),
+				},
+			],
+		};
+		expect(parseReleaseManifest(valid, "0.1.0-alpha.8")).toEqual(valid);
+		expect(() =>
+			parseReleaseManifest(
+				{
+					...valid,
+					packages: [{ ...valid.packages[0], file: "../../package.json" }],
+				},
+				"0.1.0-alpha.8",
+			),
+		).toThrow("invalid packed package manifest");
+		expect(() => parseReleaseManifest(valid, "0.1.0-alpha.9")).toThrow(
+			"does not match the release version",
+		);
+	});
+
+	it("publishes prepared GitHub Release assets without a stored npm token", () => {
 		const workflow = readFileSync(
 			path.resolve(import.meta.dirname, "../.github/workflows/npm-release.yml"),
 			"utf-8",
 		);
-		expect(workflow).toContain("workflow_dispatch:");
+		expect(workflow).toContain("release:");
+		expect(workflow).toContain("types: [published]");
 		expect(workflow).toContain("id-token: write");
-		expect(workflow).toContain("if: github.ref == 'refs/heads/main'");
-		expect(workflow).toContain("runs-on: macos-15");
+		expect(workflow).toContain("runs-on: ubuntu-latest");
+		expect(workflow).toContain("timeout-minutes: 60");
+		expect(workflow).toContain("git merge-base --is-ancestor");
+		expect(workflow).toContain("release:verify-tag");
+		expect(workflow).toContain("gh release download");
+		expect(workflow).not.toContain("release:build");
+		expect(workflow).not.toContain("release:pack");
+		expect(workflow).not.toContain("release:smoke");
 		expect(workflow).toContain("--trusted-publishing");
 		expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN/);
 	});

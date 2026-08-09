@@ -1,14 +1,10 @@
 name: Publish npm alpha
 
-run-name: Publish npm alpha ${{ inputs.version }}
+run-name: Publish npm alpha ${{ github.event.release.tag_name }}
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Exact alpha version committed in package.json
-        required: true
-        type: string
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -20,50 +16,51 @@ concurrency:
 
 jobs:
   publish:
-    if: github.ref == 'refs/heads/main'
-    runs-on: macos-15
-    timeout-minutes: 180
+    if: github.event.release.prerelease == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Check out the release commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        timeout-minutes: 10
         with:
+          fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        timeout-minutes: 10
         with:
           node-version: 24.14.1
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Confirm the committed release version
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: >-
-          node -e 'const actual = require("./package.json").version;
-          if (actual !== process.env.RELEASE_VERSION) {
-          throw new Error(`package.json is ${actual}, not ${process.env.RELEASE_VERSION}`); }'
+      - name: Confirm main-branch ancestry
+        timeout-minutes: 10
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Install dependencies
+        timeout-minutes: 30
         run: npm ci
 
-      - name: Install the pinned Rust toolchain
-        working-directory: runtime/rust
-        run: rustup show active-toolchain
+      - name: Confirm the exact release tag
+        timeout-minutes: 10
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: npm run release:verify-tag -- "$RELEASE_TAG"
 
-      - name: Run the developer release gate
-        run: npm run test:check
-
-      - name: Build the Apple Silicon release
-        run: npm run release:build
-
-      - name: Smoke-test the release binary
-        run: npm run release:smoke
-
-      - name: Pack and verify the npm packages
-        run: npm run release:pack
+      - name: Download the prepared release assets
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: >-
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+          --pattern "*.tgz" --pattern "packages.json" --dir dist/release/packs
 
       - name: Publish through npm trusted publishing
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: npm run release:publish -- --confirm "$RELEASE_VERSION" --trusted-publishing
+        timeout-minutes: 30
+        run: >-
+          npm run release:publish -- --confirm
+          "$(node -p 'require("./package.json").version')" --trusted-publishing

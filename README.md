@@ -333,13 +333,38 @@ dist-tag. Each publish is a plain synchronous `npm publish` with the terminal's
 stdin/stdout/stderr inherited, so enter the OTP directly when npm prompts. Build,
 pack, and publish log per-target progress and elapsed time.
 
-The `Publish npm alpha` GitHub Actions workflow provides the unattended release
-path. Dispatch `npm-release.yml` from `main` and enter the exact version already
-committed in `package.json`. The workflow runs the normal developer gate, builds,
-smokes, and packs the Apple Silicon release on a GitHub-hosted macOS ARM runner, and
-publishes through npm trusted publishing. It has `id-token: write` permission but no
-stored npm token. `--trusted-publishing` is accepted only inside a GitHub Actions
-OIDC environment; local publishing continues to require web authentication.
+The `Publish npm alpha` GitHub Actions workflow provides the unattended publishing
+path. Build, smoke, and pack the Apple Silicon macOS release locally, using the
+explicit target to route the build through Zig. After the release commit is pushed
+to `main`, `release:create-github` verifies the clean commit and tarball checksums,
+creates the exact `v<package.json version>` tag and a draft GitHub prerelease,
+uploads every npm tarball plus `packages.json`, verifies the complete draft, and
+publishes the GitHub release. Publishing the prerelease triggers the workflow.
+
+```shell
+npm run release:build -- --target aarch64-apple-darwin
+npm run release:smoke
+npm run release:pack -- --target aarch64-apple-darwin
+git push origin main
+npm run release:create-github -- --confirm "$(node -p "require('./package.json').version")"
+```
+
+The Ubuntu workflow only checks out the tagged commit, validates its ancestry and
+exact version tag, downloads the prepared assets, rechecks their manifest and
+checksums, and publishes through npm trusted publishing. It has `id-token: write`
+permission but no stored npm token. `--trusted-publishing` is accepted only for the
+matching tag in a GitHub Actions OIDC environment; local publishing continues to
+require web authentication. If draft creation or asset verification fails, the
+GitHub release remains unpublished and the npm workflow does not run.
+
+GitHub release immutability is a required one-time repository setting. Once the
+draft is published, GitHub then prevents replacement or deletion of its tag and
+assets. Enable it with an administrative GitHub credential before the first release:
+
+```shell
+gh api --method PUT -H "X-GitHub-Api-Version: 2026-03-10" \
+  repos/dirkdev98/maligator/immutable-releases
+```
 
 Before the first workflow release, configure every npm package once for repository
 `dirkdev98/maligator`, workflow filename `npm-release.yml`, and the `npm publish`
