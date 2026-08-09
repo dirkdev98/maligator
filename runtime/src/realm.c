@@ -51,7 +51,7 @@ MalRealm *mal_realm_create(MalVm *vm, MalRealmInstaller installer, void *data) {
 
     // Well-known symbols belong to the isolate's agent, not an individual realm.
     // Their enum slots are deliberately contiguous.
-    for (i32 slot = MAL_INTRINSIC_SYMBOL_ITERATOR; slot <= MAL_INTRINSIC_SYMBOL_UNSCOPABLES; slot++) {
+    for (i32 slot = MAL_INTRINSIC_SYMBOL_ITERATOR; slot <= MAL_INTRINSIC_SYMBOL_ASYNC_DISPOSE; slot++) {
         realm->intrinsics[slot] = vm->initial_realm->intrinsics[slot];
     }
 

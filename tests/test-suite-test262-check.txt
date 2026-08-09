@@ -27,6 +27,10 @@ test/built-ins/Date/prototype/toTemporalInstant/this-value-invalid-date.js
 test/built-ins/Date/prototype/toTemporalInstant/this-value-valid-date.js
 test/built-ins/Iterator/prototype/Symbol.dispose/invokes-return.js
 test/built-ins/Iterator/prototype/Symbol.dispose/prop-desc.js
+test/built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/invokes-return.js
+test/built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/throw-return-getter.js
+test/built-ins/Symbol/asyncDispose/cross-realm.js
+test/built-ins/Symbol/dispose/cross-realm.js
 test/built-ins/Array/prototype/find/resizable-buffer-shrink-mid-iteration.js
 test/built-ins/ArrayBuffer/prototype/resize/this-is-detached.js
 test/built-ins/ArrayIteratorPrototype/next/args-mapped-expansion-before-exhaustion.js

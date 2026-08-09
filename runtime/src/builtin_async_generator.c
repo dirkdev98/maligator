@@ -400,6 +400,153 @@ static MalValue mal_async_iterator_constructor(MalVm *vm, MalValue this_value, c
     return mal_value_from_object(mal_object_new(&vm->heap, prototype));
 }
 
+static MalValue mal_async_iterator_dispose_unwrap(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) vm;
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_async_iterator_dispose_reject(
+    MalVm *vm,
+    MalValue promise,
+    MalValue reject
+) {
+    MalValue reason = vm->completion.value;
+    vm->completion = (MalCompletion) {
+        .kind = MAL_COMPLETION_NORMAL,
+        .value = mal_value_new_undefined(),
+    };
+    (void) mal_vm_call_value(
+        vm,
+        reject,
+        mal_value_new_undefined(),
+        &reason,
+        1
+    );
+    vm->completion = (MalCompletion) {
+        .kind = MAL_COMPLETION_NORMAL,
+        .value = mal_value_new_undefined(),
+    };
+    return promise;
+}
+
+/** %AsyncIteratorPrototype%[@@asyncDispose] closes and awaits the iterator. */
+static MalValue mal_async_iterator_prototype_async_dispose(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+
+    MalValue roots[7] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        this_value,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+
+    if (!mal_promise_new_capability(
+            vm,
+            vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+            &roots[0],
+            &roots[1],
+            &roots[2])) {
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+
+    if (!mal_vm_get_property(
+            vm,
+            roots[3],
+            mal_intrinsic_string_key(vm, "return"),
+            &roots[4])) {
+        MalValue promise = mal_async_iterator_dispose_reject(vm, roots[0], roots[2]);
+        mal_gc_unroot(&span);
+        return promise;
+    }
+    if (!mal_value_is_nil(roots[4]) && !mal_value_is_callable(roots[4])) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Async iterator return is not a function"
+        );
+        MalValue promise = mal_async_iterator_dispose_reject(vm, roots[0], roots[2]);
+        mal_gc_unroot(&span);
+        return promise;
+    }
+
+    if (mal_value_is_nil(roots[4])) {
+        MalValue undefined = mal_value_new_undefined();
+        (void) mal_vm_call_value(
+            vm,
+            roots[1],
+            mal_value_new_undefined(),
+            &undefined,
+            1
+        );
+        MalValue promise = roots[0];
+        mal_gc_unroot(&span);
+        return promise;
+    }
+
+    MalValue undefined = mal_value_new_undefined();
+    MalCompletion completion =
+        mal_vm_call_value(vm, roots[4], roots[3], &undefined, 1);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        MalValue promise = mal_async_iterator_dispose_reject(vm, roots[0], roots[2]);
+        mal_gc_unroot(&span);
+        return promise;
+    }
+    roots[5] = completion.value;
+    if (!mal_promise_resolve_value(vm, roots[5], &roots[6])) {
+        MalValue promise = mal_async_iterator_dispose_reject(vm, roots[0], roots[2]);
+        mal_gc_unroot(&span);
+        return promise;
+    }
+
+    MalNativeFunctionObject *unwrap = mal_native_function_object_new_arity(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, ""),
+        1,
+        mal_async_iterator_dispose_unwrap
+    );
+    roots[5] = mal_value_from_native_function_object(unwrap);
+    mal_promise_perform_then(
+        vm,
+        roots[6],
+        roots[5],
+        mal_value_new_undefined(),
+        roots[1],
+        roots[2]
+    );
+    MalValue promise = roots[0];
+    mal_gc_unroot(&span);
+    return promise;
+}
+
 // The AsyncFunction constructor: assembles `(async function anonymous(...){...})`
 // and compiles it through the dynamic-function path, producing an async function
 // with the proper %AsyncFunction.prototype% wiring.
@@ -428,6 +575,7 @@ void mal_builtin_async_generator_install(MalVm *vm) {
     MalObject *async_iterator_prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_PROTOTYPE] = mal_value_from_object(async_iterator_prototype);
     mal_intrinsic_define_symbol_method(vm, async_iterator_prototype, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR, "[Symbol.asyncIterator]", mal_agen_async_iterator);
+    mal_intrinsic_define_symbol_method(vm, async_iterator_prototype, MAL_INTRINSIC_SYMBOL_ASYNC_DISPOSE, "[Symbol.asyncDispose]", mal_async_iterator_prototype_async_dispose);
 
     // %AsyncIterator% global (abstract constructor), with AsyncIterator.prototype.
     MalNativeFunctionObject *async_iterator = mal_native_function_object_new_arity(
