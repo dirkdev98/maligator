@@ -10,3 +10,6 @@
  * intrinsics.c.
  */
 void mal_builtin_uri_install(MalVm *vm);
+
+/** Install the Annex B escape/unescape functions on the supplied global. */
+void mal_builtin_uri_install_legacy_globals(MalVm *vm, MalObject *global_this);

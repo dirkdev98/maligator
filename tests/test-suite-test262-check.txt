@@ -2,12 +2,17 @@
 # from baseline or report changes. Keep representative siblings only and keep
 # this selection disjoint from Test262 smoke.
 
-# Core built-in and runtime boundaries (50)
+# Core built-in and runtime boundaries (55)
 test/annexB/built-ins/String/prototype/anchor/B.2.3.2.js
 test/annexB/built-ins/String/prototype/big/prop-desc.js
 test/annexB/built-ins/String/prototype/fontcolor/attr-tostring-err.js
 test/annexB/built-ins/String/prototype/trimLeft/reference-trimStart.js
 test/annexB/built-ins/String/prototype/trimRight/reference-trimEnd.js
+test/annexB/built-ins/escape/argument_types.js
+test/annexB/built-ins/escape/escape-above-astral.js
+test/annexB/built-ins/escape/to-primitive-err.js
+test/annexB/built-ins/unescape/four-ignore-bad-u.js
+test/annexB/built-ins/unescape/to-string-observe.js
 test/built-ins/AggregateError/newtarget-proto-custom.js
 test/built-ins/Array/prototype/find/resizable-buffer-shrink-mid-iteration.js
 test/built-ins/ArrayBuffer/prototype/resize/this-is-detached.js

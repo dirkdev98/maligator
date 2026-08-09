@@ -10,6 +10,7 @@
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 // A growable UTF-16 code-unit buffer used to build encode/decode results.
 typedef struct MalUriBuffer {
@@ -284,16 +285,10 @@ static MalValue mal_uri_decode(MalVm *vm, MalString *string, bool (*reserved)(c1
     return mal_uri_buffer_to_string(vm, &buffer);
 }
 
-// ToString(arg) guarding against Symbol (which has no string coercion). Returns
-// false with a pending TypeError when the argument is a Symbol.
+// Full ToString(arg), including object ToPrimitive and abrupt completion.
 static bool mal_uri_to_string(MalVm *vm, const MalValue *args, i32 arg_count, MalString **out) {
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    if (mal_value_is_symbol(value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol to a string");
-        return false;
-    }
-    *out = mal_ops_to_string(&vm->heap, value);
-    return true;
+    return mal_vm_to_string(vm, value, out);
 }
 
 static MalValue mal_builtin_decode_uri(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -345,6 +340,94 @@ static MalValue mal_builtin_encode_uri_component(MalVm *vm, MalValue this_value,
     return mal_uri_encode(vm, string, mal_uri_encode_component_unescaped);
 }
 
+static bool mal_uri_escape_unescaped(c16 c) {
+    return (c >= 'A' && c <= 'Z') ||
+        (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9') ||
+        c == '@' || c == '*' || c == '_' || c == '+' || c == '-' ||
+        c == '.' || c == '/';
+}
+
+/** Annex B escape(string), operating on UTF-16 code units rather than scalars. */
+static MalValue mal_builtin_escape(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    MalString *string;
+    if (!mal_uri_to_string(vm, args, arg_count, &string)) {
+        return mal_value_new_undefined();
+    }
+
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    MalUriBuffer buffer = {.vm = vm};
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        if (mal_uri_escape_unescaped(unit)) {
+            if (!mal_uri_buffer_push(&buffer, unit)) goto failed;
+        } else if (unit < 256) {
+            if (!mal_uri_buffer_push_octet(&buffer, (u8) unit)) goto failed;
+        } else if (!mal_uri_buffer_push(&buffer, '%') ||
+                   !mal_uri_buffer_push(&buffer, 'u') ||
+                   !mal_uri_buffer_push(&buffer, mal_uri_hex_digits[(unit >> 12) & 0x0F]) ||
+                   !mal_uri_buffer_push(&buffer, mal_uri_hex_digits[(unit >> 8) & 0x0F]) ||
+                   !mal_uri_buffer_push(&buffer, mal_uri_hex_digits[(unit >> 4) & 0x0F]) ||
+                   !mal_uri_buffer_push(&buffer, mal_uri_hex_digits[unit & 0x0F])) {
+            goto failed;
+        }
+    }
+    return mal_uri_buffer_to_string(vm, &buffer);
+
+failed:
+    free(buffer.data);
+    return mal_value_new_undefined();
+}
+
+static bool mal_uri_hex_quad(const c16 *units, c16 *out) {
+    i32 a = mal_hex_decode_digit(units[0]);
+    i32 b = mal_hex_decode_digit(units[1]);
+    i32 c = mal_hex_decode_digit(units[2]);
+    i32 d = mal_hex_decode_digit(units[3]);
+    if (a < 0 || b < 0 || c < 0 || d < 0) return false;
+    *out = (c16) ((a << 12) | (b << 8) | (c << 4) | d);
+    return true;
+}
+
+/** Annex B unescape(string); malformed escapes are copied verbatim. */
+static MalValue mal_builtin_unescape(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    MalString *string;
+    if (!mal_uri_to_string(vm, args, arg_count, &string)) {
+        return mal_value_new_undefined();
+    }
+
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    MalUriBuffer buffer = {.vm = vm};
+    for (usize i = 0; i < length; i++) {
+        c16 decoded;
+        u8 byte;
+        if (units[i] == '%' && i + 5 < length && units[i + 1] == 'u' &&
+            mal_uri_hex_quad(units + i + 2, &decoded)) {
+            if (!mal_uri_buffer_push(&buffer, decoded)) goto failed;
+            i += 5;
+        } else if (units[i] == '%' && i + 2 < length &&
+                   mal_uri_hex_pair(units[i + 1], units[i + 2], &byte)) {
+            if (!mal_uri_buffer_push(&buffer, byte)) goto failed;
+            i += 2;
+        } else if (!mal_uri_buffer_push(&buffer, units[i])) {
+            goto failed;
+        }
+    }
+    return mal_uri_buffer_to_string(vm, &buffer);
+
+failed:
+    free(buffer.data);
+    return mal_value_new_undefined();
+}
+
 static MalValue mal_uri_make_function(MalVm *vm, const byte *name, MalNativeFunctionCallback callback) {
     MalNativeFunctionObject *function = mal_native_function_object_new_arity(
         &vm->heap,
@@ -361,4 +444,12 @@ void mal_builtin_uri_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_DECODE_URI_COMPONENT] = mal_uri_make_function(vm, "decodeURIComponent", mal_builtin_decode_uri_component);
     vm->intrinsics[MAL_INTRINSIC_ENCODE_URI] = mal_uri_make_function(vm, "encodeURI", mal_builtin_encode_uri);
     vm->intrinsics[MAL_INTRINSIC_ENCODE_URI_COMPONENT] = mal_uri_make_function(vm, "encodeURIComponent", mal_builtin_encode_uri_component);
+}
+
+void mal_builtin_uri_install_legacy_globals(MalVm *vm, MalObject *global_this) {
+    u8 flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_data(
+        vm, global_this, "escape", mal_uri_make_function(vm, "escape", mal_builtin_escape), flags);
+    mal_intrinsic_define_data(
+        vm, global_this, "unescape", mal_uri_make_function(vm, "unescape", mal_builtin_unescape), flags);
 }

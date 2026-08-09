@@ -923,6 +923,7 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "decodeURIComponent", vm->intrinsics[MAL_INTRINSIC_DECODE_URI_COMPONENT], flags);
     mal_intrinsic_define_data(vm, global_this, "encodeURI", vm->intrinsics[MAL_INTRINSIC_ENCODE_URI], flags);
     mal_intrinsic_define_data(vm, global_this, "encodeURIComponent", vm->intrinsics[MAL_INTRINSIC_ENCODE_URI_COMPONENT], flags);
+    mal_builtin_uri_install_legacy_globals(vm, global_this);
     mal_intrinsic_define_data(vm, global_this, "NaN", vm->intrinsics[MAL_INTRINSIC_NAN_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "Infinity", vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "undefined", mal_value_new_undefined(), MAL_PROPERTY_NONE);
