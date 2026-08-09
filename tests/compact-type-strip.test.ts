@@ -92,6 +92,19 @@ interface Container<ValueType> extends Iterable<ValueType> {
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "result.ts"));
 	});
 
+	test("does not treat a const type parameter as a variable declaration", () => {
+		const source = `export type Result<ErrorType, ValueType> =
+	| { readonly ok: true; readonly value: ValueType }
+	| { readonly error: ErrorType; readonly ok: false };
+export const ok = <const ValueType>(value: ValueType): Result<never, ValueType> => ({
+	ok: true,
+	value,
+});`;
+		const stripped = stripCompactTypes(source, "const-generic-arrow.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "const-generic-arrow.ts"));
+	});
+
 	test("strips common erasable expression and function syntax", () => {
 		const source = `function identity<Value>(value?: Value): Value | undefined {
 	return value;

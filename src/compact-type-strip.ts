@@ -996,6 +996,14 @@ function blankVariableAnnotations(
 ): void {
 	for (const word of words) {
 		if (word.text !== "const" && word.text !== "let" && word.text !== "var") continue;
+		// `const` is also an erasable modifier on a TypeScript type parameter.
+		// Treating `<const Value>` as a declaration starts an annotation scan in the
+		// middle of the generic arrow and can erase its complete implementation.
+		if (
+			word.text === "const" &&
+			source[previousCodeIndex(source, code, word.start - 1)] === "<"
+		)
+			continue;
 		let i = word.end;
 		let nested = 0;
 		let angles = 0;
