@@ -94,7 +94,14 @@ async function developmentSamples(): Promise<Array<Sample>> {
 	let output = "";
 	const child = spawn(
 		binary,
-		[...argumentPrefix, "dev", "dev-app.mts", "--config", "maligator.build.mts"],
+		[
+			...argumentPrefix,
+			"dev",
+			"dev-app.mts",
+			"--config",
+			"maligator.build.mts",
+			"--verbose",
+		],
 		{
 			cwd: project,
 			detached: process.platform !== "win32",

@@ -841,7 +841,7 @@ export async function devCommand(
 	try {
 		while (!stopping) {
 			if (watchHost === undefined) await delay(75);
-			else await watchHost.wait(watchHandle, 1000);
+			else await watchHost.wait(watchHandle, 50);
 			const changed = changedFiles(states, watchHost !== undefined || poll++ % 14 === 0);
 			if (changed.length === 0) {
 				const status = child === undefined ? undefined : processHost.status(child);

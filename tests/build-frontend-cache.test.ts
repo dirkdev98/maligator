@@ -2,6 +2,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	statSync,
 	utimesSync,
 	writeFileSync,
@@ -227,6 +228,56 @@ describe("normal build frontend cache", () => {
 		expect(changedDependency.fragmentArtifacts).toEqual({ hits: 1, misses: 1 });
 		expect(changedDependency.wires![0]).not.toEqual(changed.wires![0]);
 		expect(changedDependency.wires![1]).toEqual(changed.wires![1]);
+	});
+
+	it("retains dependency linkage validation across local exported-value edits", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.mjs");
+		const local = path.join(root, "local.mjs");
+		const dependencyDirectory = path.join(root, "node_modules/example-dependency");
+		const dependency = path.join(dependencyDirectory, "index.mjs");
+		const session = new BuildCompilationSession();
+		mkdirSync(dependencyDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(dependencyDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(dependency, `export const answer = 42;\n`);
+		write(local, `export const revision = 0;\n`);
+		write(
+			entrypoint,
+			`import { answer } from "example-dependency";\nimport { revision } from "./local.mjs";\nconsole.log(answer, revision);\n`,
+		);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-fragment-linkage-test",
+			cacheDirectory,
+			session,
+			optimization: "development" as const,
+			relocatable: true,
+		};
+
+		expect(compileBuildFrontend(options).fragmentArtifacts).toEqual({
+			hits: 0,
+			misses: 2,
+		});
+		expect(readdirSync(path.join(cacheDirectory, "linkages"))).toHaveLength(1);
+		write(local, `export const revision = 1;\n`);
+		session.invalidate(local);
+		expect(compileBuildFrontend(options).fragmentArtifacts).toEqual({
+			hits: 1,
+			misses: 1,
+		});
+		expect(readdirSync(path.join(cacheDirectory, "linkages"))).toHaveLength(1);
+
+		write(dependency, `export const answer = 43;\n`);
+		session.invalidate(dependency);
+		compileBuildFrontend(options);
+		expect(readdirSync(path.join(cacheDirectory, "linkages"))).toHaveLength(2);
 	});
 
 	it("falls back to a whole image for namespace imports across the boundary", () => {

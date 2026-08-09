@@ -450,32 +450,21 @@ function compileArtifact(
 	return { wire, definition, artifact, cache: "miss" };
 }
 
-function statementShape(statement: ESTree.Statement): unknown {
-	return JSON.parse(
-		JSON.stringify(statement, (key, value: unknown) =>
-			key === "loc" ? undefined : value,
-		),
-	) as unknown;
-}
-
-function linkageKey(identity: string, graph: ModuleGraph): string {
+function linkageKey(
+	identity: string,
+	graph: ModuleGraph,
+	plans: Array<PlannedImport>,
+): string {
 	return digest(
 		JSON.stringify({
 			identity,
+			plans,
 			modules: [...graph.modules.values()]
+				.filter((record) => externalModule(record.path))
 				.map((record) => ({
 					path: record.path,
 					goal: record.goal,
-					externalSource: externalModule(record.path) ? digest(record.source) : undefined,
-					boundary: record.parsed.ast.body
-						.filter(
-							(statement) =>
-								statement.type === "ImportDeclaration" ||
-								statement.type === "ExportNamedDeclaration" ||
-								statement.type === "ExportDefaultDeclaration" ||
-								statement.type === "ExportAllDeclaration",
-						)
-						.map(statementShape),
+					source: digest(record.source),
 				}))
 				.sort((left, right) =>
 					left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
@@ -603,7 +592,7 @@ function validateLinkage(
 	options: CompileBuildFragmentsOptions,
 	plans: Array<PlannedImport>,
 ): void {
-	const key = linkageKey(identity, options.graph);
+	const key = linkageKey(identity, options.graph, plans);
 	const marker = path.join(root, "linkages", `${key}.valid`);
 	if (existsSync(marker)) return;
 	const startedAt = Date.now();
