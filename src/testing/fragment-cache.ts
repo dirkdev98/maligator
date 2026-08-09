@@ -594,6 +594,7 @@ export function compileRelocatableTestImage(
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = environmentIdentity(options);
 	const session = options.session ?? new TestCompilationSession();
+	session.useCacheDirectory(options.cacheDirectory);
 	const phases = emptyPhases();
 	const validationStartedAt = Date.now();
 	const existing = readManifest(manifestPath(root, entries, identity));
@@ -608,6 +609,7 @@ export function compileRelocatableTestImage(
 	);
 	phases.validationMs = Date.now() - validationStartedAt;
 	if (hit !== undefined) {
+		session.flush();
 		hit.frontendMs = Date.now() - startedAt;
 		hit.phases = phases;
 		return hit;
@@ -662,6 +664,7 @@ export function compileRelocatableTestImage(
 		phases,
 	);
 	const dependencies = dependencyIdentities([planning, base], session);
+	session.flush();
 	const manifest: FragmentManifest = {
 		schema: FRAGMENT_SCHEMA,
 		identity,

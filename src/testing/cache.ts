@@ -281,6 +281,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 		serializeMs: 0,
 	};
 	const session = options.session ?? new TestCompilationSession();
+	session.useCacheDirectory(options.cacheDirectory);
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = cacheIdentity(options);
@@ -297,6 +298,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	);
 	phases.validationMs = Date.now() - validationStartedAt;
 	if (hit !== undefined) {
+		session.flush();
 		return {
 			wire: hit,
 			cache: "hit",
@@ -311,6 +313,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	const graph = buildTestGraph(options, entries, session);
 	phases.graphMs = Date.now() - graphStartedAt;
 	const dependencies = dependencyIdentities(graph, session);
+	session.flush();
 	const contentKey = digest(
 		JSON.stringify({
 			identity,

@@ -414,6 +414,10 @@ function compileAndBuild(
 		`${frontend.moduleParses.hits} reused, ${frontend.moduleParses.misses} parsed`,
 	);
 	reporter.detail(
+		"File digests",
+		`${frontend.fileDigests.hits} reused, ${frontend.fileDigests.misses} hashed`,
+	);
+	reporter.detail(
 		"Frontend phases",
 		`validation ${frontend.phases.validationMs}ms, graph ${frontend.phases.graphMs}ms, ` +
 			`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +

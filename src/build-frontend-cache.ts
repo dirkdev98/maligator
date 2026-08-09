@@ -71,6 +71,7 @@ export interface CompiledBuildFrontend {
 	phases: BuildFrontendPhases;
 	dependencies: Array<string>;
 	moduleParses: { hits: number; misses: number };
+	fileDigests: { hits: number; misses: number };
 	wires?: Array<Uint8Array>;
 	fragmentArtifacts?: { hits: number; misses: number };
 	fragmentFallback?: string;
@@ -294,12 +295,21 @@ export function compileBuildFrontend(
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = cacheIdentity(options);
 	const session = options.session ?? new BuildCompilationSession();
+	session.useCacheDirectory(options.cacheDirectory);
 	const parseStatsBefore = session.moduleParses.statistics();
+	const digestStatsBefore = session.digestStatistics();
 	const moduleParseStats = () => {
 		const current = session.moduleParses.statistics();
 		return {
 			hits: current.hits - parseStatsBefore.hits,
 			misses: current.misses - parseStatsBefore.misses,
+		};
+	};
+	const fileDigestStats = () => {
+		const current = session.digestStatistics();
+		return {
+			hits: current.hits - digestStatsBefore.hits,
+			misses: current.misses - digestStatsBefore.misses,
 		};
 	};
 
@@ -308,6 +318,7 @@ export function compileBuildFrontend(
 		const cached = loadCached(root, artifactRoot, entrypoint, identity, session);
 		phases.validationMs = Date.now() - validationStartedAt;
 		if (cached !== undefined) {
+			session.flush();
 			return {
 				definition: cached.definition,
 				wire: cached.wire,
@@ -317,6 +328,7 @@ export function compileBuildFrontend(
 				phases,
 				dependencies: cached.dependencies.map((dependency) => dependency.path),
 				moduleParses: moduleParseStats(),
+				fileDigests: fileDigestStats(),
 			};
 		}
 	}
@@ -383,6 +395,7 @@ export function compileBuildFrontend(
 	}
 	const wire = wires.at(-1)!;
 	const dependencies = graphDependencies(graph, session);
+	session.flush();
 	const key = contentKey(identity, entrypoint, dependencies);
 	const wireDigests = wires.map((fragmentWire) => {
 		cacheFrontendWire(fragmentWire, artifactRoot);
@@ -409,6 +422,7 @@ export function compileBuildFrontend(
 		phases,
 		dependencies: dependencies.map((dependency) => dependency.path),
 		moduleParses: moduleParseStats(),
+		fileDigests: fileDigestStats(),
 		fragmentArtifacts,
 		fragmentFallback,
 	};
