@@ -42,6 +42,14 @@ check(Temporal.PlainTime.compare("01:00", "02:00") === -1);
 check(time.until("13:34:56.987654321").hours === 1);
 check(time.round({ smallestUnit: "minute" }).toString() === "12:35:00");
 
+const instant = Temporal.Instant.from("1969-12-31T23:59:59.123456789Z");
+check(instant.epochNanoseconds === -876543211n);
+check(instant.epochMilliseconds === -877);
+check(instant.toString() === "1969-12-31T23:59:59.123456789Z");
+check(instant.add({ seconds: 1 }).toString() === "1970-01-01T00:00:00.123456789Z");
+check(Temporal.Instant.compare(instant, "1970-01-01T00:00:00Z") === -1);
+check(instant.until("1970-01-01T00:00:00.123456789Z").seconds === 1);
+
 const order = [];
 const bag = {};
 for (const name of [
@@ -94,6 +102,7 @@ check(threw);
 for (let i = 0; i < 200; i++) {
 	Temporal.Duration.from("PT1.000000001S").negated().abs();
 	Temporal.PlainTime.from("12:34:56.987654321").add({ nanoseconds: i });
+	Temporal.Instant.fromEpochNanoseconds(BigInt(i)).add({ nanoseconds: 1 });
 }
 
 let passed = 0;

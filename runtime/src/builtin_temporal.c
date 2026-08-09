@@ -4,8 +4,11 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "ascii.h"
+#include "builtin_bigint.h"
+#include "heap_bigint.h"
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "temporal_object.h"
@@ -14,7 +17,9 @@
 #include "vm.h"
 #include "vm_ops.h"
 #include "temporal_rs/Duration.h"
+#include "temporal_rs/Instant.h"
 #include "temporal_rs/PlainTime.h"
+#include "temporal_rs/TimeZone.h"
 
 // Maligator owns all observable JS coercion/property-order behavior; the
 // generated temporal_capi surface owns validated calendrical arithmetic.
@@ -1163,6 +1168,430 @@ static MalValue plain_time_value_of(
     return temporal_throw_type(vm, "Cannot convert Temporal.PlainTime to a primitive");
 }
 
+static I128Nanoseconds temporal_i128_to_nanoseconds(i128 value) {
+    bool negative = value < 0;
+    u128 magnitude = negative ? (u128) (-(value + 1)) + 1 : (u128) value;
+    return (I128Nanoseconds) {
+        .high = (u64) (magnitude >> 64) | (negative ? ((u64) 1 << 63) : 0),
+        .low = (u64) magnitude,
+    };
+}
+
+static i128 temporal_nanoseconds_to_i128(I128Nanoseconds value) {
+    bool negative = (value.high & ((u64) 1 << 63)) != 0;
+    u128 magnitude = ((u128) (value.high & ~((u64) 1 << 63)) << 64) | value.low;
+    if (!negative) return (i128) magnitude;
+    return magnitude == ((u128) 1 << 127) ? (i128) magnitude : -(i128) magnitude;
+}
+
+static bool instant_this(MalVm *vm, MalValue value, MalTemporalObject **out) {
+    if (!mal_value_is_temporal_object(value)) {
+        temporal_throw_type(vm, "Temporal.Instant method called on incompatible receiver");
+        return false;
+    }
+    MalTemporalObject *object = mal_value_to_temporal_object(value);
+    if (object->kind != MAL_TEMPORAL_INSTANT || object->handle == nullptr) {
+        temporal_throw_type(vm, "Temporal.Instant method called on incompatible receiver");
+        return false;
+    }
+    *out = object;
+    return true;
+}
+
+static MalValue instant_wrap(MalVm *vm, Instant *handle, MalObject *prototype) {
+    return mal_value_from_temporal_object(mal_temporal_object_new(
+        &vm->heap, prototype, MAL_TEMPORAL_INSTANT, handle));
+}
+
+static MalValue instant_wrap_intrinsic(MalVm *vm, Instant *handle) {
+    return instant_wrap(
+        vm, handle,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TEMPORAL_INSTANT_PROTOTYPE]));
+}
+
+static Instant *instant_from_bigint(MalVm *vm, MalValue value) {
+    i128 nanoseconds;
+    if (!mal_bigint_to_bigint(vm, value, &nanoseconds)) return nullptr;
+    temporal_rs_Instant_try_new_result result =
+        temporal_rs_Instant_try_new(temporal_i128_to_nanoseconds(nanoseconds));
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return nullptr;
+    }
+    return result.ok;
+}
+
+static MalValue instant_constructor(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        return temporal_throw_type(vm, "Temporal.Instant must be called with new");
+    }
+    Instant *handle = instant_from_bigint(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (handle == nullptr) return mal_value_new_undefined();
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_TEMPORAL_INSTANT_PROTOTYPE, &prototype)) {
+        temporal_rs_Instant_destroy(handle);
+        return mal_value_new_undefined();
+    }
+    return instant_wrap(vm, handle, prototype);
+}
+
+static Instant *instant_from_like(MalVm *vm, MalValue input) {
+    if (mal_value_is_temporal_object(input)) {
+        MalTemporalObject *object = mal_value_to_temporal_object(input);
+        if (object->kind == MAL_TEMPORAL_INSTANT && object->handle != nullptr) {
+            return temporal_rs_Instant_clone(object->handle);
+        }
+    }
+    if (!mal_value_is_string(input) && !mal_value_is_object(input)) {
+        temporal_throw_type(vm, "Temporal.Instant input must be a string or object");
+        return nullptr;
+    }
+    MalString *string;
+    if (!mal_vm_to_string(vm, input, &string)) return nullptr;
+    DiplomatString16View view = {
+        .data = (const char16_t *) mal_string_code_units(string),
+        .len = mal_string_length(string),
+    };
+    temporal_rs_Instant_from_utf16_result result = temporal_rs_Instant_from_utf16(view);
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return nullptr;
+    }
+    return result.ok;
+}
+
+static MalValue instant_from(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    Instant *handle = instant_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    return handle == nullptr ? mal_value_new_undefined() : instant_wrap_intrinsic(vm, handle);
+}
+
+static MalValue instant_from_epoch_milliseconds(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    f64 number;
+    if (!mal_vm_to_number(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &number)) {
+        return mal_value_new_undefined();
+    }
+    if (!isfinite(number) || trunc(number) != number ||
+        number < (f64) INT64_MIN || number >= -(f64) INT64_MIN) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid epoch milliseconds");
+        return mal_value_new_undefined();
+    }
+    temporal_rs_Instant_from_epoch_milliseconds_result result =
+        temporal_rs_Instant_from_epoch_milliseconds((i64) number);
+    return result.is_ok ? instant_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue instant_from_epoch_nanoseconds(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    Instant *handle = instant_from_bigint(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    return handle == nullptr ? mal_value_new_undefined() : instant_wrap_intrinsic(vm, handle);
+}
+
+static MalValue instant_epoch_milliseconds(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return mal_ops_number_value((f64) temporal_rs_Instant_epoch_milliseconds(object->handle));
+}
+
+static MalValue instant_epoch_nanoseconds(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
+    i128 nanoseconds = temporal_nanoseconds_to_i128(
+        temporal_rs_Instant_epoch_nanoseconds(object->handle));
+    return mal_value_from_bigint(mal_bigint_new(&vm->heap, nanoseconds));
+}
+
+static MalValue instant_compare(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    Instant *one = instant_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (one == nullptr) return mal_value_new_undefined();
+    Instant *two = instant_from_like(
+        vm, arg_count > 1 ? args[1] : mal_value_new_undefined());
+    if (two == nullptr) {
+        temporal_rs_Instant_destroy(one);
+        return mal_value_new_undefined();
+    }
+    i8 comparison = temporal_rs_Instant_compare(one, two);
+    temporal_rs_Instant_destroy(one);
+    temporal_rs_Instant_destroy(two);
+    return mal_value_from_i32(comparison);
+}
+
+static MalValue instant_add_or_subtract(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool subtract
+) {
+    MalTemporalObject *object;
+    if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
+    Duration *duration = duration_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (duration == nullptr) return mal_value_new_undefined();
+    Instant *handle = nullptr;
+    TemporalError error = {0};
+    bool ok;
+    if (subtract) {
+        temporal_rs_Instant_subtract_result result =
+            temporal_rs_Instant_subtract(object->handle, duration);
+        ok = result.is_ok;
+        if (ok) handle = result.ok; else error = result.err;
+    } else {
+        temporal_rs_Instant_add_result result =
+            temporal_rs_Instant_add(object->handle, duration);
+        ok = result.is_ok;
+        if (ok) handle = result.ok; else error = result.err;
+    }
+    temporal_rs_Duration_destroy(duration);
+    return ok ? instant_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
+}
+
+static MalValue instant_add(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return instant_add_or_subtract(vm, this_value, args, arg_count, false);
+}
+
+static MalValue instant_subtract(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return instant_add_or_subtract(vm, this_value, args, arg_count, true);
+}
+
+static MalValue instant_equals(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
+    Instant *other = instant_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (other == nullptr) return mal_value_new_undefined();
+    bool equal = temporal_rs_Instant_equals(object->handle, other);
+    temporal_rs_Instant_destroy(other);
+    return mal_value_new_boolean(equal);
+}
+
+static bool instant_difference_settings(
+    MalVm *vm, MalValue value, DifferenceSettings *settings
+) {
+    *settings = (DifferenceSettings) {0};
+    bool present;
+    if (!temporal_options_object(vm, value, &present)) return false;
+    Unit largest = Unit_Second;
+    Unit smallest = Unit_Nanosecond;
+    RoundingMode mode = RoundingMode_Trunc;
+    u32 increment = 1;
+    if (present &&
+        (!temporal_get_unit_option(
+             vm, value, "largestUnit", true, false, Unit_Auto, &largest) ||
+         !temporal_get_rounding_increment(vm, value, &increment) ||
+         !temporal_get_rounding_mode(vm, value, RoundingMode_Trunc, &mode) ||
+         !temporal_get_unit_option(
+             vm, value, "smallestUnit", false, false, Unit_Nanosecond, &smallest))) {
+        return false;
+    }
+    if (largest == Unit_Auto) {
+        largest = smallest > Unit_Second ? smallest : Unit_Second;
+    }
+    settings->largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
+    settings->smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
+    settings->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
+    settings->increment = (OptionU32) {.ok = increment, .is_ok = true};
+    return true;
+}
+
+static MalValue instant_difference(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool since
+) {
+    MalTemporalObject *object;
+    if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
+    Instant *other = instant_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (other == nullptr) return mal_value_new_undefined();
+    DifferenceSettings settings;
+    if (!instant_difference_settings(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &settings)) {
+        temporal_rs_Instant_destroy(other);
+        return mal_value_new_undefined();
+    }
+    Duration *handle = nullptr;
+    TemporalError error = {0};
+    bool ok;
+    if (since) {
+        temporal_rs_Instant_since_result result =
+            temporal_rs_Instant_since(object->handle, other, settings);
+        ok = result.is_ok;
+        if (ok) handle = result.ok; else error = result.err;
+    } else {
+        temporal_rs_Instant_until_result result =
+            temporal_rs_Instant_until(object->handle, other, settings);
+        ok = result.is_ok;
+        if (ok) handle = result.ok; else error = result.err;
+    }
+    temporal_rs_Instant_destroy(other);
+    return ok ? duration_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
+}
+
+static MalValue instant_since(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return instant_difference(vm, this_value, args, arg_count, true);
+}
+
+static MalValue instant_until(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return instant_difference(vm, this_value, args, arg_count, false);
+}
+
+static MalValue instant_round(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
+    RoundingOptions options;
+    if (!plain_time_rounding_options(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &options)) {
+        return mal_value_new_undefined();
+    }
+    temporal_rs_Instant_round_result result =
+        temporal_rs_Instant_round(object->handle, options);
+    return result.is_ok ? instant_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static bool temporal_time_zone_from_value(
+    MalVm *vm, MalValue value, TimeZone *zone
+) {
+    if (!mal_value_is_string(value) && !mal_value_is_object(value)) {
+        temporal_throw_type(vm, "Temporal time zone must be a string or object");
+        return false;
+    }
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    usize length;
+    byte *utf8 = mal_string_to_utf8(string, &length);
+    if (utf8 == nullptr) return temporal_throw_type(vm, "Unable to encode time zone"), false;
+    temporal_rs_TimeZone_try_from_str_result result = temporal_rs_TimeZone_try_from_str(
+        (DiplomatStringView) {.data = (const char *) utf8, .len = length});
+    free(utf8);
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return false;
+    }
+    *zone = result.ok;
+    return true;
+}
+
+static MalValue instant_to_string_impl(
+    MalVm *vm, MalValue this_value, MalValue options_value, bool read_options
+) {
+    MalTemporalObject *object;
+    if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
+    ToStringRoundingOptions options = {
+        .precision = {.is_minute = false, .precision = {.is_ok = false}},
+        .smallest_unit = {.is_ok = false},
+        .rounding_mode = {.ok = RoundingMode_Trunc, .is_ok = true},
+    };
+    TimeZone_option zone = {.is_ok = false};
+    if (read_options) {
+        if (!temporal_to_string_rounding_options(vm, options_value, &options)) {
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(options_value)) {
+            MalValue zone_value;
+            if (!mal_vm_get_property(
+                    vm, options_value, mal_intrinsic_string_key(vm, "timeZone"),
+                    &zone_value)) {
+                return mal_value_new_undefined();
+            }
+            if (!mal_value_is_undefined(zone_value)) {
+                if (!temporal_time_zone_from_value(vm, zone_value, &zone.ok)) {
+                    return mal_value_new_undefined();
+                }
+                zone.is_ok = true;
+            }
+        }
+    }
+    DiplomatWrite *write = diplomat_buffer_write_create(48);
+    if (write == nullptr) return temporal_throw_type(vm, "Unable to format Temporal.Instant");
+    temporal_rs_Instant_to_ixdtf_string_with_compiled_data_result result =
+        temporal_rs_Instant_to_ixdtf_string_with_compiled_data(
+            object->handle, zone, options, write);
+    if (!result.is_ok) {
+        diplomat_buffer_write_destroy(write);
+        return temporal_throw(vm, result.err);
+    }
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue instant_to_string(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return instant_to_string_impl(
+        vm, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(), true);
+}
+
+static MalValue instant_to_string_no_options(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return instant_to_string_impl(vm, this_value, mal_value_new_undefined(), false);
+}
+
+static MalValue instant_value_of(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return temporal_throw_type(vm, "Cannot convert Temporal.Instant to a primitive");
+}
+
 static MalValue temporal_unimplemented_constructor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee
@@ -1198,6 +1627,62 @@ static void temporal_install_placeholder(
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, temporal, name, vm->intrinsics[constructor_slot],
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+static void temporal_install_instant(MalVm *vm, MalObject *temporal) {
+    MalObject *object_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalObject *function_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, object_prototype);
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "Instant"), 1,
+        instant_constructor);
+    vm->intrinsics[MAL_INTRINSIC_TEMPORAL_INSTANT_CONSTRUCTOR] =
+        mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_TEMPORAL_INSTANT_PROTOTYPE] =
+        mal_value_from_object(prototype);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype",
+                              vm->intrinsics[MAL_INTRINSIC_TEMPORAL_INSTANT_PROTOTYPE],
+                              MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, "constructor",
+                              vm->intrinsics[MAL_INTRINSIC_TEMPORAL_INSTANT_CONSTRUCTOR],
+                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "compare", 2,
+                                  instant_compare);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "from", 1,
+                                  instant_from);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor,
+                                  "fromEpochMilliseconds", 1,
+                                  instant_from_epoch_milliseconds);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor,
+                                  "fromEpochNanoseconds", 1,
+                                  instant_from_epoch_nanoseconds);
+    mal_intrinsic_define_data(vm, temporal, "Instant",
+                              vm->intrinsics[MAL_INTRINSIC_TEMPORAL_INSTANT_CONSTRUCTOR],
+                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+
+    mal_intrinsic_define_accessor_n(
+        vm, prototype, mal_intrinsic_string_key(vm, "epochMilliseconds"),
+        "get epochMilliseconds", 0, instant_epoch_milliseconds, nullptr, 0, nullptr,
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_accessor_n(
+        vm, prototype, mal_intrinsic_string_key(vm, "epochNanoseconds"),
+        "get epochNanoseconds", 0, instant_epoch_nanoseconds, nullptr, 0, nullptr,
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_method_n(vm, prototype, "add", 1, instant_add);
+    mal_intrinsic_define_method_n(vm, prototype, "equals", 1, instant_equals);
+    mal_intrinsic_define_method_n(vm, prototype, "round", 1, instant_round);
+    mal_intrinsic_define_method_n(vm, prototype, "since", 1, instant_since);
+    mal_intrinsic_define_method_n(vm, prototype, "subtract", 1, instant_subtract);
+    mal_intrinsic_define_method_n(vm, prototype, "toJSON", 0,
+                                  instant_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0,
+                                  instant_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, instant_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "until", 1, instant_until);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, instant_value_of);
+    temporal_set_tag(vm, prototype, "Temporal.Instant");
 }
 
 static void temporal_install_plain_time(MalVm *vm, MalObject *temporal) {
@@ -1325,9 +1810,7 @@ void mal_builtin_temporal_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, duration_prototype, "valueOf", 0, duration_value_of);
     temporal_set_tag(vm, duration_prototype, "Temporal.Duration");
 
-    temporal_install_placeholder(vm, temporal, "Instant", 1,
-        MAL_INTRINSIC_TEMPORAL_INSTANT_CONSTRUCTOR,
-        MAL_INTRINSIC_TEMPORAL_INSTANT_PROTOTYPE);
+    temporal_install_instant(vm, temporal);
     MalObject *now = mal_object_new(&vm->heap, object_prototype);
     temporal_set_tag(vm, now, "Temporal.Now");
     mal_intrinsic_define_data(vm, temporal, "Now", mal_value_from_object(now),
