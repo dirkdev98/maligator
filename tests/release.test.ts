@@ -9,7 +9,9 @@ import { createReleaseArchive, deterministicTar } from "../scripts/release-archi
 import { nextAlphaVersion } from "../scripts/release-version.ts";
 import {
 	createLauncherPackageJson,
+	matchingPublishedIntegrity,
 	NPM_WEB_LOGIN_ARGUMENTS,
+	preparedTarballIntegrity,
 	selectReleaseTargetTriples,
 } from "../scripts/release.ts";
 import { createBuildArtifact } from "../src/build-artifact.ts";
@@ -157,6 +159,20 @@ describe("release targets", () => {
 describe("npm launcher", () => {
 	it("requires web authentication before release publishing", () => {
 		expect(NPM_WEB_LOGIN_ARGUMENTS).toEqual(["login", "--auth-type", "web"]);
+	});
+
+	it("resumes only when an existing package has identical tarball contents", () => {
+		const tarball = Buffer.from("prepared npm tarball");
+		const integrity = preparedTarballIntegrity(tarball);
+		expect(matchingPublishedIntegrity("@maligator/cli", undefined, tarball)).toBe(false);
+		expect(matchingPublishedIntegrity("@maligator/cli", integrity, tarball)).toBe(true);
+		expect(() =>
+			matchingPublishedIntegrity(
+				"@maligator/cli",
+				preparedTarballIntegrity(Buffer.from("different tarball")),
+				tarball,
+			),
+		).toThrow("already published with different contents");
 	});
 
 	it("publishes the helper runtime and TypeScript declarations", () => {

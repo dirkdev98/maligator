@@ -475,6 +475,57 @@ function packRelease(args: Array<string>): void {
 	releaseLog(`npm tarballs ready: ${packs}`);
 }
 
+export function preparedTarballIntegrity(bytes: Uint8Array): string {
+	return `sha512-${hash("sha512", bytes, "base64")}`;
+}
+
+export function matchingPublishedIntegrity(
+	packageName: string,
+	publishedIntegrity: string | undefined,
+	tarball: Uint8Array,
+): boolean {
+	if (publishedIntegrity === undefined) return false;
+	const preparedIntegrity = preparedTarballIntegrity(tarball);
+	if (publishedIntegrity !== preparedIntegrity) {
+		throw new Error(
+			`${packageName} is already published with different contents; refusing to continue`,
+		);
+	}
+	return true;
+}
+
+function publishedPackageIntegrity(
+	packageName: string,
+	version: string,
+): string | undefined {
+	const view = spawnSync(
+		"npm",
+		["view", `${packageName}@${version}`, "dist.integrity", "--json"],
+		{
+			cwd: repositoryRoot,
+			encoding: "utf-8",
+			env: npmEnvironment(),
+		},
+	);
+	if (view.error !== undefined) throw view.error;
+	if (view.status !== 0) {
+		const output = `${view.stdout ?? ""}\n${view.stderr ?? ""}`;
+		if (output.includes("E404") || output.includes("No match found for version")) {
+			return undefined;
+		}
+		throw new Error(
+			view.signal === null
+				? `npm view exited with status ${view.status}: ${output.trim()}`
+				: `npm view terminated by ${view.signal}`,
+		);
+	}
+	const integrity: unknown = JSON.parse(view.stdout);
+	if (typeof integrity !== "string") {
+		throw new Error(`npm returned invalid integrity metadata for ${packageName}`);
+	}
+	return integrity;
+}
+
 function publishRelease(args: Array<string>): void {
 	const version = packageVersion();
 	if (args.length !== 2 || args[0] !== "--confirm" || args[1] !== version) {
@@ -534,11 +585,23 @@ function publishRelease(args: Array<string>): void {
 		if (typeof entry.file !== "string")
 			throw new Error("invalid packed package manifest");
 		const tarball = path.join(releaseRoot, "packs", entry.file);
-		const digest = hash("sha256", readFileSync(tarball), "hex");
+		const tarballBytes = readFileSync(tarball);
+		const digest = hash("sha256", tarballBytes, "hex");
 		if (digest !== entry.sha256) throw new Error(`packed tarball changed: ${entry.file}`);
-		releaseLog(
-			`[${index + 1}/${expectedNames.length}] publishing ${expectedNames[index]}`,
-		);
+		const packageName = expectedNames[index]!;
+		if (
+			matchingPublishedIntegrity(
+				packageName,
+				publishedPackageIntegrity(packageName, version),
+				tarballBytes,
+			)
+		) {
+			releaseLog(
+				`[${index + 1}/${expectedNames.length}] ${packageName} already published; integrity matches`,
+			);
+			continue;
+		}
+		releaseLog(`[${index + 1}/${expectedNames.length}] publishing ${packageName}`);
 		const publish = spawnSync(
 			"npm",
 			["publish", tarball, "--access", "public", "--tag", "alpha"],
