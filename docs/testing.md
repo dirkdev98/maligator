@@ -4,6 +4,19 @@ Maligator uses three cumulative test tiers. The two-minute check is the normal
 developer gate. The smoke tier is primarily an early fuse inside larger runs,
 and the full tier is exhaustive rather than interactive.
 
+## DX performance exercise
+
+`npm run bench:dx -- <maligator-binary>` creates an isolated representative
+Express, Drizzle, Valibot, SQLite, and TypeScript project. It reports cold and
+warm `run` and `test` latency plus initial `dev` readiness and a leaf-edit restart.
+The generated project and cache are removed afterward. Add `--assets` after the
+binary to include the deliberately slower 100-file configured-asset path; this is
+optional while development assets still require the native toolchain.
+
+The exercise records measurements rather than enforcing machine-specific timing
+thresholds. Performance changes should compare the same binary, host, and cache
+scenario before and after the change.
+
 ## Tiers
 
 | Tier  | Command              | Policy                    | Intended use                                                                                     |

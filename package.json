@@ -24,6 +24,7 @@
 	},
 	"scripts": {
 		"bench": "node ./scripts/bench.ts",
+		"bench:dx": "node ./scripts/dx-performance.ts",
 		"format": "oxfmt",
 		"lint": "eslint . --concurrency=auto --fix --cache --cache-location .cache/eslint/ && oxfmt",
 		"lint:ci": "eslint . --concurrency=auto && oxfmt --check",
