@@ -49,7 +49,10 @@ describe("relocatable test fragment cache", () => {
 	test("installs Node-compatible globals in interpreted test images", () => {
 		const root = temporaryDirectory();
 		const compiled = compileRelocatableTestImage({
-			files: [path.resolve("tests/fixtures/node-headers.test.ts")],
+			files: [
+				path.resolve("tests/fixtures/node-headers.test.ts"),
+				path.resolve("tests/fixtures/node-fetch.test.ts"),
+			],
 			config: resolveBuildConfig({ surface: { node: true } }),
 			stripTypes: stripTypesWithTypeScript,
 			stripperIdentity: "node-globals-regression",
@@ -64,6 +67,7 @@ describe("relocatable test fragment cache", () => {
 		expect(compiled.cache).toBe("miss");
 		expect(compiled.wires.map((wire) => wire.kind)).toEqual([
 			"base",
+			"entry",
 			"entry",
 			"runner",
 		]);

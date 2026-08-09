@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await -- This source is compiled inside Maligator, whose Node host objects intentionally have no TypeScript declarations. */
+
+import { request as nodeRequest } from "node:http";
+
 class MaligatorHeaders {
 	constructor(init = undefined) {
 		/** @type {Map<string, string>} */
@@ -103,4 +107,77 @@ class MaligatorHeaders {
 
 if (typeof globalThis.Headers !== "function") globalThis.Headers = MaligatorHeaders;
 
-export { MaligatorHeaders };
+class MaligatorResponse {
+	constructor(body, init = {}) {
+		this._body = body;
+		this.status = init.status ?? 200;
+		this.statusText = init.statusText ?? "";
+		this.headers = new MaligatorHeaders(init.headers);
+		this.url = init.url ?? "";
+		this.redirected = false;
+		this.type = "basic";
+	}
+
+	get ok() {
+		return this.status >= 200 && this.status <= 299;
+	}
+
+	async text() {
+		return this._body.toString("utf8");
+	}
+
+	async json() {
+		return JSON.parse(await this.text());
+	}
+
+	async arrayBuffer() {
+		const copy = new Uint8Array(this._body.length);
+		copy.set(this._body);
+		return copy.buffer;
+	}
+
+	async bytes() {
+		const copy = new Uint8Array(this._body.length);
+		copy.set(this._body);
+		return copy;
+	}
+}
+
+function maligatorFetch(input, init = {}) {
+	return new Promise((resolve, reject) => {
+		const headers = new MaligatorHeaders(init.headers);
+		const requestHeaders = Object.create(null);
+		for (const [name, value] of headers) requestHeaders[name] = value;
+		const url = String(input);
+		const request = nodeRequest(
+			url,
+			{
+				method: init.method ?? "GET",
+				headers: requestHeaders,
+			},
+			(response) => {
+				const chunks = [];
+				response.on("data", (chunk) => chunks.push(chunk));
+				response.on("error", reject);
+				response.on("end", () => {
+					resolve(
+						new MaligatorResponse(Buffer.concat(chunks), {
+							status: response.statusCode ?? 0,
+							statusText: response.statusMessage ?? "",
+							headers: response.headers,
+							url,
+						}),
+					);
+				});
+			},
+		);
+		request.on("error", reject);
+		if (init.body !== undefined && init.body !== null) request.write(init.body);
+		request.end();
+	});
+}
+
+if (typeof globalThis.Response !== "function") globalThis.Response = MaligatorResponse;
+if (typeof globalThis.fetch !== "function") globalThis.fetch = maligatorFetch;
+
+export { MaligatorHeaders, MaligatorResponse, maligatorFetch };

@@ -273,6 +273,7 @@ setTimeout(() => {
 		path.join(project, "example.test.ts"),
 		`import { beforeEach, expect, test } from "maligator:test";
 import { basename, join } from "node:path";
+import { createServer } from "node:http";
 
 let value: string;
 beforeEach(() => {
@@ -282,6 +283,17 @@ test("interprets async tests with host dependencies", async () => {
 \tawait expect(Promise.resolve(basename(value))).resolves.toBe("answer.ts");
 \texpect(typeof Headers).toBe("function");
 \texpect(new Headers({ "x-test": "yes" }).get("x-test")).toBe("yes");
+\tconst server = createServer((_request, response) => {
+\t\tresponse.setHeader("content-type", "application/json");
+\t\tresponse.end(JSON.stringify({ answer: 42 }));
+\t});
+\tawait new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+\tconst address = server.address();
+\tconst response = await fetch("http://127.0.0.1:" + address.port + "/answer");
+\texpect(response.status).toBe(200);
+\texpect(response.headers.get("content-type")).toBe("application/json");
+\tawait expect(response.json()).resolves.toMatchObject({ answer: 42 });
+\tawait new Promise((resolve) => server.close(resolve));
 });
 `,
 	);
