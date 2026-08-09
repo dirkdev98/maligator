@@ -50,6 +50,19 @@ check(instant.add({ seconds: 1 }).toString() === "1970-01-01T00:00:00.123456789Z
 check(Temporal.Instant.compare(instant, "1970-01-01T00:00:00Z") === -1);
 check(instant.until("1970-01-01T00:00:00.123456789Z").seconds === 1);
 
+const date = Temporal.PlainDate.from("2024-02-29");
+check(date.calendarId === "iso8601");
+check(date.dayOfYear === 60);
+check(date.inLeapYear === true);
+check(date.add({ years: 1 }).toString() === "2025-02-28");
+check(date.until("2024-03-02").days === 2);
+
+const dateTime = Temporal.PlainDateTime.from("2024-02-29T23:59:58.123456789");
+check(dateTime.toPlainDate().equals(date));
+check(dateTime.toPlainTime().nanosecond === 789);
+check(dateTime.add({ seconds: 2 }).toString() === "2024-03-01T00:00:00.123456789");
+check(dateTime.withPlainTime("12:30").toString() === "2024-02-29T12:30:00");
+
 const order = [];
 const bag = {};
 for (const name of [
@@ -103,6 +116,8 @@ for (let i = 0; i < 200; i++) {
 	Temporal.Duration.from("PT1.000000001S").negated().abs();
 	Temporal.PlainTime.from("12:34:56.987654321").add({ nanoseconds: i });
 	Temporal.Instant.fromEpochNanoseconds(BigInt(i)).add({ nanoseconds: 1 });
+	Temporal.PlainDate.from("2024-02-29").add({ days: i % 7 });
+	Temporal.PlainDateTime.from("2024-02-29T12:34:56.987654321").toPlainTime();
 }
 
 let passed = 0;
