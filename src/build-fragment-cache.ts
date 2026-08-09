@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "./build-config.ts";
@@ -35,7 +42,7 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const FRAGMENT_SCHEMA = 3;
+const FRAGMENT_SCHEMA = 4;
 const CACHE_DIRECTORY = ".cache/mal-cache/build-fragments";
 const LINKED_MODULES_GLOBAL = "__maligatorDevelopmentLinkedModules";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
@@ -49,11 +56,24 @@ interface PlannedImport {
 
 interface CompiledArtifact {
 	wire: Uint8Array;
+	definition: ReturnType<typeof compileSemanticProgramToVmDefinition>;
+	artifact: BuildFragmentArtifact;
 	cache: "hit" | "miss";
+}
+
+export interface BuildFragmentArtifact {
+	digest: string;
+	path: string;
+	size: number;
+	mtimeMs: number;
+	ctimeMs: number;
+	ino: number;
+	dev: number;
 }
 
 export interface CompiledBuildFragments {
 	wires: Array<Uint8Array>;
+	artifacts: Array<BuildFragmentArtifact>;
 	definition: ReturnType<typeof compileSemanticProgramToVmDefinition>;
 	artifactHits: number;
 	artifactMisses: number;
@@ -318,6 +338,42 @@ function graphKey(identity: string, kind: string, graph: ModuleGraph): string {
 	);
 }
 
+function artifactIdentity(
+	digest: string,
+	artifactRoot: string,
+): BuildFragmentArtifact | undefined {
+	try {
+		const file = frontendWirePath(digest, artifactRoot);
+		const stats = statSync(file);
+		if (!stats.isFile()) return undefined;
+		return {
+			digest,
+			path: file,
+			size: stats.size,
+			mtimeMs: stats.mtimeMs,
+			ctimeMs: stats.ctimeMs,
+			ino: stats.ino,
+			dev: stats.dev,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function validArtifact(artifact: BuildFragmentArtifact, artifactRoot: string): boolean {
+	if (!/^[0-9a-f]{64}$/.test(artifact.digest)) return false;
+	const current = artifactIdentity(artifact.digest, artifactRoot);
+	return (
+		current !== undefined &&
+		current.path === artifact.path &&
+		current.size === artifact.size &&
+		current.mtimeMs === artifact.mtimeMs &&
+		current.ctimeMs === artifact.ctimeMs &&
+		current.ino === artifact.ino &&
+		current.dev === artifact.dev
+	);
+}
+
 function compileArtifact(
 	root: string,
 	artifactRoot: string,
@@ -325,23 +381,39 @@ function compileArtifact(
 	kind: string,
 	graph: ModuleGraph,
 	options: CompileBuildFragmentsOptions,
-): CompiledArtifact & {
-	definition: ReturnType<typeof compileSemanticProgramToVmDefinition>;
-} {
+): CompiledArtifact {
 	const key = graphKey(identity, kind, graph);
 	const mappingPath = path.join(root, "artifacts", `${key}.json`);
 	try {
 		const reference = JSON.parse(readFileSync(mappingPath, "utf-8")) as {
-			digest?: string;
+			schema?: number;
+			artifact?: BuildFragmentArtifact;
 		};
-		if (reference.digest === undefined) throw new Error("missing artifact digest");
-		const wire = new Uint8Array(
-			readFileSync(frontendWirePath(reference.digest, artifactRoot)),
-		);
-		if (digest(wire) !== reference.digest) throw new Error("corrupt artifact");
+		if (
+			reference.schema !== 1 ||
+			reference.artifact === undefined ||
+			!validArtifact(reference.artifact, artifactRoot)
+		) {
+			throw new Error("invalid fragment artifact reference");
+		}
+		let wire: Uint8Array | undefined;
+		let definition: ReturnType<typeof deserializeVmDefinition> | undefined;
+		const loadWire = () => {
+			if (wire !== undefined) return wire;
+			wire = new Uint8Array(readFileSync(reference.artifact!.path));
+			if (digest(wire) !== reference.artifact!.digest) {
+				throw new Error("corrupt fragment artifact");
+			}
+			return wire;
+		};
 		return {
-			wire,
-			definition: deserializeVmDefinition(wire),
+			get wire() {
+				return loadWire();
+			},
+			get definition() {
+				return (definition ??= deserializeVmDefinition(loadWire()));
+			},
+			artifact: reference.artifact,
 			cache: "hit",
 		};
 	} catch {
@@ -370,8 +442,12 @@ function compileArtifact(
 	options.phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = digest(wire);
 	cacheFrontendWire(wire, artifactRoot);
-	publish(mappingPath, `${JSON.stringify({ digest: wireDigest })}\n`);
-	return { wire, definition, cache: "miss" };
+	const artifact = artifactIdentity(wireDigest, artifactRoot);
+	if (artifact === undefined) {
+		throw new Error(`fragment artifact is missing after publication: ${wireDigest}`);
+	}
+	publish(mappingPath, `${JSON.stringify({ schema: 1, artifact })}\n`);
+	return { wire, definition, artifact, cache: "miss" };
 }
 
 function statementShape(statement: ESTree.Statement): unknown {
@@ -574,7 +650,10 @@ export function compileBuildFragments(
 		(artifact) => artifact.cache === "hit",
 	).length;
 	return {
-		wires: [baseArtifact.wire, applicationArtifact.wire],
+		get wires() {
+			return [baseArtifact.wire, applicationArtifact.wire];
+		},
+		artifacts: [baseArtifact.artifact, applicationArtifact.artifact],
 		definition: applicationArtifact.definition,
 		artifactHits: hits,
 		artifactMisses: 2 - hits,

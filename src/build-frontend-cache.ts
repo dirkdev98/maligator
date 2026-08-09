@@ -464,7 +464,9 @@ export function compileBuildFrontend(
 
 	const semanticStartedAt = Date.now();
 	let definition: VmDefinition;
-	let wires: Array<Uint8Array>;
+	let wires: Array<Uint8Array> | undefined;
+	let fragmentArtifactIdentities: Array<BuildFrontendArtifactIdentity> | undefined;
+	let loadFragmentWires: (() => Array<Uint8Array>) | undefined;
 	let fragmentArtifacts: { hits: number; misses: number } | undefined;
 	let fragmentFallback: string | undefined;
 	if (
@@ -485,7 +487,17 @@ export function compileBuildFrontend(
 				onCompilePhase: options.onCompilePhase,
 			});
 			definition = fragments.definition;
-			wires = fragments.wires;
+			fragmentArtifactIdentities = fragments.artifacts.map(
+				({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
+					digest: artifactDigest,
+					size,
+					mtimeMs,
+					ctimeMs,
+					ino,
+					dev,
+				}),
+			);
+			loadFragmentWires = () => fragments.wires;
 			fragmentArtifacts = {
 				hits: fragments.artifactHits,
 				misses: fragments.artifactMisses,
@@ -514,19 +526,20 @@ export function compileBuildFrontend(
 		wires = [serializeVmDefinition(definition)];
 		phases.serializeMs = Date.now() - serializeStartedAt;
 	}
-	const wire = wires.at(-1)!;
 	const dependencies = graphDependencies(graph, session);
 	session.flush();
 	const key = contentKey(identity, entrypoint, dependencies);
-	const artifacts = wires.map((fragmentWire) => {
-		const wireDigest = digest(fragmentWire);
-		cacheFrontendWire(fragmentWire, artifactRoot);
-		const artifact = artifactIdentity(wireDigest, artifactRoot);
-		if (artifact === undefined) {
-			throw new Error(`frontend artifact is missing after publication: ${wireDigest}`);
-		}
-		return artifact;
-	});
+	const artifacts =
+		fragmentArtifactIdentities ??
+		wires!.map((fragmentWire) => {
+			const wireDigest = digest(fragmentWire);
+			cacheFrontendWire(fragmentWire, artifactRoot);
+			const artifact = artifactIdentity(wireDigest, artifactRoot);
+			if (artifact === undefined) {
+				throw new Error(`frontend artifact is missing after publication: ${wireDigest}`);
+			}
+			return artifact;
+		});
 	const definitionStats = vmDefinitionStats(definition);
 	publish(
 		manifestPath(root, entrypoint, identity),
@@ -541,10 +554,15 @@ export function compileBuildFrontend(
 		} satisfies BuildFrontendManifest)}\n`,
 	);
 
+	const materializeWires = () => (wires ??= loadFragmentWires!());
 	return {
 		definition,
-		wire,
-		wires: wires.length > 1 ? wires : undefined,
+		get wire() {
+			return materializeWires().at(-1)!;
+		},
+		get wires() {
+			return artifacts.length > 1 ? materializeWires() : undefined;
+		},
 		cache: "miss",
 		frontendMs: Date.now() - startedAt,
 		phases,
