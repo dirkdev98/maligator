@@ -119,7 +119,9 @@ export const createService = (initial: number): Service => {
 		const stripped = stripCompactTypes(source, "nested-concise-factory.ts");
 
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "nested-concise-factory.ts"));
-		expect(() => parseScript(stripped.replace("export ", ""), { strict: true })).not.toThrow();
+		expect(() =>
+			parseScript(stripped.replace("export ", ""), { strict: true }),
+		).not.toThrow();
 	});
 
 	test("strips common erasable expression and function syntax", () => {

@@ -1208,7 +1208,8 @@ function blankNonNullAssertions(
 			: undefined;
 		if (
 			(isIdentifierPart(source[before]) &&
-				(precedingWord === undefined || !expressionPrefixWords.has(precedingWord.text))) ||
+				(precedingWord === undefined ||
+					!expressionPrefixWords.has(precedingWord.text))) ||
 			source[before] === ")" ||
 			source[before] === "]"
 		) {

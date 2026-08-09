@@ -144,14 +144,18 @@ const noOverrides = new Map<string, Exclude<AccessOverride, "inherit">>();
 if (
 	resolveAccess({ overrides: noOverrides, ruleId: "locked-rule", settings: ruleSettings })
 		.isUnlocked !== false ||
-	resolveAccess({ overrides: noOverrides, ruleId: "unlocked-rule", settings: ruleSettings })
-		.isUnlocked !== true
+	resolveAccess({
+		overrides: noOverrides,
+		ruleId: "unlocked-rule",
+		settings: ruleSettings,
+	}).isUnlocked !== true
 ) {
 	throw new Error("nested Map-derived access resolution changed its boolean");
 }
 if (
-	lockedDependencies(["locked-rule", "unlocked-rule"], ruleSettings, noOverrides).join(",") !==
-	"locked-rule"
+	lockedDependencies(["locked-rule", "unlocked-rule"], ruleSettings, noOverrides).join(
+		",",
+	) !== "locked-rule"
 ) {
 	throw new Error("filter inverted a nested Map-derived boolean");
 }
