@@ -328,6 +328,38 @@ test("interprets async tests with host dependencies", async () => {
 		"ok   test interpreted TypeScript and node:path without an available native compiler",
 	);
 
+	const callableCommonjs = path.join(project, "node_modules", "callable-commonjs");
+	mkdirSync(callableCommonjs, { recursive: true });
+	writeFileSync(
+		path.join(callableCommonjs, "package.json"),
+		`{"main":"index.cjs"}\n`,
+	);
+	writeFileSync(
+		path.join(callableCommonjs, "index.cjs"),
+		`module.exports = function callableCommonjs() { return 42; };\n`,
+	);
+	writeFileSync(
+		path.join(project, "commonjs-default.test.ts"),
+		`import callableCommonjs from "callable-commonjs";
+import { expect, test } from "maligator:test";
+
+test("CommonJS default exports remain callable", () => {
+	expect(typeof callableCommonjs).toBe("function");
+	expect(callableCommonjs()).toBe(42);
+});
+`,
+	);
+	const commonjsDefaultOutput = invoke(
+		["test", "commonjs-default.test.ts"],
+		testOnlyEnv,
+	);
+	if (!commonjsDefaultOutput.includes("1 passed, 0 failed")) {
+		throw new Error(
+			`CommonJS default import test failed:\n${commonjsDefaultOutput}`,
+		);
+	}
+	console.log("ok   test preserved callable CommonJS default exports");
+
 	writeFileSync(
 		path.join(project, "namespace.test.ts"),
 		`import { expect, test } from "maligator:test";

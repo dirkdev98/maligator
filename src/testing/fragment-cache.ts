@@ -64,6 +64,7 @@ interface FragmentManifest {
 interface PlannedImport {
 	specifier: string;
 	target: string;
+	commonjs: boolean;
 	names: Array<string>;
 }
 
@@ -478,6 +479,7 @@ function planEntry(
 				// runtime.mjs twice: file-boundary globals would update one suite tree
 				// while imported test() registered into the other.
 				target: specifier === TEST_MODULE_ID ? TEST_MODULE_ID : dependency.resolvedPath,
+				commonjs: graph.modules.get(dependency.resolvedPath)?.goal === "cjs",
 				names: [],
 			};
 			imports.set(specifier, planned);
@@ -526,7 +528,7 @@ function planningGraph(
 	});
 }
 
-function facadeSource(target: string, names: Array<string>): string {
+function facadeSource(target: string, names: Array<string>, commonjs: boolean): string {
 	if (names.length === 0) return "";
 	const registry = isExternalModule(target)
 		? DEVELOPMENT_LINKED_MODULES_GLOBAL
@@ -536,7 +538,11 @@ function facadeSource(target: string, names: Array<string>): string {
 	];
 	for (const [index, name] of names.entries()) {
 		const local = `__maligatorImport${index}`;
-		lines.push(`const ${local} = __namespace[${JSON.stringify(name)}];`);
+		const value =
+			commonjs && name === "default"
+				? "__namespace"
+				: `__namespace[${JSON.stringify(name)}]`;
+		lines.push(`const ${local} = ${value};`);
 		lines.push(
 			name === "default" ? `export default ${local};` : `export { ${local} as ${name} };`,
 		);
@@ -561,7 +567,7 @@ function fragmentGraph(
 	>();
 	for (const planned of plan.imports) {
 		virtualModules.set(planned.specifier, {
-			source: facadeSource(planned.target, planned.names),
+			source: facadeSource(planned.target, planned.names, planned.commonjs),
 			goal: "module",
 		});
 	}
