@@ -319,13 +319,13 @@ export function executeIROptimizations(program: IntermediateProgram) {
  * the production pipeline above.
  */
 export function executeIRDevelopmentOptimizations(program: IntermediateProgram): void {
+	// Keep only normalization required by lowering and resumable execution. The
+	// production passes below reduce output by about 20%, but on representative
+	// dependency graphs their repeated Map/Set scans cost substantially more than
+	// the larger development wire costs to lower, serialize, load, and execute.
 	optDropInstructionsAfterJumpsOrReturns(program);
 	optDropUnreferencedBlocks(program);
 	optLocalsToRegister(program);
-	optCopyPropagation(program);
-	optDeadInstructionElimination(program);
-	optCombineLinearBlocks(program);
-	optPatchJumpsToDirectJumpBlocks(program);
 	annotateTerminalYieldSites(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);
