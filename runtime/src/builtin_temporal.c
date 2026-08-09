@@ -36,6 +36,9 @@ static MalValue plain_date_time_wrap_intrinsic(MalVm *vm, PlainDateTime *handle)
 static MalValue plain_month_day_wrap_intrinsic(MalVm *vm, PlainMonthDay *handle);
 static MalValue plain_year_month_wrap_intrinsic(MalVm *vm, PlainYearMonth *handle);
 static MalValue zoned_date_time_wrap_intrinsic(MalVm *vm, ZonedDateTime *handle);
+static bool temporal_to_string_rounding_options(
+    MalVm *vm, MalValue value, ToStringRoundingOptions *options);
+static MalValue temporal_write_to_string(MalVm *vm, DiplomatWrite *write);
 
 static MalValue temporal_throw(MalVm *vm, TemporalError error) {
     MalIntrinsic kind = error.kind == ErrorKind_Type
@@ -391,6 +394,28 @@ static MalValue duration_to_string(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee
 ) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!duration_this(vm, this_value, &object)) return mal_value_new_undefined();
+    ToStringRoundingOptions options;
+    if (!temporal_to_string_rounding_options(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &options)) {
+        return mal_value_new_undefined();
+    }
+    DiplomatWrite *write = diplomat_buffer_write_create(64);
+    temporal_rs_Duration_to_string_result result =
+        temporal_rs_Duration_to_string(object->handle, options, write);
+    if (!result.is_ok) {
+        diplomat_buffer_write_destroy(write);
+        return temporal_throw(vm, result.err);
+    }
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue duration_to_string_no_options(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
     (void) args; (void) arg_count; (void) new_target; (void) callee;
     return duration_to_string_default(vm, this_value);
 }
@@ -593,12 +618,68 @@ static bool temporal_calendar_kind(
         *kind = AnyCalendarKind_Iso;
         return true;
     }
-    if (!mal_value_is_string(value) && !mal_value_is_object(value)) {
-        temporal_throw_type(vm, "Temporal calendar must be a string or object");
+    if (mal_value_is_temporal_object(value)) {
+        MalTemporalObject *object = mal_value_to_temporal_object(value);
+        const Calendar *calendar = nullptr;
+        switch (object->kind) {
+            case MAL_TEMPORAL_PLAIN_DATE:
+                calendar = temporal_rs_PlainDate_calendar(object->handle); break;
+            case MAL_TEMPORAL_PLAIN_DATE_TIME:
+                calendar = temporal_rs_PlainDateTime_calendar(object->handle); break;
+            case MAL_TEMPORAL_PLAIN_MONTH_DAY:
+                calendar = temporal_rs_PlainMonthDay_calendar(object->handle); break;
+            case MAL_TEMPORAL_PLAIN_YEAR_MONTH:
+                calendar = temporal_rs_PlainYearMonth_calendar(object->handle); break;
+            case MAL_TEMPORAL_ZONED_DATE_TIME:
+                calendar = temporal_rs_ZonedDateTime_calendar(object->handle); break;
+            case MAL_TEMPORAL_DURATION:
+            case MAL_TEMPORAL_INSTANT:
+            case MAL_TEMPORAL_PLAIN_TIME:
+                break;
+        }
+        if (calendar != nullptr) {
+            DiplomatStringView identifier = temporal_rs_Calendar_identifier(calendar);
+            temporal_rs_AnyCalendarKind_get_for_str_result result =
+                temporal_rs_AnyCalendarKind_get_for_str(identifier);
+            if (result.is_ok) { *kind = result.ok; return true; }
+        }
+    }
+    if (!mal_value_is_string(value)) {
+        temporal_throw_type(vm, "Temporal calendar must be a string");
         return false;
     }
-    MalString *string;
-    if (!mal_vm_to_string(vm, value, &string)) return false;
+    MalString *string = mal_value_to_string(value);
+    usize length;
+    byte *utf8 = mal_string_to_utf8(string, &length);
+    if (utf8 == nullptr) return temporal_throw_type(vm, "Unable to encode calendar"), false;
+    temporal_rs_AnyCalendarKind_get_for_str_result result =
+        temporal_rs_AnyCalendarKind_get_for_str(
+            (DiplomatStringView) {.data = (const char *) utf8, .len = length});
+    free(utf8);
+    if (!result.is_ok) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal calendar");
+        return false;
+    }
+    *kind = result.ok;
+    return true;
+}
+
+static bool temporal_calendar_string(
+    MalVm *vm, MalValue value, AnyCalendarKind *kind
+) {
+    if (mal_value_is_undefined(value)) {
+        *kind = AnyCalendarKind_Iso;
+        return true;
+    }
+    if (mal_value_is_temporal_object(value)) {
+        return temporal_calendar_kind(vm, value, kind);
+    }
+    if (!mal_value_is_string(value)) {
+        temporal_throw_type(vm, "Temporal calendar must be a string");
+        return false;
+    }
+    MalString *string = mal_value_to_string(value);
     usize length;
     byte *utf8 = mal_string_to_utf8(string, &length);
     if (utf8 == nullptr) return temporal_throw_type(vm, "Unable to encode calendar"), false;
@@ -646,6 +727,184 @@ static bool temporal_display_calendar(
         return false;
     }
     return true;
+}
+
+static bool duration_relative_to(
+    MalVm *vm, MalValue options, RelativeTo *relative
+) {
+    *relative = (RelativeTo) {0};
+    bool present;
+    if (!temporal_options_object(vm, options, &present)) return false;
+    if (!present) return true;
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, "relativeTo"), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    if (mal_value_is_temporal_object(value)) {
+        MalTemporalObject *object = mal_value_to_temporal_object(value);
+        if (object->kind == MAL_TEMPORAL_PLAIN_DATE) {
+            relative->date = object->handle;
+            return true;
+        }
+        if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME) {
+            relative->zoned = object->handle;
+            return true;
+        }
+    }
+    temporal_throw_type(vm, "Unsupported Temporal relativeTo value");
+    return false;
+}
+
+static MalValue duration_compare(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    Duration *one = duration_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (one == nullptr) return mal_value_new_undefined();
+    Duration *two = duration_from_like(
+        vm, arg_count > 1 ? args[1] : mal_value_new_undefined());
+    if (two == nullptr) {
+        temporal_rs_Duration_destroy(one);
+        return mal_value_new_undefined();
+    }
+    RelativeTo relative;
+    if (!duration_relative_to(
+            vm, arg_count > 2 ? args[2] : mal_value_new_undefined(), &relative)) {
+        temporal_rs_Duration_destroy(one);
+        temporal_rs_Duration_destroy(two);
+        return mal_value_new_undefined();
+    }
+    temporal_rs_Duration_compare_result result =
+        temporal_rs_Duration_compare(one, two, relative);
+    temporal_rs_Duration_destroy(one);
+    temporal_rs_Duration_destroy(two);
+    return result.is_ok ? mal_value_from_i32(result.ok) : temporal_throw(vm, result.err);
+}
+
+static MalValue duration_with(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!duration_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(input) || mal_value_is_temporal_object(input)) {
+        return temporal_throw_type(vm, "Temporal.Duration.with requires a property bag");
+    }
+    PartialDuration partial;
+    if (!duration_partial_from_object(vm, input, &partial, true)) {
+        return mal_value_new_undefined();
+    }
+    i64 whole[8] = {
+        temporal_rs_Duration_years(object->handle),
+        temporal_rs_Duration_months(object->handle),
+        temporal_rs_Duration_weeks(object->handle),
+        temporal_rs_Duration_days(object->handle),
+        temporal_rs_Duration_hours(object->handle),
+        temporal_rs_Duration_minutes(object->handle),
+        temporal_rs_Duration_seconds(object->handle),
+        temporal_rs_Duration_milliseconds(object->handle),
+    };
+    f64 fraction[2] = {
+        temporal_rs_Duration_microseconds(object->handle),
+        temporal_rs_Duration_nanoseconds(object->handle),
+    };
+    if (partial.years.is_ok) whole[0] = partial.years.ok;
+    if (partial.months.is_ok) whole[1] = partial.months.ok;
+    if (partial.weeks.is_ok) whole[2] = partial.weeks.ok;
+    if (partial.days.is_ok) whole[3] = partial.days.ok;
+    if (partial.hours.is_ok) whole[4] = partial.hours.ok;
+    if (partial.minutes.is_ok) whole[5] = partial.minutes.ok;
+    if (partial.seconds.is_ok) whole[6] = partial.seconds.ok;
+    if (partial.milliseconds.is_ok) whole[7] = partial.milliseconds.ok;
+    if (partial.microseconds.is_ok) fraction[0] = partial.microseconds.ok;
+    if (partial.nanoseconds.is_ok) fraction[1] = partial.nanoseconds.ok;
+    temporal_rs_Duration_create_result result = temporal_rs_Duration_create(
+        whole[0], whole[1], whole[2], whole[3], whole[4], whole[5], whole[6], whole[7],
+        fraction[0], fraction[1]);
+    return result.is_ok ? duration_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue duration_round(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!duration_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    RoundingOptions options = {0};
+    RelativeTo relative = {0};
+    if (mal_value_is_string(value)) {
+        Unit unit;
+        if (!temporal_unit_from_string(
+                vm, mal_value_to_string(value), false, &unit)) {
+            return mal_value_new_undefined();
+        }
+        options.smallest_unit = (Unit_option) {.ok = unit, .is_ok = true};
+        options.largest_unit = (Unit_option) {.ok = Unit_Auto, .is_ok = true};
+        options.rounding_mode = (RoundingMode_option) {
+            .ok = RoundingMode_HalfExpand, .is_ok = true};
+        options.increment = (OptionU32) {.ok = 1, .is_ok = true};
+    } else {
+        bool present;
+        if (!temporal_options_object(vm, value, &present)) return mal_value_new_undefined();
+        if (!present) return temporal_throw_type(vm, "Temporal.Duration.round requires an argument");
+        Unit largest, smallest;
+        RoundingMode mode;
+        u32 increment;
+        if (!temporal_get_unit_option(
+                vm, value, "largestUnit", true, false, Unit_Auto, &largest) ||
+            !temporal_get_rounding_increment(vm, value, &increment) ||
+            !temporal_get_rounding_mode(vm, value, RoundingMode_HalfExpand, &mode) ||
+            !temporal_get_unit_option(
+                vm, value, "smallestUnit", false, false, Unit_Nanosecond, &smallest) ||
+            !duration_relative_to(vm, value, &relative)) {
+            return mal_value_new_undefined();
+        }
+        options.largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
+        options.smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
+        options.rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
+        options.increment = (OptionU32) {.ok = increment, .is_ok = true};
+    }
+    temporal_rs_Duration_round_result result =
+        temporal_rs_Duration_round(object->handle, options, relative);
+    return result.is_ok ? duration_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue duration_total(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!duration_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue value = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    Unit unit;
+    RelativeTo relative = {0};
+    if (mal_value_is_string(value)) {
+        if (!temporal_unit_from_string(vm, mal_value_to_string(value), false, &unit)) {
+            return mal_value_new_undefined();
+        }
+    } else {
+        bool present;
+        if (!temporal_options_object(vm, value, &present)) return mal_value_new_undefined();
+        if (!present || !temporal_get_unit_option(
+                vm, value, "unit", false, true, Unit_Auto, &unit) ||
+            !duration_relative_to(vm, value, &relative)) {
+            return mal_value_new_undefined();
+        }
+    }
+    temporal_rs_Duration_total_result result =
+        temporal_rs_Duration_total(object->handle, unit, relative);
+    return result.is_ok ? mal_ops_number_value(result.ok) : temporal_throw(vm, result.err);
 }
 
 static bool plain_time_this(MalVm *vm, MalValue value, MalTemporalObject **out) {
@@ -1344,15 +1603,15 @@ static void plain_date_partial_destroy(PlainDatePartial *fields) {
     free(fields->era);
 }
 
-static bool plain_date_partial_from_object(
-    MalVm *vm, MalValue input, PlainDatePartial *fields
+static bool plain_date_partial_from_object_impl(
+    MalVm *vm, MalValue input, PlainDatePartial *fields, bool require_field
 ) {
     *fields = (PlainDatePartial) {0};
     fields->partial.calendar = AnyCalendarKind_Iso;
     MalValue value;
     if (!mal_vm_get_property(
             vm, input, mal_intrinsic_string_key(vm, "calendar"), &value) ||
-        !temporal_calendar_kind(vm, value, &fields->partial.calendar)) {
+        !temporal_calendar_string(vm, value, &fields->partial.calendar)) {
         return false;
     }
     const byte *names[] = {"day", "era", "eraYear", "month", "monthCode", "year"};
@@ -1405,12 +1664,18 @@ static bool plain_date_partial_from_object(
             else fields->partial.year = option;
         }
     }
-    if (!any) {
+    if (require_field && !any) {
         plain_date_partial_destroy(fields);
         temporal_throw_type(vm, "Temporal.PlainDate property bag has no date fields");
         return false;
     }
     return true;
+}
+
+static bool plain_date_partial_from_object(
+    MalVm *vm, MalValue input, PlainDatePartial *fields
+) {
+    return plain_date_partial_from_object_impl(vm, input, fields, true);
 }
 
 static PlainDate *plain_date_from_like(
@@ -3630,20 +3895,73 @@ static ZonedDateTime *zoned_date_time_from_like_options(
     if (mal_value_is_temporal_object(input)) {
         MalTemporalObject *object = mal_value_to_temporal_object(input);
         if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME && object->handle != nullptr) {
+            ArithmeticOverflow overflow;
+            if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
             return temporal_rs_ZonedDateTime_clone(object->handle);
         }
     }
-    ArithmeticOverflow overflow;
-    if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
     if (mal_value_is_string(input)) {
         MalString *string = mal_value_to_string(input);
         DiplomatString16View view = {
             .data = (const char16_t *) mal_string_code_units(string),
             .len = mal_string_length(string),
         };
-        temporal_rs_ZonedDateTime_from_utf16_result result =
+        temporal_rs_ZonedDateTime_from_utf16_result validated =
             temporal_rs_ZonedDateTime_from_utf16(
                 view, Disambiguation_Compatible, OffsetDisambiguation_Reject);
+        if (!validated.is_ok) {
+            temporal_throw(vm, validated.err);
+            return nullptr;
+        }
+        temporal_rs_ZonedDateTime_destroy(validated.ok);
+        Disambiguation disambiguation = Disambiguation_Compatible;
+        OffsetDisambiguation offset = OffsetDisambiguation_Reject;
+        ArithmeticOverflow overflow;
+        bool present;
+        if (!temporal_options_object(vm, options, &present)) return nullptr;
+        if (present) {
+            MalValue value;
+            MalString *option;
+            if (!mal_vm_get_property(
+                    vm, options, mal_intrinsic_string_key(vm, "disambiguation"),
+                    &value)) return nullptr;
+            if (!mal_value_is_undefined(value)) {
+                if (!mal_vm_to_string(vm, value, &option)) return nullptr;
+                if (mal_string_equals_ascii(option, "compatible")) {}
+                else if (mal_string_equals_ascii(option, "earlier"))
+                    disambiguation = Disambiguation_Earlier;
+                else if (mal_string_equals_ascii(option, "later"))
+                    disambiguation = Disambiguation_Later;
+                else if (mal_string_equals_ascii(option, "reject"))
+                    disambiguation = Disambiguation_Reject;
+                else {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                                       "Invalid Temporal disambiguation option");
+                    return nullptr;
+                }
+            }
+            if (!mal_vm_get_property(
+                    vm, options, mal_intrinsic_string_key(vm, "offset"), &value)) {
+                return nullptr;
+            }
+            if (!mal_value_is_undefined(value)) {
+                if (!mal_vm_to_string(vm, value, &option)) return nullptr;
+                if (mal_string_equals_ascii(option, "use")) offset = OffsetDisambiguation_Use;
+                else if (mal_string_equals_ascii(option, "prefer"))
+                    offset = OffsetDisambiguation_Prefer;
+                else if (mal_string_equals_ascii(option, "ignore"))
+                    offset = OffsetDisambiguation_Ignore;
+                else if (mal_string_equals_ascii(option, "reject")) {}
+                else {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                                       "Invalid Temporal offset option");
+                    return nullptr;
+                }
+            }
+        }
+        if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
+        temporal_rs_ZonedDateTime_from_utf16_result result =
+            temporal_rs_ZonedDateTime_from_utf16(view, disambiguation, offset);
         if (!result.is_ok) {
             temporal_throw(vm, result.err);
             return nullptr;
@@ -3654,6 +3972,8 @@ static ZonedDateTime *zoned_date_time_from_like_options(
         temporal_throw_type(vm, "Temporal.ZonedDateTime input must be a string or object");
         return nullptr;
     }
+
+    ArithmeticOverflow overflow = ArithmeticOverflow_Constrain;
 
     PlainDatePartial date;
     if (!plain_date_partial_from_object(vm, input, &date)) return nullptr;
@@ -3699,6 +4019,63 @@ static ZonedDateTime *zoned_date_time_from_like_options(
     if (!temporal_time_zone_from_value(vm, value, &zone)) {
         free(offset_data); plain_date_partial_destroy(&date); return nullptr;
     }
+    Disambiguation disambiguation = Disambiguation_Compatible;
+    OffsetDisambiguation offset_option = OffsetDisambiguation_Reject;
+    bool options_present;
+    if (!temporal_options_object(vm, options, &options_present)) {
+        free(offset_data); plain_date_partial_destroy(&date); return nullptr;
+    }
+    if (options_present) {
+        MalValue option_value;
+        MalString *string;
+        if (!mal_vm_get_property(
+                vm, options, mal_intrinsic_string_key(vm, "disambiguation"),
+                &option_value)) {
+            free(offset_data); plain_date_partial_destroy(&date); return nullptr;
+        }
+        if (!mal_value_is_undefined(option_value)) {
+            if (!mal_vm_to_string(vm, option_value, &string)) {
+                free(offset_data); plain_date_partial_destroy(&date); return nullptr;
+            }
+            if (mal_string_equals_ascii(string, "compatible")) {}
+            else if (mal_string_equals_ascii(string, "earlier"))
+                disambiguation = Disambiguation_Earlier;
+            else if (mal_string_equals_ascii(string, "later"))
+                disambiguation = Disambiguation_Later;
+            else if (mal_string_equals_ascii(string, "reject"))
+                disambiguation = Disambiguation_Reject;
+            else {
+                free(offset_data); plain_date_partial_destroy(&date);
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                                   "Invalid Temporal disambiguation option");
+                return nullptr;
+            }
+        }
+        if (!mal_vm_get_property(
+                vm, options, mal_intrinsic_string_key(vm, "offset"), &option_value)) {
+            free(offset_data); plain_date_partial_destroy(&date); return nullptr;
+        }
+        if (!mal_value_is_undefined(option_value)) {
+            if (!mal_vm_to_string(vm, option_value, &string)) {
+                free(offset_data); plain_date_partial_destroy(&date); return nullptr;
+            }
+            if (mal_string_equals_ascii(string, "use")) offset_option = OffsetDisambiguation_Use;
+            else if (mal_string_equals_ascii(string, "prefer"))
+                offset_option = OffsetDisambiguation_Prefer;
+            else if (mal_string_equals_ascii(string, "ignore"))
+                offset_option = OffsetDisambiguation_Ignore;
+            else if (mal_string_equals_ascii(string, "reject")) {}
+            else {
+                free(offset_data); plain_date_partial_destroy(&date);
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                                   "Invalid Temporal offset option");
+                return nullptr;
+            }
+        }
+    }
+    if (!temporal_overflow_option(vm, options, &overflow)) {
+        free(offset_data); plain_date_partial_destroy(&date); return nullptr;
+    }
     PartialZonedDateTime partial = {
         .date = date.partial, .time = time, .offset = offset,
         .timezone = {.ok = zone, .is_ok = true},
@@ -3706,10 +4083,8 @@ static ZonedDateTime *zoned_date_time_from_like_options(
     temporal_rs_ZonedDateTime_from_partial_result result =
         temporal_rs_ZonedDateTime_from_partial(
             partial, (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true},
-            (Disambiguation_option) {
-                .ok = Disambiguation_Compatible, .is_ok = true},
-            (OffsetDisambiguation_option) {
-                .ok = OffsetDisambiguation_Reject, .is_ok = true});
+            (Disambiguation_option) {.ok = disambiguation, .is_ok = true},
+            (OffsetDisambiguation_option) {.ok = offset_option, .is_ok = true});
     free(offset_data);
     plain_date_partial_destroy(&date);
     if (!result.is_ok) {
@@ -4224,6 +4599,155 @@ static MalValue zoned_date_time_with_time_zone(
                         : temporal_throw(vm, result.err);
 }
 
+static bool zoned_date_time_option_string(
+    MalVm *vm, MalValue options, const byte *name, const byte *fallback,
+    MalString **out
+) {
+    bool present;
+    if (!temporal_options_object(vm, options, &present)) return false;
+    if (!present) {
+        *out = mal_intrinsic_ascii(vm, fallback);
+        return true;
+    }
+    MalValue value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, name), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) {
+        *out = mal_intrinsic_ascii(vm, fallback);
+        return true;
+    }
+    return mal_vm_to_string(vm, value, out);
+}
+
+static bool zoned_date_time_disambiguation_options(
+    MalVm *vm, MalValue options, Disambiguation *disambiguation,
+    OffsetDisambiguation *offset
+) {
+    MalString *string;
+    if (!zoned_date_time_option_string(
+            vm, options, "disambiguation", "compatible", &string)) return false;
+    if (mal_string_equals_ascii(string, "compatible")) {
+        *disambiguation = Disambiguation_Compatible;
+    } else if (mal_string_equals_ascii(string, "earlier")) {
+        *disambiguation = Disambiguation_Earlier;
+    } else if (mal_string_equals_ascii(string, "later")) {
+        *disambiguation = Disambiguation_Later;
+    } else if (mal_string_equals_ascii(string, "reject")) {
+        *disambiguation = Disambiguation_Reject;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal disambiguation option");
+        return false;
+    }
+    if (!zoned_date_time_option_string(vm, options, "offset", "prefer", &string)) {
+        return false;
+    }
+    if (mal_string_equals_ascii(string, "use")) *offset = OffsetDisambiguation_Use;
+    else if (mal_string_equals_ascii(string, "prefer")) {
+        *offset = OffsetDisambiguation_Prefer;
+    } else if (mal_string_equals_ascii(string, "ignore")) {
+        *offset = OffsetDisambiguation_Ignore;
+    } else if (mal_string_equals_ascii(string, "reject")) {
+        *offset = OffsetDisambiguation_Reject;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal offset option");
+        return false;
+    }
+    return true;
+}
+
+static MalValue zoned_date_time_with(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(input) || mal_value_is_temporal_object(input)) {
+        return temporal_throw_type(vm, "Temporal.ZonedDateTime.with requires a property bag");
+    }
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, input, mal_intrinsic_string_key(vm, "calendar"), &value)) {
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_undefined(value)) {
+        return temporal_throw_type(vm, "Temporal.ZonedDateTime.with rejects calendar");
+    }
+    PlainDatePartial date;
+    if (!plain_date_partial_from_object_impl(vm, input, &date, false)) {
+        return mal_value_new_undefined();
+    }
+    PlainTimeFields time_fields;
+    if (!plain_time_read_fields(vm, input, &time_fields, false)) {
+        plain_date_partial_destroy(&date);
+        return mal_value_new_undefined();
+    }
+    PartialTime time;
+    if (!plain_time_partial(
+            vm, &time_fields, ArithmeticOverflow_Constrain, &time)) {
+        plain_date_partial_destroy(&date);
+        return mal_value_new_undefined();
+    }
+    if (!mal_vm_get_property(
+            vm, input, mal_intrinsic_string_key(vm, "offset"), &value)) {
+        plain_date_partial_destroy(&date);
+        return mal_value_new_undefined();
+    }
+    byte *offset_data = nullptr;
+    OptionStringView offset_string = {.is_ok = false};
+    if (!mal_value_is_undefined(value)) {
+        MalString *string;
+        if (!mal_vm_to_string(vm, value, &string)) {
+            plain_date_partial_destroy(&date);
+            return mal_value_new_undefined();
+        }
+        usize length;
+        offset_data = mal_string_to_utf8(string, &length);
+        if (offset_data == nullptr) {
+            plain_date_partial_destroy(&date);
+            return temporal_throw_type(vm, "Unable to encode Temporal offset");
+        }
+        offset_string = (OptionStringView) {
+            .ok = {.data = (const char *) offset_data, .len = length}, .is_ok = true};
+    }
+    if (!mal_vm_get_property(
+            vm, input, mal_intrinsic_string_key(vm, "timeZone"), &value)) {
+        free(offset_data); plain_date_partial_destroy(&date);
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_undefined(value)) {
+        free(offset_data); plain_date_partial_destroy(&date);
+        return temporal_throw_type(vm, "Temporal.ZonedDateTime.with rejects timeZone");
+    }
+    MalValue options = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    Disambiguation disambiguation;
+    OffsetDisambiguation offset;
+    ArithmeticOverflow overflow;
+    if (!zoned_date_time_disambiguation_options(
+            vm, options, &disambiguation, &offset) ||
+        !temporal_overflow_option(vm, options, &overflow)) {
+        free(offset_data); plain_date_partial_destroy(&date);
+        return mal_value_new_undefined();
+    }
+    PartialZonedDateTime partial = {
+        .date = date.partial, .time = time, .offset = offset_string,
+        .timezone = {.is_ok = false},
+    };
+    temporal_rs_ZonedDateTime_with_result result = temporal_rs_ZonedDateTime_with(
+        object->handle, partial,
+        (Disambiguation_option) {.ok = disambiguation, .is_ok = true},
+        (OffsetDisambiguation_option) {.ok = offset, .is_ok = true},
+        (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
+    free(offset_data);
+    plain_date_partial_destroy(&date);
+    return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
 static MalValue zoned_date_time_with_calendar(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee
@@ -4272,16 +4796,48 @@ static MalValue zoned_date_time_to_string_impl(
         .rounding_mode = {.ok = RoundingMode_Trunc, .is_ok = true},
     };
     DisplayCalendar calendar = DisplayCalendar_Auto;
-    if (read_options &&
-        (!temporal_to_string_rounding_options(vm, options_value, &rounding) ||
-         !temporal_display_calendar(vm, options_value, &calendar))) {
-        return mal_value_new_undefined();
+    DisplayOffset offset = DisplayOffset_Auto;
+    DisplayTimeZone timezone = DisplayTimeZone_Auto;
+    if (read_options) {
+        if (!temporal_display_calendar(vm, options_value, &calendar) ||
+            !temporal_to_string_rounding_options(vm, options_value, &rounding)) {
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(options_value)) {
+            MalValue value;
+            MalString *string;
+            if (!mal_vm_get_property(
+                    vm, options_value, mal_intrinsic_string_key(vm, "offset"),
+                    &value)) return mal_value_new_undefined();
+            if (!mal_value_is_undefined(value)) {
+                if (!mal_vm_to_string(vm, value, &string)) return mal_value_new_undefined();
+                if (mal_string_equals_ascii(string, "never")) offset = DisplayOffset_Never;
+                else if (!mal_string_equals_ascii(string, "auto")) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                                       "Invalid Temporal offset display option");
+                    return mal_value_new_undefined();
+                }
+            }
+            if (!mal_vm_get_property(
+                    vm, options_value, mal_intrinsic_string_key(vm, "timeZoneName"),
+                    &value)) return mal_value_new_undefined();
+            if (!mal_value_is_undefined(value)) {
+                if (!mal_vm_to_string(vm, value, &string)) return mal_value_new_undefined();
+                if (mal_string_equals_ascii(string, "never")) timezone = DisplayTimeZone_Never;
+                else if (mal_string_equals_ascii(string, "critical"))
+                    timezone = DisplayTimeZone_Critical;
+                else if (!mal_string_equals_ascii(string, "auto")) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                                       "Invalid Temporal timeZoneName option");
+                    return mal_value_new_undefined();
+                }
+            }
+        }
     }
     DiplomatWrite *write = diplomat_buffer_write_create(80);
     temporal_rs_ZonedDateTime_to_ixdtf_string_result result =
         temporal_rs_ZonedDateTime_to_ixdtf_string(
-            object->handle, DisplayOffset_Auto, DisplayTimeZone_Auto,
-            calendar, rounding, write);
+            object->handle, offset, timezone, calendar, rounding, write);
     if (!result.is_ok) {
         diplomat_buffer_write_destroy(write);
         return temporal_throw(vm, result.err);
@@ -4431,6 +4987,83 @@ static MalValue temporal_now_time_zone_id(
     return temporal_write_to_string(vm, write);
 }
 
+static MalValue plain_date_time_to_zoned_date_time(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    TimeZone zone;
+    if (!temporal_time_zone_from_value(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &zone)) {
+        return mal_value_new_undefined();
+    }
+    MalString *string;
+    if (!zoned_date_time_option_string(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(),
+            "disambiguation", "compatible", &string)) {
+        return mal_value_new_undefined();
+    }
+    Disambiguation disambiguation;
+    if (mal_string_equals_ascii(string, "compatible")) {
+        disambiguation = Disambiguation_Compatible;
+    } else if (mal_string_equals_ascii(string, "earlier")) {
+        disambiguation = Disambiguation_Earlier;
+    } else if (mal_string_equals_ascii(string, "later")) {
+        disambiguation = Disambiguation_Later;
+    } else if (mal_string_equals_ascii(string, "reject")) {
+        disambiguation = Disambiguation_Reject;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal disambiguation option");
+        return mal_value_new_undefined();
+    }
+    temporal_rs_PlainDateTime_to_zoned_date_time_result result =
+        temporal_rs_PlainDateTime_to_zoned_date_time(
+            object->handle, zone, disambiguation);
+    return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue plain_date_to_zoned_date_time(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalValue zone_value = input;
+    PlainTime *time = nullptr;
+    if (mal_value_is_object(input) && !mal_value_is_string(input)) {
+        MalValue value;
+        if (!mal_vm_get_property(
+                vm, input, mal_intrinsic_string_key(vm, "plainTime"), &value)) {
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(value)) {
+            time = plain_time_from_like(vm, value, mal_value_new_undefined());
+            if (time == nullptr) return mal_value_new_undefined();
+        }
+        if (!mal_vm_get_property(
+                vm, input, mal_intrinsic_string_key(vm, "timeZone"), &zone_value)) {
+            if (time != nullptr) temporal_rs_PlainTime_destroy(time);
+            return mal_value_new_undefined();
+        }
+    }
+    TimeZone zone;
+    if (!temporal_time_zone_from_value(vm, zone_value, &zone)) {
+        if (time != nullptr) temporal_rs_PlainTime_destroy(time);
+        return mal_value_new_undefined();
+    }
+    temporal_rs_PlainDate_to_zoned_date_time_result result =
+        temporal_rs_PlainDate_to_zoned_date_time(object->handle, zone, time);
+    if (time != nullptr) temporal_rs_PlainTime_destroy(time);
+    return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
 static MalValue temporal_unimplemented_constructor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee
@@ -4532,6 +5165,8 @@ static void temporal_install_plain_date(MalVm *vm, MalObject *temporal) {
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0, plain_date_to_string);
     mal_intrinsic_define_method_n(vm, prototype, "toPlainDateTime", 0,
                                   plain_date_to_plain_date_time);
+    mal_intrinsic_define_method_n(vm, prototype, "toZonedDateTime", 1,
+                                  plain_date_to_zoned_date_time);
     mal_intrinsic_define_method_n(vm, prototype, "toPlainMonthDay", 0,
                                   plain_date_to_plain_month_day);
     mal_intrinsic_define_method_n(vm, prototype, "toPlainYearMonth", 0,
@@ -4625,6 +5260,8 @@ static void temporal_install_plain_date_time(MalVm *vm, MalObject *temporal) {
                                   plain_date_time_to_plain_time);
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0,
                                   plain_date_time_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toZonedDateTime", 1,
+                                  plain_date_time_to_zoned_date_time);
     mal_intrinsic_define_method_n(vm, prototype, "until", 1, plain_date_time_until);
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0,
                                   plain_date_time_value_of);
@@ -4849,6 +5486,8 @@ static void temporal_install_zoned_date_time(MalVm *vm, MalObject *temporal) {
     mal_intrinsic_define_method_n(vm, prototype, "until", 1, zoned_date_time_until);
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0,
                                   zoned_date_time_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "with", 1,
+                                  zoned_date_time_with);
     mal_intrinsic_define_method_n(vm, prototype, "withCalendar", 1,
                                   zoned_date_time_with_calendar);
     mal_intrinsic_define_method_n(vm, prototype, "withPlainTime", 0,
@@ -5003,6 +5642,8 @@ void mal_builtin_temporal_install(MalVm *vm) {
                               vm->intrinsics[MAL_INTRINSIC_TEMPORAL_DURATION_CONSTRUCTOR],
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_method_n(vm, (MalObject *) duration_ctor, "from", 1, duration_from);
+    mal_intrinsic_define_method_n(vm, (MalObject *) duration_ctor, "compare", 2,
+                                  duration_compare);
     mal_intrinsic_define_data(vm, temporal, "Duration",
                               vm->intrinsics[MAL_INTRINSIC_TEMPORAL_DURATION_CONSTRUCTOR],
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -5034,11 +5675,16 @@ void mal_builtin_temporal_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, duration_prototype, "abs", 0, duration_abs);
     mal_intrinsic_define_method_n(vm, duration_prototype, "add", 1, duration_add);
     mal_intrinsic_define_method_n(vm, duration_prototype, "negated", 0, duration_negated);
+    mal_intrinsic_define_method_n(vm, duration_prototype, "round", 1, duration_round);
     mal_intrinsic_define_method_n(vm, duration_prototype, "subtract", 1, duration_subtract);
-    mal_intrinsic_define_method_n(vm, duration_prototype, "toJSON", 0, duration_to_string);
-    mal_intrinsic_define_method_n(vm, duration_prototype, "toLocaleString", 0, duration_to_string);
+    mal_intrinsic_define_method_n(vm, duration_prototype, "toJSON", 0,
+                                  duration_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, duration_prototype, "toLocaleString", 0,
+                                  duration_to_string_no_options);
     mal_intrinsic_define_method_n(vm, duration_prototype, "toString", 0, duration_to_string);
+    mal_intrinsic_define_method_n(vm, duration_prototype, "total", 1, duration_total);
     mal_intrinsic_define_method_n(vm, duration_prototype, "valueOf", 0, duration_value_of);
+    mal_intrinsic_define_method_n(vm, duration_prototype, "with", 1, duration_with);
     temporal_set_tag(vm, duration_prototype, "Temporal.Duration");
 
     temporal_install_instant(vm, temporal);
