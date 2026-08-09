@@ -21,9 +21,13 @@ interface Sample {
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const requestedBinary = process.argv[2];
 if (requestedBinary === undefined) {
-	throw new Error("usage: node scripts/dx-performance.ts <maligator-binary> [--assets]");
+	throw new Error(
+		"usage: node scripts/dx-performance.ts <maligator-binary|--source> [--assets]",
+	);
 }
-const binary = path.resolve(requestedBinary);
+const sourceMode = requestedBinary === "--source";
+const binary = sourceMode ? process.execPath : path.resolve(requestedBinary);
+const argumentPrefix = sourceMode ? [path.join(repositoryRoot, "src/index.ts")] : [];
 const measureAssets = process.argv.slice(3).includes("--assets");
 const root = mkdtempSync(path.join(os.tmpdir(), "maligator-dx-performance-"));
 const project = path.join(root, "project");
@@ -49,7 +53,7 @@ function linkPackages(source: string): void {
 
 function invoke(name: string, args: Array<string>): Sample {
 	const startedAt = performance.now();
-	const result = spawnSync(binary, args, {
+	const result = spawnSync(binary, [...argumentPrefix, ...args], {
 		cwd: project,
 		encoding: "utf-8",
 		env: process.env,
@@ -57,8 +61,9 @@ function invoke(name: string, args: Array<string>): Sample {
 	});
 	const durationMs = performance.now() - startedAt;
 	if (result.status !== 0) {
+		const diagnostics = `${result.stdout}\n${result.stderr}`;
 		throw new Error(
-			`${name} exited with ${result.status}:\n${result.stdout}\n${result.stderr}`,
+			`${name} exited with ${result.status}:\n${diagnostics.slice(-24_000)}`,
 		);
 	}
 	return { name, durationMs, stdout: result.stdout, stderr: result.stderr };
@@ -87,12 +92,16 @@ function waitFor(
 
 async function developmentSamples(): Promise<Array<Sample>> {
 	let output = "";
-	const child = spawn(binary, ["dev", "dev-app.mts", "--config", "maligator.build.mts"], {
-		cwd: project,
-		detached: process.platform !== "win32",
-		env: process.env,
-		stdio: ["ignore", "pipe", "pipe"],
-	});
+	const child = spawn(
+		binary,
+		[...argumentPrefix, "dev", "dev-app.mts", "--config", "maligator.build.mts"],
+		{
+			cwd: project,
+			detached: process.platform !== "win32",
+			env: process.env,
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
 	child.stdout.setEncoding("utf-8");
 	child.stderr.setEncoding("utf-8");
 	child.stdout.on("data", (chunk: string) => {
