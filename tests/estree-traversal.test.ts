@@ -71,3 +71,18 @@ test("skip prunes one subtree and stop terminates traversal", () => {
 	expect(result).toBe(ESTREE_STOP);
 	expect(seen).toEqual(["Program", "ExpressionStatement", "ExpressionStatement"]);
 });
+
+test("falls back to structural discovery for future parser node kinds", () => {
+	const future = {
+		type: "FutureExpression",
+		child: identifier("visible"),
+		metadata: { hidden: identifier("not-a-direct-child") },
+	} as unknown as ESTree.Node;
+	const seen: Array<string> = [];
+
+	traverseEstree(future, (node) => {
+		seen.push(node.type === "Identifier" ? node.name : node.type);
+	});
+
+	expect(seen).toEqual(["FutureExpression", "visible"]);
+});
