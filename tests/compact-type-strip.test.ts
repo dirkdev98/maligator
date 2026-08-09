@@ -57,6 +57,17 @@ export const createController = ({ service }: Dependencies) => service;
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "controller.ts"));
 	});
 
+	test("strips literal unions from later arrow parameters", () => {
+		const source = `const identity = (
+	value: string,
+	role: "admin" | "teacher",
+) => \`${"${value}:${role}"}\`;`;
+		const stripped = stripCompactTypes(source, "literal-union.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "literal-union.ts"));
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
 	test("strips generic declarations with compound types", () => {
 		const source = `export type Result<ErrorType, ValueType> =
 	| { ok: true; value: ValueType }

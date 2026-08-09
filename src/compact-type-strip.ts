@@ -92,7 +92,11 @@ function lexicalCodeMask(source: string, filePath: string): Array<boolean> {
 	const markQuoted = (start: number): number => {
 		const quote = source[start]!;
 		let i = start;
-		code[i++] = false;
+		// Keep the opening quote visible to the syntax scanners while masking the
+		// literal body. Type positions may consist entirely of literal types (for
+		// example `role: "admin" | "teacher"`), so treating the whole token as
+		// trivia made annotation scanners report an empty type.
+		code[i++] = true;
 		while (i < source.length) {
 			code[i] = false;
 			if (source[i] === "\\") {
@@ -1163,7 +1167,7 @@ function findAssertionEnd(
 		else if (char === "}" && braces > 0) braces--;
 		else if (char === "<") angles++;
 		else if (char === ">" && angles > 0) angles--;
-		if (isIdentifierStart(char)) sawType = true;
+		if (isIdentifierStart(char) || char === '"' || char === "'") sawType = true;
 	}
 	if (sawType) return source.length;
 	fail(filePath, start, "empty type assertions");
@@ -1361,7 +1365,7 @@ function findTypeEnd(
 		else if (char === "}" && braces > 0) braces--;
 		else if (char === "<") angles++;
 		else if (char === ">" && angles > 0) angles--;
-		if (isIdentifierStart(char)) sawType = true;
+		if (isIdentifierStart(char) || char === '"' || char === "'") sawType = true;
 	}
 	fail(filePath, start, "unterminated type annotations");
 }
