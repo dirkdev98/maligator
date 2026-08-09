@@ -63,6 +63,14 @@ check(dateTime.toPlainTime().nanosecond === 789);
 check(dateTime.add({ seconds: 2 }).toString() === "2024-03-01T00:00:00.123456789");
 check(dateTime.withPlainTime("12:30").toString() === "2024-02-29T12:30:00");
 
+const yearMonth = Temporal.PlainYearMonth.from("2024-02");
+check(yearMonth.daysInMonth === 29);
+check(yearMonth.add({ months: 1 }).toString() === "2024-03");
+check(yearMonth.until("2025-04").months === 2);
+check(yearMonth.until("2025-04").years === 1);
+const monthDay = Temporal.PlainMonthDay.from("02-29");
+check(monthDay.toPlainDate({ year: 2024 }).equals(date));
+
 const order = [];
 const bag = {};
 for (const name of [
@@ -118,6 +126,8 @@ for (let i = 0; i < 200; i++) {
 	Temporal.Instant.fromEpochNanoseconds(BigInt(i)).add({ nanoseconds: 1 });
 	Temporal.PlainDate.from("2024-02-29").add({ days: i % 7 });
 	Temporal.PlainDateTime.from("2024-02-29T12:34:56.987654321").toPlainTime();
+	Temporal.PlainYearMonth.from("2024-02").add({ months: i % 12 });
+	Temporal.PlainMonthDay.from("02-29").toPlainDate({ year: 2024 });
 }
 
 let passed = 0;

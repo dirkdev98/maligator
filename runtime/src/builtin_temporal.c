@@ -31,6 +31,10 @@
 // Maligator owns all observable JS coercion/property-order behavior; the
 // generated temporal_capi surface owns validated calendrical arithmetic.
 
+static MalValue plain_date_time_wrap_intrinsic(MalVm *vm, PlainDateTime *handle);
+static MalValue plain_month_day_wrap_intrinsic(MalVm *vm, PlainMonthDay *handle);
+static MalValue plain_year_month_wrap_intrinsic(MalVm *vm, PlainYearMonth *handle);
+
 static MalValue temporal_throw(MalVm *vm, TemporalError error) {
     MalIntrinsic kind = error.kind == ErrorKind_Type
         ? MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE
@@ -1766,6 +1770,67 @@ static MalValue plain_date_with(
                         : temporal_throw(vm, result.err);
 }
 
+static MalValue plain_date_with_calendar(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
+    AnyCalendarKind calendar;
+    if (!temporal_calendar_kind(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &calendar)) {
+        return mal_value_new_undefined();
+    }
+    return plain_date_wrap_intrinsic(
+        vm, temporal_rs_PlainDate_with_calendar(object->handle, calendar));
+}
+
+static MalValue plain_date_to_plain_date_time(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
+    PlainTime *time = nullptr;
+    if (arg_count > 0 && !mal_value_is_undefined(args[0])) {
+        time = plain_time_from_like(vm, args[0], mal_value_new_undefined());
+        if (time == nullptr) return mal_value_new_undefined();
+    }
+    temporal_rs_PlainDate_to_plain_date_time_result result =
+        temporal_rs_PlainDate_to_plain_date_time(object->handle, time);
+    if (time != nullptr) temporal_rs_PlainTime_destroy(time);
+    return result.is_ok ? plain_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue plain_date_to_plain_month_day(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
+    temporal_rs_PlainDate_to_plain_month_day_result result =
+        temporal_rs_PlainDate_to_plain_month_day(object->handle);
+    return result.is_ok ? plain_month_day_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue plain_date_to_plain_year_month(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
+    temporal_rs_PlainDate_to_plain_year_month_result result =
+        temporal_rs_PlainDate_to_plain_year_month(object->handle);
+    return result.is_ok ? plain_year_month_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
 static MalValue plain_date_to_string_impl(
     MalVm *vm, MalValue this_value, MalValue options, bool read_options
 ) {
@@ -2342,6 +2407,734 @@ static MalValue plain_date_time_value_of(
     return temporal_throw_type(vm, "Cannot convert Temporal.PlainDateTime to a primitive");
 }
 
+static bool plain_year_month_this(MalVm *vm, MalValue value, MalTemporalObject **out) {
+    if (!mal_value_is_temporal_object(value)) {
+        temporal_throw_type(vm, "Temporal.PlainYearMonth method called on incompatible receiver");
+        return false;
+    }
+    MalTemporalObject *object = mal_value_to_temporal_object(value);
+    if (object->kind != MAL_TEMPORAL_PLAIN_YEAR_MONTH || object->handle == nullptr) {
+        temporal_throw_type(vm, "Temporal.PlainYearMonth method called on incompatible receiver");
+        return false;
+    }
+    *out = object;
+    return true;
+}
+
+static MalValue plain_year_month_wrap(
+    MalVm *vm, PlainYearMonth *handle, MalObject *prototype
+) {
+    return mal_value_from_temporal_object(mal_temporal_object_new(
+        &vm->heap, prototype, MAL_TEMPORAL_PLAIN_YEAR_MONTH, handle));
+}
+
+static MalValue plain_year_month_wrap_intrinsic(MalVm *vm, PlainYearMonth *handle) {
+    return plain_year_month_wrap(
+        vm, handle,
+        mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_PROTOTYPE]));
+}
+
+static MalValue plain_year_month_constructor(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        return temporal_throw_type(vm, "Temporal.PlainYearMonth must be called with new");
+    }
+    i32 year;
+    u16 month, reference_day;
+    if (!temporal_i32_integer(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &year) ||
+        !temporal_u16_integer(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), UINT8_MAX, &month)) {
+        return mal_value_new_undefined();
+    }
+    AnyCalendarKind calendar;
+    if (!temporal_calendar_kind(
+            vm, arg_count > 2 ? args[2] : mal_value_new_undefined(), &calendar)) {
+        return mal_value_new_undefined();
+    }
+    if (arg_count > 3 && !mal_value_is_undefined(args[3])) {
+        if (!temporal_u16_integer(vm, args[3], UINT8_MAX, &reference_day)) {
+            return mal_value_new_undefined();
+        }
+    } else reference_day = 1;
+    temporal_rs_PlainYearMonth_try_new_with_overflow_result result =
+        temporal_rs_PlainYearMonth_try_new_with_overflow(
+            year, (u8) month,
+            (OptionU8) {.ok = (u8) reference_day, .is_ok = true},
+            calendar, ArithmeticOverflow_Reject);
+    if (!result.is_ok) return temporal_throw(vm, result.err);
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_PROTOTYPE,
+            &prototype)) {
+        temporal_rs_PlainYearMonth_destroy(result.ok);
+        return mal_value_new_undefined();
+    }
+    return plain_year_month_wrap(vm, result.ok, prototype);
+}
+
+static PlainYearMonth *plain_year_month_from_like(
+    MalVm *vm, MalValue input, MalValue options
+) {
+    if (mal_value_is_temporal_object(input)) {
+        MalTemporalObject *object = mal_value_to_temporal_object(input);
+        if (object->kind == MAL_TEMPORAL_PLAIN_YEAR_MONTH && object->handle != nullptr) {
+            ArithmeticOverflow overflow;
+            if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
+            return temporal_rs_PlainYearMonth_clone(object->handle);
+        }
+    }
+    if (mal_value_is_string(input)) {
+        MalString *string = mal_value_to_string(input);
+        DiplomatString16View view = {
+            .data = (const char16_t *) mal_string_code_units(string),
+            .len = mal_string_length(string),
+        };
+        temporal_rs_PlainYearMonth_from_utf16_result result =
+            temporal_rs_PlainYearMonth_from_utf16(view);
+        if (!result.is_ok) {
+            temporal_throw(vm, result.err);
+            return nullptr;
+        }
+        ArithmeticOverflow overflow;
+        if (!temporal_overflow_option(vm, options, &overflow)) {
+            temporal_rs_PlainYearMonth_destroy(result.ok);
+            return nullptr;
+        }
+        return result.ok;
+    }
+    if (!mal_value_is_object(input)) {
+        temporal_throw_type(vm, "Temporal.PlainYearMonth.from requires a string or object");
+        return nullptr;
+    }
+    PlainDatePartial fields;
+    if (!plain_date_partial_from_object(vm, input, &fields)) return nullptr;
+    ArithmeticOverflow overflow;
+    if (!temporal_overflow_option(vm, options, &overflow)) {
+        plain_date_partial_destroy(&fields);
+        return nullptr;
+    }
+    temporal_rs_PlainYearMonth_from_partial_result result =
+        temporal_rs_PlainYearMonth_from_partial(
+            fields.partial,
+            (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
+    plain_date_partial_destroy(&fields);
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return nullptr;
+    }
+    return result.ok;
+}
+
+static MalValue plain_year_month_from(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    PlainYearMonth *handle = plain_year_month_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(),
+        arg_count > 1 ? args[1] : mal_value_new_undefined());
+    return handle == nullptr ? mal_value_new_undefined()
+                             : plain_year_month_wrap_intrinsic(vm, handle);
+}
+
+static MalValue plain_year_month_compare(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    PlainYearMonth *one = plain_year_month_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+    if (one == nullptr) return mal_value_new_undefined();
+    PlainYearMonth *two = plain_year_month_from_like(
+        vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined());
+    if (two == nullptr) {
+        temporal_rs_PlainYearMonth_destroy(one);
+        return mal_value_new_undefined();
+    }
+    i8 comparison = temporal_rs_PlainYearMonth_compare(one, two);
+    temporal_rs_PlainYearMonth_destroy(one);
+    temporal_rs_PlainYearMonth_destroy(two);
+    return mal_value_from_i32(comparison);
+}
+
+#define PLAIN_YEAR_MONTH_GETTER(c_name, ffi_name) \
+    static MalValue c_name(MalVm *vm, MalValue this_value, const MalValue *args, \
+                           i32 arg_count, MalValue new_target, MalValue callee) { \
+        (void) args; (void) arg_count; (void) new_target; (void) callee; \
+        MalTemporalObject *object; \
+        if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined(); \
+        return mal_value_from_i32((i32) ffi_name(object->handle)); \
+    }
+
+PLAIN_YEAR_MONTH_GETTER(plain_year_month_year, temporal_rs_PlainYearMonth_year)
+PLAIN_YEAR_MONTH_GETTER(plain_year_month_month, temporal_rs_PlainYearMonth_month)
+PLAIN_YEAR_MONTH_GETTER(plain_year_month_days_in_month, temporal_rs_PlainYearMonth_days_in_month)
+PLAIN_YEAR_MONTH_GETTER(plain_year_month_days_in_year, temporal_rs_PlainYearMonth_days_in_year)
+PLAIN_YEAR_MONTH_GETTER(plain_year_month_months_in_year, temporal_rs_PlainYearMonth_months_in_year)
+
+static MalValue plain_year_month_calendar_id(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return temporal_calendar_identifier(
+        vm, temporal_rs_PlainYearMonth_calendar(object->handle));
+}
+
+static MalValue plain_year_month_month_code(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    DiplomatWrite *write = diplomat_buffer_write_create(8);
+    temporal_rs_PlainYearMonth_month_code(object->handle, write);
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue plain_year_month_in_leap_year(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return mal_value_new_boolean(
+        temporal_rs_PlainYearMonth_in_leap_year(object->handle));
+}
+
+static MalValue plain_year_month_equals(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    PlainYearMonth *other = plain_year_month_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+    if (other == nullptr) return mal_value_new_undefined();
+    bool equal = temporal_rs_PlainYearMonth_equals(object->handle, other);
+    temporal_rs_PlainYearMonth_destroy(other);
+    return mal_value_new_boolean(equal);
+}
+
+static MalValue plain_year_month_difference(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool since
+) {
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    PlainYearMonth *other = plain_year_month_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+    if (other == nullptr) return mal_value_new_undefined();
+    MalValue options = arg_count > 1 ? args[1] : mal_value_new_undefined();
+    bool present;
+    if (!temporal_options_object(vm, options, &present)) {
+        temporal_rs_PlainYearMonth_destroy(other);
+        return mal_value_new_undefined();
+    }
+    Unit largest = Unit_Year, smallest = Unit_Month;
+    RoundingMode mode = RoundingMode_Trunc;
+    u32 increment = 1;
+    if (present &&
+        (!temporal_get_unit_option(
+             vm, options, "largestUnit", true, false, Unit_Auto, &largest) ||
+         !temporal_get_rounding_increment(vm, options, &increment) ||
+         !temporal_get_rounding_mode(vm, options, RoundingMode_Trunc, &mode) ||
+         !temporal_get_unit_option(
+             vm, options, "smallestUnit", false, false, Unit_Month, &smallest))) {
+        temporal_rs_PlainYearMonth_destroy(other);
+        return mal_value_new_undefined();
+    }
+    if (largest == Unit_Auto) largest = Unit_Year;
+    DifferenceSettings settings = {
+        .largest_unit = {.ok = largest, .is_ok = true},
+        .smallest_unit = {.ok = smallest, .is_ok = true},
+        .rounding_mode = {.ok = mode, .is_ok = true},
+        .increment = {.ok = increment, .is_ok = true},
+    };
+    Duration *handle = nullptr;
+    TemporalError error = {0};
+    bool ok;
+    if (since) {
+        temporal_rs_PlainYearMonth_since_result result =
+            temporal_rs_PlainYearMonth_since(object->handle, other, settings);
+        ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
+    } else {
+        temporal_rs_PlainYearMonth_until_result result =
+            temporal_rs_PlainYearMonth_until(object->handle, other, settings);
+        ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
+    }
+    temporal_rs_PlainYearMonth_destroy(other);
+    return ok ? duration_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
+}
+
+static MalValue plain_year_month_since(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return plain_year_month_difference(vm, this_value, args, arg_count, true);
+}
+
+static MalValue plain_year_month_until(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return plain_year_month_difference(vm, this_value, args, arg_count, false);
+}
+
+static MalValue plain_year_month_with(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(input) || mal_value_is_temporal_object(input)) {
+        return temporal_throw_type(vm, "Temporal.PlainYearMonth.with requires a property bag");
+    }
+    PlainDatePartial fields;
+    if (!plain_date_partial_from_object(vm, input, &fields)) return mal_value_new_undefined();
+    ArithmeticOverflow overflow;
+    if (!temporal_overflow_option(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
+        plain_date_partial_destroy(&fields);
+        return mal_value_new_undefined();
+    }
+    temporal_rs_PlainYearMonth_with_result result = temporal_rs_PlainYearMonth_with(
+        object->handle, fields.partial,
+        (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
+    plain_date_partial_destroy(&fields);
+    return result.is_ok ? plain_year_month_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue plain_year_month_to_plain_date(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(input)) {
+        return temporal_throw_type(vm, "Temporal.PlainYearMonth.toPlainDate requires an object");
+    }
+    MalValue value;
+    if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, "day"), &value)) {
+        return mal_value_new_undefined();
+    }
+    u16 day;
+    if (!temporal_u16_integer(vm, value, UINT8_MAX, &day)) return mal_value_new_undefined();
+    PartialDate partial = {.calendar = AnyCalendarKind_Iso,
+                           .day = {.ok = (u8) day, .is_ok = true}};
+    temporal_rs_PlainYearMonth_to_plain_date_result result =
+        temporal_rs_PlainYearMonth_to_plain_date(
+            object->handle, (PartialDate_option) {.ok = partial, .is_ok = true});
+    return result.is_ok ? plain_date_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue plain_year_month_era(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    DiplomatWrite *write = diplomat_buffer_write_create(16);
+    temporal_rs_PlainYearMonth_era(object->handle, write);
+    if (diplomat_buffer_write_len(write) == 0) {
+        diplomat_buffer_write_destroy(write);
+        return mal_value_new_undefined();
+    }
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue plain_year_month_era_year(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    temporal_rs_PlainYearMonth_era_year_result result =
+        temporal_rs_PlainYearMonth_era_year(object->handle);
+    return result.is_ok ? mal_value_from_i32(result.ok) : mal_value_new_undefined();
+}
+
+static MalValue plain_year_month_add_or_subtract(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool subtract
+) {
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    Duration *duration = duration_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (duration == nullptr) return mal_value_new_undefined();
+    ArithmeticOverflow overflow;
+    if (!temporal_overflow_option(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
+        temporal_rs_Duration_destroy(duration);
+        return mal_value_new_undefined();
+    }
+    PlainYearMonth *handle = nullptr;
+    TemporalError error = {0};
+    bool ok;
+    if (subtract) {
+        temporal_rs_PlainYearMonth_subtract_result result =
+            temporal_rs_PlainYearMonth_subtract(object->handle, duration, overflow);
+        ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
+    } else {
+        temporal_rs_PlainYearMonth_add_result result =
+            temporal_rs_PlainYearMonth_add(object->handle, duration, overflow);
+        ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
+    }
+    temporal_rs_Duration_destroy(duration);
+    return ok ? plain_year_month_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
+}
+
+static MalValue plain_year_month_add(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return plain_year_month_add_or_subtract(vm, this_value, args, arg_count, false);
+}
+
+static MalValue plain_year_month_subtract(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return plain_year_month_add_or_subtract(vm, this_value, args, arg_count, true);
+}
+
+static MalValue plain_year_month_to_string_impl(
+    MalVm *vm, MalValue this_value, MalValue options, bool read_options
+) {
+    MalTemporalObject *object;
+    if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
+    DisplayCalendar display = DisplayCalendar_Auto;
+    if (read_options && !temporal_display_calendar(vm, options, &display)) {
+        return mal_value_new_undefined();
+    }
+    DiplomatWrite *write = diplomat_buffer_write_create(32);
+    temporal_rs_PlainYearMonth_to_ixdtf_string(object->handle, display, write);
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue plain_year_month_to_string(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return plain_year_month_to_string_impl(
+        vm, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(), true);
+}
+
+static MalValue plain_year_month_to_string_no_options(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return plain_year_month_to_string_impl(
+        vm, this_value, mal_value_new_undefined(), false);
+}
+
+static MalValue plain_year_month_value_of(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return temporal_throw_type(vm, "Cannot convert Temporal.PlainYearMonth to a primitive");
+}
+
+static bool plain_month_day_this(MalVm *vm, MalValue value, MalTemporalObject **out) {
+    if (!mal_value_is_temporal_object(value)) {
+        temporal_throw_type(vm, "Temporal.PlainMonthDay method called on incompatible receiver");
+        return false;
+    }
+    MalTemporalObject *object = mal_value_to_temporal_object(value);
+    if (object->kind != MAL_TEMPORAL_PLAIN_MONTH_DAY || object->handle == nullptr) {
+        temporal_throw_type(vm, "Temporal.PlainMonthDay method called on incompatible receiver");
+        return false;
+    }
+    *out = object;
+    return true;
+}
+
+static MalValue plain_month_day_wrap(
+    MalVm *vm, PlainMonthDay *handle, MalObject *prototype
+) {
+    return mal_value_from_temporal_object(mal_temporal_object_new(
+        &vm->heap, prototype, MAL_TEMPORAL_PLAIN_MONTH_DAY, handle));
+}
+
+static MalValue plain_month_day_wrap_intrinsic(MalVm *vm, PlainMonthDay *handle) {
+    return plain_month_day_wrap(
+        vm, handle,
+        mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_PROTOTYPE]));
+}
+
+static MalValue plain_month_day_constructor(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        return temporal_throw_type(vm, "Temporal.PlainMonthDay must be called with new");
+    }
+    u16 month, day;
+    if (!temporal_u16_integer(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), UINT8_MAX, &month) ||
+        !temporal_u16_integer(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), UINT8_MAX, &day)) {
+        return mal_value_new_undefined();
+    }
+    AnyCalendarKind calendar;
+    if (!temporal_calendar_kind(
+            vm, arg_count > 2 ? args[2] : mal_value_new_undefined(), &calendar)) {
+        return mal_value_new_undefined();
+    }
+    i32 reference_year = 1972;
+    if (arg_count > 3 && !mal_value_is_undefined(args[3]) &&
+        !temporal_i32_integer(vm, args[3], &reference_year)) {
+        return mal_value_new_undefined();
+    }
+    temporal_rs_PlainMonthDay_try_new_with_overflow_result result =
+        temporal_rs_PlainMonthDay_try_new_with_overflow(
+            (u8) month, (u8) day, calendar, ArithmeticOverflow_Reject,
+            (OptionI32) {.ok = reference_year, .is_ok = true});
+    if (!result.is_ok) return temporal_throw(vm, result.err);
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_PROTOTYPE,
+            &prototype)) {
+        temporal_rs_PlainMonthDay_destroy(result.ok);
+        return mal_value_new_undefined();
+    }
+    return plain_month_day_wrap(vm, result.ok, prototype);
+}
+
+static PlainMonthDay *plain_month_day_from_like(
+    MalVm *vm, MalValue input, MalValue options
+) {
+    if (mal_value_is_temporal_object(input)) {
+        MalTemporalObject *object = mal_value_to_temporal_object(input);
+        if (object->kind == MAL_TEMPORAL_PLAIN_MONTH_DAY && object->handle != nullptr) {
+            ArithmeticOverflow overflow;
+            if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
+            return temporal_rs_PlainMonthDay_clone(object->handle);
+        }
+    }
+    if (mal_value_is_string(input)) {
+        MalString *string = mal_value_to_string(input);
+        DiplomatString16View view = {
+            .data = (const char16_t *) mal_string_code_units(string),
+            .len = mal_string_length(string),
+        };
+        temporal_rs_PlainMonthDay_from_utf16_result result =
+            temporal_rs_PlainMonthDay_from_utf16(view);
+        if (!result.is_ok) {
+            temporal_throw(vm, result.err);
+            return nullptr;
+        }
+        ArithmeticOverflow overflow;
+        if (!temporal_overflow_option(vm, options, &overflow)) {
+            temporal_rs_PlainMonthDay_destroy(result.ok);
+            return nullptr;
+        }
+        return result.ok;
+    }
+    if (!mal_value_is_object(input)) {
+        temporal_throw_type(vm, "Temporal.PlainMonthDay.from requires a string or object");
+        return nullptr;
+    }
+    PlainDatePartial fields;
+    if (!plain_date_partial_from_object(vm, input, &fields)) return nullptr;
+    ArithmeticOverflow overflow;
+    if (!temporal_overflow_option(vm, options, &overflow)) {
+        plain_date_partial_destroy(&fields);
+        return nullptr;
+    }
+    temporal_rs_PlainMonthDay_from_partial_result result =
+        temporal_rs_PlainMonthDay_from_partial(
+            fields.partial,
+            (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
+    plain_date_partial_destroy(&fields);
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return nullptr;
+    }
+    return result.ok;
+}
+
+static MalValue plain_month_day_from(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    PlainMonthDay *handle = plain_month_day_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(),
+        arg_count > 1 ? args[1] : mal_value_new_undefined());
+    return handle == nullptr ? mal_value_new_undefined()
+                             : plain_month_day_wrap_intrinsic(vm, handle);
+}
+
+#define PLAIN_MONTH_DAY_GETTER(c_name, ffi_name) \
+    static MalValue c_name(MalVm *vm, MalValue this_value, const MalValue *args, \
+                           i32 arg_count, MalValue new_target, MalValue callee) { \
+        (void) args; (void) arg_count; (void) new_target; (void) callee; \
+        MalTemporalObject *object; \
+        if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined(); \
+        return mal_value_from_i32((i32) ffi_name(object->handle)); \
+    }
+
+PLAIN_MONTH_DAY_GETTER(plain_month_day_month, temporal_rs_PlainMonthDay_month)
+PLAIN_MONTH_DAY_GETTER(plain_month_day_day, temporal_rs_PlainMonthDay_day)
+
+static MalValue plain_month_day_calendar_id(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return temporal_calendar_identifier(
+        vm, temporal_rs_PlainMonthDay_calendar(object->handle));
+}
+
+static MalValue plain_month_day_month_code(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
+    DiplomatWrite *write = diplomat_buffer_write_create(8);
+    temporal_rs_PlainMonthDay_month_code(object->handle, write);
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue plain_month_day_equals(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
+    PlainMonthDay *other = plain_month_day_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
+    if (other == nullptr) return mal_value_new_undefined();
+    bool equal = temporal_rs_PlainMonthDay_equals(object->handle, other);
+    temporal_rs_PlainMonthDay_destroy(other);
+    return mal_value_new_boolean(equal);
+}
+
+static MalValue plain_month_day_with(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(input) || mal_value_is_temporal_object(input)) {
+        return temporal_throw_type(vm, "Temporal.PlainMonthDay.with requires a property bag");
+    }
+    PlainDatePartial fields;
+    if (!plain_date_partial_from_object(vm, input, &fields)) return mal_value_new_undefined();
+    ArithmeticOverflow overflow;
+    if (!temporal_overflow_option(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
+        plain_date_partial_destroy(&fields);
+        return mal_value_new_undefined();
+    }
+    temporal_rs_PlainMonthDay_with_result result = temporal_rs_PlainMonthDay_with(
+        object->handle, fields.partial,
+        (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
+    plain_date_partial_destroy(&fields);
+    return result.is_ok ? plain_month_day_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue plain_month_day_to_plain_date(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(input)) {
+        return temporal_throw_type(vm, "Temporal.PlainMonthDay.toPlainDate requires an object");
+    }
+    MalValue value;
+    if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, "year"), &value)) {
+        return mal_value_new_undefined();
+    }
+    i32 year;
+    if (!temporal_i32_integer(vm, value, &year)) return mal_value_new_undefined();
+    PartialDate partial = {.calendar = AnyCalendarKind_Iso,
+                           .year = {.ok = year, .is_ok = true}};
+    temporal_rs_PlainMonthDay_to_plain_date_result result =
+        temporal_rs_PlainMonthDay_to_plain_date(
+            object->handle, (PartialDate_option) {.ok = partial, .is_ok = true});
+    return result.is_ok ? plain_date_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue plain_month_day_to_string_impl(
+    MalVm *vm, MalValue this_value, MalValue options, bool read_options
+) {
+    MalTemporalObject *object;
+    if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
+    DisplayCalendar display = DisplayCalendar_Auto;
+    if (read_options && !temporal_display_calendar(vm, options, &display)) {
+        return mal_value_new_undefined();
+    }
+    DiplomatWrite *write = diplomat_buffer_write_create(32);
+    temporal_rs_PlainMonthDay_to_ixdtf_string(object->handle, display, write);
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue plain_month_day_to_string(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return plain_month_day_to_string_impl(
+        vm, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(), true);
+}
+
+static MalValue plain_month_day_to_string_no_options(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return plain_month_day_to_string_impl(
+        vm, this_value, mal_value_new_undefined(), false);
+}
+
+static MalValue plain_month_day_value_of(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return temporal_throw_type(vm, "Cannot convert Temporal.PlainMonthDay to a primitive");
+}
+
 static I128Nanoseconds temporal_i128_to_nanoseconds(i128 value) {
     bool negative = value < 0;
     u128 magnitude = negative ? (u128) (-(value + 1)) + 1 : (u128) value;
@@ -2865,9 +3658,17 @@ static void temporal_install_plain_date(MalVm *vm, MalObject *temporal) {
     mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0,
                                   plain_date_to_string_no_options);
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0, plain_date_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toPlainDateTime", 0,
+                                  plain_date_to_plain_date_time);
+    mal_intrinsic_define_method_n(vm, prototype, "toPlainMonthDay", 0,
+                                  plain_date_to_plain_month_day);
+    mal_intrinsic_define_method_n(vm, prototype, "toPlainYearMonth", 0,
+                                  plain_date_to_plain_year_month);
     mal_intrinsic_define_method_n(vm, prototype, "until", 1, plain_date_until);
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, plain_date_value_of);
     mal_intrinsic_define_method_n(vm, prototype, "with", 1, plain_date_with);
+    mal_intrinsic_define_method_n(vm, prototype, "withCalendar", 1,
+                                  plain_date_with_calendar);
     temporal_set_tag(vm, prototype, "Temporal.PlainDate");
 }
 
@@ -2960,6 +3761,128 @@ static void temporal_install_plain_date_time(MalVm *vm, MalObject *temporal) {
     mal_intrinsic_define_method_n(vm, prototype, "withPlainTime", 0,
                                   plain_date_time_with_plain_time);
     temporal_set_tag(vm, prototype, "Temporal.PlainDateTime");
+}
+
+static void temporal_install_plain_year_month(MalVm *vm, MalObject *temporal) {
+    MalObject *object_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalObject *function_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, object_prototype);
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "PlainYearMonth"), 2,
+        plain_year_month_constructor);
+    vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_CONSTRUCTOR] =
+        mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_PROTOTYPE] =
+        mal_value_from_object(prototype);
+    mal_intrinsic_define_data(
+        vm, (MalObject *) constructor, "prototype",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_PROTOTYPE],
+        MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(
+        vm, prototype, "constructor",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "compare", 2,
+                                  plain_year_month_compare);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "from", 1,
+                                  plain_year_month_from);
+    mal_intrinsic_define_data(
+        vm, temporal, "PlainYearMonth",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    struct { const byte *name; MalNativeFunctionCallback getter; } getters[] = {
+        {"calendarId", plain_year_month_calendar_id}, {"year", plain_year_month_year},
+        {"month", plain_year_month_month}, {"monthCode", plain_year_month_month_code},
+        {"daysInMonth", plain_year_month_days_in_month},
+        {"daysInYear", plain_year_month_days_in_year},
+        {"monthsInYear", plain_year_month_months_in_year},
+        {"inLeapYear", plain_year_month_in_leap_year},
+        {"era", plain_year_month_era}, {"eraYear", plain_year_month_era_year},
+    };
+    for (usize i = 0; i < countof(getters); ++i) {
+        byte name[32] = "get "; usize length = 4;
+        for (const byte *source = getters[i].name;
+             *source != '\0' && length + 1 < sizeof(name); ++source) name[length++] = *source;
+        name[length] = '\0';
+        mal_intrinsic_define_accessor_n(
+            vm, prototype, mal_intrinsic_string_key(vm, getters[i].name), name, 0,
+            getters[i].getter, nullptr, 0, nullptr, MAL_PROPERTY_CONFIGURABLE);
+    }
+    mal_intrinsic_define_method_n(vm, prototype, "add", 1, plain_year_month_add);
+    mal_intrinsic_define_method_n(vm, prototype, "equals", 1, plain_year_month_equals);
+    mal_intrinsic_define_method_n(vm, prototype, "since", 1, plain_year_month_since);
+    mal_intrinsic_define_method_n(vm, prototype, "subtract", 1,
+                                  plain_year_month_subtract);
+    mal_intrinsic_define_method_n(vm, prototype, "toJSON", 0,
+                                  plain_year_month_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0,
+                                  plain_year_month_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0,
+                                  plain_year_month_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toPlainDate", 1,
+                                  plain_year_month_to_plain_date);
+    mal_intrinsic_define_method_n(vm, prototype, "until", 1, plain_year_month_until);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0,
+                                  plain_year_month_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "with", 1, plain_year_month_with);
+    temporal_set_tag(vm, prototype, "Temporal.PlainYearMonth");
+}
+
+static void temporal_install_plain_month_day(MalVm *vm, MalObject *temporal) {
+    MalObject *object_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalObject *function_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, object_prototype);
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "PlainMonthDay"), 2,
+        plain_month_day_constructor);
+    vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_CONSTRUCTOR] =
+        mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_PROTOTYPE] =
+        mal_value_from_object(prototype);
+    mal_intrinsic_define_data(
+        vm, (MalObject *) constructor, "prototype",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_PROTOTYPE],
+        MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(
+        vm, prototype, "constructor",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "from", 1,
+                                  plain_month_day_from);
+    mal_intrinsic_define_data(
+        vm, temporal, "PlainMonthDay",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    struct { const byte *name; MalNativeFunctionCallback getter; } getters[] = {
+        {"calendarId", plain_month_day_calendar_id}, {"month", plain_month_day_month},
+        {"monthCode", plain_month_day_month_code}, {"day", plain_month_day_day},
+    };
+    for (usize i = 0; i < countof(getters); ++i) {
+        byte name[32] = "get "; usize length = 4;
+        for (const byte *source = getters[i].name;
+             *source != '\0' && length + 1 < sizeof(name); ++source) name[length++] = *source;
+        name[length] = '\0';
+        mal_intrinsic_define_accessor_n(
+            vm, prototype, mal_intrinsic_string_key(vm, getters[i].name), name, 0,
+            getters[i].getter, nullptr, 0, nullptr, MAL_PROPERTY_CONFIGURABLE);
+    }
+    mal_intrinsic_define_method_n(vm, prototype, "equals", 1, plain_month_day_equals);
+    mal_intrinsic_define_method_n(vm, prototype, "toPlainDate", 1,
+                                  plain_month_day_to_plain_date);
+    mal_intrinsic_define_method_n(vm, prototype, "toJSON", 0,
+                                  plain_month_day_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0,
+                                  plain_month_day_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0,
+                                  plain_month_day_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0,
+                                  plain_month_day_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "with", 1, plain_month_day_with);
+    temporal_set_tag(vm, prototype, "Temporal.PlainMonthDay");
 }
 
 static void temporal_install_instant(MalVm *vm, MalObject *temporal) {
@@ -3150,13 +4073,9 @@ void mal_builtin_temporal_install(MalVm *vm) {
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     temporal_install_plain_date(vm, temporal);
     temporal_install_plain_date_time(vm, temporal);
-    temporal_install_placeholder(vm, temporal, "PlainMonthDay", 2,
-        MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_CONSTRUCTOR,
-        MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_PROTOTYPE);
+    temporal_install_plain_month_day(vm, temporal);
     temporal_install_plain_time(vm, temporal);
-    temporal_install_placeholder(vm, temporal, "PlainYearMonth", 2,
-        MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_CONSTRUCTOR,
-        MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_PROTOTYPE);
+    temporal_install_plain_year_month(vm, temporal);
     temporal_install_placeholder(vm, temporal, "ZonedDateTime", 2,
         MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_CONSTRUCTOR,
         MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE);
