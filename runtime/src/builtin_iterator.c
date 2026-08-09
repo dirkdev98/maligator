@@ -364,6 +364,46 @@ static MalValue mal_builtin_iterator_prototype_iterator(MalVm *vm, MalValue this
     return this_value;
 }
 
+/** %IteratorPrototype%[@@dispose] closes an iterator and discards its result. */
+static MalValue mal_builtin_iterator_prototype_dispose(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+
+    MalValue return_method;
+    if (!mal_vm_get_property(
+            vm,
+            this_value,
+            mal_intrinsic_string_key(vm, "return"),
+            &return_method)) {
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_nil(return_method)) {
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_callable(return_method)) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Iterator return is not a function"
+        );
+        return mal_value_new_undefined();
+    }
+    MalCompletion completion =
+        mal_vm_call_value(vm, return_method, this_value, nullptr, 0);
+    return completion.kind == MAL_COMPLETION_NORMAL
+        ? mal_value_new_undefined()
+        : completion.value;
+}
+
 bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out) {
     MalValue method;
     if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
@@ -546,6 +586,7 @@ void mal_builtin_iterator_install(MalVm *vm) {
     MalObject *iterator_prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE] = mal_value_from_object(iterator_prototype);
     mal_intrinsic_define_symbol_method(vm, iterator_prototype, MAL_INTRINSIC_SYMBOL_ITERATOR, "[Symbol.iterator]", mal_builtin_iterator_prototype_iterator);
+    mal_intrinsic_define_symbol_method(vm, iterator_prototype, MAL_INTRINSIC_SYMBOL_DISPOSE, "[Symbol.dispose]", mal_builtin_iterator_prototype_dispose);
 
     MalObject *map_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE, iterator_prototype, "Map Iterator");
     mal_intrinsic_define_method_n(vm, map_iterator, "next", 0, mal_builtin_map_iterator_next);
