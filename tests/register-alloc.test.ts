@@ -147,6 +147,22 @@ test("development allocation keeps every virtual value distinct", () => {
 	expect(fn.nextRegisterDestination).toBe(6);
 });
 
+test("development allocation retains an already valid virtual register namespace", () => {
+	const snapshot: IRInstruction = { type: "loadArgumentCount", registers: [1] };
+	const value: IRInstruction = { type: "createObject", registers: [8] };
+	const fn = {
+		parameterCount: 1,
+		nextRegisterDestination: 9,
+		blocks: [{ instructions: [snapshot, value] }],
+	} as unknown as IRFunction;
+
+	allocateDevelopmentRegisters({ functions: [fn] } as unknown as IntermediateProgram);
+
+	expect(snapshot.registers[0]).toBe(1);
+	expect(value.registers[0]).toBe(8);
+	expect(fn.nextRegisterDestination).toBe(9);
+});
+
 test("never shares a physical register across representation classes", () => {
 	const number: IRInstruction = { type: "createNumber", registers: [0], value: 1 };
 	const boolean: IRInstruction = { type: "createBoolean", registers: [1], value: true };

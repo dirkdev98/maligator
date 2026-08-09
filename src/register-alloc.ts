@@ -32,10 +32,39 @@ export function allocateRegisters(program: IntermediateProgram) {
  */
 export function allocateDevelopmentRegisters(program: IntermediateProgram): void {
 	for (const fn of program.functions) {
-		allocateDense(fn, allVirtualRegisters(fn));
+		if (!developmentRegistersAlreadyValid(fn)) {
+			allocateDense(fn, allVirtualRegisters(fn));
+		}
 	}
 
 	if (debugEnabled) debugIntermediateProgram(program);
+}
+
+/**
+ * IR destinations already live in one monotonically allocated namespace. The
+ * development backend deliberately does not coalesce them, so rewriting every
+ * operand through Map/Set tables is redundant unless argument snapshots need
+ * their ABI-mandated dense prefix repaired.
+ */
+function developmentRegistersAlreadyValid(fn: IRFunction): boolean {
+	let snapshotIndex = 0;
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				instruction.type !== "loadArgumentCount" &&
+				instruction.type !== "loadArgument"
+			) {
+				return true;
+			}
+			if (
+				instruction.registers[0] !==
+				fn.parameterCount + snapshotIndex++
+			) {
+				return false;
+			}
+		}
+	}
+	return true;
 }
 
 /**
