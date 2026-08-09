@@ -12,6 +12,7 @@
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "mal_i18n.h"
 #include "temporal_object.h"
 #include "utf8.h"
 #include "value_ops.h"
@@ -4883,7 +4884,21 @@ static bool temporal_now_nanoseconds(MalVm *vm, i128 *out) {
 
 static bool temporal_now_zone(MalVm *vm, MalValue value, TimeZone *out) {
     if (mal_value_is_undefined(value)) {
-        *out = temporal_rs_TimeZone_utc();
+        u8 identifier[256];
+        i32 length = mal_i18n_local_tz_name(identifier, (i32) sizeof(identifier));
+        if (length < 0 || length > (i32) sizeof(identifier)) {
+            temporal_throw_type(vm, "Unable to resolve the system time zone");
+            return false;
+        }
+        temporal_rs_TimeZone_try_from_identifier_str_result result =
+            temporal_rs_TimeZone_try_from_identifier_str(
+                (DiplomatStringView) {
+                    .data = (const char *) identifier, .len = (usize) length});
+        if (!result.is_ok) {
+            temporal_throw(vm, result.err);
+            return false;
+        }
+        *out = result.ok;
         return true;
     }
     return temporal_time_zone_from_value(vm, value, out);
@@ -4982,9 +4997,13 @@ static MalValue temporal_now_time_zone_id(
     MalValue new_target, MalValue callee
 ) {
     (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
-    DiplomatWrite *write = diplomat_buffer_write_create(8);
-    temporal_rs_TimeZone_identifier(temporal_rs_TimeZone_utc(), write);
-    return temporal_write_to_string(vm, write);
+    u8 identifier[256];
+    i32 length = mal_i18n_local_tz_name(identifier, (i32) sizeof(identifier));
+    if (length < 0 || length > (i32) sizeof(identifier)) {
+        return temporal_throw_type(vm, "Unable to resolve the system time zone");
+    }
+    return mal_value_from_string(mal_string_from_utf8(
+        &vm->heap, (const byte *) identifier, (usize) length));
 }
 
 static MalValue plain_date_time_to_zoned_date_time(
@@ -5064,41 +5083,11 @@ static MalValue plain_date_to_zoned_date_time(
                         : temporal_throw(vm, result.err);
 }
 
-static MalValue temporal_unimplemented_constructor(
-    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
-    MalValue new_target, MalValue callee
-) {
-    (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
-    return temporal_throw_type(vm, "Temporal constructor is not implemented yet");
-}
-
 static void temporal_set_tag(MalVm *vm, MalObject *object, const byte *tag) {
     MalPropertyDesc desc = mal_intrinsic_data_desc(
         mal_value_from_string(mal_intrinsic_ascii(vm, tag)), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(
         object, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &desc);
-}
-
-static void temporal_install_placeholder(
-    MalVm *vm, MalObject *temporal, const byte *name, i32 length,
-    MalIntrinsic constructor_slot, MalIntrinsic prototype_slot
-) {
-    MalObject *function_prototype =
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalObject *prototype = mal_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
-        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, name), length,
-        temporal_unimplemented_constructor);
-    vm->intrinsics[constructor_slot] = mal_value_from_native_function_object(constructor);
-    vm->intrinsics[prototype_slot] = mal_value_from_object(prototype);
-    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype",
-                              vm->intrinsics[prototype_slot], MAL_PROPERTY_NONE);
-    mal_intrinsic_define_data(vm, prototype, "constructor",
-                              vm->intrinsics[constructor_slot],
-                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_data(vm, temporal, name, vm->intrinsics[constructor_slot],
-                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
 static void temporal_install_plain_date(MalVm *vm, MalObject *temporal) {

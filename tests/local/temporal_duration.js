@@ -81,8 +81,11 @@ check(zoned.add({ days: 1 }).day === 2);
 check(instant.toZonedDateTimeISO("UTC").toInstant().equals(instant));
 check(Temporal.ZonedDateTime.from("2024-02-29T12:30+01:00[+01:00]").hour === 12);
 check(typeof Temporal.Now.instant().epochNanoseconds === "bigint");
-check(Temporal.Now.timeZoneId() === "UTC");
+check(
+	typeof Temporal.Now.timeZoneId() === "string" && Temporal.Now.timeZoneId().length > 0,
+);
 check(Temporal.Now.zonedDateTimeISO("UTC").timeZoneId === "UTC");
+check(Temporal.Now.zonedDateTimeISO().timeZoneId === Temporal.Now.timeZoneId());
 
 const order = [];
 const bag = {};
