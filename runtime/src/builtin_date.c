@@ -942,6 +942,22 @@ DATE_GETTER(date_proto_get_utc_seconds, true, DATE_FIELD_SECONDS)
 DATE_GETTER(date_proto_get_milliseconds, false, DATE_FIELD_MS)
 DATE_GETTER(date_proto_get_utc_milliseconds, true, DATE_FIELD_MS)
 
+static MalValue date_proto_get_year(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalDateObject *date;
+    if (!date_this(vm, this_value, &date)) {
+        return mal_value_new_undefined();
+    }
+    if (isnan(date->date_value)) {
+        return mal_value_new_nan();
+    }
+    return mal_ops_number_value(
+        date_year_from_time(date_local_time(date->date_value)) - 1900.0);
+}
+
 static MalValue date_proto_get_time(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) args;
     (void) arg_count;
@@ -1044,7 +1060,7 @@ static MalValue date_set_time_fields(MalVm *vm, MalValue this_value, bool utc, c
  * field (0=year, 1=month, 2=date). `reset_nan` resets an invalid receiver to t=+0
  * (only setFullYear/setUTCFullYear do).
  */
-static MalValue date_set_date_fields(MalVm *vm, MalValue this_value, bool utc, const MalValue *args, i32 arg_count, i32 first, bool reset_nan) {
+static MalValue date_set_date_fields(MalVm *vm, MalValue this_value, bool utc, const MalValue *args, i32 arg_count, i32 first, bool reset_nan, bool make_full_year) {
     MalDateObject *date;
     if (!date_this(vm, this_value, &date)) {
         return mal_value_new_undefined();
@@ -1066,6 +1082,9 @@ static MalValue date_set_date_fields(MalVm *vm, MalValue this_value, bool utc, c
             }
             present[first + i] = true;
         }
+    }
+    if (make_full_year) {
+        vals[first] = date_make_full_year(vals[first]);
     }
 
     f64 t;
@@ -1094,11 +1113,11 @@ static MalValue date_set_date_fields(MalVm *vm, MalValue this_value, bool utc, c
         return date_set_time_fields(vm, this_value, utc_flag, args, arg_count, first_field);                      \
     }
 
-#define DATE_DATE_SETTER(fn_name, utc_flag, first_field, reset)                                                   \
+#define DATE_DATE_SETTER(fn_name, utc_flag, first_field, reset, make_full)                                        \
     static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) { \
         (void) nt;                                                                                                \
         (void) cl;                                                                                                \
-        return date_set_date_fields(vm, this_value, utc_flag, args, arg_count, first_field, reset);               \
+        return date_set_date_fields(vm, this_value, utc_flag, args, arg_count, first_field, reset, make_full);    \
     }
 
 DATE_TIME_SETTER(date_proto_set_milliseconds, false, 3)
@@ -1110,12 +1129,13 @@ DATE_TIME_SETTER(date_proto_set_utc_minutes, true, 1)
 DATE_TIME_SETTER(date_proto_set_hours, false, 0)
 DATE_TIME_SETTER(date_proto_set_utc_hours, true, 0)
 
-DATE_DATE_SETTER(date_proto_set_date, false, 2, false)
-DATE_DATE_SETTER(date_proto_set_utc_date, true, 2, false)
-DATE_DATE_SETTER(date_proto_set_month, false, 1, false)
-DATE_DATE_SETTER(date_proto_set_utc_month, true, 1, false)
-DATE_DATE_SETTER(date_proto_set_full_year, false, 0, true)
-DATE_DATE_SETTER(date_proto_set_utc_full_year, true, 0, true)
+DATE_DATE_SETTER(date_proto_set_date, false, 2, false, false)
+DATE_DATE_SETTER(date_proto_set_utc_date, true, 2, false, false)
+DATE_DATE_SETTER(date_proto_set_month, false, 1, false, false)
+DATE_DATE_SETTER(date_proto_set_utc_month, true, 1, false, false)
+DATE_DATE_SETTER(date_proto_set_full_year, false, 0, true, false)
+DATE_DATE_SETTER(date_proto_set_utc_full_year, true, 0, true, false)
+DATE_DATE_SETTER(date_proto_set_year, false, 0, true, true)
 
 // ---------------------------------------------------------------------------
 // Prototype string conversions
@@ -1387,6 +1407,7 @@ void mal_builtin_date_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "getTimezoneOffset", 0, date_proto_get_timezone_offset);
 
     mal_intrinsic_define_method_n(vm, prototype, "getFullYear", 0, date_proto_get_full_year);
+    mal_intrinsic_define_method_n(vm, prototype, "getYear", 0, date_proto_get_year);
     mal_intrinsic_define_method_n(vm, prototype, "getUTCFullYear", 0, date_proto_get_utc_full_year);
     mal_intrinsic_define_method_n(vm, prototype, "getMonth", 0, date_proto_get_month);
     mal_intrinsic_define_method_n(vm, prototype, "getUTCMonth", 0, date_proto_get_utc_month);
@@ -1418,13 +1439,17 @@ void mal_builtin_date_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "setUTCMonth", 2, date_proto_set_utc_month);
     mal_intrinsic_define_method_n(vm, prototype, "setFullYear", 3, date_proto_set_full_year);
     mal_intrinsic_define_method_n(vm, prototype, "setUTCFullYear", 3, date_proto_set_utc_full_year);
+    mal_intrinsic_define_method_n(vm, prototype, "setYear", 1, date_proto_set_year);
 
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0, date_proto_to_string);
     mal_intrinsic_define_method_n(vm, prototype, "toDateString", 0, date_proto_to_date_string);
     mal_intrinsic_define_method_n(vm, prototype, "toTimeString", 0, date_proto_to_time_string);
-    mal_intrinsic_define_method_n(vm, prototype, "toUTCString", 0, date_proto_to_utc_string);
-    // toGMTString is a (legacy) alias of toUTCString.
-    mal_intrinsic_define_method_n(vm, prototype, "toGMTString", 0, date_proto_to_utc_string);
+    MalValue to_utc_string = mal_intrinsic_define_method_n(
+        vm, prototype, "toUTCString", 0, date_proto_to_utc_string);
+    // Annex B requires the very same function object, not a callback-equivalent clone.
+    mal_intrinsic_define_data(
+        vm, prototype, "toGMTString", to_utc_string,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_method_n(vm, prototype, "toISOString", 0, date_proto_to_iso_string);
     mal_intrinsic_define_method_n(vm, prototype, "toJSON", 1, date_proto_to_json);
 

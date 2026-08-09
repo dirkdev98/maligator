@@ -2,7 +2,12 @@
 # from baseline or report changes. Keep representative siblings only and keep
 # this selection disjoint from Test262 smoke.
 
-# Core built-in and runtime boundaries (55)
+# Core built-in and runtime boundaries (60)
+test/annexB/built-ins/Date/prototype/getYear/return-value.js
+test/annexB/built-ins/Date/prototype/setYear/date-value-read-before-tonumber-when-date-is-valid.js
+test/annexB/built-ins/Date/prototype/setYear/this-time-nan.js
+test/annexB/built-ins/Date/prototype/setYear/time-clip.js
+test/annexB/built-ins/Date/prototype/toGMTString/value.js
 test/annexB/built-ins/String/prototype/anchor/B.2.3.2.js
 test/annexB/built-ins/String/prototype/big/prop-desc.js
 test/annexB/built-ins/String/prototype/fontcolor/attr-tostring-err.js
