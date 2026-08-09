@@ -13,6 +13,9 @@
 #include "builtin_console.h"
 #include "builtin_data_view.h"
 #include "builtin_date.h"
+#if MAL_TEMPORAL
+#include "builtin_temporal.h"
+#endif
 #include "builtin_intl.h"
 #include "builtin_typed_array.h"
 #include "builtin_atomics.h"
@@ -600,6 +603,9 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_console_install(vm);
     mal_builtin_promise_install(vm);
     mal_builtin_date_install(vm);
+#if MAL_TEMPORAL
+    mal_builtin_temporal_install(vm);
+#endif
     mal_builtin_regexp_install(vm);
     mal_builtin_intl_install(vm);
     mal_builtin_uri_install(vm);
@@ -636,6 +642,16 @@ void mal_intrinsics_init(MalVm *vm) {
         MAL_INTRINSIC_TYPED_ARRAY_CONSTRUCTOR,
         MAL_INTRINSIC_PROMISE_CONSTRUCTOR,
         MAL_INTRINSIC_DATE_CONSTRUCTOR,
+#if MAL_TEMPORAL
+        MAL_INTRINSIC_TEMPORAL_DURATION_CONSTRUCTOR,
+        MAL_INTRINSIC_TEMPORAL_INSTANT_CONSTRUCTOR,
+        MAL_INTRINSIC_TEMPORAL_PLAIN_DATE_CONSTRUCTOR,
+        MAL_INTRINSIC_TEMPORAL_PLAIN_DATE_TIME_CONSTRUCTOR,
+        MAL_INTRINSIC_TEMPORAL_PLAIN_MONTH_DAY_CONSTRUCTOR,
+        MAL_INTRINSIC_TEMPORAL_PLAIN_TIME_CONSTRUCTOR,
+        MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_CONSTRUCTOR,
+        MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_CONSTRUCTOR,
+#endif
         MAL_INTRINSIC_REGEXP_CONSTRUCTOR,
         MAL_INTRINSIC_INTL_LOCALE_CONSTRUCTOR,
         MAL_INTRINSIC_INTL_COLLATOR_CONSTRUCTOR,
@@ -892,6 +908,9 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);
     mal_intrinsic_define_data(vm, global_this, "Promise", vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Date", vm->intrinsics[MAL_INTRINSIC_DATE_CONSTRUCTOR], flags);
+#if MAL_TEMPORAL
+    mal_intrinsic_define_data(vm, global_this, "Temporal", vm->intrinsics[MAL_INTRINSIC_TEMPORAL], flags);
+#endif
     mal_intrinsic_define_data(vm, global_this, "RegExp", vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Intl", vm->intrinsics[MAL_INTRINSIC_INTL], flags);
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);

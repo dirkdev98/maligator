@@ -200,6 +200,8 @@ typedef enum MalHeapType : u8 {
      * date_object.h.
      */
     MAL_HEAP_DATE_OBJECT,
+    /** Temporal instances: one ordinary-object shell around a temporal_rs handle. */
+    MAL_HEAP_TEMPORAL_OBJECT,
     /**
      * Intl service instances (MalIntlObject): Intl.Locale and the formatter
      * objects, holding an (optional) Rust-owned ICU4X handle + per-kind data.

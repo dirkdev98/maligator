@@ -46,6 +46,18 @@ bool mal_value_is_date_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_DATE_OBJECT);
 }
 
+bool mal_value_is_temporal_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_TEMPORAL_OBJECT);
+}
+
+MalTemporalObject *mal_value_to_temporal_object(MalValue value) {
+    return (MalTemporalObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_temporal_object(MalTemporalObject *temporal) {
+    return mal_value_from_heap((MalHeapHeader *) temporal);
+}
+
 bool mal_value_is_weak_ref_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_WEAK_REF_OBJECT);
 }

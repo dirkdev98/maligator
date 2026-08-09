@@ -101,6 +101,8 @@ export interface BuildOptions {
 	 * methods throw).
 	 */
 	regexpEnabled?: boolean;
+	/** Include Temporal and its calendar/time-zone data. Defaults to true internally. */
+	temporalEnabled?: boolean;
 	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
 	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled` /
@@ -138,6 +140,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 				eval: options.evalEnabled ?? true,
 				realms: options.realmsEnabled ?? true,
 				regexp: options.regexpEnabled ?? true,
+				temporal: options.temporalEnabled ?? true,
 				intl: {
 					enabled: options.intlEnabled ?? true,
 					features: options.intlFeatures ?? [],

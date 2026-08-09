@@ -23,6 +23,7 @@ typedef struct MalPromiseObject MalPromiseObject;
 typedef struct MalIteratorHelperObject MalIteratorHelperObject;
 typedef struct MalPrimitiveWrapperObject MalPrimitiveWrapperObject;
 typedef struct MalDateObject MalDateObject;
+typedef struct MalTemporalObject MalTemporalObject;
 typedef struct MalIntlObject MalIntlObject;
 typedef struct MalRegExpObject MalRegExpObject;
 typedef struct MalRegExpStringIteratorObject MalRegExpStringIteratorObject;
@@ -423,6 +424,11 @@ MalValue mal_value_from_primitive_wrapper(MalPrimitiveWrapperObject *wrapper);
 bool mal_value_is_date_object(MalValue value);
 MalDateObject *mal_value_to_date_object(MalValue value);
 MalValue mal_value_from_date_object(MalDateObject *date);
+
+/** Temporal branded object predicate + box/unbox. */
+bool mal_value_is_temporal_object(MalValue value);
+MalTemporalObject *mal_value_to_temporal_object(MalValue value);
+MalValue mal_value_from_temporal_object(MalTemporalObject *temporal);
 
 /**
  * Intl service instance predicate + box/unbox (Locale + the formatters).

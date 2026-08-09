@@ -27,6 +27,7 @@ export function setup(): void {
 			eval: true,
 			regexp: true,
 			realms: true,
+			temporal: true,
 			intl: { enabled: true, features: [] },
 		},
 		surface: { webPlatform: true, node: false },

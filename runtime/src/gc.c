@@ -33,12 +33,23 @@
 #include "./property_store.h"
 #include "./proxy_object.h"
 #include "./regexp_object.h"
+#include "./temporal_object.h"
 #include "./shape.h"
 #include "./typed_array_object.h"
 #include "./vm.h"
 #include "./vm_ops.h"
 #include "mal_i18n.h"
 #include "mal_regexp.h"
+#if MAL_TEMPORAL
+#include "temporal_rs/Duration.h"
+#include "temporal_rs/Instant.h"
+#include "temporal_rs/PlainDate.h"
+#include "temporal_rs/PlainDateTime.h"
+#include "temporal_rs/PlainMonthDay.h"
+#include "temporal_rs/PlainTime.h"
+#include "temporal_rs/PlainYearMonth.h"
+#include "temporal_rs/ZonedDateTime.h"
+#endif
 
 /*
  * Mutator-contract state + hooks. The flags stay false and the SATB hook is a
@@ -1134,6 +1145,41 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             if (re->matcher != nullptr) {
                 mal_regexp_free(re->matcher);
                 re->matcher = nullptr;
+            }
+#endif
+            break;
+        }
+        case MAL_HEAP_TEMPORAL_OBJECT: {
+#if MAL_TEMPORAL
+            MalTemporalObject *temporal = (MalTemporalObject *) cell;
+            if (temporal->handle != nullptr) {
+                switch (temporal->kind) {
+                    case MAL_TEMPORAL_DURATION:
+                        temporal_rs_Duration_destroy(temporal->handle);
+                        break;
+                    case MAL_TEMPORAL_INSTANT:
+                        temporal_rs_Instant_destroy(temporal->handle);
+                        break;
+                    case MAL_TEMPORAL_PLAIN_DATE:
+                        temporal_rs_PlainDate_destroy(temporal->handle);
+                        break;
+                    case MAL_TEMPORAL_PLAIN_DATE_TIME:
+                        temporal_rs_PlainDateTime_destroy(temporal->handle);
+                        break;
+                    case MAL_TEMPORAL_PLAIN_MONTH_DAY:
+                        temporal_rs_PlainMonthDay_destroy(temporal->handle);
+                        break;
+                    case MAL_TEMPORAL_PLAIN_TIME:
+                        temporal_rs_PlainTime_destroy(temporal->handle);
+                        break;
+                    case MAL_TEMPORAL_PLAIN_YEAR_MONTH:
+                        temporal_rs_PlainYearMonth_destroy(temporal->handle);
+                        break;
+                    case MAL_TEMPORAL_ZONED_DATE_TIME:
+                        temporal_rs_ZonedDateTime_destroy(temporal->handle);
+                        break;
+                }
+                temporal->handle = nullptr;
             }
 #endif
             break;

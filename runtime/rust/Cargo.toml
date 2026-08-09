@@ -45,6 +45,7 @@ icu_experimental = { version = "0.5", optional = true }
 # Writeable: stringify ICU "formatted" results that expose Writeable (not Display).
 writeable = { version = "0.6", optional = true }
 # temporal_rs joins here for the Temporal global.
+temporal_capi = { version = "0.2.6", default-features = false, optional = true }
 # regress: the ECMAScript RegExp engine (the one Boa uses). Lives in this crate
 # rather than its own because two Rust staticlibs can't co-link (duplicate std
 # panic-runtime symbols). The `utf16` feature matches over &[u16] with no UTF-8
@@ -92,10 +93,10 @@ web-platform = ["dep:ada-url"]
 # Maps to engine.regexp (rust-build.ts) + C `-DMAL_REGEXP`.
 regexp = ["dep:regress"]
 
-# ECMAScript Temporal. The dependency and FFI module land in the next semantic
-# slice; keeping the named feature here makes build/config gating independently
-# testable and gives Cargo a valid all-features identity at this checkpoint.
-temporal = []
+# ECMAScript Temporal through temporal_rs's generated stable C interface. Its
+# compiled_data provider embeds deterministic IANA time-zone data only when the
+# build config selects engine.temporal.
+temporal = ["dep:temporal_capi", "temporal_capi/compiled_data"]
 
 # node:zlib phase 1: decompression-only flat primitives. The C/JS adapters remain
 # outside this feature; Node builds select it through normalizeNativeFeatures.

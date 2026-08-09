@@ -339,6 +339,7 @@ export function test262PrepareBuild() {
 			eval: true,
 			realms: true,
 			regexp: true,
+			temporal: true,
 			intl: { enabled: true },
 		},
 		surface: { webPlatform: true, node: false },

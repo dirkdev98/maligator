@@ -15,6 +15,11 @@
 
 mod ffi;
 
+// temporal_rs's official C ABI. Keeping it in this crate preserves the one-
+// staticlib rule while exporting the generated `temporal_rs_*` symbols to C.
+#[cfg(feature = "temporal")]
+extern crate temporal_capi;
+
 // The RegExp FFI (regress engine). Gated behind the `regexp` Cargo feature
 // (engine.regexp) so a non-regex build drops the engine + its Unicode tables. See
 // src/regexp.rs.
