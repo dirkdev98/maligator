@@ -80,6 +80,9 @@ For a fix queue maintained in a separate clone:
 - Follow `docs/testing.md` when placing tests. If a regression could reasonably belong in more than one lane, ask the user rather than guessing.
 - Never use git worktrees.
 - When asked to commit, create unsigned local commits and do not push unless explicitly asked.
+- When a push is explicitly authorized, host-specific authentication instructions may
+  be available in the ignored `AGENTS.local.md`. Never print or persist the GitHub
+  token, and do not weaken the explicit-push requirement when using that fallback.
 - Work through clusters in phased semantic slices rather than stopping after the first passing case.
 
 ## External Subagents

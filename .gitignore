@@ -12,3 +12,5 @@ tsconfig.tsbuildinfo
 tests/local/tmp*.js
 *_todo.md
 .claude
+AGENTS.local.md
+scripts/local-gh-push.sh
