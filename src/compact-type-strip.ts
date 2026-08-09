@@ -1186,12 +1186,29 @@ function blankNonNullAssertions(
 	code: Array<boolean>,
 	output: Array<string>,
 ): void {
+	const expressionPrefixWords = new Set([
+		"await",
+		"case",
+		"delete",
+		"in",
+		"instanceof",
+		"new",
+		"return",
+		"throw",
+		"typeof",
+		"void",
+		"yield",
+	]);
 	for (let i = 0; i < source.length; i++) {
 		if (!code[i] || source[i] !== "!" || source[i + 1] === "=" || source[i - 1] === "!")
 			continue;
 		const before = previousCodeIndex(source, code, i - 1);
+		const precedingWord = isIdentifierPart(source[before])
+			? wordAtPreviousCode(source, code, i)
+			: undefined;
 		if (
-			isIdentifierPart(source[before]) ||
+			(isIdentifierPart(source[before]) &&
+				(precedingWord === undefined || !expressionPrefixWords.has(precedingWord.text))) ||
 			source[before] === ")" ||
 			source[before] === "]"
 		) {

@@ -135,6 +135,18 @@ const message = \`value:${"${selected as string}"}\`;
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "erasable.ts"));
 	});
 
+	test("preserves logical negation after expression-prefix keywords", () => {
+		const source = `const locked = (access: { isUnlocked: boolean }) => {
+	return !access.isUnlocked;
+};
+const direct = !locked({ isUnlocked: true });
+const asserted = access!.isUnlocked;`;
+
+		expect(stripCompactTypes(source, "logical-not.ts")).toBe(
+			stripTypesWithTypeScript(source, "logical-not.ts"),
+		);
+	});
+
 	test.each([
 		[
 			"typed recursive block body",

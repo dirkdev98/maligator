@@ -103,4 +103,57 @@ if (
 	throw new Error("comparison operators consumed a nested typed concise factory");
 }
 
+type AccessOverride = "inherit" | "locked" | "unlocked";
+
+interface RuleSetting {
+	readonly isUnlocked: boolean;
+}
+
+interface ResolveAccessInput {
+	readonly overrides: ReadonlyMap<string, Exclude<AccessOverride, "inherit">>;
+	readonly ruleId: string;
+	readonly settings: ReadonlyMap<string, RuleSetting>;
+}
+
+const resolveAccess = ({ overrides, ruleId, settings }: ResolveAccessInput) => {
+	const classroomIsUnlocked = settings.get(ruleId)?.isUnlocked ?? false;
+	const storedOverride = overrides.get(ruleId);
+	let override: AccessOverride = "inherit";
+	if (storedOverride !== undefined) override = storedOverride;
+	return {
+		isUnlocked:
+			override === "unlocked" || (override === "inherit" && classroomIsUnlocked),
+	};
+};
+
+const lockedDependencies = (
+	dependencyRuleIds: readonly string[],
+	settings: ReadonlyMap<string, RuleSetting>,
+	overrides: ReadonlyMap<string, Exclude<AccessOverride, "inherit">>,
+) =>
+	dependencyRuleIds.filter((dependencyRuleId) => {
+		const access = resolveAccess({ overrides, ruleId: dependencyRuleId, settings });
+		return !access.isUnlocked;
+	});
+
+const ruleSettings = new Map([
+	["locked-rule", { isUnlocked: false }],
+	["unlocked-rule", { isUnlocked: true }],
+]);
+const noOverrides = new Map<string, Exclude<AccessOverride, "inherit">>();
+if (
+	resolveAccess({ overrides: noOverrides, ruleId: "locked-rule", settings: ruleSettings })
+		.isUnlocked !== false ||
+	resolveAccess({ overrides: noOverrides, ruleId: "unlocked-rule", settings: ruleSettings })
+		.isUnlocked !== true
+) {
+	throw new Error("nested Map-derived access resolution changed its boolean");
+}
+if (
+	lockedDependencies(["locked-rule", "unlocked-rule"], ruleSettings, noOverrides).join(",") !==
+	"locked-rule"
+) {
+	throw new Error("filter inverted a nested Map-derived boolean");
+}
+
 console.log("TYPESCRIPT_ERASABLE_ISSUE_5_PASS");
