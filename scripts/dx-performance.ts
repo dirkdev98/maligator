@@ -29,6 +29,7 @@ const sourceMode = requestedBinary === "--source";
 const binary = sourceMode ? process.execPath : path.resolve(requestedBinary);
 const argumentPrefix = sourceMode ? [path.join(repositoryRoot, "src/index.ts")] : [];
 const measureAssets = process.argv.slice(3).includes("--assets");
+const keepFixture = process.argv.slice(3).includes("--keep");
 const root = mkdtempSync(path.join(os.tmpdir(), "maligator-dx-performance-"));
 const project = path.join(root, "project");
 const nodeModules = path.join(project, "node_modules");
@@ -146,20 +147,17 @@ async function developmentSamples(): Promise<Array<Sample>> {
 	}
 }
 
-function phase(stderr: string, label: string): string | undefined {
-	return stderr
+function report(sample: Sample): void {
+	const detailPrefixes = [
+		"Frontend cache:",
+		"Frontend phases:",
+		"Development fragments:",
+		"Compiler phase ·",
+	];
+	const details = sample.stderr
 		.split("\n")
 		.map((line) => line.trim())
-		.find((line) => line.startsWith(label));
-}
-
-function report(sample: Sample): void {
-	const details = [
-		phase(sample.stderr, "Frontend cache:"),
-		phase(sample.stderr, "Frontend phases:"),
-		phase(sample.stderr, "Development fragments:"),
-	]
-		.filter((value) => value !== undefined)
+		.filter((line) => detailPrefixes.some((prefix) => line.startsWith(prefix)))
 		.join(" · ");
 	console.log(
 		`${sample.name.padEnd(30)} ${sample.durationMs.toFixed(1).padStart(8)} ms${
@@ -259,5 +257,6 @@ test("representative graph", () => {
 		console.log("\nAdd --assets to measure the current native toolchain asset path.");
 	}
 } finally {
-	rmSync(root, { recursive: true, force: true });
+	if (keepFixture) console.log(`\nFixture retained at ${project}`);
+	else rmSync(root, { recursive: true, force: true });
 }
