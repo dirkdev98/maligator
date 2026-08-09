@@ -216,6 +216,37 @@ describe("emit-vm instruction packing", () => {
 		);
 	});
 
+	it("charges split units only for declarations they reference", () => {
+		const functions = Array.from({ length: 100 }, () => ({
+			...fn,
+			instructions: [
+				{ opcode: "CREATE_UNDEFINED", dst: 0 } as const,
+				{ opcode: "RETURN", value: 0 } as const,
+			],
+		}));
+		const stringConstants = Array.from({ length: 300 }, (_, index) =>
+			[...String(index).padEnd(40, "x")].map((character) => character.charCodeAt(0)),
+		);
+		const budget = 100_000;
+		const units = emitVmTranslationUnits(
+			{
+				...definition,
+				functionCount: functions.length,
+				functions,
+				stringConstants,
+			},
+			{},
+			budget,
+		);
+		const metadataUnit = units.find((unit) =>
+			unit.includes("const MalFunction mal_functions[] ="),
+		);
+
+		expect(units.every((unit) => unit.length <= budget)).toBe(true);
+		expect(metadataUnit).toBeDefined();
+		expect(metadataUnit).not.toContain("extern const c16 mal_string_0_code_units[];");
+	});
+
 	it("gives split async functions external linkage", () => {
 		const asyncFunction: VmFunction = {
 			...fn,

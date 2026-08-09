@@ -309,13 +309,26 @@ interface SplitDataSource {
 	definitions: Array<ExternalDataDefinition>;
 }
 
+interface GeneratedDeclaration {
+	symbol: string;
+	source: string;
+}
+
+interface TranslationUnitPart {
+	kind: "data array" | "compiled function";
+	symbol: string;
+	source: string;
+	declarations: Set<string>;
+}
+
 /**
  * Move generated arrays out of the definition translation unit.
  *
- * Aggregate tables can point at other generated symbols, so secondary units also
- * receive the complete generated extern preamble. Keeping every array external
- * lets large contiguous metadata tables retain their runtime ABI without making
- * the small `MalVmDefinition` source cross the native compiler's string ceiling.
+ * Aggregate tables can point at other generated symbols, so the definition unit
+ * retains declarations for every externalized array. The translation-unit packer
+ * selects the dependency-minimal subset for each secondary unit. Keeping every
+ * array external lets large contiguous metadata tables retain their runtime ABI
+ * without charging unrelated declarations to every compiler input.
  */
 function externalizeDataArrays(source: string): SplitDataSource {
 	const lines = source.split("\n");
@@ -548,54 +561,106 @@ export function emitVmTranslationUnits(
 		);
 	}
 
-	const generatedDeclarations = splitData.source
+	const generatedDeclarations: Array<GeneratedDeclaration> = splitData.source
 		.split("\n")
 		.filter(
 			(line) =>
 				line.startsWith("extern ") ||
 				(line.startsWith("MalValue mal_compiled_") && line.endsWith(";")),
-		);
-	const header = [...C_HEADER_LINES, ...generatedDeclarations, ""].join("\n");
-	if (header.length > maxCodeUnits) {
-		throw new RangeError(
-			`generated shared declaration header has ${header.length} code units; ` +
-				`maximum is ${maxCodeUnits}`,
-		);
-	}
+		)
+		.map((source) => {
+			const match = /\b(mal_[A-Za-z0-9_]+)(?=\[\]|\()/.exec(source);
+			if (match === null) {
+				throw new Error(`cannot identify generated declaration '${source}'`);
+			}
+			return { symbol: match[1]!, source };
+		});
+	const declarationsBySymbol = new Map(
+		generatedDeclarations.map((declaration) => [declaration.symbol, declaration]),
+	);
+	const preparePart = (
+		part: Omit<TranslationUnitPart, "declarations">,
+	): TranslationUnitPart => {
+		const declarations = new Set<string>();
+		for (const match of part.source.matchAll(/\bmal_[A-Za-z0-9_]+\b/g)) {
+			if (declarationsBySymbol.has(match[0])) declarations.add(match[0]);
+		}
+		return { ...part, declarations };
+	};
+	const unitSource = (
+		parts: Array<TranslationUnitPart>,
+		referenced: Set<string>,
+	): string => {
+		const declarations = generatedDeclarations
+			.filter((declaration) => referenced.has(declaration.symbol))
+			.map((declaration) => declaration.source);
+		return [
+			...C_HEADER_LINES,
+			...declarations,
+			"",
+			...parts.map((part) => part.source),
+		].join("\n");
+	};
 	const units = [splitData.source];
-	let parts = [header];
-	let length = header.length;
+	let parts: Array<TranslationUnitPart> = [];
+	let referenced = new Set<string>();
+	let declarationCodeUnits = 0;
+	let bodyCodeUnits = 0;
+	const baseHeaderCodeUnits = C_HEADER_LINES.reduce(
+		(total, line) => total + line.length + 1,
+		0,
+	);
 	const flush = (): void => {
-		if (parts.length === 1) return;
-		units.push(parts.join("\n"));
-		parts = [header];
-		length = header.length;
+		if (parts.length === 0) return;
+		units.push(unitSource(parts, referenced));
+		parts = [];
+		referenced = new Set();
+		declarationCodeUnits = 0;
+		bodyCodeUnits = 0;
+	};
+	const additionalDeclarationCodeUnits = (part: TranslationUnitPart): number => {
+		let codeUnits = 0;
+		for (const symbol of part.declarations) {
+			if (!referenced.has(symbol)) {
+				codeUnits += declarationsBySymbol.get(symbol)!.source.length + 1;
+			}
+		}
+		return codeUnits;
+	};
+	const append = (input: Omit<TranslationUnitPart, "declarations">): void => {
+		const part = preparePart(input);
+		let addedDeclarations = additionalDeclarationCodeUnits(part);
+		let candidateCodeUnits =
+			baseHeaderCodeUnits +
+			declarationCodeUnits +
+			addedDeclarations +
+			bodyCodeUnits +
+			part.source.length +
+			1;
+		if (candidateCodeUnits > maxCodeUnits) {
+			flush();
+			addedDeclarations = additionalDeclarationCodeUnits(part);
+			candidateCodeUnits =
+				baseHeaderCodeUnits + addedDeclarations + part.source.length + 1;
+		}
+		if (candidateCodeUnits > maxCodeUnits) {
+			throw new RangeError(
+				`generated ${part.kind} '${part.symbol}' has ${part.source.length} code units ` +
+					`and requires ${candidateCodeUnits} including its declarations; ` +
+					`translation-unit maximum is ${maxCodeUnits}`,
+			);
+		}
+		for (const symbol of part.declarations) referenced.add(symbol);
+		declarationCodeUnits += addedDeclarations;
+		bodyCodeUnits += part.source.length + 1;
+		parts.push(part);
 	};
 	for (const data of splitData.definitions) {
-		const additional = data.source.length + 1;
-		if (header.length + additional > maxCodeUnits) {
-			throw new RangeError(
-				`generated data array '${data.symbol}' has ${data.source.length} code units; ` +
-					`translation-unit maximum is ${maxCodeUnits}`,
-			);
-		}
-		if (length + additional > maxCodeUnits) flush();
-		parts.push(data.source);
-		length += additional;
+		append({ kind: "data array", symbol: data.symbol, source: data.source });
 	}
-	flush();
 	for (const fn of emitted.compiled) {
 		if (fn === null) continue;
-		const additional = fn.source.length + 1;
-		if (header.length + additional > maxCodeUnits) {
-			throw new RangeError(
-				`compiled function '${fn.symbol}' has ${fn.source.length} generated code units; ` +
-					`translation-unit maximum is ${maxCodeUnits}`,
-			);
-		}
-		if (length + additional > maxCodeUnits) flush();
-		parts.push(fn.source);
-		length += additional;
+		append({ kind: "compiled function", symbol: fn.symbol, source: fn.source });
 	}
 	flush();
 	return units;
