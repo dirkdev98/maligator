@@ -5,6 +5,12 @@ import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
 import {
+	compileDependencyFragments,
+	DEVELOPMENT_LINKED_MODULES_GLOBAL,
+	isExternalModule,
+} from "../dependency-fragment-cache.ts";
+import type { DependencyFragmentArtifact } from "../dependency-fragment-cache.ts";
+import {
 	cacheFrontendWire,
 	frontendArtifactIdentity,
 	frontendArtifactUnchanged,
@@ -30,7 +36,7 @@ import type {
 } from "./cache.ts";
 import { TestCompilationSession } from "./cache.ts";
 
-const FRAGMENT_SCHEMA = 4;
+const FRAGMENT_SCHEMA = 5;
 const TEST_MODULE_ID = "maligator:test";
 const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
 const CACHE_DIRECTORY = ".cache/mal-cache/test";
@@ -45,10 +51,11 @@ interface FragmentReference extends ArtifactReference {
 }
 
 interface FragmentManifest {
-	schema: 4;
+	schema: 5;
 	identity: string;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
+	dependencyArtifacts: Array<ArtifactReference>;
 	base: ArtifactReference;
 	fragments: Array<FragmentReference>;
 	runner: ArtifactReference;
@@ -72,7 +79,7 @@ interface CompiledArtifact extends ArtifactReference {
 }
 
 export interface RelocatableTestWire {
-	kind: "base" | "entry" | "runner";
+	kind: "dependency" | "base" | "entry" | "runner";
 	file?: string;
 	path: string;
 	digest: string;
@@ -211,7 +218,9 @@ function readArtifact(
 	};
 }
 
-function artifactReference(artifact: CompiledArtifact): ArtifactReference {
+function artifactReference(
+	artifact: CompiledArtifact | DependencyFragmentArtifact,
+): ArtifactReference {
 	return {
 		key: artifact.key,
 		digest: artifact.digest,
@@ -226,7 +235,7 @@ function artifactReference(artifact: CompiledArtifact): ArtifactReference {
 
 function relocatableWire(
 	kind: RelocatableTestWire["kind"],
-	artifact: CompiledArtifact,
+	artifact: CompiledArtifact | DependencyFragmentArtifact,
 	file?: string,
 ): RelocatableTestWire {
 	return {
@@ -261,6 +270,10 @@ function manifestHit(
 	const base = readArtifact(artifactRoot, manifest.base, "base");
 	const runner = readArtifact(artifactRoot, manifest.runner, "runner");
 	if (base === undefined || runner === undefined) return undefined;
+	const dependencyArtifacts = manifest.dependencyArtifacts.map((reference) =>
+		readArtifact(artifactRoot, reference, "dependency"),
+	);
+	if (dependencyArtifacts.some((artifact) => artifact === undefined)) return undefined;
 	const fragments: Array<RelocatableTestWire> = [];
 	for (const file of requested) {
 		const reference = manifest.fragments.find((fragment) => fragment.file === file);
@@ -270,13 +283,18 @@ function manifestHit(
 		fragments.push(artifact);
 	}
 	return {
-		wires: [base, ...fragments, runner],
+		wires: [
+			...(dependencyArtifacts as Array<RelocatableTestWire>),
+			base,
+			...fragments,
+			runner,
+		],
 		cache: "hit",
 		frontendMs: 0,
 		phases: emptyPhases(),
 		entries: manifest.entries,
 		dependencies: manifest.dependencies.map((dependency) => dependency.path),
-		artifactHits: fragments.length + 2,
+		artifactHits: dependencyArtifacts.length + fragments.length + 2,
 		artifactMisses: 0,
 	};
 }
@@ -509,10 +527,11 @@ function planningGraph(
 
 function facadeSource(target: string, names: Array<string>): string {
 	if (names.length === 0) return "";
+	const registry = isExternalModule(target)
+		? DEVELOPMENT_LINKED_MODULES_GLOBAL
+		: "__maligatorTestLinkedModules";
 	const lines = [
-		`const __namespace = globalThis.__maligatorTestLinkedModules[${JSON.stringify(
-			target,
-		)}];`,
+		`const __namespace = globalThis[${JSON.stringify(registry)}][${JSON.stringify(target)}];`,
 	];
 	for (const [index, name] of names.entries()) {
 		const local = `__maligatorImport${index}`;
@@ -564,7 +583,9 @@ function baseGraph(
 	const targets = new Set<string>([TEST_MODULE_ID]);
 	if (options.config.surface.node) targets.add(NODE_GLOBALS_MODULE_ID);
 	for (const plan of plans) {
-		for (const imported of plan.imports) targets.add(imported.target);
+		for (const imported of plan.imports) {
+			if (!isExternalModule(imported.target)) targets.add(imported.target);
+		}
 	}
 	const ordered = [...targets].sort();
 	const imports = ordered
@@ -688,6 +709,30 @@ export function compileRelocatableTestImage(
 	}));
 	const runner = runnerGraph(entries[0]!, options, session.moduleParses);
 	phases.graphMs += Date.now() - fragmentGraphsStartedAt;
+	const dependencyTargets = [
+		...new Map(
+			plans
+				.flatMap((plan) => plan.imports)
+				.filter((planned) => isExternalModule(planned.target))
+				.map((planned) => [
+					planned.target,
+					{
+						target: planned.target,
+						commonjs: planning.modules.get(planned.target)?.goal === "cjs",
+					},
+				]),
+		).values(),
+	];
+	const dependencyArtifacts = compileDependencyFragments({
+		graph: planning,
+		targets: dependencyTargets,
+		config: options.config,
+		stripTypes: options.stripTypes,
+		stripperIdentity: options.stripperIdentity,
+		cacheDirectory: options.cacheDirectory,
+		session,
+		phases,
+	});
 
 	const baseArtifact = compileArtifact(
 		root,
@@ -726,6 +771,7 @@ export function compileRelocatableTestImage(
 		identity,
 		entries,
 		dependencies,
+		dependencyArtifacts: dependencyArtifacts.map(artifactReference),
 		base: artifactReference(baseArtifact),
 		fragments: fragmentArtifacts.map((artifact) => ({
 			file: artifact.file,
@@ -734,11 +780,16 @@ export function compileRelocatableTestImage(
 		runner: artifactReference(runnerArtifact),
 	};
 	publishManifest(root, manifest, entries);
-	const artifactHits = [baseArtifact, ...fragmentArtifacts, runnerArtifact].filter(
-		(artifact) => artifact.cache === "hit",
-	).length;
+	const artifacts = [
+		...dependencyArtifacts,
+		baseArtifact,
+		...fragmentArtifacts,
+		runnerArtifact,
+	];
+	const artifactHits = artifacts.filter((artifact) => artifact.cache === "hit").length;
 	return {
 		wires: [
+			...dependencyArtifacts.map((artifact) => relocatableWire("dependency", artifact)),
 			relocatableWire("base", baseArtifact),
 			...fragmentArtifacts.map(
 				(artifact): RelocatableTestWire =>
@@ -752,6 +803,6 @@ export function compileRelocatableTestImage(
 		entries,
 		dependencies: dependencies.map((dependency) => dependency.path),
 		artifactHits,
-		artifactMisses: fragmentArtifacts.length + 2 - artifactHits,
+		artifactMisses: artifacts.length - artifactHits,
 	};
 }

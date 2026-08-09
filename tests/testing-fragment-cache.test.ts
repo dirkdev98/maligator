@@ -12,6 +12,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import {
+	BuildCompilationSession,
+	compileBuildFrontend,
+} from "../src/build-frontend-cache.ts";
 import { TestCompilationSession } from "../src/testing/cache.ts";
 import {
 	compileRelocatableTestImage,
@@ -86,11 +90,62 @@ describe("relocatable test fragment cache", () => {
 		});
 
 		expect(compiled.cache).toBe("miss");
-		expect(compiled.artifactMisses).toBe(3);
+		expect(compiled.wires[0]?.kind).toBe("dependency");
+		expect(compiled.artifactMisses).toBe(4);
 		// The production allocator made this one-table graph take roughly 44 seconds.
 		// Ten seconds is a deliberately loose smoke fuse for loaded CI hosts while
 		// still proving interpreted tests use the linear development allocator.
 		expect(compiled.phases.compileMs).toBeLessThan(10_000);
+	});
+
+	test("reuses dependency artifacts produced by a normal run build", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const packageDirectory = path.join(root, "node_modules/example-package");
+		const application = path.join(root, "app.mjs");
+		const testEntry = path.join(root, "app.test.mts");
+		const config = resolveBuildConfig({});
+		mkdirSync(packageDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(packageDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(path.join(packageDirectory, "index.mjs"), `export const answer = 42;\n`);
+		write(application, `import { answer } from "example-package";\nvoid answer;\n`);
+		write(
+			testEntry,
+			`import { test } from "maligator:test";\nimport { answer } from "example-package";\ntest("answer", () => answer);\n`,
+		);
+		const build = compileBuildFrontend({
+			entrypoint: application,
+			config,
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "cross-command-dependency-test",
+			cacheDirectory,
+			session: new BuildCompilationSession(),
+			optimization: "development",
+			relocatable: true,
+		});
+		expect(build.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
+
+		const compiledTest = compileRelocatableTestImage({
+			files: [testEntry],
+			config,
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "cross-command-dependency-test",
+			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
+			cacheDirectory,
+		});
+		expect(compiledTest.wires.map((wire) => wire.kind)).toEqual([
+			"dependency",
+			"base",
+			"entry",
+			"runner",
+		]);
+		expect(compiledTest.wires[0]!.path).toBe(build.artifacts[0]!.path);
+		expect(compiledTest.artifactHits).toBe(1);
+		expect(compiledTest.artifactMisses).toBe(3);
 	});
 
 	test("reuses base and unchanged entry fragments independently", () => {
