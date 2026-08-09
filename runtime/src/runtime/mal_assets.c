@@ -402,7 +402,21 @@ static int mal_asset_write_tree(const MalAsset *asset, const char *root, const c
                 return err;
             }
         }
-        int err = mal_posix_fs_write_file(destination, (const byte *) file->data, file->length);
+        const byte *contents = (const byte *) file->data;
+        byte *owned_contents = nullptr;
+        usize length = file->length;
+        int err = 0;
+        if (contents == nullptr) {
+            if (file->source_path == nullptr) {
+                free(destination);
+                return EINVAL;
+            }
+            err = mal_posix_fs_read_file(file->source_path, &owned_contents, &length);
+            if (err == 0 && length != file->length) err = EIO;
+            contents = owned_contents;
+        }
+        if (err == 0) err = mal_posix_fs_write_file(destination, contents, length);
+        free(owned_contents);
         free(destination);
         if (err != 0) return err;
     }

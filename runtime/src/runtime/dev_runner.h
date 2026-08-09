@@ -6,6 +6,7 @@
 int mal_dev_run_wires(
     const char *const *wire_paths,
     int wire_count,
+    const char *asset_manifest_path,
     int argc,
     char **argv,
     bool web_platform,

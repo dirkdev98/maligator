@@ -334,6 +334,7 @@ describe("emit-vm instruction packing", () => {
 						{
 							path: "compiler.malw",
 							sourcePath: "/unused/compiler.malw",
+							inputPath: "/unused/compiler.malw",
 							size: 825_000,
 							digest: "digest",
 							embeddedSymbol: "mal_compiler_wire_data",
@@ -343,7 +344,9 @@ describe("emit-vm instruction packing", () => {
 			],
 		});
 		expect(output).toContain("extern const u8 mal_compiler_wire_data[];");
-		expect(output).toContain(".data = mal_compiler_wire_data, .length = 825000");
+		expect(output).toContain(
+			".data = mal_compiler_wire_data, .source_path = nullptr, .length = 825000",
+		);
 		expect(output).not.toContain('#embed "/unused/compiler.malw"');
 	});
 });

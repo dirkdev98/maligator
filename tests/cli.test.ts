@@ -200,6 +200,7 @@ describe("command shell", () => {
 		});
 		expect(installation.developmentRunner).toEqual({
 			executablePath: path.resolve("bin/maligator"),
+			externalAssets: true,
 			webPlatform: true,
 			node: true,
 			realms: true,

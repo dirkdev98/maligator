@@ -12,6 +12,7 @@ import { ASSET_FORMAT_VERSION, includeConfiguredAssets } from "../src/assets.ts"
 import { BuildConfigError } from "../src/build-config.ts";
 import { compileEntrypoint } from "../src/compile-program.ts";
 import { emitVmDefinition } from "../src/emit-vm.ts";
+import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 
 function fixture(): string {
 	const root = mkdtempSync(path.join(tmpdir(), "mal-assets-unit-"));
@@ -88,6 +89,38 @@ describe("configured asset inclusion", () => {
 		writeFileSync(path.join(root, "empty.bin"), "changed after inclusion");
 		expect(readFileSync(snapshot)).toEqual(Buffer.from([]));
 		expect(asset!.files[0]!.size).toBe(0);
+	});
+
+	it("reuses and repairs content-addressed development snapshots", () => {
+		const root = fixture();
+		const cacheDirectory = path.join(root, "cache");
+		const config = { data: { type: "file" as const, path: "tree/root.txt" } };
+		const coldSession = new FrontendCompilationSession();
+		coldSession.useCacheDirectory(cacheDirectory);
+		const cold = includeConfiguredAssets(config, root, {
+			cacheDirectory,
+			session: coldSession,
+		})[0]!.files[0]!;
+		coldSession.flush();
+
+		const warmSession = new FrontendCompilationSession();
+		warmSession.useCacheDirectory(cacheDirectory);
+		const warm = includeConfiguredAssets(config, root, {
+			cacheDirectory,
+			session: warmSession,
+		})[0]!.files[0]!;
+		expect(warm.sourcePath).toBe(cold.sourcePath);
+		expect(warm.inputPath).toBe(path.join(root, "tree/root.txt"));
+		expect(warmSession.digestStatistics()).toEqual({ hits: 1, misses: 0 });
+
+		writeFileSync(warm.sourcePath, "xxxxx");
+		const repairSession = new FrontendCompilationSession();
+		repairSession.useCacheDirectory(cacheDirectory);
+		const repaired = includeConfiguredAssets(config, root, {
+			cacheDirectory,
+			session: repairSession,
+		})[0]!.files[0]!;
+		expect(readFileSync(repaired.sourcePath, "utf-8")).toBe("root\n");
 	});
 
 	it("fails when an include pattern matches no files", () => {

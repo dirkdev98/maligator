@@ -18,6 +18,7 @@ import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
 import type { BuildCommand, DevCommand, RunCommand, TestCommand } from "./cli.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
+import { cacheDevelopmentAssets } from "./development-assets.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
 import { FrontendCompilationSession } from "./frontend-cache.ts";
@@ -88,6 +89,7 @@ export interface CompilerInstallation {
 		node: boolean;
 		realms: boolean;
 		intl: boolean;
+		externalAssets: boolean;
 		scheduler: "single" | "multiprocessing";
 	};
 	evalCompiler:
@@ -138,6 +140,7 @@ export function productCompilerInstallation(
 						node: true,
 						realms: true,
 						intl: false,
+						externalAssets: true,
 						scheduler: "single" as const,
 					},
 				}),
@@ -245,7 +248,7 @@ function compatibleDevelopmentRunner(
 	const runner = context.installation.developmentRunner;
 	if (
 		runner === undefined ||
-		Object.keys(config.assets).length > 0 ||
+		(Object.keys(config.assets).length > 0 && !runner.externalAssets) ||
 		(config.surface.webPlatform && !runner.webPlatform) ||
 		(config.surface.node && !runner.node) ||
 		(config.engine.realms && !runner.realms) ||
@@ -320,14 +323,22 @@ function compileAndBuild(
 	) {
 		commandError("error: '--artifact' requires '--production'");
 	}
+	const frontendSession = context.frontendSession ?? new FrontendCompilationSession();
+	frontendSession.useCacheDirectory();
 	const assets = reporter.phase("Collect assets", () => {
 		try {
-			return includeConfiguredAssets(buildConfig.assets);
+			return includeConfiguredAssets(buildConfig.assets, process.cwd(), {
+				cacheDirectory: ".cache/mal-cache",
+				session: frontendSession,
+			});
 		} catch (error) {
 			if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
 			throw error;
 		}
 	});
+	const assetManifest = reporter.phase("Prepare development assets", () =>
+		command.kind === "build" ? undefined : cacheDevelopmentAssets(assets),
+	);
 	const { toolchain, plan } = reporter.phase("Resolve toolchain", () =>
 		selectToolchain(command, buildConfig, context),
 	);
@@ -364,14 +375,14 @@ function compileAndBuild(
 					config: buildConfig,
 					stripTypes: context.stripTypes,
 					stripperIdentity: context.installation.frontendIdentity,
-					session: context.frontendSession,
+					session: frontendSession,
 					optimization:
 						command.kind === "build" && command.production ? "full" : "development",
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
 					forceCompile: debugEnabled || compilerDiagnostics,
-					relocatable: command.kind !== "build" && assets.length === 0,
+					relocatable: command.kind !== "build",
 					onCompilePhase: (phase, durationMs) => {
 						compilerPhases.push({ phase, durationMs });
 					},
@@ -436,9 +447,14 @@ function compileAndBuild(
 	for (const phase of compilerPhases) {
 		reporter.timing(`Compiler phase · ${phase.phase}`, phase.durationMs);
 	}
-	reporter.detail("Dependencies", frontend.dependencies.length);
-	for (const dependency of frontend.dependencies)
-		reporter.detail("Dependency", dependency);
+	const dependencies = [
+		...new Set([
+			...frontend.dependencies,
+			...assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
+		]),
+	].sort();
+	reporter.detail("Dependencies", dependencies.length);
+	for (const dependency of dependencies) reporter.detail("Dependency", dependency);
 
 	const stats = frontend.definitionStats;
 	reporter.detail("Functions", stats.functionCount);
@@ -452,7 +468,7 @@ function compileAndBuild(
 		);
 		reporter.detail("Serialized bytes", frontend.wire.length);
 		reporter.complete("Serialized", serializePath, true);
-		return { serializedPath: serializePath, dependencies: frontend.dependencies };
+		return { serializedPath: serializePath, dependencies };
 	}
 
 	const packagedRunner =
@@ -471,13 +487,16 @@ function compileAndBuild(
 		return {
 			binaryPath: packagedRunner.executablePath,
 			runArguments: [
-				"--maligator-internal-run-wire",
+				assetManifest === undefined
+					? "--maligator-internal-run-wire"
+					: "--maligator-internal-run-wire-assets",
 				String(surfaceMask),
 				String(wirePaths.length),
+				...(assetManifest === undefined ? [] : [assetManifest]),
 				...wirePaths,
 				...command.programArgs,
 			],
-			dependencies: frontend.dependencies,
+			dependencies,
 		};
 	}
 
@@ -543,7 +562,7 @@ function compileAndBuild(
 			);
 		},
 	});
-	if (command.kind !== "build" && assets.length === 0) {
+	if (command.kind !== "build") {
 		const wirePaths = reporter.phase("Cache development image", () =>
 			frontend.artifacts.map((artifact) => artifact.path),
 		);
@@ -581,12 +600,15 @@ function compileAndBuild(
 		return {
 			binaryPath,
 			runArguments: [
-				"--maligator-internal-run-wires",
+				assetManifest === undefined
+					? "--maligator-internal-run-wires"
+					: "--maligator-internal-run-wires-assets",
 				String(wirePaths.length),
+				...(assetManifest === undefined ? [] : [assetManifest]),
 				...wirePaths,
 				...command.programArgs,
 			],
-			dependencies: frontend.dependencies,
+			dependencies,
 		};
 	}
 
@@ -664,7 +686,7 @@ function compileAndBuild(
 		return {
 			binaryPath,
 			artifactDirectory: artifact.directory,
-			dependencies: frontend.dependencies,
+			dependencies,
 		};
 	}
 	reporter.complete(
@@ -672,7 +694,7 @@ function compileAndBuild(
 		resultPath,
 		command.kind === "build",
 	);
-	return { binaryPath, dependencies: frontend.dependencies };
+	return { binaryPath, dependencies };
 }
 
 /** Compile and link one parsed `build` command without owning process dispatch. */

@@ -23,8 +23,9 @@
 extern const MalVmDefinition mal_vm_definition;
 
 static const char development_wire_command[] = "--maligator-internal-run-wire";
+static const char development_wire_assets_command[] = "--maligator-internal-run-wire-assets";
 
-static int run_development_wire(int argc, char **argv) {
+static int run_development_wire(int argc, char **argv, bool has_assets) {
     if (argc < 5 || strlen(argv[2]) != 1 ||
         argv[2][0] < '0' || argv[2][0] > '3') {
         fprintf(stderr, "invalid internal development wire invocation\n");
@@ -32,7 +33,7 @@ static int run_development_wire(int argc, char **argv) {
     }
     int surface_mask = argv[2][0] - '0';
     int wire_count = atoi(argv[3]);
-    int wire_offset = 4;
+    int wire_offset = has_assets ? 5 : 4;
     if (wire_count < 1 || wire_offset + wire_count > argc) {
         fprintf(stderr, "invalid internal development wire count\n");
         return 2;
@@ -48,6 +49,7 @@ static int run_development_wire(int argc, char **argv) {
     }
     int code = mal_dev_run_wires(
         (const char *const *) &argv[wire_offset], wire_count,
+        has_assets ? argv[4] : nullptr,
         program_argc, program_argv,
         (surface_mask & 1) != 0, (surface_mask & 2) != 0);
     free(program_argv);
@@ -56,7 +58,10 @@ static int run_development_wire(int argc, char **argv) {
 
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], development_wire_command) == 0) {
-        return run_development_wire(argc, argv);
+        return run_development_wire(argc, argv, false);
+    }
+    if (argc >= 2 && strcmp(argv[1], development_wire_assets_command) == 0) {
+        return run_development_wire(argc, argv, true);
     }
     // Line-buffer stdout: a server logs then blocks in the event loop indefinitely,
     // so fully-buffered output (the default when stdout is a pipe) would never be

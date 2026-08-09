@@ -962,6 +962,8 @@ typedef struct MalHostInstall {
 typedef struct MalAssetFile {
     const char *path;
     const u8 *data;
+    /** Development manifests use an immutable external snapshot instead of data. */
+    const char *source_path;
     usize length;
 } MalAssetFile;
 

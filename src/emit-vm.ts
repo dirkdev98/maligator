@@ -748,7 +748,7 @@ function malVmDefinitionStruct(
 			const symbol =
 				file.embeddedSymbol ?? `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
 			lines.push(
-				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .length = ${file.size} },`,
+				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .source_path = nullptr, .length = ${file.size} },`,
 			);
 		}
 		lines.push("};", "");

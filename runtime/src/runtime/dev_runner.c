@@ -1,5 +1,6 @@
 #include "dev_runner.h"
 
+#include "development_assets.h"
 #include "vm.h"
 #include "perf_stats.h"
 #include "vm_load.h"
@@ -11,6 +12,7 @@
 #include "web_fetch.h"
 #include "host.h"
 #include "host_registry.h"
+#include "mal_assets.h"
 #include "node_crypto.h"
 #include "node_immediate.h"
 #include "web_host_timer.h"
@@ -63,6 +65,7 @@ static MalLoadedDefinition *load_definition(const char *path) {
 int mal_dev_run_wires(
     const char *const *wire_paths,
     int wire_count,
+    const char *asset_manifest_path,
     int argc,
     char **argv,
     bool web_platform,
@@ -73,9 +76,23 @@ int mal_dev_run_wires(
     if (loaded == nullptr) {
         return 2;
     }
+    MalDevelopmentAssets *development_assets = nullptr;
+    MalVmDefinition root_definition = *mal_loaded_definition_get(loaded);
+    if (asset_manifest_path != nullptr) {
+        const char *asset_error = "unknown error";
+        development_assets = mal_development_assets_load(asset_manifest_path, &asset_error);
+        if (development_assets == nullptr) {
+            fprintf(stderr, "could not load development assets %s: %s\n",
+                asset_manifest_path, asset_error);
+            mal_vm_loaded_definition_free(loaded);
+            return 2;
+        }
+        root_definition.assets = mal_development_assets_get(
+            development_assets, &root_definition.asset_count);
+    }
 
     MalVm vm;
-    mal_vm_init(&vm, mal_loaded_definition_get(loaded));
+    mal_vm_init(&vm, &root_definition);
     mal_host_attach(&vm);
 #if MAL_WEB_PLATFORM || MAL_NODE
     MalObject *global_this = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
@@ -103,9 +120,13 @@ int mal_dev_run_wires(
 #endif
 
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
+    if (development_assets != nullptr) {
+        mal_host_install_maligator(&vm, nullptr, 0, &launch);
+    }
     mal_perf_stats_reset();
     MalCallable **callables = calloc((usize) wire_count, sizeof(MalCallable *));
     if (callables == nullptr) {
+        mal_development_assets_free(development_assets);
         mal_vm_loaded_definition_free(loaded);
         return 2;
     }
@@ -156,6 +177,7 @@ int mal_dev_run_wires(
         mal_vm_free(&vm);
     }
     free(callables);
+    mal_development_assets_free(development_assets);
     mal_vm_loaded_definition_free(loaded);
     return code;
 }
