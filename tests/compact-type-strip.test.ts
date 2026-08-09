@@ -68,6 +68,18 @@ export const createController = ({ service }: Dependencies) => service;
 		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
 	});
 
+	test("relocates the closing parenthesis across multiline return types", () => {
+		const source = `type Result<E, T> = { error: E; ok: false } | { ok: true; value: T };
+const createValue = (): Result<
+	{ type: "missing" } | { type: "taken" },
+	{ value: string }
+> => ({ ok: true, value: { value: "ready" } });`;
+		const stripped = stripCompactTypes(source, "multiline-return.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "multiline-return.ts"));
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
 	test("strips generic declarations with compound types", () => {
 		const source = `export type Result<ErrorType, ValueType> =
 	| { ok: true; value: ValueType }

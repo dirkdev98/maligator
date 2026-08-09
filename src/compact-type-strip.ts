@@ -1204,6 +1204,18 @@ function blankArrowAnnotations(
 		if (head !== undefined) {
 			if (head.returnColon !== undefined) {
 				blank(output, source, head.returnColon, arrow);
+				if (
+					source.slice(head.parametersClose, arrow).includes("\n") ||
+					source.slice(head.parametersClose, arrow).includes("\r")
+				) {
+					// JavaScript forbids a line terminator between the parameter list and
+					// `=>`. For a multiline return annotation, relocate the erased closing
+					// parenthesis to the final type token, matching TypeScript's blank-space
+					// transform while preserving every source offset and line.
+					const relocatedClose = previousCodeIndex(source, code, arrow - 1);
+					output[head.parametersClose] = " ";
+					output[relocatedClose] = ")";
+				}
 			}
 			const open = matchingBackward(
 				source,
