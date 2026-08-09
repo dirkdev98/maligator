@@ -46,6 +46,25 @@ test(${JSON.stringify(name)}, () => expect(answer).toBe(42));
 }
 
 describe("relocatable test fragment cache", () => {
+	test("keeps a cold Drizzle table graph on the linear development path", () => {
+		const root = temporaryDirectory();
+		const compiled = compileRelocatableTestImage({
+			files: [path.resolve("tests/fixtures/drizzle-simple-table.test.ts")],
+			config: resolveBuildConfig({ surface: { node: true } }),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "drizzle-cold-regression",
+			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
+			cacheDirectory: path.join(root, "cache"),
+		});
+
+		expect(compiled.cache).toBe("miss");
+		expect(compiled.artifactMisses).toBe(3);
+		// The production allocator made this one-table graph take roughly 44 seconds.
+		// Ten seconds is a deliberately loose smoke fuse for loaded CI hosts while
+		// still proving interpreted tests use the linear development allocator.
+		expect(compiled.phases.compileMs).toBeLessThan(10_000);
+	});
+
 	test("reuses base and unchanged entry fragments independently", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
