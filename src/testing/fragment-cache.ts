@@ -30,6 +30,7 @@ import { TestCompilationSession } from "./cache.ts";
 
 const FRAGMENT_SCHEMA = 3;
 const TEST_MODULE_ID = "maligator:test";
+const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
 const CACHE_DIRECTORY = ".cache/mal-cache/test";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 
@@ -155,6 +156,10 @@ function environmentIdentity(options: CompileTestImageOptions): string {
 				surface: options.config.surface,
 			},
 			runtime: digest(options.testModuleSource),
+			nodeGlobals:
+				options.config.surface.node === true
+					? digest(options.nodeGlobalsSource ?? "")
+					: undefined,
 		}),
 	);
 }
@@ -425,7 +430,7 @@ function planningGraph(
 	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-fragment-plan.mts");
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
-		entrySource: `${entries
+		entrySource: `${options.config.surface.node ? `import ${JSON.stringify(NODE_GLOBALS_MODULE_ID)};\n` : ""}${entries
 			.map((file) => `import ${JSON.stringify(file)};`)
 			.join("\n")}\n`,
 		stripTypes: options.stripTypes,
@@ -433,6 +438,9 @@ function planningGraph(
 		parseCache,
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
+			...(options.config.surface.node
+				? [[NODE_GLOBALS_MODULE_ID, { source: options.nodeGlobalsSource ?? "", goal: "module" }] as const]
+				: []),
 		]),
 	});
 }
@@ -492,6 +500,7 @@ function baseGraph(
 	parseCache: ModuleParseCache,
 ): ModuleGraph {
 	const targets = new Set<string>([TEST_MODULE_ID]);
+	if (options.config.surface.node) targets.add(NODE_GLOBALS_MODULE_ID);
 	for (const plan of plans) {
 		for (const imported of plan.imports) targets.add(imported.target);
 	}
@@ -522,6 +531,9 @@ globalThis.__maligatorTestLinkedModules = __maligatorModules;
 		parseCache,
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
+			...(options.config.surface.node
+				? [[NODE_GLOBALS_MODULE_ID, { source: options.nodeGlobalsSource ?? "", goal: "module" }] as const]
+				: []),
 		]),
 	});
 }

@@ -31,6 +31,7 @@ await runCli(process.argv.slice(2), {
 		assets.materialize("testRuntime"),
 		assets.materialize("license"),
 		process.argv[0],
+		assets.materialize("testNodeGlobals"),
 	),
 	developmentProcesses: {
 		spawn: (executablePath, args) => mal._spawnDevelopmentProcess(executablePath, args),

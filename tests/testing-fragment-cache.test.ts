@@ -46,6 +46,29 @@ test(${JSON.stringify(name)}, () => expect(answer).toBe(42));
 }
 
 describe("relocatable test fragment cache", () => {
+	test("installs Node-compatible globals in interpreted test images", () => {
+		const root = temporaryDirectory();
+		const compiled = compileRelocatableTestImage({
+			files: [path.resolve("tests/fixtures/node-headers.test.ts")],
+			config: resolveBuildConfig({ surface: { node: true } }),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "node-globals-regression",
+			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
+			nodeGlobalsSource: readFileSync(
+				path.resolve("src/testing/node-globals.mjs"),
+				"utf-8",
+			),
+			cacheDirectory: path.join(root, "cache"),
+		});
+
+		expect(compiled.cache).toBe("miss");
+		expect(compiled.wires.map((wire) => wire.kind)).toEqual([
+			"base",
+			"entry",
+			"runner",
+		]);
+	});
+
 	test("keeps a cold Drizzle table graph on the linear development path", () => {
 		const root = temporaryDirectory();
 		const compiled = compileRelocatableTestImage({

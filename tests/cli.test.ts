@@ -171,6 +171,7 @@ describe("command shell", () => {
 			runtimeDirectory: path.join(repoRoot, "runtime"),
 			licensePath: path.join(repoRoot, "LICENSE"),
 			testModulePath: path.join(repoRoot, "src/testing/runtime.mjs"),
+			testNodeGlobalsPath: path.join(repoRoot, "src/testing/node-globals.mjs"),
 			frontendIdentity: "typescript-strip-v1",
 			evalCompiler: {
 				kind: "source",
@@ -191,6 +192,7 @@ describe("command shell", () => {
 		);
 		expect(installation.runtimeDirectory).toBe(path.resolve("relative-runtime"));
 		expect(installation.testModulePath).toBe(path.resolve("test-runtime.mjs"));
+		expect(installation.testNodeGlobalsPath).toBe(path.resolve("node-globals.mjs"));
 		expect(installation.frontendIdentity).toBe("compact-type-strip-v1");
 		expect(installation.evalCompiler).toEqual({
 			kind: "prebuilt",
@@ -241,6 +243,10 @@ describe("command shell", () => {
 		expect(productConfig.assets.testRuntime).toEqual({
 			type: "file",
 			path: path.join(repoRoot, "src/testing/runtime.mjs"),
+		});
+		expect(productConfig.assets.testNodeGlobals).toEqual({
+			type: "file",
+			path: path.join(repoRoot, "src/testing/node-globals.mjs"),
 		});
 	});
 

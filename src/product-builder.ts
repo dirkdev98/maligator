@@ -41,6 +41,10 @@ export function productCliConfig(
 				type: "file",
 				path: path.resolve(repositoryRoot, "src/testing/runtime.mjs"),
 			},
+			testNodeGlobals: {
+				type: "file",
+				path: path.resolve(repositoryRoot, "src/testing/node-globals.mjs"),
+			},
 			license: { type: "file", path: path.resolve(repositoryRoot, "LICENSE") },
 			runtime: {
 				type: "directory",

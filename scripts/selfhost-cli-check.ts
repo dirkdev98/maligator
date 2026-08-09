@@ -280,6 +280,8 @@ beforeEach(() => {
 });
 test("interprets async tests with host dependencies", async () => {
 \tawait expect(Promise.resolve(basename(value))).resolves.toBe("answer.ts");
+\texpect(typeof Headers).toBe("function");
+\texpect(new Headers({ "x-test": "yes" }).get("x-test")).toBe("yes");
 });
 `,
 	);

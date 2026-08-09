@@ -42,6 +42,7 @@ interface CompileTestOptions {
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	testModuleSource: string;
+	nodeGlobalsSource?: string;
 	cacheDirectory?: string;
 	session?: FrontendCompilationSession;
 	/** Require an artifact with exactly these entries during failure containment. */
@@ -113,6 +114,10 @@ function cacheIdentity(options: CompileTestOptions): string {
 			optimization: "development",
 			flags,
 			testModule: digest(options.testModuleSource),
+			nodeGlobals:
+				options.config.surface.node === true
+					? digest(options.nodeGlobalsSource ?? "")
+					: undefined,
 			testImageTransform: TEST_IMAGE_TRANSFORM,
 		}),
 	);
@@ -179,9 +184,9 @@ function cachedWire(
 	}
 }
 
-function syntheticEntry(entries: Array<string>): string {
+function syntheticEntry(entries: Array<string>, node: boolean): string {
 	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
-	return `import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
+	return `${node ? 'import "maligator:node-globals";\n' : ""}import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
 ${imports}
 globalThis.__maligatorTestResult = await __run(globalThis.__maligatorTestOptions);
 `;
@@ -202,12 +207,15 @@ function buildTestGraph(
 	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-image-entry.mts");
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
-		entrySource: syntheticEntry(entries),
+		entrySource: syntheticEntry(entries, options.config.surface.node),
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		parseCache: session.moduleParses,
 		virtualModules: new Map([
 			[TEST_MODULE_ID, { source: options.testModuleSource, goal: "module" }],
+			...(options.config.surface.node
+				? [["maligator:node-globals", { source: options.nodeGlobalsSource ?? "", goal: "module" }] as const]
+				: []),
 		]),
 		transformSource(source, filePath) {
 			return entrySet.has(filePath) ? wrapTestEntry(source, filePath) : source;
@@ -301,7 +309,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	const contentKey = digest(
 		JSON.stringify({
 			identity,
-			entrySource: syntheticEntry(entries),
+			entrySource: syntheticEntry(entries, options.config.surface.node),
 			dependencies: dependencies.map(({ path: file, digest: contentDigest }) => ({
 				file,
 				digest: contentDigest,

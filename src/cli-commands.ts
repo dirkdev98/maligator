@@ -78,6 +78,8 @@ export interface CompilerInstallation {
 	licensePath?: string;
 	/** Source implementation supplied for the virtual maligator:test module. */
 	testModulePath: string;
+	/** Node-compatible globals installed before interpreted test modules. */
+	testNodeGlobalsPath: string;
 	/** Cache identity of the active TypeScript erasure frontend. */
 	frontendIdentity: string;
 	/** Prebuilt multi-call executable capable of running development wire images. */
@@ -102,6 +104,7 @@ export function developmentCompilerInstallation(
 		runtimeDirectory: path.resolve(sourceDirectory, "../runtime"),
 		licensePath: path.resolve(sourceDirectory, "../LICENSE"),
 		testModulePath: path.join(sourceDirectory, "testing/runtime.mjs"),
+		testNodeGlobalsPath: path.join(sourceDirectory, "testing/node-globals.mjs"),
 		frontendIdentity: "typescript-strip-v1",
 		evalCompiler: {
 			kind: "source",
@@ -117,11 +120,15 @@ export function productCompilerInstallation(
 	testModulePath: string,
 	licensePath?: string,
 	developmentRunnerPath?: string,
+	testNodeGlobalsPath?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
 		...(licensePath === undefined ? {} : { licensePath: path.resolve(licensePath) }),
 		testModulePath: path.resolve(testModulePath),
+		testNodeGlobalsPath: path.resolve(
+			testNodeGlobalsPath ?? path.join(path.dirname(testModulePath), "node-globals.mjs"),
+		),
 		frontendIdentity: "compact-type-strip-v1",
 		...(developmentRunnerPath === undefined
 			? {}
