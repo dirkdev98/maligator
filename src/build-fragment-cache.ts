@@ -18,14 +18,15 @@ import {
 	DEVELOPMENT_LINKED_MODULES_GLOBAL,
 	isExternalModule,
 } from "./dependency-fragment-cache.ts";
+import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { ESTREE_SKIP, ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
 import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
 	frontendDigest,
 	frontendWirePath,
+	FrontendCompilationSession,
 } from "./frontend-cache.ts";
-import type { FrontendCompilationSession } from "./frontend-cache.ts";
 import { linkModules } from "./linker.ts";
 import type { ModuleLinkage } from "./linker.ts";
 import type {
@@ -65,6 +66,21 @@ interface CompiledArtifact {
 	cache: "hit" | "miss";
 }
 
+interface LinkageValidationRequest {
+	schema: 1;
+	entrypoint: string;
+	config: ResolvedBuildConfig;
+	stripperIdentity: string;
+	cacheDirectory?: string;
+	resultPath: string;
+}
+
+interface LinkageValidationResult {
+	schema: 1;
+	ok: boolean;
+	error?: string;
+}
+
 export interface BuildFragmentArtifact {
 	digest: string;
 	path: string;
@@ -99,6 +115,7 @@ export interface CompileBuildFragmentsOptions {
 	session: FrontendCompilationSession;
 	phases: BuildFrontendPhases;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
+	dependencyWorker?: DependencyFragmentWorker;
 }
 
 function digest(value: string | Uint8Array): string {
@@ -569,6 +586,107 @@ function validateLinkage(
 	publish(marker, `${key}\n`);
 }
 
+function prepareParallelLinkageValidation(
+	root: string,
+	identity: string,
+	options: CompileBuildFragmentsOptions,
+	plans: Array<PlannedImport>,
+): { task: Array<string>; resultPath: string } | undefined {
+	const key = linkageKey(identity, options.graph, plans);
+	const marker = path.join(root, "linkages", `${key}.valid`);
+	if (existsSync(marker)) return undefined;
+	const resultPath = path.join(root, "requests", `${key}.linkage-result.json`);
+	const request: LinkageValidationRequest = {
+		schema: 1,
+		entrypoint: options.graph.entry,
+		config: options.config,
+		stripperIdentity: options.stripperIdentity,
+		...(options.cacheDirectory === undefined
+			? {}
+			: { cacheDirectory: options.cacheDirectory }),
+		resultPath,
+	};
+	const requestPath = path.join(root, "requests", `${key}.linkage-request.json`);
+	publish(requestPath, `${JSON.stringify(request)}\n`);
+	return {
+		task: ["--maligator-internal-linkage-validation", requestPath],
+		resultPath,
+	};
+}
+
+function finishParallelLinkageValidation(resultPath: string): void {
+	const result = JSON.parse(readFileSync(resultPath, "utf-8")) as
+		| LinkageValidationResult
+		| undefined;
+	if (result?.schema !== 1 || typeof result.ok !== "boolean") {
+		throw new Error("invalid dependency linkage worker result");
+	}
+	if (!result.ok) {
+		throw new UnsupportedBuildFragmentsError(
+			result.error ?? "dependency linkage validation failed",
+		);
+	}
+}
+
+/** Internal worker entry for linkage validation overlapped with island compilation. */
+export function validateBuildFragmentRequest(
+	file: string,
+	stripTypes: BuildModuleGraphOptions["stripTypes"],
+): void {
+	const request = JSON.parse(readFileSync(path.resolve(file), "utf-8")) as
+		| LinkageValidationRequest
+		| undefined;
+	if (
+		request?.schema !== 1 ||
+		typeof request.entrypoint !== "string" ||
+		typeof request.resultPath !== "string"
+	) {
+		throw new Error("invalid dependency linkage worker request");
+	}
+	try {
+		const graph = buildModuleGraph(request.entrypoint, {
+			buildConfig: request.config,
+			stripTypes,
+		});
+		assertNoBoundaryCycle(graph);
+		const plans = planBoundary(graph);
+		const phases: BuildFrontendPhases = {
+			validationMs: 0,
+			graphMs: 0,
+			semanticMs: 0,
+			compileMs: 0,
+			serializeMs: 0,
+			workerMs: 0,
+		};
+		const session = new FrontendCompilationSession();
+		const options: CompileBuildFragmentsOptions = {
+			graph,
+			config: request.config,
+			stripTypes,
+			stripperIdentity: request.stripperIdentity,
+			cacheDirectory: request.cacheDirectory,
+			session,
+			phases,
+		};
+		validateLinkage(
+			cacheRoot(request.cacheDirectory),
+			environmentIdentity(options),
+			options,
+			plans,
+		);
+		publish(
+			request.resultPath,
+			`${JSON.stringify({ schema: 1, ok: true } satisfies LinkageValidationResult)}\n`,
+		);
+	} catch (error) {
+		if (!(error instanceof UnsupportedBuildFragmentsError)) throw error;
+		publish(
+			request.resultPath,
+			`${JSON.stringify({ schema: 1, ok: false, error: error.message } satisfies LinkageValidationResult)}\n`,
+		);
+	}
+}
+
 /** Split stable dependencies from project code into independently cached VM images. */
 export function compileBuildFragments(
 	options: CompileBuildFragmentsOptions,
@@ -578,7 +696,13 @@ export function compileBuildFragments(
 	const identity = environmentIdentity(options);
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
-	validateLinkage(root, identity, options, plans);
+	const parallelValidation =
+		options.dependencyWorker === undefined
+			? undefined
+			: prepareParallelLinkageValidation(root, identity, options, plans);
+	if (options.dependencyWorker === undefined) {
+		validateLinkage(root, identity, options, plans);
+	}
 	const dependencyArtifacts = compileDependencyFragments({
 		graph: options.graph,
 		targets: plans.map(({ target, commonjs }) => ({ target, commonjs })),
@@ -589,7 +713,13 @@ export function compileBuildFragments(
 		session: options.session,
 		phases: options.phases,
 		onCompilePhase: options.onCompilePhase,
+		worker: options.dependencyWorker,
+		parallelWorkerTasks:
+			parallelValidation === undefined ? [] : [parallelValidation.task],
 	});
+	if (parallelValidation !== undefined) {
+		finishParallelLinkageValidation(parallelValidation.resultPath);
+	}
 	const graphStartedAt = Date.now();
 	const application = applicationGraph(plans, options, options.session.moduleParses);
 	options.phases.graphMs += Date.now() - graphStartedAt;

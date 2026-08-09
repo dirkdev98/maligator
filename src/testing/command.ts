@@ -118,6 +118,7 @@ function emptyPhases(): TestFrontendPhases {
 		semanticMs: 0,
 		compileMs: 0,
 		serializeMs: 0,
+		workerMs: 0,
 	};
 }
 
@@ -127,6 +128,7 @@ function addPhases(target: TestFrontendPhases, value: TestFrontendPhases): void 
 	target.semanticMs += value.semanticMs;
 	target.compileMs += value.compileMs;
 	target.serializeMs += value.serializeMs;
+	target.workerMs += value.workerMs;
 }
 
 function randomSeed(): number {
@@ -222,6 +224,7 @@ export async function executeTestCommand(
 				nodeGlobalsSource,
 				session,
 				allowSupersetCache,
+				dependencyWorker: context.dependencyWorker,
 			};
 			let compiled: CompiledTestImage | CompiledRelocatableTestImage;
 			try {
@@ -367,7 +370,7 @@ export async function executeTestCommand(
 			1,
 		)}ms, semantic ${phases.semanticMs.toFixed(1)}ms, compile ${phases.compileMs.toFixed(
 			1,
-		)}ms, serialize ${phases.serializeMs.toFixed(1)}ms`,
+		)}ms, serialize ${phases.serializeMs.toFixed(1)}ms, workers ${phases.workerMs.toFixed(1)}ms`,
 	);
 	return {
 		exitCode: failed === 0 ? 0 : 1,

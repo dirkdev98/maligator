@@ -11,6 +11,7 @@ import {
 import type { BuildConfigTypeStripper, ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv, selectNativeBuildPlan } from "./build-flags.ts";
 import type { NativeBuildPlan } from "./build-flags.ts";
+import { validateBuildFragmentRequest } from "./build-fragment-cache.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { BuildReporter } from "./build-progress.ts";
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
@@ -18,6 +19,8 @@ import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
 import type { BuildCommand, DevCommand, RunCommand, TestCommand } from "./cli.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
+import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
+import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
@@ -50,6 +53,7 @@ export interface CommandContext {
 	developmentWatcher?: DevelopmentWatchHost;
 	frontendSession?: FrontendCompilationSession;
 	developmentCache?: DevelopmentBuildCache;
+	dependencyWorker?: DependencyFragmentWorker;
 }
 
 export interface DevelopmentWatchHost {
@@ -386,6 +390,7 @@ function compileAndBuild(
 					onCompilePhase: (phase, durationMs) => {
 						compilerPhases.push({ phase, durationMs });
 					},
+					dependencyWorker: context.dependencyWorker,
 					afterOptimization: (irProgram) => {
 						if (command.kind === "build" && command.internal.dumpLiveness) {
 							log.info(debugProgramLiveness(irProgram));
@@ -430,7 +435,7 @@ function compileAndBuild(
 		"Frontend phases",
 		`validation ${frontend.phases.validationMs}ms, graph ${frontend.phases.graphMs}ms, ` +
 			`semantic ${frontend.phases.semanticMs}ms, compile ${frontend.phases.compileMs}ms, ` +
-			`serialize ${frontend.phases.serializeMs}ms`,
+			`serialize ${frontend.phases.serializeMs}ms, workers ${frontend.phases.workerMs}ms`,
 	);
 	if (frontend.fragmentArtifacts !== undefined) {
 		reporter.detail(
@@ -913,6 +918,20 @@ export async function runCli(
 ): Promise<void> {
 	let verbose = false;
 	try {
+		if (args[0] === "--maligator-internal-dependency-fragment") {
+			if (args.length !== 2) {
+				throw new Error("dependency fragment worker requires one request path");
+			}
+			compileDependencyFragmentRequest(args[1]!, context.stripTypes);
+			return;
+		}
+		if (args[0] === "--maligator-internal-linkage-validation") {
+			if (args.length !== 2) {
+				throw new Error("linkage validation worker requires one request path");
+			}
+			validateBuildFragmentRequest(args[1]!, context.stripTypes);
+			return;
+		}
 		const command = parseCliArgs(args);
 		verbose =
 			(command.kind === "build" && command.internal.verbose) ||

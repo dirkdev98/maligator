@@ -10,4 +10,5 @@ await runCli(process.argv.slice(2), {
 	installation: developmentCompilerInstallation(import.meta.dirname),
 	developmentProcesses: nodeDevelopmentProcessHost,
 	developmentWatcher: nodeDevelopmentWatchHost,
+	dependencyWorker: { tool: process.execPath, args: [import.meta.filename] },
 });

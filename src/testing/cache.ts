@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
+import type { DependencyFragmentWorker } from "../dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
@@ -47,6 +48,7 @@ interface CompileTestOptions {
 	session?: FrontendCompilationSession;
 	/** Require an artifact with exactly these entries during failure containment. */
 	allowSupersetCache?: boolean;
+	dependencyWorker?: DependencyFragmentWorker;
 }
 
 export interface CompileTestFileOptions extends CompileTestOptions {
@@ -63,6 +65,7 @@ export interface TestFrontendPhases {
 	semanticMs: number;
 	compileMs: number;
 	serializeMs: number;
+	workerMs: number;
 }
 
 export interface CompiledTestImage {
@@ -279,6 +282,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 		semanticMs: 0,
 		compileMs: 0,
 		serializeMs: 0,
+		workerMs: 0,
 	};
 	const session = options.session ?? new TestCompilationSession();
 	session.useCacheDirectory(options.cacheDirectory);

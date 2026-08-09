@@ -48,6 +48,30 @@ function parallelShellScript(
 	return `${starts.join("\n")}\nstatus=0\n${waits.join("\n")}\nexit "$status"\n`;
 }
 
+/** Execute independent commands concurrently through one synchronous coordinator. */
+export function runIndependentCommands(
+	commands: ReadonlyArray<NativeCommand>,
+	options: NativeCommandOptions & { jobs: number },
+): void {
+	if (commands.length === 0) return;
+	const jobs = Math.min(commands.length, options.jobs);
+	if (jobs <= 1) {
+		for (const command of commands) {
+			execFileSync(command.tool, [...command.args], {
+				cwd: options.cwd,
+				env: options.env,
+				stdio: options.verbose ? "inherit" : "pipe",
+			});
+		}
+		return;
+	}
+	execFileSync("/bin/sh", ["-c", parallelShellScript(commands, jobs)], {
+		cwd: options.cwd,
+		env: options.env,
+		stdio: options.verbose ? "inherit" : "pipe",
+	});
+}
+
 /** Run one native tool while keeping the CLI's result-only stdout contract. */
 export function runNativeCommand(
 	context: NativeBuildContext,

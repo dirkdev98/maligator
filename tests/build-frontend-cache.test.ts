@@ -266,6 +266,10 @@ describe("normal build frontend cache", () => {
 			session,
 			optimization: "development" as const,
 			relocatable: true,
+			dependencyWorker: {
+				tool: process.execPath,
+				args: [path.resolve("src/index.ts")],
+			},
 		});
 
 		const combined = compileBuildFrontend(options(firstEntry));
@@ -395,6 +399,10 @@ describe("normal build frontend cache", () => {
 			cacheDirectory,
 			optimization: "development",
 			relocatable: true,
+			dependencyWorker: {
+				tool: process.execPath,
+				args: [path.resolve("src/index.ts")],
+			},
 		});
 
 		expect(compiled.wires).toBeUndefined();

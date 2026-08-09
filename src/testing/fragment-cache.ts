@@ -306,6 +306,7 @@ function emptyPhases(): TestFrontendPhases {
 		semanticMs: 0,
 		compileMs: 0,
 		serializeMs: 0,
+		workerMs: 0,
 	};
 }
 
@@ -732,6 +733,7 @@ export function compileRelocatableTestImage(
 		cacheDirectory: options.cacheDirectory,
 		session,
 		phases,
+		worker: options.dependencyWorker,
 	});
 
 	const baseArtifact = compileArtifact(

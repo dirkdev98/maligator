@@ -59,4 +59,5 @@ await runCli(process.argv.slice(2), {
 		},
 		close() {},
 	},
+	dependencyWorker: { tool: process.argv[0]!, args: [] },
 });

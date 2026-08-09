@@ -18,6 +18,7 @@ import {
 } from "./build-fragment-cache.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
@@ -80,6 +81,7 @@ export interface BuildFrontendPhases {
 	semanticMs: number;
 	compileMs: number;
 	serializeMs: number;
+	workerMs: number;
 }
 
 export interface CompiledBuildFrontend {
@@ -117,6 +119,8 @@ export interface CompileBuildFrontendOptions {
 	relocatable?: boolean;
 	afterOptimization?: (program: IntermediateProgram) => void;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
+	/** Optional self-hosted worker command for independent dependency islands. */
+	dependencyWorker?: DependencyFragmentWorker;
 }
 
 function digest(value: string | Uint8Array): string {
@@ -402,6 +406,7 @@ export function compileBuildFrontend(
 		semanticMs: 0,
 		compileMs: 0,
 		serializeMs: 0,
+		workerMs: 0,
 	};
 	const entrypoint = path.resolve(options.entrypoint);
 	const root = cacheRoot(options.cacheDirectory);
@@ -485,6 +490,7 @@ export function compileBuildFrontend(
 				session,
 				phases,
 				onCompilePhase: options.onCompilePhase,
+				dependencyWorker: options.dependencyWorker,
 			});
 			definition = fragments.definition;
 			fragmentArtifactIdentities = fragments.artifacts.map(
