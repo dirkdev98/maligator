@@ -254,6 +254,62 @@ static MalValue mal_builtin_aggregate_error_constructor(MalVm *vm, MalValue this
     );
 }
 
+/**
+ * SuppressedError(error, suppressed, message) creates an Error instance whose
+ * message is installed before the two resource-management payload properties.
+ * That property order is observable through Object.getOwnPropertyNames.
+ */
+static MalValue mal_builtin_suppressed_error_constructor(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+
+    MalObject *error = mal_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_SUPPRESSED_ERROR_PROTOTYPE])
+    );
+    mal_error_mark_error_data(vm, error);
+    mal_error_capture_stack(vm, error);
+
+    MalValue message = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+    if (!mal_value_is_undefined(message)) {
+        MalString *message_string;
+        if (!mal_vm_to_string(vm, message, &message_string)) {
+            return mal_value_new_undefined();
+        }
+        mal_intrinsic_define_data(
+            vm,
+            error,
+            "message",
+            mal_value_from_string(message_string),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
+        );
+    }
+
+    mal_intrinsic_define_data(
+        vm,
+        error,
+        "error",
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
+    );
+    mal_intrinsic_define_data(
+        vm,
+        error,
+        "suppressed",
+        arg_count >= 2 ? args[1] : mal_value_new_undefined(),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
+    );
+    return mal_value_from_object(error);
+}
+
 MalValue mal_builtin_new_aggregate_error(MalVm *vm, MalValue errors) {
     return mal_builtin_aggregate_error_make(vm, errors, mal_value_new_undefined(), mal_value_new_undefined());
 }
@@ -910,4 +966,5 @@ void mal_builtin_error_install(MalVm *vm) {
     mal_builtin_error_install_kind(vm, "URIError", MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, error_prototype, error_constructor, 1, mal_builtin_uri_error_constructor);
     mal_builtin_error_install_kind(vm, "EvalError", MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, error_prototype, error_constructor, 1, mal_builtin_eval_error_constructor);
     mal_builtin_error_install_kind(vm, "AggregateError", MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE, error_prototype, error_constructor, 2, mal_builtin_aggregate_error_constructor);
+    mal_builtin_error_install_kind(vm, "SuppressedError", MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR, MAL_INTRINSIC_SUPPRESSED_ERROR_PROTOTYPE, error_prototype, error_constructor, 3, mal_builtin_suppressed_error_constructor);
 }

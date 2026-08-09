@@ -625,6 +625,7 @@ void mal_intrinsics_init(MalVm *vm) {
         MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR,
         MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR,
         MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR,
         MAL_INTRINSIC_STRING_CONSTRUCTOR,
         MAL_INTRINSIC_NUMBER_CONSTRUCTOR,
         MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR,
@@ -914,6 +915,7 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "RegExp", vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Intl", vm->intrinsics[MAL_INTRINSIC_INTL], flags);
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "SuppressedError", vm->intrinsics[MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Iterator", vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "AsyncIterator", vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR], flags);
 #if MAL_REALMS

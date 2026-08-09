@@ -19,6 +19,9 @@ test/annexB/built-ins/escape/to-primitive-err.js
 test/annexB/built-ins/unescape/four-ignore-bad-u.js
 test/annexB/built-ins/unescape/to-string-observe.js
 test/built-ins/AggregateError/newtarget-proto-custom.js
+test/built-ins/SuppressedError/order-of-args-evaluation.js
+test/built-ins/SuppressedError/newtarget-proto-custom.js
+test/built-ins/SuppressedError/message-tostring-abrupt.js
 test/built-ins/Array/prototype/find/resizable-buffer-shrink-mid-iteration.js
 test/built-ins/ArrayBuffer/prototype/resize/this-is-detached.js
 test/built-ins/ArrayIteratorPrototype/next/args-mapped-expansion-before-exhaustion.js
