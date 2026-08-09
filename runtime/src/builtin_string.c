@@ -940,6 +940,146 @@ done:
     return result;
 }
 
+/** Annex B CreateHTML, including the legacy quote-only attribute escaping. */
+static MalValue mal_builtin_string_create_html(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    const byte *tag,
+    const byte *attribute
+) {
+    MalValue roots[2] = {
+        mal_value_from_string(mal_builtin_string_this_to_string(vm, this_value)),
+        mal_value_new_undefined(),
+    };
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+
+    if (attribute != nullptr) {
+        roots[1] = mal_value_from_string(mal_builtin_string_coerce(
+            vm, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            goto failed;
+        }
+
+        MalString *value = mal_value_to_string(roots[1]);
+        const c16 *source = mal_string_code_units(value);
+        usize source_length = mal_string_length(value);
+        usize quote_count = 0;
+        for (usize i = 0; i < source_length; i++) {
+            quote_count += source[i] == '"';
+        }
+        if (quote_count > 0) {
+            usize escaped_length;
+            usize extra;
+            usize bytes;
+            if (!mal_checked_size_multiply(quote_count, 5, MAL_STRING_MAX_CODE_UNITS, &extra) ||
+                !mal_checked_size_add(source_length, extra, MAL_STRING_MAX_CODE_UNITS, &escaped_length) ||
+                !mal_checked_size_multiply(escaped_length, sizeof(c16), SIZE_MAX, &bytes)) {
+                mal_builtin_string_throw_length(vm);
+                goto failed;
+            }
+            c16 *escaped = mal_heap_alloc_raw(&vm->heap, bytes);
+            usize out = 0;
+            static const c16 replacement[] = {'&', 'q', 'u', 'o', 't', ';'};
+            for (usize i = 0; i < source_length; i++) {
+                if (source[i] == '"') {
+                    memcpy(escaped + out, replacement, sizeof(replacement));
+                    out += sizeof(replacement) / sizeof(replacement[0]);
+                } else {
+                    escaped[out++] = source[i];
+                }
+            }
+            roots[1] = mal_value_from_string(
+                mal_string_new_owned(&vm->heap, escaped, escaped_length));
+        }
+    }
+
+    MalRootedStringParts parts;
+    usize part_count = attribute == nullptr ? 7 : 12;
+    if (!mal_rooted_string_parts_init(
+            &parts, mal_intrinsic_ascii(vm, ""), part_count)) {
+        mal_builtin_string_throw_length(vm);
+        goto failed;
+    }
+
+#define MAL_APPEND_HTML_PART(part)                                                        \
+    do {                                                                                  \
+        if (!mal_rooted_string_parts_append(&parts, (part))) {                            \
+            mal_builtin_string_throw_length(vm);                                          \
+            goto dispose;                                                                 \
+        }                                                                                 \
+    } while (0)
+
+    MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, "<"));
+    MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, tag));
+    if (attribute != nullptr) {
+        MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, " "));
+        MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, attribute));
+        MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, "=\""));
+        MAL_APPEND_HTML_PART(mal_value_to_string(roots[1]));
+        MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, "\""));
+    }
+    MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, ">"));
+    MAL_APPEND_HTML_PART(mal_value_to_string(roots[0]));
+    MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, "</"));
+    MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, tag));
+    MAL_APPEND_HTML_PART(mal_intrinsic_ascii(vm, ">"));
+
+#undef MAL_APPEND_HTML_PART
+
+    MalString *flattened;
+    if (!mal_rooted_string_parts_flatten(vm, &parts, &flattened)) {
+        mal_builtin_string_throw_length(vm);
+        goto dispose;
+    }
+    roots[0] = mal_value_from_string(flattened);
+
+dispose:
+    mal_rooted_string_parts_dispose(&parts);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root_span);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_value_new_undefined()
+        : roots[0];
+
+failed:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root_span);
+    return mal_value_new_undefined();
+}
+
+#define MAL_DEFINE_CREATE_HTML_METHOD(name, tag, attribute)                              \
+    static MalValue mal_builtin_string_prototype_##name(                                 \
+        MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,              \
+        MalValue new_target, MalValue callee                                               \
+    ) {                                                                                   \
+        return mal_builtin_string_create_html(                                             \
+            vm, this_value, args, arg_count, tag, attribute);                             \
+    }
+
+MAL_DEFINE_CREATE_HTML_METHOD(anchor, "a", "name")
+MAL_DEFINE_CREATE_HTML_METHOD(big, "big", nullptr)
+MAL_DEFINE_CREATE_HTML_METHOD(blink, "blink", nullptr)
+MAL_DEFINE_CREATE_HTML_METHOD(bold, "b", nullptr)
+MAL_DEFINE_CREATE_HTML_METHOD(fixed, "tt", nullptr)
+MAL_DEFINE_CREATE_HTML_METHOD(fontcolor, "font", "color")
+MAL_DEFINE_CREATE_HTML_METHOD(fontsize, "font", "size")
+MAL_DEFINE_CREATE_HTML_METHOD(italics, "i", nullptr)
+MAL_DEFINE_CREATE_HTML_METHOD(link, "a", "href")
+MAL_DEFINE_CREATE_HTML_METHOD(small, "small", nullptr)
+MAL_DEFINE_CREATE_HTML_METHOD(strike, "strike", nullptr)
+MAL_DEFINE_CREATE_HTML_METHOD(sub, "sub", nullptr)
+MAL_DEFINE_CREATE_HTML_METHOD(sup, "sup", nullptr)
+
+#undef MAL_DEFINE_CREATE_HTML_METHOD
+
 #define MAL_STRING_REPEAT_LAZY_MIN_CODE_UNITS ((usize) 65536)
 
 static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1920,13 +2060,34 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "slice", 2, mal_builtin_string_prototype_slice);
     mal_intrinsic_define_method_n(vm, prototype, "substring", 2, mal_builtin_string_prototype_substring);
     mal_intrinsic_define_method_n(vm, prototype, "substr", 2, mal_builtin_string_prototype_substr);
+    mal_intrinsic_define_method_n(vm, prototype, "anchor", 1, mal_builtin_string_prototype_anchor);
+    mal_intrinsic_define_method_n(vm, prototype, "big", 0, mal_builtin_string_prototype_big);
+    mal_intrinsic_define_method_n(vm, prototype, "blink", 0, mal_builtin_string_prototype_blink);
+    mal_intrinsic_define_method_n(vm, prototype, "bold", 0, mal_builtin_string_prototype_bold);
+    mal_intrinsic_define_method_n(vm, prototype, "fixed", 0, mal_builtin_string_prototype_fixed);
+    mal_intrinsic_define_method_n(vm, prototype, "fontcolor", 1, mal_builtin_string_prototype_fontcolor);
+    mal_intrinsic_define_method_n(vm, prototype, "fontsize", 1, mal_builtin_string_prototype_fontsize);
+    mal_intrinsic_define_method_n(vm, prototype, "italics", 0, mal_builtin_string_prototype_italics);
+    mal_intrinsic_define_method_n(vm, prototype, "link", 1, mal_builtin_string_prototype_link);
+    mal_intrinsic_define_method_n(vm, prototype, "small", 0, mal_builtin_string_prototype_small);
+    mal_intrinsic_define_method_n(vm, prototype, "strike", 0, mal_builtin_string_prototype_strike);
+    mal_intrinsic_define_method_n(vm, prototype, "sub", 0, mal_builtin_string_prototype_sub);
+    mal_intrinsic_define_method_n(vm, prototype, "sup", 0, mal_builtin_string_prototype_sup);
     mal_intrinsic_define_method_n(vm, prototype, "concat", 1, mal_builtin_string_prototype_concat);
     mal_intrinsic_define_method_n(vm, prototype, "localeCompare", 1, mal_builtin_string_prototype_locale_compare);
     mal_intrinsic_define_method_n(vm, prototype, "normalize", 0, mal_builtin_string_prototype_normalize);
     mal_intrinsic_define_method_n(vm, prototype, "repeat", 1, mal_builtin_string_prototype_repeat);
     mal_intrinsic_define_method_n(vm, prototype, "trim", 0, mal_builtin_string_prototype_trim);
-    mal_intrinsic_define_method_n(vm, prototype, "trimStart", 0, mal_builtin_string_prototype_trim_start);
-    mal_intrinsic_define_method_n(vm, prototype, "trimEnd", 0, mal_builtin_string_prototype_trim_end);
+    MalValue trim_start = mal_intrinsic_define_method_n(
+        vm, prototype, "trimStart", 0, mal_builtin_string_prototype_trim_start);
+    MalValue trim_end = mal_intrinsic_define_method_n(
+        vm, prototype, "trimEnd", 0, mal_builtin_string_prototype_trim_end);
+    mal_intrinsic_define_data(
+        vm, prototype, "trimLeft", trim_start,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(
+        vm, prototype, "trimRight", trim_end,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_method_n(vm, prototype, "toUpperCase", 0, mal_builtin_string_prototype_to_upper_case);
     mal_intrinsic_define_method_n(vm, prototype, "toLowerCase", 0, mal_builtin_string_prototype_to_lower_case);
     // Without ICU the locale-aware case methods behave as the default-locale ones
