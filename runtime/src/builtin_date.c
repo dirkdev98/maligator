@@ -8,6 +8,9 @@
 #include <time.h>
 
 #include "builtin_intl.h"
+#if MAL_TEMPORAL
+#include "builtin_temporal.h"
+#endif
 #include "date_object.h"
 #include "heap_string.h"
 #include "mal_i18n.h"
@@ -1248,6 +1251,38 @@ static MalValue date_proto_to_iso_string(MalVm *vm, MalValue this_value, const M
     return date_string_value(vm, buf, n);
 }
 
+#if MAL_TEMPORAL
+static MalValue date_proto_to_temporal_instant(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalDateObject *date;
+    if (!date_this(vm, this_value, &date)) {
+        return mal_value_new_undefined();
+    }
+    if (!isfinite(date->date_value)) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid time value"
+        );
+        return mal_value_new_undefined();
+    }
+    return mal_builtin_temporal_instant_from_epoch_milliseconds(
+        vm,
+        date->date_value
+    );
+}
+#endif
+
 static MalValue date_proto_to_json(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) args;
     (void) arg_count;
@@ -1451,6 +1486,15 @@ void mal_builtin_date_install(MalVm *vm) {
         vm, prototype, "toGMTString", to_utc_string,
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_method_n(vm, prototype, "toISOString", 0, date_proto_to_iso_string);
+#if MAL_TEMPORAL
+    mal_intrinsic_define_method_n(
+        vm,
+        prototype,
+        "toTemporalInstant",
+        0,
+        date_proto_to_temporal_instant
+    );
+#endif
     mal_intrinsic_define_method_n(vm, prototype, "toJSON", 1, date_proto_to_json);
 
     // toLocaleString / toLocaleDateString / toLocaleTimeString delegate to

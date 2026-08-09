@@ -3459,6 +3459,16 @@ static MalValue instant_wrap_intrinsic(MalVm *vm, Instant *handle) {
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TEMPORAL_INSTANT_PROTOTYPE]));
 }
 
+MalValue mal_builtin_temporal_instant_from_epoch_milliseconds(
+    MalVm *vm,
+    f64 milliseconds
+) {
+    temporal_rs_Instant_from_epoch_milliseconds_result result =
+        temporal_rs_Instant_from_epoch_milliseconds((i64) milliseconds);
+    return result.is_ok ? instant_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
 static Instant *instant_from_bigint(MalVm *vm, MalValue value) {
     i128 nanoseconds;
     if (!mal_bigint_to_bigint(vm, value, &nanoseconds)) return nullptr;
@@ -3545,10 +3555,7 @@ static MalValue instant_from_epoch_milliseconds(
                            "Invalid epoch milliseconds");
         return mal_value_new_undefined();
     }
-    temporal_rs_Instant_from_epoch_milliseconds_result result =
-        temporal_rs_Instant_from_epoch_milliseconds((i64) number);
-    return result.is_ok ? instant_wrap_intrinsic(vm, result.ok)
-                        : temporal_throw(vm, result.err);
+    return mal_builtin_temporal_instant_from_epoch_milliseconds(vm, number);
 }
 
 static MalValue instant_from_epoch_nanoseconds(
