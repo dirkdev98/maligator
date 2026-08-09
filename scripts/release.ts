@@ -65,13 +65,17 @@ export function assertGitHubTrustedPublishingEnvironment(
 			"trusted publishing requires GitHub Actions with id-token: write permission",
 		);
 	}
-	if (
-		environment.GITHUB_REF_TYPE !== "tag" ||
-		environment.GITHUB_REF_NAME === undefined
-	) {
-		throw new Error("trusted publishing requires a GitHub tag ref");
+	const releaseTag =
+		environment.GITHUB_REF_TYPE === "tag"
+			? environment.GITHUB_REF_NAME
+			: environment.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+				  environment.GITHUB_REF === "refs/heads/main"
+				? environment.MALIGATOR_RELEASE_TAG
+				: undefined;
+	if (releaseTag === undefined) {
+		throw new Error("trusted publishing requires a GitHub release tag or main retry");
 	}
-	assertReleaseTag(environment.GITHUB_REF_NAME, version);
+	assertReleaseTag(releaseTag, version);
 }
 
 function formatDuration(milliseconds: number): string {

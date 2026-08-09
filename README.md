@@ -366,6 +366,17 @@ gh api --method PUT -H "X-GitHub-Api-Version: 2026-03-10" \
   repos/dirkdev98/maligator/immutable-releases
 ```
 
+If publishing fails after an immutable release is created, repair and push `main`,
+then retry that same release without replacing its tag or assets:
+
+```shell
+gh workflow run npm-release.yml --ref main -f release_tag=v0.1.0-alpha.8
+```
+
+The retry path accepts only the exact version in `package.json`, checks that the
+release is an immutable prerelease whose tag commit is contained in `main`, and
+revalidates every downloaded tarball before publishing.
+
 Before the first workflow release, configure every npm package once for repository
 `dirkdev98/maligator`, workflow filename `npm-release.yml`, and the `npm publish`
 permission. The CLI equivalent for each package is:

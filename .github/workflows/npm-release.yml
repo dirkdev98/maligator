@@ -1,10 +1,16 @@
 name: Publish npm alpha
 
-run-name: Publish npm alpha ${{ github.event.release.tag_name }}
+run-name: Publish npm alpha ${{ github.event.release.tag_name || inputs.release_tag }}
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact immutable GitHub prerelease tag to retry
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -16,9 +22,11 @@ concurrency:
 
 jobs:
   publish:
-    if: github.event.release.prerelease == true
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == true
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
     steps:
       - name: Check out the release commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -26,7 +34,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || 'main' }}
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -36,9 +44,18 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Confirm main-branch ancestry
+      - name: Confirm immutable release and main-branch ancestry
         timeout-minutes: 10
-        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_IS_IMMUTABLE_PRERELEASE="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isImmutable,isPrerelease \
+            --jq '.isImmutable == true and .isPrerelease == true')"
+          test "$RELEASE_IS_IMMUTABLE_PRERELEASE" = true
+          RELEASE_SHA="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test -n "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
 
       - name: Install dependencies
         timeout-minutes: 30
@@ -46,21 +63,20 @@ jobs:
 
       - name: Confirm the exact release tag
         timeout-minutes: 10
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: npm run release:verify-tag -- "$RELEASE_TAG"
 
       - name: Download the prepared release assets
         timeout-minutes: 20
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: >-
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
           --pattern "*.tgz" --pattern "packages.json" --dir dist/release/packs
 
       - name: Publish through npm trusted publishing
         timeout-minutes: 30
+        env:
+          MALIGATOR_RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: >-
           npm run release:publish -- --confirm
           "$(node -p 'require("./package.json").version')" --trusted-publishing

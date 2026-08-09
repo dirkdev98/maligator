@@ -197,7 +197,7 @@ describe("npm launcher", () => {
 				},
 				"0.1.0-alpha.8",
 			),
-		).toThrow("tag ref");
+		).toThrow("release tag or main retry");
 		expect(() =>
 			assertGitHubTrustedPublishingEnvironment(
 				{
@@ -206,6 +206,20 @@ describe("npm launcher", () => {
 					ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
 					GITHUB_REF_TYPE: "tag",
 					GITHUB_REF_NAME: "v0.1.0-alpha.8",
+				},
+				"0.1.0-alpha.8",
+			),
+		).not.toThrow();
+		expect(() =>
+			assertGitHubTrustedPublishingEnvironment(
+				{
+					GITHUB_ACTIONS: "true",
+					ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc",
+					ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+					GITHUB_EVENT_NAME: "workflow_dispatch",
+					GITHUB_REF_TYPE: "branch",
+					GITHUB_REF: "refs/heads/main",
+					MALIGATOR_RELEASE_TAG: "v0.1.0-alpha.8",
 				},
 				"0.1.0-alpha.8",
 			),
@@ -255,9 +269,12 @@ describe("npm launcher", () => {
 		);
 		expect(workflow).toContain("release:");
 		expect(workflow).toContain("types: [published]");
+		expect(workflow).toContain("workflow_dispatch:");
 		expect(workflow).toContain("id-token: write");
 		expect(workflow).toContain("runs-on: ubuntu-latest");
 		expect(workflow).toContain("timeout-minutes: 60");
+		expect(workflow).toContain("isImmutable");
+		expect(workflow).toContain('git rev-list -n 1 "$RELEASE_TAG"');
 		expect(workflow).toContain("git merge-base --is-ancestor");
 		expect(workflow).toContain("release:verify-tag");
 		expect(workflow).toContain("gh release download");
