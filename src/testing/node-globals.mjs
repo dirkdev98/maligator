@@ -20,6 +20,15 @@ class MaligatorHeaders {
 			}
 			return;
 		}
+		if (typeof init[Symbol.iterator] === "function") {
+			for (const pair of init) {
+				if (!Array.isArray(pair) || pair.length !== 2) {
+					throw new TypeError("Headers entry must contain exactly two items");
+				}
+				this.append(pair[0], pair[1]);
+			}
+			return;
+		}
 		for (const name of Object.keys(init)) this.append(name, init[name]);
 	}
 
