@@ -87,21 +87,7 @@ static void mal_host_throw_errno(
     free(message);
 }
 
-static MalValue mal_test_run_wire(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
-    (void) nt;
-    (void) callee;
-    if (argc < 1 || !mal_value_is_typed_array_object(args[0])) {
-        mal_vm_throw_error(
-            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "mal._runWire requires a Uint8Array");
-        return mal_value_new_undefined();
-    }
-
-    MalTypedArrayObject *wire = mal_value_to_typed_array_object(args[0]);
-    usize length = mal_typed_array_object_byte_length(wire);
-    const u8 *bytes = wire->buffer->data + wire->byte_offset;
+static MalValue mal_test_run_wire_bytes(MalVm *vm, const u8 *bytes, usize length) {
     const char *error = "invalid VM wire";
     MalLoadedDefinition *loaded = mal_vm_load_definition_with_host_resolver(
         bytes, length, &error, mal_host_resolve_installer);
@@ -128,6 +114,51 @@ static MalValue mal_test_run_wire(
         return mal_value_new_undefined();
     }
     return completion.value;
+}
+
+static MalValue mal_test_run_wire(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 1 || !mal_value_is_typed_array_object(args[0])) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "mal._runWire requires a Uint8Array");
+        return mal_value_new_undefined();
+    }
+
+    MalTypedArrayObject *wire = mal_value_to_typed_array_object(args[0]);
+    usize length = mal_typed_array_object_byte_length(wire);
+    const u8 *bytes = (const u8 *) wire->buffer->data + wire->byte_offset;
+    return mal_test_run_wire_bytes(vm, bytes, length);
+}
+
+static MalValue mal_test_run_wire_path(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 1) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "mal._runWirePath requires a path");
+        return mal_value_new_undefined();
+    }
+    char *path = mal_asset_to_cstr(vm, args[0], "path");
+    if (path == nullptr) return mal_value_new_undefined();
+    byte *bytes = nullptr;
+    usize length = 0;
+    int err = mal_posix_fs_read_file(path, &bytes, &length);
+    if (err != 0) {
+        mal_host_throw_errno(vm, err, "mal._runWirePath", "cannot read", path);
+        free(path);
+        free(bytes);
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_test_run_wire_bytes(vm, (const u8 *) bytes, length);
+    free(path);
+    free(bytes);
+    return result;
 }
 
 static MalValue mal_dev_spawn(
@@ -592,6 +623,8 @@ void mal_host_install_maligator(
         vm, mal, (const byte *) "assets", roots[1], MAL_ASSET_VISIBLE);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_runWire", 1, mal_test_run_wire);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_runWirePath", 1, mal_test_run_wire_path);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_spawnDevelopmentProcess", 2, mal_dev_spawn);
     mal_intrinsic_define_method_n(

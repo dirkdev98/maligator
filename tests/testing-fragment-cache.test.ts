@@ -1,4 +1,5 @@
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -128,6 +129,13 @@ describe("relocatable test fragment cache", () => {
 		expect(coldParses.misses).toBeGreaterThan(0);
 		expect(warm.cache).toBe("hit");
 		expect(warm.artifactHits).toBe(4);
+		for (const wire of warm.wires) {
+			expect(existsSync(wire.path)).toBe(true);
+			expect(wire.size).toBeGreaterThan(0);
+			expect(Object.getOwnPropertyDescriptor(wire, "wire")?.get).toBeTypeOf(
+				"function",
+			);
+		}
 
 		write(first, testSource("a", 1));
 		session.invalidate(first);

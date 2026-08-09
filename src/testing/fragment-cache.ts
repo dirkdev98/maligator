@@ -6,11 +6,13 @@ import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
 import {
 	cacheFrontendWire,
+	frontendArtifactIdentity,
+	frontendArtifactUnchanged,
 	frontendArtifactCacheRoot,
 	frontendDigest,
-	frontendWirePath,
 } from "../frontend-cache.ts";
 import type { FrontendCompilationSession } from "../frontend-cache.ts";
+import type { FrontendArtifactIdentity } from "../frontend-cache.ts";
 import { linkModules } from "../linker.ts";
 import type { ModuleGraph, ModuleParseCache } from "../module-graph.ts";
 import { buildModuleGraph } from "../module-graph.ts";
@@ -28,15 +30,14 @@ import type {
 } from "./cache.ts";
 import { TestCompilationSession } from "./cache.ts";
 
-const FRAGMENT_SCHEMA = 3;
+const FRAGMENT_SCHEMA = 4;
 const TEST_MODULE_ID = "maligator:test";
 const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
 const CACHE_DIRECTORY = ".cache/mal-cache/test";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 
-interface ArtifactReference {
+interface ArtifactReference extends FrontendArtifactIdentity {
 	key: string;
-	digest: string;
 }
 
 interface FragmentReference extends ArtifactReference {
@@ -44,7 +45,7 @@ interface FragmentReference extends ArtifactReference {
 }
 
 interface FragmentManifest {
-	schema: 3;
+	schema: 4;
 	identity: string;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
@@ -73,6 +74,9 @@ interface CompiledArtifact extends ArtifactReference {
 export interface RelocatableTestWire {
 	kind: "base" | "entry" | "runner";
 	file?: string;
+	path: string;
+	digest: string;
+	size: number;
 	wire: Uint8Array;
 }
 
@@ -183,28 +187,61 @@ function dependenciesUnchanged(
 }
 
 function readArtifact(
-	root: string,
 	artifactRoot: string,
 	reference: ArtifactReference,
-): Uint8Array | undefined {
-	try {
-		const mapping = JSON.parse(
-			readFileSync(artifactPath(root, reference.key), "utf-8"),
-		) as {
-			digest?: string;
-		};
-		if (mapping.digest !== reference.digest) return undefined;
-		const wire = new Uint8Array(
-			readFileSync(frontendWirePath(reference.digest, artifactRoot)),
-		);
-		return digest(wire) === reference.digest ? wire : undefined;
-	} catch {
-		return undefined;
-	}
+	kind: RelocatableTestWire["kind"],
+	file?: string,
+): RelocatableTestWire | undefined {
+	if (!frontendArtifactUnchanged(reference, artifactRoot)) return undefined;
+	let wire: Uint8Array | undefined;
+	return {
+		kind,
+		...(file === undefined ? {} : { file }),
+		path: reference.path,
+		digest: reference.digest,
+		size: reference.size,
+		get wire() {
+			if (wire !== undefined) return wire;
+			wire = new Uint8Array(readFileSync(reference.path));
+			if (digest(wire) !== reference.digest) {
+				throw new Error(`test artifact digest mismatch: ${reference.path}`);
+			}
+			return wire;
+		},
+	};
+}
+
+function artifactReference(artifact: CompiledArtifact): ArtifactReference {
+	return {
+		key: artifact.key,
+		digest: artifact.digest,
+		path: artifact.path,
+		size: artifact.size,
+		mtimeMs: artifact.mtimeMs,
+		ctimeMs: artifact.ctimeMs,
+		ino: artifact.ino,
+		dev: artifact.dev,
+	};
+}
+
+function relocatableWire(
+	kind: RelocatableTestWire["kind"],
+	artifact: CompiledArtifact,
+	file?: string,
+): RelocatableTestWire {
+	return {
+		kind,
+		...(file === undefined ? {} : { file }),
+		path: artifact.path,
+		digest: artifact.digest,
+		size: artifact.size,
+		get wire() {
+			return artifact.wire;
+		},
+	};
 }
 
 function manifestHit(
-	root: string,
 	artifactRoot: string,
 	identity: string,
 	requested: Array<string>,
@@ -221,19 +258,19 @@ function manifestHit(
 	) {
 		return undefined;
 	}
-	const base = readArtifact(root, artifactRoot, manifest.base);
-	const runner = readArtifact(root, artifactRoot, manifest.runner);
+	const base = readArtifact(artifactRoot, manifest.base, "base");
+	const runner = readArtifact(artifactRoot, manifest.runner, "runner");
 	if (base === undefined || runner === undefined) return undefined;
 	const fragments: Array<RelocatableTestWire> = [];
 	for (const file of requested) {
 		const reference = manifest.fragments.find((fragment) => fragment.file === file);
 		if (reference === undefined) return undefined;
-		const wire = readArtifact(root, artifactRoot, reference);
-		if (wire === undefined) return undefined;
-		fragments.push({ kind: "entry", file, wire });
+		const artifact = readArtifact(artifactRoot, reference, "entry", file);
+		if (artifact === undefined) return undefined;
+		fragments.push(artifact);
 	}
 	return {
-		wires: [{ kind: "base", wire: base }, ...fragments, { kind: "runner", wire: runner }],
+		wires: [base, ...fragments, runner],
 		cache: "hit",
 		frontendMs: 0,
 		phases: emptyPhases(),
@@ -306,14 +343,30 @@ function compileArtifact(
 	const file = artifactPath(root, key);
 	try {
 		const reference = JSON.parse(readFileSync(file, "utf-8")) as {
-			digest?: string;
+			schema?: number;
+			artifact?: FrontendArtifactIdentity;
 		};
-		if (reference.digest === undefined) throw new Error("missing artifact digest");
-		const wire = new Uint8Array(
-			readFileSync(frontendWirePath(reference.digest, artifactRoot)),
-		);
-		if (digest(wire) !== reference.digest) throw new Error("corrupt artifact");
-		return { key, digest: reference.digest, wire, cache: "hit" };
+		if (
+			reference.schema !== 1 ||
+			reference.artifact === undefined ||
+			!frontendArtifactUnchanged(reference.artifact, artifactRoot)
+		) {
+			throw new Error("invalid test artifact reference");
+		}
+		let wire: Uint8Array | undefined;
+		return {
+			key,
+			...reference.artifact,
+			get wire() {
+				if (wire !== undefined) return wire;
+				wire = new Uint8Array(readFileSync(reference.artifact!.path));
+				if (digest(wire) !== reference.artifact!.digest) {
+					throw new Error("corrupt test artifact");
+				}
+				return wire;
+			},
+			cache: "hit",
+		};
 	} catch {
 		// Compile below when either the graph mapping or shared artifact is absent.
 	}
@@ -332,8 +385,12 @@ function compileArtifact(
 	phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = digest(wire);
 	cacheFrontendWire(wire, artifactRoot);
-	publish(file, `${JSON.stringify({ digest: wireDigest })}\n`);
-	return { key, digest: wireDigest, wire, cache: "miss" };
+	const artifact = frontendArtifactIdentity(wireDigest, artifactRoot);
+	if (artifact === undefined) {
+		throw new Error(`test artifact is missing after publication: ${wireDigest}`);
+	}
+	publish(file, `${JSON.stringify({ schema: 1, artifact })}\n`);
+	return { key, ...artifact, wire, cache: "miss" };
 }
 
 function importedName(specifier: ESTree.ImportSpecifier): string {
@@ -599,7 +656,6 @@ export function compileRelocatableTestImage(
 	const validationStartedAt = Date.now();
 	const existing = readManifest(manifestPath(root, entries, identity));
 	const hit = manifestHit(
-		root,
 		artifactRoot,
 		identity,
 		entries,
@@ -670,13 +726,12 @@ export function compileRelocatableTestImage(
 		identity,
 		entries,
 		dependencies,
-		base: { key: baseArtifact.key, digest: baseArtifact.digest },
+		base: artifactReference(baseArtifact),
 		fragments: fragmentArtifacts.map((artifact) => ({
 			file: artifact.file,
-			key: artifact.key,
-			digest: artifact.digest,
+			...artifactReference(artifact),
 		})),
-		runner: { key: runnerArtifact.key, digest: runnerArtifact.digest },
+		runner: artifactReference(runnerArtifact),
 	};
 	publishManifest(root, manifest, entries);
 	const artifactHits = [baseArtifact, ...fragmentArtifacts, runnerArtifact].filter(
@@ -684,15 +739,12 @@ export function compileRelocatableTestImage(
 	).length;
 	return {
 		wires: [
-			{ kind: "base", wire: baseArtifact.wire },
+			relocatableWire("base", baseArtifact),
 			...fragmentArtifacts.map(
-				(artifact): RelocatableTestWire => ({
-					kind: "entry",
-					file: artifact.file,
-					wire: artifact.wire,
-				}),
+				(artifact): RelocatableTestWire =>
+					relocatableWire("entry", artifact, artifact.file),
 			),
-			{ kind: "runner", wire: runnerArtifact.wire },
+			relocatableWire("runner", runnerArtifact),
 		],
 		cache: "miss",
 		frontendMs: Date.now() - startedAt,

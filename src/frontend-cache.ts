@@ -24,6 +24,16 @@ export interface FrontendDependencyIdentity {
 	digest: string;
 }
 
+export interface FrontendArtifactIdentity {
+	digest: string;
+	path: string;
+	size: number;
+	mtimeMs: number;
+	ctimeMs: number;
+	ino: number;
+	dev: number;
+}
+
 interface FileDigestManifest {
 	schema: 1;
 	projectRoot: string;
@@ -77,6 +87,45 @@ export function frontendWirePath(
 	root = FRONTEND_CACHE_DIRECTORY,
 ): string {
 	return path.resolve(root, "artifacts", `${digest}.malw`);
+}
+
+export function frontendArtifactIdentity(
+	digest: string,
+	root = FRONTEND_CACHE_DIRECTORY,
+): FrontendArtifactIdentity | undefined {
+	try {
+		const file = frontendWirePath(digest, root);
+		const stats = statSync(file);
+		if (!stats.isFile()) return undefined;
+		return {
+			digest,
+			path: file,
+			size: stats.size,
+			mtimeMs: stats.mtimeMs,
+			ctimeMs: stats.ctimeMs,
+			ino: stats.ino,
+			dev: stats.dev,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+export function frontendArtifactUnchanged(
+	artifact: FrontendArtifactIdentity,
+	root = FRONTEND_CACHE_DIRECTORY,
+): boolean {
+	if (!/^[0-9a-f]{64}$/.test(artifact.digest)) return false;
+	const current = frontendArtifactIdentity(artifact.digest, root);
+	return (
+		current !== undefined &&
+		current.path === artifact.path &&
+		current.size === artifact.size &&
+		current.mtimeMs === artifact.mtimeMs &&
+		current.ctimeMs === artifact.ctimeMs &&
+		current.ino === artifact.ino &&
+		current.dev === artifact.dev
+	);
 }
 
 /**

@@ -15,6 +15,7 @@ import type { TestEvent, TestFailure, TestRunResult } from "./protocol.ts";
 
 interface TestRuntimeBridge {
 	_runWire(wire: Uint8Array): unknown;
+	_runWirePath?(path: string): unknown;
 }
 
 interface TestGlobals {
@@ -262,11 +263,17 @@ export async function executeTestCommand(
 		globals.__maligatorTestOptions = { ...runOptions, files: group.files };
 		delete globals.__maligatorTestResult;
 		try {
-			const wires =
-				"wires" in group.compiled
-					? group.compiled.wires.map((wire) => wire.wire)
-					: [group.compiled.wire];
-			for (const wire of wires) await globals.mal._runWire(wire);
+			if ("wires" in group.compiled && globals.mal._runWirePath !== undefined) {
+				for (const wire of group.compiled.wires) {
+					await globals.mal._runWirePath(wire.path);
+				}
+			} else {
+				const wires =
+					"wires" in group.compiled
+						? group.compiled.wires.map((wire) => wire.wire)
+						: [group.compiled.wire];
+				for (const wire of wires) await globals.mal._runWire(wire);
+			}
 		} catch (error) {
 			if (!command.bail && group.files.length > 1) {
 				const middle = Math.floor(group.files.length / 2);
