@@ -335,16 +335,12 @@ describe("emit-vm instruction packing", () => {
 
 		expect(units.every((unit) => unit.length <= budget)).toBe(true);
 		expect(definitionUnit).toContain("MalFunction mal_functions[400];");
-		expect(definitionUnit).toContain(
-			"MalSourcePos mal_source_positions[800];",
-		);
+		expect(definitionUnit).toContain("MalSourcePos mal_source_positions[800];");
 		expect(definitionUnit).toContain(
 			".initialize_generated_data = mal_initialize_generated_data",
 		);
 		expect(dataUnits).toContain("void mal_initialize_mal_functions_chunk_0(");
-		expect(dataUnits).toContain(
-			"void mal_initialize_mal_source_positions_chunk_0(",
-		);
+		expect(dataUnits).toContain("void mal_initialize_mal_source_positions_chunk_0(");
 		expect(dataUnits).not.toContain("const MalFunction mal_functions[] =");
 	});
 

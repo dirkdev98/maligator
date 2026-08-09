@@ -330,10 +330,7 @@ test("interprets async tests with host dependencies", async () => {
 
 	const callableCommonjs = path.join(project, "node_modules", "callable-commonjs");
 	mkdirSync(callableCommonjs, { recursive: true });
-	writeFileSync(
-		path.join(callableCommonjs, "package.json"),
-		`{"main":"index.cjs"}\n`,
-	);
+	writeFileSync(path.join(callableCommonjs, "package.json"), `{"main":"index.cjs"}\n`);
 	writeFileSync(
 		path.join(callableCommonjs, "index.cjs"),
 		`module.exports = function callableCommonjs() { return 42; };\n`,
@@ -349,14 +346,9 @@ test("CommonJS default exports remain callable", () => {
 });
 `,
 	);
-	const commonjsDefaultOutput = invoke(
-		["test", "commonjs-default.test.ts"],
-		testOnlyEnv,
-	);
+	const commonjsDefaultOutput = invoke(["test", "commonjs-default.test.ts"], testOnlyEnv);
 	if (!commonjsDefaultOutput.includes("1 passed, 0 failed")) {
-		throw new Error(
-			`CommonJS default import test failed:\n${commonjsDefaultOutput}`,
-		);
+		throw new Error(`CommonJS default import test failed:\n${commonjsDefaultOutput}`);
 	}
 	console.log("ok   test preserved callable CommonJS default exports");
 

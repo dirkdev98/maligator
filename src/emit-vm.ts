@@ -355,8 +355,7 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 		}
 		definitionLines[0] = definitionLines[0]!.replace(/^static /, "");
 		if (
-			(symbol.startsWith("mal_functions") ||
-				symbol.startsWith("mal_source_positions")) &&
+			(symbol.startsWith("mal_functions") || symbol.startsWith("mal_source_positions")) &&
 			definitionLines.join("\n").length > Math.floor(maxCodeUnits / 2)
 		) {
 			const rows = definitionLines.slice(1, -1);
