@@ -31,6 +31,17 @@ check(
 );
 check(new Temporal.Duration().blank === true);
 
+const time = new Temporal.PlainTime(12, 34, 56, 987, 654, 321);
+check(time.toString() === "12:34:56.987654321");
+check(time.toString({ smallestUnit: "millisecond" }) === "12:34:56.987");
+check(time.add({ minutes: 30 }).toString() === "13:04:56.987654321");
+check(time.subtract({ hours: 13 }).toString() === "23:34:56.987654321");
+check(time.with({ minute: 10 }).minute === 10);
+check(Temporal.PlainTime.from("23:59:58.123456789").nanosecond === 789);
+check(Temporal.PlainTime.compare("01:00", "02:00") === -1);
+check(time.until("13:34:56.987654321").hours === 1);
+check(time.round({ smallestUnit: "minute" }).toString() === "12:35:00");
+
 const order = [];
 const bag = {};
 for (const name of [
@@ -82,6 +93,7 @@ check(threw);
 
 for (let i = 0; i < 200; i++) {
 	Temporal.Duration.from("PT1.000000001S").negated().abs();
+	Temporal.PlainTime.from("12:34:56.987654321").add({ nanoseconds: i });
 }
 
 let passed = 0;

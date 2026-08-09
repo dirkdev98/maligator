@@ -174,12 +174,7 @@ export function test262PruneArtifactCache() {
 }
 
 const SKIPPED_FLAGS = ["CanBlockIsTrue"];
-const SKIPPED_FEATURES = [
-	"IsHTMLDDA",
-	"decorators",
-	"explicit-resource-management",
-	"Temporal",
-];
+const SKIPPED_FEATURES = ["IsHTMLDDA", "decorators", "explicit-resource-management"];
 // Unsupported module forms still run compile-time negative coverage, but their
 // positive/runtime tests require parser or host-loader behavior we do not expose.
 const SKIPPED_MODULE_FEATURES = [
