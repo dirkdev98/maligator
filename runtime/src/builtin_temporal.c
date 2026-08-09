@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "ascii.h"
 #include "builtin_bigint.h"
@@ -34,6 +35,7 @@
 static MalValue plain_date_time_wrap_intrinsic(MalVm *vm, PlainDateTime *handle);
 static MalValue plain_month_day_wrap_intrinsic(MalVm *vm, PlainMonthDay *handle);
 static MalValue plain_year_month_wrap_intrinsic(MalVm *vm, PlainYearMonth *handle);
+static MalValue zoned_date_time_wrap_intrinsic(MalVm *vm, ZonedDateTime *handle);
 
 static MalValue temporal_throw(MalVm *vm, TemporalError error) {
     MalIntrinsic kind = error.kind == ErrorKind_Type
@@ -809,6 +811,11 @@ static PlainTime *plain_time_from_like(
             if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
             return temporal_rs_PlainDateTime_to_plain_time(object->handle);
         }
+        if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME && object->handle != nullptr) {
+            ArithmeticOverflow overflow;
+            if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
+            return temporal_rs_ZonedDateTime_to_plain_time(object->handle);
+        }
     }
     if (mal_value_is_string(input)) {
         MalString *string = mal_value_to_string(input);
@@ -1421,6 +1428,11 @@ static PlainDate *plain_date_from_like(
             if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
             return temporal_rs_PlainDateTime_to_plain_date(object->handle);
         }
+        if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME && object->handle != nullptr) {
+            ArithmeticOverflow overflow;
+            if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
+            return temporal_rs_ZonedDateTime_to_plain_date(object->handle);
+        }
     }
     if (mal_value_is_string(input)) {
         MalString *string = mal_value_to_string(input);
@@ -1960,6 +1972,11 @@ static PlainDateTime *plain_date_time_from_like(
                 return nullptr;
             }
             return result.ok;
+        }
+        if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME && object->handle != nullptr) {
+            ArithmeticOverflow overflow;
+            if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
+            return temporal_rs_ZonedDateTime_to_plain_datetime(object->handle);
         }
     }
     if (mal_value_is_string(input)) {
@@ -3214,6 +3231,9 @@ static Instant *instant_from_like(MalVm *vm, MalValue input) {
         if (object->kind == MAL_TEMPORAL_INSTANT && object->handle != nullptr) {
             return temporal_rs_Instant_clone(object->handle);
         }
+        if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME && object->handle != nullptr) {
+            return temporal_rs_ZonedDateTime_to_instant(object->handle);
+        }
     }
     if (!mal_value_is_string(input) && !mal_value_is_object(input)) {
         temporal_throw_type(vm, "Temporal.Instant input must be a string or object");
@@ -3472,12 +3492,11 @@ static MalValue instant_round(
 static bool temporal_time_zone_from_value(
     MalVm *vm, MalValue value, TimeZone *zone
 ) {
-    if (!mal_value_is_string(value) && !mal_value_is_object(value)) {
-        temporal_throw_type(vm, "Temporal time zone must be a string or object");
+    if (!mal_value_is_string(value)) {
+        temporal_throw_type(vm, "Temporal time zone must be a string");
         return false;
     }
-    MalString *string;
-    if (!mal_vm_to_string(vm, value, &string)) return false;
+    MalString *string = mal_value_to_string(value);
     usize length;
     byte *utf8 = mal_string_to_utf8(string, &length);
     if (utf8 == nullptr) return temporal_throw_type(vm, "Unable to encode time zone"), false;
@@ -3557,6 +3576,859 @@ static MalValue instant_value_of(
 ) {
     (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
     return temporal_throw_type(vm, "Cannot convert Temporal.Instant to a primitive");
+}
+
+static MalValue instant_to_zoned_date_time_iso(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!instant_this(vm, this_value, &object)) return mal_value_new_undefined();
+    TimeZone zone;
+    if (!temporal_time_zone_from_value(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &zone)) {
+        return mal_value_new_undefined();
+    }
+    temporal_rs_Instant_to_zoned_date_time_iso_result result =
+        temporal_rs_Instant_to_zoned_date_time_iso(object->handle, zone);
+    return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static bool zoned_date_time_this(MalVm *vm, MalValue value, MalTemporalObject **out) {
+    if (!mal_value_is_temporal_object(value)) {
+        temporal_throw_type(vm, "Temporal.ZonedDateTime method called on incompatible receiver");
+        return false;
+    }
+    MalTemporalObject *object = mal_value_to_temporal_object(value);
+    if (object->kind != MAL_TEMPORAL_ZONED_DATE_TIME || object->handle == nullptr) {
+        temporal_throw_type(vm, "Temporal.ZonedDateTime method called on incompatible receiver");
+        return false;
+    }
+    *out = object;
+    return true;
+}
+
+static MalValue zoned_date_time_wrap(
+    MalVm *vm, ZonedDateTime *handle, MalObject *prototype
+) {
+    return mal_value_from_temporal_object(mal_temporal_object_new(
+        &vm->heap, prototype, MAL_TEMPORAL_ZONED_DATE_TIME, handle));
+}
+
+static MalValue zoned_date_time_wrap_intrinsic(MalVm *vm, ZonedDateTime *handle) {
+    return zoned_date_time_wrap(
+        vm, handle,
+        mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE]));
+}
+
+static ZonedDateTime *zoned_date_time_from_like_options(
+    MalVm *vm, MalValue input, MalValue options
+) {
+    if (mal_value_is_temporal_object(input)) {
+        MalTemporalObject *object = mal_value_to_temporal_object(input);
+        if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME && object->handle != nullptr) {
+            return temporal_rs_ZonedDateTime_clone(object->handle);
+        }
+    }
+    ArithmeticOverflow overflow;
+    if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
+    if (mal_value_is_string(input)) {
+        MalString *string = mal_value_to_string(input);
+        DiplomatString16View view = {
+            .data = (const char16_t *) mal_string_code_units(string),
+            .len = mal_string_length(string),
+        };
+        temporal_rs_ZonedDateTime_from_utf16_result result =
+            temporal_rs_ZonedDateTime_from_utf16(
+                view, Disambiguation_Compatible, OffsetDisambiguation_Reject);
+        if (!result.is_ok) {
+            temporal_throw(vm, result.err);
+            return nullptr;
+        }
+        return result.ok;
+    }
+    if (!mal_value_is_object(input)) {
+        temporal_throw_type(vm, "Temporal.ZonedDateTime input must be a string or object");
+        return nullptr;
+    }
+
+    PlainDatePartial date;
+    if (!plain_date_partial_from_object(vm, input, &date)) return nullptr;
+    PlainTimeFields time_fields;
+    if (!plain_time_read_fields(vm, input, &time_fields, false)) {
+        plain_date_partial_destroy(&date);
+        return nullptr;
+    }
+    PartialTime time;
+    if (!plain_time_partial(vm, &time_fields, overflow, &time)) {
+        plain_date_partial_destroy(&date);
+        return nullptr;
+    }
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, input, mal_intrinsic_string_key(vm, "offset"), &value)) {
+        plain_date_partial_destroy(&date);
+        return nullptr;
+    }
+    byte *offset_data = nullptr;
+    OptionStringView offset = {.is_ok = false};
+    if (!mal_value_is_undefined(value)) {
+        MalString *string;
+        if (!mal_vm_to_string(vm, value, &string)) {
+            plain_date_partial_destroy(&date);
+            return nullptr;
+        }
+        usize length;
+        offset_data = mal_string_to_utf8(string, &length);
+        if (offset_data == nullptr) {
+            plain_date_partial_destroy(&date);
+            temporal_throw_type(vm, "Unable to encode Temporal offset");
+            return nullptr;
+        }
+        offset = (OptionStringView) {
+            .ok = {.data = (const char *) offset_data, .len = length}, .is_ok = true};
+    }
+    if (!mal_vm_get_property(
+            vm, input, mal_intrinsic_string_key(vm, "timeZone"), &value)) {
+        free(offset_data); plain_date_partial_destroy(&date); return nullptr;
+    }
+    TimeZone zone;
+    if (!temporal_time_zone_from_value(vm, value, &zone)) {
+        free(offset_data); plain_date_partial_destroy(&date); return nullptr;
+    }
+    PartialZonedDateTime partial = {
+        .date = date.partial, .time = time, .offset = offset,
+        .timezone = {.ok = zone, .is_ok = true},
+    };
+    temporal_rs_ZonedDateTime_from_partial_result result =
+        temporal_rs_ZonedDateTime_from_partial(
+            partial, (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true},
+            (Disambiguation_option) {
+                .ok = Disambiguation_Compatible, .is_ok = true},
+            (OffsetDisambiguation_option) {
+                .ok = OffsetDisambiguation_Reject, .is_ok = true});
+    free(offset_data);
+    plain_date_partial_destroy(&date);
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return nullptr;
+    }
+    return result.ok;
+}
+
+static ZonedDateTime *zoned_date_time_from_like(MalVm *vm, MalValue input) {
+    return zoned_date_time_from_like_options(vm, input, mal_value_new_undefined());
+}
+
+static MalValue zoned_date_time_constructor(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        return temporal_throw_type(vm, "Temporal.ZonedDateTime must be called with new");
+    }
+    i128 nanoseconds;
+    if (!mal_bigint_to_bigint(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &nanoseconds)) {
+        return mal_value_new_undefined();
+    }
+    TimeZone zone;
+    if (!temporal_time_zone_from_value(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &zone)) {
+        return mal_value_new_undefined();
+    }
+    AnyCalendarKind calendar;
+    if (!temporal_calendar_kind(
+            vm, arg_count > 2 ? args[2] : mal_value_new_undefined(), &calendar)) {
+        return mal_value_new_undefined();
+    }
+    temporal_rs_ZonedDateTime_try_new_result result = temporal_rs_ZonedDateTime_try_new(
+        temporal_i128_to_nanoseconds(nanoseconds), calendar, zone);
+    if (!result.is_ok) return temporal_throw(vm, result.err);
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE,
+            &prototype)) {
+        temporal_rs_ZonedDateTime_destroy(result.ok);
+        return mal_value_new_undefined();
+    }
+    return zoned_date_time_wrap(vm, result.ok, prototype);
+}
+
+static MalValue zoned_date_time_from(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    ZonedDateTime *handle = zoned_date_time_from_like_options(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined(),
+        arg_count > 1 ? args[1] : mal_value_new_undefined());
+    return handle == nullptr ? mal_value_new_undefined()
+                             : zoned_date_time_wrap_intrinsic(vm, handle);
+}
+
+static MalValue zoned_date_time_compare(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    ZonedDateTime *one = zoned_date_time_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (one == nullptr) return mal_value_new_undefined();
+    ZonedDateTime *two = zoned_date_time_from_like(
+        vm, arg_count > 1 ? args[1] : mal_value_new_undefined());
+    if (two == nullptr) {
+        temporal_rs_ZonedDateTime_destroy(one);
+        return mal_value_new_undefined();
+    }
+    i8 result = temporal_rs_ZonedDateTime_compare_instant(one, two);
+    temporal_rs_ZonedDateTime_destroy(one);
+    temporal_rs_ZonedDateTime_destroy(two);
+    return mal_value_from_i32(result);
+}
+
+#define ZONED_DATE_TIME_GETTER(c_name, ffi_name) \
+    static MalValue c_name(MalVm *vm, MalValue this_value, const MalValue *args, \
+                           i32 arg_count, MalValue new_target, MalValue callee) { \
+        (void) args; (void) arg_count; (void) new_target; (void) callee; \
+        MalTemporalObject *object; \
+        if (!zoned_date_time_this(vm, this_value, &object)) \
+            return mal_value_new_undefined(); \
+        return mal_value_from_i32((i32) ffi_name(object->handle)); \
+    }
+
+ZONED_DATE_TIME_GETTER(zoned_date_time_year, temporal_rs_ZonedDateTime_year)
+ZONED_DATE_TIME_GETTER(zoned_date_time_month, temporal_rs_ZonedDateTime_month)
+ZONED_DATE_TIME_GETTER(zoned_date_time_day, temporal_rs_ZonedDateTime_day)
+ZONED_DATE_TIME_GETTER(zoned_date_time_hour, temporal_rs_ZonedDateTime_hour)
+ZONED_DATE_TIME_GETTER(zoned_date_time_minute, temporal_rs_ZonedDateTime_minute)
+ZONED_DATE_TIME_GETTER(zoned_date_time_second, temporal_rs_ZonedDateTime_second)
+ZONED_DATE_TIME_GETTER(zoned_date_time_millisecond, temporal_rs_ZonedDateTime_millisecond)
+ZONED_DATE_TIME_GETTER(zoned_date_time_microsecond, temporal_rs_ZonedDateTime_microsecond)
+ZONED_DATE_TIME_GETTER(zoned_date_time_nanosecond, temporal_rs_ZonedDateTime_nanosecond)
+ZONED_DATE_TIME_GETTER(zoned_date_time_day_of_week, temporal_rs_ZonedDateTime_day_of_week)
+ZONED_DATE_TIME_GETTER(zoned_date_time_day_of_year, temporal_rs_ZonedDateTime_day_of_year)
+ZONED_DATE_TIME_GETTER(zoned_date_time_days_in_week, temporal_rs_ZonedDateTime_days_in_week)
+ZONED_DATE_TIME_GETTER(zoned_date_time_days_in_month, temporal_rs_ZonedDateTime_days_in_month)
+ZONED_DATE_TIME_GETTER(zoned_date_time_days_in_year, temporal_rs_ZonedDateTime_days_in_year)
+ZONED_DATE_TIME_GETTER(zoned_date_time_months_in_year, temporal_rs_ZonedDateTime_months_in_year)
+
+static MalValue zoned_date_time_epoch_milliseconds(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return mal_ops_number_value(
+        (f64) temporal_rs_ZonedDateTime_epoch_milliseconds(object->handle));
+}
+
+static MalValue zoned_date_time_epoch_nanoseconds(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    i128 value = temporal_nanoseconds_to_i128(
+        temporal_rs_ZonedDateTime_epoch_nanoseconds(object->handle));
+    return mal_value_from_bigint(mal_bigint_new(&vm->heap, value));
+}
+
+static MalValue zoned_date_time_offset_nanoseconds(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return mal_ops_number_value(
+        (f64) temporal_rs_ZonedDateTime_offset_nanoseconds(object->handle));
+}
+
+static MalValue zoned_date_time_string_getter(
+    MalVm *vm, MalValue this_value, bool timezone, bool month_code
+) {
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    DiplomatWrite *write = diplomat_buffer_write_create(32);
+    if (timezone) {
+        temporal_rs_TimeZone_identifier(
+            temporal_rs_ZonedDateTime_timezone(object->handle), write);
+    } else if (month_code) {
+        temporal_rs_ZonedDateTime_month_code(object->handle, write);
+    } else {
+        temporal_rs_ZonedDateTime_offset_result result =
+            temporal_rs_ZonedDateTime_offset(object->handle, write);
+        if (!result.is_ok) {
+            diplomat_buffer_write_destroy(write);
+            return temporal_throw(vm, result.err);
+        }
+    }
+    return temporal_write_to_string(vm, write);
+}
+
+#define ZONED_STRING_GETTER(c_name, timezone, month_code) \
+    static MalValue c_name(MalVm *vm, MalValue this_value, const MalValue *args, \
+                           i32 arg_count, MalValue new_target, MalValue callee) { \
+        (void) args; (void) arg_count; (void) new_target; (void) callee; \
+        return zoned_date_time_string_getter(vm, this_value, timezone, month_code); \
+    }
+
+ZONED_STRING_GETTER(zoned_date_time_time_zone_id, true, false)
+ZONED_STRING_GETTER(zoned_date_time_month_code, false, true)
+ZONED_STRING_GETTER(zoned_date_time_offset, false, false)
+
+static MalValue zoned_date_time_calendar_id(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return temporal_calendar_identifier(
+        vm, temporal_rs_ZonedDateTime_calendar(object->handle));
+}
+
+static MalValue zoned_date_time_in_leap_year(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return mal_value_new_boolean(
+        temporal_rs_ZonedDateTime_in_leap_year(object->handle));
+}
+
+static MalValue zoned_date_time_hours_in_day(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    temporal_rs_ZonedDateTime_hours_in_day_result result =
+        temporal_rs_ZonedDateTime_hours_in_day(object->handle);
+    return result.is_ok ? mal_ops_number_value(result.ok) : temporal_throw(vm, result.err);
+}
+
+static MalValue zoned_date_time_optional_week(
+    MalVm *vm, MalValue this_value, bool year
+) {
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    if (year) {
+        temporal_rs_ZonedDateTime_year_of_week_result result =
+            temporal_rs_ZonedDateTime_year_of_week(object->handle);
+        return result.is_ok ? mal_value_from_i32(result.ok) : mal_value_new_undefined();
+    }
+    temporal_rs_ZonedDateTime_week_of_year_result result =
+        temporal_rs_ZonedDateTime_week_of_year(object->handle);
+    return result.is_ok ? mal_value_from_i32(result.ok) : mal_value_new_undefined();
+}
+
+static MalValue zoned_date_time_era(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    DiplomatWrite *write = diplomat_buffer_write_create(16);
+    temporal_rs_ZonedDateTime_era(object->handle, write);
+    if (diplomat_buffer_write_len(write) == 0) {
+        diplomat_buffer_write_destroy(write);
+        return mal_value_new_undefined();
+    }
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue zoned_date_time_era_year(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    temporal_rs_ZonedDateTime_era_year_result result =
+        temporal_rs_ZonedDateTime_era_year(object->handle);
+    return result.is_ok ? mal_value_from_i32(result.ok) : mal_value_new_undefined();
+}
+
+static MalValue zoned_date_time_week_of_year(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return zoned_date_time_optional_week(vm, this_value, false);
+}
+
+static MalValue zoned_date_time_year_of_week(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return zoned_date_time_optional_week(vm, this_value, true);
+}
+
+static MalValue zoned_date_time_add_or_subtract(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool subtract
+) {
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    Duration *duration = duration_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (duration == nullptr) return mal_value_new_undefined();
+    ArithmeticOverflow overflow;
+    if (!temporal_overflow_option(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
+        temporal_rs_Duration_destroy(duration);
+        return mal_value_new_undefined();
+    }
+    ZonedDateTime *handle = nullptr;
+    TemporalError error = {0};
+    bool ok;
+    if (subtract) {
+        temporal_rs_ZonedDateTime_subtract_result result =
+            temporal_rs_ZonedDateTime_subtract(
+                object->handle, duration,
+                (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
+        ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
+    } else {
+        temporal_rs_ZonedDateTime_add_result result = temporal_rs_ZonedDateTime_add(
+            object->handle, duration,
+            (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
+        ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
+    }
+    temporal_rs_Duration_destroy(duration);
+    return ok ? zoned_date_time_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
+}
+
+#define ZONED_BINARY_METHOD(name, subtract) \
+    static MalValue name(MalVm *vm, MalValue this_value, const MalValue *args, \
+                         i32 arg_count, MalValue new_target, MalValue callee) { \
+        (void) new_target; (void) callee; \
+        return zoned_date_time_add_or_subtract( \
+            vm, this_value, args, arg_count, subtract); \
+    }
+
+ZONED_BINARY_METHOD(zoned_date_time_add, false)
+ZONED_BINARY_METHOD(zoned_date_time_subtract, true)
+
+static MalValue zoned_date_time_equals(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    ZonedDateTime *other = zoned_date_time_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (other == nullptr) return mal_value_new_undefined();
+    bool equal = temporal_rs_ZonedDateTime_equals(object->handle, other);
+    temporal_rs_ZonedDateTime_destroy(other);
+    return mal_value_new_boolean(equal);
+}
+
+static bool zoned_date_time_difference_settings(
+    MalVm *vm, MalValue value, DifferenceSettings *settings
+) {
+    *settings = (DifferenceSettings) {0};
+    bool present;
+    if (!temporal_options_object(vm, value, &present)) return false;
+    Unit largest = Unit_Hour, smallest = Unit_Nanosecond;
+    RoundingMode mode = RoundingMode_Trunc;
+    u32 increment = 1;
+    if (present &&
+        (!temporal_get_unit_option(vm, value, "largestUnit", true, false,
+                                   Unit_Auto, &largest) ||
+         !temporal_get_rounding_increment(vm, value, &increment) ||
+         !temporal_get_rounding_mode(vm, value, RoundingMode_Trunc, &mode) ||
+         !temporal_get_unit_option(vm, value, "smallestUnit", false, false,
+                                   Unit_Nanosecond, &smallest))) return false;
+    if (largest == Unit_Auto) largest = smallest > Unit_Hour ? smallest : Unit_Hour;
+    settings->largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
+    settings->smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
+    settings->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
+    settings->increment = (OptionU32) {.ok = increment, .is_ok = true};
+    return true;
+}
+
+static MalValue zoned_date_time_difference(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool since
+) {
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    ZonedDateTime *other = zoned_date_time_from_like(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (other == nullptr) return mal_value_new_undefined();
+    DifferenceSettings settings;
+    if (!zoned_date_time_difference_settings(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &settings)) {
+        temporal_rs_ZonedDateTime_destroy(other);
+        return mal_value_new_undefined();
+    }
+    Duration *handle = nullptr;
+    TemporalError error = {0};
+    bool ok;
+    if (since) {
+        temporal_rs_ZonedDateTime_since_result result =
+            temporal_rs_ZonedDateTime_since(object->handle, other, settings);
+        ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
+    } else {
+        temporal_rs_ZonedDateTime_until_result result =
+            temporal_rs_ZonedDateTime_until(object->handle, other, settings);
+        ok = result.is_ok; if (ok) handle = result.ok; else error = result.err;
+    }
+    temporal_rs_ZonedDateTime_destroy(other);
+    return ok ? duration_wrap_intrinsic(vm, handle) : temporal_throw(vm, error);
+}
+
+#define ZONED_DIFFERENCE_METHOD(name, since) \
+    static MalValue name(MalVm *vm, MalValue this_value, const MalValue *args, \
+                         i32 arg_count, MalValue new_target, MalValue callee) { \
+        (void) new_target; (void) callee; \
+        return zoned_date_time_difference(vm, this_value, args, arg_count, since); \
+    }
+
+ZONED_DIFFERENCE_METHOD(zoned_date_time_since, true)
+ZONED_DIFFERENCE_METHOD(zoned_date_time_until, false)
+
+static MalValue zoned_date_time_round(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    RoundingOptions options;
+    if (!plain_time_rounding_options(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &options)) {
+        return mal_value_new_undefined();
+    }
+    temporal_rs_ZonedDateTime_round_result result =
+        temporal_rs_ZonedDateTime_round(object->handle, options);
+    return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue zoned_date_time_to_instant(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return instant_wrap_intrinsic(
+        vm, temporal_rs_ZonedDateTime_to_instant(object->handle));
+}
+
+static MalValue zoned_date_time_to_plain_date(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return plain_date_wrap_intrinsic(
+        vm, temporal_rs_ZonedDateTime_to_plain_date(object->handle));
+}
+
+static MalValue zoned_date_time_to_plain_time(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return plain_time_wrap_intrinsic(
+        vm, temporal_rs_ZonedDateTime_to_plain_time(object->handle));
+}
+
+static MalValue zoned_date_time_to_plain_date_time(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    return plain_date_time_wrap_intrinsic(
+        vm, temporal_rs_ZonedDateTime_to_plain_datetime(object->handle));
+}
+
+static MalValue zoned_date_time_start_of_day(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    temporal_rs_ZonedDateTime_start_of_day_result result =
+        temporal_rs_ZonedDateTime_start_of_day(object->handle);
+    return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue zoned_date_time_get_time_zone_transition(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalString *string;
+    if (!mal_vm_to_string(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
+    TransitionDirection direction;
+    if (mal_string_equals_ascii(string, "next")) direction = TransitionDirection_Next;
+    else if (mal_string_equals_ascii(string, "previous")) {
+        direction = TransitionDirection_Previous;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal transition direction");
+        return mal_value_new_undefined();
+    }
+    temporal_rs_ZonedDateTime_get_time_zone_transition_result result =
+        temporal_rs_ZonedDateTime_get_time_zone_transition(object->handle, direction);
+    if (!result.is_ok) {
+        if (result.err.kind == ErrorKind_Generic) return mal_value_new_null();
+        return temporal_throw(vm, result.err);
+    }
+    return result.ok == nullptr ? mal_value_new_null()
+                                : zoned_date_time_wrap_intrinsic(vm, result.ok);
+}
+
+static MalValue zoned_date_time_with_time_zone(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    TimeZone zone;
+    if (!temporal_time_zone_from_value(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &zone)) {
+        return mal_value_new_undefined();
+    }
+    temporal_rs_ZonedDateTime_with_timezone_result result =
+        temporal_rs_ZonedDateTime_with_timezone(object->handle, zone);
+    return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue zoned_date_time_with_calendar(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    AnyCalendarKind calendar;
+    if (!temporal_calendar_kind(
+            vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &calendar)) {
+        return mal_value_new_undefined();
+    }
+    return zoned_date_time_wrap_intrinsic(
+        vm, temporal_rs_ZonedDateTime_with_calendar(object->handle, calendar));
+}
+
+static MalValue zoned_date_time_with_plain_time(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    PlainTime *time = nullptr;
+    bool owned = false;
+    if (arg_count > 0 && !mal_value_is_undefined(args[0])) {
+        time = plain_time_from_like(vm, args[0], mal_value_new_undefined());
+        if (time == nullptr) return mal_value_new_undefined();
+        owned = true;
+    }
+    temporal_rs_ZonedDateTime_with_plain_time_result result =
+        temporal_rs_ZonedDateTime_with_plain_time(object->handle, time);
+    if (owned) temporal_rs_PlainTime_destroy(time);
+    return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
+static MalValue zoned_date_time_to_string_impl(
+    MalVm *vm, MalValue this_value, MalValue options_value, bool read_options
+) {
+    MalTemporalObject *object;
+    if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    ToStringRoundingOptions rounding = {
+        .precision = {.is_minute = false, .precision = {.is_ok = false}},
+        .smallest_unit = {.is_ok = false},
+        .rounding_mode = {.ok = RoundingMode_Trunc, .is_ok = true},
+    };
+    DisplayCalendar calendar = DisplayCalendar_Auto;
+    if (read_options &&
+        (!temporal_to_string_rounding_options(vm, options_value, &rounding) ||
+         !temporal_display_calendar(vm, options_value, &calendar))) {
+        return mal_value_new_undefined();
+    }
+    DiplomatWrite *write = diplomat_buffer_write_create(80);
+    temporal_rs_ZonedDateTime_to_ixdtf_string_result result =
+        temporal_rs_ZonedDateTime_to_ixdtf_string(
+            object->handle, DisplayOffset_Auto, DisplayTimeZone_Auto,
+            calendar, rounding, write);
+    if (!result.is_ok) {
+        diplomat_buffer_write_destroy(write);
+        return temporal_throw(vm, result.err);
+    }
+    return temporal_write_to_string(vm, write);
+}
+
+static MalValue zoned_date_time_to_string(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    return zoned_date_time_to_string_impl(
+        vm, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(), true);
+}
+
+static MalValue zoned_date_time_to_string_no_options(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return zoned_date_time_to_string_impl(
+        vm, this_value, mal_value_new_undefined(), false);
+}
+
+static MalValue zoned_date_time_value_of(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
+    return temporal_throw_type(vm, "Cannot convert Temporal.ZonedDateTime to a primitive");
+}
+
+static bool temporal_now_nanoseconds(MalVm *vm, i128 *out) {
+    struct timespec time;
+    if (timespec_get(&time, TIME_UTC) != TIME_UTC) {
+        temporal_throw_type(vm, "Unable to read the system clock");
+        return false;
+    }
+    *out = (i128) time.tv_sec * 1000000000 + time.tv_nsec;
+    return true;
+}
+
+static bool temporal_now_zone(MalVm *vm, MalValue value, TimeZone *out) {
+    if (mal_value_is_undefined(value)) {
+        *out = temporal_rs_TimeZone_utc();
+        return true;
+    }
+    return temporal_time_zone_from_value(vm, value, out);
+}
+
+static Instant *temporal_now_instant_handle(MalVm *vm) {
+    i128 nanoseconds;
+    if (!temporal_now_nanoseconds(vm, &nanoseconds)) return nullptr;
+    temporal_rs_Instant_try_new_result result =
+        temporal_rs_Instant_try_new(temporal_i128_to_nanoseconds(nanoseconds));
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return nullptr;
+    }
+    return result.ok;
+}
+
+static ZonedDateTime *temporal_now_zoned_handle(
+    MalVm *vm, MalValue zone_value
+) {
+    i128 nanoseconds;
+    if (!temporal_now_nanoseconds(vm, &nanoseconds)) return nullptr;
+    TimeZone zone;
+    if (!temporal_now_zone(vm, zone_value, &zone)) return nullptr;
+    temporal_rs_ZonedDateTime_try_new_result result = temporal_rs_ZonedDateTime_try_new(
+        temporal_i128_to_nanoseconds(nanoseconds), AnyCalendarKind_Iso, zone);
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return nullptr;
+    }
+    return result.ok;
+}
+
+static MalValue temporal_now_instant(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
+    Instant *handle = temporal_now_instant_handle(vm);
+    return handle == nullptr ? mal_value_new_undefined()
+                             : instant_wrap_intrinsic(vm, handle);
+}
+
+static MalValue temporal_now_zoned_date_time_iso(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    ZonedDateTime *handle = temporal_now_zoned_handle(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    return handle == nullptr ? mal_value_new_undefined()
+                             : zoned_date_time_wrap_intrinsic(vm, handle);
+}
+
+static MalValue temporal_now_plain_date_time_iso(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    ZonedDateTime *zoned = temporal_now_zoned_handle(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (zoned == nullptr) return mal_value_new_undefined();
+    PlainDateTime *handle = temporal_rs_ZonedDateTime_to_plain_datetime(zoned);
+    temporal_rs_ZonedDateTime_destroy(zoned);
+    return plain_date_time_wrap_intrinsic(vm, handle);
+}
+
+static MalValue temporal_now_plain_date_iso(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    ZonedDateTime *zoned = temporal_now_zoned_handle(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (zoned == nullptr) return mal_value_new_undefined();
+    PlainDate *handle = temporal_rs_ZonedDateTime_to_plain_date(zoned);
+    temporal_rs_ZonedDateTime_destroy(zoned);
+    return plain_date_wrap_intrinsic(vm, handle);
+}
+
+static MalValue temporal_now_plain_time_iso(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) new_target; (void) callee;
+    ZonedDateTime *zoned = temporal_now_zoned_handle(
+        vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
+    if (zoned == nullptr) return mal_value_new_undefined();
+    PlainTime *handle = temporal_rs_ZonedDateTime_to_plain_time(zoned);
+    temporal_rs_ZonedDateTime_destroy(zoned);
+    return plain_time_wrap_intrinsic(vm, handle);
+}
+
+static MalValue temporal_now_time_zone_id(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value; (void) args; (void) arg_count; (void) new_target; (void) callee;
+    DiplomatWrite *write = diplomat_buffer_write_create(8);
+    temporal_rs_TimeZone_identifier(temporal_rs_TimeZone_utc(), write);
+    return temporal_write_to_string(vm, write);
 }
 
 static MalValue temporal_unimplemented_constructor(
@@ -3885,6 +4757,107 @@ static void temporal_install_plain_month_day(MalVm *vm, MalObject *temporal) {
     temporal_set_tag(vm, prototype, "Temporal.PlainMonthDay");
 }
 
+static void temporal_install_zoned_date_time(MalVm *vm, MalObject *temporal) {
+    MalObject *object_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalObject *function_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, object_prototype);
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "ZonedDateTime"), 2,
+        zoned_date_time_constructor);
+    vm->intrinsics[MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_CONSTRUCTOR] =
+        mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE] =
+        mal_value_from_object(prototype);
+    mal_intrinsic_define_data(
+        vm, (MalObject *) constructor, "prototype",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE],
+        MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(
+        vm, prototype, "constructor",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "compare", 2,
+                                  zoned_date_time_compare);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "from", 1,
+                                  zoned_date_time_from);
+    mal_intrinsic_define_data(
+        vm, temporal, "ZonedDateTime",
+        vm->intrinsics[MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+
+    struct { const byte *name; MalNativeFunctionCallback getter; } getters[] = {
+        {"calendarId", zoned_date_time_calendar_id},
+        {"timeZoneId", zoned_date_time_time_zone_id},
+        {"year", zoned_date_time_year}, {"month", zoned_date_time_month},
+        {"monthCode", zoned_date_time_month_code}, {"day", zoned_date_time_day},
+        {"hour", zoned_date_time_hour}, {"minute", zoned_date_time_minute},
+        {"second", zoned_date_time_second},
+        {"millisecond", zoned_date_time_millisecond},
+        {"microsecond", zoned_date_time_microsecond},
+        {"nanosecond", zoned_date_time_nanosecond},
+        {"epochMilliseconds", zoned_date_time_epoch_milliseconds},
+        {"epochNanoseconds", zoned_date_time_epoch_nanoseconds},
+        {"offset", zoned_date_time_offset},
+        {"offsetNanoseconds", zoned_date_time_offset_nanoseconds},
+        {"dayOfWeek", zoned_date_time_day_of_week},
+        {"dayOfYear", zoned_date_time_day_of_year},
+        {"weekOfYear", zoned_date_time_week_of_year},
+        {"yearOfWeek", zoned_date_time_year_of_week},
+        {"hoursInDay", zoned_date_time_hours_in_day},
+        {"daysInWeek", zoned_date_time_days_in_week},
+        {"daysInMonth", zoned_date_time_days_in_month},
+        {"daysInYear", zoned_date_time_days_in_year},
+        {"monthsInYear", zoned_date_time_months_in_year},
+        {"inLeapYear", zoned_date_time_in_leap_year},
+        {"era", zoned_date_time_era}, {"eraYear", zoned_date_time_era_year},
+    };
+    for (usize i = 0; i < countof(getters); ++i) {
+        byte name[40] = "get "; usize length = 4;
+        for (const byte *source = getters[i].name;
+             *source != '\0' && length + 1 < sizeof(name); ++source) name[length++] = *source;
+        name[length] = '\0';
+        mal_intrinsic_define_accessor_n(
+            vm, prototype, mal_intrinsic_string_key(vm, getters[i].name), name, 0,
+            getters[i].getter, nullptr, 0, nullptr, MAL_PROPERTY_CONFIGURABLE);
+    }
+    mal_intrinsic_define_method_n(vm, prototype, "add", 1, zoned_date_time_add);
+    mal_intrinsic_define_method_n(vm, prototype, "equals", 1, zoned_date_time_equals);
+    mal_intrinsic_define_method_n(vm, prototype, "getTimeZoneTransition", 1,
+                                  zoned_date_time_get_time_zone_transition);
+    mal_intrinsic_define_method_n(vm, prototype, "round", 1, zoned_date_time_round);
+    mal_intrinsic_define_method_n(vm, prototype, "since", 1, zoned_date_time_since);
+    mal_intrinsic_define_method_n(vm, prototype, "startOfDay", 0,
+                                  zoned_date_time_start_of_day);
+    mal_intrinsic_define_method_n(vm, prototype, "subtract", 1,
+                                  zoned_date_time_subtract);
+    mal_intrinsic_define_method_n(vm, prototype, "toInstant", 0,
+                                  zoned_date_time_to_instant);
+    mal_intrinsic_define_method_n(vm, prototype, "toJSON", 0,
+                                  zoned_date_time_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0,
+                                  zoned_date_time_to_string_no_options);
+    mal_intrinsic_define_method_n(vm, prototype, "toPlainDate", 0,
+                                  zoned_date_time_to_plain_date);
+    mal_intrinsic_define_method_n(vm, prototype, "toPlainDateTime", 0,
+                                  zoned_date_time_to_plain_date_time);
+    mal_intrinsic_define_method_n(vm, prototype, "toPlainTime", 0,
+                                  zoned_date_time_to_plain_time);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0,
+                                  zoned_date_time_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "until", 1, zoned_date_time_until);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0,
+                                  zoned_date_time_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "withCalendar", 1,
+                                  zoned_date_time_with_calendar);
+    mal_intrinsic_define_method_n(vm, prototype, "withPlainTime", 0,
+                                  zoned_date_time_with_plain_time);
+    mal_intrinsic_define_method_n(vm, prototype, "withTimeZone", 1,
+                                  zoned_date_time_with_time_zone);
+    temporal_set_tag(vm, prototype, "Temporal.ZonedDateTime");
+}
+
 static void temporal_install_instant(MalVm *vm, MalObject *temporal) {
     MalObject *object_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
@@ -3936,6 +4909,8 @@ static void temporal_install_instant(MalVm *vm, MalObject *temporal) {
     mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0,
                                   instant_to_string_no_options);
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0, instant_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toZonedDateTimeISO", 1,
+                                  instant_to_zoned_date_time_iso);
     mal_intrinsic_define_method_n(vm, prototype, "until", 1, instant_until);
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, instant_value_of);
     temporal_set_tag(vm, prototype, "Temporal.Instant");
@@ -4068,6 +5043,17 @@ void mal_builtin_temporal_install(MalVm *vm) {
 
     temporal_install_instant(vm, temporal);
     MalObject *now = mal_object_new(&vm->heap, object_prototype);
+    mal_intrinsic_define_method_n(vm, now, "instant", 0, temporal_now_instant);
+    mal_intrinsic_define_method_n(vm, now, "plainDateISO", 0,
+                                  temporal_now_plain_date_iso);
+    mal_intrinsic_define_method_n(vm, now, "plainDateTimeISO", 0,
+                                  temporal_now_plain_date_time_iso);
+    mal_intrinsic_define_method_n(vm, now, "plainTimeISO", 0,
+                                  temporal_now_plain_time_iso);
+    mal_intrinsic_define_method_n(vm, now, "timeZoneId", 0,
+                                  temporal_now_time_zone_id);
+    mal_intrinsic_define_method_n(vm, now, "zonedDateTimeISO", 0,
+                                  temporal_now_zoned_date_time_iso);
     temporal_set_tag(vm, now, "Temporal.Now");
     mal_intrinsic_define_data(vm, temporal, "Now", mal_value_from_object(now),
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -4076,9 +5062,7 @@ void mal_builtin_temporal_install(MalVm *vm) {
     temporal_install_plain_month_day(vm, temporal);
     temporal_install_plain_time(vm, temporal);
     temporal_install_plain_year_month(vm, temporal);
-    temporal_install_placeholder(vm, temporal, "ZonedDateTime", 2,
-        MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_CONSTRUCTOR,
-        MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE);
+    temporal_install_zoned_date_time(vm, temporal);
     temporal_set_tag(vm, temporal, "Temporal");
 }
 

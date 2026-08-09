@@ -71,6 +71,19 @@ check(yearMonth.until("2025-04").years === 1);
 const monthDay = Temporal.PlainMonthDay.from("02-29");
 check(monthDay.toPlainDate({ year: 2024 }).equals(date));
 
+const zoned = new Temporal.ZonedDateTime(0n, "UTC");
+check(zoned.toString() === "1970-01-01T00:00:00+00:00[UTC]");
+check(zoned.epochNanoseconds === 0n);
+check(zoned.timeZoneId === "UTC");
+check(zoned.toInstant().epochNanoseconds === 0n);
+check(zoned.toPlainDateTime().toString() === "1970-01-01T00:00:00");
+check(zoned.add({ days: 1 }).day === 2);
+check(instant.toZonedDateTimeISO("UTC").toInstant().equals(instant));
+check(Temporal.ZonedDateTime.from("2024-02-29T12:30+01:00[+01:00]").hour === 12);
+check(typeof Temporal.Now.instant().epochNanoseconds === "bigint");
+check(Temporal.Now.timeZoneId() === "UTC");
+check(Temporal.Now.zonedDateTimeISO("UTC").timeZoneId === "UTC");
+
 const order = [];
 const bag = {};
 for (const name of [
@@ -128,6 +141,7 @@ for (let i = 0; i < 200; i++) {
 	Temporal.PlainDateTime.from("2024-02-29T12:34:56.987654321").toPlainTime();
 	Temporal.PlainYearMonth.from("2024-02").add({ months: i % 12 });
 	Temporal.PlainMonthDay.from("02-29").toPlainDate({ year: 2024 });
+	Temporal.ZonedDateTime.from("2024-02-29T12:34:56.987654321+00:00[UTC]").toInstant();
 }
 
 let passed = 0;
