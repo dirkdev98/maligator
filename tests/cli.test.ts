@@ -306,6 +306,7 @@ describe("command shell", () => {
 		expect(result.stderr).toContain("Compile modules completed");
 		expect(result.stderr).toContain("Entrypoint:");
 		expect(result.stderr).toContain("Frontend phases:");
+		expect(result.stderr).toContain("File digests:");
 		expect(result.stderr).toContain("Dependencies: 1");
 		expect(result.stderr).toContain("Compiler phase · compile to ir:");
 	});

@@ -20,7 +20,7 @@ import type { BuildCommand, DevCommand, RunCommand, TestCommand } from "./cli.ts
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
-import { cacheFrontendWire, FrontendCompilationSession } from "./frontend-cache.ts";
+import { FrontendCompilationSession } from "./frontend-cache.ts";
 import {
 	debugHofInlineSites,
 	debugInlinableCalls,
@@ -29,7 +29,6 @@ import {
 } from "./inline.ts";
 import { debugProgramLiveness } from "./liveness.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
-import { vmDefinitionStats } from "./lower-vm.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { executeTestCommand } from "./testing/command.ts";
@@ -407,7 +406,6 @@ function compileAndBuild(
 		},
 		(result) => `frontend cache ${result.cache}`,
 	);
-	const vmDefinition = frontend.definition;
 	reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
 	reporter.detail(
 		"Module parses",
@@ -442,7 +440,7 @@ function compileAndBuild(
 	for (const dependency of frontend.dependencies)
 		reporter.detail("Dependency", dependency);
 
-	const stats = vmDefinitionStats(vmDefinition);
+	const stats = frontend.definitionStats;
 	reporter.detail("Functions", stats.functionCount);
 	reporter.detail("Instructions", stats.instructionCount);
 
@@ -463,7 +461,7 @@ function compileAndBuild(
 			: undefined;
 	if (command.kind !== "build" && packagedRunner !== undefined) {
 		const wirePaths = reporter.phase("Cache development image", () =>
-			(frontend.wires ?? [frontend.wire]).map((wire) => cacheFrontendWire(wire)),
+			frontend.artifacts.map((artifact) => artifact.path),
 		);
 		const surfaceMask =
 			(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
@@ -547,7 +545,7 @@ function compileAndBuild(
 	});
 	if (command.kind !== "build" && assets.length === 0) {
 		const wirePaths = reporter.phase("Cache development image", () =>
-			(frontend.wires ?? [frontend.wire]).map((wire) => cacheFrontendWire(wire)),
+			frontend.artifacts.map((artifact) => artifact.path),
 		);
 		reporter.detail("Execution backend", "interpreted development image");
 		reporter.detail("Development images", wirePaths.join(", "));
@@ -592,6 +590,7 @@ function compileAndBuild(
 		};
 	}
 
+	const vmDefinition = frontend.definition;
 	const output = reporter.phase("Generate native code", () =>
 		emitVmTranslationUnits(vmDefinition, {
 			compiled: command.kind !== "build" || command.internal.compiled,

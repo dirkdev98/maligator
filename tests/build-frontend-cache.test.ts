@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	statSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -55,6 +62,28 @@ describe("normal build frontend cache", () => {
 		expect(warm.phases.graphMs).toBe(0);
 		expect(warm.phases.semanticMs).toBe(0);
 		expect(warm.phases.compileMs).toBe(0);
+		expect(warm.artifacts).toEqual(cold.artifacts);
+		expect(warm.definitionStats).toEqual(cold.definitionStats);
+	});
+
+	it("invalidates a changed wire identity before exposing a lazy artifact handle", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.ts");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(entrypoint, `console.log(42);\n`);
+
+		const cold = compile(entrypoint, cacheDirectory);
+		const warm = compile(entrypoint, cacheDirectory);
+		expect(warm.cache).toBe("hit");
+		const artifact = warm.artifacts[0]!;
+		const times = statSync(artifact.path);
+		writeFileSync(artifact.path, new Uint8Array(artifact.size));
+		utimesSync(artifact.path, times.atime, times.mtime);
+
+		const repaired = compile(entrypoint, cacheDirectory);
+		expect(repaired.cache).toBe("miss");
+		expect(repaired.wire).toEqual(cold.wire);
 	});
 
 	it("retains native numeric fusion across a frontend cache hit", () => {

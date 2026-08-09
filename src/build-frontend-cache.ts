@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
@@ -26,6 +27,8 @@ import {
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import type { IntermediateProgram } from "./ir.ts";
 import type { VmDefinition } from "./lower-vm.ts";
+import { vmDefinitionStats } from "./lower-vm.ts";
+import type { VmDefinitionStats } from "./lower-vm.ts";
 import type { BuildModuleGraphOptions, ModuleGraph } from "./module-graph.ts";
 import { buildModuleGraph } from "./module-graph.ts";
 import {
@@ -40,19 +43,35 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 2;
+const BUILD_FRONTEND_CACHE_SCHEMA = 3;
 const BUILD_FRONTEND_PIPELINE_VERSION = 4;
 const BUILD_FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/build-frontend";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 2;
+	schema: 3;
 	identity: string;
 	contentKey: string;
-	wireDigests: Array<string>;
+	artifacts: Array<BuildFrontendArtifactIdentity>;
+	definitionStats: VmDefinitionStats;
 	entrypoint: string;
 	dependencies: Array<BuildDependencyIdentity>;
+}
+
+interface BuildFrontendArtifactIdentity {
+	digest: string;
+	size: number;
+	mtimeMs: number;
+	ctimeMs: number;
+	ino: number;
+	dev: number;
+}
+
+export interface BuildFrontendArtifact {
+	digest: string;
+	path: string;
+	size: number;
 }
 
 export interface BuildFrontendPhases {
@@ -72,6 +91,8 @@ export interface CompiledBuildFrontend {
 	dependencies: Array<string>;
 	moduleParses: { hits: number; misses: number };
 	fileDigests: { hits: number; misses: number };
+	artifacts: Array<BuildFrontendArtifact>;
+	definitionStats: VmDefinitionStats;
 	wires?: Array<Uint8Array>;
 	fragmentArtifacts?: { hits: number; misses: number };
 	fragmentFallback?: string;
@@ -162,6 +183,81 @@ function dependenciesUnchanged(
 	});
 }
 
+function artifactIdentity(
+	digest: string,
+	artifactRoot: string,
+): BuildFrontendArtifactIdentity | undefined {
+	try {
+		const stats = statSync(frontendWirePath(digest, artifactRoot));
+		if (!stats.isFile()) return undefined;
+		return {
+			digest,
+			size: stats.size,
+			mtimeMs: stats.mtimeMs,
+			ctimeMs: stats.ctimeMs,
+			ino: stats.ino,
+			dev: stats.dev,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function artifactsUnchanged(
+	artifacts: Array<BuildFrontendArtifactIdentity>,
+	artifactRoot: string,
+): boolean {
+	return artifacts.every((artifact) => {
+		const current = artifactIdentity(artifact.digest, artifactRoot);
+		return (
+			current !== undefined &&
+			current.size === artifact.size &&
+			current.mtimeMs === artifact.mtimeMs &&
+			current.ctimeMs === artifact.ctimeMs &&
+			current.ino === artifact.ino &&
+			current.dev === artifact.dev
+		);
+	});
+}
+
+function validArtifactIdentity(value: unknown): value is BuildFrontendArtifactIdentity {
+	if (typeof value !== "object" || value === null) return false;
+	const artifact = value as Partial<BuildFrontendArtifactIdentity>;
+	return (
+		typeof artifact.digest === "string" &&
+		/^[0-9a-f]{64}$/.test(artifact.digest) &&
+		[artifact.size, artifact.mtimeMs, artifact.ctimeMs, artifact.ino, artifact.dev].every(
+			(field) => typeof field === "number" && Number.isFinite(field),
+		)
+	);
+}
+
+function validDefinitionStats(value: unknown): value is VmDefinitionStats {
+	if (typeof value !== "object" || value === null) return false;
+	const stats = value as Partial<VmDefinitionStats>;
+	return (
+		Number.isSafeInteger(stats.functionCount) &&
+		stats.functionCount! >= 0 &&
+		Number.isSafeInteger(stats.instructionCount) &&
+		stats.instructionCount! >= 0
+	);
+}
+
+function materializedArtifacts(
+	artifacts: Array<BuildFrontendArtifactIdentity>,
+	artifactRoot: string,
+): Array<Uint8Array> {
+	return artifacts.map((artifact) => {
+		const wire = new Uint8Array(
+			readFileSync(frontendWirePath(artifact.digest, artifactRoot)),
+		);
+		if (digest(wire) !== artifact.digest) {
+			throw new Error(`frontend artifact digest mismatch: ${artifact.digest}`);
+		}
+		return wire;
+	});
+}
+
 function loadCached(
 	root: string,
 	artifactRoot: string,
@@ -173,6 +269,8 @@ function loadCached(
 			definition: VmDefinition;
 			wire: Uint8Array;
 			wires: Array<Uint8Array>;
+			artifacts: Array<BuildFrontendArtifact>;
+			definitionStats: VmDefinitionStats;
 			dependencies: Array<BuildDependencyIdentity>;
 	  }
 	| undefined {
@@ -181,24 +279,39 @@ function loadCached(
 		manifest?.schema !== BUILD_FRONTEND_CACHE_SCHEMA ||
 		manifest.entrypoint !== entrypoint ||
 		manifest.identity !== identity ||
+		!Array.isArray(manifest.artifacts) ||
+		manifest.artifacts.length === 0 ||
+		!manifest.artifacts.every(validArtifactIdentity) ||
+		!validDefinitionStats(manifest.definitionStats) ||
+		!Array.isArray(manifest.dependencies) ||
+		!artifactsUnchanged(manifest.artifacts, artifactRoot) ||
 		!dependenciesUnchanged(manifest.dependencies, session)
 	) {
 		return undefined;
 	}
 	try {
-		if (manifest.wireDigests.length === 0) return undefined;
-		const wires = manifest.wireDigests.map(
-			(wireDigest) =>
-				new Uint8Array(readFileSync(frontendWirePath(wireDigest, artifactRoot))),
-		);
-		if (wires.some((wire, index) => digest(wire) !== manifest.wireDigests[index])) {
-			return undefined;
-		}
-		const wire = wires.at(-1)!;
+		let wires: Array<Uint8Array> | undefined;
+		let definition: VmDefinition | undefined;
+		const loadWires = () =>
+			(wires ??= materializedArtifacts(manifest.artifacts, artifactRoot));
+		const loadDefinition = () =>
+			(definition ??= deserializeVmDefinition(loadWires().at(-1)!));
 		return {
-			definition: deserializeVmDefinition(wire),
-			wire,
-			wires,
+			get definition() {
+				return loadDefinition();
+			},
+			get wire() {
+				return loadWires().at(-1)!;
+			},
+			get wires() {
+				return loadWires();
+			},
+			artifacts: manifest.artifacts.map((artifact) => ({
+				digest: artifact.digest,
+				path: frontendWirePath(artifact.digest, artifactRoot),
+				size: artifact.size,
+			})),
+			definitionStats: manifest.definitionStats,
 			dependencies: manifest.dependencies,
 		};
 	} catch {
@@ -320,15 +433,23 @@ export function compileBuildFrontend(
 		if (cached !== undefined) {
 			session.flush();
 			return {
-				definition: cached.definition,
-				wire: cached.wire,
-				wires: cached.wires.length > 1 ? cached.wires : undefined,
+				get definition() {
+					return cached.definition;
+				},
+				get wire() {
+					return cached.wire;
+				},
+				get wires() {
+					return cached.artifacts.length > 1 ? cached.wires : undefined;
+				},
 				cache: "hit",
 				frontendMs: Date.now() - startedAt,
 				phases,
 				dependencies: cached.dependencies.map((dependency) => dependency.path),
 				moduleParses: moduleParseStats(),
 				fileDigests: fileDigestStats(),
+				artifacts: cached.artifacts,
+				definitionStats: cached.definitionStats,
 			};
 		}
 	}
@@ -397,17 +518,24 @@ export function compileBuildFrontend(
 	const dependencies = graphDependencies(graph, session);
 	session.flush();
 	const key = contentKey(identity, entrypoint, dependencies);
-	const wireDigests = wires.map((fragmentWire) => {
+	const artifacts = wires.map((fragmentWire) => {
+		const wireDigest = digest(fragmentWire);
 		cacheFrontendWire(fragmentWire, artifactRoot);
-		return digest(fragmentWire);
+		const artifact = artifactIdentity(wireDigest, artifactRoot);
+		if (artifact === undefined) {
+			throw new Error(`frontend artifact is missing after publication: ${wireDigest}`);
+		}
+		return artifact;
 	});
+	const definitionStats = vmDefinitionStats(definition);
 	publish(
 		manifestPath(root, entrypoint, identity),
 		`${JSON.stringify({
 			schema: BUILD_FRONTEND_CACHE_SCHEMA,
 			identity,
 			contentKey: key,
-			wireDigests,
+			artifacts,
+			definitionStats,
 			entrypoint,
 			dependencies,
 		} satisfies BuildFrontendManifest)}\n`,
@@ -423,6 +551,12 @@ export function compileBuildFrontend(
 		dependencies: dependencies.map((dependency) => dependency.path),
 		moduleParses: moduleParseStats(),
 		fileDigests: fileDigestStats(),
+		artifacts: artifacts.map((artifact) => ({
+			digest: artifact.digest,
+			path: frontendWirePath(artifact.digest, artifactRoot),
+			size: artifact.size,
+		})),
+		definitionStats,
 		fragmentArtifacts,
 		fragmentFallback,
 	};
