@@ -35,7 +35,7 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const FRAGMENT_SCHEMA = 2;
+const FRAGMENT_SCHEMA = 3;
 const CACHE_DIRECTORY = ".cache/mal-cache/build-fragments";
 const LINKED_MODULES_GLOBAL = "__maligatorDevelopmentLinkedModules";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
@@ -43,6 +43,7 @@ const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 interface PlannedImport {
 	specifier: string;
 	target: string;
+	commonjs: boolean;
 	names: Array<string>;
 }
 
@@ -140,7 +141,12 @@ function planBoundary(graph: ModuleGraph): Array<PlannedImport> {
 				);
 			}
 			if (planned === undefined) {
-				planned = { specifier, target: dependency.resolvedPath, names: [] };
+				planned = {
+					specifier,
+					target: dependency.resolvedPath,
+					commonjs: graph.modules.get(dependency.resolvedPath)?.goal === "cjs",
+					names: [],
+				};
 				imports.set(specifier, planned);
 			}
 			for (const imported of statement.specifiers) {
@@ -199,14 +205,16 @@ function assertNoBoundaryCycle(graph: ModuleGraph): void {
 	}
 }
 
-function facadeSource(target: string, names: Array<string>): string {
+function facadeSource(target: string, names: Array<string>, commonjs: boolean): string {
 	if (names.length === 0) return "";
 	const lines = [
-		`const __namespace = globalThis[${JSON.stringify(LINKED_MODULES_GLOBAL)}][${JSON.stringify(target)}];`,
+		`const __module = globalThis[${JSON.stringify(LINKED_MODULES_GLOBAL)}][${JSON.stringify(target)}];`,
 	];
 	for (const [index, name] of names.entries()) {
 		const local = `__maligatorImport${index}`;
-		lines.push(`const ${local} = __namespace[${JSON.stringify(name)}];`);
+		const value =
+			commonjs && name === "default" ? "__module" : `__module[${JSON.stringify(name)}]`;
+		lines.push(`const ${local} = ${value};`);
 		lines.push(
 			name === "default" ? `export default ${local};` : `export { ${local} as ${name} };`,
 		);
@@ -219,16 +227,19 @@ function baseGraph(
 	options: CompileBuildFragmentsOptions,
 	parseCache: ModuleParseCache,
 ): ModuleGraph {
-	const targets = [...new Set(plans.map((plan) => plan.target))].sort();
+	const targets = [
+		...new Map(plans.map((plan) => [plan.target, plan.commonjs])).entries(),
+	].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
 	const imports = targets
-		.map(
-			(target, index) =>
-				`import * as __maligatorModule${index} from ${JSON.stringify(target)};`,
+		.map(([target, commonjs], index) =>
+			commonjs
+				? `import __maligatorModule${index} from ${JSON.stringify(target)};`
+				: `import * as __maligatorModule${index} from ${JSON.stringify(target)};`,
 		)
 		.join("\n");
 	const publications = targets
 		.map(
-			(target, index) =>
+			([target], index) =>
 				`__maligatorModules[${JSON.stringify(target)}] = __maligatorModule${index};`,
 		)
 		.join("\n");
@@ -258,7 +269,7 @@ function applicationGraph(
 	const virtualModules = new Map<string, { source: string; goal: "module" }>();
 	for (const plan of plans) {
 		virtualModules.set(plan.specifier, {
-			source: facadeSource(plan.target, plan.names),
+			source: facadeSource(plan.target, plan.names, plan.commonjs),
 			goal: "module",
 		});
 	}
