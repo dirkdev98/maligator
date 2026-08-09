@@ -8,9 +8,11 @@ import { defineBuild } from "../npm/cli/index.js";
 import { createReleaseArchive, deterministicTar } from "../scripts/release-archive.ts";
 import { nextAlphaVersion } from "../scripts/release-version.ts";
 import {
+	assertGitHubTrustedPublishingEnvironment,
 	createLauncherPackageJson,
 	matchingPublishedIntegrity,
 	NPM_WEB_LOGIN_ARGUMENTS,
+	parsePublishReleaseArguments,
 	preparedTarballIntegrity,
 	selectReleaseTargetTriples,
 } from "../scripts/release.ts";
@@ -159,6 +161,47 @@ describe("release targets", () => {
 describe("npm launcher", () => {
 	it("requires web authentication before release publishing", () => {
 		expect(NPM_WEB_LOGIN_ARGUMENTS).toEqual(["login", "--auth-type", "web"]);
+	});
+
+	it("reserves trusted publishing for a GitHub Actions OIDC environment", () => {
+		expect(
+			parsePublishReleaseArguments(["--confirm", "0.1.0-alpha.8"], "0.1.0-alpha.8"),
+		).toBe("web");
+		expect(
+			parsePublishReleaseArguments(
+				["--confirm", "0.1.0-alpha.8", "--trusted-publishing"],
+				"0.1.0-alpha.8",
+			),
+		).toBe("trusted-publishing");
+		expect(() =>
+			parsePublishReleaseArguments(
+				["--confirm", "0.1.0-alpha.7", "--trusted-publishing"],
+				"0.1.0-alpha.8",
+			),
+		).toThrow("--confirm 0.1.0-alpha.8");
+		expect(() =>
+			assertGitHubTrustedPublishingEnvironment({ GITHUB_ACTIONS: "true" }),
+		).toThrow("id-token: write");
+		expect(() =>
+			assertGitHubTrustedPublishingEnvironment({
+				GITHUB_ACTIONS: "true",
+				ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc",
+				ACTIONS_ID_TOKEN_REQUEST_TOKEN: "request-token",
+			}),
+		).not.toThrow();
+	});
+
+	it("keeps the GitHub release workflow token-free and OIDC-scoped", () => {
+		const workflow = readFileSync(
+			path.resolve(import.meta.dirname, "../.github/workflows/npm-release.yml"),
+			"utf-8",
+		);
+		expect(workflow).toContain("workflow_dispatch:");
+		expect(workflow).toContain("id-token: write");
+		expect(workflow).toContain("if: github.ref == 'refs/heads/main'");
+		expect(workflow).toContain("runs-on: macos-15");
+		expect(workflow).toContain("--trusted-publishing");
+		expect(workflow).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN/);
 	});
 
 	it("resumes only when an existing package has identical tarball contents", () => {

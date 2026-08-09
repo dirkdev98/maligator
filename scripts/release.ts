@@ -25,6 +25,36 @@ const releaseStartedAt = performance.now();
 
 export const NPM_WEB_LOGIN_ARGUMENTS = ["login", "--auth-type", "web"] as const;
 
+export type NpmReleaseAuthentication = "web" | "trusted-publishing";
+
+export function parsePublishReleaseArguments(
+	args: Array<string>,
+	version: string,
+): NpmReleaseAuthentication {
+	if (args.length < 2 || args[0] !== "--confirm" || args[1] !== version) {
+		throw new Error(`publishing requires --confirm ${version}`);
+	}
+	if (args.length === 2) return "web";
+	if (args.length === 3 && args[2] === "--trusted-publishing") {
+		return "trusted-publishing";
+	}
+	throw new Error(`publishing requires --confirm ${version} [--trusted-publishing]`);
+}
+
+export function assertGitHubTrustedPublishingEnvironment(
+	environment: NodeJS.ProcessEnv,
+): void {
+	if (
+		environment.GITHUB_ACTIONS !== "true" ||
+		environment.ACTIONS_ID_TOKEN_REQUEST_URL === undefined ||
+		environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN === undefined
+	) {
+		throw new Error(
+			"trusted publishing requires GitHub Actions with id-token: write permission",
+		);
+	}
+}
+
 function formatDuration(milliseconds: number): string {
 	const seconds = Math.round(milliseconds / 1000);
 	if (seconds < 60) return `${seconds}s`;
@@ -528,9 +558,7 @@ function publishedPackageIntegrity(
 
 function publishRelease(args: Array<string>): void {
 	const version = packageVersion();
-	if (args.length !== 2 || args[0] !== "--confirm" || args[1] !== version) {
-		throw new Error(`publishing requires --confirm ${version}`);
-	}
+	const authentication = parsePublishReleaseArguments(args, version);
 	assertVersionSynchronized(version);
 	const status = execFileSync("git", ["status", "--porcelain"], {
 		cwd: repositoryRoot,
@@ -564,19 +592,24 @@ function publishRelease(args: Array<string>): void {
 	if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
 		throw new Error("refusing to publish an incomplete or unordered package set");
 	}
-	releaseLog("authenticating to npm with web login");
-	const login = spawnSync("npm", [...NPM_WEB_LOGIN_ARGUMENTS], {
-		cwd: repositoryRoot,
-		stdio: ["inherit", "inherit", "inherit"],
-		env: npmEnvironment(),
-	});
-	if (login.error !== undefined) throw login.error;
-	if (login.status !== 0) {
-		throw new Error(
-			login.signal === null
-				? `npm web login exited with status ${login.status}`
-				: `npm web login terminated by ${login.signal}`,
-		);
+	if (authentication === "trusted-publishing") {
+		assertGitHubTrustedPublishingEnvironment(process.env);
+		releaseLog("authenticating to npm with GitHub Actions trusted publishing");
+	} else {
+		releaseLog("authenticating to npm with web login");
+		const login = spawnSync("npm", [...NPM_WEB_LOGIN_ARGUMENTS], {
+			cwd: repositoryRoot,
+			stdio: ["inherit", "inherit", "inherit"],
+			env: npmEnvironment(),
+		});
+		if (login.error !== undefined) throw login.error;
+		if (login.status !== 0) {
+			throw new Error(
+				login.signal === null
+					? `npm web login exited with status ${login.status}`
+					: `npm web login terminated by ${login.signal}`,
+			);
+		}
 	}
 	releaseLog(`publishing ${expectedNames.length} packages under the alpha tag`);
 	for (const [index, entry] of (
@@ -607,8 +640,8 @@ function publishRelease(args: Array<string>): void {
 			["publish", tarball, "--access", "public", "--tag", "alpha"],
 			{
 				cwd: repositoryRoot,
-				// npm owns the complete interactive exchange. In particular, stdin
-				// remains attached to the terminal so its native OTP prompt works.
+				// npm owns the complete exchange: either the interactive OTP prompt
+				// or the GitHub Actions OIDC token exchange.
 				stdio: ["inherit", "inherit", "inherit"],
 				env: npmEnvironment(),
 			},

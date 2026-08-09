@@ -306,10 +306,10 @@ on these native packages:
 There is no source-build fallback. An unsupported host or installation without its
 optional platform package fails with an actionable message.
 
-Releases are local during the alpha phase. `package.json` is the version source of
-truth; `src/version.ts` is generated and checked before building or publishing.
-Every prerelease is published explicitly under the npm `alpha` dist-tag. The release
-automation does not attempt to change or remove the registry's `latest` tag.
+`package.json` is the release version source of truth; `src/version.ts` is generated
+and checked before building or publishing. Every prerelease is published explicitly
+under the npm `alpha` dist-tag. The release automation does not attempt to change or
+remove the registry's `latest` tag.
 
 ```shell
 # Verify npm authentication before doing the expensive build.
@@ -332,6 +332,27 @@ the platform packages first, and publishes `@maligator/cli` last under the `alph
 dist-tag. Each publish is a plain synchronous `npm publish` with the terminal's
 stdin/stdout/stderr inherited, so enter the OTP directly when npm prompts. Build,
 pack, and publish log per-target progress and elapsed time.
+
+The `Publish npm alpha` GitHub Actions workflow provides the unattended release
+path. Dispatch `npm-release.yml` from `main` and enter the exact version already
+committed in `package.json`. The workflow runs the normal developer gate, builds,
+smokes, and packs the Apple Silicon release on a GitHub-hosted macOS ARM runner, and
+publishes through npm trusted publishing. It has `id-token: write` permission but no
+stored npm token. `--trusted-publishing` is accepted only inside a GitHub Actions
+OIDC environment; local publishing continues to require web authentication.
+
+Before the first workflow release, configure every npm package once for repository
+`dirkdev98/maligator`, workflow filename `npm-release.yml`, and the `npm publish`
+permission. The CLI equivalent for each package is:
+
+```shell
+npm trust github @maligator/cli --repo dirkdev98/maligator --file npm-release.yml --allow-publish --yes
+```
+
+Repeat that command for the four `@maligator/cli-<platform>-<arch>` packages listed
+above. npm protects this one-time trust change with 2FA; subsequent workflow
+publishes use short-lived OIDC credentials and require neither an npm token nor an
+OTP.
 
 `release:build` and `release:pack` default to `aarch64-apple-darwin` so a local
 release only builds Apple Silicon macOS. Pass `-- --all-targets` for the complete
