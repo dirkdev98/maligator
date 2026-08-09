@@ -105,6 +105,23 @@ export const ok = <const ValueType>(value: ValueType): Result<never, ValueType> 
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "const-generic-arrow.ts"));
 	});
 
+	test("does not pair comparisons with later nested arrow tokens", () => {
+		const source = `interface Projection { readonly value: number }
+interface Service { readonly create: () => Projection }
+const choose = (first: number, second: number) => {
+	if (first < 1 || second < 2) return "low";
+	return "high";
+};
+export const createService = (initial: number): Service => {
+	const create = (): Projection => ({ value: initial });
+	return { create };
+};`;
+		const stripped = stripCompactTypes(source, "nested-concise-factory.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "nested-concise-factory.ts"));
+		expect(() => parseScript(stripped.replace("export ", ""), { strict: true })).not.toThrow();
+	});
+
 	test("strips common erasable expression and function syntax", () => {
 		const source = `function identity<Value>(value?: Value): Value | undefined {
 	return value;

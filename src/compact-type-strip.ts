@@ -1494,7 +1494,15 @@ function matching(
 	for (let i = start; i < source.length; i++) {
 		if (!code[i]) continue;
 		if (source[i] === open) depth++;
-		if (source[i] === close && --depth === 0) return i;
+		// The `>` in an arrow is never the closing delimiter for a type argument
+		// list. Counting it let unrelated `<` comparisons consume later arrows as
+		// one giant generic region.
+		if (
+			source[i] === close &&
+			!(open === "<" && close === ">" && source[i - 1] === "=") &&
+			--depth === 0
+		)
+			return i;
 	}
 	fail(filePath, start, `unbalanced '${open}' syntax`);
 }
@@ -1510,7 +1518,12 @@ function matchingOrMinusOne(
 	for (let i = start; i < source.length; i++) {
 		if (!code[i]) continue;
 		if (source[i] === open) depth++;
-		if (source[i] === close && --depth === 0) return i;
+		if (
+			source[i] === close &&
+			!(open === "<" && close === ">" && source[i - 1] === "=") &&
+			--depth === 0
+		)
+			return i;
 	}
 	return -1;
 }

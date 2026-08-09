@@ -78,4 +78,29 @@ if (validateExercise({ type: "matching", prompts: [] }).join(",") !== "prompts")
 	throw new Error("typed union switch case labels were stripped");
 }
 
+interface Projection {
+	readonly value: number;
+}
+
+interface ProjectionService {
+	readonly create: () => Projection;
+}
+
+const projectionStage = (mastery: number, confidence: number) => {
+	if (mastery < 0.7 || confidence < 0.8) return "learning";
+	return "secure";
+};
+
+const createProjectionService = (initial: number): ProjectionService => {
+	const create = (): Projection => ({ value: initial });
+	return { create };
+};
+
+if (
+	projectionStage(0.6, 0.9) !== "learning" ||
+	createProjectionService(25).create().value !== 25
+) {
+	throw new Error("comparison operators consumed a nested typed concise factory");
+}
+
 console.log("TYPESCRIPT_ERASABLE_ISSUE_5_PASS");
