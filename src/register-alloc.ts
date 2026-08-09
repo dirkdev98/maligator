@@ -56,10 +56,7 @@ function developmentRegistersAlreadyValid(fn: IRFunction): boolean {
 			) {
 				return true;
 			}
-			if (
-				instruction.registers[0] !==
-				fn.parameterCount + snapshotIndex++
-			) {
+			if (instruction.registers[0] !== fn.parameterCount + snapshotIndex++) {
 				return false;
 			}
 		}

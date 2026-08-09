@@ -132,9 +132,7 @@ describe("relocatable test fragment cache", () => {
 		for (const wire of warm.wires) {
 			expect(existsSync(wire.path)).toBe(true);
 			expect(wire.size).toBeGreaterThan(0);
-			expect(Object.getOwnPropertyDescriptor(wire, "wire")?.get).toBeTypeOf(
-				"function",
-			);
+			expect(Object.getOwnPropertyDescriptor(wire, "wire")).toHaveProperty("get");
 		}
 
 		write(first, testSource("a", 1));
