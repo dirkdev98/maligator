@@ -35,6 +35,43 @@ export function test262RunsInVariant(
 	);
 }
 
+export interface Test262RuntimeNegativeVerdict {
+	passed: boolean;
+	reason: string;
+}
+
+/** Match a runtime-negative test against the native harness's uncaught error. */
+export function test262RuntimeNegativeVerdict(
+	file: Pick<Test262File, "frontmatter">,
+	output: ReadonlyArray<string>,
+	didThrow: boolean,
+): Test262RuntimeNegativeVerdict | undefined {
+	const negative = file.frontmatter.negative;
+	if (negative?.phase !== "runtime") {
+		return undefined;
+	}
+
+	if (!didThrow) {
+		return {
+			passed: false,
+			reason: `negative(runtime): expected ${negative.type} but completed`,
+		};
+	}
+
+	const uncaught = output
+		.map((line) => line.trim())
+		.find((line) => line.startsWith("Uncaught "));
+	const actual = uncaught?.slice("Uncaught ".length).match(/^([A-Za-z_$][\w$]*)/)?.[1];
+	if (actual === negative.type) {
+		return { passed: true, reason: "" };
+	}
+
+	return {
+		passed: false,
+		reason: `negative(runtime): expected ${negative.type}, got ${actual ?? "unknown throw"}`,
+	};
+}
+
 export function test262BatchRegressions(
 	results: ReadonlyArray<{ path: string; result: Test262Result }>,
 	filesByPath: ReadonlyMap<string, Test262File>,

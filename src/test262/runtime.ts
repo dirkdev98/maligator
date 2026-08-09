@@ -49,6 +49,7 @@ import {
 import type { BatchManifest } from "./artifact-cache.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
+import { test262RuntimeNegativeVerdict } from "./policy.ts";
 import { createTest262BatchReport } from "./report.ts";
 import type {
 	Test262BatchCacheState,
@@ -173,18 +174,6 @@ export function test262PruneArtifactCache() {
 	}
 }
 
-const SKIPPED_FLAGS = ["CanBlockIsTrue"];
-const SKIPPED_FEATURES = ["IsHTMLDDA", "decorators", "explicit-resource-management"];
-// Unsupported module forms still run compile-time negative coverage, but their
-// positive/runtime tests require parser or host-loader behavior we do not expose.
-const SKIPPED_MODULE_FEATURES = [
-	"import-defer",
-	"source-phase-imports",
-	"json-modules",
-	"import-text",
-	"import-bytes",
-];
-const SKIPPED_PATHS = ["annexB"];
 // The pinned corpus predates tc39/test262@250f204f, which excludes the
 // immutable-buffer harness variant from tests that require mutable element
 // descriptors or writes.
@@ -200,21 +189,6 @@ const STALE_IMMUTABLE_VARIANT_TESTS = new Set([
 	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/undefined-tobigint.js",
 	"test/built-ins/TypedArrayConstructors/internals/Set/bigint-tonumber.js",
 	"test/built-ins/TypedArrayConstructors/internals/Set/tonumber-value-throws.js",
-]);
-// This pinned test's own BigInt adapter reads its deliberately throwing source
-// before invoking the method under test. Node reproduces the same pre-call error,
-// so keep the invalid corpus input visible as a skip instead of rewriting it.
-const INVALID_PINNED_TESTS = new Set([
-	"test/built-ins/TypedArray/prototype/set/this-backed-by-resizable-buffer.js",
-]);
-// These cases require a host-backed async waiter list that can be woken by
-// Atomics.notify. The single-agent runtime exposes waitAsync's synchronous
-// validation/result paths but does not schedule blocking waiter records.
-const UNSUPPORTED_ASYNC_WAIT_TESTS = new Set([
-	"test/built-ins/Atomics/waitAsync/bigint/undefined-for-timeout.js",
-	"test/built-ins/Atomics/waitAsync/implicit-infinity-for-timeout.js",
-	"test/built-ins/Atomics/waitAsync/returns-result-object-value-is-promise-resolves-to-ok.js",
-	"test/built-ins/Atomics/waitAsync/undefined-for-timeout.js",
 ]);
 
 const HARNESS_CACHE: Record<string, string> = {};
@@ -398,23 +372,6 @@ export function test262PrepareBuild() {
 }
 
 export function test262ShouldSkip(file: Test262File): boolean {
-	if (
-		INVALID_PINNED_TESTS.has(file.path) ||
-		UNSUPPORTED_ASYNC_WAIT_TESTS.has(file.path)
-	) {
-		return true;
-	}
-
-	if (file.frontmatter.negative) {
-		// Parse/early/resolution negatives are resolved at compile time: a
-		// SyntaxError thrown while compiling is exactly the rejection the test
-		// expects (see test262CompileToC). Runtime negatives would need run-phase
-		// error-type matching (not yet implemented), so they stay skipped.
-		if (file.frontmatter.negative.phase === "runtime") {
-			return true;
-		}
-	}
-
 	// Variant-aware run-mode filtering. The sloppy pass runs only the tests that
 	// have a sloppy variant (default + `noStrict`), skipping the strict-only ones
 	// (`onlyStrict`/`module`/`raw`); the strict pass skips `noStrict` tests, which
@@ -430,42 +387,6 @@ export function test262ShouldSkip(file: Test262File): boolean {
 		}
 	} else if (flags.includes("noStrict")) {
 		return true;
-	}
-
-	for (const flag of SKIPPED_FLAGS) {
-		if (file.frontmatter.flags?.includes(flag)) {
-			return true;
-		}
-	}
-	// The harness helper requires the unimplemented $262.agent host API. Keep
-	// ordinary SharedArrayBuffer and Atomics coverage active.
-	if (file.frontmatter.includes?.includes("atomicsHelper.js")) {
-		return true;
-	}
-
-	for (const feature of SKIPPED_FEATURES) {
-		if (file.frontmatter.features?.includes(feature)) {
-			return true;
-		}
-	}
-	for (const feature of SKIPPED_MODULE_FEATURES) {
-		if (
-			file.frontmatter.features?.includes(feature) &&
-			(!file.frontmatter.negative || file.frontmatter.negative.phase === "runtime") &&
-			// `defer` remains a valid default-import binding. Test262 tags that
-			// contextual-keyword test with import-defer even though neither it nor
-			// its dependency uses the unsupported deferred-import production.
-			(feature !== "import-defer" ||
-				!file.path.endsWith("/syntax/valid-default-binding-named-defer.js"))
-		) {
-			return true;
-		}
-	}
-
-	for (const part of SKIPPED_PATHS) {
-		if (file.path.includes(part)) {
-			return true;
-		}
 	}
 
 	return false;
@@ -557,6 +478,27 @@ function applyAsyncVerdict(file: Test262File, stdout: string) {
 			file,
 		);
 	}
+}
+
+function applyRuntimeNegativeVerdict(
+	file: Test262File,
+	output: ReadonlyArray<string>,
+	didThrow: boolean,
+): boolean {
+	const verdict = test262RuntimeNegativeVerdict(file, output, didThrow);
+	if (verdict === undefined) {
+		return false;
+	}
+	file.result = verdict.passed ? "PASSED" : "FAILED";
+	if (!verdict.passed) {
+		countReason(
+			FAILURE_COUNTS,
+			FAILURE_CACHE,
+			normalizeFailureReason(verdict.reason),
+			file,
+		);
+	}
+	return true;
 }
 
 function recordFailure(
@@ -1288,7 +1230,9 @@ function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<numbe
 		resolved.add(index);
 		recordTiming("run", file.path, elapsedMs);
 
-		if (kind === "EXIT" && isAsyncTest(file)) {
+		if (kind === "EXIT" && applyRuntimeNegativeVerdict(file, currentOutput, code !== 0)) {
+			// The runtime-negative matcher owns this verdict, including error type.
+		} else if (kind === "EXIT" && isAsyncTest(file)) {
 			// Async tests exit 0 whether they pass or fail (`$DONE` never throws);
 			// the stdout sentinel is authoritative. A non-zero exit means a sync
 			// throw before settling, which `asyncVerdict` reports as no completion.
@@ -1387,7 +1331,9 @@ export async function test262RunSingle(
 			maxBuffer: 1024 * 1024,
 			env: { ...runEnv(), MAL_TEST262: "1" },
 		});
-		if (isAsyncTest(file)) {
+		if (applyRuntimeNegativeVerdict(file, stdout.split("\n"), false)) {
+			// A runtime-negative test must throw; normal completion is a failure.
+		} else if (isAsyncTest(file)) {
 			applyAsyncVerdict(file, stdout);
 		} else {
 			file.result = "PASSED";
@@ -1406,6 +1352,14 @@ export async function test262RunSingle(
 		} else if (error.signal) {
 			file.result = "CRASHED";
 			countReason(FAILURE_COUNTS, FAILURE_CACHE, `signal: ${error.signal}`, file);
+		} else if (
+			applyRuntimeNegativeVerdict(
+				file,
+				[...(error.stdout ?? "").split("\n"), ...(error.stderr ?? "").split("\n")],
+				true,
+			)
+		) {
+			// The expected runtime exception and exact constructor decide the verdict.
 		} else if (isAsyncTest(file)) {
 			// A non-zero exit means the script threw before settling: no sentinel,
 			// so `asyncVerdict` reports it as an incomplete async test.

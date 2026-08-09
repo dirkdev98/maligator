@@ -3,6 +3,7 @@ import {
 	parseTest262Policy,
 	test262BatchRegressions,
 	test262FoldedRegressions,
+	test262RuntimeNegativeVerdict,
 	test262RunsInVariant,
 	test262WorkerCount,
 } from "../src/test262/policy.ts";
@@ -40,6 +41,26 @@ describe("Test262 runner policy", () => {
 		);
 		expect(test262RunsInVariant(file("module", ["module"]), "sloppy")).toBe(false);
 		expect(test262RunsInVariant(file("raw", ["raw"]), "sloppy")).toBe(false);
+	});
+
+	it("requires the exact exception type for runtime-negative tests", () => {
+		const negative = file("runtime-negative");
+		negative.frontmatter.negative = { phase: "runtime", type: "TypeError" };
+
+		expect(
+			test262RuntimeNegativeVerdict(negative, ["Uncaught TypeError: boom"], true),
+		).toEqual({ passed: true, reason: "" });
+		expect(
+			test262RuntimeNegativeVerdict(negative, ["Uncaught RangeError: boom"], true),
+		).toEqual({
+			passed: false,
+			reason: "negative(runtime): expected TypeError, got RangeError",
+		});
+		expect(test262RuntimeNegativeVerdict(negative, [], false)).toEqual({
+			passed: false,
+			reason: "negative(runtime): expected TypeError but completed",
+		});
+		expect(test262RuntimeNegativeVerdict(file("positive"), [], false)).toBeUndefined();
 	});
 
 	it("treats every non-pass result for a previous pass as a regression", () => {
