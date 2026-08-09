@@ -238,13 +238,19 @@ describe("emit-vm instruction packing", () => {
 			{},
 			budget,
 		);
-		const metadataUnit = units.find((unit) =>
-			unit.includes("const MalFunction mal_functions[] ="),
+		const metadataUnits = units.filter(
+			(unit) =>
+				unit.includes("const MalFunction mal_functions[] =") ||
+				unit.includes("void mal_initialize_mal_functions_chunk_"),
 		);
 
 		expect(units.every((unit) => unit.length <= budget)).toBe(true);
-		expect(metadataUnit).toBeDefined();
-		expect(metadataUnit).not.toContain("extern const c16 mal_string_0_code_units[];");
+		expect(metadataUnits.length).toBeGreaterThan(0);
+		expect(
+			metadataUnits.some(
+				(unit) => !unit.includes("extern const c16 mal_string_0_code_units[];"),
+			),
+		).toBe(true);
 	});
 
 	it("gives split async functions external linkage", () => {
@@ -302,6 +308,44 @@ describe("emit-vm instruction packing", () => {
 		);
 		expect(units[0]).toContain("extern const MalSourcePos mal_source_positions[];");
 		expect(data).toContain("const MalSourcePos mal_source_positions[] = {");
+	});
+
+	it("splits oversized aggregate metadata into bounded initializers", () => {
+		const functions = Array.from({ length: 400 }, () => ({
+			...fn,
+			instructions: [...fn.instructions],
+		}));
+		const sourcePositions = Array.from({ length: 800 }, (_, index) => ({
+			line: index + 1,
+			column: index % 80,
+		}));
+		const budget = 100_000;
+		const units = emitVmTranslationUnits(
+			{
+				...definition,
+				functionCount: functions.length,
+				functions,
+				sourcePositions,
+			},
+			{},
+			budget,
+		);
+		const definitionUnit = units[0]!;
+		const dataUnits = units.slice(1).join("\n");
+
+		expect(units.every((unit) => unit.length <= budget)).toBe(true);
+		expect(definitionUnit).toContain("MalFunction mal_functions[400];");
+		expect(definitionUnit).toContain(
+			"MalSourcePos mal_source_positions[800];",
+		);
+		expect(definitionUnit).toContain(
+			".initialize_generated_data = mal_initialize_generated_data",
+		);
+		expect(dataUnits).toContain("void mal_initialize_mal_functions_chunk_0(");
+		expect(dataUnits).toContain(
+			"void mal_initialize_mal_source_positions_chunk_0(",
+		);
+		expect(dataUnits).not.toContain("const MalFunction mal_functions[] =");
 	});
 
 	it("rejects an invalid translation-unit budget", () => {

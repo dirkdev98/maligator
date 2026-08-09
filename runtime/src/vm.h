@@ -981,6 +981,9 @@ typedef struct MalVmDefinition {
     i32 function_count;
     const MalFunction *functions;
 
+    /** Populate split generated tables before their first use. */
+    void (*initialize_generated_data)(void);
+
     /**
      * Immortal string constants baked into the program image (static storage,
      * EXTERNAL code units). Hashes are computed lazily by mal_string_hash, so the

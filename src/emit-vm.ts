@@ -330,10 +330,11 @@ interface TranslationUnitPart {
  * array external lets large contiguous metadata tables retain their runtime ABI
  * without charging unrelated declarations to every compiler input.
  */
-function externalizeDataArrays(source: string): SplitDataSource {
+function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataSource {
 	const lines = source.split("\n");
 	const output: Array<string> = [];
 	const definitions: Array<ExternalDataDefinition> = [];
+	const splitInitializers: Array<string> = [];
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index]!;
 		const match = /^(?:static )?(.+?) (mal_[A-Za-z0-9_]+)\[\] = (.*)$/.exec(line);
@@ -353,10 +354,72 @@ function externalizeDataArrays(source: string): SplitDataSource {
 			definitionLines.push(lines[index]!);
 		}
 		definitionLines[0] = definitionLines[0]!.replace(/^static /, "");
+		if (
+			(symbol.startsWith("mal_functions") ||
+				symbol.startsWith("mal_source_positions")) &&
+			definitionLines.join("\n").length > Math.floor(maxCodeUnits / 2)
+		) {
+			const rows = definitionLines.slice(1, -1);
+			const mutableType = type.replace(/^const /, "");
+			const chunkBudget = Math.max(1, Math.floor(maxCodeUnits / 4));
+			const chunks: Array<Array<string>> = [];
+			let chunk: Array<string> = [];
+			let chunkCodeUnits = 0;
+			for (const row of rows) {
+				if (chunk.length > 0 && chunkCodeUnits + row.length + 1 > chunkBudget) {
+					chunks.push(chunk);
+					chunk = [];
+					chunkCodeUnits = 0;
+				}
+				chunk.push(row);
+				chunkCodeUnits += row.length + 1;
+			}
+			if (chunk.length > 0) chunks.push(chunk);
+
+			output.push(`${mutableType} ${symbol}[${rows.length}];`);
+			let rowOffset = 0;
+			const initializer = `mal_initialize_${symbol}`;
+			splitInitializers.push(initializer);
+			for (const [chunkIndex, chunkRows] of chunks.entries()) {
+				const chunkSymbol = `${initializer}_chunk_${chunkIndex}`;
+				output.push(`extern void ${chunkSymbol}(${mutableType} *target);`);
+				definitions.push({
+					symbol: chunkSymbol,
+					source: [
+						`void ${chunkSymbol}(${mutableType} *target) {`,
+						`    static ${type} rows[] = {`,
+						...chunkRows,
+						"    };",
+						`    for (usize i = 0; i < ${chunkRows.length}; ++i) target[${rowOffset} + i] = rows[i];`,
+						"}",
+					].join("\n"),
+				});
+				rowOffset += chunkRows.length;
+			}
+			output.push(`static void ${initializer}(void) {`);
+			for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+				output.push(`    ${initializer}_chunk_${chunkIndex}(${symbol});`);
+			}
+			output.push("}");
+			continue;
+		}
 		definitions.push({ symbol, source: definitionLines.join("\n") });
 		output.push(`extern ${type} ${symbol}[];`);
 	}
-	return { source: output.join("\n"), definitions };
+	if (splitInitializers.length > 0) {
+		output.unshift("static void mal_initialize_generated_data(void);");
+		output.push("static void mal_initialize_generated_data(void) {");
+		for (const initializer of splitInitializers) output.push(`    ${initializer}();`);
+		output.push("}");
+	}
+	let splitSource = output.join("\n");
+	if (splitInitializers.length > 0) {
+		splitSource = splitSource.replace(
+			"    .initialize_generated_data = nullptr,",
+			"    .initialize_generated_data = mal_initialize_generated_data,",
+		);
+	}
+	return { source: splitSource, definitions };
 }
 
 function emitVmDefinitionSource(
@@ -553,7 +616,7 @@ export function emitVmTranslationUnits(
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
 	const emitted = emitVmDefinitionSource(definition, options, true);
-	const splitData = externalizeDataArrays(emitted.source);
+	const splitData = externalizeDataArrays(emitted.source, maxCodeUnits);
 	if (splitData.source.length > maxCodeUnits) {
 		throw new RangeError(
 			`generated definition translation unit has ${splitData.source.length} code units; ` +
@@ -809,6 +872,7 @@ function malVmDefinitionStruct(
 		`const MalVmDefinition mal_vm_definition${suffix} = {`,
 		`    .function_count = ${definition.functionCount},`,
 		`    .functions = mal_functions${suffix},`,
+		"    .initialize_generated_data = nullptr,",
 		`    .string_constant_count = ${definition.stringConstants.length},`,
 		`    .string_constants = ${definition.stringConstants.length > 0 ? `mal_strings${suffix}` : "nullptr"},`,
 		`    .bigint_constant_count = ${definition.bigintConstants.length},`,

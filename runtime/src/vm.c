@@ -416,6 +416,10 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->allocation_error = mal_value_new_undefined();
     mal_gc_init(vm);
 
+    if (definition->initialize_generated_data != nullptr) {
+        definition->initialize_generated_data();
+    }
+
     // Relocate the program's function / string / bigint / literal-template tables into
     // VM-owned growable storage behind a mutable `live_definition` (see vm.h), so
     // runtime eval can splice more in later while the const access paths keep
