@@ -35,6 +35,7 @@ export interface ResolvedBuildConfig {
 		eval: boolean | "compile-check";
 		realms: boolean;
 		regexp: boolean;
+		temporal: boolean;
 		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
 	};
 	host: { scheduler: "single" | "multiprocessing" };
@@ -204,6 +205,7 @@ const CONFIG_SCHEMA: ObjectSchema = {
 				eval: evalLeaf,
 				realms: booleanLeaf,
 				regexp: booleanLeaf,
+				temporal: booleanLeaf,
 				intl: {
 					object: {
 						enabled: booleanLeaf,
@@ -263,6 +265,8 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 			// RegExp is core ECMAScript, so it defaults ON (unlike eval/Intl/web) —
 			// power users disable it explicitly for size-critical builds.
 			regexp: config.engine?.regexp ?? true,
+			// Temporal carries calendar and time-zone data, so product builds opt in.
+			temporal: config.engine?.temporal ?? false,
 			intl: {
 				enabled: config.engine?.intl?.enabled ?? false,
 				features: config.engine?.intl?.features ?? [],
@@ -597,23 +601,25 @@ function shortHash(value: unknown): string {
  * from their exact inputs. The output depends
  * on `engine.eval` (flips `-DMAL_EVAL` + whether the compiler wire is embedded),
  * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks),
+ * `engine.temporal` (flips `-DMAL_TEMPORAL` + calendar/time-zone support),
  * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether web_url.c compiles), and
  * `surface.node` (flips `-DMAL_NODE` + the node host built-in surface). Not-yet-wired
  * fields (host.scheduler) are excluded so unrelated edits do not change the name.
- * Returns "" for the canonical build (eval on, Intl on, all
+ * Returns "" for the canonical build (eval on, Temporal on, Intl on, all
  * locales, web on, node OFF) so it keeps the unsuffixed binary name — node defaults
  * off and every internal-tooling build is node-off, so node-off stays canonical.
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	// The generated binary depends on eval, whether Intl is on, which services are selected
 	// (each flips a -DMAL_INTL_HAS_* define), web-platform (web_url.c gating), regexp
-	// (builtin_regexp/regexp_object/gc/string gating), and node (the host built-in
+	// (builtin_regexp/regexp_object/gc/string gating), Temporal, and node (the host built-in
 	// surface), but NOT on the locale set (that only changes Rust/ICU datagen).
-	// Empty services = all; eval + realms + Intl + all-services + web + regexp on and
+	// Empty services = all; eval + realms + Intl + all-services + web + regexp + Temporal on and
 	// node off = canonical.
 	const services = selectedIntlServices(config).sort();
 	const web = config.surface.webPlatform;
 	const regexp = config.engine.regexp;
+	const temporal = config.engine.temporal;
 	const node = config.surface.node;
 	const realms = config.engine.realms;
 	if (
@@ -623,6 +629,7 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		services.length === 0 &&
 		web &&
 		regexp &&
+		temporal &&
 		!node
 	) {
 		return "";
@@ -633,6 +640,7 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		services,
 		web,
 		regexp,
+		temporal,
 		node,
 		realms,
 	});
@@ -664,6 +672,7 @@ export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDer
 		intlFeatures,
 		webPlatformEnabled: config.surface.webPlatform,
 		regexpEnabled: config.engine.regexp,
+		temporalEnabled: config.engine.temporal,
 		nodeEnabled: config.surface.node,
 	});
 	return {

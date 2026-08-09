@@ -93,6 +93,7 @@ export interface NativeFeatureSpec {
 	intlEnabled: boolean;
 	webPlatformEnabled: boolean;
 	regexpEnabled: boolean;
+	temporalEnabled: boolean;
 	nodeEnabled: boolean;
 	intlFeatures: Array<string>;
 	cDefines: Array<string>;
@@ -112,6 +113,7 @@ export function normalizeNativeFeatures(
 	const intlEnabled = input.intlEnabled ?? true;
 	const webPlatformEnabled = input.webPlatformEnabled ?? true;
 	const regexpEnabled = input.regexpEnabled ?? true;
+	const temporalEnabled = input.temporalEnabled ?? true;
 	const nodeEnabled = input.nodeEnabled ?? false;
 	const services = Object.values(INTL_SERVICE_FEATURES);
 	const knownCargoFeatures = new Set(services.map(({ cargo }) => cargo));
@@ -160,12 +162,14 @@ export function normalizeNativeFeatures(
 		...(intlEnabled ? intlDefines : ["-DMAL_INTL=0"]),
 		...(webPlatformEnabled ? [] : ["-DMAL_WEB_PLATFORM=0"]),
 		...(regexpEnabled ? [] : ["-DMAL_REGEXP=0"]),
+		...(temporalEnabled ? [] : ["-DMAL_TEMPORAL=0"]),
 		...(nodeEnabled ? ["-DMAL_NODE=1"] : []),
 	];
 	const cargoFeatures = sortedUnique([
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
 		...(webPlatformEnabled ? ["web-platform"] : []),
 		...(regexpEnabled ? ["regexp"] : []),
+		...(temporalEnabled ? ["temporal"] : []),
 		...(nodeEnabled ? ["node-argon2", "node-tls", "node-zlib"] : []),
 	]);
 	return {
@@ -174,6 +178,7 @@ export function normalizeNativeFeatures(
 		intlEnabled,
 		webPlatformEnabled,
 		regexpEnabled,
+		temporalEnabled,
 		nodeEnabled,
 		intlFeatures,
 		cDefines,
@@ -353,7 +358,8 @@ export function optFlags(
  * call sites (kept in lockstep with the Rust `intl` Cargo feature).
  * `webPlatformEnabled: false` adds `-DMAL_WEB_PLATFORM=0`, which compiles web_url.c away
  * so no ada FFI symbols are referenced (in lockstep with the Rust `web-platform`
- * feature, which drops the C++ ada parser + `-lc++`). `nodeEnabled: true` adds
+ * feature, which drops the C++ ada parser + `-lc++`). `temporalEnabled: false`
+ * adds `-DMAL_TEMPORAL=0` and omits the Rust Temporal feature. `nodeEnabled: true` adds
  * `-DMAL_NODE=1`, opting the node host built-in surface in (it defaults off, so —
  * unlike the default-on features above — only the ON case emits a define).
  */
@@ -365,6 +371,8 @@ export interface FeatureDefineOpts {
 	intlServiceDefines?: Array<string>;
 	webPlatformEnabled?: boolean;
 	regexpEnabled?: boolean;
+	/** `-DMAL_TEMPORAL=0` when the Temporal surface is excluded (default on internally). */
+	temporalEnabled?: boolean;
 	/** `-DMAL_NODE=1` when the node host built-in surface is enabled (default off). */
 	nodeEnabled?: boolean;
 }
@@ -387,6 +395,7 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 		opts.intlEnabled === false ? ["-DMAL_INTL=0"] : (opts.intlServiceDefines ?? []);
 	const webFlag = opts.webPlatformEnabled === false ? ["-DMAL_WEB_PLATFORM=0"] : [];
 	const regexpFlag = opts.regexpEnabled === false ? ["-DMAL_REGEXP=0"] : [];
+	const temporalFlag = opts.temporalEnabled === false ? ["-DMAL_TEMPORAL=0"] : [];
 	// node defaults OFF (C default MAL_NODE=0), so only the ON case emits a flag.
 	const nodeFlag = opts.nodeEnabled === true ? ["-DMAL_NODE=1"] : [];
 	return [
@@ -395,6 +404,7 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 		...intlFlags,
 		...webFlag,
 		...regexpFlag,
+		...temporalFlag,
 		...nodeFlag,
 	];
 }

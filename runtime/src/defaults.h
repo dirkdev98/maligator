@@ -86,6 +86,15 @@ typedef size_t usize;
 #define MAL_REGEXP 1
 #endif
 
+// Whether this build includes the Temporal global and its calendar/time-zone
+// implementation. Default on for internal tooling; product build configs set
+// `-DMAL_TEMPORAL=0` unless `engine.temporal` is explicitly enabled. The Cargo
+// `temporal` feature must be selected in lockstep so Rust symbols and data are
+// either present together or compiled out together.
+#ifndef MAL_TEMPORAL
+#define MAL_TEMPORAL 1
+#endif
+
 // Whether this build includes the node host built-in surface (`node:path`,
 // `node:fs`, `node:child_process`, `node:crypto`). Unlike the features above this
 // is OPT-IN: default OFF, the build config sets `-DMAL_NODE=1` (see build-flags.ts)

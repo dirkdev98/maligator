@@ -141,6 +141,7 @@ export default defineBuild({
 		eval: false,
 		realms: false,
 		regexp: true,
+		temporal: false,
 		intl: {
 			enabled: false,
 			features: [],
@@ -173,6 +174,7 @@ All fields are optional. Product defaults are:
 | `engine.eval`           | `false`    | Runtime-disabled by default; `true` embeds the compiler; `"compile-check"` rejects visible uses |
 | `engine.realms`         | `false`    | Include Realm support                                                                           |
 | `engine.regexp`         | `true`     | Include the RegExp engine                                                                       |
+| `engine.temporal`       | `false`    | Include Temporal plus calendar and time-zone data                                               |
 | `engine.intl.enabled`   | `false`    | Include Intl and ICU4X data                                                                     |
 | `engine.intl.features`  | `[]`       | All Intl services when Intl is enabled; a non-empty list selects services                       |
 | `engine.intl.languages` | `[]`       | All locales; locale subsetting is not implemented yet                                           |

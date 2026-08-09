@@ -889,13 +889,18 @@ exit 7
 		expect(first.library).toBe(reordered.library);
 		expect(first.library).not.toBe(different.library);
 		expect(first.library).toContain(cacheDirectory);
-		expect(first.cargoFeatures).toEqual(["intl-collator", "intl-segmenter", "regexp"]);
+		expect(first.cargoFeatures).toEqual([
+			"intl-collator",
+			"intl-segmenter",
+			"regexp",
+			"temporal",
+		]);
 		expect(first.cargoArguments).toEqual([
 			"build",
 			"--release",
 			"--no-default-features",
 			"--features",
-			"intl-collator,intl-segmenter,regexp",
+			"intl-collator,intl-segmenter,regexp,temporal",
 		]);
 
 		writeFileSync(
@@ -925,7 +930,7 @@ exit 7
 			webPlatformEnabled: false,
 			regexpEnabled: false,
 		});
-		expect(features.cargoFeatures).toEqual(["intl-segmenter"]);
+		expect(features.cargoFeatures).toEqual(["intl-segmenter", "temporal"]);
 		expect(features.cDefines).toContain("-DMAL_INTL_HAS_COLLATOR=0");
 		expect(features.cDefines).toContain("-DMAL_WEB_PLATFORM=0");
 		expect(features.cDefines).toContain("-DMAL_REGEXP=0");
@@ -954,6 +959,7 @@ exit 7
 				intlEnabled: false,
 				webPlatformEnabled: false,
 				regexpEnabled: false,
+				temporalEnabled: false,
 				nodeEnabled: true,
 				intlFeatures: [],
 				cDefines: ["-DMAL_EVAL=1"],
@@ -967,6 +973,7 @@ exit 7
 			"-DMAL_INTL=0",
 			"-DMAL_WEB_PLATFORM=0",
 			"-DMAL_REGEXP=0",
+			"-DMAL_TEMPORAL=0",
 			"-DMAL_NODE=1",
 		]);
 		expect(context.features.cargoFeatures).toEqual([

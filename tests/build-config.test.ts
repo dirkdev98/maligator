@@ -50,6 +50,11 @@ describe("resolveBuildConfig defaults", () => {
 		expect(resolveBuildConfig({ engine: { regexp: false } }).engine.regexp).toBe(false);
 	});
 
+	it("defaults Temporal OFF and honors an explicit opt-in", () => {
+		expect(resolveBuildConfig({}).engine.temporal).toBe(false);
+		expect(resolveBuildConfig({ engine: { temporal: true } }).engine.temporal).toBe(true);
+	});
+
 	it("honors explicit values", () => {
 		const config = resolveBuildConfig({ engine: { eval: true } });
 		expect(config.engine.eval).toBe(true);
@@ -324,7 +329,7 @@ describe("intl feature → cargo features + C defines", () => {
 
 	it("distinct feature sets get distinct output suffixes; all-services is canonical", () => {
 		const all = resolveBuildConfig({
-			engine: { eval: true, realms: true, intl: { enabled: true } },
+			engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
 			surface: { webPlatform: true },
 		});
 		const subset = resolveBuildConfig({
@@ -342,7 +347,7 @@ describe("buildConfigCacheSuffix", () => {
 		expect(
 			buildConfigCacheSuffix(
 				resolveBuildConfig({
-					engine: { eval: true, realms: true, intl: { enabled: true } },
+					engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
 					surface: { webPlatform: true },
 				}),
 			),
@@ -391,15 +396,32 @@ describe("buildConfigCacheSuffix", () => {
 		expect(buildConfigCacheSuffix(noRegexp)).toMatch(/^[0-9a-f]{8}$/);
 		expect(buildConfigCacheSuffix(noRegexp)).not.toBe(buildConfigCacheSuffix(canonical));
 	});
+
+	it("Temporal-off gets a distinct non-empty output suffix", () => {
+		const canonical = resolveBuildConfig({
+			engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		});
+		const noTemporal = resolveBuildConfig({
+			engine: { eval: true, realms: true, temporal: false, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		});
+		expect(buildDerivationFromConfig(noTemporal).features.temporalEnabled).toBe(false);
+		expect(buildDerivationFromConfig(canonical).features.temporalEnabled).toBe(true);
+		expect(featureDefines({ temporalEnabled: false })).toContain("-DMAL_TEMPORAL=0");
+		expect(buildConfigCacheSuffix(noTemporal)).not.toBe(
+			buildConfigCacheSuffix(canonical),
+		);
+	});
 });
 
 describe("surface.node build derivation + cache", () => {
 	const canonical = resolveBuildConfig({
-		engine: { eval: true, realms: true, intl: { enabled: true } },
+		engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
 		surface: { webPlatform: true },
 	});
 	const nodeOn = resolveBuildConfig({
-		engine: { eval: true, realms: true, intl: { enabled: true } },
+		engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
 		surface: { webPlatform: true, node: true },
 	});
 
@@ -421,7 +443,7 @@ describe("surface.node build derivation + cache", () => {
 
 describe("engine.realms build plumbing", () => {
 	const canonical = resolveBuildConfig({
-		engine: { eval: true, realms: true, intl: { enabled: true } },
+		engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
 		surface: { webPlatform: true },
 	});
 	const realmsOff = resolveBuildConfig({
@@ -474,6 +496,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			services.length === 0 &&
 			c.surface.webPlatform &&
 			c.engine.regexp &&
+			c.engine.temporal &&
 			!c.surface.node
 		) {
 			return "";
@@ -484,6 +507,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			services,
 			web: c.surface.webPlatform,
 			regexp: c.engine.regexp,
+			temporal: c.engine.temporal,
 			node: c.surface.node,
 			realms: c.engine.realms,
 		});
@@ -519,7 +543,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			engine: { eval: true, intl: { enabled: true } },
 			surface: { webPlatform: true, node: true },
 		});
-		expect(buildConfigCacheSuffix(nodeOn)).toBe("8ed6ee64");
+		expect(buildConfigCacheSuffix(nodeOn)).toBe("b04ab3b5");
 	});
 
 	it("does not include executable assets in the output suffix", () => {

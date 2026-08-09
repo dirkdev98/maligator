@@ -92,6 +92,11 @@ web-platform = ["dep:ada-url"]
 # Maps to engine.regexp (rust-build.ts) + C `-DMAL_REGEXP`.
 regexp = ["dep:regress"]
 
+# ECMAScript Temporal. The dependency and FFI module land in the next semantic
+# slice; keeping the named feature here makes build/config gating independently
+# testable and gives Cargo a valid all-features identity at this checkpoint.
+temporal = []
+
 # node:zlib phase 1: decompression-only flat primitives. The C/JS adapters remain
 # outside this feature; Node builds select it through normalizeNativeFeatures.
 node-zlib = ["dep:flate2", "dep:brotli-decompressor"]

@@ -30,6 +30,8 @@ export interface MaligatorBuildConfig {
 		eval?: boolean | "compile-check";
 		realms?: boolean;
 		regexp?: boolean;
+		/** Include the Temporal global and its calendar/time-zone data. */
+		temporal?: boolean;
 		intl?: {
 			enabled?: boolean;
 			features?: Array<MaligatorIntlFeature>;
