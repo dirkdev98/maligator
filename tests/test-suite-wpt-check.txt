@@ -49,6 +49,7 @@ html/webappapis/timers/negative-setinterval.any.js
 html/webappapis/timers/negative-settimeout.any.js
 streams/queuing-strategies.any.js
 streams/readable-streams/bad-strategies.any.js
+streams/readable-streams/cancel.any.js
 streams/readable-streams/constructor.any.js
 streams/readable-streams/floating-point-total-queue-size.any.js
 streams/readable-streams/tee.any.js

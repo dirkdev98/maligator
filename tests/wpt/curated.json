@@ -519,6 +519,27 @@
 			"includes": []
 		},
 		{
+			"path": "streams/readable-streams/cancel.any.js",
+			"sha256": "bd50daffad0c780fd72cc665fe5e791f3ef69cb552745947dfd053d0bb4596a0",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/test-utils.js" },
+				{ "name": "script", "value": "../resources/rs-utils.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				},
+				{
+					"path": "streams/resources/rs-utils.js",
+					"sha256": "e4ac017aecf1eb2f83b0f22ece95998fec7d42a6de1d94fa1497351369bec04b"
+				}
+			]
+		},
+		{
 			"path": "streams/readable-streams/constructor.any.js",
 			"sha256": "5a80b6aea8ce78ffc639bc85ab9ec9bfb64a4b102dcee53a6eaee1d904f4205c",
 			"target": "server-main",
