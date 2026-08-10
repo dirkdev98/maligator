@@ -45,6 +45,17 @@ typedef struct MalRealm MalRealm;
 typedef struct MalHeap {
     /** All chunks, newest first (allocation source + shutdown release). */
     MalGcChunk *chunks;
+    /** Last chunk that contained an explicitly-freed RAW buffer. GC finalizers
+     * release related buffers in clusters, so this turns the common ownership
+     * check into one range comparison instead of a full chunk-list scan. Chunks
+     * live until mal_heap_free, so the cache cannot dangle during heap use. */
+    MalGcChunk *raw_lookup_chunk;
+    /** Chunks sorted by base address. Explicit RAW frees use this for an O(log n)
+     * ownership fallback when the locality cache misses, instead of walking the
+     * allocation-order list. */
+    MalGcChunk **chunk_index;
+    usize chunk_count;
+    usize chunk_capacity;
     /** Large-object records (size > largest size class), singly linked. */
     MalGcLarge *large;
     /** Current bump block per size class for managed cells. */
