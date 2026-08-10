@@ -51,6 +51,7 @@ streams/queuing-strategies.any.js
 streams/readable-streams/bad-strategies.any.js
 streams/readable-streams/constructor.any.js
 streams/readable-streams/floating-point-total-queue-size.any.js
+streams/readable-streams/tee.any.js
 url/url-searchparams.any.js
 url/url-statics-canparse.any.js
 url/url-statics-parse.any.js
