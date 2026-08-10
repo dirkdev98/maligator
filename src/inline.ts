@@ -23,6 +23,7 @@
  */
 
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
+import type { IRRegisterIndex } from "./ir-register-index.ts";
 import { addInlineSourcePosition, getOrCreateStringConstant } from "./ir.ts";
 import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
 import { definedRegister } from "./register-alloc.ts";
@@ -112,8 +113,9 @@ export function functionValuedRegisters(
 	fn: IRFunction,
 	capturedSlots: ReadonlyMap<string, number>,
 	globalSlots: ReadonlyMap<number, number>,
+	registerIndex: IRRegisterIndex = buildIRRegisterIndex(fn),
 ): Map<number, number> {
-	const definitions = buildIRRegisterIndex(fn).definitions;
+	const definitions = registerIndex.definitions;
 	const isSingleDefinition = (register: number) =>
 		definitions.get(register)?.length === 1;
 
@@ -188,39 +190,97 @@ export function functionValuedRegisters(
  * written more than once, or from a non-function, is excluded. (Resolving the store
  * source uses only createFunction+move, no captured loads, to avoid circularity.)
  */
-export function capturedSlotFunctions(program: IntermediateProgram): Map<string, number> {
+export interface FunctionSlotFacts {
+	captured: Map<string, number>;
+	global: Map<number, number>;
+}
+
+/** Resolve immutable function-valued captured and global slots in one graph scan.
+ * Callers that also need per-function provenance can provide their register indexes,
+ * avoiding four identical index builds per function in each inlining pass. */
+export function functionSlotFacts(
+	program: IntermediateProgram,
+	registerIndexes?: ReadonlyMap<IRFunction, IRRegisterIndex>,
+): FunctionSlotFacts {
 	const empty = new Map<string, number>();
 	const emptyGlobals = new Map<number, number>();
-	const stores = new Map<string, { func: number | undefined; count: number }>();
+	const capturedStores = new Map<string, { func: number | undefined; count: number }>();
+	interface GlobalSlotAcc {
+		func: number | undefined;
+		funcStores: number;
+		otherStores: number;
+		conflict: boolean;
+	}
+	const globalStores = new Map<number, GlobalSlotAcc>();
 	for (const fn of program.functions) {
-		const localFuncOf = functionValuedRegisters(fn, empty, emptyGlobals);
+		const registerIndex = registerIndexes?.get(fn) ?? buildIRRegisterIndex(fn);
+		const localFuncOf = functionValuedRegisters(fn, empty, emptyGlobals, registerIndex);
+		const emptyRegisters = createEmptyRegisters(fn, registerIndex);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (
-					instruction.type !== "storeCaptured" ||
-					instruction.functionIndex === undefined ||
-					instruction.index === undefined
+					instruction.type === "storeCaptured" &&
+					instruction.functionIndex !== undefined &&
+					instruction.index !== undefined
 				) {
-					continue;
-				}
-				const key = capturedSlotKey(instruction.functionIndex, instruction.index);
-				const func = localFuncOf.get(instruction.registers[0]);
-				const existing = stores.get(key);
-				if (existing === undefined) {
-					stores.set(key, { func, count: 1 });
-				} else {
-					existing.count += 1;
+					const key = capturedSlotKey(instruction.functionIndex, instruction.index);
+					const func = localFuncOf.get(instruction.registers[0]);
+					const existing = capturedStores.get(key);
+					if (existing === undefined) {
+						capturedStores.set(key, { func, count: 1 });
+					} else {
+						existing.count += 1;
+					}
+				} else if (instruction.type === "storeGlobal") {
+					const slot = instruction.index;
+					const source = instruction.registers[0];
+					let acc = globalStores.get(slot);
+					if (acc === undefined) {
+						acc = {
+							func: undefined,
+							funcStores: 0,
+							otherStores: 0,
+							conflict: false,
+						};
+						globalStores.set(slot, acc);
+					}
+					const func = localFuncOf.get(source);
+					if (func !== undefined) {
+						acc.funcStores += 1;
+						if (acc.func === undefined) {
+							acc.func = func;
+						} else if (acc.func !== func) {
+							acc.conflict = true;
+						}
+					} else if (!emptyRegisters.has(source)) {
+						acc.otherStores += 1;
+					}
 				}
 			}
 		}
 	}
-	const resolved = new Map<string, number>();
-	for (const [key, { func, count }] of stores) {
+	const captured = new Map<string, number>();
+	for (const [key, { func, count }] of capturedStores) {
 		if (count === 1 && func !== undefined) {
-			resolved.set(key, func);
+			captured.set(key, func);
 		}
 	}
-	return resolved;
+	const global = new Map<number, number>();
+	for (const [slot, acc] of globalStores) {
+		if (
+			acc.func !== undefined &&
+			acc.funcStores === 1 &&
+			acc.otherStores === 0 &&
+			!acc.conflict
+		) {
+			global.set(slot, acc.func);
+		}
+	}
+	return { captured, global };
+}
+
+export function capturedSlotFunctions(program: IntermediateProgram): Map<string, number> {
+	return functionSlotFacts(program).captured;
 }
 
 /** Registers whose sole definition is a `createEmpty` (the TDZ sentinel a
@@ -229,8 +289,11 @@ export function capturedSlotFunctions(program: IntermediateProgram): Map<string,
  * so the global-slot resolver ignores it (a real read is still guarded by the
  * `throwIfTdz` the front end emits — kept by DCE — so resolving the callee never
  * skips a temporal-dead-zone throw). */
-function createEmptyRegisters(fn: IRFunction): Set<number> {
-	const definitions = buildIRRegisterIndex(fn).definitions;
+function createEmptyRegisters(
+	fn: IRFunction,
+	registerIndex: IRRegisterIndex = buildIRRegisterIndex(fn),
+): Set<number> {
+	const definitions = registerIndex.definitions;
 	const set = new Set<number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -260,56 +323,7 @@ function createEmptyRegisters(fn: IRFunction): Set<number> {
  * only createFunction+move chains — no captured/global loads — to avoid circularity.)
  */
 export function globalSlotFunctions(program: IntermediateProgram): Map<number, number> {
-	const empty = new Map<string, number>();
-	const emptyGlobals = new Map<number, number>();
-	interface SlotAcc {
-		func: number | undefined;
-		funcStores: number;
-		otherStores: number;
-		conflict: boolean;
-	}
-	const slots = new Map<number, SlotAcc>();
-	for (const fn of program.functions) {
-		const localFuncOf = functionValuedRegisters(fn, empty, emptyGlobals);
-		const emptyRegs = createEmptyRegisters(fn);
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (instruction.type !== "storeGlobal") {
-					continue;
-				}
-				const slot = instruction.index;
-				const source = instruction.registers[0];
-				let acc = slots.get(slot);
-				if (acc === undefined) {
-					acc = { func: undefined, funcStores: 0, otherStores: 0, conflict: false };
-					slots.set(slot, acc);
-				}
-				const func = localFuncOf.get(source);
-				if (func !== undefined) {
-					acc.funcStores += 1;
-					if (acc.func === undefined) {
-						acc.func = func;
-					} else if (acc.func !== func) {
-						acc.conflict = true;
-					}
-				} else if (!emptyRegs.has(source)) {
-					acc.otherStores += 1;
-				}
-			}
-		}
-	}
-	const resolved = new Map<number, number>();
-	for (const [slot, acc] of slots) {
-		if (
-			acc.func !== undefined &&
-			acc.funcStores === 1 &&
-			acc.otherStores === 0 &&
-			!acc.conflict
-		) {
-			resolved.set(slot, acc.func);
-		}
-	}
-	return resolved;
+	return functionSlotFacts(program).global;
 }
 
 /**
@@ -333,12 +347,14 @@ interface IntrinsicDerivedSlotFacts {
  */
 function intrinsicDerivedSlotFacts(
 	program: IntermediateProgram,
+	indexes: ReadonlyMap<IRFunction, IRRegisterIndex> = new Map(
+		program.functions.map((fn) => [fn, buildIRRegisterIndex(fn)]),
+	),
 ): IntrinsicDerivedSlotFacts {
 	interface StoreSource {
 		fn: IRFunction;
 		register: number;
 	}
-	const indexes = new Map(program.functions.map((fn) => [fn, buildIRRegisterIndex(fn)]));
 	const capturedStores = new Map<string, Array<StoreSource>>();
 	const globalStores = new Map<number, Array<StoreSource>>();
 	for (const fn of program.functions) {
@@ -432,15 +448,19 @@ function intrinsicDerivedSlotFacts(
 }
 
 export function annotateDirectCallTargets(program: IntermediateProgram): number {
-	const capturedSlots = capturedSlotFunctions(program);
-	const globalSlots = globalSlotFunctions(program);
-	const intrinsicSlots = intrinsicDerivedSlotFacts(program);
+	const indexes = new Map(program.functions.map((fn) => [fn, buildIRRegisterIndex(fn)]));
+	const { captured: capturedSlots, global: globalSlots } = functionSlotFacts(
+		program,
+		indexes,
+	);
+	const intrinsicSlots = intrinsicDerivedSlotFacts(program, indexes);
 	const functions = new Map(program.functions.map((fn) => [fn.functionIndex, fn]));
 	let functionCallCount = 0;
 
 	for (const fn of program.functions) {
-		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
-		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const registerIndex = indexes.get(fn)!;
+		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots, registerIndex);
+		const definitions = registerIndex.uniqueDefinitions;
 		const intrinsicOf = new Set<number>();
 		let provenanceChanged = true;
 		while (provenanceChanged) {
@@ -766,7 +786,11 @@ export function findInlinableCalls(
 	program: IntermediateProgram,
 ): ProgramInlineCandidates {
 	const targetOf = new Map<number, IRFunction>();
-	for (const fn of program.functions) targetOf.set(fn.functionIndex, fn);
+	const registerIndexes = new Map<IRFunction, IRRegisterIndex>();
+	for (const fn of program.functions) {
+		targetOf.set(fn.functionIndex, fn);
+		registerIndexes.set(fn, buildIRRegisterIndex(fn));
+	}
 	const eligibleCache = new Map<number, boolean>();
 	const isEligible = (index: number): boolean => {
 		const cached = eligibleCache.get(index);
@@ -779,11 +803,18 @@ export function findInlinableCalls(
 		return ok;
 	};
 
-	const capturedSlots = capturedSlotFunctions(program);
-	const globalSlots = globalSlotFunctions(program);
+	const { captured: capturedSlots, global: globalSlots } = functionSlotFacts(
+		program,
+		registerIndexes,
+	);
 	const byCaller = new Map<number, Array<InlineCandidate>>();
 	for (const fn of program.functions) {
-		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
+		const funcOf = functionValuedRegisters(
+			fn,
+			capturedSlots,
+			globalSlots,
+			registerIndexes.get(fn),
+		);
 		const candidates: Array<InlineCandidate> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -1313,13 +1344,19 @@ export function decodeStringConstant(
  * only — no transformation.
  */
 export function findHofInlineSites(program: IntermediateProgram): ProgramHofSites {
+	const targetOf = new Map<number, IRFunction>();
+	const registerIndexes = new Map<IRFunction, IRRegisterIndex>();
+	for (const fn of program.functions) {
+		targetOf.set(fn.functionIndex, fn);
+		registerIndexes.set(fn, buildIRRegisterIndex(fn));
+	}
 	const eligibleCache = new Map<number, boolean>();
 	const isEligible = (index: number): boolean => {
 		const cached = eligibleCache.get(index);
 		if (cached !== undefined) {
 			return cached;
 		}
-		const target = program.functions.find((fn) => fn.functionIndex === index);
+		const target = targetOf.get(index);
 		const ok =
 			target !== undefined &&
 			isInlinableTarget(target) &&
@@ -1335,12 +1372,15 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 		return ok;
 	};
 
-	const capturedSlots = capturedSlotFunctions(program);
-	const globalSlots = globalSlotFunctions(program);
+	const { captured: capturedSlots, global: globalSlots } = functionSlotFacts(
+		program,
+		registerIndexes,
+	);
 	const byCaller = new Map<number, Array<HofInlineSite>>();
 	for (const fn of program.functions) {
-		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
-		const defs = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const registerIndex = registerIndexes.get(fn)!;
+		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots, registerIndex);
+		const defs = registerIndex.uniqueDefinitions;
 		const sites: Array<HofInlineSite> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {

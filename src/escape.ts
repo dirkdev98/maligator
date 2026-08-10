@@ -33,13 +33,12 @@
  */
 
 import {
-	capturedSlotFunctions,
 	decodeStringConstant,
+	functionSlotFacts,
 	functionValuedRegisters,
-	globalSlotFunctions,
 } from "./inline.ts";
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
-import type { IRRegisterOperand } from "./ir-register-index.ts";
+import type { IRRegisterIndex, IRRegisterOperand } from "./ir-register-index.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 import { log } from "./utils.ts";
 
@@ -236,8 +235,8 @@ function buildFunctionContext(
 	fn: IRFunction,
 	capturedSlots: ReadonlyMap<string, number>,
 	globalSlots: ReadonlyMap<number, number>,
+	registerIndex: IRRegisterIndex = buildIRRegisterIndex(fn),
 ): FunctionContext {
-	const registerIndex = buildIRRegisterIndex(fn);
 	const defCount = new Map<number, number>();
 	for (const [register, definitions] of registerIndex.definitions) {
 		defCount.set(register, definitions.length);
@@ -246,7 +245,7 @@ function buildFunctionContext(
 		defCount,
 		usesOf: registerIndex.uses,
 		singleDefs: registerIndex.uniqueDefinitions,
-		funcOf: functionValuedRegisters(fn, capturedSlots, globalSlots),
+		funcOf: functionValuedRegisters(fn, capturedSlots, globalSlots, registerIndex),
 	};
 }
 
@@ -630,8 +629,13 @@ export interface ProgramEscape {
  * terminates on the finite lattice.
  */
 export function analyzeProgramEscape(program: IntermediateProgram): ProgramEscape {
-	const capturedSlots = capturedSlotFunctions(program);
-	const globalSlots = globalSlotFunctions(program);
+	const registerIndexes = new Map(
+		program.functions.map((fn) => [fn, buildIRRegisterIndex(fn)]),
+	);
+	const { captured: capturedSlots, global: globalSlots } = functionSlotFacts(
+		program,
+		registerIndexes,
+	);
 
 	const contexts = new Map<number, FunctionContext>();
 	const summaries = new Map<number, EffectSummary>();
@@ -640,7 +644,10 @@ export function analyzeProgramEscape(program: IntermediateProgram): ProgramEscap
 	// for analyzable ones (params/receiver `none`, raised below).
 	const analyzableSet = new Set<number>();
 	for (const fn of program.functions) {
-		contexts.set(fn.functionIndex, buildFunctionContext(fn, capturedSlots, globalSlots));
+		contexts.set(
+			fn.functionIndex,
+			buildFunctionContext(fn, capturedSlots, globalSlots, registerIndexes.get(fn)),
+		);
 		if (!analyzable(fn)) {
 			summaries.set(fn.functionIndex, conservativeSummary(fn));
 			continue;
