@@ -19,6 +19,7 @@ fetch/api/headers/headers-errors.any.js
 fetch/api/headers/headers-normalize.any.js
 fetch/api/headers/headers-structure.any.js
 fetch/api/request/forbidden-method.any.js
+fetch/api/request/request-clone-readable-stream-body.any.js
 fetch/api/request/request-constructor-init-body-override.any.js
 fetch/api/request/request-consume-empty.any.js
 fetch/api/request/request-error.any.js

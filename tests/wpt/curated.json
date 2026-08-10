@@ -226,6 +226,14 @@
 			"includes": []
 		},
 		{
+			"path": "fetch/api/request/request-clone-readable-stream-body.any.js",
+			"sha256": "fceb5b247950c5fa814e6b76625ec2c242100e9f3690f5581f94de35c5f1c96b",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
 			"path": "fetch/api/request/request-constructor-init-body-override.any.js",
 			"sha256": "f632fc7bf3f5a685fe502c530af6d49fe36716e7fedaa8dac260fe3ccab81590",
 			"target": "server-main",
