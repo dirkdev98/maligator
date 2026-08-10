@@ -453,7 +453,7 @@ test(function(t) {
 		expect(parsed.harness.status).toBe("OK");
 	});
 
-	it("passes promise_test context and supports promise_rejects_exactly", () => {
+	it("passes promise_test context and supports rejection assertions", () => {
 		const source = String.raw`
 var reason = {};
 promise_test(function(t) {
@@ -462,11 +462,19 @@ promise_test(function(t) {
 }, "exact rejection");
 promise_test(function(t) {
   return promise_rejects_exactly(t, reason, Promise.reject({}), "wrong reason");
-}, "wrong rejection");`;
+}, "wrong rejection");
+promise_test(function(t) {
+  return promise_rejects_js(t, TypeError, Promise.reject(new TypeError("expected")), "JS error");
+}, "JS rejection");
+promise_test(function(t) {
+  return promise_rejects_js(t, TypeError, Promise.reject(new RangeError("wrong")), "wrong JS error");
+}, "wrong JS rejection");`;
 		const parsed = runProgram(source);
 		expect(parsed.subtests.map(({ subtest, status }) => [subtest, status])).toEqual([
 			["exact rejection", "PASS"],
 			["wrong rejection", "FAIL"],
+			["JS rejection", "PASS"],
+			["wrong JS rejection", "FAIL"],
 		]);
 	});
 

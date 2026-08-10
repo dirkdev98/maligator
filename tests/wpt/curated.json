@@ -218,6 +218,71 @@
 			"includes": []
 		},
 		{
+			"path": "fetch/api/request/forbidden-method.any.js",
+			"sha256": "d531582e04abd1857c9de1e8b2b745f5899c7e855c1ac0dc6d2bf8c93d439044",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" }
+			],
+			"includes": []
+		},
+		{
+			"path": "fetch/api/response/response-error.any.js",
+			"sha256": "f5c0863dd92f0e973c4fda128ec9d869cf36a226bd891f387e3faa01e29389cd",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Response error" }
+			],
+			"includes": []
+		},
+		{
+			"path": "fetch/api/response/response-init-001.any.js",
+			"sha256": "a4f53fc2c718a3a6d9f2692f6778e88dc74f7c938940ba47ffc4ac5dd9096482",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Response init: simple cases" }
+			],
+			"includes": []
+		},
+		{
+			"path": "fetch/api/response/response-static-error.any.js",
+			"sha256": "d55c1c97d9db34123e02a73b44965e31bb638b75ef38cbaf1fe01b0050c49355",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Response: error static method" }
+			],
+			"includes": []
+		},
+		{
+			"path": "fetch/api/response/response-static-json.any.js",
+			"sha256": "467229540cf61c12ee730be8d658d921b9b70afebfc9b8379ca6afe8b6a1b060",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Response: json static method" }
+			],
+			"includes": []
+		},
+		{
+			"path": "fetch/api/response/response-static-redirect.any.js",
+			"sha256": "0ba5cced747dffc81bc08e528aa40014488e9679985f0cc501fa5143d8fef29e",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Response: redirect static method" }
+			],
+			"includes": []
+		},
+		{
 			"path": "html/webappapis/timers/cleartimeout-clearinterval.any.js",
 			"sha256": "88249c3de681efa1db0c3a6ca39cdc74b657b052eeb96ca7d43b2971d5327985",
 			"target": "server-main",
