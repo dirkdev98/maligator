@@ -179,6 +179,12 @@ static void ws_error_stream(
     stream->as.writable_stream.stored_error = roots[1];
     mal_gc_card(&stream->object.header, roots[1]);
     MalReadableStreamObject *controller = ws_controller_for(stream);
+    MalReadableStreamObject *writer = ws_writer_for(stream);
+    if (writer != nullptr) {
+        MalPromiseObject *ready =
+            mal_value_to_promise_object(writer->as.writer.ready_promise);
+        if (ready->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, ready, roots[1]);
+    }
     MalWritableStreamWriteRequest *request =
         controller->as.writable_controller.queue_head;
     if (controller->as.writable_controller.writing && request != nullptr &&
@@ -200,11 +206,7 @@ static void ws_error_stream(
     if (!controller->as.writable_controller.writing) {
         controller->as.writable_controller.queue_total_size = 0;
     }
-    MalReadableStreamObject *writer = ws_writer_for(stream);
     if (writer != nullptr) {
-        MalPromiseObject *ready =
-            mal_value_to_promise_object(writer->as.writer.ready_promise);
-        if (ready->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, ready, roots[1]);
         MalPromiseObject *closed =
             mal_value_to_promise_object(writer->as.writer.closed_promise);
         if (closed->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, closed, roots[1]);
