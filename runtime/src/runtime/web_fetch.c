@@ -300,6 +300,7 @@ MalResponseObject *mal_response_object_new(
     r->status = status;
     r->status_text = mal_value_new_undefined();
     r->headers = mal_value_new_undefined();
+    r->server_headers = mal_value_new_undefined();
     r->body = body;
     r->body_len = body_len;
     r->body_stream = mal_value_new_undefined();
@@ -318,7 +319,44 @@ static void mal_response_trace(MalHeapHeader *cell) {
     MalResponseObject *response = (MalResponseObject *) cell;
     mal_gc_mark_value(response->status_text);
     mal_gc_mark_value(response->headers);
+    mal_gc_mark_value(response->server_headers);
     mal_gc_mark_value(response->body_stream);
+}
+
+static bool mal_fetch_response_headers(MalVm *vm, MalValue init,
+    MalValue *visible_out, MalValue *server_out) {
+    MalValue roots[3] = {mal_value_new_undefined(), init, mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 3);
+    MalHeadersObject *raw = mal_headers_from_init(vm, roots[1]);
+    roots[0] = mal_value_from_headers_object(raw);
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+        mal_gc_unroot(&rs);
+        return false;
+    }
+    MalHeadersObject *visible = mal_headers_create(vm);
+    visible->guard = MAL_HEADERS_GUARD_RESPONSE;
+    roots[2] = mal_value_from_headers_object(visible);
+    MalHeadersObject *server = mal_headers_create(vm);
+    *server_out = mal_value_from_headers_object(server);
+    MalRootSpan server_span;
+    mal_gc_root(&server_span, server_out, 1);
+    for (i32 i = 0; i < raw->count; i++) {
+        MalHeaderEntry *entry = &raw->entries[i];
+        MalHeadersObject *target = mal_fetch_name_is(entry->name, "set-cookie")
+                || mal_fetch_name_is(entry->name, "set-cookie2")
+            ? server : visible;
+        if (!mal_headers_append_entry(target, entry->name, entry->value)) {
+            mal_vm_throw_allocation_error(vm);
+            mal_gc_unroot(&server_span);
+            mal_gc_unroot(&rs);
+            return false;
+        }
+    }
+    *visible_out = roots[2];
+    mal_gc_unroot(&server_span);
+    mal_gc_unroot(&rs);
+    return true;
 }
 
 static MalValue mal_response_constructor(
@@ -332,13 +370,14 @@ static MalValue mal_response_constructor(
     (void) callee;
 
     i32 status = 200;
-    MalValue roots[3] = {
+    MalValue roots[4] = {
         mal_value_new_undefined(),
         mal_value_new_undefined(),
         mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0)),
+        mal_value_new_undefined(),
     };
     MalRootSpan rs;
-    mal_gc_root(&rs, roots, 3);
+    mal_gc_root(&rs, roots, 4);
     byte *body = nullptr;
     MalResponseObject *response = nullptr;
     const char *content_type = nullptr;
@@ -430,8 +469,10 @@ static MalValue mal_response_constructor(
     }
     response = mal_response_object_new(&vm->heap, proto, status, body, body_len);
     roots[1] = mal_value_from_response_object(response);
-    response->headers = mal_value_from_headers_object(mal_headers_from_init(vm, roots[0]));
-    if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto response_error;
+    if (!mal_fetch_response_headers(vm, roots[0], &response->headers, &roots[3])) {
+        goto response_error;
+    }
+    response->server_headers = roots[3];
     response->status_text = roots[2];
     mal_fetch_default_content_type(
         vm, mal_value_to_headers_object(response->headers), content_type);
@@ -937,12 +978,11 @@ static MalValue mal_response_static_json(
     MalResponseObject *r = mal_response_object_new(&vm->heap, proto, status, body, body_len);
     roots[0] = mal_value_from_response_object(r);
     r->status_text = roots[2];
-    MalHeadersObject *h = mal_headers_from_init(vm, roots[1]);
-    if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+    if (!mal_fetch_response_headers(vm, roots[1], &r->headers, &r->server_headers)) {
         mal_gc_unroot(&rs);
         return mal_value_new_undefined();
     }
-    r->headers = mal_value_from_headers_object(h); // reachable + traced via r now
+    MalHeadersObject *h = mal_value_to_headers_object(r->headers);
     mal_fetch_default_content_type(vm, h, "application/json");
     MalValue result = roots[0];
     mal_gc_unroot(&rs);
@@ -990,6 +1030,8 @@ static MalValue mal_response_static_redirect(
     mal_gc_root(&rrs, &rval, 1);
     MalHeadersObject *h = mal_headers_create(vm);
     r->headers = mal_value_from_headers_object(h);
+    MalHeadersObject *server_headers = mal_headers_create(vm);
+    r->server_headers = mal_value_from_headers_object(server_headers);
     i32 url_len = mal_url_href(url_handle, nullptr, 0);
     byte *url_bytes = url_len > 0 ? malloc((usize) url_len) : nullptr;
     if (url_len > 0 && url_bytes == nullptr) {
@@ -1025,6 +1067,8 @@ static MalValue mal_response_static_error(
     MalHeadersObject *h = mal_headers_create(vm);
     h->guard = MAL_HEADERS_GUARD_IMMUTABLE;
     r->headers = mal_value_from_headers_object(h);
+    MalHeadersObject *server_headers = mal_headers_create(vm);
+    r->server_headers = mal_value_from_headers_object(server_headers);
     mal_gc_unroot(&rrs);
     return rval;
 }
@@ -1844,24 +1888,34 @@ static char *mal_fetch_serialize_headers(
     MalResponseObject *r, usize *out_len, bool *ok) {
     static const char default_ct[] = "Content-Type: text/plain; charset=utf-8\r\n";
     *ok = true;
-    if (!mal_value_is_headers_object(r->headers)) {
+    MalHeadersObject *headers[2];
+    i32 header_count = 0;
+    if (mal_value_is_headers_object(r->server_headers)) {
+        headers[header_count++] = mal_value_to_headers_object(r->server_headers);
+    }
+    if (mal_value_is_headers_object(r->headers)) {
+        headers[header_count++] = mal_value_to_headers_object(r->headers);
+    }
+    if (header_count == 0) {
         *out_len = 0;
         return nullptr;
     }
-    MalHeadersObject *h = mal_value_to_headers_object(r->headers);
 
     bool has_ct = false;
     usize size = 0;
-    for (i32 i = 0; i < h->count; i++) {
-        const MalString *n = h->entries[i].name;
-        if (mal_fetch_name_is(n, "content-length") || mal_fetch_name_is(n, "connection")
-            || mal_fetch_name_is(n, "transfer-encoding")) {
-            continue;
+    for (i32 set = 0; set < header_count; set++) {
+        MalHeadersObject *h = headers[set];
+        for (i32 i = 0; i < h->count; i++) {
+            const MalString *n = h->entries[i].name;
+            if (mal_fetch_name_is(n, "content-length") || mal_fetch_name_is(n, "connection")
+                || mal_fetch_name_is(n, "transfer-encoding")) {
+                continue;
+            }
+            if (mal_fetch_name_is(n, "content-type")) {
+                has_ct = true;
+            }
+            size += mal_string_length(n) + 2 + mal_string_length(h->entries[i].value) + 2;
         }
-        if (mal_fetch_name_is(n, "content-type")) {
-            has_ct = true;
-        }
-        size += mal_string_length(n) + 2 + mal_string_length(h->entries[i].value) + 2;
     }
     if (!has_ct) {
         size += strlen(default_ct);
@@ -1878,27 +1932,30 @@ static char *mal_fetch_serialize_headers(
         memcpy(buf, default_ct, strlen(default_ct));
         o += strlen(default_ct);
     }
-    for (i32 i = 0; i < h->count; i++) {
-        const MalString *n = h->entries[i].name;
-        if (mal_fetch_name_is(n, "content-length") || mal_fetch_name_is(n, "connection")
-            || mal_fetch_name_is(n, "transfer-encoding")) {
-            continue;
+    for (i32 set = 0; set < header_count; set++) {
+        MalHeadersObject *h = headers[set];
+        for (i32 i = 0; i < h->count; i++) {
+            const MalString *n = h->entries[i].name;
+            if (mal_fetch_name_is(n, "content-length") || mal_fetch_name_is(n, "connection")
+                || mal_fetch_name_is(n, "transfer-encoding")) {
+                continue;
+            }
+            const c16 *nu = mal_string_code_units(n);
+            usize nl = mal_string_length(n);
+            for (usize k = 0; k < nl; k++) {
+                buf[o++] = (char) nu[k];
+            }
+            buf[o++] = ':';
+            buf[o++] = ' ';
+            const MalString *v = h->entries[i].value;
+            const c16 *vu = mal_string_code_units(v);
+            usize vl = mal_string_length(v);
+            for (usize k = 0; k < vl; k++) {
+                buf[o++] = (char) vu[k];
+            }
+            buf[o++] = '\r';
+            buf[o++] = '\n';
         }
-        const c16 *nu = mal_string_code_units(n);
-        usize nl = mal_string_length(n);
-        for (usize k = 0; k < nl; k++) {
-            buf[o++] = (char) nu[k];
-        }
-        buf[o++] = ':';
-        buf[o++] = ' ';
-        const MalString *v = h->entries[i].value;
-        const c16 *vu = mal_string_code_units(v);
-        usize vl = mal_string_length(v);
-        for (usize k = 0; k < vl; k++) {
-            buf[o++] = (char) vu[k];
-        }
-        buf[o++] = '\r';
-        buf[o++] = '\n';
     }
     *out_len = o;
     return buf;
