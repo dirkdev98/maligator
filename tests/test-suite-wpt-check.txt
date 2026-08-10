@@ -65,6 +65,7 @@ streams/writable-streams/error.any.js
 streams/writable-streams/floating-point-total-queue-size.any.js
 streams/writable-streams/general.any.js
 streams/writable-streams/properties.any.js
+streams/writable-streams/start.any.js
 url/url-searchparams.any.js
 url/url-statics-canparse.any.js
 url/url-statics-parse.any.js
