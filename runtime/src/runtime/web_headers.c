@@ -215,6 +215,86 @@ static bool mal_headers_can_mutate(MalVm *vm, const MalHeadersObject *h) {
     return true;
 }
 
+static bool mal_headers_name_is_ascii(const MalString *name, const char *ascii) {
+    usize length = strlen(ascii);
+    if (mal_string_length(name) != length) return false;
+    const c16 *units = mal_string_code_units(name);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] != (c16) (u8) ascii[i]) return false;
+    }
+    return true;
+}
+
+static bool mal_headers_name_starts_ascii(const MalString *name, const char *ascii) {
+    usize length = strlen(ascii);
+    if (mal_string_length(name) < length) return false;
+    const c16 *units = mal_string_code_units(name);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] != (c16) (u8) ascii[i]) return false;
+    }
+    return true;
+}
+
+static bool mal_headers_forbidden_request_name(const MalString *name) {
+    static const char *const forbidden[] = {"accept-charset", "accept-encoding",
+        "access-control-request-headers", "access-control-request-method", "connection",
+        "content-length", "cookie", "cookie2", "date", "dnt", "expect", "host",
+        "keep-alive", "origin", "referer", "set-cookie", "te",
+        "trailer", "transfer-encoding", "upgrade", "via"};
+    for (usize i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); i++) {
+        if (mal_headers_name_is_ascii(name, forbidden[i])) return true;
+    }
+    return mal_headers_name_starts_ascii(name, "proxy-")
+        || mal_headers_name_starts_ascii(name, "sec-");
+}
+
+static bool mal_headers_value_starts_ascii_ci(
+    const MalString *value, const char *ascii) {
+    usize prefix = strlen(ascii);
+    usize length = mal_string_length(value);
+    if (length < prefix) return false;
+    const c16 *units = mal_string_code_units(value);
+    for (usize i = 0; i < prefix; i++) {
+        c16 unit = units[i];
+        if (unit >= 'A' && unit <= 'Z') unit = (c16) (unit + ('a' - 'A'));
+        if (unit != (c16) (u8) ascii[i]) return false;
+    }
+    return length == prefix || units[prefix] == ';';
+}
+
+static bool mal_headers_no_cors_safelisted(
+    const MalString *name, const MalString *value) {
+    if (mal_string_length(value) > 128) return false;
+    if (mal_headers_name_is_ascii(name, "accept")
+        || mal_headers_name_is_ascii(name, "accept-language")
+        || mal_headers_name_is_ascii(name, "content-language")) {
+        return true;
+    }
+    if (!mal_headers_name_is_ascii(name, "content-type")) return false;
+    return mal_headers_value_starts_ascii_ci(value, "application/x-www-form-urlencoded")
+        || mal_headers_value_starts_ascii_ci(value, "multipart/form-data")
+        || mal_headers_value_starts_ascii_ci(value, "text/plain");
+}
+
+static bool mal_headers_guard_allows(
+    const MalHeadersObject *h, const MalString *name, const MalString *value) {
+    if ((h->guard == MAL_HEADERS_GUARD_REQUEST
+            || h->guard == MAL_HEADERS_GUARD_REQUEST_NO_CORS)
+        && mal_headers_forbidden_request_name(name)) {
+        return false;
+    }
+    if (h->guard == MAL_HEADERS_GUARD_REQUEST_NO_CORS
+        && !mal_headers_no_cors_safelisted(name, value)) {
+        return false;
+    }
+    if (h->guard == MAL_HEADERS_GUARD_RESPONSE
+        && (mal_headers_name_is_ascii(name, "set-cookie")
+            || mal_headers_name_is_ascii(name, "set-cookie2"))) {
+        return false;
+    }
+    return true;
+}
+
 static bool mal_headers_append_values(
     MalVm *vm, MalHeadersObject *h, MalValue name_input, MalValue value_input) {
     MalValue roots[4] = {
@@ -243,6 +323,10 @@ static bool mal_headers_append_values(
     if (!mal_headers_validate_value(vm, value)) {
         mal_gc_unroot(&rs);
         return false;
+    }
+    if (!mal_headers_guard_allows(h, name, value)) {
+        mal_gc_unroot(&rs);
+        return true;
     }
     bool mutable = mal_headers_can_mutate(vm, h);
     if (mutable && !mal_headers_append_entry(h, name, value)) {
@@ -564,6 +648,11 @@ static MalValue mal_headers_method_set(
         }
         MalString *name = tmp->entries[0].name;
         MalString *value = tmp->entries[0].value;
+        if (!mal_headers_guard_allows(h, name, value)) {
+            mal_gc_unroot(&rs);
+            mal_gc_native_rooted_end(vm);
+            return mal_value_new_undefined();
+        }
         i32 first = -1;
         i32 w = 0;
         for (i32 i = 0; i < h->count; i++) {
@@ -632,7 +721,8 @@ static MalValue mal_headers_method_delete(
     mal_gc_native_rooted_begin(vm);
     MalString *n;
     if (mal_headers_method_name(vm, args, argc, &name_root, &n)) {
-        if (mal_headers_can_mutate(vm, h)) {
+        MalString *empty = mal_string_new_ascii(&vm->heap, "", 0);
+        if (mal_headers_guard_allows(h, n, empty) && mal_headers_can_mutate(vm, h)) {
             mal_headers_remove(h, n);
         }
     }
@@ -711,8 +801,24 @@ static MalHeadersObject *mal_headers_from_init_with_prototype(
 }
 
 MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init) {
-    return mal_headers_from_init_with_prototype(vm, init,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_HEADERS_PROTOTYPE]));
+    return mal_headers_from_init_guarded(vm, init, MAL_HEADERS_GUARD_NONE);
+}
+
+MalHeadersObject *mal_headers_from_init_guarded(
+    MalVm *vm, MalValue init, MalHeadersGuard guard) {
+    MalHeadersObject *headers = mal_headers_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_HEADERS_PROTOTYPE]));
+    headers->guard = guard;
+    MalValue roots[2] = {mal_value_from_headers_object(headers), init};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
+    if (!mal_value_is_undefined(roots[1])) {
+        mal_gc_native_rooted_begin(vm);
+        mal_headers_fill_from_init(vm, headers, roots[1]);
+        mal_gc_native_rooted_end(vm);
+    }
+    mal_gc_unroot(&rs);
+    return headers;
 }
 
 static MalValue mal_headers_constructor(

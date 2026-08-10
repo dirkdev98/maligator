@@ -1329,7 +1329,10 @@ static MalValue mal_request_constructor(
             "GET and HEAD requests cannot have a body");
         goto request_error;
     }
-    slots[5] = mal_value_from_headers_object(mal_headers_from_init(vm, slots[3]));
+    MalHeadersGuard headers_guard = request_mode == 1
+        ? MAL_HEADERS_GUARD_REQUEST_NO_CORS : MAL_HEADERS_GUARD_REQUEST;
+    slots[5] = mal_value_from_headers_object(
+        mal_headers_from_init_guarded(vm, slots[3], headers_guard));
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto request_error;
     mal_fetch_default_content_type(
         vm, mal_value_to_headers_object(slots[5]), content_type);

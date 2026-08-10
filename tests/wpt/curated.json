@@ -245,6 +245,17 @@
 			]
 		},
 		{
+			"path": "fetch/api/request/request-headers.any.js",
+			"sha256": "abb337fe59abb65853d8af6a1545ae6f9650d2f31c4311b68156977d9b472ddc",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Request Headers" }
+			],
+			"includes": []
+		},
+		{
 			"path": "fetch/api/response/response-error.any.js",
 			"sha256": "f5c0863dd92f0e973c4fda128ec9d869cf36a226bd891f387e3faa01e29389cd",
 			"target": "server-main",
