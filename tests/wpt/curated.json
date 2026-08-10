@@ -548,6 +548,14 @@
 			"includes": []
 		},
 		{
+			"path": "streams/readable-streams/count-queuing-strategy-integration.any.js",
+			"sha256": "0e2014e25113e9e1685c59a2b8fbbd39eedc931fe9450054b0587030ed0b0366",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
 			"path": "streams/readable-streams/floating-point-total-queue-size.any.js",
 			"sha256": "7e7e4d0767702c23de523e0e58d17cf997d12ced0f5836cf7930ec320243f560",
 			"target": "server-main",
