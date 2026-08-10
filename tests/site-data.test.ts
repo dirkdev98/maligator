@@ -1,10 +1,25 @@
 import { expect, test } from "vitest";
 import {
+	changesOnly,
 	isoWeekKey,
 	latestPerWeek,
 	since,
 	summarizeTest262,
 } from "../scripts/site-data.ts";
+
+test("benchmark history retains each changed commit and skips unrelated snapshots", () => {
+	const points = changesOnly(
+		[
+			{ commit: "a", value: 100 },
+			{ commit: "b", value: 100 },
+			{ commit: "c", value: 90 },
+			{ commit: "d", value: 90 },
+			{ commit: "e", value: 100 },
+		],
+		(point) => point.value,
+	);
+	expect(points.map((point) => point.commit)).toEqual(["a", "c", "e"]);
+});
 
 test("Test262 site summary keeps skips separate and folds all failure modes", () => {
 	expect(

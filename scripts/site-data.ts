@@ -32,6 +32,8 @@ export interface Test262Point extends DatedPoint {
 export interface SelfCompileMetrics {
 	maligatorMs: number;
 	nodeMs: number;
+	maligatorPhases: SelfCompilePhases;
+	nodePhases: SelfCompilePhases;
 	runs: number;
 	units: number;
 	maligatorCodeUnits: number;
@@ -39,6 +41,17 @@ export interface SelfCompileMetrics {
 	platform: string;
 	arch: string;
 	nodeVersion: string;
+}
+
+interface SelfCompilePhases {
+	graphMs: number;
+	semanticMs: number;
+	compileToIrMs: number;
+	optimizeMs: number;
+	regallocMs: number;
+	lowerMs: number;
+	emitMs: number;
+	writeMs: number;
 }
 
 export interface SelfCompilePoint extends DatedPoint, SelfCompileMetrics {
@@ -50,6 +63,8 @@ function selfCompileMetrics(point: SelfCompilePoint): SelfCompileMetrics {
 	return {
 		maligatorMs: point.maligatorMs,
 		nodeMs: point.nodeMs,
+		maligatorPhases: point.maligatorPhases,
+		nodePhases: point.nodePhases,
 		runs: point.runs,
 		units: point.units,
 		maligatorCodeUnits: point.maligatorCodeUnits,
@@ -113,6 +128,23 @@ export function latestPerWeek<T extends DatedPoint>(points: ReadonlyArray<T>): A
 	return [...result.values()];
 }
 
+/** Keep the first point and every later point whose measured value changed. */
+export function changesOnly<T>(
+	points: ReadonlyArray<T>,
+	valueOf: (point: T) => unknown,
+): Array<T> {
+	const result: Array<T> = [];
+	let previous: string | undefined;
+	let hasPrevious = false;
+	for (const point of points) {
+		const current = JSON.stringify(valueOf(point));
+		if (!hasPrevious || current !== previous) result.push(point);
+		previous = current;
+		hasPrevious = true;
+	}
+	return result;
+}
+
 export function since<T extends DatedPoint>(
 	points: ReadonlyArray<T>,
 	start: string,
@@ -171,18 +203,21 @@ function currentCommit(): string {
 export function selfCompileHistory(
 	previewDate = statSync(BENCH_FILE).mtime,
 ): Array<SelfCompilePoint> {
-	const committed: Array<SelfCompilePoint> = history<BenchmarkFile>(BENCH_FILE)
-		.filter(
-			(
-				revision,
-			): revision is GitRevision<BenchmarkFile & { selfCompile: SelfCompileMetrics }> =>
-				revision.value.selfCompile !== undefined,
-		)
-		.map(({ commit, date, value }) => ({
-			commit: commit.slice(0, 8),
-			date,
-			...value.selfCompile,
-		}));
+	const committed: Array<SelfCompilePoint> = changesOnly(
+		history<BenchmarkFile>(BENCH_FILE)
+			.filter(
+				(
+					revision,
+				): revision is GitRevision<BenchmarkFile & { selfCompile: SelfCompileMetrics }> =>
+					revision.value.selfCompile !== undefined,
+			)
+			.map(({ commit, date, value }) => ({
+				commit: commit.slice(0, 8),
+				date,
+				...value.selfCompile,
+			})),
+		selfCompileMetrics,
+	);
 	const current = (JSON.parse(readFileSync(BENCH_FILE, "utf8")) as BenchmarkFile)
 		.selfCompile;
 	if (current !== undefined) {
@@ -197,7 +232,7 @@ export function selfCompileHistory(
 			});
 		}
 	}
-	return latestPerWeek(committed);
+	return committed;
 }
 
 function replaceRegion(source: string, name: string, body: string): string {
