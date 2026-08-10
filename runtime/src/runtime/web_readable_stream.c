@@ -1431,6 +1431,401 @@ MalValue mal_readable_stream_create_proxy(MalVm *vm, MalValue value) {
     return proxy;
 }
 
+enum {
+    RS_TEE_READER,
+    RS_TEE_CONTROLLER_1,
+    RS_TEE_CONTROLLER_2,
+    RS_TEE_READING,
+    RS_TEE_CANCELED_1,
+    RS_TEE_CANCELED_2,
+    RS_TEE_REASON_1,
+    RS_TEE_REASON_2,
+    RS_TEE_CANCEL_PROMISE_1,
+    RS_TEE_CANCEL_RESOLVE_1,
+    RS_TEE_CANCEL_REJECT_1,
+    RS_TEE_CANCEL_PROMISE_2,
+    RS_TEE_CANCEL_RESOLVE_2,
+    RS_TEE_CANCEL_REJECT_2,
+    RS_TEE_CLOSED,
+    RS_TEE_SLOT_COUNT,
+};
+
+static MalValue rs_tee_state_callback(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm;
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_new_undefined();
+}
+
+static bool rs_tee_branch_canceled(
+    MalNativeFunctionObject *state, i32 branch) {
+    return mal_value_is_truthy(mal_native_function_object_get_slot(
+        state, branch == 1 ? RS_TEE_CANCELED_1 : RS_TEE_CANCELED_2));
+}
+
+static MalValue rs_tee_branch_controller(
+    MalNativeFunctionObject *state, i32 branch) {
+    return mal_native_function_object_get_slot(
+        state, branch == 1 ? RS_TEE_CONTROLLER_1 : RS_TEE_CONTROLLER_2);
+}
+
+static void rs_tee_call_settler(
+    MalVm *vm, MalValue settler, MalValue value) {
+    if (mal_value_is_undefined(settler)) return;
+    MalCompletion completion = mal_vm_call_value(
+        vm, settler, mal_value_new_undefined(), &value, 1);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion = rs_normal();
+    }
+}
+
+static void rs_tee_settle_cancellations(
+    MalVm *vm, MalNativeFunctionObject *state, bool reject, MalValue value) {
+    for (i32 branch = 1; branch <= 2; branch++) {
+        i32 promise_slot = branch == 1
+            ? RS_TEE_CANCEL_PROMISE_1 : RS_TEE_CANCEL_PROMISE_2;
+        if (mal_value_is_undefined(
+                mal_native_function_object_get_slot(state, promise_slot))) {
+            continue;
+        }
+        i32 settler_slot;
+        if (branch == 1) {
+            settler_slot = reject
+                ? RS_TEE_CANCEL_REJECT_1 : RS_TEE_CANCEL_RESOLVE_1;
+        } else {
+            settler_slot = reject
+                ? RS_TEE_CANCEL_REJECT_2 : RS_TEE_CANCEL_RESOLVE_2;
+        }
+        rs_tee_call_settler(vm,
+            mal_native_function_object_get_slot(state, settler_slot), value);
+    }
+}
+
+static void rs_tee_error_active_branches(
+    MalVm *vm, MalNativeFunctionObject *state, MalValue error) {
+    for (i32 branch = 1; branch <= 2; branch++) {
+        if (rs_tee_branch_canceled(state, branch)) continue;
+        MalValue controller = rs_tee_branch_controller(state, branch);
+        if (!mal_value_is_undefined(controller)) {
+            (void) rs_controller_error(vm, controller, &error, 1,
+                mal_value_new_undefined(), mal_value_new_undefined());
+        }
+    }
+}
+
+static MalValue rs_tee_read_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *callback = mal_value_to_native_function_object(callee);
+    MalValue state_value = mal_native_function_object_get_slot(callback, 0);
+    MalNativeFunctionObject *state =
+        mal_value_to_native_function_object(state_value);
+    mal_native_function_object_set_slot(
+        state, RS_TEE_READING, mal_value_new_boolean(false));
+    MalValue result = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue done;
+    if (!mal_vm_get_property(vm, result,
+            mal_intrinsic_string_key(vm, (const byte *) "done"), &done)) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        mal_native_function_object_set_slot(
+            state, RS_TEE_CLOSED, mal_value_new_boolean(true));
+        rs_tee_error_active_branches(vm, state, error);
+        rs_tee_settle_cancellations(
+            vm, state, false, mal_value_new_undefined());
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_truthy(done)) {
+        mal_native_function_object_set_slot(
+            state, RS_TEE_CLOSED, mal_value_new_boolean(true));
+        for (i32 branch = 1; branch <= 2; branch++) {
+            if (rs_tee_branch_canceled(state, branch)) continue;
+            MalValue controller = rs_tee_branch_controller(state, branch);
+            if (!mal_value_is_undefined(controller)) {
+                (void) rs_controller_close(vm, controller, nullptr, 0,
+                    mal_value_new_undefined(), mal_value_new_undefined());
+            }
+        }
+        rs_tee_settle_cancellations(
+            vm, state, false, mal_value_new_undefined());
+        return mal_value_new_undefined();
+    }
+
+    MalValue chunk;
+    if (!mal_vm_get_property(vm, result,
+            mal_intrinsic_string_key(vm, (const byte *) "value"), &chunk)) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        mal_native_function_object_set_slot(
+            state, RS_TEE_CLOSED, mal_value_new_boolean(true));
+        rs_tee_error_active_branches(vm, state, error);
+        rs_tee_settle_cancellations(
+            vm, state, false, mal_value_new_undefined());
+        return mal_value_new_undefined();
+    }
+    for (i32 branch = 1; branch <= 2; branch++) {
+        if (rs_tee_branch_canceled(state, branch)) continue;
+        MalValue controller = rs_tee_branch_controller(state, branch);
+        if (mal_value_is_undefined(controller)) continue;
+        (void) rs_controller_enqueue(vm, controller, &chunk, 1,
+            mal_value_new_undefined(), mal_value_new_undefined());
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            MalValue error = vm->completion.value;
+            vm->completion = rs_normal();
+            mal_native_function_object_set_slot(
+                state, RS_TEE_CLOSED, mal_value_new_boolean(true));
+            rs_tee_error_active_branches(vm, state, error);
+            rs_tee_settle_cancellations(
+                vm, state, false, mal_value_new_undefined());
+            break;
+        }
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_tee_read_rejected(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *callback = mal_value_to_native_function_object(callee);
+    MalNativeFunctionObject *state = mal_value_to_native_function_object(
+        mal_native_function_object_get_slot(callback, 0));
+    MalValue error = argc >= 1 ? args[0] : mal_value_new_undefined();
+    mal_native_function_object_set_slot(
+        state, RS_TEE_READING, mal_value_new_boolean(false));
+    mal_native_function_object_set_slot(
+        state, RS_TEE_CLOSED, mal_value_new_boolean(true));
+    rs_tee_error_active_branches(vm, state, error);
+    rs_tee_settle_cancellations(
+        vm, state, false, mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_tee_cancel_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *callback = mal_value_to_native_function_object(callee);
+    MalNativeFunctionObject *state = mal_value_to_native_function_object(
+        mal_native_function_object_get_slot(callback, 0));
+    rs_tee_settle_cancellations(
+        vm, state, false, mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_tee_cancel_rejected(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *callback = mal_value_to_native_function_object(callee);
+    MalNativeFunctionObject *state = mal_value_to_native_function_object(
+        mal_native_function_object_get_slot(callback, 0));
+    rs_tee_settle_cancellations(vm, state, true,
+        argc >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_tee_pull(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *pull = mal_value_to_native_function_object(callee);
+    MalValue state_value = mal_native_function_object_get_slot(pull, 0);
+    MalNativeFunctionObject *state =
+        mal_value_to_native_function_object(state_value);
+    i32 branch = mal_value_to_i32(
+        mal_native_function_object_get_slot(pull, 1));
+    if (argc >= 1) {
+        mal_native_function_object_set_slot(state,
+            branch == 1 ? RS_TEE_CONTROLLER_1 : RS_TEE_CONTROLLER_2,
+            args[0]);
+    }
+    if (mal_value_is_truthy(mal_native_function_object_get_slot(
+            state, RS_TEE_CLOSED)) ||
+        mal_value_is_truthy(mal_native_function_object_get_slot(
+            state, RS_TEE_READING))) {
+        return mal_value_new_undefined();
+    }
+    mal_native_function_object_set_slot(
+        state, RS_TEE_READING, mal_value_new_boolean(true));
+    MalValue promise = rs_reader_read(vm,
+        mal_native_function_object_get_slot(state, RS_TEE_READER),
+        nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_native_function_object_set_slot(
+            state, RS_TEE_READING, mal_value_new_boolean(false));
+        return promise;
+    }
+    MalValue fulfilled = rs_callback(vm, rs_tee_read_fulfilled, state_value);
+    MalValue rejected = rs_callback(vm, rs_tee_read_rejected, state_value);
+    mal_promise_perform_then(vm, promise, fulfilled, rejected,
+        mal_value_new_undefined(), mal_value_new_undefined());
+    return promise;
+}
+
+static MalValue rs_tee_cancel(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *cancel = mal_value_to_native_function_object(callee);
+    MalValue state_value = mal_native_function_object_get_slot(cancel, 0);
+    MalNativeFunctionObject *state =
+        mal_value_to_native_function_object(state_value);
+    i32 branch = mal_value_to_i32(
+        mal_native_function_object_get_slot(cancel, 1));
+    i32 canceled_slot = branch == 1 ? RS_TEE_CANCELED_1 : RS_TEE_CANCELED_2;
+    i32 reason_slot = branch == 1 ? RS_TEE_REASON_1 : RS_TEE_REASON_2;
+    i32 promise_slot = branch == 1
+        ? RS_TEE_CANCEL_PROMISE_1 : RS_TEE_CANCEL_PROMISE_2;
+    i32 resolve_slot = branch == 1
+        ? RS_TEE_CANCEL_RESOLVE_1 : RS_TEE_CANCEL_RESOLVE_2;
+    i32 reject_slot = branch == 1
+        ? RS_TEE_CANCEL_REJECT_1 : RS_TEE_CANCEL_REJECT_2;
+    if (!mal_value_is_undefined(
+            mal_native_function_object_get_slot(state, promise_slot))) {
+        return mal_native_function_object_get_slot(state, promise_slot);
+    }
+
+    MalValue promise;
+    MalValue resolve;
+    MalValue reject;
+    if (!mal_promise_new_capability(vm,
+            vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+            &promise, &resolve, &reject)) {
+        return mal_value_new_undefined();
+    }
+    mal_native_function_object_set_slot(state, promise_slot, promise);
+    mal_native_function_object_set_slot(state, resolve_slot, resolve);
+    mal_native_function_object_set_slot(state, reject_slot, reject);
+    mal_native_function_object_set_slot(
+        state, canceled_slot, mal_value_new_boolean(true));
+    mal_native_function_object_set_slot(state, reason_slot,
+        argc >= 1 ? args[0] : mal_value_new_undefined());
+
+    if (mal_value_is_truthy(mal_native_function_object_get_slot(
+            state, RS_TEE_CLOSED))) {
+        rs_tee_call_settler(vm, resolve, mal_value_new_undefined());
+        return promise;
+    }
+    if (!rs_tee_branch_canceled(state, 1) ||
+        !rs_tee_branch_canceled(state, 2)) {
+        return promise;
+    }
+
+    MalValue reasons = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
+    MalRootSpan span;
+    mal_gc_root(&span, &reasons, 1);
+    MalArrayObject *array = mal_value_to_array_object(reasons);
+    mal_array_object_store(array, mal_key_index(0),
+        mal_native_function_object_get_slot(state, RS_TEE_REASON_1));
+    mal_array_object_store(array, mal_key_index(1),
+        mal_native_function_object_get_slot(state, RS_TEE_REASON_2));
+    mal_native_function_object_set_slot(
+        state, RS_TEE_CLOSED, mal_value_new_boolean(true));
+    MalValue cancel_promise = rs_reader_cancel(vm,
+        mal_native_function_object_get_slot(state, RS_TEE_READER),
+        &reasons, 1, mal_value_new_undefined(), mal_value_new_undefined());
+    MalValue fulfilled = rs_callback(vm, rs_tee_cancel_fulfilled, state_value);
+    MalValue rejected = rs_callback(vm, rs_tee_cancel_rejected, state_value);
+    mal_promise_perform_then(vm, cancel_promise, fulfilled, rejected,
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&span);
+    return promise;
+}
+
+static MalValue rs_tee_make_branch(
+    MalVm *vm, MalValue state, i32 branch) {
+    MalValue roots[5] = {
+        state, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 5);
+    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalValue slots[2] = {state, mal_value_from_i32(branch)};
+    roots[2] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, rs_tee_pull, slots, 2));
+    roots[3] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, rs_tee_cancel, slots, 2));
+    MalPropertyFlags flags =
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]),
+        (const byte *) "pull", roots[2], flags);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]),
+        (const byte *) "cancel", roots[3], flags);
+    roots[4] = rs_constructor(vm, mal_value_new_undefined(), &roots[1], 1,
+        vm->intrinsics[MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR],
+        mal_value_new_undefined());
+    MalValue result = roots[4];
+    mal_gc_unroot(&span);
+    return result;
+}
+
+bool mal_readable_stream_tee(
+    MalVm *vm, MalValue value, MalValue *branch1_out, MalValue *branch2_out) {
+    if (!rs_is_kind(value, MAL_READABLE_STREAM)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body stream is not a ReadableStream");
+        return false;
+    }
+    MalValue roots[5] = {
+        value, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 5);
+    MalReadableStreamObject *reader = rs_acquire_reader(vm,
+        mal_value_to_readable_stream_object(value),
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_PROTOTYPE]));
+    if (reader == nullptr) {
+        mal_gc_unroot(&span);
+        return false;
+    }
+    roots[1] = mal_value_from_readable_stream_object(reader);
+    mal_value_to_promise_object(reader->as.reader.closed_promise)->is_handled = true;
+    MalValue slots[RS_TEE_SLOT_COUNT];
+    for (i32 i = 0; i < RS_TEE_SLOT_COUNT; i++) {
+        slots[i] = mal_value_new_undefined();
+    }
+    slots[RS_TEE_READER] = roots[1];
+    slots[RS_TEE_READING] = mal_value_new_boolean(false);
+    slots[RS_TEE_CANCELED_1] = mal_value_new_boolean(false);
+    slots[RS_TEE_CANCELED_2] = mal_value_new_boolean(false);
+    slots[RS_TEE_CLOSED] = mal_value_new_boolean(false);
+    roots[2] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, rs_tee_state_callback, slots, RS_TEE_SLOT_COUNT));
+    roots[3] = rs_tee_make_branch(vm, roots[2], 1);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
+    roots[4] = rs_tee_make_branch(vm, roots[2], 2);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
+    *branch1_out = roots[3];
+    *branch2_out = roots[4];
+    mal_gc_unroot(&span);
+    return true;
+
+fail:
+    if (reader->as.reader.requests_head == nullptr) {
+        (void) rs_reader_release_lock(vm, roots[1], nullptr, 0,
+            mal_value_new_undefined(), mal_value_new_undefined());
+    }
+    mal_gc_unroot(&span);
+    return false;
+}
+
 static void rs_trace(MalHeapHeader *cell) {
     MalReadableStreamObject *object = (MalReadableStreamObject *) cell;
     switch (object->kind) {

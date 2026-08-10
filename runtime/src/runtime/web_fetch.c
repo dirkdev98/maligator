@@ -2897,7 +2897,8 @@ static MalValue mal_request_clone(
     MalRequestObject *source = mal_request_this_or_throw(vm, self);
     if (source == nullptr) return mal_value_new_undefined();
     if (!mal_value_is_undefined(source->body_stream)
-        && mal_readable_stream_is_disturbed(source->body_stream)) {
+        && (mal_readable_stream_is_locked(source->body_stream)
+            || mal_readable_stream_is_disturbed(source->body_stream))) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Cannot clone a Request with a used body");
         return mal_value_new_undefined();
@@ -2905,9 +2906,13 @@ static MalValue mal_request_clone(
 
     MalRequestObject *clone = mal_request_object_new(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REQUEST_PROTOTYPE]));
-    MalValue result = mal_value_from_request_object(clone);
+    MalValue roots[3] = {
+        mal_value_from_request_object(clone),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
     MalRootSpan rs;
-    mal_gc_root(&rs, &result, 1);
+    mal_gc_root(&rs, roots, 3);
     if (source->body != nullptr) {
         clone->body = malloc(source->body_len == 0 ? 1 : source->body_len);
         if (clone->body == nullptr) {
@@ -2931,6 +2936,20 @@ static MalValue mal_request_clone(
     clone->cache = source->cache;
     clone->redirect = source->redirect;
     clone->integrity = source->integrity;
+    if (source->body == nullptr
+        && !mal_value_is_undefined(source->body_stream)) {
+        if (!mal_readable_stream_tee(
+                vm, source->body_stream, &roots[1], &roots[2])) {
+            mal_gc_unroot(&rs);
+            return mal_value_new_undefined();
+        }
+        mal_gc_write_barrier(source->body_stream);
+        source->body_stream = roots[1];
+        mal_gc_card(&source->object.header, roots[1]);
+        clone->body_stream = roots[2];
+        mal_gc_card(&clone->object.header, roots[2]);
+    }
+    MalValue result = roots[0];
     mal_gc_unroot(&rs);
     return result;
 }

@@ -84,3 +84,7 @@ MalValue mal_readable_stream_default_reader_read(MalVm *vm, MalValue value);
 
 /** Create a distinct stream that forwards reads and cancellation to `value`. */
 MalValue mal_readable_stream_create_proxy(MalVm *vm, MalValue value);
+
+/** Tee `value` into two independently consumable default streams. */
+bool mal_readable_stream_tee(
+    MalVm *vm, MalValue value, MalValue *branch1_out, MalValue *branch2_out);

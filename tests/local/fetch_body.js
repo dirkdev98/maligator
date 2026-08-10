@@ -395,6 +395,51 @@ async function run() {
 		"Request streaming body proxy forwards ordered chunks",
 		(await proxiedRequest.text()) === "proxy" && proxiedRequest.bodyUsed,
 	);
+	const teeSource = new Request("https://example.com/upload", {
+		method: "POST",
+		body: byteStream([116, 101], [101]),
+		duplex: "half",
+	});
+	const teeClone = teeSource.clone();
+	check(
+		"Request clone tees a streaming body into distinct branches",
+		teeSource.body !== teeClone.body && !teeSource.bodyUsed && !teeClone.bodyUsed,
+	);
+	check(
+		"Request clone branches consume independently",
+		(await teeClone.text()) === "tee" &&
+			(await teeSource.text()) === "tee" &&
+			teeClone.bodyUsed &&
+			teeSource.bodyUsed,
+	);
+	let teeCancelReason;
+	const cancelSource = new Request("https://example.com/upload", {
+		method: "POST",
+		body: new ReadableStream({
+			pull() {
+				return new Promise(() => {});
+			},
+			cancel(reason) {
+				teeCancelReason = reason;
+			},
+		}),
+		duplex: "half",
+	});
+	const cancelClone = cancelSource.clone();
+	let firstCancelSettled = false;
+	const firstCancel = cancelSource.body.cancel("first").then(() => {
+		firstCancelSettled = true;
+	});
+	await Promise.resolve();
+	check("one tee branch does not cancel the source", !firstCancelSettled);
+	const secondCancel = cancelClone.body.cancel("second");
+	await Promise.all([firstCancel, secondCancel]);
+	check(
+		"both tee cancellations reach the source as ordered reasons",
+		Array.isArray(teeCancelReason) &&
+			teeCancelReason[0] === "first" &&
+			teeCancelReason[1] === "second",
+	);
 
 	const streamError = new Error("stream failure");
 	const erroredBody = new Response(
