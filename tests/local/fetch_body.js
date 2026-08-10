@@ -22,6 +22,15 @@ async function rejectsSyntaxError(promise) {
 	}
 }
 
+function byteStream(...chunks) {
+	return new ReadableStream({
+		start(controller) {
+			for (const chunk of chunks) controller.enqueue(new Uint8Array(chunk));
+			controller.close();
+		},
+	});
+}
+
 async function run() {
 	const response = new Response(new Uint8Array([1, 2, 255]));
 	const responseBody = response.body;
@@ -231,7 +240,13 @@ async function run() {
 		await rejectsTypeError(new Response(null).formData()),
 	);
 
-	const passthroughStream = new ReadableStream();
+	const passthroughStream = new ReadableStream({
+		start(controller) {
+			controller.enqueue(new Uint8Array([115, 116, 114]));
+			controller.enqueue(new Uint8Array([101, 97, 109]));
+			controller.close();
+		},
+	});
 	const streamResponse = new Response(passthroughStream);
 	check(
 		"Response accepts an undisturbed ReadableStream BodyInit",
@@ -239,9 +254,99 @@ async function run() {
 			streamResponse.headers.get("content-type") === null &&
 			!streamResponse.bodyUsed,
 	);
+	const streamingText = streamResponse.text();
 	check(
-		"streaming Body conversion fails asynchronously until stream reads land",
-		(await rejectsTypeError(streamResponse.text())) && !streamResponse.bodyUsed,
+		"streaming Body conversion disturbs and locks synchronously",
+		streamResponse.bodyUsed && passthroughStream.locked,
+	);
+	check("streaming Body collects ordered chunks", (await streamingText) === "stream");
+	check(
+		"streaming Body rejects repeated consumption",
+		await rejectsTypeError(streamResponse.bytes()),
+	);
+	const streamedBytes = await new Response(
+		byteStream([1], [2, 3]),
+	).bytes();
+	check(
+		"streaming Body bytes conversion",
+		streamedBytes instanceof Uint8Array &&
+			streamedBytes.length === 3 &&
+			streamedBytes[0] === 1 &&
+			streamedBytes[2] === 3,
+	);
+	const streamedBuffer = await new Response(
+		byteStream([4, 5], [6]),
+	).arrayBuffer();
+	const streamedBufferBytes = new Uint8Array(streamedBuffer);
+	check(
+		"streaming Body arrayBuffer conversion",
+		streamedBuffer instanceof ArrayBuffer &&
+			streamedBufferBytes[0] === 4 &&
+			streamedBufferBytes[2] === 6,
+	);
+	const streamedJson = await new Response(
+		byteStream([123, 34, 111, 107, 34], [58, 116, 114, 117, 101, 125]),
+	).json();
+	check("streaming Body JSON conversion", streamedJson.ok === true);
+	const streamedBlob = await new Response(byteStream([98], [108, 111, 98]), {
+		headers: { "Content-Type": "text/plain" },
+	}).blob();
+	check(
+		"streaming Body Blob conversion",
+		streamedBlob instanceof Blob &&
+			streamedBlob.type === "text/plain" &&
+			(await streamedBlob.text()) === "blob",
+	);
+	const streamedForm = await new Response(
+		byteStream([120, 61, 49, 38], [121, 61, 50]),
+		{ headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+	).formData();
+	check(
+		"streaming Body formData conversion",
+		streamedForm.get("x") === "1" && streamedForm.get("y") === "2",
+	);
+	let pullCount = 0;
+	const pulledBody = new Response(new ReadableStream({
+		pull(controller) {
+			pullCount++;
+			if (pullCount === 1) controller.enqueue(new Uint8Array([112, 117, 108, 108]));
+			else controller.close();
+		},
+	}));
+	check(
+		"streaming Body drives pull through queued promise reactions",
+		(await pulledBody.text()) === "pull" && pullCount === 2,
+	);
+	const patchedStream = byteStream([105, 110, 116, 101, 114, 110, 97, 108]);
+	patchedStream.getReader = () => {
+		throw new Error("observable getReader called");
+	};
+	check(
+		"streaming Body uses internal reader algorithms",
+		(await new Response(patchedStream).text()) === "internal",
+	);
+
+	const streamError = new Error("stream failure");
+	const erroredBody = new Response(new ReadableStream({
+		start(controller) {
+			controller.error(streamError);
+		},
+	}));
+	let preservedStreamError = false;
+	try {
+		await erroredBody.text();
+	} catch (error) {
+		preservedStreamError = error === streamError;
+	}
+	check("streaming Body preserves stream errors", preservedStreamError);
+	check(
+		"streaming Body rejects non-byte chunks",
+		await rejectsTypeError(new Response(new ReadableStream({
+			start(controller) {
+				controller.enqueue("not bytes");
+				controller.close();
+			},
+		})).text()),
 	);
 	const lockedStream = new ReadableStream();
 	const lockedStreamReader = lockedStream.getReader();

@@ -1294,6 +1294,22 @@ static MalValue mal_form_data_for_each(
     return mal_value_new_undefined();
 }
 
+typedef enum MalFetchBodyConsumeKind {
+    MAL_FETCH_BODY_CONSUME_TEXT,
+    MAL_FETCH_BODY_CONSUME_JSON,
+    MAL_FETCH_BODY_CONSUME_ARRAY_BUFFER,
+    MAL_FETCH_BODY_CONSUME_BYTES,
+    MAL_FETCH_BODY_CONSUME_BLOB,
+    MAL_FETCH_BODY_CONSUME_FORM_DATA,
+} MalFetchBodyConsumeKind;
+
+static bool mal_fetch_body_is_stream_only(const MalFetchBody *body) {
+    return body->bytes == nullptr && !mal_value_is_undefined(*body->stream);
+}
+
+static MalValue mal_fetch_body_collect_stream(
+    MalVm *vm, MalValue self, MalFetchBody *body, MalFetchBodyConsumeKind kind);
+
 static MalValue mal_fetch_body_method_text(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args;
@@ -1303,6 +1319,10 @@ static MalValue mal_fetch_body_method_text(
     MalFetchBody body;
     if (!mal_fetch_body_from_value(self, &body)) {
         return mal_fetch_reject_type_error(vm);
+    }
+    if (mal_fetch_body_is_stream_only(&body)) {
+        return mal_fetch_body_collect_stream(
+            vm, self, &body, MAL_FETCH_BODY_CONSUME_TEXT);
     }
     if (!mal_fetch_body_begin(vm, self, &body)) {
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -1325,6 +1345,10 @@ static MalValue mal_fetch_body_method_array_buffer(
     MalFetchBody body;
     if (!mal_fetch_body_from_value(self, &body)) {
         return mal_fetch_reject_type_error(vm);
+    }
+    if (mal_fetch_body_is_stream_only(&body)) {
+        return mal_fetch_body_collect_stream(
+            vm, self, &body, MAL_FETCH_BODY_CONSUME_ARRAY_BUFFER);
     }
     if (!mal_fetch_body_begin(vm, self, &body)) {
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -1349,6 +1373,10 @@ static MalValue mal_fetch_body_method_bytes(
     if (!mal_fetch_body_from_value(self, &body)) {
         return mal_fetch_reject_type_error(vm);
     }
+    if (mal_fetch_body_is_stream_only(&body)) {
+        return mal_fetch_body_collect_stream(
+            vm, self, &body, MAL_FETCH_BODY_CONSUME_BYTES);
+    }
     if (!mal_fetch_body_begin(vm, self, &body)) {
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_fetch_reject_completion(vm);
@@ -1371,6 +1399,10 @@ static MalValue mal_fetch_body_method_json(
     MalFetchBody body;
     if (!mal_fetch_body_from_value(self, &body)) {
         return mal_fetch_reject_type_error(vm);
+    }
+    if (mal_fetch_body_is_stream_only(&body)) {
+        return mal_fetch_body_collect_stream(
+            vm, self, &body, MAL_FETCH_BODY_CONSUME_JSON);
     }
     if (!mal_fetch_body_begin(vm, self, &body)) {
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -1438,6 +1470,40 @@ static MalValue mal_fetch_form_data_type_error(MalVm *vm) {
     return mal_fetch_reject_completion(vm);
 }
 
+static MalValue mal_fetch_form_data_value(MalVm *vm, MalFetchBody *body) {
+    MalValue roots[3] = {
+        mal_fetch_body_string_impl(vm, body, false),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    MalCompletion parsed = mal_vm_construct_value(vm,
+        vm->intrinsics[MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR], roots, 1);
+    if (parsed.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    roots[1] = parsed.value;
+    MalUrlSearchParamsObject *params = mal_value_to_url_search_params_object(roots[1]);
+    MalFormDataObject *form_data = mal_form_data_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FORM_DATA_PROTOTYPE]));
+    roots[2] = mal_fetch_from_form_data(form_data);
+    for (i32 i = 0; i < params->count; i++) {
+        if (!mal_form_data_append_entry(vm, form_data, params->pairs[i].name,
+                mal_value_from_string(params->pairs[i].value), nullptr)) {
+            mal_gc_unroot(&span);
+            return mal_value_new_undefined();
+        }
+    }
+    MalValue result = roots[2];
+    mal_gc_unroot(&span);
+    return result;
+}
+
 static MalValue mal_fetch_body_method_form_data(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args; (void) argc; (void) nt; (void) callee;
@@ -1450,39 +1516,51 @@ static MalValue mal_fetch_body_method_form_data(
             content_type, "application/x-www-form-urlencoded")) {
         return mal_fetch_form_data_type_error(vm);
     }
+    if (mal_fetch_body_is_stream_only(&body)) {
+        return mal_fetch_body_collect_stream(
+            vm, self, &body, MAL_FETCH_BODY_CONSUME_FORM_DATA);
+    }
     if (!mal_fetch_body_begin(vm, self, &body)) {
         return vm->completion.kind == MAL_COMPLETION_THROW
             ? mal_fetch_reject_completion(vm) : mal_fetch_reject_type_error(vm);
     }
-    MalValue roots[3] = {
-        mal_fetch_body_string_impl(vm, &body, false),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-    };
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_fetch_reject_completion(vm);
-    }
+    MalValue value = mal_fetch_form_data_value(vm, &body);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_fetch_reject_completion(vm) : mal_fetch_resolve(vm, value);
+}
+
+static MalValue mal_fetch_blob_value(MalVm *vm, MalValue self, MalFetchBody *body) {
+    MalString *content_type = mal_fetch_body_content_type(vm, self);
+    MalValue type_root = mal_value_from_string(content_type);
     MalRootSpan span;
-    mal_gc_root(&span, roots, 3);
-    MalCompletion parsed = mal_vm_construct_value(vm,
-        vm->intrinsics[MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR], roots, 1);
-    if (parsed.kind == MAL_COMPLETION_THROW) {
+    mal_gc_root(&span, &type_root, 1);
+    usize type_length;
+    char *type = (char *) mal_fetch_utf8_encode(vm, content_type, &type_length);
+    if (type == nullptr) {
         mal_gc_unroot(&span);
-        return mal_fetch_reject_completion(vm);
+        return mal_value_new_undefined();
     }
-    roots[1] = parsed.value;
-    MalUrlSearchParamsObject *params = mal_value_to_url_search_params_object(roots[1]);
-    MalFormDataObject *form_data = mal_form_data_new(&vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FORM_DATA_PROTOTYPE]));
-    roots[2] = mal_fetch_from_form_data(form_data);
-    for (i32 i = 0; i < params->count; i++) {
-        if (!mal_form_data_append_entry(vm, form_data, params->pairs[i].name,
-                mal_value_from_string(params->pairs[i].value), nullptr)) {
-            mal_gc_unroot(&span);
-            return mal_fetch_reject_completion(vm);
-        }
+    char *grown_type = realloc(type, type_length + 1);
+    if (grown_type == nullptr) {
+        free(type);
+        mal_gc_unroot(&span);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
     }
-    MalValue result = mal_fetch_resolve(vm, roots[2]);
+    type = grown_type;
+    type[type_length] = '\0';
+    byte *bytes = malloc(body->length == 0 ? 1 : body->length);
+    if (bytes == nullptr) {
+        free(type);
+        mal_gc_unroot(&span);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (body->length > 0) memcpy(bytes, body->bytes, body->length);
+    MalObject *prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_BLOB_PROTOTYPE]);
+    MalValue result = mal_fetch_from_blob(mal_blob_object_new(
+        &vm->heap, prototype, bytes, body->length, type, type_length));
     mal_gc_unroot(&span);
     return result;
 }
@@ -1497,46 +1575,285 @@ static MalValue mal_fetch_body_method_blob(
     if (!mal_fetch_body_from_value(self, &body)) {
         return mal_fetch_reject_type_error(vm);
     }
+    if (mal_fetch_body_is_stream_only(&body)) {
+        return mal_fetch_body_collect_stream(
+            vm, self, &body, MAL_FETCH_BODY_CONSUME_BLOB);
+    }
     if (!mal_fetch_body_begin(vm, self, &body)) {
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_fetch_reject_completion(vm);
         }
         return mal_fetch_reject_type_error(vm);
     }
-    MalString *content_type = mal_fetch_body_content_type(vm, self);
-    MalValue type_root = mal_value_from_string(content_type);
+    MalValue value = mal_fetch_blob_value(vm, self, &body);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_fetch_reject_completion(vm) : mal_fetch_resolve(vm, value);
+}
+
+enum {
+    MAL_FETCH_COLLECT_READER,
+    MAL_FETCH_COLLECT_CHUNKS,
+    MAL_FETCH_COLLECT_TOTAL,
+    MAL_FETCH_COLLECT_RESOLVE,
+    MAL_FETCH_COLLECT_REJECT,
+    MAL_FETCH_COLLECT_SELF,
+    MAL_FETCH_COLLECT_KIND,
+    MAL_FETCH_COLLECT_ON_REJECTED,
+    MAL_FETCH_COLLECT_SLOT_COUNT,
+};
+
+static void mal_fetch_call_settler(MalVm *vm, MalValue settler, MalValue value) {
+    MalCompletion completion = mal_vm_call_value(
+        vm, settler, mal_value_new_undefined(), &value, 1);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
+    }
+}
+
+static void mal_fetch_collect_reject_completion(
+    MalVm *vm, MalNativeFunctionObject *function) {
+    MalValue error = vm->completion.value;
+    vm->completion = (MalCompletion) {
+        .kind = MAL_COMPLETION_NORMAL,
+        .value = mal_value_new_undefined(),
+    };
+    mal_fetch_call_settler(vm,
+        mal_native_function_object_get_slot(function, MAL_FETCH_COLLECT_REJECT),
+        error);
+}
+
+static MalValue mal_fetch_collect_conversion(
+    MalVm *vm, MalValue self, MalFetchBody *body, MalFetchBodyConsumeKind kind) {
+    switch (kind) {
+        case MAL_FETCH_BODY_CONSUME_TEXT:
+            return mal_fetch_body_string(vm, body);
+        case MAL_FETCH_BODY_CONSUME_JSON: {
+            MalValue text = mal_fetch_body_string(vm, body);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
+            MalRootSpan span;
+            mal_gc_root(&span, &text, 1);
+            MalValue result = mal_builtin_json_parse_intrinsic(vm, text);
+            mal_gc_unroot(&span);
+            return result;
+        }
+        case MAL_FETCH_BODY_CONSUME_ARRAY_BUFFER:
+            return mal_fetch_new_array_buffer(vm, body->bytes, body->length);
+        case MAL_FETCH_BODY_CONSUME_BYTES:
+            return mal_fetch_new_uint8array(vm, body->bytes, body->length);
+        case MAL_FETCH_BODY_CONSUME_BLOB:
+            return mal_fetch_blob_value(vm, self, body);
+        case MAL_FETCH_BODY_CONSUME_FORM_DATA:
+            return mal_fetch_form_data_value(vm, body);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_fetch_body_collect_rejected(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    mal_fetch_call_settler(vm,
+        mal_native_function_object_get_slot(function, MAL_FETCH_COLLECT_REJECT),
+        argc >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_fetch_body_collect_fulfilled(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue read_result = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue done;
+    if (!mal_vm_get_property(vm, read_result,
+            mal_intrinsic_string_key(vm, (const byte *) "done"), &done)) {
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_truthy(done)) {
+        MalValue chunks_value = mal_native_function_object_get_slot(
+            function, MAL_FETCH_COLLECT_CHUNKS);
+        MalArrayObject *chunks = mal_value_to_array_object(chunks_value);
+        usize total = (usize) mal_value_to_f64(mal_native_function_object_get_slot(
+            function, MAL_FETCH_COLLECT_TOTAL));
+        byte *bytes = malloc(total == 0 ? 1 : total);
+        if (bytes == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            mal_fetch_collect_reject_completion(vm, function);
+            return mal_value_new_undefined();
+        }
+        usize offset = 0;
+        for (u32 i = 0; i < mal_array_object_length(chunks); i++) {
+            MalValue chunk;
+            MalBufferSourceSpan chunk_span;
+            if (!mal_array_object_dense_get(chunks, i, &chunk) ||
+                mal_buffer_source_span(chunk, &chunk_span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+                free(bytes);
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Body stream chunk became unusable");
+                mal_fetch_collect_reject_completion(vm, function);
+                return mal_value_new_undefined();
+            }
+            if (chunk_span.length > 0) {
+                memcpy(bytes + offset, chunk_span.data, chunk_span.length);
+                offset += chunk_span.length;
+            }
+        }
+        MalValue body_self = mal_native_function_object_get_slot(
+            function, MAL_FETCH_COLLECT_SELF);
+        MalFetchBody body = {
+            .owner = mal_value_to_object(body_self),
+            .bytes = bytes,
+            .length = total,
+            .stream = nullptr,
+        };
+        MalFetchBodyConsumeKind kind = (MalFetchBodyConsumeKind) mal_value_to_i32(
+            mal_native_function_object_get_slot(function, MAL_FETCH_COLLECT_KIND));
+        MalValue result = mal_fetch_collect_conversion(vm, body_self, &body, kind);
+        free(bytes);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_fetch_collect_reject_completion(vm, function);
+        } else {
+            mal_fetch_call_settler(vm,
+                mal_native_function_object_get_slot(function, MAL_FETCH_COLLECT_RESOLVE),
+                result);
+        }
+        return mal_value_new_undefined();
+    }
+
+    MalValue chunk;
+    if (!mal_vm_get_property(vm, read_result,
+            mal_intrinsic_string_key(vm, (const byte *) "value"), &chunk)) {
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_typed_array_object(chunk) ||
+        mal_value_to_typed_array_object(chunk)->kind != MAL_TA_UINT8) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body stream yielded a non-Uint8Array chunk");
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+    MalBufferSourceSpan chunk_span;
+    if (mal_buffer_source_span(chunk, &chunk_span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body stream yielded an unusable Uint8Array chunk");
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+    usize total = (usize) mal_value_to_f64(mal_native_function_object_get_slot(
+        function, MAL_FETCH_COLLECT_TOTAL));
+    if (chunk_span.length > UINT32_MAX - total) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Body stream exceeds the supported size");
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+    MalValue copy = mal_fetch_new_uint8array(vm, chunk_span.data, chunk_span.length);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+    MalArrayObject *chunks = mal_value_to_array_object(
+        mal_native_function_object_get_slot(function, MAL_FETCH_COLLECT_CHUNKS));
+    if (!mal_array_object_store(chunks,
+            mal_key_index(mal_array_object_length(chunks)), copy)) {
+        mal_vm_throw_allocation_error(vm);
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+    mal_native_function_object_set_slot(function, MAL_FETCH_COLLECT_TOTAL,
+        mal_value_from_f64((f64) (total + chunk_span.length)));
+
+    MalValue read_promise = mal_readable_stream_default_reader_read(vm,
+        mal_native_function_object_get_slot(function, MAL_FETCH_COLLECT_READER));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_fetch_collect_reject_completion(vm, function);
+        return mal_value_new_undefined();
+    }
+    mal_promise_perform_then(vm, read_promise, callee,
+        mal_native_function_object_get_slot(function, MAL_FETCH_COLLECT_ON_REJECTED),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_fetch_body_collect_stream(
+    MalVm *vm, MalValue self, MalFetchBody *body, MalFetchBodyConsumeKind kind) {
+    if (kind == MAL_FETCH_BODY_CONSUME_FORM_DATA) {
+        MalString *content_type = mal_fetch_body_content_type(vm, self);
+        if (!mal_fetch_content_type_starts_with(
+                content_type, "application/x-www-form-urlencoded")) {
+            return mal_fetch_form_data_type_error(vm);
+        }
+    }
+    MalValue roots[8] = {
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        self, *body->stream, mal_value_new_undefined(), mal_value_new_undefined(),
+    };
     MalRootSpan span;
-    mal_gc_root(&span, &type_root, 1);
-    usize type_length;
-    char *type = (char *) mal_fetch_utf8_encode(vm, content_type, &type_length);
-    if (type == nullptr) {
+    mal_gc_root(&span, roots, 8);
+    if (!mal_promise_new_capability(vm,
+            vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+            &roots[0], &roots[1], &roots[2])) {
         mal_gc_unroot(&span);
-        return mal_fetch_reject_completion(vm);
+        return mal_value_new_undefined();
     }
-    char *grown_type = realloc(type, type_length + 1);
-    if (grown_type == nullptr) {
-        free(type);
+    roots[3] = mal_readable_stream_acquire_default_reader(vm, roots[5]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        MalValue error = vm->completion.value;
+        vm->completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
+        mal_fetch_call_settler(vm, roots[2], error);
+        MalValue promise = roots[0];
         mal_gc_unroot(&span);
-        mal_vm_throw_allocation_error(vm);
-        return mal_fetch_reject_completion(vm);
+        return promise;
     }
-    type = grown_type;
-    type[type_length] = '\0';
-    byte *bytes = malloc(body.length == 0 ? 1 : body.length);
-    if (bytes == nullptr) {
-        free(type);
-        mal_gc_unroot(&span);
-        mal_vm_throw_allocation_error(vm);
-        return mal_fetch_reject_completion(vm);
+    roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue rejected_slots[MAL_FETCH_COLLECT_SLOT_COUNT] = {
+        roots[3], roots[4], mal_value_from_f64(0), roots[1], roots[2],
+        self, mal_value_from_i32((i32) kind), mal_value_new_undefined(),
+    };
+    roots[6] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, mal_fetch_body_collect_rejected,
+            rejected_slots, MAL_FETCH_COLLECT_SLOT_COUNT));
+    MalValue fulfilled_slots[MAL_FETCH_COLLECT_SLOT_COUNT] = {
+        roots[3], roots[4], mal_value_from_f64(0), roots[1], roots[2],
+        self, mal_value_from_i32((i32) kind), roots[6],
+    };
+    roots[7] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, mal_fetch_body_collect_fulfilled,
+            fulfilled_slots, MAL_FETCH_COLLECT_SLOT_COUNT));
+    MalValue read_promise = mal_readable_stream_default_reader_read(vm, roots[3]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        MalValue error = vm->completion.value;
+        vm->completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
+        mal_fetch_call_settler(vm, roots[2], error);
+    } else {
+        mal_promise_perform_then(vm, read_promise, roots[7], roots[6],
+            mal_value_new_undefined(), mal_value_new_undefined());
     }
-    if (body.length > 0) memcpy(bytes, body.bytes, body.length);
-    MalObject *prototype =
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_BLOB_PROTOTYPE]);
-    MalValue result = mal_fetch_from_blob(mal_blob_object_new(
-        &vm->heap, prototype, bytes, body.length, type, type_length));
-    result = mal_fetch_resolve(vm, result);
+    MalValue promise = roots[0];
     mal_gc_unroot(&span);
-    return result;
+    return promise;
 }
 
 static MalValue mal_response_get_status(
@@ -1688,13 +2005,6 @@ static MalValue mal_fetch_body_method_for(
     bool response, MalNativeFunctionCallback callback) {
     if (!mal_fetch_body_has_brand(self, response)) {
         return mal_fetch_reject_type_error(vm);
-    }
-    MalFetchBody body;
-    if (mal_fetch_body_from_value(self, &body)
-        && body.bytes == nullptr && !mal_value_is_undefined(*body.stream)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Consuming a streaming Body is not supported yet");
-        return mal_fetch_reject_completion(vm);
     }
     return callback(vm, self, args, argc, nt, callee);
 }

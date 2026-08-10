@@ -1228,6 +1228,32 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
     return promise;
 }
 
+MalValue mal_readable_stream_acquire_default_reader(MalVm *vm, MalValue value) {
+    if (!mal_value_is_readable_stream_object(value) ||
+        mal_value_to_readable_stream_object(value)->kind != MAL_READABLE_STREAM) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body stream is not a ReadableStream");
+        return mal_value_new_undefined();
+    }
+    MalReadableStreamObject *reader = rs_acquire_reader(vm,
+        mal_value_to_readable_stream_object(value),
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_PROTOTYPE]));
+    if (reader != nullptr) {
+        // Fetch's internal reader never exposes `closed`; its read loop observes
+        // the same stored error, so suppress a duplicate unhandled rejection.
+        mal_value_to_promise_object(reader->as.reader.closed_promise)->is_handled = true;
+    }
+    return reader == nullptr
+        ? mal_value_new_undefined()
+        : mal_value_from_readable_stream_object(reader);
+}
+
+MalValue mal_readable_stream_default_reader_read(MalVm *vm, MalValue value) {
+    return rs_reader_read(vm, value, nullptr, 0,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
 static MalValue rs_reader_cancel(MalVm *vm, MalValue self, const MalValue *args,
     i32 argc, MalValue nt, MalValue callee) {
     (void) nt;

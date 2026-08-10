@@ -77,3 +77,7 @@ MalValue mal_readable_stream_from_bytes(MalVm *vm, const byte *bytes, usize leng
 bool mal_readable_stream_is_locked(MalValue value);
 bool mal_readable_stream_is_disturbed(MalValue value);
 bool mal_readable_stream_consume(MalVm *vm, MalValue value);
+
+/** Internal reader algorithms used by Fetch Body consumption. */
+MalValue mal_readable_stream_acquire_default_reader(MalVm *vm, MalValue value);
+MalValue mal_readable_stream_default_reader_read(MalVm *vm, MalValue value);
