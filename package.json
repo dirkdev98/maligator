@@ -37,6 +37,8 @@
 		"selfhost:cli": "node ./scripts/selfhost-cli-check.ts",
 		"selfhost:frontend": "node ./scripts/selfhost-frontend-check.ts",
 		"selfhost:native": "node ./scripts/selfhost-native-build-check.ts",
+		"site:build": "node ./scripts/site-build.ts",
+		"site:update": "node ./scripts/site-data.ts",
 		"test": "vitest",
 		"test262": "node ./scripts/test262.ts --canonical",
 		"test262:regressions": "node ./scripts/test262.ts --canonical --manifest tests/test-suite-test262-smoke.txt --manifest tests/test-suite-test262-check.txt --check --policy complete",

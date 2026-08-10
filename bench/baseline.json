@@ -408,5 +408,16 @@
         }
       }
     }
+  },
+  "selfCompile": {
+    "maligatorMs": 263656.616917,
+    "nodeMs": 24578.870834,
+    "runs": 3,
+    "units": 15,
+    "maligatorCodeUnits": 39226424,
+    "nodeCodeUnits": 39225451,
+    "platform": "darwin",
+    "arch": "arm64",
+    "nodeVersion": "v24.14.1"
   }
 }

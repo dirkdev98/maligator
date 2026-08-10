@@ -12,6 +12,10 @@
  *               feature flag's marginal bytes are tracked. No V8 compare.
  *   - compiler  Node-hosted front-end throughput and serialized wire bytes for a
  *               deterministic, constant-heavy multi-function source corpus.
+ *   - self-compile native Maligator and Node run the same pre-stripped compiler
+ *               source graph to emit C translation units. Fresh-process median
+ *               wall time includes startup and source loading but excludes the C
+ *               compiler and linker. Explicit release lane; omitted by default.
  *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage
  *               plus an application-like object/collection/JSON pipeline).
  *   - module    bench/module-alloc.mjs: an ES module whose top-level const-bound
@@ -66,14 +70,19 @@
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	closeSync,
+	copyFileSync,
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	openSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
@@ -86,6 +95,7 @@ import {
 	buildNativeBinaryResult,
 	HOST_MAIN,
 } from "../src/test-harness.ts";
+import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 import { persistBenchmarkBaseline, readBenchmarkBaseline } from "./bench-baseline.ts";
 import {
 	formatOhaDuration,
@@ -136,6 +146,17 @@ interface CompilerMetrics {
 	sourceBytes: number;
 	wireBytes: number;
 	functionCount: number;
+}
+interface SelfCompileMetrics {
+	maligatorMs: number;
+	nodeMs: number;
+	runs: number;
+	units: number;
+	maligatorCodeUnits: number;
+	nodeCodeUnits: number;
+	platform: string;
+	arch: string;
+	nodeVersion: string;
 }
 interface ModuleMetrics {
 	malMs: number;
@@ -389,6 +410,7 @@ interface BenchmarkSnapshot {
 	/** Per-config binary/archive bytes (keyed by SIZE_PROFILES name). */
 	size?: Record<string, SizeMetrics>;
 	compiler?: CompilerMetrics;
+	selfCompile?: SelfCompileMetrics;
 	language?: LanguageMetrics;
 	module?: ModuleMetrics;
 	string?: StringMetrics;
@@ -561,6 +583,166 @@ function benchCompiler(runs: number): CompilerMetrics {
 		wireBytes: wire.byteLength,
 		functionCount: COMPILER_FUNCTION_COUNT,
 	};
+}
+
+// ---- self-compile (native compiler vs Node, through C emit) ---------------
+
+interface SelfCompileRun {
+	wallMs: number;
+	units: number;
+	codeUnits: number;
+	digest: string;
+}
+
+function digestDirectory(directory: string): string {
+	const digest = createHash("sha256");
+	for (const name of readdirSync(directory).sort()) {
+		digest.update(name);
+		digest.update(readFileSync(path.join(directory, name)));
+	}
+	return digest.digest("hex");
+}
+
+function runSelfCompile(
+	command: string,
+	args: Array<string>,
+	output: string,
+): SelfCompileRun {
+	const start = process.hrtime.bigint();
+	const result = spawnSync(command, [...args, output], {
+		encoding: "utf8",
+		maxBuffer: 1024 * 1024,
+		timeout: 900_000,
+	});
+	const wallMs = Number(process.hrtime.bigint() - start) / 1e6;
+	if (result.error !== undefined) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(
+			`self-compile failed: ${command} ${args.join(" ")} (status ${result.status})\n${result.stderr}`,
+		);
+	}
+	const summary = JSON.parse(result.stdout.trim()) as {
+		units: number;
+		codeUnits: number;
+	};
+	return {
+		wallMs,
+		units: summary.units,
+		codeUnits: summary.codeUnits,
+		digest: digestDirectory(output),
+	};
+}
+
+function assertSameSelfCompile(reference: SelfCompileRun, actual: SelfCompileRun): void {
+	if (
+		actual.units !== reference.units ||
+		actual.codeUnits !== reference.codeUnits ||
+		actual.digest !== reference.digest
+	) {
+		throw new Error(
+			`self-compile output mismatch: ${JSON.stringify(actual)} != ${JSON.stringify(reference)}`,
+		);
+	}
+}
+
+function assertComparableSelfCompile(
+	node: SelfCompileRun,
+	maligator: SelfCompileRun,
+): void {
+	// The compiler is still closing semantic gaps between its native and Node hosts.
+	// Keep the workload comparable without hiding small, deterministic C differences.
+	const sizeDifference = Math.abs(node.codeUnits - maligator.codeUnits) / node.codeUnits;
+	if (node.units !== maligator.units || sizeDifference > 0.01) {
+		throw new Error(
+			`self-compile workloads diverged: ${JSON.stringify(maligator)} != ${JSON.stringify(node)}`,
+		);
+	}
+}
+
+function copyStrippedTree(source: string, destination: string): void {
+	mkdirSync(destination, { recursive: true });
+	for (const entry of readdirSync(source, { withFileTypes: true })) {
+		const from = path.join(source, entry.name);
+		const to = path.join(destination, entry.name);
+		if (entry.isDirectory()) {
+			copyStrippedTree(from, to);
+		} else if (/\.(?:ts|mts|cts)$/.test(entry.name)) {
+			writeFileSync(to, stripTypesWithTypeScript(readFileSync(from, "utf8"), from));
+		} else if (entry.isFile()) {
+			copyFileSync(from, to);
+		}
+	}
+}
+
+function prepareSelfCompileSource(root: string): string {
+	mkdirSync(root, { recursive: true });
+	writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+	copyStrippedTree(path.resolve("src"), path.join(root, "src"));
+	mkdirSync(path.join(root, "bench"), { recursive: true });
+	const fixture = path.resolve("bench/self-compile.mts");
+	writeFileSync(
+		path.join(root, "bench/self-compile.mts"),
+		stripTypesWithTypeScript(readFileSync(fixture, "utf8"), fixture),
+	);
+	symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
+	return path.join(root, "bench/self-compile.mts");
+}
+
+function benchSelfCompile(runs: number): SelfCompileMetrics {
+	const fixture = path.resolve("bench/self-compile.mts");
+	const config = resolveBuildConfig({
+		engine: { eval: false, realms: false, regexp: true, intl: { enabled: false } },
+		surface: { webPlatform: false, node: true, maligator: true },
+	});
+	const binary = buildNativeBinary({
+		fixture,
+		name: "bench-self-compile",
+		config,
+	});
+	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-"));
+	const maligatorTimes: Array<number> = [];
+	const nodeTimes: Array<number> = [];
+	let nodeReference: SelfCompileRun | undefined;
+	let maligatorReference: SelfCompileRun | undefined;
+	try {
+		const target = prepareSelfCompileSource(path.join(root, "source"));
+		for (let index = 0; index < runs; index++) {
+			const nodeOutput = path.join(root, `node-${index}`);
+			const maligatorOutput = path.join(root, `maligator-${index}`);
+			let node: SelfCompileRun;
+			let maligator: SelfCompileRun;
+			if (index % 2 === 0) {
+				maligator = runSelfCompile(binary, [target], maligatorOutput);
+				node = runSelfCompile(process.execPath, [fixture, target], nodeOutput);
+			} else {
+				node = runSelfCompile(process.execPath, [fixture, target], nodeOutput);
+				maligator = runSelfCompile(binary, [target], maligatorOutput);
+			}
+			assertComparableSelfCompile(node, maligator);
+			if (nodeReference === undefined) nodeReference = node;
+			else assertSameSelfCompile(nodeReference, node);
+			if (maligatorReference === undefined) maligatorReference = maligator;
+			else assertSameSelfCompile(maligatorReference, maligator);
+			nodeTimes.push(node.wallMs);
+			maligatorTimes.push(maligator.wallMs);
+		}
+		if (nodeReference === undefined || maligatorReference === undefined) {
+			throw new Error("self-compile requires at least one run");
+		}
+		return {
+			maligatorMs: median(maligatorTimes),
+			nodeMs: median(nodeTimes),
+			runs,
+			units: nodeReference.units,
+			maligatorCodeUnits: maligatorReference.codeUnits,
+			nodeCodeUnits: nodeReference.codeUnits,
+			platform: process.platform,
+			arch: process.arch,
+			nodeVersion: process.version,
+		};
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 }
 
 // ---- language (vs V8) -----------------------------------------------------
@@ -2130,6 +2312,21 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  wire      ${humanBytes(entry.compiler.wireBytes)}${delta(entry.compiler.wireBytes, p?.wireBytes)}`,
 		);
 	}
+	if (entry.selfCompile) {
+		const p = previous?.selfCompile;
+		console.log("self-compile to C (fresh process; Node is reference):");
+		console.log(
+			`  maligator ${entry.selfCompile.maligatorMs.toFixed(1)}ms${delta(entry.selfCompile.maligatorMs, p?.maligatorMs)}`,
+		);
+		console.log(`  node      ${entry.selfCompile.nodeMs.toFixed(1)}ms`);
+		console.log(`  output    ${entry.selfCompile.units} units`);
+		console.log(
+			`  C bytes   ${humanBytes(entry.selfCompile.maligatorCodeUnits)} Maligator, ${humanBytes(entry.selfCompile.nodeCodeUnits)} Node`,
+		);
+		console.log(
+			`  context   median of ${entry.selfCompile.runs}, ${entry.selfCompile.platform}-${entry.selfCompile.arch}, ${entry.selfCompile.nodeVersion}`,
+		);
+	}
 	if (entry.string) {
 		const p = previous?.string;
 		console.log("string (String + RegExp; vs V8):");
@@ -2465,6 +2662,7 @@ const entry: BenchmarkSnapshot = {};
 
 if (which.includes("size")) entry.size = benchSize();
 if (which.includes("compiler")) entry.compiler = benchCompiler(runs);
+if (which.includes("self-compile")) entry.selfCompile = benchSelfCompile(runs);
 if (which.includes("language")) entry.language = benchLanguage(runs);
 if (which.includes("module")) entry.module = benchModule(runs);
 if (which.includes("string")) entry.string = benchString(runs);
