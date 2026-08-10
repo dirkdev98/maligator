@@ -14,13 +14,7 @@ replacement for WPT server transforms without modifying the upstream source.
 | `encoding/encodeInto.any.js`                          | Deferred      | Add `SharedArrayBuffer`; the ordinary `ArrayBuffer` cases already pass in discovery.                                              |
 | `encoding/textdecoder-streaming.any.js`               | Deferred      | Add `SharedArrayBuffer`; the ordinary-buffer streaming cases already pass in discovery.                                           |
 | `fetch/api/headers/header-values-normalize.any.js`    | Deferred      | Implement outbound `fetch()` plus deterministic WPT server resources; its XHR branch is outside server-main.                      |
-| `fetch/api/request/request-consume-empty.any.js`      | W2 body queue | Install Blob and FormData, which the source references at top level.                                                              |
-| `fetch/api/request/request-init-002.any.js`           | W2 body queue | Install Blob and complete BodyInit union handling.                                                                                |
 | `fetch/api/response/json.any.js`                      | Deferred      | Implement outbound `fetch()` and its WPT JSON resource.                                                                           |
-| `fetch/api/response/response-consume-empty.any.js`    | W2 body queue | Install Blob and FormData, which the source references at top level.                                                              |
-| `fetch/api/response/response-init-002.any.js`         | W2 body queue | Install Blob and complete BodyInit union handling.                                                                                |
-| `fetch/api/response/response-init-contenttype.any.js` | W2 body queue | Install Blob and FormData MIME extraction.                                                                                        |
+| `fetch/api/response/response-init-contenttype.any.js` | W2 body queue | Complete arbitrary `ReadableStream` BodyInit; Blob, FormData, URLSearchParams, and string cases now pass.                         |
 | `url/url-origin.any.js`                               | Deferred      | Provide the pinned URL JSON resources through a deterministic resource loader or outbound `fetch()`.                              |
 | `url/url-setters.any.js`                              | Deferred      | Support subset-by-key metadata and provide the pinned setter JSON resource.                                                       |
-| `url/urlencoded-parser.any.js`                        | W2 body queue | Implement URL-encoded `Request.formData()` and `Response.formData()`; its URLSearchParams-only cases pass.                        |
-| `url/urlsearchparams-constructor.any.js`              | W2 body queue | Install FormData; all other constructor cases pass in discovery.                                                                  |
