@@ -1317,6 +1317,120 @@ static MalValue rs_reader_release_lock(MalVm *vm, MalValue self,
     return mal_value_new_undefined();
 }
 
+static void rs_proxy_error_from_completion(
+    MalVm *vm, MalValue controller_value) {
+    MalValue error = vm->completion.value;
+    vm->completion = rs_normal();
+    rs_controller_error(vm, controller_value, &error, 1,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+static MalValue rs_proxy_read_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalValue controller = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    MalValue result = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue done;
+    if (!mal_vm_get_property(vm, result,
+            mal_intrinsic_string_key(vm, (const byte *) "done"), &done)) {
+        rs_proxy_error_from_completion(vm, controller);
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_truthy(done)) {
+        return rs_controller_close(vm, controller, nullptr, 0,
+            mal_value_new_undefined(), mal_value_new_undefined());
+    }
+    MalValue chunk;
+    if (!mal_vm_get_property(vm, result,
+            mal_intrinsic_string_key(vm, (const byte *) "value"), &chunk)) {
+        rs_proxy_error_from_completion(vm, controller);
+        return mal_value_new_undefined();
+    }
+    MalValue enqueue_result = rs_controller_enqueue(vm, controller, &chunk, 1,
+        mal_value_new_undefined(), mal_value_new_undefined());
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        rs_proxy_error_from_completion(vm, controller);
+    }
+    return enqueue_result;
+}
+
+static MalValue rs_proxy_pull(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalValue reader = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    MalValue promise = rs_reader_read(vm, reader, nullptr, 0,
+        mal_value_new_undefined(), mal_value_new_undefined());
+    if (vm->completion.kind == MAL_COMPLETION_THROW || argc < 1) {
+        return promise;
+    }
+    MalValue callback = rs_callback(vm, rs_proxy_read_fulfilled, args[0]);
+    mal_promise_perform_then(vm, promise, callback, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    return promise;
+}
+
+static MalValue rs_proxy_cancel(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalValue reader = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    return rs_reader_cancel(vm, reader, args, argc,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+MalValue mal_readable_stream_create_proxy(MalVm *vm, MalValue value) {
+    if (!rs_is_kind(value, MAL_READABLE_STREAM)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body stream is not a ReadableStream");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[5] = {
+        value, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 5);
+    MalReadableStreamObject *reader = rs_acquire_reader(vm,
+        mal_value_to_readable_stream_object(value),
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_PROTOTYPE]));
+    if (reader == nullptr) {
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    roots[1] = mal_value_from_readable_stream_object(reader);
+    mal_value_to_promise_object(reader->as.reader.closed_promise)->is_handled = true;
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[3] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, rs_proxy_pull, &roots[1], 1));
+    roots[4] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, rs_proxy_cancel, &roots[1], 1));
+    MalPropertyFlags flags =
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]),
+        (const byte *) "pull", roots[3], flags);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]),
+        (const byte *) "cancel", roots[4], flags);
+    MalValue proxy = rs_constructor(vm, mal_value_new_undefined(), &roots[2], 1,
+        vm->intrinsics[MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR],
+        mal_value_new_undefined());
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        (void) rs_reader_release_lock(vm, roots[1], nullptr, 0,
+            mal_value_new_undefined(), mal_value_new_undefined());
+    }
+    mal_gc_unroot(&span);
+    return proxy;
+}
+
 static void rs_trace(MalHeapHeader *cell) {
     MalReadableStreamObject *object = (MalReadableStreamObject *) cell;
     switch (object->kind) {

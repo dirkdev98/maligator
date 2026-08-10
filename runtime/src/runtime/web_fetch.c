@@ -2792,9 +2792,9 @@ static MalValue mal_request_constructor(
     }
     if (source_request != nullptr && source_request->body == nullptr
         && !mal_value_is_undefined(source_request->body_stream) && !body_override) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Copying a streaming Request body is not supported yet");
-        goto request_error;
+        r->body_stream = mal_readable_stream_create_proxy(
+            vm, source_request->body_stream);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto request_error;
     }
 
     r->method = slots[1];

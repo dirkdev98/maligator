@@ -384,6 +384,20 @@ async function run() {
 		streamNoCorsThrows = error instanceof TypeError;
 	}
 	check("Request rejects stream bodies in no-cors mode", streamNoCorsThrows);
+	const proxySource = new Request("https://example.com/upload", {
+		method: "POST",
+		body: byteStream([112, 114, 111], [120, 121]),
+		duplex: "half",
+	});
+	const proxiedRequest = new Request(proxySource);
+	check(
+		"Request copy creates a distinct proxy for a streaming body",
+		proxiedRequest.body !== proxySource.body && proxySource.body.locked,
+	);
+	check(
+		"Request streaming body proxy forwards ordered chunks",
+		(await proxiedRequest.text()) === "proxy" && proxiedRequest.bodyUsed,
+	);
 
 	const streamError = new Error("stream failure");
 	const erroredBody = new Response(new ReadableStream({
