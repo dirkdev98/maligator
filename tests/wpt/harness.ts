@@ -585,6 +585,7 @@ var __wpt_native_set_timeout = globalThis.setTimeout;
 var __wpt_native_clear_timeout = globalThis.clearTimeout;
 var self = globalThis;
 var location = Object.freeze(__WPT_LOCATION__);
+globalThis.location = location;
 globalThis.setInterval = function() {
   var handle = __wpt_native_set_interval.apply(globalThis, arguments);
   __wpt_intervals.push(handle);
@@ -861,7 +862,17 @@ export function createWptProgram(
 		throw new Error("WPT subtest timeout must be a positive integer");
 	}
 	const url = new URL(variant, `https://web-platform.test/${entry.path}`);
-	const location = { pathname: url.pathname, search: url.search, hash: url.hash };
+	const location = {
+		href: url.href,
+		origin: url.origin,
+		protocol: url.protocol,
+		host: url.host,
+		hostname: url.hostname,
+		port: url.port,
+		pathname: url.pathname,
+		search: url.search,
+		hash: url.hash,
+	};
 	const adapter = TESTHARNESS_ADAPTER.replace("__WPT_PATH__", JSON.stringify(entry.path))
 		.replace("__WPT_VARIANT__", JSON.stringify(variant))
 		.replace("__WPT_TITLE__", JSON.stringify(pinned.metadata.title))

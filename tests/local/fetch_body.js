@@ -700,6 +700,14 @@ async function run() {
 		nonByteByobThrows = error instanceof TypeError;
 	}
 	check("BYOB readers require byte streams", nonByteByobThrows);
+	globalThis.location = { href: "https://example.test/base/path" };
+	const relativeRedirect = Response.redirect("/");
+	check(
+		"Response.redirect resolves relative URLs against the environment base",
+		relativeRedirect.body === null &&
+			relativeRedirect.headers.get("location") === "https://example.test/",
+	);
+	delete globalThis.location;
 
 	const byobCloneSource = new Request("https://example.com/", {
 		method: "POST",

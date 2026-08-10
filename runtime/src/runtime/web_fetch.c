@@ -2222,6 +2222,31 @@ static MalValue mal_response_static_redirect(
     void *url_handle = mal_url_parse(
         mal_string_code_units(url), mal_string_length(url), nullptr, 0, false);
     if (url_handle == nullptr) {
+        MalValue location;
+        if (!mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS],
+                mal_intrinsic_string_key(vm, (const byte *) "location"),
+                &location)) {
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_object(location)) {
+            MalValue href;
+            if (!mal_vm_get_property(vm, location,
+                    mal_intrinsic_string_key(vm, (const byte *) "href"),
+                    &href)) {
+                return mal_value_new_undefined();
+            }
+            if (!mal_value_is_undefined(href)) {
+                MalString *base;
+                if (!mal_vm_to_string(vm, href, &base)) {
+                    return mal_value_new_undefined();
+                }
+                url_handle = mal_url_parse(mal_string_code_units(url),
+                    mal_string_length(url), mal_string_code_units(base),
+                    mal_string_length(base), true);
+            }
+        }
+    }
+    if (url_handle == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid URL");
         return mal_value_new_undefined();
     }
