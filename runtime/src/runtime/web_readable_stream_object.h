@@ -124,6 +124,7 @@ bool mal_readable_stream_consume(MalVm *vm, MalValue value);
 
 /** Internal reader algorithms used by Fetch Body consumption. */
 MalValue mal_readable_stream_acquire_default_reader(MalVm *vm, MalValue value);
+MalValue mal_readable_stream_default_reader_closed(MalValue value);
 MalValue mal_readable_stream_default_reader_read(MalVm *vm, MalValue value);
 MalValue mal_readable_stream_default_reader_cancel(
     MalVm *vm, MalValue value, MalValue reason);
