@@ -325,6 +325,65 @@ async function run() {
 		"streaming Body uses internal reader algorithms",
 		(await new Response(patchedStream).text()) === "internal",
 	);
+	const requestStream = byteStream([114, 101], [113, 117, 101, 115, 116]);
+	const streamingRequest = new Request("https://example.com/upload", {
+		method: "POST",
+		body: requestStream,
+		duplex: "half",
+	});
+	check(
+		"Request accepts a ReadableStream body with duplex half",
+		streamingRequest.body === requestStream &&
+			streamingRequest.duplex === "half" &&
+			!streamingRequest.bodyUsed,
+	);
+	check(
+		"Request consumes a streaming body",
+		(await streamingRequest.text()) === "request" && streamingRequest.bodyUsed,
+	);
+	let missingDuplexThrows = false;
+	try {
+		new Request("https://example.com/upload", {
+			method: "POST",
+			body: byteStream([1]),
+		});
+	} catch (error) {
+		missingDuplexThrows = error instanceof TypeError;
+	}
+	check("Request stream body requires duplex", missingDuplexThrows);
+	let invalidDuplexThrows = false;
+	try {
+		new Request("https://example.com/upload", {
+			method: "POST",
+			body: "data",
+			duplex: "full",
+		});
+	} catch (error) {
+		invalidDuplexThrows = error instanceof TypeError;
+	}
+	check("Request validates the duplex enum", invalidDuplexThrows);
+	let streamGetThrows = false;
+	try {
+		new Request("https://example.com/upload", {
+			body: byteStream([1]),
+			duplex: "half",
+		});
+	} catch (error) {
+		streamGetThrows = error instanceof TypeError;
+	}
+	check("Request rejects a stream body for GET", streamGetThrows);
+	let streamNoCorsThrows = false;
+	try {
+		new Request("https://example.com/upload", {
+			method: "POST",
+			mode: "no-cors",
+			body: byteStream([1]),
+			duplex: "half",
+		});
+	} catch (error) {
+		streamNoCorsThrows = error instanceof TypeError;
+	}
+	check("Request rejects stream bodies in no-cors mode", streamNoCorsThrows);
 
 	const streamError = new Error("stream failure");
 	const erroredBody = new Response(new ReadableStream({

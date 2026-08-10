@@ -2463,7 +2463,7 @@ enum {
 };
 
 static bool mal_fetch_validate_request_init(MalVm *vm, MalValue init,
-    MalValue *fields, i32 *mode, i32 *cache) {
+    MalValue *fields, i32 *mode, i32 *cache, bool *duplex_present) {
     MalValue value;
     if (!mal_vm_get_property(vm, init,
             mal_intrinsic_string_key(vm, (const byte *) "window"), &value)) {
@@ -2473,6 +2473,21 @@ static bool mal_fetch_validate_request_init(MalVm *vm, MalValue init,
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "RequestInit.window must be null");
         return false;
+    }
+
+    if (!mal_vm_get_property(vm, init,
+            mal_intrinsic_string_key(vm, (const byte *) "duplex"), &value)) {
+        return false;
+    }
+    if (!mal_value_is_undefined(value)) {
+        MalString *duplex;
+        if (!mal_vm_to_string(vm, value, &duplex)) return false;
+        if (!mal_string_equals_ascii(duplex, "half")) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "RequestInit.duplex must be half");
+            return false;
+        }
+        *duplex_present = true;
     }
 
     if (!mal_vm_get_property(vm, init,
@@ -2574,6 +2589,7 @@ static MalValue mal_request_constructor(
     const char *content_type = nullptr;
     i32 request_mode = 2;
     i32 request_cache = 0;
+    bool duplex_present = false;
 
     if (argc >= 1 && mal_value_is_request_object(args[0])) {
         MalRequestObject *src = mal_value_to_request_object(args[0]);
@@ -2615,7 +2631,8 @@ static MalValue mal_request_constructor(
 
     if (argc >= 2 && mal_value_is_object(args[1])) {
         if (!mal_fetch_validate_request_init(
-                vm, args[1], &slots[6], &request_mode, &request_cache)) {
+                vm, args[1], &slots[6], &request_mode, &request_cache,
+                &duplex_present)) {
             goto request_error;
         }
         MalValue v;
@@ -2641,27 +2658,46 @@ static MalValue mal_request_constructor(
 
     // A body from init replaces any copied body. A Request used as the init
     // dictionary exposes its byte-backed body through the Body stream getter;
-    // preserve those bytes without broadening support to arbitrary streams yet.
+    // preserve those source bytes rather than treating that lazy stream as a
+    // streaming upload.
     if (mal_value_is_readable_stream_object(slots[4])) {
         MalRequestObject *body_source = argc >= 2 && mal_value_is_request_object(args[1])
             ? mal_value_to_request_object(args[1]) : nullptr;
-        if (body_source == nullptr || body_source->body == nullptr
-            || !mal_ops_same_value(body_source->body_stream, slots[4])) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "Arbitrary ReadableStream BodyInit is not supported yet");
-            goto request_error;
+        if (body_source != nullptr && body_source->body != nullptr
+            && mal_ops_same_value(body_source->body_stream, slots[4])) {
+            free(r->body);
+            r->body = malloc(body_source->body_len == 0 ? 1 : body_source->body_len);
+            if (r->body == nullptr) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Request body allocation failed");
+                goto request_error;
+            }
+            if (body_source->body_len > 0) {
+                memcpy(r->body, body_source->body, body_source->body_len);
+            }
+            r->body_len = body_source->body_len;
+        } else {
+            if (!duplex_present) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "RequestInit.duplex is required for a ReadableStream body");
+                goto request_error;
+            }
+            if (request_mode != 0 && request_mode != 2) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "ReadableStream request bodies require same-origin or cors mode");
+                goto request_error;
+            }
+            if (mal_readable_stream_is_locked(slots[4])
+                || mal_readable_stream_is_disturbed(slots[4])) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "ReadableStream BodyInit is locked or disturbed");
+                goto request_error;
+            }
+            free(r->body);
+            r->body = nullptr;
+            r->body_len = 0;
+            r->body_stream = slots[4];
         }
-        free(r->body);
-        r->body = malloc(body_source->body_len == 0 ? 1 : body_source->body_len);
-        if (r->body == nullptr) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                "Request body allocation failed");
-            goto request_error;
-        }
-        if (body_source->body_len > 0) {
-            memcpy(r->body, body_source->body, body_source->body_len);
-        }
-        r->body_len = body_source->body_len;
     } else if (mal_fetch_is_form_data(slots[4])) {
         free(r->body);
         r->body = mal_form_data_serialize(
@@ -2727,7 +2763,7 @@ static MalValue mal_request_constructor(
             "no-cors Request method is not CORS-safelisted");
         goto request_error;
     }
-    if (r->body != nullptr &&
+    if ((r->body != nullptr || !mal_value_is_undefined(r->body_stream)) &&
         (mal_fetch_string_ascii_equal_ci(method, "GET") ||
             mal_fetch_string_ascii_equal_ci(method, "HEAD"))) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -2754,6 +2790,12 @@ static MalValue mal_request_constructor(
             goto request_error;
         }
     }
+    if (source_request != nullptr && source_request->body == nullptr
+        && !mal_value_is_undefined(source_request->body_stream) && !body_override) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Copying a streaming Request body is not supported yet");
+        goto request_error;
+    }
 
     r->method = slots[1];
     r->url = slots[2];
@@ -2765,6 +2807,9 @@ static MalValue mal_request_constructor(
     r->cache = slots[10];
     r->redirect = slots[11];
     r->integrity = slots[12];
+    if (!mal_value_is_undefined(r->body_stream)) {
+        mal_gc_card(&r->object.header, r->body_stream);
+    }
     for (usize i = 1; i < sizeof(slots) / sizeof(slots[0]); i++) {
         if (i == 3 || i == 4) continue;
         mal_gc_card(&r->object.header, slots[i]);
