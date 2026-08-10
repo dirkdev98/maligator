@@ -48,6 +48,7 @@ fetch/api/request/request-init-002.any.js
 fetch/api/request/request-structure.any.js
 fetch/api/response/json.any.js
 fetch/api/response/response-consume-empty.any.js
+fetch/api/response/response-consume-stream.any.js
 fetch/api/response/response-error.any.js
 fetch/api/response/response-init-001.any.js
 fetch/api/response/response-init-002.any.js

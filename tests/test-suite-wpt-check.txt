@@ -28,6 +28,7 @@ fetch/api/request/request-init-stream.any.js
 fetch/api/request/request-headers.any.js
 fetch/api/request/request-structure.any.js
 fetch/api/response/response-consume-empty.any.js
+fetch/api/response/response-consume-stream.any.js
 fetch/api/response/response-error.any.js
 fetch/api/response/response-error-from-stream.any.js
 fetch/api/response/response-from-stream.any.js

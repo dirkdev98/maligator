@@ -322,6 +322,23 @@
 			"includes": []
 		},
 		{
+			"path": "fetch/api/response/response-consume-stream.any.js",
+			"sha256": "9aa003bf20a4a812ff6a0ce16818ccba10aea8cbc45ef021052bfebd64e2aa60",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Response consume" },
+				{ "name": "script", "value": "../resources/utils.js" }
+			],
+			"includes": [
+				{
+					"path": "fetch/api/resources/utils.js",
+					"sha256": "b0471d45399909b060f9d36caca1346477c47852c280ac5a2fb4c3d7d85077aa"
+				}
+			]
+		},
+		{
 			"path": "fetch/api/response/response-error.any.js",
 			"sha256": "f5c0863dd92f0e973c4fda128ec9d869cf36a226bd891f387e3faa01e29389cd",
 			"target": "server-main",
