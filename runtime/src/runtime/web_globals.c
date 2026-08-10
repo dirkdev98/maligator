@@ -1197,12 +1197,21 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
         mal_web_structured_clone);
 
     // performance (now / timeOrigin).
-    MalObject *performance = mal_intrinsic_new_object(vm);
+    MalObject *event_target_proto =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_TARGET_PROTOTYPE]);
+    MalEventTargetObject *performance_target =
+        mal_event_target_object_new(&vm->heap, event_target_proto);
+    MalValue performance_value = mal_value_from_event_target_object(performance_target);
+    MalRootSpan performance_root;
+    mal_gc_root(&performance_root, &performance_value, 1);
+    MalObject *performance = &performance_target->object;
     mal_intrinsic_define_method_n(vm, performance, (const byte *) "now", 0, mal_web_performance_now);
     mal_intrinsic_define_data(vm, performance, (const byte *) "timeOrigin",
         mal_value_from_f64(mal_web_time_origin_ms), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, global_this, (const byte *) "performance",
-        mal_value_from_object(performance), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+        performance_value,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&performance_root);
 
     // crypto (randomUUID / getRandomValues). This program already links the
     // entropy boundary, so Math.random's generator can be seeded from it rather

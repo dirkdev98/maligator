@@ -89,9 +89,9 @@ int main(int argc, char **argv) {
     // with mal_fetch_install (web_fetch.c). The reactor (mal_host_attach) is a separate
     // axis and stays: a non-web host program still gets the event loop.
     mal_fetch_install(&vm, global_this);          // fetch / Response / Headers / Mal.serve
+    mal_events_install(&vm, global_this);         // EventTarget / Event
     mal_web_globals_install(&vm, global_this);    // TextEncoder / TextDecoder / …
     mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)
-    mal_events_install(&vm, global_this);         // EventTarget / Event
     mal_readable_stream_install(&vm, global_this); // ReadableStream default mode
 #endif
 

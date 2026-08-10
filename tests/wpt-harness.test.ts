@@ -164,6 +164,7 @@ describe("curated WPT harness", () => {
 				"// META: script=../support/first.js",
 				"// META: variant=#second",
 				"// META: script=/common/second.js",
+				"// META: timeout=long",
 				"",
 				"// META: title=Too late",
 			].join("\n"),
@@ -172,6 +173,7 @@ describe("curated WPT harness", () => {
 		expect(metadata.globals).toEqual(["window", "worker"]);
 		expect(metadata.variants).toEqual(["?first#hash", "#second"]);
 		expect(metadata.scripts).toEqual(["../support/first.js", "/common/second.js"]);
+		expect(metadata.timeout).toBe("long");
 		expect(metadata.declarations.map((item) => item.name)).toEqual([
 			"title",
 			"global",
@@ -179,6 +181,7 @@ describe("curated WPT harness", () => {
 			"script",
 			"variant",
 			"script",
+			"timeout",
 		]);
 		expect(parseWptMetadata("\n// META: title=Not initial").declarations).toEqual([]);
 		expect(parseWptMetadata("test(() => {});\n// META: variant=?late").variants).toEqual([
@@ -195,9 +198,12 @@ describe("curated WPT harness", () => {
 		expect(() => parseWptMetadata("// META: title=one\n// META: title=two")).toThrow(
 			"repeated title",
 		);
-		expect(() => parseWptMetadata("// META: timeout=long")).toThrow(
-			"unsupported WPT metadata",
+		expect(() => parseWptMetadata("// META: timeout=short")).toThrow(
+			"unsupported timeout metadata",
 		);
+		expect(() =>
+			parseWptMetadata("// META: timeout=long\n// META: timeout=long"),
+		).toThrow("repeated timeout metadata");
 	});
 
 	it("resolves root-relative and relative scripts without permitting escapes", () => {
@@ -389,6 +395,34 @@ describe("curated WPT harness", () => {
 			status: "ERROR",
 			message: "setup failed",
 		});
+	});
+
+	it("supports single-test setup, async callback this, and interval cleanup", () => {
+		const single = runProgram(
+			[
+				"setup({ single_test: true });",
+				"setTimeout(assert_unreached, 1000);",
+				"var handle = setInterval(function() {",
+				"  clearInterval(handle);",
+				"  done();",
+				"}, 0);",
+			].join("\n"),
+		);
+		expect(single.subtests).toMatchObject([{ status: "PASS" }]);
+		expect(single.harness).toMatchObject({ status: "OK", total: 1 });
+
+		const asynchronous = runProgram(
+			"async_test(function() { this.step_timeout(function() { this.done(); }, 0); }, 'this');",
+		);
+		expect(asynchronous.subtests).toMatchObject([{ status: "PASS" }]);
+		expect(asynchronous.harness).toMatchObject({ status: "OK", total: 1 });
+	});
+
+	it("supports approximate numeric assertions", () => {
+		const parsed = runProgram(
+			"test(function() { assert_approx_equals(10.25, 10, 0.25); }, 'approx');",
+		);
+		expect(parsed.subtests).toMatchObject([{ status: "PASS" }]);
 	});
 
 	it("matches START and RESULT by numeric ID and attributes crashes to that ID", () => {

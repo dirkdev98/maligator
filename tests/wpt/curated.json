@@ -222,9 +222,7 @@
 			"sha256": "d531582e04abd1857c9de1e8b2b745f5899c7e855c1ac0dc6d2bf8c93d439044",
 			"target": "server-main",
 			"modes": ["normal", "gc-stress"],
-			"metadata": [
-				{ "name": "global", "value": "window,worker" }
-			],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
 			"includes": []
 		},
 		{
@@ -322,6 +320,14 @@
 			"includes": []
 		},
 		{
+			"path": "html/webappapis/timers/clearinterval-from-callback.any.js",
+			"sha256": "c48db2297ad8796a98f4c0d12e0d4bf466ff599cbbb982065dcbd740490fb574",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
 			"path": "html/webappapis/timers/cleartimeout-clearinterval.any.js",
 			"sha256": "88249c3de681efa1db0c3a6ca39cdc74b657b052eeb96ca7d43b2971d5327985",
 			"target": "server-main",
@@ -332,6 +338,22 @@
 		{
 			"path": "html/webappapis/timers/missing-timeout-setinterval.any.js",
 			"sha256": "5edf0f09d55cacd4ffa6e62696d3614d7fcd099627a56b4a9d00449633395da5",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "html/webappapis/timers/negative-setinterval.any.js",
+			"sha256": "cc6bba6aa3bffc42321a44380937b4b7fb97ad494dd3a6db919122372ddf1400",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "html/webappapis/timers/negative-settimeout.any.js",
+			"sha256": "8f8adbe6e0c94b801dd36ba9c8a484bdb7a3f2a1813aa5b19024d3fb04660e94",
 			"target": "server-main",
 			"modes": ["normal", "gc-stress"],
 			"metadata": [],
@@ -367,6 +389,14 @@
 			"target": "server-main",
 			"modes": ["normal", "gc-stress"],
 			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
+			"path": "url/url-searchparams.any.js",
+			"sha256": "c8aac0f9c4ddcb1c7acf2b5848315e237b7edf84d1d91d61cc4608a1a4d32302",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
 			"includes": []
 		},
 		{
@@ -468,6 +498,22 @@
 		{
 			"path": "url/urlsearchparams-stringifier.any.js",
 			"sha256": "14f7b8871fec6a02dbbe324a5f8943932ecb149285e5cc149fdf34ae769d52c0",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "hr-time/basic.any.js",
+			"sha256": "83751a3306d9ee4f9c83e405bd91c293476b25240e958d0277f5e80a93cd8c67",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "hr-time/monotonic-clock.any.js",
+			"sha256": "cfbbde21f4ffcb2e3e4d60542297ece40089364b90720de646c7a716afdfb6e9",
 			"target": "server-main",
 			"modes": ["normal", "gc-stress"],
 			"metadata": [],

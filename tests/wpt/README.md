@@ -89,6 +89,8 @@ numbers while reporting the upstream harness error, and correlates
 `WPT_START`/`WPT_RESULT` records by numeric ID. It does not attempt full browser
 harness emulation.
 
-`wave-0.txt` remains the broader reviewed candidate list. Adding a curated path
-requires reviewing server-main applicability, metadata and support dependencies,
-fixture hashes, declared modes, variant behavior, and adapter API use.
+`wave-0.txt` remains the broader reviewed candidate list. The current disposition of
+every candidate not yet curated is recorded in
+[`wave-0-review.md`](wave-0-review.md). Adding a curated path requires reviewing
+server-main applicability, metadata and support dependencies, fixture hashes,
+declared modes, variant behavior, and adapter API use.

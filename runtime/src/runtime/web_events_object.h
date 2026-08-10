@@ -40,6 +40,10 @@ typedef struct MalEventTargetObject {
 
 typedef struct MalVm MalVm;
 
+/* Allocate a branded EventTarget with the supplied prototype. Runtime-owned web
+ * objects such as performance use this to inherit the shared listener methods. */
+MalEventTargetObject *mal_event_target_object_new(MalHeap *heap, MalObject *prototype);
+
 /* Throw a DOMException backed by the installed intrinsic prototype and hidden
  * name/message slots. The helper roots all intermediate values across GC. */
 void mal_dom_exception_throw(MalVm *vm, const byte *message, const byte *name);

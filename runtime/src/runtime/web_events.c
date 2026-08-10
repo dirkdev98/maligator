@@ -258,7 +258,7 @@ static bool ev_get_bool(MalVm *vm, MalValue obj, const byte *name) {
  * EventTarget object (also backs AbortSignal instances).
  * --------------------------------------------------------------------------- */
 
-static MalEventTargetObject *event_target_new(MalHeap *heap, MalObject *prototype) {
+MalEventTargetObject *mal_event_target_object_new(MalHeap *heap, MalObject *prototype) {
     MalEventTargetObject *t =
         mal_heap_alloc(heap, sizeof(MalEventTargetObject), MAL_HEAP_EVENT_TARGET_OBJECT);
     mal_object_init(heap, &t->object, MAL_HEAP_EVENT_TARGET_OBJECT, prototype);
@@ -435,7 +435,7 @@ static MalValue event_target_constructor(
     (void) argc;
     (void) callee;
     MalObject *proto = ev_instance_proto(vm, nt, MAL_INTRINSIC_EVENT_TARGET_PROTOTYPE);
-    return mal_value_from_event_target_object(event_target_new(&vm->heap, proto));
+    return mal_value_from_event_target_object(mal_event_target_object_new(&vm->heap, proto));
 }
 
 static MalValue event_target_add_listener(
@@ -626,7 +626,7 @@ static MalValue event_stop_immediate(
  * before allocating. */
 static MalValue mal_abort_signal_new(MalVm *vm) {
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ABORT_SIGNAL_PROTOTYPE]);
-    MalEventTargetObject *s = event_target_new(&vm->heap, proto);
+    MalEventTargetObject *s = mal_event_target_object_new(&vm->heap, proto);
     MalValue sval = mal_value_from_event_target_object(s);
     MalRootSpan rs;
     mal_gc_root(&rs, &sval, 1);

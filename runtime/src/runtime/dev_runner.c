@@ -110,9 +110,9 @@ int mal_dev_run_wires(
 #if MAL_WEB_PLATFORM
     if (web_platform) {
         mal_fetch_install(&vm, global_this);
+        mal_events_install(&vm, global_this);
         mal_web_globals_install(&vm, global_this);
         mal_url_install(&vm, global_this);
-        mal_events_install(&vm, global_this);
         mal_readable_stream_install(&vm, global_this);
     }
 #else

@@ -9,7 +9,7 @@ export type WptMode = "normal" | "gc-stress";
 export type WptBackend = "compiled" | "interpreted";
 export type WptPolicy = "bail" | "complete";
 export type WptStatus = "PASS" | "FAIL" | "TIMEOUT" | "CRASH";
-export type WptMetadataName = "title" | "global" | "variant" | "script";
+export type WptMetadataName = "title" | "global" | "variant" | "script" | "timeout";
 
 export interface WptMetadataDeclaration {
 	name: WptMetadataName;
@@ -79,6 +79,7 @@ export interface WptParsedMetadata {
 	globals: Array<string>;
 	variants: Array<string>;
 	scripts: Array<string>;
+	timeout: "long" | null;
 }
 
 export interface WptPinnedTest {
@@ -218,6 +219,7 @@ function parseMetadataDeclarations(
 	if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
 	let hasTitle = false;
 	let hasGlobal = false;
+	let hasTimeout = false;
 	const variants = new Set<string>();
 	return value.map((item, index) => {
 		const declaration = object(item, `${label}[${index}]`);
@@ -226,7 +228,8 @@ function parseMetadataDeclarations(
 			name !== "title" &&
 			name !== "global" &&
 			name !== "variant" &&
-			name !== "script"
+			name !== "script" &&
+			name !== "timeout"
 		) {
 			throw new Error(`unsupported WPT metadata: ${name}`);
 		}
@@ -248,6 +251,12 @@ function parseMetadataDeclarations(
 				throw new Error(`${label} has duplicate variant ${declarationValue}`);
 			}
 			variants.add(declarationValue);
+		} else if (name === "timeout") {
+			if (hasTimeout) throw new Error(`${label} has repeated timeout metadata`);
+			if (declarationValue !== "long") {
+				throw new Error(`${label}[${index}].value has unsupported timeout metadata`);
+			}
+			hasTimeout = true;
 		}
 		return { name, value: declarationValue };
 	});
@@ -273,6 +282,8 @@ export function parseWptMetadata(source: string): WptParsedMetadata {
 		globals: global === undefined ? ["window", "dedicatedworker"] : global.split(","),
 		variants: variants.length === 0 ? [""] : variants,
 		scripts: validated.filter((item) => item.name === "script").map((item) => item.value),
+		timeout:
+			validated.find((item) => item.name === "timeout")?.value === "long" ? "long" : null,
 	};
 }
 
@@ -565,8 +576,45 @@ var __wpt_occurrences = Object.create(null);
 var __wpt_duplicate_names = [];
 var __wpt_timeout = __WPT_TIMEOUT__;
 var __wpt_harness_error = null;
+var __wpt_single_test = null;
+var __wpt_intervals = [];
+var __wpt_timeouts = [];
+var __wpt_native_set_interval = globalThis.setInterval;
+var __wpt_native_clear_interval = globalThis.clearInterval;
+var __wpt_native_set_timeout = globalThis.setTimeout;
+var __wpt_native_clear_timeout = globalThis.clearTimeout;
 var self = globalThis;
 var location = Object.freeze(__WPT_LOCATION__);
+globalThis.setInterval = function() {
+  var handle = __wpt_native_set_interval.apply(globalThis, arguments);
+  __wpt_intervals.push(handle);
+  return handle;
+};
+globalThis.clearInterval = function(handle) {
+  __wpt_native_clear_interval.call(globalThis, handle);
+};
+globalThis.setTimeout = function() {
+  var handle = __wpt_native_set_timeout.apply(globalThis, arguments);
+  __wpt_timeouts.push(handle);
+  return handle;
+};
+globalThis.clearTimeout = function(handle) {
+  __wpt_native_clear_timeout.call(globalThis, handle);
+};
+function __wpt_cleanup_timers() {
+  for (var i = 0; i < __wpt_intervals.length; i++) {
+    __wpt_native_clear_interval.call(globalThis, __wpt_intervals[i]);
+  }
+  for (var i = 0; i < __wpt_timeouts.length; i++) {
+    __wpt_native_clear_timeout.call(globalThis, __wpt_timeouts[i]);
+  }
+  __wpt_intervals.length = 0;
+  __wpt_timeouts.length = 0;
+  globalThis.setInterval = __wpt_native_set_interval;
+  globalThis.clearInterval = __wpt_native_clear_interval;
+  globalThis.setTimeout = __wpt_native_set_timeout;
+  globalThis.clearTimeout = __wpt_native_clear_timeout;
+}
 function __wpt_message(error) {
   if (error && error.message !== undefined) return String(error.message);
   return String(error);
@@ -629,7 +677,9 @@ function __wpt_context(finish, isSettled) {
     });
   };
   context.step_timeout = function(callback, timeout) {
-    return setTimeout(context.step_func(callback), timeout);
+    return setTimeout(context.step_func(function() {
+      return callback.apply(context, arguments);
+    }), timeout);
   };
   context.unreached_func = function(message) {
     return context.step_func(function() { assert_unreached(message); });
@@ -637,6 +687,16 @@ function __wpt_context(finish, isSettled) {
   return context;
 }
 function setup(callback) {
+  if (callback && typeof callback === "object") {
+    if (callback.single_test === true) {
+      if (__wpt_single_test !== null) {
+        __wpt_set_harness_error("setup({single_test: true}) called more than once");
+      } else {
+        __wpt_single_test = async_test(null);
+      }
+    }
+    return;
+  }
   if (typeof callback !== "function") return;
   try { callback(); }
   catch (error) { __wpt_set_harness_error(error); }
@@ -685,7 +745,7 @@ function async_test(callback, name) {
     }, __wpt_timeout);
     try {
       if (callback !== null) {
-        var value = callback(context);
+        var value = callback.call(context, context);
         __wpt_check_return_value("async_test", testRecord, value);
       }
     }
@@ -753,6 +813,12 @@ function assert_equals(actual, expected, message) {
 function assert_not_equals(actual, expected, message) {
   if (Object.is(actual, expected)) __wpt_fail((message ? message + ": " : "") + "expected values to differ");
 }
+function assert_approx_equals(actual, expected, epsilon, message) {
+  if (typeof actual !== "number" || typeof expected !== "number" || typeof epsilon !== "number" ||
+      Math.abs(actual - expected) > epsilon) {
+    __wpt_fail((message ? message + ": " : "") + "expected " + String(actual) + " to be within " + String(epsilon) + " of " + String(expected));
+  }
+}
 function assert_array_equals(actual, expected, message) {
   if (actual.length !== expected.length) __wpt_fail((message ? message + ": " : "") + "array lengths differ");
   for (var i = 0; i < expected.length; i++) assert_equals(actual[i], expected[i], message || "array item " + i);
@@ -773,7 +839,9 @@ function assert_throws_exactly(expected, callback, message) {
   if (error !== expected) __wpt_fail((message ? message + ": " : "") + "expected exact thrown value");
 }
 function assert_unreached(message) { __wpt_fail(message || "reached unreachable code"); }
-function done() {}
+function done() {
+  if (__wpt_single_test !== null) __wpt_single_test.done();
+}
 function format_value(value) { return JSON.stringify(value); }
 function generate_tests(callback, cases) {
   cases.forEach(function(item) { test(function() { callback.apply(null, item.slice(1)); }, item[0]); });
@@ -784,7 +852,7 @@ export function createWptProgram(
 	entry: WptManifestEntry,
 	pinned: WptPinnedTest,
 	variant: string,
-	timeoutMs = 10_000,
+	timeoutMs = pinned.metadata.timeout === "long" ? 60_000 : 10_000,
 ): string {
 	if (!pinned.metadata.variants.includes(variant)) {
 		throw new Error(`variant ${variant} is not declared by ${entry.path}`);
@@ -800,7 +868,7 @@ export function createWptProgram(
 		.replace("__WPT_LOCATION__", JSON.stringify(location))
 		.replace("__WPT_TIMEOUT__", String(timeoutMs));
 	const includes = pinned.includes.map((include) => include.source).join("\n");
-	return `${adapter}\n${includes}\n${pinned.source}\nPromise.all([__wpt_queue, Promise.all(__wpt_async)]).then(function() {\n  __wpt_check_duplicate_names();\n  console.log("WPT_HARNESS " + JSON.stringify({path: __wpt_path, status: __wpt_harness_error === null ? "OK" : "ERROR", total: __wpt_count, message: __wpt_harness_error}));\n});\n`;
+	return `${adapter}\n${includes}\n${pinned.source}\nPromise.all([__wpt_queue, Promise.all(__wpt_async)]).then(function() {\n  __wpt_cleanup_timers();\n  __wpt_check_duplicate_names();\n  console.log("WPT_HARNESS " + JSON.stringify({path: __wpt_path, status: __wpt_harness_error === null ? "OK" : "ERROR", total: __wpt_count, message: __wpt_harness_error}));\n});\n`;
 }
 
 interface WptTransportTest {
