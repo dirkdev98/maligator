@@ -11,6 +11,9 @@ typedef enum MalReadableStreamKind : u8 {
     MAL_READABLE_STREAM_BYOB_READER,
     MAL_COUNT_QUEUING_STRATEGY,
     MAL_BYTE_LENGTH_QUEUING_STRATEGY,
+    MAL_WRITABLE_STREAM,
+    MAL_WRITABLE_STREAM_DEFAULT_CONTROLLER,
+    MAL_WRITABLE_STREAM_DEFAULT_WRITER,
 } MalReadableStreamKind;
 
 typedef enum MalReadableStreamState : u8 {
@@ -31,6 +34,14 @@ typedef struct MalReadableStreamReadRequest {
     MalValue promise;
     MalValue view;
 } MalReadableStreamReadRequest;
+
+typedef struct MalWritableStreamWriteRequest {
+    struct MalWritableStreamWriteRequest *next;
+    MalValue chunk;
+    MalValue promise;
+    f64 size;
+    bool close;
+} MalWritableStreamWriteRequest;
 
 typedef struct MalReadableStreamObject {
     MalObject object;
@@ -68,11 +79,40 @@ typedef struct MalReadableStreamObject {
         struct {
             f64 high_water_mark;
         } strategy;
+        struct {
+            MalReadableStreamState state;
+            MalValue controller;
+            MalValue writer;
+            MalValue stored_error;
+        } writable_stream;
+        struct {
+            MalValue stream;
+            MalValue underlying_sink;
+            MalValue write_method;
+            MalValue close_method;
+            MalValue abort_method;
+            MalValue size_algorithm;
+            MalWritableStreamWriteRequest *queue_head;
+            MalWritableStreamWriteRequest *queue_tail;
+            f64 queue_total_size;
+            f64 high_water_mark;
+            bool started;
+            bool writing;
+            bool close_requested;
+        } writable_controller;
+        struct {
+            MalValue stream;
+            MalValue closed_promise;
+            MalValue ready_promise;
+        } writer;
     } as;
 } MalReadableStreamObject;
 
 /** Install default readable streams and queuing-strategy globals. */
 void mal_readable_stream_install(MalVm *vm, MalObject *global_this);
+
+/** Install default writable streams. Shares the native web-stream cell. */
+void mal_writable_stream_install(MalVm *vm, MalObject *global_this);
 
 /** Create a default stream containing one owned Uint8Array copy of `bytes`. */
 MalValue mal_readable_stream_from_bytes(MalVm *vm, const byte *bytes, usize length);

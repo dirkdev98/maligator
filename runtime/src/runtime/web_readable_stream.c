@@ -2145,6 +2145,30 @@ static void rs_trace(MalHeapHeader *cell) {
         case MAL_COUNT_QUEUING_STRATEGY:
         case MAL_BYTE_LENGTH_QUEUING_STRATEGY:
             break;
+        case MAL_WRITABLE_STREAM:
+            mal_gc_mark_value(object->as.writable_stream.controller);
+            mal_gc_mark_value(object->as.writable_stream.writer);
+            mal_gc_mark_value(object->as.writable_stream.stored_error);
+            break;
+        case MAL_WRITABLE_STREAM_DEFAULT_CONTROLLER:
+            mal_gc_mark_value(object->as.writable_controller.stream);
+            mal_gc_mark_value(object->as.writable_controller.underlying_sink);
+            mal_gc_mark_value(object->as.writable_controller.write_method);
+            mal_gc_mark_value(object->as.writable_controller.close_method);
+            mal_gc_mark_value(object->as.writable_controller.abort_method);
+            mal_gc_mark_value(object->as.writable_controller.size_algorithm);
+            for (MalWritableStreamWriteRequest *request =
+                     object->as.writable_controller.queue_head;
+                 request != nullptr; request = request->next) {
+                mal_gc_mark_value(request->chunk);
+                mal_gc_mark_value(request->promise);
+            }
+            break;
+        case MAL_WRITABLE_STREAM_DEFAULT_WRITER:
+            mal_gc_mark_value(object->as.writer.stream);
+            mal_gc_mark_value(object->as.writer.closed_promise);
+            mal_gc_mark_value(object->as.writer.ready_promise);
+            break;
     }
 }
 
@@ -2164,6 +2188,18 @@ static void rs_finalize(MalHeapHeader *cell) {
         }
         object->as.reader.requests_head = nullptr;
         object->as.reader.requests_tail = nullptr;
+    } else if (object->kind == MAL_WRITABLE_STREAM_DEFAULT_CONTROLLER) {
+        MalWritableStreamWriteRequest *request =
+            object->as.writable_controller.queue_head;
+        while (request != nullptr) {
+            MalWritableStreamWriteRequest *next = request->next;
+            mal_gc_write_barrier(request->chunk);
+            mal_gc_write_barrier(request->promise);
+            free(request);
+            request = next;
+        }
+        object->as.writable_controller.queue_head = nullptr;
+        object->as.writable_controller.queue_tail = nullptr;
     }
 }
 

@@ -93,6 +93,7 @@ int main(int argc, char **argv) {
     mal_web_globals_install(&vm, global_this);    // TextEncoder / TextDecoder / …
     mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)
     mal_readable_stream_install(&vm, global_this); // ReadableStream default mode
+    mal_writable_stream_install(&vm, global_this); // WritableStream default mode
 #endif
 
     // Fill the reached host built-in / `process` global slots before execution
