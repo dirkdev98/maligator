@@ -339,6 +339,14 @@
 			"includes": []
 		},
 		{
+			"path": "fetch/api/response/response-from-stream.any.js",
+			"sha256": "048609ff6a98cf7ebf08f8cb3b081535618a0bd72dda192e249b86e0177d0b33",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
 			"path": "fetch/api/response/response-init-001.any.js",
 			"sha256": "a4f53fc2c718a3a6d9f2692f6778e88dc74f7c938940ba47ffc4ac5dd9096482",
 			"target": "server-main",
