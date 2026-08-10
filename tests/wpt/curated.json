@@ -648,6 +648,46 @@
 			"includes": []
 		},
 		{
+			"path": "streams/writable-streams/byte-length-queuing-strategy.any.js",
+			"sha256": "2e711f5a35a0e5795b961139e548f639058fc2fed2e3ed74d24a829cf30f7d6c",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
+			"path": "streams/writable-streams/count-queuing-strategy.any.js",
+			"sha256": "eccd6eec96a5483cb5982c373427e850fa17942fcb632d2eaf89726822bfa5b2",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
+			"path": "streams/writable-streams/error.any.js",
+			"sha256": "07465db8be2affd45d0a42887c952543f966c42b932f03c80248189a75b982e7",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
+			"path": "streams/writable-streams/floating-point-total-queue-size.any.js",
+			"sha256": "11dd40aab4d526bf59547b4ab81b429015c3ffd39f73ce3934bfa9cfba6199ca",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
+			"path": "streams/writable-streams/general.any.js",
+			"sha256": "06f0856ac4964a498daf45aa811b50c16f5f8d11e62370def268673338dbe243",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
 			"path": "streams/writable-streams/constructor.any.js",
 			"sha256": "84dec5817cfb4697f414a6595864de91e1716c4058234123c76d8cd00edd61af",
 			"target": "server-main",

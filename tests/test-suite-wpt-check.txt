@@ -58,7 +58,12 @@ streams/readable-streams/floating-point-total-queue-size.any.js
 streams/readable-streams/general.any.js
 streams/readable-streams/tee.any.js
 streams/writable-streams/bad-strategies.any.js
+streams/writable-streams/byte-length-queuing-strategy.any.js
 streams/writable-streams/constructor.any.js
+streams/writable-streams/count-queuing-strategy.any.js
+streams/writable-streams/error.any.js
+streams/writable-streams/floating-point-total-queue-size.any.js
+streams/writable-streams/general.any.js
 streams/writable-streams/properties.any.js
 url/url-searchparams.any.js
 url/url-statics-canparse.any.js
