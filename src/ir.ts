@@ -4693,7 +4693,7 @@ function isScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
 	);
 }
 
-/** `globalThis[name] = value` — a sloppy assignment to an unresolved name. */
+/** SetMutableBinding through the global object's Object Environment Record. */
 function emitGlobalPropertyStore(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -4701,16 +4701,12 @@ function emitGlobalPropertyStore(
 	name: string,
 	value: number,
 ) {
-	const global = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
-		type: "loadIntrinsic",
-		registers: [global],
-		intrinsic: "globalThis",
-	});
-	const key = compileStaticString(program, fn, cursor, name);
-	cursor.block.instructions.push({
-		type: "storeProperty",
-		registers: [global, key, value],
+		type: "storeGlobalProperty",
+		registers: [value],
+		nameStringIndex: getOrCreateStringConstant(program, name),
+		declaration: false,
+		declarationConfigurable: false,
 	});
 }
 
@@ -5485,18 +5481,10 @@ function compileStaticIdentifierTarget(
 	}
 
 	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
-		if (hostGlobalLocation || isSloppyFunction(fn)) {
-			// Sloppy assignment to an unresolved name creates/sets a global property.
-			emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
-			return;
-		}
-		// Strict: PutValue on an unresolvable reference throws ReferenceError.
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadUndeclared",
-			registers: [destination],
-			nameStringIndex: getOrCreateStringConstant(program, binding.name),
-		});
+		// A statically-undeclared name can still resolve through the global object's
+		// Object Environment Record. The runtime store checks whether the property
+		// exists and throws for an actually-unresolvable strict assignment.
+		emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
 		return;
 	}
 
@@ -9742,25 +9730,13 @@ function compileIdentifierAssignment(
 			? globalPropertyLocation(program, binding.name)
 			: null;
 	if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
-		// Sloppy `x = v` for an unresolved x creates/sets a global property and
-		// evaluates to v. (Compound forms read first, so an absent global still
-		// throws below — correct.)
-		if (isSloppyFunction(fn) && assignmentExpression.operator === "=") {
+		// A plain assignment must resolve against the runtime global object in both
+		// modes. Sloppy code creates an absent property; strict code throws only when
+		// the property is actually absent. Compound forms read first below.
+		if (assignmentExpression.operator === "=") {
 			const value = compileExpression(program, fn, cursor, assignmentExpression.right);
 			emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
 			return value;
-		}
-
-		if (assignmentExpression.operator === "=") {
-			// PutValue on an unresolvable strict reference throws after the RHS.
-			compileExpression(program, fn, cursor, assignmentExpression.right);
-			const destination = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
-				type: "loadUndeclared",
-				registers: [destination],
-				nameStringIndex: getOrCreateStringConstant(program, binding.name),
-			});
-			return destination;
 		}
 		// A compound assignment continues below: it must resolve a property that
 		// can have appeared on the global object at runtime, then read and store it.

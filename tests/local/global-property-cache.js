@@ -74,6 +74,30 @@ ok(
 	}) instanceof TypeError,
 );
 
+globalThis.runtimeInstalledGlobal = 1;
+function strictRuntimeGlobalStore() {
+	"use strict";
+	runtimeInstalledGlobal = 2;
+}
+strictRuntimeGlobalStore();
+ok(
+	"strict assignment resolves an installed global property",
+	globalThis.runtimeInstalledGlobal === 2,
+);
+delete globalThis.runtimeInstalledGlobal;
+function strictMissingGlobalStore() {
+	"use strict";
+	runtimeMissingGlobal = 1;
+}
+ok(
+	"strict assignment rejects a missing global property",
+	caught(strictMissingGlobalStore) instanceof ReferenceError,
+);
+ok(
+	"failed strict assignment does not create a global property",
+	!("runtimeMissingGlobal" in globalThis),
+);
+
 const evalResult = eval(
 	"var evalAddedGlobal = 1;" +
 		"for (let i = 0; i < 1000; i++) evalAddedGlobal = evalAddedGlobal + 1;" +

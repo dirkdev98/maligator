@@ -1222,6 +1222,20 @@ test("declared script-global reads use the dedicated global property opcode", ()
 	);
 });
 
+test("strict undeclared assignments resolve through the runtime global object", () => {
+	const program = compileScript(
+		'"use strict"; function write() { runtimeInstalledGlobal = 2 }',
+	);
+	const instructions = instructionsOf(functionNamed(program, "write"));
+
+	expect(instructions).toContainEqual(
+		expect.objectContaining({ type: "storeGlobalProperty", declaration: false }),
+	);
+	expect(instructions.some((instruction) => instruction.type === "loadUndeclared")).toBe(
+		false,
+	);
+});
+
 test("static nested data literals lower to one packed template instruction", () => {
 	const program = compileScript(
 		'const value = [1, "text", { foo: [, -0, true, null, 9n] }, 2, 3, 4, 5, 6, 7, 8];',
