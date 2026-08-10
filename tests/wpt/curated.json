@@ -273,6 +273,14 @@
 			"includes": []
 		},
 		{
+			"path": "fetch/api/request/request-init-stream.any.js",
+			"sha256": "9594fc0b9873ea3fe0f4f0ba126c76cb0601d375639bf153a7a3aa508525d8dd",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
 			"path": "fetch/api/request/request-headers.any.js",
 			"sha256": "abb337fe59abb65853d8af6a1545ae6f9650d2f31c4311b68156977d9b472ddc",
 			"target": "server-main",
