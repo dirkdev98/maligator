@@ -812,6 +812,62 @@ static MalValue ws_writer_release(MalVm *vm, MalValue self,
     return mal_value_new_undefined();
 }
 
+bool mal_writable_stream_is_stream(MalValue value) {
+    return ws_is_kind(value, MAL_WRITABLE_STREAM);
+}
+
+bool mal_writable_stream_is_locked(MalValue value) {
+    return ws_is_kind(value, MAL_WRITABLE_STREAM) &&
+        !mal_value_is_undefined(
+            mal_value_to_readable_stream_object(value)->as.writable_stream.writer);
+}
+
+MalValue mal_writable_stream_acquire_default_writer(MalVm *vm, MalValue value) {
+    MalReadableStreamObject *stream = ws_require(vm, value, MAL_WRITABLE_STREAM,
+        "Expected a WritableStream");
+    if (stream == nullptr) return mal_value_new_undefined();
+    MalReadableStreamObject *writer = ws_acquire_writer(vm, stream,
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_WRITER_PROTOTYPE]));
+    return writer == nullptr ? mal_value_new_undefined()
+                             : mal_value_from_readable_stream_object(writer);
+}
+
+MalValue mal_writable_stream_default_writer_ready(MalValue value) {
+    return mal_value_to_readable_stream_object(value)->as.writer.ready_promise;
+}
+
+MalValue mal_writable_stream_default_writer_closed(MalValue value) {
+    return mal_value_to_readable_stream_object(value)->as.writer.closed_promise;
+}
+
+MalValue mal_writable_stream_default_writer_write(
+    MalVm *vm, MalValue value, MalValue chunk) {
+    return ws_writer_write(vm, value, &chunk, 1,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+MalValue mal_writable_stream_default_writer_close(MalVm *vm, MalValue value) {
+    return ws_writer_close(vm, value, nullptr, 0,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+MalValue mal_writable_stream_default_writer_abort(
+    MalVm *vm, MalValue value, MalValue reason) {
+    return ws_writer_abort(vm, value, &reason, 1,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+void mal_writable_stream_default_writer_release(MalVm *vm, MalValue value) {
+    MalReadableStreamObject *writer = mal_value_to_readable_stream_object(value);
+    mal_value_to_promise_object(writer->as.writer.ready_promise)->is_handled = true;
+    mal_value_to_promise_object(writer->as.writer.closed_promise)->is_handled = true;
+    (void) ws_writer_release(vm, value, nullptr, 0,
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_value_to_promise_object(writer->as.writer.ready_promise)->is_handled = true;
+    mal_value_to_promise_object(writer->as.writer.closed_promise)->is_handled = true;
+}
+
 static MalValue ws_stream_abort(MalVm *vm, MalValue self,
     const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;

@@ -16,6 +16,7 @@
 #include "value.h"
 #include "vm.h"
 #include "vm_ops.h"
+#include "web_events_object.h"
 
 static void rs_call_pull_if_needed(MalVm *vm, MalReadableStreamObject *controller);
 static MalReadableStreamObject *rs_acquire_reader(
@@ -1533,6 +1534,454 @@ static MalValue rs_reader_release_lock(MalVm *vm, MalValue self,
     return mal_value_new_undefined();
 }
 
+MalValue mal_readable_stream_default_reader_cancel(
+    MalVm *vm, MalValue value, MalValue reason) {
+    return rs_reader_cancel(vm, value, &reason, 1,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+void mal_readable_stream_default_reader_release(MalVm *vm, MalValue value) {
+    (void) rs_reader_release_lock(vm, value, nullptr, 0,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+enum {
+    RS_PIPE_READER,
+    RS_PIPE_WRITER,
+    RS_PIPE_PROMISE,
+    RS_PIPE_REASON,
+    RS_PIPE_FLAGS,
+    RS_PIPE_SHUTTING_DOWN,
+    RS_PIPE_SETTLED,
+    RS_PIPE_SLOT_COUNT,
+};
+
+enum {
+    RS_PIPE_PREVENT_CLOSE = 1 << 0,
+    RS_PIPE_PREVENT_ABORT = 1 << 1,
+    RS_PIPE_PREVENT_CANCEL = 1 << 2,
+};
+
+static MalValue rs_pipe_state_callback(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm;
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_new_undefined();
+}
+
+static MalNativeFunctionObject *rs_pipe_state(MalValue callee) {
+    MalNativeFunctionObject *callback = mal_value_to_native_function_object(callee);
+    return mal_value_to_native_function_object(
+        mal_native_function_object_get_slot(callback, 0));
+}
+
+static bool rs_pipe_state_bool(MalNativeFunctionObject *state, i32 slot) {
+    return mal_value_is_truthy(mal_native_function_object_get_slot(state, slot));
+}
+
+static bool rs_pipe_has_flag(MalNativeFunctionObject *state, i32 flag) {
+    i32 flags = mal_value_to_i32(
+        mal_native_function_object_get_slot(state, RS_PIPE_FLAGS));
+    return (flags & flag) != 0;
+}
+
+static void rs_pipe_settle(
+    MalVm *vm, MalNativeFunctionObject *state, bool rejected, MalValue value) {
+    if (rs_pipe_state_bool(state, RS_PIPE_SETTLED)) return;
+    mal_native_function_object_set_slot(
+        state, RS_PIPE_SETTLED, mal_value_new_boolean(true));
+    MalValue roots[4] = {
+        mal_value_from_native_function_object(state),
+        mal_native_function_object_get_slot(state, RS_PIPE_READER),
+        mal_native_function_object_get_slot(state, RS_PIPE_WRITER),
+        value,
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    mal_readable_stream_default_reader_release(vm, roots[1]);
+    mal_writable_stream_default_writer_release(vm, roots[2]);
+    MalPromiseObject *promise = mal_value_to_promise_object(
+        mal_native_function_object_get_slot(state, RS_PIPE_PROMISE));
+    if (rejected) mal_promise_reject(vm, promise, roots[3]);
+    else mal_promise_fulfill(vm, promise, mal_value_new_undefined());
+    mal_gc_unroot(&span);
+}
+
+static void rs_pipe_attach(MalVm *vm, MalValue promise,
+    MalNativeFunctionCallback fulfilled_callback,
+    MalNativeFunctionCallback rejected_callback,
+    MalValue state_value) {
+    MalValue roots[4] = {
+        promise, state_value, mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    if (fulfilled_callback != nullptr) {
+        roots[2] = rs_callback(vm, fulfilled_callback, roots[1]);
+    }
+    if (rejected_callback != nullptr) {
+        roots[3] = rs_callback(vm, rejected_callback, roots[1]);
+    }
+    mal_promise_perform_then(vm, roots[0], roots[2], roots[3],
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&span);
+}
+
+static MalValue rs_pipe_action_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *state = rs_pipe_state(callee);
+    rs_pipe_settle(vm, state, true,
+        mal_native_function_object_get_slot(state, RS_PIPE_REASON));
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_pipe_action_rejected(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    rs_pipe_settle(vm, rs_pipe_state(callee), true,
+        argc >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static void rs_pipe_shutdown_source_error(
+    MalVm *vm, MalNativeFunctionObject *state, MalValue reason) {
+    if (rs_pipe_state_bool(state, RS_PIPE_SHUTTING_DOWN)) return;
+    mal_native_function_object_set_slot(
+        state, RS_PIPE_SHUTTING_DOWN, mal_value_new_boolean(true));
+    mal_native_function_object_set_slot(state, RS_PIPE_REASON, reason);
+    if (rs_pipe_has_flag(state, RS_PIPE_PREVENT_ABORT)) {
+        rs_pipe_settle(vm, state, true, reason);
+        return;
+    }
+    MalValue state_value = mal_value_from_native_function_object(state);
+    MalValue action = mal_writable_stream_default_writer_abort(vm,
+        mal_native_function_object_get_slot(state, RS_PIPE_WRITER), reason);
+    rs_pipe_attach(vm, action, rs_pipe_action_fulfilled,
+        rs_pipe_action_rejected, state_value);
+}
+
+static void rs_pipe_shutdown_destination_error(
+    MalVm *vm, MalNativeFunctionObject *state, MalValue reason) {
+    if (rs_pipe_state_bool(state, RS_PIPE_SHUTTING_DOWN)) return;
+    mal_native_function_object_set_slot(
+        state, RS_PIPE_SHUTTING_DOWN, mal_value_new_boolean(true));
+    mal_native_function_object_set_slot(state, RS_PIPE_REASON, reason);
+    if (rs_pipe_has_flag(state, RS_PIPE_PREVENT_CANCEL)) {
+        rs_pipe_settle(vm, state, true, reason);
+        return;
+    }
+    MalValue state_value = mal_value_from_native_function_object(state);
+    MalValue action = mal_readable_stream_default_reader_cancel(vm,
+        mal_native_function_object_get_slot(state, RS_PIPE_READER), reason);
+    rs_pipe_attach(vm, action, rs_pipe_action_fulfilled,
+        rs_pipe_action_rejected, state_value);
+}
+
+static void rs_pipe_pump(MalVm *vm, MalNativeFunctionObject *state);
+
+static MalValue rs_pipe_write_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *state = rs_pipe_state(callee);
+    if (!rs_pipe_state_bool(state, RS_PIPE_SHUTTING_DOWN)) {
+        rs_pipe_pump(vm, state);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_pipe_destination_rejected(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    rs_pipe_shutdown_destination_error(vm, rs_pipe_state(callee),
+        argc >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_pipe_close_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    rs_pipe_settle(vm, rs_pipe_state(callee), false,
+        mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_pipe_close_rejected(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    rs_pipe_settle(vm, rs_pipe_state(callee), true,
+        argc >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_pipe_read_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *state = rs_pipe_state(callee);
+    if (rs_pipe_state_bool(state, RS_PIPE_SHUTTING_DOWN)) {
+        return mal_value_new_undefined();
+    }
+    MalValue roots[3] = {
+        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    if (!mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "done"), &roots[1])) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        rs_pipe_shutdown_source_error(vm, state, error);
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_truthy(roots[1])) {
+        mal_native_function_object_set_slot(
+            state, RS_PIPE_SHUTTING_DOWN, mal_value_new_boolean(true));
+        if (rs_pipe_has_flag(state, RS_PIPE_PREVENT_CLOSE)) {
+            rs_pipe_settle(vm, state, false, mal_value_new_undefined());
+        } else {
+            roots[2] = mal_writable_stream_default_writer_close(vm,
+                mal_native_function_object_get_slot(state, RS_PIPE_WRITER));
+            rs_pipe_attach(vm, roots[2], rs_pipe_close_fulfilled,
+                rs_pipe_close_rejected,
+                mal_value_from_native_function_object(state));
+        }
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    if (!mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "value"), &roots[1])) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        rs_pipe_shutdown_source_error(vm, state, error);
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    roots[2] = mal_writable_stream_default_writer_write(vm,
+        mal_native_function_object_get_slot(state, RS_PIPE_WRITER), roots[1]);
+    rs_pipe_attach(vm, roots[2], rs_pipe_write_fulfilled,
+        rs_pipe_destination_rejected,
+        mal_value_from_native_function_object(state));
+    mal_gc_unroot(&span);
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_pipe_source_rejected(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    rs_pipe_shutdown_source_error(vm, rs_pipe_state(callee),
+        argc >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_pipe_ready_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *state = rs_pipe_state(callee);
+    if (rs_pipe_state_bool(state, RS_PIPE_SHUTTING_DOWN)) {
+        return mal_value_new_undefined();
+    }
+    MalValue promise = mal_readable_stream_default_reader_read(vm,
+        mal_native_function_object_get_slot(state, RS_PIPE_READER));
+    rs_pipe_attach(vm, promise, rs_pipe_read_fulfilled,
+        rs_pipe_source_rejected, mal_value_from_native_function_object(state));
+    return mal_value_new_undefined();
+}
+
+static void rs_pipe_pump(MalVm *vm, MalNativeFunctionObject *state) {
+    MalValue ready = mal_writable_stream_default_writer_ready(
+        mal_native_function_object_get_slot(state, RS_PIPE_WRITER));
+    rs_pipe_attach(vm, ready, rs_pipe_ready_fulfilled,
+        rs_pipe_destination_rejected,
+        mal_value_from_native_function_object(state));
+}
+
+static MalValue rs_pipe_destination_closed(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *state = rs_pipe_state(callee);
+    if (!rs_pipe_state_bool(state, RS_PIPE_SHUTTING_DOWN)) {
+        rs_pipe_shutdown_destination_error(vm, state,
+            rs_take_type_error(vm,
+                (const byte *) "WritableStream closed before piping completed"));
+    }
+    return mal_value_new_undefined();
+}
+
+static bool rs_pipe_options(MalVm *vm, MalValue options,
+    i32 *flags_out, MalValue *signal_out) {
+    *flags_out = 0;
+    *signal_out = mal_value_new_undefined();
+    if (mal_value_is_nil(options)) return true;
+    const byte *names[] = {
+        (const byte *) "preventAbort",
+        (const byte *) "preventCancel",
+        (const byte *) "preventClose",
+        (const byte *) "signal",
+    };
+    i32 bits[] = {
+        RS_PIPE_PREVENT_ABORT, RS_PIPE_PREVENT_CANCEL,
+        RS_PIPE_PREVENT_CLOSE, 0,
+    };
+    for (i32 index = 0; index < 4; index++) {
+        MalValue value;
+        if (!mal_vm_get_property(vm, options,
+                mal_intrinsic_string_key(vm, names[index]), &value)) {
+            return false;
+        }
+        if (index < 3) {
+            if (mal_value_is_truthy(value)) *flags_out |= bits[index];
+        } else {
+            *signal_out = value;
+        }
+    }
+    if (!mal_value_is_undefined(*signal_out)) {
+        if (!mal_value_is_event_target_object(*signal_out) ||
+            !mal_value_to_event_target_object(*signal_out)->is_abort_signal) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "ReadableStream pipe signal must be an AbortSignal");
+            return false;
+        }
+    }
+    return true;
+}
+
+static MalValue rs_pipe_start(MalVm *vm, MalValue source,
+    MalValue destination, i32 flags) {
+    MalValue roots[6] = {
+        source, destination, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 6);
+    roots[2] = mal_readable_stream_acquire_default_reader(vm, roots[0]);
+    roots[3] = mal_writable_stream_acquire_default_writer(vm, roots[1]);
+    roots[4] = mal_value_from_promise_object(rs_new_promise(vm));
+    MalValue slots[RS_PIPE_SLOT_COUNT] = {
+        roots[2], roots[3], roots[4], mal_value_new_undefined(),
+        mal_value_from_i32(flags), mal_value_new_boolean(false),
+        mal_value_new_boolean(false),
+    };
+    roots[5] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, rs_pipe_state_callback, slots, RS_PIPE_SLOT_COUNT));
+    MalValue closed = mal_writable_stream_default_writer_closed(roots[3]);
+    rs_pipe_attach(vm, closed, rs_pipe_destination_closed,
+        rs_pipe_destination_rejected, roots[5]);
+    rs_pipe_pump(vm, mal_value_to_native_function_object(roots[5]));
+    MalValue result = roots[4];
+    mal_gc_unroot(&span);
+    return result;
+}
+
+static MalValue rs_pipe_to(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) nt;
+    (void) callee;
+    if (!rs_is_kind(self, MAL_READABLE_STREAM)) {
+        return rs_rejected_type_error(vm,
+            (const byte *) "ReadableStream.pipeTo called on incompatible receiver");
+    }
+    MalValue destination = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_writable_stream_is_stream(destination)) {
+        return rs_rejected_type_error(vm,
+            (const byte *) "ReadableStream.pipeTo requires a WritableStream");
+    }
+    MalValue options = argc >= 2 ? args[1] : mal_value_new_undefined();
+    i32 flags;
+    MalValue signal;
+    if (!rs_pipe_options(vm, options, &flags, &signal)) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        return rs_rejected_promise(vm, error);
+    }
+    if (mal_readable_stream_is_locked(self) ||
+        mal_writable_stream_is_locked(destination)) {
+        return rs_rejected_type_error(vm,
+            (const byte *) "Cannot pipe a locked stream");
+    }
+    return rs_pipe_start(vm, self, destination, flags);
+}
+
+static MalValue rs_pipe_through(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt;
+    (void) callee;
+    if (!rs_is_kind(self, MAL_READABLE_STREAM)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStream.pipeThrough called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[4] = {
+        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        argc >= 2 ? args[1] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    if (!mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "readable"), &roots[2])) {
+        goto fail;
+    }
+    if (!rs_is_kind(roots[2], MAL_READABLE_STREAM)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStream.pipeThrough readable must be a ReadableStream");
+        goto fail;
+    }
+    if (!mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "writable"), &roots[3])) {
+        goto fail;
+    }
+    if (!mal_writable_stream_is_stream(roots[3])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStream.pipeThrough writable must be a WritableStream");
+        goto fail;
+    }
+    i32 flags;
+    MalValue signal;
+    if (!rs_pipe_options(vm, roots[1], &flags, &signal)) goto fail;
+    if (mal_readable_stream_is_locked(self) ||
+        mal_writable_stream_is_locked(roots[3])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot pipe a locked stream");
+        goto fail;
+    }
+    roots[0] = rs_pipe_start(vm, self, roots[3], flags);
+    mal_value_to_promise_object(roots[0])->is_handled = true;
+    MalValue result = roots[2];
+    mal_gc_unroot(&span);
+    return result;
+fail:
+    mal_gc_unroot(&span);
+    return mal_value_new_undefined();
+}
+
 static void rs_proxy_error_from_completion(
     MalVm *vm, MalValue controller_value) {
     MalValue error = vm->completion.value;
@@ -2253,6 +2702,10 @@ void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
         vm, stream_proto, (const byte *) "cancel", 1, rs_cancel);
     mal_intrinsic_define_method_n(
         vm, stream_proto, (const byte *) "getReader", 0, rs_get_reader);
+    mal_intrinsic_define_method_n(
+        vm, stream_proto, (const byte *) "pipeThrough", 1, rs_pipe_through);
+    mal_intrinsic_define_method_n(
+        vm, stream_proto, (const byte *) "pipeTo", 1, rs_pipe_to);
     mal_intrinsic_define_method_n(
         vm, stream_proto, (const byte *) "tee", 0, rs_tee);
 
