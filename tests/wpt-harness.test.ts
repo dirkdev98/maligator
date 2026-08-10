@@ -509,6 +509,23 @@ test(function(t) {
 		expect(parsed.harness.status).toBe("OK");
 	});
 
+	it("supports context step receivers and arguments", () => {
+		const parsed = runProgram(String.raw`
+promise_test(function(t) {
+  var receiver = {};
+  var result = t.step(function(a, b) {
+    assert_equals(this, receiver);
+    return a + b;
+  }, receiver, 2, 3);
+  assert_equals(result, 5);
+  return Promise.resolve();
+}, "step context");`);
+		expect(parsed.subtests[0]).toMatchObject({
+			subtest: "step context",
+			status: "PASS",
+		});
+	});
+
 	it("passes promise_test context and supports rejection assertions", () => {
 		const source = String.raw`
 var reason = {};

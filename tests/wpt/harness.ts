@@ -668,6 +668,12 @@ function __wpt_context(finish, isSettled) {
     context.__wpt_cleanups.push(callback);
   };
   context.done = function() { finish("PASS", null); };
+  context.step = function(callback, receiver) {
+    if (isSettled()) return null;
+    var args = Array.prototype.slice.call(arguments, 2);
+    try { return callback.apply(receiver, args); }
+    catch (error) { finish("FAIL", __wpt_message(error)); }
+  };
   context.step_func = function(callback) {
     return function() {
       if (isSettled()) return;
