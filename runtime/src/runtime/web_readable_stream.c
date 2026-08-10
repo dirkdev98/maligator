@@ -1048,7 +1048,7 @@ static MalValue rs_get_reader(MalVm *vm, MalValue self, const MalValue *args,
                 return mal_value_new_undefined();
             }
             if (!mal_string_equals_ascii(mode_string, "byob")) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                     "ReadableStream reader mode must be 'byob'");
                 return mal_value_new_undefined();
             }
@@ -1486,32 +1486,40 @@ static MalValue rs_reader_release_lock(MalVm *vm, MalValue self,
     if (mal_value_is_undefined(reader->as.reader.stream)) {
         return mal_value_new_undefined();
     }
-    if (reader->as.reader.requests_head != nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Cannot release a reader with pending read requests");
-        return mal_value_new_undefined();
-    }
     MalReadableStreamObject *stream =
         mal_value_to_readable_stream_object(reader->as.reader.stream);
-    MalValue error = rs_take_type_error(
+    MalValue roots[3] = {
+        self, mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    roots[1] = rs_take_type_error(
         vm, (const byte *) "ReadableStream reader was released");
+    while (reader->as.reader.requests_head != nullptr) {
+        MalReadableStreamReadRequest *request = reader->as.reader.requests_head;
+        roots[2] = request->promise;
+        rs_request_remove(reader, request);
+        mal_promise_reject(
+            vm, mal_value_to_promise_object(roots[2]), roots[1]);
+    }
     MalPromiseObject *closed;
     if (stream->as.stream.state == MAL_READABLE_STREAM_READABLE) {
         closed = mal_value_to_promise_object(reader->as.reader.closed_promise);
         closed->is_handled = true;
-        mal_promise_reject(vm, closed, error);
+        mal_promise_reject(vm, closed, roots[1]);
     } else {
-        MalValue replacement = rs_rejected_promise(vm, error);
-        closed = mal_value_to_promise_object(replacement);
+        roots[2] = rs_rejected_promise(vm, roots[1]);
+        closed = mal_value_to_promise_object(roots[2]);
         closed->is_handled = true;
         mal_gc_write_barrier(reader->as.reader.closed_promise);
-        reader->as.reader.closed_promise = replacement;
-        mal_gc_card(&reader->object.header, replacement);
+        reader->as.reader.closed_promise = roots[2];
+        mal_gc_card(&reader->object.header, roots[2]);
     }
     mal_gc_write_barrier(stream->as.stream.reader);
     stream->as.stream.reader = mal_value_new_undefined();
     mal_gc_write_barrier(reader->as.reader.stream);
     reader->as.reader.stream = mal_value_new_undefined();
+    mal_gc_unroot(&span);
     return mal_value_new_undefined();
 }
 

@@ -243,6 +243,24 @@ async function run() {
 	const secondPullValue = await pullReader.read();
 	check("promise-returning pull", secondPullValue.value === "two");
 	await pullReader.cancel();
+	let modeToStringCalled = false;
+	let invalidModeRejected = false;
+	try {
+		new ReadableStream().getReader({
+			mode: {
+				toString() {
+					modeToStringCalled = true;
+					return "";
+				},
+			},
+		});
+	} catch (error) {
+		invalidModeRejected = error instanceof TypeError;
+	}
+	check(
+		"reader mode uses Web IDL enum conversion",
+		modeToStringCalled && invalidModeRejected,
+	);
 
 	let lockController;
 	const lockStream = new ReadableStream({
@@ -257,34 +275,34 @@ async function run() {
 	} catch (error) {
 		doubleLock = error instanceof TypeError;
 	}
-	const lockRead = firstReader.read();
-	let pendingRelease = false;
-	try {
-		firstReader.releaseLock();
-	} catch (error) {
-		pendingRelease = error instanceof TypeError;
-	}
-	lockController.enqueue("unlock");
-	await lockRead;
-	const releasedClosed = firstReader.closed.then(
+	const lockRead = firstReader.read().then(
 		() => false,
 		(error) => error instanceof TypeError,
 	);
 	firstReader.releaseLock();
+	const releasedClosed = firstReader.closed.then(
+		() => false,
+		(error) => error instanceof TypeError,
+	);
+	lockController.enqueue("unlock");
 	const releasedRead = firstReader.read().then(
 		() => false,
 		(error) => error instanceof TypeError,
 	);
 	check(
-		"locking and pending release error",
-		doubleLock && pendingRelease && !lockStream.locked,
+		"pending reads reject when a reader releases",
+		doubleLock && (await lockRead) && !lockStream.locked,
 	);
 	check("released reader rejects", (await releasedClosed) && (await releasedRead));
 	const secondReader = lockStream.getReader();
+	const secondReaderValue = await secondReader.read();
 	const secondClosed = secondReader.closed.catch(() => undefined);
 	secondReader.releaseLock();
 	await secondClosed;
-	check("stream can be relocked", !lockStream.locked);
+	check(
+		"stream can be relocked after a pending release",
+		secondReaderValue.value === "unlock" && !lockStream.locked,
+	);
 
 	let closedReleaseController;
 	const closedReleaseStream = new ReadableStream({
