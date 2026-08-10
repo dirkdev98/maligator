@@ -425,6 +425,28 @@ describe("curated WPT harness", () => {
 		expect(parsed.subtests).toMatchObject([{ status: "PASS" }]);
 	});
 
+	it("supports global timeouts, object assertions, and test cleanup", () => {
+		const source = String.raw`
+var original = globalThis.ReadableStream;
+globalThis.ReadableStream = function Original() {};
+test(function(t) {
+  var value = globalThis.ReadableStream;
+  t.add_cleanup(function() { globalThis.ReadableStream = value; });
+  globalThis.ReadableStream = function Replacement() {};
+  assert_object_equals({ value: "chunk", done: false }, { value: "chunk", done: false });
+}, "cleanup");
+promise_test(function() {
+  return new Promise(function(resolve) { step_timeout(resolve, 0); });
+}, "global timeout");
+test(function() {
+  assert_equals(globalThis.ReadableStream.name, "Original");
+  globalThis.ReadableStream = original;
+}, "cleanup restored global");`;
+		const parsed = runProgram(source);
+		expect(parsed.subtests.map((item) => item.status)).toEqual(["PASS", "PASS", "PASS"]);
+		expect(parsed.harness).toMatchObject({ status: "OK", total: 3 });
+	});
+
 	it("matches START and RESULT by numeric ID and attributes crashes to that ID", () => {
 		const duplicateOutput = [
 			'WPT_START {"path":"url/a.any.js","id":8,"subtest":"same","occurrence":1}',

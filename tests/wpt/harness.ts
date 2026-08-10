@@ -663,6 +663,10 @@ function __wpt_emit(test, status, message) {
 }
 function __wpt_context(finish, isSettled) {
   var context = {};
+  context.__wpt_cleanups = [];
+  context.add_cleanup = function(callback) {
+    context.__wpt_cleanups.push(callback);
+  };
   context.done = function() { finish("PASS", null); };
   context.step_func = function(callback) {
     return function() {
@@ -687,6 +691,29 @@ function __wpt_context(finish, isSettled) {
   };
   return context;
 }
+function __wpt_run_cleanups(context, allowThenables) {
+  var pending = [];
+  for (var i = 0; i < context.__wpt_cleanups.length; i++) {
+    try {
+      var result = context.__wpt_cleanups[i]();
+      if (result !== undefined) {
+        if (allowThenables && result && typeof result.then === "function") {
+          pending.push(Promise.resolve(result).catch(__wpt_set_harness_error));
+        } else {
+          __wpt_set_harness_error("cleanup callback returned a non-undefined value");
+        }
+      }
+    } catch (error) {
+      __wpt_set_harness_error(error);
+    }
+  }
+  return Promise.all(pending);
+}
+function step_timeout(callback, timeout) {
+  var args = Array.prototype.slice.call(arguments, 2);
+  var receiver = this;
+  return setTimeout(function() { callback.apply(receiver, args); }, timeout);
+}
 function setup(callback) {
   if (callback && typeof callback === "object") {
     if (callback.single_test === true) {
@@ -705,6 +732,7 @@ function setup(callback) {
 function test(callback, name) {
   var testRecord = __wpt_register(callback, name);
   __wpt_start(testRecord);
+  var context;
   try {
     var settled = false;
     var stepStatus = null;
@@ -716,11 +744,16 @@ function test(callback, name) {
       stepMessage = message;
       if (status !== "PASS") throw new Error(message);
     };
-    var value = callback(__wpt_context(finish, function() { return settled; }));
+    context = __wpt_context(finish, function() { return settled; });
+    var value = callback(context);
     __wpt_check_return_value("test", testRecord, value);
+    __wpt_run_cleanups(context, false);
     __wpt_emit(testRecord, stepStatus === null ? "PASS" : stepStatus, stepMessage);
   }
-  catch (error) { __wpt_emit(testRecord, "FAIL", __wpt_message(error)); }
+  catch (error) {
+    if (context !== undefined) __wpt_run_cleanups(context, false);
+    __wpt_emit(testRecord, "FAIL", __wpt_message(error));
+  }
 }
 function async_test(callback, name) {
   if (typeof callback !== "function") {
@@ -737,6 +770,7 @@ function async_test(callback, name) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      __wpt_run_cleanups(context, false);
       __wpt_emit(testRecord, status, message);
       resolve();
     }
@@ -783,8 +817,12 @@ function promise_test(callback, name) {
       }
       catch (error) { pending = Promise.reject(error); }
       pending.then(
-        function() { finish("PASS", null); },
-        function(error) { finish("FAIL", __wpt_message(error)); }
+        function() {
+          return __wpt_run_cleanups(context, true).then(function() { finish("PASS", null); });
+        },
+        function(error) {
+          return __wpt_run_cleanups(context, true).then(function() { finish("FAIL", __wpt_message(error)); });
+        }
       );
     });
   });
@@ -823,6 +861,34 @@ function assert_approx_equals(actual, expected, epsilon, message) {
 function assert_array_equals(actual, expected, message) {
   if (actual.length !== expected.length) __wpt_fail((message ? message + ": " : "") + "array lengths differ");
   for (var i = 0; i < expected.length; i++) assert_equals(actual[i], expected[i], message || "array item " + i);
+}
+function assert_object_equals(actual, expected, message) {
+  if (typeof actual !== "object" || actual === null) {
+    __wpt_fail((message ? message + ": " : "") + "expected an object");
+  }
+  function check_equal(actualObject, expectedObject, stack) {
+    stack.push(actualObject);
+    var property;
+    for (property in actualObject) {
+      if (!Object.prototype.hasOwnProperty.call(expectedObject, property)) {
+        __wpt_fail((message ? message + ": " : "") + "unexpected property " + property);
+      }
+      if (typeof actualObject[property] === "object" && actualObject[property] !== null) {
+        if (stack.indexOf(actualObject[property]) === -1) {
+          check_equal(actualObject[property], expectedObject[property], stack);
+        }
+      } else if (!Object.is(actualObject[property], expectedObject[property])) {
+        __wpt_fail((message ? message + ": " : "") + "property " + property + " differs");
+      }
+    }
+    for (property in expectedObject) {
+      if (!Object.prototype.hasOwnProperty.call(actualObject, property)) {
+        __wpt_fail((message ? message + ": " : "") + "expected property " + property + " missing");
+      }
+    }
+    stack.pop();
+  }
+  check_equal(actual, expected, []);
 }
 function assert_throws_js(constructor, callback, message) {
   var error = null;
