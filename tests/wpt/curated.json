@@ -519,6 +519,22 @@
 			"includes": []
 		},
 		{
+			"path": "streams/piping/close-propagation-backward.any.js",
+			"sha256": "c7363f99f40cf1b5a5bad2a1c74c37106a51971c92296c04edf4c88efa29b357",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/recording-streams.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/recording-streams.js",
+					"sha256": "7c90125c056643aa82b07eb00584e5d52ed39778b23adfeac82db2890a4a92ca"
+				}
+			]
+		},
+		{
 			"path": "streams/piping/general.any.js",
 			"sha256": "ebc66303d934b1a3e98cde72eb2d18c7a7f00f9f63bc32b8e0e2b6220578010c",
 			"target": "server-main",
