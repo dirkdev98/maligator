@@ -511,6 +511,30 @@
 			"includes": []
 		},
 		{
+			"path": "streams/piping/general-addition.any.js",
+			"sha256": "add1ac186cf5ecd70b7844c7d8d117490a3f421a52a9996a1479ae4453db363e",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
+			"path": "streams/piping/general.any.js",
+			"sha256": "ebc66303d934b1a3e98cde72eb2d18c7a7f00f9f63bc32b8e0e2b6220578010c",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/recording-streams.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/recording-streams.js",
+					"sha256": "7c90125c056643aa82b07eb00584e5d52ed39778b23adfeac82db2890a4a92ca"
+				}
+			]
+		},
+		{
 			"path": "streams/readable-streams/bad-strategies.any.js",
 			"sha256": "6feff82c1b36f3107643b0efcaf46bf07c9c8a40947de603294959d1881aa62b",
 			"target": "server-main",
