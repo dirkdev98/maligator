@@ -1219,6 +1219,10 @@ typedef struct MalMapGetSetCacheEntry {
 typedef struct MalVm {
     const MalVmDefinition *definition;
 
+    /** Initial immutable string table retained for native code's direct constants. */
+    const MalString *initial_string_constants;
+    i32 initial_string_constant_count;
+
     /**
      * VM-owned, mutable definition that `definition` points at. Initialized as a
      * shallow copy of the program definition with its function / string-constant /

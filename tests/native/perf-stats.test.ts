@@ -168,6 +168,7 @@ describe("opt-in performance statistics", () => {
 		const properties = reportLine(result.stderr, "[perf-property-stats]");
 		expect(field(properties, "ensure_calls")).toBeGreaterThan(0);
 		expect(field(properties, "ensure_inserts")).toBeGreaterThan(0);
+		expect(field(properties, "constant_atom_hits")).toBeGreaterThan(1000);
 		const allocations = reportLine(result.stderr, "[perf-allocation-stats]");
 		expect(
 			field(allocations, "empty_objects") + field(allocations, "shaped_objects"),

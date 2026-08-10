@@ -92,6 +92,36 @@ static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
     return true;
 }
 
+static i32 mal_vm_string_table_index(
+    const MalString *string, const MalString *table, i32 count
+) {
+    if (count <= 0) return -1;
+    uptr address = (uptr) string;
+    uptr base = (uptr) table;
+    if (address < base) return -1;
+    usize offset = address - base;
+    usize bytes = sizeof(MalString) * (usize) count;
+    return offset < bytes && offset % sizeof(MalString) == 0
+        ? (i32) (offset / sizeof(MalString))
+        : -1;
+}
+
+/** Return this VM's canonical atom for a baked string constant, if applicable. */
+static MalString *mal_vm_string_constant_atom(MalVm *vm, const MalString *string) {
+    if (string->header.storage != MAL_HEAP_STORAGE_IMMORTAL) return nullptr;
+    i32 index = mal_vm_string_table_index(
+        string, vm->initial_string_constants,
+        vm->initial_string_constant_count);
+    if (index < 0) {
+        index = mal_vm_string_table_index(
+            string, vm->definition->string_constants,
+            vm->definition->string_constant_count);
+    }
+    if (index < 0) return nullptr;
+    MAL_PERF_COUNT(property_constant_atom_hits);
+    return vm->string_constant_atoms[index];
+}
+
 bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
     // CanonicalNumericIndexString (7.1.21): "-0" is canonical by fiat; otherwise
     // a string is canonical iff ToString(ToNumber(string)) reproduces it exactly.
@@ -115,7 +145,11 @@ static bool mal_vm_string_to_property_key(MalVm *vm, MalValue value, MalKey *key
         return true;
     }
 
-    MalString *atom = mal_property_atomize_string(vm, mal_value_to_string(value));
+    MalString *string = mal_value_to_string(value);
+    MalString *atom = mal_vm_string_constant_atom(vm, string);
+    if (atom == nullptr) {
+        atom = mal_property_atomize_string(vm, string);
+    }
     *key_out = (MalKey) {
         .kind = MAL_KEY_STRING,
         .value = mal_value_from_string(atom),

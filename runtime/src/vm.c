@@ -443,6 +443,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->live_definition.functions = functions;
 
     i32 string_count = definition->string_constant_count;
+    vm->initial_string_constants = definition->string_constants;
+    vm->initial_string_constant_count = string_count;
     // Fixed capacity, never reallocated (see MAL_MAX_STRING_CONSTANTS): string
     // cells must keep stable addresses because values point at them.
     vm->string_capacity = string_count > MAL_MAX_STRING_CONSTANTS ? string_count : MAL_MAX_STRING_CONSTANTS;

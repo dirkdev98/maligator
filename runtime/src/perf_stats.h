@@ -148,6 +148,7 @@ typedef struct MalPerfStats {
     u64 property_ensure_calls;
     u64 property_ensure_inserts;
     u64 property_ensure_hits;
+    u64 property_constant_atom_hits;
     u64 property_accessor_sidecar_allocations;
     u64 property_accessor_sidecar_frees;
     u64 copy_data_linear_exclusion_checks;
