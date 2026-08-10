@@ -123,6 +123,44 @@ async function run() {
 	);
 	check("blob consumption is one-shot", await rejectsTypeError(blobResponse.blob()));
 
+	const nativeBlob = new Blob(["A", new Uint8Array([66]), new Blob(["C"])], {
+		type: "TEXT/PLAIN",
+	});
+	check(
+		"Blob owns parts and normalizes type",
+		nativeBlob instanceof Blob &&
+			nativeBlob.size === 3 &&
+			nativeBlob.type === "text/plain" &&
+			(await nativeBlob.text()) === "ABC",
+	);
+	const blobBytes = await nativeBlob.bytes();
+	check(
+		"Blob exposes copied bytes",
+		blobBytes instanceof Uint8Array &&
+			blobBytes[0] === 65 &&
+			blobBytes[1] === 66 &&
+			blobBytes[2] === 67,
+	);
+	const blobInitResponse = new Response(nativeBlob);
+	check(
+		"Response accepts Blob BodyInit",
+		blobInitResponse.headers.get("content-type") === "text/plain" &&
+			(await blobInitResponse.text()) === "ABC",
+	);
+	const blobInitRequest = new Request("https://example.com/", {
+		method: "POST",
+		body: nativeBlob,
+	});
+	check(
+		"Request accepts Blob BodyInit",
+		blobInitRequest.headers.get("content-type") === "text/plain" &&
+			(await blobInitRequest.text()) === "ABC",
+	);
+	check(
+		"Blob methods enforce their brand",
+		await rejectsTypeError(Blob.prototype.text.call({})),
+	);
+
 	const canceled = new Response("cancel me");
 	await canceled.body.cancel("unused");
 	check("stream cancel disturbs body", canceled.bodyUsed);

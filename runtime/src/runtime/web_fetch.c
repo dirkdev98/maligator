@@ -8,11 +8,13 @@
 #include "ascii.h"
 #include "array_buffer_object.h"
 #include "builtin_data_view.h"
+#include "builtin_iterator.h"
 #include "builtin_json.h"
 #include "builtin_promise.h"
 #include "function_object.h"
 #include "gc.h"
 #include "web_headers_object.h"
+#include "web_blob_object.h"
 #include "heap.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -230,6 +232,118 @@ static MalValue mal_fetch_reject_completion(MalVm *vm) {
     return mal_fetch_reject(vm, error);
 }
 
+static bool mal_fetch_is_blob(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_BLOB_OBJECT);
+}
+
+static MalBlobObject *mal_fetch_to_blob(MalValue value) {
+    return (MalBlobObject *) mal_value_to_heap(value);
+}
+
+static MalValue mal_fetch_from_blob(MalBlobObject *blob) {
+    return mal_value_from_heap((MalHeapHeader *) blob);
+}
+
+static MalBlobObject *mal_blob_object_new(MalHeap *heap, MalObject *prototype,
+    byte *bytes, usize length, char *type, usize type_length) {
+    MalBlobObject *blob =
+        mal_heap_alloc(heap, sizeof(MalBlobObject), MAL_HEAP_BLOB_OBJECT);
+    mal_object_init(heap, &blob->object, MAL_HEAP_BLOB_OBJECT, prototype);
+    blob->bytes = bytes;
+    blob->length = length;
+    blob->type = type;
+    blob->type_length = type_length;
+    return blob;
+}
+
+static void mal_blob_finalize(MalHeapHeader *cell) {
+    MalBlobObject *blob = (MalBlobObject *) cell;
+    free(blob->bytes);
+    free(blob->type);
+    blob->bytes = nullptr;
+    blob->type = nullptr;
+    blob->length = 0;
+    blob->type_length = 0;
+}
+
+static bool mal_blob_append_bytes(
+    MalVm *vm, byte **buffer, usize *length, usize *capacity,
+    const byte *bytes, usize byte_length) {
+    if (byte_length > SIZE_MAX - *length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Blob exceeds the supported size");
+        return false;
+    }
+    usize required = *length + byte_length;
+    if (required > *capacity) {
+        usize next = *capacity == 0 ? 64 : *capacity;
+        while (next < required) {
+            if (next > SIZE_MAX / 2) {
+                next = required;
+                break;
+            }
+            next *= 2;
+        }
+        byte *grown = realloc(*buffer, next);
+        if (grown == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        *buffer = grown;
+        *capacity = next;
+    }
+    if (byte_length > 0) memcpy(*buffer + *length, bytes, byte_length);
+    *length = required;
+    return true;
+}
+
+static bool mal_blob_normalize_type(
+    MalVm *vm, MalValue options, char **type_out, usize *length_out) {
+    *type_out = malloc(1);
+    if (*type_out == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    (*type_out)[0] = '\0';
+    *length_out = 0;
+    if (!mal_value_is_object(options)) return true;
+
+    MalValue value;
+    if (!mal_vm_get_property(vm, options,
+            mal_intrinsic_string_key(vm, (const byte *) "type"), &value)) {
+        free(*type_out);
+        *type_out = nullptr;
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) {
+        free(*type_out);
+        *type_out = nullptr;
+        return false;
+    }
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] < 0x20 || units[i] > 0x7E) return true;
+    }
+    char *type = realloc(*type_out, length + 1);
+    if (type == nullptr) {
+        free(*type_out);
+        *type_out = nullptr;
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        type[i] = (char) (unit >= 'A' && unit <= 'Z' ? unit + ('a' - 'A') : unit);
+    }
+    type[length] = '\0';
+    *type_out = type;
+    *length_out = length;
+    return true;
+}
+
 typedef struct MalFetchBody {
     MalObject *owner;
     byte *bytes;
@@ -420,7 +534,17 @@ static MalValue mal_response_constructor(
             "ReadableStream BodyInit is not supported yet");
         goto response_error;
     }
-    if (arg_count >= 1 && mal_value_is_string(args[0])) {
+    if (arg_count >= 1 && mal_fetch_is_blob(args[0])) {
+        MalBlobObject *blob = mal_fetch_to_blob(args[0]);
+        body = malloc(blob->length == 0 ? 1 : blob->length);
+        if (body == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            goto response_error;
+        }
+        if (blob->length > 0) memcpy(body, blob->bytes, blob->length);
+        body_len = blob->length;
+        content_type = blob->type_length > 0 ? blob->type : nullptr;
+    } else if (arg_count >= 1 && mal_value_is_string(args[0])) {
         MalString *str = mal_value_to_string(args[0]);
         body = mal_fetch_utf8_encode(vm, str, &body_len);
         if (body == nullptr) goto response_error;
@@ -515,6 +639,158 @@ static MalValue mal_fetch_body_string(MalVm *vm, const MalFetchBody *body) {
         mal_string_new_copy(&vm->heap, units + offset, count - offset));
     free(units);
     return s;
+}
+
+static MalValue mal_blob_constructor(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) callee;
+    if (!mal_value_is_object(nt)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Blob constructor requires new");
+        return mal_value_new_undefined();
+    }
+
+    byte *bytes = nullptr;
+    usize length = 0;
+    usize capacity = 0;
+    if (argc >= 1 && !mal_value_is_undefined(args[0])) {
+        MalIteratorRecord record;
+        if (!mal_vm_get_iterator(vm, args[0], &record)) goto blob_error;
+        MalValue part = mal_value_new_undefined();
+        MalRootSpan iterator_span, part_span;
+        mal_gc_root(&iterator_span, &record.iterator, 2);
+        mal_gc_root(&part_span, &part, 1);
+        bool ok = false;
+        while (true) {
+            bool done;
+            if (!mal_vm_iterator_step(vm, &record, &part, &done)) break;
+            if (done) {
+                ok = true;
+                break;
+            }
+            if (mal_fetch_is_blob(part)) {
+                MalBlobObject *source = mal_fetch_to_blob(part);
+                if (!mal_blob_append_bytes(vm, &bytes, &length, &capacity,
+                        source->bytes, source->length)) break;
+                continue;
+            }
+            const byte *source_bytes;
+            usize source_length;
+            MalFetchBufferSourceResult source_result =
+                mal_fetch_buffer_source(vm, part, &source_bytes, &source_length);
+            if (source_result == MAL_FETCH_BUFFER_SOURCE_ERROR) break;
+            if (source_result == MAL_FETCH_BUFFER_SOURCE_OK) {
+                if (!mal_blob_append_bytes(vm, &bytes, &length, &capacity,
+                        source_bytes, source_length)) break;
+                continue;
+            }
+            MalString *string;
+            if (!mal_vm_to_string(vm, part, &string)) break;
+            usize encoded_length;
+            byte *encoded = mal_fetch_utf8_encode(vm, string, &encoded_length);
+            if (encoded == nullptr) break;
+            bool appended = mal_blob_append_bytes(
+                vm, &bytes, &length, &capacity, encoded, encoded_length);
+            free(encoded);
+            if (!appended) break;
+        }
+        mal_gc_unroot(&part_span);
+        mal_gc_unroot(&iterator_span);
+        if (!ok) goto blob_error;
+    }
+
+    char *type = nullptr;
+    usize type_length = 0;
+    if (!mal_blob_normalize_type(vm,
+            argc >= 2 ? args[1] : mal_value_new_undefined(),
+            &type, &type_length)) {
+        goto blob_error;
+    }
+    if (bytes == nullptr) {
+        bytes = malloc(1);
+        if (bytes == nullptr) {
+            free(type);
+            mal_vm_throw_allocation_error(vm);
+            goto blob_error;
+        }
+    }
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, nt, MAL_INTRINSIC_BLOB_PROTOTYPE, &prototype)) {
+        free(type);
+        goto blob_error;
+    }
+    return mal_fetch_from_blob(mal_blob_object_new(
+        &vm->heap, prototype, bytes, length, type, type_length));
+
+blob_error:
+    free(bytes);
+    return mal_value_new_undefined();
+}
+
+static MalBlobObject *mal_blob_this(MalVm *vm, MalValue self) {
+    if (mal_fetch_is_blob(self)) return mal_fetch_to_blob(self);
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Blob method called on incompatible receiver");
+    return nullptr;
+}
+
+static MalValue mal_blob_get_size(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalBlobObject *blob = mal_blob_this(vm, self);
+    return blob != nullptr
+        ? mal_value_from_f64((f64) blob->length) : mal_value_new_undefined();
+}
+
+static MalValue mal_blob_get_type(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalBlobObject *blob = mal_blob_this(vm, self);
+    return blob != nullptr
+        ? mal_value_from_string(mal_string_new_ascii(
+            &vm->heap, blob->type, blob->type_length))
+        : mal_value_new_undefined();
+}
+
+static MalValue mal_blob_text(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalBlobObject *blob = mal_blob_this(vm, self);
+    if (blob == nullptr) return mal_fetch_reject_completion(vm);
+    MalFetchBody body = {.bytes = blob->bytes, .length = blob->length};
+    MalValue text = mal_fetch_body_string(vm, &body);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_fetch_reject_completion(vm) : mal_fetch_resolve(vm, text);
+}
+
+static MalValue mal_blob_array_buffer(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalBlobObject *blob = mal_blob_this(vm, self);
+    if (blob == nullptr) return mal_fetch_reject_completion(vm);
+    MalValue result = mal_fetch_new_array_buffer(vm, blob->bytes, blob->length);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_fetch_reject_completion(vm) : mal_fetch_resolve(vm, result);
+}
+
+static MalValue mal_blob_bytes(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalBlobObject *blob = mal_blob_this(vm, self);
+    if (blob == nullptr) return mal_fetch_reject_completion(vm);
+    MalValue result = mal_fetch_new_uint8array(vm, blob->bytes, blob->length);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_fetch_reject_completion(vm) : mal_fetch_resolve(vm, result);
+}
+
+static MalValue mal_blob_stream(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalBlobObject *blob = mal_blob_this(vm, self);
+    if (blob == nullptr) return mal_value_new_undefined();
+    return mal_readable_stream_from_bytes(vm, blob->bytes, blob->length);
 }
 
 static MalValue mal_fetch_body_method_text(
@@ -627,26 +903,7 @@ static MalValue mal_fetch_body_method_json(
     return result;
 }
 
-static MalValue mal_fetch_blob_text(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    if (!mal_value_is_object(self)) return mal_fetch_reject_type_error(vm);
-    MalValue text;
-    if (!mal_vm_get_property(vm, self,
-            mal_intrinsic_string_key(vm, (const byte *) "__mal_blob_text"), &text)
-        || !mal_value_is_string(text)) {
-        if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            return mal_fetch_reject_completion(vm);
-        }
-        return mal_fetch_reject_type_error(vm);
-    }
-    return mal_fetch_resolve(vm, text);
-}
-
-static MalValue mal_fetch_body_content_type(MalVm *vm, MalValue self) {
+static MalString *mal_fetch_body_content_type(MalVm *vm, MalValue self) {
     MalValue headers = mal_value_is_response_object(self)
         ? mal_value_to_response_object(self)->headers
         : mal_value_to_request_object(self)->headers;
@@ -654,16 +911,13 @@ static MalValue mal_fetch_body_content_type(MalVm *vm, MalValue self) {
         MalHeadersObject *object = mal_value_to_headers_object(headers);
         for (i32 i = 0; i < object->count; i++) {
             if (mal_fetch_name_is(object->entries[i].name, "content-type")) {
-                return mal_value_from_string(object->entries[i].value);
+                return object->entries[i].value;
             }
         }
     }
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
+    return mal_string_new_ascii(&vm->heap, "", 0);
 }
 
-/* The W2 Body conversion lands before Blob's constructor/storage surface. Keep
- * the returned object deliberately small but semantically useful: MIME type and
- * UTF-8 text are snapshotted, and text() retains its asynchronous contract. */
 static MalValue mal_fetch_body_method_blob(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args;
@@ -680,25 +934,38 @@ static MalValue mal_fetch_body_method_blob(
         }
         return mal_fetch_reject_type_error(vm);
     }
-    MalValue roots[3] = {
-        mal_fetch_body_string(vm, &body),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-    };
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+    MalString *content_type = mal_fetch_body_content_type(vm, self);
+    MalValue type_root = mal_value_from_string(content_type);
+    MalRootSpan span;
+    mal_gc_root(&span, &type_root, 1);
+    usize type_length;
+    char *type = (char *) mal_fetch_utf8_encode(vm, content_type, &type_length);
+    if (type == nullptr) {
+        mal_gc_unroot(&span);
         return mal_fetch_reject_completion(vm);
     }
-    MalRootSpan span;
-    mal_gc_root(&span, roots, 3);
-    roots[1] = mal_fetch_body_content_type(vm, self);
-    MalObject *blob = mal_intrinsic_new_object(vm);
-    roots[2] = mal_value_from_object(blob);
-    mal_intrinsic_define_data(vm, blob, (const byte *) "__mal_blob_text",
-        roots[0], MAL_PROPERTY_NONE);
-    mal_intrinsic_define_data(vm, blob, (const byte *) "type",
-        roots[1], MAL_PROPERTY_ENUMERABLE);
-    mal_intrinsic_define_method_n(vm, blob, (const byte *) "text", 0, mal_fetch_blob_text);
-    MalValue result = mal_fetch_resolve(vm, roots[2]);
+    char *grown_type = realloc(type, type_length + 1);
+    if (grown_type == nullptr) {
+        free(type);
+        mal_gc_unroot(&span);
+        mal_vm_throw_allocation_error(vm);
+        return mal_fetch_reject_completion(vm);
+    }
+    type = grown_type;
+    type[type_length] = '\0';
+    byte *bytes = malloc(body.length == 0 ? 1 : body.length);
+    if (bytes == nullptr) {
+        free(type);
+        mal_gc_unroot(&span);
+        mal_vm_throw_allocation_error(vm);
+        return mal_fetch_reject_completion(vm);
+    }
+    if (body.length > 0) memcpy(bytes, body.bytes, body.length);
+    MalObject *prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_BLOB_PROTOTYPE]);
+    MalValue result = mal_fetch_from_blob(mal_blob_object_new(
+        &vm->heap, prototype, bytes, body.length, type, type_length));
+    result = mal_fetch_resolve(vm, result);
     mal_gc_unroot(&span);
     return result;
 }
@@ -1522,6 +1789,17 @@ static MalValue mal_request_constructor(
             memcpy(r->body, body_source->body, body_source->body_len);
         }
         r->body_len = body_source->body_len;
+    } else if (mal_fetch_is_blob(slots[4])) {
+        MalBlobObject *blob = mal_fetch_to_blob(slots[4]);
+        free(r->body);
+        r->body = malloc(blob->length == 0 ? 1 : blob->length);
+        if (r->body == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            goto request_error;
+        }
+        if (blob->length > 0) memcpy(r->body, blob->bytes, blob->length);
+        r->body_len = blob->length;
+        content_type = blob->type_length > 0 ? blob->type : nullptr;
     } else if (mal_value_is_string(slots[4])) {
         MalString *bs = mal_value_to_string(slots[4]);
         free(r->body);
@@ -2520,6 +2798,36 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     MalObject *object_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
 
+    // Blob constructor + immutable byte-backed prototype surface.
+    MalObject *blob_proto = mal_object_new(&vm->heap, object_prototype);
+    MalNativeFunctionObject *blob_ctor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "Blob"), 0,
+        mal_blob_constructor);
+    mal_native_function_object_set_constructor(blob_ctor);
+    vm->intrinsics[MAL_INTRINSIC_BLOB_CONSTRUCTOR] =
+        mal_value_from_native_function_object(blob_ctor);
+    vm->intrinsics[MAL_INTRINSIC_BLOB_PROTOTYPE] = mal_value_from_object(blob_proto);
+    mal_intrinsic_define_data(vm, (MalObject *) blob_ctor, (const byte *) "prototype",
+        vm->intrinsics[MAL_INTRINSIC_BLOB_PROTOTYPE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, blob_proto, (const byte *) "constructor",
+        vm->intrinsics[MAL_INTRINSIC_BLOB_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_fetch_define_getter(vm, blob_proto, (const byte *) "size", mal_blob_get_size);
+    mal_fetch_define_getter(vm, blob_proto, (const byte *) "type", mal_blob_get_type);
+    mal_intrinsic_define_method_n(vm, blob_proto, (const byte *) "text", 0, mal_blob_text);
+    mal_intrinsic_define_method_n(
+        vm, blob_proto, (const byte *) "arrayBuffer", 0, mal_blob_array_buffer);
+    mal_intrinsic_define_method_n(vm, blob_proto, (const byte *) "bytes", 0, mal_blob_bytes);
+    mal_intrinsic_define_method_n(vm, blob_proto, (const byte *) "stream", 0, mal_blob_stream);
+    MalPropertyDesc blob_tag_desc = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "Blob")),
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(blob_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &blob_tag_desc);
+    mal_intrinsic_define_data(vm, global_this, (const byte *) "Blob",
+        vm->intrinsics[MAL_INTRINSIC_BLOB_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+
     // Response constructor + prototype.
     MalObject *resp_proto = mal_object_new(&vm->heap, object_prototype);
     MalNativeFunctionObject *resp_ctor = mal_native_function_object_new_arity(
@@ -2635,4 +2943,5 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_gc_register_finalizer(MAL_HEAP_RESPONSE_OBJECT, mal_response_finalize);
     mal_gc_register_tracer(MAL_HEAP_REQUEST_OBJECT, mal_request_trace);
     mal_gc_register_finalizer(MAL_HEAP_REQUEST_OBJECT, mal_request_finalize);
+    mal_gc_register_finalizer(MAL_HEAP_BLOB_OBJECT, mal_blob_finalize);
 }
