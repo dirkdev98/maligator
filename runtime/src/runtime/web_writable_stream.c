@@ -802,10 +802,20 @@ static MalValue ws_writer_release(MalVm *vm, MalValue self,
         mal_value_to_readable_stream_object(writer->as.writer.stream);
     MalPromiseObject *ready = mal_value_to_promise_object(writer->as.writer.ready_promise);
     if (ready->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, ready, roots[1]);
-    else writer->as.writer.ready_promise = ws_rejected_promise(vm, roots[1]);
+    else {
+        MalValue replacement = ws_rejected_promise(vm, roots[1]);
+        mal_gc_write_barrier(writer->as.writer.ready_promise);
+        writer->as.writer.ready_promise = replacement;
+        mal_gc_card(&writer->object.header, replacement);
+    }
     MalPromiseObject *closed = mal_value_to_promise_object(writer->as.writer.closed_promise);
     if (closed->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, closed, roots[1]);
-    else writer->as.writer.closed_promise = ws_rejected_promise(vm, roots[1]);
+    else {
+        MalValue replacement = ws_rejected_promise(vm, roots[1]);
+        mal_gc_write_barrier(writer->as.writer.closed_promise);
+        writer->as.writer.closed_promise = replacement;
+        mal_gc_card(&writer->object.header, replacement);
+    }
     stream->as.writable_stream.writer = mal_value_new_undefined();
     writer->as.writer.stream = mal_value_new_undefined();
     mal_gc_unroot(&span);
