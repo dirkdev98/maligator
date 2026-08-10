@@ -57,6 +57,9 @@ streams/readable-streams/default-reader.any.js
 streams/readable-streams/floating-point-total-queue-size.any.js
 streams/readable-streams/general.any.js
 streams/readable-streams/tee.any.js
+streams/writable-streams/bad-strategies.any.js
+streams/writable-streams/constructor.any.js
+streams/writable-streams/properties.any.js
 url/url-searchparams.any.js
 url/url-statics-canparse.any.js
 url/url-statics-parse.any.js
