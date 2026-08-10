@@ -519,6 +519,14 @@
 			"includes": []
 		},
 		{
+			"path": "streams/readable-streams/bad-underlying-sources.any.js",
+			"sha256": "10a8d8f3878a73b95580e824bee7a9bf029c51896a2d2c0c77c1eaf6301ce79e",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
 			"path": "streams/readable-streams/cancel.any.js",
 			"sha256": "bd50daffad0c780fd72cc665fe5e791f3ef69cb552745947dfd053d0bb4596a0",
 			"target": "server-main",
