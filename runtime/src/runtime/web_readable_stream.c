@@ -545,20 +545,11 @@ static void rs_call_pull_if_needed(MalVm *vm, MalReadableStreamObject *controlle
     if (call.kind == MAL_COMPLETION_THROW) {
         MalValue error = call.value;
         vm->completion = rs_normal();
-        controller->as.controller.pulling = false;
-        rs_error_stream(vm,
-            mal_value_to_readable_stream_object(controller->as.controller.stream), error);
-        mal_gc_unroot(&span);
-        return;
-    }
-    if (!mal_promise_resolve_value(vm, call.value, &roots[3])) {
+        roots[3] = rs_rejected_promise(vm, error);
+    } else if (!mal_promise_resolve_value(vm, call.value, &roots[3])) {
         MalValue error = vm->completion.value;
         vm->completion = rs_normal();
-        controller->as.controller.pulling = false;
-        rs_error_stream(vm,
-            mal_value_to_readable_stream_object(controller->as.controller.stream), error);
-        mal_gc_unroot(&span);
-        return;
+        roots[3] = rs_rejected_promise(vm, error);
     }
     roots[4] = rs_callback(vm, rs_pull_fulfilled, roots[0]);
     roots[5] = rs_callback(vm, rs_pull_rejected, roots[0]);
@@ -1678,6 +1669,11 @@ static bool rs_tee_branch_canceled(
         state, branch == 1 ? RS_TEE_CANCELED_1 : RS_TEE_CANCELED_2));
 }
 
+static bool rs_tee_both_branches_canceled(MalNativeFunctionObject *state) {
+    return rs_tee_branch_canceled(state, 1) &&
+        rs_tee_branch_canceled(state, 2);
+}
+
 static MalValue rs_tee_branch_controller(
     MalNativeFunctionObject *state, i32 branch) {
     return mal_native_function_object_get_slot(
@@ -1728,6 +1724,33 @@ static void rs_tee_error_active_branches(
     }
 }
 
+static void rs_tee_fail(
+    MalVm *vm, MalNativeFunctionObject *state, MalValue error) {
+    if (mal_value_is_truthy(mal_native_function_object_get_slot(
+            state, RS_TEE_CLOSED))) {
+        return;
+    }
+    mal_native_function_object_set_slot(
+        state, RS_TEE_READING, mal_value_new_boolean(false));
+    mal_native_function_object_set_slot(
+        state, RS_TEE_CLOSED, mal_value_new_boolean(true));
+    rs_tee_error_active_branches(vm, state, error);
+    rs_tee_settle_cancellations(
+        vm, state, false, mal_value_new_undefined());
+}
+
+static MalValue rs_tee_reader_closed_rejected(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *callback = mal_value_to_native_function_object(callee);
+    MalNativeFunctionObject *state = mal_value_to_native_function_object(
+        mal_native_function_object_get_slot(callback, 0));
+    rs_tee_fail(vm, state,
+        argc >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
 static MalValue rs_tee_read_fulfilled(MalVm *vm, MalValue self,
     const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -1762,8 +1785,13 @@ static MalValue rs_tee_read_fulfilled(MalVm *vm, MalValue self,
                     mal_value_new_undefined(), mal_value_new_undefined());
             }
         }
-        rs_tee_settle_cancellations(
-            vm, state, false, mal_value_new_undefined());
+        // Canceling the original stream resolves its pending read before the
+        // source cancel algorithm settles. In that path the branch promises
+        // must follow the cancel result instead of resolving from this read.
+        if (!rs_tee_both_branches_canceled(state)) {
+            rs_tee_settle_cancellations(
+                vm, state, false, mal_value_new_undefined());
+        }
         return mal_value_new_undefined();
     }
 
@@ -1807,13 +1835,7 @@ static MalValue rs_tee_read_rejected(MalVm *vm, MalValue self,
     MalNativeFunctionObject *state = mal_value_to_native_function_object(
         mal_native_function_object_get_slot(callback, 0));
     MalValue error = argc >= 1 ? args[0] : mal_value_new_undefined();
-    mal_native_function_object_set_slot(
-        state, RS_TEE_READING, mal_value_new_boolean(false));
-    mal_native_function_object_set_slot(
-        state, RS_TEE_CLOSED, mal_value_new_boolean(true));
-    rs_tee_error_active_branches(vm, state, error);
-    rs_tee_settle_cancellations(
-        vm, state, false, mal_value_new_undefined());
+    rs_tee_fail(vm, state, error);
     return mal_value_new_undefined();
 }
 
@@ -1992,12 +2014,13 @@ bool mal_readable_stream_tee(
     }
     bool byte_stream =
         mal_value_to_readable_stream_object(value)->as.stream.byte_stream;
-    MalValue roots[5] = {
+    MalValue roots[6] = {
         value, mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
     };
     MalRootSpan span;
-    mal_gc_root(&span, roots, 5);
+    mal_gc_root(&span, roots, 6);
     MalReadableStreamObject *reader = rs_acquire_reader(vm,
         mal_value_to_readable_stream_object(value),
         mal_value_to_object(vm->intrinsics[
@@ -2025,6 +2048,10 @@ bool mal_readable_stream_tee(
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
     roots[4] = rs_tee_make_branch(vm, roots[2], 2);
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
+    roots[5] = rs_callback(vm, rs_tee_reader_closed_rejected, roots[2]);
+    mal_promise_perform_then(vm, reader->as.reader.closed_promise,
+        mal_value_new_undefined(), roots[5],
+        mal_value_new_undefined(), mal_value_new_undefined());
     if (byte_stream) {
         mal_value_to_readable_stream_object(roots[3])->as.stream.byte_stream = true;
         mal_value_to_readable_stream_object(roots[4])->as.stream.byte_stream = true;

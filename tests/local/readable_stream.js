@@ -451,6 +451,99 @@ async function run() {
 			publicCancelReasons[0] === "left" &&
 			publicCancelReasons[1] === "right",
 	);
+
+	const publicCancelError = { marker: "cancel failed" };
+	const publicCancelErrorSource = new ReadableStream({
+		cancel() {
+			throw publicCancelError;
+		},
+	});
+	const [publicCancelErrorBranch1, publicCancelErrorBranch2] =
+		publicCancelErrorSource.tee();
+	const publicCancelError1 = publicCancelErrorBranch1.cancel();
+	await tick();
+	const publicCancelError2 = publicCancelErrorBranch2.cancel();
+	const publicCancelErrors = await Promise.all([
+		publicCancelError1.then(
+			() => false,
+			(error) => error === publicCancelError,
+		),
+		publicCancelError2.then(
+			() => false,
+			(error) => error === publicCancelError,
+		),
+	]);
+	check(
+		"public tee propagates cancellation errors",
+		publicCancelErrors[0] && publicCancelErrors[1],
+	);
+
+	let publicTeeErrorController;
+	const publicTeeError = { marker: "source failed" };
+	const publicTeeErrorSource = new ReadableStream({
+		start(controller) {
+			publicTeeErrorController = controller;
+		},
+	});
+	const [publicTeeErrorBranch1, publicTeeErrorBranch2] = publicTeeErrorSource.tee();
+	const publicTeeErrorReader1 = publicTeeErrorBranch1.getReader();
+	const publicTeeErrorReader2 = publicTeeErrorBranch2.getReader();
+	publicTeeErrorController.enqueue("queued");
+	await Promise.all([publicTeeErrorReader1.read(), publicTeeErrorReader2.read()]);
+	publicTeeErrorController.error(publicTeeError);
+	const publicTeeClosedErrors = await Promise.all([
+		publicTeeErrorReader1.closed.then(
+			() => false,
+			(error) => error === publicTeeError,
+		),
+		publicTeeErrorReader2.closed.then(
+			() => false,
+			(error) => error === publicTeeError,
+		),
+	]);
+	check(
+		"public tee observes source errors without pending reads",
+		publicTeeClosedErrors[0] && publicTeeClosedErrors[1],
+	);
+
+	const publicTeePullError = { marker: "pull failed" };
+	const publicTeePullErrorSource = new ReadableStream({
+		start(controller) {
+			controller.enqueue("first");
+			controller.enqueue("second");
+		},
+		pull() {
+			throw publicTeePullError;
+		},
+	});
+	const [publicTeePullErrorBranch1, publicTeePullErrorBranch2] =
+		publicTeePullErrorSource.tee();
+	const publicTeePullErrorReader1 = publicTeePullErrorBranch1.getReader();
+	const publicTeePullErrorReader2 = publicTeePullErrorBranch2.getReader();
+	const publicTeePullFirst = await publicTeePullErrorReader1.read();
+	const publicTeePullSecond = await publicTeePullErrorReader1.read();
+	const publicTeePullRejected = await Promise.all([
+		publicTeePullErrorReader1.read().then(
+			() => false,
+			(error) => error === publicTeePullError,
+		),
+		publicTeePullErrorReader1.closed.then(
+			() => false,
+			(error) => error === publicTeePullError,
+		),
+		publicTeePullErrorReader2.closed.then(
+			() => false,
+			(error) => error === publicTeePullError,
+		),
+	]);
+	check(
+		"public tee drains chunks before a pull error",
+		publicTeePullFirst.value === "first" &&
+			publicTeePullSecond.value === "second" &&
+			publicTeePullRejected[0] &&
+			publicTeePullRejected[1] &&
+			publicTeePullRejected[2],
+	);
 }
 
 run().then(
