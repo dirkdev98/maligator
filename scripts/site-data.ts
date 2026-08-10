@@ -9,6 +9,7 @@ const SITE_FILE = "website/index.html";
 const MASCOT_FILE = "website/mascot.webp";
 const SITE_META_FILE = "website/site-meta.json";
 const FORMATTER = path.resolve("node_modules/.bin/oxfmt");
+export const TEST262_HISTORY_START = "2026-06-07T00:00:00Z";
 
 interface DatedPoint {
 	date: string;
@@ -112,6 +113,15 @@ export function latestPerWeek<T extends DatedPoint>(points: ReadonlyArray<T>): A
 	return [...result.values()];
 }
 
+export function since<T extends DatedPoint>(
+	points: ReadonlyArray<T>,
+	start: string,
+): Array<T> {
+	const startTime = new Date(start).getTime();
+	if (Number.isNaN(startTime)) throw new Error(`invalid history start '${start}'`);
+	return points.filter((point) => new Date(point.date).getTime() >= startTime);
+}
+
 function git(args: Array<string>, maxBuffer = 64 * 1024 * 1024): string {
 	return execFileSync("git", args, {
 		encoding: "utf8",
@@ -142,12 +152,15 @@ function history<T>(file: string): Array<GitRevision<T>> {
 
 export function test262History(): Array<Test262Point> {
 	return latestPerWeek(
-		history<Test262File>(TEST262_FILE).map(({ commit, date, value }) => ({
-			commit: commit.slice(0, 8),
-			date,
-			corpus: value.sha.slice(0, 8),
-			...summarizeTest262(value.summary),
-		})),
+		since(
+			history<Test262File>(TEST262_FILE).map(({ commit, date, value }) => ({
+				commit: commit.slice(0, 8),
+				date,
+				corpus: value.sha.slice(0, 8),
+				...summarizeTest262(value.summary),
+			})),
+			TEST262_HISTORY_START,
+		),
 	);
 }
 

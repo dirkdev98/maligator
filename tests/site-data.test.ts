@@ -1,5 +1,10 @@
 import { expect, test } from "vitest";
-import { isoWeekKey, latestPerWeek, summarizeTest262 } from "../scripts/site-data.ts";
+import {
+	isoWeekKey,
+	latestPerWeek,
+	since,
+	summarizeTest262,
+} from "../scripts/site-data.ts";
 
 test("Test262 site summary keeps skips separate and folds all failure modes", () => {
 	expect(
@@ -28,4 +33,16 @@ test("site history retains the latest authoritative point in each ISO week", () 
 	]);
 	expect(isoWeekKey("2026-01-05T08:00:00Z")).toBe("2026-W02");
 	expect(isoWeekKey("2026-01-11T19:00:00Z")).toBe("2026-W02");
+});
+
+test("site history can start at an explicit measurement", () => {
+	const points = [
+		{ date: "2026-06-06T23:59:59Z", value: "before" },
+		{ date: "2026-06-07T00:00:00Z", value: "start" },
+		{ date: "2026-06-14T00:00:00Z", value: "after" },
+	];
+	expect(since(points, "2026-06-07T00:00:00Z").map((point) => point.value)).toEqual([
+		"start",
+		"after",
+	]);
 });

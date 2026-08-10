@@ -5,7 +5,7 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta
 			name="description"
-			content="Maligator is an experimental ahead-of-time JavaScript compiler, exploring its identity in public."
+			content="Maligator is an experimental ahead-of-time JavaScript compiler that produces native executables."
 		/>
 		<meta name="color-scheme" content="light dark" />
 		<title>Maligator — experimental AOT JavaScript compiler</title>
@@ -149,6 +149,9 @@
 				gap: clamp(2rem, 7vw, 7rem);
 				min-height: min(760px, calc(100vh - 5.25rem));
 				padding-block: clamp(4rem, 9vw, 8rem);
+			}
+			.hero > * {
+				min-width: 0;
 			}
 			.eyebrow {
 				display: flex;
@@ -327,6 +330,7 @@
 			}
 			.chart-shell {
 				position: relative;
+				min-width: 0;
 				overflow: hidden;
 				padding: clamp(1.1rem, 3vw, 2rem);
 				border: 1px solid var(--line);
@@ -494,6 +498,7 @@
 				gap: 1.2rem;
 			}
 			.reality-card {
+				min-width: 0;
 				padding: clamp(1.4rem, 4vw, 2.4rem);
 				border-radius: var(--radius);
 			}
@@ -545,6 +550,9 @@
 				grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
 				gap: 1.2rem;
 				align-items: stretch;
+			}
+			.example-grid > * {
+				min-width: 0;
 			}
 			.code-card {
 				overflow: hidden;
@@ -647,8 +655,9 @@
 					display: none;
 				}
 				.hero {
-					grid-template-columns: 1fr;
+					grid-template-columns: minmax(0, 1fr);
 					min-height: auto;
+					padding-block: 3.5rem 4.5rem;
 				}
 				.mascot-frame {
 					justify-self: center;
@@ -668,11 +677,53 @@
 				}
 			}
 			@media (max-width: 520px) {
+				.wrap {
+					width: min(1180px, calc(100% - 1.25rem));
+				}
+				header {
+					min-height: 4.5rem;
+				}
+				main section {
+					padding-block: 3.5rem;
+				}
+				.hero {
+					padding-block: 2.75rem 3.75rem;
+				}
 				h1 {
-					font-size: clamp(4rem, 23vw, 6.2rem);
+					max-width: none;
+					font-size: clamp(2.75rem, 14vw, 4.5rem);
+					line-height: 0.84;
+					letter-spacing: -0.075em;
+				}
+				.lede {
+					margin-top: 1.5rem;
+					font-size: 1.15rem;
+				}
+				.eyebrow {
+					margin-bottom: 1rem;
 				}
 				.actions .button {
 					width: 100%;
+				}
+				.mascot-frame {
+					width: min(82vw, 360px);
+					box-shadow: 0.65rem 0.65rem 0 color-mix(in srgb, var(--cyan) 78%, var(--paper));
+				}
+				.mascot-caption {
+					right: -0.25rem;
+					bottom: 1rem;
+					max-width: 11rem;
+				}
+				.section-head {
+					gap: 1rem;
+					margin-bottom: 1.75rem;
+				}
+				h2 {
+					font-size: clamp(2.35rem, 13vw, 3.7rem);
+				}
+				.chart-shell {
+					padding: 1rem 0.75rem;
+					border-radius: 1rem;
 				}
 				.chart-heading {
 					display: block;
@@ -682,9 +733,21 @@
 					text-align: left;
 				}
 				.tooltip {
-					top: 8.8rem;
+					top: 7.5rem;
 					right: 0.75rem;
 					left: 0.75rem;
+					min-width: 0;
+				}
+				.reality-list {
+					gap: 1rem;
+				}
+				.reality-list li {
+					grid-template-columns: 1.65rem minmax(0, 1fr);
+					gap: 0.45rem;
+				}
+				pre {
+					padding: 1rem;
+					font-size: 0.72rem;
 				}
 				footer {
 					display: block;
@@ -727,13 +790,8 @@
 					</p>
 					<h1>JavaScript,<br /><span class="bite">ahead</span><br />of time.</h1>
 					<p class="lede">
-						Maligator is an <strong>experimental AOT JavaScript compiler</strong>,
-						exploring its identity in public.
-					</p>
-					<p class="hero-note">
-						It already produces configurable native executables. It is not yet
-						battle-tested, uniformly fast, or trying to be a drop-in Node replacement. The
-						alpha is here to make the progress visible—and invite better ideas.
+						An <strong>experimental AOT JavaScript compiler</strong> that produces
+						configurable native executables.
 					</p>
 					<div class="actions">
 						<a class="button" href="https://bsky.app/profile/ddv.tools"
@@ -756,7 +814,7 @@
 					/>
 					<!-- mascot:end -->
 					<figcaption class="mascot-caption">
-						Focused. Curious. Known to bite into difficult runtime problems.
+						Alert. Curious. Bites runtime bugs.
 					</figcaption>
 				</figure>
 			</section>
@@ -768,11 +826,7 @@
 							<p class="kicker">Progress, not promises</p>
 							<h2>The line so far.</h2>
 						</div>
-						<p class="section-copy">
-							The graphs use committed project data. They exist to show movement and
-							regressions—not to manufacture an “Nx faster” headline. Weeks without a
-							trustworthy full result stay empty.
-						</p>
+						<p class="section-copy">Committed full-suite and benchmark results.</p>
 					</div>
 					<div class="chart-grid">
 						<article class="chart-shell">
@@ -780,9 +834,8 @@
 								<div>
 									<h3>Test262 compatibility</h3>
 									<p>
-										Authoritative compiled/normal baseline from
-										<code>scripts/test262.json</code>. Strict and sloppy results are
-										folded together; the chart always uses a true 0–100% scale.
+										Compiled/normal baseline, strict and sloppy combined. The scale is
+										always 0–100%.
 									</p>
 								</div>
 								<div class="stat">
@@ -820,11 +873,8 @@
 								<div>
 									<h3>Compiling the compiler</h3>
 									<p>
-										Fresh-process median to load Maligator’s compiler source, compile it,
-										and emit C. Startup and file I/O count; the C compiler and linker do
-										not. Erasable TypeScript syntax is stripped before timing because the
-										native compiler does not yet include that frontend. Node runs the same
-										prepared source as a neutral reference.
+										Fresh-process median through C emission. Node runs the same prepared
+										source as a reference; C compilation and linking are excluded.
 									</p>
 								</div>
 								<div class="stat">
@@ -871,11 +921,7 @@
 							<p class="kicker">The honest alpha</p>
 							<h2>What it is.<br />What it isn’t.</h2>
 						</div>
-						<p class="section-copy">
-							A compatibility percentage is useful evidence, not a product identity. These
-							are the capabilities that make Maligator interesting today—and the
-							constraints that still define using it.
-						</p>
+						<p class="section-copy">Current capabilities and current limits.</p>
 					</div>
 					<div class="reality-grid">
 						<article class="reality-card can">
@@ -886,8 +932,7 @@
 									<div>
 										<b>Produce native executables</b>
 										<p>
-											Compile JavaScript and erasable TypeScript applications ahead of
-											time into standalone native programs.
+											Compile JavaScript and erasable TypeScript into standalone programs.
 										</p>
 									</div>
 								</li>
@@ -896,8 +941,8 @@
 									<div>
 										<b>Shape the runtime per build</b>
 										<p>
-											Select eval, Realms, RegExp, Temporal, Intl services, web APIs,
-											curated Node APIs, and Maligator’s own surface.
+											Select eval, Realms, RegExp, Temporal, Intl, web, and curated Node
+											APIs.
 										</p>
 									</div>
 								</li>
@@ -905,10 +950,7 @@
 									<span class="index">03</span>
 									<div>
 										<b>Carry application assets</b>
-										<p>
-											Embed files or selected directory trees in the executable and
-											materialize the exact captured bytes at runtime.
-										</p>
+										<p>Embed files or directories directly in the executable.</p>
 									</div>
 								</li>
 								<li>
@@ -916,9 +958,8 @@
 									<div>
 										<b>Compile at runtime—when selected</b>
 										<p>
-											An eval-enabled build embeds the compiler and executes dynamic
-											JavaScript through the interpreter; eval-free builds leave that
-											payload out.
+											Eval-enabled builds embed the compiler; eval-free builds leave it
+											out.
 										</p>
 									</div>
 								</li>
@@ -927,23 +968,22 @@
 									<div>
 										<b>Run most of Test262</b>
 										<p>
-											<span data-test262-count>More than fifty thousand</span> applicable
-											tests pass in the current strict-and-sloppy compiled baseline.
+											<span data-test262-count>More than fifty thousand</span> tests pass
+											in the combined compiled baseline.
 										</p>
 									</div>
 								</li>
 							</ol>
 						</article>
 						<article class="reality-card cannot">
-							<h3>It cannot claim this.</h3>
+							<h3>Not yet.</h3>
 							<ol class="reality-list">
 								<li>
 									<span class="index">01</span>
 									<div>
 										<b>Battle-tested software</b>
 										<p>
-											Maligator is only now being used in real project work. That is
-											exposing bugs, rough edges, and assumptions quickly.
+											Real project use has only just started and is exposing rough edges.
 										</p>
 									</div>
 								</li>
@@ -951,10 +991,7 @@
 									<span class="index">02</span>
 									<div>
 										<b>Drop-in Node compatibility</b>
-										<p>
-											The Node surface is intentionally curated: enough compatibility to
-											build useful things, not a promise to reproduce all of Node.js.
-										</p>
+										<p>The Node surface is intentionally curated, not complete.</p>
 									</div>
 								</li>
 								<li>
@@ -962,30 +999,15 @@
 									<div>
 										<b>Uniformly competitive speed</b>
 										<p>
-											Some focused paths are promising. Other ordinary JavaScript
-											constructs remain much slower than Node. Performance is uneven.
+											Some paths are quick; ordinary constructs can still be much slower.
 										</p>
 									</div>
 								</li>
 								<li>
 									<span class="index">04</span>
 									<div>
-										<b>A settled destination</b>
-										<p>
-											The project does not yet know whether its strongest identity will be
-											tiny deployment, configurable runtimes, self-hosting, performance,
-											or something not found yet.
-										</p>
-									</div>
-								</li>
-								<li>
-									<span class="index">05</span>
-									<div>
 										<b>Broad release support</b>
-										<p>
-											The current packaged alpha targets macOS arm64 and remains unsigned.
-											Other deployment targets are not presented as ready.
-										</p>
+										<p>The packaged alpha still targets unsigned macOS arm64 builds.</p>
 									</div>
 								</li>
 							</ol>
@@ -1002,9 +1024,8 @@
 							<h2>This page is the example.</h2>
 						</div>
 						<p class="section-copy">
-							The homepage is one self-contained HTML file. A small Maligator program
-							embeds it as an asset and serves it from the resulting executable behind
-							plain HTTP—ready for a future TLS-terminating reverse proxy.
+							This HTML is embedded in a native Linux executable and served from a
+							Cloudflare Container.
 						</p>
 					</div>
 					<div class="example-grid">
@@ -1029,18 +1050,6 @@ Mal.serve({
   },
 });</code></pre>
 							</article>
-							<article class="code-card" style="margin-top: 1rem">
-								<div class="code-title">
-									<span>website/maligator.build.ts</span><span>simplified</span>
-								</div>
-								<pre><code><span class="kw">export default</span> defineBuild({
-  assets: {
-    site: { type: <span class="str">"file"</span>, path: <span class="str">"website/index.html"</span> },
-  },
-  engine: { eval: <span class="kw">false</span>, regexp: <span class="kw">false</span> },
-  surface: { webPlatform: <span class="kw">true</span>, node: <span class="kw">true</span> },
-});</code></pre>
-							</article>
 							<div class="command">npm run site:build</div>
 						</div>
 						<aside class="proof-card">
@@ -1049,8 +1058,7 @@ Mal.serve({
 								<p class="big" data-binary-size>measuring</p>
 							</div>
 							<p class="label">
-								One native server. One embedded HTML asset. No CDN, external font, cookie,
-								tracker, or client dependency.
+								One native server. One embedded HTML asset. No client dependencies.
 							</p>
 							<p class="fine">
 								<span data-binary-platform>current host</span> ·
@@ -1065,13 +1073,9 @@ Mal.serve({
 
 			<section class="section-rule closing">
 				<div class="wrap">
-					<p class="kicker">Ideas welcome</p>
-					<h2>What should this become?</h2>
-					<p>
-						Follow the progress, reply with an idea, or open an issue with something
-						concrete. The alpha’s most useful outcome is discovering the project’s
-						identity through real use.
-					</p>
+					<p class="kicker">Follow along</p>
+					<h2>Releases, progress, and bugs.</h2>
+					<p>Reply on Bluesky or X, or open an issue with something concrete.</p>
 					<div class="actions">
 						<a class="button" href="https://bsky.app/profile/ddv.tools"
 							>@ddv.tools on Bluesky</a
@@ -1092,7 +1096,7 @@ Mal.serve({
 
 		<div class="wrap">
 			<footer>
-				<span>Maligator <span data-version>alpha</span> · experimental by design</span
+				<span>Maligator <span data-version>alpha</span></span
 				><span>Self-contained. No analytics.</span>
 			</footer>
 		</div>
@@ -1102,24 +1106,6 @@ Mal.serve({
 			{
 				"version": "0.1.0-alpha.10",
 				"test262": [
-					{
-						"commit": "c6d9dcf6",
-						"date": "2026-02-08T22:10:57+01:00",
-						"corpus": "f2d59ea6",
-						"passed": 2933,
-						"failed": 30172,
-						"skipped": 19777,
-						"percent": 5.546310653908702
-					},
-					{
-						"commit": "a6bfd574",
-						"date": "2026-02-14T23:10:49+01:00",
-						"corpus": "f2d59ea6",
-						"passed": 4166,
-						"failed": 28939,
-						"skipped": 19777,
-						"percent": 7.877916871525283
-					},
 					{
 						"commit": "b0cffda1",
 						"date": "2026-06-07T10:16:56+02:00",
@@ -1195,9 +1181,8 @@ Mal.serve({
 				],
 				"selfCompile": [
 					{
-						"commit": "318bd6f2",
-						"date": "2026-08-10T11:09:28.545Z",
-						"preview": true,
+						"commit": "2caa32ea",
+						"date": "2026-08-10T13:46:56+02:00",
 						"maligatorMs": 263656.616917,
 						"nodeMs": 24578.870834,
 						"runs": 3,
@@ -1290,12 +1275,13 @@ Mal.serve({
 							'<div class="empty-chart"><p>The first trustworthy measurement starts here.<br>Nothing has been backfilled.</p></div>';
 						return;
 					}
-					const width = 920,
-						height = 380,
-						left = 68,
-						right = 24,
+					const compact = container.clientWidth < 560;
+					const width = compact ? Math.max(300, container.clientWidth) : 920,
+						height = compact ? 300 : 380,
+						left = compact ? 48 : 68,
+						right = compact ? 12 : 24,
 						top = 22,
-						bottom = 48;
+						bottom = compact ? 42 : 48;
 					const plotWidth = width - left - right,
 						plotHeight = height - top - bottom;
 					const dates = points.map((point) => new Date(point.date).getTime());
@@ -1369,7 +1355,7 @@ Mal.serve({
 								class: `point ${seriesIndex === 0 ? "point-primary" : "point-secondary"}`,
 								cx: plottedPoint.x,
 								cy: plottedPoint.y,
-								r: 6,
+								r: compact ? 5 : 6,
 								tabindex: 0,
 							});
 							const content = tooltip(plottedPoint.source);
