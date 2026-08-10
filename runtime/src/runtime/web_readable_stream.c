@@ -2043,6 +2043,31 @@ fail:
     return false;
 }
 
+static MalValue rs_tee(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalValue roots[4] = {
+        self, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    if (!mal_readable_stream_tee(vm, roots[0], &roots[1], &roots[2])) {
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    roots[3] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
+    MalArrayObject *branches = mal_value_to_array_object(roots[3]);
+    mal_array_object_store(branches, mal_key_index(0), roots[1]);
+    mal_array_object_store(branches, mal_key_index(1), roots[2]);
+    MalValue result = roots[3];
+    mal_gc_unroot(&span);
+    return result;
+}
+
 static void rs_trace(MalHeapHeader *cell) {
     MalReadableStreamObject *object = (MalReadableStreamObject *) cell;
     switch (object->kind) {
@@ -2147,6 +2172,8 @@ void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
         vm, stream_proto, (const byte *) "cancel", 1, rs_cancel);
     mal_intrinsic_define_method_n(
         vm, stream_proto, (const byte *) "getReader", 0, rs_get_reader);
+    mal_intrinsic_define_method_n(
+        vm, stream_proto, (const byte *) "tee", 0, rs_tee);
 
     MalObject *controller_proto = rs_install_class(vm, global_this,
         (const byte *) "ReadableStreamDefaultController", 0, rs_controller_constructor,

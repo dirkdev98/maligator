@@ -381,6 +381,76 @@ async function run() {
 		secondClose = error instanceof TypeError;
 	}
 	check("close is one-shot", secondClose);
+
+	const sharedChunk = { marker: 42 };
+	const publicTeeSource = new ReadableStream({
+		start(controller) {
+			controller.enqueue(sharedChunk);
+			controller.enqueue("tail");
+			controller.close();
+		},
+	});
+	const publicBranches = publicTeeSource.tee();
+	const publicReader1 = publicBranches[0].getReader();
+	const publicReader2 = publicBranches[1].getReader();
+	const [publicFirst1, publicFirst2] = await Promise.all([
+		publicReader1.read(),
+		publicReader2.read(),
+	]);
+	const [publicTail1, publicTail2] = await Promise.all([
+		publicReader1.read(),
+		publicReader2.read(),
+	]);
+	const [publicDone1, publicDone2] = await Promise.all([
+		publicReader1.read(),
+		publicReader2.read(),
+	]);
+	check(
+		"public tee fans out ordered chunks",
+		Array.isArray(publicBranches) &&
+			publicBranches.length === 2 &&
+			publicBranches[0] instanceof ReadableStream &&
+			publicBranches[1] instanceof ReadableStream &&
+			publicTeeSource.locked &&
+			publicFirst1.value === sharedChunk &&
+			publicFirst2.value === sharedChunk &&
+			publicTail1.value === "tail" &&
+			publicTail2.value === "tail" &&
+			publicDone1.done &&
+			publicDone2.done,
+	);
+	const lockedTeeSource = new ReadableStream();
+	lockedTeeSource.getReader();
+	let lockedTeeThrows = false;
+	try {
+		lockedTeeSource.tee();
+	} catch (error) {
+		lockedTeeThrows = error instanceof TypeError;
+	}
+	check("public tee rejects locked sources", lockedTeeThrows);
+
+	let publicCancelReasons;
+	const publicCancelSource = new ReadableStream({
+		cancel(reasons) {
+			publicCancelReasons = reasons;
+		},
+	});
+	const [publicCancelBranch1, publicCancelBranch2] = publicCancelSource.tee();
+	const publicCancel1 = publicCancelBranch1.cancel("left");
+	let publicCancel1Settled = false;
+	publicCancel1.then(() => {
+		publicCancel1Settled = true;
+	});
+	await tick();
+	const publicCancel1StayedPending = !publicCancel1Settled;
+	const publicCancel2 = publicCancelBranch2.cancel("right");
+	await Promise.all([publicCancel1, publicCancel2]);
+	check(
+		"public tee combines cancellation reasons",
+		publicCancel1StayedPending &&
+			publicCancelReasons[0] === "left" &&
+			publicCancelReasons[1] === "right",
+	);
 }
 
 run().then(
