@@ -231,6 +231,29 @@ async function run() {
 		await rejectsTypeError(new Response(null).formData()),
 	);
 
+	const passthroughStream = new ReadableStream();
+	const streamResponse = new Response(passthroughStream);
+	check(
+		"Response accepts an undisturbed ReadableStream BodyInit",
+		streamResponse.body === passthroughStream &&
+			streamResponse.headers.get("content-type") === null &&
+			!streamResponse.bodyUsed,
+	);
+	check(
+		"streaming Body conversion fails asynchronously until stream reads land",
+		(await rejectsTypeError(streamResponse.text())) && !streamResponse.bodyUsed,
+	);
+	const lockedStream = new ReadableStream();
+	const lockedStreamReader = lockedStream.getReader();
+	let lockedBodyThrows = false;
+	try {
+		new Response(lockedStream);
+	} catch (error) {
+		lockedBodyThrows = error instanceof TypeError;
+	}
+	lockedStreamReader.releaseLock();
+	check("Response rejects a locked ReadableStream BodyInit", lockedBodyThrows);
+
 	const canceled = new Response("cancel me");
 	await canceled.body.cancel("unused");
 	check("stream cancel disturbs body", canceled.bodyUsed);

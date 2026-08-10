@@ -753,10 +753,9 @@ static bool mal_fetch_body_from_value(MalValue value, MalFetchBody *body) {
 }
 
 static MalValue mal_fetch_body_stream(MalVm *vm, MalValue owner, MalFetchBody *body) {
-    if (body->bytes == nullptr) {
-        return mal_value_new_null();
-    }
-    if (mal_value_is_undefined(*body->stream)) {
+    if (!mal_value_is_undefined(*body->stream)) return *body->stream;
+    if (body->bytes == nullptr) return mal_value_new_null();
+    {
         MalRootSpan span;
         mal_gc_root(&span, &owner, 1);
         MalValue stream =
@@ -773,9 +772,7 @@ static MalValue mal_fetch_body_stream(MalVm *vm, MalValue owner, MalFetchBody *b
 }
 
 static bool mal_fetch_body_begin(MalVm *vm, MalValue owner, MalFetchBody *body) {
-    if (body->bytes == nullptr) {
-        return true;
-    }
+    if (body->bytes == nullptr && mal_value_is_undefined(*body->stream)) return true;
     MalValue stream = mal_fetch_body_stream(vm, owner, body);
     return mal_readable_stream_consume(vm, stream);
 }
@@ -861,14 +858,15 @@ static MalValue mal_response_constructor(
     (void) callee;
 
     i32 status = 200;
-    MalValue roots[4] = {
+    MalValue roots[5] = {
         mal_value_new_undefined(),
         mal_value_new_undefined(),
         mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0)),
         mal_value_new_undefined(),
+        mal_value_new_undefined(),
     };
     MalRootSpan rs;
-    mal_gc_root(&rs, roots, 4);
+    mal_gc_root(&rs, roots, 5);
     byte *body = nullptr;
     MalResponseObject *response = nullptr;
     const char *content_type = nullptr;
@@ -906,12 +904,16 @@ static MalValue mal_response_constructor(
     usize body_len = 0;
     const byte *src_bytes;
     usize src_len;
+    bool has_body = arg_count >= 1 && !mal_value_is_nil(args[0]);
     if (arg_count >= 1 && mal_value_is_readable_stream_object(args[0])) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "ReadableStream BodyInit is not supported yet");
-        goto response_error;
-    }
-    if (arg_count >= 1 && mal_fetch_is_form_data(args[0])) {
+        if (mal_readable_stream_is_locked(args[0])
+            || mal_readable_stream_is_disturbed(args[0])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "ReadableStream BodyInit is locked or disturbed");
+            goto response_error;
+        }
+        roots[4] = args[0];
+    } else if (arg_count >= 1 && mal_fetch_is_form_data(args[0])) {
         body = mal_form_data_serialize(
             vm, mal_fetch_to_form_data(args[0]), &body_len);
         if (body == nullptr) goto response_error;
@@ -960,7 +962,7 @@ static MalValue mal_response_constructor(
                 : "text/plain;charset=UTF-8";
         }
     }
-    if (body != nullptr && (status == 204 || status == 205 || status == 304)) {
+    if (has_body && (status == 204 || status == 205 || status == 304)) {
         free(body);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Response status cannot have a body");
@@ -975,6 +977,10 @@ static MalValue mal_response_constructor(
     }
     response = mal_response_object_new(&vm->heap, proto, status, body, body_len);
     roots[1] = mal_value_from_response_object(response);
+    if (!mal_value_is_undefined(roots[4])) {
+        response->body_stream = roots[4];
+        mal_gc_card(&response->object.header, roots[4]);
+    }
     if (!mal_fetch_response_headers(vm, roots[0], &response->headers, &roots[3])) {
         goto response_error;
     }
@@ -1669,8 +1675,7 @@ static MalValue mal_fetch_body_get_used(
             "Body getter called on incompatible receiver");
         return mal_value_new_undefined();
     }
-    return mal_value_new_boolean(body.bytes != nullptr &&
-        !mal_value_is_undefined(*body.stream) &&
+    return mal_value_new_boolean(!mal_value_is_undefined(*body.stream) &&
         mal_readable_stream_is_disturbed(*body.stream));
 }
 
@@ -1683,6 +1688,13 @@ static MalValue mal_fetch_body_method_for(
     bool response, MalNativeFunctionCallback callback) {
     if (!mal_fetch_body_has_brand(self, response)) {
         return mal_fetch_reject_type_error(vm);
+    }
+    MalFetchBody body;
+    if (mal_fetch_body_from_value(self, &body)
+        && body.bytes == nullptr && !mal_value_is_undefined(*body.stream)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Consuming a streaming Body is not supported yet");
+        return mal_fetch_reject_completion(vm);
     }
     return callback(vm, self, args, argc, nt, callee);
 }
