@@ -410,27 +410,27 @@
     }
   },
   "selfCompile": {
-    "maligatorMs": 80282.298959,
-    "nodeMs": 11203.217125,
+    "maligatorMs": 78357.791125,
+    "nodeMs": 11052.215166,
     "maligatorPhases": {
-      "graphMs": 387,
-      "semanticMs": 863,
-      "compileToIrMs": 318,
-      "optimizeMs": 72929,
-      "regallocMs": 2399,
-      "lowerMs": 1468,
-      "emitMs": 1781,
-      "writeMs": 72
+      "graphMs": 368,
+      "semanticMs": 836,
+      "compileToIrMs": 309,
+      "optimizeMs": 71289,
+      "regallocMs": 2335,
+      "lowerMs": 1434,
+      "emitMs": 1724,
+      "writeMs": 53
     },
     "nodePhases": {
-      "graphMs": 86,
-      "semanticMs": 134,
-      "compileToIrMs": 87,
-      "optimizeMs": 9800,
-      "regallocMs": 378,
-      "lowerMs": 194,
-      "emitMs": 296,
-      "writeMs": 30
+      "graphMs": 83,
+      "semanticMs": 135,
+      "compileToIrMs": 86,
+      "optimizeMs": 9748,
+      "regallocMs": 376,
+      "lowerMs": 191,
+      "emitMs": 292,
+      "writeMs": 19
     },
     "runs": 3,
     "units": 15,
