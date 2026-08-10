@@ -111,6 +111,18 @@ async function run() {
 			bytesResponse.bodyUsed,
 	);
 
+	const blobResponse = new Response("blob text", {
+		headers: { "Content-Type": "text/custom" },
+	});
+	const blob = await blobResponse.blob();
+	check(
+		"blob snapshots MIME and text",
+		blob.type === "text/custom" &&
+			(await blob.text()) === "blob text" &&
+			blobResponse.bodyUsed,
+	);
+	check("blob consumption is one-shot", await rejectsTypeError(blobResponse.blob()));
+
 	const canceled = new Response("cancel me");
 	await canceled.body.cancel("unused");
 	check("stream cancel disturbs body", canceled.bodyUsed);
@@ -139,6 +151,14 @@ async function run() {
 			(await nullBody.text()) === "" &&
 			(await nullBody.arrayBuffer()).byteLength === 0 &&
 			nullBody.bodyUsed === false,
+	);
+	const emptyBlob = await nullBody.blob();
+	check(
+		"null body blob remains repeatable",
+		emptyBlob.type === "" &&
+			(await emptyBlob.text()) === "" &&
+			(await nullBody.blob()).type === "" &&
+			!nullBody.bodyUsed,
 	);
 	check(
 		"null JSON rejects without disturbance",
@@ -190,6 +210,15 @@ async function run() {
 	check(
 		"init body does not disturb the source",
 		!overrideSource.bodyUsed && (await overridden.text()) === "override",
+	);
+	const dictionarySource = new Request("https://example.com/", {
+		method: "POST",
+		body: "dictionary",
+	});
+	const dictionaryCopy = new Request("https://example.com/", dictionarySource);
+	check(
+		"RequestInit copies a Request byte stream",
+		!dictionarySource.bodyUsed && (await dictionaryCopy.text()) === "dictionary",
 	);
 	check(
 		"Response methods reject Request receivers",

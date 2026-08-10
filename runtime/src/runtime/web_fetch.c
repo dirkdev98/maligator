@@ -627,6 +627,82 @@ static MalValue mal_fetch_body_method_json(
     return result;
 }
 
+static MalValue mal_fetch_blob_text(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    if (!mal_value_is_object(self)) return mal_fetch_reject_type_error(vm);
+    MalValue text;
+    if (!mal_vm_get_property(vm, self,
+            mal_intrinsic_string_key(vm, (const byte *) "__mal_blob_text"), &text)
+        || !mal_value_is_string(text)) {
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_fetch_reject_completion(vm);
+        }
+        return mal_fetch_reject_type_error(vm);
+    }
+    return mal_fetch_resolve(vm, text);
+}
+
+static MalValue mal_fetch_body_content_type(MalVm *vm, MalValue self) {
+    MalValue headers = mal_value_is_response_object(self)
+        ? mal_value_to_response_object(self)->headers
+        : mal_value_to_request_object(self)->headers;
+    if (mal_value_is_headers_object(headers)) {
+        MalHeadersObject *object = mal_value_to_headers_object(headers);
+        for (i32 i = 0; i < object->count; i++) {
+            if (mal_fetch_name_is(object->entries[i].name, "content-type")) {
+                return mal_value_from_string(object->entries[i].value);
+            }
+        }
+    }
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
+}
+
+/* The W2 Body conversion lands before Blob's constructor/storage surface. Keep
+ * the returned object deliberately small but semantically useful: MIME type and
+ * UTF-8 text are snapshotted, and text() retains its asynchronous contract. */
+static MalValue mal_fetch_body_method_blob(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalFetchBody body;
+    if (!mal_fetch_body_from_value(self, &body)) {
+        return mal_fetch_reject_type_error(vm);
+    }
+    if (!mal_fetch_body_begin(vm, self, &body)) {
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_fetch_reject_completion(vm);
+        }
+        return mal_fetch_reject_type_error(vm);
+    }
+    MalValue roots[3] = {
+        mal_fetch_body_string(vm, &body),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_fetch_reject_completion(vm);
+    }
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    roots[1] = mal_fetch_body_content_type(vm, self);
+    MalObject *blob = mal_intrinsic_new_object(vm);
+    roots[2] = mal_value_from_object(blob);
+    mal_intrinsic_define_data(vm, blob, (const byte *) "__mal_blob_text",
+        roots[0], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, blob, (const byte *) "type",
+        roots[1], MAL_PROPERTY_ENUMERABLE);
+    mal_intrinsic_define_method_n(vm, blob, (const byte *) "text", 0, mal_fetch_blob_text);
+    MalValue result = mal_fetch_resolve(vm, roots[2]);
+    mal_gc_unroot(&span);
+    return result;
+}
+
 static MalValue mal_response_get_status(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args;
@@ -799,8 +875,8 @@ static MalValue mal_fetch_body_method_unimplemented(
     (void) argc;
     (void) nt;
     (void) callee;
-    // Blob and FormData are part of the Body mixin surface even before their W2
-    // platform objects land. Keep the method contract and reject asynchronously.
+    // FormData is part of the Body mixin surface before its W2 platform object
+    // lands. Keep the method contract and reject asynchronously.
     return mal_fetch_reject_type_error(vm);
 }
 
@@ -824,7 +900,7 @@ MAL_FETCH_BODY_METHOD_WRAPPER(
     mal_response_body, true, array_buffer, mal_fetch_body_method_array_buffer)
 MAL_FETCH_BODY_METHOD_WRAPPER(mal_response_body, true, bytes, mal_fetch_body_method_bytes)
 MAL_FETCH_BODY_METHOD_WRAPPER(
-    mal_response_body, true, blob, mal_fetch_body_method_unimplemented)
+    mal_response_body, true, blob, mal_fetch_body_method_blob)
 MAL_FETCH_BODY_METHOD_WRAPPER(
     mal_response_body, true, form_data, mal_fetch_body_method_unimplemented)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_response_body, true, get_body, mal_fetch_body_get_body)
@@ -836,7 +912,7 @@ MAL_FETCH_BODY_METHOD_WRAPPER(
     mal_request_body, false, array_buffer, mal_fetch_body_method_array_buffer)
 MAL_FETCH_BODY_METHOD_WRAPPER(mal_request_body, false, bytes, mal_fetch_body_method_bytes)
 MAL_FETCH_BODY_METHOD_WRAPPER(
-    mal_request_body, false, blob, mal_fetch_body_method_unimplemented)
+    mal_request_body, false, blob, mal_fetch_body_method_blob)
 MAL_FETCH_BODY_METHOD_WRAPPER(
     mal_request_body, false, form_data, mal_fetch_body_method_unimplemented)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_request_body, false, get_body, mal_fetch_body_get_body)
@@ -1423,11 +1499,29 @@ static MalValue mal_request_constructor(
         }
     }
 
-    // A body from init (string or BufferSource) replaces any copied body.
+    // A body from init replaces any copied body. A Request used as the init
+    // dictionary exposes its byte-backed body through the Body stream getter;
+    // preserve those bytes without broadening support to arbitrary streams yet.
     if (mal_value_is_readable_stream_object(slots[4])) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "ReadableStream BodyInit is not supported yet");
-        goto request_error;
+        MalRequestObject *body_source = argc >= 2 && mal_value_is_request_object(args[1])
+            ? mal_value_to_request_object(args[1]) : nullptr;
+        if (body_source == nullptr || body_source->body == nullptr
+            || !mal_ops_same_value(body_source->body_stream, slots[4])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Arbitrary ReadableStream BodyInit is not supported yet");
+            goto request_error;
+        }
+        free(r->body);
+        r->body = malloc(body_source->body_len == 0 ? 1 : body_source->body_len);
+        if (r->body == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Request body allocation failed");
+            goto request_error;
+        }
+        if (body_source->body_len > 0) {
+            memcpy(r->body, body_source->body, body_source->body_len);
+        }
+        r->body_len = body_source->body_len;
     } else if (mal_value_is_string(slots[4])) {
         MalString *bs = mal_value_to_string(slots[4]);
         free(r->body);
