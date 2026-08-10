@@ -1069,6 +1069,116 @@ static bool mal_fetch_normalize_method(MalVm *vm, MalString *method, MalValue *o
     return true;
 }
 
+static bool mal_fetch_request_url(MalVm *vm, MalString *url) {
+    const c16 *units = mal_string_code_units(url);
+    usize length = mal_string_length(url);
+    bool absolute_authority = false;
+    for (usize i = 0; i + 2 < length; i++) {
+        if (units[i] == ':' && units[i + 1] == '/' && units[i + 2] == '/') {
+            absolute_authority = true;
+            break;
+        }
+    }
+    // Maligator's server-main Request accepts application-relative targets because
+    // it has no ambient document base. Absolute authority URLs still use the shared
+    // WHATWG parser and must not contain credentials.
+    if (!absolute_authority) return true;
+    void *handle = mal_url_parse(units, length, nullptr, 0, false);
+    if (handle == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Request input is not a valid URL");
+        return false;
+    }
+    bool credentials = mal_url_username(handle, nullptr, 0) > 0
+        || mal_url_password(handle, nullptr, 0) > 0;
+    mal_url_free(handle);
+    if (credentials) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Request input URL cannot contain credentials");
+        return false;
+    }
+    return true;
+}
+
+static bool mal_fetch_request_init_enum(MalVm *vm, MalValue init, const char *name,
+    const char *const *values, usize value_count, i32 *selected) {
+    *selected = -1;
+    MalValue value;
+    if (!mal_vm_get_property(vm, init,
+            mal_intrinsic_string_key(vm, (const byte *) name), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    for (usize i = 0; i < value_count; i++) {
+        if (mal_string_equals_ascii(string, values[i])) {
+            *selected = (i32) i;
+            return true;
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "RequestInit member is not a valid enum value");
+    return false;
+}
+
+static bool mal_fetch_validate_request_init(MalVm *vm, MalValue init, i32 *mode_out) {
+    *mode_out = -1;
+    MalValue value;
+    if (!mal_vm_get_property(vm, init,
+            mal_intrinsic_string_key(vm, (const byte *) "window"), &value)) {
+        return false;
+    }
+    if (!mal_value_is_nil(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "RequestInit.window must be null");
+        return false;
+    }
+
+    if (!mal_vm_get_property(vm, init,
+            mal_intrinsic_string_key(vm, (const byte *) "referrer"), &value)) {
+        return false;
+    }
+    if (!mal_value_is_undefined(value)) {
+        MalString *referrer;
+        if (!mal_vm_to_string(vm, value, &referrer)
+            || !mal_fetch_request_url(vm, referrer)) {
+            return false;
+        }
+    }
+
+    static const char *const referrer_policies[] = {"", "no-referrer",
+        "no-referrer-when-downgrade", "origin", "origin-when-cross-origin",
+        "same-origin", "strict-origin", "strict-origin-when-cross-origin", "unsafe-url"};
+    static const char *const modes[] = {"same-origin", "no-cors", "cors"};
+    static const char *const credentials[] = {"omit", "same-origin", "include"};
+    static const char *const caches[] = {
+        "default", "no-store", "reload", "no-cache", "force-cache", "only-if-cached"};
+    static const char *const redirects[] = {"follow", "error", "manual"};
+    i32 ignored;
+    i32 mode;
+    i32 cache;
+    if (!mal_fetch_request_init_enum(vm, init, "referrerPolicy", referrer_policies,
+            sizeof(referrer_policies) / sizeof(referrer_policies[0]), &ignored)
+        || !mal_fetch_request_init_enum(
+            vm, init, "mode", modes, sizeof(modes) / sizeof(modes[0]), &mode)
+        || !mal_fetch_request_init_enum(vm, init, "credentials", credentials,
+            sizeof(credentials) / sizeof(credentials[0]), &ignored)
+        || !mal_fetch_request_init_enum(
+            vm, init, "cache", caches, sizeof(caches) / sizeof(caches[0]), &cache)
+        || !mal_fetch_request_init_enum(vm, init, "redirect", redirects,
+            sizeof(redirects) / sizeof(redirects[0]), &ignored)) {
+        return false;
+    }
+    if (cache == 5 && mode != 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "RequestInit.cache only-if-cached requires same-origin mode");
+        return false;
+    }
+    *mode_out = mode;
+    return true;
+}
+
 /* `new Request(input, init?)`: input is a URL string or another Request (copied);
  * init overrides method / headers / body. method/url/headers are own properties,
  * the body is stored as raw bytes (like a server-built Request). */
@@ -1076,12 +1186,15 @@ static MalValue mal_request_constructor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) this_value;
     (void) callee;
+    if (!mal_value_is_object(nt)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Request constructor requires new");
+        return mal_value_new_undefined();
+    }
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REQUEST_PROTOTYPE]);
-    if (mal_value_is_object(nt)) {
-        MalValue p = mal_vm_function_prototype(vm, nt);
-        if (mal_value_is_object(p)) {
-            proto = mal_value_to_object(p);
-        }
+    MalValue p = mal_vm_function_prototype(vm, nt);
+    if (mal_value_is_object(p)) {
+        proto = mal_value_to_object(p);
     }
     MalRequestObject *r = mal_request_object_new(&vm->heap, proto);
     // Root the instance + the transient method/url/headers/body values across the
@@ -1098,6 +1211,7 @@ static MalValue mal_request_constructor(
     MalRequestObject *source_request = nullptr;
     bool body_override = false;
     const char *content_type = nullptr;
+    i32 request_mode = -1;
 
     if (argc >= 1 && mal_value_is_request_object(args[0])) {
         MalRequestObject *src = mal_value_to_request_object(args[0]);
@@ -1126,11 +1240,14 @@ static MalValue mal_request_constructor(
         }
     } else if (argc >= 1 && !mal_value_is_undefined(args[0])) {
         MalString *u;
-        if (!mal_vm_to_string(vm, args[0], &u)) goto request_error;
+        if (!mal_vm_to_string(vm, args[0], &u) || !mal_fetch_request_url(vm, u)) {
+            goto request_error;
+        }
         slots[2] = mal_value_from_string(u);
     }
 
     if (argc >= 2 && mal_value_is_object(args[1])) {
+        if (!mal_fetch_validate_request_init(vm, args[1], &request_mode)) goto request_error;
         MalValue v;
         if (!mal_vm_get_property(vm, args[1],
                 mal_intrinsic_string_key(vm, (const byte *) "method"), &v)) goto request_error;
@@ -1198,6 +1315,13 @@ static MalValue mal_request_constructor(
     if (!mal_vm_to_string(vm, slots[1], &method)) goto request_error;
     if (!mal_fetch_normalize_method(vm, method, &slots[1])) goto request_error;
     method = mal_value_to_string(slots[1]);
+    if (request_mode == 1 && !mal_fetch_string_ascii_equal_ci(method, "GET")
+        && !mal_fetch_string_ascii_equal_ci(method, "HEAD")
+        && !mal_fetch_string_ascii_equal_ci(method, "POST")) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "no-cors Request method is not CORS-safelisted");
+        goto request_error;
+    }
     if (r->body != nullptr &&
         (mal_fetch_string_ascii_equal_ci(method, "GET") ||
             mal_fetch_string_ascii_equal_ci(method, "HEAD"))) {

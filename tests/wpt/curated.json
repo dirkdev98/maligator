@@ -228,6 +228,23 @@
 			"includes": []
 		},
 		{
+			"path": "fetch/api/request/request-error.any.js",
+			"sha256": "a87987c0049c2d22b5c1d8fda09f7f6add2db55aed8a7d14001bcadc011c7524",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Request error" },
+				{ "name": "script", "value": "request-error.js" }
+			],
+			"includes": [
+				{
+					"path": "fetch/api/request/request-error.js",
+					"sha256": "6e8cda90613eb7da52862ca4463f3842ad34b39c9ebe30df5cb8afcfd102c762"
+				}
+			]
+		},
+		{
 			"path": "fetch/api/response/response-error.any.js",
 			"sha256": "f5c0863dd92f0e973c4fda128ec9d869cf36a226bd891f387e3faa01e29389cd",
 			"target": "server-main",
