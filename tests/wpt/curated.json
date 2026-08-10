@@ -556,6 +556,22 @@
 			"includes": []
 		},
 		{
+			"path": "streams/readable-streams/default-reader.any.js",
+			"sha256": "97061c83a2371d0a48244f4d81a80046e178c0d88fd3cb23daac26d23221681c",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/rs-utils.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/rs-utils.js",
+					"sha256": "e4ac017aecf1eb2f83b0f22ece95998fec7d42a6de1d94fa1497351369bec04b"
+				}
+			]
+		},
+		{
 			"path": "streams/readable-streams/floating-point-total-queue-size.any.js",
 			"sha256": "7e7e4d0767702c23de523e0e58d17cf997d12ced0f5836cf7930ec320243f560",
 			"target": "server-main",
