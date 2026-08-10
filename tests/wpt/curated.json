@@ -345,6 +345,14 @@
 			]
 		},
 		{
+			"path": "fetch/api/response/response-init-contenttype.any.js",
+			"sha256": "0812b00fb59a414652e82cea3b9f858204edb4646f6d9cb724a87c375fd3898e",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
 			"path": "fetch/api/response/response-static-error.any.js",
 			"sha256": "d55c1c97d9db34123e02a73b44965e31bb638b75ef38cbaf1fe01b0050c49355",
 			"target": "server-main",
