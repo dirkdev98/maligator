@@ -858,6 +858,11 @@ function assert_approx_equals(actual, expected, epsilon, message) {
     __wpt_fail((message ? message + ": " : "") + "expected " + String(actual) + " to be within " + String(epsilon) + " of " + String(expected));
   }
 }
+function assert_greater_than(actual, expected, message) {
+  if (typeof actual !== "number" || typeof expected !== "number" || !(actual > expected)) {
+    __wpt_fail((message ? message + ": " : "") + "expected " + String(actual) + " to be greater than " + String(expected));
+  }
+}
 function assert_array_equals(actual, expected, message) {
   if (actual.length !== expected.length) __wpt_fail((message ? message + ": " : "") + "array lengths differ");
   for (var i = 0; i < expected.length; i++) assert_equals(actual[i], expected[i], message || "array item " + i);

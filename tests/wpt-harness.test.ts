@@ -420,7 +420,7 @@ describe("curated WPT harness", () => {
 
 	it("supports approximate numeric assertions", () => {
 		const parsed = runProgram(
-			"test(function() { assert_approx_equals(10.25, 10, 0.25); }, 'approx');",
+			"test(function() { assert_approx_equals(10.25, 10, 0.25); assert_greater_than(3, 2); }, 'numeric');",
 		);
 		expect(parsed.subtests).toMatchObject([{ status: "PASS" }]);
 	});
