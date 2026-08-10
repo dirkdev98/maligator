@@ -256,6 +256,17 @@
 			"includes": []
 		},
 		{
+			"path": "fetch/api/request/request-structure.any.js",
+			"sha256": "26cde26a2993ef04ca1c97ace296720c770838c752cfd7c4ea67e63e4868ab61",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "title", "value": "Request structure" }
+			],
+			"includes": []
+		},
+		{
 			"path": "fetch/api/response/response-error.any.js",
 			"sha256": "f5c0863dd92f0e973c4fda128ec9d869cf36a226bd891f387e3faa01e29389cd",
 			"target": "server-main",

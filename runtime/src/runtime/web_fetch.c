@@ -751,6 +751,18 @@ static MalValue mal_fetch_body_getter_for(
     return callback(vm, self, args, argc, nt, callee);
 }
 
+static MalValue mal_fetch_body_method_unimplemented(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    // Blob and FormData are part of the Body mixin surface even before their W2
+    // platform objects land. Keep the method contract and reject asynchronously.
+    return mal_fetch_reject_type_error(vm);
+}
+
 #define MAL_FETCH_BODY_METHOD_WRAPPER(prefix, response_brand, suffix, callback) \
     static MalValue prefix##_##suffix( \
         MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) { \
@@ -770,6 +782,10 @@ MAL_FETCH_BODY_METHOD_WRAPPER(mal_response_body, true, json, mal_fetch_body_meth
 MAL_FETCH_BODY_METHOD_WRAPPER(
     mal_response_body, true, array_buffer, mal_fetch_body_method_array_buffer)
 MAL_FETCH_BODY_METHOD_WRAPPER(mal_response_body, true, bytes, mal_fetch_body_method_bytes)
+MAL_FETCH_BODY_METHOD_WRAPPER(
+    mal_response_body, true, blob, mal_fetch_body_method_unimplemented)
+MAL_FETCH_BODY_METHOD_WRAPPER(
+    mal_response_body, true, form_data, mal_fetch_body_method_unimplemented)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_response_body, true, get_body, mal_fetch_body_get_body)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_response_body, true, get_used, mal_fetch_body_get_used)
 
@@ -778,6 +794,10 @@ MAL_FETCH_BODY_METHOD_WRAPPER(mal_request_body, false, json, mal_fetch_body_meth
 MAL_FETCH_BODY_METHOD_WRAPPER(
     mal_request_body, false, array_buffer, mal_fetch_body_method_array_buffer)
 MAL_FETCH_BODY_METHOD_WRAPPER(mal_request_body, false, bytes, mal_fetch_body_method_bytes)
+MAL_FETCH_BODY_METHOD_WRAPPER(
+    mal_request_body, false, blob, mal_fetch_body_method_unimplemented)
+MAL_FETCH_BODY_METHOD_WRAPPER(
+    mal_request_body, false, form_data, mal_fetch_body_method_unimplemented)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_request_body, false, get_body, mal_fetch_body_get_body)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_request_body, false, get_used, mal_fetch_body_get_used)
 
@@ -794,6 +814,35 @@ static void mal_fetch_define_getter(
         .getter = mal_value_from_native_function_object(
             mal_native_function_object_new(&vm->heap, fn_proto, mal_intrinsic_ascii(vm, name), getter)),
         .setter = mal_value_new_undefined(),
+    };
+    mal_object_define_own(proto, mal_intrinsic_string_key(vm, name), &desc);
+}
+
+static MalValue mal_fetch_readonly_setter(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm;
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_new_undefined();
+}
+
+/* Maligator currently reports failed [[Set]] operations even for sloppy source.
+ * A no-op Web IDL setter preserves readonly attribute behavior without turning a
+ * harmless assignment into an exception. */
+static void mal_fetch_define_readonly_getter(
+    MalVm *vm, MalObject *proto, const byte *name, MalNativeFunctionCallback getter) {
+    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalPropertyDesc desc = {
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = mal_value_new_undefined(),
+        .getter = mal_value_from_native_function_object(
+            mal_native_function_object_new(&vm->heap, fn_proto, mal_intrinsic_ascii(vm, name), getter)),
+        .setter = mal_value_from_native_function_object(
+            mal_native_function_object_new(&vm->heap, fn_proto, mal_intrinsic_ascii(vm, name),
+                mal_fetch_readonly_setter)),
     };
     mal_object_define_own(proto, mal_intrinsic_string_key(vm, name), &desc);
 }
@@ -990,6 +1039,16 @@ MalRequestObject *mal_request_object_new(MalHeap *heap, MalObject *prototype) {
     r->body = nullptr;
     r->body_len = 0;
     r->body_stream = mal_value_new_undefined();
+    r->method = mal_value_new_undefined();
+    r->url = mal_value_new_undefined();
+    r->headers = mal_value_new_undefined();
+    r->referrer = mal_value_new_undefined();
+    r->referrer_policy = mal_value_new_undefined();
+    r->mode = mal_value_new_undefined();
+    r->credentials = mal_value_new_undefined();
+    r->cache = mal_value_new_undefined();
+    r->redirect = mal_value_new_undefined();
+    r->integrity = mal_value_new_undefined();
     return r;
 }
 
@@ -1002,7 +1061,18 @@ static void mal_request_finalize(MalHeapHeader *cell) {
 }
 
 static void mal_request_trace(MalHeapHeader *cell) {
-    mal_gc_mark_value(((MalRequestObject *) cell)->body_stream);
+    MalRequestObject *request = (MalRequestObject *) cell;
+    mal_gc_mark_value(request->body_stream);
+    mal_gc_mark_value(request->method);
+    mal_gc_mark_value(request->url);
+    mal_gc_mark_value(request->headers);
+    mal_gc_mark_value(request->referrer);
+    mal_gc_mark_value(request->referrer_policy);
+    mal_gc_mark_value(request->mode);
+    mal_gc_mark_value(request->credentials);
+    mal_gc_mark_value(request->cache);
+    mal_gc_mark_value(request->redirect);
+    mal_gc_mark_value(request->integrity);
 }
 
 static bool mal_fetch_method_token_unit(c16 unit) {
@@ -1101,8 +1171,7 @@ static bool mal_fetch_request_url(MalVm *vm, MalString *url) {
 }
 
 static bool mal_fetch_request_init_enum(MalVm *vm, MalValue init, const char *name,
-    const char *const *values, usize value_count, i32 *selected) {
-    *selected = -1;
+    const char *const *values, usize value_count, i32 *selected, MalValue *out) {
     MalValue value;
     if (!mal_vm_get_property(vm, init,
             mal_intrinsic_string_key(vm, (const byte *) name), &value)) {
@@ -1114,6 +1183,7 @@ static bool mal_fetch_request_init_enum(MalVm *vm, MalValue init, const char *na
     for (usize i = 0; i < value_count; i++) {
         if (mal_string_equals_ascii(string, values[i])) {
             *selected = (i32) i;
+            *out = mal_value_from_string(string);
             return true;
         }
     }
@@ -1122,8 +1192,18 @@ static bool mal_fetch_request_init_enum(MalVm *vm, MalValue init, const char *na
     return false;
 }
 
-static bool mal_fetch_validate_request_init(MalVm *vm, MalValue init, i32 *mode_out) {
-    *mode_out = -1;
+enum {
+    MAL_REQUEST_INIT_REFERRER,
+    MAL_REQUEST_INIT_REFERRER_POLICY,
+    MAL_REQUEST_INIT_MODE,
+    MAL_REQUEST_INIT_CREDENTIALS,
+    MAL_REQUEST_INIT_CACHE,
+    MAL_REQUEST_INIT_REDIRECT,
+    MAL_REQUEST_INIT_INTEGRITY,
+};
+
+static bool mal_fetch_validate_request_init(MalVm *vm, MalValue init,
+    MalValue *fields, i32 *mode, i32 *cache) {
     MalValue value;
     if (!mal_vm_get_property(vm, init,
             mal_intrinsic_string_key(vm, (const byte *) "window"), &value)) {
@@ -1145,6 +1225,7 @@ static bool mal_fetch_validate_request_init(MalVm *vm, MalValue init, i32 *mode_
             || !mal_fetch_request_url(vm, referrer)) {
             return false;
         }
+        fields[MAL_REQUEST_INIT_REFERRER] = mal_value_from_string(referrer);
     }
 
     static const char *const referrer_policies[] = {"", "no-referrer",
@@ -1155,33 +1236,45 @@ static bool mal_fetch_validate_request_init(MalVm *vm, MalValue init, i32 *mode_
     static const char *const caches[] = {
         "default", "no-store", "reload", "no-cache", "force-cache", "only-if-cached"};
     static const char *const redirects[] = {"follow", "error", "manual"};
-    i32 ignored;
-    i32 mode;
-    i32 cache;
+    i32 selected = -1;
     if (!mal_fetch_request_init_enum(vm, init, "referrerPolicy", referrer_policies,
-            sizeof(referrer_policies) / sizeof(referrer_policies[0]), &ignored)
+            sizeof(referrer_policies) / sizeof(referrer_policies[0]), &selected,
+            &fields[MAL_REQUEST_INIT_REFERRER_POLICY])
         || !mal_fetch_request_init_enum(
-            vm, init, "mode", modes, sizeof(modes) / sizeof(modes[0]), &mode)
+            vm, init, "mode", modes, sizeof(modes) / sizeof(modes[0]), mode,
+            &fields[MAL_REQUEST_INIT_MODE])
         || !mal_fetch_request_init_enum(vm, init, "credentials", credentials,
-            sizeof(credentials) / sizeof(credentials[0]), &ignored)
+            sizeof(credentials) / sizeof(credentials[0]), &selected,
+            &fields[MAL_REQUEST_INIT_CREDENTIALS])
         || !mal_fetch_request_init_enum(
-            vm, init, "cache", caches, sizeof(caches) / sizeof(caches[0]), &cache)
+            vm, init, "cache", caches, sizeof(caches) / sizeof(caches[0]), cache,
+            &fields[MAL_REQUEST_INIT_CACHE])
         || !mal_fetch_request_init_enum(vm, init, "redirect", redirects,
-            sizeof(redirects) / sizeof(redirects[0]), &ignored)) {
+            sizeof(redirects) / sizeof(redirects[0]), &selected,
+            &fields[MAL_REQUEST_INIT_REDIRECT])) {
         return false;
     }
-    if (cache == 5 && mode != 0) {
+
+    if (!mal_vm_get_property(vm, init,
+            mal_intrinsic_string_key(vm, (const byte *) "integrity"), &value)) {
+        return false;
+    }
+    if (!mal_value_is_undefined(value)) {
+        MalString *integrity;
+        if (!mal_vm_to_string(vm, value, &integrity)) return false;
+        fields[MAL_REQUEST_INIT_INTEGRITY] = mal_value_from_string(integrity);
+    }
+
+    if (*cache == 5 && *mode != 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "RequestInit.cache only-if-cached requires same-origin mode");
         return false;
     }
-    *mode_out = mode;
     return true;
 }
 
 /* `new Request(input, init?)`: input is a URL string or another Request (copied);
- * init overrides method / headers / body. method/url/headers are own properties,
- * the body is stored as raw bytes (like a server-built Request). */
+ * init overrides the Request internal slots and the body remains owned raw bytes. */
 static MalValue mal_request_constructor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) this_value;
@@ -1197,35 +1290,49 @@ static MalValue mal_request_constructor(
         proto = mal_value_to_object(p);
     }
     MalRequestObject *r = mal_request_object_new(&vm->heap, proto);
-    // Root the instance + the transient method/url/headers/body values across the
-    // allocations below (ToString, Headers construction).
-    MalValue slots[6];
+    // Root the instance and every transient Request slot across conversion and
+    // Headers/body allocation.
+    MalValue slots[13];
+    for (usize i = 0; i < sizeof(slots) / sizeof(slots[0]); i++) {
+        slots[i] = mal_value_new_undefined();
+    }
     slots[0] = mal_value_from_request_object(r);
+    MalRootSpan rs;
+    mal_gc_root(&rs, slots, sizeof(slots) / sizeof(slots[0]));
     slots[1] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "GET", 3)); // method
     slots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));    // url
-    slots[3] = mal_value_new_undefined();                                        // headers init
-    slots[4] = mal_value_new_undefined();                                        // body value
-    slots[5] = mal_value_new_undefined();                                        // Headers instance
-    MalRootSpan rs;
-    mal_gc_root(&rs, slots, 6);
+    slots[6] = mal_value_from_string(
+        mal_string_new_ascii(&vm->heap, "about:client", 12)); // referrer
+    slots[7] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0)); // referrerPolicy
+    slots[8] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "cors", 4));
+    slots[9] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "same-origin", 11));
+    slots[10] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "default", 7));
+    slots[11] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "follow", 6));
+    slots[12] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0)); // integrity
     MalRequestObject *source_request = nullptr;
     bool body_override = false;
     const char *content_type = nullptr;
-    i32 request_mode = -1;
+    i32 request_mode = 2;
+    i32 request_cache = 0;
 
     if (argc >= 1 && mal_value_is_request_object(args[0])) {
         MalRequestObject *src = mal_value_to_request_object(args[0]);
         source_request = src;
-        MalValue v;
-        if (!mal_vm_get_property(vm, args[0],
-                mal_intrinsic_string_key(vm, (const byte *) "method"), &v)) goto request_error;
-        slots[1] = v;
-        if (!mal_vm_get_property(vm, args[0],
-                mal_intrinsic_string_key(vm, (const byte *) "url"), &v)) goto request_error;
-        slots[2] = v;
-        if (!mal_vm_get_property(vm, args[0],
-                mal_intrinsic_string_key(vm, (const byte *) "headers"), &v)) goto request_error;
-        slots[3] = v;
+        slots[1] = src->method;
+        slots[2] = src->url;
+        slots[3] = src->headers;
+        slots[6] = src->referrer;
+        slots[7] = src->referrer_policy;
+        slots[8] = src->mode;
+        slots[9] = src->credentials;
+        slots[10] = src->cache;
+        slots[11] = src->redirect;
+        slots[12] = src->integrity;
+        MalString *source_mode = mal_value_to_string(src->mode);
+        request_mode = mal_string_equals_ascii(source_mode, "same-origin") ? 0
+            : mal_string_equals_ascii(source_mode, "no-cors") ? 1 : 2;
+        request_cache = mal_string_equals_ascii(
+            mal_value_to_string(src->cache), "only-if-cached") ? 5 : 0;
         if (src->body != nullptr) {
             r->body = malloc(src->body_len == 0 ? 1 : src->body_len);
             if (r->body == nullptr) {
@@ -1247,7 +1354,10 @@ static MalValue mal_request_constructor(
     }
 
     if (argc >= 2 && mal_value_is_object(args[1])) {
-        if (!mal_fetch_validate_request_init(vm, args[1], &request_mode)) goto request_error;
+        if (!mal_fetch_validate_request_init(
+                vm, args[1], &slots[6], &request_mode, &request_cache)) {
+            goto request_error;
+        }
         MalValue v;
         if (!mal_vm_get_property(vm, args[1],
                 mal_intrinsic_string_key(vm, (const byte *) "method"), &v)) goto request_error;
@@ -1350,10 +1460,20 @@ static MalValue mal_request_constructor(
         }
     }
 
-    mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "method"), slots[1]);
-    mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "url"), slots[2]);
-    mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "headers"),
-        slots[5]);
+    r->method = slots[1];
+    r->url = slots[2];
+    r->headers = slots[5];
+    r->referrer = slots[6];
+    r->referrer_policy = slots[7];
+    r->mode = slots[8];
+    r->credentials = slots[9];
+    r->cache = slots[10];
+    r->redirect = slots[11];
+    r->integrity = slots[12];
+    for (usize i = 1; i < sizeof(slots) / sizeof(slots[0]); i++) {
+        if (i == 3 || i == 4) continue;
+        mal_gc_card(&r->object.header, slots[i]);
+    }
 
     mal_gc_unroot(&rs);
     return slots[0];
@@ -1361,6 +1481,117 @@ static MalValue mal_request_constructor(
 request_error:
     mal_gc_unroot(&rs);
     return mal_value_new_undefined();
+}
+
+static MalRequestObject *mal_request_this_or_throw(MalVm *vm, MalValue self) {
+    if (mal_value_is_request_object(self)) return mal_value_to_request_object(self);
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Request getter called on incompatible receiver");
+    return nullptr;
+}
+
+#define MAL_REQUEST_FIELD_GETTER(name, field) \
+    static MalValue name(MalVm *vm, MalValue self, const MalValue *args, i32 argc, \
+        MalValue nt, MalValue callee) { \
+        (void) args; \
+        (void) argc; \
+        (void) nt; \
+        (void) callee; \
+        MalRequestObject *request = mal_request_this_or_throw(vm, self); \
+        return request == nullptr ? mal_value_new_undefined() : request->field; \
+    }
+
+MAL_REQUEST_FIELD_GETTER(mal_request_get_method, method)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_url, url)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_headers, headers)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_referrer, referrer)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_referrer_policy, referrer_policy)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_mode, mode)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_credentials, credentials)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_cache, cache)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_redirect, redirect)
+MAL_REQUEST_FIELD_GETTER(mal_request_get_integrity, integrity)
+
+#undef MAL_REQUEST_FIELD_GETTER
+
+static MalValue mal_request_constant_getter(
+    MalVm *vm, MalValue self, const byte *value) {
+    if (mal_request_this_or_throw(vm, self) == nullptr) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_intrinsic_ascii(vm, value));
+}
+
+#define MAL_REQUEST_CONSTANT_GETTER(name, value) \
+    static MalValue name(MalVm *vm, MalValue self, const MalValue *args, i32 argc, \
+        MalValue nt, MalValue callee) { \
+        (void) args; \
+        (void) argc; \
+        (void) nt; \
+        (void) callee; \
+        return mal_request_constant_getter(vm, self, (const byte *) value); \
+    }
+
+MAL_REQUEST_CONSTANT_GETTER(mal_request_get_destination, "")
+MAL_REQUEST_CONSTANT_GETTER(mal_request_get_duplex, "half")
+
+#undef MAL_REQUEST_CONSTANT_GETTER
+
+static MalValue mal_request_false_getter(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_request_this_or_throw(vm, self) == nullptr
+        ? mal_value_new_undefined() : mal_value_new_boolean(false);
+}
+
+static MalValue mal_request_clone(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalRequestObject *source = mal_request_this_or_throw(vm, self);
+    if (source == nullptr) return mal_value_new_undefined();
+    if (!mal_value_is_undefined(source->body_stream)
+        && mal_readable_stream_is_disturbed(source->body_stream)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot clone a Request with a used body");
+        return mal_value_new_undefined();
+    }
+
+    MalRequestObject *clone = mal_request_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REQUEST_PROTOTYPE]));
+    MalValue result = mal_value_from_request_object(clone);
+    MalRootSpan rs;
+    mal_gc_root(&rs, &result, 1);
+    if (source->body != nullptr) {
+        clone->body = malloc(source->body_len == 0 ? 1 : source->body_len);
+        if (clone->body == nullptr) {
+            mal_gc_unroot(&rs);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Request body allocation failed");
+            return mal_value_new_undefined();
+        }
+        if (source->body_len > 0) memcpy(clone->body, source->body, source->body_len);
+        clone->body_len = source->body_len;
+    }
+    MalHeadersObject *source_headers = mal_value_to_headers_object(source->headers);
+    clone->headers = mal_value_from_headers_object(
+        mal_headers_from_init_guarded(vm, source->headers, source_headers->guard));
+    clone->method = source->method;
+    clone->url = source->url;
+    clone->referrer = source->referrer;
+    clone->referrer_policy = source->referrer_policy;
+    clone->mode = source->mode;
+    clone->credentials = source->credentials;
+    clone->cache = source->cache;
+    clone->redirect = source->redirect;
+    clone->integrity = source->integrity;
+    mal_gc_unroot(&rs);
+    return result;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1518,6 +1749,15 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     MalValue result = mal_value_from_request_object(r);
     MalRootSpan rs;
     mal_gc_root(&rs, &result, 1);
+    r->referrer = mal_value_from_string(
+        mal_string_new_ascii(&vm->heap, "about:client", 12));
+    r->referrer_policy = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
+    r->mode = mal_value_from_string(mal_string_new_ascii(&vm->heap, "cors", 4));
+    r->credentials = mal_value_from_string(
+        mal_string_new_ascii(&vm->heap, "same-origin", 11));
+    r->cache = mal_value_from_string(mal_string_new_ascii(&vm->heap, "default", 7));
+    r->redirect = mal_value_from_string(mal_string_new_ascii(&vm->heap, "follow", 6));
+    r->integrity = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
     if (req->body_len > 0) {
         r->body = malloc(req->body_len);
         if (r->body == nullptr) {
@@ -1531,8 +1771,7 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     }
 
     MalString *method = mal_string_new_ascii(&vm->heap, req->method, req->method_len);
-    mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "method"),
-        mal_value_from_string(method));
+    r->method = mal_value_from_string(method);
 
     // url = "http://" + Host + request-target (spec wants an absolute URL string).
     // Sized exactly: snprintf reports the untruncated length, so measuring into a
@@ -1562,8 +1801,7 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
     }
     MalString *url = mal_string_new_ascii(&vm->heap, (const byte *) urlbuf, url_len);
     free(urlbuf);
-    mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "url"),
-        mal_value_from_string(url));
+    r->url = mal_value_from_string(url);
 
     // request.headers (a Headers instance built from the parsed headers).
     MalHeadersObject *headers = mal_headers_create(vm);
@@ -1571,8 +1809,7 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
         mal_headers_append_bytes(vm, headers, req->headers[i].name,
             req->headers[i].name_len, req->headers[i].value, req->headers[i].value_len);
     }
-    mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "headers"),
-        mal_value_from_headers_object(headers));
+    r->headers = mal_value_from_headers_object(headers);
 
     mal_gc_unroot(&rs);
     return result;
@@ -2155,6 +2392,9 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_method_n(
         vm, resp_proto, (const byte *) "arrayBuffer", 0, mal_response_body_array_buffer);
     mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "bytes", 0, mal_response_body_bytes);
+    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "blob", 0, mal_response_body_blob);
+    mal_intrinsic_define_method_n(
+        vm, resp_proto, (const byte *) "formData", 0, mal_response_body_form_data);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "body", mal_response_body_get_body);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "bodyUsed", mal_response_body_get_used);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "status", mal_response_get_status);
@@ -2192,11 +2432,43 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "text", 0, mal_request_body_text);
     mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "json", 0, mal_request_body_json);
+    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "clone", 0, mal_request_clone);
     mal_intrinsic_define_method_n(
         vm, req_proto, (const byte *) "arrayBuffer", 0, mal_request_body_array_buffer);
     mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "bytes", 0, mal_request_body_bytes);
-    mal_fetch_define_getter(vm, req_proto, (const byte *) "body", mal_request_body_get_body);
-    mal_fetch_define_getter(vm, req_proto, (const byte *) "bodyUsed", mal_request_body_get_used);
+    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "blob", 0, mal_request_body_blob);
+    mal_intrinsic_define_method_n(
+        vm, req_proto, (const byte *) "formData", 0, mal_request_body_form_data);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "body", mal_request_body_get_body);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "bodyUsed", mal_request_body_get_used);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "method", mal_request_get_method);
+    mal_fetch_define_readonly_getter(vm, req_proto, (const byte *) "url", mal_request_get_url);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "headers", mal_request_get_headers);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "destination", mal_request_get_destination);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "referrer", mal_request_get_referrer);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "referrerPolicy", mal_request_get_referrer_policy);
+    mal_fetch_define_readonly_getter(vm, req_proto, (const byte *) "mode", mal_request_get_mode);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "credentials", mal_request_get_credentials);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "cache", mal_request_get_cache);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "redirect", mal_request_get_redirect);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "integrity", mal_request_get_integrity);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "isReloadNavigation", mal_request_false_getter);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "isHistoryNavigation", mal_request_false_getter);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "duplex", mal_request_get_duplex);
 
     // Headers (constructor + prototype; registers its own GC tracer/finalizer).
     mal_headers_install(vm, global_this);
