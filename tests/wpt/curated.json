@@ -556,6 +556,32 @@
 			]
 		},
 		{
+			"path": "streams/piping/flow-control.any.js",
+			"sha256": "0aaf759d9bffd6ab3bf64aa936f1a2e5e3ba76f3674cd6b36fb1202942bf8003",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/test-utils.js" },
+				{ "name": "script", "value": "../resources/rs-utils.js" },
+				{ "name": "script", "value": "../resources/recording-streams.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				},
+				{
+					"path": "streams/resources/rs-utils.js",
+					"sha256": "e4ac017aecf1eb2f83b0f22ece95998fec7d42a6de1d94fa1497351369bec04b"
+				},
+				{
+					"path": "streams/resources/recording-streams.js",
+					"sha256": "7c90125c056643aa82b07eb00584e5d52ed39778b23adfeac82db2890a4a92ca"
+				}
+			]
+		},
+		{
 			"path": "streams/piping/general.any.js",
 			"sha256": "ebc66303d934b1a3e98cde72eb2d18c7a7f00f9f63bc32b8e0e2b6220578010c",
 			"target": "server-main",
