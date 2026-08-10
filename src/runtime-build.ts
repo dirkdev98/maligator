@@ -91,7 +91,14 @@ interface RuntimeLayout {
 	buildDirectory: string;
 	flags: Array<string>;
 	includeArguments: Array<string>;
+	sqliteIncludeArguments: Array<string>;
 	cacheKey: string;
+}
+
+interface RuntimeSource {
+	name: string;
+	path: string;
+	includeArguments?: Array<string>;
 }
 
 function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
@@ -115,6 +122,8 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 	const sourceRoot = path.join(context.runtimeDirectory, "src");
 	const llhttpRoot = path.join(context.runtimeDirectory, "vendor/llhttp");
 	const sqliteRoot = path.join(context.runtimeDirectory, "vendor/sqlite");
+	const sqliteIncludeArguments =
+		context.features.nodeEnabled && existsSync(sqliteRoot) ? ["-I", sqliteRoot] : [];
 	const includeArguments = [
 		"-I",
 		sourceRoot,
@@ -125,7 +134,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		"-I",
 		path.join(context.runtimeDirectory, "rust/include"),
 		...(existsSync(llhttpRoot) ? ["-I", path.join(llhttpRoot, "include")] : []),
-		...(context.features.nodeEnabled && existsSync(sqliteRoot) ? ["-I", sqliteRoot] : []),
+		...sqliteIncludeArguments,
 	];
 	const identityFlags = flags.map((flag) =>
 		flag.startsWith("-DMAL_COMPILER_WIRE=") ? "-DMAL_COMPILER_WIRE=<content>" : flag,
@@ -136,6 +145,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 				? undefined
 				: hash("sha256", readFileSync(compilerWire), "hex"),
 		compileArguments: [
+			"<runtime-sources>",
 			"-std=c2x",
 			...identityFlags,
 			...includeArguments,
@@ -145,6 +155,18 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 			"<source>",
 			"-o",
 			"<object>",
+			...(sqliteIncludeArguments.length === 0
+				? []
+				: [
+						"<sqlite-amalgamation>",
+						"-std=c2x",
+						...identityFlags,
+						...sqliteIncludeArguments,
+						"-c",
+						"<source>",
+						"-o",
+						"<object>",
+					]),
 		],
 		environmentFingerprint: context.environmentFingerprint,
 		layerSourceDirectories: [
@@ -162,6 +184,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		buildDirectory: path.join(context.cacheDirectory, "runtime", cacheKey),
 		flags,
 		includeArguments,
+		sqliteIncludeArguments,
 		cacheKey,
 	};
 }
@@ -271,7 +294,7 @@ function buildRuntimeCache(
 			const layerStartedAt = performance.now();
 			const objectDirectory = path.join(temporaryDirectory, "objects", layer.name);
 			mkdirSync(objectDirectory, { recursive: true });
-			const sources = readdirSync(layer.source)
+			const sources: Array<RuntimeSource> = readdirSync(layer.source)
 				.filter((name) => name.endsWith(".c"))
 				.sort()
 				.map((name) => ({
@@ -290,7 +313,11 @@ function buildRuntimeCache(
 				context.features.nodeEnabled &&
 				existsSync(sqliteSource)
 			) {
-				sources.push({ name: "sqlite3.c", path: sqliteSource });
+				sources.push({
+					name: "sqlite3.c",
+					path: sqliteSource,
+					includeArguments: layout.sqliteIncludeArguments,
+				});
 			}
 			const objects = sources.map((source) =>
 				path.join(objectDirectory, `${source.name.slice(0, -2)}.o`),
@@ -308,9 +335,11 @@ function buildRuntimeCache(
 					args: toolArguments(context.toolchain.tools.cc, [
 						"-std=c2x",
 						...layout.flags,
-						...layout.includeArguments,
-						"-I",
-						layer.source,
+						...(source.includeArguments ?? [
+							...layout.includeArguments,
+							"-I",
+							layer.source,
+						]),
 						"-c",
 						source.path,
 						"-o",

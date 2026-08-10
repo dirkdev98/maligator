@@ -764,6 +764,40 @@ exit 7
 		expect(runtimeArtifactKey(development)).toBe(runtimeArtifactKey(production));
 	});
 
+	it("isolates the SQLite amalgamation from runtime header names", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const sqliteDirectory = path.join(runtimeDirectory, "vendor/sqlite");
+		mkdirSync(sqliteDirectory, { recursive: true });
+		writeFileSync(path.join(sqliteDirectory, "sqlite3.c"), "int sqlite_value = 1;\n");
+		writeFileSync(path.join(sqliteDirectory, "sqlite3.h"), "#pragma once\n");
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		ensureNativeArtifacts(
+			resolveNativeBuildContext({
+				toolchain,
+				runtimeDirectory,
+				cacheDirectory: path.join(fake.root, "sqlite-cache"),
+				features: {
+					evalEnabled: false,
+					nodeEnabled: true,
+					webPlatformEnabled: false,
+				},
+			}),
+		);
+		const sqliteInvocation = readFileSync(fake.logPath, "utf-8")
+			.split("\n")
+			.find((line) => line.includes("vendor/sqlite/sqlite3.c"));
+		expect(sqliteInvocation).toBeDefined();
+		expect(sqliteInvocation).toContain(`-I ${sqliteDirectory}`);
+		expect(sqliteInvocation).not.toContain(`-I ${path.join(runtimeDirectory, "src")}`);
+	});
+
 	it("fingerprints only build environment and snapshots it for native subprocesses", () => {
 		const fake = createFakeToolchain();
 		const runtimeDirectory = createMinimalRuntime(fake);
