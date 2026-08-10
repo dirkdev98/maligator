@@ -98,6 +98,28 @@ check("preventDefault", e.defaultPrevented === true);
 const e2 = new Event("x"); // not cancelable
 e2.preventDefault();
 check("preventDefault no-op when not cancelable", e2.defaultPrevented === false);
+let eventWithoutNewThrows = false;
+try {
+	Event("x");
+} catch (error) {
+	eventWithoutNewThrows = error instanceof TypeError;
+}
+check("Event requires new", eventWithoutNewThrows);
+check(
+	"Event initializes legacy state",
+	e2.target === null &&
+		e2.srcElement === null &&
+		e2.currentTarget === null &&
+		e2.eventPhase === Event.NONE &&
+		e2.returnValue === true &&
+		e2.timeStamp > 0 &&
+		typeof e2.initEvent === "function",
+);
+const custom = new CustomEvent("custom", { detail: 54, cancelable: true });
+check(
+	"CustomEvent extends Event",
+	custom instanceof Event && custom.detail === 54 && custom.cancelable,
+);
 
 // --- EventTarget ---
 const et = new EventTarget();

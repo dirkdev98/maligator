@@ -10,6 +10,7 @@
 #include "heap.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
+#include "monotonic_clock.h"
 #include "web_host_timer.h" // AbortSignal.timeout
 #include "intrinsics.h"
 #include "object.h"
@@ -538,25 +539,47 @@ static void event_define_trusted_state(MalVm *vm, MalObject *event, bool trusted
         mal_intrinsic_string_key(vm, (const byte *) "isTrusted"), &accessor);
 }
 
+static void event_initialize(MalVm *vm, MalObject *event, MalValue type,
+    bool bubbles, bool cancelable, bool trusted) {
+    ev_set(vm, event, (const byte *) "type", type);
+    ev_set(vm, event, (const byte *) "target", mal_value_new_null());
+    ev_set(vm, event, (const byte *) "srcElement", mal_value_new_null());
+    ev_set(vm, event, (const byte *) "currentTarget", mal_value_new_null());
+    ev_set(vm, event, (const byte *) "eventPhase", mal_value_from_i32(0));
+    ev_set(vm, event, (const byte *) "bubbles", mal_value_new_boolean(bubbles));
+    ev_set(vm, event, (const byte *) "cancelable", mal_value_new_boolean(cancelable));
+    ev_set(vm, event, (const byte *) "defaultPrevented", mal_value_new_boolean(false));
+    ev_set(vm, event, (const byte *) "returnValue", mal_value_new_boolean(true));
+    ev_set(vm, event, (const byte *) "cancelBubble", mal_value_new_boolean(false));
+    ev_set(vm, event, (const byte *) "composed", mal_value_new_boolean(false));
+    ev_set(vm, event, (const byte *) "timeStamp",
+        mal_value_from_f64((f64) mal_monotonic_now_ns() / 1.0e6));
+    event_define_trusted_state(vm, event, trusted);
+}
+
 static MalValue mal_event_new(MalVm *vm, const char *type, bool trusted) {
     MalObject *ev = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_PROTOTYPE]));
-    MalValue evval = mal_value_from_object(ev);
+    MalValue roots[2] = {
+        mal_value_from_object(ev), mal_value_new_undefined(),
+    };
     MalRootSpan rs;
-    mal_gc_root(&rs, &evval, 1);
-    ev_set(vm, ev, (const byte *) "type",
-        mal_value_from_string(mal_string_new_ascii(&vm->heap, type, strlen(type))));
-    ev_set(vm, ev, (const byte *) "bubbles", mal_value_new_boolean(false));
-    ev_set(vm, ev, (const byte *) "cancelable", mal_value_new_boolean(false));
-    ev_set(vm, ev, (const byte *) "defaultPrevented", mal_value_new_boolean(false));
-    event_define_trusted_state(vm, ev, trusted);
+    mal_gc_root(&rs, roots, 2);
+    roots[1] = mal_value_from_string(
+        mal_string_new_ascii(&vm->heap, type, strlen(type)));
+    event_initialize(vm, ev, roots[1], false, false, trusted);
     mal_gc_unroot(&rs);
-    return evval;
+    return roots[0];
 }
 
 static MalValue event_constructor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) this_value;
     (void) callee;
+    if (mal_value_is_undefined(nt)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Constructor Event requires 'new'");
+        return mal_value_new_undefined();
+    }
     if (argc < 1) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Event requires a type");
         return mal_value_new_undefined();
@@ -572,11 +595,7 @@ static MalValue event_constructor(
     mal_gc_root(&rs, &evval, 1);
     bool bubbles = argc >= 2 && mal_value_is_object(args[1]) && ev_get_bool(vm, args[1], (const byte *) "bubbles");
     bool cancelable = argc >= 2 && mal_value_is_object(args[1]) && ev_get_bool(vm, args[1], (const byte *) "cancelable");
-    ev_set(vm, ev, (const byte *) "type", mal_value_from_string(type));
-    ev_set(vm, ev, (const byte *) "bubbles", mal_value_new_boolean(bubbles));
-    ev_set(vm, ev, (const byte *) "cancelable", mal_value_new_boolean(cancelable));
-    ev_set(vm, ev, (const byte *) "defaultPrevented", mal_value_new_boolean(false));
-    event_define_trusted_state(vm, ev, false);
+    event_initialize(vm, ev, mal_value_from_string(type), bubbles, cancelable, false);
     mal_gc_unroot(&rs);
     return evval;
 }
@@ -590,8 +609,78 @@ static MalValue event_prevent_default(
     if (mal_value_is_object(self) && ev_get_bool(vm, self, (const byte *) "cancelable")) {
         ev_set(vm, mal_value_to_object(self), (const byte *) "defaultPrevented",
             mal_value_new_boolean(true));
+        ev_set(vm, mal_value_to_object(self), (const byte *) "returnValue",
+            mal_value_new_boolean(false));
     }
     return mal_value_new_undefined();
+}
+
+static MalValue event_init_event(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt;
+    (void) callee;
+    if (!event_set_trusted(vm, self, false)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Event.initEvent called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    MalString *type;
+    if (!mal_vm_to_string(vm,
+            argc >= 1 ? args[0] : mal_value_new_undefined(), &type)) {
+        return mal_value_new_undefined();
+    }
+    MalObject *event = mal_value_to_object(self);
+    ev_set(vm, event, (const byte *) "type", mal_value_from_string(type));
+    ev_set(vm, event, (const byte *) "bubbles",
+        mal_value_new_boolean(argc >= 2 && mal_value_is_truthy(args[1])));
+    ev_set(vm, event, (const byte *) "cancelable",
+        mal_value_new_boolean(argc >= 3 && mal_value_is_truthy(args[2])));
+    ev_set(vm, event, (const byte *) "defaultPrevented", mal_value_new_boolean(false));
+    ev_set(vm, event, (const byte *) "returnValue", mal_value_new_boolean(true));
+    return mal_value_new_undefined();
+}
+
+static MalValue custom_event_constructor(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) callee;
+    if (mal_value_is_undefined(nt)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Constructor CustomEvent requires 'new'");
+        return mal_value_new_undefined();
+    }
+    if (argc < 1) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "CustomEvent requires a type");
+        return mal_value_new_undefined();
+    }
+    MalString *type;
+    if (!mal_vm_to_string(vm, args[0], &type)) {
+        return mal_value_new_undefined();
+    }
+    bool has_init = argc >= 2 && mal_value_is_object(args[1]);
+    bool bubbles = has_init && ev_get_bool(vm, args[1], (const byte *) "bubbles");
+    bool cancelable = has_init && ev_get_bool(vm, args[1], (const byte *) "cancelable");
+    MalValue detail = mal_value_new_null();
+    if (has_init && !mal_vm_get_property(vm, args[1],
+            mal_intrinsic_string_key(vm, (const byte *) "detail"), &detail)) {
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_undefined(detail)) {
+        detail = mal_value_new_null();
+    }
+    MalObject *prototype = ev_instance_proto(
+        vm, nt, MAL_INTRINSIC_CUSTOM_EVENT_PROTOTYPE);
+    MalObject *event = mal_object_new(&vm->heap, prototype);
+    MalValue roots[3] = {
+        mal_value_from_object(event), mal_value_from_string(type), detail,
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    event_initialize(vm, event, roots[1], bubbles, cancelable, false);
+    ev_set(vm, event, (const byte *) "detail", roots[2]);
+    mal_gc_unroot(&span);
+    return roots[0];
 }
 
 static MalValue event_stop_propagation(
@@ -1053,6 +1142,31 @@ void mal_events_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_method_n(vm, event_proto, (const byte *) "stopPropagation", 0, event_stop_propagation);
     mal_intrinsic_define_method_n(
         vm, event_proto, (const byte *) "stopImmediatePropagation", 0, event_stop_immediate);
+    mal_intrinsic_define_method_n(
+        vm, event_proto, (const byte *) "initEvent", 3, event_init_event);
+    static const struct {
+        const byte *name;
+        i32 value;
+    } event_phase_constants[] = {
+        {(const byte *) "NONE", 0},
+        {(const byte *) "CAPTURING_PHASE", 1},
+        {(const byte *) "AT_TARGET", 2},
+        {(const byte *) "BUBBLING_PHASE", 3},
+    };
+    for (usize i = 0; i < countof(event_phase_constants); i++) {
+        MalValue value = mal_value_from_i32(event_phase_constants[i].value);
+        mal_intrinsic_define_data(vm,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_CONSTRUCTOR]),
+            event_phase_constants[i].name, value, MAL_PROPERTY_ENUMERABLE);
+        mal_intrinsic_define_data(vm, event_proto,
+            event_phase_constants[i].name, value, MAL_PROPERTY_ENUMERABLE);
+    }
+
+    // CustomEvent extends the common Event surface.
+    (void) ev_install_class(vm, global_this, (const byte *) "CustomEvent", 1,
+        custom_event_constructor, event_proto,
+        MAL_INTRINSIC_CUSTOM_EVENT_CONSTRUCTOR,
+        MAL_INTRINSIC_CUSTOM_EVENT_PROTOTYPE);
 
     // EventTarget.
     MalObject *et_proto = ev_install_class(vm, global_this, (const byte *) "EventTarget", 0,

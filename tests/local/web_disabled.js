@@ -23,6 +23,8 @@ const absent = [
 	"structuredClone",
 	"queueMicrotask",
 	// events (web_events.c).
+	"Event",
+	"CustomEvent",
 	"EventTarget",
 	"AbortController",
 ];
