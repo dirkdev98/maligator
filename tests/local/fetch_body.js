@@ -673,6 +673,54 @@ async function run() {
 		preservedAbrupt && !abruptSource.bodyUsed && !abruptSource.body.locked,
 	);
 
+	const byobResponse = new Response("abcdef");
+	const byobReader = byobResponse.body.getReader({ mode: "byob" });
+	const byobBuffer = new ArrayBuffer(5);
+	const byobFirst = await byobReader.read(new Uint8Array(byobBuffer, 2, 3));
+	const byobSecond = await byobReader.read(new Uint8Array(4));
+	const byobDone = await byobReader.read(new Uint8Array(1));
+	check(
+		"Fetch byte streams support offset BYOB reads",
+		byobReader instanceof ReadableStreamBYOBReader &&
+			byobFirst.value.buffer === byobBuffer &&
+			byobFirst.value.byteOffset === 2 &&
+			byobFirst.value.byteLength === 3 &&
+			new Uint8Array(byobBuffer)[2] === 97 &&
+			new Uint8Array(byobBuffer)[4] === 99 &&
+			byobSecond.value.byteLength === 3 &&
+			byobSecond.value[0] === 100 &&
+			byobSecond.value[2] === 102 &&
+			byobDone.done &&
+			byobDone.value.byteLength === 0,
+	);
+	let nonByteByobThrows = false;
+	try {
+		new ReadableStream().getReader({ mode: "byob" });
+	} catch (error) {
+		nonByteByobThrows = error instanceof TypeError;
+	}
+	check("BYOB readers require byte streams", nonByteByobThrows);
+
+	const byobCloneSource = new Request("https://example.com/", {
+		method: "POST",
+		body: "clone-byob",
+	});
+	void byobCloneSource.body;
+	const byobClone = byobCloneSource.clone();
+	const byobCloneSourceReader = byobCloneSource.body.getReader({ mode: "byob" });
+	const byobCloneReader = byobClone.body.getReader({ mode: "byob" });
+	const [byobCloneSourceRead, byobCloneRead] = await Promise.all([
+		byobCloneSourceReader.read(new Uint8Array(16)),
+		byobCloneReader.read(new Uint8Array(16)),
+	]);
+	check(
+		"Request clone branches preserve byte-stream BYOB reads",
+		byobCloneSourceRead.value.length === 10 &&
+			byobCloneRead.value.length === 10 &&
+			byobCloneSourceRead.value[0] === 99 &&
+			byobCloneRead.value[9] === 98,
+	);
+
 	for (let i = 0; i < 40; i++) {
 		const teardown = new Response(new Uint8Array([i, i + 1]));
 		if (i % 2 === 0) await teardown.bytes();

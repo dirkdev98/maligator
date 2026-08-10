@@ -8,6 +8,7 @@ typedef enum MalReadableStreamKind : u8 {
     MAL_READABLE_STREAM,
     MAL_READABLE_STREAM_DEFAULT_CONTROLLER,
     MAL_READABLE_STREAM_DEFAULT_READER,
+    MAL_READABLE_STREAM_BYOB_READER,
     MAL_COUNT_QUEUING_STRATEGY,
     MAL_BYTE_LENGTH_QUEUING_STRATEGY,
 } MalReadableStreamKind;
@@ -22,11 +23,13 @@ typedef struct MalReadableStreamQueueEntry {
     struct MalReadableStreamQueueEntry *next;
     MalValue chunk;
     f64 size;
+    usize byte_offset;
 } MalReadableStreamQueueEntry;
 
 typedef struct MalReadableStreamReadRequest {
     struct MalReadableStreamReadRequest *next;
     MalValue promise;
+    MalValue view;
 } MalReadableStreamReadRequest;
 
 typedef struct MalReadableStreamObject {
@@ -39,6 +42,7 @@ typedef struct MalReadableStreamObject {
             MalValue reader;
             MalValue stored_error;
             bool disturbed;
+            bool byte_stream;
         } stream;
         struct {
             MalValue stream;
