@@ -1511,14 +1511,14 @@ static MalValue mal_fetch_body_method_form_data(
     if (!mal_fetch_body_from_value(self, &body)) {
         return mal_fetch_reject_type_error(vm);
     }
+    if (mal_fetch_body_is_stream_only(&body)) {
+        return mal_fetch_body_collect_stream(
+            vm, self, &body, MAL_FETCH_BODY_CONSUME_FORM_DATA);
+    }
     MalString *content_type = mal_fetch_body_content_type(vm, self);
     if (!mal_fetch_content_type_starts_with(
             content_type, "application/x-www-form-urlencoded")) {
         return mal_fetch_form_data_type_error(vm);
-    }
-    if (mal_fetch_body_is_stream_only(&body)) {
-        return mal_fetch_body_collect_stream(
-            vm, self, &body, MAL_FETCH_BODY_CONSUME_FORM_DATA);
     }
     if (!mal_fetch_body_begin(vm, self, &body)) {
         return vm->completion.kind == MAL_COMPLETION_THROW
@@ -1647,8 +1647,16 @@ static MalValue mal_fetch_collect_conversion(
             return mal_fetch_new_uint8array(vm, body->bytes, body->length);
         case MAL_FETCH_BODY_CONSUME_BLOB:
             return mal_fetch_blob_value(vm, self, body);
-        case MAL_FETCH_BODY_CONSUME_FORM_DATA:
+        case MAL_FETCH_BODY_CONSUME_FORM_DATA: {
+            MalString *content_type = mal_fetch_body_content_type(vm, self);
+            if (!mal_fetch_content_type_starts_with(
+                    content_type, "application/x-www-form-urlencoded")) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Body MIME type is not supported by formData()");
+                return mal_value_new_undefined();
+            }
             return mal_fetch_form_data_value(vm, body);
+        }
     }
     return mal_value_new_undefined();
 }
@@ -1788,13 +1796,6 @@ static MalValue mal_fetch_body_collect_fulfilled(
 
 static MalValue mal_fetch_body_collect_stream(
     MalVm *vm, MalValue self, MalFetchBody *body, MalFetchBodyConsumeKind kind) {
-    if (kind == MAL_FETCH_BODY_CONSUME_FORM_DATA) {
-        MalString *content_type = mal_fetch_body_content_type(vm, self);
-        if (!mal_fetch_content_type_starts_with(
-                content_type, "application/x-www-form-urlencoded")) {
-            return mal_fetch_form_data_type_error(vm);
-        }
-    }
     MalValue roots[8] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
