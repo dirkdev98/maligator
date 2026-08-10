@@ -298,21 +298,6 @@ static void ws_process_queue(MalVm *vm, MalReadableStreamObject *controller) {
     MalValue method = request->close
         ? controller->as.writable_controller.close_method
         : controller->as.writable_controller.write_method;
-    if (mal_value_is_undefined(method)) {
-        mal_promise_fulfill(vm, mal_value_to_promise_object(request->promise),
-            mal_value_new_undefined());
-        controller->as.writable_controller.queue_head = request->next;
-        if (request->next == nullptr) controller->as.writable_controller.queue_tail = nullptr;
-        if (!request->close) {
-            controller->as.writable_controller.queue_total_size -= request->size;
-        } else {
-            ws_finish_close(vm, stream);
-        }
-        ws_free_request(request);
-        ws_update_backpressure(vm, controller);
-        ws_process_queue(vm, controller);
-        return;
-    }
     MalValue roots[7] = {
         mal_value_from_readable_stream_object(controller),
         controller->as.writable_controller.underlying_sink,
@@ -322,6 +307,10 @@ static void ws_process_queue(MalVm *vm, MalReadableStreamObject *controller) {
     MalRootSpan span;
     mal_gc_root(&span, roots, 7);
     controller->as.writable_controller.writing = true;
+    if (mal_value_is_undefined(method)) {
+        roots[4] = ws_resolved_promise(vm);
+        goto settle;
+    }
     MalCompletion call;
     if (request->close) {
         call = mal_vm_call_value(vm, roots[2], roots[1], nullptr, 0);
@@ -338,6 +327,7 @@ static void ws_process_queue(MalVm *vm, MalReadableStreamObject *controller) {
         vm->completion = ws_normal();
         roots[4] = ws_rejected_promise(vm, error);
     }
+settle:
     roots[5] = ws_callback(vm, ws_operation_fulfilled, roots[0]);
     roots[6] = ws_callback(vm, ws_operation_rejected, roots[0]);
     mal_promise_perform_then(vm, roots[4], roots[5], roots[6],
