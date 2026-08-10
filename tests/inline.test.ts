@@ -427,6 +427,28 @@ test("a unique strict class method inlines behind a loaded-callee guard", () => 
 	).toBe(1);
 });
 
+test("mutually recursive method inlining has a bounded expansion depth", () => {
+	const ir = optimizedProgram(`
+		class Ping {
+			ping(other, remaining) {
+				return remaining === 0 ? 0 : other.pong(this, remaining - 1);
+			}
+		}
+		class Pong {
+			pong(other, remaining) {
+				return remaining === 0 ? 0 : other.ping(this, remaining - 1);
+			}
+		}
+		globalThis.result = new Ping().ping(new Pong(), 20);
+	`);
+	const guards = ir.functions
+		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
+		.filter((instruction) => instruction.type === "guardFunctionIndex");
+
+	expect(guards.length).toBeGreaterThan(0);
+	expect(guards.length).toBeLessThanOrEqual(9);
+});
+
 test("a generator target is not inlinable", () => {
 	expect(
 		nestedCount(`(function (){ const g = function*(){ return 1; }; return g(); })();`),

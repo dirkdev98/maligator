@@ -150,6 +150,8 @@ interface CompilerMetrics {
 interface SelfCompileMetrics {
 	maligatorMs: number;
 	nodeMs: number;
+	maligatorPhases: SelfCompilePhases;
+	nodePhases: SelfCompilePhases;
 	runs: number;
 	units: number;
 	maligatorCodeUnits: number;
@@ -592,6 +594,18 @@ interface SelfCompileRun {
 	units: number;
 	codeUnits: number;
 	digest: string;
+	phases: SelfCompilePhases;
+}
+
+interface SelfCompilePhases {
+	graphMs: number;
+	semanticMs: number;
+	compileToIrMs: number;
+	optimizeMs: number;
+	regallocMs: number;
+	lowerMs: number;
+	emitMs: number;
+	writeMs: number;
 }
 
 function digestDirectory(directory: string): string {
@@ -624,12 +638,14 @@ function runSelfCompile(
 	const summary = JSON.parse(result.stdout.trim()) as {
 		units: number;
 		codeUnits: number;
+		phases: SelfCompilePhases;
 	};
 	return {
 		wallMs,
 		units: summary.units,
 		codeUnits: summary.codeUnits,
 		digest: digestDirectory(output),
+		phases: summary.phases,
 	};
 }
 
@@ -702,6 +718,8 @@ function benchSelfCompile(runs: number): SelfCompileMetrics {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-self-compile-"));
 	const maligatorTimes: Array<number> = [];
 	const nodeTimes: Array<number> = [];
+	const maligatorPhases: Array<SelfCompilePhases> = [];
+	const nodePhases: Array<SelfCompilePhases> = [];
 	let nodeReference: SelfCompileRun | undefined;
 	let maligatorReference: SelfCompileRun | undefined;
 	try {
@@ -725,6 +743,8 @@ function benchSelfCompile(runs: number): SelfCompileMetrics {
 			else assertSameSelfCompile(maligatorReference, maligator);
 			nodeTimes.push(node.wallMs);
 			maligatorTimes.push(maligator.wallMs);
+			nodePhases.push(node.phases);
+			maligatorPhases.push(maligator.phases);
 		}
 		if (nodeReference === undefined || maligatorReference === undefined) {
 			throw new Error("self-compile requires at least one run");
@@ -732,6 +752,26 @@ function benchSelfCompile(runs: number): SelfCompileMetrics {
 		return {
 			maligatorMs: median(maligatorTimes),
 			nodeMs: median(nodeTimes),
+			maligatorPhases: {
+				graphMs: median(maligatorPhases.map((phases) => phases.graphMs)),
+				semanticMs: median(maligatorPhases.map((phases) => phases.semanticMs)),
+				compileToIrMs: median(maligatorPhases.map((phases) => phases.compileToIrMs)),
+				optimizeMs: median(maligatorPhases.map((phases) => phases.optimizeMs)),
+				regallocMs: median(maligatorPhases.map((phases) => phases.regallocMs)),
+				lowerMs: median(maligatorPhases.map((phases) => phases.lowerMs)),
+				emitMs: median(maligatorPhases.map((phases) => phases.emitMs)),
+				writeMs: median(maligatorPhases.map((phases) => phases.writeMs)),
+			},
+			nodePhases: {
+				graphMs: median(nodePhases.map((phases) => phases.graphMs)),
+				semanticMs: median(nodePhases.map((phases) => phases.semanticMs)),
+				compileToIrMs: median(nodePhases.map((phases) => phases.compileToIrMs)),
+				optimizeMs: median(nodePhases.map((phases) => phases.optimizeMs)),
+				regallocMs: median(nodePhases.map((phases) => phases.regallocMs)),
+				lowerMs: median(nodePhases.map((phases) => phases.lowerMs)),
+				emitMs: median(nodePhases.map((phases) => phases.emitMs)),
+				writeMs: median(nodePhases.map((phases) => phases.writeMs)),
+			},
 			runs,
 			units: nodeReference.units,
 			maligatorCodeUnits: maligatorReference.codeUnits,
@@ -2319,6 +2359,18 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  maligator ${entry.selfCompile.maligatorMs.toFixed(1)}ms${delta(entry.selfCompile.maligatorMs, p?.maligatorMs)}`,
 		);
 		console.log(`  node      ${entry.selfCompile.nodeMs.toFixed(1)}ms`);
+		console.log(
+			`  front end maligator graph ${entry.selfCompile.maligatorPhases.graphMs.toFixed(0)}ms, semantic ${entry.selfCompile.maligatorPhases.semanticMs.toFixed(0)}ms, IR ${entry.selfCompile.maligatorPhases.compileToIrMs.toFixed(0)}ms`,
+		);
+		console.log(
+			`            node      graph ${entry.selfCompile.nodePhases.graphMs.toFixed(0)}ms, semantic ${entry.selfCompile.nodePhases.semanticMs.toFixed(0)}ms, IR ${entry.selfCompile.nodePhases.compileToIrMs.toFixed(0)}ms`,
+		);
+		console.log(
+			`  back end  maligator optimize ${entry.selfCompile.maligatorPhases.optimizeMs.toFixed(0)}ms, regalloc ${entry.selfCompile.maligatorPhases.regallocMs.toFixed(0)}ms, lower ${entry.selfCompile.maligatorPhases.lowerMs.toFixed(0)}ms, emit ${entry.selfCompile.maligatorPhases.emitMs.toFixed(0)}ms, write ${entry.selfCompile.maligatorPhases.writeMs.toFixed(0)}ms`,
+		);
+		console.log(
+			`            node      optimize ${entry.selfCompile.nodePhases.optimizeMs.toFixed(0)}ms, regalloc ${entry.selfCompile.nodePhases.regallocMs.toFixed(0)}ms, lower ${entry.selfCompile.nodePhases.lowerMs.toFixed(0)}ms, emit ${entry.selfCompile.nodePhases.emitMs.toFixed(0)}ms, write ${entry.selfCompile.nodePhases.writeMs.toFixed(0)}ms`,
+		);
 		console.log(`  output    ${entry.selfCompile.units} units`);
 		console.log(
 			`  C bytes   ${humanBytes(entry.selfCompile.maligatorCodeUnits)} Maligator, ${humanBytes(entry.selfCompile.nodeCodeUnits)} Node`,

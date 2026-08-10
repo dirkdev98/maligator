@@ -94,6 +94,18 @@ class Recursive {
 }
 check(new Recursive().recurse(20) === 20, "recursive method remains bounded");
 
+class Ping {
+	ping(other, remaining) {
+		return remaining === 0 ? 0 : 1 + other.pong(this, remaining - 1);
+	}
+}
+class Pong {
+	pong(other, remaining) {
+		return remaining === 0 ? 0 : 1 + other.ping(this, remaining - 1);
+	}
+}
+check(new Ping().ping(new Pong(), 20) === 20, "mutual method recursion remains bounded");
+
 let loadedBeforeThrow = 0;
 const throwingReceiver = {
 	get quote() {

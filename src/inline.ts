@@ -1050,6 +1050,7 @@ function methodDisqualifies(instruction: IRInstruction): boolean {
 		case "storeSuperProperty":
 		case "loadSuperProperty":
 		case "checkSuperClass":
+		case "guardFunctionIndex":
 			return true;
 		default:
 			return false;
@@ -1407,7 +1408,12 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 /** Cap on a caller's instruction count to bound inline expansion (mutual recursion
  * etc. inlines a few levels then stops). */
 const MAX_CALLER_INSTRUCTIONS = 2000;
+/** Guarded method bodies retain the original fallback call. A mutually recursive
+ * method graph therefore creates a fresh call site at every inline level unless
+ * cloned calls carry an explicit expansion bound. */
+const MAX_GUARDED_INLINE_DEPTH = 3;
 const partialEscapeInlineBlocked = new WeakSet<IRInstruction>();
+const guardedInlineDepth = new WeakMap<IRInstruction, number>();
 
 /**
  * If `fn` is a single straight-line block ending in `return` (no branches, no
@@ -1616,7 +1622,12 @@ function inlineInstruction(
 			registers: [instruction.registers[0] + offset, instruction.registers[2] + offset],
 		};
 	}
-	return withRegisterOffset(instruction, offset);
+	const cloned = withRegisterOffset(instruction, offset);
+	const depth = guardedInlineDepth.get(instruction);
+	if (depth !== undefined && cloned.type === "call") {
+		guardedInlineDepth.set(cloned, depth);
+	}
+	return cloned;
 }
 
 /**
@@ -2000,6 +2011,10 @@ function inlineGuardedCallSite(
 	if (host === undefined || isCallInTry(fn, host, index)) {
 		return false; // gone / relocating out of an enclosing try (see multi-block inliner)
 	}
+	const expansionDepth = guardedInlineDepth.get(call) ?? 0;
+	if (expansionDepth >= MAX_GUARDED_INLINE_DEPTH) {
+		return false;
+	}
 	if (
 		targetFns.some((target) => hasStackObjectMaterialization(target)) &&
 		blockIsInCycle(fn, host)
@@ -2026,7 +2041,6 @@ function inlineGuardedCallSite(
 			break;
 		}
 	}
-
 	const base = fn.blocks.length;
 	let nextBlockIndex = base;
 	const layouts = targetFns.map((targetFn, targetIndex) => {
@@ -2071,6 +2085,14 @@ function inlineGuardedCallSite(
 			entryIndex,
 			joinIndex,
 		)) {
+			for (const instruction of inlinedBlock.instructions) {
+				if (instruction.type === "call") {
+					guardedInlineDepth.set(
+						instruction,
+						Math.max(guardedInlineDepth.get(instruction) ?? 0, expansionDepth + 1),
+					);
+				}
+			}
 			fn.blocks.push(inlinedBlock);
 		}
 	}
@@ -2115,7 +2137,10 @@ export function optInlineMethod(program: IntermediateProgram): boolean {
 			[]) {
 			const targetFns = targets
 				.map((target) => targetOf.get(target))
-				.filter((target): target is IRFunction => target !== undefined);
+				.filter(
+					(target): target is IRFunction =>
+						target !== undefined && isInlinableMethodTarget(target),
+				);
 			if (inlineGuardedCallSite(program, fn, call, targetFns, receiverRegister)) {
 				changed = true;
 			}
