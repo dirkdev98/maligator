@@ -15,6 +15,7 @@
 #include "gc.h"
 #include "web_headers_object.h"
 #include "web_blob_object.h"
+#include "web_form_data_object.h"
 #include "heap.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -26,6 +27,7 @@
 #include "web_readable_stream_object.h"
 #include "web_request_object.h"
 #include "web_response_object.h"
+#include "web_url_object.h"
 #include "server.h" // host: mal_http_server_start_stream_handler, mal_http_conn_respond
 #include "utf8.h"
 #include "typed_array_object.h"
@@ -344,6 +346,381 @@ static bool mal_blob_normalize_type(
     return true;
 }
 
+static bool mal_fetch_is_form_data(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_FORM_DATA_OBJECT);
+}
+
+static MalFormDataObject *mal_fetch_to_form_data(MalValue value) {
+    return (MalFormDataObject *) mal_value_to_heap(value);
+}
+
+static MalValue mal_fetch_from_form_data(MalFormDataObject *form_data) {
+    return mal_value_from_heap((MalHeapHeader *) form_data);
+}
+
+static MalFormDataObject *mal_form_data_new(MalHeap *heap, MalObject *prototype) {
+    MalFormDataObject *form_data =
+        mal_heap_alloc(heap, sizeof(MalFormDataObject), MAL_HEAP_FORM_DATA_OBJECT);
+    mal_object_init(heap, &form_data->object, MAL_HEAP_FORM_DATA_OBJECT, prototype);
+    form_data->entries = nullptr;
+    form_data->count = 0;
+    form_data->capacity = 0;
+    return form_data;
+}
+
+static void mal_form_data_finalize(MalHeapHeader *cell) {
+    MalFormDataObject *form_data = (MalFormDataObject *) cell;
+    free(form_data->entries);
+    form_data->entries = nullptr;
+    form_data->count = 0;
+    form_data->capacity = 0;
+}
+
+static void mal_form_data_trace(MalHeapHeader *cell) {
+    MalFormDataObject *form_data = (MalFormDataObject *) cell;
+    for (i32 i = 0; i < form_data->count; i++) {
+        MalFormDataEntry *entry = &form_data->entries[i];
+        mal_gc_mark_value(mal_value_from_string(entry->name));
+        mal_gc_mark_value(entry->value);
+        if (entry->filename != nullptr) {
+            mal_gc_mark_value(mal_value_from_string(entry->filename));
+        }
+    }
+}
+
+static bool mal_form_data_append_entry(MalVm *vm, MalFormDataObject *form_data,
+    MalString *name, MalValue value, MalString *filename) {
+    if (form_data->count == form_data->capacity) {
+        i32 next = form_data->capacity == 0 ? 8 : form_data->capacity * 2;
+        MalFormDataEntry *grown = realloc(
+            form_data->entries, sizeof(MalFormDataEntry) * (usize) next);
+        if (grown == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        form_data->entries = grown;
+        form_data->capacity = next;
+    }
+    MalFormDataEntry *entry = &form_data->entries[form_data->count++];
+    entry->name = name;
+    entry->value = value;
+    entry->filename = filename;
+    mal_gc_card(&form_data->object.header, mal_value_from_string(name));
+    mal_gc_card(&form_data->object.header, value);
+    if (filename != nullptr) {
+        mal_gc_card(&form_data->object.header, mal_value_from_string(filename));
+    }
+    return true;
+}
+
+static const char *MAL_FORM_DATA_BOUNDARY = "----maligator-formdata-boundary";
+static const char *MAL_FORM_DATA_CONTENT_TYPE =
+    "multipart/form-data; boundary=----maligator-formdata-boundary";
+
+static bool mal_form_data_append_string(MalVm *vm, byte **buffer, usize *length,
+    usize *capacity, MalString *string) {
+    usize encoded_length;
+    byte *encoded = mal_fetch_utf8_encode(vm, string, &encoded_length);
+    if (encoded == nullptr) return false;
+    bool ok = mal_blob_append_bytes(
+        vm, buffer, length, capacity, encoded, encoded_length);
+    free(encoded);
+    return ok;
+}
+
+static bool mal_form_data_append_quoted(MalVm *vm, byte **buffer, usize *length,
+    usize *capacity, MalString *string) {
+    usize encoded_length;
+    byte *encoded = mal_fetch_utf8_encode(vm, string, &encoded_length);
+    if (encoded == nullptr) return false;
+    bool ok = true;
+    for (usize i = 0; i < encoded_length; i++) {
+        const char *replacement = encoded[i] == '\r' ? "%0D"
+            : encoded[i] == '\n' ? "%0A" : encoded[i] == '"' ? "%22" : nullptr;
+        if (replacement != nullptr) {
+            if (!mal_blob_append_bytes(vm, buffer, length, capacity,
+                    (const byte *) replacement, 3)) {
+                ok = false;
+                break;
+            }
+            continue;
+        }
+        if (!mal_blob_append_bytes(
+                vm, buffer, length, capacity, &encoded[i], 1)) {
+            ok = false;
+            break;
+        }
+    }
+    free(encoded);
+    return ok;
+}
+
+static byte *mal_form_data_serialize(
+    MalVm *vm, MalFormDataObject *form_data, usize *length_out) {
+    byte *buffer = nullptr;
+    usize length = 0;
+    usize capacity = 0;
+    if (form_data->count == 0) {
+        buffer = malloc(1);
+        if (buffer == nullptr) mal_vm_throw_allocation_error(vm);
+        *length_out = 0;
+        return buffer;
+    }
+    for (i32 i = 0; i < form_data->count; i++) {
+        MalFormDataEntry *entry = &form_data->entries[i];
+        if (!mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                (const byte *) "--", 2)
+            || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                (const byte *) MAL_FORM_DATA_BOUNDARY, strlen(MAL_FORM_DATA_BOUNDARY))
+            || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                (const byte *) "\r\nContent-Disposition: form-data; name=\"",
+                strlen("\r\nContent-Disposition: form-data; name=\""))
+            || !mal_form_data_append_quoted(
+                vm, &buffer, &length, &capacity, entry->name)
+            || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                (const byte *) "\"", 1)) {
+            goto serialize_error;
+        }
+        if (mal_fetch_is_blob(entry->value)) {
+            MalBlobObject *blob = mal_fetch_to_blob(entry->value);
+            if (!mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                    (const byte *) "; filename=\"", strlen("; filename=\""))
+                || !mal_form_data_append_quoted(
+                    vm, &buffer, &length, &capacity, entry->filename)
+                || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                    (const byte *) "\"\r\nContent-Type: ",
+                    strlen("\"\r\nContent-Type: "))
+                || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                    (const byte *) (blob->type_length > 0
+                        ? blob->type : "application/octet-stream"),
+                    blob->type_length > 0 ? blob->type_length : 24)
+                || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                    (const byte *) "\r\n\r\n", 4)
+                || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                    blob->bytes, blob->length)) {
+                goto serialize_error;
+            }
+        } else if (!mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                (const byte *) "\r\n\r\n", 4)
+            || !mal_form_data_append_string(vm, &buffer, &length, &capacity,
+                mal_value_to_string(entry->value))) {
+            goto serialize_error;
+        }
+        if (!mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+                (const byte *) "\r\n", 2)) goto serialize_error;
+    }
+    if (!mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+            (const byte *) "--", 2)
+        || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+            (const byte *) MAL_FORM_DATA_BOUNDARY, strlen(MAL_FORM_DATA_BOUNDARY))
+        || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
+            (const byte *) "--\r\n", 4)) {
+        goto serialize_error;
+    }
+    *length_out = length;
+    return buffer;
+
+serialize_error:
+    free(buffer);
+    return nullptr;
+}
+
+static void mal_form_data_release_entry(const MalFormDataEntry *entry) {
+    mal_gc_write_barrier(mal_value_from_string(entry->name));
+    mal_gc_write_barrier(entry->value);
+    if (entry->filename != nullptr) {
+        mal_gc_write_barrier(mal_value_from_string(entry->filename));
+    }
+}
+
+static MalFormDataObject *mal_form_data_this(MalVm *vm, MalValue self) {
+    if (mal_fetch_is_form_data(self)) return mal_fetch_to_form_data(self);
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "FormData method called on incompatible receiver");
+    return nullptr;
+}
+
+static bool mal_form_data_convert_entry(MalVm *vm, const MalValue *args, i32 argc,
+    MalValue roots[3], MalString **filename_out) {
+    if (argc < 2) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "FormData entry requires a name and value");
+        return false;
+    }
+    MalString *name;
+    if (!mal_vm_to_string(vm, args[0], &name)) return false;
+    roots[0] = mal_value_from_string(name);
+    *filename_out = nullptr;
+    if (mal_fetch_is_blob(args[1])) {
+        roots[1] = args[1];
+        MalString *filename;
+        if (argc >= 3) {
+            if (!mal_vm_to_string(vm, args[2], &filename)) return false;
+        } else {
+            filename = mal_string_new_ascii(&vm->heap, "blob", 4);
+        }
+        roots[2] = mal_value_from_string(filename);
+        *filename_out = filename;
+        return true;
+    }
+    MalString *value;
+    if (!mal_vm_to_string(vm, args[1], &value)) return false;
+    roots[1] = mal_value_from_string(value);
+    return true;
+}
+
+static MalValue mal_form_data_constructor(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) callee;
+    if (!mal_value_is_object(nt)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "FormData constructor requires new");
+        return mal_value_new_undefined();
+    }
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, nt, MAL_INTRINSIC_FORM_DATA_PROTOTYPE, &prototype)) {
+        return mal_value_new_undefined();
+    }
+    return mal_fetch_from_form_data(mal_form_data_new(&vm->heap, prototype));
+}
+
+static MalValue mal_form_data_append(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    if (form_data == nullptr) return mal_value_new_undefined();
+    MalValue roots[3] = {
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    MalString *filename;
+    bool converted = mal_form_data_convert_entry(vm, args, argc, roots, &filename);
+    if (converted) {
+        (void) mal_form_data_append_entry(vm, form_data,
+            mal_value_to_string(roots[0]), roots[1], filename);
+    }
+    mal_gc_unroot(&span);
+    return mal_value_new_undefined();
+}
+
+static bool mal_form_data_name(MalVm *vm, const MalValue *args, i32 argc, MalString **out) {
+    if (argc < 1) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "FormData operation requires a name");
+        return false;
+    }
+    return mal_vm_to_string(vm, args[0], out);
+}
+
+static MalValue mal_form_data_delete(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    MalString *name;
+    if (form_data == nullptr || !mal_form_data_name(vm, args, argc, &name)) {
+        return mal_value_new_undefined();
+    }
+    i32 write = 0;
+    for (i32 read = 0; read < form_data->count; read++) {
+        MalFormDataEntry entry = form_data->entries[read];
+        if (mal_string_equals(entry.name, name)) {
+            mal_form_data_release_entry(&entry);
+        } else {
+            if (write != read) form_data->entries[write] = entry;
+            write++;
+        }
+    }
+    form_data->count = write;
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_form_data_get(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    MalString *name;
+    if (form_data == nullptr || !mal_form_data_name(vm, args, argc, &name)) {
+        return mal_value_new_undefined();
+    }
+    for (i32 i = 0; i < form_data->count; i++) {
+        if (mal_string_equals(form_data->entries[i].name, name)) {
+            return form_data->entries[i].value;
+        }
+    }
+    return mal_value_new_null();
+}
+
+static MalValue mal_form_data_get_all(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    MalString *name;
+    if (form_data == nullptr || !mal_form_data_name(vm, args, argc, &name)) {
+        return mal_value_new_undefined();
+    }
+    MalArrayObject *values = mal_intrinsic_new_array(vm, 0);
+    u32 index = 0;
+    for (i32 i = 0; i < form_data->count; i++) {
+        if (mal_string_equals(form_data->entries[i].name, name)) {
+            mal_array_object_store(values, mal_key_index(index++), form_data->entries[i].value);
+        }
+    }
+    return mal_value_from_array_object(values);
+}
+
+static MalValue mal_form_data_has(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    MalValue value = mal_form_data_get(vm, self, args, argc, nt, callee);
+    return vm->completion.kind == MAL_COMPLETION_NORMAL
+        ? mal_value_new_boolean(!mal_value_is_null(value)) : mal_value_new_undefined();
+}
+
+static MalValue mal_form_data_set(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    if (form_data == nullptr) return mal_value_new_undefined();
+    MalValue roots[3] = {
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    MalString *filename;
+    if (!mal_form_data_convert_entry(vm, args, argc, roots, &filename)) {
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    MalString *name = mal_value_to_string(roots[0]);
+    i32 first = -1;
+    i32 write = 0;
+    for (i32 read = 0; read < form_data->count; read++) {
+        MalFormDataEntry entry = form_data->entries[read];
+        if (mal_string_equals(entry.name, name)) {
+            if (first < 0) {
+                first = write++;
+                mal_form_data_release_entry(&entry);
+            } else {
+                mal_form_data_release_entry(&entry);
+            }
+        } else {
+            if (write != read) form_data->entries[write] = entry;
+            write++;
+        }
+    }
+    form_data->count = write;
+    if (first < 0) {
+        (void) mal_form_data_append_entry(vm, form_data, name, roots[1], filename);
+    } else {
+        form_data->entries[first] = (MalFormDataEntry) {
+            .name = name, .value = roots[1], .filename = filename};
+        mal_gc_card(&form_data->object.header, roots[0]);
+        mal_gc_card(&form_data->object.header, roots[1]);
+        if (filename != nullptr) mal_gc_card(&form_data->object.header, roots[2]);
+    }
+    mal_gc_unroot(&span);
+    return mal_value_new_undefined();
+}
+
 typedef struct MalFetchBody {
     MalObject *owner;
     byte *bytes;
@@ -534,7 +911,12 @@ static MalValue mal_response_constructor(
             "ReadableStream BodyInit is not supported yet");
         goto response_error;
     }
-    if (arg_count >= 1 && mal_fetch_is_blob(args[0])) {
+    if (arg_count >= 1 && mal_fetch_is_form_data(args[0])) {
+        body = mal_form_data_serialize(
+            vm, mal_fetch_to_form_data(args[0]), &body_len);
+        if (body == nullptr) goto response_error;
+        content_type = MAL_FORM_DATA_CONTENT_TYPE;
+    } else if (arg_count >= 1 && mal_fetch_is_blob(args[0])) {
         MalBlobObject *blob = mal_fetch_to_blob(args[0]);
         body = malloc(blob->length == 0 ? 1 : blob->length);
         if (body == nullptr) {
@@ -617,7 +999,8 @@ static MalResponseObject *mal_response_this(MalValue self) {
     return mal_value_is_response_object(self) ? mal_value_to_response_object(self) : nullptr;
 }
 
-static MalValue mal_fetch_body_string(MalVm *vm, const MalFetchBody *body) {
+static MalValue mal_fetch_body_string_impl(
+    MalVm *vm, const MalFetchBody *body, bool strip_bom) {
     if (body->bytes == nullptr || body->length == 0) {
         return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
     }
@@ -628,7 +1011,7 @@ static MalValue mal_fetch_body_string(MalVm *vm, const MalFetchBody *body) {
             "Body text allocation failed");
         return mal_value_new_undefined();
     }
-    usize offset = count > 0 && units[0] == 0xFEFF ? 1 : 0;
+    usize offset = strip_bom && count > 0 && units[0] == 0xFEFF ? 1 : 0;
     if (count - offset > MAL_STRING_MAX_CODE_UNITS) {
         free(units);
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
@@ -639,6 +1022,10 @@ static MalValue mal_fetch_body_string(MalVm *vm, const MalFetchBody *body) {
         mal_string_new_copy(&vm->heap, units + offset, count - offset));
     free(units);
     return s;
+}
+
+static MalValue mal_fetch_body_string(MalVm *vm, const MalFetchBody *body) {
+    return mal_fetch_body_string_impl(vm, body, true);
 }
 
 static MalValue mal_blob_constructor(
@@ -793,6 +1180,114 @@ static MalValue mal_blob_stream(
     return mal_readable_stream_from_bytes(vm, blob->bytes, blob->length);
 }
 
+static void mal_form_data_iterator_trace(MalHeapHeader *cell) {
+    MalFormDataIteratorObject *iterator = (MalFormDataIteratorObject *) cell;
+    mal_gc_mark_value(mal_fetch_from_form_data(iterator->form_data));
+}
+
+static MalValue mal_form_data_make_iterator(MalVm *vm, MalFormDataObject *form_data,
+    MalFormDataIteratorKind kind) {
+    MalFormDataIteratorObject *iterator = mal_heap_alloc(&vm->heap,
+        sizeof(MalFormDataIteratorObject), MAL_HEAP_FORM_DATA_ITERATOR_OBJECT);
+    mal_object_init(&vm->heap, &iterator->object,
+        MAL_HEAP_FORM_DATA_ITERATOR_OBJECT,
+        mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_FORM_DATA_ITERATOR_PROTOTYPE]));
+    iterator->form_data = form_data;
+    iterator->index = 0;
+    iterator->kind = kind;
+    mal_gc_card(&iterator->object.header, mal_fetch_from_form_data(form_data));
+    return mal_value_from_heap((MalHeapHeader *) iterator);
+}
+
+static MalValue mal_form_data_iterator_next(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    if (!mal_value_is_heap_type(self, MAL_HEAP_FORM_DATA_ITERATOR_OBJECT)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Receiver is not a FormData iterator");
+        return mal_value_new_undefined();
+    }
+    MalFormDataIteratorObject *iterator =
+        (MalFormDataIteratorObject *) mal_value_to_heap(self);
+    MalFormDataObject *form_data = iterator->form_data;
+    if (iterator->index >= (u64) form_data->count) {
+        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+    }
+    MalFormDataEntry *entry = &form_data->entries[iterator->index++];
+    MalValue value;
+    if (iterator->kind == MAL_FORM_DATA_ITERATOR_KEYS) {
+        value = mal_value_from_string(entry->name);
+    } else if (iterator->kind == MAL_FORM_DATA_ITERATOR_VALUES) {
+        value = entry->value;
+    } else {
+        value = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
+        MalRootSpan span;
+        mal_gc_root(&span, &value, 1);
+        MalArrayObject *pair = mal_value_to_array_object(value);
+        mal_array_object_store(pair, mal_key_index(0), mal_value_from_string(entry->name));
+        mal_array_object_store(pair, mal_key_index(1), entry->value);
+        mal_gc_unroot(&span);
+    }
+    MalRootSpan span;
+    mal_gc_root(&span, &value, 1);
+    MalValue result = mal_vm_create_iter_result(vm, value, false);
+    mal_gc_unroot(&span);
+    return result;
+}
+
+static MalValue mal_form_data_entries(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    return form_data != nullptr
+        ? mal_form_data_make_iterator(vm, form_data, MAL_FORM_DATA_ITERATOR_ENTRIES)
+        : mal_value_new_undefined();
+}
+
+static MalValue mal_form_data_keys(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    return form_data != nullptr
+        ? mal_form_data_make_iterator(vm, form_data, MAL_FORM_DATA_ITERATOR_KEYS)
+        : mal_value_new_undefined();
+}
+
+static MalValue mal_form_data_values(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    return form_data != nullptr
+        ? mal_form_data_make_iterator(vm, form_data, MAL_FORM_DATA_ITERATOR_VALUES)
+        : mal_value_new_undefined();
+}
+
+static MalValue mal_form_data_for_each(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt; (void) callee;
+    MalFormDataObject *form_data = mal_form_data_this(vm, self);
+    if (form_data == nullptr) return mal_value_new_undefined();
+    if (argc < 1 || !mal_value_is_callable(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "FormData forEach callback is not callable");
+        return mal_value_new_undefined();
+    }
+    MalValue callback = args[0];
+    MalValue this_arg = argc >= 2 ? args[1] : mal_value_new_undefined();
+    for (i32 i = 0; i < form_data->count; i++) {
+        MalValue call_args[3] = {
+            form_data->entries[i].value,
+            mal_value_from_string(form_data->entries[i].name),
+            self,
+        };
+        MalCompletion completion =
+            mal_vm_call_value(vm, callback, this_arg, call_args, 3);
+        if (completion.kind != MAL_COMPLETION_NORMAL) return mal_value_new_undefined();
+    }
+    return mal_value_new_undefined();
+}
+
 static MalValue mal_fetch_body_method_text(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args;
@@ -916,6 +1411,74 @@ static MalString *mal_fetch_body_content_type(MalVm *vm, MalValue self) {
         }
     }
     return mal_string_new_ascii(&vm->heap, "", 0);
+}
+
+static bool mal_fetch_content_type_starts_with(
+    MalString *content_type, const char *prefix) {
+    usize prefix_length = strlen(prefix);
+    if (mal_string_length(content_type) < prefix_length) return false;
+    const c16 *units = mal_string_code_units(content_type);
+    for (usize i = 0; i < prefix_length; i++) {
+        c16 unit = units[i];
+        if (unit >= 'A' && unit <= 'Z') unit += 'a' - 'A';
+        if (unit != (c16) prefix[i]) return false;
+    }
+    return true;
+}
+
+static MalValue mal_fetch_form_data_type_error(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Body MIME type is not supported by formData()");
+    return mal_fetch_reject_completion(vm);
+}
+
+static MalValue mal_fetch_body_method_form_data(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalFetchBody body;
+    if (!mal_fetch_body_from_value(self, &body)) {
+        return mal_fetch_reject_type_error(vm);
+    }
+    MalString *content_type = mal_fetch_body_content_type(vm, self);
+    if (!mal_fetch_content_type_starts_with(
+            content_type, "application/x-www-form-urlencoded")) {
+        return mal_fetch_form_data_type_error(vm);
+    }
+    if (!mal_fetch_body_begin(vm, self, &body)) {
+        return vm->completion.kind == MAL_COMPLETION_THROW
+            ? mal_fetch_reject_completion(vm) : mal_fetch_reject_type_error(vm);
+    }
+    MalValue roots[3] = {
+        mal_fetch_body_string_impl(vm, &body, false),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_fetch_reject_completion(vm);
+    }
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    MalCompletion parsed = mal_vm_construct_value(vm,
+        vm->intrinsics[MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR], roots, 1);
+    if (parsed.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&span);
+        return mal_fetch_reject_completion(vm);
+    }
+    roots[1] = parsed.value;
+    MalUrlSearchParamsObject *params = mal_value_to_url_search_params_object(roots[1]);
+    MalFormDataObject *form_data = mal_form_data_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FORM_DATA_PROTOTYPE]));
+    roots[2] = mal_fetch_from_form_data(form_data);
+    for (i32 i = 0; i < params->count; i++) {
+        if (!mal_form_data_append_entry(vm, form_data, params->pairs[i].name,
+                mal_value_from_string(params->pairs[i].value), nullptr)) {
+            mal_gc_unroot(&span);
+            return mal_fetch_reject_completion(vm);
+        }
+    }
+    MalValue result = mal_fetch_resolve(vm, roots[2]);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static MalValue mal_fetch_body_method_blob(
@@ -1135,18 +1698,6 @@ static MalValue mal_fetch_body_getter_for(
     return callback(vm, self, args, argc, nt, callee);
 }
 
-static MalValue mal_fetch_body_method_unimplemented(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    // FormData is part of the Body mixin surface before its W2 platform object
-    // lands. Keep the method contract and reject asynchronously.
-    return mal_fetch_reject_type_error(vm);
-}
-
 #define MAL_FETCH_BODY_METHOD_WRAPPER(prefix, response_brand, suffix, callback) \
     static MalValue prefix##_##suffix( \
         MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) { \
@@ -1169,7 +1720,7 @@ MAL_FETCH_BODY_METHOD_WRAPPER(mal_response_body, true, bytes, mal_fetch_body_met
 MAL_FETCH_BODY_METHOD_WRAPPER(
     mal_response_body, true, blob, mal_fetch_body_method_blob)
 MAL_FETCH_BODY_METHOD_WRAPPER(
-    mal_response_body, true, form_data, mal_fetch_body_method_unimplemented)
+    mal_response_body, true, form_data, mal_fetch_body_method_form_data)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_response_body, true, get_body, mal_fetch_body_get_body)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_response_body, true, get_used, mal_fetch_body_get_used)
 
@@ -1181,7 +1732,7 @@ MAL_FETCH_BODY_METHOD_WRAPPER(mal_request_body, false, bytes, mal_fetch_body_met
 MAL_FETCH_BODY_METHOD_WRAPPER(
     mal_request_body, false, blob, mal_fetch_body_method_blob)
 MAL_FETCH_BODY_METHOD_WRAPPER(
-    mal_request_body, false, form_data, mal_fetch_body_method_unimplemented)
+    mal_request_body, false, form_data, mal_fetch_body_method_form_data)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_request_body, false, get_body, mal_fetch_body_get_body)
 MAL_FETCH_BODY_GETTER_WRAPPER(mal_request_body, false, get_used, mal_fetch_body_get_used)
 
@@ -1789,6 +2340,12 @@ static MalValue mal_request_constructor(
             memcpy(r->body, body_source->body, body_source->body_len);
         }
         r->body_len = body_source->body_len;
+    } else if (mal_fetch_is_form_data(slots[4])) {
+        free(r->body);
+        r->body = mal_form_data_serialize(
+            vm, mal_fetch_to_form_data(slots[4]), &r->body_len);
+        if (r->body == nullptr) goto request_error;
+        content_type = MAL_FORM_DATA_CONTENT_TYPE;
     } else if (mal_fetch_is_blob(slots[4])) {
         MalBlobObject *blob = mal_fetch_to_blob(slots[4]);
         free(r->body);
@@ -2828,6 +3385,72 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
         vm->intrinsics[MAL_INTRINSIC_BLOB_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
+    // FormData constructor, live iterators, and ordered entry operations.
+    MalObject *form_data_iterator_proto = mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]));
+    vm->intrinsics[MAL_INTRINSIC_FORM_DATA_ITERATOR_PROTOTYPE] =
+        mal_value_from_object(form_data_iterator_proto);
+    mal_intrinsic_define_method_n(vm, form_data_iterator_proto,
+        (const byte *) "next", 0, mal_form_data_iterator_next);
+    MalPropertyDesc form_data_iterator_tag = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(
+            vm, (const byte *) "FormData Iterator")),
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(form_data_iterator_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
+        &form_data_iterator_tag);
+
+    MalObject *form_data_proto = mal_object_new(&vm->heap, object_prototype);
+    MalNativeFunctionObject *form_data_ctor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype,
+        mal_intrinsic_ascii(vm, (const byte *) "FormData"), 0,
+        mal_form_data_constructor);
+    mal_native_function_object_set_constructor(form_data_ctor);
+    vm->intrinsics[MAL_INTRINSIC_FORM_DATA_CONSTRUCTOR] =
+        mal_value_from_native_function_object(form_data_ctor);
+    vm->intrinsics[MAL_INTRINSIC_FORM_DATA_PROTOTYPE] =
+        mal_value_from_object(form_data_proto);
+    mal_intrinsic_define_data(vm, (MalObject *) form_data_ctor,
+        (const byte *) "prototype", vm->intrinsics[MAL_INTRINSIC_FORM_DATA_PROTOTYPE],
+        MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, form_data_proto, (const byte *) "constructor",
+        vm->intrinsics[MAL_INTRINSIC_FORM_DATA_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    MalPropertyDesc form_data_tag = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "FormData")),
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(form_data_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
+        &form_data_tag);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "append", 2, mal_form_data_append);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "delete", 1, mal_form_data_delete);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "get", 1, mal_form_data_get);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "getAll", 1, mal_form_data_get_all);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "has", 1, mal_form_data_has);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "set", 2, mal_form_data_set);
+    MalValue form_data_entries_fn = mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "entries", 0, mal_form_data_entries);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "keys", 0, mal_form_data_keys);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "values", 0, mal_form_data_values);
+    mal_intrinsic_define_method_n(
+        vm, form_data_proto, (const byte *) "forEach", 1, mal_form_data_for_each);
+    MalPropertyDesc form_data_iterator_desc = mal_intrinsic_data_desc(
+        form_data_entries_fn, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(form_data_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR),
+        &form_data_iterator_desc);
+    mal_intrinsic_define_data(vm, global_this, (const byte *) "FormData",
+        vm->intrinsics[MAL_INTRINSIC_FORM_DATA_CONSTRUCTOR],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+
     // Response constructor + prototype.
     MalObject *resp_proto = mal_object_new(&vm->heap, object_prototype);
     MalNativeFunctionObject *resp_ctor = mal_native_function_object_new_arity(
@@ -2944,4 +3567,8 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_gc_register_tracer(MAL_HEAP_REQUEST_OBJECT, mal_request_trace);
     mal_gc_register_finalizer(MAL_HEAP_REQUEST_OBJECT, mal_request_finalize);
     mal_gc_register_finalizer(MAL_HEAP_BLOB_OBJECT, mal_blob_finalize);
+    mal_gc_register_tracer(MAL_HEAP_FORM_DATA_OBJECT, mal_form_data_trace);
+    mal_gc_register_finalizer(MAL_HEAP_FORM_DATA_OBJECT, mal_form_data_finalize);
+    mal_gc_register_tracer(
+        MAL_HEAP_FORM_DATA_ITERATOR_OBJECT, mal_form_data_iterator_trace);
 }

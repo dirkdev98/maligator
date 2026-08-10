@@ -161,6 +161,76 @@ async function run() {
 		await rejectsTypeError(Blob.prototype.text.call({})),
 	);
 
+	const formData = new FormData();
+	formData.append("name", "first");
+	formData.append("name", "second");
+	formData.append("file", new Blob(["payload"], { type: "text/custom" }), "x.txt");
+	check(
+		"FormData preserves ordered entries",
+		formData instanceof FormData &&
+			formData.get("name") === "first" &&
+			formData.getAll("name").join(",") === "first,second" &&
+			formData.has("file") &&
+			Array.from(formData.keys()).join(",") === "name,name,file" &&
+			Array.from(formData.values())[2] instanceof Blob,
+	);
+	formData.set("name", "replacement");
+	formData.delete("file");
+	check(
+		"FormData set and delete retain position",
+		JSON.stringify(Array.from(formData)) === JSON.stringify([["name", "replacement"]]),
+	);
+	const multipart = new FormData();
+	multipart.append("name", "value");
+	const multipartResponse = new Response(multipart);
+	check(
+		"Response serializes FormData BodyInit",
+		multipartResponse.headers.get("content-type").startsWith("multipart/form-data;") &&
+			(await multipartResponse.text()).includes('name="name"\r\n\r\nvalue'),
+	);
+	const multipartRequest = new Request("https://example.com/", {
+		method: "POST",
+		body: multipart,
+	});
+	check(
+		"Request serializes FormData BodyInit",
+		multipartRequest.headers.get("content-type").startsWith("multipart/form-data;") &&
+			(await multipartRequest.text()).includes('name="name"\r\n\r\nvalue'),
+	);
+	check(
+		"empty FormData retains an empty byte body",
+		(await new Response(new FormData()).text()) === "",
+	);
+	const parsedRequest = await new Request("https://example.com/", {
+		method: "POST",
+		body: "a=1&a=two+words",
+		headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+	}).formData();
+	check(
+		"Request formData parses URL-encoded entries",
+		parsedRequest instanceof FormData &&
+			JSON.stringify(Array.from(parsedRequest)) ===
+				JSON.stringify([
+					["a", "1"],
+					["a", "two words"],
+				]),
+	);
+	const parsedResponse = await new Response("x=%E2%80%A0", {
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+	}).formData();
+	check("Response formData uses UTF-8", parsedResponse.get("x") === "†");
+	const nullFormBody = new Response(null, {
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+	});
+	check(
+		"null URL-encoded body resolves empty FormData without disturbance",
+		(await nullFormBody.formData()) instanceof FormData && !nullFormBody.bodyUsed,
+	);
+	check(
+		"unsupported formData MIME rejects",
+		await rejectsTypeError(new Response(null).formData()),
+	);
+
 	const canceled = new Response("cancel me");
 	await canceled.body.cancel("unused");
 	check("stream cancel disturbs body", canceled.bodyUsed);
