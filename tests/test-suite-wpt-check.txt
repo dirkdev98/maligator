@@ -2,6 +2,7 @@
 dom/abort/event.any.js
 dom/abort/timeout.any.js
 dom/events/AddEventListenerOptions-once.any.js
+dom/events/Event-constructors.any.js
 dom/events/Event-isTrusted.any.js
 encoding/api-basics.any.js
 encoding/api-surrogates-utf8.any.js

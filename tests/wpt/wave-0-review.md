@@ -8,7 +8,6 @@ replacement for WPT server transforms without modifying the upstream source.
 
 | Candidate                                          | Disposition | Next gate                                                                                                                         |
 | -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `dom/events/Event-constructors.any.js`             | Deferred    | Complete Event constructor Web IDL/null-state behavior and decide whether the file's `CustomEvent` case is in the server profile. |
 | `html/webappapis/atob/base64.any.js`               | Deferred    | Provide its dynamically loaded JSON resource through the pinned runner and resolve the upstream duplicate test names.             |
 | `encoding/api-invalid-label.any.js`                | Deferred    | Add the subset-test include contract and the broader Encoding label table.                                                        |
 | `encoding/encodeInto.any.js`                       | Deferred    | Add `SharedArrayBuffer`; the ordinary `ArrayBuffer` cases already pass in discovery.                                              |

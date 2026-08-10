@@ -36,6 +36,14 @@
 			"includes": []
 		},
 		{
+			"path": "dom/events/Event-constructors.any.js",
+			"sha256": "860c64f2813cc3e31547aeb49f0a56ec9dde1e1bdfe0a4be7d94155bfbc1028b",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "title", "value": "Event constructors" }],
+			"includes": []
+		},
+		{
 			"path": "dom/events/Event-isTrusted.any.js",
 			"sha256": "73925cca5b100206b4070406e0666fa8516373af4a0285132af1fc40d5880084",
 			"target": "server-main",
