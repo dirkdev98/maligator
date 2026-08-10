@@ -631,7 +631,7 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
     };
     MalRootSpan span;
     mal_gc_root(&span, roots, 10);
-    if (!mal_value_is_nil(roots[0]) && !mal_value_is_object(roots[0])) {
+    if (!mal_value_is_undefined(roots[0]) && !mal_value_is_object(roots[0])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "ReadableStream underlyingSource must be an object");
         goto fail;
@@ -670,7 +670,7 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
         }
     }
 
-    MalValue source = mal_value_is_nil(roots[0]) ? mal_value_new_undefined() : roots[0];
+    MalValue source = mal_value_is_undefined(roots[0]) ? mal_value_new_undefined() : roots[0];
     roots[2] = source;
     if (mal_value_is_object(source)) {
         MalValue type;
@@ -679,6 +679,16 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
             goto fail;
         }
         if (!mal_value_is_undefined(type)) {
+            roots[6] = type;
+            MalString *type_string;
+            if (!mal_vm_to_string(vm, roots[6], &type_string)) {
+                goto fail;
+            }
+            if (!mal_string_equals_ascii(type_string, "bytes")) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "ReadableStream source type must be 'bytes'");
+                goto fail;
+            }
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                 "ReadableStream byte sources are not supported");
             goto fail;

@@ -9,6 +9,36 @@ function tick() {
 }
 
 async function run() {
+	let typeToStringCalls = 0;
+	check(
+		"null source rejected",
+		(() => {
+			try {
+				new ReadableStream(null);
+				return false;
+			} catch (error) {
+				return error instanceof TypeError;
+			}
+		})(),
+	);
+	check(
+		"source type conversion",
+		(() => {
+			try {
+				new ReadableStream({
+					type: {
+						toString() {
+							typeToStringCalls++;
+							return "invalid";
+						},
+					},
+				});
+				return false;
+			} catch (error) {
+				return error instanceof TypeError && typeToStringCalls === 1;
+			}
+		})(),
+	);
 	check(
 		"globals",
 		typeof ReadableStream === "function" &&
