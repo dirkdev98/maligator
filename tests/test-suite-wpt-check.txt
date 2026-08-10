@@ -48,6 +48,12 @@ html/webappapis/timers/missing-timeout-setinterval.any.js
 html/webappapis/timers/negative-setinterval.any.js
 html/webappapis/timers/negative-settimeout.any.js
 streams/queuing-strategies.any.js
+streams/piping/close-propagation-backward.any.js
+streams/piping/close-propagation-forward.any.js
+streams/piping/flow-control.any.js
+streams/piping/general-addition.any.js
+streams/piping/general.any.js
+streams/piping/pipe-through.any.js
 streams/readable-streams/bad-strategies.any.js
 streams/readable-streams/bad-underlying-sources.any.js
 streams/readable-streams/cancel.any.js
