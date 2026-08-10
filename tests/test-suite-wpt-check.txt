@@ -23,13 +23,17 @@ fetch/api/request/request-constructor-init-body-override.any.js
 fetch/api/request/request-consume-empty.any.js
 fetch/api/request/request-error.any.js
 fetch/api/request/request-init-002.any.js
+fetch/api/request/request-init-stream.any.js
 fetch/api/request/request-headers.any.js
 fetch/api/request/request-structure.any.js
 fetch/api/response/response-consume-empty.any.js
 fetch/api/response/response-error.any.js
+fetch/api/response/response-error-from-stream.any.js
+fetch/api/response/response-from-stream.any.js
 fetch/api/response/response-init-001.any.js
 fetch/api/response/response-init-002.any.js
 fetch/api/response/response-init-contenttype.any.js
+fetch/api/response/response-stream-bad-chunk.any.js
 fetch/api/response/response-static-error.any.js
 fetch/api/response/response-static-json.any.js
 fetch/api/response/response-static-redirect.any.js
