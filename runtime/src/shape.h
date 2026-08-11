@@ -41,6 +41,19 @@ typedef struct MalShape MalShape;
 typedef struct MalShapeTransition MalShapeTransition;
 typedef struct MalShapeTransitionIndex MalShapeTransitionIndex;
 
+/**
+ * Immutable proof that one shaped-object layout is the exact default-data
+ * extension of another. Plans are built once and then reused by guarded bulk
+ * initialization; shapes and their property arrays never mutate or move.
+ */
+typedef struct MalShapeAppendPlan {
+    MalShape *source;
+    MalShape *final;
+} MalShapeAppendPlan;
+
+static_assert(sizeof(MalShapeAppendPlan) <= 16,
+              "MalShapeAppendPlan outgrew two pointers");
+
 typedef enum MalShapeFindCaller {
     MAL_SHAPE_FIND_GET_OWN,
     MAL_SHAPE_FIND_DEFINE_OWN,

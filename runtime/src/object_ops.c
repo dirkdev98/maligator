@@ -445,46 +445,70 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     return MAL_DEFINE_OWN_APPLIED;
 }
 
-bool mal_object_try_append_shaped_values(
-    MalObject *object, MalShape *expected_source, MalShape *expected_final,
-    const MalValue *values, u32 count
+bool mal_object_append_plan_init(
+    MalShapeAppendPlan *plan, MalShape *source, MalShape *final, u32 count
 ) {
-    if (object == nullptr || expected_source == nullptr || expected_final == nullptr
-        || values == nullptr || count == 0 || object->header.type != MAL_HEAP_OBJECT
-        || object->shape != expected_source || object->overflow != nullptr
-        || !object->extensible) {
+    if (plan == nullptr) return false;
+    *plan = (MalShapeAppendPlan) {0};
+    if (source == nullptr || final == nullptr || count == 0) {
         return false;
     }
+    // A non-null source also records that a caller attempted initialization.
+    // Keeping final null on failure makes the plan unusable while letting lazy
+    // caches avoid rebuilding the same immutable shapes on every fallback.
+    plan->source = source;
 
-    u32 source_count = expected_source->inline_count;
+    u32 source_count = source->inline_count;
     if (source_count > MAL_SHAPE_MAX_INLINE_SLOTS
         || count > MAL_SHAPE_MAX_INLINE_SLOTS - source_count
-        || expected_final->inline_count != source_count + count
-        || (source_count == 0) != (object->slots == nullptr)
-        || (source_count == 0 && object->slots_owned)) {
+        || final->inline_count != source_count + count) {
         return false;
     }
 
-    // Validate the entire immutable layout before growing storage so every guard
-    // failure leaves object state and protector state untouched.
     for (u32 i = 0; i < source_count; ++i) {
-        const MalShapeProp *source = &expected_source->props[i];
-        const MalShapeProp *final = &expected_final->props[i];
-        if (source->key != final->key || source->slot != final->slot
-            || source->attrs != final->attrs) {
+        const MalShapeProp *source_prop = &source->props[i];
+        const MalShapeProp *final_prop = &final->props[i];
+        if (source_prop->key != final_prop->key
+            || source_prop->slot != final_prop->slot
+            || source_prop->attrs != final_prop->attrs) {
             return false;
         }
     }
-    for (u32 i = source_count; i < expected_final->inline_count; ++i) {
-        const MalShapeProp *prop = &expected_final->props[i];
+    for (u32 i = source_count; i < final->inline_count; ++i) {
+        const MalShapeProp *prop = &final->props[i];
         if (prop->slot != i || !mal_shape_attrs_are_default(prop->attrs)) {
             return false;
         }
         for (u32 prior = 0; prior < i; ++prior) {
-            if (mal_key_value_equals(expected_final->props[prior].key, prop->key)) {
+            if (mal_key_value_equals(final->props[prior].key, prop->key)) {
                 return false;
             }
         }
+    }
+
+    plan->final = final;
+    return true;
+}
+
+bool mal_object_try_append_shaped_values(
+    MalObject *object, const MalShapeAppendPlan *plan, const MalValue *values,
+    u32 count
+) {
+    if (object == nullptr || plan == nullptr || plan->source == nullptr
+        || plan->final == nullptr || values == nullptr || count == 0
+        || object->header.type != MAL_HEAP_OBJECT || object->shape != plan->source
+        || object->overflow != nullptr || !object->extensible) {
+        return false;
+    }
+
+    u32 source_count = plan->source->inline_count;
+    u32 final_count = plan->final->inline_count;
+    if (source_count > MAL_SHAPE_MAX_INLINE_SLOTS || final_count <= source_count
+        || final_count > MAL_SHAPE_MAX_INLINE_SLOTS
+        || count != final_count - source_count
+        || (source_count == 0) != (object->slots == nullptr)
+        || (source_count == 0 && object->slots_owned)) {
+        return false;
     }
 
     if (object->watched_method_proto) {
@@ -493,14 +517,14 @@ bool mal_object_try_append_shaped_values(
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_append_invalidations);
     }
-    mal_object_grow_slots(object, source_count, expected_final->inline_count);
+    mal_object_grow_slots(object, source_count, final_count);
     for (u32 i = 0; i < count; ++i) {
-        const MalShapeProp *prop = &expected_final->props[source_count + i];
+        const MalShapeProp *prop = &plan->final->props[source_count + i];
         object->slots[prop->slot] = values[i];
         mal_gc_card(&object->header, values[i]);
         mal_gc_card(&object->header, prop->key);
     }
-    object->shape = expected_final;
+    object->shape = plan->final;
     return true;
 }
 

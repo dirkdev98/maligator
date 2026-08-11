@@ -6,6 +6,7 @@
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "shape.h"
 #include "value.h"
 
 #define MAL_COROUTINE_POOL_CLASS_COUNT 14
@@ -1293,12 +1294,12 @@ typedef struct MalVm {
     struct MalShape *regexp_indices_shape;
 
     /** Shared EventEmitter plus `{ encrypted, readable, writable }` socket layout. */
-    struct MalShape *node_http_socket_shape;
+    MalShapeAppendPlan node_http_socket_append_plan;
 
     /** Canonical node:http IncomingMessage layout before/after dispatch fields. */
-    struct MalShape *node_http_readable_state_shape;
-    struct MalShape *node_http_incoming_message_source_shape;
-    struct MalShape *node_http_incoming_message_final_shape;
+    MalShapeAppendPlan node_http_readable_state_append_plan;
+    MalShapeAppendPlan node_http_incoming_message_source_append_plan;
+    MalShapeAppendPlan node_http_incoming_message_dispatch_append_plan;
 
     /** Prototype shapes guarding direct construction of canonical HTTP streams. */
     struct MalShape *node_http_object_prototype_shape;
@@ -1315,9 +1316,9 @@ typedef struct MalVm {
     usize node_http_server_response_prototype_properties;
 
     /** Canonical node:http ServerResponse parent/constructor/dispatch layouts. */
-    struct MalShape *node_http_server_response_parent_shape;
-    struct MalShape *node_http_server_response_constructor_shape;
-    struct MalShape *node_http_server_response_dispatch_shape;
+    MalShapeAppendPlan node_http_server_response_root_append_plan;
+    MalShapeAppendPlan node_http_server_response_constructor_append_plan;
+    MalShapeAppendPlan node_http_server_response_dispatch_append_plan;
 
     /** Canonical null-prototype `{ changes, lastInsertRowid }` result layout. */
     struct MalShape *node_sqlite_run_result_shape;

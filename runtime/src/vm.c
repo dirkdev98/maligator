@@ -519,10 +519,10 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->regexp_result_shape = nullptr;
     vm->regexp_result_indices_shape = nullptr;
     vm->regexp_indices_shape = nullptr;
-    vm->node_http_socket_shape = nullptr;
-    vm->node_http_readable_state_shape = nullptr;
-    vm->node_http_incoming_message_source_shape = nullptr;
-    vm->node_http_incoming_message_final_shape = nullptr;
+    vm->node_http_socket_append_plan = (MalShapeAppendPlan) {0};
+    vm->node_http_readable_state_append_plan = (MalShapeAppendPlan) {0};
+    vm->node_http_incoming_message_source_append_plan = (MalShapeAppendPlan) {0};
+    vm->node_http_incoming_message_dispatch_append_plan = (MalShapeAppendPlan) {0};
     vm->node_http_object_prototype_shape = nullptr;
     vm->node_http_event_emitter_prototype_shape = nullptr;
     vm->node_http_stream_prototype_shape = nullptr;
@@ -535,9 +535,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->node_http_readable_prototype_properties = 0;
     vm->node_http_incoming_message_prototype_properties = 0;
     vm->node_http_server_response_prototype_properties = 0;
-    vm->node_http_server_response_parent_shape = nullptr;
-    vm->node_http_server_response_constructor_shape = nullptr;
-    vm->node_http_server_response_dispatch_shape = nullptr;
+    vm->node_http_server_response_root_append_plan = (MalShapeAppendPlan) {0};
+    vm->node_http_server_response_constructor_append_plan = (MalShapeAppendPlan) {0};
+    vm->node_http_server_response_dispatch_append_plan = (MalShapeAppendPlan) {0};
     vm->node_sqlite_run_result_shape = nullptr;
     vm->interp_call_cache = nullptr;
     vm->global_property_cache = nullptr;

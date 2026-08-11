@@ -917,18 +917,21 @@ static MalValue http_server_socket_facade(MalVm *vm) {
     mal_gc_root(&root, roots, countof(roots));
     roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
     roots[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-    if (vm->node_http_socket_shape == nullptr) {
+    if (vm->node_http_socket_append_plan.source == nullptr) {
         static const char *names[] = {
             "_events", "_eventsCount", "_maxListeners",
             "encrypted", "readable", "writable",
         };
-        MalShape *shape = mal_shape_root(&vm->heap);
+        MalShape *source = mal_shape_root(&vm->heap);
+        MalShape *shape = source;
         for (usize i = 0; i < countof(names); i++) {
             shape = mal_shape_add_property(
                 shape, mal_intrinsic_string_key(vm, (const byte *) names[i]),
                 HTTP_VISIBLE);
         }
-        vm->node_http_socket_shape = shape;
+        (void) mal_object_append_plan_init(
+            &vm->node_http_socket_append_plan, source, shape,
+            (u32) countof(names));
     }
     MalValue values[] = {
         roots[1], mal_value_from_i32(0), mal_value_new_undefined(),
@@ -936,8 +939,8 @@ static MalValue http_server_socket_facade(MalVm *vm) {
         mal_value_new_boolean(true),
     };
     if (mal_object_try_append_shaped_values(
-            mal_value_to_object(roots[0]), mal_shape_root(&vm->heap),
-            vm->node_http_socket_shape, values, (u32) countof(values))) {
+            mal_value_to_object(roots[0]), &vm->node_http_socket_append_plan,
+            values, (u32) countof(values))) {
         MAL_PERF_COUNT(http_bulk_shaped_objects);
         MAL_PERF_ADD(http_bulk_shaped_slots, countof(values));
         MAL_PERF_ADD(http_property_definitions_avoided, countof(values));
@@ -955,7 +958,7 @@ static MalValue http_server_socket_facade(MalVm *vm) {
 }
 
 static void http_incoming_message_dispatch_shapes(MalVm *vm) {
-    if (vm->node_http_incoming_message_source_shape != nullptr) return;
+    if (vm->node_http_incoming_message_dispatch_append_plan.source != nullptr) return;
 
     static const char *source_names[] = {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
@@ -971,23 +974,32 @@ static void http_incoming_message_dispatch_shapes(MalVm *vm) {
     static_assert(countof(source_names) + countof(dispatch_names)
                       <= MAL_SHAPE_MAX_INLINE_SLOTS,
                   "IncomingMessage dispatch shape exceeds inline slots");
-    MalShape *shape = mal_shape_root(&vm->heap);
+    MalShape *root = mal_shape_root(&vm->heap);
+    MalShape *shape = root;
     for (usize i = 0; i < countof(source_names); ++i) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) source_names[i]),
             HTTP_VISIBLE);
     }
-    vm->node_http_incoming_message_source_shape = shape;
+    MalShape *source = shape;
     for (usize i = 0; i < countof(dispatch_names); ++i) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) dispatch_names[i]),
             HTTP_VISIBLE);
     }
-    vm->node_http_incoming_message_final_shape = shape;
+    MalShape *final = shape;
+    MalShapeAppendPlan source_plan = {0};
+    MalShapeAppendPlan dispatch_plan = {0};
+    (void) mal_object_append_plan_init(
+        &source_plan, root, source, (u32) countof(source_names));
+    (void) mal_object_append_plan_init(
+        &dispatch_plan, source, final, (u32) countof(dispatch_names));
+    vm->node_http_incoming_message_source_append_plan = source_plan;
+    vm->node_http_incoming_message_dispatch_append_plan = dispatch_plan;
 }
 
 static void http_server_response_shapes(MalVm *vm) {
-    if (vm->node_http_server_response_parent_shape != nullptr) return;
+    if (vm->node_http_server_response_dispatch_append_plan.source != nullptr) return;
 
     static const char *parent_names[] = {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
@@ -1000,33 +1012,47 @@ static void http_server_response_shapes(MalVm *vm) {
     static_assert(countof(parent_names) + countof(constructor_names)
                       + countof(dispatch_names) <= MAL_SHAPE_MAX_INLINE_SLOTS,
                    "ServerResponse dispatch shape exceeds inline slots");
-    MalShape *shape = mal_shape_root(&vm->heap);
+    MalShape *root = mal_shape_root(&vm->heap);
+    MalShape *shape = root;
     for (usize i = 0; i < countof(parent_names); ++i) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) parent_names[i]),
             HTTP_VISIBLE);
     }
-    vm->node_http_server_response_parent_shape = shape;
+    MalShape *parent = shape;
     for (usize i = 0; i < countof(constructor_names); ++i) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) constructor_names[i]),
             HTTP_VISIBLE);
     }
-    vm->node_http_server_response_constructor_shape = shape;
+    MalShape *constructor = shape;
     for (usize i = 0; i < countof(dispatch_names); ++i) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) dispatch_names[i]),
             HTTP_VISIBLE);
     }
-    vm->node_http_server_response_dispatch_shape = shape;
+    MalShape *dispatch = shape;
+    MalShapeAppendPlan root_plan = {0};
+    MalShapeAppendPlan constructor_plan = {0};
+    MalShapeAppendPlan dispatch_plan = {0};
+    (void) mal_object_append_plan_init(
+        &root_plan, root, constructor,
+        (u32) (countof(parent_names) + countof(constructor_names)));
+    (void) mal_object_append_plan_init(
+        &constructor_plan, parent, constructor,
+        (u32) countof(constructor_names));
+    (void) mal_object_append_plan_init(
+        &dispatch_plan, constructor, dispatch, (u32) countof(dispatch_names));
+    vm->node_http_server_response_root_append_plan = root_plan;
+    vm->node_http_server_response_constructor_append_plan = constructor_plan;
+    vm->node_http_server_response_dispatch_append_plan = dispatch_plan;
 }
 
 static void http_initialize_shaped_object(
-    MalVm *vm, MalValue object, MalShape *shape,
+    MalVm *vm, MalValue object, const MalShapeAppendPlan *plan,
     const char *const *names, const MalValue *values, usize count) {
     if (mal_object_try_append_shaped_values(
-            mal_value_to_object(object), mal_shape_root(&vm->heap), shape,
-            values, (u32) count)) {
+            mal_value_to_object(object), plan, values, (u32) count)) {
         MAL_PERF_COUNT(http_bulk_shaped_objects);
         MAL_PERF_ADD(http_bulk_shaped_slots, count);
         MAL_PERF_ADD(http_property_definitions_avoided, count);
@@ -1038,22 +1064,25 @@ static void http_initialize_shaped_object(
     }
 }
 
-static MalShape *http_readable_state_shape(MalVm *vm) {
-    if (vm->node_http_readable_state_shape != nullptr) {
-        return vm->node_http_readable_state_shape;
+static const MalShapeAppendPlan *http_readable_state_append_plan(MalVm *vm) {
+    if (vm->node_http_readable_state_append_plan.source != nullptr) {
+        return &vm->node_http_readable_state_append_plan;
     }
     static const char *names[] = {
         "encoding", "decoder", "ended", "endEmitted", "destroyed",
         "objectMode", "highWaterMark", "reading",
     };
-    MalShape *shape = mal_shape_root(&vm->heap);
+    MalShape *source = mal_shape_root(&vm->heap);
+    MalShape *shape = source;
     for (usize i = 0; i < countof(names); i++) {
         shape = mal_shape_add_property(
             shape, mal_intrinsic_string_key(vm, (const byte *) names[i]),
             HTTP_VISIBLE);
     }
-    vm->node_http_readable_state_shape = shape;
-    return shape;
+    (void) mal_object_append_plan_init(
+        &vm->node_http_readable_state_append_plan, source, shape,
+        (u32) countof(names));
+    return &vm->node_http_readable_state_append_plan;
 }
 
 static usize http_object_property_count(const MalObject *object) {
@@ -1157,7 +1186,7 @@ static MalValue http_new_incoming_message(MalVm *vm) {
         mal_value_new_boolean(false),
     };
     http_initialize_shaped_object(
-        vm, roots[2], http_readable_state_shape(vm),
+        vm, roots[2], http_readable_state_append_plan(vm),
         state_names, state_values, countof(state_values));
 
     http_incoming_message_dispatch_shapes(vm);
@@ -1176,7 +1205,7 @@ static MalValue http_new_incoming_message(MalVm *vm) {
         mal_value_new_boolean(true), mal_value_new_boolean(false),
     };
     http_initialize_shaped_object(
-        vm, roots[0], vm->node_http_incoming_message_source_shape,
+        vm, roots[0], &vm->node_http_incoming_message_source_append_plan,
         request_names, request_values, countof(request_values));
     MalValue result = roots[0];
     mal_gc_unroot(&root);
@@ -1216,7 +1245,7 @@ static MalValue http_new_server_response(MalVm *vm) {
         mal_value_new_boolean(false), mal_value_new_boolean(false),
     };
     http_initialize_shaped_object(
-        vm, roots[0], vm->node_http_server_response_constructor_shape,
+        vm, roots[0], &vm->node_http_server_response_root_append_plan,
         names, values, countof(values));
     MalValue result = roots[0];
     mal_gc_unroot(&root);
@@ -3338,8 +3367,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
 
     if (mal_object_try_append_shaped_values(
             mal_value_to_object(roots[0]),
-            vm->node_http_incoming_message_source_shape,
-            vm->node_http_incoming_message_final_shape,
+            &vm->node_http_incoming_message_dispatch_append_plan,
             request_values, (u32) countof(request_values))) {
         MAL_PERF_COUNT(http_incoming_message_shape_append_batches);
         MAL_PERF_ADD(http_incoming_message_shape_append_slots,
@@ -3370,8 +3398,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     MalValue response_values[] = {roots[4], roots[4]};
     if (mal_object_try_append_shaped_values(
             mal_value_to_object(roots[1]),
-            vm->node_http_server_response_constructor_shape,
-            vm->node_http_server_response_dispatch_shape,
+            &vm->node_http_server_response_dispatch_append_plan,
             response_values, (u32) countof(response_values))) {
         MAL_PERF_COUNT(http_response_shape_append_batches);
         MAL_PERF_ADD(http_response_shape_append_slots, countof(response_values));
@@ -4367,8 +4394,7 @@ static MalValue http_server_response_constructor(
         };
         if (mal_object_try_append_shaped_values(
                 mal_value_to_object(result),
-                vm->node_http_server_response_parent_shape,
-                vm->node_http_server_response_constructor_shape,
+                &vm->node_http_server_response_constructor_append_plan,
                 values, (u32) countof(values))) {
             MAL_PERF_COUNT(http_response_constructor_shape_append_batches);
             MAL_PERF_ADD(http_response_constructor_shape_append_slots,
