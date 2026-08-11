@@ -455,7 +455,9 @@ describe("serialize-vm", () => {
 			const literalCountOffset =
 				13 + new TextEncoder().encode(probe.entrypointPath).length;
 			expect(
-				Array.from(wire.subarray(literalCountOffset, literalCountOffset + encoding.length)),
+				Array.from(
+					wire.subarray(literalCountOffset, literalCountOffset + encoding.length),
+				),
 			).toEqual(encoding);
 			expect(deserializeVmDefinition(wire).literalTemplateData).toEqual(
 				probe.literalTemplateData,

@@ -776,7 +776,10 @@ exit 7
 		writeFileSync(path.join(runtimeDirectory, "src/engine.c"), "int engine_value = 2;\n");
 		expect(runtimeHeaderHash(runtimeDirectory, false)).toBe(initial);
 
-		writeFileSync(path.join(runtimeDirectory, "rust/include/mal.h"), "#define MAL_ABI 2\n");
+		writeFileSync(
+			path.join(runtimeDirectory, "rust/include/mal.h"),
+			"#define MAL_ABI 2\n",
+		);
 		expect(runtimeHeaderHash(runtimeDirectory, false)).not.toBe(initial);
 	});
 

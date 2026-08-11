@@ -63,6 +63,24 @@ function staticKey(node: ESTree.Node, computed: boolean): string | null {
 	return null;
 }
 
+function literalRequireSpecifier(node: ESTree.Node): string | null {
+	if (node.type !== "CallExpression") {
+		return null;
+	}
+	const callee = node.callee as ESTree.Node;
+	const argument = node.arguments[0] as ESTree.Node | undefined;
+	if (
+		callee.type !== "Identifier" ||
+		callee.name !== "require" ||
+		node.arguments.length !== 1 ||
+		argument?.type !== "Literal" ||
+		typeof argument.value !== "string"
+	) {
+		return null;
+	}
+	return argument.value;
+}
+
 export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 	const names = new Set<string>();
 	let complete = true;
@@ -97,19 +115,13 @@ export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 			const right = node.right as ESTree.Node;
 			if (right.type === "ObjectExpression") {
 				handleObjectLiteral(right);
-			} else if (
-				right.type === "CallExpression" &&
-				right.callee.type === "Identifier" &&
-				right.callee.name === "require" &&
-				right.arguments.length === 1 &&
-				right.arguments[0]?.type === "Literal" &&
-				typeof right.arguments[0].value === "string"
-			) {
-				reexports.add(right.arguments[0].value);
-				complete = false;
 			} else {
-				// require(...), a function, a variable: names come from a value we
-				// cannot read statically.
+				const reexport = literalRequireSpecifier(right);
+				if (reexport !== null) {
+					reexports.add(reexport);
+				}
+				// require(...), a function, a variable: names may come from a value
+				// we cannot read statically.
 				complete = false;
 			}
 			return;

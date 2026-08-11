@@ -15,7 +15,10 @@ try {
 } catch (error) {
 	message = error.message;
 }
-check("dynamic resolution explains the image boundary", message.includes("ahead-of-time image"));
+check(
+	"dynamic resolution explains the image boundary",
+	message.includes("ahead-of-time image"),
+);
 
 for (const [name, ok] of results) {
 	if (!ok) console.log(`FAIL: ${name}`);

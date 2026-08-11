@@ -116,7 +116,10 @@ check(
 	process.platform === "darwin" || process.platform === "linux",
 );
 check("arch is supported", process.arch === "arm64" || process.arch === "x64");
-check("versions exposes a conservative Node compatibility level", process.versions.node === "0.0.0");
+check(
+	"versions exposes a conservative Node compatibility level",
+	process.versions.node === "0.0.0",
+);
 check("stdout fd", process.stdout.fd === 1);
 check("stderr fd", process.stderr.fd === 2);
 check("stdout isTTY", typeof process.stdout.isTTY === "boolean");

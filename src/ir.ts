@@ -3029,9 +3029,11 @@ function isImportMeta(node: ESTree.Node): node is ESTree.MetaProperty {
 }
 
 function fileUsesImportMeta(file: SemanticFile): boolean {
-	return traverseEstree(file.ast.body, (node) =>
-		isImportMeta(node) ? ESTREE_STOP : undefined,
-	) === ESTREE_STOP;
+	return (
+		traverseEstree(file.ast.body, (node) =>
+			isImportMeta(node) ? ESTREE_STOP : undefined,
+		) === ESTREE_STOP
+	);
 }
 
 function importMetaSlot(program: IntermediateProgram, file: SemanticFile): number {
@@ -12355,13 +12357,7 @@ function compileImportExpression(
 		const matchIndex = fn.blocks.push({ instructions: [] }) - 1;
 		matchJump.blocks[0] = matchIndex;
 		cursor.block = fn.blocks[matchIndex]!;
-		const imported = emitDynamicImportCall(
-			program,
-			fn,
-			cursor,
-			specifier,
-			candidate,
-		);
+		const imported = emitDynamicImportCall(program, fn, cursor, specifier, candidate);
 		cursor.block.instructions.push({ type: "move", registers: [result, imported] });
 		const joinJump: Extract<IRInstruction, { type: "jump" }> = {
 			type: "jump",

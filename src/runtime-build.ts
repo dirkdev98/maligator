@@ -41,7 +41,10 @@ function runtimeSourceHash(runtimeDirectory: string, nodeEnabled: boolean): stri
 }
 
 /** Headers that generated application translation units compile against. */
-export function runtimeHeaderHash(runtimeDirectory: string, nodeEnabled: boolean): string {
+export function runtimeHeaderHash(
+	runtimeDirectory: string,
+	nodeEnabled: boolean,
+): string {
 	const root = path.resolve(runtimeDirectory);
 	const llhttp = path.join(root, "vendor/llhttp/include");
 	const sqlite = path.join(root, "vendor/sqlite");

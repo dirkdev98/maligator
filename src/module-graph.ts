@@ -823,12 +823,9 @@ function resolveExports(
 				return { key, prefix: key.slice(0, star), suffix: key.slice(star + 1) };
 			})
 			.filter(
-				({ prefix, suffix }) =>
-					subpath.startsWith(prefix) && subpath.endsWith(suffix),
+				({ prefix, suffix }) => subpath.startsWith(prefix) && subpath.endsWith(suffix),
 			)
-			.sort(
-				(a, b) => b.prefix.length - a.prefix.length || b.key.length - a.key.length,
-			);
+			.sort((a, b) => b.prefix.length - a.prefix.length || b.key.length - a.key.length);
 		for (const { key, prefix, suffix } of patterns) {
 			const match = subpath.slice(prefix.length, subpath.length - suffix.length);
 			const resolved = resolveExports(exportsField[key]!, ".", packageDir, ctx, match);
@@ -866,7 +863,8 @@ function resolveExportTarget(
 	if (!target.startsWith("./")) {
 		return null;
 	}
-	const substituted = patternMatch === undefined ? target : target.replaceAll("*", patternMatch);
+	const substituted =
+		patternMatch === undefined ? target : target.replaceAll("*", patternMatch);
 	const resolved = path.resolve(packageDir, substituted);
 	return isFile(resolved) ? resolved : null;
 }

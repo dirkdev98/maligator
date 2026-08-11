@@ -359,8 +359,7 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 			(symbol.startsWith("mal_functions") ||
 				symbol.startsWith("mal_source_positions") ||
 				symbol.startsWith("mal_strings") ||
-				(symbol.startsWith("mal_function_") &&
-					symbol.includes("_instructions"))) &&
+				(symbol.startsWith("mal_function_") && symbol.includes("_instructions"))) &&
 			definitionLines.join("\n").length > Math.floor(maxCodeUnits / 2)
 		) {
 			const rows = definitionLines.slice(1, -1);
@@ -480,13 +479,13 @@ function emitVmDefinitionSource(
 	const compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) => {
 		if (!useCompiled) return null;
 		const emitted = emitCompiledFunction(
-					fn,
-					i,
-					suffix,
-					debug,
-					undefined,
-					splitCompiledFunctions ? "external" : "static",
-				);
+			fn,
+			i,
+			suffix,
+			debug,
+			undefined,
+			splitCompiledFunctions ? "external" : "static",
+		);
 		if (emitted === null) return null;
 		if (
 			maxCompiledFunctionCodeUnits !== undefined &&
@@ -664,15 +663,16 @@ export function emitVmTranslationUnits(
 			return { symbol: match[1]!, source };
 		})
 		.concat(
-			emitted.compiled.flatMap((fn): Array<GeneratedDeclaration> =>
-				fn === null
-					? []
-					: [
-							{
-								symbol: fn.symbol,
-								source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
-							},
-						],
+			emitted.compiled.flatMap(
+				(fn): Array<GeneratedDeclaration> =>
+					fn === null
+						? []
+						: [
+								{
+									symbol: fn.symbol,
+									source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
+								},
+							],
 			),
 		);
 	const declarationsBySymbol = new Map(

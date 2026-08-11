@@ -1,7 +1,4 @@
-import bufferDefault, {
-	Buffer as ImportedBuffer,
-	constants,
-} from "node:buffer";
+import bufferDefault, { Buffer as ImportedBuffer, constants } from "node:buffer";
 
 const results = [];
 function check(name, value) {
