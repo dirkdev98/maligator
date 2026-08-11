@@ -413,6 +413,7 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_NODE_TRANSFORM_PROTOTYPE,
     /* Per-realm Node filesystem/crypto modules with default + named identity. */
     MAL_INTRINSIC_NODE_FS_MODULE,
+    MAL_INTRINSIC_NODE_FS_PROMISES_MODULE,
     MAL_INTRINSIC_NODE_CRYPTO_MODULE,
     MAL_INTRINSIC_NODE_PERF_HOOKS_MODULE,
     MAL_INTRINSIC_NODE_TLS_MODULE,

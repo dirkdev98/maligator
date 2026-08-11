@@ -13,6 +13,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import fsPromises, { readdir } from "node:fs/promises";
 
 const results: Array<[string, boolean]> = [];
 function check(name: string, ok: boolean): void {
@@ -127,6 +128,31 @@ for (const entry of entries) {
 }
 check("readdirSync returns text-file Dirent", sawText);
 check("readdirSync returns byte-file Dirent", sawBytes);
+
+check("node:fs/promises default exposes readdir", fsPromises.readdir === readdir);
+const promiseOrder = ["before"];
+const promisedEntries = readdir(nested, { withFileTypes: true }).then((value) => {
+	promiseOrder.push("fulfilled");
+	return value;
+});
+promiseOrder.push("after");
+const promiseEntries = await promisedEntries;
+eq(
+	"promise readdir defers fulfillment",
+	promiseOrder.join(","),
+	"before,after,fulfilled",
+);
+check(
+	"promise readdir preserves Dirent results",
+	promiseEntries.some((entry) => entry.name === "utf8.txt" && entry.isFile()),
+);
+let promisedMissingCode = "";
+try {
+	await readdir(`${root}/promise-missing`);
+} catch (error) {
+	promisedMissingCode = (error as NodeJS.ErrnoException).code ?? "";
+}
+eq("promise readdir rejects with errno", promisedMissingCode, "ENOENT");
 
 copyFileSync(textFile, copiedFile);
 eq("copyFileSync copies contents", readFileSync(copiedFile, "utf8"), "héllo 😀");

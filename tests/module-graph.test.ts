@@ -600,6 +600,25 @@ test("canonicalizes bare ESM buffer to node:buffer", () => {
 	);
 });
 
+test("canonicalizes the promise-based filesystem submodule", () => {
+	write(
+		"fs-promises.mjs",
+		`import fsPromises, { readdir } from "fs/promises";\n` +
+			`globalThis.sink = [fsPromises, readdir];\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "fs-promises.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:fs/promises",
+	);
+	expect(graph.modules.get("node:fs/promises")?.host).toMatchObject({
+		named: ["readdir"],
+		hasDefault: true,
+		installer: "mal_host_install_node_fs_promises",
+	});
+});
+
 test("rejects a node:* import clearly when surface.node is off (the default)", () => {
 	write("node-off.mjs", `import { join } from "node:path";\n`);
 	expect(() => buildModuleGraph(path.join(root, "node-off.mjs"))).toThrow(

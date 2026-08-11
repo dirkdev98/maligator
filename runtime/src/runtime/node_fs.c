@@ -9,6 +9,7 @@
 
 #include "ascii.h"
 #include "array_object.h"
+#include "builtin_promise.h"
 #include "date_object.h"
 #include "function_object.h"
 #include "gc.h"
@@ -23,6 +24,7 @@
 #include "object_ops.h"
 #include "posix_fs.h" // host layer: the POSIX syscalls + errno results
 #include "property_store.h"
+#include "promise_object.h"
 #include "table.h"
 #include "utf8.h"
 #include "typed_array_object.h"
@@ -544,6 +546,72 @@ static void node_fs_clear_completion(MalVm *vm) {
     };
 }
 
+enum {
+    NODE_FS_PROMISE_TASK_PROMISE,
+    NODE_FS_PROMISE_TASK_OPERATION,
+    NODE_FS_PROMISE_TASK_PATH,
+    NODE_FS_PROMISE_TASK_OPTIONS,
+    NODE_FS_PROMISE_TASK_SLOT_COUNT,
+};
+
+static MalValue node_fs_promise_task(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *task = mal_value_to_native_function_object(callee);
+    MalValue roots[NODE_FS_PROMISE_TASK_SLOT_COUNT];
+    for (i32 i = 0; i < NODE_FS_PROMISE_TASK_SLOT_COUNT; i++) {
+        roots[i] = mal_native_function_object_get_slot(task, i);
+    }
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalCompletion completion = mal_vm_call_value(
+        vm, roots[NODE_FS_PROMISE_TASK_OPERATION], mal_value_new_undefined(),
+        roots + NODE_FS_PROMISE_TASK_PATH, 2);
+    MalPromiseObject *promise = mal_value_to_promise_object(
+        roots[NODE_FS_PROMISE_TASK_PROMISE]);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        roots[NODE_FS_PROMISE_TASK_PATH] = completion.value;
+        node_fs_clear_completion(vm);
+        mal_promise_reject(vm, promise, roots[NODE_FS_PROMISE_TASK_PATH]);
+    } else {
+        roots[NODE_FS_PROMISE_TASK_PATH] = completion.value;
+        mal_promise_fulfill(vm, promise, roots[NODE_FS_PROMISE_TASK_PATH]);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_promises_readdir(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalValue roots[NODE_FS_PROMISE_TASK_SLOT_COUNT] = {
+        mal_value_from_promise_object(mal_promise_object_new(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]))),
+        mal_native_function_object_get_slot(
+            mal_value_to_native_function_object(callee), 0),
+        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        argc >= 2 ? args[1] : mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue task = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "readdir"),
+            node_fs_promise_task, roots, countof(roots)));
+    mal_vm_enqueue_reaction_job(vm, task, false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    MalValue promise = roots[NODE_FS_PROMISE_TASK_PROMISE];
+    mal_gc_unroot(&root);
+    return promise;
+}
+
 static MalValue node_fs_errno_value(
     MalVm *vm, int err, const char *syscall, const char *path) {
     node_fs_throw_errno(vm, err, syscall, path);
@@ -1045,6 +1113,45 @@ void mal_host_install_node_fs(
     mal_gc_unroot(&module_root);
 
     mal_gc_unroot(&proto_rs);
+}
+
+void mal_host_install_node_fs_promises(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE];
+    if (!mal_value_is_undefined(cached)) {
+        mal_node_module_publish(vm, slots, count, cached);
+        return;
+    }
+
+    mal_host_install_node_fs(vm, nullptr, 0, launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+
+    MalValue roots[] = {
+        vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE],
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "readdirSync"), &roots[1])) {
+        mal_gc_unroot(&root);
+        return;
+    }
+
+    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalValue readdir = node_fs_make_fn_slot(
+        vm, fn_proto, "readdir", 1, node_fs_promises_readdir, roots[1]);
+    MalRootSpan readdir_root;
+    mal_gc_root(&readdir_root, &readdir, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]),
+        (const byte *) "readdir", readdir, NODE_FS_VISIBLE);
+    mal_gc_unroot(&readdir_root);
+
+    vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE] = roots[2];
+    mal_node_module_publish(vm, slots, count, roots[2]);
+    mal_gc_unroot(&root);
 }
 
 #endif /* MAL_NODE */

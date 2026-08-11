@@ -114,6 +114,13 @@ const FS: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:fs"),
 };
 
+const FS_PROMISES: HostModuleSpec = {
+	id: "node:fs/promises",
+	named: ["readdir"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:fs/promises"),
+};
+
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
 	named: ["execFileSync"],
@@ -316,6 +323,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 	[
 		PATH,
 		FS,
+		FS_PROMISES,
 		CHILD_PROCESS,
 		CRYPTO,
 		PERF_HOOKS,

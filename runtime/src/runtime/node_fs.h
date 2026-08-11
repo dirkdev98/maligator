@@ -24,3 +24,8 @@
 void mal_host_install_node_fs(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
 );
+
+/** Host installer for the promise-based filesystem submodule. */
+void mal_host_install_node_fs_promises(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
+);

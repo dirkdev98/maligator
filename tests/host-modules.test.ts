@@ -162,6 +162,22 @@ describe("host-install manifest", () => {
 		expect(def.hostInstalls[0]!.exports.map((e) => e.name)).toEqual(["default"]);
 	});
 
+	it("binds promise-based filesystem exports through their submodule installer", () => {
+		const def = compile(
+			`import fsPromises, { readdir } from "node:fs/promises";\nglobalThis.sink = [fsPromises, readdir];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_fs_promises",
+				exports: [
+					expect.objectContaining({ name: "readdir" }),
+					expect.objectContaining({ name: "default" }),
+				],
+			}),
+		]);
+	});
+
 	it("binds node:events default and named constructor exports through one installer", () => {
 		const def = compile(
 			`import Events, { EventEmitter } from "node:events";\nglobalThis.sink = [Events, EventEmitter];\n`,
