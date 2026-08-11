@@ -146,8 +146,8 @@ static int codec_header_field(llhttp_t *parser, const char *at, size_t length) {
             return codec_fail(parser, "HTTP field allocation failed");
         }
         MalHttpCodecField *field = &head->fields[head->field_count++];
+        *field = (MalHttpCodecField) { .value_offset = SIZE_MAX };
         field->name_offset = head->arena_length;
-        field->value_offset = SIZE_MAX;
     }
     codec->header_name_open = true;
     MalHttpCodecField *field = &head->fields[head->field_count - 1];

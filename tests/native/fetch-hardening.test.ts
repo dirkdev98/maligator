@@ -401,6 +401,21 @@ describe("Mal.serve hardening", () => {
 		});
 	});
 
+	it("accepts realistic request heads that spill inline codec storage", async () => {
+		await withServer(bin, {}, async (base) => {
+			const headers = Array.from(
+				{ length: 24 },
+				(_, index) => `X-Browser-${index}: ${"v".repeat(64)}\r\n`,
+			).join("");
+			const response = await rawExchange(
+				base,
+				`GET /ok HTTP/1.1\r\nHost: x\r\n${headers}\r\n`,
+			);
+			expect(statusLine(response)).toContain("200");
+			expect(response).toContain("ok");
+		});
+	});
+
 	// A body where none is allowed shifts every following response on a reused
 	// connection. Assert the wire carries no forbidden bytes and that the next
 	// pipelined request still lines up.
