@@ -355,7 +355,11 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 		}
 		definitionLines[0] = definitionLines[0]!.replace(/^static /, "");
 		if (
-			(symbol.startsWith("mal_functions") || symbol.startsWith("mal_source_positions")) &&
+			(symbol.startsWith("mal_functions") ||
+				symbol.startsWith("mal_source_positions") ||
+				symbol.startsWith("mal_strings") ||
+				(symbol.startsWith("mal_function_") &&
+					symbol.includes("_instructions"))) &&
 			definitionLines.join("\n").length > Math.floor(maxCodeUnits / 2)
 		) {
 			const rows = definitionLines.slice(1, -1);
@@ -375,7 +379,10 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 			}
 			if (chunk.length > 0) chunks.push(chunk);
 
-			output.push(`${mutableType} ${symbol}[${rows.length}];`);
+			output.push(
+				`extern ${mutableType} ${symbol}[];`,
+				`${mutableType} ${symbol}[${rows.length}];`,
+			);
 			let rowOffset = 0;
 			const initializer = `mal_initialize_${symbol}`;
 			splitInitializers.push(initializer);
@@ -425,6 +432,7 @@ function emitVmDefinitionSource(
 	definition: VmDefinition,
 	options: EmitOptions,
 	splitCompiledFunctions: boolean,
+	maxCompiledFunctionCodeUnits?: number,
 ): EmittedVmSource {
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
@@ -468,26 +476,39 @@ function emitVmDefinitionSource(
 	// Native-backend functions. Emitted before the MalFunction table (which
 	// references their symbols) and after the constant pools (which they may
 	// reference). The bytecode is still emitted below as a fallback / for `new`.
-	const compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) =>
-		useCompiled
-			? emitCompiledFunction(
+	const compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) => {
+		if (!useCompiled) return null;
+		const emitted = emitCompiledFunction(
 					fn,
 					i,
 					suffix,
 					debug,
 					undefined,
 					splitCompiledFunctions ? "external" : "static",
-				)
-			: null,
-	);
+				);
+		if (emitted === null) return null;
+		if (
+			maxCompiledFunctionCodeUnits !== undefined &&
+			emitted.source.length + C_HEADER_LINES.join("\n").length + 1 >
+				maxCompiledFunctionCodeUnits
+		) {
+			return null;
+		}
+		return emitted;
+	});
 	if (splitCompiledFunctions) {
+		if (compiled.some((fn) => fn !== null)) {
+			lines.push(
+				`#define MAL_DECLARE_COMPILED(name) MalValue name${COMPILED_FUNCTION_DECLARATION}`,
+			);
+		}
 		for (const fn of compiled) {
 			if (fn !== null) {
-				lines.push(`MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
+				lines.push(`MAL_DECLARE_COMPILED(${fn.symbol});`);
 			}
 		}
 		if (compiled.some((fn) => fn !== null)) {
-			lines.push("");
+			lines.push("#undef MAL_DECLARE_COMPILED", "");
 		}
 	} else {
 		for (const fn of compiled) {
@@ -591,7 +612,15 @@ function emitVmDefinitionSource(
 	}
 	lines.push("};", "");
 
-	lines.push(...malVmDefinitionStruct(definition, suffix, debug, undefined, options));
+	for (const line of malVmDefinitionStruct(
+		definition,
+		suffix,
+		debug,
+		undefined,
+		options,
+	)) {
+		lines.push(line);
+	}
 
 	return { source: lines.join("\n"), compiled };
 }
@@ -614,7 +643,7 @@ export function emitVmTranslationUnits(
 	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
-	const emitted = emitVmDefinitionSource(definition, options, true);
+	const emitted = emitVmDefinitionSource(definition, options, true, maxCodeUnits);
 	const splitData = externalizeDataArrays(emitted.source, maxCodeUnits);
 	if (splitData.source.length > maxCodeUnits) {
 		throw new RangeError(
@@ -625,18 +654,26 @@ export function emitVmTranslationUnits(
 
 	const generatedDeclarations: Array<GeneratedDeclaration> = splitData.source
 		.split("\n")
-		.filter(
-			(line) =>
-				line.startsWith("extern ") ||
-				(line.startsWith("MalValue mal_compiled_") && line.endsWith(";")),
-		)
+		.filter((line) => line.startsWith("extern "))
 		.map((source) => {
 			const match = /\b(mal_[A-Za-z0-9_]+)(?=\[\]|\()/.exec(source);
 			if (match === null) {
 				throw new Error(`cannot identify generated declaration '${source}'`);
 			}
 			return { symbol: match[1]!, source };
-		});
+		})
+		.concat(
+			emitted.compiled.flatMap((fn): Array<GeneratedDeclaration> =>
+				fn === null
+					? []
+					: [
+							{
+								symbol: fn.symbol,
+								source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
+							},
+						],
+			),
+		);
 	const declarationsBySymbol = new Map(
 		generatedDeclarations.map((declaration) => [declaration.symbol, declaration]),
 	);

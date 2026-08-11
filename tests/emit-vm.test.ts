@@ -193,7 +193,8 @@ describe("emit-vm instruction packing", () => {
 
 		expect(units.length).toBeGreaterThan(2);
 		expect(units.every((unit) => unit.length <= budget)).toBe(true);
-		expect(units[0]).toContain("MalValue mal_compiled_0(MalVm *vm, MalValue this_value");
+		expect(units[0]).toContain("#define MAL_DECLARE_COMPILED(name)");
+		expect(units[0]).toContain("MAL_DECLARE_COMPILED(mal_compiled_0);");
 		expect(units[0]).not.toContain(
 			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {",
 		);
@@ -203,13 +204,11 @@ describe("emit-vm instruction packing", () => {
 		const metadataUnit = units.find((unit) =>
 			unit.includes("const MalFunction mal_functions[]"),
 		);
-		expect(metadataUnit).toContain(
-			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state);",
-		);
+		expect(metadataUnit).toContain("MAL_DECLARE_COMPILED(mal_compiled_0);");
 		expect(units.slice(1).join("\n")).not.toContain(
 			"static MalValue mal_compiled_0(MalVm *vm",
 		);
-		expect(units[0]).toContain("MalValue mal_compiled_1(MalVm *vm");
+		expect(units[0]).toContain("MAL_DECLARE_COMPILED(mal_compiled_1);");
 		expect(units.slice(1).join("\n")).toContain("MalValue mal_compiled_1(MalVm *vm");
 		expect(units.slice(1).join("\n")).not.toContain(
 			"static MalValue mal_compiled_1(MalVm *vm",
@@ -319,6 +318,9 @@ describe("emit-vm instruction packing", () => {
 			line: index + 1,
 			column: index % 80,
 		}));
+		const stringConstants = Array.from({ length: 800 }, (_, index) =>
+			[...String(index).padEnd(80, "x")].map((character) => character.charCodeAt(0)),
+		);
 		const budget = 100_000;
 		const units = emitVmTranslationUnits(
 			{
@@ -326,6 +328,7 @@ describe("emit-vm instruction packing", () => {
 				functionCount: functions.length,
 				functions,
 				sourcePositions,
+				stringConstants,
 			},
 			{},
 			budget,
@@ -335,13 +338,44 @@ describe("emit-vm instruction packing", () => {
 
 		expect(units.every((unit) => unit.length <= budget)).toBe(true);
 		expect(definitionUnit).toContain("MalFunction mal_functions[400];");
+		expect(definitionUnit).toContain("MalString mal_strings[800];");
 		expect(definitionUnit).toContain("MalSourcePos mal_source_positions[800];");
 		expect(definitionUnit).toContain(
 			".initialize_generated_data = mal_initialize_generated_data",
 		);
 		expect(dataUnits).toContain("void mal_initialize_mal_functions_chunk_0(");
+		expect(dataUnits).toContain("void mal_initialize_mal_strings_chunk_0(");
 		expect(dataUnits).toContain("void mal_initialize_mal_source_positions_chunk_0(");
 		expect(dataUnits).not.toContain("const MalFunction mal_functions[] =");
+	});
+
+	it("keeps an oversized compiled function as bounded bytecode", () => {
+		const instructions = [
+			...Array.from({ length: 200 }, () => ({
+				opcode: "CALL" as const,
+				dst: 0,
+				callee: 1,
+				thisValue: 2,
+				argumentCount: 0,
+				arguments: [],
+			})),
+			{ opcode: "RETURN" as const, value: 0 },
+		];
+		const units = emitVmTranslationUnits(
+			{
+				...definition,
+				functions: [{ ...fn, capturedCount: 0, registerCount: 3, instructions }],
+			},
+			{},
+			20_000,
+		);
+		const output = units.join("\n");
+
+		expect(units.every((unit) => unit.length <= 20_000)).toBe(true);
+		expect(output).not.toContain("MalValue mal_compiled_0(MalVm *vm");
+		expect(output).toContain("MalInstruction mal_function_0_instructions[201]");
+		expect(output).toContain("void mal_initialize_mal_function_0_instructions_chunk_0(");
+		expect(output).toContain(".compiled = nullptr");
 	});
 
 	it("rejects an invalid translation-unit budget", () => {
