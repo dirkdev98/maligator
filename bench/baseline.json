@@ -410,32 +410,32 @@
     }
   },
   "selfCompile": {
-    "maligatorMs": 77952.415917,
-    "nodeMs": 11208.366917,
+    "maligatorMs": 94911.182333,
+    "nodeMs": 12239.577375,
     "maligatorPhases": {
-      "graphMs": 364,
-      "semanticMs": 840,
-      "compileToIrMs": 309,
-      "optimizeMs": 70717,
-      "regallocMs": 2325,
-      "lowerMs": 1431,
-      "emitMs": 1743,
-      "writeMs": 64
+      "graphMs": 437,
+      "semanticMs": 954,
+      "compileToIrMs": 355,
+      "optimizeMs": 86545,
+      "regallocMs": 2530,
+      "lowerMs": 1588,
+      "emitMs": 1956,
+      "writeMs": 58
     },
     "nodePhases": {
-      "graphMs": 84,
-      "semanticMs": 134,
-      "compileToIrMs": 89,
-      "optimizeMs": 9886,
-      "regallocMs": 379,
-      "lowerMs": 193,
-      "emitMs": 301,
-      "writeMs": 29
+      "graphMs": 104,
+      "semanticMs": 156,
+      "compileToIrMs": 98,
+      "optimizeMs": 10775,
+      "regallocMs": 416,
+      "lowerMs": 206,
+      "emitMs": 322,
+      "writeMs": 23
     },
-    "runs": 3,
+    "runs": 5,
     "units": 15,
-    "maligatorCodeUnits": 39236988,
-    "nodeCodeUnits": 39236071,
+    "maligatorCodeUnits": 39211880,
+    "nodeCodeUnits": 39210963,
     "platform": "darwin",
     "arch": "arm64",
     "nodeVersion": "v24.14.1"
