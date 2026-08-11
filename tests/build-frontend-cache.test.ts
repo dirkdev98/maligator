@@ -67,6 +67,30 @@ describe("normal build frontend cache", () => {
 		expect(warm.definitionStats).toEqual(cold.definitionStats);
 	});
 
+	it("separates cache entries by module aliases", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.mjs");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(path.join(root, "first.mjs"), `export const answer = 1;\n`);
+		write(path.join(root, "second.mjs"), `export const answer = 2;\n`);
+		write(entrypoint, `import { answer } from "answer";\nconsole.log(answer);\n`);
+		const run = (target: string) =>
+			compileBuildFrontend({
+				entrypoint,
+				config: resolveBuildConfig({
+					modules: { aliases: { answer: target } },
+				}),
+				stripTypes: stripTypesWithTypeScript,
+				stripperIdentity: "build-frontend-cache-test",
+				cacheDirectory,
+			});
+
+		expect(run("./first.mjs").cache).toBe("miss");
+		expect(run("./first.mjs").cache).toBe("hit");
+		expect(run("./second.mjs").cache).toBe("miss");
+	});
+
 	it("invalidates a changed wire identity before exposing a lazy artifact handle", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

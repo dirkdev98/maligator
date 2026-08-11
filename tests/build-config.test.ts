@@ -43,6 +43,7 @@ describe("resolveBuildConfig defaults", () => {
 		expect(config.host.scheduler).toBe("single");
 		expect(config.surface).toEqual({ webPlatform: false, node: false, maligator: true });
 		expect(config.assets).toEqual({});
+		expect(config.modules.aliases).toEqual({});
 	});
 
 	it("defaults RegExp ON (core language, unlike eval/Intl/web)", () => {
@@ -87,6 +88,25 @@ describe("loadBuildConfig", () => {
 			}),
 		);
 		expect(loadBuildConfig(undefined, dir).engine.eval).toBe(false);
+	});
+
+	it("accepts exact module aliases", () => {
+		const dir = tmpdir();
+		writeConfig(
+			dir,
+			JSON.stringify({ modules: { aliases: { "package-entry": "./src/pure.ts" } } }),
+		);
+		expect(loadBuildConfig(undefined, dir).modules.aliases).toEqual({
+			"package-entry": "./src/pure.ts",
+		});
+	});
+
+	it("rejects malformed module aliases", () => {
+		const dir = tmpdir();
+		writeConfig(dir, JSON.stringify({ modules: { aliases: { package: "" } } }));
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(
+			/modules\.aliases.*record of non-empty string replacements/,
+		);
 	});
 
 	it("accepts strict file and directory asset entries", () => {

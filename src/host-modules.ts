@@ -323,6 +323,27 @@ const HTTP: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:http"),
 };
 
+const HTTPS: HostModuleSpec = {
+	id: "node:https",
+	named: ["Agent", "get", "globalAgent", "request"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:https"),
+};
+
+const HTTP2: HostModuleSpec = {
+	id: "node:http2",
+	named: ["connect"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:http2"),
+};
+
+const TIMERS_PROMISES: HostModuleSpec = {
+	id: "node:timers/promises",
+	named: ["setTimeout"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:timers/promises"),
+};
+
 const URL: HostModuleSpec = {
 	id: "node:url",
 	named: ["Url", "fileURLToPath", "format", "parse", "pathToFileURL"],
@@ -397,6 +418,9 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		ASYNC_HOOKS,
 		STREAM,
 		HTTP,
+		HTTPS,
+		HTTP2,
+		TIMERS_PROMISES,
 		URL,
 		QUERYSTRING,
 		NET,

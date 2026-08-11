@@ -103,6 +103,7 @@ function environmentIdentity(options: CompileDependencyFragmentsOptions): string
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: "development",
+			modules: options.config.modules,
 			engine: options.config.engine,
 			host: options.config.host,
 			surface: options.config.surface,

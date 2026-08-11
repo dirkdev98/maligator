@@ -104,6 +104,7 @@ function resolvedEntries(files: Array<string>): Array<string> {
 
 function cacheIdentity(options: CompileTestOptions): string {
 	const flags = {
+		modules: options.config.modules,
 		engine: options.config.engine,
 		host: options.config.host,
 		surface: options.config.surface,

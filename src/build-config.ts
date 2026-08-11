@@ -31,6 +31,7 @@ export interface ResolvedBuildConfig {
 	entry: string | undefined;
 	outputName: string | undefined;
 	assets: Record<string, AssetInclusion>;
+	modules: { aliases: Record<string, string> };
 	engine: {
 		eval: boolean | "compile-check";
 		realms: boolean;
@@ -136,6 +137,20 @@ const stringArrayLeaf: Leaf = {
 			"an array of strings",
 		),
 };
+const stringRecordLeaf: Leaf = {
+	leaf: (value, at) =>
+		expect(
+			typeof value === "object" &&
+				value !== null &&
+				!Array.isArray(value) &&
+				Object.entries(value).every(
+					([key, entry]) =>
+						key.length > 0 && typeof entry === "string" && entry.length > 0,
+				),
+			at,
+			"a record of non-empty string replacements",
+		),
+};
 const schedulerLeaf: Leaf = {
 	leaf: (value, at) =>
 		expect(
@@ -200,6 +215,7 @@ const CONFIG_SCHEMA: ObjectSchema = {
 		entry: stringLeaf,
 		outputName: stringLeaf,
 		assets: assetsLeaf,
+		modules: { object: { aliases: stringRecordLeaf } },
 		engine: {
 			object: {
 				eval: evalLeaf,
@@ -259,6 +275,7 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 		entry: config.entry,
 		outputName: config.outputName,
 		assets: { ...(config.assets ?? {}) },
+		modules: { aliases: { ...(config.modules?.aliases ?? {}) } },
 		engine: {
 			eval: config.engine?.eval ?? false,
 			realms: config.engine?.realms ?? false,

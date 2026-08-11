@@ -832,10 +832,10 @@ test("parse caches distinguish transformed source from the on-disk module", () =
 });
 
 test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
-	write("node-unknown.mjs", `import "node:https";\n`);
+	write("node-unknown.mjs", `import "node:dgram";\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "node-unknown.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:https'/);
+	).toThrow(/unknown node built-in module 'node:dgram'/);
 });
 
 test("canonicalizes a bare ESM path specifier to the host built-in", () => {
@@ -844,6 +844,19 @@ test("canonicalizes a bare ESM path specifier to the host built-in", () => {
 		buildConfig: nodeOn,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
+});
+
+test("applies an exact module alias before resolution", () => {
+	write("aliased.mjs", `export const answer = 42;\n`);
+	write("alias-entry.mjs", `import { answer } from "package-entry";\nanswer;\n`);
+	const graph = buildModuleGraph(path.join(root, "alias-entry.mjs"), {
+		buildConfig: resolveBuildConfig({
+			modules: { aliases: { "package-entry": "./aliased.mjs" } },
+		}),
+	});
+	expect(graph.modules.get(graph.entry)?.dependencies[0]?.resolvedPath).toBe(
+		path.join(root, "aliased.mjs"),
+	);
 });
 
 test("gives supported bare assert precedence over npm packages", () => {
@@ -933,25 +946,29 @@ test("canonicalizes bare string_decoder instead of resolving an ancestor shim", 
 	);
 });
 
-test("a literal dynamic import of a supported node:* is rejected (static import only)", () => {
+test("a literal dynamic import of a supported node:* resolves to its host module", () => {
 	write(
 		"dyn-node.mjs",
 		`async function f() {\n\treturn import("node:crypto");\n}\nglobalThis.sink = f;\n`,
 	);
-	// Host exports are synthesized into global slots and filled by a native
-	// installer before execution; there is no runtime module object for `import()`
-	// to resolve to a namespace in this slice, so a literal dynamic import of a
-	// supported built-in is rejected rather than left half-wired.
-	expect(() =>
-		buildModuleGraph(path.join(root, "dyn-node.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/Cannot dynamically import node built-in 'node:crypto'/);
+	const graph = buildModuleGraph(path.join(root, "dyn-node.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)?.dependencies).toEqual([
+		expect.objectContaining({
+			specifier: "node:crypto",
+			kind: "dynamic",
+			resolvedPath: "node:crypto",
+		}),
+	]);
+	expect(graph.modules.get("node:crypto")?.host?.id).toBe("node:crypto");
 });
 
 test("a literal dynamic import of an unknown node:* is rejected, not deferred", () => {
-	write("dyn-unknown.mjs", `import("node:https");\n`);
+	write("dyn-unknown.mjs", `import("node:dgram");\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "dyn-unknown.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:https'/);
+	).toThrow(/unknown node built-in module 'node:dgram'/);
 });
 
 test("a literal dynamic import of node:* is rejected when surface.node is off", () => {

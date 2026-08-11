@@ -311,10 +311,13 @@ export function buildModuleGraph(
 				}
 				return { ...dependency, resolvedPath: dependency.specifier };
 			}
-			const canonicalHostId = canonicalNodeHostModuleId(dependency.specifier);
-			const canonicalBuiltinId = canonicalNodeBuiltinId(dependency.specifier);
+			const aliasedSpecifier =
+				options.buildConfig?.modules.aliases[dependency.specifier] ??
+				dependency.specifier;
+			const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
+			const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
 			const resolved = resolveSpecifier(
-				canonicalHostId ?? canonicalBuiltinId ?? dependency.specifier,
+				canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
 				filePath,
 				{
 					...ctx,
@@ -325,18 +328,6 @@ export function buildModuleGraph(
 				},
 			);
 			if ("host" in resolved) {
-				if (dependency.kind === "dynamic") {
-					// A host built-in's exports are synthesized into global slots at link
-					// time and filled by a native installer before execution — there is
-					// no runtime module object for `import()` to resolve to a namespace in
-					// this slice. Reject a literal dynamic import rather than resolve it to
-					// a namespace that cannot be built; a static import is the supported
-					// form.
-					throw new SyntaxError(
-						`Cannot dynamically import node built-in '${resolved.host.id}' from ${filePath}: ` +
-							`node built-ins support static import only`,
-					);
-				}
 				// A supported `node:*` built-in: identity is its canonical specifier.
 				return { ...dependency, resolvedPath: resolved.host.id };
 			}

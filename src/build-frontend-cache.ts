@@ -150,6 +150,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			optimization: options.optimization ?? "full",
 			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
+			modules: options.config.modules,
 			engine: options.config.engine,
 			host: options.config.host,
 			surface: options.config.surface,

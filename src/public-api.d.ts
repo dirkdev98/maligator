@@ -21,6 +21,10 @@ export interface MaligatorBuildConfig {
 	entry?: string;
 	outputName?: string;
 	assets?: Record<string, AssetInclusion>;
+	modules?: {
+		/** Exact specifier replacements applied before module resolution. */
+		aliases?: Record<string, string>;
+	};
 	engine?: {
 		/**
 		 * `true` embeds the runtime compiler. `false` keeps eval/Function present

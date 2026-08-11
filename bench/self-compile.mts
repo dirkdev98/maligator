@@ -15,6 +15,7 @@ const config: ResolvedBuildConfig = {
 	entry: undefined,
 	outputName: undefined,
 	assets: {},
+	modules: { aliases: {} },
 	engine: {
 		eval: false,
 		realms: false,

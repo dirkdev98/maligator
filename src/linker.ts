@@ -588,21 +588,24 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	};
 
 	// --- Phase C: resolve `import * as ns` namespaces ---
-	for (const file of program.files) {
-		if (goalOf(file.path) === "cjs") {
+	for (const modulePath of exportsByModule.keys()) {
+		if (goalOf(modulePath) === "cjs") {
 			continue;
 		}
 		const nsExports: Array<{ name: string; exporter: Binding }> = [];
-		for (const name of exportNamesOf(file.path)) {
-			const exporter = resolveExport(file.path, name);
+		for (const name of exportNamesOf(modulePath)) {
+			const exporter = resolveExport(modulePath, name);
 			// An ambiguous star-exported name is omitted from the namespace (not an
 			// error): 16.2.1.6.3 GetExportedNames keeps it but ResolveExport → ambiguous.
 			if (exporter && exporter !== "ambiguous") {
 				nsExports.push({ name, exporter });
-				exporter.usageNodes.push(file.ast);
+				const usageNode =
+					program.files.find((file) => file.path === modulePath)?.ast ??
+					program.files[0]?.ast;
+				if (usageNode) exporter.usageNodes.push(usageNode);
 			}
 		}
-		linkage.moduleNamespaces.set(file.path, nsExports);
+		linkage.moduleNamespaces.set(modulePath, nsExports);
 	}
 
 	for (const { file, binding, module } of namespaceToResolve) {
