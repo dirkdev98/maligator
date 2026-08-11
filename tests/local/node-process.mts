@@ -15,6 +15,7 @@ import importedProcess, {
 	env as importedEnv,
 	hrtime as importedHrtime,
 } from "node:process";
+import { pathToFileURL } from "node:url";
 import requiredProcesses from "./node-process-require.cjs";
 
 const MARKER = "NODE_PROCESS_MARKER";
@@ -51,6 +52,14 @@ function check(name: string, ok: boolean): void {
 }
 
 check("process is object", typeof process === "object" && process !== null);
+check("import.meta has stable identity", import.meta === import.meta);
+check(
+	"import.meta exposes Node path metadata",
+	import.meta.filename.endsWith("/tests/local/node-process.mts") &&
+		import.meta.dirname.endsWith("/tests/local") &&
+		import.meta.url === pathToFileURL(import.meta.filename).href &&
+		import.meta.main,
+);
 check("process has global identity", globalThis.process === process);
 check("global aliases globalThis", global === globalThis);
 check("node:process default has global identity", importedProcess === process);

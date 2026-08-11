@@ -176,6 +176,8 @@ export interface IntermediateProgram {
 	>;
 	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
 	dynamicModuleStatusSlot: Map<string, number>;
+	/** One stable import.meta object slot per ES module that reads it. */
+	importMetaSlot: Map<string, number>;
 
 	/**
 	 * CommonJS modules, keyed by path to their integer module id. The id indexes
@@ -1738,6 +1740,7 @@ export function compileSemanticProgramToIr(
 		namespaceImports: new Map(),
 		moduleNamespaces: new Map(),
 		dynamicModuleStatusSlot: new Map(),
+		importMetaSlot: new Map(),
 
 		cjsModuleId: new Map(),
 		cjsWrapperFunctionIndex: [],
@@ -3016,8 +3019,91 @@ function emitFunctionBodyTdz(
 function moduleNeedsPrologue(program: IntermediateProgram, file: SemanticFile): boolean {
 	return (
 		(file.scopes[0]?.bindings ?? []).some(isTdzBinding) ||
-		(program.namespaceImports.get(file.path)?.length ?? 0) > 0
+		(program.namespaceImports.get(file.path)?.length ?? 0) > 0 ||
+		fileUsesImportMeta(file)
 	);
+}
+
+function isImportMeta(node: ESTree.Node): node is ESTree.MetaProperty {
+	return (
+		node.type === "MetaProperty" &&
+		node.meta.name === "import" &&
+		node.property.name === "meta"
+	);
+}
+
+function fileUsesImportMeta(file: SemanticFile): boolean {
+	return traverseEstree(file.ast.body, (node) =>
+		isImportMeta(node) ? ESTREE_STOP : undefined,
+	) === ESTREE_STOP;
+}
+
+function importMetaSlot(program: IntermediateProgram, file: SemanticFile): number {
+	let slot = program.importMetaSlot.get(file.path);
+	if (slot === undefined) {
+		slot = program.nextGlobalIndex++;
+		program.importMetaSlot.set(file.path, slot);
+	}
+	return slot;
+}
+
+function importMetaUrl(filePath: string): string {
+	const normalized = filePath.replaceAll("\\", "/");
+	const encoded = normalized
+		.split("/")
+		.map((segment) => encodeURIComponent(segment))
+		.join("/");
+	return `file://${encoded.startsWith("/") ? "" : "/"}${encoded}`;
+}
+
+function emitImportMetaInit(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	file: SemanticFile,
+): void {
+	if (!fileUsesImportMeta(file)) return;
+
+	const cursor = { block };
+	const object = nextRegisterDestination(fn);
+	block.instructions.push({ type: "createObject", registers: [object] });
+	for (const [name, value] of [["url", importMetaUrl(file.path)]] as const) {
+		emitStoreProperty(
+			program,
+			fn,
+			cursor,
+			object,
+			name,
+			compileStaticString(program, fn, cursor, value),
+		);
+	}
+	if (program.semantic.graph?.nodeEnabled) {
+		for (const [name, value] of [
+			["filename", file.path],
+			["dirname", commonJsDirname(file.path)],
+		] as const) {
+			emitStoreProperty(
+				program,
+				fn,
+				cursor,
+				object,
+				name,
+				compileStaticString(program, fn, cursor, value),
+			);
+		}
+		const main = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "createBoolean",
+			registers: [main],
+			value: file.path === program.semantic.entrypointPath,
+		});
+		emitStoreProperty(program, fn, cursor, object, "main", main);
+	}
+	block.instructions.push({
+		type: "storeGlobal",
+		registers: [object],
+		index: importMetaSlot(program, file),
+	});
 }
 
 /**
@@ -3032,6 +3118,7 @@ function emitModulePrologue(
 	file: SemanticFile,
 ) {
 	emitTdzHoleInits(program, fn, block, file.scopes[0]?.bindings ?? []);
+	emitImportMetaInit(program, fn, block, file);
 	for (const namespaceImport of program.namespaceImports.get(file.path) ?? []) {
 		emitNamespaceObject(
 			program,
@@ -9220,6 +9307,15 @@ function compileExpression(
 			return destination;
 		}
 		case "MetaProperty": {
+			if (isImportMeta(expression)) {
+				const destination = nextRegisterDestination(fn);
+				cursor.block.instructions.push({
+					type: "loadGlobal",
+					registers: [destination],
+					index: importMetaSlot(program, fn.semanticFile),
+				});
+				return destination;
+			}
 			if (fn.classContext?.superNewTargetBinding && !fn.inFieldInitializer) {
 				return loadRegisterFromLocation(
 					fn,
@@ -9227,8 +9323,7 @@ function compileExpression(
 					getOrCreateBindingLocation(program, fn, fn.classContext.superNewTargetBinding),
 				);
 			}
-			// new.target: the active frame's new.target. import.meta is gated by
-			// the syntax scan and never reaches here. An arrow inherits new.target
+			// new.target: the active frame's new.target. An arrow inherits new.target
 			// lexically — sema bound it to an implicit "new.target" binding on the
 			// enclosing non-arrow function, captured through the closure env.
 			const newTargetBinding = fn.semanticFile.nodeToBinding.get(expression);
