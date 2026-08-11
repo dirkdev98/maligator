@@ -19,6 +19,7 @@ import type { NativeBuildContext } from "./native-build-context.ts";
 import { runNativeCommand, runNativeCommands } from "./native-command.ts";
 import { ensureNativeArtifacts } from "./runtime-build.ts";
 import type { NativeArtifacts } from "./runtime-build.ts";
+import { runtimeHeaderHash } from "./runtime-build.ts";
 import { toolArguments } from "./toolchain.ts";
 
 const BUILD_DIRECTORY = ".cache/mal-build";
@@ -220,7 +221,6 @@ interface PendingGeneratedObject {
 
 function ensureGeneratedObjects(
 	context: NativeBuildContext,
-	runtimeArtifactPath: string,
 	inputs: ReadonlyArray<GeneratedObjectInput>,
 	compileArguments: Array<string>,
 	verbose: boolean,
@@ -230,15 +230,19 @@ function ensureGeneratedObjects(
 	const results = new Array<string | undefined>(inputs.length);
 	const cacheHits = new Array<boolean | undefined>(inputs.length);
 	const pending: Array<PendingGeneratedObject> = [];
+	const runtimeHeaders = runtimeHeaderHash(
+		context.runtimeDirectory,
+		context.features.nodeEnabled,
+	);
 	for (const [index, input] of inputs.entries()) {
 		const key = hash(
 			"sha256",
 			JSON.stringify({
-				schema: 1,
+				schema: 2,
 				sourcePath: input.sourcePath,
 				source: hash("sha256", input.source, "hex"),
 				compileArguments,
-				runtimeArtifactDirectory: path.dirname(runtimeArtifactPath),
+				runtimeHeaders,
 				environment: context.environmentFingerprint,
 				toolchain: context.toolchain.fingerprint,
 				target: context.toolchain.target,
@@ -436,7 +440,6 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c");
 	const generatedObjects = ensureGeneratedObjects(
 		context,
-		artifacts.c.runtime,
 		[
 			...cPaths.map((sourcePath, index) => ({
 				sourcePath,

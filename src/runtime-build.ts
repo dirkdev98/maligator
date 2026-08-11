@@ -40,6 +40,24 @@ function runtimeSourceHash(runtimeDirectory: string, nodeEnabled: boolean): stri
 	});
 }
 
+/** Headers that generated application translation units compile against. */
+export function runtimeHeaderHash(runtimeDirectory: string, nodeEnabled: boolean): string {
+	const root = path.resolve(runtimeDirectory);
+	const llhttp = path.join(root, "vendor/llhttp/include");
+	const sqlite = path.join(root, "vendor/sqlite");
+	return hashDirectoryTrees({
+		root,
+		directories: [
+			path.join(root, "src"),
+			path.join(root, "rust/include"),
+			...(existsSync(llhttp) ? [llhttp] : []),
+			...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
+		],
+		include: (entry) => entry.name.endsWith(".h"),
+		compareNames: legacyLocaleNameComparator,
+	});
+}
+
 export function runtimeArtifactKey(inputs: {
 	compilerWireDigest?: string;
 	compileArguments: Array<string>;

@@ -21,7 +21,11 @@ import {
 } from "../src/native-build-context.ts";
 import type { NativeBuildContext } from "../src/native-build-context.ts";
 import { nativeBuildJobs, runNativeCommands } from "../src/native-command.ts";
-import { ensureNativeArtifacts, runtimeArtifactKey } from "../src/runtime-build.ts";
+import {
+	ensureNativeArtifacts,
+	runtimeArtifactKey,
+	runtimeHeaderHash,
+} from "../src/runtime-build.ts";
 import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
 import { formatToolchainReport, inspectToolchain } from "../src/toolchain.ts";
 import type { ToolchainReport } from "../src/toolchain.ts";
@@ -762,6 +766,18 @@ exit 7
 		const development = { ...base, mode: "development" };
 		const production = { ...base, mode: "production" };
 		expect(runtimeArtifactKey(development)).toBe(runtimeArtifactKey(production));
+	});
+
+	it("keys generated objects by runtime headers rather than implementations", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const initial = runtimeHeaderHash(runtimeDirectory, false);
+
+		writeFileSync(path.join(runtimeDirectory, "src/engine.c"), "int engine_value = 2;\n");
+		expect(runtimeHeaderHash(runtimeDirectory, false)).toBe(initial);
+
+		writeFileSync(path.join(runtimeDirectory, "rust/include/mal.h"), "#define MAL_ABI 2\n");
+		expect(runtimeHeaderHash(runtimeDirectory, false)).not.toBe(initial);
 	});
 
 	it("isolates the SQLite amalgamation from runtime header names", () => {
