@@ -10,6 +10,56 @@
 #include "value.h"
 #include "vm_ops.h"
 
+static MalValue node_diagnostics_undefined(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    return mal_value_new_undefined();
+}
+
+static MalValue node_diagnostics_false(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    return mal_value_new_boolean(false);
+}
+
+static MalValue node_diagnostics_channel(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalValue channel = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &channel, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(channel),
+        "hasSubscribers", mal_value_new_boolean(false), MAL_PROPERTY_NONE);
+    static const char *undefined_methods[] = {
+        "bindStore", "runStores", "subscribe", "unbindStore", "unsubscribe",
+    };
+    for (usize i = 0; i < countof(undefined_methods); i++) {
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(channel),
+            (const byte *) undefined_methods[i], 1, node_diagnostics_undefined);
+    }
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(channel),
+        "publish", 1, node_diagnostics_false);
+    mal_gc_unroot(&root);
+    return channel;
+}
+
 static MalValue node_diagnostics_trace_sync(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -66,6 +116,14 @@ void mal_host_install_node_diagnostics_channel(
         mal_gc_root(&root, &module, 1);
         mal_intrinsic_define_method_n(vm, mal_value_to_object(module),
             "tracingChannel", 1, node_diagnostics_tracing_channel);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(module),
+            "channel", 1, node_diagnostics_channel);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(module),
+            "subscribe", 2, node_diagnostics_undefined);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(module),
+            "unsubscribe", 2, node_diagnostics_false);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(module),
+            "hasSubscribers", 1, node_diagnostics_false);
         vm->intrinsics[MAL_INTRINSIC_NODE_DIAGNOSTICS_CHANNEL_MODULE] = module;
         mal_gc_unroot(&root);
     }

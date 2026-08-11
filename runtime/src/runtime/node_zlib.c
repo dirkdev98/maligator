@@ -257,6 +257,32 @@ ZLIB_FACTORY(zlib_create_inflate, MAL_ZLIB_FORMAT_ZLIB)
 ZLIB_FACTORY(zlib_create_gunzip, MAL_ZLIB_FORMAT_GZIP)
 ZLIB_FACTORY(zlib_create_brotli_decompress, MAL_ZLIB_FORMAT_BROTLI)
 
+static MalValue zlib_create_gzip_unavailable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+        "Gzip compression is not supported by this host");
+    return mal_value_new_undefined();
+}
+
+static MalValue zlib_deflate_unavailable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+        "Deflate compression is not supported by this host");
+    return mal_value_new_undefined();
+}
+
 static void zlib_install_exports(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
     for (i32 i = 0; i < count; i++) {
@@ -280,8 +306,9 @@ void mal_host_install_node_zlib(
         return;
     }
     mal_gc_register_finalizer(MAL_HEAP_NODE_ZLIB_OBJECT, zlib_finalize);
-    MalValue roots[2] = {
+    MalValue roots[3] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_new_undefined(),
         mal_value_new_undefined(),
     };
     MalRootSpan root;
@@ -293,6 +320,8 @@ void mal_host_install_node_zlib(
         {"createInflate", zlib_create_inflate},
         {"createGunzip", zlib_create_gunzip},
         {"createBrotliDecompress", zlib_create_brotli_decompress},
+		{"createGzip", zlib_create_gzip_unavailable},
+		{"deflate", zlib_deflate_unavailable},
     };
     for (usize i = 0; i < countof(factories); i++) {
         roots[1] = mal_value_from_native_function_object(
@@ -305,6 +334,24 @@ void mal_host_install_node_zlib(
             vm, mal_value_to_object(roots[0]), (const byte *) factories[i].name,
             roots[1], ZLIB_VISIBLE);
     }
+
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    static const struct {
+        const char *name;
+        i32 value;
+    } constants[] = {
+        {"Z_SYNC_FLUSH", 2},
+        {"BROTLI_OPERATION_FLUSH", 1},
+        {"ZSTD_e_flush", 1},
+    };
+    for (usize i = 0; i < countof(constants); i++) {
+        mal_intrinsic_define_data(
+            vm, mal_value_to_object(roots[2]), (const byte *) constants[i].name,
+            mal_value_from_f64((f64) constants[i].value), MAL_PROPERTY_ENUMERABLE);
+    }
+    mal_intrinsic_define_data(
+        vm, mal_value_to_object(roots[0]), (const byte *) "constants", roots[2],
+        ZLIB_VISIBLE);
     vm->intrinsics[MAL_INTRINSIC_NODE_ZLIB_MODULE] = roots[0];
     zlib_install_exports(vm, slots, count, roots[0]);
     mal_gc_unroot(&root);

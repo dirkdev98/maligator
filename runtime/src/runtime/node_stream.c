@@ -303,6 +303,26 @@ STREAM_CONSTRUCTOR(stream_readable_constructor, STREAM_READABLE)
 STREAM_CONSTRUCTOR(stream_writable_constructor, STREAM_WRITABLE)
 STREAM_CONSTRUCTOR(stream_duplex_constructor, STREAM_DUPLEX)
 STREAM_CONSTRUCTOR(stream_transform_constructor, STREAM_TRANSFORM)
+STREAM_CONSTRUCTOR(stream_pass_through_constructor, STREAM_TRANSFORM)
+
+static MalValue stream_pass_through_transform(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalValue roots[] = {
+        argc > 2 ? args[2] : mal_value_new_undefined(),
+        mal_value_new_null(),
+        argc > 0 ? args[0] : mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_vm_call_value(
+        vm, roots[0], mal_value_new_undefined(), roots + 1, 2).value;
+    mal_gc_unroot(&root);
+    return result;
+}
 
 static bool stream_is_readable(MalVm *vm, MalValue receiver) {
     return mal_value_is_object(receiver)
@@ -1591,6 +1611,19 @@ static MalValue stream_function(
             mal_intrinsic_ascii(vm, (const byte *) name), length, callback));
 }
 
+static MalValue stream_pipeline_unavailable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                       "Stream pipelines are not supported by this host");
+    return mal_value_new_undefined();
+}
+
 static void stream_define_methods(
     MalVm *vm, MalObject *prototype,
     const StreamMethod *methods, usize count, MalValue *scratch) {
@@ -1640,6 +1673,24 @@ static void stream_install_exports(
         "Stream", "Readable", "Writable", "Duplex", "Transform",
     };
     for (i32 i = 0; i < count; i++) {
+        if (strcmp(slots[i].name, "PassThrough") == 0) {
+            MalValue pass_through = mal_value_new_undefined();
+            if (stream_get(
+                    vm, vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR],
+                    "PassThrough", &pass_through)) {
+                vm->globals[slots[i].slot] = pass_through;
+            }
+            continue;
+        }
+        if (strcmp(slots[i].name, "pipeline") == 0) {
+            MalValue pipeline = mal_value_new_undefined();
+            if (stream_get(
+                    vm, vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR],
+                    "pipeline", &pipeline)) {
+                vm->globals[slots[i].slot] = pipeline;
+            }
+            continue;
+        }
         usize export_index = 0;
         if (strcmp(slots[i].name, "default") != 0) {
             for (; export_index < countof(export_names); export_index++) {
@@ -1668,7 +1719,7 @@ void mal_host_install_node_stream(
      * global slot. This also makes count-zero internal installation safe. */
     mal_host_install_node_events(vm, nullptr, 0, launch);
 
-    MalValue roots[13];
+    MalValue roots[16];
     for (usize i = 0; i < countof(roots); i++) {
         roots[i] = mal_value_new_undefined();
     }
@@ -1697,11 +1748,16 @@ void mal_host_install_node_stream(
         vm, "Duplex", stream_duplex_constructor, roots[5]);
     roots[11] = stream_constructor_value(
         vm, "Transform", stream_transform_constructor, roots[6]);
+    roots[13] = mal_value_from_object(
+        mal_object_new(&vm->heap, mal_value_to_object(roots[6])));
+    roots[14] = stream_constructor_value(
+        vm, "PassThrough", stream_pass_through_constructor, roots[13]);
 
     mal_object_set_prototype(mal_value_to_object(roots[8]), mal_value_to_object(roots[7]));
     mal_object_set_prototype(mal_value_to_object(roots[9]), mal_value_to_object(roots[7]));
     mal_object_set_prototype(mal_value_to_object(roots[10]), mal_value_to_object(roots[8]));
     mal_object_set_prototype(mal_value_to_object(roots[11]), mal_value_to_object(roots[10]));
+    mal_object_set_prototype(mal_value_to_object(roots[14]), mal_value_to_object(roots[11]));
 
     static const StreamMethod stream_methods[] = {
         {"destroy", 1, stream_destroy},
@@ -1727,6 +1783,12 @@ void mal_host_install_node_stream(
                           countof(writable_methods), &roots[12]);
     stream_define_methods(vm, mal_value_to_object(roots[5]), writable_methods,
                           countof(writable_methods), &roots[12]);
+    static const StreamMethod pass_through_methods[] = {
+        {"_transform", 3, stream_pass_through_transform},
+    };
+    stream_define_methods(
+        vm, mal_value_to_object(roots[13]), pass_through_methods,
+        countof(pass_through_methods), &roots[15]);
 
     MalValue base_on;
     if (stream_get(vm, roots[1], "on", &base_on)) {
@@ -1771,6 +1833,14 @@ void mal_host_install_node_stream(
         vm->intrinsics[stream_constructor_slots[i]] = roots[7 + i];
         vm->intrinsics[stream_prototype_slots[i]] = roots[2 + i];
     }
+    mal_intrinsic_define_data(
+        vm, mal_value_to_object(roots[7]), (const byte *) "PassThrough", roots[14],
+        STREAM_VISIBLE);
+    roots[12] = stream_function(
+        vm, "pipeline", 3, stream_pipeline_unavailable);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
+                              (const byte *) "pipeline", roots[12],
+                              STREAM_VISIBLE);
     stream_install_exports(vm, slots, count);
     mal_gc_unroot(&root);
 }

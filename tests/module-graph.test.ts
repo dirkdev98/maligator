@@ -182,11 +182,13 @@ test("traverses the complete pinned Express initialization graph", () => {
 
 	expect(graph.modules.has("node:http")).toBe(true);
 	expect(graph.modules.get("node:url")?.host?.named).toEqual([
+		"URL",
 		"Url",
 		"fileURLToPath",
 		"format",
 		"parse",
 		"pathToFileURL",
+		"urlToHttpOptions",
 	]);
 	expect(graph.modules.get("node:querystring")?.host?.named).toEqual(["parse"]);
 	expect(graph.modules.get("node:net")?.host?.named).toEqual([
@@ -195,7 +197,14 @@ test("traverses the complete pinned Express initialization graph", () => {
 		"createConnection",
 		"isIP",
 	]);
-	expect(graph.modules.get("node:os")?.host?.named).toEqual(["hostname", "release"]);
+	expect(graph.modules.get("node:os")?.host?.named).toEqual([
+		"availableParallelism",
+		"cpus",
+		"hostname",
+		"platform",
+		"release",
+		"tmpdir",
+	]);
 });
 
 test("requires an explicit stripper for TypeScript and applies it across the graph", () => {
@@ -515,6 +524,20 @@ test("does not fall back to main when package exports blocks the root", () => {
 	);
 });
 
+test("resolves wildcard package exports", () => {
+	write(
+		"node_modules/pattern/package.json",
+		JSON.stringify({ type: "module", exports: { "./dist/*": "./dist/*.js" } }),
+	);
+	write("node_modules/pattern/dist/feature.js", `export const value = 42;\n`);
+	write("pattern.mjs", `import { value } from "pattern/dist/feature";\nvalue;\n`);
+
+	const graph = buildModuleGraph(path.join(root, "pattern.mjs"));
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		path.join(root, "node_modules/pattern/dist/feature.js"),
+	);
+});
+
 test("resolves supported node:* imports to virtual host modules (no disk read) when surface.node is on", () => {
 	write(
 		"node-host.mjs",
@@ -561,12 +584,17 @@ test("host catalog includes path and postgres.js loading companions", () => {
 
 	const cryptoSpec = graph.modules.get("node:crypto")!.host!;
 	expect(cryptoSpec.named).toEqual([
+		"X509Certificate",
 		"argon2",
 		"argon2Sync",
 		"createHash",
 		"createHmac",
+		"createSign",
+		"createVerify",
+		"generateKeyPairSync",
 		"hash",
 		"pbkdf2Sync",
+		"publicEncrypt",
 		"randomBytes",
 		"randomInt",
 		"randomUUID",
@@ -574,7 +602,7 @@ test("host catalog includes path and postgres.js loading companions", () => {
 	]);
 	expect(cryptoSpec.hasDefault).toBe(true);
 	expect(graph.modules.get("node:perf_hooks")!.host).toMatchObject({
-		named: ["performance"],
+		named: ["monitorEventLoopDelay", "performance"],
 		hasDefault: true,
 	});
 	expect(graph.modules.get("node:tls")!.host).toMatchObject({
@@ -654,7 +682,7 @@ test("resolves the diagnostics tracing channel", () => {
 		buildConfig: nodeOn,
 	});
 	expect(graph.modules.get("node:diagnostics_channel")?.host).toMatchObject({
-		named: ["tracingChannel"],
+		named: ["channel", "hasSubscribers", "subscribe", "tracingChannel", "unsubscribe"],
 		hasDefault: true,
 		installer: "mal_host_install_node_diagnostics_channel",
 	});
@@ -669,7 +697,17 @@ test("canonicalizes the worker_threads main-thread identity", () => {
 		"node:worker_threads",
 	);
 	expect(graph.modules.get("node:worker_threads")?.host).toMatchObject({
-		named: ["isMainThread"],
+		named: [
+			"MessageChannel",
+			"SHARE_ENV",
+			"Worker",
+			"isMainThread",
+			"markAsUncloneable",
+			"parentPort",
+			"receiveMessageOnPort",
+			"threadId",
+			"workerData",
+		],
 		hasDefault: true,
 		installer: "mal_host_install_node_worker_threads",
 	});
@@ -684,7 +722,7 @@ test("canonicalizes the CommonJS module API", () => {
 		"node:module",
 	);
 	expect(graph.modules.get("node:module")?.host).toMatchObject({
-		named: ["createRequire"],
+		named: ["builtinModules", "createRequire", "isBuiltin"],
 		hasDefault: true,
 		installer: "mal_host_install_node_module",
 	});
@@ -700,7 +738,7 @@ test("resolves asynchronous child process entrypoints", () => {
 		buildConfig: nodeOn,
 	});
 	expect(graph.modules.get("node:child_process")?.host).toMatchObject({
-		named: ["exec", "execFileSync", "spawn"],
+		named: ["exec", "execFile", "execFileSync", "spawn"],
 		installer: "mal_host_install_node_child_process",
 	});
 });
@@ -712,7 +750,7 @@ test("rejects a node:* import clearly when surface.node is off (the default)", (
 	);
 });
 
-test("canonicalizes bare zlib and exposes only the decompression adapter", () => {
+test("canonicalizes bare zlib and exposes compression adapters", () => {
 	write("zlib.cjs", `module.exports = [require("zlib"), require("node:zlib")];\n`);
 	const graph = buildModuleGraph(path.join(root, "zlib.cjs"), {
 		buildConfig: nodeOn,
@@ -723,7 +761,14 @@ test("canonicalizes bare zlib and exposes only the decompression adapter", () =>
 		"node:zlib",
 	]);
 	expect(graph.modules.get("node:zlib")?.host).toMatchObject({
-		named: ["createInflate", "createGunzip", "createBrotliDecompress"],
+		named: [
+			"constants",
+			"createBrotliDecompress",
+			"createGunzip",
+			"createGzip",
+			"createInflate",
+			"deflate",
+		],
 		hasDefault: true,
 	});
 });
@@ -740,6 +785,7 @@ test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 	]);
 	expect(graph.modules.get("node:http")?.host).toMatchObject({
 		named: [
+			"Agent",
 			"METHODS",
 			"STATUS_CODES",
 			"IncomingMessage",
@@ -748,6 +794,7 @@ test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 			"ClientRequest",
 			"createServer",
 			"get",
+			"globalAgent",
 			"request",
 			"validateHeaderName",
 			"validateHeaderValue",
@@ -870,16 +917,31 @@ test("gives supported bare assert precedence over npm packages", () => {
 		"node:assert",
 	);
 	expect(graph.modules.get("node:assert")?.host).toMatchObject({
-		named: ["ok", "equal", "strictEqual", "deepEqual", "deepStrictEqual", "match"],
+		named: [
+			"AssertionError",
+			"ok",
+			"equal",
+			"strictEqual",
+			"deepEqual",
+			"deepStrictEqual",
+			"match",
+		],
 		hasDefault: true,
 	});
 });
 
 test("recognizes inspector as a bare core module", () => {
 	write("bare-inspector.cjs", `module.exports = require("inspector");\n`);
-	expect(() =>
-		buildModuleGraph(path.join(root, "bare-inspector.cjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:inspector'/);
+	const graph = buildModuleGraph(path.join(root, "bare-inspector.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:inspector",
+	);
+	expect(graph.modules.get("node:inspector")?.host).toMatchObject({
+		named: ["Session", "close", "open", "url"],
+		hasDefault: true,
+	});
 });
 
 test("does not treat prefix-only node:test as a bare core module", () => {

@@ -604,6 +604,106 @@ static MalValue util_promisify(
     return wrapper;
 }
 
+static MalValue util_types_is_promise(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    return mal_value_new_boolean(
+        argc > 0 && mal_value_is_promise_object(args[0]));
+}
+
+static bool util_env_space(c16 unit) {
+    return unit == ' ' || unit == '\t';
+}
+
+static MalValue util_parse_env(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    if (argc < 1 || !mal_value_is_string(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The content argument must be a string");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {
+        args[0],
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalString *source = mal_value_to_string(roots[0]);
+    const c16 *units = mal_string_code_units(source);
+    usize length = mal_string_length(source);
+    usize cursor = 0;
+    while (cursor < length) {
+        usize line_end = cursor;
+        while (line_end < length && units[line_end] != '\n'
+               && units[line_end] != '\r') {
+            line_end++;
+        }
+        usize start = cursor;
+        while (start < line_end && util_env_space(units[start])) start++;
+        if (start < line_end && units[start] != '#') {
+            if (line_end - start >= 7
+                && units[start] == 'e' && units[start + 1] == 'x'
+                && units[start + 2] == 'p' && units[start + 3] == 'o'
+                && units[start + 4] == 'r' && units[start + 5] == 't'
+                && util_env_space(units[start + 6])) {
+                start += 7;
+                while (start < line_end && util_env_space(units[start])) start++;
+            }
+            usize equals = start;
+            while (equals < line_end && units[equals] != '=') equals++;
+            usize key_end = equals;
+            while (key_end > start && util_env_space(units[key_end - 1])) key_end--;
+            if (equals < line_end && key_end > start) {
+                usize value_start = equals + 1;
+                while (value_start < line_end && util_env_space(units[value_start])) {
+                    value_start++;
+                }
+                usize value_end = line_end;
+                if (value_start < value_end
+                    && (units[value_start] == '\'' || units[value_start] == '"')) {
+                    c16 quote = units[value_start++];
+                    if (value_end > value_start && units[value_end - 1] == quote) {
+                        value_end--;
+                    }
+                } else {
+                    for (usize i = value_start; i < value_end; i++) {
+                        if (units[i] == '#') {
+                            value_end = i;
+                            break;
+                        }
+                    }
+                    while (value_end > value_start
+                           && util_env_space(units[value_end - 1])) {
+                        value_end--;
+                    }
+                }
+                roots[2] = mal_value_from_string(mal_string_new_slice(
+                    &vm->heap, source, start, key_end - start));
+                roots[3] = mal_value_from_string(mal_string_new_slice(
+                    &vm->heap, source, value_start, value_end - value_start));
+                mal_object_set(mal_value_to_object(roots[1]),
+                    mal_key_from_value(roots[2]), roots[3]);
+            }
+        }
+        cursor = line_end;
+        if (cursor < length && units[cursor] == '\r') cursor++;
+        if (cursor < length && units[cursor] == '\n') cursor++;
+    }
+    MalValue result = roots[1];
+    mal_gc_unroot(&root);
+    return result;
+}
+
 typedef struct MalNodeUtilExport {
     const char *name;
     i32 length;
@@ -616,6 +716,7 @@ static const MalNodeUtilExport util_exports[] = {
     {"formatWithOptions", 2, util_format_with_options},
     {"inherits", 2, util_inherits},
     {"inspect", 2, util_inspect},
+    {"parseEnv", 1, util_parse_env},
     {"promisify", 1, util_promisify},
 };
 
@@ -623,7 +724,9 @@ void mal_host_install_node_util(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
-    MalValue values[countof(util_exports) + 1];
+    const usize types_index = countof(util_exports);
+    const usize namespace_index = types_index + 1;
+    MalValue values[countof(util_exports) + 2];
     for (usize i = 0; i < countof(values); i++) {
         values[i] = mal_value_new_undefined();
     }
@@ -638,13 +741,21 @@ void mal_host_install_node_util(
                 mal_intrinsic_ascii(vm, (const byte *) export->name),
                 export->length, export->callback));
     }
-    values[countof(util_exports)] =
-        mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalObject *namespace = mal_value_to_object(values[countof(util_exports)]);
+	values[types_index] = mal_value_from_object(mal_intrinsic_new_object(vm));
+	values[namespace_index] = mal_value_from_native_function_object(
+		mal_native_function_object_new_arity(&vm->heap, function_prototype,
+			mal_intrinsic_ascii(vm, (const byte *) "isPromise"), 1,
+			util_types_is_promise));
+	mal_intrinsic_define_data(vm, mal_value_to_object(values[types_index]),
+		(const byte *) "isPromise", values[namespace_index], UTIL_VISIBLE);
+	values[namespace_index] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalObject *namespace = mal_value_to_object(values[namespace_index]);
     for (usize i = 0; i < countof(util_exports); i++) {
         mal_intrinsic_define_data(vm, namespace,
             (const byte *) util_exports[i].name, values[i], UTIL_VISIBLE);
     }
+	mal_intrinsic_define_data(vm, namespace,
+		(const byte *) "types", values[types_index], UTIL_VISIBLE);
 
     for (i32 slot = 0; slot < count; slot++) {
         MalValue value = mal_value_new_undefined();
@@ -655,7 +766,9 @@ void mal_host_install_node_util(
             }
         }
         if (strcmp(slots[slot].name, "default") == 0) {
-            value = values[countof(util_exports)];
+			value = values[namespace_index];
+		} else if (strcmp(slots[slot].name, "types") == 0) {
+			value = values[types_index];
         }
         if (!mal_value_is_undefined(value)) {
             vm->globals[slots[slot].slot] = value;

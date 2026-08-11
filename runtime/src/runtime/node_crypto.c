@@ -2099,6 +2099,19 @@ typedef struct {
     MalNativeFunctionCallback callback;
 } CryptoExport;
 
+static MalValue mal_node_crypto_asymmetric_unavailable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+        "Asymmetric cryptography is not supported by this host");
+    return mal_value_new_undefined();
+}
+
 /* The flat exports (everything that needs no private-symbol slot). Lengths match
  * Node's, which the fixture pins. */
 static const CryptoExport CRYPTO_EXPORTS[] = {
@@ -2110,6 +2123,11 @@ static const CryptoExport CRYPTO_EXPORTS[] = {
     {"randomInt", 3, mal_node_crypto_random_int},
     {"randomUUID", 1, mal_node_crypto_random_uuid},
     {"timingSafeEqual", 0, mal_node_crypto_timing_safe_equal},
+	{"createSign", 1, mal_node_crypto_asymmetric_unavailable},
+	{"createVerify", 1, mal_node_crypto_asymmetric_unavailable},
+	{"generateKeyPairSync", 3, mal_node_crypto_asymmetric_unavailable},
+	{"publicEncrypt", 2, mal_node_crypto_asymmetric_unavailable},
+	{"X509Certificate", 1, mal_node_crypto_asymmetric_unavailable},
 };
 
 void mal_host_install_node_crypto(
@@ -2155,11 +2173,15 @@ void mal_host_install_node_crypto(
     mal_intrinsic_define_data(vm, module, (const byte *) "createHmac", roots[5], method_flags);
     for (usize i = 0; i < countof(CRYPTO_EXPORTS); i++) {
         const CryptoExport *export_entry = &CRYPTO_EXPORTS[i];
-        MalValue function = mal_value_from_native_function_object(
-            mal_native_function_object_new_arity(&vm->heap,
-                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-                mal_intrinsic_ascii(vm, (const byte *) export_entry->name),
-                export_entry->length, export_entry->callback));
+		MalNativeFunctionObject *native = mal_native_function_object_new_arity(
+			&vm->heap,
+			mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+			mal_intrinsic_ascii(vm, (const byte *) export_entry->name),
+			export_entry->length, export_entry->callback);
+		if (strcmp(export_entry->name, "X509Certificate") == 0) {
+			mal_native_function_object_set_constructor(native);
+		}
+		MalValue function = mal_value_from_native_function_object(native);
         MalRootSpan function_root;
         mal_gc_root(&function_root, &function, 1);
         mal_intrinsic_define_data(

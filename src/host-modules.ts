@@ -104,6 +104,7 @@ const FS: HostModuleSpec = {
 		"mkdtempSync",
 		"readFile",
 		"readFileSync",
+		"readdir",
 		"readdirSync",
 		"realpathSync",
 		"renameSync",
@@ -139,30 +140,83 @@ const VM: HostModuleSpec = {
 
 const DIAGNOSTICS_CHANNEL: HostModuleSpec = {
 	id: "node:diagnostics_channel",
-	named: ["tracingChannel"],
+	named: ["channel", "hasSubscribers", "subscribe", "tracingChannel", "unsubscribe"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:diagnostics_channel"),
 };
 
+const DOMAIN: HostModuleSpec = {
+	id: "node:domain",
+	named: ["active", "create"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:domain"),
+};
+
+const DNS: HostModuleSpec = {
+	id: "node:dns",
+	named: [
+		"CONNREFUSED",
+		"NODATA",
+		"NOTFOUND",
+		"NOTIMP",
+		"REFUSED",
+		"Resolver",
+		"SERVFAIL",
+		"lookup",
+		"resolve",
+		"resolve4",
+		"resolve6",
+	],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:dns"),
+};
+
 const WORKER_THREADS: HostModuleSpec = {
 	id: "node:worker_threads",
-	named: ["isMainThread"],
+	named: [
+		"MessageChannel",
+		"SHARE_ENV",
+		"Worker",
+		"isMainThread",
+		"markAsUncloneable",
+		"parentPort",
+		"receiveMessageOnPort",
+		"threadId",
+		"workerData",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:worker_threads"),
 };
 
 const MODULE: HostModuleSpec = {
 	id: "node:module",
-	named: ["createRequire"],
+	named: ["builtinModules", "createRequire", "isBuiltin"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:module"),
 };
 
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
-	named: ["exec", "execFileSync", "spawn"],
+	named: ["exec", "execFile", "execFileSync", "spawn"],
 	hasDefault: false,
 	installer: hostInstallerSymbol("node:child_process"),
+};
+
+const CLUSTER: HostModuleSpec = {
+	id: "node:cluster",
+	named: [
+		"fork",
+		"isMaster",
+		"isPrimary",
+		"isWorker",
+		"on",
+		"once",
+		"setMaxListeners",
+		"worker",
+		"workers",
+	],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:cluster"),
 };
 
 // The authentication-grade slice: hashing, HMAC, PBKDF2, Argon2 (sync and
@@ -171,12 +225,17 @@ const CHILD_PROCESS: HostModuleSpec = {
 const CRYPTO: HostModuleSpec = {
 	id: "node:crypto",
 	named: [
+		"X509Certificate",
 		"argon2",
 		"argon2Sync",
 		"createHash",
 		"createHmac",
+		"createSign",
+		"createVerify",
+		"generateKeyPairSync",
 		"hash",
 		"pbkdf2Sync",
+		"publicEncrypt",
 		"randomBytes",
 		"randomInt",
 		"randomUUID",
@@ -188,7 +247,7 @@ const CRYPTO: HostModuleSpec = {
 
 const PERF_HOOKS: HostModuleSpec = {
 	id: "node:perf_hooks",
-	named: ["performance"],
+	named: ["monitorEventLoopDelay", "performance"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:perf_hooks"),
 };
@@ -202,7 +261,7 @@ const TLS: HostModuleSpec = {
 
 const EVENTS: HostModuleSpec = {
 	id: "node:events",
-	named: ["EventEmitter"],
+	named: ["EventEmitter", "errorMonitor"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:events"),
 };
@@ -222,7 +281,9 @@ const UTIL: HostModuleSpec = {
 		"formatWithOptions",
 		"inherits",
 		"inspect",
+		"parseEnv",
 		"promisify",
+		"types",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:util"),
@@ -285,7 +346,15 @@ const ASSERT_STRICT: HostModuleSpec = {
 
 const ASSERT: HostModuleSpec = {
 	id: "node:assert",
-	named: ["ok", "equal", "strictEqual", "deepEqual", "deepStrictEqual", "match"],
+	named: [
+		"AssertionError",
+		"ok",
+		"equal",
+		"strictEqual",
+		"deepEqual",
+		"deepStrictEqual",
+		"match",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:assert"),
 };
@@ -299,7 +368,15 @@ const ASYNC_HOOKS: HostModuleSpec = {
 
 const STREAM: HostModuleSpec = {
 	id: "node:stream",
-	named: ["Stream", "Readable", "Writable", "Duplex", "Transform"],
+	named: [
+		"Stream",
+		"Readable",
+		"Writable",
+		"Duplex",
+		"Transform",
+		"PassThrough",
+		"pipeline",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:stream"),
 };
@@ -307,6 +384,7 @@ const STREAM: HostModuleSpec = {
 const HTTP: HostModuleSpec = {
 	id: "node:http",
 	named: [
+		"Agent",
 		"METHODS",
 		"STATUS_CODES",
 		"IncomingMessage",
@@ -315,6 +393,7 @@ const HTTP: HostModuleSpec = {
 		"ClientRequest",
 		"createServer",
 		"get",
+		"globalAgent",
 		"request",
 		"validateHeaderName",
 		"validateHeaderValue",
@@ -337,6 +416,13 @@ const HTTP2: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:http2"),
 };
 
+const INSPECTOR: HostModuleSpec = {
+	id: "node:inspector",
+	named: ["Session", "close", "open", "url"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:inspector"),
+};
+
 const TIMERS_PROMISES: HostModuleSpec = {
 	id: "node:timers/promises",
 	named: ["setTimeout"],
@@ -346,7 +432,15 @@ const TIMERS_PROMISES: HostModuleSpec = {
 
 const URL: HostModuleSpec = {
 	id: "node:url",
-	named: ["Url", "fileURLToPath", "format", "parse", "pathToFileURL"],
+	named: [
+		"URL",
+		"Url",
+		"fileURLToPath",
+		"format",
+		"parse",
+		"pathToFileURL",
+		"urlToHttpOptions",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:url"),
 };
@@ -358,6 +452,13 @@ const QUERYSTRING: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:querystring"),
 };
 
+const READLINE: HostModuleSpec = {
+	id: "node:readline",
+	named: ["createInterface"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:readline"),
+};
+
 const NET: HostModuleSpec = {
 	id: "node:net",
 	named: ["Socket", "connect", "createConnection", "isIP"],
@@ -367,7 +468,7 @@ const NET: HostModuleSpec = {
 
 const OS: HostModuleSpec = {
 	id: "node:os",
-	named: ["hostname", "release"],
+	named: ["availableParallelism", "cpus", "hostname", "platform", "release", "tmpdir"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:os"),
 };
@@ -381,7 +482,14 @@ const STRING_DECODER: HostModuleSpec = {
 
 const ZLIB: HostModuleSpec = {
 	id: "node:zlib",
-	named: ["createInflate", "createGunzip", "createBrotliDecompress"],
+	named: [
+		"constants",
+		"createBrotliDecompress",
+		"createGunzip",
+		"createGzip",
+		"createInflate",
+		"deflate",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:zlib"),
 };
@@ -402,9 +510,12 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		V8,
 		VM,
 		DIAGNOSTICS_CHANNEL,
+		DOMAIN,
+		DNS,
 		WORKER_THREADS,
 		MODULE,
 		CHILD_PROCESS,
+		CLUSTER,
 		CRYPTO,
 		PERF_HOOKS,
 		TLS,
@@ -420,9 +531,11 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		HTTP,
 		HTTPS,
 		HTTP2,
+		INSPECTOR,
 		TIMERS_PROMISES,
 		URL,
 		QUERYSTRING,
+		READLINE,
 		NET,
 		OS,
 		STRING_DECODER,

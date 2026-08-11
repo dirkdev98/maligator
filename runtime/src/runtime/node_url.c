@@ -465,6 +465,19 @@ static MalValue url_file_url_to_path(
     return mal_value_from_string(result_string);
 }
 
+static MalValue url_to_http_options_unavailable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+        "Converting URL objects to HTTP options is not supported by this host");
+    return mal_value_new_undefined();
+}
+
 void mal_host_install_node_url(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -478,6 +491,7 @@ void mal_host_install_node_url(
             mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
             mal_value_new_undefined(),
             mal_value_new_undefined(),
+			mal_value_new_undefined(), mal_value_new_undefined(),
         };
         MalRootSpan root;
         mal_gc_root(&root, roots, countof(roots));
@@ -501,10 +515,17 @@ void mal_host_install_node_url(
         roots[6] = mal_intrinsic_define_method_n(
             vm, mal_value_to_object(roots[0]), (const byte *) "fileURLToPath", 1,
             url_file_url_to_path);
+		roots[7] = vm->intrinsics[MAL_INTRINSIC_URL_CONSTRUCTOR];
+		roots[8] = mal_intrinsic_define_method_n(
+			vm, mal_value_to_object(roots[0]), (const byte *) "urlToHttpOptions", 1,
+			url_to_http_options_unavailable);
         static const char *names[] = {
-            "Url", "parse", "format", "pathToFileURL", "fileURLToPath",
+			"Url", "parse", "format", "pathToFileURL", "fileURLToPath", "URL",
+			"urlToHttpOptions",
         };
-        MalValue values[] = {roots[2], roots[3], roots[4], roots[5], roots[6]};
+		MalValue values[] = {
+			roots[2], roots[3], roots[4], roots[5], roots[6], roots[7], roots[8],
+		};
         for (usize i = 0; i < countof(names); i++) {
             mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                                       (const byte *) names[i], values[i], URL_VISIBLE);

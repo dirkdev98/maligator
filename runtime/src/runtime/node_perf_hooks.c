@@ -27,6 +27,56 @@ static MalValue node_performance_now(
         (f64) (mal_monotonic_now_ns() - node_perf_hooks_origin_ns) / 1.0e6);
 }
 
+static MalValue node_perf_hooks_histogram_chain(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    return receiver;
+}
+
+static MalValue node_perf_hooks_histogram_zero(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    return mal_value_from_i32(0);
+}
+
+static MalValue node_monitor_event_loop_delay(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalValue histogram = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &histogram, 1);
+    static const char *numeric_names[] = {"min", "max", "mean", "stddev", "exceeds"};
+    for (usize i = 0; i < countof(numeric_names); i++) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(histogram),
+            (const byte *) numeric_names[i], mal_value_from_i32(0), PERF_HOOKS_VISIBLE);
+    }
+    static const char *chain_methods[] = {"disable", "enable", "reset"};
+    for (usize i = 0; i < countof(chain_methods); i++) {
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(histogram),
+            (const byte *) chain_methods[i], 0, node_perf_hooks_histogram_chain);
+    }
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(histogram),
+        (const byte *) "percentile", 1, node_perf_hooks_histogram_zero);
+    mal_gc_unroot(&root);
+    return histogram;
+}
+
 void mal_host_install_node_perf_hooks(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -42,6 +92,7 @@ void mal_host_install_node_perf_hooks(
     MalValue roots[] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_from_object(mal_intrinsic_new_object(vm)),
+		mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -51,6 +102,9 @@ void mal_host_install_node_perf_hooks(
     mal_intrinsic_define_data(
         vm, mal_value_to_object(roots[0]), (const byte *) "performance",
         roots[1], PERF_HOOKS_VISIBLE);
+	roots[2] = mal_intrinsic_define_method_n(
+		vm, mal_value_to_object(roots[0]), (const byte *) "monitorEventLoopDelay", 1,
+		node_monitor_event_loop_delay);
     vm->intrinsics[MAL_INTRINSIC_NODE_PERF_HOOKS_MODULE] = roots[0];
     mal_node_module_publish(vm, slots, count, roots[0]);
     mal_gc_unroot(&root);

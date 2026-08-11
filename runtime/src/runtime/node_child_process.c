@@ -567,6 +567,7 @@ void mal_host_install_node_child_process(
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     for (i32 i = 0; i < count; i++) {
         if (strcmp(slots[i].name, "exec") == 0 ||
+			strcmp(slots[i].name, "execFile") == 0 ||
             strcmp(slots[i].name, "spawn") == 0) {
             const char *name = slots[i].name;
             MalNativeFunctionObject *fn = mal_native_function_object_new_arity(

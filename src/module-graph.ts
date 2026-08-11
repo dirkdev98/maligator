@@ -781,24 +781,24 @@ type ExportsField = string | Array<ExportsField> | { [key: string]: ExportsField
  * Resolve a subpath against a package's `exports` field.
  *
  * Handles string targets, condition objects (matched against
- * EXPORT_CONDITIONS), and flat subpath maps. Subpath *patterns* (wildcards like
- * `./*`) are not handled yet.
- *
- * Wildcard/pattern subpaths in `exports` remain unsupported.
+ * EXPORT_CONDITIONS), and flat subpath maps including wildcard patterns.
  */
 function resolveExports(
 	exportsField: ExportsField,
 	subpath: string,
 	packageDir: string,
 	ctx: ResolveContext,
+	patternMatch?: string,
 ): string | null {
 	if (typeof exportsField === "string") {
-		return subpath === "." ? resolveExportTarget(exportsField, packageDir) : null;
+		return subpath === "."
+			? resolveExportTarget(exportsField, packageDir, patternMatch)
+			: null;
 	}
 
 	if (Array.isArray(exportsField)) {
 		for (const candidate of exportsField) {
-			const resolved = resolveExports(candidate, subpath, packageDir, ctx);
+			const resolved = resolveExports(candidate, subpath, packageDir, ctx, patternMatch);
 			if (resolved) {
 				return resolved;
 			}
@@ -812,7 +812,31 @@ function resolveExports(
 	if (isSubpathMap) {
 		const target = exportsField[subpath];
 		// Resolve the matched target's conditions/string against the "." root.
-		return target === undefined ? null : resolveExports(target, ".", packageDir, ctx);
+		if (target !== undefined) {
+			return resolveExports(target, ".", packageDir, ctx);
+		}
+
+		const patterns = keys
+			.filter((key) => key.includes("*"))
+			.map((key) => {
+				const star = key.indexOf("*");
+				return { key, prefix: key.slice(0, star), suffix: key.slice(star + 1) };
+			})
+			.filter(
+				({ prefix, suffix }) =>
+					subpath.startsWith(prefix) && subpath.endsWith(suffix),
+			)
+			.sort(
+				(a, b) => b.prefix.length - a.prefix.length || b.key.length - a.key.length,
+			);
+		for (const { key, prefix, suffix } of patterns) {
+			const match = subpath.slice(prefix.length, subpath.length - suffix.length);
+			const resolved = resolveExports(exportsField[key]!, ".", packageDir, ctx, match);
+			if (resolved) {
+				return resolved;
+			}
+		}
+		return null;
 	}
 
 	// A conditions object: object declaration order determines precedence. Skip
@@ -820,7 +844,7 @@ function resolveExports(
 	// `node` condition is only in ctx.conditions under surface.node.
 	for (const [condition, target] of Object.entries(exportsField)) {
 		if (ctx.conditions.has(condition)) {
-			const resolved = resolveExports(target, subpath, packageDir, ctx);
+			const resolved = resolveExports(target, subpath, packageDir, ctx, patternMatch);
 			if (resolved) {
 				return resolved;
 			}
@@ -834,11 +858,16 @@ function resolveExports(
  * An `exports` target is an exact file reference (no extension probing per the
  * Node spec) and must be relative to the package.
  */
-function resolveExportTarget(target: string, packageDir: string): string | null {
+function resolveExportTarget(
+	target: string,
+	packageDir: string,
+	patternMatch?: string,
+): string | null {
 	if (!target.startsWith("./")) {
 		return null;
 	}
-	const resolved = path.resolve(packageDir, target);
+	const substituted = patternMatch === undefined ? target : target.replaceAll("*", patternMatch);
+	const resolved = path.resolve(packageDir, substituted);
 	return isFile(resolved) ? resolved : null;
 }
 

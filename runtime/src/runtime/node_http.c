@@ -4798,6 +4798,31 @@ static MalValue http_constructor(
     return value;
 }
 
+static MalValue http_agent_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
+    MalValue prototype_value = mal_vm_function_prototype(vm, target);
+    MalObject *prototype = mal_value_is_object(prototype_value)
+        ? mal_value_to_object(prototype_value)
+        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    return mal_value_from_object(mal_object_new(&vm->heap, prototype));
+}
+
+static MalValue http_agent_destroy(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    return receiver;
+}
+
 static MalValue http_methods(MalVm *vm) {
     static const char *methods[] = {
         "ACL", "BIND", "CHECKOUT", "CONNECT", "COPY", "DELETE", "GET", "HEAD",
@@ -4861,7 +4886,7 @@ void mal_host_install_node_http(
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return;
     }
-    MalValue roots[16] = {
+    MalValue roots[19] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
@@ -4870,7 +4895,8 @@ void mal_host_install_node_http(
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -4998,13 +5024,22 @@ void mal_host_install_node_http(
     mal_intrinsic_define_data(
         vm, mal_value_to_object(roots[0]), (const byte *) "validateHeaderValue",
         roots[15], HTTP_VISIBLE);
+    roots[16] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[16]), (const byte *) "destroy", 0,
+        http_agent_destroy);
+    roots[17] = http_constructor(
+        vm, "Agent", 1, http_agent_constructor, roots[16]);
+    roots[18] = mal_value_from_object(mal_object_new(
+        &vm->heap, mal_value_to_object(roots[16])));
 
     static const char *names[] = {
         "METHODS", "STATUS_CODES", "IncomingMessage", "ServerResponse", "Server",
-        "ClientRequest",
+        "ClientRequest", "Agent", "globalAgent",
     };
     MalValue values[] = {
-        roots[8], roots[13], roots[3], roots[4], roots[6], roots[10],
+        roots[8], roots[13], roots[3], roots[4], roots[6], roots[10], roots[17],
+        roots[18],
     };
     for (usize i = 0; i < countof(names); i++) {
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),

@@ -631,6 +631,70 @@ static MalValue node_fs_promises_operation(
     return promise;
 }
 
+static MalValue node_fs_callback_task(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *task = mal_value_to_native_function_object(callee);
+    MalValue roots[NODE_FS_PROMISE_TASK_SLOT_COUNT];
+    for (i32 i = 0; i < NODE_FS_PROMISE_TASK_SLOT_COUNT; i++) {
+        roots[i] = mal_native_function_object_get_slot(task, i);
+    }
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalCompletion completion = mal_vm_call_value(
+        vm, roots[NODE_FS_PROMISE_TASK_OPERATION], mal_value_new_undefined(),
+        roots + NODE_FS_PROMISE_TASK_PATH, 2);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        roots[NODE_FS_PROMISE_TASK_PATH] = completion.value;
+        node_fs_clear_completion(vm);
+        mal_vm_call_value(vm, roots[NODE_FS_PROMISE_TASK_PROMISE],
+            mal_value_new_undefined(), roots + NODE_FS_PROMISE_TASK_PATH, 1);
+    } else {
+        roots[NODE_FS_PROMISE_TASK_PATH] = mal_value_new_null();
+        roots[NODE_FS_PROMISE_TASK_OPTIONS] = completion.value;
+        mal_vm_call_value(vm, roots[NODE_FS_PROMISE_TASK_PROMISE],
+            mal_value_new_undefined(), roots + NODE_FS_PROMISE_TASK_PATH, 2);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_callback_operation(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    i32 callback_index = argc - 1;
+    if (callback_index < 1 || !mal_value_is_callable(args[callback_index])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "readdir callback must be a function");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[NODE_FS_PROMISE_TASK_SLOT_COUNT] = {
+        args[callback_index],
+        mal_native_function_object_get_slot(
+            mal_value_to_native_function_object(callee), 0),
+        args[0],
+        callback_index > 1 ? args[1] : mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue task = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "readdirCallback"),
+            node_fs_callback_task, roots, countof(roots)));
+    mal_vm_enqueue_reaction_job(vm, task, false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
 static MalValue node_fs_errno_value(
     MalVm *vm, int err, const char *syscall, const char *path) {
     node_fs_throw_errno(vm, err, syscall, path);
@@ -1061,6 +1125,16 @@ static MalValue node_fs_export(
         return node_fs_make_fn_slot(
             vm, fn_proto, "readdirSync", 1, node_fs_readdir_sync, protos[1]);
     }
+	if (strcmp(name, "readdir") == 0) {
+		MalValue operation = node_fs_make_fn_slot(
+			vm, fn_proto, "readdirSync", 1, node_fs_readdir_sync, protos[1]);
+		MalRootSpan root;
+		mal_gc_root(&root, &operation, 1);
+		MalValue result = node_fs_make_fn_slot(
+			vm, fn_proto, "readdir", 3, node_fs_callback_operation, operation);
+		mal_gc_unroot(&root);
+		return result;
+	}
     if (strcmp(name, "mkdirSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "mkdirSync", 1, node_fs_mkdir_sync);
     }
@@ -1117,7 +1191,7 @@ void mal_host_install_node_fs(
 
     static const char *names[] = {
         "Stats", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
-        "mkdtempSync", "readFile", "readFileSync", "readdirSync", "realpathSync", "renameSync",
+		"mkdtempSync", "readFile", "readFileSync", "readdir", "readdirSync", "realpathSync", "renameSync",
         "rmSync", "statSync", "stat", "writeFileSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));

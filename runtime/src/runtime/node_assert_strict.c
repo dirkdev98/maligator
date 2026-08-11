@@ -127,22 +127,89 @@ static MalValue assert_match(
     return mal_value_new_undefined();
 }
 
+static MalValue assertion_error_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    MalValue roots[] = {
+        argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_from_string(mal_intrinsic_ascii(vm, "Assertion failed")),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_object(roots[0])) {
+        mal_vm_get_property(
+            vm, roots[0], mal_intrinsic_string_key(vm, "message"), &roots[1]);
+    }
+    MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
+    MalCompletion completion = mal_vm_construct_value_with_target(
+        vm, vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR], roots + 1, 1, target);
+    roots[2] = completion.value;
+    if (completion.kind != MAL_COMPLETION_THROW && mal_value_is_object(roots[2])) {
+        MalObject *error = mal_value_to_object(roots[2]);
+        mal_object_set(error, mal_intrinsic_string_key(vm, "name"),
+            mal_value_from_string(mal_intrinsic_ascii(vm, "AssertionError")));
+        mal_object_set(error, mal_intrinsic_string_key(vm, "code"),
+            mal_value_from_string(mal_intrinsic_ascii(vm, "ERR_ASSERTION")));
+        static const char *option_names[] = {"actual", "expected", "operator"};
+        for (usize i = 0; i < countof(option_names); i++) {
+            MalValue value = mal_value_new_undefined();
+            if (mal_value_is_object(roots[0])
+                && mal_vm_get_property(
+                    vm, roots[0],
+                    mal_intrinsic_string_key(vm, (const byte *) option_names[i]),
+                    &value)) {
+                mal_object_set(error,
+                    mal_intrinsic_string_key(
+                        vm, (const byte *) option_names[i]), value);
+            }
+        }
+    }
+    MalValue result = roots[2];
+    mal_gc_unroot(&root);
+    return result;
+}
+
 void mal_host_install_node_assert(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_MODULE];
     if (mal_value_is_undefined(module)) {
-        module = mal_value_from_native_function_object(
+        MalValue roots[] = {
+            mal_value_from_native_function_object(
             mal_native_function_object_new_arity(
                 &vm->heap,
                 mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-                mal_intrinsic_ascii(vm, "ok"), 0, assert_ok));
+                mal_intrinsic_ascii(vm, "ok"), 0, assert_ok)),
+            mal_value_from_object(mal_object_new(
+                &vm->heap, mal_value_to_object(
+                    vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]))),
+            mal_value_new_undefined(),
+        };
         MalRootSpan root;
-        mal_gc_root(&root, &module, 1);
-        MalObject *object = mal_value_to_object(module);
+        mal_gc_root(&root, roots, countof(roots));
+        module = roots[0];
+        MalNativeFunctionObject *assertion_error =
+            mal_native_function_object_new_arity(
+                &vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, "AssertionError"), 1,
+                assertion_error_constructor);
+        mal_native_function_object_set_constructor(assertion_error);
+        roots[2] = mal_value_from_native_function_object(assertion_error);
         mal_intrinsic_define_data(
-            vm, object, "ok", module, NODE_ASSERT_VISIBLE);
+            vm, (MalObject *) assertion_error, "prototype", roots[1],
+            MAL_PROPERTY_NONE);
+        mal_intrinsic_define_data(
+            vm, mal_value_to_object(roots[1]), "constructor", roots[2],
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+        MalObject *object = mal_value_to_object(roots[0]);
+        mal_intrinsic_define_data(
+            vm, object, "ok", roots[0], NODE_ASSERT_VISIBLE);
+        mal_intrinsic_define_data(
+            vm, object, "AssertionError", roots[2], NODE_ASSERT_VISIBLE);
         mal_intrinsic_define_method_n(
             vm, object, "equal", 2, assert_equal);
         mal_intrinsic_define_method_n(
@@ -153,7 +220,7 @@ void mal_host_install_node_assert(
             vm, object, "deepStrictEqual", 2, assert_deep_equal);
         mal_intrinsic_define_method_n(
             vm, object, "match", 2, assert_match);
-        vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_MODULE] = module;
+        vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_MODULE] = roots[0];
         mal_gc_unroot(&root);
     }
     mal_node_module_publish(vm, slots, count, module);
