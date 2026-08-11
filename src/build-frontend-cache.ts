@@ -45,7 +45,7 @@ import {
 import { MALIGATOR_VERSION } from "./version.ts";
 
 const BUILD_FRONTEND_CACHE_SCHEMA = 3;
-const BUILD_FRONTEND_PIPELINE_VERSION = 4;
+const BUILD_FRONTEND_PIPELINE_VERSION = 5;
 const BUILD_FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/build-frontend";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;

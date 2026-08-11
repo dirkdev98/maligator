@@ -210,8 +210,27 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			const ast = fileByPath.get(cjsPath)?.ast;
 			info = ast
 				? detectCjsExports(ast)
-				: { names: new Set<string>(), complete: false, reassignsModuleExports: false };
+				: {
+						names: new Set<string>(),
+						complete: false,
+						reassignsModuleExports: false,
+						reexports: new Set<string>(),
+					};
+			// Cache before following re-exports so cycles terminate with the names
+			// collected so far, as cjs-module-lexer-style discovery does.
 			exportInfoCache.set(cjsPath, info);
+			for (const specifier of info.reexports) {
+				const target = specifierToPath.get(cjsPath)?.get(specifier);
+				if (!target) {
+					continue;
+				}
+				const host = graph.modules.get(target)?.host;
+				if (host) {
+					for (const name of host.named) info.names.add(name);
+				} else if (goalOf(target) === "cjs") {
+					for (const name of cjsExportInfo(target).names) info.names.add(name);
+				}
+			}
 		}
 		return info;
 	};

@@ -30,6 +30,8 @@ export interface CjsExportInfo {
 	 * initial `exports` object.
 	 */
 	reassignsModuleExports: boolean;
+	/** Literal require specifiers assigned directly to module.exports. */
+	reexports: Set<string>;
 }
 
 function isExportsIdentifier(node: ESTree.Node): boolean {
@@ -65,6 +67,7 @@ export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 	const names = new Set<string>();
 	let complete = true;
 	let reassignsModuleExports = false;
+	const reexports = new Set<string>();
 
 	const handleObjectLiteral = (object: ESTree.ObjectExpression) => {
 		for (const property of object.properties) {
@@ -94,6 +97,16 @@ export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 			const right = node.right as ESTree.Node;
 			if (right.type === "ObjectExpression") {
 				handleObjectLiteral(right);
+			} else if (
+				right.type === "CallExpression" &&
+				right.callee.type === "Identifier" &&
+				right.callee.name === "require" &&
+				right.arguments.length === 1 &&
+				right.arguments[0]?.type === "Literal" &&
+				typeof right.arguments[0].value === "string"
+			) {
+				reexports.add(right.arguments[0].value);
+				complete = false;
 			} else {
 				// require(...), a function, a variable: names come from a value we
 				// cannot read statically.
@@ -153,7 +166,7 @@ export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 			handleDefineProperty(node);
 		}
 	});
-	return { names, complete, reassignsModuleExports };
+	return { names, complete, reassignsModuleExports, reexports };
 }
 
 /**

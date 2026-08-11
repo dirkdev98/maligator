@@ -185,6 +185,23 @@ test("records ESM imports from a CommonJS module instead of aliasing them", () =
 	);
 });
 
+test("follows CommonJS whole-module re-exports when building namespaces", () => {
+	const root = tree({
+		"entry.cjs": `if (process.env.MODE) {\n\tmodule.exports = require("./a.cjs");\n} else {\n\tmodule.exports = require("./b.cjs");\n}\n`,
+		"a.cjs": `exports.forwardRef = function () {};\n`,
+		"b.cjs": `exports.createElement = function () {};\n`,
+		"main.mjs": `import * as ns from "./entry.cjs";\nglobalThis.sink = ns;\n`,
+	});
+
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+	const linkage = linkModules(program);
+
+	expect(linkage.cjsImports.get(path.join(root, "main.mjs"))?.[0]).toMatchObject({
+		kind: "namespace",
+		names: ["createElement", "forwardRef"],
+	});
+});
+
 test("re-exporting from a CommonJS module records cjs imports for it", () => {
 	const root = tree({
 		"lib.cjs": `exports.x = 1;\nexports.y = 2;\n`,
@@ -290,6 +307,7 @@ test("resolves a namespace import of a host built-in to its (sorted) exports", (
 		"isAbsolute",
 		"join",
 		"normalize",
+		"posix",
 		"relative",
 		"resolve",
 		"sep",
