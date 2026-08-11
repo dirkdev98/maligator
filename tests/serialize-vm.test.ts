@@ -497,7 +497,7 @@ describe("serialize-vm", () => {
 
 	it.each([
 		[0, [], []],
-		[33, new Array<number>(33).fill(0), new Array<number>(33).fill(0)],
+		[65, new Array<number>(65).fill(0), new Array<number>(65).fill(0)],
 		[2, [0], [0, 1]],
 		[2, [0, 1], [0]],
 	])(

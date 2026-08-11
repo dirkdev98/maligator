@@ -12318,8 +12318,16 @@ function compileImportExpression(
 		return emitDynamicImportCall(program, fn, cursor, specifier);
 	}
 
+	const candidatePaths = new Set(
+		[...(program.semantic.graph?.modules.values() ?? [])]
+			.flatMap((module) => module.dependencies)
+			.filter(
+				(dependency) => dependency.kind === "dynamic" && dependency.resolvedPath !== null,
+			)
+			.map((dependency) => dependency.resolvedPath!),
+	);
 	const candidates = program.semantic.files
-		.filter((file) => !file.commonjs)
+		.filter((file) => !file.commonjs && candidatePaths.has(file.path))
 		.map((file) => file.path)
 		.sort();
 	const result = nextRegisterDestination(fn);

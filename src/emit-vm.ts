@@ -120,10 +120,10 @@ const COMPILED_FUNCTION_DECLARATION =
 	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state)";
 
 /** Keep native/self-hosted compiler strings comfortably below the 16 MiB engine limit. */
-// Three MiB keeps the self-host compiler's largest indivisible metadata table
-// intact while giving representative dependency graphs enough units to fill the
-// bounded native compiler pool.
-export const DEFAULT_TRANSLATION_UNIT_CODE_UNITS = 3 * 1024 * 1024;
+// Eight MiB accommodates large indivisible dependency functions while staying
+// below the self-host compiler's 16 MiB string ceiling. Splittable functions and
+// data continue to use separate bounded units for native compiler parallelism.
+export const DEFAULT_TRANSLATION_UNIT_CODE_UNITS = 8 * 1024 * 1024;
 
 function stringCodeUnitsBody(constant: Array<number>): string {
 	return `{ ${constant.length > 0 ? constant.join(", ") : "0"} }`;

@@ -861,7 +861,7 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 		case "CREATE_OBJECT_SHAPED":
 			if (
 				i.count < 1 ||
-				i.count > 32 ||
+				i.count > 64 ||
 				i.keyStringIndices.length !== i.count ||
 				i.valueRegisters.length !== i.count
 			) {
@@ -1631,7 +1631,7 @@ function readInstruction(r: Reader): VmInstruction {
 			};
 			if (
 				instruction.count < 1 ||
-				instruction.count > 32 ||
+				instruction.count > 64 ||
 				instruction.keyStringIndices.length !== instruction.count ||
 				instruction.valueRegisters.length !== instruction.count
 			) {
