@@ -229,6 +229,22 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds callable node:assert default and named exports", () => {
+		const def = compile(
+			`import assert, { strictEqual } from "node:assert";\nglobalThis.sink = [assert, strictEqual];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_assert",
+				exports: [
+					expect.objectContaining({ name: "strictEqual" }),
+					expect.objectContaining({ name: "default" }),
+				],
+			}),
+		]);
+	});
+
 	it("binds node:tty default and named exports through one installer", () => {
 		const def = compile(
 			`import tty, { isatty } from "node:tty";\nglobalThis.sink = [tty, isatty];\n`,

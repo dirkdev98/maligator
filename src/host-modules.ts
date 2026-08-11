@@ -264,6 +264,13 @@ const ASSERT_STRICT: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:assert/strict"),
 };
 
+const ASSERT: HostModuleSpec = {
+	id: "node:assert",
+	named: ["ok", "equal", "strictEqual", "deepEqual", "deepStrictEqual", "match"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:assert"),
+};
+
 const ASYNC_HOOKS: HostModuleSpec = {
 	id: "node:async_hooks",
 	named: ["AsyncLocalStorage", "AsyncResource"],
@@ -365,6 +372,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		UTIL,
 		BUFFER,
 		PROCESS,
+		ASSERT,
 		ASSERT_STRICT,
 		ASYNC_HOOKS,
 		STREAM,

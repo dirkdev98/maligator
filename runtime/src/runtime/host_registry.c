@@ -40,6 +40,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_maligator);
 #if MAL_NODE
     MATCH_INSTALLER(mal_host_install_process);
+    MATCH_INSTALLER(mal_host_install_node_assert);
     MATCH_INSTALLER(mal_host_install_node_assert_strict);
     MATCH_INSTALLER(mal_host_install_node_async_hooks);
     MATCH_INSTALLER(mal_host_install_node_buffer);

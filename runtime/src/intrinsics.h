@@ -398,6 +398,8 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_NODE_BUFFER_MODULE,
     /* Shared free-global and node:process module object. */
     MAL_INTRINSIC_NODE_PROCESS_MODULE,
+    /* Per-realm callable node:assert and object-shaped strict assertion modules. */
+    MAL_INTRINSIC_NODE_ASSERT_MODULE,
     /* Per-realm node:assert/strict CommonJS/default export object. */
     MAL_INTRINSIC_NODE_ASSERT_STRICT_MODULE,
     /* Per-realm Node stream constructor/prototype graph, populated lazily. */

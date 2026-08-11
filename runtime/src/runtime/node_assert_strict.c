@@ -12,8 +12,31 @@
 #include "value_ops.h"
 #include "vm_ops.h"
 
+#define NODE_ASSERT_VISIBLE \
+    (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
+
 static MalValue assert_fail(MalVm *vm, const byte *message) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message);
+    return mal_value_new_undefined();
+}
+
+static MalValue assert_ok(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    if (argc >= 1 && mal_value_is_truthy(args[0])) {
+        return mal_value_new_undefined();
+    }
+    MalValue message = argc >= 2 && mal_value_is_string(args[1])
+        ? args[1]
+        : mal_value_from_string(mal_intrinsic_ascii(
+            vm, "The expression evaluated to a falsy value"));
+    MalRootSpan root;
+    mal_gc_root(&root, &message, 1);
+    mal_vm_throw_error_value(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message);
+    mal_gc_unroot(&root);
     return mal_value_new_undefined();
 }
 
@@ -102,6 +125,38 @@ static MalValue assert_match(
         return assert_fail(vm, (const byte *) "Expected string to match regular expression");
     }
     return mal_value_new_undefined();
+}
+
+void mal_host_install_node_assert(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch) {
+    (void) launch;
+    MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_MODULE];
+    if (mal_value_is_undefined(module)) {
+        module = mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(
+                &vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, "ok"), 0, assert_ok));
+        MalRootSpan root;
+        mal_gc_root(&root, &module, 1);
+        MalObject *object = mal_value_to_object(module);
+        mal_intrinsic_define_data(
+            vm, object, "ok", module, NODE_ASSERT_VISIBLE);
+        mal_intrinsic_define_method_n(
+            vm, object, "equal", 2, assert_equal);
+        mal_intrinsic_define_method_n(
+            vm, object, "strictEqual", 2, assert_equal);
+        mal_intrinsic_define_method_n(
+            vm, object, "deepEqual", 2, assert_deep_equal);
+        mal_intrinsic_define_method_n(
+            vm, object, "deepStrictEqual", 2, assert_deep_equal);
+        mal_intrinsic_define_method_n(
+            vm, object, "match", 2, assert_match);
+        vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_MODULE] = module;
+        mal_gc_unroot(&root);
+    }
+    mal_node_module_publish(vm, slots, count, module);
 }
 
 void mal_host_install_node_assert_strict(

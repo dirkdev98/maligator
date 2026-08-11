@@ -810,13 +810,20 @@ test("canonicalizes a bare ESM path specifier to the host built-in", () => {
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
 });
 
-test("gives unsupported bare core modules precedence over npm packages", () => {
+test("gives supported bare assert precedence over npm packages", () => {
 	write("node_modules/assert/package.json", `{"main":"index.js"}\n`);
 	write("node_modules/assert/index.js", `module.exports = "npm-shadow";\n`);
 	write("bare-assert.cjs", `module.exports = require("assert");\n`);
-	expect(() =>
-		buildModuleGraph(path.join(root, "bare-assert.cjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:assert'/);
+	const graph = buildModuleGraph(path.join(root, "bare-assert.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:assert",
+	);
+	expect(graph.modules.get("node:assert")?.host).toMatchObject({
+		named: ["ok", "equal", "strictEqual", "deepEqual", "deepStrictEqual", "match"],
+		hasDefault: true,
+	});
 });
 
 test("recognizes inspector as a bare core module", () => {
