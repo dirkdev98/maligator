@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 18u        // complete compiler metadata retained for frontend caches
+#define WIRE_VERSION 19u        // guarded inherited stack-object metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1547,6 +1547,12 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
         u32 stack_access_count = rd_count(&r, 3);
         for (u32 access = 0; r.ok && access < stack_access_count; access++) {
             (void) rd_i32(&r);
+            (void) rd_i32(&r);
+            (void) rd_i32(&r);
+        }
+
+        u32 inherited_stack_access_count = rd_count(&r, 2);
+        for (u32 access = 0; r.ok && access < inherited_stack_access_count; access++) {
             (void) rd_i32(&r);
             (void) rd_i32(&r);
         }

@@ -102,6 +102,57 @@ describe("scalar-replaced object observations", () => {
 });
 
 describe("closed fixed-shape stack-object proof", () => {
+	it("accepts one static inherited read with a fixed own-slot island", () => {
+		const program = optimized(
+			`function f(value) { const o = { x: value }; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`,
+		);
+		expect(stackSiteCount(program)).toBe(1);
+		expect(
+			instructions(program).filter(
+				(instruction) =>
+					(instruction.type === "loadProperty" ||
+						instruction.type === "loadPropertyStatic") &&
+					instruction.stackObjectInheritedSiteId !== undefined,
+			),
+		).toHaveLength(1);
+	});
+
+	it("accepts a linear allocation-to-read corridor inside a surrounding loop", () => {
+		const program = optimized(
+			`function f(count) { let sum = 0; while (count-- > 0) { const o = { x: count }; const inherited = o.toString; if (typeof inherited === "function") sum += o.x; } return sum; } globalThis.keep = f;`,
+		);
+		expect(stackSiteCount(program)).toBe(1);
+		expect(
+			instructions(program).filter(
+				(instruction) =>
+					(instruction.type === "loadProperty" ||
+						instruction.type === "loadPropertyStatic") &&
+					instruction.stackObjectInheritedSiteId !== undefined,
+			),
+		).toHaveLength(1);
+	});
+
+	it.each([
+		[
+			"two inherited reads",
+			`function f(value) { const o = { x: value }; const a = o.toString; const b = o.valueOf; return typeof a === "function" && typeof b === "function" ? o.x : 0; } globalThis.keep = f;`,
+		],
+		[
+			"own store",
+			`function f(value) { const o = { x: value }; o.x = value + 1; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`,
+		],
+		[
+			"intervening call",
+			`function f(value) { const o = { x: value }; sideEffect(); const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`,
+		],
+		[
+			"intervening backedge",
+			`function f(value) { const o = { x: value }; let n = 1; while (n-- > 0) value++; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`,
+		],
+	])("rejects guarded inherited island with %s", (_name, source) => {
+		expect(stackSiteCount(optimized(source))).toBe(0);
+	});
+
 	it.each([
 		[
 			"empty identity-observed object",
@@ -336,6 +387,29 @@ describe("closed fixed-shape stack-object proof", () => {
 });
 
 describe("stack-object native metadata and C emission", () => {
+	it("emits an inline dependency guard with stack and heap representations", () => {
+		const definition = compileSemanticProgramToVmDefinition(
+			semantic(
+				`function f(value) { const o = { x: value }; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`,
+			),
+		);
+		const fn = definition.functions.find(
+			(candidate) => (candidate.stackObjectInheritedAccesses?.length ?? 0) > 0,
+		)!;
+		expect(fn.stackObjectInheritedAccesses).toHaveLength(1);
+		const source = emitVmDefinition(definition, { compiled: true });
+		expect(source).toContain("MAL_IC_MODE_INHERITED_VALUE");
+		expect(source).toContain("->poly_count > 0");
+		expect(source).toContain("->poly_count == 0");
+		expect(source).toContain("mal_primitive_method_protector");
+		expect(source).toContain("->receiver_type == MAL_HEAP_OBJECT");
+		expect(source).toContain("_inherited_fast");
+		expect(source).toMatch(/if \(__stack_object_\d+_inherited_fast\) \{/);
+		expect(source).toContain("= mal_vm_create_object_shaped(vm");
+		expect(source).toContain("mal_perf_ic_load_inherited_hit();");
+		expect(source).not.toContain("mal_vm_local_inherited_value_try_load_static");
+	});
+
 	it("emits an immortal stack MalObject backed by activation root slots", () => {
 		const definition = compileSemanticProgramToVmDefinition(
 			semantic(
@@ -427,6 +501,22 @@ describe("stack-object native metadata and C emission", () => {
 		).toBe(true);
 		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
 			"MalObject __stack_object_",
+		);
+	});
+
+	it("serializes guarded inherited stack-object metadata", () => {
+		const decoded = deserializeVmDefinition(
+			compileSourceToBuffer(
+				`function f(value) { const o = { x: value }; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`,
+			),
+		);
+		expect(
+			decoded.functions.some(
+				(fn) => (fn.stackObjectInheritedAccesses?.length ?? 0) === 1,
+			),
+		).toBe(true);
+		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
+			"MAL_IC_MODE_INHERITED_VALUE",
 		);
 	});
 });

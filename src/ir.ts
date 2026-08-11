@@ -976,6 +976,8 @@ export type IRInstruction =
 			registers: [number, number, number];
 			stackObjectSiteId?: number;
 			stackObjectSlot?: number;
+			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
+			stackObjectInheritedSiteId?: number;
 	  }
 	| {
 			type: "loadPropertyStatic";
@@ -985,6 +987,8 @@ export type IRInstruction =
 			stringIndex: number;
 			stackObjectSiteId?: number;
 			stackObjectSlot?: number;
+			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
+			stackObjectInheritedSiteId?: number;
 	  }
 	| {
 			type: "loadSuperProperty";

@@ -172,6 +172,9 @@ typedef struct MalPerfStats {
     u64 object_shaped_creations;
     u64 stack_object_initializations;
     u64 stack_object_materializations;
+    u64 stack_object_inherited_fast_initializations;
+    u64 stack_object_inherited_heap_fallbacks;
+    u64 stack_object_inherited_direct_loads;
     u64 error_stack_trace_stores;
     u64 error_stack_trace_releases;
     u64 error_stack_trace_peak_live;
@@ -465,4 +468,16 @@ static inline void mal_perf_ic_store_region_hit(void) {
 
 static inline void mal_perf_stack_object_init(void) {
     MAL_PERF_COUNT(stack_object_initializations);
+}
+
+static inline void mal_perf_stack_object_inherited_fast_init(void) {
+    MAL_PERF_COUNT(stack_object_inherited_fast_initializations);
+}
+
+static inline void mal_perf_stack_object_inherited_heap_fallback(void) {
+    MAL_PERF_COUNT(stack_object_inherited_heap_fallbacks);
+}
+
+static inline void mal_perf_stack_object_inherited_direct_load(void) {
+    MAL_PERF_COUNT(stack_object_inherited_direct_loads);
 }

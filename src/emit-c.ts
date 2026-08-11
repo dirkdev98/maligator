@@ -589,6 +589,26 @@ export function emitCompiledFunction(
 		}
 		stackObjectAccesses.set(access.instructionIndex, { site, slot: access.slot });
 	}
+	const stackObjectInheritedAccesses = new Map<number, StackObjectSite>();
+	for (const access of fn.stackObjectInheritedAccesses ?? []) {
+		const instruction = fn.instructions[access.instructionIndex];
+		const site = stackObjectSites.get(access.allocationInstructionIndex);
+		if (
+			instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			site === undefined ||
+			site.inheritedLoadInstructionIndex !== undefined ||
+			stackObjectInheritedAccesses.has(access.instructionIndex)
+		) {
+			throw new Error(
+				`Invalid inherited stack-object access metadata at instruction ${access.instructionIndex}`,
+			);
+		}
+		site.inheritedLoadInstructionIndex = access.instructionIndex;
+		site.inheritedIcIndex = instruction.icIndex;
+		site.inheritedFastName = `${site.objectName}_inherited_fast`;
+		site.inheritedValueName = `${site.objectName}_inherited_value`;
+		stackObjectInheritedAccesses.set(access.instructionIndex, site);
+	}
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -613,6 +633,7 @@ export function emitCompiledFunction(
 		stackObjectSites,
 		stackObjectAccesses,
 		stackObjectMaterializations,
+		stackObjectInheritedAccesses,
 	);
 	if (body === null) {
 		return null;
@@ -697,6 +718,10 @@ export function emitCompiledFunction(
 	}
 	for (const site of stackObjectSites.values()) {
 		lines.push(`    MalObject ${site.objectName};`);
+		if (site.inheritedLoadInstructionIndex !== undefined) {
+			lines.push(`    bool ${site.inheritedFastName} = false;`);
+			lines.push(`    MalValue ${site.inheritedValueName} = MAL_VALUE_UNDEFINED;`);
+		}
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
@@ -868,6 +893,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1227,6 +1253,10 @@ interface StackObjectSite {
 	objectName: string;
 	slotsOffset: number;
 	slotCount: number;
+	inheritedLoadInstructionIndex?: number;
+	inheritedIcIndex?: number;
+	inheritedFastName?: string;
+	inheritedValueName?: string;
 }
 
 /**
@@ -1325,6 +1355,7 @@ function emitBody(
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
+	stackObjectInheritedAccesses: ReadonlyMap<number, StackObjectSite>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -1579,6 +1610,7 @@ function emitBody(
 			stackObjectSites.get(ip),
 			stackObjectAccesses.get(ip),
 			stackObjectMaterializations.get(ip),
+			stackObjectInheritedAccesses.get(ip),
 			mathUnaryCalls.has(ip),
 			mathBinaryCalls.has(ip),
 			loopBody.has(ip),
@@ -1624,6 +1656,7 @@ function emitInstruction(
 	stackObjectSite: StackObjectSite | undefined,
 	stackObjectAccess: { site: StackObjectSite; slot: number } | undefined,
 	stackObjectMaterialization: StackObjectSite | undefined,
+	stackObjectInheritedAccess: StackObjectSite | undefined,
 	mathUnaryCall: boolean,
 	mathBinaryCall: boolean,
 	loopStaticPropertyFastPath: boolean,
@@ -1788,6 +1821,32 @@ function emitInstruction(
 				];
 			}
 			const { objectName, slotsOffset } = stackObjectSite;
+			if (stackObjectSite.inheritedLoadInstructionIndex !== undefined) {
+				const fastName = stackObjectSite.inheritedFastName!;
+				const inheritedValue = stackObjectSite.inheritedValueName!;
+				const icName = `${objectName}_inherited_ic`;
+				const prototypeName = `${objectName}_prototype`;
+				return [
+					...shape,
+					`MalInlineCache *${icName} = &__property_ic[${stackObjectSite.inheritedIcIndex}];`,
+					`MalObject *${prototypeName} = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);`,
+					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape == __oshape_${ip} && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && mal_primitive_method_protector && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
+					`if (${fastName}) {`,
+					`  ${inheritedValue} = ${icName}->value;`,
+					`  mal_perf_stack_object_init();`,
+					`  mal_perf_stack_object_inherited_fast_init();`,
+					`  ${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = ${prototypeName}, .slots = &__gc_slots[${slotsOffset}], .overflow = nullptr };`,
+					...instruction.valueRegisters.map(
+						(register, index) =>
+							`  __gc_slots[${slotsOffset + index}] = ${boxed(register)};`,
+					),
+					`  r${instruction.dst} = mal_value_from_object(&${objectName});`,
+					`} else {`,
+					`  mal_perf_stack_object_inherited_heap_fallback();`,
+					`  r${instruction.dst} = mal_vm_create_object_shaped(vm, __oshape_${ip}, (MalValue[]){ ${values} }, ${instruction.count});`,
+					`}`,
+				];
+			}
 			return [
 				...shape,
 				// Direct initialization is essential: this storage never enters the heap,
@@ -1895,9 +1954,75 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (stackObjectInheritedAccess !== undefined) {
+				const fallback = emitInstruction(
+					instruction,
+					ip,
+					suffix,
+					reps,
+					strict,
+					handlerIp,
+					gcUnlink,
+					thisSlot,
+					coro,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					mathUnaryCall,
+					mathBinaryCall,
+					loopStaticPropertyFastPath,
+					mappedArguments,
+					mappedArgumentSlots,
+					hasPrototype,
+				);
+				if (fallback === null) return null;
+				return [
+					`if (${stackObjectInheritedAccess.inheritedFastName}) {`,
+					`  r${instruction.dst} = ${stackObjectInheritedAccess.inheritedValueName};`,
+					`  mal_perf_ic_load_inherited_hit();`,
+					`  mal_perf_stack_object_inherited_direct_load();`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
-				return [`r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`];
+				if (site.inheritedLoadInstructionIndex === undefined) {
+					return [`r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`];
+				}
+				const fallback = emitInstruction(
+					instruction,
+					ip,
+					suffix,
+					reps,
+					strict,
+					handlerIp,
+					gcUnlink,
+					thisSlot,
+					coro,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					mathUnaryCall,
+					mathBinaryCall,
+					loopStaticPropertyFastPath,
+					mappedArguments,
+					mappedArgumentSlots,
+					hasPrototype,
+				);
+				if (fallback === null) return null;
+				return [
+					`if (${site.inheritedFastName}) {`,
+					`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
 			}
 			const key =
 				instruction.opcode === "LOAD_PROPERTY_STATIC"

@@ -17,8 +17,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 18 for complete native-code generation metadata.
-export const WIRE_VERSION = 18;
+// Bumped to 19 for guarded inherited stack-object metadata.
+export const WIRE_VERSION = 19;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -596,6 +596,12 @@ export function serializeVmDefinition(
 			w.i32(access.instructionIndex);
 			w.i32(access.allocationInstructionIndex);
 			w.i32(access.slot);
+		}
+
+		w.u32(fn.stackObjectInheritedAccesses?.length ?? 0);
+		for (const access of fn.stackObjectInheritedAccesses ?? []) {
+			w.i32(access.instructionIndex);
+			w.i32(access.allocationInstructionIndex);
 		}
 
 		w.u32(fn.stackObjectMaterializations?.length ?? 0);
@@ -1327,6 +1333,17 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				allocationInstructionIndex: r.i32(),
 				slot: r.i32(),
 			}));
+		}
+
+		const stackObjectInheritedAccessCount = r.count(2);
+		if (stackObjectInheritedAccessCount > 0) {
+			fn.stackObjectInheritedAccesses = Array.from(
+				{ length: stackObjectInheritedAccessCount },
+				() => ({
+					instructionIndex: r.i32(),
+					allocationInstructionIndex: r.i32(),
+				}),
+			);
 		}
 
 		const stackObjectMaterializationCount = r.count(2);

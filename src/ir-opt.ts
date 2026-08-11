@@ -885,6 +885,7 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 								stringIndex: key.stringIndex,
 								stackObjectSiteId: instruction.stackObjectSiteId,
 								stackObjectSlot: instruction.stackObjectSlot,
+								stackObjectInheritedSiteId: instruction.stackObjectInheritedSiteId,
 							}
 						: {
 								type: "storePropertyStatic",
@@ -941,6 +942,12 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				) {
 					delete instruction.stackObjectSiteId;
 					delete instruction.stackObjectSlot;
+					if (
+						instruction.type === "loadProperty" ||
+						instruction.type === "loadPropertyStatic"
+					) {
+						delete instruction.stackObjectInheritedSiteId;
+					}
 				}
 			}
 		}
@@ -1091,6 +1098,8 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				const materializingReturns = new Set<
 					Extract<IRInstruction, { type: "return" }>
 				>();
+				let inheritedLoad: Extract<IRInstruction, { type: "loadProperty" }> | undefined;
+				let hasOwnStore = false;
 				let observed = false;
 				let safe = true;
 				while (safe && worklist.length > 0) {
@@ -1115,10 +1124,18 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 							}
 							case "loadProperty": {
 								const key = constantString(use.registers[2]);
-								if (position !== 1 || key === undefined || !ownKeys.has(key)) {
+								if (position !== 1 || key === undefined) {
 									safe = false;
-								} else {
+								} else if (ownKeys.has(key)) {
 									stackAccesses.set(use, slotByKey.get(key)!);
+								} else if (
+									allocation.type === "createObjectShaped" &&
+									inheritedLoad === undefined
+								) {
+									inheritedLoad = use;
+									observed = true;
+								} else {
+									safe = false;
 								}
 								break;
 							}
@@ -1128,6 +1145,7 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 									safe = false;
 								} else {
 									stackAccesses.set(use, slotByKey.get(key)!);
+									hasOwnStore = true;
 								}
 								break;
 							}
@@ -1161,6 +1179,93 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 								safe = false;
 						}
 						if (!safe) break;
+					}
+				}
+
+				if (safe && inheritedLoad !== undefined) {
+					const allocationLocation = instructionLocations.get(allocation)!;
+					const loadLocation = instructionLocations.get(inheritedLoad)!;
+					if (
+						materializingReturns.size > 0 ||
+						hasOwnStore ||
+						stackAccesses.size === 0 ||
+						!dominators[loadLocation.blockIndex]!.has(allocationLocation.blockIndex) ||
+						(loadLocation.blockIndex === allocationLocation.blockIndex &&
+							loadLocation.instructionIndex <= allocationLocation.instructionIndex)
+					) {
+						safe = false;
+					} else {
+						const sameBlock = allocationLocation.blockIndex === loadLocation.blockIndex;
+						let corridor: Set<number>;
+						if (sameBlock) {
+							// A surrounding loop is harmless when allocation and observation
+							// are ordered in one linear block: its backedge occurs after this
+							// instance's guarded read, not inside the proof corridor.
+							corridor = new Set([allocationLocation.blockIndex]);
+						} else {
+							const afterAllocation = new Set<number>();
+							const forward = [allocationLocation.blockIndex];
+							while (forward.length > 0) {
+								const blockIndex = forward.pop()!;
+								if (afterAllocation.has(blockIndex)) continue;
+								afterAllocation.add(blockIndex);
+								if (blockIndex === loadLocation.blockIndex) continue;
+								for (const successor of successors[blockIndex]!) forward.push(successor);
+							}
+							const beforeLoad = new Set<number>();
+							const reverse = [loadLocation.blockIndex];
+							while (reverse.length > 0) {
+								const blockIndex = reverse.pop()!;
+								if (beforeLoad.has(blockIndex)) continue;
+								beforeLoad.add(blockIndex);
+								if (blockIndex === allocationLocation.blockIndex) continue;
+								for (const predecessor of predecessors[blockIndex]!)
+									reverse.push(predecessor);
+							}
+							corridor = new Set(
+								[...afterAllocation].filter((blockIndex) => beforeLoad.has(blockIndex)),
+							);
+						}
+						for (const blockIndex of corridor) {
+							if (
+								!sameBlock &&
+								successors[blockIndex]!.some(
+									(successor) =>
+										corridor.has(successor) && dominators[blockIndex]!.has(successor),
+								)
+							) {
+								safe = false;
+								break;
+							}
+							const instructions = fn.blocks[blockIndex]!.instructions;
+							const start =
+								blockIndex === allocationLocation.blockIndex
+									? allocationLocation.instructionIndex + 1
+									: 0;
+							const end =
+								blockIndex === loadLocation.blockIndex
+									? loadLocation.instructionIndex
+									: instructions.length;
+							for (let index = start; index < end; index++) {
+								const instruction = instructions[index]!;
+								const directOwnLoad =
+									instruction.type === "loadProperty" && stackAccesses.has(instruction);
+								const strictIdentity =
+									instruction.type === "binary" &&
+									(instruction.operator === "===" || instruction.operator === "!==");
+								const immortalString = instruction.type === "createString";
+								if (
+									isSafepoint(instruction) &&
+									!directOwnLoad &&
+									!strictIdentity &&
+									!immortalString
+								) {
+									safe = false;
+									break;
+								}
+							}
+							if (!safe) break;
+						}
 					}
 				}
 
@@ -1210,6 +1315,9 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 						for (const instruction of materializingReturns) {
 							instruction.stackObjectMaterializeSiteId = siteId;
 						}
+					}
+					if (inheritedLoad !== undefined) {
+						inheritedLoad.stackObjectInheritedSiteId = siteId;
 					}
 					stackObjectSlots += keyStringIndices.length;
 				}

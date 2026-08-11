@@ -300,6 +300,8 @@ static void mal_perf_stats_print(void) {
         stderr,
         "[perf-allocation-stats] empty_objects=%llu shaped_objects=%llu "
         "stack_objects=%llu stack_materializations=%llu "
+        "stack_inherited_fast=%llu stack_inherited_heap_fallbacks=%llu "
+        "stack_inherited_direct_loads=%llu "
         "accessor_sidecar_allocations=%llu accessor_sidecar_frees=%llu "
         "error_trace_stores=%llu error_trace_releases=%llu error_trace_peak_live=%llu "
         "function_property_cache_allocations=%llu function_property_cache_bytes=%llu "
@@ -310,6 +312,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.object_shaped_creations,
         (unsigned long long) mal_perf_stats.stack_object_initializations,
         (unsigned long long) mal_perf_stats.stack_object_materializations,
+        (unsigned long long) mal_perf_stats.stack_object_inherited_fast_initializations,
+        (unsigned long long) mal_perf_stats.stack_object_inherited_heap_fallbacks,
+        (unsigned long long) mal_perf_stats.stack_object_inherited_direct_loads,
         (unsigned long long) mal_perf_stats.property_accessor_sidecar_allocations,
         (unsigned long long) mal_perf_stats.property_accessor_sidecar_frees,
         (unsigned long long) mal_perf_stats.error_stack_trace_stores,

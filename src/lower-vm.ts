@@ -242,6 +242,10 @@ export interface VmFunction {
 		allocationInstructionIndex: number;
 		slot: number;
 	}>;
+	stackObjectInheritedAccesses?: ReadonlyArray<{
+		instructionIndex: number;
+		allocationInstructionIndex: number;
+	}>;
 
 	/**
 	 * COMPILE-ONLY: partial-escape materializations keyed to RETURN instruction
@@ -1150,6 +1154,10 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		siteId: number;
 		slot: number;
 	}> = [];
+	const pendingStackObjectInheritedAccesses: Array<{
+		instructionIndex: number;
+		siteId: number;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1234,6 +1242,16 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 					slot: instruction.stackObjectSlot,
 				});
 			}
+			if (
+				(instruction.type === "loadProperty" ||
+					instruction.type === "loadPropertyStatic") &&
+				instruction.stackObjectInheritedSiteId !== undefined
+			) {
+				pendingStackObjectInheritedAccesses.push({
+					instructionIndex,
+					siteId: instruction.stackObjectInheritedSiteId,
+				});
+			}
 			positions.push(currentPos);
 		}
 	}
@@ -1256,6 +1274,15 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 				throw new Error(`Unknown stack-object access site id ${siteId}`);
 			}
 			return { instructionIndex, allocationInstructionIndex, slot };
+		},
+	);
+	const stackObjectInheritedAccesses = pendingStackObjectInheritedAccesses.map(
+		({ instructionIndex, siteId }) => {
+			const allocationInstructionIndex = stackObjectSiteInstructionById.get(siteId);
+			if (allocationInstructionIndex === undefined) {
+				throw new Error(`Unknown inherited stack-object site id ${siteId}`);
+			}
+			return { instructionIndex, allocationInstructionIndex };
 		},
 	);
 
@@ -1317,6 +1344,8 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		gcRootRegisters,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
+		stackObjectInheritedAccesses:
+			stackObjectInheritedAccesses.length > 0 ? stackObjectInheritedAccesses : undefined,
 		stackObjectMaterializations:
 			stackObjectMaterializations.length > 0 ? stackObjectMaterializations : undefined,
 	};

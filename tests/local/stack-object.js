@@ -141,6 +141,24 @@ function callEscape(seed) {
 	receiveEscape(o);
 }
 
+let inheritedIslandCaptured = null;
+function inheritedIsland(seed, expected) {
+	const object = { value: seed, next: seed + 1, tag: 17 };
+	const inherited = object.toString;
+	const capturedIdentity = object === inheritedIslandCaptured;
+	if (inherited !== expected) return -1;
+	return object.value + object.next + object.tag + (capturedIdentity ? 1000 : 0);
+}
+
+function replacementToString() {
+	return "replacement";
+}
+
+const inheritedIslandFunctions = [inheritedIsland];
+function callInheritedIsland(seed, expected) {
+	return inheritedIslandFunctions[0](seed, expected);
+}
+
 check("loop reuse", loopReuse());
 check("empty observed object", emptyObserved(40));
 check("simultaneous stack sites", simultaneous(41));
@@ -208,6 +226,56 @@ check(
 	"passed object stays heap-live",
 	globalEscape.value === 14 && globalEscape.text === "call:14",
 );
+
+const toStringDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, "toString");
+const originalToString = toStringDescriptor.value;
+check("inherited island cold fill", callInheritedIsland(30, originalToString) === 78);
+check("inherited island stable fast", callInheritedIsland(31, originalToString) === 80);
+
+Object.prototype.toString = replacementToString;
+check(
+	"inherited island data replacement cold",
+	callInheritedIsland(32, replacementToString) === 82,
+);
+check(
+	"inherited island data replacement fast",
+	callInheritedIsland(33, replacementToString) === 84,
+);
+
+Object.defineProperty(Object.prototype, "toString", {
+	configurable: true,
+	enumerable: toStringDescriptor.enumerable,
+	get() {
+		inheritedIslandCaptured = this;
+		delete this.value;
+		this.value = 41;
+		return replacementToString;
+	},
+});
+check(
+	"inherited island getter result and identity",
+	callInheritedIsland(34, replacementToString) === 1093,
+);
+allocateNoise(304);
+check(
+	"inherited island getter captures heap receiver",
+	inheritedIslandCaptured.value === 41 &&
+		inheritedIslandCaptured.next === 35 &&
+		inheritedIslandCaptured.tag === 17,
+);
+
+delete Object.prototype.toString;
+inheritedIslandCaptured = null;
+check("inherited island delete", callInheritedIsland(35, undefined) === 88);
+Object.defineProperty(Object.prototype, "toString", {
+	configurable: true,
+	enumerable: toStringDescriptor.enumerable,
+	value: originalToString,
+	writable: true,
+});
+check("inherited island redefine cold", callInheritedIsland(36, originalToString) === 90);
+check("inherited island redefine fast", callInheritedIsland(37, originalToString) === 92);
+Object.defineProperty(Object.prototype, "toString", toStringDescriptor);
 
 // Prototype-observing calls intentionally remain negative: passing the pointer to
 // Object.getPrototypeOf is outside the first stack-object proof.
