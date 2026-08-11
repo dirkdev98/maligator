@@ -130,7 +130,8 @@ export interface IntermediateProgram {
 	/**
 	 * Compile each module init file only once.
 	 */
-	compiledModuleInitForPaths: Set<string>;
+	/** Module path to its lazy init function, or null when merged/eagerly initialized. */
+	compiledModuleInitForPaths: Map<string, number | null>;
 
 	/**
 	 * Keep track of where the binding is stored.
@@ -176,8 +177,6 @@ export interface IntermediateProgram {
 	>;
 	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
 	dynamicModuleStatusSlot: Map<string, number>;
-	/** One stable import.meta object slot per ES module that reads it. */
-	importMetaSlot: Map<string, number>;
 
 	/**
 	 * CommonJS modules, keyed by path to their integer module id. The id indexes
@@ -1729,7 +1728,7 @@ export function compileSemanticProgramToIr(
 
 		bindingFunctionNode: new Map(),
 
-		compiledModuleInitForPaths: new Set(),
+		compiledModuleInitForPaths: new Map(),
 		bindingToStorage: new Map(),
 		nextLoopScopeId: -1,
 		nodeToFunctionCache: new Map(),
@@ -1740,7 +1739,6 @@ export function compileSemanticProgramToIr(
 		namespaceImports: new Map(),
 		moduleNamespaces: new Map(),
 		dynamicModuleStatusSlot: new Map(),
-		importMetaSlot: new Map(),
 
 		cjsModuleId: new Map(),
 		cjsWrapperFunctionIndex: [],
@@ -1832,7 +1830,7 @@ function compileMergedModuleInit(
 	// separate per-file init; mark every module compiled up front since the
 	// merged init already covers every module's top-level.
 	for (const modulePath of evaluationOrder) {
-		program.compiledModuleInitForPaths.add(modulePath);
+		program.compiledModuleInitForPaths.set(modulePath, null);
 	}
 
 	const fn: IRFunction = {
@@ -1940,11 +1938,8 @@ function emitRequiredEsmNamespaceInits(
  */
 function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	if (program.compiledModuleInitForPaths.has(initFile.path)) {
-		// We already compiled the entrypoint for this file, so we can skip it, so we don't
-		// initialize a module twice.
-		return -1;
+		return program.compiledModuleInitForPaths.get(initFile.path) ?? -1;
 	}
-	program.compiledModuleInitForPaths.add(initFile.path);
 
 	const fn: IRFunction = {
 		semanticFile: initFile,
@@ -1960,6 +1955,7 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	};
 
 	program.functions.push(fn);
+	program.compiledModuleInitForPaths.set(initFile.path, fn.functionIndex);
 	const inheritedContextBindings = program.evalDirect
 		? prepareDirectEvalClassContext(program, fn)
 		: [];
@@ -2600,7 +2596,7 @@ function compileCjsModuleWrapper(
 	program: IntermediateProgram,
 	file: SemanticFile,
 ): number {
-	program.compiledModuleInitForPaths.add(file.path);
+	program.compiledModuleInitForPaths.set(file.path, null);
 
 	const fn: IRFunction = {
 		semanticFile: file,
@@ -3039,10 +3035,11 @@ function fileUsesImportMeta(file: SemanticFile): boolean {
 }
 
 function importMetaSlot(program: IntermediateProgram, file: SemanticFile): number {
-	let slot = program.importMetaSlot.get(file.path);
+	const key = `\0import-meta:${file.path}`;
+	let slot = program.dynamicModuleStatusSlot.get(key);
 	if (slot === undefined) {
 		slot = program.nextGlobalIndex++;
-		program.importMetaSlot.set(file.path, slot);
+		program.dynamicModuleStatusSlot.set(key, slot);
 	}
 	return slot;
 }
@@ -12310,6 +12307,82 @@ function compileImportExpression(
 	options?: ESTree.Expression | null,
 ): number {
 	const targetPath = dynamicImportTargetPath(program, fn, source);
+	const specifier = compileExpression(program, fn, cursor, source);
+	if (options) {
+		compileExpression(program, fn, cursor, options);
+	}
+	if (targetPath) {
+		return emitDynamicImportCall(program, fn, cursor, specifier, targetPath);
+	}
+	if (source.type === "Literal") {
+		return emitDynamicImportCall(program, fn, cursor, specifier);
+	}
+
+	const candidates = program.semantic.files
+		.filter((file) => !file.commonjs)
+		.map((file) => file.path)
+		.sort();
+	const result = nextRegisterDestination(fn);
+	const joinJumps: Array<Extract<IRInstruction, { type: "jump" }>> = [];
+
+	for (const candidate of candidates) {
+		const candidateSpecifier = compileStaticString(program, fn, cursor, candidate);
+		const matches = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [matches, specifier, candidateSpecifier],
+			operator: "===",
+		});
+		const matchJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+			type: "jumpIf",
+			registers: [matches],
+			blocks: [-1],
+		};
+		const nextJump: Extract<IRInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		cursor.block.instructions.push(matchJump, nextJump);
+
+		const matchIndex = fn.blocks.push({ instructions: [] }) - 1;
+		matchJump.blocks[0] = matchIndex;
+		cursor.block = fn.blocks[matchIndex]!;
+		const imported = emitDynamicImportCall(
+			program,
+			fn,
+			cursor,
+			specifier,
+			candidate,
+		);
+		cursor.block.instructions.push({ type: "move", registers: [result, imported] });
+		const joinJump: Extract<IRInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		cursor.block.instructions.push(joinJump);
+		joinJumps.push(joinJump);
+
+		const nextIndex = fn.blocks.push({ instructions: [] }) - 1;
+		nextJump.blocks[0] = nextIndex;
+		cursor.block = fn.blocks[nextIndex]!;
+	}
+
+	const missing = emitDynamicImportCall(program, fn, cursor, specifier);
+	cursor.block.instructions.push({ type: "move", registers: [result, missing] });
+	const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+	for (const jump of joinJumps) jump.blocks[0] = joinIndex;
+	cursor.block.instructions.push({ type: "jump", blocks: [joinIndex] });
+	cursor.block = fn.blocks[joinIndex]!;
+	return result;
+}
+
+function emitDynamicImportCall(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	specifier: number,
+	targetPath?: string,
+): number {
 	const targetFile = targetPath
 		? program.semantic.files.find((file) => file.path === targetPath)
 		: undefined;
@@ -12329,10 +12402,6 @@ function compileImportExpression(
 		intrinsic: "__dynamicImport",
 	});
 	const thisRegister = compileUndefined(fn, cursor);
-	const specifier = compileExpression(program, fn, cursor, source);
-	if (options) {
-		compileExpression(program, fn, cursor, options);
-	}
 	const initFn =
 		targetInitIndex >= 0 ? nextRegisterDestination(fn) : compileUndefined(fn, cursor);
 	if (targetInitIndex >= 0) {

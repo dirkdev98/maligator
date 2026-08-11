@@ -550,6 +550,17 @@ static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const
     }
 
     (void) specifier_string;
+    if (!mal_value_is_callable(init_fn) && mal_value_is_undefined(namespace)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot resolve dynamic import in the compiled module graph");
+        MalValue reason = vm->completion.value;
+        vm->completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
+        mal_promise_reject(vm, promise, reason);
+        return promise_value;
+    }
     if (mal_value_is_callable(init_fn) && status_slot >= 0 && !mal_value_is_truthy(vm->globals[status_slot])) {
         MalCompletion completion = mal_vm_call_value(vm, init_fn, mal_value_new_undefined(), nullptr, 0);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
