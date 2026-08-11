@@ -55,6 +55,10 @@ const definition: VmDefinition = {
 	hostInstalls: [],
 };
 
+const sourceEntryFieldSize =
+	1 + new TextEncoder().encode(definition.entrypointPath).length;
+const afterSourceEntry = (offset: number): number => offset + sourceEntryFieldSize;
+
 describe("wire loader side-data validation", () => {
 	let driver: string;
 	let directory: string;
@@ -87,19 +91,21 @@ describe("wire loader side-data validation", () => {
 	}
 
 	it("rejects an explicit count that disagrees with its arrays", () => {
-		// Empty definition tables put the first instruction at byte 32. Its explicit
-		// count follows the opcode tag and dst operand.
-		rejectsMutation("explicit-count", 32 + 1 + 1, 4); // ZigZag(2)
+		// Empty definition tables put the first instruction at byte 32 after the
+		// fixed header and source-entry field. Its explicit count follows the opcode
+		// tag and dst operand.
+		rejectsMutation("explicit-count", afterSourceEntry(32 + 1 + 1), 4); // ZigZag(2)
 	});
 
 	it("rejects mismatched paired-array lengths", () => {
 		// Skip tag, dst, explicit count, then the first array's count and one value.
-		rejectsMutation("paired-count", 32 + 1 + 1 + 1 + 1 + 1, 2);
+		rejectsMutation("paired-count", afterSourceEntry(32 + 1 + 1 + 1 + 1 + 1), 2);
 	});
 
 	it("rejects snapshot metadata that disagrees with the opcode prefix", () => {
-		// The first function starts at byte 15; its snapshot count is byte 23.
-		rejectsMutation("snapshot-prefix", 23, 1);
+		// The first function starts at byte 15 after the source-entry field; its
+		// snapshot count is eight bytes later.
+		rejectsMutation("snapshot-prefix", afterSourceEntry(23), 1);
 	});
 
 	it("rejects a snapshot plan that clobbers an aliased source", () => {
@@ -125,7 +131,7 @@ describe("wire loader side-data validation", () => {
 		};
 		const wire = serializeVmDefinition(cycleDefinition, { debugInfo: false });
 		// Move the scratch restore before r1's read of raw argument slot 0.
-		wire.set([0, 3, 2, 0], 26);
+		wire.set([0, 3, 2, 0], afterSourceEntry(26));
 		rejectsWire("snapshot-clobber", wire);
 	});
 
