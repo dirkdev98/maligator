@@ -213,6 +213,18 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds createRequire through the Node module API installer", () => {
+		const def = compile(
+			`import { createRequire } from "node:module";\nglobalThis.sink = createRequire;\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_module",
+			}),
+		]);
+	});
+
 	it("binds node:events default and named constructor exports through one installer", () => {
 		const def = compile(
 			`import Events, { EventEmitter } from "node:events";\nglobalThis.sink = [Events, EventEmitter];\n`,

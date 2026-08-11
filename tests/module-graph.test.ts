@@ -669,6 +669,21 @@ test("canonicalizes the worker_threads main-thread identity", () => {
 	});
 });
 
+test("canonicalizes the CommonJS module API", () => {
+	write("module-api.cjs", `module.exports = require("module").createRequire;\n`);
+	const graph = buildModuleGraph(path.join(root, "module-api.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:module",
+	);
+	expect(graph.modules.get("node:module")?.host).toMatchObject({
+		named: ["createRequire"],
+		hasDefault: true,
+		installer: "mal_host_install_node_module",
+	});
+});
+
 test("rejects a node:* import clearly when surface.node is off (the default)", () => {
 	write("node-off.mjs", `import { join } from "node:path";\n`);
 	expect(() => buildModuleGraph(path.join(root, "node-off.mjs"))).toThrow(

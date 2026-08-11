@@ -149,6 +149,13 @@ const WORKER_THREADS: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:worker_threads"),
 };
 
+const MODULE: HostModuleSpec = {
+	id: "node:module",
+	named: ["createRequire"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:module"),
+};
+
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
 	named: ["execFileSync"],
@@ -363,6 +370,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		VM,
 		DIAGNOSTICS_CHANNEL,
 		WORKER_THREADS,
+		MODULE,
 		CHILD_PROCESS,
 		CRYPTO,
 		PERF_HOOKS,

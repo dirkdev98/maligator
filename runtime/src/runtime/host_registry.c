@@ -14,6 +14,7 @@
 #include "node_events.h"
 #include "node_fs.h"
 #include "node_http.h"
+#include "node_module_api.h"
 #include "node_net.h"
 #include "node_os.h"
 #include "node_path.h"
@@ -51,6 +52,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_fs);
     MATCH_INSTALLER(mal_host_install_node_fs_promises);
     MATCH_INSTALLER(mal_host_install_node_http);
+    MATCH_INSTALLER(mal_host_install_node_module);
     MATCH_INSTALLER(mal_host_install_node_net);
     MATCH_INSTALLER(mal_host_install_node_os);
     MATCH_INSTALLER(mal_host_install_node_path);
