@@ -918,6 +918,31 @@ static inline bool mal_vm_object_try_load_static(const MalObject *object,
     return mal_vm_object_try_load(object, ic->key, ic, out);
 }
 
+/**
+ * Static-name native probe for the common dependency-registered inherited-value
+ * path. Keeping this subset separate from mal_vm_inherited_try_load lets the C
+ * compiler inline the stable local-chain guards without cloning that larger
+ * helper's missing/slot/table mode dispatch into every generated property site.
+ *
+ * A positive inherited row is invalidated eagerly when any registered chain
+ * member changes. The remaining guards prove that the receiver still has no own
+ * property and still starts at the exact registered prototype chain. Runtime-owned
+ * watched values, other inherited modes, exotics, and cold/invalid rows return
+ * false and retain the existing general probe unchanged.
+ */
+static inline bool mal_vm_local_inherited_value_try_load_static(
+    const MalObject *object, const MalInlineCache *ic, MalValue *out
+) {
+    if (object == nullptr || ic->mode != MAL_IC_MODE_INHERITED_VALUE ||
+        ic->poly_count == 0 || object->shape != ic->shape ||
+        object->prototype != ic->proto_object[0] || object->overflow != nullptr) {
+        return false;
+    }
+    *out = ic->value;
+    mal_perf_ic_load_inherited_hit();
+    return true;
+}
+
 /** Guarded inherited data-property slot/entry hit, plus the watched-value fallback. */
 static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
                                               const MalInlineCache *ic, MalValue *out) {

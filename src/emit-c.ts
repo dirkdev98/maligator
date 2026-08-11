@@ -1332,6 +1332,28 @@ function emitBody(
 			jumpTargets.add(instruction.targetIp);
 		}
 	}
+	// Static property sites inside a natural flattened loop are the ones where
+	// cloning the dependency-registered inherited-value fast path pays for its
+	// code size. Mark the union of backward-jump intervals; straight-line and
+	// one-shot sites retain the smaller ordinary probe and outlined inherited
+	// fallback.
+	const loopBody = new Set<number>();
+	const loopDeltas = new Int32Array(fn.instructions.length + 1);
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (
+			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+			instruction.targetIp <= ip
+		) {
+			loopDeltas[instruction.targetIp] = (loopDeltas[instruction.targetIp] ?? 0) + 1;
+			loopDeltas[ip + 1] = (loopDeltas[ip + 1] ?? 0) - 1;
+		}
+	}
+	let loopDepth = 0;
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		loopDepth += loopDeltas[ip]!;
+		if (loopDepth > 0) loopBody.add(ip);
+	}
 	// A coroutine resumes at the instruction after each suspend (GENERATOR_START/
 	// YIELD/AWAIT), so those need labels for the entry dispatch to jump to.
 	if (coro !== null) {
@@ -1559,6 +1581,7 @@ function emitBody(
 			stackObjectMaterializations.get(ip),
 			mathUnaryCalls.has(ip),
 			mathBinaryCalls.has(ip),
+			loopBody.has(ip),
 			fn.mappedArguments,
 			fn.mappedArgumentSlots,
 			fn.hasPrototype,
@@ -1603,6 +1626,7 @@ function emitInstruction(
 	stackObjectMaterialization: StackObjectSite | undefined,
 	mathUnaryCall: boolean,
 	mathBinaryCall: boolean,
+	loopStaticPropertyFastPath: boolean,
 	mappedArguments: boolean,
 	mappedArgumentSlots: Array<number>,
 	hasPrototype: boolean,
@@ -1922,7 +1946,11 @@ function emitInstruction(
 			if (!reg.consolidated) {
 				const probe =
 					instruction.opcode === "LOAD_PROPERTY_STATIC"
-						? `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
+						? `${
+								loopStaticPropertyFastPath
+									? `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_local_inherited_value_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
+									: `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip}))`
+							} || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
 						: `(${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
 				return [
 					...(reg.declare
