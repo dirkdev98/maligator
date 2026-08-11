@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 describe("development wire runner", () => {
-	it("runs Node host modules and preserves AOT argument layout without generated C", () => {
+	it("runs Node host modules and preserves the source entry without generated C", () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "mal-dev-runner-"));
 		const entrypoint = path.join(directory, "entry.mjs");
 		const config = path.join(directory, "maligator.build.mjs");
@@ -51,7 +51,9 @@ describe("development wire runner", () => {
 		);
 
 		expect(result.status, result.stderr || result.stdout).toBe(0);
-		expect(result.stdout.trim()).toBe('42 ["<compiled>","two words","--flag"]');
+		expect(result.stdout.trim()).toBe(
+			`42 ${JSON.stringify([entrypoint, "two words", "--flag"])}`,
+		);
 		expect(result.stderr).toContain("Execution backend: interpreted development image");
 		expect(result.stderr).toContain("Prepare development runtime completed");
 		expect(result.stderr).toContain("Development fragments: 0 reused, 2 compiled");

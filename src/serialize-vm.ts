@@ -17,8 +17,9 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 19 for guarded inherited stack-object metadata.
-export const WIRE_VERSION = 19;
+// Bumped to 20 for source-entry metadata combined with guarded inherited
+// stack-object metadata; both branches had independently consumed version 19.
+export const WIRE_VERSION = 20;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -504,6 +505,9 @@ export function serializeVmDefinition(
 	w.fixedU32(WIRE_VERSION);
 	w.u32(debug ? FLAG_HAS_DEBUG : 0);
 	w.u32(def.globalCount);
+	const entrypoint = utf8Encode(def.entrypointPath);
+	w.u32(entrypoint.length);
+	for (const byte of entrypoint) w.u8(byte);
 
 	// Strings: each is a length-prefixed UTF-16 code-unit run.
 	w.u32(def.stringConstants.length);
@@ -1216,6 +1220,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	}
 	const debug = (r.u32() & FLAG_HAS_DEBUG) !== 0;
 	const globalCount = r.u32();
+	const entrypointLength = r.count(1);
+	const entrypointBytes = new Array<number>(entrypointLength);
+	for (let index = 0; index < entrypointLength; index++) {
+		entrypointBytes[index] = r.u8();
+	}
+	const entrypointPath = utf8Decode(entrypointBytes);
 
 	const stringCount = r.count(1);
 	const stringConstants: Array<Array<number>> = [];
@@ -1436,6 +1446,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	}
 
 	return {
+		entrypointPath,
 		functionCount,
 		functions,
 		stringConstants,

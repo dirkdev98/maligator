@@ -615,6 +615,41 @@ static MalValue util_types_is_promise(
         argc > 0 && mal_value_is_promise_object(args[0]));
 }
 
+static MalValue util_debug_noop(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    return mal_value_new_undefined();
+}
+
+static MalValue util_debuglog(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalValue logger = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "debug"), 0,
+            util_debug_noop));
+    MalRootSpan root;
+    mal_gc_root(&root, &logger, 1);
+    mal_intrinsic_define_data(
+        vm, mal_value_to_object(logger), (const byte *) "enabled",
+        mal_value_new_boolean(false), UTIL_VISIBLE);
+    mal_gc_unroot(&root);
+    return logger;
+}
+
 static bool util_env_space(c16 unit) {
     return unit == ' ' || unit == '\t';
 }
@@ -712,6 +747,7 @@ typedef struct MalNodeUtilExport {
 
 static const MalNodeUtilExport util_exports[] = {
     {"deprecate", 3, util_deprecate},
+    {"debuglog", 2, util_debuglog},
     {"format", 1, util_format},
     {"formatWithOptions", 2, util_format_with_options},
     {"inherits", 2, util_inherits},

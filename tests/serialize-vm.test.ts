@@ -158,6 +158,7 @@ const genFn: VmFunction = {
 };
 
 const definition: VmDefinition = {
+	entrypointPath: "/fixture/entry.mjs",
 	functionCount: 2,
 	functions: [mainFn, genFn],
 	stringConstants: [
@@ -449,8 +450,13 @@ describe("serialize-vm", () => {
 				cjsModuleFunctionIndices: [],
 			};
 			const wire = serializeVmDefinition(probe, { debugInfo: false });
-			// Fixed magic/version, then one-byte flags/global/string-count/bigint-count.
-			expect(Array.from(wire.subarray(12, 12 + encoding.length))).toEqual(encoding);
+			// Fixed magic/version, one-byte flags/global/entry length, the entry bytes,
+			// then one-byte string and bigint counts.
+			const literalCountOffset =
+				13 + new TextEncoder().encode(probe.entrypointPath).length;
+			expect(
+				Array.from(wire.subarray(literalCountOffset, literalCountOffset + encoding.length)),
+			).toEqual(encoding);
 			expect(deserializeVmDefinition(wire).literalTemplateData).toEqual(
 				probe.literalTemplateData,
 			);
@@ -530,6 +536,7 @@ describe("serialize-vm", () => {
 
 	it("drops the vestigial TRY_BEGIN.handlerIp (restored as 0)", () => {
 		const probe: VmDefinition = {
+			entrypointPath: "/fixture/entry.mjs",
 			functionCount: 1,
 			functions: [
 				{

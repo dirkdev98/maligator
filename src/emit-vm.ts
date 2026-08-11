@@ -917,6 +917,7 @@ function malVmDefinitionStruct(
 		`    .literal_template_data_count = ${definition.literalTemplateData.length},`,
 		`    .literal_template_data = ${literalTemplatesSymbol},`,
 		`    .global_count = ${definition.globalCount},`,
+		`    .entry_path = "${cEscapeString(definition.entrypointPath)}",`,
 		`    .cjs_module_count = ${definition.cjsModuleFunctionIndices.length},`,
 		`    .cjs_module_function_indices = ${hasCjs ? `mal_cjs_modules${suffix}` : "nullptr"},`,
 		`    .file_count = ${hasFiles ? definition.files.length : 0},`,

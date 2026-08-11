@@ -922,23 +922,14 @@ typedef struct MalHostInstallSlot {
 } MalHostInstallSlot;
 
 /**
- * Engine-neutral launch context threaded to every host installer: the process
- * command line exactly as `main` received it (argc/argv). A host built-in that
- * needs it — currently only `process`, for `process.argv` / `process.argc` —
- * reads it; the others ignore it. Engine-only embeddings (the test262 runner)
- * and from-wire runs still pass one, but their manifests are empty or carry
- * unresolved installers, so it is never consulted there.
- *
- * Deliberately only the command line, no compiled-entry field: `process.argv[1]`
- * (the "script" slot) is a compile-time artifact the runtime driver knows nothing
- * about — the fixed driver `main` cannot see the entry module baked into
- * `mal_vm_definition`. The `process` installer therefore synthesizes a stable
- * placeholder for that slot itself rather than the driver threading one through
- * here, keeping this ABI to argc/argv alone and engine-neutral.
+ * Engine-neutral launch context threaded to every host installer. Alongside the
+ * process command line, a host driver may expose the compiled definition's source
+ * entry so Node's script argv slot preserves ordinary entrypoint detection.
  */
 typedef struct MalHostLaunchContext {
     int argc;
     char **argv;
+    const char *script_path;
 } MalHostLaunchContext;
 
 /**
@@ -1012,6 +1003,9 @@ typedef struct MalVmDefinition {
     const u32 *literal_template_data;
 
     i32 global_count;
+
+    /** Source entry retained for Node-compatible process.argv[1]. */
+    const char *entry_path;
 
     /**
      * CommonJS module table: cjs_module_function_indices[id] is the function

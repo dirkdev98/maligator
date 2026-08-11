@@ -84,13 +84,13 @@ describe("native process global", () => {
 		});
 	}, 300_000);
 
-	it("forwards OS argv as [argv0, <compiled>, ...rest]", () => {
+	it("forwards OS argv with the compiled source entry", () => {
 		const r = run(bin, ["alpha", "beta gamma"], { env: { NODE_PROCESS_MARKER: "m" } });
 		expect(r.status).toBe(0);
 		const argv = argvItems(r.lines);
 		expect(field(r.lines, "ARGV_LEN")).toBe("4");
 		expect(argv[0]).toBeTruthy(); // OS argv0 (the invoked binary path)
-		expect(argv[1]).toBe("<compiled>"); // stable script placeholder
+		expect(argv[1]).toBe(path.resolve(FIXTURE));
 		expect(argv[2]).toBe("alpha");
 		expect(argv[3]).toBe("beta gamma");
 	});

@@ -88,8 +88,11 @@ check(
 	requiredProcesses.bare === process && requiredProcesses.canonical === process,
 );
 check("argv is array", Array.isArray(process.argv));
-check("argv has argv0 + placeholder", process.argv.length >= 2);
-check("argv[1] is <compiled> placeholder", process.argv[1] === "<compiled>");
+check("argv has argv0 + source entry", process.argv.length >= 2);
+check(
+	"argv[1] is the source entry",
+	process.argv[1].endsWith("/tests/local/node-process.mts"),
+);
 check(
 	"argv0 is a non-empty string",
 	typeof process.argv[0] === "string" && process.argv[0].length > 0,

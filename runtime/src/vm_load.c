@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 19u        // guarded inherited stack-object metadata
+#define WIRE_VERSION 20u        // source entry + guarded inherited stack-object metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1377,6 +1377,13 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
         r.ok = false;
     }
     def->global_count = (i32) global_count;
+    u32 entry_path_length = rd_count(&r, 1);
+    char *entry_path = arena(
+        L, &r, (usize) entry_path_length + 1, alignof(char));
+    for (u32 index = 0; r.ok && index < entry_path_length; index++) {
+        entry_path[index] = (char) rd_u8(&r);
+    }
+    def->entry_path = entry_path;
 
     // Strings: immortal, external code units copied into the arena.
     u32 string_count = rd_count(&r, 1);

@@ -2,6 +2,7 @@
 
 #if MAL_NODE
 
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,6 +184,17 @@ static MalValue node_fs_is_directory(
     return mal_value_new_boolean(node_fs_this_type(vm, self) == MAL_POSIX_FT_DIR);
 }
 
+static MalValue node_fs_is_symbolic_link(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_new_boolean(
+        node_fs_this_type(vm, self) == MAL_POSIX_FT_SYMLINK);
+}
+
 /* A Stats object over `proto` carrying Node's Date-backed timestamps plus the
  * hidden type marker the predicates read. */
 static MalValue node_fs_make_stats(MalVm *vm, MalObject *proto, const MalPosixStat *st) {
@@ -313,6 +325,74 @@ static MalValue node_fs_write_file_sync(
     }
     free(path);
     return mal_value_new_undefined();
+}
+
+static bool node_fs_fd(MalVm *vm, MalValue value, int *fd) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || number < 0 || number > INT_MAX || trunc(number) != number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "file descriptor must be a non-negative integer");
+        return false;
+    }
+    *fd = (int) number;
+    return true;
+}
+
+static bool node_fs_write_bytes(
+    MalVm *vm, MalValue data, const byte **bytes, usize *length, byte **owned) {
+    *bytes = (const byte *) "";
+    *length = 0;
+    *owned = nullptr;
+    if (mal_value_is_typed_array_object(data)
+        && mal_value_to_typed_array_object(data)->kind == MAL_TA_UINT8) {
+        MalTypedArrayObject *view = mal_value_to_typed_array_object(data);
+        *length = mal_typed_array_object_byte_length(view);
+        if (*length > 0) {
+            *bytes = (const byte *) view->buffer->data + view->byte_offset;
+        }
+        return true;
+    }
+    if (mal_value_is_string(data)) {
+        *owned = mal_string_to_utf8(mal_value_to_string(data), length);
+        if (*owned == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        *bytes = *owned;
+        return true;
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        (const byte *) "write data must be a string or Uint8Array");
+    return false;
+}
+
+static MalValue node_fs_write_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    int fd;
+    if (!node_fs_fd(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &fd)) {
+        return mal_value_new_undefined();
+    }
+    const byte *bytes;
+    usize length;
+    byte *owned;
+    if (!node_fs_write_bytes(
+            vm, argc > 1 ? args[1] : mal_value_new_undefined(),
+            &bytes, &length, &owned)) {
+        return mal_value_new_undefined();
+    }
+    usize written;
+    int err = mal_posix_fs_write_fd(fd, bytes, length, &written);
+    free(owned);
+    if (err != 0) {
+        node_fs_throw_errno(vm, err, "write", "");
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_f64((f64) written);
 }
 
 static MalValue node_fs_stat_sync(
@@ -701,6 +781,79 @@ static MalValue node_fs_errno_value(
     MalValue error = vm->completion.value;
     node_fs_clear_completion(vm);
     return error;
+}
+
+static MalValue node_fs_write_task(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *task = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {
+        mal_native_function_object_get_slot(task, 0),
+        mal_native_function_object_get_slot(task, 1),
+        mal_native_function_object_get_slot(task, 2),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    int fd;
+    const byte *bytes;
+    usize length;
+    byte *owned;
+    usize written = 0;
+    int err = 0;
+    if (!node_fs_fd(vm, roots[1], &fd)
+        || !node_fs_write_bytes(vm, roots[2], &bytes, &length, &owned)) {
+        roots[3] = vm->completion.value;
+        node_fs_clear_completion(vm);
+        err = -1;
+    } else {
+        err = mal_posix_fs_write_fd(fd, bytes, length, &written);
+        free(owned);
+        if (err != 0) roots[3] = node_fs_errno_value(vm, err, "write", "");
+    }
+    if (err == 0) {
+        MalValue callback_args[] = {
+            mal_value_new_null(), mal_value_from_f64((f64) written), roots[2],
+        };
+        mal_vm_call_value(
+            vm, roots[0], mal_value_new_undefined(), callback_args, 3);
+    } else {
+        mal_vm_call_value(
+            vm, roots[0], mal_value_new_undefined(), roots + 3, 1);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_write(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    i32 callback_index = argc - 1;
+    if (callback_index < 2 || !mal_value_is_callable(args[callback_index])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "write callback must be a function");
+        return mal_value_new_undefined();
+    }
+    MalValue slots[] = {args[callback_index], args[0], args[1]};
+    MalRootSpan root;
+    mal_gc_root(&root, slots, countof(slots));
+    MalValue task = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "write"),
+            node_fs_write_task, slots, countof(slots)));
+    mal_vm_enqueue_reaction_job(vm, task, false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
 }
 
 static MalCompletion node_fs_call_method(
@@ -1110,6 +1263,12 @@ static MalValue node_fs_export(
     if (strcmp(name, "writeFileSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "writeFileSync", 2, node_fs_write_file_sync);
     }
+    if (strcmp(name, "writeSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "writeSync", 2, node_fs_write_sync);
+    }
+    if (strcmp(name, "write") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "write", 3, node_fs_write);
+    }
     if (strcmp(name, "statSync") == 0) {
         return node_fs_make_fn_slot(
             vm, fn_proto, "statSync", 1, node_fs_stat_sync, protos[0]);
@@ -1182,17 +1341,23 @@ void mal_host_install_node_fs(
     mal_intrinsic_define_method_n(vm, stats_proto, (const byte *) "isFile", 0, node_fs_is_file);
     mal_intrinsic_define_method_n(
         vm, stats_proto, (const byte *) "isDirectory", 0, node_fs_is_directory);
+    mal_intrinsic_define_method_n(
+        vm, stats_proto, (const byte *) "isSymbolicLink", 0,
+        node_fs_is_symbolic_link);
 
     MalObject *dirent_proto = mal_object_new(&vm->heap, obj_proto);
     protos[1] = mal_value_from_object(dirent_proto);
     mal_intrinsic_define_method_n(vm, dirent_proto, (const byte *) "isFile", 0, node_fs_is_file);
     mal_intrinsic_define_method_n(
         vm, dirent_proto, (const byte *) "isDirectory", 0, node_fs_is_directory);
+    mal_intrinsic_define_method_n(
+        vm, dirent_proto, (const byte *) "isSymbolicLink", 0,
+        node_fs_is_symbolic_link);
 
     static const char *names[] = {
         "Stats", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
 		"mkdtempSync", "readFile", "readFileSync", "readdir", "readdirSync", "realpathSync", "renameSync",
-        "rmSync", "statSync", "stat", "writeFileSync",
+        "rmSync", "statSync", "stat", "write", "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan module_root;

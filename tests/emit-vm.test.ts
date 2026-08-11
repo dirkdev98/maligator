@@ -76,6 +76,7 @@ const fn: VmFunction = {
 };
 
 const definition: VmDefinition = {
+	entrypointPath: "/fixture/entry.mjs",
 	functionCount: 1,
 	functions: [fn],
 	stringConstants: [[], ["a".charCodeAt(0)], ["b".charCodeAt(0)], ["c".charCodeAt(0)]],

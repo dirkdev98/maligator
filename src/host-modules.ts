@@ -111,7 +111,9 @@ const FS: HostModuleSpec = {
 		"rmSync",
 		"statSync",
 		"stat",
+		"write",
 		"writeFileSync",
+		"writeSync",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:fs"),
@@ -277,6 +279,7 @@ const UTIL: HostModuleSpec = {
 	id: "node:util",
 	named: [
 		"deprecate",
+		"debuglog",
 		"format",
 		"formatWithOptions",
 		"inherits",
@@ -308,6 +311,7 @@ const PROCESS: HostModuleSpec = {
 		"emit",
 		"emitWarning",
 		"env",
+		"execPath",
 		"eventNames",
 		"exit",
 		"getMaxListeners",
@@ -468,7 +472,15 @@ const NET: HostModuleSpec = {
 
 const OS: HostModuleSpec = {
 	id: "node:os",
-	named: ["availableParallelism", "cpus", "hostname", "platform", "release", "tmpdir"],
+	named: [
+		"arch",
+		"availableParallelism",
+		"cpus",
+		"hostname",
+		"platform",
+		"release",
+		"tmpdir",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:os"),
 };

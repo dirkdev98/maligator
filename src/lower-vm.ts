@@ -87,6 +87,8 @@ export function rebaseVmValueOperand(operand: number, stringBase: number): numbe
  * Keep inline with the C struct
  */
 export interface VmDefinition {
+	/** Absolute source entry used for Node-compatible process.argv[1]. */
+	entrypointPath: string;
 	functionCount: number;
 	functions: Array<VmFunction>;
 	stringConstants: Array<Array<number>>;
@@ -1037,6 +1039,7 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
 	);
 
 	return {
+		entrypointPath: program.semantic.entrypointPath,
 		functionCount: program.functions.length,
 		functions,
 		stringConstants: program.stringConstants,

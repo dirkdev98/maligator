@@ -259,6 +259,7 @@ function cloneLiteralTemplates(
 /** Merge immutable definitions while cloning and rebasing every indexed table. */
 export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDefinition {
 	const merged: VmDefinition = {
+		entrypointPath: definitions[0]?.entrypointPath ?? "",
 		functionCount: 0,
 		functions: [],
 		stringConstants: [],

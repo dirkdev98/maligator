@@ -31,6 +31,7 @@ function vmFunction(instructions: Array<VmInstruction>): VmFunction {
 function definition(overrides: Partial<VmDefinition> = {}): VmDefinition {
 	const functions = overrides.functions ?? [vmFunction([{ opcode: "RETURN", value: 0 }])];
 	return {
+		entrypointPath: "input.js",
 		functionCount: functions.length,
 		functions,
 		stringConstants: [[65]],

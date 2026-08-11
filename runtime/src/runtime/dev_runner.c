@@ -66,6 +66,7 @@ int mal_dev_run_wires(
     const char *const *wire_paths,
     int wire_count,
     const char *asset_manifest_path,
+    const char *entry_path,
     int argc,
     char **argv,
     bool web_platform,
@@ -119,7 +120,11 @@ int mal_dev_run_wires(
     (void) web_platform;
 #endif
 
-    MalHostLaunchContext launch = {.argc = argc, .argv = argv};
+    MalHostLaunchContext launch = {
+        .argc = argc,
+        .argv = argv,
+        .script_path = entry_path != nullptr ? entry_path : root_definition.entry_path,
+    };
     if (development_assets != nullptr) {
         mal_host_install_maligator(&vm, nullptr, 0, &launch);
     }

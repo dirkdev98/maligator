@@ -46,6 +46,31 @@ static MalValue os_hostname(
         &vm->heap, (const byte *) hostname, strlen(hostname)));
 }
 
+static MalValue os_arch(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    struct utsname info;
+    const char *machine = uname(&info) == 0 ? info.machine : "unknown";
+    const char *arch = machine;
+    if (strcmp(machine, "x86_64") == 0 || strcmp(machine, "amd64") == 0) {
+        arch = "x64";
+    } else if (strcmp(machine, "aarch64") == 0 || strcmp(machine, "arm64") == 0) {
+        arch = "arm64";
+    } else if (strcmp(machine, "i386") == 0 || strcmp(machine, "i486") == 0
+               || strcmp(machine, "i586") == 0 || strcmp(machine, "i686") == 0) {
+        arch = "ia32";
+    } else if (strncmp(machine, "arm", 3) == 0) {
+        arch = "arm";
+    }
+    return mal_value_from_string(mal_string_new_ascii(
+        &vm->heap, (const byte *) arch, strlen(arch)));
+}
+
 static MalValue os_platform(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -175,6 +200,8 @@ void mal_host_install_node_os(
         mal_intrinsic_define_method_n(
             vm, mal_value_to_object(module), (const byte *) "hostname", 0,
             os_hostname);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "arch", 0, os_arch);
         mal_intrinsic_define_method_n(
             vm, mal_value_to_object(module), (const byte *) "release", 0, os_release);
         mal_intrinsic_define_method_n(

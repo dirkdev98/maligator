@@ -50,9 +50,7 @@ static char **mal_process_environ(void) {
 }
 #endif
 
-// The stable placeholder for process.argv[1] (the "script" slot). The entry module
-// is baked into the definition at compile time and invisible to the runtime driver,
-// so there is no real path to report — see MalHostLaunchContext.
+// Fallback for stripped definitions whose source entry is not retained.
 static const char mal_process_script_placeholder[] = "<compiled>";
 
 // Decode `len` UTF-8 bytes into a fresh MalString value. argv / env / cwd arrive as
@@ -81,8 +79,7 @@ static void mal_process_set_element(MalVm *vm, MalObject *array, u32 index, cons
     mal_gc_unroot(&rs);
 }
 
-// process.argv = [OS argv0, "<compiled>", OS argv1..]. The placeholder occupies the
-// script slot; the remaining OS arguments follow, shifted by one.
+// process.argv = [OS argv0, compiled entry, OS argv1..].
 static MalValue mal_process_build_argv(MalVm *vm, const MalHostLaunchContext *launch) {
     i32 os_argc = launch != nullptr ? launch->argc : 0;
     char **os_argv = launch != nullptr ? launch->argv : nullptr;
@@ -95,7 +92,11 @@ static MalValue mal_process_build_argv(MalVm *vm, const MalHostLaunchContext *la
     MalObject *argv = (MalObject *) mal_value_to_array_object(argv_val);
 
     mal_process_set_element(vm, argv, 0, os_argc >= 1 ? os_argv[0] : "");
-    mal_process_set_element(vm, argv, 1, mal_process_script_placeholder);
+    mal_process_set_element(
+        vm, argv, 1,
+        launch != nullptr && launch->script_path != nullptr
+            ? launch->script_path
+            : mal_process_script_placeholder);
     for (i32 i = 1; i < os_argc; i++) {
         mal_process_set_element(vm, argv, (u32) i + 1u, os_argv[i]);
     }
@@ -589,6 +590,17 @@ void mal_host_install_process(
     mal_gc_root(&argv_root, &argv, 1);
     mal_intrinsic_define_data(vm, process, (const byte *) "argv", argv, data_flags);
     mal_gc_unroot(&argv_root);
+
+    const char *executable = launch != nullptr && launch->argc > 0
+        && launch->argv != nullptr && launch->argv[0] != nullptr
+        ? launch->argv[0]
+        : "";
+    MalValue exec_path = mal_process_utf8_string(vm, executable);
+    MalRootSpan exec_path_root;
+    mal_gc_root(&exec_path_root, &exec_path, 1);
+    mal_intrinsic_define_data(
+        vm, process, (const byte *) "execPath", exec_path, data_flags);
+    mal_gc_unroot(&exec_path_root);
 
     MalValue env = mal_process_build_env(vm);
     MalRootSpan env_root;

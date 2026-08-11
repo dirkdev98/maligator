@@ -14,14 +14,14 @@
  * are validated for embedded NUL by the runtime layer before reaching this API.
  */
 
-/* Coarse file classification the `isFile` / `isDirectory` predicates need. The
+/* Coarse file classification the Stats / Dirent predicates need. The
  * runtime layer stores this on Stats / Dirent and compares against it, so it never
- * needs the POSIX `S_IF*` bits itself. Anything that is neither a regular file nor
- * a directory (symlink, device, fifo, socket) is OTHER. */
+ * needs the POSIX `S_IF*` bits itself. Devices, fifos, and sockets are OTHER. */
 typedef enum MalPosixFileType {
     MAL_POSIX_FT_OTHER = 0,
     MAL_POSIX_FT_FILE = 1,
     MAL_POSIX_FT_DIR = 2,
+    MAL_POSIX_FT_SYMLINK = 3,
 } MalPosixFileType;
 
 typedef struct MalPosixStat {
@@ -53,6 +53,9 @@ int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len);
 /* Truncate-or-create `path` (mode 0666 & umask) and write all `len` bytes. Returns
  * 0 or an errno. */
 int mal_posix_fs_write_file(const char *path, const byte *data, usize len);
+
+/* Write all bytes to an open descriptor. Returns 0 or an errno. */
+int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written);
 
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */
 int mal_posix_fs_stat(const char *path, MalPosixStat *out);

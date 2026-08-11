@@ -23,6 +23,9 @@ static u32 mal_posix_ft_from_mode(mode_t m) {
     if (S_ISDIR(m)) {
         return MAL_POSIX_FT_DIR;
     }
+    if (S_ISLNK(m)) {
+        return MAL_POSIX_FT_SYMLINK;
+    }
     return MAL_POSIX_FT_OTHER;
 }
 
@@ -63,10 +66,14 @@ static u32 mal_posix_dirent_type(const char *dir, const struct dirent *de) {
             return MAL_POSIX_FT_DIR;
         case DT_REG:
             return MAL_POSIX_FT_FILE;
+#ifdef DT_LNK
+        case DT_LNK:
+            return MAL_POSIX_FT_SYMLINK;
+#endif
         case DT_UNKNOWN:
             break; // some filesystems don't fill d_type — fall back to lstat
         default:
-            return MAL_POSIX_FT_OTHER; // symlink / fifo / socket / device
+            return MAL_POSIX_FT_OTHER; // fifo / socket / device
     }
 #endif
     return mal_posix_lstat_type(dir, de->d_name);
@@ -174,6 +181,25 @@ int mal_posix_fs_write_file(const char *path, const byte *data, usize len) {
     if (close(fd) < 0) {
         return errno;
     }
+    return 0;
+}
+
+int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written) {
+    usize off = 0;
+    while (off < len) {
+        ssize_t count = write(fd, data + off, len - off);
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            *written = off;
+            return errno;
+        }
+        if (count == 0) {
+            *written = off;
+            return EIO;
+        }
+        off += (usize) count;
+    }
+    *written = off;
     return 0;
 }
 
