@@ -178,6 +178,17 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds V8 flags and VM context helpers through separate installers", () => {
+		const def = compile(
+			`import { setFlagsFromString } from "node:v8";\nimport { runInNewContext } from "node:vm";\nglobalThis.sink = [setFlagsFromString, runInNewContext];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({ installer: "mal_host_install_node_v8" }),
+			expect.objectContaining({ installer: "mal_host_install_node_vm" }),
+		]);
+	});
+
 	it("binds node:events default and named constructor exports through one installer", () => {
 		const def = compile(
 			`import Events, { EventEmitter } from "node:events";\nglobalThis.sink = [Events, EventEmitter];\n`,

@@ -619,6 +619,26 @@ test("canonicalizes the promise-based filesystem submodule", () => {
 	});
 });
 
+test("resolves curated V8 and VM context helpers", () => {
+	write(
+		"node-vm.mjs",
+		`import { setFlagsFromString } from "node:v8";\n` +
+			`import { runInNewContext } from "node:vm";\n` +
+			`globalThis.sink = [setFlagsFromString, runInNewContext];\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "node-vm.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get("node:v8")?.host).toMatchObject({
+		named: ["setFlagsFromString"],
+		hasDefault: true,
+	});
+	expect(graph.modules.get("node:vm")?.host).toMatchObject({
+		named: ["runInNewContext"],
+		hasDefault: true,
+	});
+});
+
 test("rejects a node:* import clearly when surface.node is off (the default)", () => {
 	write("node-off.mjs", `import { join } from "node:path";\n`);
 	expect(() => buildModuleGraph(path.join(root, "node-off.mjs"))).toThrow(

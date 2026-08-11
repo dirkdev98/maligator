@@ -593,6 +593,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 #if MAL_NODE
     vm->async_context = nullptr;
+    vm->node_v8_expose_gc = false;
 #endif
 
     vm->job_head = nullptr;

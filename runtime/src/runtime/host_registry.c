@@ -26,6 +26,8 @@
 #include "node_tty.h"
 #include "node_url.h"
 #include "node_util.h"
+#include "node_v8.h"
+#include "node_vm.h"
 #include "node_zlib.h"
 #endif
 
@@ -57,6 +59,8 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_tty);
     MATCH_INSTALLER(mal_host_install_node_url);
     MATCH_INSTALLER(mal_host_install_node_util);
+    MATCH_INSTALLER(mal_host_install_node_v8);
+    MATCH_INSTALLER(mal_host_install_node_vm);
     MATCH_INSTALLER(mal_host_install_node_zlib);
 #endif
     return nullptr;

@@ -121,6 +121,20 @@ const FS_PROMISES: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:fs/promises"),
 };
 
+const V8: HostModuleSpec = {
+	id: "node:v8",
+	named: ["setFlagsFromString"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:v8"),
+};
+
+const VM: HostModuleSpec = {
+	id: "node:vm",
+	named: ["runInNewContext"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:vm"),
+};
+
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
 	named: ["execFileSync"],
@@ -324,6 +338,8 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		PATH,
 		FS,
 		FS_PROMISES,
+		V8,
+		VM,
 		CHILD_PROCESS,
 		CRYPTO,
 		PERF_HOOKS,

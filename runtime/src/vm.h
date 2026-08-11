@@ -1379,6 +1379,8 @@ typedef struct MalVm {
      * executing fiber and is captured by async resources at creation time.
      */
     struct MalAsyncContext *async_context;
+    /** Whether node:v8 requested explicit GC exposure for future VM contexts. */
+    bool node_v8_expose_gc;
 #endif
 
     /**
