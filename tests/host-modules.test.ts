@@ -189,6 +189,18 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds diagnostics tracing through its host installer", () => {
+		const def = compile(
+			`import { tracingChannel } from "node:diagnostics_channel";\nglobalThis.sink = tracingChannel;\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_diagnostics_channel",
+			}),
+		]);
+	});
+
 	it("binds node:events default and named constructor exports through one installer", () => {
 		const def = compile(
 			`import Events, { EventEmitter } from "node:events";\nglobalThis.sink = [Events, EventEmitter];\n`,

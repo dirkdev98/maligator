@@ -135,6 +135,13 @@ const VM: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:vm"),
 };
 
+const DIAGNOSTICS_CHANNEL: HostModuleSpec = {
+	id: "node:diagnostics_channel",
+	named: ["tracingChannel"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:diagnostics_channel"),
+};
+
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
 	named: ["execFileSync"],
@@ -340,6 +347,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		FS_PROMISES,
 		V8,
 		VM,
+		DIAGNOSTICS_CHANNEL,
 		CHILD_PROCESS,
 		CRYPTO,
 		PERF_HOOKS,

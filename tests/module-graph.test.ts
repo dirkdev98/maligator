@@ -639,6 +639,21 @@ test("resolves curated V8 and VM context helpers", () => {
 	});
 });
 
+test("resolves the diagnostics tracing channel", () => {
+	write(
+		"diagnostics.cjs",
+		`module.exports = require("node:diagnostics_channel").tracingChannel;\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "diagnostics.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get("node:diagnostics_channel")?.host).toMatchObject({
+		named: ["tracingChannel"],
+		hasDefault: true,
+		installer: "mal_host_install_node_diagnostics_channel",
+	});
+});
+
 test("rejects a node:* import clearly when surface.node is off (the default)", () => {
 	write("node-off.mjs", `import { join } from "node:path";\n`);
 	expect(() => buildModuleGraph(path.join(root, "node-off.mjs"))).toThrow(
