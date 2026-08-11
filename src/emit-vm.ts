@@ -99,6 +99,7 @@ function displayFilePath(filePath: string): string {
 }
 
 const C_HEADER_LINES = [
+	"#include <string.h>",
 	'#include "vm.h"',
 	'#include "vm_ops.h"',
 	'#include "value_ops.h"',
@@ -396,7 +397,7 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 						`    static ${type} rows[] = {`,
 						...chunkRows,
 						"    };",
-						`    for (usize i = 0; i < ${chunkRows.length}; ++i) target[${rowOffset} + i] = rows[i];`,
+						`    memcpy(target + ${rowOffset}, rows, sizeof(rows));`,
 						"}",
 					].join("\n"),
 				});
