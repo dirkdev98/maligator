@@ -415,6 +415,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 #endif
     vm->allocation_error = mal_value_new_undefined();
     vm->tiny_string_cache = nullptr;
+    vm->small_uint_string_cache = nullptr;
+    vm->small_uint_string_cache_scan_limit = 0;
     mal_gc_init(vm);
 
     if (definition->initialize_generated_data != nullptr) {
@@ -894,6 +896,9 @@ void mal_vm_free(MalVm *vm) {
     mal_async_generator_free_request_pool(vm);
     free(vm->tiny_string_cache);
     vm->tiny_string_cache = nullptr;
+    free(vm->small_uint_string_cache);
+    vm->small_uint_string_cache = nullptr;
+    vm->small_uint_string_cache_scan_limit = 0;
     // Snapshot allocation statistics while the heap counters are still intact.
     mal_gc_state_free(vm);
     mal_heap_free(&vm->heap);

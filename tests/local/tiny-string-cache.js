@@ -61,6 +61,39 @@ const primitiveMap = new Map([[numericConcat, 12]]);
 ok("equal primitive constructors", numericConcat === numericAscii);
 ok("Map content equality", primitiveMap.get(numericAscii) === 12);
 
+let numericChecksum = 0;
+for (let i = 0; i < 4096; i++) {
+	const value = i & 1023;
+	const text = String(value);
+	if (Number(text) !== value) throw new Error("broken cached uint string");
+	numericChecksum += text.length + text.charCodeAt(0);
+}
+ok("cached uint conversion checksum", numericChecksum === 228628);
+ok(
+	"uint cache boundaries",
+	String(0) === "0" &&
+		String(255) === "255" &&
+		String(1023) === "1023" &&
+		String(1024) === "1024" &&
+		String(-1) === "-1" &&
+		String(-2147483648) === "-2147483648" &&
+		String(2147483647) === "2147483647" &&
+		String(-0) === "0",
+);
+
+const numericKeys = {};
+numericKeys[String(0)] = "zero";
+numericKeys[String(255)] = "byte";
+numericKeys[String(1023)] = "cached";
+numericKeys[String(1024)] = "outside";
+ok(
+	"cached uint property keys",
+	numericKeys[0] === "zero" &&
+		numericKeys[255] === "byte" &&
+		numericKeys[1023] === "cached" &&
+		numericKeys[1024] === "outside",
+);
+
 const boxedA = Object(concatenate("a", "b"));
 const boxedB = Object(concatenate("a", "b"));
 ok(
@@ -90,6 +123,7 @@ if (typeof $262 !== "undefined") {
 		"cross-Realm primitive key",
 		keyed[otherKey] === undefined && computed[otherKey] === 2000,
 	);
+	ok("cross-Realm uint string", other.eval("String(1023)") === String(1023));
 	$262.gc();
 }
 

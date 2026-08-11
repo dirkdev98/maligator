@@ -106,6 +106,8 @@ typedef struct MalPerfStats {
     u64 string_tiny_cache_misses;
     u64 string_tiny_cache_replacements;
     u64 string_tiny_cache_promotions;
+    u64 string_small_uint_cache_hits;
+    u64 string_small_uint_cache_misses;
     u64 string_copy_allocations;
     u64 string_copy_code_units;
     u64 string_ascii_allocations;

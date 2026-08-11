@@ -96,5 +96,7 @@ describe("bounded tiny-string cache", () => {
 		expect(perfField(stderr, "tiny_cache_misses")).toBeGreaterThan(0);
 		expect(perfField(stderr, "tiny_cache_replacements")).toBeGreaterThan(0);
 		expect(perfField(stderr, "tiny_cache_promotions")).toBeGreaterThan(0);
+		expect(perfField(stderr, "small_uint_cache_hits")).toBeGreaterThan(3000);
+		expect(perfField(stderr, "small_uint_cache_misses")).toBe(1024);
 	});
 });

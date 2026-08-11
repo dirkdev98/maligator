@@ -10,6 +10,12 @@
 #include "value.h"
 
 #define MAL_COROUTINE_POOL_CLASS_COUNT 14
+#define MAL_TINY_STRING_CACHE_CAPACITY 256
+#define MAL_SMALL_UINT_STRING_CACHE_CAPACITY 1024
+
+static_assert((MAL_TINY_STRING_CACHE_CAPACITY
+               & (MAL_TINY_STRING_CACHE_CAPACITY - 1)) == 0,
+              "tiny string cache capacity must be a power of two");
 
 typedef enum MalOpcode {
     MAL_OP_MOVE,
@@ -1605,7 +1611,17 @@ typedef struct MalVm {
      * the VM's established hot fields.
      */
     struct MalString **tiny_string_cache;
+
+    /** Lazily allocated canonical decimal strings for int32 values 0..1023. */
+    struct MalString **small_uint_string_cache;
+    /** One past the largest populated uint slot; bounds every GC root scan. */
+    u16 small_uint_string_cache_scan_limit;
 } MalVm;
+
+/** Every engine heap is the unique inline heap of one MalVm. */
+static inline MalVm *mal_vm_from_heap(MalHeap *heap) {
+    return (MalVm *) ((byte *) heap - offsetof(MalVm, heap));
+}
 
 /** Lazily materialize one function's property and shaped-literal cache rows. */
 void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index);

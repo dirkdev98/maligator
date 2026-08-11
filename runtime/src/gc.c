@@ -976,6 +976,15 @@ static void mal_gc_scan_roots(MalVm *vm) {
             mal_gc_mark_string(vm->tiny_string_cache[i]);
         }
     }
+    if (vm->small_uint_string_cache != nullptr) {
+        if (vm->small_uint_string_cache_scan_limit
+            > MAL_SMALL_UINT_STRING_CACHE_CAPACITY) {
+            abort();
+        }
+        for (usize i = 0; i < vm->small_uint_string_cache_scan_limit; ++i) {
+            mal_gc_mark_string(vm->small_uint_string_cache[i]);
+        }
+    }
 
     // The running fiber's execution slice lives in the live MalVm fields + the
     // global root-chain heads.

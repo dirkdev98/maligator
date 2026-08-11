@@ -179,6 +179,7 @@ static void mal_perf_stats_print(void) {
         "inline_allocations=%llu inline_code_units=%llu inline_concat_results=%llu "
         "tiny_cache_hits=%llu tiny_cache_misses=%llu tiny_cache_replacements=%llu "
         "tiny_cache_promotions=%llu "
+        "small_uint_cache_hits=%llu small_uint_cache_misses=%llu "
         "copy_allocations=%llu copy_code_units=%llu "
         "ascii_allocations=%llu ascii_code_units=%llu "
         "owned_allocations=%llu owned_code_units=%llu "
@@ -206,6 +207,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_tiny_cache_misses,
         (unsigned long long) mal_perf_stats.string_tiny_cache_replacements,
         (unsigned long long) mal_perf_stats.string_tiny_cache_promotions,
+        (unsigned long long) mal_perf_stats.string_small_uint_cache_hits,
+        (unsigned long long) mal_perf_stats.string_small_uint_cache_misses,
         (unsigned long long) mal_perf_stats.string_copy_allocations,
         (unsigned long long) mal_perf_stats.string_copy_code_units,
         (unsigned long long) mal_perf_stats.string_ascii_allocations,

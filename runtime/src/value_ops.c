@@ -10,6 +10,7 @@
 #include "ecma_whitespace.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
+#include "vm.h"
 
 f64 mal_ops_number_to_integer_or_infinity(f64 number) {
     if (isnan(number) || number == 0.0) {
@@ -301,10 +302,26 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
     }
 
     if (mal_value_is_int32(value)) {
+        i32 integer = mal_value_to_i32(value);
+        MalVm *owner = nullptr;
+        if ((u32) integer < MAL_SMALL_UINT_STRING_CACHE_CAPACITY) {
+            owner = mal_vm_from_heap(heap);
+            if (owner->small_uint_string_cache == nullptr) {
+                owner->small_uint_string_cache = calloc(
+                    MAL_SMALL_UINT_STRING_CACHE_CAPACITY,
+                    sizeof(*owner->small_uint_string_cache));
+                if (owner->small_uint_string_cache == nullptr) abort();
+            }
+            MalString *cached = owner->small_uint_string_cache[integer];
+            if (cached != nullptr) {
+                MAL_PERF_COUNT(string_small_uint_cache_hits);
+                return cached;
+            }
+            MAL_PERF_COUNT(string_small_uint_cache_misses);
+        }
         byte buffer[11];
         byte *end = buffer + sizeof(buffer);
         byte *cursor = end;
-        i32 integer = mal_value_to_i32(value);
         u32 magnitude = integer < 0 ? (u32) -(i64) integer : (u32) integer;
         do {
             *--cursor = (byte) ('0' + magnitude % 10);
@@ -313,7 +330,16 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
         if (integer < 0) {
             *--cursor = '-';
         }
-        return mal_string_new_ascii(heap, cursor, (usize) (end - cursor));
+        MalString *string =
+            mal_string_new_ascii(heap, cursor, (usize) (end - cursor));
+        if (owner != nullptr) {
+            owner->small_uint_string_cache[integer] = string;
+            u16 scan_limit = (u16) integer + 1;
+            if (scan_limit > owner->small_uint_string_cache_scan_limit) {
+                owner->small_uint_string_cache_scan_limit = scan_limit;
+            }
+        }
+        return string;
     }
 
     if (mal_value_is_bigint(value)) {

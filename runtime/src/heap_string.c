@@ -79,10 +79,7 @@ u64 mal_string_hash_code_units(const c16 *code_units, usize length) {
 }
 
 static MalString ***mal_string_tiny_cache_slot(MalHeap *heap) {
-    // MalHeap has one owner and is embedded directly in MalVm. Keeping this
-    // optional cold cache at the VM tail preserves all pre-existing hot offsets.
-    MalVm *vm = (MalVm *) ((byte *) heap - offsetof(MalVm, heap));
-    return &vm->tiny_string_cache;
+    return &mal_vm_from_heap(heap)->tiny_string_cache;
 }
 
 static void mal_string_tiny_cache_store(
