@@ -6,6 +6,7 @@
 #include "gc.h"
 #include "checked_size.h"
 #include "perf_stats.h"
+#include "vm.h"
 
 static void mal_string_require_valid_length(usize length) {
     // Raw constructors have no VM/completion channel. VM-aware producers must
@@ -75,6 +76,110 @@ u64 mal_string_hash_code_units(const c16 *code_units, usize length) {
     }
 
     return hash;
+}
+
+static MalString ***mal_string_tiny_cache_slot(MalHeap *heap) {
+    // MalHeap has one owner and is embedded directly in MalVm. Keeping this
+    // optional cold cache at the VM tail preserves all pre-existing hot offsets.
+    MalVm *vm = (MalVm *) ((byte *) heap - offsetof(MalVm, heap));
+    return &vm->tiny_string_cache;
+}
+
+static void mal_string_tiny_cache_store(
+    MalHeap *heap, usize index, MalString *replacement
+) {
+    MalString **cache = *mal_string_tiny_cache_slot(heap);
+    if (cache == nullptr) abort();
+    MalString *old = cache[index];
+    if (old == replacement) return;
+    if (old != nullptr && mal_gc_marking_active) {
+        mal_gc_satb_record(mal_value_from_string(old));
+    }
+    cache[index] = replacement;
+}
+
+typedef struct MalTinyStringCacheResult {
+    MalString *string;
+    bool hit;
+} MalTinyStringCacheResult;
+
+static bool mal_string_tiny_cache_matches(
+    const MalString *cached, const c16 *code_units, usize length
+) {
+    if (cached == nullptr || cached->length != length
+        || cached->storage == MAL_STRING_STORAGE_DEPENDENT
+        || cached->storage == MAL_STRING_STORAGE_CONS) {
+        return false;
+    }
+    const c16 *cached_units = mal_string_code_units(cached);
+    switch (length) {
+        case 0: return true;
+        case 1: return cached_units[0] == code_units[0];
+        case 2:
+            return cached_units[0] == code_units[0]
+                && cached_units[1] == code_units[1];
+        case 3:
+            return cached_units[0] == code_units[0]
+                && cached_units[1] == code_units[1]
+                && cached_units[2] == code_units[2];
+        case 4:
+            return cached_units[0] == code_units[0]
+                && cached_units[1] == code_units[1]
+                && cached_units[2] == code_units[2]
+                && cached_units[3] == code_units[3];
+        default: abort();
+    }
+}
+
+static MalTinyStringCacheResult mal_string_tiny_cache_get_or_create(
+    MalHeap *heap, const c16 *code_units, usize length
+) {
+    if (length > MAL_STRING_INLINE_CODE_UNITS) abort();
+    MalString ***cache_slot = mal_string_tiny_cache_slot(heap);
+    if (*cache_slot == nullptr) {
+        *cache_slot = calloc(
+            MAL_TINY_STRING_CACHE_CAPACITY, sizeof(**cache_slot));
+        if (*cache_slot == nullptr) abort();
+    }
+    MalString **cache = *cache_slot;
+    u64 hash = mal_string_hash_code_units(code_units, length);
+    usize index = (usize) hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+    MalString *cached = cache[index];
+    if (mal_string_tiny_cache_matches(cached, code_units, length)) {
+        MAL_PERF_COUNT(string_tiny_cache_hits);
+        return (MalTinyStringCacheResult) {.string = cached, .hit = true};
+    }
+
+    MAL_PERF_COUNT(string_tiny_cache_misses);
+    if (cached != nullptr) {
+        MAL_PERF_COUNT(string_tiny_cache_replacements);
+    }
+    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    mal_string_init_inline(string, code_units, length);
+    string->hash = hash;
+    string->hash_valid = true;
+    mal_string_tiny_cache_store(heap, index, string);
+    return (MalTinyStringCacheResult) {.string = string, .hit = false};
+}
+
+void mal_string_tiny_cache_promote(MalHeap *heap, MalString *atom) {
+    if (atom == nullptr || atom->length > MAL_STRING_INLINE_CODE_UNITS
+        || (atom->storage != MAL_STRING_STORAGE_INLINE
+            && atom->storage != MAL_STRING_STORAGE_OWNED
+            && atom->storage != MAL_STRING_STORAGE_EXTERNAL)) {
+        return;
+    }
+    MalString **cache = *mal_string_tiny_cache_slot(heap);
+    if (cache == nullptr) return;
+    u64 hash = mal_string_hash_code_units(mal_string_code_units(atom), atom->length);
+    usize index = (usize) hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+    if (cache[index] == atom) return;
+    if (!mal_string_tiny_cache_matches(
+            cache[index], mal_string_code_units(atom), atom->length)) {
+        return;
+    }
+    mal_string_tiny_cache_store(heap, index, atom);
+    MAL_PERF_COUNT(string_tiny_cache_promotions);
 }
 
 void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_units, usize length) {
@@ -355,7 +460,14 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
             sizeof(c16) * right->length
         );
         MAL_PERF_COUNT(string_inline_concat_results);
-        *out = mal_string_new_copy(heap, code_units, length);
+        MalTinyStringCacheResult result =
+            mal_string_tiny_cache_get_or_create(heap, code_units, length);
+        if (!result.hit) {
+            mal_perf_string_allocation(length);
+            MAL_PERF_COUNT(string_copy_allocations);
+            MAL_PERF_ADD(string_copy_code_units, length);
+        }
+        *out = result.string;
         return true;
     }
 

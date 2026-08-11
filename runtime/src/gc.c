@@ -971,6 +971,11 @@ static void mal_gc_scan_roots(MalVm *vm) {
     // The heap-owned transition tree retains keys even when no live object
     // currently owns an intermediate shape.
     mal_shape_visit_transition_keys(&vm->heap, mal_gc_mark_value);
+    if (vm->tiny_string_cache != nullptr) {
+        for (usize i = 0; i < MAL_TINY_STRING_CACHE_CAPACITY; ++i) {
+            mal_gc_mark_string(vm->tiny_string_cache[i]);
+        }
+    }
 
     // The running fiber's execution slice lives in the live MalVm fields + the
     // global root-chain heads.

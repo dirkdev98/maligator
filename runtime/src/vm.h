@@ -1598,6 +1598,13 @@ typedef struct MalVm {
      * the bare test262 runner). See host.h.
      */
     void *host;
+
+    /**
+     * Lazily allocated strong roots for repeated 2-4-unit concatenations. Keep
+     * this tail-only so enabling the optimization does not perturb offsets of
+     * the VM's established hot fields.
+     */
+    struct MalString **tiny_string_cache;
 } MalVm;
 
 /** Lazily materialize one function's property and shaped-literal cache rows. */

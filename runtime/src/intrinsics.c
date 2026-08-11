@@ -274,7 +274,6 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
         MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
         (void) mal_table_upsert_entry(vm->atoms, atom_key, nullptr);
     }
-
     if (hot_key != MAL_HOT_KEY_COUNT) {
         vm->hot_intrinsic_keys[hot_key] = atom;
         MAL_PERF_COUNT(intrinsic_ascii_cache_fills);
@@ -290,6 +289,13 @@ MalString *mal_property_atomize_string(MalVm *vm, MalString *string) {
     if (string->property_atom) {
         return string;
     }
+    bool tiny_cache_entry =
+        string->length <= MAL_STRING_INLINE_CODE_UNITS
+        && string->hash_valid
+        && vm->tiny_string_cache != nullptr
+        && vm->tiny_string_cache[
+            (usize) string->hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1)]
+            == string;
     MalKey key = {
         .kind = MAL_KEY_STRING,
         .value = mal_value_from_string(string),
@@ -299,6 +305,9 @@ MalString *mal_property_atomize_string(MalVm *vm, MalString *string) {
         MalString *atom =
             mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
         atom->property_atom = true;
+        if (tiny_cache_entry) {
+            mal_string_tiny_cache_promote(&vm->heap, atom);
+        }
         return atom;
     }
     string->property_atom = true;

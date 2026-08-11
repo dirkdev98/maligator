@@ -53,6 +53,13 @@ static_assert(MAL_STRING_MAX_CODE_UNITS <= INT32_MAX, "string length must fit re
 u64 mal_string_hash_code_units(const c16 *code_units, usize length);
 
 /**
+ * Make a canonical flat property atom the preferred representative for its
+ * tiny-string cache slot. This is only an allocation shortcut; callers must
+ * continue to use content-correct string equality.
+ */
+void mal_string_tiny_cache_promote(MalHeap *heap, MalString *atom);
+
+/**
  * Initialize a string whose UTF-16 storage is copied into heap-owned memory.
  */
 void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_units, usize length);

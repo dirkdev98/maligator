@@ -3,6 +3,7 @@
 #include "./defaults.h"
 
 #define MAL_DEFAULT_HEAP_SIZE 16 * 1024
+#define MAL_TINY_STRING_CACHE_CAPACITY 256
 
 #define MAL_HEAP_ALIGN_SIZE(size, type) \
     (((size) + alignof(type) - 1) & ~(alignof(type) - 1))
@@ -25,6 +26,10 @@ typedef struct MalGcChunk MalGcChunk;
 typedef struct MalGcBlock MalGcBlock;
 typedef struct MalGcLarge MalGcLarge;
 typedef struct MalShape MalShape;
+
+static_assert((MAL_TINY_STRING_CACHE_CAPACITY
+               & (MAL_TINY_STRING_CACHE_CAPACITY - 1)) == 0,
+              "tiny string cache capacity must be a power of two");
 
 #if MAL_REALMS
 /* Realm metadata is defined in vm.h; the heap caches only a back-pointer to the

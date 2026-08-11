@@ -1782,7 +1782,7 @@ function stringProfileRow(name: string, stderr: string): void {
 	const averageLength = total === 0 ? 0 : (allocations.code_units ?? 0) / total;
 	const shortPercent = total === 0 ? 0 : (short * 100) / total;
 	console.log(
-		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}  scan ${String(strings.unit_scan_word_blocks ?? 0).padStart(9)}x4  case ${String(strings.case_calls ?? 0).padStart(8)} / ${String(strings.case_reuses ?? 0).padStart(8)} reuse  regexp ${String(regexp.exec_calls ?? 0).padStart(8)} / ${String(regexp.fast_exec_calls ?? 0).padStart(8)} fast`,
+		`  ${name.padEnd(22)} ${String(total).padStart(10)} alloc  ${shortPercent.toFixed(1).padStart(5)}% <=4  inline ${String(allocations.inline_allocations ?? 0).padStart(10)}  avg ${averageLength.toFixed(1).padStart(6)}u  copy ${String(copied).padStart(11)}u  dep ${String(allocations.dependent_allocations ?? 0).padStart(9)}  cons ${String(allocations.cons_allocations ?? 0).padStart(9)}  flat ${String(allocations.flatten_calls ?? 0).padStart(9)}  tiny ${String(allocations.tiny_cache_hits ?? 0).padStart(9)}h/${String(allocations.tiny_cache_misses ?? 0).padStart(6)}m/${String(allocations.tiny_cache_replacements ?? 0).padStart(6)}r  scan ${String(strings.unit_scan_word_blocks ?? 0).padStart(9)}x4  case ${String(strings.case_calls ?? 0).padStart(8)} / ${String(strings.case_reuses ?? 0).padStart(8)} reuse  regexp ${String(regexp.exec_calls ?? 0).padStart(8)} / ${String(regexp.fast_exec_calls ?? 0).padStart(8)} fast`,
 	);
 }
 
@@ -2222,6 +2222,9 @@ function benchHttpProfile(requests: number, conc: number): void {
 				);
 				console.log(
 					`    strings/request     ${perfPerRequest(stringAllocations, "allocations", requests).toFixed(1)} allocations, ${perfPerRequest(stringAllocations, "code_units", requests).toFixed(1)} logical units, ${perfPerRequest(stringAllocations, "copy_code_units", requests).toFixed(1)} copied, ${perfPerRequest(stringAllocations, "ascii_code_units", requests).toFixed(1)} widened`,
+				);
+				console.log(
+					`    tiny concat cache   ${perfPerRequest(stringAllocations, "tiny_cache_hits", requests).toFixed(1)} hits, ${perfPerRequest(stringAllocations, "tiny_cache_misses", requests).toFixed(1)} misses, ${perfPerRequest(stringAllocations, "tiny_cache_replacements", requests).toFixed(1)} replacements, ${perfPerRequest(stringAllocations, "tiny_cache_promotions", requests).toFixed(1)} atom promotions/request`,
 				);
 				console.log(
 					`    case/request        ${perfPerRequest(strings, "case_calls", requests).toFixed(1)} calls, ${perfPerRequest(strings, "case_reuses", requests).toFixed(1)} reused, ${perfPerRequest(strings, "case_changed_allocations", requests).toFixed(1)} changed allocations`,
