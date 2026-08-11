@@ -674,3 +674,59 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("MAL_BUILTIN_COLLECTION_SET_ADD");
 	});
 });
+
+describe("native static typeof facts", () => {
+	function emit(source: string): string {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"static-typeof-facts.js",
+			parseScript(source, { strict: false }),
+		);
+		return emitVmDefinition(compileSemanticProgramToVmDefinition(semantic), {
+			compiled: true,
+		});
+	}
+
+	it("folds typeof over proven native number and boolean representations", () => {
+		const output = emit(`
+			"use strict";
+			function numberResult(value) { return typeof (value - 1) === "number"; }
+			function booleanResult(value) { return typeof (value < 1) !== "number"; }
+			globalThis.keep = [numberResult, booleanResult];
+		`);
+
+		// The promoted numeric version folds both checks. Its boxed fallback still
+		// classifies the subtraction result, while the comparison result is a proven
+		// native boolean in every version.
+		expect(output.match(/mal_vm_typeof_compare/g)).toHaveLength(1);
+		expect(output).toContain("= true;");
+		expect(output).not.toContain("MAL_TYPEOF_BOOLEAN");
+	});
+
+	it("retains generic typeof classification for an unknown boxed value", () => {
+		const output = emit(`
+			"use strict";
+			function classify(value) { return typeof value === "number"; }
+			globalThis.classify = classify;
+		`);
+
+		expect(output).toContain("mal_vm_typeof_compare");
+		expect(output).toContain("MAL_TYPEOF_NUMBER");
+	});
+
+	it("uses a source typeof guard in a numeric parameter specialization", () => {
+		const output = emit(`
+			"use strict";
+			function square(value) {
+				if (typeof value !== "number") return -1;
+				return value * value;
+			}
+			globalThis.square = square;
+		`);
+
+		expect(output).toContain("static MalValue mal_compiled_1_boxed(");
+		expect(output).toContain("if (!mal_ops_is_number(p0))");
+		expect(output.match(/mal_vm_typeof_compare/g)).toHaveLength(1);
+		expect(output).toMatch(/r\d+ = r\d+ \* r\d+;/);
+	});
+});

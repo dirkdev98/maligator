@@ -274,7 +274,9 @@ const UNAMBIGUOUS_NUMERIC_BINARY = new Set<string>([
  * numeric-friendly — at least one unambiguously-numeric use (so promotion
  * actually pays; a parameter only boxed at a boundary gains nothing) and no use
  * that strongly implies a non-number (a property base/key, a callee/receiver, a
- * type query like `!`/typeof, or `in`/`instanceof`).
+ * generic type query like `!`/unfused typeof, or `in`/`instanceof`). A fused
+ * TYPEOF_COMPARE is neutral: the numeric version's entry guard makes its result
+ * statically known, while the boxed version retains the source predicate.
  *
  * Promotion is *speculative*, not a proof: a promoted parameter is unboxed once
  * at function entry behind a guard that bails to the interpreter when an
@@ -419,7 +421,11 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				}
 				break;
 			case "TYPEOF_COMPARE":
-				disqualUse.add(instruction.src);
+				// A canonical source-level type predicate is compatible with a numeric
+				// specialization. It does not justify promotion by itself (a separate
+				// numeric use must still pay for the version), but it no longer blocks
+				// that specialization; TYPEOF_COMPARE emission folds it from the proven
+				// representation in the fast version.
 				break;
 			default:
 				// An opcode the backend can't lower yet: the function won't compile.
@@ -2520,6 +2526,26 @@ function emitInstruction(
 		}
 		case "TYPEOF_COMPARE": {
 			const { dst, src, expected, negated } = instruction;
+			// Native register representations are stronger than a runtime typeof
+			// query: a number-rep register can only hold a JS Number and a
+			// boolean-rep register can only hold a JS Boolean. Consume that static
+			// proof directly instead of boxing the scalar only to classify it again.
+			// Boxed values retain the generic classifier because their precise
+			// primitive/object/callable kind is not represented by this lattice yet.
+			const proven =
+				reps[src] === "number"
+					? "number"
+					: reps[src] === "boolean"
+						? "boolean"
+						: undefined;
+			if (proven !== undefined) {
+				const value = (proven === expected) !== negated;
+				return [
+					reps[dst] === "boolean"
+						? `r${dst} = ${value ? "true" : "false"};`
+						: `r${dst} = MAL_VALUE_${value ? "TRUE" : "FALSE"};`,
+				];
+			}
 			const predicate = `mal_vm_typeof_compare(${boxed(src)}, ${emitTypeofResult(expected)})`;
 			const result = negated ? `!(${predicate})` : predicate;
 			return [

@@ -167,6 +167,29 @@ const int32ComparisonEdges = [
 	strictNotEqual(2147483647, -2147483648),
 ].map(repr);
 
+function guardedSquare(value) {
+	if (typeof value !== "number") return "not-number";
+	return repr(value * value);
+}
+
+let guardedCoercions = 0;
+const guardedObject = {
+	valueOf() {
+		guardedCoercions++;
+		return 4;
+	},
+};
+const guardedTypeFacts = [
+	guardedSquare(3),
+	guardedSquare(-0),
+	guardedSquare(Number.NaN),
+	guardedSquare("3"),
+	guardedSquare(3n),
+	guardedSquare(Symbol("3")),
+	guardedSquare(guardedObject),
+	String(guardedCoercions),
+];
+
 console.log(
 	JSON.stringify({
 		numeric,
@@ -176,5 +199,6 @@ console.log(
 		int32SubtractEdges,
 		int32MultiplyEdges,
 		int32ComparisonEdges,
+		guardedTypeFacts,
 	}),
 );

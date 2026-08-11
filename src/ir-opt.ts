@@ -12,7 +12,11 @@ import {
 	optInlineSpeculative,
 } from "./inline.ts";
 import type { CapturedSlotOptimizationFacts } from "./inline.ts";
-import { buildIRRegisterIndex, destinationCount } from "./ir-register-index.ts";
+import {
+	buildIRRegisterIndex,
+	definedRegisters,
+	destinationCount,
+} from "./ir-register-index.ts";
 import { debugIntermediateProgram, getOrCreateStringConstant } from "./ir.ts";
 import type {
 	IntermediateProgram,
@@ -192,6 +196,22 @@ export function executeIROptimizations(program: IntermediateProgram) {
 					features.typeofComparisonFunctions.size;
 				return optFuseTypeofComparisons(program, features.typeofComparisonFunctions);
 			},
+		},
+		// Consume exact primitive/object/callable facts after typeof fusion. A
+		// comparison whose operand can only have (or can never have) the requested
+		// canonical typeof result becomes a constant boolean; the existing primitive
+		// folder then removes any newly constant branch in this same round.
+		{
+			run: (program, features) =>
+				optFoldStaticTypeofComparisons(program, features.typeofComparisonFunctions),
+		},
+		// Refine the tested value on the true/false successors of a canonical
+		// typeof branch. This first path-sensitive slice consumes only stable SSA
+		// values (parameters without writes or unique definitions/move aliases), so
+		// no kill set or effect model is required yet.
+		{
+			run: (program, features) =>
+				optRefineStaticTypeofBranches(program, features.typeofComparisonFunctions),
 		},
 		// Fold only primitive operations whose exact JavaScript result can be
 		// computed without coercing an object or running user code. Constant jump
@@ -1364,6 +1384,390 @@ type FoldedPrimitive =
 	| { kind: "null" }
 	| { kind: "undefined" };
 
+const TYPEOF_RESULTS: ReadonlyArray<IRTypeofResult> = [
+	"undefined",
+	"object",
+	"boolean",
+	"number",
+	"string",
+	"symbol",
+	"bigint",
+	"function",
+];
+
+const TYPEOF_BIT = new Map<IRTypeofResult, number>(
+	TYPEOF_RESULTS.map((result, index) => [result, 1 << index]),
+);
+const TYPEOF_ALL = (1 << TYPEOF_RESULTS.length) - 1;
+
+const BOOLEAN_BINARY_OPERATORS = new Set<
+	Extract<IRInstruction, { type: "binary" }>["operator"]
+>(["<", "<=", ">", ">=", "==", "!=", "===", "!==", "in", "instanceof"]);
+
+const NUMBER_FROM_NUMBER_BINARY_OPERATORS = new Set<
+	Extract<IRInstruction, { type: "binary" }>["operator"]
+>(["+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"]);
+
+/** Canonical typeof-result mask produced by one instruction definition. */
+function producedTypeofMask(
+	instruction: IRInstruction,
+	factOf: (register: number) => number | null,
+): number | null {
+	const bit = (result: IRTypeofResult): number => TYPEOF_BIT.get(result)!;
+	switch (instruction.type) {
+		case "createUndefined":
+			return bit("undefined");
+		case "createNull":
+		case "createObject":
+		case "createObjectShaped":
+		case "createArray":
+		case "instantiateLiteralTemplate":
+		case "createModuleNamespace":
+		case "createTemplateObject":
+		case "createArgumentsObject":
+		case "createRestArguments":
+		case "arrayRest":
+		case "copyDataProperties":
+			return bit("object");
+		case "createBoolean":
+		case "typeofCompare":
+			return bit("boolean");
+		case "createNumber":
+		case "createF64":
+		case "loadArgumentCount":
+			return bit("number");
+		case "createString":
+			return bit("string");
+		case "createBigint":
+			return bit("bigint");
+		case "createFunction":
+			return bit("function");
+		case "move":
+			return factOf(instruction.registers[1]);
+		case "binary": {
+			if (BOOLEAN_BINARY_OPERATORS.has(instruction.operator)) {
+				return bit("boolean");
+			}
+			if (NUMBER_FROM_NUMBER_BINARY_OPERATORS.has(instruction.operator)) {
+				const left = factOf(instruction.registers[1]);
+				const right = factOf(instruction.registers[2]);
+				if (left === null || right === null) return null;
+				return left === bit("number") && right === bit("number")
+					? bit("number")
+					: TYPEOF_ALL;
+			}
+			return TYPEOF_ALL;
+		}
+		case "unary": {
+			if (instruction.operator === "!") return bit("boolean");
+			if (instruction.operator === "typeof") return bit("string");
+			if (
+				instruction.operator === "+" ||
+				instruction.operator === "-" ||
+				instruction.operator === "~" ||
+				instruction.operator === "tonumeric" ||
+				instruction.operator === "increment" ||
+				instruction.operator === "decrement"
+			) {
+				const source = factOf(instruction.registers[1]);
+				if (source === null) return null;
+				return source === bit("number") ? bit("number") : TYPEOF_ALL;
+			}
+			return TYPEOF_ALL;
+		}
+		default:
+			return TYPEOF_ALL;
+	}
+}
+
+/**
+ * Infer a conservative union of canonical typeof results for every virtual
+ * register. Multiple definitions union their possibilities; any unmodelled
+ * producer contributes the full set. Values only move from unresolved to a
+ * concrete mask and then gain bits, so the iteration is monotone.
+ */
+function inferStaticTypeofMasks(fn: IRFunction): Map<number, number> {
+	const facts = new Map<number, number | null>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) continue;
+			for (const register of instruction.registers) {
+				if (register >= 0 && !facts.has(register)) {
+					facts.set(register, register < fn.parameterCount ? TYPEOF_ALL : null);
+				}
+			}
+		}
+	}
+
+	const factOf = (register: number): number | null => facts.get(register) ?? TYPEOF_ALL;
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const produced = producedTypeofMask(instruction, factOf);
+				if (produced === null) continue;
+				for (const register of definedRegisters(instruction)) {
+					const current = facts.get(register) ?? null;
+					const joined = current === null ? produced : current | produced;
+					if (joined !== current) {
+						facts.set(register, joined);
+						changed = true;
+					}
+				}
+			}
+		}
+	}
+
+	return new Map(
+		[...facts].map(([register, fact]) => [register, fact ?? TYPEOF_ALL] as const),
+	);
+}
+
+function optFoldStaticTypeofComparisons(
+	program: IntermediateProgram,
+	functions: ReadonlySet<IRFunction> = new Set(program.functions),
+): boolean {
+	let changed = false;
+	for (const fn of functions) {
+		const facts = inferStaticTypeofMasks(fn);
+		for (const block of fn.blocks) {
+			block.instructions = block.instructions.map((instruction) => {
+				if (instruction.type !== "typeofCompare") return instruction;
+				const mask = facts.get(instruction.registers[1]) ?? TYPEOF_ALL;
+				const expected = TYPEOF_BIT.get(instruction.expected)!;
+				const alwaysMatches = (mask & ~expected) === 0;
+				const neverMatches = (mask & expected) === 0;
+				if (!alwaysMatches && !neverMatches) return instruction;
+				changed = true;
+				const matches = alwaysMatches;
+				return {
+					type: "createBoolean",
+					registers: [instruction.registers[0]],
+					value: instruction.negated ? !matches : matches,
+				};
+			});
+		}
+	}
+	return changed;
+}
+
+/** A terminal conditional in the normalized IR: jump-if-true, then false jump. */
+function terminalConditional(
+	block: IRFunction["blocks"][number],
+): { condition: number; ifTrue: number; ifFalse: number } | undefined {
+	const length = block.instructions.length;
+	if (length < 2) return undefined;
+	const conditional = block.instructions[length - 2];
+	const fallback = block.instructions[length - 1];
+	if (conditional?.type !== "jumpIf" || fallback?.type !== "jump") return undefined;
+	return {
+		condition: conditional.registers[0],
+		ifTrue: conditional.blocks[0],
+		ifFalse: fallback.blocks[0],
+	};
+}
+
+function staticTypeofSuccessors(fn: IRFunction): Array<Array<number>> {
+	return fn.blocks.map((block, blockIndex) => {
+		const successors = new Set<number>();
+		for (const instruction of block.instructions) {
+			if (instruction.type === "jump" || instruction.type === "jumpIf") {
+				for (const target of instruction.blocks) {
+					if (target >= 0 && target < fn.blocks.length) successors.add(target);
+				}
+			}
+		}
+		const last = block.instructions[block.instructions.length - 1];
+		if (
+			last?.type !== "jump" &&
+			last?.type !== "return" &&
+			last?.type !== "throw" &&
+			blockIndex + 1 < fn.blocks.length
+		) {
+			successors.add(blockIndex + 1);
+		}
+		return [...successors];
+	});
+}
+
+/**
+ * Follow unique move definitions to the stable value they copy. Parameters are
+ * stable only when the body never writes their register; non-parameters require
+ * exactly one definition. A multiply-defined register is deliberately not a
+ * refinable SSA value in this first slice.
+ */
+function stableCanonicalRegister(
+	register: number,
+	fn: IRFunction,
+	definitions: ReadonlyMap<number, ReadonlyArray<{ instruction: IRInstruction }>>,
+): number | undefined {
+	const seen = new Set<number>();
+	let current = register;
+	while (!seen.has(current)) {
+		seen.add(current);
+		const writes = definitions.get(current) ?? [];
+		if (current < fn.parameterCount) {
+			return writes.length === 0 ? current : undefined;
+		}
+		if (writes.length !== 1) return undefined;
+		const producer = writes[0]!.instruction;
+		if (producer.type !== "move") return current;
+		current = producer.registers[1];
+	}
+	return undefined;
+}
+
+type StaticTypeofState = Map<number, number>;
+
+function optRefineStaticTypeofBranches(
+	program: IntermediateProgram,
+	functions: ReadonlySet<IRFunction> = new Set(program.functions),
+): boolean {
+	let changed = false;
+	for (const fn of functions) {
+		const hasExceptionControl = fn.blocks.some((block) =>
+			block.instructions.some(
+				(instruction) =>
+					instruction.type === "tryBegin" ||
+					instruction.type === "tryEnd" ||
+					instruction.type === "catch" ||
+					instruction.type === "throw",
+			),
+		);
+		if (
+			fn.blocks.length === 0 ||
+			fn.isGenerator ||
+			fn.isAsync ||
+			hasExceptionControl ||
+			functionUsesWith(fn) ||
+			(fn.semanticFile?.hasDirectEval.size ?? 0) > 0
+		) {
+			continue;
+		}
+		const baseFacts = inferStaticTypeofMasks(fn);
+		const index = buildIRRegisterIndex(fn);
+		const successors = staticTypeofSuccessors(fn);
+		const states: Array<StaticTypeofState | null> = fn.blocks.map(() => null);
+		states[0] = new Map();
+		const worklist = [0];
+		const queued = new Set(worklist);
+		const baseMask = (register: number): number => baseFacts.get(register) ?? TYPEOF_ALL;
+		const stateMask = (state: StaticTypeofState, register: number): number =>
+			state.get(register) ?? baseMask(register);
+
+		const enqueueMerge = (target: number, incoming: StaticTypeofState): void => {
+			if (target < 0 || target >= fn.blocks.length) return;
+			const current = states[target];
+			if (current === null || current === undefined) {
+				states[target] = new Map(incoming);
+				if (!queued.has(target)) {
+					queued.add(target);
+					worklist.push(target);
+				}
+				return;
+			}
+			let stateChanged = false;
+			const registers = new Set([...current.keys(), ...incoming.keys()]);
+			for (const register of registers) {
+				const joined = stateMask(current, register) | stateMask(incoming, register);
+				const base = baseMask(register);
+				const previous = stateMask(current, register);
+				if (joined === base) current.delete(register);
+				else current.set(register, joined);
+				stateChanged ||= joined !== previous;
+			}
+			if (stateChanged && !queued.has(target)) {
+				queued.add(target);
+				worklist.push(target);
+			}
+		};
+
+		while (worklist.length > 0) {
+			const blockIndex = worklist.shift()!;
+			queued.delete(blockIndex);
+			const input = states[blockIndex];
+			if (input === null || input === undefined) continue;
+			const branch = terminalConditional(fn.blocks[blockIndex]!);
+			let refined = false;
+			const branchTargets =
+				branch === undefined ? undefined : new Set([branch.ifTrue, branch.ifFalse]);
+			const normalizedBranch =
+				branch !== undefined &&
+				branchTargets!.size === successors[blockIndex]!.length &&
+				successors[blockIndex]!.every((target) => branchTargets!.has(target));
+			if (branch !== undefined && normalizedBranch) {
+				const condition = stableCanonicalRegister(
+					branch.condition,
+					fn,
+					index.definitions,
+				);
+				const conditionProducer =
+					condition === undefined ? undefined : index.uniqueDefinitions.get(condition);
+				if (conditionProducer?.type === "typeofCompare") {
+					const operand = stableCanonicalRegister(
+						conditionProducer.registers[1],
+						fn,
+						index.definitions,
+					);
+					if (operand !== undefined) {
+						const current = stateMask(input, operand);
+						const expected = TYPEOF_BIT.get(conditionProducer.expected)!;
+						const matching = current & expected;
+						const excluding = current & ~expected;
+						const trueMask = conditionProducer.negated ? excluding : matching;
+						const falseMask = conditionProducer.negated ? matching : excluding;
+						for (const [target, mask] of [
+							[branch.ifTrue, trueMask],
+							[branch.ifFalse, falseMask],
+						] as const) {
+							if (mask === 0) continue;
+							const outgoing = new Map(input);
+							if (mask === baseMask(operand)) outgoing.delete(operand);
+							else outgoing.set(operand, mask);
+							enqueueMerge(target, outgoing);
+						}
+						refined = true;
+					}
+				}
+			}
+			if (!refined) {
+				for (const successor of successors[blockIndex]!) {
+					enqueueMerge(successor, input);
+				}
+			}
+		}
+
+		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
+			const input = states[blockIndex];
+			if (input === null || input === undefined) continue;
+			const block = fn.blocks[blockIndex]!;
+			block.instructions = block.instructions.map((instruction) => {
+				if (instruction.type !== "typeofCompare") return instruction;
+				const operand = stableCanonicalRegister(
+					instruction.registers[1],
+					fn,
+					index.definitions,
+				);
+				if (operand === undefined) return instruction;
+				const mask = stateMask(input, operand);
+				const expected = TYPEOF_BIT.get(instruction.expected)!;
+				const alwaysMatches = (mask & ~expected) === 0;
+				const neverMatches = (mask & expected) === 0;
+				if (!alwaysMatches && !neverMatches) return instruction;
+				changed = true;
+				const matches = alwaysMatches;
+				return {
+					type: "createBoolean",
+					registers: [instruction.registers[0]],
+					value: instruction.negated ? !matches : matches,
+				};
+			});
+		}
+	}
+	return changed;
+}
+
 function foldedPrimitive(
 	instruction: IRInstruction | undefined,
 ): FoldedPrimitive | undefined {
@@ -2102,6 +2506,8 @@ export const irOptTestHooks = {
 	combineLinearBlocksInFunction,
 	eliminateRedundantTdzChecksInFunction,
 	foldPrimitiveConstants: optFoldPrimitiveConstants,
+	foldStaticTypeofComparisons: optFoldStaticTypeofComparisons,
+	refineStaticTypeofBranches: optRefineStaticTypeofBranches,
 	eliminateRedundantNumericCoercions: optEliminateRedundantNumericCoercions,
 	forwardSingleUsePrimitiveResults: optForwardSingleUsePrimitiveResults,
 	commonPrimitiveConstants: optCommonPrimitiveConstants,
