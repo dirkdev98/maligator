@@ -873,8 +873,9 @@
 								<div>
 									<h3>Compiling the compiler</h3>
 									<p>
-										Fresh-process median through C emission. Node runs the same prepared
-										source as a reference; C compilation and linking are excluded.
+										Fresh-process median through C emission. Node.js runs the same
+										prepared source as a reference; C compilation and linking are
+										excluded.
 									</p>
 								</div>
 								<div class="stat">
@@ -885,11 +886,11 @@
 							<div
 								class="chart"
 								id="self-chart"
-								aria-label="Self-compile wall time for Maligator and Node"
+								aria-label="Self-compile wall time for Maligator and Node.js"
 							></div>
 							<div class="tooltip" id="self-tooltip" role="status" hidden></div>
 							<div class="legend">
-								<span>Maligator native</span><span class="node">Node reference</span>
+								<span>Maligator native</span><span class="node">Node.js reference</span>
 							</div>
 							<details>
 								<summary>Exact self-compile results and environment</summary>
@@ -899,7 +900,7 @@
 											<tr>
 												<th>Date</th>
 												<th>Maligator</th>
-												<th>Node</th>
+												<th>Node.js</th>
 												<th>Runs</th>
 												<th>Environment</th>
 												<th>Commit</th>
@@ -941,8 +942,8 @@
 									<div>
 										<b>Shape the runtime per build</b>
 										<p>
-											Select eval, Realms, RegExp, Temporal, Intl, web, and curated Node
-											APIs.
+											Select eval, Realms, RegExp, Temporal, Intl, web, and curated
+											Node.js APIs.
 										</p>
 									</div>
 								</li>
@@ -990,8 +991,8 @@
 								<li>
 									<span class="index">02</span>
 									<div>
-										<b>Drop-in Node compatibility</b>
-										<p>The Node surface is intentionally curated, not complete.</p>
+										<b>Drop-in Node.js compatibility</b>
+										<p>The Node.js surface is intentionally curated, not complete.</p>
 									</div>
 								</li>
 								<li>
@@ -1373,11 +1374,19 @@ Mal.serve({
 				const data = JSON.parse(document.getElementById("site-data").textContent);
 				const ns = "http://www.w3.org/2000/svg";
 				const fmt = new Intl.NumberFormat("en-US");
+				const calendarDate = (value) => new Date(`${value.slice(0, 10)}T12:00:00Z`);
 				const shortDate = (value) =>
-					new Date(value).toLocaleDateString("en", {
+					calendarDate(value).toLocaleDateString("en-GB", {
 						year: "numeric",
 						month: "short",
 						day: "numeric",
+						timeZone: "UTC",
+					});
+				const axisDate = (value) =>
+					calendarDate(value).toLocaleDateString("en-GB", {
+						month: "short",
+						day: "numeric",
+						timeZone: "UTC",
 					});
 				const el = (name, attrs = {}) => {
 					const node = document.createElementNS(ns, name);
@@ -1496,10 +1505,7 @@ Mal.serve({
 										? "end"
 										: "middle",
 						});
-						label.textContent = new Date(point.date).toLocaleDateString("en", {
-							month: "short",
-							year: "2-digit",
-						});
+						label.textContent = axisDate(point.date);
 						svg.append(label);
 					}
 					for (const [seriesIndex, item] of series.entries()) {
@@ -1595,7 +1601,7 @@ Mal.serve({
 					series: [{ key: "maligatorMs" }, { key: "nodeMs" }],
 					tickFormat: duration,
 					tooltip: (point) =>
-						`<strong>${html(shortDate(point.date))}</strong><br>Maligator ${duration(point.maligatorMs)}<br>Node ${duration(point.nodeMs)}<br>median of ${point.runs} · ${html(point.platform)}-${html(point.arch)} · ${html(point.nodeVersion)}<br>${point.units} C units · ${fmt.format(point.maligatorCodeUnits)} / ${fmt.format(point.nodeCodeUnits)} C bytes<br>commit ${html(point.commit)}${point.preview ? " · local preview" : ""}`,
+						`<strong>${html(shortDate(point.date))}</strong><br>Maligator ${duration(point.maligatorMs)}<br>Node.js ${duration(point.nodeMs)}<br>median of ${point.runs} · ${html(point.platform)}-${html(point.arch)} · ${html(point.nodeVersion)}<br>${point.units} C units · ${fmt.format(point.maligatorCodeUnits)} / ${fmt.format(point.nodeCodeUnits)} C bytes<br>commit ${html(point.commit)}${point.preview ? " · local preview" : ""}`,
 				});
 				document.getElementById("self-table").innerHTML = self
 					.map(
