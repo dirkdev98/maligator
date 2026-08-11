@@ -13,6 +13,7 @@
 import importedProcess, {
 	emitWarning as importedEmitWarning,
 	env as importedEnv,
+	hrtime as importedHrtime,
 } from "node:process";
 import requiredProcesses from "./node-process-require.cjs";
 
@@ -51,12 +52,28 @@ function check(name: string, ok: boolean): void {
 
 check("process is object", typeof process === "object" && process !== null);
 check("process has global identity", globalThis.process === process);
+check("global aliases globalThis", global === globalThis);
 check("node:process default has global identity", importedProcess === process);
 check("node:process named env has global identity", importedEnv === process.env);
 check(
 	"node:process named emitWarning has method identity",
 	importedEmitWarning === process.emitWarning,
 );
+check("node:process named hrtime has method identity", importedHrtime === process.hrtime);
+const highResolution = process.hrtime();
+check(
+	"hrtime returns seconds and nanoseconds",
+	Array.isArray(highResolution) &&
+		highResolution.length === 2 &&
+		highResolution[0] >= 0 &&
+		highResolution[1] >= 0 &&
+		highResolution[1] < 1_000_000_000,
+);
+check("hrtime.bigint returns nanoseconds", typeof process.hrtime.bigint() === "bigint");
+const tickOrder = ["sync"];
+process.nextTick((value) => tickOrder.push(value), "tick");
+await Promise.resolve();
+check("nextTick queues a callback with arguments", tickOrder.join(",") === "sync,tick");
 check(
 	"bare and canonical CommonJS process have global identity",
 	requiredProcesses.bare === process && requiredProcesses.canonical === process,
@@ -87,6 +104,7 @@ check(
 	process.platform === "darwin" || process.platform === "linux",
 );
 check("arch is supported", process.arch === "arm64" || process.arch === "x64");
+check("versions exposes a conservative Node compatibility level", process.versions.node === "0.0.0");
 check("stdout fd", process.stdout.fd === 1);
 check("stderr fd", process.stderr.fd === 2);
 check("stdout isTTY", typeof process.stdout.isTTY === "boolean");

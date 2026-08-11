@@ -83,6 +83,7 @@ const PATH: HostModuleSpec = {
 		"isAbsolute",
 		"join",
 		"normalize",
+		"posix",
 		"relative",
 		"resolve",
 		"sep",
@@ -98,6 +99,7 @@ const FS: HostModuleSpec = {
 		"copyFileSync",
 		"createReadStream",
 		"existsSync",
+		"lstatSync",
 		"mkdirSync",
 		"mkdtempSync",
 		"readFile",
@@ -116,7 +118,7 @@ const FS: HostModuleSpec = {
 
 const FS_PROMISES: HostModuleSpec = {
 	id: "node:fs/promises",
-	named: ["readdir"],
+	named: ["lstat", "readFile", "readdir"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:fs/promises"),
 };
@@ -158,7 +160,7 @@ const MODULE: HostModuleSpec = {
 
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
-	named: ["execFileSync"],
+	named: ["exec", "execFileSync", "spawn"],
 	hasDefault: false,
 	installer: hostInstallerSymbol("node:child_process"),
 };
@@ -214,14 +216,21 @@ const TTY: HostModuleSpec = {
 
 const UTIL: HostModuleSpec = {
 	id: "node:util",
-	named: ["deprecate", "format", "formatWithOptions", "inherits", "inspect"],
+	named: [
+		"deprecate",
+		"format",
+		"formatWithOptions",
+		"inherits",
+		"inspect",
+		"promisify",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:util"),
 };
 
 const BUFFER: HostModuleSpec = {
 	id: "node:buffer",
-	named: ["Buffer"],
+	named: ["Buffer", "constants"],
 	hasDefault: true,
 	installer: BUFFER_INSTALLER_SYMBOL,
 };
@@ -241,9 +250,11 @@ const PROCESS: HostModuleSpec = {
 		"eventNames",
 		"exit",
 		"getMaxListeners",
+		"hrtime",
 		"kill",
 		"listenerCount",
 		"listeners",
+		"nextTick",
 		"off",
 		"on",
 		"once",
@@ -257,6 +268,7 @@ const PROCESS: HostModuleSpec = {
 		"setMaxListeners",
 		"stderr",
 		"stdout",
+		"versions",
 	],
 	hasDefault: true,
 	// The module and the free global deliberately share one cached installer so
@@ -313,7 +325,7 @@ const HTTP: HostModuleSpec = {
 
 const URL: HostModuleSpec = {
 	id: "node:url",
-	named: ["Url", "parse", "format"],
+	named: ["Url", "fileURLToPath", "format", "parse", "pathToFileURL"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:url"),
 };
@@ -334,7 +346,7 @@ const NET: HostModuleSpec = {
 
 const OS: HostModuleSpec = {
 	id: "node:os",
-	named: ["release"],
+	named: ["hostname", "release"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:os"),
 };

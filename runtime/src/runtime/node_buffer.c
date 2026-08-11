@@ -1396,6 +1396,12 @@ static void mal_buffer_install_exports(
             vm->globals[slots[i].slot] = constructor;
         } else if (strcmp(slots[i].name, "default") == 0) {
             vm->globals[slots[i].slot] = module_default;
+        } else if (strcmp(slots[i].name, "constants") == 0) {
+            MalValue constants;
+            if (mal_vm_get_property(vm, module_default,
+                    mal_intrinsic_string_key(vm, "constants"), &constants)) {
+                vm->globals[slots[i].slot] = constants;
+            }
         }
     }
 }
@@ -1412,10 +1418,11 @@ void mal_host_install_node_buffer(
             vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE]);
         return;
     }
-    MalValue roots[3] = {
-        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[4] = {
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
-    mal_gc_root(&root, roots, 3);
+    mal_gc_root(&root, roots, 4);
 
     MalObject *uint8_prototype = mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]);
@@ -1480,6 +1487,13 @@ void mal_host_install_node_buffer(
     mal_intrinsic_define_data(vm, module_default, "Buffer", roots[1],
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                                   MAL_PROPERTY_CONFIGURABLE);
+    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
+        "MAX_STRING_LENGTH", mal_value_from_f64((f64) MAL_STRING_MAX_CODE_UNITS),
+        MAL_PROPERTY_ENUMERABLE);
+    mal_intrinsic_define_data(vm, module_default, "constants", roots[3],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+            MAL_PROPERTY_CONFIGURABLE);
 
     vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR] = roots[1];
     vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE] = roots[0];

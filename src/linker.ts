@@ -638,6 +638,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			);
 		if (
 			freeGlobalUsed("process") ||
+			freeGlobalUsed("global") ||
 			freeGlobalUsed("TextEncoder") ||
 			freeGlobalUsed("TextDecoder")
 		) {

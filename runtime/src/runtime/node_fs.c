@@ -334,6 +334,25 @@ static MalValue node_fs_stat_sync(
     return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
 }
 
+static MalValue node_fs_lstat_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    char *path = node_fs_path_cstr(
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    MalPosixStat st;
+    int err = mal_posix_fs_lstat(path, &st);
+    if (err != 0) {
+        node_fs_throw_errno(vm, err, "lstat", path);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    free(path);
+    return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
+}
+
 static MalValue node_fs_readdir_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -584,7 +603,7 @@ static MalValue node_fs_promise_task(
     return mal_value_new_undefined();
 }
 
-static MalValue node_fs_promises_readdir(
+static MalValue node_fs_promises_operation(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
     (void) nt;
@@ -1031,6 +1050,10 @@ static MalValue node_fs_export(
         return node_fs_make_fn_slot(
             vm, fn_proto, "statSync", 1, node_fs_stat_sync, protos[0]);
     }
+    if (strcmp(name, "lstatSync") == 0) {
+        return node_fs_make_fn_slot(
+            vm, fn_proto, "lstatSync", 1, node_fs_lstat_sync, protos[0]);
+    }
     if (strcmp(name, "stat") == 0) {
         return node_fs_make_fn_slot(vm, fn_proto, "stat", 2, node_fs_stat, protos[0]);
     }
@@ -1093,7 +1116,7 @@ void mal_host_install_node_fs(
         vm, dirent_proto, (const byte *) "isDirectory", 0, node_fs_is_directory);
 
     static const char *names[] = {
-        "Stats", "copyFileSync", "createReadStream", "existsSync", "mkdirSync",
+        "Stats", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
         "mkdtempSync", "readFile", "readFileSync", "readdirSync", "realpathSync", "renameSync",
         "rmSync", "statSync", "stat", "writeFileSync",
     };
@@ -1130,27 +1153,49 @@ void mal_host_install_node_fs_promises(
         vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE],
         mal_value_new_undefined(),
         mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     if (!mal_vm_get_property(vm, roots[0],
-            mal_intrinsic_string_key(vm, (const byte *) "readdirSync"), &roots[1])) {
+            mal_intrinsic_string_key(vm, (const byte *) "lstatSync"), &roots[1]) ||
+        !mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "readFileSync"), &roots[2]) ||
+        !mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "readdirSync"), &roots[3])) {
         mal_gc_unroot(&root);
         return;
     }
 
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalValue lstat = node_fs_make_fn_slot(
+        vm, fn_proto, "lstat", 1, node_fs_promises_operation, roots[1]);
+    MalRootSpan lstat_root;
+    mal_gc_root(&lstat_root, &lstat, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[4]),
+        (const byte *) "lstat", lstat, NODE_FS_VISIBLE);
+    mal_gc_unroot(&lstat_root);
+
+    MalValue read_file = node_fs_make_fn_slot(
+        vm, fn_proto, "readFile", 1, node_fs_promises_operation, roots[2]);
+    MalRootSpan read_file_root;
+    mal_gc_root(&read_file_root, &read_file, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[4]),
+        (const byte *) "readFile", read_file, NODE_FS_VISIBLE);
+    mal_gc_unroot(&read_file_root);
+
     MalValue readdir = node_fs_make_fn_slot(
-        vm, fn_proto, "readdir", 1, node_fs_promises_readdir, roots[1]);
+        vm, fn_proto, "readdir", 1, node_fs_promises_operation, roots[3]);
     MalRootSpan readdir_root;
     mal_gc_root(&readdir_root, &readdir, 1);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]),
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[4]),
         (const byte *) "readdir", readdir, NODE_FS_VISIBLE);
     mal_gc_unroot(&readdir_root);
 
-    vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE] = roots[2];
-    mal_node_module_publish(vm, slots, count, roots[2]);
+    vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE] = roots[4];
+    mal_node_module_publish(vm, slots, count, roots[4]);
     mal_gc_unroot(&root);
 }
 

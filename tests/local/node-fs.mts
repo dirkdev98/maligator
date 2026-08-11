@@ -2,6 +2,7 @@ import {
 	Stats,
 	copyFileSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFile,
@@ -13,7 +14,11 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import fsPromises, { readdir } from "node:fs/promises";
+import fsPromises, {
+	lstat,
+	readFile as readFilePromise,
+	readdir,
+} from "node:fs/promises";
 
 const results: Array<[string, boolean]> = [];
 function check(name: string, ok: boolean): void {
@@ -95,6 +100,7 @@ const asyncMissingCode = await new Promise<string>((resolve) => {
 eq("readFile reports asynchronous errno", asyncMissingCode, "ENOENT");
 
 const fileStat = statSync(textFile);
+check("lstatSync returns a Stats instance", lstatSync(textFile) instanceof Stats);
 check("stat returns a Stats instance", fileStat instanceof Stats);
 check("stat file isFile", fileStat.isFile());
 eq("stat file isDirectory", fileStat.isDirectory(), false);
@@ -129,7 +135,12 @@ for (const entry of entries) {
 check("readdirSync returns text-file Dirent", sawText);
 check("readdirSync returns byte-file Dirent", sawBytes);
 
-check("node:fs/promises default exposes readdir", fsPromises.readdir === readdir);
+check(
+	"node:fs/promises default exposes methods",
+	fsPromises.lstat === lstat && fsPromises.readdir === readdir,
+);
+check("promise lstat returns Stats", (await lstat(textFile)).isFile());
+eq("promise readFile decodes UTF-8", await readFilePromise(textFile, "utf8"), "héllo 😀");
 const promiseOrder = ["before"];
 const promisedEntries = readdir(nested, { withFileTypes: true }).then((value) => {
 	promiseOrder.push("fulfilled");

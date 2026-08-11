@@ -181,7 +181,13 @@ test("traverses the complete pinned Express initialization graph", () => {
 	const graph = buildModuleGraph(entry, { buildConfig: nodeOn });
 
 	expect(graph.modules.has("node:http")).toBe(true);
-	expect(graph.modules.get("node:url")?.host?.named).toEqual(["Url", "parse", "format"]);
+	expect(graph.modules.get("node:url")?.host?.named).toEqual([
+		"Url",
+		"fileURLToPath",
+		"format",
+		"parse",
+		"pathToFileURL",
+	]);
 	expect(graph.modules.get("node:querystring")?.host?.named).toEqual(["parse"]);
 	expect(graph.modules.get("node:net")?.host?.named).toEqual([
 		"Socket",
@@ -189,7 +195,7 @@ test("traverses the complete pinned Express initialization graph", () => {
 		"createConnection",
 		"isIP",
 	]);
-	expect(graph.modules.get("node:os")?.host?.named).toEqual(["release"]);
+	expect(graph.modules.get("node:os")?.host?.named).toEqual(["hostname", "release"]);
 });
 
 test("requires an explicit stripper for TypeScript and applies it across the graph", () => {
@@ -585,7 +591,7 @@ test("canonicalizes bare buffer and exposes the node:buffer constructor", () => 
 	const dependency = graph.modules.get(graph.entry)!.dependencies[0]!;
 	expect(dependency.resolvedPath).toBe("node:buffer");
 	expect(graph.modules.get("node:buffer")?.host).toMatchObject({
-		named: ["Buffer"],
+		named: ["Buffer", "constants"],
 		hasDefault: true,
 	});
 });
@@ -613,7 +619,7 @@ test("canonicalizes the promise-based filesystem submodule", () => {
 		"node:fs/promises",
 	);
 	expect(graph.modules.get("node:fs/promises")?.host).toMatchObject({
-		named: ["readdir"],
+		named: ["lstat", "readFile", "readdir"],
 		hasDefault: true,
 		installer: "mal_host_install_node_fs_promises",
 	});
@@ -681,6 +687,21 @@ test("canonicalizes the CommonJS module API", () => {
 		named: ["createRequire"],
 		hasDefault: true,
 		installer: "mal_host_install_node_module",
+	});
+});
+
+test("resolves asynchronous child process entrypoints", () => {
+	write(
+		"child-process.mjs",
+		`import { exec, spawn } from "node:child_process";\n` +
+			`globalThis.sink = [exec, spawn];\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "child-process.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get("node:child_process")?.host).toMatchObject({
+		named: ["exec", "execFileSync", "spawn"],
+		installer: "mal_host_install_node_child_process",
 	});
 });
 

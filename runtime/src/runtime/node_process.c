@@ -9,14 +9,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "array_object.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "heap_bigint.h"
 #include "host.h"
 #include "intrinsics.h"
+#include "microtask.h"
 #include "node_events.h"
 #include "node_module.h"
 #include "object.h"
@@ -167,6 +170,90 @@ static MalValue mal_process_cwd(
         : mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) "", 0));
     free(heap_buf);
     return result;
+}
+
+static u64 mal_process_monotonic_ns(void) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (u64) now.tv_sec * 1000000000ull + (u64) now.tv_nsec;
+}
+
+static MalValue mal_process_hrtime_bigint(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_from_bigint(mal_bigint_new(
+        &vm->heap, (i128) mal_process_monotonic_ns()));
+}
+
+static MalValue mal_process_hrtime(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    u64 nanoseconds = mal_process_monotonic_ns();
+    MalValue result = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
+    MalRootSpan root;
+    mal_gc_root(&root, &result, 1);
+    MalObject *array = mal_value_to_object(result);
+    mal_object_set(array, mal_key_index(0),
+        mal_value_from_f64((f64) (nanoseconds / 1000000000ull)));
+    mal_object_set(array, mal_key_index(1),
+        mal_value_from_f64((f64) (nanoseconds % 1000000000ull)));
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue mal_process_next_tick_task(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *task =
+        mal_value_to_native_function_object(callee);
+    i32 forwarded_count = task->slot_count - 1;
+    MalValue callback = mal_native_function_object_get_slot(task, 0);
+    MalCompletion completion = mal_vm_call_value(vm, callback,
+        mal_value_new_undefined(),
+        forwarded_count > 0 ? task->slots + 1 : nullptr,
+        forwarded_count);
+    return completion.value;
+}
+
+static MalValue mal_process_next_tick(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 1 || !mal_value_is_callable(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "nextTick callback must be a function");
+        return mal_value_new_undefined();
+    }
+    MalValue task = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(
+                vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "nextTick"),
+            mal_process_next_tick_task, args, argc));
+    MalRootSpan root;
+    mal_gc_root(&root, &task, 1);
+    mal_vm_enqueue_reaction_job(vm, task, false,
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined());
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
 }
 
 static MalValue mal_process_exit(
@@ -523,7 +610,29 @@ void mal_host_install_process(
         vm, process, (const byte *) "stderr", stderr_value, data_flags);
     mal_gc_unroot(&stderr_root);
 
+    MalValue versions = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan versions_root;
+    mal_gc_root(&versions_root, &versions, 1);
+    MalValue node_version = mal_process_utf8_string(vm, "0.0.0");
+    MalRootSpan node_version_root;
+    mal_gc_root(&node_version_root, &node_version, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(versions),
+        (const byte *) "node", node_version, data_flags);
+    mal_intrinsic_define_data(vm, process, (const byte *) "versions",
+        versions, data_flags);
+    mal_gc_unroot(&node_version_root);
+    mal_gc_unroot(&versions_root);
+
     mal_intrinsic_define_method_n(vm, process, (const byte *) "cwd", 0, mal_process_cwd);
+    mal_intrinsic_define_method_n(
+        vm, process, (const byte *) "nextTick", 1, mal_process_next_tick);
+    MalValue hrtime = mal_intrinsic_define_method_n(
+        vm, process, (const byte *) "hrtime", 1, mal_process_hrtime);
+    MalRootSpan hrtime_root;
+    mal_gc_root(&hrtime_root, &hrtime, 1);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(hrtime),
+        (const byte *) "bigint", 0, mal_process_hrtime_bigint);
+    mal_gc_unroot(&hrtime_root);
     mal_intrinsic_define_method_n(
         vm, process, (const byte *) "emitWarning", 1, mal_process_emit_warning);
     mal_intrinsic_define_method_n(vm, process, (const byte *) "exit", 1, mal_process_exit);
@@ -557,6 +666,8 @@ void mal_host_install_process(
     // publish the same writable/configurable property observed by globalThis.process.
     mal_intrinsic_define_data(
         vm, global_this, (const byte *) "process", process_val, data_flags);
+    mal_intrinsic_define_data(vm, global_this, (const byte *) "global",
+        vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], data_flags);
 
     vm->intrinsics[MAL_INTRINSIC_NODE_PROCESS_MODULE] = process_val;
     mal_node_module_publish(vm, slots, count, process_val);

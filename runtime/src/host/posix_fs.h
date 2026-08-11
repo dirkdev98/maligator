@@ -57,6 +57,9 @@ int mal_posix_fs_write_file(const char *path, const byte *data, usize len);
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */
 int mal_posix_fs_stat(const char *path, MalPosixStat *out);
 
+/* lstat(2) `path` into `*out` (does not follow symlinks). */
+int mal_posix_fs_lstat(const char *path, MalPosixStat *out);
+
 /* Read the directory at `path` into a fresh malloc'd array (*out_entries,
  * *out_count), skipping "." and "..". Each entry's `type` is the entry's own type
  * (symlinks stay OTHER, like readdir withFileTypes). On success the caller frees

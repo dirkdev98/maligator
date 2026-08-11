@@ -27,6 +27,20 @@ static MalValue os_release(
         &vm->heap, (const byte *) release, strlen(release)));
 }
 
+static MalValue os_hostname(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    struct utsname info;
+    const char *hostname = uname(&info) == 0 ? info.nodename : "";
+    return mal_value_from_string(mal_string_new_ascii(
+        &vm->heap, (const byte *) hostname, strlen(hostname)));
+}
+
 void mal_host_install_node_os(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -36,6 +50,9 @@ void mal_host_install_node_os(
         module = mal_value_from_object(mal_intrinsic_new_object(vm));
         MalRootSpan root;
         mal_gc_root(&root, &module, 1);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "hostname", 0,
+            os_hostname);
         mal_intrinsic_define_method_n(
             vm, mal_value_to_object(module), (const byte *) "release", 0, os_release);
         vm->intrinsics[MAL_INTRINSIC_NODE_OS_MODULE] = module;

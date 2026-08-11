@@ -697,6 +697,9 @@ void mal_host_install_node_path(
     mal_intrinsic_define_data(vm, def, (const byte *) "sep",
         vals[MAL_NODE_PATH_FUNCTION_COUNT + 2],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, def, (const byte *) "posix",
+        vals[MAL_NODE_PATH_FUNCTION_COUNT],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
     for (i32 s = 0; s < count; ++s) {
         const char *name = slots[s].name;
@@ -717,6 +720,9 @@ void mal_host_install_node_path(
             matched = true;
         } else if (!matched && strcmp(name, "sep") == 0) {
             value = vals[MAL_NODE_PATH_FUNCTION_COUNT + 2];
+            matched = true;
+        } else if (!matched && strcmp(name, "posix") == 0) {
+            value = vals[MAL_NODE_PATH_FUNCTION_COUNT];
             matched = true;
         }
         if (matched) {

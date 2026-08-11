@@ -12827,6 +12827,7 @@ function retainHostGlobal(program: IntermediateProgram, binding: Binding): boole
 		program.hostProcess &&
 		binding.undeclared &&
 		(binding.name === "process" ||
+			binding.name === "global" ||
 			binding.name === "TextEncoder" ||
 			binding.name === "TextDecoder")
 	) {

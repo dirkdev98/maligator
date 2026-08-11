@@ -16,6 +16,7 @@
 #include "object_ops.h"
 #include "property_iter.h"
 #include "property_store.h"
+#include "promise_object.h"
 #include "u16_buffer.h"
 #include "value.h"
 #include "value_ops.h"
@@ -509,6 +510,100 @@ static MalValue util_deprecate(
     return wrapper_value;
 }
 
+static void util_clear_completion(MalVm *vm) {
+    vm->completion = (MalCompletion) {
+        .kind = MAL_COMPLETION_NORMAL,
+        .value = mal_value_new_undefined(),
+    };
+}
+
+static MalValue util_promisify_callback(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    MalPromiseObject *promise = mal_value_to_promise_object(
+        mal_native_function_object_get_slot(
+            mal_value_to_native_function_object(callee), 0));
+    if (argc > 0 && !mal_value_is_nil(args[0])) {
+        mal_promise_reject(vm, promise, args[0]);
+    } else {
+        mal_promise_fulfill(vm, promise,
+            argc > 1 ? args[1] : mal_value_new_undefined());
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue util_promisified_call(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalValue roots[] = {
+        mal_native_function_object_get_slot(
+            mal_value_to_native_function_object(callee), 0),
+        mal_value_from_promise_object(mal_promise_object_new(
+            &vm->heap,
+            mal_value_to_object(
+                vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]))),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[2] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(
+                vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "callback"),
+            util_promisify_callback, roots + 1, 1));
+
+    MalValue *call_args = malloc((usize) (argc + 1) * sizeof(MalValue));
+    if (call_args == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        MalValue result = roots[1];
+        mal_gc_unroot(&root);
+        return result;
+    }
+    for (i32 i = 0; i < argc; i++) call_args[i] = args[i];
+    call_args[argc] = roots[2];
+    MalCompletion completion = mal_vm_call_value(
+        vm, roots[0], receiver, call_args, argc + 1);
+    free(call_args);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        util_clear_completion(vm);
+        mal_promise_reject(
+            vm, mal_value_to_promise_object(roots[1]), completion.value);
+    }
+    MalValue result = roots[1];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue util_promisify(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    if (argc < 1 || !mal_value_is_callable(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The original argument must be a function");
+        return mal_value_new_undefined();
+    }
+    MalValue original = args[0];
+    MalRootSpan root;
+    mal_gc_root(&root, &original, 1);
+    MalValue wrapper = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(
+                vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "promisified"),
+            util_promisified_call, &original, 1));
+    mal_gc_unroot(&root);
+    return wrapper;
+}
+
 typedef struct MalNodeUtilExport {
     const char *name;
     i32 length;
@@ -521,6 +616,7 @@ static const MalNodeUtilExport util_exports[] = {
     {"formatWithOptions", 2, util_format_with_options},
     {"inherits", 2, util_inherits},
     {"inspect", 2, util_inspect},
+    {"promisify", 1, util_promisify},
 };
 
 void mal_host_install_node_util(

@@ -1,4 +1,7 @@
-import bufferDefault, { Buffer as ImportedBuffer } from "node:buffer";
+import bufferDefault, {
+	Buffer as ImportedBuffer,
+	constants,
+} from "node:buffer";
 
 const results = [];
 function check(name, value) {
@@ -17,6 +20,10 @@ function throws(name, constructor, fn) {
 check(
 	"ESM and global constructor identity",
 	ImportedBuffer === Buffer && bufferDefault.Buffer === Buffer,
+);
+check(
+	"buffer constants expose the string limit",
+	bufferDefault.constants === constants && constants.MAX_STRING_LENGTH > 0,
 );
 const basic = Buffer.from([0, 1, 255, 256, -1]);
 check(

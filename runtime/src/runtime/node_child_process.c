@@ -547,13 +547,34 @@ cleanup:
  * Installation.
  * --------------------------------------------------------------------------- */
 
+static MalValue mal_node_async_child_process_unavailable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+        "Asynchronous child processes are not supported by this host");
+    return mal_value_new_undefined();
+}
+
 void mal_host_install_node_child_process(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
 ) {
     (void) launch;
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "execFileSync") == 0) {
+        if (strcmp(slots[i].name, "exec") == 0 ||
+            strcmp(slots[i].name, "spawn") == 0) {
+            const char *name = slots[i].name;
+            MalNativeFunctionObject *fn = mal_native_function_object_new_arity(
+                &vm->heap, fn_proto,
+                mal_intrinsic_ascii(vm, (const byte *) name), 3,
+                mal_node_async_child_process_unavailable);
+            vm->globals[slots[i].slot] = mal_value_from_native_function_object(fn);
+        } else if (strcmp(slots[i].name, "execFileSync") == 0) {
             MalNativeFunctionObject *fn = mal_native_function_object_new_arity(
                 &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) "execFileSync"), 3, mal_node_exec_file_sync
             );

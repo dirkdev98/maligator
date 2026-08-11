@@ -14,6 +14,7 @@ import path, {
 	isAbsolute,
 	join,
 	normalize,
+	posix,
 	relative,
 	resolve,
 	sep,
@@ -57,6 +58,7 @@ eq("sep-posix", sep, "/");
 eq("default-basename-identity", path.basename === basename, true);
 eq("default-delimiter", path.delimiter, ":");
 eq("default-sep", path.sep, "/");
+eq("posix aliases the default", posix === path && path.posix === path, true);
 
 // --- dirname ---
 eq("dirname-nested", dirname("/foo/bar/baz"), "/foo/bar");

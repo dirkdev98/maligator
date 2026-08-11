@@ -2729,6 +2729,16 @@ static void mal_vm_print_thrown(MalVm *vm, MalValue value, const byte *prefix) {
         MalCompletion saved = vm->completion;
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
+        MalValue stack;
+        if (mal_vm_get_property(vm, value,
+                mal_intrinsic_string_key(vm, "stack"), &stack) &&
+            mal_value_is_string(stack)) {
+            vm->completion = saved;
+            mal_vm_print_display(stderr, stack);
+            fprintf(stderr, "\n");
+            return;
+        }
+
         MalValue to_string;
         if (mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, "toString"), &to_string) &&
             mal_value_is_callable(to_string)) {

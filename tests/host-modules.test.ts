@@ -128,6 +128,7 @@ describe("host-install manifest", () => {
 			"isAbsolute",
 			"join",
 			"normalize",
+			"posix",
 			"relative",
 			"resolve",
 			"sep",
@@ -221,6 +222,22 @@ describe("host-install manifest", () => {
 		expect(def.hostInstalls).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_module",
+			}),
+		]);
+	});
+
+	it("binds asynchronous child process entrypoints", () => {
+		const def = compile(
+			`import { exec, spawn } from "node:child_process";\nglobalThis.sink = [exec, spawn];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_child_process",
+				exports: [
+					expect.objectContaining({ name: "exec" }),
+					expect.objectContaining({ name: "spawn" }),
+				],
 			}),
 		]);
 	});
@@ -324,6 +341,14 @@ describe("host-install manifest", () => {
 		expect(def.hostInstalls).toEqual([
 			{ installer: "mal_host_install_node_buffer", exports: [] },
 		]);
+	});
+
+	it("retains the process installer for the free global alias", () => {
+		const def = compile(`globalThis.sink = global;\n`, { node: true });
+		expect(def.hostInstalls).toContainEqual({
+			installer: "mal_host_install_process",
+			exports: [],
+		});
 	});
 
 	it("drops an unreachable free Buffer and an unused node:buffer import", () => {

@@ -1,4 +1,11 @@
-import util, { deprecate, format, formatWithOptions, inherits, inspect } from "node:util";
+import util, {
+	deprecate,
+	format,
+	formatWithOptions,
+	inherits,
+	inspect,
+	promisify,
+} from "node:util";
 
 let passed = 0;
 let total = 0;
@@ -11,6 +18,18 @@ function check(condition, name) {
 
 check(util.inspect === inspect, "default/named inspect identity");
 check(util.inherits === inherits, "default/named inherits identity");
+check(util.promisify === promisify, "default/named promisify identity");
+function callbackValue(value, callback) {
+	callback(null, value * 2);
+}
+check((await promisify(callbackValue)(21)) === 42, "promisify fulfillment");
+let rejection = "";
+try {
+	await promisify((callback) => callback(new Error("rejected")))();
+} catch (error) {
+	rejection = error.message;
+}
+check(rejection === "rejected", "promisify rejection");
 check(format("hello %s %d %%", "world", 4) === "hello world 4 %", "format tokens");
 check(format("extra", { value: 1 }) === "extra { value: 1 }", "format extras");
 check(

@@ -177,23 +177,32 @@ int mal_posix_fs_write_file(const char *path, const byte *data, usize len) {
     return 0;
 }
 
+static void mal_posix_fs_copy_stat(const struct stat *st, MalPosixStat *out) {
+    out->type = mal_posix_ft_from_mode(st->st_mode);
+    out->dev = (f64) st->st_dev;
+    out->ino = (f64) st->st_ino;
+    out->size = (f64) st->st_size;
+    out->mode = (u32) st->st_mode;
+#if defined(__APPLE__)
+    out->ctime_ms = (f64) st->st_ctimespec.tv_sec * 1000.0 + (f64) st->st_ctimespec.tv_nsec / 1.0e6;
+    out->mtime_ms = (f64) st->st_mtimespec.tv_sec * 1000.0 + (f64) st->st_mtimespec.tv_nsec / 1.0e6;
+#else
+    out->ctime_ms = (f64) st->st_ctim.tv_sec * 1000.0 + (f64) st->st_ctim.tv_nsec / 1.0e6;
+    out->mtime_ms = (f64) st->st_mtim.tv_sec * 1000.0 + (f64) st->st_mtim.tv_nsec / 1.0e6;
+#endif
+}
+
 int mal_posix_fs_stat(const char *path, MalPosixStat *out) {
     struct stat st;
-    if (stat(path, &st) != 0) {
-        return errno;
-    }
-    out->type = mal_posix_ft_from_mode(st.st_mode);
-    out->dev = (f64) st.st_dev;
-    out->ino = (f64) st.st_ino;
-    out->size = (f64) st.st_size;
-    out->mode = (u32) st.st_mode;
-#if defined(__APPLE__)
-    out->ctime_ms = (f64) st.st_ctimespec.tv_sec * 1000.0 + (f64) st.st_ctimespec.tv_nsec / 1.0e6;
-    out->mtime_ms = (f64) st.st_mtimespec.tv_sec * 1000.0 + (f64) st.st_mtimespec.tv_nsec / 1.0e6;
-#else
-    out->ctime_ms = (f64) st.st_ctim.tv_sec * 1000.0 + (f64) st.st_ctim.tv_nsec / 1.0e6;
-    out->mtime_ms = (f64) st.st_mtim.tv_sec * 1000.0 + (f64) st.st_mtim.tv_nsec / 1.0e6;
-#endif
+    if (stat(path, &st) != 0) return errno;
+    mal_posix_fs_copy_stat(&st, out);
+    return 0;
+}
+
+int mal_posix_fs_lstat(const char *path, MalPosixStat *out) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return errno;
+    mal_posix_fs_copy_stat(&st, out);
     return 0;
 }
 
