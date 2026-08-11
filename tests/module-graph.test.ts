@@ -654,6 +654,21 @@ test("resolves the diagnostics tracing channel", () => {
 	});
 });
 
+test("canonicalizes the worker_threads main-thread identity", () => {
+	write("worker.cjs", `module.exports = require("worker_threads").isMainThread;\n`);
+	const graph = buildModuleGraph(path.join(root, "worker.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:worker_threads",
+	);
+	expect(graph.modules.get("node:worker_threads")?.host).toMatchObject({
+		named: ["isMainThread"],
+		hasDefault: true,
+		installer: "mal_host_install_node_worker_threads",
+	});
+});
+
 test("rejects a node:* import clearly when surface.node is off (the default)", () => {
 	write("node-off.mjs", `import { join } from "node:path";\n`);
 	expect(() => buildModuleGraph(path.join(root, "node-off.mjs"))).toThrow(

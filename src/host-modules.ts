@@ -142,6 +142,13 @@ const DIAGNOSTICS_CHANNEL: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:diagnostics_channel"),
 };
 
+const WORKER_THREADS: HostModuleSpec = {
+	id: "node:worker_threads",
+	named: ["isMainThread"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:worker_threads"),
+};
+
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
 	named: ["execFileSync"],
@@ -348,6 +355,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		V8,
 		VM,
 		DIAGNOSTICS_CHANNEL,
+		WORKER_THREADS,
 		CHILD_PROCESS,
 		CRYPTO,
 		PERF_HOOKS,

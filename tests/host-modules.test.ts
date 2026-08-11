@@ -201,6 +201,18 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds the worker main-thread identity through its host installer", () => {
+		const def = compile(
+			`import { isMainThread } from "node:worker_threads";\nglobalThis.sink = isMainThread;\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_worker_threads",
+			}),
+		]);
+	});
+
 	it("binds node:events default and named constructor exports through one installer", () => {
 		const def = compile(
 			`import Events, { EventEmitter } from "node:events";\nglobalThis.sink = [Events, EventEmitter];\n`,
