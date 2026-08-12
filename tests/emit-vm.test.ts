@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
+import { emitCompiledFunction } from "../src/emit-c.ts";
 import { emitBatch, emitVmDefinition, emitVmTranslationUnits } from "../src/emit-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
@@ -197,7 +198,7 @@ describe("emit-vm instruction packing", () => {
 		expect(units[0]).toContain("#define MAL_DECLARE_COMPILED(name)");
 		expect(units[0]).toContain("MAL_DECLARE_COMPILED(mal_compiled_0);");
 		expect(units[0]).not.toContain(
-			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {",
+			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {",
 		);
 		expect(units.slice(1).join("\n")).toContain(
 			"MalValue mal_compiled_0(MalVm *vm, MalValue this_value",
@@ -527,6 +528,68 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("MalValue p0 = arg_count > 0 ? args[0]");
 		expect(output).toContain("if (!mal_ops_is_number(p0))");
 		expect(output).toContain("return mal_compiled_0_boxed");
+
+		const nativeTarget = emitCompiledFunction(
+			reused,
+			0,
+			"",
+			false,
+			undefined,
+			"static",
+			new Map([[0, 1]]),
+		);
+		expect(nativeTarget?.nativeNumberArgumentCount).toBe(1);
+		expect(nativeTarget?.source).toContain("MalValue mal_compiled_0_native_numbers(");
+		expect(nativeTarget?.source).toContain("r0 = native_arg0;");
+		expect(nativeTarget?.source).toContain("if (entry_state != nullptr)");
+		expect(nativeTarget?.source).toContain(
+			"return mal_compiled_0_native_numbers(vm, this_value, args",
+		);
+
+		const caller: VmFunction = {
+			...fn,
+			parameterCount: 0,
+			registerCount: 3,
+			capturedCount: 0,
+			instructions: [
+				{ opcode: "LOAD_GLOBAL", dst: 0, index: 0 },
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 7 },
+				{
+					opcode: "CALL",
+					dst: 2,
+					callee: 0,
+					thisValue: 0,
+					argumentCount: 1,
+					arguments: [1],
+					directFunctionIndex: 0,
+				},
+				{ opcode: "RETURN", value: 2 },
+			],
+		};
+		const nativeCaller = emitCompiledFunction(
+			caller,
+			1,
+			"",
+			false,
+			undefined,
+			"static",
+			new Map([[0, 1]]),
+		);
+		expect(nativeCaller?.source).toMatch(
+			/mal_compiled_0_native_numbers\(vm,[^\n]+\(void \*\) vm, r1, 0\.0, 0\.0, 0\.0\)/,
+		);
+
+		const observingArguments = emitCompiledFunction(
+			{ ...reused, needsArguments: true },
+			0,
+			"",
+			false,
+			undefined,
+			"static",
+			new Map([[0, 1]]),
+		);
+		expect(observingArguments?.nativeNumberArgumentCount).toBe(0);
+		expect(observingArguments?.source).not.toContain("native_numbers");
 	});
 
 	it("retains boxed recursive re-entry for promoted numeric parameters", () => {
@@ -735,11 +798,14 @@ describe("native update-expression representation", () => {
 	});
 
 	it("emits guarded direct calls for residual exact script functions", () => {
-		const body = Array.from({ length: 24 }, (_, index) => `value += ${index};`).join(
-			"\n",
-		);
 		const output = emit(`
-			const large = function large(value) { ${body} return value; };
+			"use strict";
+			const values = [3, 5];
+			const large = function large(index) {
+				let total = 0;
+				for (let i = 0; i < 24; i++) total += values[index];
+				return total + index;
+			};
 			globalThis.result = large(1);
 		`);
 		expect(output).toContain("mal_vm_call_direct(vm,");
@@ -748,6 +814,21 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
 		expect(output).toContain("mal_vm_enter_compiled(vm, 1)");
 		expect(output).toContain("mal_vm_leave_compiled(vm)");
+	});
+
+	it("keeps argument-observing exact targets on the boxed ABI", () => {
+		const output = emit(`
+			"use strict";
+			const values = [3, 5];
+			const large = function large(index) {
+				let total = 0;
+				for (let i = 0; i < 24; i++) total += values[index];
+				return total + index + arguments.length;
+			};
+			globalThis.result = large(1);
+		`);
+		expect(output).toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
+		expect(output).not.toContain("mal_compiled_1_native_numbers");
 	});
 
 	it("emits guarded Function.prototype.call flattening with a shifted exact target", () => {

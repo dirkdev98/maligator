@@ -112,13 +112,13 @@ const C_HEADER_LINES = [
 	'#include "builtin_iterator.h"',
 	// for-await lowering uses mal_vm_get_async_iterator.
 	'#include "builtin_async_iterator.h"',
-	// Compiled coroutines dereference MalGeneratorObject (resume_state->frame).
+	// Compiled coroutines cast their backend entry state to MalGeneratorObject.
 	'#include "generator_object.h"',
 	"",
 ];
 
 const COMPILED_FUNCTION_DECLARATION =
-	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state)";
+	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state)";
 
 /** Keep native/self-hosted compiler strings comfortably below the 16 MiB engine limit. */
 // Eight MiB accommodates large indivisible dependency functions while staying
@@ -505,7 +505,7 @@ function emitVmDefinitionSource(
 		compiled.forEach((fn, index) => {
 			if (fn !== null) compiledTargets.add(index);
 		});
-		const directCompiledTargets = new Set<number>();
+		const directCompiledTargets = new Map<number, number>();
 		for (const fn of definition.functions) {
 			for (const instruction of fn.instructions) {
 				if (
@@ -513,7 +513,13 @@ function emitVmDefinitionSource(
 					instruction.directFunctionIndex !== undefined &&
 					compiledTargets.has(instruction.directFunctionIndex)
 				) {
-					directCompiledTargets.add(instruction.directFunctionIndex);
+					const target = compiled[instruction.directFunctionIndex];
+					if (target !== undefined && target !== null) {
+						directCompiledTargets.set(
+							instruction.directFunctionIndex,
+							target.nativeNumberArgumentCount,
+						);
+					}
 				}
 			}
 		}
@@ -529,11 +535,44 @@ function emitVmDefinitionSource(
 				directCompiledTargets,
 			);
 		});
+		const usedNativeNumberTargets = new Set<number>();
+		for (const fn of compiled) {
+			if (fn === null) continue;
+			for (const target of fn.nativeNumberCallTargets) {
+				usedNativeNumberTargets.add(target);
+			}
+		}
+		let refinedNativeTargets = false;
+		for (const [target, count] of directCompiledTargets) {
+			if (count > 0 && !usedNativeNumberTargets.has(target)) {
+				directCompiledTargets.set(target, 0);
+				refinedNativeTargets = true;
+			}
+		}
+		if (refinedNativeTargets) {
+			compiled = definition.functions.map((fn, i) => {
+				if (!compiledTargets.has(i)) return null;
+				return emitCompiledFunction(
+					fn,
+					i,
+					suffix,
+					debug,
+					undefined,
+					"static",
+					directCompiledTargets,
+				);
+			});
+		}
 		if (directCompiledTargets.size > 0) {
 			for (let index = 0; index < compiled.length; index++) {
 				const fn = compiled[index];
 				if (fn !== undefined && fn !== null && directCompiledTargets.has(index)) {
 					lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
+					if ((directCompiledTargets.get(index) ?? 0) > 0) {
+						lines.push(
+							`static MalValue ${fn.symbol}_native_numbers(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state, f64 native_arg0, f64 native_arg1, f64 native_arg2, f64 native_arg3);`,
+						);
+					}
 				}
 			}
 			lines.push("");

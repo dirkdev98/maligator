@@ -801,11 +801,11 @@ typedef MalValue (*MalCompiledFunction)(
     // compiled frame carries no callee otherwise). Undefined for the top-level
     // entry. Strict functions ignore it (their callee is poisoned).
     MalValue callee,
-    // Non-null only when resuming a suspended compiled coroutine (generator/
-    // async): the coroutine object whose saved frame the body restores and whose
-    // instruction_pointer selects the resume label. Null on every ordinary call,
-    // construct, and program-entry invocation; non-coroutine functions ignore it.
-    struct MalGeneratorObject *resume_state
+    // Backend-private entry state. A suspended compiled coroutine receives its
+    // MalGeneratorObject. A compiler-proven ordinary direct call may instead use
+    // it as a native-argument entry tag. Runtime calls, constructs, and program
+    // entry pass null.
+    void *entry_state
 );
 
 enum {

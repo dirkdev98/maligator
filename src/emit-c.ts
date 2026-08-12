@@ -54,6 +54,10 @@ type RegisterRep = "boxed" | "number" | "boolean";
 export interface CompiledFunction {
 	/** The C symbol to install as MalFunction.compiled. */
 	symbol: string;
+	/** Fully promoted leading numeric parameters eligible for a register ABI. */
+	nativeNumberArgumentCount: number;
+	/** Exact targets this body actually invokes through their numeric entry. */
+	nativeNumberCallTargets: ReadonlySet<number>;
 	/**
 	 * The full `static MalValue ...(...) { ... }` definition — plus, for a function
 	 * that speculatively unboxes params, its fully-boxed fallback variant emitted
@@ -581,7 +585,7 @@ export function emitCompiledFunction(
 	// an empty promotable set (no speculation, no guard, no further fallback).
 	override?: { symbol: string; promotable: Set<number> },
 	linkage: "static" | "external" = "static",
-	directCompiledTargets: ReadonlySet<number> = new Set(),
+	directCompiledTargets: ReadonlyMap<number, number> = new Map(),
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -909,6 +913,16 @@ export function emitCompiledFunction(
 	if (body === null) {
 		return null;
 	}
+	const nativeNumberCallTargets = new Set<number>();
+	for (const target of directCompiledTargets.keys()) {
+		if (
+			body.some((line) =>
+				line.includes(`mal_compiled_${target}${suffix}_native_numbers(`),
+			)
+		) {
+			nativeNumberCallTargets.add(target);
+		}
+	}
 
 	// Defensive: a register operand of -1 (a "no register" sentinel beyond the
 	// RETURN case handled below) would emit invalid C like `r-1`. Bail to the
@@ -924,8 +938,34 @@ export function emitCompiledFunction(
 		(i) => promotableParams.has(i) && reps[i] === "number",
 	);
 	const isPromoted = new Set(promotedParams);
+	const observesRawArguments = fn.instructions.some(
+		(instruction) =>
+			instruction.opcode === "LOAD_ARGUMENT_COUNT" ||
+			instruction.opcode === "LOAD_ARGUMENT" ||
+			instruction.opcode === "LOAD_STATIC_ARGUMENT" ||
+			instruction.opcode === "CREATE_REST_ARGUMENTS",
+	);
+	const nativeNumberArgumentCount =
+		fn.parameterCount > 0 &&
+		fn.parameterCount <= 4 &&
+		// A wrapper/secondary entry can perturb the layout of a large hot body more
+		// than one saved box/unbox is worth. Keep this ABI seam for compact callees;
+		// larger proof regions need a native result ABI or call-region versioning.
+		body.length <= 256 &&
+		promotedParams.length === fn.parameterCount &&
+		!fn.needsArguments &&
+		!fn.mappedArguments &&
+		fn.argumentSnapshotCount === 0 &&
+		!observesRawArguments
+			? fn.parameterCount
+			: 0;
 
 	const symbol = override?.symbol ?? `mal_compiled_${index}${suffix}`;
+	const useNativeNumberEntry =
+		override === undefined &&
+		nativeNumberArgumentCount > 0 &&
+		directCompiledTargets.get(index) === nativeNumberArgumentCount;
+	const implementationSymbol = useNativeNumberEntry ? `${symbol}_native_numbers` : symbol;
 
 	// PARAM-BAIL FALLBACK: when this variant speculatively unboxes params, its
 	// entry guard must have somewhere to go when an argument is not a number.
@@ -936,6 +976,7 @@ export function emitCompiledFunction(
 	// be dropped for every compiled function.
 	let fallbackSource = "";
 	let bailTarget = "";
+	const fallbackNativeNumberCallTargets = new Set<number>();
 	if (promotedParams.length > 0) {
 		const boxedSymbol = `mal_compiled_${index}_boxed${suffix}`;
 		const boxed = emitCompiledFunction(
@@ -951,19 +992,22 @@ export function emitCompiledFunction(
 			return null; // the promoting variant lowered, so this cannot happen
 		}
 		fallbackSource = `${boxed.source}\n\n`;
-		bailTarget = `${boxedSymbol}(vm, this_value, args, arg_count, new_target, env, callee, resume_state)`;
+		bailTarget = `${boxedSymbol}(vm, this_value, args, arg_count, new_target, env, callee, entry_state)`;
+		for (const target of boxed.nativeNumberCallTargets) {
+			fallbackNativeNumberCallTargets.add(target);
+		}
 	}
 
 	const lines: Array<string> = [];
 
 	lines.push(
-		`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {`,
+		`${useNativeNumberEntry ? "static __attribute__((aligned(64))) " : linkage === "static" ? "static " : ""}MalValue ${implementationSymbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state${useNativeNumberEntry ? ", f64 native_arg0, f64 native_arg1, f64 native_arg2, f64 native_arg3" : ""}) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
-	lines.push(`    (void) resume_state;`);
+	if (!useNativeNumberEntry) lines.push(`    (void) entry_state;`);
 	if (
 		body.some(
 			(line) =>
@@ -1024,16 +1068,30 @@ export function emitCompiledFunction(
 	// and behaves identically. Past the guard the fast body runs fully unboxed with
 	// no per-op number checks.
 	if (promotedParams.length > 0) {
+		if (useNativeNumberEntry) {
+			lines.push(`    if (entry_state != nullptr) {`);
+			for (const i of promotedParams) {
+				lines.push(`        r${i} = native_arg${i};`);
+			}
+			lines.push(`    } else {`);
+		}
 		for (const i of promotedParams) {
 			lines.push(
-				`    MalValue p${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`,
+				`${useNativeNumberEntry ? "    " : ""}    MalValue p${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`,
 			);
 		}
 		const guard = promotedParams.map((i) => `!mal_ops_is_number(p${i})`).join(" || ");
-		lines.push(`    if (${guard}) {`, `        return ${bailTarget};`, `    }`);
+		lines.push(
+			`${useNativeNumberEntry ? "    " : ""}    if (${guard}) {`,
+			`${useNativeNumberEntry ? "    " : ""}        return ${bailTarget};`,
+			`${useNativeNumberEntry ? "    " : ""}    }`,
+		);
 		for (const i of promotedParams) {
-			lines.push(`    r${i} = mal_ops_number_as_f64(p${i});`);
+			lines.push(
+				`${useNativeNumberEntry ? "    " : ""}    r${i} = mal_ops_number_as_f64(p${i});`,
+			);
 		}
+		if (useNativeNumberEntry) lines.push(`    }`);
 	}
 
 	// Remaining parameters adopt the incoming arguments boxed; non-parameter
@@ -1113,8 +1171,24 @@ export function emitCompiledFunction(
 	for (const i of valueRegs) {
 		lines.push(`#undef r${i}`);
 	}
+	if (useNativeNumberEntry) {
+		lines.push(
+			"",
+			`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
+			`    return ${implementationSymbol}(vm, this_value, args, arg_count, new_target, env, callee, entry_state, 0.0, 0.0, 0.0, 0.0);`,
+			`}`,
+		);
+	}
 
-	return { symbol, source: fallbackSource + lines.join("\n") };
+	return {
+		symbol,
+		source: fallbackSource + lines.join("\n"),
+		nativeNumberArgumentCount,
+		nativeNumberCallTargets: new Set([
+			...fallbackNativeNumberCallTargets,
+			...nativeNumberCallTargets,
+		]),
+	};
 }
 
 /**
@@ -1189,7 +1263,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
-		new Set(),
+		new Map(),
 	);
 	if (body === null) {
 		return null;
@@ -1203,7 +1277,7 @@ function emitResumableFunction(
 	const lines: Array<string> = [];
 
 	lines.push(
-		`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {`,
+		`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
@@ -1228,6 +1302,9 @@ function emitResumableFunction(
 	}
 
 	lines.push(`    MalValue *__gc_slots;`);
+	lines.push(
+		`    MalGeneratorObject *resume_state = (MalGeneratorObject *) entry_state;`,
+	);
 	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
 	lines.push(`    (void) __coro;`);
 	if (isAsyncFunction) {
@@ -1315,7 +1392,12 @@ function emitResumableFunction(
 		lines.push(`#undef r${i}`);
 	}
 
-	return { symbol, source: lines.join("\n") };
+	return {
+		symbol,
+		source: lines.join("\n"),
+		nativeNumberArgumentCount: 0,
+		nativeNumberCallTargets: new Set(),
+	};
 }
 
 /**
@@ -1697,7 +1779,7 @@ function emitBody(
 		}
 	>,
 	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
-	directCompiledTargets: ReadonlySet<number>,
+	directCompiledTargets: ReadonlyMap<number, number>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -2089,7 +2171,7 @@ function emitInstruction(
 		  }
 		| undefined,
 	cardinalityPush: CardinalityRegion | undefined,
-	directCompiledTargets: ReadonlySet<number>,
+	directCompiledTargets: ReadonlyMap<number, number>,
 	mathUnaryCall: boolean,
 	mathBinaryCall: boolean,
 	loopStaticPropertyFastPath: boolean,
@@ -2121,6 +2203,13 @@ function emitInstruction(
 			case "string":
 				return `mal_value_from_string(&mal_strings${suffix}[${decoded.index}])`;
 		}
+	};
+	const nativeNumberOperand = (operand: number): string | null => {
+		const decoded = decodeVmValueOperand(operand);
+		if (decoded.kind === "register") {
+			return reps[decoded.register] === "number" ? `r${decoded.register}` : null;
+		}
+		return decoded.kind === "number" ? cF64Literal(decoded.value) : null;
 	};
 	// Read register r as a raw double (only valid for a number-rep register).
 	const num = (r: number): string => `r${r}`;
@@ -3461,12 +3550,23 @@ function emitInstruction(
 					const directCallee = `__direct_callee_${ip}`;
 					const directFunction = `__direct_function_${ip}`;
 					const directValue = `__direct_value_${ip}`;
+					const nativeArgumentCount = directCompiledTargets.get(target) ?? 0;
+					const nativeArguments = instruction.arguments
+						.slice(0, nativeArgumentCount)
+						.map(nativeNumberOperand);
+					const useNativeArguments =
+						nativeArgumentCount > 0 &&
+						instruction.arguments.length >= nativeArgumentCount &&
+						nativeArguments.every((argument) => argument !== null);
+					const nativeArgumentExpressions = Array.from({ length: 4 }, (_, i) =>
+						i < nativeArgumentCount ? nativeArguments[i]! : "0.0",
+					).join(", ");
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`if (mal_vm_callee_has_index(vm, ${directCallee}, ${target})) {`,
 						`  if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
 						`  const MalFunction *${directFunction} = &vm->definition->functions[${target}];`,
-						`  MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
+						`  MalValue ${directValue} = ${useNativeArguments ? `mal_compiled_${target}${suffix}_native_numbers` : `mal_compiled_${target}${suffix}`}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${useNativeArguments ? "nullptr" : argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, ${useNativeArguments ? `(void *) vm, ${nativeArgumentExpressions}` : "nullptr"});`,
 						`  mal_vm_leave_compiled(vm);`,
 						`  if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 						`  r${instruction.dst} = ${directValue};`,
