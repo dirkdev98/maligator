@@ -7,6 +7,7 @@ export default defineBuild({
 	outputName: "maligator-site",
 	assets: {
 		site: { type: "file", path: "website/index.html" },
+		compatibility: { type: "file", path: "website/compatibility.html" },
 	},
 	engine: {
 		eval: false,

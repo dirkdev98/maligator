@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 
-const html = readFileSync(mal.assets.materialize("site"), "utf8");
+const pages = new Map([
+	["/", readFileSync(mal.assets.materialize("site"), "utf8")],
+	["/compatibility", readFileSync(mal.assets.materialize("compatibility"), "utf8")],
+]);
 const port = Number(process.env.PORT ?? "3000");
 
 const server = Mal.serve({
@@ -8,7 +11,14 @@ const server = Mal.serve({
 	port,
 	fetch(request) {
 		const url = new URL(request.url);
-		if (url.pathname !== "/" && url.pathname !== "/index.html") {
+		const pathname =
+			url.pathname === "/index.html"
+				? "/"
+				: url.pathname === "/compatibility.html"
+					? "/compatibility"
+					: url.pathname;
+		const html = pages.get(pathname);
+		if (html === undefined) {
 			return new Response("Not found", { status: 404 });
 		}
 		if (request.method !== "GET" && request.method !== "HEAD") {
