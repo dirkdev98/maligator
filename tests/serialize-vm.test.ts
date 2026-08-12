@@ -279,6 +279,7 @@ describe("serialize-vm", () => {
 				"STORE_PROPERTY_STATIC",
 			].includes(instruction.opcode),
 		).length;
+		const finiteAllocationInstructionIndex = metadataInstructions.length;
 		metadataInstructions.push({
 			opcode: "CREATE_OBJECT",
 			dst: 7,
@@ -286,6 +287,7 @@ describe("serialize-vm", () => {
 				icIndex: finiteStoreIc,
 				numberGuards: [1],
 				keyStringIndices: [0, 1],
+				virtualRecord: true,
 			},
 		});
 		metadataInstructions.push({
@@ -296,6 +298,17 @@ describe("serialize-vm", () => {
 			icIndex: finiteStoreIc,
 			nativeFiniteKey: { minimum: 0, ordinal: 1, stringIndices: [0, 1] },
 		});
+		metadataInstructions.push({
+			opcode: "LOAD_PROPERTY",
+			dst: 9,
+			object: 7,
+			key: 1,
+			icIndex: finiteStoreIc + 1,
+			nativeFiniteKey: { minimum: 0, ordinal: 1, stringIndices: [0, 1] },
+			nativeFiniteRecordAccess: {
+				allocationInstructionIndex: finiteAllocationInstructionIndex,
+			},
+		});
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
@@ -303,7 +316,7 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					instructions: metadataInstructions,
-					positions: [...mainFn.positions, 2, 2, 2, 2, 2],
+					positions: [...mainFn.positions, 2, 2, 2, 2, 2, 2],
 					gcRootRegisters: [0, 3, 7],
 					stackObjectSites: [{ instructionIndex: 4, slotCount: 2 }],
 					stackObjectAccesses: [

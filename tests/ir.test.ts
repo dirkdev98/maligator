@@ -165,7 +165,36 @@ test("proves a guarded fresh-object finite construction region", () => {
 	expect(allocation.nativeFiniteConstruction?.keyStringIndices).toHaveLength(8);
 	expect(allocation.registers).toHaveLength(2); // destination + guarded seed
 	expect(allocation.nativeFiniteConstruction?.source).toBe(store);
+	expect(allocation.nativeFiniteConstruction?.virtualRecord).toBeUndefined();
 	expect(store.nativeFiniteKey?.stringIndices).toHaveLength(8);
+});
+
+test("virtualizes a finite construction observed only through its selector domain", () => {
+	const program = compileScript(`
+		function consume(seed) {
+			const result = {};
+			for (let i = 0; i < 8; i++) result["p" + i] = (seed * (i + 1)) % 251;
+			let total = 0;
+			for (let i = 0; i < 8; i++) total += result["p" + i];
+			return total;
+		}
+		globalThis.consume = consume;
+	`);
+	executeIROptimizations(program);
+	const instructions = instructionsOf(functionNamed(program, "consume"));
+	const allocation = instructions.find(
+		(instruction) =>
+			instruction.type === "createObject" &&
+			instruction.nativeFiniteConstruction?.virtualRecord === true,
+	);
+	if (allocation?.type !== "createObject") throw new Error("expected virtual record");
+	const access = instructions.find(
+		(instruction) =>
+			instruction.type === "loadProperty" &&
+			instruction.nativeFiniteRecordAccess !== undefined,
+	);
+	if (access?.type !== "loadProperty") throw new Error("expected virtual record access");
+	expect(access.nativeFiniteRecordAccess?.allocation).toBe(allocation);
 });
 
 test.each([

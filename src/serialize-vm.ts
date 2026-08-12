@@ -21,8 +21,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 25 for virtual-record indexed field access metadata.
-export const WIRE_VERSION = 25;
+// Bumped to 26 for virtual finite-record construction/access metadata.
+export const WIRE_VERSION = 26;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -700,6 +700,14 @@ export function serializeVmDefinition(
 				w.i32(instruction.nativeFiniteKey.minimum);
 				w.i32(instruction.nativeFiniteKey.ordinal);
 				w.i32Array(instruction.nativeFiniteKey.stringIndices);
+				const finiteRecordAccess =
+					instruction.opcode === "LOAD_PROPERTY"
+						? instruction.nativeFiniteRecordAccess
+						: undefined;
+				w.u8(finiteRecordAccess === undefined ? 0 : 1);
+				if (finiteRecordAccess !== undefined) {
+					w.i32(finiteRecordAccess.allocationInstructionIndex);
+				}
 			} else if (
 				instruction.opcode === "CREATE_OBJECT" &&
 				instruction.nativeFiniteConstruction !== undefined
@@ -708,6 +716,7 @@ export function serializeVmDefinition(
 				w.i32(instruction.nativeFiniteConstruction.icIndex);
 				w.i32Array(instruction.nativeFiniteConstruction.numberGuards);
 				w.i32Array(instruction.nativeFiniteConstruction.keyStringIndices);
+				w.u8(instruction.nativeFiniteConstruction.virtualRecord === true ? 1 : 0);
 			} else if (
 				(instruction.opcode === "LOAD_PROPERTY" ||
 					instruction.opcode === "LOAD_PROPERTY_STATIC") &&
@@ -1571,6 +1580,24 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid finite-property metadata");
 				}
 				instruction.nativeFiniteKey = { minimum, ordinal, stringIndices };
+				const hasFiniteRecordAccess = r.u8();
+				if (hasFiniteRecordAccess > 1) {
+					throw new RangeError("serialize-vm: invalid finite-record access flag");
+				}
+				if (hasFiniteRecordAccess === 1) {
+					if (instruction.opcode !== "LOAD_PROPERTY") {
+						throw new RangeError("serialize-vm: finite-record store access metadata");
+					}
+					const allocationInstructionIndex = r.i32();
+					const allocation = fn.instructions[allocationInstructionIndex];
+					if (
+						allocation?.opcode !== "CREATE_OBJECT" ||
+						allocation.nativeFiniteConstruction?.virtualRecord !== true
+					) {
+						throw new RangeError("serialize-vm: invalid finite-record access metadata");
+					}
+					instruction.nativeFiniteRecordAccess = { allocationInstructionIndex };
+				}
 			} else if (tag === 7 && instruction.opcode === "CREATE_OBJECT") {
 				const icIndex = r.i32();
 				const numberGuards = r.i32Array();
@@ -1586,10 +1613,15 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				) {
 					throw new RangeError("serialize-vm: invalid finite-construction metadata");
 				}
+				const virtualRecord = r.u8();
+				if (virtualRecord > 1) {
+					throw new RangeError("serialize-vm: invalid finite-record construction flag");
+				}
 				instruction.nativeFiniteConstruction = {
 					icIndex,
 					numberGuards,
 					keyStringIndices,
+					...(virtualRecord === 1 ? { virtualRecord: true as const } : {}),
 				};
 			} else if (tag === 8 && instruction.opcode === "CREATE_ARRAY") {
 				const maximumLength = r.i32();

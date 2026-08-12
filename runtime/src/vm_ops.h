@@ -966,6 +966,10 @@ void mal_vm_finite_property_store(
     i32 ordinal, const i32 *string_indices, u8 count, bool strict,
     MalInlineCache *ic);
 
+/** Prepare the dependency-backed final shape without allocating an object. */
+bool mal_vm_prepare_object_finite_construction(
+    MalVm *vm, const i32 *string_indices, u8 count, MalInlineCache *ic);
+
 /** Native-only guarded allocation for a proven closed construction loop. */
 MalValue mal_vm_create_object_finite_construction(
     MalVm *vm, const i32 *string_indices, u8 count, bool number_guards_ok,

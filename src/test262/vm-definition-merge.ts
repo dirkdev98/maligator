@@ -205,6 +205,23 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "TYPEOF_COMPARE":
 			return { ...instruction };
 		case "LOAD_PROPERTY":
+			return {
+				...instruction,
+				nativeFiniteKey:
+					instruction.nativeFiniteKey === undefined
+						? undefined
+						: {
+								minimum: instruction.nativeFiniteKey.minimum,
+								ordinal: instruction.nativeFiniteKey.ordinal,
+								stringIndices: instruction.nativeFiniteKey.stringIndices.map(
+									(index) => index + base.string,
+								),
+							},
+				nativeFiniteRecordAccess:
+					instruction.nativeFiniteRecordAccess === undefined
+						? undefined
+						: { ...instruction.nativeFiniteRecordAccess },
+			};
 		case "STORE_PROPERTY":
 			return {
 				...instruction,
@@ -232,6 +249,9 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 									instruction.nativeFiniteConstruction.keyStringIndices.map(
 										(index) => index + base.string,
 									),
+								...(instruction.nativeFiniteConstruction.virtualRecord === true
+									? { virtualRecord: true as const }
+									: {}),
 							},
 			};
 		case "BINARY":

@@ -700,6 +700,9 @@ export type IRInstruction =
 			nativeFiniteConstruction?: {
 				source: Extract<IRInstruction, { type: "storeProperty" }>;
 				keyStringIndices: Array<number>;
+				/** Every residual observer is a matching finite-key load, so native
+				 * code may keep the completed record in compiler-owned slots. */
+				virtualRecord?: true;
 			};
 
 			/** COMPILE-ONLY: this allocation passed the stack-object proof. */
@@ -1006,6 +1009,10 @@ export type IRInstruction =
 				minimum: number;
 				source: Extract<IRInstruction, { type: "binary" }>;
 				stringIndices: Array<number>;
+			};
+			/** Native-only direct read from a virtual finite construction. */
+			nativeFiniteRecordAccess?: {
+				allocation: Extract<IRInstruction, { type: "createObject" }>;
 			};
 			nativeCardinalityAccess?: {
 				role: "push" | "length" | "element" | "field";

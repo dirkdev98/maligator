@@ -717,6 +717,61 @@ export function emitCompiledFunction(
 		site.inheritedValueName = `${site.objectName}_inherited_value`;
 		stackObjectInheritedAccesses.set(access.instructionIndex, site);
 	}
+	const finiteRecordRegions = new Map<number, FiniteRecordRegion>();
+	const finiteRecordStores = new Map<number, FiniteRecordRegion>();
+	const finiteRecordAccesses = new Map<number, FiniteRecordRegion>();
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		const finite =
+			instruction.opcode === "CREATE_OBJECT"
+				? instruction.nativeFiniteConstruction
+				: undefined;
+		if (finite?.virtualRecord !== true) continue;
+		if (finite.keyStringIndices.length === 0 || finite.keyStringIndices.length > 8) {
+			throw new Error(`Invalid virtual finite-record width at instruction ${ip}`);
+		}
+		const stores = fn.instructions
+			.map((candidate, candidateIp) => ({ candidate, candidateIp }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					candidate: Extract<VmInstruction, { opcode: "STORE_PROPERTY" }>;
+					candidateIp: number;
+				} =>
+					entry.candidate.opcode === "STORE_PROPERTY" &&
+					entry.candidate.icIndex === finite.icIndex &&
+					entry.candidate.nativeFiniteKey !== undefined,
+			);
+		if (stores.length !== 1) {
+			throw new Error(`Invalid virtual finite-record store at instruction ${ip}`);
+		}
+		const region: FiniteRecordRegion = {
+			allocationInstructionIndex: ip,
+			slotsOffset: nextStackSlot,
+			slotCount: finite.keyStringIndices.length,
+			fastName: `__finite_record_${ip}_fast`,
+		};
+		nextStackSlot += region.slotCount;
+		finiteRecordRegions.set(ip, region);
+		finiteRecordStores.set(stores[0]!.candidateIp, region);
+	}
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (
+			instruction.opcode !== "LOAD_PROPERTY" ||
+			instruction.nativeFiniteRecordAccess === undefined
+		) {
+			continue;
+		}
+		const region = finiteRecordRegions.get(
+			instruction.nativeFiniteRecordAccess.allocationInstructionIndex,
+		);
+		if (region === undefined || instruction.nativeFiniteKey === undefined) {
+			throw new Error(`Invalid virtual finite-record access at instruction ${ip}`);
+		}
+		finiteRecordAccesses.set(ip, region);
+	}
 	const cardinalityRegions = new Map<number, CardinalityRegion>();
 	const cardinalityAccesses = new Map<
 		number,
@@ -842,6 +897,9 @@ export function emitCompiledFunction(
 		stackObjectAccesses,
 		stackObjectMaterializations,
 		stackObjectInheritedAccesses,
+		finiteRecordRegions,
+		finiteRecordStores,
+		finiteRecordAccesses,
 		cardinalityRegions,
 		cardinalityAccesses,
 		cardinalityPushes,
@@ -933,6 +991,9 @@ export function emitCompiledFunction(
 			lines.push(`    bool ${site.inheritedFastName} = false;`);
 			lines.push(`    MalValue ${site.inheritedValueName} = MAL_VALUE_UNDEFINED;`);
 		}
+	}
+	for (const region of finiteRecordRegions.values()) {
+		lines.push(`    bool ${region.fastName} = false;`);
 	}
 	for (const region of cardinalityRegions.values()) {
 		lines.push(`    bool ${region.fastName} = false;`);
@@ -1111,6 +1172,9 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
+		new Map(),
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1492,6 +1556,13 @@ interface StackObjectSite {
 	cardinalityRegion?: CardinalityRegion;
 }
 
+interface FiniteRecordRegion {
+	allocationInstructionIndex: number;
+	slotsOffset: number;
+	slotCount: number;
+	fastName: string;
+}
+
 interface CardinalityRegion {
 	allocationInstructionIndex: number;
 	arrayRegister: number;
@@ -1605,6 +1676,9 @@ function emitBody(
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
 	stackObjectInheritedAccesses: ReadonlyMap<number, StackObjectSite>,
+	finiteRecordRegions: ReadonlyMap<number, FiniteRecordRegion>,
+	finiteRecordStores: ReadonlyMap<number, FiniteRecordRegion>,
+	finiteRecordAccesses: ReadonlyMap<number, FiniteRecordRegion>,
 	cardinalityRegions: ReadonlyMap<number, CardinalityRegion>,
 	cardinalityAccesses: ReadonlyMap<
 		number,
@@ -1940,6 +2014,9 @@ function emitBody(
 			stackObjectAccesses.get(ip),
 			stackObjectMaterializations.get(ip),
 			stackObjectInheritedAccesses.get(ip),
+			finiteRecordRegions.get(ip),
+			finiteRecordStores.get(ip),
+			finiteRecordAccesses.get(ip),
 			cardinalityRegions.get(ip),
 			cardinalityAccesses.get(ip),
 			cardinalityPushes.get(ip),
@@ -1990,6 +2067,9 @@ function emitInstruction(
 	stackObjectAccess: { site: StackObjectSite; slot: number } | undefined,
 	stackObjectMaterialization: StackObjectSite | undefined,
 	stackObjectInheritedAccess: StackObjectSite | undefined,
+	finiteRecordRegion: FiniteRecordRegion | undefined,
+	finiteRecordStore: FiniteRecordRegion | undefined,
+	finiteRecordAccess: FiniteRecordRegion | undefined,
 	cardinalityRegion: CardinalityRegion | undefined,
 	cardinalityAccess:
 		| {
@@ -2152,6 +2232,18 @@ function emitInstruction(
 				const guards = finite.numberGuards.map((register) =>
 					reps[register] === "number" ? "true" : `mal_ops_is_number(${boxed(register)})`,
 				);
+				if (finiteRecordRegion !== undefined) {
+					return [
+						`static const i32 ${table}[] = { ${finite.keyStringIndices.join(", ")} };`,
+						`${finiteRecordRegion.fastName} = (${guards.length === 0 ? "true" : guards.join(" && ")}) && mal_vm_prepare_object_finite_construction(vm, ${table}, ${finite.keyStringIndices.length}, &__property_ic[${finite.icIndex}]);`,
+						`if (${finiteRecordRegion.fastName}) {`,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						`} else {`,
+						`  r${instruction.dst} = mal_vm_op_create_object(vm);`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
 				return [
 					`static const i32 ${table}[] = { ${finite.keyStringIndices.join(", ")} };`,
 					`r${instruction.dst} = mal_vm_create_object_finite_construction(vm, ${table}, ${finite.keyStringIndices.length}, ${guards.length === 0 ? "true" : guards.join(" && ")}, &__property_ic[${finite.icIndex}]);`,
@@ -2362,6 +2454,9 @@ function emitInstruction(
 					undefined,
 					undefined,
 					undefined,
+					undefined,
+					undefined,
+					undefined,
 					mathUnaryCall,
 					mathBinaryCall,
 					loopStaticPropertyFastPath,
@@ -2453,6 +2548,9 @@ function emitInstruction(
 					undefined,
 					undefined,
 					undefined,
+					undefined,
+					undefined,
+					undefined,
 					mathUnaryCall,
 					mathBinaryCall,
 					loopStaticPropertyFastPath,
@@ -2484,6 +2582,9 @@ function emitInstruction(
 						gcUnlink,
 						thisSlot,
 						coro,
+						undefined,
+						undefined,
+						undefined,
 						undefined,
 						undefined,
 						undefined,
@@ -2531,6 +2632,9 @@ function emitInstruction(
 					undefined,
 					undefined,
 					undefined,
+					undefined,
+					undefined,
+					undefined,
 					mathUnaryCall,
 					mathBinaryCall,
 					loopStaticPropertyFastPath,
@@ -2560,6 +2664,24 @@ function emitInstruction(
 				const ordinal = `__finite_property_ordinal_${ip}`;
 				const object = `__finite_property_object_${ip}`;
 				const value = `__v_${ip}`;
+				if (finiteRecordAccess !== undefined) {
+					return [
+						`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
+						`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
+						`if (${finiteRecordAccess.fastName} && ${ordinal} >= 0 && ${ordinal} < ${finiteRecordAccess.slotCount}) {`,
+						`  r${instruction.dst} = __gc_slots[${finiteRecordAccess.slotsOffset} + ${ordinal}];`,
+						`} else {`,
+						`  MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
+						`  MalValue ${value};`,
+						`  if (mal_vm_finite_property_try_load(${object}, ${ordinal}, &__property_ic[${instruction.icIndex}], &${value})) {`,
+						`    r${instruction.dst} = ${value};`,
+						`  } else {`,
+						`    r${instruction.dst} = mal_vm_finite_property_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${ordinal}, ${table}, ${finite.stringIndices.length}, &__property_ic[${instruction.icIndex}]);`,
+						`    ${throwCheck}`,
+						`  }`,
+						`}`,
+					];
+				}
 				return [
 					`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
 					`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
@@ -2688,6 +2810,9 @@ function emitInstruction(
 						undefined,
 						undefined,
 						undefined,
+						undefined,
+						undefined,
+						undefined,
 						mathUnaryCall,
 						mathBinaryCall,
 						loopStaticPropertyFastPath,
@@ -2718,6 +2843,21 @@ function emitInstruction(
 						: `mal_ops_number_as_f64(${boxed(finite.ordinal)})`;
 				const ordinal = `__finite_store_ordinal_${ip}`;
 				const object = `__finite_store_object_${ip}`;
+				if (finiteRecordStore !== undefined) {
+					return [
+						`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
+						`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
+						`if (${finiteRecordStore.fastName}) {`,
+						`  __gc_slots[${finiteRecordStore.slotsOffset} + ${ordinal}] = ${boxed(instruction.value)};`,
+						`} else {`,
+						`  MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
+						`  if (!mal_vm_finite_property_try_store(${object}, ${ordinal}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])) {`,
+						`    mal_vm_finite_property_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${ordinal}, ${table}, ${finite.stringIndices.length}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+						`    ${throwCheck}`,
+						`  }`,
+						`}`,
+					];
+				}
 				return [
 					`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
 					`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,

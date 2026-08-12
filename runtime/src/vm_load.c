@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 25u        // virtual-record indexed field metadata
+#define WIRE_VERSION 26u        // virtual finite-record metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1619,6 +1619,12 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 for (u32 index = 0; r.ok && index < string_index_count; index++) {
                     (void) rd_i32(&r);
                 }
+                u8 has_finite_record_access = rd_u8(&r);
+                if (has_finite_record_access > 1) {
+                    r.ok = false;
+                } else if (has_finite_record_access != 0) {
+                    (void) rd_i32(&r); // virtual record allocation instruction
+                }
             } else if (tag == 7) { // CREATE_OBJECT finite construction region
                 (void) rd_i32(&r); // shared property IC index
                 u32 guard_count = rd_count(&r, sizeof(i32));
@@ -1634,6 +1640,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
                 for (u32 index = 0; r.ok && index < string_index_count; index++) {
                     (void) rd_i32(&r);
+                }
+                if (rd_u8(&r) > 1) { // virtual-record flag
+                    r.ok = false;
                 }
             } else if (tag == 8) { // CREATE_ARRAY cardinality region
                 i32 maximum_length = rd_i32(&r);

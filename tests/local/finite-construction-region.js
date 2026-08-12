@@ -8,6 +8,18 @@ function build(seed) {
 	return result;
 }
 
+function consume(seed) {
+	const result = {};
+	for (let i = 0; i < 8; i++) {
+		result["p" + i] = (seed * (i + 1)) % 251;
+	}
+	let total = 0;
+	for (let i = 0; i < 8; i++) {
+		total += result["p" + i];
+	}
+	return total;
+}
+
 const warm = build(7);
 checks.push(
 	Object.keys(warm).join(",") === "p0,p1,p2,p3,p4,p5,p6,p7" &&
@@ -52,6 +64,19 @@ checks.push(
 		refilled.p0 === 5 &&
 		Object.keys(refilled).join(",") === "p0,p1,p2,p3,p4,p5,p6,p7",
 );
+
+checks.push(consume(3) === 108);
+
+let consumedSetterCalls = 0;
+Object.defineProperty(Object.prototype, "p0", {
+	set(value) {
+		consumedSetterCalls += value;
+	},
+	configurable: true,
+});
+checks.push(Number.isNaN(consume(2)) && consumedSetterCalls === 2);
+delete Object.prototype.p0;
+checks.push(consume(4) === 144);
 
 let mutationSetterCalls = 0;
 const mutatingSeed = {

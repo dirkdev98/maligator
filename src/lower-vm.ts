@@ -451,6 +451,7 @@ export type VmInstruction =
 				icIndex: number;
 				numberGuards: Array<number>;
 				keyStringIndices: Array<number>;
+				virtualRecord?: true;
 			};
 	  }
 	| {
@@ -659,6 +660,9 @@ export type VmInstruction =
 				minimum: number;
 				ordinal: number;
 				stringIndices: Array<number>;
+			};
+			nativeFiniteRecordAccess?: {
+				allocationInstructionIndex: number;
 			};
 			nativeCardinalityAccess?: {
 				role: "push" | "length" | "element" | "field";
@@ -1220,6 +1224,10 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		role: "push" | "length" | "element" | "field";
 		fieldSlot?: number;
 	}> = [];
+	const pendingFiniteRecordAccesses: Array<{
+		instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
+		allocation: Extract<IRInstruction, { type: "createObject" }>;
+	}> = [];
 	const pendingCardinalityPushes: Array<{
 		instruction: Extract<VmInstruction, { opcode: "CALL" }>;
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
@@ -1287,6 +1295,16 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 					allocation: instruction.nativeCardinalityAccess.allocation,
 					role: instruction.nativeCardinalityAccess.role,
 					fieldSlot: instruction.nativeCardinalityAccess.fieldSlot,
+				});
+			}
+			if (
+				instruction.type === "loadProperty" &&
+				instruction.nativeFiniteRecordAccess !== undefined &&
+				vmInstruction.opcode === "LOAD_PROPERTY"
+			) {
+				pendingFiniteRecordAccesses.push({
+					instruction: vmInstruction,
+					allocation: instruction.nativeFiniteRecordAccess.allocation,
 				});
 			}
 			if (
@@ -1405,6 +1423,15 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			allocationInstructionIndex,
 			fieldSlot: pending.fieldSlot,
 		};
+	}
+	for (const pending of pendingFiniteRecordAccesses) {
+		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
+			pending.allocation,
+		);
+		if (allocationInstructionIndex === undefined) {
+			throw new Error("Unknown virtual finite-record allocation");
+		}
+		pending.instruction.nativeFiniteRecordAccess = { allocationInstructionIndex };
 	}
 	for (const pending of pendingCardinalityPushes) {
 		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
@@ -1577,6 +1604,9 @@ function lowerInstructionToVmInstruction(
 								keyStringIndices: [
 									...instruction.nativeFiniteConstruction.keyStringIndices,
 								],
+								...(instruction.nativeFiniteConstruction.virtualRecord === true
+									? { virtualRecord: true as const }
+									: {}),
 							},
 						}),
 			};

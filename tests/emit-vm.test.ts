@@ -597,6 +597,16 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_finite_property_store(vm");
 	});
 
+	it("keeps an unobserved finite record in rooted compiler slots", () => {
+		const output = emit(
+			`"use strict"; function consume(seed) { const out = {}; for (let i = 0; i < 8; i++) out["p" + i] = (seed * (i + 1)) % 251; let total = 0; for (let i = 0; i < 8; i++) total += out["p" + i]; return total; } globalThis.consume = consume;`,
+		);
+		expect(output).toContain("mal_vm_prepare_object_finite_construction");
+		expect(output).toMatch(/__finite_record_\d+_fast/);
+		expect(output).toMatch(/__gc_slots\[\d+ \+ __finite_property_ordinal_\d+\]/);
+		expect(output).not.toContain("mal_vm_create_object_finite_construction");
+	});
+
 	it("uses compound assignments for in-place numeric updates", () => {
 		const output = emit(
 			`"use strict"; function count(limit) { let value = 0; while (value < limit) value++; return value; } globalThis.count = count;`,

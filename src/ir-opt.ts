@@ -1065,6 +1065,40 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 				source: store,
 				keyStringIndices: [...finite.stringIndices],
 			};
+
+			// Stronger structural proof: if every residual observer is a finite-key
+			// load over this exact selector universe, the native backend never needs
+			// the object's identity. It can preserve the ordinary construction path as
+			// a fallback while keeping successful values in compiler-owned slots.
+			const virtualAccesses = new Set<Extract<IRInstruction, { type: "loadProperty" }>>();
+			let virtualRecord = true;
+			for (const alias of aliases) {
+				for (const use of index.uses.get(alias) ?? []) {
+					if (use.instruction.type === "move" && use.position === 1) continue;
+					if (use.instruction === store && use.position === 0) continue;
+					const access = use.instruction;
+					if (
+						use.position !== 1 ||
+						access.type !== "loadProperty" ||
+						access.nativeFiniteKey === undefined ||
+						access.nativeFiniteKey.stringIndices.length !== finite.stringIndices.length ||
+						access.nativeFiniteKey.stringIndices.some(
+							(stringIndex, ordinal) => stringIndex !== finite.stringIndices[ordinal],
+						)
+					) {
+						virtualRecord = false;
+						break;
+					}
+					virtualAccesses.add(access);
+				}
+				if (!virtualRecord) break;
+			}
+			if (virtualRecord && virtualAccesses.size > 0) {
+				allocation.nativeFiniteConstruction.virtualRecord = true;
+				for (const access of virtualAccesses) {
+					access.nativeFiniteRecordAccess = { allocation };
+				}
+			}
 		}
 	}
 }
