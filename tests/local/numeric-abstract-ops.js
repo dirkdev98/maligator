@@ -16,6 +16,19 @@ function throws(errorType, fn) {
 check("integer NaN", (12.4).toFixed(NaN) === "12");
 check("integer negative zero", "x".repeat(-0) === "");
 check("integer truncates toward zero", "x".repeat(2.9) === "xx");
+check(
+	"string to number fast integer and fallback grammar",
+	Number("17") === 17 &&
+		Number("+17") === 17 &&
+		Number("-23") === -23 &&
+		Object.is(Number("-0"), -0) &&
+		Number(" 42 ") === 42 &&
+		Number("9007199254740991") === 9007199254740991 &&
+		Number("9007199254740993") === 9007199254740992 &&
+		Number("1.25e2") === 125 &&
+		Number("0".repeat(70)) === 0 &&
+		Number.isNaN(Number("12x")),
+);
 check("repeat negative fraction becomes zero", "x".repeat(-0.5) === "");
 check(
 	"integer infinity range",

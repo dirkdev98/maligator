@@ -100,11 +100,18 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
         unit_end--;
     }
     usize token_length = unit_end - unit_start;
-    byte *bytes = malloc(token_length + 1);
+    // Numeric fields in protocols and structured text are overwhelmingly tiny.
+    // Keep their ASCII staging storage in the native frame; only unusually long
+    // tokens need a transient heap buffer.
+    byte stack_bytes[64];
+    byte *bytes = token_length < sizeof(stack_bytes)
+        ? stack_bytes
+        : malloc(token_length + 1);
+    bool heap_bytes = bytes != stack_bytes;
 
     for (usize i = 0; i < token_length; i++) {
         if (code_units[unit_start + i] > 0x7F) {
-            free(bytes);
+            if (heap_bytes) free(bytes);
             return mal_value_new_nan();
         }
         bytes[i] = (byte) code_units[unit_start + i];
@@ -116,17 +123,17 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
 
     // Empty (or all-whitespace) string is +0.
     if (token_length == 0) {
-        free(bytes);
+        if (heap_bytes) free(bytes);
         return mal_value_from_i32(0);
     }
 
     // Infinity literals (signed); the bare tokens only — no "inf"/"infinity".
     if (strcmp(start, "Infinity") == 0 || strcmp(start, "+Infinity") == 0) {
-        free(bytes);
+        if (heap_bytes) free(bytes);
         return mal_ops_number_value((f64) INFINITY);
     }
     if (strcmp(start, "-Infinity") == 0) {
-        free(bytes);
+        if (heap_bytes) free(bytes);
         return mal_ops_number_value((f64) -INFINITY);
     }
 
@@ -145,12 +152,43 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
             for (char *p = start + 2; p < end; p++) {
                 int digit = mal_ops_string_number_digit(*p);
                 if (digit < 0 || digit >= base) {
-                    free(bytes);
+                    if (heap_bytes) free(bytes);
                     return mal_value_new_nan();
                 }
                 number = number * (f64) base + (f64) digit;
             }
-            free(bytes);
+            if (heap_bytes) free(bytes);
+            return mal_ops_number_value(number);
+        }
+    }
+
+    // The common structured-data case is a short signed decimal integer. Parse
+    // it directly while every decimal step is exact; larger magnitudes and all
+    // other grammar forms retain the correctly-rounded strtod path below.
+    char *digits = start;
+    bool negative = false;
+    if (digits < end && (*digits == '+' || *digits == '-')) {
+        negative = *digits == '-';
+        digits++;
+    }
+    if (digits < end) {
+        bool decimal_integer = true;
+        u64 magnitude = 0;
+        for (char *p = digits; p < end; p++) {
+            if (*p < '0' || *p > '9') {
+                decimal_integer = false;
+                break;
+            }
+            u32 digit = (u32) (*p - '0');
+            if (magnitude > ((u64) MAL_NUMBER_MAX_SAFE_INTEGER - digit) / 10u) {
+                decimal_integer = false;
+                break;
+            }
+            magnitude = magnitude * 10u + digit;
+        }
+        if (decimal_integer) {
+            if (heap_bytes) free(bytes);
+            f64 number = negative ? -(f64) magnitude : (f64) magnitude;
             return mal_ops_number_value(number);
         }
     }
@@ -160,7 +198,7 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
     for (char *p = start; p < end; p++) {
         char c = *p;
         if (!((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')) {
-            free(bytes);
+            if (heap_bytes) free(bytes);
             return mal_value_new_nan();
         }
     }
@@ -168,11 +206,11 @@ MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
     char *parsed_end = start;
     f64 number = strtod(start, &parsed_end);
     if (parsed_end != end) {
-        free(bytes);
+        if (heap_bytes) free(bytes);
         return mal_value_new_nan();
     }
 
-    free(bytes);
+    if (heap_bytes) free(bytes);
     return mal_ops_number_value(number);
 }
 
