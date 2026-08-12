@@ -37,6 +37,8 @@ typedef struct MalReadableStreamReadRequest {
     MalValue view;
     usize bytes_filled;
     usize buffer_byte_length;
+    usize minimum_fill;
+    bool data_view;
 } MalReadableStreamReadRequest;
 
 typedef struct MalWritableStreamWriteRequest {

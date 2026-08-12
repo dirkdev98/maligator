@@ -569,6 +569,71 @@ async function run() {
 	);
 	await enqueueHandoffReader2.cancel();
 
+	let minimumPullCount = 0;
+	const minimumStream = new ReadableStream({
+		type: "bytes",
+		pull(controller) {
+			const request = controller.byobRequest;
+			if (minimumPullCount === 0) {
+				request.view[0] = 1;
+				request.view[1] = 2;
+				request.respond(2);
+			} else {
+				request.view[0] = 3;
+				request.respond(1);
+			}
+			minimumPullCount++;
+		},
+	});
+	const minimumReader = minimumStream.getReader({ mode: "byob" });
+	const minimumResult = await minimumReader.read(new Uint8Array(3), { min: 3 });
+	check(
+		"BYOB read minimum accumulates responses before fulfillment",
+		minimumPullCount === 2 &&
+			minimumResult.value.byteLength === 3 &&
+			minimumResult.value[0] === 1 &&
+			minimumResult.value[2] === 3,
+	);
+	const invalidMinimumRejected = await minimumReader
+		.read(new Uint8Array(1), { min: 0 })
+		.then(
+			() => false,
+			(error) => error instanceof TypeError,
+		);
+	check("BYOB read rejects an invalid minimum", invalidMinimumRejected);
+	const fractionalMinimumRejected = await minimumReader
+		.read(new Uint8Array(1), { min: 0.5 })
+		.then(
+			() => false,
+			(error) => error instanceof TypeError,
+		);
+	check("BYOB read validates the converted minimum", fractionalMinimumRejected);
+	await minimumReader.cancel();
+
+	let dataViewPullCount = 0;
+	const dataViewStream = new ReadableStream({
+		type: "bytes",
+		pull(controller) {
+			const request = controller.byobRequest;
+			request.view[0] = dataViewPullCount + 4;
+			request.respond(1);
+			dataViewPullCount++;
+		},
+	});
+	const dataViewReader = dataViewStream.getReader({ mode: "byob" });
+	const dataViewResult = await dataViewReader.read(new DataView(new ArrayBuffer(2)), {
+		min: 2,
+	});
+	check(
+		"BYOB DataView reads preserve the result view type",
+		dataViewPullCount === 2 &&
+			dataViewResult.value instanceof DataView &&
+			dataViewResult.value.byteLength === 2 &&
+			dataViewResult.value.getUint8(0) === 4 &&
+			dataViewResult.value.getUint8(1) === 5,
+	);
+	await dataViewReader.cancel();
+
 	const multiQueueStream = new ReadableStream({
 		type: "bytes",
 		start(controller) {

@@ -24,12 +24,33 @@ typedef struct MalDataViewObject {
     bool length_tracking;
 } MalDataViewObject;
 
+static u32 mal_data_view_current_length(const MalDataViewObject *view);
+static bool mal_data_view_is_out_of_bounds(const MalDataViewObject *view);
+
 MalArrayBufferObject *mal_data_view_object_buffer(const MalDataViewObject *view) {
     return view->buffer;
 }
 
-static u32 mal_data_view_current_length(const MalDataViewObject *view);
-static bool mal_data_view_is_out_of_bounds(const MalDataViewObject *view);
+u32 mal_data_view_object_byte_offset(const MalDataViewObject *view) {
+    return view->byte_offset;
+}
+
+u32 mal_data_view_object_byte_length(const MalDataViewObject *view) {
+    return mal_data_view_current_length(view);
+}
+
+MalDataViewObject *mal_data_view_object_new(
+    MalHeap *heap, MalObject *prototype, MalArrayBufferObject *buffer,
+    u32 byte_offset, u32 byte_length, bool length_tracking) {
+    MalDataViewObject *view = mal_heap_alloc(
+        heap, sizeof(MalDataViewObject), MAL_HEAP_DATA_VIEW_OBJECT);
+    mal_object_init(heap, &view->object, MAL_HEAP_DATA_VIEW_OBJECT, prototype);
+    view->buffer = buffer;
+    view->byte_offset = byte_offset;
+    view->byte_length = byte_length;
+    view->length_tracking = length_tracking;
+    return view;
+}
 
 MalBufferSourceSpanStatus mal_buffer_source_span(
     MalValue value, MalBufferSourceSpan *out) {
@@ -236,13 +257,9 @@ static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value
         byte_length = (u32) requested_length;
     }
 
-    MalDataViewObject *view = mal_heap_alloc(&vm->heap, sizeof(MalDataViewObject), MAL_HEAP_DATA_VIEW_OBJECT);
-    mal_object_init(&vm->heap, &view->object, MAL_HEAP_DATA_VIEW_OBJECT, prototype);
-    view->buffer = buffer;
-    view->byte_offset = (u32) byte_offset;
-    view->byte_length = byte_length;
-    view->length_tracking = length_tracking;
-    return mal_value_from_data_view_object(view);
+    return mal_value_from_data_view_object(mal_data_view_object_new(
+        &vm->heap, prototype, buffer, (u32) byte_offset, byte_length,
+        length_tracking));
 }
 
 static u16 mal_data_view_load_u16(const byte *at, bool little_endian) {

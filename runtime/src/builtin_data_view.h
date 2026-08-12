@@ -14,6 +14,11 @@ void mal_builtin_data_view_install(MalVm *vm);
  * the collector can trace the view -> buffer edge without seeing the struct.
  */
 MalArrayBufferObject *mal_data_view_object_buffer(const MalDataViewObject *view);
+u32 mal_data_view_object_byte_offset(const MalDataViewObject *view);
+u32 mal_data_view_object_byte_length(const MalDataViewObject *view);
+MalDataViewObject *mal_data_view_object_new(
+    MalHeap *heap, MalObject *prototype, MalArrayBufferObject *buffer,
+    u32 byte_offset, u32 byte_length, bool length_tracking);
 
 typedef enum MalBufferSourceSpanStatus {
     MAL_BUFFER_SOURCE_SPAN_OK,
