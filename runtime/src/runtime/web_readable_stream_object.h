@@ -36,6 +36,7 @@ typedef struct MalReadableStreamReadRequest {
     MalValue promise;
     MalValue view;
     usize bytes_filled;
+    usize buffer_byte_length;
 } MalReadableStreamReadRequest;
 
 typedef struct MalWritableStreamWriteRequest {
@@ -67,6 +68,7 @@ typedef struct MalReadableStreamObject {
             MalValue byob_request;
             MalValue orphaned_pull_into_view;
             usize orphaned_bytes_filled;
+            usize orphaned_buffer_byte_length;
             MalReadableStreamQueueEntry *queue_head;
             MalReadableStreamQueueEntry *queue_tail;
             f64 queue_total_size;

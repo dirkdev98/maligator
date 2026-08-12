@@ -682,6 +682,14 @@
 			]
 		},
 		{
+			"path": "streams/readable-byte-streams/bad-buffers-and-views.any.js",
+			"sha256": "ae47480e012db42e6e0f8ee801005d624dd2888231fb5da25c00f5bd068ea3a5",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
 			"path": "streams/readable-byte-streams/construct-byob-request.any.js",
 			"sha256": "c423f1c2afa761e47d953220c82a0028b2659d8040d4cdcbd0248c4f8b67d701",
 			"target": "server-main",
@@ -696,6 +704,14 @@
 					"sha256": "e4ac017aecf1eb2f83b0f22ece95998fec7d42a6de1d94fa1497351369bec04b"
 				}
 			]
+		},
+		{
+			"path": "streams/readable-byte-streams/enqueue-with-detached-buffer.any.js",
+			"sha256": "b6e0b0fd3dbaf40aa373b00d5d69ed032022b0ef4944e2fe08afd31df80cf9b4",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
 		},
 		{
 			"path": "streams/readable-byte-streams/general.any.js",
@@ -717,6 +733,14 @@
 					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
 				}
 			]
+		},
+		{
+			"path": "streams/readable-byte-streams/respond-after-enqueue.any.js",
+			"sha256": "80b4f94916b21e6b6de5032ad67038ce24d36ceea02d3960128eb8cac9abc0b5",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
 		},
 		{
 			"path": "streams/readable-byte-streams/templated.any.js",

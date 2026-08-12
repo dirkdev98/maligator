@@ -338,6 +338,7 @@ MalValue mal_readable_stream_from_bytes(
     controller->as.controller.byob_request = mal_value_new_undefined();
     controller->as.controller.orphaned_pull_into_view = mal_value_new_undefined();
     controller->as.controller.orphaned_bytes_filled = 0;
+    controller->as.controller.orphaned_buffer_byte_length = 0;
     controller->as.controller.queue_head = nullptr;
     controller->as.controller.queue_tail = nullptr;
     controller->as.controller.queue_total_size = length == 0 ? 0 : 1;
@@ -540,6 +541,11 @@ static bool rs_copy_byte_chunk(MalVm *vm, MalValue chunk, MalValue *chunk_out) {
         source.length > UINT32_MAX) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "ReadableByteStreamController.enqueue requires an attached ArrayBufferView");
+        return false;
+    }
+    if (source.length == 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableByteStreamController.enqueue requires a non-empty ArrayBufferView");
         return false;
     }
     if (mal_value_is_typed_array_object(chunk)) {
@@ -891,6 +897,7 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
     controller->as.controller.byob_request = mal_value_new_undefined();
     controller->as.controller.orphaned_pull_into_view = mal_value_new_undefined();
     controller->as.controller.orphaned_bytes_filled = 0;
+    controller->as.controller.orphaned_buffer_byte_length = 0;
     controller->as.controller.queue_head = nullptr;
     controller->as.controller.queue_tail = nullptr;
     controller->as.controller.queue_total_size = 0;
@@ -1607,6 +1614,7 @@ static MalValue rs_byob_request_respond(MalVm *vm, MalValue self,
         controller->as.controller.orphaned_pull_into_view =
             mal_value_new_undefined();
         controller->as.controller.orphaned_bytes_filled = 0;
+        controller->as.controller.orphaned_buffer_byte_length = 0;
         MalValue count = mal_value_from_f64_convert_nan((f64) copied);
         (void) rs_byob_request_respond(vm, self, &count, 1,
             mal_value_new_undefined(), mal_value_new_undefined());
@@ -1709,10 +1717,14 @@ static MalValue rs_byob_request_respond_with_new_view(MalVm *vm, MalValue self,
         return mal_value_new_undefined();
     }
     MalValue view = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_typed_array_object(view)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStreamBYOBRequest.respondWithNewView requires a TypedArray");
+        return mal_value_new_undefined();
+    }
     MalBufferSourceSpan view_span;
-    if (!mal_value_is_typed_array_object(view) ||
-        mal_buffer_source_span(view, &view_span) != MAL_BUFFER_SOURCE_SPAN_OK) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+    if (mal_buffer_source_span(view, &view_span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "ReadableStreamBYOBRequest.respondWithNewView requires an attached TypedArray");
         return mal_value_new_undefined();
     }
@@ -1732,6 +1744,20 @@ static MalValue rs_byob_request_respond_with_new_view(MalVm *vm, MalValue self,
             "ReadableStreamBYOBRequest has no pending read");
         return mal_value_new_undefined();
     }
+    MalReadableStreamObject *stream = mal_value_to_readable_stream_object(
+        controller->as.controller.stream);
+    if (stream->as.stream.state == MAL_READABLE_STREAM_READABLE &&
+        view_span.length == 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStreamBYOBRequest replacement view must be non-empty while readable");
+        return mal_value_new_undefined();
+    }
+    if (stream->as.stream.state == MAL_READABLE_STREAM_CLOSED &&
+        view_span.length != 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStreamBYOBRequest replacement view must be empty after close");
+        return mal_value_new_undefined();
+    }
     MalReadableStreamReadRequest *read_request = reader->as.reader.requests_head;
     bool orphaned = !mal_value_is_undefined(
         controller->as.controller.orphaned_pull_into_view);
@@ -1746,9 +1772,18 @@ static MalValue rs_byob_request_respond_with_new_view(MalVm *vm, MalValue self,
     usize bytes_filled = orphaned
         ? controller->as.controller.orphaned_bytes_filled
         : read_request->bytes_filled;
+    usize buffer_byte_length = orphaned
+        ? controller->as.controller.orphaned_buffer_byte_length
+        : read_request->buffer_byte_length;
     u32 remaining_offset = original->byte_offset + (u32) bytes_filled;
     usize remaining_length = original_byte_length - bytes_filled;
     bool replaces_buffer = replacement->buffer != original->buffer;
+    if (mal_array_buffer_object_byte_length(replacement->buffer) !=
+        buffer_byte_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "ReadableStreamBYOBRequest replacement buffer length must match");
+        return mal_value_new_undefined();
+    }
     if (replacement->byte_offset != remaining_offset ||
         view_span.length > remaining_length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
@@ -1868,6 +1903,7 @@ static MalValue rs_controller_enqueue_kind(MalVm *vm, MalValue self,
         controller->as.controller.orphaned_pull_into_view =
             mal_value_new_undefined();
         controller->as.controller.orphaned_bytes_filled = 0;
+        controller->as.controller.orphaned_buffer_byte_length = 0;
         rs_invalidate_byob_request(controller);
         reader = rs_reader_for(stream);
     }
@@ -2181,6 +2217,7 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
     MalValue view = mal_value_new_undefined();
     MalTypedArrayObject *destination = nullptr;
     MalBufferSourceSpan destination_span;
+    usize buffer_byte_length = 0;
     if (byob) {
         view = argc >= 1 ? args[0] : mal_value_new_undefined();
         if (!rs_byob_view_is_valid(vm, view, &destination, &destination_span)) {
@@ -2188,6 +2225,8 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
             vm->completion = rs_normal();
             return rs_rejected_promise(vm, error);
         }
+        buffer_byte_length =
+            mal_array_buffer_object_byte_length(destination->buffer);
         view = rs_transfer_typed_array_view(vm, view);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             MalValue error = vm->completion.value;
@@ -2347,6 +2386,7 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_value_new_undefined();
         }
+        buffer_byte_length = controller->as.controller.auto_allocate_chunk_size;
     }
     MalValue request_roots[2] = {view, mal_value_new_undefined()};
     MalRootSpan request_span;
@@ -2357,6 +2397,7 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
     request->promise = request_roots[1];
     request->view = request_roots[0];
     request->bytes_filled = initial_bytes_filled;
+    request->buffer_byte_length = buffer_byte_length;
     if (reader->as.reader.requests_tail == nullptr) {
         reader->as.reader.requests_head = request;
     } else {
@@ -2461,6 +2502,8 @@ static MalValue rs_reader_release_lock(MalVm *vm, MalValue self,
             controller->as.controller.orphaned_pull_into_view = request->view;
             controller->as.controller.orphaned_bytes_filled =
                 request->bytes_filled;
+            controller->as.controller.orphaned_buffer_byte_length =
+                request->buffer_byte_length;
             mal_gc_card(&controller->object.header, request->view);
         }
         roots[2] = request->promise;
@@ -3590,13 +3633,14 @@ static MalValue rs_tee_cancel(MalVm *vm, MalValue self, const MalValue *args,
 }
 
 static MalValue rs_tee_make_branch(
-    MalVm *vm, MalValue state, i32 branch) {
-    MalValue roots[5] = {
+    MalVm *vm, MalValue state, i32 branch, bool byte_stream) {
+    MalValue roots[6] = {
         state, mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
     };
     MalRootSpan span;
-    mal_gc_root(&span, roots, 5);
+    mal_gc_root(&span, roots, 6);
     roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalValue slots[2] = {state, mal_value_from_i32(branch)};
     roots[2] = mal_value_from_native_function_object(
@@ -3613,7 +3657,16 @@ static MalValue rs_tee_make_branch(
         (const byte *) "pull", roots[2], flags);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]),
         (const byte *) "cancel", roots[3], flags);
-    roots[4] = rs_constructor(vm, mal_value_new_undefined(), &roots[1], 1,
+    i32 constructor_argc = 1;
+    if (byte_stream) {
+        roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[5]),
+            (const byte *) "highWaterMark", mal_value_from_i32(0), flags);
+        constructor_argc = 2;
+    }
+    MalValue constructor_args[2] = {roots[1], roots[5]};
+    roots[4] = rs_constructor(vm, mal_value_new_undefined(), constructor_args,
+        constructor_argc,
         vm->intrinsics[MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR],
         mal_value_new_undefined());
     MalValue result = roots[4];
@@ -3660,9 +3713,9 @@ bool mal_readable_stream_tee(
         mal_native_function_object_new_with_slots(&vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             nullptr, rs_tee_state_callback, slots, RS_TEE_SLOT_COUNT));
-    roots[3] = rs_tee_make_branch(vm, roots[2], 1);
+    roots[3] = rs_tee_make_branch(vm, roots[2], 1, byte_stream);
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
-    roots[4] = rs_tee_make_branch(vm, roots[2], 2);
+    roots[4] = rs_tee_make_branch(vm, roots[2], 2, byte_stream);
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
     roots[5] = rs_callback(vm, rs_tee_reader_closed_rejected, roots[2]);
     mal_promise_perform_then(vm, reader->as.reader.closed_promise,
