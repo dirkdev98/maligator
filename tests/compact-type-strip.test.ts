@@ -121,6 +121,88 @@ console.log(parseWidget(false));`;
 		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
 	});
 
+	test("preserves contextual keywords used as runtime names", () => {
+		const source = `const values = {
+	const: 1,
+	let: 2,
+	var: 3,
+	as: 4,
+	satisfies: 5,
+	declare: 6,
+	namespace: 7,
+	module: 8,
+	import: 9,
+	export: 10,
+	function(value: number): number { return value; },
+	generic<T>(value: T): T { return value; },
+};
+class Names {
+	public(value: number): number { return value + values.as; }
+	private() { return values.satisfies; }
+	protected() { return values.const; }
+	readonly() { return values.let; }
+	abstract() { return values.var; }
+	override() { return values.declare; }
+	accessor() { return values.namespace; }
+	declare() { return values.module; }
+	function(value: number): number { return value; }
+	import: number = values.import;
+	export = values.export;
+}`;
+
+		expect(stripCompactTypes(source, "contextual-names.ts")).toBe(
+			stripTypesWithTypeScript(source, "contextual-names.ts"),
+		);
+	});
+
+	test("stops assertions before runtime operators", () => {
+		const source = `const logical = input as boolean && fallback;
+const union = input as string | undefined || fallback;
+const intersection = input as Left & Right && fallback;
+const comparison = input as number < limit;
+const inequality = input as number !== limit;
+const membership = input as PropertyKey in object;
+const instance = input as object instanceof Constructor;
+const negative = input as -1;
+const numeric = input as 1;
+const emptyObject = input as {};
+const emptyTuple = input as [];
+const callable = input as (() => void) && fallback;
+const bareCallable = input as () => void;
+const constructable = input as new () => object;
+const conditional = input as T extends U ? X : Y;
+const nestedConditional = input as T extends U ? X extends Y ? A : B : C;
+const conditionalRuntime = input as T extends U ? X : Y && fallback;
+const voidDivision = input as void / divisor;
+const genericDivision = input as Array<string> / divisor;
+const genericMembership = input as Array<string> in object;
+const generic = input as Array<string> && fallback;
+const greater = input as number >= limit;
+const less = input as number <= limit;
+const qualified = input as Namespace.as;
+const unionContextual = input as string | as;
+const chained = input as unknown as string;
+const checked = input satisfies boolean && fallback;
+const exported = input as import("package").Model as object;
+const template = input as \`literal\`;`;
+		const stripped = stripCompactTypes(source, "assertion-operators.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "assertion-operators.ts"));
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
+	test("allows an object method named constructor to use typed parameters", () => {
+		const source = `const factory = {
+	constructor(public: string) {
+		return public;
+	},
+};`;
+
+		expect(stripCompactTypes(source, "object-constructor.ts")).toBe(
+			stripTypesWithTypeScript(source, "object-constructor.ts"),
+		);
+	});
+
 	test("does not pair comparisons with later nested arrow tokens", () => {
 		const source = `interface Projection { readonly value: number }
 interface Service { readonly create: () => Projection }

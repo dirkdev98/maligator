@@ -35,6 +35,45 @@ interface Word {
 	end: number;
 }
 
+const expressionPrefixWords = new Set([
+	"await",
+	"case",
+	"class",
+	"const",
+	"delete",
+	"do",
+	"else",
+	"export",
+	"function",
+	"import",
+	"in",
+	"instanceof",
+	"let",
+	"new",
+	"return",
+	"throw",
+	"typeof",
+	"var",
+	"void",
+	"yield",
+]);
+
+const nonGenericTypeWords = new Set([
+	"any",
+	"bigint",
+	"boolean",
+	"never",
+	"null",
+	"number",
+	"object",
+	"string",
+	"symbol",
+	"this",
+	"undefined",
+	"unknown",
+	"void",
+]);
+
 function fail(filePath: string, offset: number, syntax: string): never {
 	throw new SyntaxError(
 		`Compact TypeScript stripper does not support ${syntax} in ${filePath} at offset ${offset}`,
@@ -128,9 +167,16 @@ function lexicalCodeMask(source: string, filePath: string): Array<boolean> {
 			return false;
 		const previous = previousCodeIndex(source, code, position - 1);
 		if (previous < 0) return true;
+		if (source[previous] === ">" && closesAssertionGeneric(source, code, previous)) {
+			return false;
+		}
 		if ("([{=,:;!?&|+-*%^~<>".includes(source[previous]!)) return true;
 		const previousWord = wordAtPreviousCode(source, code, position);
-		return previousWord !== undefined && regexPrefixWords.has(previousWord.text);
+		if (previousWord === undefined || !regexPrefixWords.has(previousWord.text)) {
+			return false;
+		}
+		const beforePrevious = wordAtPreviousCode(source, code, previousWord.start);
+		return beforePrevious?.text !== "as" && beforePrevious?.text !== "satisfies";
 	};
 	const markRegex = (start: number): number => {
 		let i = start;
@@ -227,6 +273,37 @@ function lexicalCodeMask(source: string, filePath: string): Array<boolean> {
 	return code;
 }
 
+function closesAssertionGeneric(
+	source: string,
+	code: Array<boolean>,
+	close: number,
+): boolean {
+	let depth = 0;
+	let open = -1;
+	for (let i = close; i >= 0; i--) {
+		if (!code[i]) continue;
+		if (source[i] === ">" && source[i - 1] !== "=") depth++;
+		else if (source[i] === "<" && --depth === 0) {
+			open = i;
+			break;
+		}
+	}
+	if (open < 0) return false;
+	let cursor = open;
+	while (cursor > 0) {
+		const word = wordAtPreviousCode(source, code, cursor);
+		if (word) {
+			if (word.text === "as" || word.text === "satisfies") return true;
+			cursor = word.start;
+			continue;
+		}
+		const previous = previousCodeIndex(source, code, cursor - 1);
+		if (source[previous] !== ".") return false;
+		cursor = previous;
+	}
+	return false;
+}
+
 function scanWords(source: string, code: Array<boolean>): Array<Word> {
 	const words: Array<Word> = [];
 	let i = 0;
@@ -257,12 +334,18 @@ function rejectUnsupported(
 			}
 		}
 		if (word.text === "import") {
+			const immediate = nextCodeIndex(source, code, word.end);
+			if (!isIdentifierStart(source[immediate])) continue;
 			const binding = words[wi + 1];
 			if (binding && source[nextCodeIndex(source, code, binding.end)] === "=") {
 				fail(filePath, word.start, "import aliases");
 			}
 		}
-		if (word.text === "export" && source[nextCodeIndex(source, code, word.end)] === "=") {
+		if (
+			word.text === "export" &&
+			source[nextCodeIndex(source, code, word.end)] === "=" &&
+			!isClassBodyMember(source, code, words, word.start)
+		) {
 			fail(filePath, word.start, "export assignments");
 		}
 	}
@@ -286,6 +369,8 @@ function blankAmbientDeclarations(
 		const word = words[wi]!;
 		if (word.text !== "declare" || !isDeclarationPosition(source, code, word.start))
 			continue;
+		const immediate = nextCodeIndex(source, code, word.end);
+		if ("(:=;?!<,}".includes(source[immediate]!)) continue;
 		const declaration = words[wi + 1];
 		if (!declaration) fail(filePath, word.start, "malformed declare syntax");
 		if (
@@ -326,6 +411,13 @@ function blankTypeOnlyNamespaces(
 		if (
 			(word.text !== "namespace" && word.text !== "module") ||
 			!isDeclarationPosition(source, code, word.start)
+		)
+			continue;
+		const immediate = nextCodeIndex(source, code, word.end);
+		if (
+			!isIdentifierStart(source[immediate]) &&
+			source[immediate] !== '"' &&
+			source[immediate] !== "'"
 		)
 			continue;
 		const previous = wordAtPreviousCode(source, code, word.start);
@@ -396,6 +488,7 @@ function rejectParameterProperties(
 	const modifiers = new Set(["public", "private", "protected", "readonly", "override"]);
 	for (const word of words) {
 		if (word.text !== "constructor") continue;
+		if (!isClassBodyMember(source, code, words, word.start)) continue;
 		const open = nextCodeIndex(source, code, word.end);
 		if (source[open] !== "(") continue;
 		const close = matching(source, code, open, "(", ")", filePath);
@@ -409,6 +502,42 @@ function rejectParameterProperties(
 			}
 		}
 	}
+}
+
+function isClassBodyMember(
+	source: string,
+	code: Array<boolean>,
+	words: Array<Word>,
+	position: number,
+): boolean {
+	let depth = 0;
+	let bodyOpen = -1;
+	for (let i = previousCodeIndex(source, code, position - 1); i >= 0; i--) {
+		if (source[i] === "}") depth++;
+		else if (source[i] === "{") {
+			if (depth === 0) {
+				bodyOpen = i;
+				break;
+			}
+			depth--;
+		}
+	}
+	if (bodyOpen < 0) return false;
+	let classWord: Word | undefined;
+	for (let wi = words.length - 1; wi >= 0; wi--) {
+		const candidate = words[wi]!;
+		if (candidate.text === "class" && candidate.end <= bodyOpen) {
+			classWord = candidate;
+			break;
+		}
+	}
+	if (!classWord) return false;
+	for (let i = classWord.end; i < bodyOpen; i++) {
+		if (code[i] && (source[i] === ";" || source[i] === "{" || source[i] === "}")) {
+			return false;
+		}
+	}
+	return true;
 }
 
 function insideImportOrExportStatement(
@@ -425,10 +554,14 @@ function insideImportOrExportStatement(
 			break;
 		}
 	}
-	for (let i = wordIndex - 1; i >= 0 && words[i]!.start >= statementStart; i--) {
-		if (words[i]!.text === "import" || words[i]!.text === "export") return true;
-	}
-	return false;
+	const first = wordAt(source, code, nextCodeIndex(source, code, statementStart));
+	if (first?.text === "import") return true;
+	if (first?.text !== "export") return false;
+	const afterExport = nextCodeIndex(source, code, first.end);
+	const next = wordAt(source, code, afterExport);
+	return (
+		source[afterExport] === "{" || source[afterExport] === "*" || next?.text === "type"
+	);
 }
 
 function blankTopLevelTypeDeclarations(
@@ -729,6 +862,12 @@ function blankClassMembers(
 
 		if (isIdentifierStart(char)) {
 			const word = wordAt(source, code, i)!;
+			const afterWord = nextCodeIndex(source, code, word.end);
+			const usedAsMemberName = "(<:=;?!,".includes(source[afterWord]!);
+			if (usedAsMemberName) {
+				i = word.end - 1;
+				continue;
+			}
 			if (word.text === "accessor") {
 				fail(filePath, word.start, "auto-accessor class fields");
 			}
@@ -996,6 +1135,14 @@ function blankVariableAnnotations(
 ): void {
 	for (const word of words) {
 		if (word.text !== "const" && word.text !== "let" && word.text !== "var") continue;
+		const before = previousCodeIndex(source, code, word.start - 1);
+		const after = nextCodeIndex(source, code, word.end);
+		if (
+			source[before] === "." ||
+			source[before] === "#" ||
+			"(:=;?!<,}".includes(source[after]!)
+		)
+			continue;
 		// `const` is also the complete type in an `as const` assertion. The
 		// assertion pass erases it later; treating it as a declaration here can
 		// consume following object-literal properties as variable annotations.
@@ -1049,6 +1196,12 @@ function blankFunctionAnnotations(
 ): void {
 	for (const word of words) {
 		if (word.text !== "function") continue;
+		const immediate = nextCodeIndex(source, code, word.end);
+		if (":=;?!<,".includes(source[immediate]!)) continue;
+		if (source[immediate] === "(") {
+			const previous = previousCodeIndex(source, code, word.start - 1);
+			if ("{,;}".includes(source[previous]!)) continue;
+		}
 		const open = findCodeChar(source, code, "(", word.end);
 		if (open < 0) fail(filePath, word.start, "generic or malformed functions");
 		const close = matching(source, code, open, "(", ")", filePath);
@@ -1095,7 +1248,23 @@ function blankMethodAnnotations(
 	const controlWords = new Set(["if", "for", "while", "switch", "catch", "with"]);
 	for (let open = 0; open < source.length; open++) {
 		if (!code[open] || source[open] !== "(") continue;
-		const preceding = wordAtPreviousCode(source, code, open);
+		let preceding = wordAtPreviousCode(source, code, open);
+		const beforeParameters = previousCodeIndex(source, code, open - 1);
+		if (
+			preceding === undefined &&
+			source[beforeParameters] === ">" &&
+			source[beforeParameters - 1] !== "="
+		) {
+			const genericOpen = matchingBackward(
+				source,
+				code,
+				beforeParameters,
+				"<",
+				">",
+				filePath,
+			);
+			preceding = wordAtPreviousCode(source, code, genericOpen);
+		}
 		if (preceding === undefined || controlWords.has(preceding.text)) continue;
 		const close = matching(source, code, open, "(", ")", filePath);
 		const after = nextCodeIndex(source, code, close + 1);
@@ -1108,7 +1277,7 @@ function blankMethodAnnotations(
 		}
 		let returnTypeEnd = -1;
 		if (source[after] === ":") {
-			returnTypeEnd = findTypeEnd(source, code, after + 1, ["{"], filePath);
+			returnTypeEnd = findTypeEnd(source, code, after + 1, ["{", ";"], filePath);
 			if (source[returnTypeEnd] !== "{") continue;
 		} else if (source[after] !== "{") {
 			continue;
@@ -1129,16 +1298,55 @@ function blankTypeAssertions(
 	words: Array<Word>,
 	filePath: string,
 ): void {
+	let blankedUntil = 0;
 	for (let wi = 0; wi < words.length; wi++) {
 		const word = words[wi]!;
+		if (word.start < blankedUntil) continue;
 		if (
 			(word.text !== "as" && word.text !== "satisfies") ||
-			insideImportOrExportStatement(source, code, words, wi)
+			insideImportOrExportStatement(source, code, words, wi) ||
+			!isTypeAssertionOperator(source, code, word)
 		)
 			continue;
 		const end = findAssertionEnd(source, code, word.end, filePath);
 		blank(output, source, word.start, end);
+		blankedUntil = end;
 	}
+}
+
+function isTypeAssertionOperator(
+	source: string,
+	code: Array<boolean>,
+	word: Word,
+): boolean {
+	const previous = previousCodeIndex(source, code, word.start - 1);
+	const previousWord = wordAtPreviousCode(source, code, word.start);
+	if (previousWord && expressionPrefixWords.has(previousWord.text)) {
+		const beforePrevious = wordAtPreviousCode(source, code, previousWord.start);
+		if (beforePrevious?.text !== "as" && beforePrevious?.text !== "satisfies") {
+			return false;
+		}
+	}
+	let rawPrevious = word.start - 1;
+	while (rawPrevious >= 0 && /\s/u.test(source[rawPrevious]!)) rawPrevious--;
+	const canEndExpression =
+		isIdentifierPart(source[previous]) ||
+		")]}".includes(source[previous]!) ||
+		(source[previous] === ">" && closesAssertionGeneric(source, code, previous)) ||
+		"'\"`/!".includes(source[rawPrevious]!);
+	if (!canEndExpression || source[previous] === "." || source[previous] === "#") {
+		return false;
+	}
+
+	const next = nextCodeIndex(source, code, word.end);
+	let rawNext = word.end;
+	while (rawNext < source.length && /\s/u.test(source[rawNext]!)) rawNext++;
+	return (
+		isIdentifierStart(source[next]) ||
+		(source[next] !== undefined && source[next] >= "0" && source[next] <= "9") ||
+		"({[\"'-".includes(source[next]!) ||
+		source[rawNext] === "`"
+	);
 }
 
 function findAssertionEnd(
@@ -1151,11 +1359,67 @@ function findAssertionEnd(
 	let brackets = 0;
 	let braces = 0;
 	let angles = 0;
-	let sawType = false;
+	let pendingConditional = 0;
+	let conditionalDepth = 0;
+	let rawStart = start;
+	while (rawStart < source.length && /\s/u.test(source[rawStart]!)) rawStart++;
+	let sawType = source[rawStart] === "`";
 	for (let i = nextCodeIndex(source, code, start); i < source.length; i++) {
 		if (!code[i]) continue;
 		const char = source[i]!;
 		const topLevel = parentheses === 0 && brackets === 0 && braces === 0 && angles === 0;
+		if (topLevel && !sawType && char === "-") {
+			const next = nextCodeIndex(source, code, i + 1);
+			if (source[next] !== undefined && source[next] >= "0" && source[next] <= "9") {
+				sawType = true;
+				continue;
+			}
+		}
+		const previous = previousCodeIndex(source, code, i - 1);
+		const next = nextCodeIndex(source, code, i + 1);
+		if (
+			topLevel &&
+			sawType &&
+			((char === "=" && source[next] === ">") ||
+				(char === ">" && source[previous] === "="))
+		)
+			continue;
+		if (
+			topLevel &&
+			sawType &&
+			((char === "&" && source[i + 1] === "&") ||
+				(char === "|" && source[i + 1] === "|") ||
+				char === "!" ||
+				char === "^" ||
+				char === ">")
+		)
+			return i;
+		if (topLevel && sawType && isIdentifierStart(char)) {
+			const candidate = wordAt(source, code, i)!;
+			if (candidate.text === "extends") pendingConditional++;
+			const beforeCandidate = previousCodeIndex(source, code, i - 1);
+			if (
+				">)]}\"'`0123456789".includes(source[beforeCandidate]!) ||
+				isIdentifierPart(source[beforeCandidate])
+			) {
+				if (
+					candidate.text === "as" ||
+					candidate.text === "satisfies" ||
+					candidate.text === "in" ||
+					candidate.text === "instanceof"
+				)
+					return i;
+			}
+		}
+		if (topLevel && char === "?" && pendingConditional > 0) {
+			pendingConditional--;
+			conditionalDepth++;
+			continue;
+		}
+		if (topLevel && char === ":" && conditionalDepth > 0) {
+			conditionalDepth--;
+			continue;
+		}
 		if (
 			topLevel &&
 			(char === ";" ||
@@ -1175,6 +1439,13 @@ function findAssertionEnd(
 			if (!sawType) fail(filePath, start, "empty type assertions");
 			return i;
 		}
+		if (topLevel && sawType && char === "<") {
+			const previousWord = wordAtPreviousCode(source, code, i);
+			if (previousWord !== undefined && nonGenericTypeWords.has(previousWord.text))
+				return i;
+			const close = matchingOrMinusOne(source, code, i, "<", ">");
+			if (close < 0) return i;
+		}
 		if (char === "(") parentheses++;
 		else if (char === ")" && parentheses > 0) parentheses--;
 		else if (char === "[") brackets++;
@@ -1183,7 +1454,16 @@ function findAssertionEnd(
 		else if (char === "}" && braces > 0) braces--;
 		else if (char === "<") angles++;
 		else if (char === ">" && angles > 0) angles--;
-		if (isIdentifierStart(char) || char === '"' || char === "'") sawType = true;
+		if (
+			isIdentifierStart(char) ||
+			(char >= "0" && char <= "9") ||
+			char === '"' ||
+			char === "'" ||
+			char === "(" ||
+			char === "[" ||
+			char === "{"
+		)
+			sawType = true;
 	}
 	if (sawType) return source.length;
 	fail(filePath, start, "empty type assertions");
