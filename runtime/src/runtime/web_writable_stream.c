@@ -183,7 +183,14 @@ static void ws_error_stream(
     if (writer != nullptr) {
         MalPromiseObject *ready =
             mal_value_to_promise_object(writer->as.writer.ready_promise);
-        if (ready->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, ready, roots[1]);
+        if (ready->state == MAL_PROMISE_PENDING) {
+            mal_promise_reject(vm, ready, roots[1]);
+        } else {
+            MalValue replacement = ws_rejected_promise(vm, roots[1]);
+            mal_gc_write_barrier(writer->as.writer.ready_promise);
+            writer->as.writer.ready_promise = replacement;
+            mal_gc_card(&writer->object.header, replacement);
+        }
     }
     MalWritableStreamWriteRequest *request =
         controller->as.writable_controller.queue_head;

@@ -79,6 +79,7 @@ streams/readable-streams/reentrant-strategies.any.js
 streams/readable-streams/tee.any.js
 streams/readable-streams/templated.any.js
 streams/writable-streams/bad-strategies.any.js
+streams/writable-streams/bad-underlying-sinks.any.js
 streams/writable-streams/byte-length-queuing-strategy.any.js
 streams/writable-streams/constructor.any.js
 streams/writable-streams/count-queuing-strategy.any.js
