@@ -645,6 +645,32 @@
 			]
 		},
 		{
+			"path": "streams/readable-streams/async-iterator.any.js",
+			"sha256": "23642e42322aebd262ad9084ba78e12c1c0ec0562fec3a7b124f10ef421e543c",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/rs-utils.js" },
+				{ "name": "script", "value": "../resources/test-utils.js" },
+				{ "name": "script", "value": "../resources/recording-streams.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/rs-utils.js",
+					"sha256": "e4ac017aecf1eb2f83b0f22ece95998fec7d42a6de1d94fa1497351369bec04b"
+				},
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				},
+				{
+					"path": "streams/resources/recording-streams.js",
+					"sha256": "7c90125c056643aa82b07eb00584e5d52ed39778b23adfeac82db2890a4a92ca"
+				}
+			]
+		},
+		{
 			"path": "streams/readable-streams/bad-strategies.any.js",
 			"sha256": "6feff82c1b36f3107643b0efcaf46bf07c9c8a40947de603294959d1881aa62b",
 			"target": "server-main",
@@ -891,6 +917,14 @@
 					"sha256": "e4ac017aecf1eb2f83b0f22ece95998fec7d42a6de1d94fa1497351369bec04b"
 				}
 			]
+		},
+		{
+			"path": "streams/readable-streams/patched-global.any.js",
+			"sha256": "187d22462a7079ee503c5b3199a17af0bf1c9d47d61cc9f96e6ad1e6621efcdf",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
 		},
 		{
 			"path": "streams/readable-streams/templated.any.js",

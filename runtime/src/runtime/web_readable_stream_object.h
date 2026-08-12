@@ -11,6 +11,7 @@ typedef enum MalReadableStreamKind : u8 {
     MAL_READABLE_STREAM_DEFAULT_READER,
     MAL_READABLE_STREAM_BYOB_READER,
     MAL_READABLE_STREAM_BYOB_REQUEST,
+    MAL_READABLE_STREAM_ASYNC_ITERATOR,
     MAL_COUNT_QUEUING_STRATEGY,
     MAL_BYTE_LENGTH_QUEUING_STRATEGY,
     MAL_WRITABLE_STREAM,
@@ -91,6 +92,12 @@ typedef struct MalReadableStreamObject {
             MalValue controller;
             MalValue view;
         } byob_request;
+        struct {
+            MalValue reader;
+            MalValue ongoing_promise;
+            bool prevent_cancel;
+            bool finished;
+        } iterator;
         struct {
             f64 high_water_mark;
         } strategy;

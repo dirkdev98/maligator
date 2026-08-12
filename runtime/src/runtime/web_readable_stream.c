@@ -4077,7 +4077,7 @@ static MalValue rs_tee_make_branch(
     };
     MalRootSpan span;
     mal_gc_root(&span, roots, 6);
-    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     MalValue slots[2] = {state, mal_value_from_i32(branch)};
     roots[2] = mal_value_from_native_function_object(
         mal_native_function_object_new_with_slots(&vm->heap,
@@ -4099,7 +4099,7 @@ static MalValue rs_tee_make_branch(
             (const byte *) "type",
             mal_value_from_string(mal_intrinsic_ascii(
                 vm, (const byte *) "bytes")), flags);
-        roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        roots[5] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[5]),
             (const byte *) "highWaterMark", mal_value_from_i32(0), flags);
         constructor_argc = 2;
@@ -4215,6 +4215,255 @@ static MalValue rs_tee(MalVm *vm, MalValue self, const MalValue *args,
     return result;
 }
 
+static MalValue rs_iterator_then(MalVm *vm, MalValue promise,
+    MalValue on_fulfilled, MalValue on_rejected) {
+    MalValue roots[4] = {
+        promise, on_fulfilled, on_rejected, mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    roots[3] = mal_value_from_promise_object(rs_new_promise(vm));
+    mal_promise_perform_then(vm, roots[0], roots[1], roots[2], roots[3],
+        vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR]);
+    MalValue result = roots[3];
+    mal_gc_unroot(&span);
+    return result;
+}
+
+static void rs_iterator_release_reader(
+    MalVm *vm, MalReadableStreamObject *iterator) {
+    MalValue reader = iterator->as.iterator.reader;
+    if (!rs_is_kind(reader, MAL_READABLE_STREAM_DEFAULT_READER)) return;
+    MalReadableStreamObject *reader_object =
+        mal_value_to_readable_stream_object(reader);
+    if (mal_value_is_undefined(reader_object->as.reader.stream)) return;
+    (void) rs_reader_release_lock(vm, reader, nullptr, 0,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+static MalValue rs_iterator_read_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalReadableStreamObject *iterator = mal_value_to_readable_stream_object(
+        mal_native_function_object_get_slot(
+            mal_value_to_native_function_object(callee), 0));
+    MalValue result = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue done;
+    if (!mal_vm_get_property(vm, result,
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done)) {
+        iterator->as.iterator.finished = true;
+        rs_iterator_release_reader(vm, iterator);
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_truthy(done)) {
+        iterator->as.iterator.finished = true;
+        rs_iterator_release_reader(vm, iterator);
+    }
+    return result;
+}
+
+static MalValue rs_iterator_read_rejected(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalReadableStreamObject *iterator = mal_value_to_readable_stream_object(
+        mal_native_function_object_get_slot(
+            mal_value_to_native_function_object(callee), 0));
+    iterator->as.iterator.finished = true;
+    rs_iterator_release_reader(vm, iterator);
+    vm->completion = (MalCompletion) {
+        .kind = MAL_COMPLETION_THROW,
+        .value = argc >= 1 ? args[0] : mal_value_new_undefined(),
+    };
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_iterator_next_operation(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalValue iterator_value = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    MalReadableStreamObject *iterator =
+        mal_value_to_readable_stream_object(iterator_value);
+    if (iterator->as.iterator.finished) {
+        return rs_resolved_promise(vm,
+            mal_vm_create_iter_result(
+                vm, mal_value_new_undefined(), true));
+    }
+
+    MalValue roots[4] = {
+        iterator_value, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    roots[1] = rs_reader_read(vm, iterator->as.iterator.reader,
+        nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
+    roots[2] = rs_callback(vm, rs_iterator_read_fulfilled, roots[0]);
+    roots[3] = rs_callback(vm, rs_iterator_read_rejected, roots[0]);
+    MalValue result = rs_iterator_then(vm, roots[1], roots[2], roots[3]);
+    mal_gc_unroot(&span);
+    return result;
+}
+
+static MalValue rs_iterator_return_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalValue reason = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    return mal_vm_create_iter_result(vm, reason, true);
+}
+
+static MalValue rs_iterator_return_operation(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *operation =
+        mal_value_to_native_function_object(callee);
+    MalValue iterator_value =
+        mal_native_function_object_get_slot(operation, 0);
+    MalValue reason = mal_native_function_object_get_slot(operation, 1);
+    MalReadableStreamObject *iterator =
+        mal_value_to_readable_stream_object(iterator_value);
+    if (iterator->as.iterator.finished) {
+        return rs_resolved_promise(
+            vm, mal_vm_create_iter_result(vm, reason, true));
+    }
+    iterator->as.iterator.finished = true;
+    if (iterator->as.iterator.prevent_cancel) {
+        rs_iterator_release_reader(vm, iterator);
+        return rs_resolved_promise(
+            vm, mal_vm_create_iter_result(vm, reason, true));
+    }
+
+    MalValue roots[3] = {
+        iterator_value, reason, mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    roots[2] = rs_reader_cancel(vm, iterator->as.iterator.reader,
+        &roots[1], 1, mal_value_new_undefined(), mal_value_new_undefined());
+    rs_iterator_release_reader(vm, iterator);
+    MalValue fulfilled = rs_callback(
+        vm, rs_iterator_return_fulfilled, roots[1]);
+    MalValue result = rs_iterator_then(
+        vm, roots[2], fulfilled, mal_value_new_undefined());
+    mal_gc_unroot(&span);
+    return result;
+}
+
+static MalValue rs_iterator_schedule(MalVm *vm,
+    MalReadableStreamObject *iterator, MalValue operation) {
+    MalValue iterator_value =
+        mal_value_from_readable_stream_object(iterator);
+    MalValue result;
+    if (mal_value_is_undefined(iterator->as.iterator.ongoing_promise)) {
+        MalCompletion completion = mal_vm_call_value(vm, operation,
+            iterator_value, nullptr, 0);
+        result = completion.kind == MAL_COMPLETION_THROW
+            ? rs_rejected_promise(vm, completion.value) : completion.value;
+        vm->completion = rs_normal();
+    } else {
+        result = rs_iterator_then(vm,
+            iterator->as.iterator.ongoing_promise, operation, operation);
+    }
+    mal_gc_write_barrier(iterator->as.iterator.ongoing_promise);
+    iterator->as.iterator.ongoing_promise = result;
+    mal_gc_card(&iterator->object.header, result);
+    return result;
+}
+
+static MalValue rs_iterator_next(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalReadableStreamObject *iterator = rs_require(vm, self,
+        MAL_READABLE_STREAM_ASYNC_ITERATOR,
+        (const byte *) "ReadableStream async iterator next called on incompatible receiver");
+    if (iterator == nullptr) return mal_value_new_undefined();
+    MalValue operation = rs_callback(vm, rs_iterator_next_operation, self);
+    return rs_iterator_schedule(vm, iterator, operation);
+}
+
+static MalValue rs_iterator_return(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt;
+    (void) callee;
+    MalReadableStreamObject *iterator = rs_require(vm, self,
+        MAL_READABLE_STREAM_ASYNC_ITERATOR,
+        (const byte *) "ReadableStream async iterator return called on incompatible receiver");
+    if (iterator == nullptr) return mal_value_new_undefined();
+    MalValue slots[2] = {
+        self, argc >= 1 ? args[0] : mal_value_new_undefined(),
+    };
+    MalValue operation = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) ""),
+            rs_iterator_return_operation, slots, 2));
+    return rs_iterator_schedule(vm, iterator, operation);
+}
+
+static MalValue rs_values(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt;
+    MalReadableStreamObject *stream = rs_require(vm, self,
+        MAL_READABLE_STREAM,
+        (const byte *) "ReadableStream.values called on incompatible receiver");
+    if (stream == nullptr) return mal_value_new_undefined();
+    bool prevent_cancel = false;
+    if (argc >= 1 && !mal_value_is_nil(args[0])) {
+        MalValue option;
+        if (!mal_vm_get_property(vm, args[0],
+                mal_intrinsic_string_key(vm,
+                    (const byte *) "preventCancel"), &option)) {
+            return mal_value_new_undefined();
+        }
+        prevent_cancel = mal_value_is_truthy(option);
+    }
+
+    MalValue roots[3] = {
+        self,
+        mal_native_function_object_get_slot(
+            mal_value_to_native_function_object(callee), 0),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    MalReadableStreamObject *reader = rs_acquire_reader(vm, stream,
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_PROTOTYPE]));
+    if (reader == nullptr) {
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    MalValue reader_value =
+        mal_value_from_readable_stream_object(reader);
+    mal_value_to_promise_object(reader->as.reader.closed_promise)->is_handled = true;
+    MalReadableStreamObject *iterator = rs_new(vm,
+        MAL_READABLE_STREAM_ASYNC_ITERATOR,
+        mal_value_to_object(roots[1]));
+    roots[2] = mal_value_from_readable_stream_object(iterator);
+    iterator->as.iterator.reader = reader_value;
+    iterator->as.iterator.ongoing_promise = mal_value_new_undefined();
+    iterator->as.iterator.prevent_cancel = prevent_cancel;
+    iterator->as.iterator.finished = false;
+    MalValue result = roots[2];
+    mal_gc_unroot(&span);
+    return result;
+}
+
 static void rs_trace(MalHeapHeader *cell) {
     MalReadableStreamObject *object = (MalReadableStreamObject *) cell;
     switch (object->kind) {
@@ -4240,6 +4489,10 @@ static void rs_trace(MalHeapHeader *cell) {
         case MAL_READABLE_STREAM_BYOB_REQUEST:
             mal_gc_mark_value(object->as.byob_request.controller);
             mal_gc_mark_value(object->as.byob_request.view);
+            break;
+        case MAL_READABLE_STREAM_ASYNC_ITERATOR:
+            mal_gc_mark_value(object->as.iterator.reader);
+            mal_gc_mark_value(object->as.iterator.ongoing_promise);
             break;
         case MAL_READABLE_STREAM_DEFAULT_READER:
         case MAL_READABLE_STREAM_BYOB_READER:
@@ -4369,6 +4622,40 @@ void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
         vm, stream_proto, (const byte *) "pipeTo", 1, rs_pipe_to);
     mal_intrinsic_define_method_n(
         vm, stream_proto, (const byte *) "tee", 0, rs_tee);
+
+    MalObject *iterator_proto = mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_ASYNC_ITERATOR_PROTOTYPE]));
+    MalPropertyFlags iterator_method_flags =
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+        MAL_PROPERTY_CONFIGURABLE;
+    MalValue iterator_next = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "next"), 0,
+            rs_iterator_next));
+    MalValue iterator_return = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "return"), 1,
+            rs_iterator_return));
+    mal_intrinsic_define_data(vm, iterator_proto, (const byte *) "next",
+        iterator_next, iterator_method_flags);
+    mal_intrinsic_define_data(vm, iterator_proto, (const byte *) "return",
+        iterator_return, iterator_method_flags);
+    MalValue iterator_proto_value = mal_value_from_object(iterator_proto);
+    MalValue values = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots_arity(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "values"), 0,
+            rs_values, &iterator_proto_value, 1));
+    mal_intrinsic_define_data(vm, stream_proto, (const byte *) "values",
+        values, iterator_method_flags);
+    MalPropertyDesc async_iterator =
+        mal_intrinsic_data_desc(values, iterator_method_flags);
+    mal_object_define_own(stream_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR),
+        &async_iterator);
 
     MalObject *controller_proto = rs_install_class(vm, global_this,
         (const byte *) "ReadableStreamDefaultController", 0, rs_controller_constructor,
