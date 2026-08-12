@@ -15,9 +15,15 @@ import {
 	writeFileSync,
 } from "node:fs";
 import fsPromises, {
+	copyFile,
 	lstat,
+	mkdir,
 	readFile as readFilePromise,
 	readdir,
+	rename,
+	rm,
+	stat,
+	writeFile,
 } from "node:fs/promises";
 
 const results: Array<[string, boolean]> = [];
@@ -157,6 +163,22 @@ check(
 	"promise readdir preserves Dirent results",
 	promiseEntries.some((entry) => entry.name === "utf8.txt" && entry.isFile()),
 );
+const promiseDir = `${root}/promise-dir`;
+const promiseSource = `${promiseDir}/source.txt`;
+const promiseCopy = `${promiseDir}/copy.txt`;
+const promiseRenamed = `${promiseDir}/renamed.txt`;
+await mkdir(promiseDir, { recursive: true });
+await writeFile(promiseSource, "promise data");
+await copyFile(promiseSource, promiseCopy);
+eq(
+	"promise copyFile copies contents",
+	await readFilePromise(promiseCopy, "utf8"),
+	"promise data",
+);
+await rename(promiseCopy, promiseRenamed);
+check("promise stat returns Stats", (await stat(promiseRenamed)).isFile());
+await rm(promiseRenamed);
+eq("promise rm removes files", existsSync(promiseRenamed), false);
 let promisedMissingCode = "";
 try {
 	await readdir(`${root}/promise-missing`);

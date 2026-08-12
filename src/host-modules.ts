@@ -121,7 +121,17 @@ const FS: HostModuleSpec = {
 
 const FS_PROMISES: HostModuleSpec = {
 	id: "node:fs/promises",
-	named: ["lstat", "readFile", "readdir"],
+	named: [
+		"copyFile",
+		"lstat",
+		"mkdir",
+		"readFile",
+		"readdir",
+		"rename",
+		"rm",
+		"stat",
+		"writeFile",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:fs/promises"),
 };
