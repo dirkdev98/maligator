@@ -4,6 +4,17 @@ import util, {
 	formatWithOptions,
 	inherits,
 	inspect,
+	isArray,
+	isBoolean,
+	isBuffer,
+	isFunction,
+	isNull,
+	isNullOrUndefined,
+	isNumber,
+	isObject,
+	isString,
+	isSymbol,
+	isUndefined,
 	promisify,
 } from "node:util";
 
@@ -41,6 +52,26 @@ check(
 );
 check(inspect([1, "two"]) === "[ 1, 'two' ]", "array inspection");
 check(inspect("quoted") === "'quoted'" && inspect({}) === "{}", "scalar inspection");
+const legacyCases = [
+	["isArray", isArray, [], true],
+	["isBoolean", isBoolean, false, true],
+	["isBuffer", isBuffer, Buffer.from("x"), true],
+	["isFunction", isFunction, () => 1, true],
+	["isNull", isNull, null, true],
+	["isNullOrUndefined", isNullOrUndefined, undefined, true],
+	["isNumber", isNumber, 1.5, true],
+	["isObject", isObject, {}, true],
+	["isString", isString, "node", true],
+	["isSymbol", isSymbol, Symbol("node"), true],
+	["isUndefined", isUndefined, undefined, true],
+];
+for (const [name, predicate, value, expected] of legacyCases) {
+	check(predicate(value) === expected, `${name} positive`);
+	check(predicate.name === name && predicate.length === 1, `${name} metadata`);
+	check(util[name] === predicate, `${name} default/named identity`);
+}
+check(!isBuffer(new Uint8Array(1)), "isBuffer rejects plain Uint8Array");
+check(!isObject(null) && !isObject(() => 1), "isObject follows legacy Node semantics");
 
 const typeCases = [
 	["isAnyArrayBuffer", new ArrayBuffer(1), true],
@@ -55,6 +86,14 @@ const typeCases = [
 	["isRegExp", /node/, true],
 	["isTypedArray", new Uint8Array(1), true],
 	["isBoxedPrimitive", Object(1), true],
+	[
+		"isGeneratorObject",
+		(function* () {
+			yield 1;
+		})(),
+		true,
+	],
+	["isProxy", new Proxy({}, {}), true],
 	["isMapIterator", new Map().entries(), true],
 	["isSetIterator", new Set().values(), true],
 	["isInt8Array", new Int8Array(1), true],
@@ -76,6 +115,9 @@ for (const [name, value, expected] of typeCases) {
 }
 check(types.isPromise(Promise.resolve()), "types.isPromise positive");
 check(!types.isPromise({ then() {} }), "types.isPromise rejects thenables");
+check(!types.isExternal({}), "types.isExternal rejects ordinary objects");
+check(!types.isKeyObject({}), "types.isKeyObject rejects ordinary objects");
+check(!types.isCryptoKey({}), "types.isCryptoKey rejects ordinary objects");
 const circular = {};
 circular.self = circular;
 check(inspect(circular) === "{ self: [Circular] }", "cycle inspection");

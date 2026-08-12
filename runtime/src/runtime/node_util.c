@@ -20,6 +20,7 @@
 #include "property_iter.h"
 #include "property_store.h"
 #include "promise_object.h"
+#include "proxy_object.h"
 #include "typed_array_object.h"
 #include "u16_buffer.h"
 #include "value.h"
@@ -619,6 +620,66 @@ static MalValue util_types_is_promise(
         argc > 0 && mal_value_is_promise_object(args[0]));
 }
 
+typedef enum MalUtilLegacyPredicate {
+    UTIL_IS_ARRAY,
+    UTIL_IS_BOOLEAN,
+    UTIL_IS_BUFFER,
+    UTIL_IS_FUNCTION,
+    UTIL_IS_NULL,
+    UTIL_IS_NULL_OR_UNDEFINED,
+    UTIL_IS_NUMBER,
+    UTIL_IS_OBJECT,
+    UTIL_IS_STRING,
+    UTIL_IS_SYMBOL,
+    UTIL_IS_UNDEFINED,
+} MalUtilLegacyPredicate;
+
+static MalValue util_legacy_predicate(
+    MalVm *vm, const MalValue *args, i32 argc, MalUtilLegacyPredicate kind) {
+    (void) vm;
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    bool result = false;
+    switch (kind) {
+        case UTIL_IS_ARRAY: result = mal_value_is_array_object(value); break;
+        case UTIL_IS_BOOLEAN: result = mal_value_is_boolean(value); break;
+        case UTIL_IS_BUFFER:
+            result = mal_value_is_typed_array_object(value)
+                && mal_value_to_typed_array_object(value)->is_buffer;
+            break;
+        case UTIL_IS_FUNCTION: result = mal_value_is_callable(value); break;
+        case UTIL_IS_NULL: result = mal_value_is_null(value); break;
+        case UTIL_IS_NULL_OR_UNDEFINED: result = mal_value_is_nil(value); break;
+        case UTIL_IS_NUMBER: result = mal_ops_is_number(value); break;
+        case UTIL_IS_OBJECT:
+            result = mal_value_is_object(value) && !mal_value_is_callable(value);
+            break;
+        case UTIL_IS_STRING: result = mal_value_is_string(value); break;
+        case UTIL_IS_SYMBOL: result = mal_value_is_symbol(value); break;
+        case UTIL_IS_UNDEFINED: result = mal_value_is_undefined(value); break;
+    }
+    return mal_value_new_boolean(result);
+}
+
+#define UTIL_LEGACY_PREDICATE(name, kind) \
+    static MalValue util_##name( \
+        MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, \
+        MalValue new_target, MalValue callee) { \
+        (void) receiver; (void) new_target; (void) callee; \
+        return util_legacy_predicate(vm, args, argc, kind); \
+    }
+
+UTIL_LEGACY_PREDICATE(is_array, UTIL_IS_ARRAY)
+UTIL_LEGACY_PREDICATE(is_boolean, UTIL_IS_BOOLEAN)
+UTIL_LEGACY_PREDICATE(is_buffer, UTIL_IS_BUFFER)
+UTIL_LEGACY_PREDICATE(is_function, UTIL_IS_FUNCTION)
+UTIL_LEGACY_PREDICATE(is_null, UTIL_IS_NULL)
+UTIL_LEGACY_PREDICATE(is_null_or_undefined, UTIL_IS_NULL_OR_UNDEFINED)
+UTIL_LEGACY_PREDICATE(is_number, UTIL_IS_NUMBER)
+UTIL_LEGACY_PREDICATE(is_object, UTIL_IS_OBJECT)
+UTIL_LEGACY_PREDICATE(is_string, UTIL_IS_STRING)
+UTIL_LEGACY_PREDICATE(is_symbol, UTIL_IS_SYMBOL)
+UTIL_LEGACY_PREDICATE(is_undefined, UTIL_IS_UNDEFINED)
+
 typedef bool (*MalUtilTypePredicate)(MalValue value);
 
 static MalValue util_type_predicate_result(
@@ -655,6 +716,13 @@ UTIL_TYPE_PREDICATE(is_weak_set,
 UTIL_TYPE_PREDICATE(is_reg_exp, mal_value_is_regexp_object(value))
 UTIL_TYPE_PREDICATE(is_typed_array, mal_value_is_typed_array_object(value))
 UTIL_TYPE_PREDICATE(is_boxed_primitive, mal_value_is_primitive_wrapper(value))
+UTIL_TYPE_PREDICATE(is_generator_object, mal_value_is_generator_object(value))
+UTIL_TYPE_PREDICATE(is_module_namespace_object,
+    mal_value_is_module_namespace_object(value))
+UTIL_TYPE_PREDICATE(is_proxy, mal_value_is_proxy_object(value))
+UTIL_TYPE_PREDICATE(is_external, false)
+UTIL_TYPE_PREDICATE(is_key_object, false)
+UTIL_TYPE_PREDICATE(is_crypto_key, false)
 UTIL_TYPE_PREDICATE(is_map_iterator,
     mal_value_is_iterator_object(value)
         && mal_value_to_iterator_object(value)->kind <= MAL_ITERATOR_MAP_ENTRIES)
@@ -697,6 +765,12 @@ static const MalNodeUtilTypeExport util_type_exports[] = {
     {"isRegExp", util_types_is_reg_exp},
     {"isTypedArray", util_types_is_typed_array},
     {"isBoxedPrimitive", util_types_is_boxed_primitive},
+    {"isGeneratorObject", util_types_is_generator_object},
+    {"isModuleNamespaceObject", util_types_is_module_namespace_object},
+    {"isProxy", util_types_is_proxy},
+    {"isExternal", util_types_is_external},
+    {"isKeyObject", util_types_is_key_object},
+    {"isCryptoKey", util_types_is_crypto_key},
     {"isMapIterator", util_types_is_map_iterator},
     {"isSetIterator", util_types_is_set_iterator},
     {"isInt8Array", util_types_is_int8_array},
@@ -849,6 +923,17 @@ static const MalNodeUtilExport util_exports[] = {
     {"formatWithOptions", 2, util_format_with_options},
     {"inherits", 2, util_inherits},
     {"inspect", 2, util_inspect},
+    {"isArray", 1, util_is_array},
+    {"isBoolean", 1, util_is_boolean},
+    {"isBuffer", 1, util_is_buffer},
+    {"isFunction", 1, util_is_function},
+    {"isNull", 1, util_is_null},
+    {"isNullOrUndefined", 1, util_is_null_or_undefined},
+    {"isNumber", 1, util_is_number},
+    {"isObject", 1, util_is_object},
+    {"isString", 1, util_is_string},
+    {"isSymbol", 1, util_is_symbol},
+    {"isUndefined", 1, util_is_undefined},
     {"parseEnv", 1, util_parse_env},
     {"promisify", 1, util_promisify},
 };

@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/utsname.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "array_object.h"
@@ -59,6 +60,107 @@ static MalValue os_type(
     const char *type = uname(&info) == 0 ? info.sysname : "";
     return mal_value_from_string(mal_string_new_ascii(
         &vm->heap, (const byte *) type, strlen(type)));
+}
+
+static MalValue os_uname_field(MalVm *vm, const char *field) {
+    return mal_value_from_string(mal_string_new_ascii(
+        &vm->heap, (const byte *) field, strlen(field)));
+}
+
+static MalValue os_machine(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    struct utsname info;
+    return os_uname_field(vm, uname(&info) == 0 ? info.machine : "");
+}
+
+static MalValue os_version(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    struct utsname info;
+    return os_uname_field(vm, uname(&info) == 0 ? info.version : "");
+}
+
+static MalValue os_memory(bool available) {
+    long pages = sysconf(available ? _SC_AVPHYS_PAGES : _SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (pages < 0 || page_size < 0) return mal_value_from_i32(0);
+    return mal_value_from_f64_convert_nan((f64) pages * (f64) page_size);
+}
+
+static MalValue os_freemem(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm; (void) receiver; (void) args; (void) argc;
+    (void) new_target; (void) callee;
+    return os_memory(true);
+}
+
+static MalValue os_totalmem(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm; (void) receiver; (void) args; (void) argc;
+    (void) new_target; (void) callee;
+    return os_memory(false);
+}
+
+static MalValue os_uptime(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm; (void) receiver; (void) args; (void) argc;
+    (void) new_target; (void) callee;
+    struct timespec time = {0};
+#ifdef CLOCK_BOOTTIME
+    clock_gettime(CLOCK_BOOTTIME, &time);
+#else
+    clock_gettime(CLOCK_MONOTONIC, &time);
+#endif
+    return mal_value_from_f64_convert_nan(
+        (f64) time.tv_sec + (f64) time.tv_nsec / 1000000000.0);
+}
+
+static MalValue os_loadavg(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    double averages[3] = {0};
+    if (getloadavg(averages, 3) < 0) memset(averages, 0, sizeof(averages));
+    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, 3);
+    for (i32 i = 0; i < 3; i++) {
+        mal_array_object_store(array, mal_key_index(i),
+            mal_value_from_f64_convert_nan(averages[i]));
+    }
+    return mal_value_from_array_object(array);
+}
+
+static void os_user_info_string(
+    MalVm *vm, MalObject *object, const char *name, const char *value) {
+    mal_intrinsic_define_data(vm, object, (const byte *) name,
+        os_uname_field(vm, value != nullptr ? value : ""),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+static MalValue os_user_info(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    struct passwd *entry = getpwuid(geteuid());
+    MalValue result = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &result, 1);
+    MalObject *object = mal_value_to_object(result);
+    os_user_info_string(vm, object, "username", entry != nullptr ? entry->pw_name : "");
+    os_user_info_string(vm, object, "homedir", entry != nullptr ? entry->pw_dir : "");
+    os_user_info_string(vm, object, "shell", entry != nullptr ? entry->pw_shell : "");
+    u32 flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_data(vm, object, (const byte *) "uid",
+        mal_value_from_i32((i32) geteuid()), flags);
+    mal_intrinsic_define_data(vm, object, (const byte *) "gid",
+        mal_value_from_i32((i32) getegid()), flags);
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalValue os_homedir(
@@ -268,6 +370,20 @@ void mal_host_install_node_os(
             os_available_parallelism);
         mal_intrinsic_define_method_n(
             vm, mal_value_to_object(module), (const byte *) "cpus", 0, os_cpus);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "machine", 0, os_machine);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "version", 0, os_version);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "freemem", 0, os_freemem);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "totalmem", 0, os_totalmem);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "uptime", 0, os_uptime);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "loadavg", 0, os_loadavg);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "userInfo", 0, os_user_info);
         mal_intrinsic_define_data(
             vm, mal_value_to_object(module), (const byte *) "EOL",
             mal_value_from_string(mal_string_new_ascii(
