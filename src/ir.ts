@@ -1455,6 +1455,15 @@ export type IRInstruction =
 			nativeNumericFusion?:
 				| { role: "start"; id: number }
 				| { role: "finish"; id: number; first: IRInstruction };
+
+			/** Native-only proof for `literal + integer` in a bounded loop region.
+			 * `stringIndices[value - minimum]` is the exact concatenation result.
+			 * The interpreter deliberately ignores this metadata and executes `+`.
+			 */
+			nativeFiniteString?: {
+				minimum: number;
+				stringIndices: Array<number>;
+			};
 	  }
 	| {
 			type: "unary";

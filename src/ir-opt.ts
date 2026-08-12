@@ -25,7 +25,7 @@ import type {
 	IRInstruction,
 	IRTypeofResult,
 } from "./ir.ts";
-import { isSafepoint } from "./liveness.ts";
+import { findBackEdges, isSafepoint } from "./liveness.ts";
 import { definedRegister, inferVirtualReps } from "./register-alloc.ts";
 import { debugEnabled, isNil } from "./utils.ts";
 
@@ -324,6 +324,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	if (residualFeatures.call) annotateDirectCallTargets(program);
 	if (residualFeatures.call) optImmediateCallOperands(program);
 	optDeadInstructionElimination(program);
+	annotateFiniteStringConcats(program);
 	annotateNativeNumericFusions(program);
 	annotateTerminalYieldSites(program);
 
@@ -663,6 +664,7 @@ export function annotateNativeNumericFusions(program: IntermediateProgram): void
 				const finish = use.instruction;
 				if (
 					finish.type !== "binary" ||
+					finish.nativeFiniteString !== undefined ||
 					(use.position !== 1 && use.position !== 2) ||
 					!NATIVE_NUMERIC_FUSION_FINISH_OPERATORS.has(finish.operator) ||
 					participating.has(finish)
@@ -685,6 +687,247 @@ export function annotateNativeNumericFusions(program: IntermediateProgram): void
 				finish.nativeNumericFusion = { role: "finish", id, first };
 				participating.add(first);
 				participating.add(finish);
+			}
+		}
+	}
+}
+
+interface FiniteIntegerRange {
+	minimum: number;
+	maximum: number;
+}
+
+const MAX_FINITE_STRING_VALUES = 32;
+const MAX_FINITE_STRING_CONSTANTS = 512;
+const MAX_FINITE_STRING_CODE_UNITS = 16 * 1024 * 1024;
+const MAX_FINITE_STRING_PREFIX_CODE_UNITS = 64;
+
+function exactIntegerConstant(
+	instruction: IRInstruction | undefined,
+): number | undefined {
+	if (
+		(instruction?.type !== "createNumber" && instruction?.type !== "createF64") ||
+		!Number.isSafeInteger(instruction.value)
+	) {
+		return undefined;
+	}
+	return instruction.value;
+}
+
+/**
+ * Prove the canonical compiler loop-counter shape and attach finite string
+ * universes to `literal + integer` operations in the true body block. The proof
+ * is intentionally narrow: one non-negative integer initializer, only self
+ * increments thereafter, an integer `< bound` header, and no alternate entry to
+ * that header. Derived `%` and small-mask `&` values remain finite as well.
+ *
+ * The result is native-code metadata, not a semantic rewrite. The interpreter
+ * continues to execute ordinary `+`; compiled output can select an immortal
+ * precomputed string because both operands and the complete value range are
+ * statically proven. Any shape outside this exact loop form remains generic.
+ */
+export function annotateFiniteStringConcats(program: IntermediateProgram): void {
+	const initialStringCount = program.stringConstants.length;
+	for (const fn of program.functions) {
+		if (fn.isGenerator || fn.isAsync) continue;
+		const index = buildIRRegisterIndex(fn, { locations: true });
+		const { backEdges } = findBackEdges(fn);
+		if (backEdges.length === 0) continue;
+
+		const incoming = fn.blocks.map(() => new Set<number>());
+		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
+			for (const instruction of fn.blocks[blockIndex]!.instructions) {
+				if (instruction.type !== "jump" && instruction.type !== "jumpIf") continue;
+				for (const target of instruction.blocks) incoming[target]?.add(blockIndex);
+			}
+		}
+
+		const entryRanges = new Map<number, Map<number, FiniteIntegerRange>>();
+		for (let header = 0; header < fn.blocks.length; header++) {
+			if (header === 0) continue;
+			const loopBackEdges = backEdges.filter((edge) => edge.to === header);
+			if (loopBackEdges.length === 0) continue;
+			const instructions = fn.blocks[header]!.instructions;
+			for (const branch of instructions) {
+				if (branch.type !== "jumpIf" || branch.blocks.length !== 1) continue;
+				const comparison = index.uniqueDefinitions.get(branch.registers[0]);
+				if (comparison?.type !== "binary" || comparison.operator !== "<") continue;
+				const counter = comparison.registers[1];
+				const bound = exactIntegerConstant(
+					index.uniqueDefinitions.get(comparison.registers[2]),
+				);
+				if (bound === undefined) continue;
+
+				const definitions = index.definitions.get(counter) ?? [];
+				const starts = definitions.filter(
+					({ instruction }) =>
+						instruction.type === "createNumber" || instruction.type === "createF64",
+				);
+				if (starts.length !== 1) continue;
+				const start = exactIntegerConstant(starts[0]!.instruction);
+				if (start === undefined || start < 0 || bound <= start) continue;
+				if (bound - start > MAX_FINITE_STRING_VALUES) continue;
+				if (
+					definitions.some(({ instruction }) => {
+						if (instruction === starts[0]!.instruction) return false;
+						return !(
+							instruction.type === "unary" &&
+							instruction.operator === "increment" &&
+							instruction.registers[0] === counter &&
+							instruction.registers[1] === counter
+						);
+					})
+				) {
+					continue;
+				}
+
+				const startLocation = index.locations?.get(starts[0]!.instruction);
+				if (startLocation === undefined) continue;
+				const predecessor = startLocation.blockIndex;
+				const trueBackEdges = loopBackEdges.filter((edge) => edge.from !== predecessor);
+				if (trueBackEdges.length === 0) continue;
+				const allowedIncoming = new Set<number>([
+					predecessor,
+					...trueBackEdges.map((edge) => edge.from),
+				]);
+				const actualIncoming = incoming[header]!;
+				if (
+					actualIncoming.size !== allowedIncoming.size ||
+					[...actualIncoming].some((blockIndex) => !allowedIncoming.has(blockIndex))
+				) {
+					continue;
+				}
+				if (
+					!fn.blocks[predecessor]!.instructions.some(
+						(instruction) =>
+							instruction.type === "jump" && instruction.blocks.includes(header),
+					)
+				) {
+					continue;
+				}
+
+				const target = branch.blocks[0];
+				if (incoming[target]?.size !== 1 || !incoming[target].has(header)) continue;
+				const ranges = entryRanges.get(target) ?? new Map<number, FiniteIntegerRange>();
+				const existing = ranges.get(counter);
+				const proven = { minimum: start, maximum: bound - 1 };
+				if (existing === undefined) {
+					ranges.set(counter, proven);
+				} else {
+					ranges.set(counter, {
+						minimum: Math.max(existing.minimum, proven.minimum),
+						maximum: Math.min(existing.maximum, proven.maximum),
+					});
+				}
+				entryRanges.set(target, ranges);
+			}
+		}
+
+		for (const [blockIndex, initialRanges] of entryRanges) {
+			const ranges = new Map(initialRanges);
+			for (const instruction of fn.blocks[blockIndex]!.instructions) {
+				if (instruction.type === "binary" && instruction.operator === "+") {
+					const leftDefinition = index.uniqueDefinitions.get(instruction.registers[1]);
+					const right = instruction.registers[2];
+					const range = ranges.get(right);
+					if (
+						leftDefinition?.type === "createString" &&
+						program.stringConstants[leftDefinition.stringIndex]!.length <=
+							MAX_FINITE_STRING_PREFIX_CODE_UNITS &&
+						range !== undefined &&
+						range.minimum <= range.maximum &&
+						range.maximum - range.minimum + 1 <= MAX_FINITE_STRING_VALUES
+					) {
+						const prefix = decodeStringConstant(program, leftDefinition.stringIndex);
+						const values = Array.from(
+							{ length: range.maximum - range.minimum + 1 },
+							(_, offset) => prefix + String(range.minimum + offset),
+						);
+						if (values.some((value) => value.length > MAX_FINITE_STRING_CODE_UNITS)) {
+							continue;
+						}
+						const newCount = values.filter(
+							(value) => !program.stringConstantToIndex.has(value),
+						).length;
+						if (
+							program.stringConstants.length - initialStringCount + newCount <=
+							MAX_FINITE_STRING_CONSTANTS
+						) {
+							instruction.nativeFiniteString = {
+								minimum: range.minimum,
+								stringIndices: values.map((value) =>
+									getOrCreateStringConstant(program, value),
+								),
+							};
+						}
+					}
+				}
+
+				if (!("registers" in instruction)) continue;
+				for (const destination of definedRegisters(instruction))
+					ranges.delete(destination);
+				const destination = definedRegister(instruction);
+				if (destination === null) continue;
+				let produced: FiniteIntegerRange | undefined;
+				switch (instruction.type) {
+					case "createNumber":
+					case "createF64":
+						if (Number.isSafeInteger(instruction.value)) {
+							produced = { minimum: instruction.value, maximum: instruction.value };
+						}
+						break;
+					case "move":
+						produced = ranges.get(instruction.registers[1]);
+						break;
+					case "unary": {
+						const source = ranges.get(instruction.registers[1]);
+						if (source !== undefined && instruction.operator === "increment") {
+							produced = {
+								minimum: source.minimum + 1,
+								maximum: source.maximum + 1,
+							};
+						} else if (source !== undefined && instruction.operator === "decrement") {
+							produced = {
+								minimum: source.minimum - 1,
+								maximum: source.maximum - 1,
+							};
+						}
+						break;
+					}
+					case "binary": {
+						const left = ranges.get(instruction.registers[1]);
+						const constant = exactIntegerConstant(
+							index.uniqueDefinitions.get(instruction.registers[2]),
+						);
+						if (
+							instruction.operator === "%" &&
+							left !== undefined &&
+							left.minimum >= 0 &&
+							constant !== undefined &&
+							constant > 0
+						) {
+							produced = {
+								minimum: 0,
+								maximum: Math.min(left.maximum, constant - 1),
+							};
+						} else if (
+							instruction.operator === "&" &&
+							constant !== undefined &&
+							constant >= 0 &&
+							constant < MAX_FINITE_STRING_VALUES
+						) {
+							produced = { minimum: 0, maximum: constant };
+						}
+						break;
+					}
+				}
+				if (
+					produced !== undefined &&
+					Number.isSafeInteger(produced.minimum) &&
+					Number.isSafeInteger(produced.maximum)
+				) {
+					ranges.set(destination, produced);
+				}
 			}
 		}
 	}

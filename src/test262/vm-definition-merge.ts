@@ -204,10 +204,22 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CHECK_SUPER_CLASS":
 		case "CREATE_REST_ARGUMENTS":
 		case "ARRAY_REST":
-		case "BINARY":
 		case "UNARY":
 		case "TYPEOF_COMPARE":
 			return { ...instruction };
+		case "BINARY":
+			return {
+				...instruction,
+				nativeFiniteString:
+					instruction.nativeFiniteString === undefined
+						? undefined
+						: {
+								minimum: instruction.nativeFiniteString.minimum,
+								stringIndices: instruction.nativeFiniteString.stringIndices.map(
+									(index) => index + base.string,
+								),
+							},
+			};
 	}
 	return assertNever(instruction);
 }

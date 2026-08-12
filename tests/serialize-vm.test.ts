@@ -248,6 +248,14 @@ describe("serialize-vm", () => {
 			arguments: [3],
 			directFunctionIndex: 1,
 		});
+		metadataInstructions.push({
+			opcode: "BINARY",
+			dst: 8,
+			left: 0,
+			right: 1,
+			operator: "+",
+			nativeFiniteString: { minimum: 0, stringIndices: [0, 1, 2] },
+		});
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
@@ -255,7 +263,7 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					instructions: metadataInstructions,
-					positions: [...mainFn.positions, 2],
+					positions: [...mainFn.positions, 2, 2],
 					gcRootRegisters: [0, 3, 7],
 					stackObjectSites: [{ instructionIndex: 4, slotCount: 2 }],
 					stackObjectAccesses: [

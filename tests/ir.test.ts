@@ -64,6 +64,57 @@ test("accepts non-index numeric-looking names in static shapes", () => {
 	).toBe(true);
 });
 
+test("proves finite strings from bounded integer loops", () => {
+	const program = compileScript(`
+		function keys() {
+			const result = [];
+			for (let i = 0; i < 8; i++) {
+				result.push("p" + i, "q" + (i % 3));
+			}
+			return result;
+		}
+		globalThis.keys = keys;
+	`);
+	executeIROptimizations(program);
+	const finite = instructionsOf(functionNamed(program, "keys")).flatMap((instruction) =>
+		instruction.type === "binary" && instruction.nativeFiniteString !== undefined
+			? [instruction.nativeFiniteString]
+			: [],
+	);
+	expect(finite).toHaveLength(2);
+	expect(
+		finite.map((table) =>
+			table.stringIndices.map((index) =>
+				String.fromCharCode(...program.stringConstants[index]!),
+			),
+		),
+	).toEqual([
+		["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7"],
+		["q0", "q1", "q2"],
+	]);
+});
+
+test("leaves unbounded and non-integer string concatenation generic", () => {
+	const program = compileScript(`
+		function dynamic(value) { return "p" + value; }
+		function fractional() {
+			const result = [];
+			for (let i = 0.5; i < 4; i++) result.push("q" + i);
+			return result;
+		}
+		globalThis.keep = [dynamic, fractional];
+	`);
+	executeIROptimizations(program);
+	for (const name of ["dynamic", "fractional"]) {
+		expect(
+			instructionsOf(functionNamed(program, name)).some(
+				(instruction) =>
+					instruction.type === "binary" && instruction.nativeFiniteString !== undefined,
+			),
+		).toBe(false);
+	}
+});
+
 test("reuses an otherwise-unobserved object rest value for a leading spread", () => {
 	const program = compileScript(`
 		function normalize({ id, ...rest }) {

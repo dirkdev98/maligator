@@ -518,6 +518,24 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(/__nf_\d+_value == r\d+/);
 	});
 
+	it("selects proven finite loop strings from the program image", () => {
+		const output = emit(
+			`"use strict"; function keys() { const out = []; for (let i = 0; i < 8; i++) out.push("p" + i, "q" + (i % 3)); return out; } globalThis.keys = keys;`,
+		);
+		expect(output).toContain("static const i32 __finite_string_");
+		expect(output).toMatch(
+			/mal_value_from_string\(&mal_strings\[__finite_string_\d+\[\(i32\)/,
+		);
+	});
+
+	it("keeps unbounded literal concatenation on the generic operator", () => {
+		const output = emit(
+			`"use strict"; function key(value) { return "p" + value; } globalThis.key = key;`,
+		);
+		expect(output).not.toContain("__finite_string_");
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
+	});
+
 	it("uses compound assignments for in-place numeric updates", () => {
 		const output = emit(
 			`"use strict"; function count(limit) { let value = 0; while (value < limit) value++; return value; } globalThis.count = count;`,

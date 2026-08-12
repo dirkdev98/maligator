@@ -2362,6 +2362,25 @@ function emitInstruction(
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			const fusion = instruction.nativeNumericFusion;
+			const finiteString = instruction.nativeFiniteString;
+			if (
+				operator === "+" &&
+				finiteString !== undefined &&
+				finiteString.stringIndices.length > 0
+			) {
+				const table = `__finite_string_${ip}`;
+				const finiteNumber = rightIsNum
+					? num(right)
+					: `mal_ops_number_as_f64(${boxed(right)})`;
+				const offset =
+					finiteString.minimum === 0
+						? `(i32) ${finiteNumber}`
+						: `(i32) ${finiteNumber} - (${finiteString.minimum})`;
+				return [
+					`static const i32 ${table}[] = { ${finiteString.stringIndices.join(", ")} };`,
+					`r${dst} = mal_value_from_string(&mal_strings${suffix}[${table}[${offset}]]);`,
+				];
+			}
 			if (operator === "in") {
 				const numberGuard = leftIsNum ? "" : `mal_ops_is_number(${boxed(left)}) && `;
 				return [

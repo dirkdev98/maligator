@@ -110,6 +110,14 @@ describe("Test262 VM definition merger", () => {
 				arguments: [],
 				directFunctionIndex: 0,
 			},
+			{
+				opcode: "BINARY",
+				dst: 0,
+				left: 1,
+				right: 2,
+				operator: "+",
+				nativeFiniteString: { minimum: 0, stringIndices: [0] },
+			},
 		];
 		const second = definition({
 			functions: [vmFunction(indexed)],
@@ -172,6 +180,9 @@ describe("Test262 VM definition merger", () => {
 			directCallTargetFunctionIndex: 2,
 		});
 		expect(rebased[17]).toMatchObject({ directFunctionIndex: 2 });
+		expect(rebased[18]).toMatchObject({
+			nativeFiniteString: { minimum: 0, stringIndices: [2] },
+		});
 		expect(second.functions[0]!.instructions).toEqual(indexed);
 	});
 

@@ -17,9 +17,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 20 for source-entry metadata combined with guarded inherited
-// stack-object metadata; both branches had independently consumed version 19.
-export const WIRE_VERSION = 20;
+// Bumped to 21 for finite-string native compiler metadata.
+export const WIRE_VERSION = 21;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -631,7 +630,9 @@ export function serializeVmDefinition(
 					return instruction.directFunctionIndex !== undefined;
 				}
 				return (
-					instruction.opcode === "BINARY" && instruction.nativeNumericFusion !== undefined
+					instruction.opcode === "BINARY" &&
+					(instruction.nativeNumericFusion !== undefined ||
+						instruction.nativeFiniteString !== undefined)
 				);
 			});
 		w.u32(instructionMetadata.length);
@@ -658,6 +659,13 @@ export function serializeVmDefinition(
 			} else if (instruction.opcode === "CONSTRUCT") {
 				w.u8(2);
 				w.i32(instruction.directFunctionIndex!);
+			} else if (
+				instruction.opcode === "BINARY" &&
+				instruction.nativeFiniteString !== undefined
+			) {
+				w.u8(4);
+				w.i32(instruction.nativeFiniteString.minimum);
+				w.i32Array(instruction.nativeFiniteString.stringIndices);
 			} else if (instruction.opcode === "BINARY") {
 				w.u8(3);
 				const fusion = instruction.nativeNumericFusion!;
@@ -1434,6 +1442,17 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				} else {
 					throw new RangeError("serialize-vm: invalid numeric-fusion role");
 				}
+			} else if (tag === 4 && instruction.opcode === "BINARY") {
+				const minimum = r.i32();
+				const stringIndices = r.i32Array();
+				if (
+					stringIndices.length === 0 ||
+					stringIndices.length > 32 ||
+					stringIndices.some((index) => index < 0 || index >= stringConstants.length)
+				) {
+					throw new RangeError("serialize-vm: invalid finite-string metadata");
+				}
+				instruction.nativeFiniteString = { minimum, stringIndices };
 			} else {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",

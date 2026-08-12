@@ -940,6 +940,10 @@ export type VmInstruction =
 							operator: IRBinaryOperator;
 						};
 				  };
+			nativeFiniteString?: {
+				minimum: number;
+				stringIndices: Array<number>;
+			};
 	  }
 	| {
 			opcode: "UNARY";
@@ -2026,6 +2030,14 @@ function lowerInstructionToVmInstruction(
 				right: instruction.registers[2],
 				operator: instruction.operator,
 				...(nativeNumericFusion === undefined ? {} : { nativeNumericFusion }),
+				...(instruction.nativeFiniteString === undefined
+					? {}
+					: {
+							nativeFiniteString: {
+								minimum: instruction.nativeFiniteString.minimum,
+								stringIndices: [...instruction.nativeFiniteString.stringIndices],
+							},
+						}),
 			};
 		}
 		case "unary":
