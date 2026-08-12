@@ -105,6 +105,22 @@ export const ok = <const ValueType>(value: ValueType): Result<never, ValueType> 
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "const-generic-arrow.ts"));
 	});
 
+	test("does not treat const assertions as variable declarations", () => {
+		const source = `const parseWidget = (valid: boolean) => {
+	if (!valid) {
+		return { found: false as const, invalid: true as const };
+	}
+	return { found: true as const, value: "ok" };
+};
+console.log(parseWidget(false));`;
+		const stripped = stripCompactTypes(source, "object-property-as-const.ts");
+
+		expect(stripped).toBe(
+			stripTypesWithTypeScript(source, "object-property-as-const.ts"),
+		);
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
 	test("does not pair comparisons with later nested arrow tokens", () => {
 		const source = `interface Projection { readonly value: number }
 interface Service { readonly create: () => Projection }

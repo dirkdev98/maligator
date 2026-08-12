@@ -996,6 +996,14 @@ function blankVariableAnnotations(
 ): void {
 	for (const word of words) {
 		if (word.text !== "const" && word.text !== "let" && word.text !== "var") continue;
+		// `const` is also the complete type in an `as const` assertion. The
+		// assertion pass erases it later; treating it as a declaration here can
+		// consume following object-literal properties as variable annotations.
+		if (
+			word.text === "const" &&
+			wordAtPreviousCode(source, code, word.start)?.text === "as"
+		)
+			continue;
 		// `const` is also an erasable modifier on a TypeScript type parameter.
 		// Treating `<const Value>` as a declaration starts an annotation scan in the
 		// middle of the generic arrow and can erase its complete implementation.
