@@ -21,7 +21,7 @@ use it to produce and run a production application binary.
 
 ### Production build creation
 
-- [ ] Smoke-test the production CLI without the repository or Node.js on `PATH`,
+- [x] Smoke-test the production CLI without the repository or Node.js on `PATH`,
       including `--help`, `--version`, `doctor`, `init`, `build --production`, and
       running the resulting application.
 

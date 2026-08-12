@@ -198,13 +198,18 @@ test("traverses the complete pinned Express initialization graph", () => {
 		"isIP",
 	]);
 	expect(graph.modules.get("node:os")?.host?.named).toEqual([
+		"EOL",
 		"arch",
 		"availableParallelism",
 		"cpus",
+		"devNull",
+		"endianness",
+		"homedir",
 		"hostname",
 		"platform",
 		"release",
 		"tmpdir",
+		"type",
 	]);
 });
 
