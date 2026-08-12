@@ -1696,6 +1696,19 @@ interface RegionAccess {
 }
 
 /**
+ * One adjacent static Get + direct String#charCodeAt call. No instruction can
+ * observe or invalidate state between the two operations, so native emission may
+ * keep the complete pair behind one watched-method license while retaining the
+ * original Get+Call in a cold fallback.
+ */
+interface StringCharCodeAtFusion {
+	loadIp: number;
+	callIp: number;
+	load: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+	call: Extract<VmInstruction, { opcode: "CALL" }>;
+}
+
+/**
  * One exact natural loop that may execute a dependency-backed inherited static
  * load through a cloned native fast body. The ordinary body remains in place as
  * the generic twin. Entry and post-safepoint validation prove the IC row before
@@ -2411,6 +2424,32 @@ function emitBody(
 		}
 	}
 
+	const stringCharCodeAtFusionByIp = new Map<number, StringCharCodeAtFusion>();
+	for (let loadIp = 0; loadIp + 1 < fn.instructions.length; loadIp++) {
+		const load = fn.instructions[loadIp]!;
+		const call = fn.instructions[loadIp + 1]!;
+		if (
+			load.opcode !== "LOAD_PROPERTY_STATIC" ||
+			call.opcode !== "CALL" ||
+			call.directStringCharCodeAt !== true ||
+			call.callee !== load.dst ||
+			call.thisValue !== load.object ||
+			jumpTargets.has(loadIp + 1) ||
+			handlerTargets[loadIp] !== handlerTargets[loadIp + 1] ||
+			regionGuard.get(loadIp)?.consolidated === true
+		) {
+			continue;
+		}
+		const fusion: StringCharCodeAtFusion = {
+			loadIp,
+			callIp: loadIp + 1,
+			load,
+			call,
+		};
+		stringCharCodeAtFusionByIp.set(loadIp, fusion);
+		stringCharCodeAtFusionByIp.set(loadIp + 1, fusion);
+	}
+
 	const lines: Array<string> = denseIteratorCursors.map(
 		(cursor) => `MalIteratorObject *${cursor.name} = nullptr;`,
 	);
@@ -2421,6 +2460,7 @@ function emitBody(
 		}
 	}
 	if (
+		stringCharCodeAtFusionByIp.size > 0 ||
 		fn.instructions.some(
 			(instruction, ip) =>
 				loopBody.has(ip) && instruction.opcode === "LOAD_PROPERTY_STATIC",
@@ -2552,6 +2592,7 @@ function emitBody(
 						publishPosition: debug,
 					}
 				: undefined,
+			stringCharCodeAtFusionByIp.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -2613,6 +2654,7 @@ function emitInstruction(
 	mappedArgumentSlots: Array<number>,
 	hasPrototype: boolean,
 	loopTwinEmission?: LoopTwinEmission,
+	stringCharCodeAtFusion?: StringCharCodeAtFusion,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -2980,6 +3022,9 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (stringCharCodeAtFusion !== undefined && stringCharCodeAtFusion.loadIp === ip) {
+				return [];
+			}
 			if (
 				loopTwinEmission?.kind === "fast" &&
 				ip === loopTwinEmission.twin.propertyIp &&
@@ -4040,6 +4085,29 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (stringCharCodeAtFusion !== undefined && stringCharCodeAtFusion.callIp === ip) {
+				const fusion = stringCharCodeAtFusion;
+				const receiver = boxedOperand(instruction.thisValue);
+				const firstNumber = args.length === 0 ? "0.0" : nativeNumberOperand(args[0]!);
+				const numberGuard =
+					firstNumber !== null ? "true" : `mal_ops_is_number(${boxedOperand(args[0]!)})`;
+				const position =
+					firstNumber ?? `mal_ops_number_as_f64(${boxedOperand(args[0]!)})`;
+				const callee = `r${fusion.load.dst}`;
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`if (mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${fusion.load.icIndex}], &${callee}) && mal_value_is_string(${receiver}) && ${numberGuard}) {`,
+					`  r${instruction.dst} = mal_builtin_string_char_code_at_number(${receiver}, ${position});`,
+					`} else {`,
+					`  ${callee} = mal_vm_op_load_property_ic(vm, ${boxedOperand(fusion.load.object)}, mal_value_from_string(vm->string_constant_atoms[${fusion.load.stringIndex}]), &__property_ic[${fusion.load.icIndex}]);`,
+					`  ${throwCheck}`,
+					`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${callee}, ${receiver}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`  ${poll}`,
+					`}`,
+				];
+			}
 			if (cardinalityPush !== undefined) {
 				const target = cardinalityPush;
 				const fastResult =

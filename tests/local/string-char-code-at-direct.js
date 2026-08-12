@@ -40,6 +40,15 @@ const ownMethod = {
 ok("non-string receiver", codeUnit(ownMethod, 2) === 42);
 
 const original = String.prototype.charCodeAt;
+function mutateThenRead(value, index) {
+	String.prototype.charCodeAt = function (position) {
+		return this.length + position;
+	};
+	return value.charCodeAt(index);
+}
+ok("same-activation epoch invalidation", mutateThenRead("epoch", 3) === 8);
+String.prototype.charCodeAt = original;
+
 String.prototype.charCodeAt = function (value) {
 	return this.length + value;
 };
@@ -47,5 +56,5 @@ ok("prototype replacement", codeUnit("override", 3) === 11);
 String.prototype.charCodeAt = original;
 ok("restored method remains conformant", codeUnit("Z", 0) === 90);
 
-ok("checks ran", passed === 11);
+ok("checks ran", passed === 12);
 console.log("string-char-code-at-direct PASS");

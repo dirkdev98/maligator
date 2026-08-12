@@ -922,6 +922,13 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.codeUnit = codeUnit;
 		`);
+		expect(output).toContain(
+			"mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING",
+		);
+		expect(output).toContain("mal_builtin_string_char_code_at_number(");
+		// The original Get+Call remains in the cold arm for non-String receivers,
+		// coercible arguments, cold ICs, and invalidated watched-method epochs.
+		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
 		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
 		expect(output).toContain(", 1);");
 	});

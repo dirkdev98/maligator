@@ -1031,6 +1031,39 @@ static inline bool mal_vm_local_watched_inherited_value_try_load_static(
     return true;
 }
 
+/**
+ * Static-name proof for a watched primitive method inside compiled optimistic
+ * regions. The function-entry snapshot is zero unless the legacy protector was
+ * live; every later watched-method mutation bumps the family epoch. Exact Realm
+ * and prototype identity keep a cache row from crossing intrinsic families.
+ *
+ * `expected_kind` is supplied by compiler metadata for the fused builtin
+ * protocol. The receiver is deliberately not inspected here: a region may
+ * process many primitive values under the same licensed method row, and its
+ * per-operation brand proof/check remains separate.
+ */
+static inline bool mal_vm_local_watched_primitive_value_try_load_static(
+    const MalVm *vm, u64 watched_methods_epoch, u8 expected_kind,
+    const MalInlineCache *ic, MalValue *out
+) {
+    if (watched_methods_epoch == 0 ||
+        watched_methods_epoch != vm->semantic_epochs.watched_methods ||
+        ic->mode != MAL_IC_MODE_PRIMITIVE_VALUE || ic->prim_kind != expected_kind
+#if MAL_REALMS
+        || ic->realm != vm->current_realm
+#endif
+    ) {
+        return false;
+    }
+    MalIntrinsic slot = mal_vm_primitive_method_proto_slot(expected_kind);
+    if (ic->prototype != (const MalObject *) mal_value_to_heap(vm->intrinsics[slot])) {
+        return false;
+    }
+    *out = ic->value;
+    mal_perf_ic_load_primitive_hit();
+    return true;
+}
+
 /** Guarded inherited data-property slot/entry hit, plus the watched-value fallback. */
 static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
                                               const MalInlineCache *ic, MalValue *out) {

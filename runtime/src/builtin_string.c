@@ -631,13 +631,8 @@ MalCompletion mal_builtin_string_char_code_at_direct(
         (arg_count == 0 || mal_ops_is_number(args[0]))) {
         f64 position = arg_count == 0
             ? 0
-            : mal_ops_number_to_integer_or_infinity(
-                mal_ops_number_as_f64(args[0]));
-        MalString *string = mal_value_to_string(this_value);
-        MalValue result = position < 0 || position >= (f64) mal_string_length(string)
-            ? mal_value_new_nan()
-            : mal_value_from_i32(mal_string_code_units(string)[(usize) position]);
-        MAL_PERF_COUNT(string_char_code_at_direct_hits);
+            : mal_ops_number_as_f64(args[0]);
+        MalValue result = mal_builtin_string_char_code_at_number(this_value, position);
         return (MalCompletion) {
             .kind = MAL_COMPLETION_NORMAL,
             .value = result,
