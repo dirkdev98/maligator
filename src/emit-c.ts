@@ -581,6 +581,7 @@ export function emitCompiledFunction(
 	// an empty promotable set (no speculation, no guard, no further fallback).
 	override?: { symbol: string; promotable: Set<number> },
 	linkage: "static" | "external" = "static",
+	directCompiledTargets: ReadonlySet<number> = new Set(),
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -903,6 +904,7 @@ export function emitCompiledFunction(
 		cardinalityRegions,
 		cardinalityAccesses,
 		cardinalityPushes,
+		directCompiledTargets,
 	);
 	if (body === null) {
 		return null;
@@ -936,10 +938,15 @@ export function emitCompiledFunction(
 	let bailTarget = "";
 	if (promotedParams.length > 0) {
 		const boxedSymbol = `mal_compiled_${index}_boxed${suffix}`;
-		const boxed = emitCompiledFunction(fn, index, suffix, debug, {
-			symbol: boxedSymbol,
-			promotable: new Set(),
-		});
+		const boxed = emitCompiledFunction(
+			fn,
+			index,
+			suffix,
+			debug,
+			{ symbol: boxedSymbol, promotable: new Set() },
+			linkage,
+			directCompiledTargets,
+		);
 		if (boxed === null) {
 			return null; // the promoting variant lowered, so this cannot happen
 		}
@@ -1182,6 +1189,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
+		new Set(),
 	);
 	if (body === null) {
 		return null;
@@ -1689,6 +1697,7 @@ function emitBody(
 		}
 	>,
 	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
+	directCompiledTargets: ReadonlySet<number>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -2020,6 +2029,7 @@ function emitBody(
 			cardinalityRegions.get(ip),
 			cardinalityAccesses.get(ip),
 			cardinalityPushes.get(ip),
+			directCompiledTargets,
 			mathUnaryCalls.has(ip),
 			mathBinaryCalls.has(ip),
 			loopBody.has(ip),
@@ -2079,6 +2089,7 @@ function emitInstruction(
 		  }
 		| undefined,
 	cardinalityPush: CardinalityRegion | undefined,
+	directCompiledTargets: ReadonlySet<number>,
 	mathUnaryCall: boolean,
 	mathBinaryCall: boolean,
 	loopStaticPropertyFastPath: boolean,
@@ -2457,6 +2468,7 @@ function emitInstruction(
 					undefined,
 					undefined,
 					undefined,
+					directCompiledTargets,
 					mathUnaryCall,
 					mathBinaryCall,
 					loopStaticPropertyFastPath,
@@ -2551,6 +2563,7 @@ function emitInstruction(
 					undefined,
 					undefined,
 					undefined,
+					directCompiledTargets,
 					mathUnaryCall,
 					mathBinaryCall,
 					loopStaticPropertyFastPath,
@@ -2594,6 +2607,7 @@ function emitInstruction(
 						undefined,
 						undefined,
 						undefined,
+						directCompiledTargets,
 						mathUnaryCall,
 						mathBinaryCall,
 						loopStaticPropertyFastPath,
@@ -2635,6 +2649,7 @@ function emitInstruction(
 					undefined,
 					undefined,
 					undefined,
+					directCompiledTargets,
 					mathUnaryCall,
 					mathBinaryCall,
 					loopStaticPropertyFastPath,
@@ -2813,6 +2828,7 @@ function emitInstruction(
 						undefined,
 						undefined,
 						undefined,
+						directCompiledTargets,
 						mathUnaryCall,
 						mathBinaryCall,
 						loopStaticPropertyFastPath,
@@ -3440,6 +3456,29 @@ function emitInstruction(
 				];
 			}
 			if (instruction.directFunctionIndex !== undefined) {
+				const target = instruction.directFunctionIndex;
+				if (directCompiledTargets.has(target)) {
+					const directCallee = `__direct_callee_${ip}`;
+					const directFunction = `__direct_function_${ip}`;
+					const directValue = `__direct_value_${ip}`;
+					return [
+						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
+						`if (mal_vm_callee_has_index(vm, ${directCallee}, ${target})) {`,
+						`  if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
+						`  const MalFunction *${directFunction} = &vm->definition->functions[${target}];`,
+						`  MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
+						`  mal_vm_leave_compiled(vm);`,
+						`  if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${directValue};`,
+						`} else {`,
+						`  static MalCallCache __cc_${ip};`,
+						`  MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${target}, ${directCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${tmp}.value;`,
+						`}`,
+						poll,
+					];
+				}
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${instruction.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,

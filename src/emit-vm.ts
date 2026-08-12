@@ -476,7 +476,7 @@ function emitVmDefinitionSource(
 	// Native-backend functions. Emitted before the MalFunction table (which
 	// references their symbols) and after the constant pools (which they may
 	// reference). The bytecode is still emitted below as a fallback / for `new`.
-	const compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) => {
+	let compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) => {
 		if (!useCompiled) return null;
 		const emitted = emitCompiledFunction(
 			fn,
@@ -496,6 +496,49 @@ function emitVmDefinitionSource(
 		}
 		return emitted;
 	});
+	// A single translation unit can make an exact script call a real direct C
+	// call. First determine which functions lower successfully, then re-emit with
+	// that closed target set; split units retain the external runtime call seam so
+	// they need no cross-unit availability/linkage protocol.
+	if (!splitCompiledFunctions && maxCompiledFunctionCodeUnits === undefined) {
+		const compiledTargets = new Set<number>();
+		compiled.forEach((fn, index) => {
+			if (fn !== null) compiledTargets.add(index);
+		});
+		const directCompiledTargets = new Set<number>();
+		for (const fn of definition.functions) {
+			for (const instruction of fn.instructions) {
+				if (
+					instruction.opcode === "CALL" &&
+					instruction.directFunctionIndex !== undefined &&
+					compiledTargets.has(instruction.directFunctionIndex)
+				) {
+					directCompiledTargets.add(instruction.directFunctionIndex);
+				}
+			}
+		}
+		compiled = definition.functions.map((fn, i) => {
+			if (!compiledTargets.has(i)) return null;
+			return emitCompiledFunction(
+				fn,
+				i,
+				suffix,
+				debug,
+				undefined,
+				"static",
+				directCompiledTargets,
+			);
+		});
+		if (directCompiledTargets.size > 0) {
+			for (let index = 0; index < compiled.length; index++) {
+				const fn = compiled[index];
+				if (fn !== undefined && fn !== null && directCompiledTargets.has(index)) {
+					lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
+				}
+			}
+			lines.push("");
+		}
+	}
 	if (splitCompiledFunctions) {
 		if (compiled.some((fn) => fn !== null)) {
 			lines.push(

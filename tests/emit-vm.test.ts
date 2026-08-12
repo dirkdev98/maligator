@@ -744,6 +744,10 @@ describe("native update-expression representation", () => {
 		`);
 		expect(output).toContain("mal_vm_call_direct(vm,");
 		expect(output).toContain(", 1,");
+		expect(output).toContain("mal_vm_callee_has_index(vm,");
+		expect(output).toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
+		expect(output).toContain("mal_vm_enter_compiled(vm, 1)");
+		expect(output).toContain("mal_vm_leave_compiled(vm)");
 	});
 
 	it("emits guarded Function.prototype.call flattening with a shifted exact target", () => {
