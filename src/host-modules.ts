@@ -96,6 +96,7 @@ const FS: HostModuleSpec = {
 	id: "node:fs",
 	named: [
 		"Stats",
+		"appendFileSync",
 		"copyFileSync",
 		"createReadStream",
 		"existsSync",
@@ -111,6 +112,7 @@ const FS: HostModuleSpec = {
 		"rmSync",
 		"statSync",
 		"stat",
+		"unlinkSync",
 		"write",
 		"writeFileSync",
 		"writeSync",
@@ -122,6 +124,7 @@ const FS: HostModuleSpec = {
 const FS_PROMISES: HostModuleSpec = {
 	id: "node:fs/promises",
 	named: [
+		"appendFile",
 		"copyFile",
 		"lstat",
 		"mkdir",
@@ -130,6 +133,7 @@ const FS_PROMISES: HostModuleSpec = {
 		"rename",
 		"rm",
 		"stat",
+		"unlink",
 		"writeFile",
 	],
 	hasDefault: true,

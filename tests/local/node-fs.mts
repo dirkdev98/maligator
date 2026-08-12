@@ -1,5 +1,6 @@
 import {
 	Stats,
+	appendFileSync,
 	copyFileSync,
 	existsSync,
 	lstatSync,
@@ -12,9 +13,11 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import fsPromises, {
+	appendFile,
 	copyFile,
 	lstat,
 	mkdir,
@@ -23,6 +26,7 @@ import fsPromises, {
 	rename,
 	rm,
 	stat,
+	unlink,
 	writeFile,
 } from "node:fs/promises";
 
@@ -58,10 +62,26 @@ mkdirSync(nested, { recursive: true });
 check("recursive mkdir accepts an existing directory", statSync(nested).isDirectory());
 
 writeFileSync(textFile, "héllo 😀");
-eq("readFileSync decodes UTF-8", readFileSync(textFile, "utf8"), "héllo 😀");
+appendFileSync(textFile, " + sync");
+eq("appendFileSync appends text", readFileSync(textFile, "utf8"), "héllo 😀 + sync");
+await appendFile(textFile, " + promise");
+eq(
+	"promise appendFile appends text",
+	readFileSync(textFile, "utf8"),
+	"héllo 😀 + sync + promise",
+);
+eq(
+	"readFileSync decodes UTF-8",
+	readFileSync(textFile, "utf8"),
+	"héllo 😀 + sync + promise",
+);
 const textBuffer = readFileSync(textFile);
 check("readFileSync returns Buffer without encoding", Buffer.isBuffer(textBuffer));
-eq("readFileSync Buffer decodes UTF-8 by default", textBuffer.toString(), "héllo 😀");
+eq(
+	"readFileSync Buffer decodes UTF-8 by default",
+	textBuffer.toString(),
+	"héllo 😀 + sync + promise",
+);
 
 const framed = new Uint8Array([9, 65, 0, 66, 9]);
 writeFileSync(byteFile, framed.subarray(1, 4));
@@ -85,7 +105,7 @@ const asyncText = await new Promise<string>((resolve, reject) => {
 	});
 	callbackOrder.push("after");
 });
-eq("readFile decodes UTF-8", asyncText, "héllo 😀");
+eq("readFile decodes UTF-8", asyncText, "héllo 😀 + sync + promise");
 eq("readFile callback is deferred", callbackOrder.join(","), "before,after,callback");
 const asyncBuffer = await new Promise<Buffer>((resolve, reject) => {
 	readFile(byteFile, (error, value) => {
@@ -146,7 +166,11 @@ check(
 	fsPromises.lstat === lstat && fsPromises.readdir === readdir,
 );
 check("promise lstat returns Stats", (await lstat(textFile)).isFile());
-eq("promise readFile decodes UTF-8", await readFilePromise(textFile, "utf8"), "héllo 😀");
+eq(
+	"promise readFile decodes UTF-8",
+	await readFilePromise(textFile, "utf8"),
+	"héllo 😀 + sync + promise",
+);
 const promiseOrder = ["before"];
 const promisedEntries = readdir(nested, { withFileTypes: true }).then((value) => {
 	promiseOrder.push("fulfilled");
@@ -188,7 +212,11 @@ try {
 eq("promise readdir rejects with errno", promisedMissingCode, "ENOENT");
 
 copyFileSync(textFile, copiedFile);
-eq("copyFileSync copies contents", readFileSync(copiedFile, "utf8"), "héllo 😀");
+eq(
+	"copyFileSync copies contents",
+	readFileSync(copiedFile, "utf8"),
+	"héllo 😀 + sync + promise",
+);
 check(
 	"realpathSync resolves an existing path",
 	realpathSync(copiedFile).endsWith("/a/b/copied.txt"),
@@ -238,8 +266,11 @@ check(
 rmSync(temporary, { recursive: true, force: true });
 eq("rmSync recursively removes a directory", existsSync(temporary), false);
 rmSync(`${root}/already-missing`, { recursive: true, force: true });
-rmSync(copiedFile);
-eq("rmSync removes a file", existsSync(copiedFile), false);
+unlinkSync(copiedFile);
+eq("unlinkSync removes a file", existsSync(copiedFile), false);
+writeFileSync(copiedFile, "delete me");
+await unlink(copiedFile);
+eq("promise unlink removes a file", existsSync(copiedFile), false);
 
 let missingCode = "";
 let missingSyscall = "";
