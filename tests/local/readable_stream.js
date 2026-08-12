@@ -43,7 +43,10 @@ async function run() {
 		"globals",
 		typeof ReadableStream === "function" &&
 			typeof ReadableStreamDefaultController === "function" &&
+			typeof ReadableByteStreamController === "function" &&
 			typeof ReadableStreamDefaultReader === "function" &&
+			typeof ReadableStreamBYOBReader === "function" &&
+			typeof ReadableStreamBYOBRequest === "function" &&
 			typeof CountQueuingStrategy === "function" &&
 			typeof ByteLengthQueuingStrategy === "function",
 	);
@@ -116,6 +119,87 @@ async function run() {
 		"close after queued chunks",
 		q3.done && q3.value === undefined && queuedController.desiredSize === 0,
 	);
+
+	let byteController;
+	const byteChunk = new Uint16Array([0x0201, 0x0403]);
+	const byteStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			byteController = controller;
+			controller.enqueue(byteChunk);
+			controller.close();
+		},
+	});
+	const byteRead = await byteStream.getReader().read();
+	check(
+		"public byte source controller and default read",
+		byteController instanceof ReadableByteStreamController &&
+			!(byteController instanceof ReadableStreamDefaultController) &&
+			byteController.byobRequest === null &&
+			byteRead.value instanceof Uint8Array &&
+			byteRead.value.byteLength === byteChunk.byteLength &&
+			byteRead.value[0] === 1 &&
+			byteRead.value[1] === 2 &&
+			byteChunk.byteLength === 4 &&
+			byteController.desiredSize === 0,
+	);
+
+	let byteByobController;
+	const byteByobStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			byteByobController = controller;
+			controller.enqueue(new Uint8Array([5, 6, 7]));
+			controller.close();
+		},
+	});
+	const byteByobReader = byteByobStream.getReader({ mode: "byob" });
+	const byteByobFirst = await byteByobReader.read(new Uint8Array(2));
+	const byteByobSecond = await byteByobReader.read(new Uint8Array(2));
+	const byteByobDone = await byteByobReader.read(new Uint8Array(1));
+	check(
+		"public byte source supports queued BYOB reads",
+		byteByobController.desiredSize === 0 &&
+			byteByobFirst.value[0] === 5 &&
+			byteByobFirst.value[1] === 6 &&
+			byteByobSecond.value.byteLength === 1 &&
+			byteByobSecond.value[0] === 7 &&
+			byteByobDone.done &&
+			byteByobDone.value.byteLength === 0,
+	);
+
+	let byteCrossBrandRejected = false;
+	try {
+		ReadableStreamDefaultController.prototype.enqueue.call(
+			byteController,
+			new Uint8Array([1]),
+		);
+	} catch (error) {
+		byteCrossBrandRejected = error instanceof TypeError;
+	}
+	let directByteControllerRejected = false;
+	let directByobRequestRejected = false;
+	try {
+		new ReadableByteStreamController();
+	} catch (error) {
+		directByteControllerRejected = error instanceof TypeError;
+	}
+	try {
+		new ReadableStreamBYOBRequest(byteController, new Uint8Array(1));
+	} catch (error) {
+		directByobRequestRejected = error instanceof TypeError;
+	}
+	check(
+		"byte stream brands and direct constructors",
+		byteCrossBrandRejected && directByteControllerRejected && directByobRequestRejected,
+	);
+	let byteStrategySizeRejected = false;
+	try {
+		new ReadableStream({ type: "bytes" }, { size() {} });
+	} catch (error) {
+		byteStrategySizeRejected = error instanceof RangeError;
+	}
+	check("byte stream rejects a strategy size function", byteStrategySizeRejected);
 
 	let pendingController;
 	const pendingStream = new ReadableStream({
