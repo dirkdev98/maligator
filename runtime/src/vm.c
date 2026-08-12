@@ -417,6 +417,11 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->tiny_string_cache = nullptr;
     vm->small_uint_string_cache = nullptr;
     vm->small_uint_string_cache_scan_limit = 0;
+    vm->semantic_epochs = (MalSemanticEpochs) {
+        .activity = 1,
+        .array_elements = 1,
+        .watched_methods = 1,
+    };
     mal_gc_init(vm);
 
     if (definition->initialize_generated_data != nullptr) {

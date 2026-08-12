@@ -6,6 +6,7 @@
 #include "gc.h"
 #include "perf_stats.h"
 #include "value_ops.h"
+#include "vm.h"
 
 /**
  * Array fast-elements protector. True while neither %Array.prototype% nor
@@ -24,6 +25,30 @@ bool mal_array_elements_protector = true;
  * define/set/delete/reparent clears it (see `watched_method_proto`).
  */
 bool mal_primitive_method_protector = true;
+
+/** Zero is the permanently exhausted state, matching the prototype-chain epoch. */
+static void mal_semantic_epoch_bump(u64 *epoch) {
+    if (*epoch == 0) return;
+    *epoch = *epoch == UINT64_MAX ? 0 : *epoch + 1;
+}
+
+void mal_invalidate_array_elements_protector(void) {
+    mal_array_elements_protector = false;
+    // Like RAW allocation and every other MOP helper today, mutation runs on the
+    // process's one active VM. A future multi-VM scheduler must pass/activate the
+    // owning VM here before per-VM epochs can remain sound.
+    MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
+    mal_semantic_epoch_bump(&epochs->activity);
+    mal_semantic_epoch_bump(&epochs->array_elements);
+}
+
+void mal_invalidate_primitive_method_protector(void) {
+    mal_primitive_method_protector = false;
+    // See the active-VM ownership invariant above.
+    MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
+    mal_semantic_epoch_bump(&epochs->activity);
+    mal_semantic_epoch_bump(&epochs->watched_methods);
+}
 
 /* Generational card barrier for a property descriptor stored into `owner`'s
  * dictionary table: any of value/getter/setter may be a young heap pointer. No-op
@@ -191,10 +216,10 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
     // Reparenting a watched prototype changes every default-proto array's inherited
     // chain, so the fast-elements protector no longer holds.
     if (object->fast_elements_proto) {
-        mal_array_elements_protector = false;
+        mal_invalidate_array_elements_protector();
     }
     if (object->watched_method_proto) {
-        mal_primitive_method_protector = false;
+        mal_invalidate_primitive_method_protector();
     }
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_reparent_invalidations);
@@ -336,12 +361,12 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     // %Object.prototype%) dirties the fast-elements protector — an inherited indexed
     // property could now intercept an array's fresh-index store.
     if (key.kind == MAL_KEY_INDEX && object->fast_elements_proto) {
-        mal_array_elements_protector = false;
+        mal_invalidate_array_elements_protector();
     }
     // Defining any property on a watched primitive prototype invalidates the
     // primitive-method cache (a new/changed method could shadow a cached lookup).
     if (object->watched_method_proto) {
-        mal_primitive_method_protector = false;
+        mal_invalidate_primitive_method_protector();
     }
 
     // Dense array element fast path. A default-data store at an integer index goes
@@ -512,7 +537,7 @@ bool mal_object_try_append_shaped_values(
     }
 
     if (object->watched_method_proto) {
-        mal_primitive_method_protector = false;
+        mal_invalidate_primitive_method_protector();
     }
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_append_invalidations);
@@ -533,7 +558,7 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
         MAL_PERF_COUNT(prototype_epoch_delete_invalidations);
     }
     if (object->watched_method_proto) {
-        mal_primitive_method_protector = false;
+        mal_invalidate_primitive_method_protector();
     }
     // Dense array element: a present index becomes a hole (dense_delete shades the
     // dropped reference); dense elements are always configurable, so delete always
@@ -580,7 +605,7 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
     // Reassigning/adding a property on a watched primitive prototype (e.g.
     // `String.prototype.charCodeAt = fn`) invalidates the primitive-method cache.
     if (object->watched_method_proto) {
-        mal_primitive_method_protector = false;
+        mal_invalidate_primitive_method_protector();
     }
     void *resolved_entry;
     MalPropertyResolution resolution =

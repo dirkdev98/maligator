@@ -841,6 +841,8 @@ export function emitCompiledFunction(
 			allocationInstructionIndex: ip,
 			arrayRegister: receiver.register,
 			maximumLength: instruction.nativeCardinalityRegion.maximumLength,
+			semanticEpochStable: false,
+			epochName: `__cardinality_${ip}_semantic_epoch`,
 			itemSite: pushedSite,
 			itemRegister: pushedValue.register,
 			itemShapeCacheIndex: pushedInstruction.shapeCacheIndex,
@@ -876,6 +878,41 @@ export function emitCompiledFunction(
 				fieldSlot: instruction.nativeCardinalityAccess.fieldSlot,
 			});
 		}
+	}
+	for (const region of cardinalityRegions.values()) {
+		const operationIps = new Set<number>([region.allocationInstructionIndex]);
+		for (const [ip, access] of cardinalityAccesses) {
+			if (access.region === region) operationIps.add(ip);
+		}
+		for (const [ip, pushRegion] of cardinalityPushes) {
+			if (pushRegion === region) operationIps.add(ip);
+		}
+		const lastIp = Math.max(...operationIps);
+		let stable = true;
+		for (let ip = region.allocationInstructionIndex + 1; ip <= lastIp; ip++) {
+			if (operationIps.has(ip)) continue;
+			if (nativeInstructionMayInvalidateSemanticEpoch(fn.instructions[ip]!, reps)) {
+				stable = false;
+				break;
+			}
+		}
+		if (stable) {
+			const externalEntryIps = new Set<number>();
+			for (let sourceIp = 0; sourceIp < fn.instructions.length; sourceIp++) {
+				const instruction = fn.instructions[sourceIp]!;
+				if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+					if (sourceIp < region.allocationInstructionIndex || sourceIp > lastIp) {
+						externalEntryIps.add(instruction.targetIp);
+					}
+				}
+			}
+			// Exception handlers are implicit CFG entries rather than JUMP opcodes.
+			for (const handler of fn.handlers) externalEntryIps.add(handler.handlerIp);
+			stable = ![...externalEntryIps].some(
+				(targetIp) => targetIp > region.allocationInstructionIndex && targetIp <= lastIp,
+			);
+		}
+		region.semanticEpochStable = stable;
 	}
 	const totalSlots = nextStackSlot;
 
@@ -1048,6 +1085,7 @@ export function emitCompiledFunction(
 	}
 	for (const region of cardinalityRegions.values()) {
 		lines.push(`    bool ${region.fastName} = false;`);
+		lines.push(`    u64 ${region.epochName} = 0;`);
 		lines.push(`    u32 ${region.countName} = 0;`);
 		lines.push(`    MalShape *${region.shapeName} = nullptr;`);
 		lines.push(`    bool ${region.currentMaterializedName} = false;`);
@@ -1547,6 +1585,39 @@ function nativeInstructionMayCaptureStack(
 }
 
 /**
+ * Whether an instruction outside a cardinality region's own fast operations may
+ * synchronously run JavaScript and therefore mutate a watched semantic family.
+ * Allocation and GC are safe: this runtime's collector does not run finalizers or
+ * jobs inside a safepoint. Unknown instructions fail closed.
+ */
+function nativeInstructionMayInvalidateSemanticEpoch(
+	instruction: VmInstruction,
+	reps: Array<RegisterRep>,
+): boolean {
+	switch (instruction.opcode) {
+		case "CREATE_OBJECT":
+		case "CREATE_OBJECT_SHAPED":
+		case "CREATE_ARRAY":
+			return false;
+		case "LOAD_PROPERTY":
+		case "STORE_PROPERTY":
+			if (instruction.nativeClosedGlobalTable?.direct === true) return false;
+			return true;
+		case "BINARY":
+			if (
+				instruction.operator === "+" &&
+				instruction.nativeFiniteString !== undefined &&
+				reps[instruction.right] === "number"
+			) {
+				return false;
+			}
+			return nativeInstructionMayCaptureStack(instruction, reps);
+		default:
+			return nativeInstructionMayCaptureStack(instruction, reps);
+	}
+}
+
+/**
  * The rep an instruction's result naturally has, given current operand reps, or
  * null when an operand is still unknown (defer to a later fixpoint iteration).
  * Comparisons and `!` always yield a boolean; native arithmetic over numbers
@@ -1657,6 +1728,10 @@ interface CardinalityRegion {
 	allocationInstructionIndex: number;
 	arrayRegister: number;
 	maximumLength: number;
+	/** Every instruction in the complete virtual lifetime is unable to run JS or
+	 * invalidate either semantic family, so admission licenses all later uses. */
+	semanticEpochStable: boolean;
+	epochName: string;
 	itemSite: StackObjectSite;
 	itemRegister: number;
 	itemShapeCacheIndex: number;
@@ -2250,6 +2325,10 @@ function emitInstruction(
 		`${target.fastName} = false;`,
 		`${target.elementIndexName} = -1;`,
 	];
+	const cardinalityEpochGuard = (target: CardinalityRegion): string =>
+		target.semanticEpochStable
+			? ""
+			: ` && ${target.epochName} == vm->semantic_epochs.activity`;
 
 	// GC safepoint poll. Emitted at call returns and loop
 	// back-edges so a compiled function is interruptible for collection. Near-free
@@ -2431,6 +2510,8 @@ function emitInstruction(
 					`${cardinalityRegion.shapeName} = __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}];`,
 					`if (${cardinalityRegion.shapeName} == nullptr) { ${cardinalityRegion.shapeName} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${cardinalityRegion.itemSite.slotCount}); __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}] = ${cardinalityRegion.shapeName}; }`,
 					`${cardinalityRegion.fastName} = mal_primitive_method_protector && mal_builtin_array_push_virtual_guard(vm);`,
+					`${cardinalityRegion.epochName} = vm->semantic_epochs.activity;`,
+					`${cardinalityRegion.fastName} = ${cardinalityRegion.fastName} && ${cardinalityRegion.epochName} != 0;`,
 					`${cardinalityRegion.countName} = 0;`,
 					`${cardinalityRegion.elementIndexName} = -1;`,
 					`if (${cardinalityRegion.fastName}) {`,
@@ -2657,7 +2738,7 @@ function emitInstruction(
 					const valid = `__cardinality_${ip}_index_valid`;
 					return [
 						`f64 ${index} = 0;`,
-						`bool ${valid} = ${target.fastName} && mal_primitive_method_protector && mal_array_elements_protector && ${keyIsNumber};`,
+						`bool ${valid} = ${target.fastName}${cardinalityEpochGuard(target)} && ${keyIsNumber};`,
 						`if (${valid}) { ${index} = ${num(key)}; ${valid} = ${index} >= 0 && ${index} < (f64) ${target.countName} && ${index} == trunc(${index}); }`,
 						`if (${valid}) {`,
 						`  ${target.elementIndexName} = (i32) ${index};`,
@@ -2675,7 +2756,7 @@ function emitInstruction(
 					];
 				}
 				return [
-					`if (${target.fastName} && mal_primitive_method_protector && mal_array_elements_protector) {`,
+					`if (${target.fastName}${cardinalityEpochGuard(target)}) {`,
 					`  r${instruction.dst} = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH];`,
 					`} else {`,
 					`  if (${target.fastName}) {`,
@@ -3587,7 +3668,7 @@ function emitInstruction(
 						: `mal_value_from_i32((i32) ${target.countName})`;
 				const current = `__cardinality_${ip}_current`;
 				return [
-					`if (${target.fastName} && ${target.countName} < ${target.maximumLength} && mal_primitive_method_protector && mal_array_elements_protector) {`,
+					`if (${target.fastName} && ${target.countName} < ${target.maximumLength}${cardinalityEpochGuard(target)}) {`,
 					...Array.from(
 						{ length: target.itemSite.slotCount },
 						(_, slot) =>

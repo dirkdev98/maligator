@@ -1217,6 +1217,22 @@ typedef struct MalMapGetSetCacheEntry {
     u64 table_handle_epoch;
 } MalMapGetSetCacheEntry;
 
+/**
+ * Per-VM versions of broad semantic assumptions used by compiled proof regions.
+ * Every word starts at one and saturates to zero on theoretical u64 exhaustion;
+ * zero is permanently fail-closed. The JavaScript heap has one mutator today, so
+ * ordinary accesses are sufficient. A future multi-mutator VM must make bumps
+ * release operations and region snapshots acquire operations.
+ */
+typedef struct MalSemanticEpochs {
+    /** Advanced by every semantic-family invalidation; future re-entry dirty test. */
+    u64 activity;
+    /** Inherited integer-index behaviour of watched Array/Object prototypes. */
+    u64 array_elements;
+    /** Resolved values on watched builtin prototypes/constructors/namespaces. */
+    u64 watched_methods;
+} MalSemanticEpochs;
+
 typedef struct MalVm {
     const MalVmDefinition *definition;
 
@@ -1612,6 +1628,9 @@ typedef struct MalVm {
     struct MalString **small_uint_string_cache;
     /** One past the largest populated uint slot; bounds every GC root scan. */
     u16 small_uint_string_cache_scan_limit;
+
+    /** Tail-only semantic versions: do not perturb established hot VM offsets. */
+    MalSemanticEpochs semantic_epochs;
 } MalVm;
 
 /** Every engine heap is the unique inline heap of one MalVm. */

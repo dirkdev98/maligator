@@ -110,6 +110,15 @@ extern bool mal_array_elements_protector;
 extern bool mal_primitive_method_protector;
 
 /**
+ * Permanently clear one legacy protector and advance the current VM's matching
+ * semantic-family epoch. These remain cold mutation-path calls; generated proof
+ * regions snapshot the epochs, while existing runtime fast paths keep reading the
+ * compatibility booleans.
+ */
+void mal_invalidate_array_elements_protector(void);
+void mal_invalidate_primitive_method_protector(void);
+
+/**
  * The %Array.prototype% object (set at intrinsics init). Cached as a bare pointer so
  * the inline array index store fast path can confirm an array is on the default
  * prototype without a vm handle.

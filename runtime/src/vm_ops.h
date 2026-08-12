@@ -1268,7 +1268,7 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
         const MalShape *child = ic->poly_shape[0];
         u32 old_count = object->shape->inline_count;
         if (object->watched_method_proto) {
-            mal_primitive_method_protector = false;
+            mal_invalidate_primitive_method_protector();
         }
         if (mal_object_note_prototype_mutation(object)) {
             MAL_PERF_COUNT(prototype_epoch_define_invalidations);

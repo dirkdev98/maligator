@@ -581,7 +581,8 @@ describe("cardinality-only array and transitive record regions", () => {
 
 		const emitted = emitVmDefinition(definition, { compiled: true });
 		expect(emitted).toContain("mal_builtin_array_push_virtual_guard(vm)");
-		expect(emitted).toContain(
+		expect(emitted).toContain("vm->semantic_epochs.activity");
+		expect(emitted).not.toContain(
 			"mal_primitive_method_protector && mal_array_elements_protector",
 		);
 		expect(emitted).toContain("mal_vm_materialize_virtual_record_array");
@@ -599,6 +600,46 @@ describe("cardinality-only array and transitive record regions", () => {
 		).toBe(true);
 		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
 			"mal_vm_materialize_virtual_record_array",
+		);
+	});
+
+	it("licenses a guardless cardinality lifetime only without JS re-entry", () => {
+		const stable = emitVmDefinition(
+			compileSemanticProgramToVmDefinition(
+				semantic(`
+					function collect() {
+						const rows = [];
+						for (let i = 0; i < 4; i++) rows.push({ idx: i, value: i + 1 });
+						return rows.length;
+					}
+					globalThis.keep = collect;
+				`),
+			),
+			{ compiled: true },
+		);
+		expect(stable).toMatch(
+			/if \(__cardinality_\d+_fast && __cardinality_\d+_count < 4\) \{/,
+		);
+		expect(stable).not.toContain("== vm->semantic_epochs.activity");
+
+		const reentrant = emitVmDefinition(
+			compileSemanticProgramToVmDefinition(
+				semantic(`
+					function observe(value) { return value; }
+					function collect() {
+						const rows = [];
+						for (let i = 0; i < 4; i++) {
+							rows.push({ idx: i, value: observe(i) });
+						}
+						return rows.length;
+					}
+					globalThis.keep = collect;
+				`),
+			),
+			{ compiled: true },
+		);
+		expect(reentrant).toMatch(
+			/__cardinality_\d+_semantic_epoch == vm->semantic_epochs\.activity/,
 		);
 	});
 

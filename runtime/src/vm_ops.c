@@ -4690,7 +4690,7 @@ void mal_vm_op_store_property_ic(
                     (u8) (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                           MAL_PROPERTY_CONFIGURABLE));
                 if (object->watched_method_proto) {
-                    mal_primitive_method_protector = false;
+                    mal_invalidate_primitive_method_protector();
                 }
                 if (mal_object_note_prototype_mutation(object)) {
                     MAL_PERF_COUNT(prototype_epoch_define_invalidations);
