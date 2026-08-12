@@ -1705,6 +1705,20 @@ static MalValue rs_controller_close_kind(MalVm *vm, MalValue self,
             "Cannot close a closing or non-readable stream");
         return mal_value_new_undefined();
     }
+    MalReadableStreamObject *reader = rs_reader_for(stream);
+    if (kind == MAL_READABLE_BYTE_STREAM_CONTROLLER && reader != nullptr &&
+        reader->as.reader.requests_head != nullptr &&
+        !mal_value_is_undefined(reader->as.reader.requests_head->view) &&
+        reader->as.reader.requests_head->bytes_filled > 0) {
+        MalValue error = rs_take_type_error(vm,
+            (const byte *) "Cannot close a byte stream with an incomplete element");
+        rs_error_stream(vm, stream, error);
+        vm->completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_THROW,
+            .value = error,
+        };
+        return mal_value_new_undefined();
+    }
     if (controller->as.controller.queue_head == nullptr) {
         rs_close_stream(vm, stream);
     } else {
@@ -1818,7 +1832,9 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
     if (byob) {
         view = argc >= 1 ? args[0] : mal_value_new_undefined();
         if (!rs_byob_view_is_valid(vm, view, &destination, &destination_span)) {
-            return mal_value_new_undefined();
+            MalValue error = vm->completion.value;
+            vm->completion = rs_normal();
+            return rs_rejected_promise(vm, error);
         }
     }
     MalReadableStreamObject *stream =

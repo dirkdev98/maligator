@@ -251,6 +251,22 @@ async function run() {
 	}
 	check("zero autoAllocateChunkSize is rejected", zeroAutoAllocateRejected);
 
+	const invalidByobReader = new ReadableStream({ type: "bytes" }).getReader({
+		mode: "byob",
+	});
+	let invalidByobReadRejected = false;
+	try {
+		const invalidByobRead = invalidByobReader.read();
+		invalidByobReadRejected = await invalidByobRead.then(
+			() => false,
+			(error) => error instanceof TypeError,
+		);
+	} catch {
+		invalidByobReadRejected = false;
+	}
+	check("invalid BYOB read views return rejected promises", invalidByobReadRejected);
+	await invalidByobReader.cancel();
+
 	let partialRespondPulls = 0;
 	const partialRespondStream = new ReadableStream({
 		type: "bytes",
@@ -321,6 +337,34 @@ async function run() {
 			queuedPartialRead.value.byteLength === 2 &&
 			new Uint8Array(queuedPartialRead.value.buffer)[0] === 0xff &&
 			new Uint8Array(queuedPartialRead.value.buffer)[1] === 0xaa,
+	);
+
+	let incompleteCloseController;
+	const incompleteCloseStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			incompleteCloseController = controller;
+			controller.enqueue(new Uint8Array([0xff]));
+		},
+	});
+	const incompleteCloseReader = incompleteCloseStream.getReader({ mode: "byob" });
+	const incompleteCloseRead = incompleteCloseReader.read(new Uint16Array(1)).then(
+		() => false,
+		(error) => error instanceof TypeError,
+	);
+	let incompleteCloseThrew = false;
+	try {
+		incompleteCloseController.close();
+	} catch (error) {
+		incompleteCloseThrew = error instanceof TypeError;
+	}
+	const incompleteCloseClosed = incompleteCloseReader.closed.then(
+		() => false,
+		(error) => error instanceof TypeError,
+	);
+	check(
+		"closing a BYOB read with an incomplete element errors the stream",
+		incompleteCloseThrew && (await incompleteCloseRead) && (await incompleteCloseClosed),
 	);
 
 	const multiQueueStream = new ReadableStream({
