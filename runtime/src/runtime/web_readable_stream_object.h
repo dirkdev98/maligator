@@ -10,6 +10,7 @@ typedef enum MalReadableStreamKind : u8 {
     MAL_READABLE_BYTE_STREAM_CONTROLLER,
     MAL_READABLE_STREAM_DEFAULT_READER,
     MAL_READABLE_STREAM_BYOB_READER,
+    MAL_READABLE_STREAM_BYOB_REQUEST,
     MAL_COUNT_QUEUING_STRATEGY,
     MAL_BYTE_LENGTH_QUEUING_STRATEGY,
     MAL_WRITABLE_STREAM,
@@ -62,6 +63,7 @@ typedef struct MalReadableStreamObject {
             MalValue pull_method;
             MalValue cancel_method;
             MalValue size_algorithm;
+            MalValue byob_request;
             MalReadableStreamQueueEntry *queue_head;
             MalReadableStreamQueueEntry *queue_tail;
             f64 queue_total_size;
@@ -77,6 +79,10 @@ typedef struct MalReadableStreamObject {
             MalReadableStreamReadRequest *requests_head;
             MalReadableStreamReadRequest *requests_tail;
         } reader;
+        struct {
+            MalValue controller;
+            MalValue view;
+        } byob_request;
         struct {
             f64 high_water_mark;
         } strategy;

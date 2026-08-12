@@ -168,6 +168,59 @@ async function run() {
 			byteByobDone.value.byteLength === 0,
 	);
 
+	let liveByobRequest;
+	let liveByobController;
+	const pullIntoStream = new ReadableStream({
+		type: "bytes",
+		pull(controller) {
+			liveByobController = controller;
+			liveByobRequest = controller.byobRequest;
+			liveByobRequest.view[0] = 9;
+			liveByobRequest.view[1] = 8;
+			liveByobRequest.respond(2);
+			controller.close();
+		},
+	});
+	const pullIntoReader = pullIntoStream.getReader({ mode: "byob" });
+	const pullInto = await pullIntoReader.read(new Uint16Array(2));
+	check(
+		"BYOB pull exposes and invalidates a live request",
+		liveByobRequest instanceof ReadableStreamBYOBRequest &&
+			liveByobRequest.view === null &&
+			liveByobController.byobRequest === null &&
+			pullInto.value instanceof Uint16Array &&
+			pullInto.value.byteLength === 2 &&
+			new Uint8Array(pullInto.value.buffer)[0] === 9 &&
+			new Uint8Array(pullInto.value.buffer)[1] === 8,
+	);
+	let staleByobRequestRejected = false;
+	try {
+		liveByobRequest.respond(1);
+	} catch (error) {
+		staleByobRequestRejected = error instanceof TypeError;
+	}
+	check("consumed BYOB request rejects respond", staleByobRequestRejected);
+
+	const replacementStream = new ReadableStream({
+		type: "bytes",
+		pull(controller) {
+			const request = controller.byobRequest;
+			request.view[0] = 7;
+			request.view[1] = 6;
+			request.respondWithNewView(request.view.subarray(0, 2));
+			controller.close();
+		},
+	});
+	const replacementRead = await replacementStream
+		.getReader({ mode: "byob" })
+		.read(new Uint8Array(4));
+	check(
+		"BYOB request accepts a replacement view over the pending region",
+		replacementRead.value.byteLength === 2 &&
+			replacementRead.value[0] === 7 &&
+			replacementRead.value[1] === 6,
+	);
+
 	let byteCrossBrandRejected = false;
 	try {
 		ReadableStreamDefaultController.prototype.enqueue.call(
