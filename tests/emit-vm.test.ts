@@ -755,8 +755,22 @@ describe("native update-expression representation", () => {
 		expect(loopOutput).toContain(
 			"mal_primitive_method_protector ? vm->semantic_epochs.watched_methods : 0",
 		);
+		expect(loopOutput).toContain("__inherited_loop_");
+		expect(loopOutput).toMatch(/goto LF\d+/);
+		expect(loopOutput).toMatch(/goto LG\d+/);
+		expect(loopOutput).toMatch(/r\d+ = __property_ic\[\d+\]\.value/);
+		expect(loopOutput).toContain("if (mal_gc_poll) {");
+		expect(loopOutput).toMatch(
+			/pos_id = \d+;\s+mal_gc_safepoint\(vm\);\s+if \(!\(mal_vm_local_inherited_value_try_load_static/s,
+		);
 		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
+
+		const effectfulLoopOutput = emit(
+			`"use strict"; function load(object, count, mutate) { let value; for (let i = 0; i < count; i++) { value = object.value; mutate(); } return value; } globalThis.load = load;`,
+		);
+		expect(effectfulLoopOutput).not.toContain("__inherited_loop_");
+		expect(effectfulLoopOutput).not.toMatch(/goto LF\d+/);
 
 		const dynamicOutput = emit(
 			`"use strict"; function load(object, key) { return object[key]; } function store(object, key, value) { object[key] = value; } globalThis.keep = [load, store];`,

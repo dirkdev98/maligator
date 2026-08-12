@@ -1695,6 +1695,178 @@ interface RegionAccess {
 	commit: boolean;
 }
 
+/**
+ * One exact natural loop that may execute a dependency-backed inherited static
+ * load through a cloned native fast body. The ordinary body remains in place as
+ * the generic twin. Entry and post-safepoint validation prove the IC row before
+ * the fast body reads its cached value directly.
+ */
+interface InheritedLoadLoopTwin {
+	headerIp: number;
+	backedgeIp: number;
+	propertyIp: number;
+	receiver: number;
+	icIndex: number;
+	probeName: string;
+	position: number;
+}
+
+interface LoopTwinEmission {
+	twin: InheritedLoadLoopTwin;
+	kind: "fast" | "generic";
+	publishPosition: boolean;
+}
+
+const LOOP_TWIN_SCALAR_OPCODES = new Set<VmInstruction["opcode"]>([
+	"MOVE",
+	"CREATE_UNDEFINED",
+	"CREATE_NULL",
+	"CREATE_EMPTY",
+	"CREATE_BOOLEAN",
+	"CREATE_NUMBER",
+	"CREATE_F64",
+	"IS_EMPTY",
+	"TYPEOF_COMPARE",
+	"BINARY",
+	"UNARY",
+	"JUMP",
+	"JUMP_IF",
+]);
+
+function loopTwinValidation(twin: InheritedLoadLoopTwin): string {
+	const receiver = `r${twin.receiver}`;
+	const ic = `&__property_ic[${twin.icIndex}]`;
+	return `(mal_vm_local_inherited_value_try_load_static(mal_vm_as_object(${receiver}), ${ic}, &${twin.probeName}) || mal_vm_local_watched_inherited_value_try_load_static(vm, __watched_methods_epoch, ${receiver}, ${ic}, &${twin.probeName}))`;
+}
+
+/**
+ * Find the first deliberately small loop-twin domain. Requiring a literal
+ * flattened interval, one preheader edge, one unconditional backedge, and no
+ * handler/resume/observable instruction makes cloning mechanically exact. This
+ * is a proof-oriented seed, not an attempt to recognize every reducible loop.
+ */
+function findInheritedLoadLoopTwins(
+	fn: VmFunction,
+	reps: Array<RegisterRep>,
+	coro: CoroutineContext | null,
+): Array<InheritedLoadLoopTwin> {
+	if (coro !== null) return [];
+
+	const candidates: Array<InheritedLoadLoopTwin> = [];
+	for (let backedgeIp = 0; backedgeIp < fn.instructions.length; backedgeIp++) {
+		const backedge = fn.instructions[backedgeIp]!;
+		if (backedge.opcode !== "JUMP" || backedge.targetIp >= backedgeIp) continue;
+		const headerIp = backedge.targetIp;
+		if (headerIp <= 0) continue;
+		const preheader = fn.instructions[headerIp - 1];
+		if (preheader?.opcode !== "JUMP" || preheader.targetIp !== headerIp) continue;
+
+		// The interval must have exactly one backedge and no entry except the
+		// immediately preceding preheader jump. Forward exits remain legal.
+		let exactControlFlow = true;
+		for (let sourceIp = 0; sourceIp < fn.instructions.length; sourceIp++) {
+			const instruction = fn.instructions[sourceIp]!;
+			if (instruction.opcode !== "JUMP" && instruction.opcode !== "JUMP_IF") {
+				continue;
+			}
+			const target = instruction.targetIp;
+			if (
+				sourceIp >= headerIp &&
+				sourceIp <= backedgeIp &&
+				target <= sourceIp &&
+				!(sourceIp === backedgeIp && target === headerIp)
+			) {
+				exactControlFlow = false;
+				break;
+			}
+			if (
+				(sourceIp < headerIp || sourceIp > backedgeIp) &&
+				target >= headerIp &&
+				target <= backedgeIp &&
+				!(sourceIp === headerIp - 1 && target === headerIp)
+			) {
+				exactControlFlow = false;
+				break;
+			}
+		}
+		if (!exactControlFlow) continue;
+		if (
+			fn.handlers.some(
+				(handler) =>
+					(handler.handlerIp >= headerIp && handler.handlerIp <= backedgeIp) ||
+					Math.max(handler.startIp, headerIp) < Math.min(handler.endIp, backedgeIp + 1),
+			)
+		) {
+			continue;
+		}
+
+		const loads: Array<{
+			ip: number;
+			instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+		}> = [];
+		let scalarOnly = true;
+		for (let ip = headerIp; ip <= backedgeIp; ip++) {
+			const instruction = fn.instructions[ip]!;
+			if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
+				loads.push({ ip, instruction });
+				continue;
+			}
+			if (
+				!LOOP_TWIN_SCALAR_OPCODES.has(instruction.opcode) ||
+				nativeInstructionMayInvalidateSemanticEpoch(instruction, reps)
+			) {
+				scalarOnly = false;
+				break;
+			}
+		}
+		if (!scalarOnly || loads.length !== 1) continue;
+		const load = loads[0]!;
+		if (
+			load.instruction.nativeCardinalityAccess !== undefined ||
+			(fn.stackObjectAccesses ?? []).some(
+				(access) => access.instructionIndex === load.ip,
+			) ||
+			(fn.stackObjectInheritedAccesses ?? []).some(
+				(access) => access.instructionIndex === load.ip,
+			)
+		) {
+			continue;
+		}
+		if (reps[load.instruction.object] !== "boxed") continue;
+		if (
+			fn.instructions
+				.slice(headerIp, backedgeIp + 1)
+				.some((instruction) =>
+					writeRegisters(instruction).includes(load.instruction.object),
+				)
+		) {
+			continue;
+		}
+
+		candidates.push({
+			headerIp,
+			backedgeIp,
+			propertyIp: load.ip,
+			receiver: load.instruction.object,
+			icIndex: load.instruction.icIndex,
+			probeName: `__inherited_loop_${headerIp}_probe`,
+			position: fn.positions[load.ip] ?? -1,
+		});
+	}
+
+	// Nested/overlapping intervals need a real loop forest. Fail closed until that
+	// structure exists rather than composing ad-hoc clone label namespaces.
+	return candidates.filter(
+		(candidate, index) =>
+			!candidates.some(
+				(other, otherIndex) =>
+					index !== otherIndex &&
+					Math.max(candidate.headerIp, other.headerIp) <=
+						Math.min(candidate.backedgeIp, other.backedgeIp),
+			),
+	);
+}
+
 interface DenseIteratorCursor {
 	name: string;
 	iterator: number;
@@ -1902,6 +2074,13 @@ function emitBody(
 		jumpTargets.add(handler.handlerIp);
 	}
 	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	const inheritedLoadLoopTwins = findInheritedLoadLoopTwins(fn, reps, coro);
+	const inheritedLoadLoopTwinByHeader = new Map(
+		inheritedLoadLoopTwins.map((twin) => [twin.headerIp, twin] as const),
+	);
+	const inheritedLoadLoopTwinByBackedge = new Map(
+		inheritedLoadLoopTwins.map((twin) => [twin.backedgeIp, twin] as const),
+	);
 
 	// A direct Math method call retains the loaded callee across argument evaluation.
 	// Track that provenance only within straight-line regions; the runtime still guards
@@ -2139,6 +2318,9 @@ function emitBody(
 	const lines: Array<string> = denseIteratorCursors.map(
 		(cursor) => `MalIteratorObject *${cursor.name} = nullptr;`,
 	);
+	for (const twin of inheritedLoadLoopTwins) {
+		lines.push(`MalValue ${twin.probeName} = MAL_VALUE_UNDEFINED;`);
+	}
 	if (
 		fn.instructions.some(
 			(instruction, ip) =>
@@ -2170,6 +2352,62 @@ function emitBody(
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
 			// Control can arrive with a different published position.
+			lastPublishedPos = -1;
+		}
+		const loopTwin = inheritedLoadLoopTwinByHeader.get(ip);
+		if (loopTwin !== undefined) {
+			lines.push(
+				`    if (${loopTwinValidation(loopTwin)}) goto LF${loopTwin.headerIp};`,
+				`    goto LG${loopTwin.headerIp};`,
+			);
+			const fastJumpTargets = new Set<number>([loopTwin.headerIp]);
+			for (let fastIp = loopTwin.headerIp; fastIp <= loopTwin.backedgeIp; fastIp++) {
+				const instruction = fn.instructions[fastIp]!;
+				if (
+					(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+					instruction.targetIp >= loopTwin.headerIp &&
+					instruction.targetIp <= loopTwin.backedgeIp
+				) {
+					fastJumpTargets.add(instruction.targetIp);
+				}
+			}
+			for (let fastIp = loopTwin.headerIp; fastIp <= loopTwin.backedgeIp; fastIp++) {
+				if (fastJumpTargets.has(fastIp)) lines.push(`LF${fastIp}:;`);
+				const fast = emitInstruction(
+					fn.instructions[fastIp]!,
+					fastIp,
+					suffix,
+					reps,
+					fn.strict,
+					undefined,
+					gcUnlink,
+					thisSlot,
+					coro,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					directCompiledTargets,
+					false,
+					false,
+					true,
+					fn.mappedArguments,
+					fn.mappedArgumentSlots,
+					fn.hasPrototype,
+					{ twin: loopTwin, kind: "fast", publishPosition: debug },
+				);
+				if (fast === null) return null;
+				for (const line of fast) lines.push(`    ${line}`);
+			}
+			lines.push(`LG${loopTwin.headerIp}:;`);
 			lastPublishedPos = -1;
 		}
 		for (const cursor of denseIteratorCursorResets.get(ip) ?? []) {
@@ -2205,6 +2443,13 @@ function emitBody(
 			fn.mappedArguments,
 			fn.mappedArgumentSlots,
 			fn.hasPrototype,
+			inheritedLoadLoopTwinByBackedge.has(ip)
+				? {
+						twin: inheritedLoadLoopTwinByBackedge.get(ip)!,
+						kind: "generic",
+						publishPosition: debug,
+					}
+				: undefined,
 		);
 		if (emitted === null) {
 			return null;
@@ -2265,6 +2510,7 @@ function emitInstruction(
 	mappedArguments: boolean,
 	mappedArgumentSlots: Array<number>,
 	hasPrototype: boolean,
+	loopTwinEmission?: LoopTwinEmission,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -2626,6 +2872,16 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				loopTwinEmission?.kind === "fast" &&
+				ip === loopTwinEmission.twin.propertyIp &&
+				instruction.opcode === "LOAD_PROPERTY_STATIC"
+			) {
+				return [
+					"mal_perf_ic_load_inherited_hit();",
+					`r${instruction.dst} = __property_ic[${instruction.icIndex}].value;`,
+				];
+			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
 				instruction.nativeClosedGlobalTable !== undefined
@@ -3940,6 +4196,34 @@ function emitInstruction(
 		case "JUMP":
 			// A back-edge (target <= current ip) is a loop edge: poll there so an
 			// allocation-free loop is still interruptible for collection.
+			if (
+				loopTwinEmission !== undefined &&
+				ip === loopTwinEmission.twin.backedgeIp &&
+				instruction.targetIp === loopTwinEmission.twin.headerIp
+			) {
+				if (loopTwinEmission.kind === "generic") {
+					return [poll, `goto LG${instruction.targetIp};`];
+				}
+				return [
+					`if (mal_gc_poll) {`,
+					...(loopTwinEmission.publishPosition && loopTwinEmission.twin.position !== -1
+						? [
+								`  vm->native_frames[vm->native_frame_count - 1].pos_id = ${loopTwinEmission.twin.position};`,
+							]
+						: []),
+					`  mal_gc_safepoint(vm);`,
+					`  if (!${loopTwinValidation(loopTwinEmission.twin)}) goto LG${instruction.targetIp};`,
+					`}`,
+					`goto LF${instruction.targetIp};`,
+				];
+			}
+			if (
+				loopTwinEmission?.kind === "fast" &&
+				instruction.targetIp >= loopTwinEmission.twin.headerIp &&
+				instruction.targetIp <= loopTwinEmission.twin.backedgeIp
+			) {
+				return [`goto LF${instruction.targetIp};`];
+			}
 			return instruction.targetIp <= ip
 				? [poll, `goto L${instruction.targetIp};`]
 				: [`goto L${instruction.targetIp};`];
@@ -3947,6 +4231,13 @@ function emitInstruction(
 			// Branch on a raw bool / native truthiness test — no boxing when the
 			// condition is already a boolean-rep (typically a comparison result).
 			// Poll on a taken back-edge only.
+			if (
+				loopTwinEmission?.kind === "fast" &&
+				instruction.targetIp >= loopTwinEmission.twin.headerIp &&
+				instruction.targetIp <= loopTwinEmission.twin.backedgeIp
+			) {
+				return [`if (${truthy(instruction.cond)}) goto LF${instruction.targetIp};`];
+			}
 			return instruction.targetIp <= ip
 				? [`if (${truthy(instruction.cond)}) { ${poll} goto L${instruction.targetIp}; }`]
 				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
