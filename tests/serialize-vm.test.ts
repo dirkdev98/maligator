@@ -309,6 +309,32 @@ describe("serialize-vm", () => {
 				allocationInstructionIndex: finiteAllocationInstructionIndex,
 			},
 		});
+		metadataInstructions.push({
+			opcode: "LOAD_PROPERTY",
+			dst: 9,
+			object: 7,
+			key: 1,
+			icIndex: finiteStoreIc + 2,
+			nativeClosedGlobalTable: {
+				baseIndex: 0,
+				stateIndex: 4,
+				mask: 3,
+				direct: true,
+			},
+		});
+		metadataInstructions.push({
+			opcode: "STORE_PROPERTY",
+			object: 7,
+			key: 1,
+			value: 2,
+			icIndex: finiteStoreIc + 3,
+			nativeClosedGlobalTable: {
+				baseIndex: 0,
+				stateIndex: 4,
+				mask: 3,
+				direct: false,
+			},
+		});
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
@@ -316,7 +342,7 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					instructions: metadataInstructions,
-					positions: [...mainFn.positions, 2, 2, 2, 2, 2, 2],
+					positions: [...mainFn.positions, 2, 2, 2, 2, 2, 2, 2, 2],
 					gcRootRegisters: [0, 3, 7],
 					stackObjectSites: [{ instructionIndex: 4, slotCount: 2 }],
 					stackObjectAccesses: [

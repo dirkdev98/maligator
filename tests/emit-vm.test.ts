@@ -685,6 +685,26 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_IN");
 	});
 
+	it("emits synthetic globals with a materializing finite-table fallback", () => {
+		const output = emit(`
+			"use strict";
+			const table = {};
+			function update(seed, other) {
+				const key = seed & 7;
+				const previous = table[key];
+				table[key] = seed;
+				if (other !== undefined) table[other] = seed + 1;
+				return previous;
+			}
+			globalThis.update = update;
+		`);
+		expect(output).toContain("mal_array_elements_protector");
+		expect(output).toContain("MAL_VALUE_EMPTY");
+		expect(output).toContain("mal_vm_closed_global_table_deopt");
+		expect(output).toMatch(/vm->globals\[\d+ \+ \(i32\) /);
+		expect(output).toContain("mal_vm_op_store_property_ic");
+	});
+
 	it("keeps initialized numeric locals native across exception edges", () => {
 		const output = emit(
 			`"use strict"; function classify(value) { let errors = 0; try { value.x; } catch { errors = errors + 1; } return errors + 1; } globalThis.classify = classify;`,

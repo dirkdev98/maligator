@@ -207,6 +207,14 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "LOAD_PROPERTY":
 			return {
 				...instruction,
+				nativeClosedGlobalTable:
+					instruction.nativeClosedGlobalTable === undefined
+						? undefined
+						: {
+								...instruction.nativeClosedGlobalTable,
+								baseIndex: instruction.nativeClosedGlobalTable.baseIndex + base.global,
+								stateIndex: instruction.nativeClosedGlobalTable.stateIndex + base.global,
+							},
 				nativeFiniteKey:
 					instruction.nativeFiniteKey === undefined
 						? undefined
@@ -225,6 +233,14 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "STORE_PROPERTY":
 			return {
 				...instruction,
+				nativeClosedGlobalTable:
+					instruction.nativeClosedGlobalTable === undefined
+						? undefined
+						: {
+								...instruction.nativeClosedGlobalTable,
+								baseIndex: instruction.nativeClosedGlobalTable.baseIndex + base.global,
+								stateIndex: instruction.nativeClosedGlobalTable.stateIndex + base.global,
+							},
 				nativeFiniteKey:
 					instruction.nativeFiniteKey === undefined
 						? undefined

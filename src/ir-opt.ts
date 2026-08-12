@@ -319,6 +319,8 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		annotateCardinalityOnlyArrayRegions(program);
 	if (residualFeatures.object) annotateStackObjectSites(program);
 	if (residualFeatures.property) optStaticPropertyKeys(program);
+	if (residualFeatures.object && residualFeatures.property)
+		annotateClosedGlobalFiniteTables(program);
 	if (residualFeatures.call && residualFeatures.property)
 		annotateDirectStringCharCodeAtSites(program);
 	if (residualFeatures.call && residualFeatures.property)
@@ -1962,6 +1964,200 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 		}
 	}
 	return changed;
+}
+
+/**
+ * Prove a bounded Program-Dictionary region for one function's private global
+ * `{}`. Bit-mask selectors address compiler-owned synthetic global slots; every
+ * other computed access is an explicit cold deopt that materializes the table
+ * before executing the original property operation. The global object and key
+ * evaluation remain in the IR, preserving TDZ and evaluation ordering.
+ */
+export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): number {
+	type DynamicAccess = Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>;
+	interface CandidateStore {
+		fn: IRFunction;
+		instruction: IRInstruction;
+		allocation: Extract<IRInstruction, { type: "createObject" }>;
+	}
+	interface CandidateAccess {
+		fn: IRFunction;
+		instruction: DynamicAccess;
+		mask?: number;
+	}
+
+	const indexes = new Map(
+		program.functions.map((fn) => [fn, buildIRRegisterIndex(fn)] as const),
+	);
+	const rootDefinition = (fn: IRFunction, initial: number): IRInstruction | undefined => {
+		const definitions = indexes.get(fn)!.uniqueDefinitions;
+		const seen = new Set<number>();
+		let register = initial;
+		while (!seen.has(register)) {
+			seen.add(register);
+			const definition = definitions.get(register);
+			if (definition?.type !== "move") return definition;
+			register = definition.registers[1];
+		}
+		return undefined;
+	};
+	const bitMaskFor = (fn: IRFunction, key: number): number | undefined => {
+		const definition = rootDefinition(fn, key);
+		if (definition?.type !== "binary" || definition.operator !== "&") return undefined;
+		const left = exactIntegerConstant(rootDefinition(fn, definition.registers[1]));
+		const right = exactIntegerConstant(rootDefinition(fn, definition.registers[2]));
+		const mask = left ?? right;
+		if (mask === undefined || mask < 0 || mask > 1023 || (mask & (mask + 1)) !== 0) {
+			return undefined;
+		}
+		return mask;
+	};
+
+	const stores = new Map<number, Array<CandidateStore>>();
+	const invalidGlobals = new Set<number>();
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "storeGlobal") continue;
+				const root = rootDefinition(fn, instruction.registers[0]);
+				if (root?.type === "createEmpty") continue;
+				if (
+					root?.type !== "createObject" ||
+					root.stackObject ||
+					root.nativeFiniteConstruction !== undefined
+				) {
+					invalidGlobals.add(instruction.index);
+					continue;
+				}
+				const candidates = stores.get(instruction.index) ?? [];
+				candidates.push({ fn, instruction, allocation: root });
+				stores.set(instruction.index, candidates);
+			}
+		}
+	}
+
+	let annotated = 0;
+	let syntheticGlobals = 0;
+	for (const [globalIndex, candidates] of stores) {
+		if (
+			candidates.length !== 1 ||
+			invalidGlobals.has(globalIndex) ||
+			syntheticGlobals >= 4096
+		) {
+			continue;
+		}
+		const candidate = candidates[0]!;
+		const initializerIndex = indexes.get(candidate.fn)!;
+		const initializerAliases = [candidate.allocation.registers[0]];
+		const seenInitializerAliases = new Set<number>();
+		let valid = true;
+		while (initializerAliases.length > 0 && valid) {
+			const register = initializerAliases.pop()!;
+			if (seenInitializerAliases.has(register)) continue;
+			seenInitializerAliases.add(register);
+			for (const use of initializerIndex.uses.get(register) ?? []) {
+				if (use.instruction === candidate.instruction && use.position === 0) continue;
+				if (
+					use.instruction.type === "move" &&
+					use.position === 1 &&
+					initializerIndex.uniqueDefinitions.get(use.instruction.registers[0]) ===
+						use.instruction
+				) {
+					initializerAliases.push(use.instruction.registers[0]);
+					continue;
+				}
+				valid = false;
+				break;
+			}
+		}
+		if (!valid) continue;
+
+		const accesses: Array<CandidateAccess> = [];
+		for (const fn of program.functions) {
+			if (!valid) break;
+			const index = indexes.get(fn)!;
+			for (const block of fn.blocks) {
+				if (!valid) break;
+				for (const load of block.instructions) {
+					if (load.type !== "loadGlobal" || load.index !== globalIndex) continue;
+					const aliases = [load.registers[0]];
+					const seenAliases = new Set<number>();
+					while (aliases.length > 0 && valid) {
+						const register = aliases.pop()!;
+						if (seenAliases.has(register)) continue;
+						seenAliases.add(register);
+						for (const use of index.uses.get(register) ?? []) {
+							if (use.instruction.type === "throwIfTdz" && use.position === 0) {
+								continue;
+							}
+							if (
+								use.instruction.type === "move" &&
+								use.position === 1 &&
+								index.uniqueDefinitions.get(use.instruction.registers[0]) ===
+									use.instruction
+							) {
+								aliases.push(use.instruction.registers[0]);
+								continue;
+							}
+							const access = use.instruction;
+							const objectPosition = access.type === "loadProperty" ? 1 : 0;
+							if (
+								(access.type !== "loadProperty" && access.type !== "storeProperty") ||
+								use.position !== objectPosition
+							) {
+								valid = false;
+								break;
+							}
+							const keyPosition = access.type === "loadProperty" ? 2 : 1;
+							accesses.push({
+								fn,
+								instruction: access,
+								mask: bitMaskFor(fn, access.registers[keyPosition]),
+							});
+						}
+					}
+				}
+			}
+		}
+		const accessFunctions = new Set(accesses.map((access) => access.fn));
+		const masks = new Set(
+			accesses.flatMap((access) => (access.mask === undefined ? [] : [access.mask])),
+		);
+		if (
+			!valid ||
+			accesses.length === 0 ||
+			accessFunctions.size !== 1 ||
+			masks.size !== 1
+		) {
+			continue;
+		}
+		const accessFunction = accesses[0]!.fn;
+		if (
+			accessFunction.isGenerator ||
+			accessFunction.isAsync ||
+			functionUsesWith(accessFunction) ||
+			accessFunction.semanticFile.hasDirectEval.size > 0
+		) {
+			continue;
+		}
+		const mask = [...masks][0]!;
+		const width = mask + 1;
+		if (syntheticGlobals + width + 1 > 4096) continue;
+		const baseIndex = program.nextGlobalIndex;
+		const stateIndex = baseIndex + width;
+		program.nextGlobalIndex += width + 1;
+		syntheticGlobals += width + 1;
+		for (const access of accesses) {
+			access.instruction.nativeClosedGlobalTable = {
+				baseIndex,
+				stateIndex,
+				mask,
+				direct: access.mask === mask,
+			};
+			annotated++;
+		}
+	}
+	return annotated;
 }
 
 /**

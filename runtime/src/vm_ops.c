@@ -3838,6 +3838,36 @@ void mal_vm_finite_property_store(
     ic->receiver_type = 0;
 }
 
+void mal_vm_closed_global_table_deopt(
+    MalVm *vm, MalValue receiver, i32 base_index, i32 count, i32 state_index
+) {
+    MalValue state = vm->globals[state_index];
+    if (state == MAL_VALUE_TRUE) {
+        return;
+    }
+    if (state == MAL_VALUE_FALSE && mal_value_is_object(receiver)) {
+        MalObject *object = mal_value_to_object(receiver);
+        for (i32 index = 0; index < count; index++) {
+            MalValue value = vm->globals[base_index + index];
+            if (mal_value_is_empty(value)) {
+                continue;
+            }
+            MalPropertyDesc desc = mal_intrinsic_data_desc(
+                value,
+                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                    MAL_PROPERTY_CONFIGURABLE);
+            if (mal_object_define_own(object, mal_key_index(index), &desc) !=
+                MAL_DEFINE_OWN_APPLIED) {
+                mal_vm_throw_error(
+                    vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Cannot materialize closed global table");
+                break;
+            }
+        }
+    }
+    vm->globals[state_index] = MAL_VALUE_TRUE;
+}
+
 static void mal_ic_record_special(
     MalVm *vm, MalInlineCache *ic, u8 mode, u8 prim_kind, MalValue key,
     MalValue value, const MalObject *prototype

@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 26u        // virtual finite-record metadata
+#define WIRE_VERSION 27u        // closed-global object slot metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1660,6 +1660,16 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     if (field_slot < 0 || field_slot >= 8) {
                         r.ok = false;
                     }
+                }
+            } else if (tag == 10) { // closed-global finite table
+                i32 base = rd_i32(&r);
+                i32 state = rd_i32(&r);
+                i32 mask = rd_i32(&r);
+                u8 direct = rd_u8(&r);
+                if (base < 0 || state != base + mask + 1 ||
+                    state >= def->global_count || mask < 0 || mask > 1023 ||
+                    (mask & (mask + 1)) != 0 || direct > 1) {
+                    r.ok = false;
                 }
             } else {
                 r.ok = false;

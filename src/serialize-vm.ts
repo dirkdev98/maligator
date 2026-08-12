@@ -21,8 +21,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 26 for virtual finite-record construction/access metadata.
-export const WIRE_VERSION = 26;
+// Bumped to 27 for closed-global finite-table compiler metadata.
+export const WIRE_VERSION = 27;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -642,6 +642,9 @@ export function serializeVmDefinition(
 					return (
 						((instruction.opcode === "LOAD_PROPERTY" ||
 							instruction.opcode === "STORE_PROPERTY") &&
+							instruction.nativeClosedGlobalTable !== undefined) ||
+						((instruction.opcode === "LOAD_PROPERTY" ||
+							instruction.opcode === "STORE_PROPERTY") &&
 							instruction.nativeFiniteKey !== undefined) ||
 						((instruction.opcode === "LOAD_PROPERTY" ||
 							instruction.opcode === "LOAD_PROPERTY_STATIC") &&
@@ -663,7 +666,17 @@ export function serializeVmDefinition(
 		w.u32(instructionMetadata.length);
 		for (const { instruction, instructionIndex } of instructionMetadata) {
 			w.u32(instructionIndex);
-			if (instruction.opcode === "CALL") {
+			if (
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY") &&
+				instruction.nativeClosedGlobalTable !== undefined
+			) {
+				w.u8(10);
+				w.i32(instruction.nativeClosedGlobalTable.baseIndex);
+				w.i32(instruction.nativeClosedGlobalTable.stateIndex);
+				w.i32(instruction.nativeClosedGlobalTable.mask);
+				w.u8(instruction.nativeClosedGlobalTable.direct ? 1 : 0);
+			} else if (instruction.opcode === "CALL") {
 				w.u8(1);
 				w.i32(instruction.directFunctionIndex ?? -1);
 				w.i32(instruction.directCallTargetFunctionIndex ?? -1);
@@ -1661,6 +1674,32 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					}
 					instruction.nativeCardinalityAccess.fieldSlot = fieldSlot;
 				}
+			} else if (
+				tag === 10 &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY")
+			) {
+				const baseIndex = r.i32();
+				const stateIndex = r.i32();
+				const mask = r.i32();
+				const direct = r.u8();
+				if (
+					baseIndex < 0 ||
+					stateIndex !== baseIndex + mask + 1 ||
+					stateIndex >= globalCount ||
+					mask < 0 ||
+					mask > 1023 ||
+					(mask & (mask + 1)) !== 0 ||
+					direct > 1
+				) {
+					throw new RangeError("serialize-vm: invalid closed-global table metadata");
+				}
+				instruction.nativeClosedGlobalTable = {
+					baseIndex,
+					stateIndex,
+					mask,
+					direct: direct === 1,
+				};
 			} else {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",

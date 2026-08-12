@@ -143,9 +143,23 @@ describe("Test262 VM definition merger", () => {
 				icIndex: 1,
 				nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [0] },
 			},
+			{
+				opcode: "LOAD_PROPERTY",
+				dst: 0,
+				object: 1,
+				key: 2,
+				icIndex: 2,
+				nativeClosedGlobalTable: {
+					baseIndex: 0,
+					stateIndex: 4,
+					mask: 3,
+					direct: true,
+				},
+			},
 		];
 		const second = definition({
 			functions: [vmFunction(indexed)],
+			globalCount: 5,
 			literalTemplateData: [8, 2, 5, 0, 6, 0, 9, 1, 10, 0, 5, 0],
 			sourcePositions: [{ line: 2, column: 1, inlinedFunctionIndex: 0, callerPosId: 0 }],
 			cjsModuleFunctionIndices: [0],
@@ -220,6 +234,14 @@ describe("Test262 VM definition merger", () => {
 		});
 		expect(rebased[21]).toMatchObject({
 			nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [2] },
+		});
+		expect(rebased[22]).toMatchObject({
+			nativeClosedGlobalTable: {
+				baseIndex: 3,
+				stateIndex: 7,
+				mask: 3,
+				direct: true,
+			},
 		});
 		expect(second.functions[0]!.instructions).toEqual(indexed);
 	});

@@ -664,6 +664,12 @@ export type VmInstruction =
 			nativeFiniteRecordAccess?: {
 				allocationInstructionIndex: number;
 			};
+			nativeClosedGlobalTable?: {
+				baseIndex: number;
+				stateIndex: number;
+				mask: number;
+				direct: boolean;
+			};
 			nativeCardinalityAccess?: {
 				role: "push" | "length" | "element" | "field";
 				allocationInstructionIndex: number;
@@ -699,6 +705,12 @@ export type VmInstruction =
 				minimum: number;
 				ordinal: number;
 				stringIndices: Array<number>;
+			};
+			nativeClosedGlobalTable?: {
+				baseIndex: number;
+				stateIndex: number;
+				mask: number;
+				direct: boolean;
 			};
 	  }
 	| {
@@ -1860,6 +1872,10 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[1],
 				key: instruction.registers[2],
 				icIndex: -1,
+				nativeClosedGlobalTable:
+					instruction.nativeClosedGlobalTable === undefined
+						? undefined
+						: { ...instruction.nativeClosedGlobalTable },
 				...(instruction.nativeFiniteKey === undefined
 					? {}
 					: {
@@ -1893,6 +1909,10 @@ function lowerInstructionToVmInstruction(
 				key: instruction.registers[1],
 				value: instruction.registers[2],
 				icIndex: -1,
+				nativeClosedGlobalTable:
+					instruction.nativeClosedGlobalTable === undefined
+						? undefined
+						: { ...instruction.nativeClosedGlobalTable },
 				...(instruction.nativeFiniteKey === undefined
 					? {}
 					: {

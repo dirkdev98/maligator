@@ -1014,6 +1014,14 @@ export type IRInstruction =
 			nativeFiniteRecordAccess?: {
 				allocation: Extract<IRInstruction, { type: "createObject" }>;
 			};
+			/** COMPILE-ONLY: a non-escaping global `{}` is represented by a bounded
+			 * synthetic-global value table. Unknown selectors deopt/materialize it. */
+			nativeClosedGlobalTable?: {
+				baseIndex: number;
+				stateIndex: number;
+				mask: number;
+				direct: boolean;
+			};
 			nativeCardinalityAccess?: {
 				role: "push" | "length" | "element" | "field";
 				allocation: Extract<IRInstruction, { type: "createArray" }>;
@@ -1052,6 +1060,12 @@ export type IRInstruction =
 				minimum: number;
 				source: Extract<IRInstruction, { type: "binary" }>;
 				stringIndices: Array<number>;
+			};
+			nativeClosedGlobalTable?: {
+				baseIndex: number;
+				stateIndex: number;
+				mask: number;
+				direct: boolean;
 			};
 
 			// [object, key, value]

@@ -1983,8 +1983,10 @@ function emitBody(
 				flush();
 			}
 			if (
-				instr.opcode === "LOAD_PROPERTY" ||
-				instr.opcode === "STORE_PROPERTY" ||
+				(instr.opcode === "LOAD_PROPERTY" &&
+					instr.nativeClosedGlobalTable === undefined) ||
+				(instr.opcode === "STORE_PROPERTY" &&
+					instr.nativeClosedGlobalTable === undefined) ||
 				instr.opcode === "LOAD_PROPERTY_STATIC" ||
 				instr.opcode === "STORE_PROPERTY_STATIC"
 			) {
@@ -2533,6 +2535,60 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				instruction.nativeClosedGlobalTable !== undefined
+			) {
+				const table = instruction.nativeClosedGlobalTable;
+				const fallback = emitInstruction(
+					{ ...instruction, nativeClosedGlobalTable: undefined },
+					ip,
+					suffix,
+					reps,
+					strict,
+					handlerIp,
+					gcUnlink,
+					thisSlot,
+					coro,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					directCompiledTargets,
+					mathUnaryCall,
+					mathBinaryCall,
+					loopStaticPropertyFastPath,
+					mappedArguments,
+					mappedArgumentSlots,
+					hasPrototype,
+				);
+				if (fallback === null) return null;
+				const state = `vm->globals[${table.stateIndex}]`;
+				const deopt = `mal_vm_closed_global_table_deopt(vm, ${boxed(instruction.object)}, ${table.baseIndex}, ${table.mask + 1}, ${table.stateIndex});`;
+				if (!table.direct) {
+					return [deopt, throwCheck, ...fallback];
+				}
+				const value = `__closed_global_value_${ip}`;
+				return [
+					`if (mal_value_is_undefined(${state}) && mal_array_elements_protector) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
+					`if (${state} == MAL_VALUE_FALSE && mal_array_elements_protector) {`,
+					`  MalValue ${value} = vm->globals[${table.baseIndex} + (i32) ${num(instruction.key)}];`,
+					`  r${instruction.dst} = mal_value_is_empty(${value}) ? MAL_VALUE_UNDEFINED : ${value};`,
+					`} else {`,
+					`  ${deopt}`,
+					`  ${throwCheck}`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (cardinalityAccess !== undefined) {
 				const target = cardinalityAccess.region;
 				const fallback = emitInstruction(
@@ -2892,6 +2948,58 @@ function emitInstruction(
 		}
 		case "STORE_PROPERTY":
 		case "STORE_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "STORE_PROPERTY" &&
+				instruction.nativeClosedGlobalTable !== undefined
+			) {
+				const table = instruction.nativeClosedGlobalTable;
+				const fallback = emitInstruction(
+					{ ...instruction, nativeClosedGlobalTable: undefined },
+					ip,
+					suffix,
+					reps,
+					strict,
+					handlerIp,
+					gcUnlink,
+					thisSlot,
+					coro,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					directCompiledTargets,
+					mathUnaryCall,
+					mathBinaryCall,
+					loopStaticPropertyFastPath,
+					mappedArguments,
+					mappedArgumentSlots,
+					hasPrototype,
+				);
+				if (fallback === null) return null;
+				const state = `vm->globals[${table.stateIndex}]`;
+				const deopt = `mal_vm_closed_global_table_deopt(vm, ${boxed(instruction.object)}, ${table.baseIndex}, ${table.mask + 1}, ${table.stateIndex});`;
+				if (!table.direct) {
+					return [deopt, throwCheck, ...fallback];
+				}
+				return [
+					`if (mal_value_is_undefined(${state}) && mal_array_elements_protector) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
+					`if (${state} == MAL_VALUE_FALSE && mal_array_elements_protector) {`,
+					`  vm->globals[${table.baseIndex} + (i32) ${num(instruction.key)}] = ${boxed(instruction.value)};`,
+					`} else {`,
+					`  ${deopt}`,
+					`  ${throwCheck}`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				if (site.cardinalityRegion !== undefined) {

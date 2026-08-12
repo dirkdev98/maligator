@@ -45,3 +45,53 @@ describe("static-key property operations", () => {
 		).toBe(true);
 	});
 });
+
+describe("closed global finite tables", () => {
+	it("scalarizes bit-mask keys and marks unknown selectors as deopts", () => {
+		const definition = compile(`
+			const table = {};
+			function update(seed, other) {
+				const key = seed & 7;
+				const previous = table[key];
+				table[key] = seed;
+				if (other !== undefined) table[other] = seed + 1;
+				return previous;
+			}
+			globalThis.update = update;
+		`);
+		const accesses = definition.functions.flatMap((fn) =>
+			fn.instructions.flatMap((instruction) =>
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY") &&
+				instruction.nativeClosedGlobalTable !== undefined
+					? [instruction.nativeClosedGlobalTable]
+					: [],
+			),
+		);
+		expect(accesses).toHaveLength(3);
+		expect(accesses.map((access) => access.direct)).toEqual([true, true, false]);
+		expect(new Set(accesses.map((access) => access.baseIndex))).toHaveLength(1);
+		expect(accesses[0]).toMatchObject({ mask: 7 });
+		expect(accesses[0]!.stateIndex).toBe(accesses[0]!.baseIndex + 8);
+	});
+
+	it("rejects escaping and cross-function table identities", () => {
+		const definition = compile(`
+			const escaped = {};
+			const shared = {};
+			function first(seed) { shared[seed & 3] = seed; }
+			function second(seed) { return shared[seed & 3]; }
+			globalThis.keep = [escaped, first, second];
+		`);
+		expect(
+			definition.functions.some((fn) =>
+				fn.instructions.some(
+					(instruction) =>
+						(instruction.opcode === "LOAD_PROPERTY" ||
+							instruction.opcode === "STORE_PROPERTY") &&
+						instruction.nativeClosedGlobalTable !== undefined,
+				),
+			),
+		).toBe(false);
+	});
+});

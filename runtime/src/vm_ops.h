@@ -966,6 +966,12 @@ void mal_vm_finite_property_store(
     i32 ordinal, const i32 *string_indices, u8 count, bool strict,
     MalInlineCache *ic);
 
+/** Materialize a compiler-owned finite global table into its private `{}` and
+ * permanently mark the table deoptimized. Synthetic slots use EMPTY for an
+ * absent own property and are ordinary VM globals, hence already GC roots. */
+void mal_vm_closed_global_table_deopt(
+    MalVm *vm, MalValue receiver, i32 base_index, i32 count, i32 state_index);
+
 /** Prepare the dependency-backed final shape without allocating an object. */
 bool mal_vm_prepare_object_finite_construction(
     MalVm *vm, const i32 *string_indices, u8 count, MalInlineCache *ic);
