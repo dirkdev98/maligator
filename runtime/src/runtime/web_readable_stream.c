@@ -201,7 +201,8 @@ static MalReadableStreamObject *rs_reader_for(MalReadableStreamObject *stream) {
     return mal_value_to_readable_stream_object(stream->as.stream.reader);
 }
 
-static void rs_clear_algorithms(MalReadableStreamObject *controller) {
+static void rs_clear_algorithms_kind(
+    MalReadableStreamObject *controller, bool invalidate_byob_request) {
     mal_gc_write_barrier(controller->as.controller.underlying_source);
     mal_gc_write_barrier(controller->as.controller.pull_method);
     mal_gc_write_barrier(controller->as.controller.cancel_method);
@@ -210,7 +211,13 @@ static void rs_clear_algorithms(MalReadableStreamObject *controller) {
     controller->as.controller.pull_method = mal_value_new_undefined();
     controller->as.controller.cancel_method = mal_value_new_undefined();
     controller->as.controller.size_algorithm = mal_value_new_undefined();
-    rs_invalidate_byob_request(controller);
+    if (invalidate_byob_request) {
+        rs_invalidate_byob_request(controller);
+    }
+}
+
+static void rs_clear_algorithms(MalReadableStreamObject *controller) {
+    rs_clear_algorithms_kind(controller, true);
 }
 
 static void rs_queue_clear(MalReadableStreamObject *controller) {
@@ -258,15 +265,23 @@ static void rs_close_stream(MalVm *vm, MalReadableStreamObject *stream) {
     if (stream->as.stream.state != MAL_READABLE_STREAM_READABLE) {
         return;
     }
-    stream->as.stream.state = MAL_READABLE_STREAM_CLOSED;
-    rs_clear_algorithms(rs_controller_for(stream));
-
+    MalReadableStreamObject *controller = rs_controller_for(stream);
     MalReadableStreamObject *reader = rs_reader_for(stream);
+    bool preserve_byob_request = controller->kind ==
+            MAL_READABLE_BYTE_STREAM_CONTROLLER &&
+        reader != nullptr && reader->as.reader.requests_head != nullptr &&
+        mal_value_is_typed_array_object(reader->as.reader.requests_head->view);
+    stream->as.stream.state = MAL_READABLE_STREAM_CLOSED;
+    rs_clear_algorithms_kind(controller, !preserve_byob_request);
+
     if (reader == nullptr) {
         return;
     }
     mal_promise_fulfill(
         vm, mal_value_to_promise_object(reader->as.reader.closed_promise), mal_value_new_undefined());
+    if (preserve_byob_request) {
+        return;
+    }
     while (reader->as.reader.requests_head != nullptr) {
         MalReadableStreamReadRequest *request = reader->as.reader.requests_head;
         MalValue roots[3] = {
@@ -1546,6 +1561,27 @@ static MalValue rs_byob_request_respond(MalVm *vm, MalValue self,
     u32 total_filled = (u32) read_request->bytes_filled;
     u32 committed = total_filled - (total_filled % element_size);
     rs_invalidate_byob_request(controller);
+    if (stream->as.stream.state == MAL_READABLE_STREAM_CLOSED) {
+        roots[3] = rs_read_result(vm,
+            rs_byob_result_view(vm, destination, committed), true);
+        rs_request_remove(reader, read_request);
+        mal_promise_fulfill(vm,
+            mal_value_to_promise_object(roots[2]), roots[3]);
+        while (reader->as.reader.requests_head != nullptr) {
+            MalReadableStreamReadRequest *next = reader->as.reader.requests_head;
+            roots[1] = next->view;
+            roots[2] = next->promise;
+            MalTypedArrayObject *next_destination =
+                mal_value_to_typed_array_object(roots[1]);
+            roots[3] = rs_read_result(vm,
+                rs_byob_result_view(vm, next_destination, 0), true);
+            rs_request_remove(reader, next);
+            mal_promise_fulfill(vm,
+                mal_value_to_promise_object(roots[2]), roots[3]);
+        }
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
     if (committed == 0) {
         rs_call_pull_if_needed(vm, controller);
         mal_gc_unroot(&span);
@@ -1762,6 +1798,38 @@ static MalValue rs_controller_enqueue_kind(MalVm *vm, MalValue self,
         controller->as.controller.queue_tail = entry;
         controller->as.controller.queue_total_size += chunk_size;
         mal_gc_card(&controller->object.header, chunk);
+    }
+    reader = rs_reader_for(stream);
+    if (kind == MAL_READABLE_BYTE_STREAM_CONTROLLER && reader != nullptr &&
+        reader->as.reader.requests_head != nullptr &&
+        controller->as.controller.queue_head != nullptr) {
+        MalReadableStreamQueueEntry *entry = controller->as.controller.queue_head;
+        MalValue queued = entry->chunk;
+        MalRootSpan queued_span;
+        mal_gc_root(&queued_span, &queued, 1);
+        if (entry->byte_offset > 0) {
+            MalTypedArrayObject *source =
+                mal_value_to_typed_array_object(queued);
+            u32 byte_length = mal_typed_array_object_byte_length(source);
+            queued = mal_value_from_typed_array_object(
+                mal_typed_array_object_new(&vm->heap,
+                    mal_value_to_object(vm->intrinsics[
+                        MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+                    source->buffer, MAL_TA_UINT8,
+                    source->byte_offset + (u32) entry->byte_offset,
+                    byte_length - (u32) entry->byte_offset, false));
+        }
+        controller->as.controller.queue_head = entry->next;
+        if (controller->as.controller.queue_head == nullptr) {
+            controller->as.controller.queue_tail = nullptr;
+        }
+        controller->as.controller.queue_total_size -= entry->size;
+        mal_gc_write_barrier(entry->chunk);
+        free(entry);
+        (void) rs_controller_enqueue_kind(vm, self, &queued, 1, kind,
+            message, true);
+        mal_gc_unroot(&queued_span);
+        return mal_value_new_undefined();
     }
     rs_call_pull_if_needed(vm, controller);
     return mal_value_new_undefined();

@@ -399,6 +399,84 @@ async function run() {
 		incompleteCloseThrew && (await incompleteCloseRead) && (await incompleteCloseClosed),
 	);
 
+	let zeroCloseController;
+	let zeroCloseRequest;
+	const zeroCloseStream = new ReadableStream({
+		type: "bytes",
+		pull(controller) {
+			zeroCloseController = controller;
+			zeroCloseRequest = controller.byobRequest;
+			controller.close();
+			zeroCloseRequest.respond(0);
+		},
+	});
+	const zeroCloseRead = await zeroCloseStream
+		.getReader({ mode: "byob" })
+		.read(new Uint8Array([4, 5, 6]));
+	let secondZeroRespondRejected = false;
+	try {
+		zeroCloseRequest.respond(0);
+	} catch (error) {
+		secondZeroRespondRejected = error instanceof TypeError;
+	}
+	check(
+		"closed BYOB requests accept one zero-byte response",
+		zeroCloseController.byobRequest === null &&
+			zeroCloseRead.done &&
+			zeroCloseRead.value.byteLength === 0 &&
+			zeroCloseRead.value.buffer.byteLength === 3 &&
+			new Uint8Array(zeroCloseRead.value.buffer)[2] === 6 &&
+			secondZeroRespondRejected,
+	);
+
+	let multiCloseController;
+	const multiCloseStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			multiCloseController = controller;
+		},
+	});
+	const multiCloseReader = multiCloseStream.getReader({ mode: "byob" });
+	const multiCloseFirst = multiCloseReader.read(new Uint8Array(2));
+	const multiCloseSecond = multiCloseReader.read(new Uint8Array(3));
+	multiCloseController.close();
+	multiCloseController.byobRequest.respond(0);
+	const [multiCloseFirstResult, multiCloseSecondResult] = await Promise.all([
+		multiCloseFirst,
+		multiCloseSecond,
+	]);
+	check(
+		"one zero response closes multiple pending BYOB reads",
+		multiCloseFirstResult.done &&
+			multiCloseFirstResult.value.buffer.byteLength === 2 &&
+			multiCloseSecondResult.done &&
+			multiCloseSecondResult.value.buffer.byteLength === 3,
+	);
+
+	let multiPendingController;
+	const multiPendingStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			multiPendingController = controller;
+		},
+	});
+	const multiPendingReader = multiPendingStream.getReader({ mode: "byob" });
+	const multiPendingFirst = multiPendingReader.read(new Uint8Array(4));
+	const multiPendingSecond = multiPendingReader.read(new Uint8Array(4));
+	multiPendingController.enqueue(new Uint8Array([1, 2, 3, 4, 5, 6]));
+	const [multiPendingFirstResult, multiPendingSecondResult] = await Promise.all([
+		multiPendingFirst,
+		multiPendingSecond,
+	]);
+	check(
+		"one byte enqueue fills multiple pending BYOB reads",
+		multiPendingFirstResult.value.byteLength === 4 &&
+			multiPendingFirstResult.value[3] === 4 &&
+			multiPendingSecondResult.value.byteLength === 2 &&
+			multiPendingSecondResult.value[0] === 5 &&
+			multiPendingSecondResult.value[1] === 6,
+	);
+
 	const multiQueueStream = new ReadableStream({
 		type: "bytes",
 		start(controller) {
