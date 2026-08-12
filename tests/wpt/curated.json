@@ -893,6 +893,27 @@
 			]
 		},
 		{
+			"path": "streams/readable-streams/templated.any.js",
+			"sha256": "67bf45b9149dff2283524ae33c74ba3276abc6853ab1bee7d67c8fa655ca9879",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/test-utils.js" },
+				{ "name": "script", "value": "../resources/rs-test-templates.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				},
+				{
+					"path": "streams/resources/rs-test-templates.js",
+					"sha256": "7a0d0d4860ca6b397fa4aa008f802a734b99b40adff7ad60524721367d838042"
+				}
+			]
+		},
+		{
 			"path": "streams/readable-streams/tee.any.js",
 			"sha256": "098f2a7d34ca59cd739ff3ac6189a7ae6dd6d9b3c78010c5ec48b65358f29a3e",
 			"target": "server-main",
