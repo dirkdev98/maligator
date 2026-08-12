@@ -223,6 +223,9 @@ describe("serialize-vm", () => {
 	it("retains native-code generation metadata for frontend cache hits", () => {
 		const metadataInstructions: Array<VmInstruction> = mainFn.instructions.map(
 			(instruction) => {
+				if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
+					return { ...instruction, nativePrimitiveStringLength: true };
+				}
 				if (instruction.opcode === "CALL") {
 					return {
 						...instruction,
@@ -231,6 +234,7 @@ describe("serialize-vm", () => {
 						directCallTargetFunctionIndex: 1,
 						directArrayPush: true,
 						directStringCharCodeAt: true,
+						directStringCharCodeAtPosition: "inBounds",
 						directCollectionOp: "mapSet",
 					};
 				}

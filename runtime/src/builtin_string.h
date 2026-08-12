@@ -34,6 +34,17 @@ static inline MalValue mal_builtin_string_char_code_at_number(
     return result;
 }
 
+/** Stronger compiler kernel when a dominating loop test proves the exact Number
+ * position is non-negative and below this same primitive String's length. */
+static inline MalValue mal_builtin_string_char_code_at_in_bounds(
+    MalValue this_value, usize position
+) {
+    MalString *string = mal_value_to_string(this_value);
+    MalValue result = mal_value_from_i32(mal_string_code_units(string)[position]);
+    MAL_PERF_COUNT(string_char_code_at_direct_hits);
+    return result;
+}
+
 /**
  * Guarded native-backend dispatch for a direct `.charCodeAt(...)` site.
  * Primitive strings with the live builtin callback and an absent or numeric position

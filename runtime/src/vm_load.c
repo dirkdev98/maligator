@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 27u        // closed-global object slot metadata
+#define WIRE_VERSION 28u        // bounded String#charCodeAt compiler metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1580,7 +1580,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 (void) rd_i32(&r);
                 u8 flags = rd_u8(&r);
                 (void) rd_u8(&r);
-                if (flags > 15) {
+                if (flags > 63 || ((flags & 48) != 0 && (flags & 4) == 0) ||
+                    (flags & 48) == 48) {
                     r.ok = false;
                 }
                 if (flags & 8) {
@@ -1671,6 +1672,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     (mask & (mask + 1)) != 0 || direct > 1) {
                     r.ok = false;
                 }
+            } else if (tag == 11) { // guarded primitive-String length load
+                // No payload: generated native code alone consumes this hint.
             } else {
                 r.ok = false;
             }

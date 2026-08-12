@@ -21,8 +21,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 27 for closed-global finite-table compiler metadata.
-export const WIRE_VERSION = 27;
+// Bumped to 28 for bounded String#charCodeAt compiler metadata.
+export const WIRE_VERSION = 28;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -648,7 +648,9 @@ export function serializeVmDefinition(
 							instruction.nativeFiniteKey !== undefined) ||
 						((instruction.opcode === "LOAD_PROPERTY" ||
 							instruction.opcode === "LOAD_PROPERTY_STATIC") &&
-							instruction.nativeCardinalityAccess !== undefined)
+							instruction.nativeCardinalityAccess !== undefined) ||
+						(instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+							instruction.nativePrimitiveStringLength === true)
 					);
 				}
 				if (instruction.opcode === "CREATE_OBJECT") {
@@ -684,7 +686,9 @@ export function serializeVmDefinition(
 					(instruction.directFunctionCall === true ? 1 : 0) |
 						(instruction.directArrayPush === true ? 2 : 0) |
 						(instruction.directStringCharCodeAt === true ? 4 : 0) |
-						(instruction.nativeCardinalityPush !== undefined ? 8 : 0),
+						(instruction.nativeCardinalityPush !== undefined ? 8 : 0) |
+						(instruction.directStringCharCodeAtPosition === "integer" ? 16 : 0) |
+						(instruction.directStringCharCodeAtPosition === "inBounds" ? 32 : 0),
 				);
 				w.u8(
 					instruction.directCollectionOp === undefined
@@ -755,6 +759,11 @@ export function serializeVmDefinition(
 			) {
 				w.u8(8);
 				w.i32(instruction.nativeCardinalityRegion.maximumLength);
+			} else if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				instruction.nativePrimitiveStringLength === true
+			) {
+				w.u8(11);
 			} else if (
 				instruction.opcode === "BINARY" &&
 				instruction.nativeFiniteString !== undefined
@@ -1502,7 +1511,9 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				if (
 					directFunctionIndex < -1 ||
 					directCallTargetFunctionIndex < -1 ||
-					flags > 15 ||
+					flags > 63 ||
+					((flags & 48) !== 0 && (flags & 4) === 0) ||
+					(flags & 48) === 48 ||
 					collectionTag > 3
 				) {
 					throw new RangeError("serialize-vm: invalid CALL compiler metadata");
@@ -1515,6 +1526,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				if ((flags & 1) !== 0) instruction.directFunctionCall = true;
 				if ((flags & 2) !== 0) instruction.directArrayPush = true;
 				if ((flags & 4) !== 0) instruction.directStringCharCodeAt = true;
+				if ((flags & 16) !== 0) instruction.directStringCharCodeAtPosition = "integer";
+				if ((flags & 32) !== 0) instruction.directStringCharCodeAtPosition = "inBounds";
 				if ((flags & 8) !== 0) {
 					const allocationInstructionIndex = r.i32();
 					const pushedStackObjectAllocationInstructionIndex = r.i32();
@@ -1700,6 +1713,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					mask,
 					direct: direct === 1,
 				};
+			} else if (tag === 11 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
+				instruction.nativePrimitiveStringLength = true;
 			} else {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",

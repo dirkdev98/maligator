@@ -324,6 +324,8 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	if (residualFeatures.call && residualFeatures.property)
 		annotateDirectStringCharCodeAtSites(program);
 	if (residualFeatures.call && residualFeatures.property)
+		annotateBoundedStringCharCodeAtPositions(program);
+	if (residualFeatures.call && residualFeatures.property)
 		annotateDirectCollectionSites(program);
 	if (residualFeatures.call) annotateDirectCallTargets(program);
 	if (residualFeatures.call) optImmediateCallOperands(program);
@@ -699,6 +701,253 @@ export function annotateNativeNumericFusions(program: IntermediateProgram): void
 interface FiniteIntegerRange {
 	minimum: number;
 	maximum: number;
+}
+
+/**
+ * Prove the exact structured-loop relation behind
+ * `for (let i = 0; i < text.length; i++) text.charCodeAt(i)`.
+ *
+ * This deliberately does not attempt general range analysis. The accepted loop
+ * has one dominating `<` header, one backedge update, a stable receiver root,
+ * and no alternate entry into the taken body. The annotation is consumed only
+ * by the separately guarded adjacent Get+Call fusion; every rejected runtime
+ * protocol guard still executes the original property Get and Call.
+ */
+function annotateBoundedStringCharCodeAtPositions(program: IntermediateProgram): void {
+	for (const fn of program.functions) {
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			functionUsesWith(fn) ||
+			fn.semanticFile.hasDirectEval.size > 0 ||
+			fn.blocks.some((block) =>
+				block.instructions.some(
+					(instruction) =>
+						instruction.type === "tryBegin" ||
+						instruction.type === "tryEnd" ||
+						instruction.type === "catch",
+				),
+			)
+		) {
+			continue;
+		}
+
+		const index = buildIRRegisterIndex(fn, { locations: true });
+		const locations = index.locations!;
+		const incoming = fn.blocks.map(() => new Set<number>());
+		const successors = fn.blocks.map((block, blockIndex) => {
+			const result = new Set<number>();
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "jump" && instruction.type !== "jumpIf") continue;
+				for (const target of instruction.blocks) {
+					if (target >= 0 && target < fn.blocks.length) result.add(target);
+				}
+			}
+			const last = block.instructions[block.instructions.length - 1];
+			if (
+				last?.type !== "jump" &&
+				last?.type !== "return" &&
+				last?.type !== "throw" &&
+				blockIndex + 1 < fn.blocks.length
+			) {
+				result.add(blockIndex + 1);
+			}
+			for (const target of result) incoming[target]!.add(blockIndex);
+			return result;
+		});
+
+		const reachable = new Set<number>();
+		const work = fn.blocks.length === 0 ? [] : [0];
+		while (work.length > 0) {
+			const block = work.pop()!;
+			if (reachable.has(block)) continue;
+			reachable.add(block);
+			for (const target of successors[block]!) work.push(target);
+		}
+		const dominators = fn.blocks.map((_, block) =>
+			block === 0 ? new Set([0]) : new Set(reachable),
+		);
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const block of reachable) {
+				if (block === 0) continue;
+				const predecessors = [...incoming[block]!].filter((value) =>
+					reachable.has(value),
+				);
+				const next =
+					predecessors.length === 0
+						? new Set<number>()
+						: new Set(
+								[...dominators[predecessors[0]!]!].filter((candidate) =>
+									predecessors.every((value) => dominators[value]!.has(candidate)),
+								),
+							);
+				next.add(block);
+				const current = dominators[block]!;
+				if (
+					next.size !== current.size ||
+					[...next].some((candidate) => !current.has(candidate))
+				) {
+					dominators[block] = next;
+					changed = true;
+				}
+			}
+		}
+
+		const moveRoot = (initial: number): number => {
+			let register = initial;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = index.uniqueDefinitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+		const constantThroughMoves = (initial: number): number | undefined => {
+			const definition = index.uniqueDefinitions.get(moveRoot(initial));
+			return exactIntegerConstant(definition);
+		};
+
+		for (const edge of findBackEdges(fn).backEdges) {
+			if (!dominators[edge.from]?.has(edge.to)) continue;
+			const naturalBlocks = new Set<number>([edge.to, edge.from]);
+			const naturalWork = [edge.from];
+			while (naturalWork.length > 0) {
+				const block = naturalWork.pop()!;
+				for (const predecessor of incoming[block]!) {
+					if (
+						predecessor !== edge.to &&
+						!naturalBlocks.has(predecessor) &&
+						dominators[predecessor]?.has(edge.to)
+					) {
+						naturalBlocks.add(predecessor);
+						naturalWork.push(predecessor);
+					}
+				}
+			}
+			const header = fn.blocks[edge.to]!;
+			const branches = header.instructions.filter(
+				(instruction) => instruction.type === "jumpIf",
+			);
+			const exits = header.instructions.filter(
+				(instruction) => instruction.type === "jump",
+			);
+			if (branches.length !== 1 || exits.length !== 1) continue;
+			const branch = branches[0]!;
+			const bodyEntry = branch.blocks[0];
+			if (
+				bodyEntry === undefined ||
+				!dominators[edge.from]!.has(bodyEntry) ||
+				incoming[bodyEntry]!.size !== 1 ||
+				!incoming[bodyEntry]!.has(edge.to)
+			) {
+				continue;
+			}
+			const comparison = index.uniqueDefinitions.get(branch.registers[0]);
+			if (comparison?.type !== "binary" || comparison.operator !== "<") continue;
+			const positionRoot = moveRoot(comparison.registers[1]);
+			const lengthLoad = index.uniqueDefinitions.get(comparison.registers[2]);
+			if (
+				lengthLoad?.type !== "loadPropertyStatic" ||
+				decodeStringConstant(program, lengthLoad.stringIndex) !== "length"
+			) {
+				continue;
+			}
+			const receiverRoot = moveRoot(lengthLoad.registers[1]);
+			const comparisonLocation = locations.get(comparison);
+			const lengthLocation = locations.get(lengthLoad);
+			if (
+				comparisonLocation?.blockIndex !== edge.to ||
+				lengthLocation?.blockIndex !== edge.to ||
+				lengthLocation.instructionIndex >= comparisonLocation.instructionIndex
+			) {
+				continue;
+			}
+
+			const counterDefinitions = index.definitions.get(positionRoot) ?? [];
+			if (counterDefinitions.length !== 2) continue;
+			let initializer: (typeof counterDefinitions)[number] | undefined;
+			let updater: (typeof counterDefinitions)[number] | undefined;
+			for (const candidate of counterDefinitions) {
+				const definition = candidate.instruction;
+				if (definition.type === "createNumber" || definition.type === "createF64") {
+					if (definition.registers[0] === positionRoot && definition.value === 0) {
+						initializer = candidate;
+					}
+					continue;
+				}
+				if (
+					definition.type === "unary" &&
+					definition.operator === "increment" &&
+					definition.registers[0] === positionRoot &&
+					moveRoot(definition.registers[1]) === positionRoot
+				) {
+					updater = candidate;
+					continue;
+				}
+				if (definition.type !== "move" || definition.registers[0] !== positionRoot)
+					continue;
+				if (constantThroughMoves(definition.registers[1]) === 0) {
+					initializer = candidate;
+					continue;
+				}
+				const updateDefinition = index.uniqueDefinitions.get(definition.registers[1]);
+				if (
+					updateDefinition?.type !== "unary" ||
+					updateDefinition.operator !== "increment"
+				) {
+					continue;
+				}
+				let source = updateDefinition.registers[1];
+				const numeric = index.uniqueDefinitions.get(source);
+				if (numeric?.type === "unary" && numeric.operator === "tonumeric") {
+					source = numeric.registers[1];
+				}
+				if (moveRoot(source) === positionRoot) updater = candidate;
+			}
+			if (
+				initializer === undefined ||
+				updater === undefined ||
+				naturalBlocks.has(locations.get(initializer.instruction)!.blockIndex) ||
+				locations.get(updater.instruction)!.blockIndex !== edge.from
+			) {
+				continue;
+			}
+
+			for (const blockIndex of naturalBlocks) {
+				for (const instruction of fn.blocks[blockIndex]!.instructions) {
+					if (
+						instruction.type !== "call" ||
+						instruction.directStringCharCodeAt !== true ||
+						instruction.registers.length !== 4 ||
+						moveRoot(instruction.registers[2]) !== receiverRoot ||
+						moveRoot(instruction.registers[3]!) !== positionRoot
+					) {
+						continue;
+					}
+					const callLocation = locations.get(instruction)!;
+					if (
+						!dominators[callLocation.blockIndex]!.has(bodyEntry) ||
+						(callLocation.blockIndex === locations.get(updater.instruction)!.blockIndex &&
+							callLocation.instructionIndex >=
+								locations.get(updater.instruction)!.instructionIndex)
+					) {
+						continue;
+					}
+					const receiverChanged = [...(index.definitions.get(receiverRoot) ?? [])].some(
+						(definition) =>
+							naturalBlocks.has(locations.get(definition.instruction)!.blockIndex),
+					);
+					if (receiverChanged) continue;
+					instruction.directStringCharCodeAtPosition = "inBounds";
+					lengthLoad.nativePrimitiveStringLength = true;
+				}
+			}
+		}
+	}
 }
 
 const MAX_FINITE_STRING_VALUES = 32;

@@ -39,6 +39,24 @@ const ownMethod = {
 };
 ok("non-string receiver", codeUnit(ownMethod, 2) === 42);
 
+function boundedChecksum(value) {
+	let checksum = 0;
+	for (let index = 0; index < value.length; index++) {
+		checksum += value.charCodeAt(index);
+	}
+	return checksum;
+}
+ok("bounded primitive loop", boundedChecksum("A\ud83d\ude00Z") === 112344);
+
+function mismatchedBound(bound, value) {
+	let result = 0;
+	for (let index = 0; index < bound.length; index++) {
+		result += value.charCodeAt(index);
+	}
+	return result;
+}
+ok("mismatched receiver keeps bounds", Number.isNaN(mismatchedBound("long", "x")));
+
 const original = String.prototype.charCodeAt;
 function mutateThenRead(value, index) {
 	String.prototype.charCodeAt = function (position) {
@@ -56,5 +74,5 @@ ok("prototype replacement", codeUnit("override", 3) === 11);
 String.prototype.charCodeAt = original;
 ok("restored method remains conformant", codeUnit("Z", 0) === 90);
 
-ok("checks ran", passed === 12);
+ok("checks ran", passed === 14);
 console.log("string-char-code-at-direct PASS");

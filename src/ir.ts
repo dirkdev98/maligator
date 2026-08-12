@@ -903,6 +903,12 @@ export type IRInstruction =
 			 */
 			directStringCharCodeAt?: true;
 			/**
+			 * COMPILE-ONLY: the Number position is statically known to be an exact
+			 * non-negative integer and, for `inBounds`, below this primitive String
+			 * receiver's length on every path reaching the call.
+			 */
+			directStringCharCodeAtPosition?: "integer" | "inBounds";
+			/**
 			 * COMPILE-ONLY: a direct Map.get/Map.set/Set.add method site eligible for
 			 * guarded intrinsic collection dispatch in native code. The loaded callee
 			 * and receiver brand are still validated at runtime.
@@ -1034,6 +1040,9 @@ export type IRInstruction =
 			// [destination, object]
 			registers: [number, number];
 			stringIndex: number;
+			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
+			 * primitive-String consumer, so native code may try the String brand first. */
+			nativePrimitiveStringLength?: true;
 			stackObjectSiteId?: number;
 			stackObjectSlot?: number;
 			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */

@@ -558,6 +558,8 @@ export type VmInstruction =
 			};
 			/** COMPILE-ONLY: guarded intrinsic String.prototype.charCodeAt dispatch. */
 			directStringCharCodeAt?: true;
+			/** COMPILE-ONLY: statically proven Number-position strength. */
+			directStringCharCodeAtPosition?: "integer" | "inBounds";
 			/** COMPILE-ONLY: guarded intrinsic Map/Set method dispatch. */
 			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
 	  }
@@ -682,6 +684,8 @@ export type VmInstruction =
 			object: number;
 			stringIndex: number;
 			icIndex: number;
+			/** COMPILE-ONLY: guarded primitive-String `length` fast read. */
+			nativePrimitiveStringLength?: true;
 			nativeCardinalityAccess?: {
 				role: "push" | "length" | "element" | "field";
 				allocationInstructionIndex: number;
@@ -1752,6 +1756,7 @@ function lowerInstructionToVmInstruction(
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
 				directArrayPush: instruction.directArrayPush,
 				directStringCharCodeAt: instruction.directStringCharCodeAt,
+				directStringCharCodeAtPosition: instruction.directStringCharCodeAtPosition,
 				directCollectionOp: instruction.directCollectionOp,
 			};
 		case "construct":
@@ -1893,6 +1898,7 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[1],
 				stringIndex: instruction.stringIndex,
 				icIndex: -1,
+				nativePrimitiveStringLength: instruction.nativePrimitiveStringLength,
 			};
 		case "loadSuperProperty":
 			return {

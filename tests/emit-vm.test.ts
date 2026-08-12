@@ -933,6 +933,37 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(", 1);");
 	});
 
+	it("uses a relational loop proof for bounded primitive String charCodeAt", () => {
+		const output = emit(`
+			function checksum(value) {
+				let result = 0;
+				for (let index = 0; index < value.length; index++) {
+					result += value.charCodeAt(index);
+				}
+				return result;
+			}
+			globalThis.checksum = checksum;
+		`);
+		expect(output).toContain("mal_builtin_string_char_code_at_in_bounds(");
+		expect(output).toContain(
+			"mal_value_from_i32((i32) mal_string_length(mal_value_to_string(",
+		);
+	});
+
+	it("does not transfer a String length bound across receivers", () => {
+		const output = emit(`
+			function checksum(bound, value) {
+				let result = 0;
+				for (let index = 0; index < bound.length; index++) {
+					result += value.charCodeAt(index);
+				}
+				return result;
+			}
+			globalThis.checksum = checksum;
+		`);
+		expect(output).not.toContain("mal_builtin_string_char_code_at_in_bounds(");
+	});
+
 	it("emits guarded direct collection dispatch from call metadata", () => {
 		const output = emit(`
 			function update(map, set, key, value) {

@@ -3414,7 +3414,7 @@ function emitInstruction(
 									: `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip}))`
 							} || ${loopStaticPropertyFastPath ? `mal_vm_local_watched_inherited_value_try_load_static(vm, __watched_methods_epoch, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || ` : ""}mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
 						: `(${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
-				return [
+				const ordinary = [
 					...(reg.declare
 						? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
 						: []),
@@ -3426,6 +3426,19 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
+				if (
+					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+					instruction.nativePrimitiveStringLength === true
+				) {
+					return [
+						`if (mal_value_is_string(${boxed(instruction.object)})) {`,
+						`  r${instruction.dst} = mal_value_from_i32((i32) mal_string_length(mal_value_to_string(${boxed(instruction.object)})));`,
+						`} else {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				return ordinary;
 			}
 			// Consolidated object region: one shape guard (__rgok) covers the run; a hit is a
 			// direct cached-slot read (key compare guards a computed-key mismatch), a miss the
@@ -4093,11 +4106,18 @@ function emitInstruction(
 					firstNumber !== null ? "true" : `mal_ops_is_number(${boxedOperand(args[0]!)})`;
 				const position =
 					firstNumber ?? `mal_ops_number_as_f64(${boxedOperand(args[0]!)})`;
+				const boundedPosition =
+					instruction.directStringCharCodeAtPosition === "inBounds" &&
+					firstNumber !== null
+						? `(usize) (${firstNumber})`
+						: null;
 				const callee = `r${fusion.load.dst}`;
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`if (mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${fusion.load.icIndex}], &${callee}) && mal_value_is_string(${receiver}) && ${numberGuard}) {`,
-					`  r${instruction.dst} = mal_builtin_string_char_code_at_number(${receiver}, ${position});`,
+					boundedPosition === null
+						? `  r${instruction.dst} = mal_builtin_string_char_code_at_number(${receiver}, ${position});`
+						: `  r${instruction.dst} = mal_builtin_string_char_code_at_in_bounds(${receiver}, ${boundedPosition});`,
 					`} else {`,
 					`  ${callee} = mal_vm_op_load_property_ic(vm, ${boxedOperand(fusion.load.object)}, mal_value_from_string(vm->string_constant_atoms[${fusion.load.stringIndex}]), &__property_ic[${fusion.load.icIndex}]);`,
 					`  ${throwCheck}`,
