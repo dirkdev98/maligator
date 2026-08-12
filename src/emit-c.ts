@@ -1709,6 +1709,9 @@ interface InheritedLoadLoopTwin {
 	icIndex: number;
 	probeName: string;
 	position: number;
+	deferredRegisters: Array<number>;
+	deferredMoveIps: ReadonlySet<number>;
+	loadedName: string;
 }
 
 interface LoopTwinEmission {
@@ -1737,6 +1740,88 @@ function loopTwinValidation(twin: InheritedLoadLoopTwin): string {
 	const receiver = `r${twin.receiver}`;
 	const ic = `&__property_ic[${twin.icIndex}]`;
 	return `(mal_vm_local_inherited_value_try_load_static(mal_vm_as_object(${receiver}), ${ic}, &${twin.probeName}) || mal_vm_local_watched_inherited_value_try_load_static(vm, __watched_methods_epoch, ${receiver}, ${ic}, &${twin.probeName}))`;
+}
+
+function loopTwinReadRegisters(instruction: VmInstruction): Array<number> {
+	switch (instruction.opcode) {
+		case "MOVE":
+			return [instruction.src];
+		case "IS_EMPTY":
+		case "UNARY":
+		case "TYPEOF_COMPARE":
+			return [instruction.src];
+		case "BINARY":
+			return [instruction.left, instruction.right];
+		case "JUMP_IF":
+			return [instruction.cond];
+		default:
+			return [];
+	}
+}
+
+/**
+ * A dependency-backed value may stay in its IC owner throughout a fast loop
+ * when it only flows through MOVEs. Materializing every member of the move chain
+ * on exit preserves the VM-register state while removing repeated rooted-slot
+ * stores from the hot body. Any real use or overwrite rejects deferral.
+ */
+function deferredInheritedMoveChain(
+	fn: VmFunction,
+	reps: Array<RegisterRep>,
+	headerIp: number,
+	backedgeIp: number,
+	propertyIp: number,
+	propertyDst: number,
+): { registers: Array<number>; moveIps: ReadonlySet<number> } | null {
+	const registers = new Set<number>([propertyDst]);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let ip = headerIp; ip <= backedgeIp; ip++) {
+			const instruction = fn.instructions[ip]!;
+			if (
+				instruction.opcode === "MOVE" &&
+				registers.has(instruction.src) &&
+				!registers.has(instruction.dst)
+			) {
+				registers.add(instruction.dst);
+				changed = true;
+			}
+		}
+	}
+	if ([...registers].some((register) => reps[register] !== "boxed")) return null;
+
+	const moveIps = new Set<number>();
+	for (let ip = headerIp; ip <= backedgeIp; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (ip === propertyIp) continue;
+		if (
+			instruction.opcode === "MOVE" &&
+			registers.has(instruction.src) &&
+			registers.has(instruction.dst)
+		) {
+			moveIps.add(ip);
+			continue;
+		}
+		if (loopTwinReadRegisters(instruction).some((register) => registers.has(register))) {
+			return null;
+		}
+		if (writeRegisters(instruction).some((register) => registers.has(register))) {
+			return null;
+		}
+	}
+	return { registers: [...registers].sort((left, right) => left - right), moveIps };
+}
+
+function materializeDeferredInheritedValue(twin: InheritedLoadLoopTwin): Array<string> {
+	if (twin.deferredRegisters.length === 0) return [];
+	return [
+		`if (${twin.loadedName}) {`,
+		...twin.deferredRegisters.map(
+			(register) => `  r${register} = __property_ic[${twin.icIndex}].value;`,
+		),
+		`}`,
+	];
 }
 
 /**
@@ -1842,6 +1927,14 @@ function findInheritedLoadLoopTwins(
 		) {
 			continue;
 		}
+		const deferred = deferredInheritedMoveChain(
+			fn,
+			reps,
+			headerIp,
+			backedgeIp,
+			load.ip,
+			load.instruction.dst,
+		);
 
 		candidates.push({
 			headerIp,
@@ -1851,6 +1944,9 @@ function findInheritedLoadLoopTwins(
 			icIndex: load.instruction.icIndex,
 			probeName: `__inherited_loop_${headerIp}_probe`,
 			position: fn.positions[load.ip] ?? -1,
+			deferredRegisters: deferred?.registers ?? [],
+			deferredMoveIps: deferred?.moveIps ?? new Set<number>(),
+			loadedName: `__inherited_loop_${headerIp}_loaded`,
 		});
 	}
 
@@ -2320,6 +2416,9 @@ function emitBody(
 	);
 	for (const twin of inheritedLoadLoopTwins) {
 		lines.push(`MalValue ${twin.probeName} = MAL_VALUE_UNDEFINED;`);
+		if (twin.deferredRegisters.length > 0) {
+			lines.push(`bool ${twin.loadedName} = false;`);
+		}
 	}
 	if (
 		fn.instructions.some(
@@ -2356,6 +2455,9 @@ function emitBody(
 		}
 		const loopTwin = inheritedLoadLoopTwinByHeader.get(ip);
 		if (loopTwin !== undefined) {
+			if (loopTwin.deferredRegisters.length > 0) {
+				lines.push(`    ${loopTwin.loadedName} = false;`);
+			}
 			lines.push(
 				`    if (${loopTwinValidation(loopTwin)}) goto LF${loopTwin.headerIp};`,
 				`    goto LG${loopTwin.headerIp};`,
@@ -2597,6 +2699,12 @@ function emitInstruction(
 
 	switch (instruction.opcode) {
 		case "MOVE": {
+			if (
+				loopTwinEmission?.kind === "fast" &&
+				loopTwinEmission.twin.deferredMoveIps.has(ip)
+			) {
+				return [];
+			}
 			// The dst and src share a rep (a MOVE produces its src's rep, so the
 			// dst's join can only differ by being boxed). Read src in the dst's rep.
 			const dst = instruction.dst;
@@ -2877,6 +2985,12 @@ function emitInstruction(
 				ip === loopTwinEmission.twin.propertyIp &&
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
 			) {
+				if (loopTwinEmission.twin.deferredRegisters.length > 0) {
+					return [
+						"mal_perf_ic_load_inherited_hit();",
+						`${loopTwinEmission.twin.loadedName} = true;`,
+					];
+				}
 				return [
 					"mal_perf_ic_load_inherited_hit();",
 					`r${instruction.dst} = __property_ic[${instruction.icIndex}].value;`,
@@ -4206,6 +4320,9 @@ function emitInstruction(
 				}
 				return [
 					`if (mal_gc_poll) {`,
+					...materializeDeferredInheritedValue(loopTwinEmission.twin).map(
+						(line) => `  ${line}`,
+					),
 					...(loopTwinEmission.publishPosition && loopTwinEmission.twin.position !== -1
 						? [
 								`  vm->native_frames[vm->native_frame_count - 1].pos_id = ${loopTwinEmission.twin.position};`,
@@ -4224,6 +4341,12 @@ function emitInstruction(
 			) {
 				return [`goto LF${instruction.targetIp};`];
 			}
+			if (loopTwinEmission?.kind === "fast") {
+				return [
+					...materializeDeferredInheritedValue(loopTwinEmission.twin),
+					`goto L${instruction.targetIp};`,
+				];
+			}
 			return instruction.targetIp <= ip
 				? [poll, `goto L${instruction.targetIp};`]
 				: [`goto L${instruction.targetIp};`];
@@ -4237,6 +4360,16 @@ function emitInstruction(
 				instruction.targetIp <= loopTwinEmission.twin.backedgeIp
 			) {
 				return [`if (${truthy(instruction.cond)}) goto LF${instruction.targetIp};`];
+			}
+			if (loopTwinEmission?.kind === "fast") {
+				return [
+					`if (${truthy(instruction.cond)}) {`,
+					...materializeDeferredInheritedValue(loopTwinEmission.twin).map(
+						(line) => `  ${line}`,
+					),
+					`  goto L${instruction.targetIp};`,
+					`}`,
+				];
 			}
 			return instruction.targetIp <= ip
 				? [`if (${truthy(instruction.cond)}) { ${poll} goto L${instruction.targetIp}; }`]

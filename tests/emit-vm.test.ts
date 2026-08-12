@@ -758,6 +758,9 @@ describe("native update-expression representation", () => {
 		expect(loopOutput).toContain("__inherited_loop_");
 		expect(loopOutput).toMatch(/goto LF\d+/);
 		expect(loopOutput).toMatch(/goto LG\d+/);
+		expect(loopOutput).toMatch(/bool __inherited_loop_\d+_loaded = false/);
+		expect(loopOutput).toMatch(/__inherited_loop_\d+_loaded = true/);
+		expect(loopOutput).toMatch(/if \(__inherited_loop_\d+_loaded\) \{/);
 		expect(loopOutput).toMatch(/r\d+ = __property_ic\[\d+\]\.value/);
 		expect(loopOutput).toContain("if (mal_gc_poll) {");
 		expect(loopOutput).toMatch(

@@ -25,10 +25,22 @@ function loadDeep(receiver) {
 	return receiver.method;
 }
 
+function loadLoop(receiver, count, initial) {
+	let result = initial;
+	for (let index = 0; index < count; index++) result = receiver.method;
+	return result;
+}
+
 const holder = { method: original };
 const direct = Object.create(holder);
 const middle = Object.create(holder);
 const deep = Object.create(middle);
+const zeroSentinel = {};
+
+ok("loop zero iterations", loadLoop(direct, 0, zeroSentinel) === zeroSentinel);
+for (let index = 0; index < 20; index++) {
+	ok("loop warm", loadLoop(direct, 10, zeroSentinel) === original);
+}
 
 for (let index = 0; index < 2000; index++) {
 	ok("direct warm", loadDirect(direct) === original);
@@ -36,6 +48,7 @@ for (let index = 0; index < 2000; index++) {
 }
 
 holder.method = replacement;
+ok("loop invalidation between calls", loadLoop(direct, 10, zeroSentinel) === replacement);
 ok("holder replacement", loadDirect(direct) === replacement);
 ok("deep holder replacement", loadDeep(deep) === replacement);
 for (let index = 0; index < 100; index++) {
