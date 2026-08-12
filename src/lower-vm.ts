@@ -247,6 +247,31 @@ export interface VmFunction {
 		matchCodeUnit: number;
 	}>;
 
+	/** EMITTER-ONLY: selected element/length projections of an exact String split. */
+	nativeStringSplitProjections?: ReadonlyArray<{
+		callIp: number;
+		callee: number;
+		receiver: number;
+		separatorStringIndex: number;
+		result: number;
+		loads: ReadonlyArray<{
+			ip: number;
+			kind: "element" | "length";
+			index?: number;
+			dst: number;
+		}>;
+	}>;
+
+	/** EMITTER-ONLY: exact builtin String slice immediately consumed by Number. */
+	nativeStringSliceNumberFusions?: ReadonlyArray<{
+		sliceCallIp: number;
+		numberCallIp: number;
+		numberCallee: number;
+		receiver: number;
+		sliceStart: number;
+		result: number;
+	}>;
+
 	/**
 	 * COMPILE-ONLY: exact CREATE_OBJECT/CREATE_OBJECT_SHAPED sites proven safe for
 	 * native stack emission. Omitted by the wire codec, so deserialized/interpreted

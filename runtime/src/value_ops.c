@@ -90,10 +90,7 @@ static int mal_ops_string_number_digit(char c) {
 
 // StringToNumber (7.1.4.1) over the StrNumericLiteral grammar — deliberately NOT
 // strtod, which would wrongly accept "inf"/"nan" and reject 0b/0o literals.
-static MalValue mal_ops_string_to_number(MalValue value) {
-    MalString *string = mal_value_to_string(value);
-    usize length = mal_string_length(string);
-    const c16 *code_units = mal_string_code_units(string);
+MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
     usize unit_start = 0;
     usize unit_end = length;
     while (unit_start < unit_end && mal_ecma_is_string_whitespace(code_units[unit_start])) {
@@ -177,6 +174,12 @@ static MalValue mal_ops_string_to_number(MalValue value) {
 
     free(bytes);
     return mal_ops_number_value(number);
+}
+
+static MalValue mal_ops_string_to_number(MalValue value) {
+    MalString *string = mal_value_to_string(value);
+    return mal_ops_string_units_to_number(
+        mal_string_code_units(string), mal_string_length(string));
 }
 
 // Render a finite, non-zero f64 per ECMAScript Number::toString (7.1.12.1) into

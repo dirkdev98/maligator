@@ -1002,6 +1002,29 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_vm_try_string_scan_summary(vm,");
 	});
 
+	it("projects closed String split results and fuses slice into Number", () => {
+		const output = emit(`
+			function parse(value) {
+				const fields = value.split(";");
+				return Number(fields[1].slice(2)) + fields[0].length + fields.length;
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).toContain("mal_builtin_string_split_projection(vm,");
+		expect(output).toContain("mal_builtin_string_slice_to_number_direct(vm,");
+	});
+
+	it("keeps slice materialized when its result has another use", () => {
+		const output = emit(`
+			function parse(value) {
+				const tail = value.slice(1);
+				return Number(tail) + tail.length;
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).not.toContain("mal_builtin_string_slice_to_number_direct(vm,");
+	});
+
 	it("emits guarded direct collection dispatch from call metadata", () => {
 		const output = emit(`
 			function update(map, set, key, value) {

@@ -1035,6 +1035,220 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 	}
 }
 
+/**
+ * Replace an exact builtin String split Array with a rooted projection when all
+ * uses are constant element reads and/or `length`. The complete call and loads
+ * remain as the guard-miss path.
+ */
+function annotateNativeStringSplitProjections(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		const projections: Array<
+			NonNullable<VmFunction["nativeStringSplitProjections"]>[number]
+		> = [];
+		const jumpTargets = new Set<number>();
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+				jumpTargets.add(instruction.targetIp);
+			}
+		}
+		const latestDefinition = (register: number, beforeIp: number) => {
+			for (let ip = beforeIp - 1; ip >= 0; ip--) {
+				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
+					return { instruction: fn.instructions[ip]!, ip };
+				}
+			}
+			return undefined;
+		};
+		for (let callIp = 1; callIp < fn.instructions.length; callIp++) {
+			const call = fn.instructions[callIp]!;
+			const load = fn.instructions[callIp - 1]!;
+			if (
+				call.opcode !== "CALL" ||
+				call.arguments.length !== 1 ||
+				load.opcode !== "LOAD_PROPERTY_STATIC" ||
+				load.dst !== call.callee ||
+				load.object !== call.thisValue ||
+				!staticStringEquals(definition, load.stringIndex, "split") ||
+				jumpTargets.has(callIp)
+			) {
+				continue;
+			}
+			const separator = decodeVmValueOperand(call.arguments[0]!);
+			if (
+				separator.kind !== "string" ||
+				(definition.stringConstants[separator.index]?.length ?? 0) === 0
+			) {
+				continue;
+			}
+
+			const aliases = new Set<number>([call.dst]);
+			const loads: Array<
+				NonNullable<VmFunction["nativeStringSplitProjections"]>[number]["loads"][number]
+			> = [];
+			const indices = new Set<number>();
+			let lengthSeen = false;
+			let safe = true;
+			for (let ip = callIp + 1; ip < fn.instructions.length && aliases.size > 0; ip++) {
+				const instruction = fn.instructions[ip]!;
+				const usedAliases = [...aliases].filter((alias) =>
+					vmInstructionUsesRegister(instruction, alias),
+				);
+				let accepted = usedAliases.length === 0;
+				if (
+					instruction.opcode === "MOVE" &&
+					usedAliases.length === 1 &&
+					usedAliases[0] === instruction.src
+				) {
+					accepted = true;
+				} else if (
+					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+					aliases.has(instruction.object) &&
+					staticStringEquals(definition, instruction.stringIndex, "length") &&
+					!lengthSeen
+				) {
+					loads.push({ ip, kind: "length", dst: instruction.dst });
+					lengthSeen = true;
+					accepted = true;
+				} else if (
+					instruction.opcode === "LOAD_PROPERTY" &&
+					aliases.has(instruction.object)
+				) {
+					const key = latestDefinition(instruction.key, ip);
+					if (
+						key?.instruction.opcode === "CREATE_NUMBER" &&
+						Number.isInteger(key.instruction.value) &&
+						key.instruction.value >= 0 &&
+						key.instruction.value <= 0xffff &&
+						![...jumpTargets, ...fn.handlers.map((handler) => handler.handlerIp)].some(
+							(targetIp) => targetIp > key.ip && targetIp <= ip,
+						) &&
+						!indices.has(key.instruction.value)
+					) {
+						loads.push({
+							ip,
+							kind: "element",
+							index: key.instruction.value,
+							dst: instruction.dst,
+						});
+						indices.add(key.instruction.value);
+						accepted = true;
+					}
+				}
+				if (!accepted) {
+					safe = false;
+					break;
+				}
+
+				for (const alias of [...aliases]) {
+					if (vmInstructionDefinesRegister(instruction, alias)) aliases.delete(alias);
+				}
+				if (instruction.opcode === "MOVE" && usedAliases.includes(instruction.src)) {
+					aliases.add(instruction.dst);
+				}
+			}
+			const elementLoads = loads.filter((entry) => entry.kind === "element");
+			if (!safe || elementLoads.length === 0 || elementLoads.length > 8) {
+				continue;
+			}
+			projections.push({
+				callIp,
+				callee: call.callee,
+				receiver: call.thisValue,
+				separatorStringIndex: separator.index,
+				result: call.dst,
+				loads,
+			});
+		}
+		if (projections.length > 0) fn.nativeStringSplitProjections = projections;
+		else delete fn.nativeStringSplitProjections;
+	}
+}
+
+/**
+ * Fuse an exact builtin `string.slice(constant)` whose only produced value is
+ * immediately consumed by the exact Number intrinsic. Both calls remain as the
+ * guard-miss path.
+ */
+function annotateNativeStringSliceNumberFusions(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		const fusions: Array<
+			NonNullable<VmFunction["nativeStringSliceNumberFusions"]>[number]
+		> = [];
+		const jumpTargets = new Set<number>();
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+				jumpTargets.add(instruction.targetIp);
+			}
+		}
+		const latestDefinition = (register: number, beforeIp: number) => {
+			for (let ip = beforeIp - 1; ip >= 0; ip--) {
+				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
+					return { instruction: fn.instructions[ip]!, ip };
+				}
+			}
+			return undefined;
+		};
+		for (let sliceCallIp = 1; sliceCallIp + 1 < fn.instructions.length; sliceCallIp++) {
+			const sliceCall = fn.instructions[sliceCallIp]!;
+			const load = fn.instructions[sliceCallIp - 1]!;
+			const numberCall = fn.instructions[sliceCallIp + 1]!;
+			const numberArgument =
+				numberCall.opcode === "CALL"
+					? decodeVmValueOperand(numberCall.arguments[0] ?? -1)
+					: undefined;
+			if (
+				sliceCall.opcode !== "CALL" ||
+				sliceCall.arguments.length !== 1 ||
+				load.opcode !== "LOAD_PROPERTY_STATIC" ||
+				load.dst !== sliceCall.callee ||
+				load.object !== sliceCall.thisValue ||
+				!staticStringEquals(definition, load.stringIndex, "slice") ||
+				numberCall.opcode !== "CALL" ||
+				numberCall.arguments.length !== 1 ||
+				numberArgument?.kind !== "register" ||
+				numberArgument.register !== sliceCall.dst ||
+				jumpTargets.has(sliceCallIp + 1)
+			) {
+				continue;
+			}
+			const start = decodeVmValueOperand(sliceCall.arguments[0]!);
+			const numberCallee = latestDefinition(numberCall.callee, sliceCallIp + 1);
+			if (
+				start.kind !== "number" ||
+				!Number.isFinite(start.value) ||
+				numberCallee?.instruction.opcode !== "LOAD_INTRINSIC" ||
+				numberCallee.instruction.intrinsic !== "Number" ||
+				![...jumpTargets, ...fn.handlers.map((handler) => handler.handlerIp)].every(
+					(targetIp) => targetIp <= numberCallee.ip || targetIp > sliceCallIp,
+				)
+			) {
+				continue;
+			}
+			let resultEscapes = false;
+			for (let ip = sliceCallIp + 2; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (vmInstructionUsesRegister(instruction, sliceCall.dst)) {
+					resultEscapes = true;
+					break;
+				}
+				if (vmInstructionDefinesRegister(instruction, sliceCall.dst)) break;
+			}
+			if (resultEscapes) continue;
+			fusions.push({
+				sliceCallIp,
+				numberCallIp: sliceCallIp + 1,
+				numberCallee: numberCall.callee,
+				receiver: sliceCall.thisValue,
+				sliceStart: start.value,
+				result: numberCall.dst,
+			});
+			sliceCallIp++;
+		}
+		if (fusions.length > 0) fn.nativeStringSliceNumberFusions = fusions;
+		else delete fn.nativeStringSliceNumberFusions;
+	}
+}
+
 function emitVmDefinitionSource(
 	definition: VmDefinition,
 	options: EmitOptions,
@@ -1044,7 +1258,11 @@ function emitVmDefinitionSource(
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
-	if (useCompiled) annotateNativeStringScanSummaries(definition);
+	if (useCompiled) {
+		annotateNativeStringScanSummaries(definition);
+		annotateNativeStringSplitProjections(definition);
+		annotateNativeStringSliceNumberFusions(definition);
+	}
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
 	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.
 	const lines = options.includeHeader === false ? [] : [...C_HEADER_LINES];

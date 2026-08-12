@@ -59,3 +59,35 @@ MalCompletion mal_builtin_string_char_code_at_direct(
     const MalValue *args,
     i32 arg_count
 );
+
+/**
+ * Producer-consumer fusion for exact builtin `string.slice(start)` immediately
+ * consumed by the exact Number constructor. Guard failure is side-effect-free.
+ */
+bool mal_builtin_string_slice_to_number_direct(
+    MalVm *vm,
+    MalValue slice_callee,
+    MalValue number_callee,
+    MalValue receiver,
+    f64 relative_start,
+    f64 *number_out
+);
+
+#define MAL_STRING_SPLIT_PROJECTION_MAX_OUTPUTS 8u
+
+/**
+ * Allocation-free Array projection for a compiler-proven `String#split` result.
+ * Materializes only the requested element indices and returns the virtual result
+ * length. Guard failure has no observable effect so generated code can execute
+ * the complete Get+Call+property fallback unchanged.
+ */
+bool mal_builtin_string_split_projection(
+    MalVm *vm,
+    MalValue callee,
+    MalValue receiver,
+    MalValue separator,
+    const u32 *indices,
+    MalValue **outputs,
+    u32 output_count,
+    u32 *length_out
+);

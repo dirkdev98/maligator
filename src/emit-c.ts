@@ -914,6 +914,32 @@ export function emitCompiledFunction(
 		}
 		region.semanticEpochStable = stable;
 	}
+	const stringSplitProjectionSites = new Map<number, NativeStringSplitProjectionSite>();
+	for (const projection of fn.nativeStringSplitProjections ?? []) {
+		const elementLoads = projection.loads
+			.filter(
+				(
+					load,
+				): load is NativeStringSplitProjection["loads"][number] & {
+					kind: "element";
+					index: number;
+				} => load.kind === "element" && load.index !== undefined,
+			)
+			.sort((left, right) => left.index - right.index);
+		if (
+			elementLoads.length === 0 ||
+			elementLoads.length > 8 ||
+			stringSplitProjectionSites.has(projection.callIp)
+		) {
+			continue;
+		}
+		stringSplitProjectionSites.set(projection.callIp, {
+			projection,
+			slotsOffset: nextStackSlot,
+			elementLoads,
+		});
+		nextStackSlot += elementLoads.length;
+	}
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -945,6 +971,7 @@ export function emitCompiledFunction(
 		cardinalityRegions,
 		cardinalityAccesses,
 		cardinalityPushes,
+		stringSplitProjectionSites,
 		directCompiledTargets,
 	);
 	if (body === null) {
@@ -1291,6 +1318,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1713,6 +1741,33 @@ type NativeStringScanRegion = NonNullable<VmFunction["nativeStringScanRegions"]>
 interface NativeStringScanRegionAction {
 	region: NativeStringScanRegion;
 	role: "entry" | "length";
+}
+
+type NativeStringSplitProjection = NonNullable<
+	VmFunction["nativeStringSplitProjections"]
+>[number];
+
+interface NativeStringSplitProjectionSite {
+	projection: NativeStringSplitProjection;
+	slotsOffset: number;
+	elementLoads: Array<
+		NativeStringSplitProjection["loads"][number] & { kind: "element"; index: number }
+	>;
+}
+
+interface NativeStringSplitProjectionAction {
+	site: NativeStringSplitProjectionSite;
+	role: "call" | "element" | "length";
+	load?: NativeStringSplitProjection["loads"][number];
+}
+
+type NativeStringSliceNumberFusion = NonNullable<
+	VmFunction["nativeStringSliceNumberFusions"]
+>[number];
+
+interface NativeStringSliceNumberFusionAction {
+	fusion: NativeStringSliceNumberFusion;
+	role: "slice" | "number";
 }
 
 /**
@@ -2142,6 +2197,7 @@ function emitBody(
 		}
 	>,
 	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
+	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
 	directCompiledTargets: ReadonlyMap<number, number>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
@@ -2464,6 +2520,37 @@ function emitBody(
 		nativeStringScanRegionActionByIp.set(region.entryIp, { region, role: "entry" });
 		nativeStringScanRegionActionByIp.set(region.lengthLoadIp, { region, role: "length" });
 	}
+	const nativeStringSplitProjectionActionByIp = new Map<
+		number,
+		NativeStringSplitProjectionAction
+	>();
+	for (const site of stringSplitProjectionSites.values()) {
+		nativeStringSplitProjectionActionByIp.set(site.projection.callIp, {
+			site,
+			role: "call",
+		});
+		for (const load of site.projection.loads) {
+			nativeStringSplitProjectionActionByIp.set(load.ip, {
+				site,
+				role: load.kind,
+				load,
+			});
+		}
+	}
+	const nativeStringSliceNumberFusionActionByIp = new Map<
+		number,
+		NativeStringSliceNumberFusionAction
+	>();
+	for (const fusion of fn.nativeStringSliceNumberFusions ?? []) {
+		nativeStringSliceNumberFusionActionByIp.set(fusion.sliceCallIp, {
+			fusion,
+			role: "slice",
+		});
+		nativeStringSliceNumberFusionActionByIp.set(fusion.numberCallIp, {
+			fusion,
+			role: "number",
+		});
+	}
 
 	const lines: Array<string> = denseIteratorCursors.map(
 		(cursor) => `MalIteratorObject *${cursor.name} = nullptr;`,
@@ -2479,6 +2566,18 @@ function emitBody(
 			`bool __string_scan_${region.entryIp}_fast = false;`,
 			`u32 __string_scan_${region.entryIp}_length = 0;`,
 			`u32 __string_scan_${region.entryIp}_matches = 0;`,
+		);
+	}
+	for (const site of stringSplitProjectionSites.values()) {
+		lines.push(
+			`bool __string_split_${site.projection.callIp}_fast = false;`,
+			`u32 __string_split_${site.projection.callIp}_length = 0;`,
+		);
+	}
+	for (const fusion of fn.nativeStringSliceNumberFusions ?? []) {
+		lines.push(
+			`bool __string_slice_number_${fusion.sliceCallIp}_fast = false;`,
+			`f64 __string_slice_number_${fusion.sliceCallIp}_value = 0;`,
 		);
 	}
 	if (
@@ -2616,6 +2715,8 @@ function emitBody(
 				: undefined,
 			stringCharCodeAtFusionByIp.get(ip),
 			nativeStringScanRegionActionByIp.get(ip),
+			nativeStringSplitProjectionActionByIp.get(ip),
+			nativeStringSliceNumberFusionActionByIp.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -2679,6 +2780,8 @@ function emitInstruction(
 	loopTwinEmission?: LoopTwinEmission,
 	stringCharCodeAtFusion?: StringCharCodeAtFusion,
 	nativeStringScanRegionAction?: NativeStringScanRegionAction,
+	nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction,
+	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -3427,7 +3530,7 @@ function emitInstruction(
 				commit: false,
 			};
 			if (reg.kind === "array" && instruction.opcode === "LOAD_PROPERTY") {
-				return [
+				const ordinary = [
 					...(reg.declare
 						? [
 								`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`,
@@ -3441,6 +3544,20 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
+				if (nativeStringSplitProjectionAction?.role === "element") {
+					const { site, load } = nativeStringSplitProjectionAction;
+					const slot = site.elementLoads.findIndex((entry) => entry.ip === load?.ip);
+					if (slot >= 0) {
+						return [
+							`if (__string_split_${site.projection.callIp}_fast) {`,
+							`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
+							`} else {`,
+							...ordinary.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+				}
+				return ordinary;
 			}
 			if (!reg.consolidated) {
 				const probe =
@@ -3463,6 +3580,32 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
+				if (
+					nativeStringSplitProjectionAction !== undefined &&
+					nativeStringSplitProjectionAction.role !== "call"
+				) {
+					const { site, role, load } = nativeStringSplitProjectionAction;
+					const fast = `__string_split_${site.projection.callIp}_fast`;
+					if (role === "length") {
+						return [
+							`if (${fast}) {`,
+							`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __string_split_${site.projection.callIp}_length` : `mal_value_from_i32((i32) __string_split_${site.projection.callIp}_length)`};`,
+							`} else {`,
+							...ordinary.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+					const slot = site.elementLoads.findIndex((entry) => entry.ip === load?.ip);
+					if (slot >= 0) {
+						return [
+							`if (${fast}) {`,
+							`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
+							`} else {`,
+							...ordinary.map((line) => `  ${line}`),
+							`}`,
+						];
+					}
+				}
 				if (nativeStringScanRegionAction?.role === "length") {
 					const scan = nativeStringScanRegionAction.region;
 					return [
@@ -4145,6 +4288,60 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (nativeStringSliceNumberFusionAction !== undefined) {
+				const fusion = nativeStringSliceNumberFusionAction.fusion;
+				const fast = `__string_slice_number_${fusion.sliceCallIp}_fast`;
+				const value = `__string_slice_number_${fusion.sliceCallIp}_value`;
+				if (nativeStringSliceNumberFusionAction.role === "slice") {
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`${fast} = mal_builtin_string_slice_to_number_direct(vm, ${boxedOperand(instruction.callee)}, ${boxed(fusion.numberCallee)}, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${value});`,
+						`if (${fast}) {`,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						`  ${poll}`,
+						`} else {`,
+						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${tmp}.value;`,
+						`  ${poll}`,
+						`}`,
+					];
+				}
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`if (${fast}) {`,
+					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? value : `mal_ops_number_value(${value})`};`,
+					`  ${poll}`,
+					`} else {`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
+					`  ${poll}`,
+					`}`,
+				];
+			}
+			if (nativeStringSplitProjectionAction?.role === "call") {
+				const site = nativeStringSplitProjectionAction.site;
+				const projection = site.projection;
+				const fast = `__string_split_${projection.callIp}_fast`;
+				const indices = site.elementLoads.map((load) => load.index).join(", ");
+				const outputs = site.elementLoads
+					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
+					.join(", ");
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`${fast} = mal_builtin_string_split_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length);`,
+					`if (${fast}) {`,
+					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+					`  ${poll}`,
+					`} else {`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`  ${poll}`,
+					`}`,
+				];
+			}
 			if (stringCharCodeAtFusion !== undefined && stringCharCodeAtFusion.callIp === ip) {
 				const fusion = stringCharCodeAtFusion;
 				const receiver = boxedOperand(instruction.thisValue);
