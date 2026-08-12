@@ -274,6 +274,32 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds the expanded assertion compatibility surface", () => {
+		const def = compile(
+			`import { doesNotMatch, fail, ifError, notDeepStrictEqual, notStrictEqual } from "node:assert";\nimport strict, { deepStrictEqual, notDeepEqual, notEqual, ok, strictEqual } from "node:assert/strict";\nglobalThis.sink = [doesNotMatch, fail, ifError, notDeepStrictEqual, notStrictEqual, strict, deepStrictEqual, notDeepEqual, notEqual, ok, strictEqual];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls.map((install) => install.installer)).toEqual([
+			"mal_host_install_node_assert",
+			"mal_host_install_node_assert_strict",
+		]);
+		expect(def.hostInstalls[0]!.exports.map((entry) => entry.name)).toEqual([
+			"doesNotMatch",
+			"fail",
+			"ifError",
+			"notDeepStrictEqual",
+			"notStrictEqual",
+		]);
+		expect(def.hostInstalls[1]!.exports.map((entry) => entry.name)).toEqual([
+			"deepStrictEqual",
+			"notDeepEqual",
+			"notEqual",
+			"ok",
+			"strictEqual",
+			"default",
+		]);
+	});
+
 	it("binds node:tty default and named exports through one installer", () => {
 		const def = compile(
 			`import tty, { isatty } from "node:tty";\nglobalThis.sink = [tty, isatty];\n`,
