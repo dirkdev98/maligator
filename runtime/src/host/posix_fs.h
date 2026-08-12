@@ -54,6 +54,12 @@ int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len);
  * 0 or an errno. */
 int mal_posix_fs_write_file(const char *path, const byte *data, usize len);
 
+/* Create-or-append `path` (mode 0666 & umask) and write all `len` bytes. */
+int mal_posix_fs_append_file(const char *path, const byte *data, usize len);
+
+/* Remove one non-directory filesystem entry. */
+int mal_posix_fs_unlink(const char *path);
+
 /* Write all bytes to an open descriptor. Returns 0 or an errno. */
 int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written);
 

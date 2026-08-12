@@ -653,7 +653,19 @@ test("canonicalizes the promise-based filesystem submodule", () => {
 		"node:fs/promises",
 	);
 	expect(graph.modules.get("node:fs/promises")?.host).toMatchObject({
-		named: ["lstat", "readFile", "readdir"],
+		named: [
+			"appendFile",
+			"copyFile",
+			"lstat",
+			"mkdir",
+			"readFile",
+			"readdir",
+			"rename",
+			"rm",
+			"stat",
+			"unlink",
+			"writeFile",
+		],
 		hasDefault: true,
 		installer: "mal_host_install_node_fs_promises",
 	});

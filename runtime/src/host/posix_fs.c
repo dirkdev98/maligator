@@ -156,8 +156,9 @@ int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
     return 0;
 }
 
-int mal_posix_fs_write_file(const char *path, const byte *data, usize len) {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+static int mal_posix_fs_write_file_flags(
+    const char *path, const byte *data, usize len, int flags) {
+    int fd = open(path, O_WRONLY | O_CREAT | flags, 0666);
     if (fd < 0) {
         return errno;
     }
@@ -181,6 +182,19 @@ int mal_posix_fs_write_file(const char *path, const byte *data, usize len) {
     if (close(fd) < 0) {
         return errno;
     }
+    return 0;
+}
+
+int mal_posix_fs_write_file(const char *path, const byte *data, usize len) {
+    return mal_posix_fs_write_file_flags(path, data, len, O_TRUNC);
+}
+
+int mal_posix_fs_append_file(const char *path, const byte *data, usize len) {
+    return mal_posix_fs_write_file_flags(path, data, len, O_APPEND);
+}
+
+int mal_posix_fs_unlink(const char *path) {
+    if (unlink(path) != 0) return errno;
     return 0;
 }
 

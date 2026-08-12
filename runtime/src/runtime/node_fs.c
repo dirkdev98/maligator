@@ -367,6 +367,43 @@ static bool node_fs_write_bytes(
     return false;
 }
 
+static MalValue node_fs_append_file_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    const byte *bytes;
+    usize length;
+    byte *owned;
+    if (!node_fs_write_bytes(vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
+            &bytes, &length, &owned)) {
+        free(path);
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_append_file(path, bytes, length);
+    free(owned);
+    if (err != 0) node_fs_throw_errno(vm, err, "open", path);
+    free(path);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_unlink_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    int err = mal_posix_fs_unlink(path);
+    if (err != 0) node_fs_throw_errno(vm, err, "unlink", path);
+    free(path);
+    return mal_value_new_undefined();
+}
+
 static MalValue node_fs_write_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue nt, MalValue callee) {
@@ -1263,6 +1300,12 @@ static MalValue node_fs_export(
     if (strcmp(name, "writeFileSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "writeFileSync", 2, node_fs_write_file_sync);
     }
+    if (strcmp(name, "appendFileSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "appendFileSync", 2, node_fs_append_file_sync);
+    }
+    if (strcmp(name, "unlinkSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "unlinkSync", 1, node_fs_unlink_sync);
+    }
     if (strcmp(name, "writeSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "writeSync", 2, node_fs_write_sync);
     }
@@ -1355,9 +1398,9 @@ void mal_host_install_node_fs(
         node_fs_is_symbolic_link);
 
     static const char *names[] = {
-        "Stats", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
+        "Stats", "appendFileSync", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
 		"mkdtempSync", "readFile", "readFileSync", "readdir", "readdirSync", "realpathSync", "renameSync",
-        "rmSync", "statSync", "stat", "write", "writeFileSync", "writeSync",
+        "rmSync", "statSync", "stat", "unlinkSync", "write", "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan module_root;
@@ -1401,6 +1444,7 @@ void mal_host_install_node_fs_promises(
         const char *sync_name;
         i32 arity;
     } operations[] = {
+        {"appendFile", "appendFileSync", 2},
         {"copyFile", "copyFileSync", 2},
         {"lstat", "lstatSync", 1},
         {"mkdir", "mkdirSync", 1},
@@ -1409,6 +1453,7 @@ void mal_host_install_node_fs_promises(
         {"rename", "renameSync", 2},
         {"rm", "rmSync", 1},
         {"stat", "statSync", 1},
+        {"unlink", "unlinkSync", 1},
         {"writeFile", "writeFileSync", 2},
     };
     for (usize i = 0; i < countof(operations); i++) {
