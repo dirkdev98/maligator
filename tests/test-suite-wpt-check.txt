@@ -72,6 +72,7 @@ streams/readable-streams/constructor.any.js
 streams/readable-streams/count-queuing-strategy-integration.any.js
 streams/readable-streams/default-reader.any.js
 streams/readable-streams/floating-point-total-queue-size.any.js
+streams/readable-streams/from.any.js
 streams/readable-streams/general.any.js
 streams/readable-streams/patched-global.any.js
 streams/readable-streams/reentrant-strategies.any.js

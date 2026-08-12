@@ -6,6 +6,7 @@
 
 #include "array_buffer_object.h"
 #include "ascii.h"
+#include "builtin_async_iterator.h"
 #include "builtin_data_view.h"
 #include "builtin_promise.h"
 #include "function_object.h"
@@ -4464,6 +4465,186 @@ static MalValue rs_values(MalVm *vm, MalValue self,
     return result;
 }
 
+static MalValue rs_from_pull_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalValue controller = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    MalValue result = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(result)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStream.from iterator result is not an object");
+        return mal_value_new_undefined();
+    }
+    MalValue done;
+    if (!mal_vm_get_property(vm, result,
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done)) {
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_truthy(done)) {
+        return rs_controller_close(vm, controller, nullptr, 0,
+            mal_value_new_undefined(), mal_value_new_undefined());
+    }
+    MalValue value;
+    if (!mal_vm_get_property(vm, result,
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), &value)) {
+        return mal_value_new_undefined();
+    }
+    return rs_controller_enqueue(vm, controller, &value, 1,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+static MalValue rs_from_pull(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalNativeFunctionObject *pull =
+        mal_value_to_native_function_object(callee);
+    MalValue roots[5] = {
+        mal_native_function_object_get_slot(pull, 0),
+        mal_native_function_object_get_slot(pull, 1),
+        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 5);
+    MalCompletion completion = mal_vm_call_value(
+        vm, roots[1], roots[0], nullptr, 0);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion = rs_normal();
+        roots[3] = rs_rejected_promise(vm, completion.value);
+    } else if (!mal_promise_resolve_value(vm, completion.value, &roots[3])) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        roots[3] = rs_rejected_promise(vm, error);
+    }
+    roots[4] = rs_callback(vm, rs_from_pull_fulfilled, roots[2]);
+    MalValue result = rs_iterator_then(
+        vm, roots[3], roots[4], mal_value_new_undefined());
+    mal_gc_unroot(&span);
+    return result;
+}
+
+static MalValue rs_from_cancel_fulfilled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    MalValue result = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(result)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStream.from iterator return result is not an object");
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_from_cancel(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    MalValue roots[4] = {
+        mal_native_function_object_get_slot(
+            mal_value_to_native_function_object(callee), 0),
+        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    if (!mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "return"),
+            &roots[2])) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        MalValue rejected = rs_rejected_promise(vm, error);
+        mal_gc_unroot(&span);
+        return rejected;
+    }
+    if (mal_value_is_nil(roots[2])) {
+        MalValue resolved = rs_resolved_promise(
+            vm, mal_value_new_undefined());
+        mal_gc_unroot(&span);
+        return resolved;
+    }
+    if (!mal_value_is_callable(roots[2])) {
+        MalValue error = rs_take_type_error(
+            vm, (const byte *) "ReadableStream.from iterator return is not callable");
+        MalValue rejected = rs_rejected_promise(vm, error);
+        mal_gc_unroot(&span);
+        return rejected;
+    }
+    MalCompletion completion = mal_vm_call_value(
+        vm, roots[2], roots[0], &roots[1], 1);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion = rs_normal();
+        roots[3] = rs_rejected_promise(vm, completion.value);
+    } else if (!mal_promise_resolve_value(vm, completion.value, &roots[3])) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        roots[3] = rs_rejected_promise(vm, error);
+    }
+    MalValue fulfilled = rs_callback(vm, rs_from_cancel_fulfilled,
+        mal_value_new_undefined());
+    MalValue result = rs_iterator_then(
+        vm, roots[3], fulfilled, mal_value_new_undefined());
+    mal_gc_unroot(&span);
+    return result;
+}
+
+static MalValue rs_from(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    MalValue roots[8] = {
+        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 8);
+    if (!mal_value_is_object(roots[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStream.from requires an object");
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    MalIteratorRecord iterator;
+    if (!mal_vm_get_async_iterator(vm, roots[0], &iterator)) {
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    roots[1] = iterator.iterator;
+    roots[2] = iterator.next_method;
+    roots[3] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    MalValue pull_slots[2] = {roots[1], roots[2]};
+    roots[4] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) ""),
+            rs_from_pull, pull_slots, 2));
+    roots[5] = rs_callback(vm, rs_from_cancel, roots[1]);
+    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE |
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
+        (const byte *) "pull", roots[4], flags);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
+        (const byte *) "cancel", roots[5], flags);
+    roots[6] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[6]),
+        (const byte *) "highWaterMark", mal_value_from_i32(0), flags);
+    MalValue constructor_args[2] = {roots[3], roots[6]};
+    roots[7] = rs_constructor(vm, mal_value_new_undefined(),
+        constructor_args, 2,
+        vm->intrinsics[MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR],
+        mal_value_new_undefined());
+    MalValue result = roots[7];
+    mal_gc_unroot(&span);
+    return result;
+}
+
 static void rs_trace(MalHeapHeader *cell) {
     MalReadableStreamObject *object = (MalReadableStreamObject *) cell;
     switch (object->kind) {
@@ -4610,6 +4791,10 @@ void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
         (const byte *) "ReadableStream", 0, rs_constructor,
         MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR,
         MAL_INTRINSIC_READABLE_STREAM_PROTOTYPE);
+    mal_intrinsic_define_method_n(vm,
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR]),
+        (const byte *) "from", 1, rs_from);
     rs_define_getter(vm, stream_proto, (const byte *) "locked",
         (const byte *) "get locked", rs_get_locked);
     mal_intrinsic_define_method_n(

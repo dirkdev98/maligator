@@ -898,6 +898,22 @@
 			"includes": []
 		},
 		{
+			"path": "streams/readable-streams/from.any.js",
+			"sha256": "c29d350e15d61d6b27a82cf515b28e6a21f780b786ba59df71c450a4ac09bee3",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/test-utils.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				}
+			]
+		},
+		{
 			"path": "streams/readable-streams/general.any.js",
 			"sha256": "6bb8158125422ff00a320d754f5f4e25aa4530dea07a774337493e6e8905a068",
 			"target": "server-main",
