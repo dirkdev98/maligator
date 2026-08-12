@@ -35,6 +35,7 @@ typedef struct MalReadableStreamReadRequest {
     struct MalReadableStreamReadRequest *next;
     MalValue promise;
     MalValue view;
+    usize bytes_filled;
 } MalReadableStreamReadRequest;
 
 typedef struct MalWritableStreamWriteRequest {

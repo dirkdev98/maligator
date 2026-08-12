@@ -251,6 +251,96 @@ async function run() {
 	}
 	check("zero autoAllocateChunkSize is rejected", zeroAutoAllocateRejected);
 
+	let partialRespondPulls = 0;
+	const partialRespondStream = new ReadableStream({
+		type: "bytes",
+		pull(controller) {
+			partialRespondPulls++;
+			const request = controller.byobRequest;
+			request.view[0] = partialRespondPulls;
+			request.respond(1);
+			if (partialRespondPulls === 4) controller.close();
+		},
+	});
+	const partialRespondRead = await partialRespondStream
+		.getReader({ mode: "byob" })
+		.read(new Uint32Array(1));
+	check(
+		"BYOB respond accumulates partial elements",
+		partialRespondPulls === 4 &&
+			partialRespondRead.value instanceof Uint32Array &&
+			partialRespondRead.value.byteLength === 4 &&
+			new Uint8Array(partialRespondRead.value.buffer)[0] === 1 &&
+			new Uint8Array(partialRespondRead.value.buffer)[3] === 4,
+	);
+
+	let excessRespondPulls = 0;
+	const excessRespondStream = new ReadableStream({
+		type: "bytes",
+		pull(controller) {
+			excessRespondPulls++;
+			const request = controller.byobRequest;
+			request.view[0] = 1;
+			request.view[1] = 2;
+			request.view[2] = 3;
+			request.respond(3);
+		},
+	});
+	const excessRespondReader = excessRespondStream.getReader({ mode: "byob" });
+	const excessRespondFirst = await excessRespondReader.read(new Uint16Array(2));
+	const excessRespondSecond = await excessRespondReader.read(new Uint8Array(1));
+	check(
+		"BYOB respond queues bytes beyond an element boundary",
+		excessRespondPulls === 1 &&
+			excessRespondFirst.value.byteLength === 2 &&
+			new Uint8Array(excessRespondFirst.value.buffer)[0] === 1 &&
+			new Uint8Array(excessRespondFirst.value.buffer)[1] === 2 &&
+			excessRespondSecond.value[0] === 3,
+	);
+	await excessRespondReader.cancel();
+
+	let queuedPartialPulls = 0;
+	const queuedPartialStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			controller.enqueue(new Uint8Array([0xff]));
+		},
+		pull(controller) {
+			queuedPartialPulls++;
+			controller.byobRequest.view[0] = 0xaa;
+			controller.byobRequest.respond(1);
+			controller.close();
+		},
+	});
+	const queuedPartialRead = await queuedPartialStream
+		.getReader({ mode: "byob" })
+		.read(new Uint16Array(1));
+	check(
+		"queued bytes and pull responses combine into one BYOB element",
+		queuedPartialPulls === 1 &&
+			queuedPartialRead.value.byteLength === 2 &&
+			new Uint8Array(queuedPartialRead.value.buffer)[0] === 0xff &&
+			new Uint8Array(queuedPartialRead.value.buffer)[1] === 0xaa,
+	);
+
+	const multiQueueStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			controller.enqueue(new Uint8Array(16).fill(1));
+			controller.enqueue(new Uint8Array(8).fill(2));
+		},
+	});
+	const multiQueueRead = await multiQueueStream
+		.getReader({ mode: "byob" })
+		.read(new Uint8Array(24));
+	check(
+		"one BYOB read drains multiple queued byte chunks",
+		multiQueueRead.value.byteLength === 24 &&
+			multiQueueRead.value[15] === 1 &&
+			multiQueueRead.value[16] === 2 &&
+			multiQueueRead.value[23] === 2,
+	);
+
 	let byteCrossBrandRejected = false;
 	try {
 		ReadableStreamDefaultController.prototype.enqueue.call(

@@ -20,6 +20,9 @@
 
 static void rs_call_pull_if_needed(MalVm *vm, MalReadableStreamObject *controller);
 static void rs_invalidate_byob_request(MalReadableStreamObject *controller);
+static MalValue rs_controller_enqueue_kind(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalReadableStreamKind kind,
+    const byte *message);
 static MalReadableStreamObject *rs_acquire_reader(
     MalVm *vm, MalReadableStreamObject *stream, MalObject *prototype);
 static MalReadableStreamObject *rs_acquire_reader_kind(MalVm *vm,
@@ -148,33 +151,6 @@ static MalValue rs_byob_result_view(
         destination->byte_offset, byte_length / element_size, false));
 }
 
-static bool rs_byob_fill(MalVm *vm, MalValue view, MalValue chunk,
-    usize source_offset, MalValue *value_out, usize *consumed_out) {
-    MalTypedArrayObject *destination;
-    MalBufferSourceSpan destination_span;
-    if (!rs_byob_view_is_valid(vm, view, &destination, &destination_span)) {
-        return false;
-    }
-    MalBufferSourceSpan source_span;
-    if (mal_buffer_source_span(chunk, &source_span) != MAL_BUFFER_SOURCE_SPAN_OK ||
-        source_offset > source_span.length) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "A byte ReadableStream must contain buffer-source chunks");
-        return false;
-    }
-    usize remaining = source_span.length - source_offset;
-    usize copied = remaining < destination_span.length
-        ? remaining : destination_span.length;
-    if (copied > 0) {
-        memcpy(destination_span.data, source_span.data + source_offset, copied);
-    }
-    usize element_size = mal_typed_array_element_size(destination->kind);
-    usize committed = copied - (copied % element_size);
-    *value_out = rs_byob_result_view(vm, destination, (u32) committed);
-    *consumed_out = committed;
-    return true;
-}
-
 static MalReadableStreamObject *rs_controller_for(MalReadableStreamObject *stream) {
     return mal_value_to_readable_stream_object(stream->as.stream.controller);
 }
@@ -209,6 +185,23 @@ static void rs_queue_clear(MalReadableStreamObject *controller) {
     controller->as.controller.queue_head = nullptr;
     controller->as.controller.queue_tail = nullptr;
     controller->as.controller.queue_total_size = 0;
+}
+
+static void rs_queue_append(MalReadableStreamObject *controller,
+    MalValue chunk, usize byte_offset, f64 queue_size) {
+    MalReadableStreamQueueEntry *entry = malloc(sizeof(MalReadableStreamQueueEntry));
+    entry->next = nullptr;
+    entry->chunk = chunk;
+    entry->size = queue_size;
+    entry->byte_offset = byte_offset;
+    if (controller->as.controller.queue_tail == nullptr) {
+        controller->as.controller.queue_head = entry;
+    } else {
+        controller->as.controller.queue_tail->next = entry;
+    }
+    controller->as.controller.queue_tail = entry;
+    controller->as.controller.queue_total_size += queue_size;
+    mal_gc_card(&controller->object.header, chunk);
 }
 
 static void rs_request_remove(
@@ -1375,10 +1368,12 @@ static MalValue rs_byte_controller_get_byob_request(MalVm *vm, MalValue self,
     mal_gc_root(&span, roots, 3);
     MalTypedArrayObject *source = mal_value_to_typed_array_object(roots[1]);
     u32 byte_length = mal_typed_array_object_byte_length(source);
+    u32 bytes_filled = (u32) reader->as.reader.requests_head->bytes_filled;
     roots[2] = mal_value_from_typed_array_object(mal_typed_array_object_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
-        source->buffer, MAL_TA_UINT8, source->byte_offset, byte_length, false));
+        source->buffer, MAL_TA_UINT8, source->byte_offset + bytes_filled,
+        byte_length - bytes_filled, false));
     MalReadableStreamObject *request = rs_new(vm, MAL_READABLE_STREAM_BYOB_REQUEST,
         mal_value_to_object(vm->intrinsics[
             MAL_INTRINSIC_READABLE_STREAM_BYOB_REQUEST_PROTOTYPE]));
@@ -1462,34 +1457,54 @@ static MalValue rs_byob_request_respond(MalVm *vm, MalValue self,
         return mal_value_new_undefined();
     }
     MalReadableStreamReadRequest *read_request = reader->as.reader.requests_head;
-    MalValue roots[4] = {
-        self, read_request->view, read_request->promise, mal_value_new_undefined(),
+    MalValue roots[5] = {
+        self, read_request->view, read_request->promise,
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan span;
-    mal_gc_root(&span, roots, 4);
+    mal_gc_root(&span, roots, 5);
     MalTypedArrayObject *destination = mal_value_to_typed_array_object(roots[1]);
     u32 requested = (u32) raw;
-    u32 capacity = mal_typed_array_object_byte_length(destination);
+    u32 total_capacity = mal_typed_array_object_byte_length(destination);
+    u32 bytes_filled = (u32) read_request->bytes_filled;
+    u32 capacity = total_capacity - bytes_filled;
     if (requested > capacity) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
             "ReadableStreamBYOBRequest.respond byte count exceeds the view");
         mal_gc_unroot(&span);
         return mal_value_new_undefined();
     }
+    read_request->bytes_filled += requested;
     u32 element_size = mal_typed_array_element_size(destination->kind);
-    u32 committed = requested - (requested % element_size);
-    if (committed == 0 && requested > 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            "ReadableStreamBYOBRequest.respond did not fill one element");
+    u32 total_filled = (u32) read_request->bytes_filled;
+    u32 committed = total_filled - (total_filled % element_size);
+    rs_invalidate_byob_request(controller);
+    if (committed == 0) {
+        rs_call_pull_if_needed(vm, controller);
         mal_gc_unroot(&span);
         return mal_value_new_undefined();
+    }
+    u32 remainder = total_filled - committed;
+    if (remainder > 0) {
+        roots[4] = mal_value_from_typed_array_object(mal_typed_array_object_new(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[
+                MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+            destination->buffer, MAL_TA_UINT8,
+            destination->byte_offset + committed, remainder, false));
     }
     roots[3] = rs_read_result(vm,
         rs_byob_result_view(vm, destination, committed), false);
     rs_request_remove(reader, read_request);
-    rs_invalidate_byob_request(controller);
     mal_promise_fulfill(vm, mal_value_to_promise_object(roots[2]), roots[3]);
-    rs_call_pull_if_needed(vm, controller);
+    if (remainder > 0) {
+        (void) rs_controller_enqueue_kind(vm,
+            mal_value_from_readable_stream_object(controller), &roots[4], 1,
+            MAL_READABLE_BYTE_STREAM_CONTROLLER,
+            (const byte *) "ReadableByteStreamController.enqueue called on incompatible receiver");
+    } else {
+        rs_call_pull_if_needed(vm, controller);
+    }
     mal_gc_unroot(&span);
     return mal_value_new_undefined();
 }
@@ -1568,35 +1583,66 @@ static MalValue rs_controller_enqueue_kind(MalVm *vm, MalValue self,
     MalReadableStreamObject *reader = rs_reader_for(stream);
     if (reader != nullptr && reader->as.reader.requests_head != nullptr) {
         MalReadableStreamReadRequest *request = reader->as.reader.requests_head;
-        MalValue roots[4] = {
-            chunk, request->promise, request->view, mal_value_new_undefined(),
+        MalValue roots[5] = {
+            chunk, request->promise, request->view,
+            mal_value_new_undefined(), mal_value_new_undefined(),
         };
         MalRootSpan span;
-        mal_gc_root(&span, roots, 4);
+        mal_gc_root(&span, roots, 5);
         if (!mal_value_is_undefined(roots[2])) {
-            usize copied;
-            MalValue result_view;
-            if (!rs_byob_fill(vm, roots[2], roots[0], 0,
-                    &result_view, &copied)) {
+            MalTypedArrayObject *destination;
+            MalBufferSourceSpan destination_span;
+            if (!rs_byob_view_is_valid(vm, roots[2],
+                    &destination, &destination_span)) {
                 mal_gc_unroot(&span);
                 return mal_value_new_undefined();
             }
-            roots[3] = rs_read_result(vm, result_view, false);
             MalBufferSourceSpan source_span;
-            (void) mal_buffer_source_span(roots[0], &source_span);
-            if (copied < source_span.length) {
-                MalReadableStreamQueueEntry *entry =
-                    malloc(sizeof(MalReadableStreamQueueEntry));
-                entry->next = nullptr;
-                entry->chunk = roots[0];
-                entry->size = kind == MAL_READABLE_BYTE_STREAM_CONTROLLER
-                    ? (f64) (source_span.length - copied) : 1;
-                entry->byte_offset = copied;
-                controller->as.controller.queue_head = entry;
-                controller->as.controller.queue_tail = entry;
-                controller->as.controller.queue_total_size = entry->size;
-                mal_gc_card(&controller->object.header, roots[0]);
+            if (mal_buffer_source_span(roots[0], &source_span) !=
+                MAL_BUFFER_SOURCE_SPAN_OK) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "A byte ReadableStream must contain attached buffer-source chunks");
+                mal_gc_unroot(&span);
+                return mal_value_new_undefined();
             }
+            usize capacity = destination_span.length - request->bytes_filled;
+            usize copied = source_span.length < capacity
+                ? source_span.length : capacity;
+            if (copied > 0) {
+                memcpy(destination_span.data + request->bytes_filled,
+                    source_span.data, copied);
+            }
+            request->bytes_filled += copied;
+            usize element_size = mal_typed_array_element_size(destination->kind);
+            usize committed = request->bytes_filled -
+                (request->bytes_filled % element_size);
+            if (committed == 0) {
+                if (copied < source_span.length) {
+                    rs_queue_append(controller, roots[0], copied,
+                        (f64) (source_span.length - copied));
+                }
+                rs_invalidate_byob_request(controller);
+                mal_gc_unroot(&span);
+                rs_call_pull_if_needed(vm, controller);
+                return mal_value_new_undefined();
+            }
+            usize remainder = request->bytes_filled - committed;
+            if (remainder > 0) {
+                roots[4] = mal_value_from_typed_array_object(
+                    mal_typed_array_object_new(&vm->heap,
+                        mal_value_to_object(vm->intrinsics[
+                            MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+                        destination->buffer, MAL_TA_UINT8,
+                        destination->byte_offset + (u32) committed,
+                        (u32) remainder, false));
+                rs_queue_append(controller, roots[4], 0, (f64) remainder);
+            }
+            if (copied < source_span.length) {
+                rs_queue_append(controller, roots[0], copied,
+                    (f64) (source_span.length - copied));
+            }
+            roots[3] = rs_read_result(vm,
+                rs_byob_result_view(vm, destination, (u32) committed), false);
         } else {
             roots[3] = rs_read_result(vm, roots[0], false);
         }
@@ -1789,7 +1835,93 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
         return rs_rejected_promise(vm, stream->as.stream.stored_error);
     }
     MalReadableStreamObject *controller = rs_controller_for(stream);
-    if (controller->as.controller.queue_head != nullptr) {
+    usize initial_bytes_filled = 0;
+    if (byob && controller->as.controller.queue_head != nullptr) {
+        MalValue roots[4] = {
+            view, mal_value_new_undefined(),
+            mal_value_new_undefined(), mal_value_new_undefined(),
+        };
+        MalRootSpan span;
+        mal_gc_root(&span, roots, 4);
+        usize copied = 0;
+        while (controller->as.controller.queue_head != nullptr &&
+            copied < destination_span.length) {
+            MalReadableStreamQueueEntry *entry =
+                controller->as.controller.queue_head;
+            MalBufferSourceSpan source_span;
+            if (mal_buffer_source_span(entry->chunk, &source_span) !=
+                    MAL_BUFFER_SOURCE_SPAN_OK ||
+                entry->byte_offset > source_span.length) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "A byte ReadableStream must contain attached buffer-source chunks");
+                mal_gc_unroot(&span);
+                return mal_value_new_undefined();
+            }
+            usize available = source_span.length - entry->byte_offset;
+            usize capacity = destination_span.length - copied;
+            usize take = available < capacity ? available : capacity;
+            if (take > 0) {
+                memcpy(destination_span.data + copied,
+                    source_span.data + entry->byte_offset, take);
+            }
+            copied += take;
+            entry->byte_offset += take;
+            entry->size -= (f64) take;
+            controller->as.controller.queue_total_size -= (f64) take;
+            if (entry->byte_offset == source_span.length) {
+                controller->as.controller.queue_head = entry->next;
+                if (controller->as.controller.queue_head == nullptr) {
+                    controller->as.controller.queue_tail = nullptr;
+                }
+                mal_gc_write_barrier(entry->chunk);
+                free(entry);
+            }
+        }
+        if (controller->as.controller.queue_total_size < 0) {
+            controller->as.controller.queue_total_size = 0;
+        }
+        u32 element_size = mal_typed_array_element_size(destination->kind);
+        usize committed = copied - (copied % element_size);
+        usize remainder = copied - committed;
+        if (committed > 0) {
+            if (remainder > 0) {
+                roots[3] = mal_value_from_typed_array_object(
+                    mal_typed_array_object_new(&vm->heap,
+                        mal_value_to_object(vm->intrinsics[
+                            MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+                        destination->buffer, MAL_TA_UINT8,
+                        destination->byte_offset + (u32) committed,
+                        (u32) remainder, false));
+            }
+            roots[1] = rs_read_result(vm,
+                rs_byob_result_view(vm, destination, (u32) committed), false);
+            roots[2] = rs_resolved_promise(vm, roots[1]);
+            if (remainder > 0) {
+                (void) rs_controller_enqueue_kind(vm,
+                    mal_value_from_readable_stream_object(controller),
+                    &roots[3], 1, MAL_READABLE_BYTE_STREAM_CONTROLLER,
+                    (const byte *) "ReadableByteStreamController.enqueue called on incompatible receiver");
+            } else if (controller->as.controller.close_requested &&
+                controller->as.controller.queue_head == nullptr) {
+                rs_close_stream(vm, stream);
+            } else {
+                rs_call_pull_if_needed(vm, controller);
+            }
+            MalValue result = roots[2];
+            mal_gc_unroot(&span);
+            return result;
+        }
+        initial_bytes_filled = copied;
+        if (controller->as.controller.close_requested) {
+            MalValue error = rs_take_type_error(vm,
+                (const byte *) "A byte stream closed with an incomplete element");
+            rs_error_stream(vm, stream, error);
+            MalValue rejected = rs_rejected_promise(vm, error);
+            mal_gc_unroot(&span);
+            return rejected;
+        }
+        mal_gc_unroot(&span);
+    } else if (controller->as.controller.queue_head != nullptr) {
         MalReadableStreamQueueEntry *entry = controller->as.controller.queue_head;
         MalValue roots[4] = {
             entry->chunk, view, mal_value_new_undefined(), mal_value_new_undefined(),
@@ -1797,32 +1929,19 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
         MalRootSpan span;
         mal_gc_root(&span, roots, 4);
         bool consumed_entry = true;
-        if (byob) {
-            usize copied;
-            if (!rs_byob_fill(vm, roots[1], roots[0],
-                    entry->byte_offset, &roots[2], &copied)) {
-                mal_gc_unroot(&span);
-                return mal_value_new_undefined();
-            }
-            MalBufferSourceSpan source_span;
-            (void) mal_buffer_source_span(roots[0], &source_span);
-            entry->byte_offset += copied;
-            consumed_entry = entry->byte_offset == source_span.length;
-        } else {
-            roots[2] = roots[0];
-            if (entry->byte_offset > 0 &&
-                mal_value_is_typed_array_object(roots[0])) {
-                MalTypedArrayObject *source =
-                    mal_value_to_typed_array_object(roots[0]);
-                u32 byte_length = mal_typed_array_object_byte_length(source);
-                roots[2] = mal_value_from_typed_array_object(
-                    mal_typed_array_object_new(&vm->heap,
-                        mal_value_to_object(vm->intrinsics[
-                            MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
-                        source->buffer, MAL_TA_UINT8,
-                        source->byte_offset + (u32) entry->byte_offset,
-                        byte_length - (u32) entry->byte_offset, false));
-            }
+        roots[2] = roots[0];
+        if (entry->byte_offset > 0 &&
+            mal_value_is_typed_array_object(roots[0])) {
+            MalTypedArrayObject *source =
+                mal_value_to_typed_array_object(roots[0]);
+            u32 byte_length = mal_typed_array_object_byte_length(source);
+            roots[2] = mal_value_from_typed_array_object(
+                mal_typed_array_object_new(&vm->heap,
+                    mal_value_to_object(vm->intrinsics[
+                        MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+                    source->buffer, MAL_TA_UINT8,
+                    source->byte_offset + (u32) entry->byte_offset,
+                    byte_length - (u32) entry->byte_offset, false));
         }
         if (consumed_entry) {
             controller->as.controller.queue_head = entry->next;
@@ -1864,6 +1983,7 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
     request->next = nullptr;
     request->promise = request_roots[1];
     request->view = request_roots[0];
+    request->bytes_filled = initial_bytes_filled;
     if (reader->as.reader.requests_tail == nullptr) {
         reader->as.reader.requests_head = request;
     } else {
