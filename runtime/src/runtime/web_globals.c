@@ -882,6 +882,129 @@ static MalValue mal_web_crypto_get_random_values(
  * structuredClone: a deep clone honoring circular + shared references.
  * --------------------------------------------------------------------------- */
 
+static bool mal_sc_stage_transfer_list(
+    MalVm *vm, MalValue options, MalValue *staged_out) {
+    *staged_out = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    if (mal_value_is_undefined(options) || mal_value_is_null(options)) {
+        return true;
+    }
+    if (!mal_value_is_object(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "structuredClone options must be an object");
+        return false;
+    }
+
+    MalValue transfer = mal_value_new_undefined();
+    MalRootSpan transfer_span;
+    mal_gc_root(&transfer_span, &transfer, 1);
+    if (!mal_vm_get_property(vm, options,
+            mal_intrinsic_string_key(vm, (const byte *) "transfer"), &transfer)) {
+        mal_gc_unroot(&transfer_span);
+        return false;
+    }
+    if (mal_value_is_undefined(transfer)) {
+        mal_gc_unroot(&transfer_span);
+        return true;
+    }
+    if (!mal_value_is_object(transfer)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "structuredClone transfer must be iterable");
+        mal_gc_unroot(&transfer_span);
+        return false;
+    }
+
+    MalValue method;
+    if (!mal_vm_get_property(vm, transfer,
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
+        mal_gc_unroot(&transfer_span);
+        return false;
+    }
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator_from_method(vm, transfer, method, &record)) {
+        mal_gc_unroot(&transfer_span);
+        return false;
+    }
+    MalValue element = mal_value_new_undefined();
+    MalRootSpan record_span, element_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&element_span, &element, 1);
+    bool ok = false;
+    u32 index = 0;
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
+            break;
+        }
+        if (done) {
+            ok = true;
+            break;
+        }
+        mal_array_object_store(mal_value_to_array_object(*staged_out),
+            mal_key_index(index++), element);
+    }
+    mal_gc_unroot(&element_span);
+    mal_gc_unroot(&record_span);
+    mal_gc_unroot(&transfer_span);
+    return ok;
+}
+
+static bool mal_sc_prepare_transfers(
+    MalVm *vm, MalValue staged, MalMapObject *memo) {
+    MalArrayObject *values = mal_value_to_array_object(staged);
+    u32 length = mal_array_object_length(values);
+    for (u32 i = 0; i < length; i++) {
+        MalValue value;
+        (void) mal_array_object_dense_get(values, i, &value);
+        if (!mal_value_is_array_buffer_object(value)) {
+            mal_dom_exception_throw(vm,
+                "structuredClone: transfer list item is not transferable",
+                "DataCloneError");
+            return false;
+        }
+        MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(value);
+        if (buffer->detached || buffer->shared || buffer->immutable) {
+            mal_dom_exception_throw(vm,
+                "structuredClone: ArrayBuffer cannot be transferred",
+                "DataCloneError");
+            return false;
+        }
+        for (u32 j = 0; j < i; j++) {
+            MalValue prior;
+            (void) mal_array_object_dense_get(values, j, &prior);
+            if (value == prior) {
+                mal_dom_exception_throw(vm,
+                    "structuredClone: duplicate transferable", "DataCloneError");
+                return false;
+            }
+        }
+    }
+
+    for (u32 i = 0; i < length; i++) {
+        MalValue value;
+        (void) mal_array_object_dense_get(values, i, &value);
+        MalArrayBufferObject *source = mal_value_to_array_buffer_object(value);
+        MalArrayBufferObject *destination = mal_array_buffer_object_new(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+            source->byte_length, source->byte_length, false, false);
+        if (source->byte_length > 0 && destination->data == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+        destination->sensitive = source->sensitive;
+        if (source->byte_length > 0) {
+            memcpy(destination->data, source->data, source->byte_length);
+        }
+        MalValue destination_value =
+            mal_value_from_array_buffer_object(destination);
+        MalRootSpan destination_span;
+        mal_gc_root(&destination_span, &destination_value, 1);
+        mal_map_object_set(memo, value, destination_value);
+        mal_gc_unroot(&destination_span);
+        mal_array_buffer_object_detach(source);
+    }
+    return true;
+}
+
 /* Recursively clone `value`. `memo` maps every original object to its clone
  * (SameValueZero identity), which both resolves circular/shared references and —
  * because it is rooted by the caller and every clone is inserted into it right
@@ -939,6 +1062,22 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
     // TypedArray: clone the bytes into a fresh buffer + same-kind view.
     if (mal_value_is_typed_array_object(value)) {
         MalTypedArrayObject *src = mal_value_to_typed_array_object(value);
+        MalValue source_buffer = mal_value_from_array_buffer_object(src->buffer);
+        if (mal_map_object_has(memo, source_buffer)) {
+            MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(
+                mal_map_object_get(memo, source_buffer));
+            u32 element_size = mal_typed_array_element_size(src->kind);
+            u32 count = src->length_tracking
+                ? (buffer->byte_length - src->byte_offset) / element_size
+                : src->length;
+            MalObject *proto = mal_value_to_object(vm->intrinsics[
+                MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + src->kind]);
+            MalValue clone = mal_value_from_typed_array_object(
+                mal_typed_array_object_new(&vm->heap, proto, buffer, src->kind,
+                    src->byte_offset, count, src->length_tracking));
+            mal_map_object_set(memo, value, clone);
+            return clone;
+        }
         if (mal_typed_array_object_is_out_of_bounds(src)) {
             mal_dom_exception_throw(vm,
                 "structuredClone: an out-of-bounds TypedArray cannot be cloned",
@@ -1123,14 +1262,25 @@ static MalValue mal_web_structured_clone(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "structuredClone requires an argument");
         return mal_value_new_undefined();
     }
-    MalValue input = args[0];
+    MalValue roots[3] = {
+        args[0], mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 3);
+    if (!mal_sc_stage_transfer_list(vm,
+            argc >= 2 ? args[1] : mal_value_new_undefined(), &roots[1])) {
+        mal_gc_unroot(&roots_span);
+        return mal_value_new_undefined();
+    }
     MalObject *map_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]);
     MalMapObject *memo = mal_map_object_new(&vm->heap, MAL_HEAP_MAP_OBJECT, map_proto, false);
-    MalValue memo_val = mal_value_from_map_object(memo);
-    MalRootSpan rs;
-    mal_gc_root(&rs, &memo_val, 1);
-    MalValue result = mal_sc_clone(vm, input, memo);
-    mal_gc_unroot(&rs);
+    roots[2] = mal_value_from_map_object(memo);
+    if (!mal_sc_prepare_transfers(vm, roots[1], memo)) {
+        mal_gc_unroot(&roots_span);
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_sc_clone(vm, roots[0], memo);
+    mal_gc_unroot(&roots_span);
     return result;
 }
 

@@ -199,6 +199,56 @@ check(
 	changedEnumerableClone.first === 1 && changedEnumerableClone.second === 2,
 );
 
+const transferredBuffer = new Uint8Array([4, 5, 6]).buffer;
+const transferredBufferClone = structuredClone(transferredBuffer, {
+	transfer: [transferredBuffer],
+});
+check(
+	"ArrayBuffer transfer detaches source",
+	transferredBuffer.byteLength === 0 &&
+		transferredBufferClone.byteLength === 3 &&
+		new Uint8Array(transferredBufferClone)[2] === 6,
+);
+
+const transferredViewBuffer = new ArrayBuffer(6);
+const transferredView = new Uint16Array(transferredViewBuffer, 2, 2);
+transferredView[0] = 0x1234;
+const transferredViewClone = structuredClone(transferredView, {
+	transfer: new Set([transferredViewBuffer]),
+});
+check(
+	"TypedArray clone uses transferred backing buffer",
+	transferredViewBuffer.byteLength === 0 &&
+		transferredViewClone instanceof Uint16Array &&
+		transferredViewClone.byteOffset === 2 &&
+		transferredViewClone.length === 2 &&
+		transferredViewClone[0] === 0x1234,
+);
+
+const unusedTransfer = new ArrayBuffer(2);
+const unusedTransferClone = structuredClone(
+	{ ok: true },
+	{
+		transfer: [unusedTransfer],
+	},
+);
+check(
+	"unreferenced transfer still detaches",
+	unusedTransfer.byteLength === 0 && unusedTransferClone.ok,
+);
+
+const duplicateTransfer = new ArrayBuffer(2);
+let duplicateTransferThrew = false;
+try {
+	structuredClone(null, { transfer: [duplicateTransfer, duplicateTransfer] });
+} catch (error) {
+	duplicateTransferThrew = isDataCloneError(error);
+}
+check(
+	"duplicate transfer fails before detaching",
+	duplicateTransferThrew && duplicateTransfer.byteLength === 2,
+);
+
 let passed = 0;
 for (const [name, ok] of results) {
 	if (ok) passed++;

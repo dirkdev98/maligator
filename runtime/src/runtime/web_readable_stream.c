@@ -1618,16 +1618,14 @@ static MalValue rs_byob_request_respond_with_new_view(MalVm *vm, MalValue self,
         mal_typed_array_element_size(original->kind);
     u32 remaining_offset = original->byte_offset + (u32) read_request->bytes_filled;
     usize remaining_length = original_byte_length - read_request->bytes_filled;
-    bool transferred_replacement = original->buffer->detached &&
-        replacement->buffer != original->buffer;
-    if ((!transferred_replacement && replacement->buffer != original->buffer) ||
-        replacement->byte_offset != remaining_offset ||
+    bool replaces_buffer = replacement->buffer != original->buffer;
+    if (replacement->byte_offset != remaining_offset ||
         view_span.length > remaining_length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
             "ReadableStreamBYOBRequest replacement view must cover the pending buffer region");
         return mal_value_new_undefined();
     }
-    if (transferred_replacement) {
+    if (replaces_buffer) {
         MalValue roots[2] = {view, mal_value_new_undefined()};
         MalRootSpan span;
         mal_gc_root(&span, roots, 2);
