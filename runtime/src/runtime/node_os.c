@@ -3,6 +3,7 @@
 #if MAL_NODE
 
 #include <ctype.h>
+#include <pwd.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,51 @@ static MalValue os_hostname(
     const char *hostname = uname(&info) == 0 ? info.nodename : "";
     return mal_value_from_string(mal_string_new_ascii(
         &vm->heap, (const byte *) hostname, strlen(hostname)));
+}
+
+static MalValue os_type(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    struct utsname info;
+    const char *type = uname(&info) == 0 ? info.sysname : "";
+    return mal_value_from_string(mal_string_new_ascii(
+        &vm->heap, (const byte *) type, strlen(type)));
+}
+
+static MalValue os_homedir(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    const char *directory = getenv("HOME");
+    if (directory == nullptr || directory[0] == '\0') {
+        struct passwd *entry = getpwuid(geteuid());
+        directory = entry != nullptr ? entry->pw_dir : "";
+    }
+    return mal_value_from_string(mal_string_new_ascii(
+        &vm->heap, (const byte *) directory, strlen(directory)));
+}
+
+static MalValue os_endianness(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    const u16 marker = 1;
+    const char *result = *(const byte *) &marker == 1 ? "LE" : "BE";
+    return mal_value_from_string(mal_string_new_ascii(
+        &vm->heap, (const byte *) result, 2));
 }
 
 static MalValue os_arch(
@@ -201,6 +247,14 @@ void mal_host_install_node_os(
             vm, mal_value_to_object(module), (const byte *) "hostname", 0,
             os_hostname);
         mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "homedir", 0,
+            os_homedir);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "type", 0, os_type);
+        mal_intrinsic_define_method_n(
+            vm, mal_value_to_object(module), (const byte *) "endianness", 0,
+            os_endianness);
+        mal_intrinsic_define_method_n(
             vm, mal_value_to_object(module), (const byte *) "arch", 0, os_arch);
         mal_intrinsic_define_method_n(
             vm, mal_value_to_object(module), (const byte *) "release", 0, os_release);
@@ -214,6 +268,16 @@ void mal_host_install_node_os(
             os_available_parallelism);
         mal_intrinsic_define_method_n(
             vm, mal_value_to_object(module), (const byte *) "cpus", 0, os_cpus);
+        mal_intrinsic_define_data(
+            vm, mal_value_to_object(module), (const byte *) "EOL",
+            mal_value_from_string(mal_string_new_ascii(
+                &vm->heap, (const byte *) "\n", 1)),
+            MAL_PROPERTY_ENUMERABLE);
+        mal_intrinsic_define_data(
+            vm, mal_value_to_object(module), (const byte *) "devNull",
+            mal_value_from_string(mal_string_new_ascii(
+                &vm->heap, (const byte *) "/dev/null", 9)),
+            MAL_PROPERTY_ENUMERABLE);
         vm->intrinsics[MAL_INTRINSIC_NODE_OS_MODULE] = module;
         mal_gc_unroot(&root);
     }

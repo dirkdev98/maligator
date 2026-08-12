@@ -1,6 +1,6 @@
 import assertModule, { equal } from "node:assert/strict";
 import netModule, { isIP } from "node:net";
-import osModule, { release } from "node:os";
+import osModule, { EOL, devNull, endianness, homedir, release, type } from "node:os";
 import querystringModule, { parse as parseQuery } from "node:querystring";
 import urlModule, { Url, parse as parseUrl } from "node:url";
 
@@ -34,6 +34,13 @@ checks.push(
 	parseUrl === urlModule.parse,
 	isIP("127.0.0.1") === 4,
 	typeof release() === "string",
+	EOL === "\n",
+	devNull === "/dev/null",
+	endianness() === "LE" || endianness() === "BE",
+	typeof homedir() === "string" && homedir().length > 0,
+	typeof type() === "string" && type().length > 0,
+	EOL === osModule.EOL,
+	devNull === osModule.devNull,
 	parseQuery("a=b").a === "b",
 	parseUrl("/path").pathname === "/path",
 );
