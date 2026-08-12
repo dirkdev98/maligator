@@ -297,28 +297,33 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 		return new Set();
 	}
 
-	// Per-register direct-use classification, plus the forward value-copy graph.
-	// The register allocator pins parameters and routinely copies them into a
-	// working register before any arithmetic (`r1 = r0; ... r1 < n`), so a
-	// parameter's evidence has to be followed across MOVEs: `numericUse` /
-	// `disqualUse` record the *register* a use applies to, and a parameter
-	// inherits the uses of every register its value reaches via MOVE.
-	const numericUse = new Set<number>();
-	const disqualUse = new Set<number>();
-	const moveTargets = new Map<number, Array<number>>();
-	const addEdge = (src: number, dst: number): void => {
-		const list = moveTargets.get(src);
-		if (list === undefined) {
-			moveTargets.set(src, [dst]);
-		} else {
-			list.push(dst);
-		}
-	};
+	// Record the use *at each instruction*, rather than globally by physical
+	// register. Allocation deliberately reuses a color after a value dies; a
+	// global register graph then lets a later unrelated object use poison an
+	// earlier numeric parameter. The dataflow below follows the parameter value
+	// through MOVEs and kills its provenance on every physical-register rewrite.
+	const numericReads: Array<Array<number>> = fn.instructions.map(() => []);
+	const disqualifyingReads: Array<Array<number>> = fn.instructions.map(() => []);
+	let legacyUnsupported = false;
 
-	for (const instruction of fn.instructions) {
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (
+			instruction.opcode === "CREATE_OBJECT_SHAPED" ||
+			instruction.opcode === "LOAD_GLOBAL_PROPERTY" ||
+			instruction.opcode === "STORE_GLOBAL_PROPERTY" ||
+			instruction.opcode === "INIT_GLOBAL_VARS" ||
+			instruction.opcode === "THROW_IF_TDZ"
+		) {
+			// The former global-register classifier rejected these opcodes. Preserve
+			// that admission policy except for a parameter explicitly participating
+			// in the guarded finite-construction region below.
+			legacyUnsupported = true;
+		}
+		const numeric = numericReads[ip]!;
+		const disqualifying = disqualifyingReads[ip]!;
 		switch (instruction.opcode) {
 			case "MOVE":
-				addEdge(instruction.src, instruction.dst);
 				break;
 			// No register reads, or a neutral boundary read (the value is boxed
 			// there regardless) that neither justifies nor disqualifies promotion.
@@ -330,6 +335,7 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 			case "CREATE_STRING":
 			case "CREATE_BIGINT":
 			case "CREATE_OBJECT":
+			case "CREATE_OBJECT_SHAPED": // value registers are boxed boundaries
 			case "CREATE_ARRAY":
 			case "INSTANTIATE_LITERAL_TEMPLATE":
 			case "CREATE_FUNCTION":
@@ -342,66 +348,66 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 			case "LOAD_THIS":
 			case "LOAD_NEW_TARGET":
 			case "LOAD_UNDECLARED":
+			case "LOAD_GLOBAL_PROPERTY": // no register operand
 			case "LOAD_CAPTURED":
 			case "LOAD_GLOBAL":
 			case "LOAD_INTRINSIC":
 			case "STORE_GLOBAL": // src boxed at the global-store boundary
+			case "STORE_GLOBAL_PROPERTY": // src boxed at the global-property boundary
 			case "STORE_CAPTURED": // src boxed into the captured slot
+			case "INIT_GLOBAL_VARS": // no register operand
+			case "THROW_IF_TDZ": // a promoted Number cannot be EMPTY
 			case "THROW": // value boxed at the throw boundary
 			case "JUMP":
 			case "JUMP_IF": // cond read via native truthiness — fine for a number
 			case "RETURN": // value boxed at return
 				break;
 			case "CONSTRUCT":
-				disqualUse.add(instruction.callee);
+				disqualifying.push(instruction.callee);
 				// arguments are neutral boundary reads
 				break;
 			case "LOAD_PROPERTY":
 			case "LOAD_SUPER_PROPERTY":
-				disqualUse.add(instruction.object);
+				disqualifying.push(instruction.object);
 				// A numeric key enables the dense-array index path. Non-number callers
 				// take the boxed entry fallback before any body effects.
-				numericUse.add(instruction.key);
+				numeric.push(instruction.key);
 				if (instruction.opcode === "LOAD_SUPER_PROPERTY") {
-					disqualUse.add(instruction.receiver);
+					disqualifying.push(instruction.receiver);
 				}
 				break;
 			case "LOAD_PROPERTY_STATIC":
-				disqualUse.add(instruction.object);
+				disqualifying.push(instruction.object);
 				break;
 			case "STORE_PROPERTY":
-				disqualUse.add(instruction.object);
-				numericUse.add(instruction.key);
+				disqualifying.push(instruction.object);
+				numeric.push(instruction.key);
 				// value is a neutral boundary read
 				break;
 			case "STORE_PROPERTY_STATIC":
-				disqualUse.add(instruction.object);
+				disqualifying.push(instruction.object);
 				break;
 			case "TO_PROPERTY_KEY":
 				// object and key are read as boxed values, never numerically.
-				disqualUse.add(instruction.object);
-				disqualUse.add(instruction.key);
+				disqualifying.push(instruction.object, instruction.key);
 				break;
 			case "FOR_IN_KEYS":
 				// source is enumerated as an object, never read numerically.
-				disqualUse.add(instruction.source);
+				disqualifying.push(instruction.source);
 				break;
 			case "ARRAY_REST":
 				// src is read as an array-like, never numerically.
-				disqualUse.add(instruction.src);
+				disqualifying.push(instruction.src);
 				break;
 			case "CALL":
-				disqualUse.add(instruction.callee);
-				disqualUse.add(instruction.thisValue);
+				disqualifying.push(instruction.callee, instruction.thisValue);
 				// arguments are neutral boundary reads
 				break;
 			case "BINARY":
 				if (instruction.operator === "in" || instruction.operator === "instanceof") {
-					disqualUse.add(instruction.left);
-					disqualUse.add(instruction.right);
+					disqualifying.push(instruction.left, instruction.right);
 				} else if (UNAMBIGUOUS_NUMERIC_BINARY.has(instruction.operator)) {
-					numericUse.add(instruction.left);
-					numericUse.add(instruction.right);
+					numeric.push(instruction.left, instruction.right);
 				}
 				// `+` and the equality operators are neutral
 				break;
@@ -414,10 +420,10 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 					instruction.operator === "increment" ||
 					instruction.operator === "decrement"
 				) {
-					numericUse.add(instruction.src);
+					numeric.push(instruction.src);
 				} else {
 					// !, typeof, void, delete — not numeric
-					disqualUse.add(instruction.src);
+					disqualifying.push(instruction.src);
 				}
 				break;
 			case "TYPEOF_COMPARE":
@@ -433,33 +439,129 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 		}
 	}
 
-	const promotable = new Set<number>();
-	for (let p = 0; p < paramCount; p++) {
-		// Walk the forward MOVE closure of the parameter — the registers its value
-		// may reach. Register reuse can make this over-approximate, which only
-		// costs a missed or wasted promotion, never correctness: the entry guard
-		// makes any promotion sound regardless of how the parameter is used.
-		const seen = new Set<number>([p]);
-		const stack = [p];
-		let justified = false;
-		let disqualified = false;
-		while (stack.length > 0) {
-			const r = stack.pop()!;
-			if (disqualUse.has(r)) {
-				disqualified = true;
-				break;
-			}
-			if (numericUse.has(r)) {
-				justified = true;
-			}
-			for (const target of moveTargets.get(r) ?? []) {
-				if (!seen.has(target)) {
-					seen.add(target);
-					stack.push(target);
+	// Preserve the former physical-register admission policy for every ordinary
+	// function. The flow-sensitive extension below is deliberately additive only
+	// for parameters that are already runtime guards of a finite construction.
+	const legacyPromotable = new Set<number>();
+	if (!legacyUnsupported) {
+		const numericUse = new Set(numericReads.flat());
+		const disqualifyingUse = new Set(disqualifyingReads.flat());
+		const moveTargets = new Map<number, Array<number>>();
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode !== "MOVE") continue;
+			const targets = moveTargets.get(instruction.src) ?? [];
+			targets.push(instruction.dst);
+			moveTargets.set(instruction.src, targets);
+		}
+		for (let p = 0; p < paramCount; p++) {
+			const seen = new Set<number>([p]);
+			const stack = [p];
+			let justified = false;
+			let disqualified = false;
+			while (stack.length > 0) {
+				const register = stack.pop()!;
+				if (disqualifyingUse.has(register)) {
+					disqualified = true;
+					break;
+				}
+				justified ||= numericUse.has(register);
+				for (const target of moveTargets.get(register) ?? []) {
+					if (!seen.has(target)) {
+						seen.add(target);
+						stack.push(target);
+					}
 				}
 			}
+			if (justified && !disqualified) legacyPromotable.add(p);
 		}
-		if (justified && !disqualified) {
+	}
+
+	// Exception edges would need their own predecessor states. Declining the new
+	// region-derived promotion preserves the legacy result for such functions.
+	if (fn.handlers.length > 0 || fn.instructions.length === 0) return legacyPromotable;
+
+	type ParamState = Map<number, bigint>;
+	const entryStates: Array<ParamState | undefined> = Array.from(
+		{ length: fn.instructions.length },
+		() => undefined,
+	);
+	const entry = new Map<number, bigint>();
+	for (let p = 0; p < paramCount; p++) entry.set(p, 1n << BigInt(p));
+	entryStates[0] = entry;
+	const worklist = [0];
+	const queued = new Set(worklist);
+	let numericMask = 0n;
+	let disqualifyingMask = 0n;
+	let finiteConstructionMask = 0n;
+
+	const enqueueMerge = (target: number, incoming: ParamState): void => {
+		if (target < 0 || target >= fn.instructions.length) return;
+		const current = entryStates[target];
+		if (current === undefined) {
+			entryStates[target] = new Map(incoming);
+			if (!queued.has(target)) {
+				queued.add(target);
+				worklist.push(target);
+			}
+			return;
+		}
+		let changed = false;
+		for (const [register, mask] of incoming) {
+			const merged = (current.get(register) ?? 0n) | mask;
+			if (merged !== current.get(register)) {
+				current.set(register, merged);
+				changed = true;
+			}
+		}
+		if (changed && !queued.has(target)) {
+			queued.add(target);
+			worklist.push(target);
+		}
+	};
+
+	while (worklist.length > 0) {
+		const ip = worklist.shift()!;
+		queued.delete(ip);
+		const state = entryStates[ip]!;
+		for (const register of numericReads[ip]!) {
+			numericMask |= state.get(register) ?? 0n;
+		}
+		for (const register of disqualifyingReads[ip]!) {
+			disqualifyingMask |= state.get(register) ?? 0n;
+		}
+
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "CREATE_OBJECT") {
+			for (const register of instruction.nativeFiniteConstruction?.numberGuards ?? []) {
+				finiteConstructionMask |= state.get(register) ?? 0n;
+			}
+		}
+		const outgoing = new Map(state);
+		const moveMask =
+			instruction.opcode === "MOVE" ? (state.get(instruction.src) ?? 0n) : 0n;
+		for (const register of writeRegisters(instruction)) outgoing.delete(register);
+		if (instruction.opcode === "MOVE" && moveMask !== 0n) {
+			outgoing.set(instruction.dst, moveMask);
+		}
+
+		if (instruction.opcode === "JUMP") {
+			enqueueMerge(instruction.targetIp, outgoing);
+		} else if (instruction.opcode === "JUMP_IF") {
+			enqueueMerge(instruction.targetIp, outgoing);
+			enqueueMerge(ip + 1, outgoing);
+		} else if (instruction.opcode !== "RETURN" && instruction.opcode !== "THROW") {
+			enqueueMerge(ip + 1, outgoing);
+		}
+	}
+
+	const promotable = new Set(legacyPromotable);
+	for (let p = 0; p < paramCount; p++) {
+		const bit = 1n << BigInt(p);
+		if (
+			(finiteConstructionMask & bit) !== 0n &&
+			(numericMask & bit) !== 0n &&
+			(disqualifyingMask & bit) === 0n
+		) {
 			promotable.add(p);
 		}
 	}

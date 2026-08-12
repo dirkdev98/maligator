@@ -186,6 +186,32 @@ test("never shares a physical register across representation classes", () => {
 	).toHaveLength(3);
 });
 
+test("partitions guarded numeric parameter values from later boxed reuse", () => {
+	const store = {
+		type: "storeProperty",
+		registers: [2, 3, 1],
+	} as IRInstruction;
+	const parameterCopy: IRInstruction = { type: "move", registers: [1, 0] };
+	const finiteAllocation = {
+		type: "createObject",
+		registers: [2, 1],
+		nativeFiniteConstruction: {
+			source: store,
+			keyStringIndices: [0],
+		},
+	} as IRInstruction;
+	const laterBoxed: IRInstruction = { type: "createObject", registers: [4] };
+	allocate(
+		[[parameterCopy, finiteAllocation, laterBoxed, { type: "return", registers: [4] }]],
+		{
+			parameterCount: 1,
+			registerCount: 5,
+		},
+	);
+
+	expect(parameterCopy.registers[0]).not.toBe(laterBoxed.registers[0]);
+});
+
 test("keeps an appended-block numeric loop induction unboxed", () => {
 	// Multi-block inlining appends the callee entry after the caller's original
 	// blocks, then jumps back to the caller continuation. The representation

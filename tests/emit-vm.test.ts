@@ -488,6 +488,47 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_array_try_store");
 	});
 
+	it("tracks guarded numeric parameters through physical register reuse", () => {
+		const reused: VmFunction = {
+			...fn,
+			parameterCount: 1,
+			registerCount: 5,
+			capturedCount: 0,
+			instructions: [
+				{ opcode: "MOVE", dst: 1, src: 0 },
+				{ opcode: "CREATE_NUMBER", dst: 2, value: 3 },
+				{ opcode: "BINARY", dst: 3, left: 1, right: 2, operator: "*" },
+				{
+					opcode: "CREATE_OBJECT",
+					dst: 4,
+					nativeFiniteConstruction: {
+						icIndex: 0,
+						numberGuards: [1],
+						keyStringIndices: [1],
+					},
+				},
+				{ opcode: "CREATE_OBJECT", dst: 1 },
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					dst: 2,
+					object: 1,
+					stringIndex: 1,
+					icIndex: 1,
+				},
+				{ opcode: "RETURN", value: 3 },
+			],
+		};
+		const output = emitVmDefinition({
+			...definition,
+			functions: [reused],
+			stringConstants: [[], ["x".charCodeAt(0)]],
+		});
+
+		expect(output).toContain("MalValue p0 = arg_count > 0 ? args[0]");
+		expect(output).toContain("if (!mal_ops_is_number(p0))");
+		expect(output).toContain("return mal_compiled_0_boxed");
+	});
+
 	it("retains boxed recursive re-entry for promoted numeric parameters", () => {
 		const output = emit(
 			`"use strict"; function recurse(value, depth, callback) { if (depth === 0) return value * value; return callback(value - 1, depth - 1, callback); } globalThis.recurse = recurse;`,

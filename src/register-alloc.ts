@@ -1,4 +1,8 @@
-import { definedRegisters, usedRegisters } from "./ir-register-index.ts";
+import {
+	buildIRRegisterIndex,
+	definedRegisters,
+	usedRegisters,
+} from "./ir-register-index.ts";
 import { debugIntermediateProgram } from "./ir.ts";
 import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
 import {
@@ -233,7 +237,10 @@ function joinReps(current: RegisterRep | null, produced: RegisterRep): RegisterR
  * arguments, so they start (and stay) `boxed`; a register never resolved (only
  * ever unwritten) defaults to `boxed`.
  */
-export function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
+export function inferVirtualReps(
+	fn: IRFunction,
+	speculativeNumberParameters: ReadonlySet<number> = new Set(),
+): Map<number, RegisterRep> {
 	const reps = new Map<number, RegisterRep | null>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -242,7 +249,14 @@ export function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
 			}
 			for (const register of instruction.registers) {
 				if (register >= 0 && !reps.has(register)) {
-					reps.set(register, register < fn.parameterCount ? "boxed" : null);
+					reps.set(
+						register,
+						register < fn.parameterCount
+							? speculativeNumberParameters.has(register)
+								? "number"
+								: "boxed"
+							: null,
+					);
 				}
 			}
 		}
@@ -390,7 +404,10 @@ function interferenceComplexityIsHigh(fn: IRFunction, registerCount: number): bo
 	return false;
 }
 
-function allocateWithInterference(fn: IRFunction): void {
+function allocateWithInterference(
+	fn: IRFunction,
+	virtualReps: ReadonlyMap<number, RegisterRep>,
+): void {
 	const registers = allVirtualRegisters(fn);
 	if (interferenceComplexityIsHigh(fn, registers.length)) {
 		allocateDense(fn, registers);
@@ -403,7 +420,6 @@ function allocateWithInterference(fn: IRFunction): void {
 		return;
 	}
 
-	const virtualReps = inferVirtualReps(fn);
 	const repOf = (register: number): RegisterRep => virtualReps.get(register) ?? "boxed";
 	const graph = new Map<number, Set<number>>(
 		registers.map((register) => [register, new Set<number>()]),
@@ -499,6 +515,46 @@ function allocateWithInterference(fn: IRFunction): void {
 }
 
 /**
+ * Parameters used as stable Number leaves by a finite construction already have
+ * an explicit guarded fast version in the C backend. Recover the originating
+ * parameter through single-definition MOVEs so allocation can keep that
+ * version's numeric values out of physical registers later reused by objects.
+ *
+ * This does not change the VM representation or remove the boxed version: it is
+ * only an allocation partition. The emitted entry guard still selects between
+ * the native-number and fully generic bodies at runtime.
+ */
+function finiteConstructionNumberParameters(fn: IRFunction): Set<number> {
+	const parameters = new Set<number>();
+	const index = buildIRRegisterIndex(fn);
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				instruction.type !== "createObject" ||
+				instruction.nativeFiniteConstruction === undefined
+			) {
+				continue;
+			}
+			for (const guard of instruction.registers.slice(1)) {
+				let register = guard;
+				const seen = new Set<number>();
+				while (!seen.has(register)) {
+					seen.add(register);
+					if (register < fn.parameterCount) {
+						parameters.add(register);
+						break;
+					}
+					const definition = index.uniqueDefinitions.get(register);
+					if (definition?.type !== "move") break;
+					register = definition.registers[1];
+				}
+			}
+		}
+	}
+	return parameters;
+}
+
+/**
  * Allocate registers for a function. Rep-aware: a freed physical register is
  * only reused for a virtual register of the same representation, so each
  * physical register holds a single rep across its life. That lets the native
@@ -538,16 +594,17 @@ function allocateRegistersForFunction(fn: IRFunction) {
 		}
 	}
 
+	const speculativeNumberParameters = finiteConstructionNumberParameters(fn);
+	const virtualReps = inferVirtualReps(fn, speculativeNumberParameters);
 	const hasMultipleDefinitions = [...registerDefinitionCounts.values()].some(
 		(count) => count > 1,
 	);
 	const hasBackEdge = findBackEdges(fn).backEdges.length > 0;
 	if (hasMultipleDefinitions || hasBackEdge) {
-		allocateWithInterference(fn);
+		allocateWithInterference(fn, virtualReps);
 		return;
 	}
 
-	const virtualReps = inferVirtualReps(fn);
 	const repOf = (register: number): RegisterRep => virtualReps.get(register) ?? "boxed";
 
 	const virtualRegisterToRealRegister = new Map<number, number>();
