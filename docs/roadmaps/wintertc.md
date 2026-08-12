@@ -107,8 +107,8 @@ is exercised by `tests/native/fetch.test.ts`.
       the global exception/rejection-reporting model.
 - [ ] Complete Web Streams beyond the implemented default readable, writable,
       byte-source/minimum-fill pull-into, same-enqueue multi-descriptor BYOB
-      settlement, byte tee, and piping slices: residual BYOB descriptor and
-      error semantics, transform streams, async iteration, remaining
+      settlement, async iteration, byte tee, and piping slices: residual BYOB
+      descriptor and error semantics, transform streams, remaining
       error/cancellation WPT, and server integrations.
 - [ ] Bridge the implemented host H2 llhttp heads/body streams to Web Streams without
       exposing parser buffers or socket ownership.
