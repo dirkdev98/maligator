@@ -1255,6 +1255,17 @@ interface RegionAccess {
 	commit: boolean;
 }
 
+interface DenseIteratorCursor {
+	name: string;
+	iterator: number;
+	next: number;
+}
+
+interface DenseIteratorCursorAction {
+	cursor: DenseIteratorCursor;
+	kind: "capture" | "step";
+}
+
 interface StackObjectSite {
 	objectName: string;
 	slotsOffset: number;
@@ -1466,6 +1477,70 @@ function emitBody(
 		}
 	}
 
+	// A synchronous iterator record captures its `next` method exactly once. When
+	// GET_ITERATOR and ITERATOR_STEP retain the same allocated register pair, keep
+	// the validated dense Array-values iterator pointer in a native local instead
+	// of rechecking object classes, callback identity, kind, and target on every
+	// element. The boxed pair remains the GC root; any register overwrite clears
+	// the raw nonmoving cursor before it can be reused.
+	const denseIteratorCursorActions = new Map<number, DenseIteratorCursorAction>();
+	const denseIteratorCursorResets = new Map<number, Array<DenseIteratorCursor>>();
+	const denseIteratorCursors: Array<DenseIteratorCursor> = [];
+	{
+		const pairKey = (iterator: number, next: number): string => `${iterator}:${next}`;
+		const getPairs = new Set<string>();
+		const stepPairs = new Set<string>();
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "GET_ITERATOR") {
+				getPairs.add(pairKey(instruction.iteratorDst, instruction.nextDst));
+			} else if (instruction.opcode === "ITERATOR_STEP") {
+				stepPairs.add(pairKey(instruction.iterator, instruction.next));
+			}
+		}
+		const cursorsByPair = new Map<string, DenseIteratorCursor>();
+		for (const key of getPairs) {
+			if (!stepPairs.has(key)) continue;
+			const [iteratorText, nextText] = key.split(":");
+			const cursor: DenseIteratorCursor = {
+				name: `__dense_iter_${denseIteratorCursors.length}`,
+				iterator: Number(iteratorText),
+				next: Number(nextText),
+			};
+			denseIteratorCursors.push(cursor);
+			cursorsByPair.set(key, cursor);
+		}
+
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			const instruction = fn.instructions[ip]!;
+			const writes = new Set(writeRegisters(instruction));
+			let action: DenseIteratorCursorAction | undefined;
+			if (instruction.opcode === "GET_ITERATOR") {
+				const cursor = cursorsByPair.get(
+					pairKey(instruction.iteratorDst, instruction.nextDst),
+				);
+				if (cursor !== undefined) action = { cursor, kind: "capture" };
+			} else if (instruction.opcode === "ITERATOR_STEP") {
+				const cursor = cursorsByPair.get(pairKey(instruction.iterator, instruction.next));
+				// If register allocation reuses an iterator/next register for a step
+				// result, clear the cursor before the potentially-throwing operation and
+				// use the ordinary step path for that site.
+				if (
+					cursor !== undefined &&
+					!writes.has(cursor.iterator) &&
+					!writes.has(cursor.next)
+				) {
+					action = { cursor, kind: "step" };
+				}
+			}
+			if (action !== undefined) denseIteratorCursorActions.set(ip, action);
+
+			const resets = denseIteratorCursors.filter(
+				(cursor) => writes.has(cursor.iterator) || writes.has(cursor.next),
+			);
+			if (resets.length > 0) denseIteratorCursorResets.set(ip, resets);
+		}
+	}
+
 	// Guarded property-access regions. Group consecutive LOAD/STORE_PROPERTY on the same
 	// object register within a straight-line window under one shared receiver guard: an
 	// index-form (number-rep key) run guards a dense array (`mal_vm_as_array`), a string-key
@@ -1577,7 +1652,9 @@ function emitBody(
 		}
 	}
 
-	const lines: Array<string> = [];
+	const lines: Array<string> = denseIteratorCursors.map(
+		(cursor) => `MalIteratorObject *${cursor.name} = nullptr;`,
+	);
 	// Pair-fusion temporaries live for the whole C function so intervening property
 	// loads retain their original position and control-flow labels never jump over a
 	// declaration. Only boxed first results benefit from avoiding the box/unbox.
@@ -1601,6 +1678,9 @@ function emitBody(
 			// Control can arrive with a different published position.
 			lastPublishedPos = -1;
 		}
+		for (const cursor of denseIteratorCursorResets.get(ip) ?? []) {
+			lines.push(`    ${cursor.name} = nullptr;`);
+		}
 
 		const emitted = emitInstruction(
 			fn.instructions[ip]!,
@@ -1612,6 +1692,7 @@ function emitBody(
 			gcUnlink,
 			thisSlot,
 			coro,
+			denseIteratorCursorActions.get(ip),
 			regionGuard.get(ip),
 			stackObjectSites.get(ip),
 			stackObjectAccesses.get(ip),
@@ -1658,6 +1739,7 @@ function emitInstruction(
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
+	denseIteratorCursor: DenseIteratorCursorAction | undefined,
 	region: RegionAccess | undefined,
 	stackObjectSite: StackObjectSite | undefined,
 	stackObjectAccess: { site: StackObjectSite; slot: number } | undefined,
@@ -1976,6 +2058,7 @@ function emitInstruction(
 					undefined,
 					undefined,
 					undefined,
+					undefined,
 					mathUnaryCall,
 					mathBinaryCall,
 					loopStaticPropertyFastPath,
@@ -2009,6 +2092,7 @@ function emitInstruction(
 					gcUnlink,
 					thisSlot,
 					coro,
+					undefined,
 					undefined,
 					undefined,
 					undefined,
@@ -2755,6 +2839,11 @@ function emitInstruction(
 				`if (!mal_vm_get_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow}`,
 				`r${instruction.iteratorDst} = ${rec}.iterator;`,
 				`r${instruction.nextDst} = ${rec}.next_method;`,
+				...(denseIteratorCursor?.kind === "capture"
+					? [
+							`${denseIteratorCursor.cursor.name} = mal_vm_iterator_dense_array_cursor(&${rec});`,
+						]
+					: []),
 			];
 		}
 		case "GET_ASYNC_ITERATOR": {
@@ -2772,10 +2861,14 @@ function emitInstruction(
 			const rec = `iter_rec_${ip}`;
 			const val = `iter_val_${ip}`;
 			const done = `iter_done_${ip}`;
+			const step =
+				denseIteratorCursor?.kind === "step"
+					? `${denseIteratorCursor.cursor.name} != nullptr ? mal_vm_iterator_step_dense_array_cursor(vm, ${denseIteratorCursor.cursor.name}, &${rec}, &${val}, &${done}) : mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`
+					: `mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`;
 			return [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 				`MalValue ${val}; bool ${done};`,
-				`if (!mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})) ${onThrow}`,
+				`if (!(${step})) ${onThrow}`,
 				`r${instruction.valueDst} = ${val};`,
 				reps[instruction.doneDst] === "boolean"
 					? `r${instruction.doneDst} = ${done};`

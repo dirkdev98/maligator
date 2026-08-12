@@ -448,6 +448,18 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 	});
 
+	it("validates a dense Array-values iterator once per iterator record", () => {
+		const output = emit(
+			`"use strict"; function sum(values) { let total = 0; for (const value of values) total += value; return total; } globalThis.sum = sum;`,
+		);
+		expect(output).toContain("MalIteratorObject *__dense_iter_0 = nullptr;");
+		expect(output).toContain("mal_vm_iterator_dense_array_cursor(&iter_rec_");
+		expect(output).toContain(
+			"mal_vm_iterator_step_dense_array_cursor(vm, __dense_iter_0",
+		);
+		expect(output).toContain(": mal_vm_iterator_step_fast(vm,");
+	});
+
 	it("retains the boxed coercion path for unproven Number or BigInt operands", () => {
 		const output = emit(
 			`"use strict"; function increment(value) { return value++; } globalThis.increment = increment;`,

@@ -1454,6 +1454,69 @@ static inline bool mal_vm_iterator_try_dense_array_step(
     return false;
 }
 
+/** Resolve the immutable portion of the dense Array-values iterator fast path.
+ * The iterator record has already observed @@iterator and captured `next`, so a
+ * successful result remains valid for that record's lifetime. The iterator and
+ * next MalValues must remain rooted while the raw cursor is used. */
+static inline MalIteratorObject *mal_vm_iterator_dense_array_cursor(
+    const MalIteratorRecord *record
+) {
+    if (mal_value_is_iterator_object(record->iterator) &&
+        mal_value_is_native_function_object(record->next_method) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(record->next_method)) ==
+            mal_array_iterator_next_callback) {
+        MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
+        if (iterator->kind == MAL_ITERATOR_ARRAY_VALUES &&
+            mal_value_is_heap_type(iterator->target, MAL_HEAP_ARRAY_OBJECT)) {
+            return iterator;
+        }
+    }
+    return nullptr;
+}
+
+/**
+ * Non-calling step after `mal_vm_iterator_dense_array_cursor` validated the
+ * iterator record. Length and dense storage are still read fresh on every step;
+ * a hole misses so the generic path performs the prototype-aware Get.
+ */
+static inline bool mal_vm_iterator_try_dense_array_cursor_step(
+    MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
+    if (iterator->done) {
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
+    }
+    MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(iterator->target);
+    u64 index = iterator->index;
+    if (index >= array->length) {
+        iterator->done = true;
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
+    }
+    MalValue element;
+    if (mal_array_object_dense_get(array, (u32) index, &element)) {
+        iterator->index = index + 1;
+        *value_out = element;
+        *done_out = false;
+        return true;
+    }
+    // Hole / beyond the dense region (still < length): fall back for the Get.
+    return false;
+}
+
+/** Step a compiler-retained cursor, falling back only for sparse/prototype Get. */
+static inline bool mal_vm_iterator_step_dense_array_cursor(
+    MalVm *vm, MalIteratorObject *cursor, const MalIteratorRecord *record,
+    MalValue *value_out, bool *done_out
+) {
+    if (mal_vm_iterator_try_dense_array_cursor_step(cursor, value_out, done_out)) {
+        return true;
+    }
+    return mal_vm_iterator_step(vm, record, value_out, done_out);
+}
+
 /** Inline iterator step for native code, with the complete protocol as fallback. */
 static inline bool mal_vm_iterator_step_fast(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
     if (mal_vm_iterator_try_dense_array_step(record, value_out, done_out)) {

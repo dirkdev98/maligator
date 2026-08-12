@@ -38,6 +38,15 @@ describe("interpreter-local dense array accesses", () => {
 		expect(runToStdout(compiled, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
 	});
 
+	it("keeps the compiled dense iterator cursor rooted under GC stress", () => {
+		expect(
+			runToStdout(compiled, {
+				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+				timeoutMs: 60_000,
+			}),
+		).toBe(expected);
+	});
+
 	it("preserves dense hits and all guarded fallbacks", () => {
 		expect(runToStdout(interpreted, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
 	});
