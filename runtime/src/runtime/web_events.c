@@ -270,6 +270,9 @@ MalEventTargetObject *mal_event_target_object_new(MalHeap *heap, MalObject *prot
     t->dependents = nullptr;
     t->dependent_count = 0;
     t->dependent_cap = 0;
+    t->abort_algorithms = nullptr;
+    t->abort_algorithm_count = 0;
+    t->abort_algorithm_cap = 0;
     t->abort_reason = mal_value_new_undefined();
     t->is_abort_signal = false;
     t->abort_pending = false;
@@ -280,12 +283,16 @@ static void event_target_finalize(MalHeapHeader *cell) {
     MalEventTargetObject *t = (MalEventTargetObject *) cell;
     free(t->listeners);
     free(t->dependents);
+    free(t->abort_algorithms);
     t->listeners = nullptr;
     t->dependents = nullptr;
+    t->abort_algorithms = nullptr;
     t->count = 0;
     t->cap = 0;
     t->dependent_count = 0;
     t->dependent_cap = 0;
+    t->abort_algorithm_count = 0;
+    t->abort_algorithm_cap = 0;
 }
 
 static void event_target_trace(MalHeapHeader *cell) {
@@ -295,6 +302,7 @@ static void event_target_trace(MalHeapHeader *cell) {
         mal_gc_mark_value(t->listeners[i].callback);
     }
     mal_gc_mark_values(t->dependents, t->dependent_count);
+    mal_gc_mark_values(t->abort_algorithms, t->abort_algorithm_count);
     mal_gc_mark_value(t->abort_reason);
 }
 
@@ -733,6 +741,44 @@ static MalEventTargetObject *abort_signal_this(MalValue value) {
     return signal->is_abort_signal ? signal : nullptr;
 }
 
+bool mal_abort_signal_is_aborted(MalValue value) {
+    MalEventTargetObject *signal = abort_signal_this(value);
+    return signal != nullptr && !mal_value_is_undefined(signal->abort_reason);
+}
+
+MalValue mal_abort_signal_reason(MalValue value) {
+    MalEventTargetObject *signal = abort_signal_this(value);
+    return signal == nullptr ? mal_value_new_undefined() : signal->abort_reason;
+}
+
+void mal_abort_signal_add_algorithm(MalValue value, MalValue algorithm) {
+    MalEventTargetObject *signal = abort_signal_this(value);
+    if (signal == nullptr || !mal_value_is_undefined(signal->abort_reason)) return;
+    if (signal->abort_algorithm_count == signal->abort_algorithm_cap) {
+        signal->abort_algorithm_cap = signal->abort_algorithm_cap == 0
+            ? 4
+            : signal->abort_algorithm_cap * 2;
+        signal->abort_algorithms = realloc(signal->abort_algorithms,
+            sizeof(MalValue) * (usize) signal->abort_algorithm_cap);
+    }
+    signal->abort_algorithms[signal->abort_algorithm_count++] = algorithm;
+    mal_gc_card(&signal->object.header, algorithm);
+}
+
+void mal_abort_signal_remove_algorithm(MalValue value, MalValue algorithm) {
+    MalEventTargetObject *signal = abort_signal_this(value);
+    if (signal == nullptr) return;
+    for (i32 i = 0; i < signal->abort_algorithm_count; i++) {
+        if (signal->abort_algorithms[i] != algorithm) continue;
+        mal_gc_write_barrier(signal->abort_algorithms[i]);
+        for (i32 j = i + 1; j < signal->abort_algorithm_count; j++) {
+            signal->abort_algorithms[j - 1] = signal->abort_algorithms[j];
+        }
+        signal->abort_algorithm_count--;
+        return;
+    }
+}
+
 static void abort_signal_add_dependent(MalEventTargetObject *source, MalValue dependent) {
     for (i32 i = 0; i < source->dependent_count; i++) {
         if (source->dependents[i] == dependent) {
@@ -768,6 +814,33 @@ static void abort_signal_fire_tree(MalVm *vm, MalValue signal_val) {
         return;
     }
     signal->abort_pending = false;
+
+    i32 algorithm_count = signal->abort_algorithm_count;
+    MalValue *algorithms = algorithm_count == 0
+        ? nullptr
+        : malloc(sizeof(MalValue) * (usize) algorithm_count);
+    for (i32 i = 0; i < algorithm_count; i++) {
+        algorithms[i] = signal->abort_algorithms[i];
+    }
+    MalRootSpan algorithm_roots;
+    if (algorithm_count > 0) {
+        mal_gc_root(&algorithm_roots, algorithms, algorithm_count);
+    }
+    for (i32 i = 0; i < algorithm_count; i++) {
+        mal_gc_write_barrier(signal->abort_algorithms[i]);
+    }
+    signal->abort_algorithm_count = 0;
+    for (i32 i = 0; i < algorithm_count; i++) {
+        mal_vm_call_value(vm, algorithms[i], signal_val, &signal->abort_reason, 1);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_undefined()};
+        }
+    }
+    if (algorithm_count > 0) {
+        mal_gc_unroot(&algorithm_roots);
+        free(algorithms);
+    }
 
     MalValue slots[] = {signal_val, mal_value_new_undefined()};
     MalRootSpan rs;

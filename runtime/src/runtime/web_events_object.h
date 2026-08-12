@@ -33,6 +33,9 @@ typedef struct MalEventTargetObject {
     MalValue *dependents;
     i32 dependent_count;
     i32 dependent_cap;
+    MalValue *abort_algorithms;
+    i32 abort_algorithm_count;
+    i32 abort_algorithm_cap;
     MalValue abort_reason;
     bool is_abort_signal;
     bool abort_pending;
@@ -43,6 +46,12 @@ typedef struct MalVm MalVm;
 /* Allocate a branded EventTarget with the supplied prototype. Runtime-owned web
  * objects such as performance use this to inherit the shared listener methods. */
 MalEventTargetObject *mal_event_target_object_new(MalHeap *heap, MalObject *prototype);
+
+/* Internal AbortSignal hooks for abortable web-standard algorithms. */
+bool mal_abort_signal_is_aborted(MalValue signal);
+MalValue mal_abort_signal_reason(MalValue signal);
+void mal_abort_signal_add_algorithm(MalValue signal, MalValue algorithm);
+void mal_abort_signal_remove_algorithm(MalValue signal, MalValue algorithm);
 
 /* Throw a DOMException backed by the installed intrinsic prototype and hidden
  * name/message slots. The helper roots all intermediate values across GC. */

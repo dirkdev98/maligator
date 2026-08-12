@@ -849,6 +849,28 @@ function promise_rejects_js(test, constructor, promise, description) {
     }
   );
 }
+function promise_rejects_dom(test, name, promiseOrConstructor, descriptionOrPromise, maybeDescription) {
+  var constructor;
+  var promise;
+  var description;
+  if (typeof promiseOrConstructor === "function" && promiseOrConstructor.name === "DOMException") {
+    constructor = promiseOrConstructor;
+    promise = descriptionOrPromise;
+    description = maybeDescription;
+  } else {
+    constructor = DOMException;
+    promise = promiseOrConstructor;
+    description = descriptionOrPromise;
+  }
+  return Promise.resolve(promise).then(
+    test.unreached_func("Should have rejected: " + description),
+    function(error) {
+      if (!(error instanceof constructor) || error.name !== name) {
+        __wpt_fail((description ? description + ": " : "") + "expected " + name);
+      }
+    }
+  );
+}
 function __wpt_fail(message) { throw new Error(message); }
 function assert_true(actual, message) { if (actual !== true) __wpt_fail(message || "expected true but got " + String(actual)); }
 function assert_false(actual, message) { if (actual !== false) __wpt_fail(message || "expected false but got " + String(actual)); }

@@ -519,6 +519,27 @@
 			"includes": []
 		},
 		{
+			"path": "streams/piping/abort.any.js",
+			"sha256": "fda77dcb005ae4d259876959d4eb402d89761d22eaf92f3b45cc976635586942",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/recording-streams.js" },
+				{ "name": "script", "value": "../resources/test-utils.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/recording-streams.js",
+					"sha256": "7c90125c056643aa82b07eb00584e5d52ed39778b23adfeac82db2890a4a92ca"
+				},
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				}
+			]
+		},
+		{
 			"path": "streams/piping/close-propagation-backward.any.js",
 			"sha256": "c7363f99f40cf1b5a5bad2a1c74c37106a51971c92296c04edf4c88efa29b357",
 			"target": "server-main",

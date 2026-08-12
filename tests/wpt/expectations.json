@@ -1,5 +1,54 @@
 {
 	"schemaVersion": 2,
 	"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd",
-	"expectations": []
+	"expectations": [
+		{
+			"path": "streams/piping/abort.any.js",
+			"variant": "",
+			"backend": "compiled",
+			"mode": "normal",
+			"subtest": "pipeTo on a teed readable byte stream should only be aborted when both branches are aborted",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W1",
+			"reason": "Public ReadableStream byte-source construction is not implemented",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "streams/piping/abort.any.js",
+			"variant": "",
+			"backend": "compiled",
+			"mode": "gc-stress",
+			"subtest": "pipeTo on a teed readable byte stream should only be aborted when both branches are aborted",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W1",
+			"reason": "Public ReadableStream byte-source construction is not implemented",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "streams/piping/abort.any.js",
+			"variant": "",
+			"backend": "interpreted",
+			"mode": "normal",
+			"subtest": "pipeTo on a teed readable byte stream should only be aborted when both branches are aborted",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W1",
+			"reason": "Public ReadableStream byte-source construction is not implemented",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "streams/piping/abort.any.js",
+			"variant": "",
+			"backend": "interpreted",
+			"mode": "gc-stress",
+			"subtest": "pipeTo on a teed readable byte stream should only be aborted when both branches are aborted",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W1",
+			"reason": "Public ReadableStream byte-source construction is not implemented",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		}
+	]
 }

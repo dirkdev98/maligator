@@ -851,6 +851,15 @@ MalValue mal_writable_stream_default_writer_closed(MalValue value) {
     return mal_value_to_readable_stream_object(value)->as.writer.closed_promise;
 }
 
+bool mal_writable_stream_default_writer_is_writable(MalValue value) {
+    MalReadableStreamObject *writer = mal_value_to_readable_stream_object(value);
+    if (mal_value_is_undefined(writer->as.writer.stream)) return false;
+    MalReadableStreamObject *stream =
+        mal_value_to_readable_stream_object(writer->as.writer.stream);
+    return stream->as.writable_stream.state == MAL_READABLE_STREAM_READABLE &&
+        !ws_controller_for(stream)->as.writable_controller.close_requested;
+}
+
 MalValue mal_writable_stream_default_writer_write(
     MalVm *vm, MalValue value, MalValue chunk) {
     return ws_writer_write(vm, value, &chunk, 1,

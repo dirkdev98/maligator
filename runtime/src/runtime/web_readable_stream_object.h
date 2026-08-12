@@ -125,6 +125,7 @@ bool mal_readable_stream_consume(MalVm *vm, MalValue value);
 /** Internal reader algorithms used by Fetch Body consumption. */
 MalValue mal_readable_stream_acquire_default_reader(MalVm *vm, MalValue value);
 MalValue mal_readable_stream_default_reader_closed(MalValue value);
+bool mal_readable_stream_default_reader_is_readable(MalValue value);
 MalValue mal_readable_stream_default_reader_read(MalVm *vm, MalValue value);
 MalValue mal_readable_stream_default_reader_cancel(
     MalVm *vm, MalValue value, MalValue reason);
@@ -136,6 +137,7 @@ bool mal_writable_stream_is_locked(MalValue value);
 MalValue mal_writable_stream_acquire_default_writer(MalVm *vm, MalValue value);
 MalValue mal_writable_stream_default_writer_ready(MalValue value);
 MalValue mal_writable_stream_default_writer_closed(MalValue value);
+bool mal_writable_stream_default_writer_is_writable(MalValue value);
 MalValue mal_writable_stream_default_writer_write(
     MalVm *vm, MalValue value, MalValue chunk);
 MalValue mal_writable_stream_default_writer_close(MalVm *vm, MalValue value);

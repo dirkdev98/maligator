@@ -592,6 +592,56 @@ async function run() {
 			publicTeePullRejected[1] &&
 			publicTeePullRejected[2],
 	);
+
+	const pipeAbortReason = { marker: "pipe aborted" };
+	let pipeCancelReason;
+	let pipeAbortSinkReason;
+	const abortablePipeSource = new ReadableStream({
+		cancel(reason) {
+			pipeCancelReason = reason;
+		},
+	});
+	const abortablePipeDestination = new WritableStream({
+		abort(reason) {
+			pipeAbortSinkReason = reason;
+		},
+	});
+	const pipeAbortController = new AbortController();
+	const abortedPipe = abortablePipeSource.pipeTo(abortablePipeDestination, {
+		signal: pipeAbortController.signal,
+	});
+	pipeAbortController.abort(pipeAbortReason);
+	const pipeRejection = await abortedPipe.catch((error) => error);
+	check(
+		"pipeTo abort preserves reason and releases locks",
+		pipeRejection === pipeAbortReason &&
+			pipeCancelReason === pipeAbortReason &&
+			pipeAbortSinkReason === pipeAbortReason &&
+			!abortablePipeSource.locked &&
+			!abortablePipeDestination.locked,
+	);
+
+	let completedPipeController;
+	let completedPipeWasAborted = false;
+	const completedPipeSource = new ReadableStream({
+		start(controller) {
+			completedPipeController = controller;
+		},
+	});
+	const completedPipeDestination = new WritableStream({
+		abort() {
+			completedPipeWasAborted = true;
+		},
+	});
+	const completedPipeAbortController = new AbortController();
+	const completedPipe = completedPipeSource.pipeTo(completedPipeDestination, {
+		signal: completedPipeAbortController.signal,
+	});
+	completedPipeController.close();
+	await completedPipe;
+	completedPipeAbortController.abort();
+	await tick();
+	check("completed pipe removes its abort algorithm", !completedPipeWasAborted);
 }
 
 run().then(
