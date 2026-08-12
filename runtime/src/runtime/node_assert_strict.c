@@ -52,6 +52,16 @@ static MalValue assert_equal(
     return assert_fail(vm, (const byte *) "Expected values to be strictly equal");
 }
 
+static MalValue assert_not_equal(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    if (argc >= 2 && !mal_ops_same_value(args[0], args[1])) {
+        return mal_value_new_undefined();
+    }
+    return assert_fail(vm, (const byte *) "Expected values to be strictly unequal");
+}
+
 static bool assert_json_equal(MalVm *vm, MalValue left, MalValue right) {
     MalValue roots[4] = {
         vm->intrinsics[MAL_INTRINSIC_JSON], left, right,
@@ -97,6 +107,17 @@ static MalValue assert_deep_equal(
     return assert_fail(vm, (const byte *) "Expected values to be deeply equal");
 }
 
+static MalValue assert_not_deep_equal(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    if (argc >= 2 && !assert_json_equal(vm, args[0], args[1])) {
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+        return mal_value_new_undefined();
+    }
+    return assert_fail(vm, (const byte *) "Expected values not to be deeply equal");
+}
+
 static MalValue assert_match(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -125,6 +146,66 @@ static MalValue assert_match(
         return assert_fail(vm, (const byte *) "Expected string to match regular expression");
     }
     return mal_value_new_undefined();
+}
+
+static MalValue assert_does_not_match(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    if (argc < 2) return assert_fail(vm, (const byte *) "Expected string not to match regular expression");
+    MalValue roots[3] = {args[0], args[1], mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    bool found = mal_vm_get_property(vm, roots[1],
+        mal_intrinsic_string_key(vm, (const byte *) "test"), &roots[2]);
+    if (!found || !mal_value_is_callable(roots[2])) {
+        mal_gc_unroot(&root);
+        return assert_fail(vm, (const byte *) "The second argument must be a RegExp");
+    }
+    MalCompletion tested = mal_vm_call_value(vm, roots[2], roots[1], roots, 1);
+    bool matched = tested.kind != MAL_COMPLETION_THROW && mal_value_is_truthy(tested.value);
+    mal_gc_unroot(&root);
+    if (tested.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    return matched ? assert_fail(vm, (const byte *) "Expected string not to match regular expression")
+                   : mal_value_new_undefined();
+}
+
+static MalValue assert_fail_method(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue message = argc >= 1 && mal_value_is_string(args[0])
+        ? args[0] : mal_value_from_string(mal_intrinsic_ascii(vm, "Failed"));
+    MalRootSpan root;
+    mal_gc_root(&root, &message, 1);
+    mal_vm_throw_error_value(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue assert_if_error(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    if (argc == 0 || mal_value_is_null(args[0]) || mal_value_is_undefined(args[0])) {
+        return mal_value_new_undefined();
+    }
+    return assert_fail(vm, (const byte *) "ifError got unwanted exception");
+}
+
+static void install_assert_methods(MalVm *vm, MalObject *object) {
+    mal_intrinsic_define_method_n(vm, object, "equal", 2, assert_equal);
+    mal_intrinsic_define_method_n(vm, object, "strictEqual", 2, assert_equal);
+    mal_intrinsic_define_method_n(vm, object, "notEqual", 2, assert_not_equal);
+    mal_intrinsic_define_method_n(vm, object, "notStrictEqual", 2, assert_not_equal);
+    mal_intrinsic_define_method_n(vm, object, "deepEqual", 2, assert_deep_equal);
+    mal_intrinsic_define_method_n(vm, object, "deepStrictEqual", 2, assert_deep_equal);
+    mal_intrinsic_define_method_n(vm, object, "notDeepEqual", 2, assert_not_deep_equal);
+    mal_intrinsic_define_method_n(vm, object, "notDeepStrictEqual", 2, assert_not_deep_equal);
+    mal_intrinsic_define_method_n(vm, object, "match", 2, assert_match);
+    mal_intrinsic_define_method_n(vm, object, "doesNotMatch", 2, assert_does_not_match);
+    mal_intrinsic_define_method_n(vm, object, "fail", 1, assert_fail_method);
+    mal_intrinsic_define_method_n(vm, object, "ifError", 1, assert_if_error);
 }
 
 static MalValue assertion_error_constructor(
@@ -210,16 +291,7 @@ void mal_host_install_node_assert(
             vm, object, "ok", roots[0], NODE_ASSERT_VISIBLE);
         mal_intrinsic_define_data(
             vm, object, "AssertionError", roots[2], NODE_ASSERT_VISIBLE);
-        mal_intrinsic_define_method_n(
-            vm, object, "equal", 2, assert_equal);
-        mal_intrinsic_define_method_n(
-            vm, object, "strictEqual", 2, assert_equal);
-        mal_intrinsic_define_method_n(
-            vm, object, "deepEqual", 2, assert_deep_equal);
-        mal_intrinsic_define_method_n(
-            vm, object, "deepStrictEqual", 2, assert_deep_equal);
-        mal_intrinsic_define_method_n(
-            vm, object, "match", 2, assert_match);
+        install_assert_methods(vm, object);
         vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_MODULE] = roots[0];
         mal_gc_unroot(&root);
     }
@@ -232,16 +304,15 @@ void mal_host_install_node_assert_strict(
     (void) launch;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_STRICT_MODULE];
     if (mal_value_is_undefined(module)) {
-        module = mal_value_from_object(mal_intrinsic_new_object(vm));
+        module = mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, "ok"), 0, assert_ok));
         MalRootSpan root;
         mal_gc_root(&root, &module, 1);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "equal", 2, assert_equal);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "deepEqual", 2,
-            assert_deep_equal);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "match", 2, assert_match);
+        MalObject *object = mal_value_to_object(module);
+        mal_intrinsic_define_data(vm, object, "ok", module, NODE_ASSERT_VISIBLE);
+        install_assert_methods(vm, object);
         vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_STRICT_MODULE] = module;
         mal_gc_unroot(&root);
     }
