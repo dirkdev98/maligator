@@ -61,6 +61,7 @@ streams/readable-byte-streams/enqueue-with-detached-buffer.any.js
 streams/readable-byte-streams/general.any.js
 streams/readable-byte-streams/read-min.any.js
 streams/readable-byte-streams/respond-after-enqueue.any.js
+streams/readable-byte-streams/tee.any.js
 streams/readable-byte-streams/templated.any.js
 streams/readable-streams/bad-strategies.any.js
 streams/readable-streams/bad-underlying-sources.any.js

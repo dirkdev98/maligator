@@ -998,6 +998,50 @@ async function run() {
 	}
 	check("close is one-shot", secondClose);
 
+	const queuedByteTeeSource = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			controller.enqueue(new Uint8Array([1]));
+			controller.enqueue(new Uint8Array([2]));
+			controller.close();
+		},
+	});
+	const [queuedByteBranch1, queuedByteBranch2] = queuedByteTeeSource.tee();
+	const queuedByteReader1 = queuedByteBranch1.getReader({ mode: "byob" });
+	const queuedByteReader2 = queuedByteBranch2.getReader({ mode: "byob" });
+	let queuedByteReader2Closed = false;
+	queuedByteReader2.closed.then(() => {
+		queuedByteReader2Closed = true;
+	});
+	const queuedByteTimeout = new Promise((resolve) => {
+		setTimeout(() => resolve({ timeout: true }), 100);
+	});
+	const queuedByteFirst = await Promise.race([
+		queuedByteReader1.read(new Uint8Array(1)),
+		queuedByteTimeout,
+	]);
+	const queuedByteSecond = await Promise.race([
+		queuedByteReader1.read(new Uint8Array(1)),
+		queuedByteTimeout,
+	]);
+	const queuedByteDone = await Promise.race([
+		queuedByteReader1.read(new Uint8Array(1)),
+		queuedByteTimeout,
+	]);
+	check("byte tee first queued chunk", queuedByteFirst.value?.[0] === 1);
+	check("byte tee second queued chunk", queuedByteSecond.value?.[0] === 2);
+	check("byte tee closes after queued chunks", queuedByteDone.done === true);
+	const queuedByteOtherFirst = await queuedByteReader2.read(new Uint8Array(1));
+	await tick();
+	check(
+		"byte tee keeps a queued peer branch open",
+		queuedByteOtherFirst.value?.[0] === 1 && !queuedByteReader2Closed,
+	);
+	check(
+		"byte tee closes the drained branch reader",
+		(await queuedByteReader1.closed) === undefined,
+	);
+
 	const sharedChunk = { marker: 42 };
 	const publicTeeSource = new ReadableStream({
 		start(controller) {

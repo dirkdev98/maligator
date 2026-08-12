@@ -651,6 +651,41 @@ static bool rs_copy_byte_chunk(MalVm *vm, MalValue chunk, MalValue *chunk_out) {
     return true;
 }
 
+static bool rs_clone_byte_chunk(MalVm *vm, MalValue chunk, MalValue *chunk_out) {
+    MalBufferSourceSpan source;
+    if (mal_buffer_source_span(chunk, &source) !=
+            MAL_BUFFER_SOURCE_SPAN_OK ||
+        source.length > UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot clone a detached byte stream chunk");
+        return false;
+    }
+    MalValue roots[2] = {chunk, mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        (u32) source.length, (u32) source.length, false, false);
+    roots[1] = mal_value_from_array_buffer_object(buffer);
+    if (source.length > 0 && buffer->data == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Byte stream clone allocation failed");
+        mal_gc_unroot(&span);
+        return false;
+    }
+    if (source.length > 0) {
+        memcpy(buffer->data, source.data, source.length);
+    }
+    *chunk_out = mal_value_from_typed_array_object(
+        mal_typed_array_object_new(&vm->heap,
+            mal_value_to_object(vm->intrinsics[
+                MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+            buffer, MAL_TA_UINT8, 0, (u32) source.length, false));
+    mal_gc_unroot(&span);
+    return true;
+}
+
 static bool rs_should_call_pull(MalReadableStreamObject *controller) {
     MalReadableStreamObject *stream =
         mal_value_to_readable_stream_object(controller->as.controller.stream);
@@ -3494,8 +3529,11 @@ static void rs_tee_error_active_branches(
         if (rs_tee_branch_canceled(state, branch)) continue;
         MalValue controller = rs_tee_branch_controller(state, branch);
         if (!mal_value_is_undefined(controller)) {
-            (void) rs_controller_error(vm, controller, &error, 1,
-                mal_value_new_undefined(), mal_value_new_undefined());
+            MalReadableStreamObject *branch_controller =
+                mal_value_to_readable_stream_object(controller);
+            (void) rs_controller_error_kind(vm, controller, &error, 1,
+                branch_controller->kind,
+                (const byte *) "ReadableStream tee branch controller is invalid");
         }
     }
 }
@@ -3520,11 +3558,36 @@ static MalValue rs_tee_reader_closed_rejected(MalVm *vm, MalValue self,
     (void) self;
     (void) nt;
     MalNativeFunctionObject *callback = mal_value_to_native_function_object(callee);
-    MalNativeFunctionObject *state = mal_value_to_native_function_object(
-        mal_native_function_object_get_slot(callback, 0));
+    MalValue state_value = mal_native_function_object_get_slot(callback, 0);
+    MalNativeFunctionObject *state =
+        mal_value_to_native_function_object(state_value);
+    if (mal_native_function_object_get_slot(callback, 1) !=
+        mal_native_function_object_get_slot(state, RS_TEE_READER)) {
+        return mal_value_new_undefined();
+    }
     rs_tee_fail(vm, state,
         argc >= 1 ? args[0] : mal_value_new_undefined());
     return mal_value_new_undefined();
+}
+
+static void rs_tee_watch_reader(MalVm *vm, MalValue state, MalValue reader) {
+    MalValue roots[3] = {state, reader, mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    MalValue slots[2] = {roots[0], roots[1]};
+    roots[2] = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[
+                MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            nullptr, rs_tee_reader_closed_rejected, slots, 2));
+    MalReadableStreamObject *reader_object =
+        mal_value_to_readable_stream_object(roots[1]);
+    mal_value_to_promise_object(
+        reader_object->as.reader.closed_promise)->is_handled = true;
+    mal_promise_perform_then(vm, reader_object->as.reader.closed_promise,
+        mal_value_new_undefined(), roots[2],
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&span);
 }
 
 static MalValue rs_tee_read_fulfilled(MalVm *vm, MalValue self,
@@ -3557,8 +3620,25 @@ static MalValue rs_tee_read_fulfilled(MalVm *vm, MalValue self,
             if (rs_tee_branch_canceled(state, branch)) continue;
             MalValue controller = rs_tee_branch_controller(state, branch);
             if (!mal_value_is_undefined(controller)) {
-                (void) rs_controller_close(vm, controller, nullptr, 0,
-                    mal_value_new_undefined(), mal_value_new_undefined());
+                MalReadableStreamObject *branch_controller =
+                    mal_value_to_readable_stream_object(controller);
+                (void) rs_controller_close_kind(vm, controller,
+                    branch_controller->kind,
+                    (const byte *) "ReadableStream tee branch controller is invalid");
+                if (branch_controller->kind ==
+                    MAL_READABLE_BYTE_STREAM_CONTROLLER) {
+                    MalValue byob_request = rs_byte_controller_get_byob_request(
+                        vm, controller, nullptr, 0,
+                        mal_value_new_undefined(),
+                        mal_value_new_undefined());
+                    MalValue zero = mal_value_from_i32(0);
+                    if (rs_is_kind(byob_request,
+                            MAL_READABLE_STREAM_BYOB_REQUEST)) {
+                        (void) rs_byob_request_respond(vm, byob_request,
+                            &zero, 1, mal_value_new_undefined(),
+                            mal_value_new_undefined());
+                    }
+                }
             }
         }
         // Canceling the original stream resolves its pending read before the
@@ -3583,6 +3663,27 @@ static MalValue rs_tee_read_fulfilled(MalVm *vm, MalValue self,
             vm, state, false, mal_value_new_undefined());
         return mal_value_new_undefined();
     }
+    MalValue byte_clone = mal_value_new_undefined();
+    MalRootSpan byte_clone_span;
+    mal_gc_root(&byte_clone_span, &byte_clone, 1);
+    bool branch1_active = !rs_tee_branch_canceled(state, 1);
+    bool branch2_active = !rs_tee_branch_canceled(state, 2);
+    MalValue first_controller = rs_tee_branch_controller(state, 1);
+    bool byte_tee = !mal_value_is_undefined(first_controller) &&
+        mal_value_to_readable_stream_object(first_controller)->kind ==
+            MAL_READABLE_BYTE_STREAM_CONTROLLER;
+    if (byte_tee && branch1_active && branch2_active &&
+        !rs_clone_byte_chunk(vm, chunk, &byte_clone)) {
+        MalValue error = vm->completion.value;
+        vm->completion = rs_normal();
+        mal_native_function_object_set_slot(
+            state, RS_TEE_CLOSED, mal_value_new_boolean(true));
+        rs_tee_error_active_branches(vm, state, error);
+        rs_tee_settle_cancellations(
+            vm, state, false, mal_value_new_undefined());
+        mal_gc_unroot(&byte_clone_span);
+        return mal_value_new_undefined();
+    }
     for (i32 branch = 1; branch <= 2; branch++) {
         if (rs_tee_branch_canceled(state, branch)) continue;
         MalValue controller = rs_tee_branch_controller(state, branch);
@@ -3590,44 +3691,13 @@ static MalValue rs_tee_read_fulfilled(MalVm *vm, MalValue self,
         MalReadableStreamObject *branch_controller =
             mal_value_to_readable_stream_object(controller);
         if (branch_controller->kind == MAL_READABLE_BYTE_STREAM_CONTROLLER) {
-            MalBufferSourceSpan source;
-            if (mal_buffer_source_span(chunk, &source) !=
-                    MAL_BUFFER_SOURCE_SPAN_OK ||
-                source.length > UINT32_MAX) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                    "Byte stream tee received a detached chunk");
-            } else {
-                MalArrayBufferObject *buffer = mal_array_buffer_object_new(
-                    &vm->heap,
-                    mal_value_to_object(vm->intrinsics[
-                        MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-                    (u32) source.length, (u32) source.length, false, false);
-                MalValue branch_chunk =
-                    mal_value_from_array_buffer_object(buffer);
-                MalRootSpan branch_span;
-                mal_gc_root(&branch_span, &branch_chunk, 1);
-                if (source.length > 0 && buffer->data == nullptr) {
-                    mal_vm_throw_error(vm,
-                        MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                        "Byte stream tee chunk allocation failed");
-                } else {
-                    if (source.length > 0) {
-                        memcpy(buffer->data, source.data, source.length);
-                    }
-                    branch_chunk = mal_value_from_typed_array_object(
-                        mal_typed_array_object_new(&vm->heap,
-                            mal_value_to_object(vm->intrinsics[
-                                MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
-                            buffer, MAL_TA_UINT8, 0,
-                            (u32) source.length, false));
-                    (void) rs_controller_enqueue_kind(vm, controller,
-                        &branch_chunk, 1,
-                        MAL_READABLE_BYTE_STREAM_CONTROLLER,
-                        (const byte *) "ReadableByteStreamController.enqueue called on incompatible receiver",
-                        true);
-                }
-                mal_gc_unroot(&branch_span);
-            }
+            MalValue branch_chunk = branch == 2 && branch1_active
+                ? byte_clone : chunk;
+            (void) rs_controller_enqueue_kind(vm, controller,
+                &branch_chunk, 1,
+                MAL_READABLE_BYTE_STREAM_CONTROLLER,
+                (const byte *) "ReadableByteStreamController.enqueue called on incompatible receiver",
+                true);
         } else {
             (void) rs_controller_enqueue(vm, controller, &chunk, 1,
                 mal_value_new_undefined(), mal_value_new_undefined());
@@ -3643,6 +3713,7 @@ static MalValue rs_tee_read_fulfilled(MalVm *vm, MalValue self,
             break;
         }
     }
+    mal_gc_unroot(&byte_clone_span);
     return mal_value_new_undefined();
 }
 
@@ -3711,22 +3782,52 @@ static MalValue rs_tee_pull(MalVm *vm, MalValue self, const MalValue *args,
         mal_native_function_object_get_slot(state, RS_TEE_READER);
     MalReadableStreamObject *source_reader =
         mal_value_to_readable_stream_object(reader_value);
-    MalValue promise;
-    if (source_reader->kind == MAL_READABLE_STREAM_BYOB_READER && argc >= 1) {
-        MalReadableStreamObject *branch_controller =
-            mal_value_to_readable_stream_object(args[0]);
-        MalReadableStreamObject *branch_stream =
-            mal_value_to_readable_stream_object(
-                branch_controller->as.controller.stream);
-        MalReadableStreamObject *branch_reader = rs_reader_for(branch_stream);
-        MalReadableStreamReadRequest *branch_request = branch_reader == nullptr
-            ? nullptr : branch_reader->as.reader.requests_head;
-        if (branch_request == nullptr ||
-            !mal_value_is_typed_array_object(branch_request->view)) {
+    MalReadableStreamObject *branch_controller = argc >= 1
+        ? mal_value_to_readable_stream_object(args[0]) : nullptr;
+    MalReadableStreamObject *branch_stream = branch_controller == nullptr
+        ? nullptr : mal_value_to_readable_stream_object(
+              branch_controller->as.controller.stream);
+    MalReadableStreamObject *branch_reader = branch_stream == nullptr
+        ? nullptr : rs_reader_for(branch_stream);
+    MalReadableStreamReadRequest *branch_request = branch_reader == nullptr
+        ? nullptr : branch_reader->as.reader.requests_head;
+    bool byob_pull = branch_request != nullptr &&
+        mal_value_is_typed_array_object(branch_request->view);
+    MalReadableStreamKind desired_reader_kind = byob_pull
+        ? MAL_READABLE_STREAM_BYOB_READER
+        : MAL_READABLE_STREAM_DEFAULT_READER;
+    if (source_reader->kind != desired_reader_kind) {
+        MalReadableStreamObject *source_stream =
+            mal_value_to_readable_stream_object(source_reader->as.reader.stream);
+        MalValue switch_roots[2] = {
+            state_value, mal_value_from_readable_stream_object(source_stream),
+        };
+        MalRootSpan switch_span;
+        mal_gc_root(&switch_span, switch_roots, 2);
+        (void) rs_reader_release_lock(vm, reader_value, nullptr, 0,
+            mal_value_new_undefined(), mal_value_new_undefined());
+        source_reader = desired_reader_kind == MAL_READABLE_STREAM_BYOB_READER
+            ? rs_acquire_reader_kind(vm, source_stream,
+                mal_value_to_object(vm->intrinsics[
+                    MAL_INTRINSIC_READABLE_STREAM_BYOB_READER_PROTOTYPE]),
+                desired_reader_kind)
+            : rs_acquire_reader(vm, source_stream,
+                mal_value_to_object(vm->intrinsics[
+                    MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_PROTOTYPE]));
+        if (source_reader == nullptr) {
             mal_native_function_object_set_slot(
                 state, RS_TEE_READING, mal_value_new_boolean(false));
+            mal_gc_unroot(&switch_span);
             return mal_value_new_undefined();
         }
+        reader_value = mal_value_from_readable_stream_object(source_reader);
+        mal_native_function_object_set_slot(
+            state, RS_TEE_READER, reader_value);
+        rs_tee_watch_reader(vm, state_value, reader_value);
+        mal_gc_unroot(&switch_span);
+    }
+    MalValue promise;
+    if (byob_pull) {
         MalTypedArrayObject *destination =
             mal_value_to_typed_array_object(branch_request->view);
         u32 capacity = mal_typed_array_object_byte_length(destination) -
@@ -3734,6 +3835,16 @@ static MalValue rs_tee_pull(MalVm *vm, MalValue self, const MalValue *args,
         MalValue read_args[1] = {rs_auto_allocate_view(vm, capacity)};
         MalRootSpan read_span;
         mal_gc_root(&read_span, read_args, 1);
+        MalBufferSourceSpan source_span;
+        MalBufferSourceSpan read_span_bytes;
+        if (mal_buffer_source_span(branch_request->view, &source_span) ==
+                MAL_BUFFER_SOURCE_SPAN_OK &&
+            mal_buffer_source_span(read_args[0], &read_span_bytes) ==
+                MAL_BUFFER_SOURCE_SPAN_OK &&
+            capacity > 0) {
+            memcpy(read_span_bytes.data,
+                source_span.data + branch_request->bytes_filled, capacity);
+        }
         promise = rs_reader_read(vm, reader_value, read_args, 1,
             mal_value_new_undefined(), mal_value_new_undefined());
         mal_gc_unroot(&read_span);
@@ -3864,6 +3975,14 @@ static MalValue rs_tee_make_branch(
         constructor_argc,
         vm->intrinsics[MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR],
         mal_value_new_undefined());
+    if (rs_is_kind(roots[4], MAL_READABLE_STREAM)) {
+        MalReadableStreamObject *stream =
+            mal_value_to_readable_stream_object(roots[4]);
+        mal_native_function_object_set_slot(
+            mal_value_to_native_function_object(roots[0]),
+            branch == 1 ? RS_TEE_CONTROLLER_1 : RS_TEE_CONTROLLER_2,
+            stream->as.stream.controller);
+    }
     MalValue result = roots[4];
     mal_gc_unroot(&span);
     return result;
@@ -3918,10 +4037,7 @@ bool mal_readable_stream_tee(
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
     roots[4] = rs_tee_make_branch(vm, roots[2], 2, byte_stream);
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
-    roots[5] = rs_callback(vm, rs_tee_reader_closed_rejected, roots[2]);
-    mal_promise_perform_then(vm, reader->as.reader.closed_promise,
-        mal_value_new_undefined(), roots[5],
-        mal_value_new_undefined(), mal_value_new_undefined());
+    rs_tee_watch_reader(vm, roots[2], roots[1]);
     if (byte_stream) {
         mal_value_to_readable_stream_object(roots[3])->as.stream.byte_stream = true;
         mal_value_to_readable_stream_object(roots[4])->as.stream.byte_stream = true;
