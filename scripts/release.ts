@@ -8,10 +8,13 @@ import {
 	mkdirSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { buildProductCli } from "../src/product-builder.ts";
+import { resolvePathExecutable } from "../src/toolchain.ts";
 import { createReleaseArchive } from "./release-archive.ts";
 import { nextAlphaVersion } from "./release-version.ts";
 
@@ -385,12 +388,97 @@ function smokeRelease(): void {
 			`host release binary is missing; run \`npm run release:build -- --target ${target.rust}\``,
 		);
 	}
-	const output = execFileSync(binary, ["--version"], {
-		cwd: releaseRoot,
-		encoding: "utf-8",
-	});
-	if (output.trim() !== version) {
-		throw new Error(`host release binary reported ${output.trim()}, expected ${version}`);
+	const smokeRoot = mkdtempSync(path.join(os.tmpdir(), "maligator-release-smoke-"));
+	const project = path.join(smokeRoot, "project");
+	const tools = path.join(smokeRoot, "tools");
+	mkdirSync(project);
+	mkdirSync(tools);
+
+	const originalPath = process.env.PATH ?? "";
+	const rustup = resolvePathExecutable("rustup", originalPath);
+	const rustDirectory = path.join(repositoryRoot, "runtime/rust");
+	const requiredTools: Array<[string, string]> = [
+		["cc", process.env.CC?.trim() || "cc"],
+		["c++", process.env.CXX?.trim() || "c++"],
+		["ar", "ar"],
+		["rustup", rustup],
+		[
+			"cargo",
+			execFileSync(rustup, ["which", "cargo"], {
+				cwd: rustDirectory,
+				encoding: "utf-8",
+			}).trim(),
+		],
+		[
+			"rustc",
+			execFileSync(rustup, ["which", "rustc"], {
+				cwd: rustDirectory,
+				encoding: "utf-8",
+			}).trim(),
+		],
+	];
+	for (const [name, executable] of requiredTools) {
+		const source = executable.includes(path.sep)
+			? executable
+			: resolvePathExecutable(executable, originalPath);
+		symlinkSync(source, path.join(tools, name));
+	}
+	for (const optional of ["strip", "make", "ninja", "ranlib"]) {
+		try {
+			symlinkSync(
+				resolvePathExecutable(optional, originalPath),
+				path.join(tools, optional),
+			);
+		} catch {
+			// Optional accelerators must not prevent the release smoke from running.
+		}
+	}
+
+	const environment = {
+		...process.env,
+		PATH: tools,
+		CC: path.join(tools, "cc"),
+		CXX: path.join(tools, "c++"),
+	};
+	const invoke = (args: Array<string>): string =>
+		execFileSync(binary, args, {
+			cwd: project,
+			env: environment,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+
+	try {
+		if (!invoke(["--help"]).includes("maligator <command>")) {
+			throw new Error("host release binary did not print CLI help");
+		}
+		const reportedVersion = invoke(["--version"]).trim();
+		if (reportedVersion !== version) {
+			throw new Error(
+				`host release binary reported ${reportedVersion}, expected ${version}`,
+			);
+		}
+		if (!invoke(["doctor"]).includes("Toolchain is ready.")) {
+			throw new Error("host release binary did not accept the isolated toolchain");
+		}
+		invoke(["init"]);
+		writeFileSync(
+			path.join(project, "maligator.build.ts"),
+			`export default { entry: "main.ts", outputName: "release-smoke" };\n`,
+		);
+		writeFileSync(path.join(project, "main.ts"), `console.log("release smoke app");\n`);
+		const artifact = path.join(smokeRoot, "application");
+		invoke(["build", "--production", "--artifact", artifact]);
+		const applicationOutput = execFileSync(path.join(artifact, "bin/release-smoke"), [], {
+			cwd: smokeRoot,
+			env: { PATH: tools },
+			encoding: "utf-8",
+		});
+		if (applicationOutput.trim() !== "release smoke app") {
+			throw new Error(`release-built application reported ${applicationOutput.trim()}`);
+		}
+	} finally {
+		rmSync(smokeRoot, { recursive: true, force: true });
 	}
 	console.log(`Host release smoke passed: ${target.rust}`);
 }
