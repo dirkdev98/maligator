@@ -8,15 +8,19 @@
 #if MAL_NODE
 
 #include "array_object.h"
+#include "array_buffer_object.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "iterator_object.h"
+#include "map_object.h"
 #include "object.h"
 #include "object_ops.h"
 #include "property_iter.h"
 #include "property_store.h"
 #include "promise_object.h"
+#include "typed_array_object.h"
 #include "u16_buffer.h"
 #include "value.h"
 #include "value_ops.h"
@@ -615,6 +619,99 @@ static MalValue util_types_is_promise(
         argc > 0 && mal_value_is_promise_object(args[0]));
 }
 
+typedef bool (*MalUtilTypePredicate)(MalValue value);
+
+static MalValue util_type_predicate_result(
+    const MalValue *args, i32 argc, MalUtilTypePredicate predicate) {
+    return mal_value_new_boolean(argc > 0 && predicate(args[0]));
+}
+
+#define UTIL_TYPE_PREDICATE(name, expression) \
+    static bool util_type_check_##name(MalValue value) { return (expression); } \
+    static MalValue util_types_##name( \
+        MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, \
+        MalValue new_target, MalValue callee) { \
+        (void) vm; (void) receiver; (void) new_target; (void) callee; \
+        return util_type_predicate_result(args, argc, util_type_check_##name); \
+    }
+
+UTIL_TYPE_PREDICATE(is_any_array_buffer, mal_value_is_array_buffer_object(value))
+UTIL_TYPE_PREDICATE(is_array_buffer,
+    mal_value_is_array_buffer_object(value)
+        && !mal_value_to_array_buffer_object(value)->shared)
+UTIL_TYPE_PREDICATE(is_shared_array_buffer,
+    mal_value_is_array_buffer_object(value)
+        && mal_value_to_array_buffer_object(value)->shared)
+UTIL_TYPE_PREDICATE(is_data_view, mal_value_is_data_view_object(value))
+UTIL_TYPE_PREDICATE(is_date, mal_value_is_date_object(value))
+UTIL_TYPE_PREDICATE(is_map,
+    mal_value_is_map_object(value) && !mal_value_to_map_object(value)->weak)
+UTIL_TYPE_PREDICATE(is_set,
+    mal_value_is_set_object(value) && !mal_value_to_map_object(value)->weak)
+UTIL_TYPE_PREDICATE(is_weak_map,
+    mal_value_is_map_object(value) && mal_value_to_map_object(value)->weak)
+UTIL_TYPE_PREDICATE(is_weak_set,
+    mal_value_is_set_object(value) && mal_value_to_map_object(value)->weak)
+UTIL_TYPE_PREDICATE(is_reg_exp, mal_value_is_regexp_object(value))
+UTIL_TYPE_PREDICATE(is_typed_array, mal_value_is_typed_array_object(value))
+UTIL_TYPE_PREDICATE(is_boxed_primitive, mal_value_is_primitive_wrapper(value))
+UTIL_TYPE_PREDICATE(is_map_iterator,
+    mal_value_is_iterator_object(value)
+        && mal_value_to_iterator_object(value)->kind <= MAL_ITERATOR_MAP_ENTRIES)
+UTIL_TYPE_PREDICATE(is_set_iterator,
+    mal_value_is_iterator_object(value)
+        && mal_value_to_iterator_object(value)->kind >= MAL_ITERATOR_SET_VALUES
+        && mal_value_to_iterator_object(value)->kind <= MAL_ITERATOR_SET_ENTRIES)
+
+#define UTIL_TYPED_ARRAY_PREDICATE(name, expected_kind) \
+    UTIL_TYPE_PREDICATE(name, mal_value_is_typed_array_object(value) \
+        && mal_value_to_typed_array_object(value)->kind == (expected_kind))
+
+UTIL_TYPED_ARRAY_PREDICATE(is_int8_array, MAL_TA_INT8)
+UTIL_TYPED_ARRAY_PREDICATE(is_uint8_array, MAL_TA_UINT8)
+UTIL_TYPED_ARRAY_PREDICATE(is_uint8_clamped_array, MAL_TA_UINT8_CLAMPED)
+UTIL_TYPED_ARRAY_PREDICATE(is_int16_array, MAL_TA_INT16)
+UTIL_TYPED_ARRAY_PREDICATE(is_uint16_array, MAL_TA_UINT16)
+UTIL_TYPED_ARRAY_PREDICATE(is_int32_array, MAL_TA_INT32)
+UTIL_TYPED_ARRAY_PREDICATE(is_uint32_array, MAL_TA_UINT32)
+UTIL_TYPED_ARRAY_PREDICATE(is_float32_array, MAL_TA_FLOAT32)
+UTIL_TYPED_ARRAY_PREDICATE(is_float64_array, MAL_TA_FLOAT64)
+UTIL_TYPED_ARRAY_PREDICATE(is_big_int64_array, MAL_TA_BIGINT64)
+UTIL_TYPED_ARRAY_PREDICATE(is_big_uint64_array, MAL_TA_BIGUINT64)
+
+typedef struct MalNodeUtilTypeExport {
+    const char *name;
+    MalNativeFunctionCallback callback;
+} MalNodeUtilTypeExport;
+
+static const MalNodeUtilTypeExport util_type_exports[] = {
+    {"isAnyArrayBuffer", util_types_is_any_array_buffer},
+    {"isArrayBuffer", util_types_is_array_buffer},
+    {"isSharedArrayBuffer", util_types_is_shared_array_buffer},
+    {"isDataView", util_types_is_data_view},
+    {"isDate", util_types_is_date},
+    {"isMap", util_types_is_map},
+    {"isSet", util_types_is_set},
+    {"isWeakMap", util_types_is_weak_map},
+    {"isWeakSet", util_types_is_weak_set},
+    {"isRegExp", util_types_is_reg_exp},
+    {"isTypedArray", util_types_is_typed_array},
+    {"isBoxedPrimitive", util_types_is_boxed_primitive},
+    {"isMapIterator", util_types_is_map_iterator},
+    {"isSetIterator", util_types_is_set_iterator},
+    {"isInt8Array", util_types_is_int8_array},
+    {"isUint8Array", util_types_is_uint8_array},
+    {"isUint8ClampedArray", util_types_is_uint8_clamped_array},
+    {"isInt16Array", util_types_is_int16_array},
+    {"isUint16Array", util_types_is_uint16_array},
+    {"isInt32Array", util_types_is_int32_array},
+    {"isUint32Array", util_types_is_uint32_array},
+    {"isFloat32Array", util_types_is_float32_array},
+    {"isFloat64Array", util_types_is_float64_array},
+    {"isBigInt64Array", util_types_is_big_int64_array},
+    {"isBigUint64Array", util_types_is_big_uint64_array},
+};
+
 static MalValue util_debug_noop(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -784,6 +881,15 @@ void mal_host_install_node_util(
 			util_types_is_promise));
 	mal_intrinsic_define_data(vm, mal_value_to_object(values[types_index]),
 		(const byte *) "isPromise", values[namespace_index], UTIL_VISIBLE);
+	for (usize i = 0; i < countof(util_type_exports); i++) {
+		const MalNodeUtilTypeExport *export = &util_type_exports[i];
+		values[namespace_index] = mal_value_from_native_function_object(
+			mal_native_function_object_new_arity(&vm->heap, function_prototype,
+				mal_intrinsic_ascii(vm, (const byte *) export->name), 1,
+				export->callback));
+		mal_intrinsic_define_data(vm, mal_value_to_object(values[types_index]),
+			(const byte *) export->name, values[namespace_index], UTIL_VISIBLE);
+	}
 	values[namespace_index] = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalObject *namespace = mal_value_to_object(values[namespace_index]);
     for (usize i = 0; i < countof(util_exports); i++) {
