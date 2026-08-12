@@ -313,10 +313,12 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	// residual identity-observed objects left after scalar replacement, and keys
 	// the proof to the exact allocation instruction before register reuse.
 	const residualFeatures = optimizationFeatures(program);
-	if (residualFeatures.object) annotateStackObjectSites(program);
-	if (residualFeatures.property) optStaticPropertyKeys(program);
 	if (residualFeatures.call && residualFeatures.property)
 		annotateDirectArrayPushSites(program);
+	if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
+		annotateCardinalityOnlyArrayRegions(program);
+	if (residualFeatures.object) annotateStackObjectSites(program);
+	if (residualFeatures.property) optStaticPropertyKeys(program);
 	if (residualFeatures.call && residualFeatures.property)
 		annotateDirectStringCharCodeAtSites(program);
 	if (residualFeatures.call && residualFeatures.property)
@@ -1505,6 +1507,276 @@ function optImmediateCallOperands(program: IntermediateProgram): boolean {
 }
 
 /**
+ * Mark a bounded fresh array whose complete observable contract is one direct
+ * `push(record)` site plus post-loop `length` reads. Native code may keep only a
+ * rooted scalar record history and materialize the real array/records if the
+ * live `%Array.prototype.push%` guard ever rejects. The interpreter ignores the
+ * annotations and executes the original array program.
+ */
+function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void {
+	for (const fn of program.functions) {
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			functionUsesWith(fn) ||
+			fn.semanticFile.hasDirectEval.size > 0
+		) {
+			continue;
+		}
+		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
+		const locations = registerIndex.locations!;
+		const definitions = registerIndex.uniqueDefinitions;
+		const usesOf = registerIndex.uses;
+		const incoming = fn.blocks.map(() => new Set<number>());
+		const successors = fn.blocks.map((block, blockIndex) => {
+			const result = new Set<number>();
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "jump" && instruction.type !== "jumpIf") continue;
+				for (const target of instruction.blocks) {
+					if (target >= 0 && target < fn.blocks.length) {
+						result.add(target);
+						incoming[target]!.add(blockIndex);
+					}
+				}
+			}
+			const last = block.instructions[block.instructions.length - 1];
+			if (
+				last?.type !== "jump" &&
+				last?.type !== "return" &&
+				last?.type !== "throw" &&
+				blockIndex + 1 < fn.blocks.length
+			) {
+				result.add(blockIndex + 1);
+				incoming[blockIndex + 1]!.add(blockIndex);
+			}
+			return result;
+		});
+		let nextRegionId = 0;
+
+		for (const block of fn.blocks) {
+			for (const allocation of block.instructions) {
+				if (
+					allocation.type !== "createArray" ||
+					allocation.length !== 0 ||
+					definitions.get(allocation.registers[0]) !== allocation
+				) {
+					continue;
+				}
+
+				const aliases = new Set<number>([allocation.registers[0]]);
+				const worklist = [allocation.registers[0]];
+				const pushLoads: Array<Extract<IRInstruction, { type: "loadProperty" }>> = [];
+				const lengthLoads: Array<Extract<IRInstruction, { type: "loadProperty" }>> = [];
+				const pushCalls = new Set<Extract<IRInstruction, { type: "call" }>>();
+				let safe = true;
+				while (safe && worklist.length > 0) {
+					const alias = worklist.pop()!;
+					for (const use of usesOf.get(alias) ?? []) {
+						if (use.instruction.type === "move" && use.position === 1) {
+							const target = use.instruction.registers[0];
+							if (definitions.get(target) !== use.instruction) {
+								safe = false;
+								break;
+							}
+							if (!aliases.has(target)) {
+								aliases.add(target);
+								worklist.push(target);
+							}
+							continue;
+						}
+						if (
+							use.instruction.type === "call" &&
+							use.position === 2 &&
+							use.instruction.directArrayPush &&
+							use.instruction.registers.length === 4
+						) {
+							pushCalls.add(use.instruction);
+							continue;
+						}
+						if (use.instruction.type !== "loadProperty" || use.position !== 1) {
+							safe = false;
+							break;
+						}
+						const key = definitions.get(use.instruction.registers[2]);
+						if (key?.type !== "createString") {
+							safe = false;
+							break;
+						}
+						const name = decodeStringConstant(program, key.stringIndex);
+						if (name === "length") {
+							lengthLoads.push(use.instruction);
+							continue;
+						}
+						if (name !== "push") {
+							safe = false;
+							break;
+						}
+						const calleeUses = usesOf.get(use.instruction.registers[0]) ?? [];
+						if (
+							calleeUses.length !== 1 ||
+							calleeUses[0]!.position !== 1 ||
+							calleeUses[0]!.instruction.type !== "call"
+						) {
+							safe = false;
+							break;
+						}
+						const call = calleeUses[0]!.instruction;
+						if (
+							!call.directArrayPush ||
+							call.registers.length !== 4 ||
+							!aliases.has(call.registers[2]) ||
+							call.registers[3]! < 0
+						) {
+							safe = false;
+							break;
+						}
+						pushLoads.push(use.instruction);
+						pushCalls.add(call);
+					}
+				}
+				if (!safe || pushCalls.size !== 1 || lengthLoads.length === 0) continue;
+				const pushCall = [...pushCalls][0]!;
+				const receiverRegisters = new Set<number>([
+					pushCall.registers[2],
+					...pushLoads.map((load) => load.registers[1]),
+					...lengthLoads.map((load) => load.registers[1]),
+				]);
+				if (receiverRegisters.size !== 1) continue;
+				const callLocation = locations.get(pushCall);
+				if (callLocation === undefined) continue;
+				const bodyIndex = callLocation.blockIndex;
+				const bodyControls = fn.blocks[bodyIndex]!.instructions.filter(
+					(instruction) =>
+						instruction.type === "jump" ||
+						instruction.type === "jumpIf" ||
+						instruction.type === "return" ||
+						instruction.type === "throw",
+				);
+				if (bodyControls.length !== 1 || bodyControls[0]!.type !== "jump") continue;
+				const headerIndex = bodyControls[0]!.blocks[0];
+				if (
+					headerIndex === undefined ||
+					incoming[bodyIndex]!.size !== 1 ||
+					!incoming[bodyIndex]!.has(headerIndex)
+				) {
+					continue;
+				}
+				const header = fn.blocks[headerIndex]!;
+				const branches = header.instructions.filter(
+					(instruction) => instruction.type === "jumpIf",
+				);
+				const exits = header.instructions.filter(
+					(instruction) => instruction.type === "jump",
+				);
+				if (
+					branches.length !== 1 ||
+					branches[0]!.blocks[0] !== bodyIndex ||
+					exits.length !== 1
+				) {
+					continue;
+				}
+				const comparison = definitions.get(branches[0]!.registers[0]);
+				if (comparison?.type !== "binary" || comparison.operator !== "<") continue;
+				const counter = comparison.registers[1];
+				const bound = exactIntegerConstant(definitions.get(comparison.registers[2]));
+				const counterDefinitions = registerIndex.definitions.get(counter) ?? [];
+				const starts = counterDefinitions.filter(
+					({ instruction }) =>
+						instruction.type === "createNumber" || instruction.type === "createF64",
+				);
+				const increments = counterDefinitions.filter(
+					({ instruction }) =>
+						instruction.type === "unary" &&
+						instruction.operator === "increment" &&
+						instruction.registers[0] === counter &&
+						instruction.registers[1] === counter,
+				);
+				if (
+					bound === undefined ||
+					starts.length !== 1 ||
+					increments.length !== 1 ||
+					counterDefinitions.length !== 2
+				) {
+					continue;
+				}
+				const start = exactIntegerConstant(starts[0]!.instruction);
+				const startLocation = locations.get(starts[0]!.instruction);
+				const allocationLocation = locations.get(allocation);
+				if (
+					start === undefined ||
+					start < 0 ||
+					bound <= start ||
+					bound - start > 32 ||
+					startLocation === undefined ||
+					allocationLocation === undefined ||
+					startLocation.blockIndex !== allocationLocation.blockIndex ||
+					allocationLocation.instructionIndex >= startLocation.instructionIndex ||
+					incoming[headerIndex]!.size !== 2 ||
+					!incoming[headerIndex]!.has(startLocation.blockIndex) ||
+					!incoming[headerIndex]!.has(bodyIndex)
+				) {
+					continue;
+				}
+				const exitIndex = exits[0]!.blocks[0];
+				if (exitIndex === undefined) continue;
+				const afterExit = new Set<number>();
+				const reach = [exitIndex];
+				while (reach.length > 0) {
+					const current = reach.pop()!;
+					if (afterExit.has(current)) continue;
+					afterExit.add(current);
+					for (const successor of successors[current]!) reach.push(successor);
+				}
+				if (
+					lengthLoads.some((load) => {
+						const location = locations.get(load);
+						return location === undefined || !afterExit.has(location.blockIndex);
+					}) ||
+					pushLoads.some((load) => locations.get(load)?.blockIndex !== bodyIndex)
+				) {
+					continue;
+				}
+
+				let elementRegister = pushCall.registers[3]!;
+				const seenElements = new Set<number>();
+				while (!seenElements.has(elementRegister)) {
+					seenElements.add(elementRegister);
+					const definition = definitions.get(elementRegister);
+					if (definition?.type !== "move") break;
+					elementRegister = definition.registers[1];
+				}
+				const element = definitions.get(elementRegister);
+				if (
+					element?.type !== "createObjectShaped" ||
+					pushCall.registers[3] !== element.registers[0] ||
+					element.keyStringIndices.length === 0 ||
+					element.keyStringIndices.length > 8 ||
+					locations.get(element)?.blockIndex !== bodyIndex ||
+					(usesOf.get(element.registers[0]) ?? []).some(
+						({ instruction }) =>
+							instruction.type === "move" || instruction.type === "storeProperty",
+					)
+				) {
+					continue;
+				}
+
+				allocation.nativeCardinalityRegion = {
+					id: nextRegionId++,
+					maximumLength: bound - start,
+				};
+				for (const load of pushLoads) {
+					load.nativeCardinalityAccess = { role: "push", allocation };
+				}
+				for (const load of lengthLoads) {
+					load.nativeCardinalityAccess = { role: "length", allocation };
+				}
+				pushCall.nativeCardinalityPush = { allocation };
+			}
+		}
+	}
+}
+
+/**
  * Fold constant-string property keys into dedicated operations after all passes
  * that reason about the generic load/store shape have finished. DCE then removes
  * key-producing createString instructions that have no other consumers.
@@ -1538,6 +1810,7 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 								stackObjectSiteId: instruction.stackObjectSiteId,
 								stackObjectSlot: instruction.stackObjectSlot,
 								stackObjectInheritedSiteId: instruction.stackObjectInheritedSiteId,
+								nativeCardinalityAccess: instruction.nativeCardinalityAccess,
 							}
 						: {
 								type: "storePropertyStatic",
@@ -1578,6 +1851,9 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 			for (const instruction of block.instructions) {
 				if (instruction.type === "return") {
 					delete instruction.stackObjectMaterializeSiteId;
+				}
+				if (instruction.type === "call") {
+					delete instruction.cardinalityPushStackObjectSiteId;
 				}
 				if (
 					instruction.type === "createObject" ||
@@ -1750,6 +2026,7 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				const materializingReturns = new Set<
 					Extract<IRInstruction, { type: "return" }>
 				>();
+				const materializingCalls = new Set<Extract<IRInstruction, { type: "call" }>>();
 				let inheritedLoad: Extract<IRInstruction, { type: "loadProperty" }> | undefined;
 				let hasOwnStore = false;
 				let observed = false;
@@ -1826,6 +2103,18 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 							case "return":
 								if (position !== 0) safe = false;
 								else materializingReturns.add(use);
+								break;
+							case "call":
+								if (
+									position !== 3 ||
+									use.registers.length !== 4 ||
+									use.nativeCardinalityPush === undefined
+								) {
+									safe = false;
+								} else {
+									materializingCalls.add(use);
+									observed = true;
+								}
 								break;
 							default:
 								safe = false;
@@ -1967,6 +2256,9 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 						for (const instruction of materializingReturns) {
 							instruction.stackObjectMaterializeSiteId = siteId;
 						}
+					}
+					for (const instruction of materializingCalls) {
+						instruction.cardinalityPushStackObjectSiteId = siteId;
 					}
 					if (inheritedLoad !== undefined) {
 						inheritedLoad.stackObjectInheritedSiteId = siteId;

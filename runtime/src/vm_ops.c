@@ -581,6 +581,42 @@ MalValue mal_vm_materialize_stack_object(MalVm *vm, const MalObject *source) {
     return mal_value_from_object(object);
 }
 
+MalValue mal_vm_materialize_virtual_record_array(
+    MalVm *vm,
+    MalShape *shape,
+    const MalValue *values,
+    u32 count,
+    u32 slot_count
+) {
+    assert(shape != nullptr);
+    assert(slot_count >= 1 && slot_count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    assert(shape->inline_count == slot_count);
+    assert(count == 0 || values != nullptr);
+
+    MalValue roots[2] = { mal_vm_op_create_array(vm, 0), MAL_VALUE_UNDEFINED };
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return MAL_VALUE_UNDEFINED;
+    }
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    MalArrayObject *array = mal_value_to_array_object(roots[0]);
+    for (u32 i = 0; i < count; i++) {
+        roots[1] = mal_vm_create_object_shaped(
+            vm, shape, values + ((size_t) i * slot_count), slot_count);
+        if (vm->completion.kind == MAL_COMPLETION_THROW ||
+            !mal_array_object_dense_append_many(array, &roots[1], 1)) {
+            if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                mal_vm_throw_allocation_error(vm);
+            }
+            roots[0] = MAL_VALUE_UNDEFINED;
+            break;
+        }
+    }
+    MalValue result = roots[0];
+    mal_gc_unroot(&span);
+    return result;
+}
+
 MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue *values, u32 count) {
     // A static object literal: the final shape is known, so create the object
     // directly in that shape and bulk-fill its inline slots in key order, instead

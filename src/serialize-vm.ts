@@ -21,8 +21,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 23 for guarded finite-selector construction metadata.
-export const WIRE_VERSION = 23;
+// Bumped to 24 for native cardinality-region metadata.
+export const WIRE_VERSION = 24;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -627,7 +627,8 @@ export function serializeVmDefinition(
 						instruction.directCallTargetFunctionIndex !== undefined ||
 						instruction.directArrayPush === true ||
 						instruction.directStringCharCodeAt === true ||
-						instruction.directCollectionOp !== undefined
+						instruction.directCollectionOp !== undefined ||
+						instruction.nativeCardinalityPush !== undefined
 					);
 				}
 				if (instruction.opcode === "CONSTRUCT") {
@@ -635,12 +636,23 @@ export function serializeVmDefinition(
 				}
 				if (
 					instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC" ||
 					instruction.opcode === "STORE_PROPERTY"
 				) {
-					return instruction.nativeFiniteKey !== undefined;
+					return (
+						((instruction.opcode === "LOAD_PROPERTY" ||
+							instruction.opcode === "STORE_PROPERTY") &&
+							instruction.nativeFiniteKey !== undefined) ||
+						((instruction.opcode === "LOAD_PROPERTY" ||
+							instruction.opcode === "LOAD_PROPERTY_STATIC") &&
+							instruction.nativeCardinalityAccess !== undefined)
+					);
 				}
 				if (instruction.opcode === "CREATE_OBJECT") {
 					return instruction.nativeFiniteConstruction !== undefined;
+				}
+				if (instruction.opcode === "CREATE_ARRAY") {
+					return instruction.nativeCardinalityRegion !== undefined;
 				}
 				return (
 					instruction.opcode === "BINARY" &&
@@ -658,7 +670,8 @@ export function serializeVmDefinition(
 				w.u8(
 					(instruction.directFunctionCall === true ? 1 : 0) |
 						(instruction.directArrayPush === true ? 2 : 0) |
-						(instruction.directStringCharCodeAt === true ? 4 : 0),
+						(instruction.directStringCharCodeAt === true ? 4 : 0) |
+						(instruction.nativeCardinalityPush !== undefined ? 8 : 0),
 				);
 				w.u8(
 					instruction.directCollectionOp === undefined
@@ -669,6 +682,12 @@ export function serializeVmDefinition(
 								? 2
 								: 3,
 				);
+				if (instruction.nativeCardinalityPush !== undefined) {
+					w.i32(instruction.nativeCardinalityPush.allocationInstructionIndex);
+					w.i32(
+						instruction.nativeCardinalityPush.pushedStackObjectAllocationInstructionIndex,
+					);
+				}
 			} else if (instruction.opcode === "CONSTRUCT") {
 				w.u8(2);
 				w.i32(instruction.directFunctionIndex!);
@@ -689,6 +708,20 @@ export function serializeVmDefinition(
 				w.i32(instruction.nativeFiniteConstruction.icIndex);
 				w.i32Array(instruction.nativeFiniteConstruction.numberGuards);
 				w.i32Array(instruction.nativeFiniteConstruction.keyStringIndices);
+			} else if (
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC") &&
+				instruction.nativeCardinalityAccess !== undefined
+			) {
+				w.u8(9);
+				w.u8(instruction.nativeCardinalityAccess.role === "push" ? 1 : 2);
+				w.i32(instruction.nativeCardinalityAccess.allocationInstructionIndex);
+			} else if (
+				instruction.opcode === "CREATE_ARRAY" &&
+				instruction.nativeCardinalityRegion !== undefined
+			) {
+				w.u8(8);
+				w.i32(instruction.nativeCardinalityRegion.maximumLength);
 			} else if (
 				instruction.opcode === "BINARY" &&
 				instruction.nativeFiniteString !== undefined
@@ -1436,7 +1469,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				if (
 					directFunctionIndex < -1 ||
 					directCallTargetFunctionIndex < -1 ||
-					flags > 7 ||
+					flags > 15 ||
 					collectionTag > 3
 				) {
 					throw new RangeError("serialize-vm: invalid CALL compiler metadata");
@@ -1449,6 +1482,23 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				if ((flags & 1) !== 0) instruction.directFunctionCall = true;
 				if ((flags & 2) !== 0) instruction.directArrayPush = true;
 				if ((flags & 4) !== 0) instruction.directStringCharCodeAt = true;
+				if ((flags & 8) !== 0) {
+					const allocationInstructionIndex = r.i32();
+					const pushedStackObjectAllocationInstructionIndex = r.i32();
+					if (
+						fn.instructions[allocationInstructionIndex]?.opcode !== "CREATE_ARRAY" ||
+						(fn.instructions[pushedStackObjectAllocationInstructionIndex]?.opcode !==
+							"CREATE_OBJECT" &&
+							fn.instructions[pushedStackObjectAllocationInstructionIndex]?.opcode !==
+								"CREATE_OBJECT_SHAPED")
+					) {
+						throw new RangeError("serialize-vm: invalid cardinality-push metadata");
+					}
+					instruction.nativeCardinalityPush = {
+						allocationInstructionIndex,
+						pushedStackObjectAllocationInstructionIndex,
+					};
+				}
 				if (collectionTag !== 0) {
 					instruction.directCollectionOp = (["mapGet", "mapSet", "setAdd"] as const)[
 						collectionTag - 1
@@ -1529,6 +1579,29 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					icIndex,
 					numberGuards,
 					keyStringIndices,
+				};
+			} else if (tag === 8 && instruction.opcode === "CREATE_ARRAY") {
+				const maximumLength = r.i32();
+				if (maximumLength <= 0 || maximumLength > 32) {
+					throw new RangeError("serialize-vm: invalid cardinality-region metadata");
+				}
+				instruction.nativeCardinalityRegion = { maximumLength };
+			} else if (
+				tag === 9 &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC")
+			) {
+				const role = r.u8();
+				const allocationInstructionIndex = r.i32();
+				if (
+					(role !== 1 && role !== 2) ||
+					fn.instructions[allocationInstructionIndex]?.opcode !== "CREATE_ARRAY"
+				) {
+					throw new RangeError("serialize-vm: invalid cardinality-access metadata");
+				}
+				instruction.nativeCardinalityAccess = {
+					role: role === 1 ? "push" : "length",
+					allocationInstructionIndex,
 				};
 			} else {
 				throw new RangeError(

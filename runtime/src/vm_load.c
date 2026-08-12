@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 23u        // guarded finite-selector construction metadata
+#define WIRE_VERSION 24u        // native cardinality-region metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1578,8 +1578,15 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             if (tag == 1) { // CALL
                 (void) rd_i32(&r);
                 (void) rd_i32(&r);
+                u8 flags = rd_u8(&r);
                 (void) rd_u8(&r);
-                (void) rd_u8(&r);
+                if (flags > 15) {
+                    r.ok = false;
+                }
+                if (flags & 8) {
+                    (void) rd_i32(&r); // virtual array allocation instruction
+                    (void) rd_i32(&r); // pushed stack-object allocation instruction
+                }
             } else if (tag == 2) { // CONSTRUCT
                 (void) rd_i32(&r);
             } else if (tag == 3) { // BINARY numeric fusion
@@ -1627,6 +1634,17 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
                 for (u32 index = 0; r.ok && index < string_index_count; index++) {
                     (void) rd_i32(&r);
+                }
+            } else if (tag == 8) { // CREATE_ARRAY cardinality region
+                i32 maximum_length = rd_i32(&r);
+                if (maximum_length <= 0 || maximum_length > 32) {
+                    r.ok = false;
+                }
+            } else if (tag == 9) { // LOAD_PROPERTY cardinality access
+                u8 role = rd_u8(&r);
+                (void) rd_i32(&r); // virtual array allocation instruction
+                if (role < 1 || role > 2) {
+                    r.ok = false;
                 }
             } else {
                 r.ok = false;

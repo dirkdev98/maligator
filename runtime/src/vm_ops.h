@@ -1601,6 +1601,16 @@ MalValue mal_vm_op_create_object(MalVm *vm);
  */
 MalValue mal_vm_materialize_stack_object(MalVm *vm, const struct MalObject *source);
 
+/** Materialize the prior rows of a native cardinality-only region. `values` is
+ * row-major rooted storage with `count * slot_count` entries. */
+MalValue mal_vm_materialize_virtual_record_array(
+    MalVm *vm,
+    struct MalShape *shape,
+    const MalValue *values,
+    u32 count,
+    u32 slot_count
+);
+
 /** Successful stack-object return materializations (benchmark telemetry). */
 u64 mal_vm_stack_object_materialization_count(void);
 

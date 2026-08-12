@@ -734,6 +734,8 @@ export type IRInstruction =
 	  }
 	| {
 			type: "createArray";
+			/** COMPILE-ONLY: bounded push-only array virtualized by native code. */
+			nativeCardinalityRegion?: { id: number; maximumLength: number };
 
 			// [destination]
 			registers: [number];
@@ -884,6 +886,13 @@ export type IRInstruction =
 			 * validates the loaded callee, receiver, prototype, and dense state.
 			 */
 			directArrayPush?: true;
+			/** COMPILE-ONLY: this direct push is the sole mutator of a bounded
+			 * cardinality-only array. The referenced allocation owns region state. */
+			nativeCardinalityPush?: {
+				allocation: Extract<IRInstruction, { type: "createArray" }>;
+			};
+			/** COMPILE-ONLY: stack-object argument materialized only on region deopt. */
+			cardinalityPushStackObjectSiteId?: number;
 			/**
 			 * COMPILE-ONLY: a direct `.charCodeAt(...)` method site eligible for
 			 * guarded primitive-String dispatch in native code. The runtime still
@@ -998,6 +1007,10 @@ export type IRInstruction =
 				source: Extract<IRInstruction, { type: "binary" }>;
 				stringIndices: Array<number>;
 			};
+			nativeCardinalityAccess?: {
+				role: "push" | "length";
+				allocation: Extract<IRInstruction, { type: "createArray" }>;
+			};
 	  }
 	| {
 			type: "loadPropertyStatic";
@@ -1009,6 +1022,10 @@ export type IRInstruction =
 			stackObjectSlot?: number;
 			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
 			stackObjectInheritedSiteId?: number;
+			nativeCardinalityAccess?: {
+				role: "push" | "length";
+				allocation: Extract<IRInstruction, { type: "createArray" }>;
+			};
 	  }
 	| {
 			type: "loadSuperProperty";

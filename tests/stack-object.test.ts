@@ -520,3 +520,116 @@ describe("stack-object native metadata and C emission", () => {
 		);
 	});
 });
+
+describe("cardinality-only array and transitive record regions", () => {
+	const source = `
+		function collect(seed) {
+			const rows = [];
+			let total = 0;
+			for (let i = 0; i < 6; i++) {
+				const row = { idx: i, value: seed + i };
+				rows.push(row);
+				total += row.idx + row.value;
+			}
+			return total + rows.length;
+		}
+		globalThis.keep = collect;
+	`;
+
+	it("proves the bounded push/length contract and the transitive stack record", () => {
+		const program = optimized(source);
+		const region = instructions(program).find(
+			(instruction): instruction is Extract<IRInstruction, { type: "createArray" }> =>
+				instruction.type === "createArray" &&
+				instruction.nativeCardinalityRegion !== undefined,
+		);
+		expect(region?.nativeCardinalityRegion?.maximumLength).toBe(6);
+		expect(
+			instructions(program).filter(
+				(instruction) =>
+					instruction.type === "call" && instruction.nativeCardinalityPush !== undefined,
+			),
+		).toHaveLength(1);
+		expect(
+			instructions(program).filter(
+				(instruction) =>
+					(instruction.type === "loadProperty" ||
+						instruction.type === "loadPropertyStatic") &&
+					instruction.nativeCardinalityAccess !== undefined,
+			),
+		).toHaveLength(2);
+		expect(stackSiteCount(program)).toBe(1);
+	});
+
+	it("lowers, emits, and serializes rooted virtual history plus exact deopt", () => {
+		const definition = compileSemanticProgramToVmDefinition(semantic(source));
+		const regionFunction = definition.functions.find((fn) =>
+			fn.instructions.some(
+				(instruction) =>
+					instruction.opcode === "CREATE_ARRAY" &&
+					instruction.nativeCardinalityRegion !== undefined,
+			),
+		);
+		expect(regionFunction).toBeDefined();
+		expect(
+			regionFunction?.instructions.some(
+				(instruction) =>
+					instruction.opcode === "CALL" &&
+					instruction.nativeCardinalityPush !== undefined,
+			),
+		).toBe(true);
+
+		const emitted = emitVmDefinition(definition, { compiled: true });
+		expect(emitted).toContain("mal_builtin_array_push_virtual_guard(vm)");
+		expect(emitted).toContain(
+			"mal_primitive_method_protector && mal_array_elements_protector",
+		);
+		expect(emitted).toContain("mal_vm_materialize_virtual_record_array");
+		expect(emitted).toMatch(/__gc_slots\[\d+ \+ __cardinality_\d+_count \* 2/);
+
+		const decoded = deserializeVmDefinition(compileSourceToBuffer(source));
+		expect(
+			decoded.functions.some((fn) =>
+				fn.instructions.some(
+					(instruction) =>
+						instruction.opcode === "CREATE_ARRAY" &&
+						instruction.nativeCardinalityRegion !== undefined,
+				),
+			),
+		).toBe(true);
+		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
+			"mal_vm_materialize_virtual_record_array",
+		);
+	});
+
+	it.each([
+		[
+			"an array value escape",
+			`function f() { const rows = []; for (let i = 0; i < 4; i++) { const row = { x: i }; rows.push(row); } return rows; } globalThis.keep = f;`,
+		],
+		[
+			"an indexed observation",
+			`function f() { const rows = []; for (let i = 0; i < 4; i++) { const row = { x: i }; rows.push(row); } return rows.length + rows[0].x; } globalThis.keep = f;`,
+		],
+		[
+			"a dynamic bound",
+			`function f(n) { const rows = []; for (let i = 0; i < n; i++) { const row = { x: i }; rows.push(row); } return rows.length; } globalThis.keep = f;`,
+		],
+		[
+			"a record alias",
+			`function f() { const rows = []; for (let i = 0; i < 4; i++) { const row = { x: i }; const alias = row; rows.push(row); if (alias.x < 0) return 0; } return rows.length; } globalThis.keep = f;`,
+		],
+		[
+			"a post-push record mutation",
+			`function f() { const rows = []; for (let i = 0; i < 4; i++) { const row = { x: i }; rows.push(row); row.x++; } return rows.length; } globalThis.keep = f;`,
+		],
+	])("rejects %s", (_name, rejectedSource) => {
+		expect(
+			instructions(optimized(rejectedSource)).some(
+				(instruction) =>
+					instruction.type === "createArray" &&
+					instruction.nativeCardinalityRegion !== undefined,
+			),
+		).toBe(false);
+	});
+});

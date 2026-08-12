@@ -465,6 +465,8 @@ export type VmInstruction =
 			opcode: "CREATE_ARRAY";
 			dst: number;
 			length: number;
+			/** COMPILE-ONLY: native bounded push-only virtual array state. */
+			nativeCardinalityRegion?: { maximumLength: number };
 	  }
 	| {
 			opcode: "INSTANTIATE_LITERAL_TEMPLATE";
@@ -548,6 +550,11 @@ export type VmInstruction =
 			directCallTargetFunctionIndex?: number;
 			/** COMPILE-ONLY: guarded intrinsic Array.prototype.push dispatch. */
 			directArrayPush?: true;
+			/** COMPILE-ONLY: append a proven stack record to virtual history. */
+			nativeCardinalityPush?: {
+				allocationInstructionIndex: number;
+				pushedStackObjectAllocationInstructionIndex: number;
+			};
 			/** COMPILE-ONLY: guarded intrinsic String.prototype.charCodeAt dispatch. */
 			directStringCharCodeAt?: true;
 			/** COMPILE-ONLY: guarded intrinsic Map/Set method dispatch. */
@@ -653,6 +660,10 @@ export type VmInstruction =
 				ordinal: number;
 				stringIndices: Array<number>;
 			};
+			nativeCardinalityAccess?: {
+				role: "push" | "length";
+				allocationInstructionIndex: number;
+			};
 	  }
 	| {
 			opcode: "LOAD_PROPERTY_STATIC";
@@ -660,6 +671,10 @@ export type VmInstruction =
 			object: number;
 			stringIndex: number;
 			icIndex: number;
+			nativeCardinalityAccess?: {
+				role: "push" | "length";
+				allocationInstructionIndex: number;
+			};
 	  }
 	| {
 			opcode: "LOAD_SUPER_PROPERTY";
@@ -1193,6 +1208,20 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		instructionIndex: number;
 		siteId: number;
 	}> = [];
+	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
+	const pendingCardinalityAccesses: Array<{
+		instruction: Extract<
+			VmInstruction,
+			{ opcode: "LOAD_PROPERTY" | "LOAD_PROPERTY_STATIC" }
+		>;
+		allocation: Extract<IRInstruction, { type: "createArray" }>;
+		role: "push" | "length";
+	}> = [];
+	const pendingCardinalityPushes: Array<{
+		instruction: Extract<VmInstruction, { opcode: "CALL" }>;
+		allocation: Extract<IRInstruction, { type: "createArray" }>;
+		stackObjectSiteId: number;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1217,6 +1246,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 				continue;
 			}
 			const instructionIndex = instructions.length;
+			instructionIndexByIrInstruction.set(instruction, instructionIndex);
 			const vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
 			switch (vmInstruction.opcode) {
 				case "LOAD_PROPERTY":
@@ -1242,6 +1272,33 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 					break;
 			}
 			instructions.push(vmInstruction);
+			if (
+				(instruction.type === "loadProperty" ||
+					instruction.type === "loadPropertyStatic") &&
+				instruction.nativeCardinalityAccess !== undefined &&
+				(vmInstruction.opcode === "LOAD_PROPERTY" ||
+					vmInstruction.opcode === "LOAD_PROPERTY_STATIC")
+			) {
+				pendingCardinalityAccesses.push({
+					instruction: vmInstruction,
+					allocation: instruction.nativeCardinalityAccess.allocation,
+					role: instruction.nativeCardinalityAccess.role,
+				});
+			}
+			if (
+				instruction.type === "call" &&
+				instruction.nativeCardinalityPush !== undefined &&
+				vmInstruction.opcode === "CALL"
+			) {
+				if (instruction.cardinalityPushStackObjectSiteId === undefined) {
+					throw new Error("Cardinality push lacks a proven stack-object argument");
+				}
+				pendingCardinalityPushes.push({
+					instruction: vmInstruction,
+					allocation: instruction.nativeCardinalityPush.allocation,
+					stackObjectSiteId: instruction.cardinalityPushStackObjectSiteId,
+				});
+			}
 			if (
 				(instruction.type === "createObject" ||
 					instruction.type === "createObjectShaped") &&
@@ -1332,6 +1389,35 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			return { instructionIndex, allocationInstructionIndex };
 		},
 	);
+	for (const pending of pendingCardinalityAccesses) {
+		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
+			pending.allocation,
+		);
+		if (allocationInstructionIndex === undefined) {
+			throw new Error("Unknown cardinality-region array allocation");
+		}
+		pending.instruction.nativeCardinalityAccess = {
+			role: pending.role,
+			allocationInstructionIndex,
+		};
+	}
+	for (const pending of pendingCardinalityPushes) {
+		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
+			pending.allocation,
+		);
+		const pushedStackObjectAllocationInstructionIndex =
+			stackObjectSiteInstructionById.get(pending.stackObjectSiteId);
+		if (
+			allocationInstructionIndex === undefined ||
+			pushedStackObjectAllocationInstructionIndex === undefined
+		) {
+			throw new Error("Unknown cardinality-region allocation dependency");
+		}
+		pending.instruction.nativeCardinalityPush = {
+			allocationInstructionIndex,
+			pushedStackObjectAllocationInstructionIndex,
+		};
+	}
 
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation
@@ -1503,6 +1589,10 @@ function lowerInstructionToVmInstruction(
 				opcode: "CREATE_ARRAY",
 				dst: instruction.registers[0],
 				length: instruction.length,
+				nativeCardinalityRegion:
+					instruction.nativeCardinalityRegion === undefined
+						? undefined
+						: { maximumLength: instruction.nativeCardinalityRegion.maximumLength },
 			};
 		case "instantiateLiteralTemplate":
 			return {

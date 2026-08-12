@@ -615,6 +615,100 @@ export function emitCompiledFunction(
 		site.inheritedValueName = `${site.objectName}_inherited_value`;
 		stackObjectInheritedAccesses.set(access.instructionIndex, site);
 	}
+	const cardinalityRegions = new Map<number, CardinalityRegion>();
+	const cardinalityAccesses = new Map<
+		number,
+		{ region: CardinalityRegion; role: "push" | "length" }
+	>();
+	const cardinalityPushes = new Map<number, CardinalityRegion>();
+	const cardinalityHistorySlotLimit = stackSlotsBase + 512;
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (
+			instruction.opcode !== "CREATE_ARRAY" ||
+			instruction.nativeCardinalityRegion === undefined
+		) {
+			continue;
+		}
+		const pushes = fn.instructions
+			.map((candidate, candidateIp) => ({ candidate, candidateIp }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					candidate: Extract<VmInstruction, { opcode: "CALL" }>;
+					candidateIp: number;
+				} =>
+					entry.candidate.opcode === "CALL" &&
+					entry.candidate.nativeCardinalityPush?.allocationInstructionIndex === ip,
+			);
+		if (pushes.length !== 1) continue;
+		if (pushes[0]!.candidate.arguments.length !== 1) continue;
+		const receiver = decodeVmValueOperand(pushes[0]!.candidate.thisValue);
+		const pushedValue = decodeVmValueOperand(pushes[0]!.candidate.arguments[0]!);
+		if (receiver.kind !== "register" || pushedValue.kind !== "register") continue;
+		const pushedSite = stackObjectSites.get(
+			pushes[0]!.candidate.nativeCardinalityPush!
+				.pushedStackObjectAllocationInstructionIndex,
+		);
+		const pushedInstruction =
+			fn.instructions[
+				pushes[0]!.candidate.nativeCardinalityPush!
+					.pushedStackObjectAllocationInstructionIndex
+			];
+		if (
+			pushedSite === undefined ||
+			pushedSite.slotCount === 0 ||
+			pushedInstruction?.opcode !== "CREATE_OBJECT_SHAPED"
+		) {
+			continue;
+		}
+		const historySlotCount =
+			instruction.nativeCardinalityRegion.maximumLength * pushedSite.slotCount;
+		if (
+			instruction.nativeCardinalityRegion.maximumLength <= 0 ||
+			nextStackSlot + historySlotCount > cardinalityHistorySlotLimit
+		) {
+			continue;
+		}
+		const region: CardinalityRegion = {
+			allocationInstructionIndex: ip,
+			arrayRegister: receiver.register,
+			maximumLength: instruction.nativeCardinalityRegion.maximumLength,
+			itemSite: pushedSite,
+			itemRegister: pushedValue.register,
+			itemShapeCacheIndex: pushedInstruction.shapeCacheIndex,
+			itemKeyStringIndices: [...pushedInstruction.keyStringIndices],
+			historySlotsOffset: nextStackSlot,
+			fastName: `__cardinality_${ip}_fast`,
+			countName: `__cardinality_${ip}_count`,
+			shapeName: `__cardinality_${ip}_shape`,
+			currentMaterializedName: `__cardinality_${ip}_current_materialized`,
+		};
+		pushedSite.cardinalityRegion = region;
+		nextStackSlot += historySlotCount;
+		cardinalityRegions.set(ip, region);
+		cardinalityPushes.set(pushes[0]!.candidateIp, region);
+	}
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (
+			(instruction.opcode !== "LOAD_PROPERTY" &&
+				instruction.opcode !== "LOAD_PROPERTY_STATIC") ||
+			instruction.nativeCardinalityAccess === undefined
+		) {
+			continue;
+		}
+		const region = cardinalityRegions.get(
+			instruction.nativeCardinalityAccess.allocationInstructionIndex,
+		);
+		if (region !== undefined) {
+			cardinalityAccesses.set(ip, {
+				region,
+				role: instruction.nativeCardinalityAccess.role,
+			});
+		}
+	}
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -640,6 +734,9 @@ export function emitCompiledFunction(
 		stackObjectAccesses,
 		stackObjectMaterializations,
 		stackObjectInheritedAccesses,
+		cardinalityRegions,
+		cardinalityAccesses,
+		cardinalityPushes,
 	);
 	if (body === null) {
 		return null;
@@ -728,6 +825,12 @@ export function emitCompiledFunction(
 			lines.push(`    bool ${site.inheritedFastName} = false;`);
 			lines.push(`    MalValue ${site.inheritedValueName} = MAL_VALUE_UNDEFINED;`);
 		}
+	}
+	for (const region of cardinalityRegions.values()) {
+		lines.push(`    bool ${region.fastName} = false;`);
+		lines.push(`    u32 ${region.countName} = 0;`);
+		lines.push(`    MalShape *${region.shapeName} = nullptr;`);
+		lines.push(`    bool ${region.currentMaterializedName} = false;`);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
@@ -899,6 +1002,9 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
+		new Map(),
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1274,6 +1380,22 @@ interface StackObjectSite {
 	inheritedIcIndex?: number;
 	inheritedFastName?: string;
 	inheritedValueName?: string;
+	cardinalityRegion?: CardinalityRegion;
+}
+
+interface CardinalityRegion {
+	allocationInstructionIndex: number;
+	arrayRegister: number;
+	maximumLength: number;
+	itemSite: StackObjectSite;
+	itemRegister: number;
+	itemShapeCacheIndex: number;
+	itemKeyStringIndices: Array<number>;
+	historySlotsOffset: number;
+	fastName: string;
+	countName: string;
+	shapeName: string;
+	currentMaterializedName: string;
 }
 
 /**
@@ -1373,6 +1495,12 @@ function emitBody(
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
 	stackObjectInheritedAccesses: ReadonlyMap<number, StackObjectSite>,
+	cardinalityRegions: ReadonlyMap<number, CardinalityRegion>,
+	cardinalityAccesses: ReadonlyMap<
+		number,
+		{ region: CardinalityRegion; role: "push" | "length" }
+	>,
+	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -1698,6 +1826,9 @@ function emitBody(
 			stackObjectAccesses.get(ip),
 			stackObjectMaterializations.get(ip),
 			stackObjectInheritedAccesses.get(ip),
+			cardinalityRegions.get(ip),
+			cardinalityAccesses.get(ip),
+			cardinalityPushes.get(ip),
 			mathUnaryCalls.has(ip),
 			mathBinaryCalls.has(ip),
 			loopBody.has(ip),
@@ -1745,6 +1876,9 @@ function emitInstruction(
 	stackObjectAccess: { site: StackObjectSite; slot: number } | undefined,
 	stackObjectMaterialization: StackObjectSite | undefined,
 	stackObjectInheritedAccess: StackObjectSite | undefined,
+	cardinalityRegion: CardinalityRegion | undefined,
+	cardinalityAccess: { region: CardinalityRegion; role: "push" | "length" } | undefined,
+	cardinalityPush: CardinalityRegion | undefined,
 	mathUnaryCall: boolean,
 	mathBinaryCall: boolean,
 	loopStaticPropertyFastPath: boolean,
@@ -1808,6 +1942,11 @@ function emitInstruction(
 			: "MAL_VALUE_UNDEFINED";
 	const onThrow = handlerIp !== undefined ? `goto L${handlerIp};` : "goto __throw_exit;";
 	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
+	const materializeCardinalityRegion = (target: CardinalityRegion): Array<string> => [
+		`r${target.arrayRegister} = mal_vm_materialize_virtual_record_array(vm, ${target.shapeName}, &__gc_slots[${target.historySlotsOffset}], ${target.countName}, ${target.itemSite.slotCount});`,
+		throwCheck,
+		`${target.fastName} = false;`,
+	];
 
 	// GC safepoint poll. Emitted at call returns and loop
 	// back-edges so a compiled function is interruptible for collection. Near-free
@@ -1924,6 +2063,10 @@ function emitInstruction(
 				];
 			}
 			const { objectName, slotsOffset } = stackObjectSite;
+			const cardinalityReset =
+				stackObjectSite.cardinalityRegion === undefined
+					? []
+					: [`${stackObjectSite.cardinalityRegion.currentMaterializedName} = false;`];
 			if (stackObjectSite.inheritedLoadInstructionIndex !== undefined) {
 				const fastName = stackObjectSite.inheritedFastName!;
 				const inheritedValue = stackObjectSite.inheritedValueName!;
@@ -1931,6 +2074,7 @@ function emitInstruction(
 				const prototypeName = `${objectName}_prototype`;
 				return [
 					...shape,
+					...cardinalityReset,
 					`MalInlineCache *${icName} = &__property_ic[${stackObjectSite.inheritedIcIndex}];`,
 					`MalObject *${prototypeName} = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);`,
 					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape == __oshape_${ip} && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && mal_primitive_method_protector && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
@@ -1952,6 +2096,7 @@ function emitInstruction(
 			}
 			return [
 				...shape,
+				...cardinalityReset,
 				// Direct initialization is essential: this storage never enters the heap,
 				// and IMMORTAL+WHITE makes tracing/finalization/remembering skip the header.
 				"mal_perf_stack_object_init();",
@@ -1963,6 +2108,23 @@ function emitInstruction(
 			];
 		}
 		case "CREATE_ARRAY":
+			if (cardinalityRegion !== undefined) {
+				const keys = cardinalityRegion.itemKeyStringIndices
+					.map((key) => `vm->string_constant_atoms[${key}]`)
+					.join(", ");
+				return [
+					`${cardinalityRegion.shapeName} = __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}];`,
+					`if (${cardinalityRegion.shapeName} == nullptr) { ${cardinalityRegion.shapeName} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${cardinalityRegion.itemSite.slotCount}); __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}] = ${cardinalityRegion.shapeName}; }`,
+					`${cardinalityRegion.fastName} = mal_primitive_method_protector && mal_builtin_array_push_virtual_guard(vm);`,
+					`${cardinalityRegion.countName} = 0;`,
+					`if (${cardinalityRegion.fastName}) {`,
+					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+					`} else {`,
+					`  r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
 			return [`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`];
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return [
@@ -2057,6 +2219,59 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (cardinalityAccess !== undefined) {
+				const target = cardinalityAccess.region;
+				const fallback = emitInstruction(
+					instruction,
+					ip,
+					suffix,
+					reps,
+					strict,
+					handlerIp,
+					gcUnlink,
+					thisSlot,
+					coro,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					mathUnaryCall,
+					mathBinaryCall,
+					loopStaticPropertyFastPath,
+					mappedArguments,
+					mappedArgumentSlots,
+					hasPrototype,
+				);
+				if (fallback === null) return null;
+				if (cardinalityAccess.role === "length") {
+					const countValue =
+						reps[instruction.dst] === "number"
+							? `(f64) ${target.countName}`
+							: `mal_value_from_i32((i32) ${target.countName})`;
+					return [
+						`if (${target.fastName}) {`,
+						`  r${instruction.dst} = ${countValue};`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				return [
+					`if (${target.fastName} && mal_primitive_method_protector && mal_array_elements_protector) {`,
+					`  r${instruction.dst} = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH];`,
+					`} else {`,
+					`  if (${target.fastName}) {`,
+					...materializeCardinalityRegion(target).map((line) => `    ${line}`),
+					`  }`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (stackObjectInheritedAccess !== undefined) {
 				const fallback = emitInstruction(
 					instruction,
@@ -2068,6 +2283,9 @@ function emitInstruction(
 					gcUnlink,
 					thisSlot,
 					coro,
+					undefined,
+					undefined,
+					undefined,
 					undefined,
 					undefined,
 					undefined,
@@ -2094,6 +2312,42 @@ function emitInstruction(
 			}
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
+				if (site.cardinalityRegion !== undefined) {
+					const fallback = emitInstruction(
+						instruction,
+						ip,
+						suffix,
+						reps,
+						strict,
+						handlerIp,
+						gcUnlink,
+						thisSlot,
+						coro,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						mathUnaryCall,
+						mathBinaryCall,
+						loopStaticPropertyFastPath,
+						mappedArguments,
+						mappedArgumentSlots,
+						hasPrototype,
+					);
+					if (fallback === null) return null;
+					return [
+						`if (!${site.cardinalityRegion.currentMaterializedName}) {`,
+						`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (site.inheritedLoadInstructionIndex === undefined) {
 					return [`r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`];
 				}
@@ -2107,6 +2361,9 @@ function emitInstruction(
 					gcUnlink,
 					thisSlot,
 					coro,
+					undefined,
+					undefined,
+					undefined,
 					undefined,
 					undefined,
 					undefined,
@@ -2250,6 +2507,42 @@ function emitInstruction(
 		case "STORE_PROPERTY_STATIC": {
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
+				if (site.cardinalityRegion !== undefined) {
+					const fallback = emitInstruction(
+						instruction,
+						ip,
+						suffix,
+						reps,
+						strict,
+						handlerIp,
+						gcUnlink,
+						thisSlot,
+						coro,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						mathUnaryCall,
+						mathBinaryCall,
+						loopStaticPropertyFastPath,
+						mappedArguments,
+						mappedArgumentSlots,
+						hasPrototype,
+					);
+					if (fallback === null) return null;
+					return [
+						`if (!${site.cardinalityRegion.currentMaterializedName}) {`,
+						`  __gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				return [`__gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`];
 			}
 			if (
@@ -2772,6 +3065,38 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (cardinalityPush !== undefined) {
+				const target = cardinalityPush;
+				const fastResult =
+					reps[instruction.dst] === "number"
+						? `(f64) ${target.countName}`
+						: `mal_value_from_i32((i32) ${target.countName})`;
+				const current = `__cardinality_${ip}_current`;
+				return [
+					`if (${target.fastName} && ${target.countName} < ${target.maximumLength} && mal_primitive_method_protector && mal_array_elements_protector) {`,
+					...Array.from(
+						{ length: target.itemSite.slotCount },
+						(_, slot) =>
+							`  __gc_slots[${target.historySlotsOffset} + ${target.countName} * ${target.itemSite.slotCount} + ${slot}] = __gc_slots[${target.itemSite.slotsOffset + slot}];`,
+					),
+					`  ${target.countName}++;`,
+					`  r${instruction.dst} = ${fastResult};`,
+					`} else {`,
+					`  if (${target.fastName}) {`,
+					...materializeCardinalityRegion(target).map((line) => `    ${line}`),
+					`  }`,
+					`  MalValue ${current} = mal_vm_materialize_stack_object(vm, &${target.itemSite.objectName});`,
+					`  ${throwCheck}`,
+					`  r${target.itemRegister} = ${current};`,
+					`  ${target.currentMaterializedName} = true;`,
+					`  static MalCallCache __cc_${ip};`,
+					`  MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, &${current}, 1);`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`  ${poll}`,
+					`}`,
+				];
+			}
 			if (instruction.directCollectionOp !== undefined) {
 				const operation = {
 					mapGet: "MAL_BUILTIN_COLLECTION_MAP_GET",

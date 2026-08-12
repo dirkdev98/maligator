@@ -1427,6 +1427,22 @@ done:
     return ret;
 }
 
+bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
+    MalValue callee = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH];
+    MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    if (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+            mal_builtin_array_push ||
+        !mal_value_is_array_object(prototype_value) ||
+        !mal_array_elements_protector) {
+        return false;
+    }
+    MalPropertyLookup live = mal_object_get_own(
+        mal_value_to_object(prototype_value), mal_intrinsic_string_key(vm, "push"));
+    return live.present && !(live.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+        live.desc.value == callee;
+}
+
 MalCompletion mal_builtin_array_push_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,
@@ -1437,20 +1453,14 @@ MalCompletion mal_builtin_array_push_direct(
 ) {
     if (arg_count >= 0 && mal_value_is_array_object(this_value) &&
         callee == vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH] &&
-        mal_value_is_native_function_object(callee) &&
-        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) ==
-            mal_builtin_array_push) {
+        mal_builtin_array_push_virtual_guard(vm)) {
         MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
         MalArrayObject *array = mal_value_to_array_object(this_value);
         MalKey push_key = mal_intrinsic_string_key(vm, "push");
         if (mal_value_is_array_object(prototype_value) &&
             array->object.prototype == mal_value_to_object(prototype_value) &&
             !mal_object_get_own(&array->object, push_key).present) {
-            MalPropertyLookup live = mal_object_get_own(
-                mal_value_to_object(prototype_value), push_key);
-            if (live.present && !(live.desc.flags & MAL_PROPERTY_ACCESSOR) &&
-                live.desc.value == callee && mal_array_elements_protector &&
-                mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
+            if (mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
                 MAL_PERF_COUNT(array_push_direct_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,

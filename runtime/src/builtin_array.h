@@ -42,3 +42,11 @@ MalCompletion mal_builtin_array_push_direct(
     const MalValue *args,
     i32 arg_count
 );
+
+/**
+ * Whether a freshly-created ordinary Array can execute the intrinsic push
+ * algorithm without observing prototype mutation. Used by native virtual-array
+ * regions before any physical receiver exists; callers recheck at every load and
+ * call boundary and materialize on rejection.
+ */
+bool mal_builtin_array_push_virtual_guard(MalVm *vm);
