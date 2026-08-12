@@ -473,13 +473,18 @@ const NET: HostModuleSpec = {
 const OS: HostModuleSpec = {
 	id: "node:os",
 	named: [
+		"EOL",
 		"arch",
 		"availableParallelism",
 		"cpus",
+		"devNull",
+		"endianness",
+		"homedir",
 		"hostname",
 		"platform",
 		"release",
 		"tmpdir",
+		"type",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:os"),
