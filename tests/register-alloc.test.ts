@@ -3,6 +3,7 @@ import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.t
 import {
 	allocateDevelopmentRegisters,
 	allocateRegisters,
+	inferVirtualReps,
 } from "../src/register-alloc.ts";
 
 function allocate(
@@ -183,4 +184,36 @@ test("never shares a physical register across representation classes", () => {
 	expect(
 		new Set([number.registers[0], boolean.registers[0], boxed.registers[0]]),
 	).toHaveLength(3);
+});
+
+test("keeps an appended-block numeric loop induction unboxed", () => {
+	// Multi-block inlining appends the callee entry after the caller's original
+	// blocks, then jumps back to the caller continuation. The representation
+	// fixpoint must preserve unknown forward definitions as lattice top: treating
+	// the first self-update as boxed permanently poisons this numeric induction.
+	const fn = {
+		parameterCount: 0,
+		nextRegisterDestination: 4,
+		blocks: [
+			[{ type: "jump", blocks: [2] }],
+			[
+				{ type: "createNumber", registers: [1], value: 10 },
+				{ type: "binary", registers: [2, 0, 1], operator: "<" },
+				{ type: "jumpIf", registers: [2], blocks: [3] },
+				{ type: "return", registers: [0] },
+			],
+			[
+				{ type: "createNumber", registers: [0], value: 0 },
+				{ type: "jump", blocks: [1] },
+			],
+			[
+				{ type: "unary", registers: [0, 0], operator: "increment" },
+				{ type: "jump", blocks: [1] },
+			],
+		].map((instructions) => ({ instructions })) as Array<{
+			instructions: Array<IRInstruction>;
+		}>,
+	} as unknown as IRFunction;
+
+	expect(inferVirtualReps(fn).get(0)).toBe("number");
 });

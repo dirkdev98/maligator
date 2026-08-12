@@ -248,7 +248,8 @@ export function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
 		}
 	}
 
-	const repOf = (register: number): RegisterRep | null => reps.get(register) ?? "boxed";
+	const repOf = (register: number): RegisterRep | null =>
+		reps.has(register) ? reps.get(register)! : "boxed";
 
 	let changed = true;
 	while (changed) {
