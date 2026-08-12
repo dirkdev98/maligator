@@ -2139,6 +2139,16 @@ function emitBody(
 	const lines: Array<string> = denseIteratorCursors.map(
 		(cursor) => `MalIteratorObject *${cursor.name} = nullptr;`,
 	);
+	if (
+		fn.instructions.some(
+			(instruction, ip) =>
+				loopBody.has(ip) && instruction.opcode === "LOAD_PROPERTY_STATIC",
+		)
+	) {
+		lines.push(
+			"u64 __watched_methods_epoch = mal_primitive_method_protector ? vm->semantic_epochs.watched_methods : 0;",
+		);
+	}
 	// Pair-fusion temporaries live for the whole C function so intervening property
 	// loads retain their original position and control-flow labels never jump over a
 	// declaration. Only boxed first results benefit from avoiding the box/unbox.
@@ -2987,7 +2997,7 @@ function emitInstruction(
 								loopStaticPropertyFastPath
 									? `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_local_inherited_value_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
 									: `(${reg.name} && mal_vm_object_try_load_static(${reg.name}, &__property_ic[${instruction.icIndex}], &__v_${ip}))`
-							} || mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
+							} || ${loopStaticPropertyFastPath ? `mal_vm_local_watched_inherited_value_try_load_static(vm, __watched_methods_epoch, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || ` : ""}mal_vm_inherited_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load_static(${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load_static(vm, ${boxed(instruction.object)}, &__property_ic[${instruction.icIndex}], &__v_${ip})`
 						: `(${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip}) || mal_vm_special_try_load(vm, ${boxed(instruction.object)}, ${key}, &__property_ic[${instruction.icIndex}], &__v_${ip})`;
 				return [
 					...(reg.declare

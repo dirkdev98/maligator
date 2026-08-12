@@ -743,11 +743,18 @@ describe("native update-expression representation", () => {
 		expect(staticOutput).toContain("mal_vm_inherited_try_load_static(");
 		expect(staticOutput).toContain("mal_vm_object_try_store_static(");
 		expect(staticOutput).not.toContain("mal_vm_local_inherited_value_try_load_static(");
+		expect(staticOutput).not.toContain(
+			"mal_vm_local_watched_inherited_value_try_load_static(",
+		);
 
 		const loopOutput = emit(
 			`"use strict"; function load(object, count) { let value; for (let i = 0; i < count; i++) value = object.value; return value; } globalThis.load = load;`,
 		);
 		expect(loopOutput).toContain("mal_vm_local_inherited_value_try_load_static(");
+		expect(loopOutput).toContain("mal_vm_local_watched_inherited_value_try_load_static(");
+		expect(loopOutput).toContain(
+			"mal_primitive_method_protector ? vm->semantic_epochs.watched_methods : 0",
+		);
 		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
 
@@ -758,6 +765,9 @@ describe("native update-expression representation", () => {
 		expect(dynamicOutput).toContain("mal_vm_object_try_store(");
 		expect(dynamicOutput).not.toContain("mal_vm_object_try_load_static(");
 		expect(dynamicOutput).not.toContain("mal_vm_local_inherited_value_try_load_static(");
+		expect(dynamicOutput).not.toContain(
+			"mal_vm_local_watched_inherited_value_try_load_static(",
+		);
 	});
 
 	it("revalidates consolidated regions only after observable gaps", () => {

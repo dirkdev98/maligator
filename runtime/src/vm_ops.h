@@ -1006,6 +1006,31 @@ static inline bool mal_vm_local_inherited_value_try_load_static(
     return true;
 }
 
+/**
+ * Static-name loop probe for one watched inherited value. The compiler admits the
+ * protector once at function entry and supplies its family epoch; any intervening
+ * JavaScript mutation bumps that epoch and makes this probe fail closed.
+ */
+static inline bool mal_vm_local_watched_inherited_value_try_load_static(
+    const MalVm *vm, u64 watched_methods_epoch, MalValue receiver,
+    const MalInlineCache *ic, MalValue *out
+) {
+    if (watched_methods_epoch == 0 ||
+        watched_methods_epoch != vm->semantic_epochs.watched_methods ||
+        ic->mode != MAL_IC_MODE_INHERITED_VALUE || ic->poly_count != 0 ||
+        !mal_value_is_object(receiver)) {
+        return false;
+    }
+    const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
+    if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
+        object->prototype != ic->obj || object->overflow != nullptr) {
+        return false;
+    }
+    *out = ic->value;
+    mal_perf_ic_load_inherited_hit();
+    return true;
+}
+
 /** Guarded inherited data-property slot/entry hit, plus the watched-value fallback. */
 static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
                                               const MalInlineCache *ic, MalValue *out) {
