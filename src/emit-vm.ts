@@ -7,6 +7,7 @@ import {
 	computeArgumentRetentionLimit,
 	countLiteralShapeSites,
 	countPropertyIcSites,
+	decodeVmValueOperand,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
@@ -428,6 +429,612 @@ function externalizeDataArrays(source: string, maxCodeUnits: number): SplitDataS
 	return { source: splitSource, definitions };
 }
 
+interface NativeStringScanTarget {
+	functionIndex: number;
+	arrayKeyStringIndex: number;
+	matchKeyStringIndex: number;
+	matchCodeUnit: number;
+}
+
+const VM_REGISTER_USE_FIELDS = [
+	"src",
+	"value",
+	"cond",
+	"callee",
+	"thisValue",
+	"object",
+	"key",
+	"left",
+	"right",
+	"receiver",
+	"source",
+	"target",
+	"direct",
+	"fallback",
+	"iterator",
+	"next",
+	"accessor",
+	"func",
+	"parent",
+	"newTarget",
+	"found",
+	"awaitedSrc",
+	"yieldedSrc",
+	"iterable",
+	"argumentsArray",
+] as const;
+
+const VM_REGISTER_USE_ARRAY_FIELDS = [
+	"arguments",
+	"valueRegisters",
+	"keyRegisters",
+	"excluded",
+] as const;
+
+function vmInstructionUsesRegister(
+	instruction: VmInstruction,
+	register: number,
+): boolean {
+	const row = instruction as unknown as Record<string, unknown>;
+	if (VM_REGISTER_USE_FIELDS.some((field) => row[field] === register)) return true;
+	if (
+		VM_REGISTER_USE_ARRAY_FIELDS.some(
+			(field) => Array.isArray(row[field]) && row[field].includes(register),
+		)
+	) {
+		return true;
+	}
+	switch (instruction.opcode) {
+		case "RETURN":
+		case "THROW":
+		case "SET_THIS":
+			return instruction.value === register;
+		case "STORE_PROPERTY":
+		case "STORE_PROPERTY_STATIC":
+		case "STORE_SUPER_PROPERTY":
+		case "DEFINE_PROPERTY":
+		case "DEFINE_PRIVATE":
+		case "STORE_PRIVATE":
+			return instruction.value === register;
+		default:
+			return false;
+	}
+}
+
+function vmInstructionDefinesRegister(
+	instruction: VmInstruction,
+	register: number,
+): boolean {
+	const row = instruction as unknown as Record<string, unknown>;
+	if (row.dst === register) return true;
+	return ["iteratorDst", "nextDst", "resultDst", "valueDst", "doneDst", "modeDst"].some(
+		(field) => row[field] === register,
+	);
+}
+
+function staticStringEquals(
+	definition: VmDefinition,
+	index: number,
+	value: string,
+): boolean {
+	const units = definition.stringConstants[index];
+	return (
+		units !== undefined &&
+		units.length === value.length &&
+		units.every((unit, position) => unit === value.charCodeAt(position))
+	);
+}
+
+/**
+ * Recognize a deliberately narrow aggregate producer: scan one String by code
+ * unit, append exactly one shaped record per unit to a fresh Array, count one
+ * code unit value, and return `{array, count}`. Then recognize an exact caller
+ * that observes only `array.length` and `count`.
+ *
+ * This runs after wire loading and annotates only native emission. The original
+ * call and property instructions remain complete fallbacks, so no wire/runtime
+ * semantics depend on the summary.
+ */
+function annotateNativeStringScanSummaries(definition: VmDefinition): void {
+	const targets = new Map<number, NativeStringScanTarget>();
+	for (
+		let functionIndex = 0;
+		functionIndex < definition.functions.length;
+		functionIndex++
+	) {
+		const fn = definition.functions[functionIndex]!;
+		if (
+			fn.parameterCount !== 1 ||
+			fn.isGenerator ||
+			fn.isAsync ||
+			fn.handlers.length > 0
+		) {
+			continue;
+		}
+		const instructions = fn.instructions;
+		const arrays = instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					instruction: Extract<VmInstruction, { opcode: "CREATE_ARRAY" }>;
+					ip: number;
+				} =>
+					entry.instruction.opcode === "CREATE_ARRAY" && entry.instruction.length === 0,
+			);
+		const boundedCalls = instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					instruction: Extract<VmInstruction, { opcode: "CALL" }>;
+					ip: number;
+				} =>
+					entry.instruction.opcode === "CALL" &&
+					entry.instruction.directStringCharCodeAtPosition === "inBounds",
+			);
+		const pushes = instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					instruction: Extract<VmInstruction, { opcode: "CALL" }>;
+					ip: number;
+				} =>
+					entry.instruction.opcode === "CALL" &&
+					entry.instruction.directArrayPush === true,
+			);
+		const returns = instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					instruction: Extract<VmInstruction, { opcode: "RETURN" }>;
+					ip: number;
+				} => entry.instruction.opcode === "RETURN",
+			);
+		if (
+			arrays.length !== 1 ||
+			boundedCalls.length !== 1 ||
+			pushes.length !== 2 ||
+			returns.length !== 1
+		) {
+			continue;
+		}
+		const arrayAllocation = arrays[0]!;
+		const arrayAliases = new Set<number>([arrayAllocation.instruction.dst]);
+		for (const instruction of instructions) {
+			if (instruction.opcode === "MOVE" && arrayAliases.has(instruction.src)) {
+				arrayAliases.add(instruction.dst);
+			}
+		}
+		if (
+			pushes.some(
+				(push) =>
+					!arrayAliases.has(push.instruction.thisValue) ||
+					push.instruction.arguments.length !== 1,
+			)
+		) {
+			continue;
+		}
+		const bounded = boundedCalls[0]!.instruction;
+		const parameterAliases = new Set<number>([0]);
+		for (const instruction of instructions) {
+			if (instruction.opcode === "MOVE" && parameterAliases.has(instruction.src)) {
+				parameterAliases.add(instruction.dst);
+			}
+		}
+		if (!parameterAliases.has(bounded.thisValue) || bounded.arguments.length !== 1)
+			continue;
+		const propertyLoads = instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+					ip: number;
+				} => entry.instruction.opcode === "LOAD_PROPERTY_STATIC",
+			);
+		if (
+			propertyLoads.length !== 4 ||
+			propertyLoads.filter(
+				(load) =>
+					parameterAliases.has(load.instruction.object) &&
+					staticStringEquals(definition, load.instruction.stringIndex, "length"),
+			).length !== 1 ||
+			propertyLoads.filter(
+				(load) =>
+					load.ip + 1 === boundedCalls[0]!.ip &&
+					load.instruction.dst === bounded.callee &&
+					parameterAliases.has(load.instruction.object) &&
+					staticStringEquals(definition, load.instruction.stringIndex, "charCodeAt"),
+			).length !== 1 ||
+			pushes.some((push) => {
+				let load: VmInstruction | undefined;
+				for (let ip = push.ip - 1; ip >= 0; ip--) {
+					if (vmInstructionDefinesRegister(instructions[ip]!, push.instruction.callee)) {
+						load = instructions[ip];
+						break;
+					}
+				}
+				return (
+					load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					load.dst !== push.instruction.callee ||
+					!arrayAliases.has(load.object) ||
+					!staticStringEquals(definition, load.stringIndex, "push")
+				);
+			})
+		) {
+			continue;
+		}
+		const position = decodeVmValueOperand(bounded.arguments[0]!);
+		if (position.kind !== "register") continue;
+
+		const charAliases = new Set<number>([bounded.dst]);
+		for (const instruction of instructions) {
+			if (instruction.opcode === "MOVE" && charAliases.has(instruction.src)) {
+				charAliases.add(instruction.dst);
+			}
+		}
+		const comparisons = instructions.filter(
+			(instruction): instruction is Extract<VmInstruction, { opcode: "BINARY" }> =>
+				instruction.opcode === "BINARY" &&
+				instruction.operator === "===" &&
+				(charAliases.has(instruction.left) || charAliases.has(instruction.right)),
+		);
+		if (comparisons.length !== 1) continue;
+		const comparison = comparisons[0]!;
+		const needleRegister = charAliases.has(comparison.left)
+			? comparison.right
+			: comparison.left;
+		const needleDefinitions = instructions.filter(
+			(instruction): instruction is Extract<VmInstruction, { opcode: "CREATE_NUMBER" }> =>
+				instruction.opcode === "CREATE_NUMBER" && instruction.dst === needleRegister,
+		);
+		if (
+			needleDefinitions.length !== 1 ||
+			!Number.isInteger(needleDefinitions[0]!.value) ||
+			needleDefinitions[0]!.value < 0 ||
+			needleDefinitions[0]!.value > 0xffff
+		) {
+			continue;
+		}
+		const comparisonIp = instructions.indexOf(comparison);
+		const branch = instructions[comparisonIp + 1];
+		const alternate = instructions[comparisonIp + 2];
+		if (
+			branch?.opcode !== "JUMP_IF" ||
+			branch.cond !== comparison.dst ||
+			alternate?.opcode !== "JUMP" ||
+			branch.targetIp <= comparisonIp + 2 ||
+			alternate.targetIp <= branch.targetIp
+		) {
+			continue;
+		}
+		const firstEnd = alternate.targetIp - 1;
+		const secondEnd =
+			instructions[firstEnd]?.opcode === "JUMP"
+				? instructions[firstEnd].targetIp - 1
+				: -1;
+		if (
+			firstEnd < branch.targetIp ||
+			secondEnd < alternate.targetIp ||
+			instructions[firstEnd]?.opcode !== "JUMP" ||
+			instructions[secondEnd]?.opcode !== "JUMP" ||
+			instructions[firstEnd].targetIp !== instructions[secondEnd].targetIp
+		) {
+			continue;
+		}
+		const firstPushCount = pushes.filter(
+			(push) => push.ip >= branch.targetIp && push.ip <= firstEnd,
+		).length;
+		const secondPushCount = pushes.filter(
+			(push) => push.ip >= alternate.targetIp && push.ip <= secondEnd,
+		).length;
+		if (firstPushCount !== 1 || secondPushCount !== 1) continue;
+
+		const countUpdates = instructions.filter(
+			(instruction): instruction is Extract<VmInstruction, { opcode: "UNARY" }> =>
+				instruction.opcode === "UNARY" && instruction.operator === "increment",
+		);
+		if (countUpdates.length !== 2) continue;
+		const induction = position.register;
+		const matchUpdate = countUpdates.find(
+			(instruction) => instruction.dst !== induction || instruction.src !== induction,
+		);
+		if (
+			matchUpdate === undefined ||
+			matchUpdate.dst !== matchUpdate.src ||
+			!countUpdates.some(
+				(instruction) => instruction.dst === induction && instruction.src === induction,
+			)
+		) {
+			continue;
+		}
+		const matchUpdateIp = instructions.indexOf(matchUpdate);
+		let matchInitial: VmInstruction | undefined;
+		for (let ip = matchUpdateIp - 1; ip >= 0; ip--) {
+			if (vmInstructionDefinesRegister(instructions[ip]!, matchUpdate.dst)) {
+				matchInitial = instructions[ip];
+				break;
+			}
+		}
+		if (matchInitial?.opcode !== "CREATE_NUMBER" || matchInitial.value !== 0) continue;
+		const matchOnFirst = matchUpdateIp >= branch.targetIp && matchUpdateIp <= firstEnd;
+		const matchOnSecond =
+			matchUpdateIp >= alternate.targetIp && matchUpdateIp <= secondEnd;
+		if (matchOnFirst === matchOnSecond) continue;
+
+		const returned = instructions[returns[0]!.ip - 1];
+		if (
+			returned?.opcode !== "CREATE_OBJECT_SHAPED" ||
+			returns[0]!.instruction.value !== returned.dst ||
+			returned.count !== 2
+		) {
+			continue;
+		}
+		const arrayField = returned.valueRegisters.findIndex((register) =>
+			arrayAliases.has(register),
+		);
+		const matchField = returned.valueRegisters.indexOf(matchUpdate.dst);
+		if (arrayField < 0 || matchField < 0 || arrayField === matchField) continue;
+
+		// The accepted body is intentionally closed: besides charCodeAt and the two
+		// pushes, no call may run user code, and every pushed value is a shaped literal.
+		if (
+			instructions.some(
+				(instruction) =>
+					instruction.opcode === "CALL" &&
+					instruction !== bounded &&
+					!pushes.some((push) => push.instruction === instruction),
+			) ||
+			pushes.some((push) => {
+				const argument = decodeVmValueOperand(push.instruction.arguments[0]!);
+				if (argument.kind !== "register") return true;
+				return !instructions.some(
+					(instruction) =>
+						instruction.opcode === "CREATE_OBJECT_SHAPED" &&
+						instruction.dst === argument.register,
+				);
+			})
+		) {
+			continue;
+		}
+		targets.set(functionIndex, {
+			functionIndex,
+			arrayKeyStringIndex: returned.keyStringIndices[arrayField]!,
+			matchKeyStringIndex: returned.keyStringIndices[matchField]!,
+			matchCodeUnit: needleDefinitions[0]!.value,
+		});
+	}
+
+	if (targets.size === 0) return;
+	for (const fn of definition.functions) {
+		const regions: Array<NonNullable<VmFunction["nativeStringScanRegions"]>[number]> = [];
+		for (let entryIp = 0; entryIp < fn.instructions.length; entryIp++) {
+			const entry = fn.instructions[entryIp]!;
+			if (entry.opcode !== "CREATE_ARRAY" || entry.length !== 0) continue;
+			const position = definition.sourcePositions[fn.positions[entryIp] ?? -1];
+			const inlinedFunctionIndex = position?.inlinedFunctionIndex;
+			const callerPosId = position?.callerPosId;
+			const target =
+				inlinedFunctionIndex === undefined
+					? undefined
+					: targets.get(inlinedFunctionIndex);
+			if (target === undefined || callerPosId === undefined) continue;
+
+			let inlineEnd = entryIp;
+			while (inlineEnd + 1 < fn.instructions.length) {
+				const nextPosition =
+					definition.sourcePositions[fn.positions[inlineEnd + 1] ?? -1];
+				if (
+					nextPosition?.inlinedFunctionIndex !== target.functionIndex ||
+					nextPosition.callerPosId !== callerPosId
+				) {
+					break;
+				}
+				inlineEnd++;
+			}
+			const span = fn.instructions.slice(entryIp, inlineEnd + 1);
+			const allowedRegionOpcodes = new Set<VmInstruction["opcode"]>([
+				"CREATE_ARRAY",
+				"MOVE",
+				"CREATE_NUMBER",
+				"JUMP",
+				"LOAD_PROPERTY_STATIC",
+				"BINARY",
+				"JUMP_IF",
+				"CALL",
+				"CREATE_STRING",
+				"CREATE_OBJECT_SHAPED",
+				"UNARY",
+			]);
+			if (span.some((instruction) => !allowedRegionOpcodes.has(instruction.opcode))) {
+				continue;
+			}
+			const boundedCalls = span
+				.map((instruction, offset) => ({ instruction, ip: entryIp + offset }))
+				.filter(
+					(
+						entry,
+					): entry is {
+						instruction: Extract<VmInstruction, { opcode: "CALL" }>;
+						ip: number;
+					} =>
+						entry.instruction.opcode === "CALL" &&
+						entry.instruction.directStringCharCodeAtPosition === "inBounds",
+				);
+			const pushes = span
+				.map((instruction, offset) => ({ instruction, ip: entryIp + offset }))
+				.filter(
+					(
+						entry,
+					): entry is {
+						instruction: Extract<VmInstruction, { opcode: "CALL" }>;
+						ip: number;
+					} =>
+						entry.instruction.opcode === "CALL" &&
+						entry.instruction.directArrayPush === true,
+				);
+			if (boundedCalls.length !== 1 || pushes.length !== 2) continue;
+
+			const arrayAliases = new Set<number>([entry.dst]);
+			for (const instruction of span) {
+				if (instruction.opcode === "MOVE" && arrayAliases.has(instruction.src)) {
+					arrayAliases.add(instruction.dst);
+				}
+			}
+			if (
+				pushes.some(
+					(push) =>
+						!arrayAliases.has(push.instruction.thisValue) ||
+						push.instruction.arguments.length !== 1,
+				)
+			) {
+				continue;
+			}
+			const bounded = boundedCalls[0]!.instruction;
+			const boundedIp = boundedCalls[0]!.ip;
+			const indexOperand = decodeVmValueOperand(bounded.arguments[0]!);
+			if (indexOperand.kind !== "register") continue;
+			const comparisons = span.filter(
+				(instruction): instruction is Extract<VmInstruction, { opcode: "BINARY" }> =>
+					instruction.opcode === "BINARY" &&
+					instruction.operator === "===" &&
+					(instruction.left === bounded.dst || instruction.right === bounded.dst),
+			);
+			if (comparisons.length !== 1) continue;
+			const comparison = comparisons[0]!;
+			const needleRegister =
+				comparison.left === bounded.dst ? comparison.right : comparison.left;
+			const needleDefinitions = span.filter(
+				(
+					instruction,
+				): instruction is Extract<VmInstruction, { opcode: "CREATE_NUMBER" }> =>
+					instruction.opcode === "CREATE_NUMBER" && instruction.dst === needleRegister,
+			);
+			if (
+				needleDefinitions.length !== 1 ||
+				needleDefinitions[0]!.value !== target.matchCodeUnit
+			) {
+				continue;
+			}
+
+			const increments = span
+				.map((instruction, offset) => ({ instruction, ip: entryIp + offset }))
+				.filter(
+					(
+						entry,
+					): entry is {
+						instruction: Extract<VmInstruction, { opcode: "UNARY" }>;
+						ip: number;
+					} =>
+						entry.instruction.opcode === "UNARY" &&
+						entry.instruction.operator === "increment",
+				);
+			if (increments.length !== 2) continue;
+			const indexIncrement = increments.find(
+				(entry) =>
+					entry.instruction.dst === indexOperand.register &&
+					entry.instruction.src === indexOperand.register,
+			);
+			const matchIncrement = increments.find((entry) => entry !== indexIncrement);
+			if (
+				indexIncrement === undefined ||
+				matchIncrement === undefined ||
+				matchIncrement.instruction.dst !== matchIncrement.instruction.src
+			) {
+				continue;
+			}
+			const latestDefinitionBefore = (register: number, beforeIp: number) => {
+				for (let ip = beforeIp - 1; ip >= entryIp; ip--) {
+					if (vmInstructionDefinesRegister(fn.instructions[ip]!, register))
+						return fn.instructions[ip];
+				}
+				return undefined;
+			};
+			const matchInitial = latestDefinitionBefore(
+				matchIncrement.instruction.dst,
+				matchIncrement.ip,
+			);
+			const indexInitial = latestDefinitionBefore(indexOperand.register, boundedIp);
+			if (
+				matchInitial?.opcode !== "CREATE_NUMBER" ||
+				matchInitial.value !== 0 ||
+				indexInitial?.opcode !== "CREATE_NUMBER" ||
+				indexInitial.value !== 0
+			) {
+				continue;
+			}
+
+			const exitJump = span.find(
+				(instruction): instruction is Extract<VmInstruction, { opcode: "JUMP" }> =>
+					instruction.opcode === "JUMP" && instruction.targetIp === inlineEnd + 1,
+			);
+			if (exitJump === undefined) continue;
+			let lengthLoadIp = -1;
+			for (
+				let ip = inlineEnd + 1;
+				ip <= Math.min(inlineEnd + 8, fn.instructions.length - 1);
+				ip++
+			) {
+				const instruction = fn.instructions[ip]!;
+				if (
+					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+					arrayAliases.has(instruction.object) &&
+					staticStringEquals(definition, instruction.stringIndex, "length")
+				) {
+					lengthLoadIp = ip;
+					break;
+				}
+			}
+			if (lengthLoadIp < 0) continue;
+			const lengthLoad = fn.instructions[lengthLoadIp]!;
+			if (lengthLoad.opcode !== "LOAD_PROPERTY_STATIC") continue;
+
+			const definedInRegion = new Set<number>();
+			for (const instruction of span) {
+				const dst = (instruction as { dst?: number }).dst;
+				if (dst !== undefined) definedInRegion.add(dst);
+			}
+			definedInRegion.delete(bounded.thisValue);
+			let liveOutIsClosed = true;
+			for (const register of definedInRegion) {
+				if (register === matchIncrement.instruction.dst) continue;
+				for (let ip = inlineEnd + 1; ip < fn.instructions.length; ip++) {
+					const instruction = fn.instructions[ip]!;
+					if (vmInstructionUsesRegister(instruction, register)) {
+						if (ip === lengthLoadIp && arrayAliases.has(register)) break;
+						liveOutIsClosed = false;
+						break;
+					}
+					if (vmInstructionDefinesRegister(instruction, register)) break;
+				}
+				if (!liveOutIsClosed) break;
+			}
+			if (!liveOutIsClosed) continue;
+
+			regions.push({
+				entryIp,
+				exitIp: inlineEnd + 1,
+				input: bounded.thisValue,
+				lengthLoadIp,
+				lengthResult: lengthLoad.dst,
+				matchResult: matchIncrement.instruction.dst,
+				matchCodeUnit: target.matchCodeUnit,
+			});
+			entryIp = inlineEnd;
+		}
+		if (regions.length > 0) fn.nativeStringScanRegions = regions;
+		else delete fn.nativeStringScanRegions;
+	}
+}
+
 function emitVmDefinitionSource(
 	definition: VmDefinition,
 	options: EmitOptions,
@@ -437,6 +1044,7 @@ function emitVmDefinitionSource(
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
+	if (useCompiled) annotateNativeStringScanSummaries(definition);
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
 	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.
 	const lines = options.includeHeader === false ? [] : [...C_HEADER_LINES];

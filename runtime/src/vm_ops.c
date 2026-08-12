@@ -42,6 +42,41 @@ u64 mal_vm_stack_object_materialization_count(void) {
     return g_stack_object_materializations;
 }
 
+bool mal_vm_try_string_scan_summary(
+    MalVm *vm, MalValue input, c16 match_code_unit,
+    u32 *length_out, u32 *match_count_out
+) {
+    if (!mal_value_is_string(input) || !mal_primitive_method_protector ||
+        !mal_array_elements_protector || !mal_builtin_array_push_virtual_guard(vm)) {
+        return false;
+    }
+    u64 watched_epoch = vm->semantic_epochs.watched_methods;
+    u64 array_epoch = vm->semantic_epochs.array_elements;
+    if (watched_epoch == 0 || array_epoch == 0) return false;
+
+    MalString *string = mal_value_to_string(input);
+    usize length = string->length;
+    const c16 *code_units = mal_string_code_units(string);
+    if (watched_epoch != vm->semantic_epochs.watched_methods ||
+        array_epoch != vm->semantic_epochs.array_elements) {
+        return false;
+    }
+    u32 matches = 0;
+    for (usize index = 0; index < length; index++) {
+        if (mal_gc_poll) {
+            mal_gc_safepoint(vm);
+            if (watched_epoch != vm->semantic_epochs.watched_methods ||
+                array_epoch != vm->semantic_epochs.array_elements) {
+                return false;
+            }
+        }
+        matches += code_units[index] == match_code_unit;
+    }
+    *length_out = (u32) length;
+    *match_count_out = matches;
+    return true;
+}
+
 static const i32 *mal_op_instruction_data(MalCallable *callable, i32 offset) {
     return callable->function->instruction_data + offset;
 }

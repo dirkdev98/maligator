@@ -36,6 +36,17 @@ static inline bool mal_vm_callee_has_index(MalVm *vm, MalValue callee, i32 funct
 bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
 
 /**
+ * Guarded aggregate summary for a compiler-proven String scan whose ordinary
+ * body appends one inert shaped record per code unit and observes only the final
+ * Array length plus a count of one code unit. Returns false without observable
+ * side effects when any method/protector/epoch proof does not hold.
+ */
+bool mal_vm_try_string_scan_summary(
+    MalVm *vm, MalValue input, c16 match_code_unit,
+    u32 *length_out, u32 *match_count_out
+);
+
+/**
  * Spec ToPropertyKey (7.1.19): ToPrimitive(value, string) — running the object's
  * @@toPrimitive / valueOf / toString exactly once — then ToString unless the
  * result is a Symbol. For reflective builtins that convert a key a single time;

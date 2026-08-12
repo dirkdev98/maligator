@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { emitCompiledFunction } from "../src/emit-c.ts";
@@ -5,6 +6,7 @@ import { emitBatch, emitVmDefinition, emitVmTranslationUnits } from "../src/emit
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
 
 const instructions: Array<VmInstruction> = [
 	{ opcode: "CREATE_F64", dst: 0, value: -0 },
@@ -962,6 +964,42 @@ describe("native update-expression representation", () => {
 			globalThis.checksum = checksum;
 		`);
 		expect(output).not.toContain("mal_builtin_string_char_code_at_in_bounds(");
+	});
+
+	it("summarizes a closed inlined String scan allocation region", () => {
+		const program = loadEntrypointAndRunSemanticAnalysis(path.resolve("bench/gc/cli.js"));
+		const output = emitVmDefinition(compileSemanticProgramToVmDefinition(program), {
+			compiled: true,
+		});
+		expect(output).toContain("mal_vm_try_string_scan_summary(vm,");
+		expect(output).toMatch(/if \(__string_scan_\d+_fast\) \{/);
+		expect(output).toMatch(/goto L\d+;/);
+	});
+
+	it("keeps an inlined String scan generic when an aggregate record escapes", () => {
+		const output = emit(`
+			const tokenize = function tokenize(line) {
+				const out = [];
+				let count = 0;
+				for (let index = 0; index < line.length; index++) {
+					const code = line.charCodeAt(index);
+					if (code === 32) {
+						out.push({ kind: "separator", index });
+						count++;
+					} else {
+						out.push({ kind: "character", code, index });
+					}
+				}
+				return { tokens: out, count };
+			};
+			let checksum = 0;
+			for (let iteration = 0; iteration < 6000; iteration++) {
+				const result = tokenize("a b " + iteration);
+				checksum += result.tokens[0].index + result.count;
+			}
+			globalThis.checksum = checksum;
+		`);
+		expect(output).not.toContain("mal_vm_try_string_scan_summary(vm,");
 	});
 
 	it("emits guarded direct collection dispatch from call metadata", () => {

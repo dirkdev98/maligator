@@ -1708,6 +1708,13 @@ interface StringCharCodeAtFusion {
 	call: Extract<VmInstruction, { opcode: "CALL" }>;
 }
 
+type NativeStringScanRegion = NonNullable<VmFunction["nativeStringScanRegions"]>[number];
+
+interface NativeStringScanRegionAction {
+	region: NativeStringScanRegion;
+	role: "entry" | "length";
+}
+
 /**
  * One exact natural loop that may execute a dependency-backed inherited static
  * load through a cloned native fast body. The ordinary body remains in place as
@@ -2449,6 +2456,14 @@ function emitBody(
 		stringCharCodeAtFusionByIp.set(loadIp, fusion);
 		stringCharCodeAtFusionByIp.set(loadIp + 1, fusion);
 	}
+	const nativeStringScanRegionActionByIp = new Map<
+		number,
+		NativeStringScanRegionAction
+	>();
+	for (const region of fn.nativeStringScanRegions ?? []) {
+		nativeStringScanRegionActionByIp.set(region.entryIp, { region, role: "entry" });
+		nativeStringScanRegionActionByIp.set(region.lengthLoadIp, { region, role: "length" });
+	}
 
 	const lines: Array<string> = denseIteratorCursors.map(
 		(cursor) => `MalIteratorObject *${cursor.name} = nullptr;`,
@@ -2458,6 +2473,13 @@ function emitBody(
 		if (twin.deferredRegisters.length > 0) {
 			lines.push(`bool ${twin.loadedName} = false;`);
 		}
+	}
+	for (const region of fn.nativeStringScanRegions ?? []) {
+		lines.push(
+			`bool __string_scan_${region.entryIp}_fast = false;`,
+			`u32 __string_scan_${region.entryIp}_length = 0;`,
+			`u32 __string_scan_${region.entryIp}_matches = 0;`,
+		);
 	}
 	if (
 		stringCharCodeAtFusionByIp.size > 0 ||
@@ -2593,6 +2615,7 @@ function emitBody(
 					}
 				: undefined,
 			stringCharCodeAtFusionByIp.get(ip),
+			nativeStringScanRegionActionByIp.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -2655,6 +2678,7 @@ function emitInstruction(
 	hasPrototype: boolean,
 	loopTwinEmission?: LoopTwinEmission,
 	stringCharCodeAtFusion?: StringCharCodeAtFusion,
+	nativeStringScanRegionAction?: NativeStringScanRegionAction,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -2908,6 +2932,19 @@ function emitInstruction(
 			];
 		}
 		case "CREATE_ARRAY":
+			if (nativeStringScanRegionAction?.role === "entry") {
+				const region = nativeStringScanRegionAction.region;
+				const fast = `__string_scan_${region.entryIp}_fast`;
+				return [
+					`${fast} = mal_vm_try_string_scan_summary(vm, ${boxed(region.input)}, (c16) ${region.matchCodeUnit}, &__string_scan_${region.entryIp}_length, &__string_scan_${region.entryIp}_matches);`,
+					`if (${fast}) {`,
+					`  r${region.matchResult} = ${reps[region.matchResult] === "number" ? `(f64) __string_scan_${region.entryIp}_matches` : `mal_value_from_i32((i32) __string_scan_${region.entryIp}_matches)`};`,
+					`  if (mal_gc_poll) mal_gc_safepoint(vm);`,
+					`  goto L${region.exitIp};`,
+					`}`,
+					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
+				];
+			}
 			if (cardinalityRegion !== undefined) {
 				const keys = cardinalityRegion.itemKeyStringIndices
 					.map((key) => `vm->string_constant_atoms[${key}]`)
@@ -3426,6 +3463,16 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
+				if (nativeStringScanRegionAction?.role === "length") {
+					const scan = nativeStringScanRegionAction.region;
+					return [
+						`if (__string_scan_${scan.entryIp}_fast) {`,
+						`  r${scan.lengthResult} = ${reps[scan.lengthResult] === "number" ? `(f64) __string_scan_${scan.entryIp}_length` : `mal_value_from_i32((i32) __string_scan_${scan.entryIp}_length)`};`,
+						`} else {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (
 					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 					instruction.nativePrimitiveStringLength === true

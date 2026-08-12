@@ -234,6 +234,20 @@ export interface VmFunction {
 	gcRootRegisters?: ReadonlyArray<number>;
 
 	/**
+	 * EMITTER-ONLY: allocation-free summaries of fully inlined String scan regions.
+	 * These are never serialized; the ordinary VM instructions remain complete.
+	 */
+	nativeStringScanRegions?: ReadonlyArray<{
+		entryIp: number;
+		exitIp: number;
+		input: number;
+		lengthLoadIp: number;
+		lengthResult: number;
+		matchResult: number;
+		matchCodeUnit: number;
+	}>;
+
+	/**
 	 * COMPILE-ONLY: exact CREATE_OBJECT/CREATE_OBJECT_SHAPED sites proven safe for
 	 * native stack emission. Omitted by the wire codec, so deserialized/interpreted
 	 * functions retain ordinary heap allocation semantics.
