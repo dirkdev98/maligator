@@ -28,6 +28,6 @@ describe("finite string regions", () => {
 			compiled: true,
 		});
 		const output = runToStdout(binary, { env: STRESS_ENV });
-		expect(output).toContain("RESULT 4/4");
+		expect(output).toContain("RESULT 9/9");
 	});
 });

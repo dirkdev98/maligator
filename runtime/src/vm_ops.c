@@ -3700,6 +3700,56 @@ static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
     }
 }
 
+MalValue mal_vm_finite_property_load(
+    MalVm *vm, MalValue receiver, MalValue evaluated_key, i32 ordinal,
+    const i32 *string_indices, u8 count, MalInlineCache *ic
+) {
+    MalValue key = evaluated_key;
+    if (ordinal >= 0 && ordinal < count) {
+        key = mal_value_from_string(vm->string_constant_atoms[string_indices[ordinal]]);
+    }
+    MalValue result = mal_vm_op_load_property_ic(vm, receiver, key, ic);
+    if (vm->completion.kind == MAL_COMPLETION_THROW || count == 0 || count > 8) {
+        return result;
+    }
+
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr || object->shape->inline_count == 0) {
+        return result;
+    }
+
+    byte slots[8];
+    for (u8 index = 0; index < count; index++) {
+        MalValue known_key =
+            mal_value_from_string(vm->string_constant_atoms[string_indices[index]]);
+        i32 property_index = mal_shape_find(
+            object->shape, mal_key_from_value(known_key), MAL_SHAPE_FIND_LOAD_IC);
+        if (property_index < 0) {
+            return result;
+        }
+        u32 slot = object->shape->props[property_index].slot;
+        if (slot >= UINT8_MAX) {
+            return result;
+        }
+        slots[index] = (byte) slot;
+    }
+
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_FINITE_KEYS);
+    mal_ic_detach_prototype_cache(ic);
+    ic->shape = object->shape;
+    ic->key = mal_value_from_string(vm->string_constant_atoms[string_indices[0]]);
+    ic->value = MAL_VALUE_UNDEFINED;
+    ic->obj = nullptr;
+    memcpy(ic->poly_data, slots, count);
+    ic->slot = 0;
+    ic->prim_kind = 0;
+    ic->poly_count = count;
+    ic->megamorphic = false;
+    ic->mode = MAL_IC_MODE_FINITE_KEYS;
+    ic->receiver_type = 0;
+    return result;
+}
+
 static void mal_ic_record_special(
     MalVm *vm, MalInlineCache *ic, u8 mode, u8 prim_kind, MalValue key,
     MalValue value, const MalObject *prototype

@@ -256,6 +256,21 @@ describe("serialize-vm", () => {
 			operator: "+",
 			nativeFiniteString: { minimum: 0, stringIndices: [0, 1, 2] },
 		});
+		metadataInstructions.push({
+			opcode: "LOAD_PROPERTY",
+			dst: 9,
+			object: 0,
+			key: 1,
+			icIndex: metadataInstructions.filter((instruction) =>
+				[
+					"LOAD_PROPERTY",
+					"LOAD_PROPERTY_STATIC",
+					"STORE_PROPERTY",
+					"STORE_PROPERTY_STATIC",
+				].includes(instruction.opcode),
+			).length,
+			nativeFiniteKey: { minimum: 0, ordinal: 1, stringIndices: [0, 1] },
+		});
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
@@ -263,7 +278,7 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					instructions: metadataInstructions,
-					positions: [...mainFn.positions, 2, 2],
+					positions: [...mainFn.positions, 2, 2, 2],
 					gcRootRegisters: [0, 3, 7],
 					stackObjectSites: [{ instructionIndex: 4, slotCount: 2 }],
 					stackObjectAccesses: [

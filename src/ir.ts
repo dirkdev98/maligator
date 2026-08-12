@@ -979,6 +979,14 @@ export type IRInstruction =
 			stackObjectSlot?: number;
 			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
 			stackObjectInheritedSiteId?: number;
+			/** Native-only finite selector domain. The ordinary key remains available
+			 * for the exact generic fallback; the source's right operand selects a string.
+			 */
+			nativeFiniteKey?: {
+				minimum: number;
+				source: Extract<IRInstruction, { type: "binary" }>;
+				stringIndices: Array<number>;
+			};
 	  }
 	| {
 			type: "loadPropertyStatic";

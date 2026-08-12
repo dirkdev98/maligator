@@ -2114,6 +2114,32 @@ function emitInstruction(
 					`}`,
 				];
 			}
+			if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				instruction.nativeFiniteKey !== undefined
+			) {
+				const finite = instruction.nativeFiniteKey;
+				const table = `__finite_property_keys_${ip}`;
+				const ordinalNumber =
+					reps[finite.ordinal] === "number"
+						? num(finite.ordinal)
+						: `mal_ops_number_as_f64(${boxed(finite.ordinal)})`;
+				const ordinal = `__finite_property_ordinal_${ip}`;
+				const object = `__finite_property_object_${ip}`;
+				const value = `__v_${ip}`;
+				return [
+					`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
+					`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
+					`MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
+					`MalValue ${value};`,
+					`if (mal_vm_finite_property_try_load(${object}, ${ordinal}, &__property_ic[${instruction.icIndex}], &${value})) {`,
+					`  r${instruction.dst} = ${value};`,
+					`} else {`,
+					`  r${instruction.dst} = mal_vm_finite_property_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${ordinal}, ${table}, ${finite.stringIndices.length}, &__property_ic[${instruction.icIndex}]);`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
 			const key =
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
 					? `mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}])`

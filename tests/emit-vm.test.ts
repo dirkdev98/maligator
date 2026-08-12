@@ -536,6 +536,15 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
 	});
 
+	it("loads a finite selector domain through one shape-slot vector", () => {
+		const output = emit(
+			`"use strict"; function sum(source) { let total = 0; for (let i = 0; i < 8; i++) total += source["p" + (i % 4)]; return total; } globalThis.sum = sum;`,
+		);
+		expect(output).toContain("static const i32 __finite_property_keys_");
+		expect(output).toContain("mal_vm_finite_property_try_load");
+		expect(output).toContain("mal_vm_finite_property_load(vm");
+	});
+
 	it("uses compound assignments for in-place numeric updates", () => {
 		const output = emit(
 			`"use strict"; function count(limit) { let value = 0; while (value < limit) value++; return value; } globalThis.count = count;`,

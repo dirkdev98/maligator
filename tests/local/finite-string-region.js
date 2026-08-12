@@ -22,4 +22,28 @@ for (let i = 0; i < 8; i++) map.set("p" + i, i + 10);
 checks.push(map.get("p0") === 10 && map.get("p7") === 17);
 checks.push(Object.keys(object).join("|") === "p0|p1|p2|p3|p4|p5|p6|p7");
 
+function sumFinite(source) {
+	let total = 0;
+	for (let i = 0; i < 8; i++) total += source["p" + (i % 8)];
+	return total;
+}
+
+checks.push(sumFinite(object) === 84);
+object.p3 = 100;
+checks.push(sumFinite(object) === 175);
+delete object.p4;
+Object.setPrototypeOf(object, { p4: 44 });
+checks.push(sumFinite(object) === 207);
+object.p4 = 12;
+checks.push(sumFinite(object) === 175);
+
+let proxyReads = 0;
+const proxy = new Proxy(object, {
+	get(target, key, receiver) {
+		proxyReads++;
+		return Reflect.get(target, key, receiver);
+	},
+});
+checks.push(sumFinite(proxy) === 175 && proxyReads === 8);
+
 console.log("RESULT " + checks.filter(Boolean).length + "/" + checks.length);

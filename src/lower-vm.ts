@@ -643,6 +643,11 @@ export type VmInstruction =
 			object: number;
 			key: number;
 			icIndex: number;
+			nativeFiniteKey?: {
+				minimum: number;
+				ordinal: number;
+				stringIndices: Array<number>;
+			};
 	  }
 	| {
 			opcode: "LOAD_PROPERTY_STATIC";
@@ -1684,6 +1689,15 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[1],
 				key: instruction.registers[2],
 				icIndex: -1,
+				...(instruction.nativeFiniteKey === undefined
+					? {}
+					: {
+							nativeFiniteKey: {
+								minimum: instruction.nativeFiniteKey.minimum,
+								ordinal: instruction.nativeFiniteKey.source.registers[2],
+								stringIndices: [...instruction.nativeFiniteKey.stringIndices],
+							},
+						}),
 			};
 		case "loadPropertyStatic":
 			return {

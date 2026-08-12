@@ -712,6 +712,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_INHERITED_TABLE 6u
 #define MAL_IC_MODE_MISSING 7u
 #define MAL_IC_MODE_TRANSITION 8u
+#define MAL_IC_MODE_FINITE_KEYS 9u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -917,6 +918,25 @@ static inline bool mal_vm_object_try_load_static(const MalObject *object,
                                                  const MalInlineCache *ic, MalValue *out) {
     return mal_vm_object_try_load(object, ic->key, ic, out);
 }
+
+/** Exact-shape load for a compiler-proven finite selector domain. The cache row
+ * stores one slot byte per ordinal in poly_data; its slow path installs the
+ * vector only after proving every known key is an own shaped property. */
+static inline bool mal_vm_finite_property_try_load(
+    const MalObject *object, i32 ordinal, const MalInlineCache *ic, MalValue *out
+) {
+    if (object == nullptr || ic->mode != MAL_IC_MODE_FINITE_KEYS ||
+        object->shape != ic->shape || ordinal < 0 || ordinal >= ic->poly_count) {
+        return false;
+    }
+    *out = object->slots[ic->poly_data[ordinal]];
+    mal_perf_ic_load_mono_hit();
+    return true;
+}
+
+MalValue mal_vm_finite_property_load(
+    MalVm *vm, MalValue receiver, MalValue evaluated_key, i32 ordinal,
+    const i32 *string_indices, u8 count, MalInlineCache *ic);
 
 /**
  * Static-name native probe for the common dependency-registered inherited-value

@@ -174,7 +174,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "ENV_PUSH":
 		case "ENV_COPY":
 		case "ENV_POP":
-		case "LOAD_PROPERTY":
 		case "LOAD_SUPER_PROPERTY":
 		case "STORE_PROPERTY":
 		case "TO_PROPERTY_KEY":
@@ -207,6 +206,20 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "UNARY":
 		case "TYPEOF_COMPARE":
 			return { ...instruction };
+		case "LOAD_PROPERTY":
+			return {
+				...instruction,
+				nativeFiniteKey:
+					instruction.nativeFiniteKey === undefined
+						? undefined
+						: {
+								minimum: instruction.nativeFiniteKey.minimum,
+								ordinal: instruction.nativeFiniteKey.ordinal,
+								stringIndices: instruction.nativeFiniteKey.stringIndices.map(
+									(index) => index + base.string,
+								),
+							},
+			};
 		case "BINARY":
 			return {
 				...instruction,

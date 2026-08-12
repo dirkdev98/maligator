@@ -102,10 +102,15 @@ test("leaves unbounded and non-integer string concatenation generic", () => {
 			for (let i = 0.5; i < 4; i++) result.push("q" + i);
 			return result;
 		}
-		globalThis.keep = [dynamic, fractional];
+		function beyondI32() {
+			const result = [];
+			for (let i = 2 ** 40; i < 2 ** 40 + 4; i++) result.push("r" + i);
+			return result;
+		}
+		globalThis.keep = [dynamic, fractional, beyondI32];
 	`);
 	executeIROptimizations(program);
-	for (const name of ["dynamic", "fractional"]) {
+	for (const name of ["dynamic", "fractional", "beyondI32"]) {
 		expect(
 			instructionsOf(functionNamed(program, name)).some(
 				(instruction) =>
@@ -113,6 +118,47 @@ test("leaves unbounded and non-integer string concatenation generic", () => {
 			),
 		).toBe(false);
 	}
+});
+
+test("carries a finite selector domain into computed property loads", () => {
+	const program = compileScript(`
+		function sum(source) {
+			let total = 0;
+			for (let i = 0; i < 8; i++) total += source["p" + (i % 4)];
+			return total;
+		}
+		globalThis.sum = sum;
+	`);
+	executeIROptimizations(program);
+	const load = instructionsOf(functionNamed(program, "sum")).find(
+		(instruction) =>
+			instruction.type === "loadProperty" && instruction.nativeFiniteKey !== undefined,
+	);
+	if (load?.type !== "loadProperty") throw new Error("expected finite property load");
+	expect(load.nativeFiniteKey?.minimum).toBe(0);
+	expect(load.nativeFiniteKey?.stringIndices).toHaveLength(4);
+});
+
+test("does not reuse a finite selector ordinal after it changes", () => {
+	const program = compileScript(`
+		function sum(source) {
+			let total = 0;
+			for (let i = 0; i < 8; i++) {
+				const key = "p" + i;
+				i++;
+				total += source[key];
+			}
+			return total;
+		}
+		globalThis.sum = sum;
+	`);
+	executeIROptimizations(program);
+	expect(
+		instructionsOf(functionNamed(program, "sum")).some(
+			(instruction) =>
+				instruction.type === "loadProperty" && instruction.nativeFiniteKey !== undefined,
+		),
+	).toBe(false);
 });
 
 test("reuses an otherwise-unobserved object rest value for a leading spread", () => {

@@ -701,6 +701,7 @@ const MAX_FINITE_STRING_VALUES = 32;
 const MAX_FINITE_STRING_CONSTANTS = 512;
 const MAX_FINITE_STRING_CODE_UNITS = 16 * 1024 * 1024;
 const MAX_FINITE_STRING_PREFIX_CODE_UNITS = 64;
+const MAX_FINITE_STRING_INTEGER = 0x7fff_ffff;
 
 function exactIntegerConstant(
 	instruction: IRInstruction | undefined,
@@ -765,7 +766,15 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 				);
 				if (starts.length !== 1) continue;
 				const start = exactIntegerConstant(starts[0]!.instruction);
-				if (start === undefined || start < 0 || bound <= start) continue;
+				if (
+					start === undefined ||
+					start < 0 ||
+					start > MAX_FINITE_STRING_INTEGER ||
+					bound <= start ||
+					bound - 1 > MAX_FINITE_STRING_INTEGER
+				) {
+					continue;
+				}
 				if (bound - start > MAX_FINITE_STRING_VALUES) continue;
 				if (
 					definitions.some(({ instruction }) => {
@@ -853,12 +862,39 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 							program.stringConstants.length - initialStringCount + newCount <=
 							MAX_FINITE_STRING_CONSTANTS
 						) {
-							instruction.nativeFiniteString = {
+							const finite = {
 								minimum: range.minimum,
 								stringIndices: values.map((value) =>
 									getOrCreateStringConstant(program, value),
 								),
 							};
+							instruction.nativeFiniteString = finite;
+							if (finite.stringIndices.length <= 8) {
+								for (const use of index.uses.get(instruction.registers[0]) ?? []) {
+									const sourceLocation = index.locations?.get(instruction);
+									const useLocation = index.locations?.get(use.instruction);
+									const ordinalUnchanged =
+										sourceLocation !== undefined &&
+										useLocation !== undefined &&
+										sourceLocation.blockIndex === useLocation.blockIndex &&
+										sourceLocation.instructionIndex < useLocation.instructionIndex &&
+										!fn.blocks[sourceLocation.blockIndex]!.instructions.slice(
+											sourceLocation.instructionIndex + 1,
+											useLocation.instructionIndex,
+										).some((between) => definedRegisters(between).includes(right));
+									if (
+										ordinalUnchanged &&
+										use.position === 2 &&
+										use.instruction.type === "loadProperty"
+									) {
+										use.instruction.nativeFiniteKey = {
+											minimum: finite.minimum,
+											source: instruction,
+											stringIndices: [...finite.stringIndices],
+										};
+									}
+								}
+							}
 						}
 					}
 				}

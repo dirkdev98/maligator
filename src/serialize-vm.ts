@@ -17,8 +17,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 21 for finite-string native compiler metadata.
-export const WIRE_VERSION = 21;
+// Bumped to 22 for finite-selector property-region metadata.
+export const WIRE_VERSION = 22;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -629,6 +629,9 @@ export function serializeVmDefinition(
 				if (instruction.opcode === "CONSTRUCT") {
 					return instruction.directFunctionIndex !== undefined;
 				}
+				if (instruction.opcode === "LOAD_PROPERTY") {
+					return instruction.nativeFiniteKey !== undefined;
+				}
 				return (
 					instruction.opcode === "BINARY" &&
 					(instruction.nativeNumericFusion !== undefined ||
@@ -659,6 +662,14 @@ export function serializeVmDefinition(
 			} else if (instruction.opcode === "CONSTRUCT") {
 				w.u8(2);
 				w.i32(instruction.directFunctionIndex!);
+			} else if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				instruction.nativeFiniteKey !== undefined
+			) {
+				w.u8(6);
+				w.i32(instruction.nativeFiniteKey.minimum);
+				w.i32(instruction.nativeFiniteKey.ordinal);
+				w.i32Array(instruction.nativeFiniteKey.stringIndices);
 			} else if (
 				instruction.opcode === "BINARY" &&
 				instruction.nativeFiniteString !== undefined
@@ -1453,6 +1464,20 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid finite-string metadata");
 				}
 				instruction.nativeFiniteString = { minimum, stringIndices };
+			} else if (tag === 6 && instruction.opcode === "LOAD_PROPERTY") {
+				const minimum = r.i32();
+				const ordinal = r.i32();
+				const stringIndices = r.i32Array();
+				if (
+					ordinal < 0 ||
+					ordinal >= fn.registerCount ||
+					stringIndices.length === 0 ||
+					stringIndices.length > 8 ||
+					stringIndices.some((index) => index < 0 || index >= stringConstants.length)
+				) {
+					throw new RangeError("serialize-vm: invalid finite-property metadata");
+				}
+				instruction.nativeFiniteKey = { minimum, ordinal, stringIndices };
 			} else {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",

@@ -8,7 +8,7 @@
 
 #define MAL_PERF_TABLE_ROLE_COUNT 4
 #define MAL_PERF_SHAPE_CALLER_COUNT 6
-#define MAL_PERF_IC_MODE_COUNT 9
+#define MAL_PERF_IC_MODE_COUNT 10
 
 typedef struct MalPerfTableStats {
     u64 lookups;
