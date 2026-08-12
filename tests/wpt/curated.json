@@ -698,6 +698,27 @@
 			]
 		},
 		{
+			"path": "streams/readable-byte-streams/general.any.js",
+			"sha256": "dc470ce8e9e30c7bdffaa4a07a03cc535d0bee85bc0e8852014fa8bf09814967",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/rs-utils.js" },
+				{ "name": "script", "value": "../resources/test-utils.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/rs-utils.js",
+					"sha256": "e4ac017aecf1eb2f83b0f22ece95998fec7d42a6de1d94fa1497351369bec04b"
+				},
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				}
+			]
+		},
+		{
 			"path": "streams/readable-byte-streams/templated.any.js",
 			"sha256": "db88231747832f45e3ff3813ee4ccc589a3cf333216434aea722ba91ba1d7367",
 			"target": "server-main",

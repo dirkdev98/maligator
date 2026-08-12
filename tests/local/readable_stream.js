@@ -477,6 +477,98 @@ async function run() {
 			multiPendingSecondResult.value[1] === 6,
 	);
 
+	let handoffController;
+	const handoffStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			handoffController = controller;
+		},
+	});
+	const handoffReader1 = handoffStream.getReader({ mode: "byob" });
+	const handoffRead1 = handoffReader1.read(new Uint8Array(3));
+	const handoffRequest = handoffController.byobRequest;
+	const handoffRead1Rejected = handoffRead1.then(
+		() => false,
+		(error) => error instanceof TypeError,
+	);
+	const handoffClosed1Rejected = handoffReader1.closed.then(
+		() => false,
+		(error) => error instanceof TypeError,
+	);
+	handoffReader1.releaseLock();
+	const handoffReader2 = handoffStream.getReader({ mode: "byob" });
+	const handoffRead2 = handoffReader2.read(new Uint8Array(3));
+	handoffRequest.view[0] = 11;
+	handoffRequest.respond(1);
+	const handoffResult = await handoffRead2;
+	check(
+		"a live BYOB request survives reader release and fills the next read",
+		(await handoffRead1Rejected) &&
+			(await handoffClosed1Rejected) &&
+			handoffController.byobRequest === null &&
+			handoffResult.value.byteLength === 1 &&
+			handoffResult.value.buffer.byteLength === 3 &&
+			handoffResult.value[0] === 11,
+	);
+	await handoffReader2.cancel();
+
+	let partialHandoffController;
+	const partialHandoffStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			partialHandoffController = controller;
+		},
+	});
+	const partialHandoffReader1 = partialHandoffStream.getReader({ mode: "byob" });
+	const partialHandoffRead1 = partialHandoffReader1.read(new Uint16Array(1));
+	partialHandoffRead1.catch(() => {});
+	partialHandoffReader1.closed.catch(() => {});
+	partialHandoffController.byobRequest.view[0] = 0x11;
+	partialHandoffController.byobRequest.respond(1);
+	const partialHandoffRequest = partialHandoffController.byobRequest;
+	partialHandoffReader1.releaseLock();
+	const partialHandoffReader2 = partialHandoffStream.getReader({ mode: "byob" });
+	const partialHandoffRead2 = partialHandoffReader2.read(new Uint16Array(1));
+	partialHandoffRequest.view[0] = 0x22;
+	partialHandoffRequest.respond(1);
+	const partialHandoffResult = await partialHandoffRead2;
+	check(
+		"partial BYOB elements survive reader handoff",
+		partialHandoffResult.value.byteLength === 2 &&
+			new Uint8Array(partialHandoffResult.value.buffer)[0] === 0x11 &&
+			new Uint8Array(partialHandoffResult.value.buffer)[1] === 0x22,
+	);
+	await partialHandoffReader2.cancel();
+
+	let enqueueHandoffController;
+	const enqueueHandoffStream = new ReadableStream({
+		type: "bytes",
+		start(controller) {
+			enqueueHandoffController = controller;
+		},
+	});
+	const enqueueHandoffReader1 = enqueueHandoffStream.getReader({ mode: "byob" });
+	const enqueueHandoffRead1 = enqueueHandoffReader1.read(new Uint16Array(1));
+	enqueueHandoffRead1.catch(() => {});
+	enqueueHandoffReader1.closed.catch(() => {});
+	enqueueHandoffController.byobRequest.view[0] = 0x11;
+	enqueueHandoffController.byobRequest.respond(1);
+	enqueueHandoffReader1.releaseLock();
+	const enqueueHandoffReader2 = enqueueHandoffStream.getReader();
+	const enqueueHandoffRead2 = enqueueHandoffReader2.read();
+	enqueueHandoffController.enqueue(new Uint8Array([0x22]));
+	const enqueueHandoffResult2 = await enqueueHandoffRead2;
+	const enqueueHandoffResult3 = await enqueueHandoffReader2.read();
+	check(
+		"enqueue splits a partial released descriptor from the new chunk",
+		enqueueHandoffResult2.value.byteLength === 1 &&
+			enqueueHandoffResult2.value.buffer.byteLength === 1 &&
+			enqueueHandoffResult2.value[0] === 0x11 &&
+			enqueueHandoffResult3.value.byteLength === 1 &&
+			enqueueHandoffResult3.value[0] === 0x22,
+	);
+	await enqueueHandoffReader2.cancel();
+
 	const multiQueueStream = new ReadableStream({
 		type: "bytes",
 		start(controller) {

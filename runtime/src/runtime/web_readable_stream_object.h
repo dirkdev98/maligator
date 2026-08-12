@@ -65,6 +65,8 @@ typedef struct MalReadableStreamObject {
             MalValue cancel_method;
             MalValue size_algorithm;
             MalValue byob_request;
+            MalValue orphaned_pull_into_view;
+            usize orphaned_bytes_filled;
             MalReadableStreamQueueEntry *queue_head;
             MalReadableStreamQueueEntry *queue_tail;
             f64 queue_total_size;
