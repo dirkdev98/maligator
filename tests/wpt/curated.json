@@ -735,6 +735,22 @@
 			]
 		},
 		{
+			"path": "streams/readable-byte-streams/patched-global.any.js",
+			"sha256": "012b31993bd132753d3c23a0ce48654481f65ee2b9b62d228f2b02bf96318029",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/test-utils.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				}
+			]
+		},
+		{
 			"path": "streams/readable-byte-streams/read-min.any.js",
 			"sha256": "7c9676957490d5e8f2ab5da3a78c9df6447425453ba0f25e1e3d2eab40a4d444",
 			"target": "server-main",

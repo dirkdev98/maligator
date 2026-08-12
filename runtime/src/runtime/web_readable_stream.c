@@ -81,12 +81,17 @@ static MalPromiseObject *rs_new_promise(MalVm *vm) {
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
 }
 
+static void rs_resolve_promise(MalVm *vm, MalValue promise, MalValue resolution) {
+    mal_promise_settle_direct(vm, promise,
+        vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], false, resolution);
+}
+
 static MalValue rs_resolved_promise(MalVm *vm, MalValue value) {
     MalValue roots[2] = {value, mal_value_new_undefined()};
     MalRootSpan span;
     mal_gc_root(&span, roots, 2);
     roots[1] = mal_value_from_promise_object(rs_new_promise(vm));
-    mal_promise_fulfill(vm, mal_value_to_promise_object(roots[1]), roots[0]);
+    rs_resolve_promise(vm, roots[1], roots[0]);
     mal_gc_unroot(&span);
     return roots[1];
 }
@@ -355,7 +360,7 @@ static void rs_close_stream(MalVm *vm, MalReadableStreamObject *stream) {
         }
         roots[2] = rs_read_result(vm, value, true);
         rs_request_remove(reader, request);
-        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[2]);
+        rs_resolve_promise(vm, roots[0], roots[2]);
         mal_gc_unroot(&span);
     }
 }
@@ -1434,8 +1439,7 @@ static MalValue rs_cancel_internal(
         pending_roots[1] = rs_read_result(
             vm, mal_value_new_undefined(), true);
         rs_request_remove(reader, request);
-        mal_promise_fulfill(vm,
-            mal_value_to_promise_object(pending_roots[0]), pending_roots[1]);
+        rs_resolve_promise(vm, pending_roots[0], pending_roots[1]);
         mal_gc_unroot(&pending_span);
     }
     rs_close_stream(vm, stream);
@@ -1754,8 +1758,7 @@ static MalValue rs_byob_request_respond(MalVm *vm, MalValue self,
             rs_byob_result_view(vm, destination, committed,
                 read_request->data_view), true);
         rs_request_remove(reader, read_request);
-        mal_promise_fulfill(vm,
-            mal_value_to_promise_object(roots[2]), roots[3]);
+        rs_resolve_promise(vm, roots[2], roots[3]);
         while (reader->as.reader.requests_head != nullptr) {
             MalReadableStreamReadRequest *next = reader->as.reader.requests_head;
             roots[1] = next->view;
@@ -1766,8 +1769,7 @@ static MalValue rs_byob_request_respond(MalVm *vm, MalValue self,
                 rs_byob_result_view(vm, next_destination, 0,
                     next->data_view), true);
             rs_request_remove(reader, next);
-            mal_promise_fulfill(vm,
-                mal_value_to_promise_object(roots[2]), roots[3]);
+            rs_resolve_promise(vm, roots[2], roots[3]);
         }
         mal_gc_unroot(&span);
         return mal_value_new_undefined();
@@ -1790,7 +1792,7 @@ static MalValue rs_byob_request_respond(MalVm *vm, MalValue self,
         rs_byob_result_view(vm, destination, committed,
             read_request->data_view), false);
     rs_request_remove(reader, read_request);
-    mal_promise_fulfill(vm, mal_value_to_promise_object(roots[2]), roots[3]);
+    rs_resolve_promise(vm, roots[2], roots[3]);
     if (remainder > 0) {
         (void) rs_controller_enqueue_kind(vm,
             mal_value_from_readable_stream_object(controller), &roots[4], 1,
@@ -1912,6 +1914,135 @@ static MalValue rs_byob_request_respond_with_new_view(MalVm *vm, MalValue self,
         mal_value_new_undefined(), mal_value_new_undefined());
 }
 
+static bool rs_byte_controller_fulfill_byob_requests(
+    MalVm *vm,
+    MalReadableStreamObject *controller,
+    MalReadableStreamObject *reader,
+    MalValue chunk
+) {
+    if (reader == nullptr ||
+        reader->kind != MAL_READABLE_STREAM_BYOB_READER ||
+        reader->as.reader.requests_head == nullptr ||
+        mal_value_is_undefined(reader->as.reader.requests_head->view)) {
+        return false;
+    }
+
+    i32 request_count = 0;
+    for (MalReadableStreamReadRequest *request = reader->as.reader.requests_head;
+         request != nullptr; request = request->next) {
+        if (request_count == (INT32_MAX - 1) / 2) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Readable byte stream has too many pending reads");
+            return true;
+        }
+        request_count++;
+    }
+    i32 root_count = 1 + request_count * 2;
+    MalValue *roots = malloc((usize) root_count * sizeof(MalValue));
+    if (roots == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Readable byte stream settlement allocation failed");
+        return true;
+    }
+    for (i32 i = 0; i < root_count; i++) {
+        roots[i] = mal_value_new_undefined();
+    }
+    roots[0] = chunk;
+    MalRootSpan span;
+    mal_gc_root(&span, roots, root_count);
+
+    usize source_offset = 0;
+    usize settlement_count = 0;
+    while (reader->as.reader.requests_head != nullptr) {
+        MalBufferSourceSpan source_span;
+        if (mal_buffer_source_span(roots[0], &source_span) !=
+            MAL_BUFFER_SOURCE_SPAN_OK) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "A byte ReadableStream must contain attached buffer-source chunks");
+            break;
+        }
+        if (source_offset >= source_span.length) {
+            break;
+        }
+
+        MalReadableStreamReadRequest *request = reader->as.reader.requests_head;
+        if (mal_value_is_undefined(request->view)) {
+            break;
+        }
+        usize promise_slot = 1 + settlement_count * 2;
+        usize result_slot = promise_slot + 1;
+        roots[promise_slot] = request->promise;
+        roots[result_slot] = rs_transfer_typed_array_view(vm, request->view);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            break;
+        }
+        mal_gc_write_barrier(request->view);
+        request->view = roots[result_slot];
+        mal_gc_card(&reader->object.header, roots[result_slot]);
+
+        MalTypedArrayObject *destination;
+        MalBufferSourceSpan destination_span;
+        if (!rs_byob_view_is_valid(vm, roots[result_slot],
+                &destination, &destination_span)) {
+            break;
+        }
+        usize capacity = destination_span.length - request->bytes_filled;
+        usize available = source_span.length - source_offset;
+        usize copied = available < capacity ? available : capacity;
+        if (copied > 0) {
+            memcpy(destination_span.data + request->bytes_filled,
+                source_span.data + source_offset, copied);
+        }
+        source_offset += copied;
+        request->bytes_filled += copied;
+
+        usize element_size = mal_typed_array_element_size(destination->kind);
+        usize committed = request->bytes_filled -
+            (request->bytes_filled % element_size);
+        if (committed < request->minimum_fill) {
+            rs_invalidate_byob_request(controller);
+            break;
+        }
+
+        usize remainder = request->bytes_filled - committed;
+        if (remainder > 0) {
+            MalValue remainder_view = mal_value_from_typed_array_object(
+                mal_typed_array_object_new(&vm->heap,
+                    mal_value_to_object(vm->intrinsics[
+                        MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+                    destination->buffer, MAL_TA_UINT8,
+                    destination->byte_offset + (u32) committed,
+                    (u32) remainder, false));
+            rs_queue_append(controller, remainder_view, 0, (f64) remainder);
+        }
+        roots[result_slot] = rs_read_result(vm,
+            rs_byob_result_view(vm, destination, (u32) committed,
+                request->data_view), false);
+        rs_invalidate_byob_request(controller);
+        rs_request_remove(reader, request);
+        settlement_count++;
+    }
+
+    MalBufferSourceSpan source_span;
+    if (vm->completion.kind != MAL_COMPLETION_THROW &&
+        mal_buffer_source_span(roots[0], &source_span) ==
+            MAL_BUFFER_SOURCE_SPAN_OK &&
+        source_offset < source_span.length) {
+        rs_queue_append(controller, roots[0], source_offset,
+            (f64) (source_span.length - source_offset));
+    }
+    for (usize i = 0; i < settlement_count; i++) {
+        rs_resolve_promise(vm, roots[1 + i * 2], roots[2 + i * 2]);
+    }
+
+    mal_gc_unroot(&span);
+    free(roots);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        rs_call_pull_if_needed(vm, controller);
+    }
+    return true;
+}
+
 static MalValue rs_controller_enqueue_kind(MalVm *vm, MalValue self,
     const MalValue *args, i32 argc, MalReadableStreamKind kind,
     const byte *message, bool owned_byte_chunk) {
@@ -1991,8 +2122,7 @@ static MalValue rs_controller_enqueue_kind(MalVm *vm, MalValue self,
                     prefix_buffer, MAL_TA_UINT8, 0, prefix_length, false));
             roots[3] = rs_read_result(vm, roots[2], false);
             rs_request_remove(reader, pending);
-            mal_promise_fulfill(vm,
-                mal_value_to_promise_object(roots[1]), roots[3]);
+            rs_resolve_promise(vm, roots[1], roots[3]);
             mal_gc_unroot(&span);
         }
         mal_gc_write_barrier(
@@ -2018,10 +2148,14 @@ static MalValue rs_controller_enqueue_kind(MalVm *vm, MalValue self,
         roots[2] = rs_read_result(vm, roots[0], false);
         rs_invalidate_byob_request(controller);
         rs_request_remove(reader, pending);
-        mal_promise_fulfill(vm,
-            mal_value_to_promise_object(roots[1]), roots[2]);
+        rs_resolve_promise(vm, roots[1], roots[2]);
         mal_gc_unroot(&span);
         rs_call_pull_if_needed(vm, controller);
+        return mal_value_new_undefined();
+    }
+    if (kind == MAL_READABLE_BYTE_STREAM_CONTROLLER &&
+        rs_byte_controller_fulfill_byob_requests(
+            vm, controller, reader, chunk)) {
         return mal_value_new_undefined();
     }
     if (reader != nullptr && reader->as.reader.requests_head != nullptr) {
@@ -2100,7 +2234,7 @@ static MalValue rs_controller_enqueue_kind(MalVm *vm, MalValue self,
         }
         rs_invalidate_byob_request(controller);
         rs_request_remove(reader, request);
-        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[1]), roots[3]);
+        rs_resolve_promise(vm, roots[1], roots[3]);
         mal_gc_unroot(&span);
     } else {
         f64 chunk_size;
