@@ -1106,6 +1106,27 @@
 			"includes": []
 		},
 		{
+			"path": "streams/writable-streams/reentrant-strategy.any.js",
+			"sha256": "f1c493977d45b80e1acd6611dab52896f281d527fe54518d88c39dba200210aa",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,worker" },
+				{ "name": "script", "value": "../resources/test-utils.js" },
+				{ "name": "script", "value": "../resources/recording-streams.js" }
+			],
+			"includes": [
+				{
+					"path": "streams/resources/test-utils.js",
+					"sha256": "6ba682d4fa67f654de9c0d3516b6c3e0cdf1f0017085c866418cf93ced85cce7"
+				},
+				{
+					"path": "streams/resources/recording-streams.js",
+					"sha256": "7c90125c056643aa82b07eb00584e5d52ed39778b23adfeac82db2890a4a92ca"
+				}
+			]
+		},
+		{
 			"path": "streams/writable-streams/start.any.js",
 			"sha256": "fa77f9baae62fff674c310556d0a6a7081faa86818e1769cd7e7cede035d91d9",
 			"target": "server-main",

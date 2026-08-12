@@ -643,7 +643,7 @@ static MalValue ws_writer_get_desired_size(MalVm *vm, MalValue self,
 }
 
 static MalValue ws_enqueue(MalVm *vm, MalReadableStreamObject *stream,
-    MalValue chunk, bool close) {
+    MalReadableStreamObject *writer, MalValue chunk, bool close) {
     if (stream->as.writable_stream.state == MAL_READABLE_STREAM_ERRORED) {
         return ws_rejected_promise(vm, stream->as.writable_stream.stored_error);
     }
@@ -686,6 +686,27 @@ static MalValue ws_enqueue(MalVm *vm, MalReadableStreamObject *stream,
             mal_gc_unroot(&span);
             return result;
         }
+        if (mal_value_is_undefined(writer->as.writer.stream) ||
+            stream->as.writable_stream.writer !=
+                mal_value_from_readable_stream_object(writer)) {
+            MalValue result = ws_rejected_type_error(
+                vm, "WritableStreamDefaultWriter was released during size calculation");
+            mal_gc_unroot(&span);
+            return result;
+        }
+        if (stream->as.writable_stream.state == MAL_READABLE_STREAM_ERRORED) {
+            MalValue result = ws_rejected_promise(
+                vm, stream->as.writable_stream.stored_error);
+            mal_gc_unroot(&span);
+            return result;
+        }
+        if (stream->as.writable_stream.state == MAL_READABLE_STREAM_CLOSED ||
+            controller->as.writable_controller.close_requested) {
+            MalValue result = ws_rejected_type_error(
+                vm, "WritableStream is closing or closed");
+            mal_gc_unroot(&span);
+            return result;
+        }
     }
     roots[2] = mal_value_from_promise_object(ws_new_promise(vm));
     MalWritableStreamWriteRequest *request = calloc(1, sizeof(*request));
@@ -723,7 +744,8 @@ static MalValue ws_writer_write(MalVm *vm, MalValue self,
     if (mal_value_is_undefined(writer->as.writer.stream)) {
         return ws_rejected_type_error(vm, "WritableStreamDefaultWriter has been released");
     }
-    return ws_enqueue(vm, mal_value_to_readable_stream_object(writer->as.writer.stream),
+    return ws_enqueue(vm,
+        mal_value_to_readable_stream_object(writer->as.writer.stream), writer,
         argc >= 1 ? args[0] : mal_value_new_undefined(), false);
 }
 
@@ -738,7 +760,8 @@ static MalValue ws_writer_close(MalVm *vm, MalValue self,
     if (mal_value_is_undefined(writer->as.writer.stream)) {
         return ws_rejected_type_error(vm, "WritableStreamDefaultWriter has been released");
     }
-    return ws_enqueue(vm, mal_value_to_readable_stream_object(writer->as.writer.stream),
+    return ws_enqueue(vm,
+        mal_value_to_readable_stream_object(writer->as.writer.stream), writer,
         mal_value_new_undefined(), true);
 }
 
@@ -920,7 +943,7 @@ static MalValue ws_stream_close(MalVm *vm, MalValue self,
     if (!mal_value_is_undefined(stream->as.writable_stream.writer)) {
         return ws_rejected_type_error(vm, "Cannot close a locked WritableStream");
     }
-    return ws_enqueue(vm, stream, mal_value_new_undefined(), true);
+    return ws_enqueue(vm, stream, nullptr, mal_value_new_undefined(), true);
 }
 
 static MalValue ws_controller_constructor(MalVm *vm, MalValue self,
