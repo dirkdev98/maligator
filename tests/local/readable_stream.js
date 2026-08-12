@@ -137,10 +137,10 @@ async function run() {
 			!(byteController instanceof ReadableStreamDefaultController) &&
 			byteController.byobRequest === null &&
 			byteRead.value instanceof Uint8Array &&
-			byteRead.value.byteLength === byteChunk.byteLength &&
+			byteRead.value.byteLength === 4 &&
 			byteRead.value[0] === 1 &&
 			byteRead.value[1] === 2 &&
-			byteChunk.byteLength === 4 &&
+			byteChunk.byteLength === 0 &&
 			byteController.desiredSize === 0,
 	);
 
@@ -268,26 +268,58 @@ async function run() {
 	await invalidByobReader.cancel();
 
 	let partialRespondPulls = 0;
+	let partialRespondTransferred = true;
 	const partialRespondStream = new ReadableStream({
 		type: "bytes",
 		pull(controller) {
 			partialRespondPulls++;
 			const request = controller.byobRequest;
-			request.view[0] = partialRespondPulls;
+			const exposedView = request.view;
+			exposedView[0] = partialRespondPulls;
 			request.respond(1);
+			partialRespondTransferred &&= exposedView.buffer.byteLength === 0;
 			if (partialRespondPulls === 4) controller.close();
 		},
 	});
-	const partialRespondRead = await partialRespondStream
-		.getReader({ mode: "byob" })
-		.read(new Uint32Array(1));
+	const partialRespondReader = partialRespondStream.getReader({ mode: "byob" });
+	const partialRespondInput = new Uint32Array(1);
+	const partialRespondPromise = partialRespondReader.read(partialRespondInput);
+	const partialRespondInputTransferred = partialRespondInput.buffer.byteLength === 0;
+	const partialRespondRead = await partialRespondPromise;
 	check(
 		"BYOB respond accumulates partial elements",
-		partialRespondPulls === 4 &&
+		partialRespondInputTransferred &&
+			partialRespondTransferred &&
+			partialRespondPulls === 4 &&
 			partialRespondRead.value instanceof Uint32Array &&
 			partialRespondRead.value.byteLength === 4 &&
 			new Uint8Array(partialRespondRead.value.buffer)[0] === 1 &&
 			new Uint8Array(partialRespondRead.value.buffer)[3] === 4,
+	);
+
+	let transferredReplacementDetached = false;
+	const transferredReplacementStream = new ReadableStream({
+		type: "bytes",
+		pull(controller) {
+			const exposed = controller.byobRequest.view;
+			const byteOffset = exposed.byteOffset;
+			const byteLength = exposed.byteLength;
+			const transferred = new Uint8Array(
+				exposed.buffer.transfer(),
+				byteOffset,
+				byteLength,
+			);
+			transferred[0] = 9;
+			controller.byobRequest.respondWithNewView(transferred);
+			transferredReplacementDetached = transferred.buffer.byteLength === 0;
+		},
+	});
+	const transferredReplacementRead = await transferredReplacementStream
+		.getReader({ mode: "byob" })
+		.read(new Uint8Array(1));
+	check(
+		"BYOB accepts a replacement view over the transferred request buffer",
+		transferredReplacementDetached && transferredReplacementRead.value[0] === 9,
 	);
 
 	let excessRespondPulls = 0;
