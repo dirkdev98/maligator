@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 24u        // native cardinality-region metadata
+#define WIRE_VERSION 25u        // virtual-record indexed field metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1643,8 +1643,14 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             } else if (tag == 9) { // LOAD_PROPERTY cardinality access
                 u8 role = rd_u8(&r);
                 (void) rd_i32(&r); // virtual array allocation instruction
-                if (role < 1 || role > 2) {
+                if (role < 1 || role > 4) {
                     r.ok = false;
+                }
+                if (role == 4) {
+                    i32 field_slot = rd_i32(&r);
+                    if (field_slot < 0 || field_slot >= 8) {
+                        r.ok = false;
+                    }
                 }
             } else {
                 r.ok = false;

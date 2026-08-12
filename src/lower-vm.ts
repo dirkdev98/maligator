@@ -661,8 +661,9 @@ export type VmInstruction =
 				stringIndices: Array<number>;
 			};
 			nativeCardinalityAccess?: {
-				role: "push" | "length";
+				role: "push" | "length" | "element" | "field";
 				allocationInstructionIndex: number;
+				fieldSlot?: number;
 			};
 	  }
 	| {
@@ -672,8 +673,9 @@ export type VmInstruction =
 			stringIndex: number;
 			icIndex: number;
 			nativeCardinalityAccess?: {
-				role: "push" | "length";
+				role: "push" | "length" | "element" | "field";
 				allocationInstructionIndex: number;
+				fieldSlot?: number;
 			};
 	  }
 	| {
@@ -1215,7 +1217,8 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			{ opcode: "LOAD_PROPERTY" | "LOAD_PROPERTY_STATIC" }
 		>;
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
-		role: "push" | "length";
+		role: "push" | "length" | "element" | "field";
+		fieldSlot?: number;
 	}> = [];
 	const pendingCardinalityPushes: Array<{
 		instruction: Extract<VmInstruction, { opcode: "CALL" }>;
@@ -1283,6 +1286,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 					instruction: vmInstruction,
 					allocation: instruction.nativeCardinalityAccess.allocation,
 					role: instruction.nativeCardinalityAccess.role,
+					fieldSlot: instruction.nativeCardinalityAccess.fieldSlot,
 				});
 			}
 			if (
@@ -1399,6 +1403,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		pending.instruction.nativeCardinalityAccess = {
 			role: pending.role,
 			allocationInstructionIndex,
+			fieldSlot: pending.fieldSlot,
 		};
 	}
 	for (const pending of pendingCardinalityPushes) {

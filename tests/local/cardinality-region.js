@@ -21,6 +21,43 @@ ok("ordinary virtual result", ordinary(10) === 633);
 ok("ordinary repeated checksum", ordinaryTotal === 1283385);
 
 const intrinsicPush = Array.prototype.push;
+
+function indexed(seed) {
+	const rows = [];
+	for (let i = 0; i < 4; i++) rows.push({ idx: i, value: seed + i });
+	return rows[(seed + 1) % 4].value;
+}
+let indexedTotal = 0;
+for (let i = 0; i < 2000; i++) indexedTotal += indexed(i);
+ok("indexed virtual field", indexed(10) === 13);
+ok("indexed repeated checksum", indexedTotal === 2002000);
+
+let indexCoercions = 0;
+function objectIndex() {
+	const rows = [];
+	for (let i = 0; i < 4; i++) rows.push({ idx: i, value: 20 + i });
+	const key = {
+		toString() {
+			indexCoercions++;
+			return "2";
+		},
+	};
+	return rows[key].value;
+}
+ok("object index deopt result", objectIndex() === 22);
+ok("object index coerced once", indexCoercions === 1);
+
+function mutateBeforeIndex() {
+	const rows = [];
+	for (let i = 0; i < 4; i++) rows.push({ idx: i, value: 30 + i });
+	Array.prototype.push = function () {
+		return -1;
+	};
+	return rows[1].value;
+}
+ok("protector deopt before indexed read", mutateBeforeIndex() === 31);
+Array.prototype.push = intrinsicPush;
+
 let midObservation = "";
 function mutateAfterMethodLoad(i) {
 	if (i === 2) {
@@ -46,6 +83,21 @@ function mutateMidRegion() {
 }
 ok("mid-region result", mutateMidRegion() === 406);
 ok("mid-region prior rows", midObservation === "3:0:3");
+Array.prototype.push = intrinsicPush;
+
+function postConstructionAliasDeopt() {
+	const rows = [];
+	for (let i = 0; i < 3; i++) rows.push({ idx: i, value: i });
+	const alias = rows;
+	Array.prototype.push = function () {
+		return -1;
+	};
+	return alias[2].value;
+}
+ok(
+	"materialization publishes post-construction alias",
+	postConstructionAliasDeopt() === 2,
+);
 Array.prototype.push = intrinsicPush;
 
 let overrideObservation = "";
@@ -94,5 +146,5 @@ ok("accessor result", accessorBeforeEntry() === 3);
 ok("accessor receiver and calls", getterObservations === "012");
 Object.defineProperty(Array.prototype, "push", pushDescriptor);
 
-ok("check count", checks === 8);
+ok("check count", checks === 14);
 console.log("cardinality-region PASS " + checks + "/" + checks);

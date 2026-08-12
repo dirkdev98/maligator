@@ -12,7 +12,7 @@ import {
 const fixture = "tests/local/cardinality-region.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-cardinality-region-"));
 
-describe("native cardinality-only array regions", () => {
+describe("native virtual record-array regions", () => {
 	let compiled: string;
 	let concurrent: string;
 	let interpreted: string;

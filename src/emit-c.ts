@@ -618,7 +618,11 @@ export function emitCompiledFunction(
 	const cardinalityRegions = new Map<number, CardinalityRegion>();
 	const cardinalityAccesses = new Map<
 		number,
-		{ region: CardinalityRegion; role: "push" | "length" }
+		{
+			region: CardinalityRegion;
+			role: "push" | "length" | "element" | "field";
+			fieldSlot?: number;
+		}
 	>();
 	const cardinalityPushes = new Map<number, CardinalityRegion>();
 	const cardinalityHistorySlotLimit = stackSlotsBase + 512;
@@ -684,6 +688,7 @@ export function emitCompiledFunction(
 			countName: `__cardinality_${ip}_count`,
 			shapeName: `__cardinality_${ip}_shape`,
 			currentMaterializedName: `__cardinality_${ip}_current_materialized`,
+			elementIndexName: `__cardinality_${ip}_element_index`,
 		};
 		pushedSite.cardinalityRegion = region;
 		nextStackSlot += historySlotCount;
@@ -706,6 +711,7 @@ export function emitCompiledFunction(
 			cardinalityAccesses.set(ip, {
 				region,
 				role: instruction.nativeCardinalityAccess.role,
+				fieldSlot: instruction.nativeCardinalityAccess.fieldSlot,
 			});
 		}
 	}
@@ -831,6 +837,7 @@ export function emitCompiledFunction(
 		lines.push(`    u32 ${region.countName} = 0;`);
 		lines.push(`    MalShape *${region.shapeName} = nullptr;`);
 		lines.push(`    bool ${region.currentMaterializedName} = false;`);
+		lines.push(`    i32 ${region.elementIndexName} = -1;`);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
@@ -1396,6 +1403,7 @@ interface CardinalityRegion {
 	countName: string;
 	shapeName: string;
 	currentMaterializedName: string;
+	elementIndexName: string;
 }
 
 /**
@@ -1498,7 +1506,11 @@ function emitBody(
 	cardinalityRegions: ReadonlyMap<number, CardinalityRegion>,
 	cardinalityAccesses: ReadonlyMap<
 		number,
-		{ region: CardinalityRegion; role: "push" | "length" }
+		{
+			region: CardinalityRegion;
+			role: "push" | "length" | "element" | "field";
+			fieldSlot?: number;
+		}
 	>,
 	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
 ): Array<string> | null {
@@ -1877,7 +1889,13 @@ function emitInstruction(
 	stackObjectMaterialization: StackObjectSite | undefined,
 	stackObjectInheritedAccess: StackObjectSite | undefined,
 	cardinalityRegion: CardinalityRegion | undefined,
-	cardinalityAccess: { region: CardinalityRegion; role: "push" | "length" } | undefined,
+	cardinalityAccess:
+		| {
+				region: CardinalityRegion;
+				role: "push" | "length" | "element" | "field";
+				fieldSlot?: number;
+		  }
+		| undefined,
 	cardinalityPush: CardinalityRegion | undefined,
 	mathUnaryCall: boolean,
 	mathBinaryCall: boolean,
@@ -1946,6 +1964,7 @@ function emitInstruction(
 		`r${target.arrayRegister} = mal_vm_materialize_virtual_record_array(vm, ${target.shapeName}, &__gc_slots[${target.historySlotsOffset}], ${target.countName}, ${target.itemSite.slotCount});`,
 		throwCheck,
 		`${target.fastName} = false;`,
+		`${target.elementIndexName} = -1;`,
 	];
 
 	// GC safepoint poll. Emitted at call returns and loop
@@ -2117,6 +2136,7 @@ function emitInstruction(
 					`if (${cardinalityRegion.shapeName} == nullptr) { ${cardinalityRegion.shapeName} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${cardinalityRegion.itemSite.slotCount}); __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}] = ${cardinalityRegion.shapeName}; }`,
 					`${cardinalityRegion.fastName} = mal_primitive_method_protector && mal_builtin_array_push_virtual_guard(vm);`,
 					`${cardinalityRegion.countName} = 0;`,
+					`${cardinalityRegion.elementIndexName} = -1;`,
 					`if (${cardinalityRegion.fastName}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
@@ -2257,6 +2277,45 @@ function emitInstruction(
 						`if (${target.fastName}) {`,
 						`  r${instruction.dst} = ${countValue};`,
 						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				if (cardinalityAccess.role === "field") {
+					const slot = cardinalityAccess.fieldSlot;
+					if (slot === undefined || slot < 0 || slot >= target.itemSite.slotCount) {
+						return null;
+					}
+					return [
+						`if (${target.elementIndexName} >= 0) {`,
+						`  r${instruction.dst} = __gc_slots[${target.historySlotsOffset} + ${target.elementIndexName} * ${target.itemSite.slotCount} + ${slot}];`,
+						`} else {`,
+						...fallback.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				if (cardinalityAccess.role === "element") {
+					if (instruction.opcode !== "LOAD_PROPERTY") return null;
+					const key = instruction.key;
+					const keyIsNumber =
+						reps[key] === "number" ? "true" : `mal_ops_is_number(${boxed(key)})`;
+					const index = `__cardinality_${ip}_index`;
+					const valid = `__cardinality_${ip}_index_valid`;
+					return [
+						`f64 ${index} = 0;`,
+						`bool ${valid} = ${target.fastName} && mal_primitive_method_protector && mal_array_elements_protector && ${keyIsNumber};`,
+						`if (${valid}) { ${index} = ${num(key)}; ${valid} = ${index} >= 0 && ${index} < (f64) ${target.countName} && ${index} == trunc(${index}); }`,
+						`if (${valid}) {`,
+						`  ${target.elementIndexName} = (i32) ${index};`,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						`} else {`,
+						`  if (${target.fastName}) {`,
+						...materializeCardinalityRegion(target).map((line) => `    ${line}`),
+						...(instruction.object === target.arrayRegister
+							? []
+							: [`    r${instruction.object} = r${target.arrayRegister};`]),
+						`  }`,
+						`  ${target.elementIndexName} = -1;`,
 						...fallback.map((line) => `  ${line}`),
 						`}`,
 					];

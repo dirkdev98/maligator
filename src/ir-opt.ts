@@ -1508,10 +1508,11 @@ function optImmediateCallOperands(program: IntermediateProgram): boolean {
 
 /**
  * Mark a bounded fresh array whose complete observable contract is one direct
- * `push(record)` site plus post-loop `length` reads. Native code may keep only a
- * rooted scalar record history and materialize the real array/records if the
- * live `%Array.prototype.push%` guard ever rejects. The interpreter ignores the
- * annotations and executes the original array program.
+ * `push(record)` site plus post-loop `length` or indexed-own-field reads. Native
+ * code may keep only rooted row-major record history and materialize the real
+ * array/records if a live protector, index, or `%Array.prototype.push%` guard
+ * rejects. The interpreter ignores the annotations and executes the original
+ * array program.
  */
 function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void {
 	for (const fn of program.functions) {
@@ -1567,6 +1568,11 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 				const worklist = [allocation.registers[0]];
 				const pushLoads: Array<Extract<IRInstruction, { type: "loadProperty" }>> = [];
 				const lengthLoads: Array<Extract<IRInstruction, { type: "loadProperty" }>> = [];
+				const indexedLoads: Array<{
+					element: Extract<IRInstruction, { type: "loadProperty" }>;
+					field: Extract<IRInstruction, { type: "loadProperty" }>;
+					fieldName: string;
+				}> = [];
 				const pushCalls = new Set<Extract<IRInstruction, { type: "call" }>>();
 				let safe = true;
 				while (safe && worklist.length > 0) {
@@ -1599,8 +1605,51 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 						}
 						const key = definitions.get(use.instruction.registers[2]);
 						if (key?.type !== "createString") {
-							safe = false;
-							break;
+							const resultUses = usesOf.get(use.instruction.registers[0]) ?? [];
+							if (
+								resultUses.length !== 1 ||
+								resultUses[0]!.position !== 1 ||
+								resultUses[0]!.instruction.type !== "loadProperty"
+							) {
+								safe = false;
+								break;
+							}
+							const field = resultUses[0]!.instruction;
+							const fieldKey = definitions.get(field.registers[2]);
+							const elementLocation = locations.get(use.instruction);
+							const fieldLocation = locations.get(field);
+							if (
+								fieldKey?.type !== "createString" ||
+								elementLocation === undefined ||
+								fieldLocation === undefined ||
+								elementLocation.blockIndex !== fieldLocation.blockIndex ||
+								elementLocation.instructionIndex >= fieldLocation.instructionIndex
+							) {
+								safe = false;
+								break;
+							}
+							const intervening = fn.blocks[
+								elementLocation.blockIndex
+							]!.instructions.slice(
+								elementLocation.instructionIndex + 1,
+								fieldLocation.instructionIndex,
+							);
+							if (
+								intervening.some(
+									(instruction) =>
+										instruction.type !== "sourcePos" &&
+										instruction.type !== "createString",
+								)
+							) {
+								safe = false;
+								break;
+							}
+							indexedLoads.push({
+								element: use.instruction,
+								field,
+								fieldName: decodeStringConstant(program, fieldKey.stringIndex),
+							});
+							continue;
 						}
 						const name = decodeStringConstant(program, key.stringIndex);
 						if (name === "length") {
@@ -1634,14 +1683,20 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 						pushCalls.add(call);
 					}
 				}
-				if (!safe || pushCalls.size !== 1 || lengthLoads.length === 0) continue;
+				if (
+					!safe ||
+					pushCalls.size !== 1 ||
+					(lengthLoads.length === 0 && indexedLoads.length === 0) ||
+					indexedLoads.length > 1
+				)
+					continue;
 				const pushCall = [...pushCalls][0]!;
-				const receiverRegisters = new Set<number>([
+				const constructionReceiverRegisters = new Set<number>([
 					pushCall.registers[2],
 					...pushLoads.map((load) => load.registers[1]),
-					...lengthLoads.map((load) => load.registers[1]),
 				]);
-				if (receiverRegisters.size !== 1) continue;
+				if (constructionReceiverRegisters.size !== 1) continue;
+				const constructionReceiver = [...constructionReceiverRegisters][0]!;
 				const callLocation = locations.get(pushCall);
 				if (callLocation === undefined) continue;
 				const bodyIndex = callLocation.blockIndex;
@@ -1727,10 +1782,38 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 					afterExit.add(current);
 					for (const successor of successors[current]!) reach.push(successor);
 				}
+				const consumerReceivers = [
+					...lengthLoads.map((load) => load.registers[1]),
+					...indexedLoads.map(({ element }) => element.registers[1]),
+				];
+				if (
+					consumerReceivers.some((register) => {
+						if (register === constructionReceiver) return false;
+						const definition = definitions.get(register);
+						const location =
+							definition === undefined ? undefined : locations.get(definition);
+						return (
+							definition?.type !== "move" ||
+							location === undefined ||
+							location.blockIndex !== exitIndex
+						);
+					})
+				)
+					continue;
 				if (
 					lengthLoads.some((load) => {
 						const location = locations.get(load);
 						return location === undefined || !afterExit.has(location.blockIndex);
+					}) ||
+					indexedLoads.some(({ element, field }) => {
+						const elementLocation = locations.get(element);
+						const fieldLocation = locations.get(field);
+						return (
+							elementLocation === undefined ||
+							fieldLocation === undefined ||
+							!afterExit.has(elementLocation.blockIndex) ||
+							!afterExit.has(fieldLocation.blockIndex)
+						);
 					}) ||
 					pushLoads.some((load) => locations.get(load)?.blockIndex !== bodyIndex)
 				) {
@@ -1759,6 +1842,12 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 				) {
 					continue;
 				}
+				const indexedFieldSlots = indexedLoads.map(({ fieldName }) =>
+					element.keyStringIndices.findIndex(
+						(index) => decodeStringConstant(program, index) === fieldName,
+					),
+				);
+				if (indexedFieldSlots.some((slot) => slot < 0)) continue;
 
 				allocation.nativeCardinalityRegion = {
 					id: nextRegionId++,
@@ -1769,6 +1858,17 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 				}
 				for (const load of lengthLoads) {
 					load.nativeCardinalityAccess = { role: "length", allocation };
+				}
+				for (let index = 0; index < indexedLoads.length; index++) {
+					indexedLoads[index]!.element.nativeCardinalityAccess = {
+						role: "element",
+						allocation,
+					};
+					indexedLoads[index]!.field.nativeCardinalityAccess = {
+						role: "field",
+						allocation,
+						fieldSlot: indexedFieldSlots[index],
+					};
 				}
 				pushCall.nativeCardinalityPush = { allocation };
 			}

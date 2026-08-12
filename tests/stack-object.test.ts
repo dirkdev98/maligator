@@ -602,14 +602,56 @@ describe("cardinality-only array and transitive record regions", () => {
 		);
 	});
 
+	it("carries a bounded indexed record field through virtual history", () => {
+		const indexedSource = `
+			function collect(seed) {
+				const rows = [];
+				for (let i = 0; i < 4; i++) rows.push({ idx: i, value: seed + i });
+				return rows[seed % 4].value;
+			}
+			globalThis.keep = collect;
+		`;
+		const program = optimized(indexedSource);
+		const roles = instructions(program).flatMap((instruction) =>
+			(instruction.type === "loadProperty" ||
+				instruction.type === "loadPropertyStatic") &&
+			instruction.nativeCardinalityAccess !== undefined
+				? [instruction.nativeCardinalityAccess.role]
+				: [],
+		);
+		expect(roles).toContain("element");
+		expect(roles).toContain("field");
+
+		const definition = compileSemanticProgramToVmDefinition(semantic(indexedSource));
+		const emitted = emitVmDefinition(definition, { compiled: true });
+		expect(emitted).toMatch(/__cardinality_\d+_element_index \* 2 \+ 1/);
+
+		const decoded = deserializeVmDefinition(compileSourceToBuffer(indexedSource));
+		const decodedRoles = decoded.functions.flatMap((fn) =>
+			fn.instructions.flatMap((instruction) =>
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC") &&
+				instruction.nativeCardinalityAccess !== undefined
+					? [instruction.nativeCardinalityAccess.role]
+					: [],
+			),
+		);
+		expect(decodedRoles).toContain("element");
+		expect(decodedRoles).toContain("field");
+	});
+
 	it.each([
 		[
 			"an array value escape",
 			`function f() { const rows = []; for (let i = 0; i < 4; i++) { const row = { x: i }; rows.push(row); } return rows; } globalThis.keep = f;`,
 		],
 		[
-			"an indexed observation",
-			`function f() { const rows = []; for (let i = 0; i < 4; i++) { const row = { x: i }; rows.push(row); } return rows.length + rows[0].x; } globalThis.keep = f;`,
+			"an indexed element escape",
+			`function f() { const rows = []; for (let i = 0; i < 4; i++) { const row = { x: i }; rows.push(row); } return rows[0]; } globalThis.keep = f;`,
+		],
+		[
+			"an alias copied before construction finishes",
+			`function f() { const rows = []; const alias = rows; for (let i = 0; i < 4; i++) { const row = { x: i }; rows.push(row); } return alias[0].x; } globalThis.keep = f;`,
 		],
 		[
 			"a dynamic bound",

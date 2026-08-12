@@ -21,8 +21,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 24 for native cardinality-region metadata.
-export const WIRE_VERSION = 24;
+// Bumped to 25 for virtual-record indexed field access metadata.
+export const WIRE_VERSION = 25;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -714,8 +714,19 @@ export function serializeVmDefinition(
 				instruction.nativeCardinalityAccess !== undefined
 			) {
 				w.u8(9);
-				w.u8(instruction.nativeCardinalityAccess.role === "push" ? 1 : 2);
+				w.u8(
+					instruction.nativeCardinalityAccess.role === "push"
+						? 1
+						: instruction.nativeCardinalityAccess.role === "length"
+							? 2
+							: instruction.nativeCardinalityAccess.role === "element"
+								? 3
+								: 4,
+				);
 				w.i32(instruction.nativeCardinalityAccess.allocationInstructionIndex);
+				if (instruction.nativeCardinalityAccess.role === "field") {
+					w.i32(instruction.nativeCardinalityAccess.fieldSlot ?? -1);
+				}
 			} else if (
 				instruction.opcode === "CREATE_ARRAY" &&
 				instruction.nativeCardinalityRegion !== undefined
@@ -1594,15 +1605,30 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				const role = r.u8();
 				const allocationInstructionIndex = r.i32();
 				if (
-					(role !== 1 && role !== 2) ||
+					role < 1 ||
+					role > 4 ||
 					fn.instructions[allocationInstructionIndex]?.opcode !== "CREATE_ARRAY"
 				) {
 					throw new RangeError("serialize-vm: invalid cardinality-access metadata");
 				}
 				instruction.nativeCardinalityAccess = {
-					role: role === 1 ? "push" : "length",
+					role:
+						role === 1
+							? "push"
+							: role === 2
+								? "length"
+								: role === 3
+									? "element"
+									: "field",
 					allocationInstructionIndex,
 				};
+				if (role === 4) {
+					const fieldSlot = r.i32();
+					if (fieldSlot < 0 || fieldSlot >= 8) {
+						throw new RangeError("serialize-vm: invalid cardinality-field metadata");
+					}
+					instruction.nativeCardinalityAccess.fieldSlot = fieldSlot;
+				}
 			} else {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",

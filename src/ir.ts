@@ -1008,8 +1008,9 @@ export type IRInstruction =
 				stringIndices: Array<number>;
 			};
 			nativeCardinalityAccess?: {
-				role: "push" | "length";
+				role: "push" | "length" | "element" | "field";
 				allocation: Extract<IRInstruction, { type: "createArray" }>;
+				fieldSlot?: number;
 			};
 	  }
 	| {
@@ -1023,8 +1024,9 @@ export type IRInstruction =
 			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
 			stackObjectInheritedSiteId?: number;
 			nativeCardinalityAccess?: {
-				role: "push" | "length";
+				role: "push" | "length" | "element" | "field";
 				allocation: Extract<IRInstruction, { type: "createArray" }>;
+				fieldSlot?: number;
 			};
 	  }
 	| {
