@@ -126,6 +126,23 @@ describe("Test262 VM definition merger", () => {
 				icIndex: 0,
 				nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [0] },
 			},
+			{
+				opcode: "CREATE_OBJECT",
+				dst: 3,
+				nativeFiniteConstruction: {
+					icIndex: 1,
+					numberGuards: [2],
+					keyStringIndices: [0],
+				},
+			},
+			{
+				opcode: "STORE_PROPERTY",
+				object: 3,
+				key: 2,
+				value: 1,
+				icIndex: 1,
+				nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [0] },
+			},
 		];
 		const second = definition({
 			functions: [vmFunction(indexed)],
@@ -192,6 +209,16 @@ describe("Test262 VM definition merger", () => {
 			nativeFiniteString: { minimum: 0, stringIndices: [2] },
 		});
 		expect(rebased[19]).toMatchObject({
+			nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [2] },
+		});
+		expect(rebased[20]).toMatchObject({
+			nativeFiniteConstruction: {
+				icIndex: 1,
+				numberGuards: [2],
+				keyStringIndices: [2],
+			},
+		});
+		expect(rebased[21]).toMatchObject({
 			nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [2] },
 		});
 		expect(second.functions[0]!.instructions).toEqual(indexed);

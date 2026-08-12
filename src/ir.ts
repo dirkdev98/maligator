@@ -691,13 +691,24 @@ export type IRInstruction =
 	| {
 			type: "createObject";
 
+			/**
+			 * COMPILE-ONLY: a canonical finite-key loop is the only observer until
+			 * this fresh object has received every key. Registers after the
+			 * destination are stable values that must be Numbers before native
+			 * code may allocate the object directly in its final shape.
+			 */
+			nativeFiniteConstruction?: {
+				source: Extract<IRInstruction, { type: "storeProperty" }>;
+				keyStringIndices: Array<number>;
+			};
+
 			/** COMPILE-ONLY: this allocation passed the stack-object proof. */
 			stackObject?: true;
 			/** COMPILE-ONLY: function-local id for conditional-return materialization. */
 			stackObjectSiteId?: number;
 
-			// [destination]
-			registers: [number];
+			// [destination, ...nativeNumberGuards]
+			registers: [number, ...Array<number>];
 	  }
 	| {
 			// A fully static data-property object literal: all keys are known
@@ -1008,6 +1019,14 @@ export type IRInstruction =
 	  }
 	| {
 			type: "storeProperty";
+
+			/** Native-only finite selector domain. The normal key and [[Set]]
+			 * fallback remain authoritative whenever the guarded shape misses. */
+			nativeFiniteKey?: {
+				minimum: number;
+				source: Extract<IRInstruction, { type: "binary" }>;
+				stringIndices: Array<number>;
+			};
 
 			// [object, key, value]
 			registers: [number, number, number];

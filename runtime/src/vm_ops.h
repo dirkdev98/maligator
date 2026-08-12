@@ -713,6 +713,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_MISSING 7u
 #define MAL_IC_MODE_TRANSITION 8u
 #define MAL_IC_MODE_FINITE_KEYS 9u
+#define MAL_IC_MODE_FINITE_CONSTRUCTION 10u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -934,9 +935,41 @@ static inline bool mal_vm_finite_property_try_load(
     return true;
 }
 
+/** Exact-shape overwrite for a compiler-proven finite selector domain. A
+ * construction row also owns the same slot vector, so the first and every
+ * later fill of a fast-constructed object need no key conversion or lookup. */
+static inline bool mal_vm_finite_property_try_store(
+    MalObject *object, i32 ordinal, MalValue value, const MalInlineCache *ic
+) {
+    if (object == nullptr ||
+        (ic->mode != MAL_IC_MODE_FINITE_KEYS &&
+         ic->mode != MAL_IC_MODE_FINITE_CONSTRUCTION) ||
+        object->shape != ic->shape || ordinal < 0 || ordinal >= ic->poly_count) {
+        return false;
+    }
+    u8 slot = ic->poly_data[ordinal];
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+    }
+    mal_gc_write_barrier(object->slots[slot]);
+    object->slots[slot] = value;
+    mal_gc_card(&object->header, value);
+    mal_perf_ic_store_mono_hit();
+    return true;
+}
+
 MalValue mal_vm_finite_property_load(
     MalVm *vm, MalValue receiver, MalValue evaluated_key, i32 ordinal,
     const i32 *string_indices, u8 count, MalInlineCache *ic);
+void mal_vm_finite_property_store(
+    MalVm *vm, MalValue receiver, MalValue evaluated_key, MalValue value,
+    i32 ordinal, const i32 *string_indices, u8 count, bool strict,
+    MalInlineCache *ic);
+
+/** Native-only guarded allocation for a proven closed construction loop. */
+MalValue mal_vm_create_object_finite_construction(
+    MalVm *vm, const i32 *string_indices, u8 count, bool number_guards_ok,
+    MalInlineCache *ic);
 
 /**
  * Static-name native probe for the common dependency-registered inherited-value

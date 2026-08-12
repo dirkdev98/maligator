@@ -143,7 +143,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
 		case "CREATE_BOOLEAN":
-		case "CREATE_OBJECT":
 		case "CREATE_ARRAY":
 		case "CREATE_UNDEFINED":
 		case "CREATE_EMPTY":
@@ -175,7 +174,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "ENV_COPY":
 		case "ENV_POP":
 		case "LOAD_SUPER_PROPERTY":
-		case "STORE_PROPERTY":
 		case "TO_PROPERTY_KEY":
 		case "STORE_SUPER_PROPERTY":
 		case "LOAD_PROTOTYPE":
@@ -207,6 +205,7 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "TYPEOF_COMPARE":
 			return { ...instruction };
 		case "LOAD_PROPERTY":
+		case "STORE_PROPERTY":
 			return {
 				...instruction,
 				nativeFiniteKey:
@@ -218,6 +217,21 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 								stringIndices: instruction.nativeFiniteKey.stringIndices.map(
 									(index) => index + base.string,
 								),
+							},
+			};
+		case "CREATE_OBJECT":
+			return {
+				...instruction,
+				nativeFiniteConstruction:
+					instruction.nativeFiniteConstruction === undefined
+						? undefined
+						: {
+								icIndex: instruction.nativeFiniteConstruction.icIndex,
+								numberGuards: [...instruction.nativeFiniteConstruction.numberGuards],
+								keyStringIndices:
+									instruction.nativeFiniteConstruction.keyStringIndices.map(
+										(index) => index + base.string,
+									),
 							},
 			};
 		case "BINARY":

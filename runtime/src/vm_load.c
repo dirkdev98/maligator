@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 22u        // finite-selector property-region metadata
+#define WIRE_VERSION 23u        // guarded finite-selector construction metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1605,6 +1605,22 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             } else if (tag == 6) { // LOAD_PROPERTY finite selector domain
                 (void) rd_i32(&r); // minimum
                 (void) rd_i32(&r); // ordinal register
+                u32 string_index_count = rd_count(&r, sizeof(i32));
+                if (string_index_count == 0 || string_index_count > 8) {
+                    r.ok = false;
+                }
+                for (u32 index = 0; r.ok && index < string_index_count; index++) {
+                    (void) rd_i32(&r);
+                }
+            } else if (tag == 7) { // CREATE_OBJECT finite construction region
+                (void) rd_i32(&r); // shared property IC index
+                u32 guard_count = rd_count(&r, sizeof(i32));
+                if (guard_count > 4) {
+                    r.ok = false;
+                }
+                for (u32 guard = 0; r.ok && guard < guard_count; guard++) {
+                    (void) rd_i32(&r);
+                }
                 u32 string_index_count = rd_count(&r, sizeof(i32));
                 if (string_index_count == 0 || string_index_count > 8) {
                     r.ok = false;

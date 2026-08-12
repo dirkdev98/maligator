@@ -1883,6 +1883,21 @@ function emitInstruction(
 				`r${instruction.dst} = mal_value_from_bigint(&mal_bigints${suffix}[${instruction.bigintIndex}]);`,
 			];
 		case "CREATE_OBJECT":
+			if (
+				stackObjectSite === undefined &&
+				instruction.nativeFiniteConstruction !== undefined
+			) {
+				const finite = instruction.nativeFiniteConstruction;
+				const table = `__finite_construction_keys_${ip}`;
+				const guards = finite.numberGuards.map((register) =>
+					reps[register] === "number" ? "true" : `mal_ops_is_number(${boxed(register)})`,
+				);
+				return [
+					`static const i32 ${table}[] = { ${finite.keyStringIndices.join(", ")} };`,
+					`r${instruction.dst} = mal_vm_create_object_finite_construction(vm, ${table}, ${finite.keyStringIndices.length}, ${guards.length === 0 ? "true" : guards.join(" && ")}, &__property_ic[${finite.icIndex}]);`,
+					throwCheck,
+				];
+			}
 			if (stackObjectSite === undefined) {
 				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`, throwCheck];
 			}
@@ -2236,6 +2251,28 @@ function emitInstruction(
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				return [`__gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`];
+			}
+			if (
+				instruction.opcode === "STORE_PROPERTY" &&
+				instruction.nativeFiniteKey !== undefined
+			) {
+				const finite = instruction.nativeFiniteKey;
+				const table = `__finite_store_keys_${ip}`;
+				const ordinalNumber =
+					reps[finite.ordinal] === "number"
+						? num(finite.ordinal)
+						: `mal_ops_number_as_f64(${boxed(finite.ordinal)})`;
+				const ordinal = `__finite_store_ordinal_${ip}`;
+				const object = `__finite_store_object_${ip}`;
+				return [
+					`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
+					`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
+					`MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
+					`if (!mal_vm_finite_property_try_store(${object}, ${ordinal}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])) {`,
+					`  mal_vm_finite_property_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${ordinal}, ${table}, ${finite.stringIndices.length}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
+					`  ${throwCheck}`,
+					`}`,
+				];
 			}
 			const key =
 				instruction.opcode === "STORE_PROPERTY_STATIC"

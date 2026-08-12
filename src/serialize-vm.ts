@@ -1,4 +1,8 @@
-import { buildArgumentSnapshotPlan, compressPositions } from "./lower-vm.ts";
+import {
+	buildArgumentSnapshotPlan,
+	compressPositions,
+	countPropertyIcSites,
+} from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 /**
@@ -17,8 +21,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 22 for finite-selector property-region metadata.
-export const WIRE_VERSION = 22;
+// Bumped to 23 for guarded finite-selector construction metadata.
+export const WIRE_VERSION = 23;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -629,8 +633,14 @@ export function serializeVmDefinition(
 				if (instruction.opcode === "CONSTRUCT") {
 					return instruction.directFunctionIndex !== undefined;
 				}
-				if (instruction.opcode === "LOAD_PROPERTY") {
+				if (
+					instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY"
+				) {
 					return instruction.nativeFiniteKey !== undefined;
+				}
+				if (instruction.opcode === "CREATE_OBJECT") {
+					return instruction.nativeFiniteConstruction !== undefined;
 				}
 				return (
 					instruction.opcode === "BINARY" &&
@@ -663,13 +673,22 @@ export function serializeVmDefinition(
 				w.u8(2);
 				w.i32(instruction.directFunctionIndex!);
 			} else if (
-				instruction.opcode === "LOAD_PROPERTY" &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY") &&
 				instruction.nativeFiniteKey !== undefined
 			) {
 				w.u8(6);
 				w.i32(instruction.nativeFiniteKey.minimum);
 				w.i32(instruction.nativeFiniteKey.ordinal);
 				w.i32Array(instruction.nativeFiniteKey.stringIndices);
+			} else if (
+				instruction.opcode === "CREATE_OBJECT" &&
+				instruction.nativeFiniteConstruction !== undefined
+			) {
+				w.u8(7);
+				w.i32(instruction.nativeFiniteConstruction.icIndex);
+				w.i32Array(instruction.nativeFiniteConstruction.numberGuards);
+				w.i32Array(instruction.nativeFiniteConstruction.keyStringIndices);
 			} else if (
 				instruction.opcode === "BINARY" &&
 				instruction.nativeFiniteString !== undefined
@@ -777,6 +796,7 @@ function validateMappedArguments(fn: VmFunction): void {
 function validatePropertyIcIndices(fn: VmFunction): void {
 	let expected = 0;
 	let expectedLiteralShape = 0;
+	const finiteConstructionIndices: Array<number> = [];
 	for (const instruction of fn.instructions) {
 		switch (instruction.opcode) {
 			case "LOAD_PROPERTY":
@@ -798,7 +818,15 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 				}
 				expectedLiteralShape++;
 				break;
+			case "CREATE_OBJECT":
+				if (instruction.nativeFiniteConstruction !== undefined) {
+					finiteConstructionIndices.push(instruction.nativeFiniteConstruction.icIndex);
+				}
+				break;
 		}
+	}
+	if (finiteConstructionIndices.some((index) => index < 0 || index >= expected)) {
+		throw new RangeError("serialize-vm: finite construction property IC out of range");
 	}
 }
 
@@ -1464,7 +1492,11 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid finite-string metadata");
 				}
 				instruction.nativeFiniteString = { minimum, stringIndices };
-			} else if (tag === 6 && instruction.opcode === "LOAD_PROPERTY") {
+			} else if (
+				tag === 6 &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY")
+			) {
 				const minimum = r.i32();
 				const ordinal = r.i32();
 				const stringIndices = r.i32Array();
@@ -1478,6 +1510,26 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid finite-property metadata");
 				}
 				instruction.nativeFiniteKey = { minimum, ordinal, stringIndices };
+			} else if (tag === 7 && instruction.opcode === "CREATE_OBJECT") {
+				const icIndex = r.i32();
+				const numberGuards = r.i32Array();
+				const keyStringIndices = r.i32Array();
+				if (
+					icIndex < 0 ||
+					icIndex >= countPropertyIcSites(fn.instructions) ||
+					numberGuards.length > 4 ||
+					numberGuards.some((register) => register < 0 || register >= fn.registerCount) ||
+					keyStringIndices.length === 0 ||
+					keyStringIndices.length > 8 ||
+					keyStringIndices.some((index) => index < 0 || index >= stringConstants.length)
+				) {
+					throw new RangeError("serialize-vm: invalid finite-construction metadata");
+				}
+				instruction.nativeFiniteConstruction = {
+					icIndex,
+					numberGuards,
+					keyStringIndices,
+				};
 			} else {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",

@@ -715,6 +715,358 @@ function exactIntegerConstant(
 	return instruction.value;
 }
 
+const FINITE_CONSTRUCTION_NUMERIC_OPERATORS = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+/**
+ * Recognize the first deliberately narrow construction region: a fresh `{}` is
+ * filled exactly once by a one-block canonical finite-selector loop, remains
+ * unobservable until the loop's unique exit, and computes each value with only
+ * numeric operations. Native code can guard the stable unknown leaves as
+ * Numbers and ask the runtime for a prototype-dependency-backed final shape.
+ * The interpreter and every rejected guard keep the original empty-object loop.
+ */
+function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
+	if (
+		fn.isGenerator ||
+		fn.isAsync ||
+		functionUsesWith(fn) ||
+		fn.semanticFile.hasDirectEval.size > 0 ||
+		fn.blocks.some((block) =>
+			block.instructions.some(
+				(instruction) =>
+					instruction.type === "tryBegin" ||
+					instruction.type === "tryEnd" ||
+					instruction.type === "catch",
+			),
+		)
+	) {
+		return;
+	}
+
+	const index = buildIRRegisterIndex(fn, { locations: true });
+	const locations = index.locations!;
+	const incoming = fn.blocks.map(() => new Set<number>());
+	const successors = fn.blocks.map((block, blockIndex) => {
+		const result = new Set<number>();
+		for (const instruction of block.instructions) {
+			if (instruction.type !== "jump" && instruction.type !== "jumpIf") continue;
+			for (const target of instruction.blocks) {
+				if (target >= 0 && target < fn.blocks.length) {
+					result.add(target);
+					incoming[target]!.add(blockIndex);
+				}
+			}
+		}
+		const last = block.instructions[block.instructions.length - 1];
+		if (
+			last?.type !== "jump" &&
+			last?.type !== "return" &&
+			last?.type !== "throw" &&
+			blockIndex + 1 < fn.blocks.length
+		) {
+			result.add(blockIndex + 1);
+			incoming[blockIndex + 1]!.add(blockIndex);
+		}
+		return result;
+	});
+
+	for (const block of fn.blocks) {
+		for (const store of block.instructions) {
+			if (store.type !== "storeProperty" || store.nativeFiniteKey === undefined) {
+				continue;
+			}
+			const finite = store.nativeFiniteKey;
+			const storeLocation = locations.get(store);
+			const sourceLocation = locations.get(finite.source);
+			if (
+				storeLocation === undefined ||
+				sourceLocation === undefined ||
+				storeLocation.blockIndex !== sourceLocation.blockIndex
+			) {
+				continue;
+			}
+			const bodyIndex = storeLocation.blockIndex;
+			const headerIncoming = [...incoming[bodyIndex]!];
+			if (headerIncoming.length !== 1) continue;
+			const headerIndex = headerIncoming[0]!;
+			const header = fn.blocks[headerIndex]!;
+			const ordinal = finite.source.registers[2];
+			const branches = header.instructions.filter(
+				(instruction) => instruction.type === "jumpIf",
+			);
+			const exits = header.instructions.filter(
+				(instruction) => instruction.type === "jump",
+			);
+			if (
+				branches.length !== 1 ||
+				branches[0]!.blocks[0] !== bodyIndex ||
+				exits.length !== 1
+			) {
+				continue;
+			}
+			const exitIndex = exits[0]!.blocks[0];
+			if (
+				exitIndex === undefined ||
+				incoming[exitIndex]?.size !== 1 ||
+				!incoming[exitIndex].has(headerIndex)
+			) {
+				continue;
+			}
+
+			const comparison = index.uniqueDefinitions.get(branches[0]!.registers[0]);
+			if (
+				comparison?.type !== "binary" ||
+				comparison.operator !== "<" ||
+				comparison.registers[1] !== ordinal
+			) {
+				continue;
+			}
+			const boundDefinition = index.uniqueDefinitions.get(comparison.registers[2]);
+			if (
+				header.instructions.some(
+					(instruction) =>
+						instruction.type !== "sourcePos" &&
+						instruction !== comparison &&
+						instruction !== boundDefinition &&
+						instruction !== branches[0] &&
+						instruction !== exits[0],
+				)
+			) {
+				continue;
+			}
+			const bound = exactIntegerConstant(boundDefinition);
+			const ordinalDefinitions = index.definitions.get(ordinal) ?? [];
+			const starts = ordinalDefinitions.filter(
+				({ instruction }) =>
+					instruction.type === "createNumber" || instruction.type === "createF64",
+			);
+			if (bound === undefined || starts.length !== 1) continue;
+			const start = exactIntegerConstant(starts[0]!.instruction);
+			const startLocation = locations.get(starts[0]!.instruction);
+			if (
+				start === undefined ||
+				start !== finite.minimum ||
+				bound - start !== finite.stringIndices.length ||
+				startLocation === undefined
+			) {
+				continue;
+			}
+			const predecessorIndex = startLocation.blockIndex;
+			if (
+				incoming[headerIndex]!.size !== 2 ||
+				!incoming[headerIndex]!.has(predecessorIndex) ||
+				!incoming[headerIndex]!.has(bodyIndex)
+			) {
+				continue;
+			}
+			const predecessorControls = fn.blocks[predecessorIndex]!.instructions.filter(
+				(instruction) => instruction.type === "jump" || instruction.type === "jumpIf",
+			);
+			const bodyControls = fn.blocks[bodyIndex]!.instructions.filter(
+				(instruction) =>
+					instruction.type === "jump" ||
+					instruction.type === "jumpIf" ||
+					instruction.type === "return" ||
+					instruction.type === "throw",
+			);
+			if (
+				predecessorControls.length !== 1 ||
+				predecessorControls[0]!.type !== "jump" ||
+				predecessorControls[0]!.blocks[0] !== headerIndex ||
+				bodyControls.length !== 1 ||
+				bodyControls[0]!.type !== "jump" ||
+				bodyControls[0]!.blocks[0] !== headerIndex
+			) {
+				continue;
+			}
+
+			const increments = ordinalDefinitions.filter(
+				({ instruction }) =>
+					instruction.type === "unary" &&
+					instruction.operator === "increment" &&
+					instruction.registers[0] === ordinal &&
+					instruction.registers[1] === ordinal,
+			);
+			if (ordinalDefinitions.length !== 2 || increments.length !== 1) continue;
+			const incrementLocation = locations.get(increments[0]!.instruction);
+			if (
+				incrementLocation?.blockIndex !== bodyIndex ||
+				incrementLocation.instructionIndex <= storeLocation.instructionIndex
+			) {
+				continue;
+			}
+
+			// Follow single-definition aliases back to the fresh allocation.
+			let rootRegister = store.registers[0];
+			const backwards = new Set<number>();
+			while (!backwards.has(rootRegister)) {
+				backwards.add(rootRegister);
+				const definition = index.uniqueDefinitions.get(rootRegister);
+				if (definition?.type !== "move") break;
+				rootRegister = definition.registers[1];
+			}
+			const allocation = index.uniqueDefinitions.get(rootRegister);
+			if (
+				allocation?.type !== "createObject" ||
+				allocation.stackObject ||
+				allocation.nativeFiniteConstruction !== undefined
+			) {
+				continue;
+			}
+			const allocationLocation = locations.get(allocation);
+			if (allocationLocation?.blockIndex !== predecessorIndex) continue;
+
+			const afterExit = new Set<number>();
+			const reach = [exitIndex];
+			while (reach.length > 0) {
+				const current = reach.pop()!;
+				if (afterExit.has(current)) continue;
+				afterExit.add(current);
+				for (const successor of successors[current]!) reach.push(successor);
+			}
+
+			// Build the complete alias closure and ensure the object cannot be
+			// observed before the loop has completed.
+			const aliases = new Set<number>([allocation.registers[0]]);
+			const aliasWorklist = [allocation.registers[0]];
+			let valid = true;
+			while (valid && aliasWorklist.length > 0) {
+				const alias = aliasWorklist.pop()!;
+				for (const use of index.uses.get(alias) ?? []) {
+					if (use.instruction.type === "move" && use.position === 1) {
+						const target = use.instruction.registers[0];
+						if (index.uniqueDefinitions.get(target) !== use.instruction) {
+							valid = false;
+							break;
+						}
+						if (!aliases.has(target)) {
+							aliases.add(target);
+							aliasWorklist.push(target);
+						}
+						continue;
+					}
+					if (use.instruction === store && use.position === 0) continue;
+					const useLocation = locations.get(use.instruction);
+					if (useLocation === undefined || !afterExit.has(useLocation.blockIndex)) {
+						valid = false;
+						break;
+					}
+				}
+			}
+			if (!valid || !aliases.has(store.registers[0])) continue;
+
+			const dependencyInstructions = new Set<IRInstruction>();
+			const guards = new Set<number>();
+			const numericMemo = new Map<number, boolean>();
+			const proveNumeric = (register: number): boolean => {
+				if (register === ordinal) return true;
+				const memo = numericMemo.get(register);
+				if (memo !== undefined) return memo;
+				numericMemo.set(register, false);
+				const definition = index.uniqueDefinitions.get(register);
+				const definitionLocation =
+					definition === undefined ? undefined : locations.get(definition);
+				const availableBeforeAllocation =
+					definition === undefined ||
+					(definitionLocation?.blockIndex === predecessorIndex &&
+						definitionLocation.instructionIndex < allocationLocation.instructionIndex);
+				if (availableBeforeAllocation) {
+					if ((index.definitions.get(register)?.length ?? 0) <= 1) {
+						guards.add(register);
+						numericMemo.set(register, true);
+						return true;
+					}
+					return false;
+				}
+				if (definitionLocation?.blockIndex !== bodyIndex || definition === undefined) {
+					return false;
+				}
+				dependencyInstructions.add(definition);
+				let result = false;
+				if (definition.type === "createNumber" || definition.type === "createF64") {
+					result = true;
+				} else if (definition.type === "move") {
+					result = proveNumeric(definition.registers[1]);
+				} else if (
+					definition.type === "unary" &&
+					(definition.operator === "increment" ||
+						definition.operator === "decrement" ||
+						definition.operator === "+" ||
+						definition.operator === "-")
+				) {
+					result = proveNumeric(definition.registers[1]);
+				} else if (
+					definition.type === "binary" &&
+					FINITE_CONSTRUCTION_NUMERIC_OPERATORS.has(definition.operator)
+				) {
+					result =
+						proveNumeric(definition.registers[1]) &&
+						proveNumeric(definition.registers[2]);
+				}
+				numericMemo.set(register, result);
+				return result;
+			};
+			if (!proveNumeric(store.registers[2]) || guards.size > 4) continue;
+
+			dependencyInstructions.add(finite.source);
+			const prefix = index.uniqueDefinitions.get(finite.source.registers[1]);
+			if (prefix !== undefined) dependencyInstructions.add(prefix);
+			const bodyInstructions = fn.blocks[bodyIndex]!.instructions;
+			if (
+				bodyInstructions.some((instruction) => {
+					if (instruction.type === "sourcePos") return false;
+					if (instruction === store || instruction === increments[0]!.instruction) {
+						return false;
+					}
+					if (instruction === bodyControls[0]) return false;
+					return !dependencyInstructions.has(instruction);
+				})
+			) {
+				continue;
+			}
+
+			const harmlessBeforeLoop = new Set([
+				"sourcePos",
+				"move",
+				"createNumber",
+				"createF64",
+				"createBoolean",
+				"createString",
+				"createUndefined",
+				"createNull",
+				"createEmpty",
+				"jump",
+			]);
+			if (
+				fn.blocks[predecessorIndex]!.instructions.slice(
+					allocationLocation.instructionIndex + 1,
+				).some((instruction) => !harmlessBeforeLoop.has(instruction.type))
+			) {
+				continue;
+			}
+
+			allocation.registers.push(...[...guards].sort((a, b) => a - b));
+			allocation.nativeFiniteConstruction = {
+				source: store,
+				keyStringIndices: [...finite.stringIndices],
+			};
+		}
+	}
+}
+
 /**
  * Prove the canonical compiler loop-counter shape and attach finite string
  * universes to `literal + integer` operations in the true body block. The proof
@@ -884,8 +1236,8 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 										).some((between) => definedRegisters(between).includes(right));
 									if (
 										ordinalUnchanged &&
-										use.position === 2 &&
-										use.instruction.type === "loadProperty"
+										((use.position === 2 && use.instruction.type === "loadProperty") ||
+											(use.position === 1 && use.instruction.type === "storeProperty"))
 									) {
 										use.instruction.nativeFiniteKey = {
 											minimum: finite.minimum,
@@ -966,6 +1318,7 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 				}
 			}
 		}
+		annotateFiniteObjectConstructionsInFunction(fn);
 	}
 }
 

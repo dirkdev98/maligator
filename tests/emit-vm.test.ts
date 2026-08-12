@@ -545,6 +545,17 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_finite_property_load(vm");
 	});
 
+	it("guards and bulk-shapes a closed finite-key construction loop", () => {
+		const output = emit(
+			`"use strict"; function build(seed) { const out = {}; for (let i = 0; i < 8; i++) out["p" + i] = (seed * (i + 1)) % 251; return out; } globalThis.build = build;`,
+		);
+		expect(output).toContain("static const i32 __finite_construction_keys_");
+		expect(output).toContain("mal_vm_create_object_finite_construction");
+		expect(output).toContain("mal_ops_is_number(");
+		expect(output).toContain("mal_vm_finite_property_try_store");
+		expect(output).toContain("mal_vm_finite_property_store(vm");
+	});
+
 	it("uses compound assignments for in-place numeric updates", () => {
 		const output = emit(
 			`"use strict"; function count(limit) { let value = 0; while (value < limit) value++; return value; } globalThis.count = count;`,

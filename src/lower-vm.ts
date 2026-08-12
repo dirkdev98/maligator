@@ -447,6 +447,11 @@ export type VmInstruction =
 	| {
 			opcode: "CREATE_OBJECT";
 			dst: number;
+			nativeFiniteConstruction?: {
+				icIndex: number;
+				numberGuards: Array<number>;
+				keyStringIndices: Array<number>;
+			};
 	  }
 	| {
 			opcode: "CREATE_OBJECT_SHAPED";
@@ -669,6 +674,11 @@ export type VmInstruction =
 			key: number;
 			value: number;
 			icIndex: number;
+			nativeFiniteKey?: {
+				minimum: number;
+				ordinal: number;
+				stringIndices: Array<number>;
+			};
 	  }
 	| {
 			opcode: "STORE_PROPERTY_STATIC";
@@ -1151,6 +1161,19 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 
 	const instructions: Array<VmInstruction> = [];
 	let propertyIcCount = 0;
+	const propertyIcIndexByInstruction = new Map<IRInstruction, number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				instruction.type === "loadProperty" ||
+				instruction.type === "loadPropertyStatic" ||
+				instruction.type === "storeProperty" ||
+				instruction.type === "storePropertyStatic"
+			) {
+				propertyIcIndexByInstruction.set(instruction, propertyIcCount++);
+			}
+		}
+	}
 	let literalShapeCount = 0;
 	const handlers: Array<VmExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
@@ -1200,7 +1223,19 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 				case "LOAD_PROPERTY_STATIC":
 				case "STORE_PROPERTY":
 				case "STORE_PROPERTY_STATIC":
-					vmInstruction.icIndex = propertyIcCount++;
+					vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
+					break;
+				case "CREATE_OBJECT":
+					if (
+						vmInstruction.nativeFiniteConstruction !== undefined &&
+						instruction.type === "createObject" &&
+						instruction.nativeFiniteConstruction !== undefined
+					) {
+						vmInstruction.nativeFiniteConstruction.icIndex =
+							propertyIcIndexByInstruction.get(
+								instruction.nativeFiniteConstruction.source,
+							) ?? -1;
+					}
 					break;
 				case "CREATE_OBJECT_SHAPED":
 					vmInstruction.shapeCacheIndex = literalShapeCount++;
@@ -1442,6 +1477,17 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "CREATE_OBJECT",
 				dst: instruction.registers[0],
+				...(instruction.nativeFiniteConstruction === undefined
+					? {}
+					: {
+							nativeFiniteConstruction: {
+								icIndex: -1,
+								numberGuards: instruction.registers.slice(1),
+								keyStringIndices: [
+									...instruction.nativeFiniteConstruction.keyStringIndices,
+								],
+							},
+						}),
 			};
 		case "createObjectShaped":
 			return {
@@ -1722,6 +1768,15 @@ function lowerInstructionToVmInstruction(
 				key: instruction.registers[1],
 				value: instruction.registers[2],
 				icIndex: -1,
+				...(instruction.nativeFiniteKey === undefined
+					? {}
+					: {
+							nativeFiniteKey: {
+								minimum: instruction.nativeFiniteKey.minimum,
+								ordinal: instruction.nativeFiniteKey.source.registers[2],
+								stringIndices: [...instruction.nativeFiniteKey.stringIndices],
+							},
+						}),
 			};
 		case "storePropertyStatic":
 			return {

@@ -139,6 +139,60 @@ test("carries a finite selector domain into computed property loads", () => {
 	expect(load.nativeFiniteKey?.stringIndices).toHaveLength(4);
 });
 
+test("proves a guarded fresh-object finite construction region", () => {
+	const program = compileScript(`
+		function build(seed) {
+			const result = {};
+			for (let i = 0; i < 8; i++) result["p" + i] = (seed * (i + 1)) % 251;
+			return result;
+		}
+		globalThis.build = build;
+	`);
+	executeIROptimizations(program);
+	const instructions = instructionsOf(functionNamed(program, "build"));
+	const allocation = instructions.find(
+		(instruction) =>
+			instruction.type === "createObject" &&
+			instruction.nativeFiniteConstruction !== undefined,
+	);
+	const store = instructions.find(
+		(instruction) =>
+			instruction.type === "storeProperty" && instruction.nativeFiniteKey !== undefined,
+	);
+	if (allocation?.type !== "createObject")
+		throw new Error("expected finite construction");
+	if (store?.type !== "storeProperty") throw new Error("expected finite store");
+	expect(allocation.nativeFiniteConstruction?.keyStringIndices).toHaveLength(8);
+	expect(allocation.registers).toHaveLength(2); // destination + guarded seed
+	expect(allocation.nativeFiniteConstruction?.source).toBe(store);
+	expect(store.nativeFiniteKey?.stringIndices).toHaveLength(8);
+});
+
+test.each([
+	`Object.keys(result); result["p" + i] = seed * i;`,
+	`result["p" + i] = sideEffect(seed, i);`,
+	`try { result["p" + i] = seed * i; } catch {}`,
+	`if (i === 2) continue; result["p" + i] = seed * i;`,
+])("rejects an observable or effectful finite construction loop", (body) => {
+	const program = compileScript(`
+		function sideEffect(value) { return value; }
+		function build(seed) {
+			const result = {};
+			for (let i = 0; i < 8; i++) { ${body} }
+			return result;
+		}
+		globalThis.build = build;
+	`);
+	executeIROptimizations(program);
+	expect(
+		instructionsOf(functionNamed(program, "build")).some(
+			(instruction) =>
+				instruction.type === "createObject" &&
+				instruction.nativeFiniteConstruction !== undefined,
+		),
+	).toBe(false);
+});
+
 test("does not reuse a finite selector ordinal after it changes", () => {
 	const program = compileScript(`
 		function sum(source) {
