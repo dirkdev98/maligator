@@ -104,6 +104,14 @@ static inline i32 mal_ops_u32_to_i32(u32 value) {
 
 /** ToInt32 for a value already known to be a JS Number. */
 static inline i32 mal_ops_number_to_i32(f64 number) {
+    // In-range finite values need only C's truncating conversion. This is the
+    // overwhelmingly common case for native bitwise code (indices, counters,
+    // flags), and avoids the general ToUint32 fmod/ldexp path. Comparisons also
+    // reject NaN and infinities; keep the bounds conservative so the cast is
+    // always defined by C.
+    if (number >= -2147483648.0 && number <= 2147483647.0) {
+        return (i32) number;
+    }
     return mal_ops_u32_to_i32(mal_ops_number_to_uint32(number));
 }
 
