@@ -68,6 +68,7 @@ typedef struct MalReadableStreamObject {
             MalReadableStreamQueueEntry *queue_tail;
             f64 queue_total_size;
             f64 high_water_mark;
+            u32 auto_allocate_chunk_size;
             bool started;
             bool close_requested;
             bool pulling;

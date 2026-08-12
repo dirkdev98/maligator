@@ -293,6 +293,7 @@ MalValue mal_readable_stream_from_bytes(
     controller->as.controller.queue_tail = nullptr;
     controller->as.controller.queue_total_size = length == 0 ? 0 : 1;
     controller->as.controller.high_water_mark = 1;
+    controller->as.controller.auto_allocate_chunk_size = 0;
     controller->as.controller.started = true;
     controller->as.controller.close_requested = true;
     controller->as.controller.pulling = false;
@@ -703,6 +704,7 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
     f64 high_water_mark = 1;
     bool high_water_mark_set = false;
     bool byte_source = false;
+    u32 auto_allocate_chunk_size = 0;
     if (mal_value_is_object(roots[1])) {
         MalValue hwm;
         if (!mal_vm_get_property(vm, roots[1],
@@ -751,6 +753,27 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
                 goto fail;
             }
             byte_source = true;
+            MalValue auto_allocate;
+            if (!mal_vm_get_property(vm, source,
+                    mal_intrinsic_string_key(vm,
+                        (const byte *) "autoAllocateChunkSize"),
+                    &auto_allocate)) {
+                goto fail;
+            }
+            if (!mal_value_is_undefined(auto_allocate)) {
+                f64 raw_auto_allocate;
+                if (!mal_vm_to_number(vm, auto_allocate, &raw_auto_allocate)) {
+                    goto fail;
+                }
+                if (!isfinite(raw_auto_allocate) || raw_auto_allocate <= 0 ||
+                    floor(raw_auto_allocate) != raw_auto_allocate ||
+                    raw_auto_allocate > UINT32_MAX) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                        "ReadableStream autoAllocateChunkSize must be a positive integer");
+                    goto fail;
+                }
+                auto_allocate_chunk_size = (u32) raw_auto_allocate;
+            }
         }
         if (!rs_get_method(vm, source, (const byte *) "start", &roots[3]) ||
             !rs_get_method(vm, source, (const byte *) "pull", &roots[4]) ||
@@ -801,6 +824,7 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
     controller->as.controller.queue_tail = nullptr;
     controller->as.controller.queue_total_size = 0;
     controller->as.controller.high_water_mark = high_water_mark;
+    controller->as.controller.auto_allocate_chunk_size = auto_allocate_chunk_size;
     controller->as.controller.started = false;
     controller->as.controller.close_requested = false;
     controller->as.controller.pulling = false;
@@ -1695,6 +1719,28 @@ static MalValue rs_byte_controller_error(MalVm *vm, MalValue self,
         (const byte *) "ReadableByteStreamController.error called on incompatible receiver");
 }
 
+static MalValue rs_auto_allocate_view(MalVm *vm, u32 byte_length) {
+    MalValue buffer_value = mal_value_new_undefined();
+    MalRootSpan span;
+    mal_gc_root(&span, &buffer_value, 1);
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        byte_length, byte_length, false, false);
+    buffer_value = mal_value_from_array_buffer_object(buffer);
+    if (byte_length > 0 && buffer->data == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "ReadableStream auto-allocated view allocation failed");
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    MalValue view = mal_value_from_typed_array_object(mal_typed_array_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+        buffer, MAL_TA_UINT8, 0, byte_length, false));
+    mal_gc_unroot(&span);
+    return view;
+}
+
 static MalValue rs_reader_get_closed(MalVm *vm, MalValue self, const MalValue *args,
     i32 argc, MalValue nt, MalValue callee) {
     (void) args;
@@ -1802,20 +1848,33 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
         return roots[3];
     }
 
-    MalValue promise = mal_value_from_promise_object(rs_new_promise(vm));
+    if (!byob && controller->kind == MAL_READABLE_BYTE_STREAM_CONTROLLER &&
+        controller->as.controller.auto_allocate_chunk_size > 0) {
+        view = rs_auto_allocate_view(
+            vm, controller->as.controller.auto_allocate_chunk_size);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+    }
+    MalValue request_roots[2] = {view, mal_value_new_undefined()};
+    MalRootSpan request_span;
+    mal_gc_root(&request_span, request_roots, 2);
+    request_roots[1] = mal_value_from_promise_object(rs_new_promise(vm));
     MalReadableStreamReadRequest *request = malloc(sizeof(MalReadableStreamReadRequest));
     request->next = nullptr;
-    request->promise = promise;
-    request->view = view;
+    request->promise = request_roots[1];
+    request->view = request_roots[0];
     if (reader->as.reader.requests_tail == nullptr) {
         reader->as.reader.requests_head = request;
     } else {
         reader->as.reader.requests_tail->next = request;
     }
     reader->as.reader.requests_tail = request;
-    mal_gc_card(&reader->object.header, promise);
-    mal_gc_card(&reader->object.header, view);
+    mal_gc_card(&reader->object.header, request_roots[1]);
+    mal_gc_card(&reader->object.header, request_roots[0]);
     rs_call_pull_if_needed(vm, controller);
+    MalValue promise = request_roots[1];
+    mal_gc_unroot(&request_span);
     return promise;
 }
 

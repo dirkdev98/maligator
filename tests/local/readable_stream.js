@@ -221,6 +221,36 @@ async function run() {
 			replacementRead.value[1] === 6,
 	);
 
+	let autoAllocateRequest;
+	const autoAllocateStream = new ReadableStream({
+		type: "bytes",
+		autoAllocateChunkSize: 4,
+		pull(controller) {
+			autoAllocateRequest = controller.byobRequest;
+			autoAllocateRequest.view[0] = 3;
+			autoAllocateRequest.view[1] = 4;
+			autoAllocateRequest.respond(2);
+			controller.close();
+		},
+	});
+	const autoAllocateRead = await autoAllocateStream.getReader().read();
+	check(
+		"default byte reader exposes an auto-allocated BYOB request",
+		autoAllocateRequest instanceof ReadableStreamBYOBRequest &&
+			autoAllocateRequest.view === null &&
+			autoAllocateRead.value instanceof Uint8Array &&
+			autoAllocateRead.value.byteLength === 2 &&
+			autoAllocateRead.value[0] === 3 &&
+			autoAllocateRead.value[1] === 4,
+	);
+	let zeroAutoAllocateRejected = false;
+	try {
+		new ReadableStream({ type: "bytes", autoAllocateChunkSize: 0 });
+	} catch (error) {
+		zeroAutoAllocateRejected = error instanceof TypeError;
+	}
+	check("zero autoAllocateChunkSize is rejected", zeroAutoAllocateRejected);
+
 	let byteCrossBrandRejected = false;
 	try {
 		ReadableStreamDefaultController.prototype.enqueue.call(
