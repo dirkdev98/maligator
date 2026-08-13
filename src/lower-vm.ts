@@ -289,6 +289,21 @@ export interface VmFunction {
 		}>;
 	}>;
 
+	/** EMITTER-ONLY: closed exact RegExp iterator capture spans. */
+	nativeRegExpIteratorProjections?: ReadonlyArray<{
+		stepIp: number;
+		iterator: number;
+		next: number;
+		value: number;
+		done: number;
+		loads: ReadonlyArray<{
+			ip: number;
+			captureIndex: number;
+			dst: number;
+			numberCallIp: number;
+		}>;
+	}>;
+
 	/** EMITTER-ONLY: exact builtin String slice immediately consumed by Number. */
 	nativeStringSliceNumberFusions?: ReadonlyArray<{
 		sliceCallIp: number;

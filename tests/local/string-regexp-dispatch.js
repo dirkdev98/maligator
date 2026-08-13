@@ -371,6 +371,35 @@ check(
 		"subject".match(capturedMatch) === "late replacement",
 );
 
+function projectedMatchAllNumbers(value, regexp) {
+	let total = 0;
+	let count = 0;
+	for (const match of value.matchAll(regexp)) {
+		total += Number(match[1]);
+		count++;
+	}
+	return total + ":" + count;
+}
+check(
+	"closed matchAll capture spans parse through Number",
+	projectedMatchAllNumbers("a12a3", /a(\d+)/g) === "15:2",
+);
+check(
+	"closed matchAll capture spans preserve unmatched undefined",
+	projectedMatchAllNumbers("aa", /a(\d)?/g) === "NaN:2",
+);
+check(
+	"closed matchAll capture spans advance empty unicode matches",
+	projectedMatchAllNumbers("😀", /()/gu) === "0:2",
+);
+const projectedMatchAllOriginal = /a(\d)/g;
+projectedMatchAllOriginal.lastIndex = 2;
+check(
+	"closed matchAll projection leaves the original lastIndex unchanged",
+	projectedMatchAllNumbers("a1a2", projectedMatchAllOriginal) === "2:1" &&
+		projectedMatchAllOriginal.lastIndex === 2,
+);
+
 const manualIterator = "aba".matchAll(/a/g);
 const manualFirst = manualIterator.next();
 const manualSecond = manualIterator.next();

@@ -965,6 +965,34 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += loads.length + 1;
 	}
+	const regexpIteratorProjectionSites = new Map<
+		number,
+		NativeRegExpIteratorProjectionSite
+	>();
+	for (const projection of fn.nativeRegExpIteratorProjections ?? []) {
+		const loads = [...projection.loads].sort(
+			(left, right) => left.captureIndex - right.captureIndex,
+		);
+		if (
+			loads.length === 0 ||
+			loads.length > 8 ||
+			regexpIteratorProjectionSites.has(projection.stepIp) ||
+			loads.some(
+				(load, index) =>
+					load.captureIndex <= 0 ||
+					(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
+			)
+		) {
+			continue;
+		}
+		regexpIteratorProjectionSites.set(projection.stepIp, {
+			projection,
+			subjectSlot: nextStackSlot,
+			slotsOffset: nextStackSlot + 1,
+			loads,
+		});
+		nextStackSlot += loads.length + 1;
+	}
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -998,6 +1026,7 @@ export function emitCompiledFunction(
 		cardinalityPushes,
 		stringSplitProjectionSites,
 		regexpExecProjectionSites,
+		regexpIteratorProjectionSites,
 		directCompiledTargets,
 	);
 	if (body === null) {
@@ -1344,6 +1373,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1811,6 +1841,23 @@ interface NativeRegExpExecProjectionAction {
 	load?: NativeRegExpExecProjection["loads"][number];
 }
 
+type NativeRegExpIteratorProjection = NonNullable<
+	VmFunction["nativeRegExpIteratorProjections"]
+>[number];
+
+interface NativeRegExpIteratorProjectionSite {
+	projection: NativeRegExpIteratorProjection;
+	subjectSlot: number;
+	slotsOffset: number;
+	loads: Array<NativeRegExpIteratorProjection["loads"][number]>;
+}
+
+interface NativeRegExpIteratorProjectionAction {
+	site: NativeRegExpIteratorProjectionSite;
+	role: "step" | "capture" | "number";
+	load?: NativeRegExpIteratorProjection["loads"][number];
+}
+
 type NativeStringSliceNumberFusion = NonNullable<
 	VmFunction["nativeStringSliceNumberFusions"]
 >[number];
@@ -2249,6 +2296,7 @@ function emitBody(
 	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
 	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
+	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
 	directCompiledTargets: ReadonlyMap<number, number>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
@@ -2629,6 +2677,28 @@ function emitBody(
 			}
 		}
 	}
+	const nativeRegExpIteratorProjectionActionByIp = new Map<
+		number,
+		NativeRegExpIteratorProjectionAction
+	>();
+	for (const site of regexpIteratorProjectionSites.values()) {
+		nativeRegExpIteratorProjectionActionByIp.set(site.projection.stepIp, {
+			site,
+			role: "step",
+		});
+		for (const load of site.loads) {
+			nativeRegExpIteratorProjectionActionByIp.set(load.ip, {
+				site,
+				role: "capture",
+				load,
+			});
+			nativeRegExpIteratorProjectionActionByIp.set(load.numberCallIp, {
+				site,
+				role: "number",
+				load,
+			});
+		}
+	}
 	const nativeStringSliceNumberFusionActionByIp = new Map<
 		number,
 		NativeStringSliceNumberFusionAction
@@ -2680,6 +2750,13 @@ function emitBody(
 				);
 			}
 		}
+	}
+	for (const site of regexpIteratorProjectionSites.values()) {
+		lines.push(
+			`bool __regexp_iter_${site.projection.stepIp}_projected = false;`,
+			`i32 __regexp_iter_${site.projection.stepIp}_starts[${site.loads.length}];`,
+			`i32 __regexp_iter_${site.projection.stepIp}_ends[${site.loads.length}];`,
+		);
 	}
 	for (const fusion of fn.nativeStringSliceNumberFusions ?? []) {
 		lines.push(
@@ -2827,6 +2904,7 @@ function emitBody(
 			nativeStringScanRegionActionByIp.get(ip),
 			nativeStringSplitProjectionActionByIp.get(ip),
 			nativeRegExpExecProjectionActionByIp.get(ip),
+			nativeRegExpIteratorProjectionActionByIp.get(ip),
 			nativeStringSliceNumberFusionActionByIp.get(ip),
 		);
 		if (emitted === null) {
@@ -2893,6 +2971,7 @@ function emitInstruction(
 	nativeStringScanRegionAction?: NativeStringScanRegionAction,
 	nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction,
 	nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction,
+	nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction,
 	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
@@ -3274,6 +3353,23 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				nativeRegExpIteratorProjectionAction?.role === "capture"
+			) {
+				const { site, load } = nativeRegExpIteratorProjectionAction;
+				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
+				if (slot >= 0) {
+					return [
+						`if (__regexp_iter_${site.projection.stepIp}_projected) {`,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						`} else {`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, ${boxedOperand(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
+			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				nativeRegExpExecProjectionAction?.role === "length"
@@ -4464,6 +4560,30 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (nativeRegExpIteratorProjectionAction?.role === "number") {
+				const { site, load } = nativeRegExpIteratorProjectionAction;
+				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
+				if (slot >= 0) {
+					const start = `__regexp_iter_${site.projection.stepIp}_starts[${slot}]`;
+					const end = `__regexp_iter_${site.projection.stepIp}_ends[${slot}]`;
+					const parsed = `mal_ops_string_units_to_number(mal_string_code_units(mal_value_to_string(__gc_slots[${site.subjectSlot}])) + ${start}, (usize) (${end} - ${start}))`;
+					const direct =
+						reps[instruction.dst] === "number"
+							? `mal_ops_number_as_f64(${parsed})`
+							: parsed;
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`if (__regexp_iter_${site.projection.stepIp}_projected) {`,
+						`  r${instruction.dst} = ${start} < 0 ? ${reps[instruction.dst] === "number" ? "NAN" : "mal_value_new_nan()"} : ${direct};`,
+						`} else {`,
+						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
+						`}`,
+						poll,
+					];
+				}
+			}
 			if (nativeRegExpExecProjectionAction?.role === "number") {
 				const { site, load } = nativeRegExpExecProjectionAction;
 				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
@@ -4885,6 +5005,27 @@ function emitInstruction(
 				denseIteratorCursor?.kind === "step"
 					? `${denseIteratorCursor.cursor.name} != nullptr ? mal_vm_iterator_step_dense_array_cursor(vm, ${denseIteratorCursor.cursor.name}, &${rec}, &${val}, &${done}) : mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`
 					: `mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`;
+			if (nativeRegExpIteratorProjectionAction?.role === "step") {
+				const site = nativeRegExpIteratorProjectionAction.site;
+				const indices = site.loads.map((load) => load.captureIndex).join(", ");
+				const outputs = site.loads
+					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
+					.join(", ");
+				const status = `regexp_iter_status_${ip}`;
+				return [
+					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
+					`MalValue ${val}; bool ${done};`,
+					`__regexp_iter_${site.projection.stepIp}_projected = false;`,
+					`int ${status} = mal_regexp_try_exact_iterator_capture_projection(vm, ${boxed(instruction.iterator)}, ${boxed(instruction.next)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, __regexp_iter_${site.projection.stepIp}_starts, __regexp_iter_${site.projection.stepIp}_ends, &__gc_slots[${site.subjectSlot}], &${val}, &${done});`,
+					`if (${status} < 0) ${onThrow}`,
+					`if (${status} == 0 && !(${step})) ${onThrow}`,
+					`__regexp_iter_${site.projection.stepIp}_projected = ${status} > 0 && mal_value_is_boolean(${val});`,
+					`r${instruction.valueDst} = ${val};`,
+					reps[instruction.doneDst] === "boolean"
+						? `r${instruction.doneDst} = ${done};`
+						: `r${instruction.doneDst} = mal_value_new_boolean(${done});`,
+				];
+			}
 			return [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 				`MalValue ${val}; bool ${done};`,

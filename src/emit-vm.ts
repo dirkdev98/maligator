@@ -1430,6 +1430,160 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 }
 
 /**
+ * Keep the match value of an exact RegExp String Iterator virtual when a loop
+ * consumes it only through constant captures passed directly to Number. The
+ * iterator/next pair and the complete close CFG stay untouched.
+ */
+function annotateNativeRegExpIteratorProjections(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		const projections: Array<
+			NonNullable<VmFunction["nativeRegExpIteratorProjections"]>[number]
+		> = [];
+		const handlerTargets = new Set(fn.handlers.map((handler) => handler.handlerIp));
+		const jumpEdges: Array<{ sourceIp: number; targetIp: number }> = [];
+		for (const [sourceIp, instruction] of fn.instructions.entries()) {
+			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+				jumpEdges.push({ sourceIp, targetIp: instruction.targetIp });
+			}
+		}
+		const latestDefinition = (register: number, beforeIp: number) => {
+			for (let ip = beforeIp - 1; ip >= 0; ip--) {
+				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
+					return { instruction: fn.instructions[ip]!, ip };
+				}
+			}
+			return undefined;
+		};
+		const hasOnlyUsesUntilRedefinition = (
+			register: number,
+			startIp: number,
+			allowedUses: ReadonlySet<number>,
+		): boolean => {
+			for (let ip = startIp; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (vmInstructionUsesRegister(instruction, register) && !allowedUses.has(ip)) {
+					return false;
+				}
+				if (vmInstructionDefinesRegister(instruction, register)) return true;
+			}
+			return true;
+		};
+
+		for (const [stepIp, step] of fn.instructions.entries()) {
+			const doneBranch = fn.instructions[stepIp + 1];
+			if (
+				step.opcode !== "ITERATOR_STEP" ||
+				doneBranch?.opcode !== "JUMP_IF" ||
+				doneBranch.cond !== step.doneDst ||
+				doneBranch.targetIp <= stepIp + 1 ||
+				handlerTargets.has(stepIp)
+			) {
+				continue;
+			}
+
+			const aliases = new Set([step.valueDst]);
+			const loads: Array<
+				NonNullable<
+					VmFunction["nativeRegExpIteratorProjections"]
+				>[number]["loads"][number]
+			> = [];
+			const indices = new Set<number>();
+			let safe = true;
+			for (let ip = stepIp + 2; ip < fn.instructions.length && aliases.size > 0; ip++) {
+				const instruction = fn.instructions[ip]!;
+				const usedAliases = [...aliases].filter((alias) =>
+					vmInstructionUsesRegister(instruction, alias),
+				);
+				let accepted = usedAliases.length === 0;
+				if (
+					instruction.opcode === "MOVE" &&
+					usedAliases.length === 1 &&
+					aliases.has(instruction.src)
+				) {
+					accepted = true;
+				} else if (
+					instruction.opcode === "LOAD_PROPERTY" &&
+					aliases.has(instruction.object) &&
+					usedAliases.length === 1
+				) {
+					const key = latestDefinition(instruction.key, ip);
+					const numberCall = fn.instructions[ip + 1];
+					const argument =
+						numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+							? decodeVmValueOperand(numberCall.arguments[0])
+							: undefined;
+					const numberDefinition =
+						numberCall?.opcode === "CALL"
+							? latestDefinition(numberCall.callee, ip + 1)
+							: undefined;
+					if (
+						key?.instruction.opcode === "CREATE_NUMBER" &&
+						key.ip > stepIp &&
+						Number.isInteger(key.instruction.value) &&
+						key.instruction.value > 0 &&
+						key.instruction.value <= 0xffff &&
+						!indices.has(key.instruction.value) &&
+						numberCall?.opcode === "CALL" &&
+						numberCall.arguments.length === 1 &&
+						argument?.kind === "register" &&
+						argument.register === instruction.dst &&
+						numberDefinition?.instruction.opcode === "LOAD_INTRINSIC" &&
+						numberDefinition.ip > stepIp &&
+						numberDefinition.instruction.intrinsic === "Number" &&
+						hasOnlyUsesUntilRedefinition(instruction.dst, ip + 1, new Set([ip + 1]))
+					) {
+						loads.push({
+							ip,
+							captureIndex: key.instruction.value,
+							dst: instruction.dst,
+							numberCallIp: ip + 1,
+						});
+						indices.add(key.instruction.value);
+						accepted = true;
+					}
+				}
+				if (!accepted) {
+					safe = false;
+					break;
+				}
+				for (const alias of [...aliases]) {
+					if (vmInstructionDefinesRegister(instruction, alias)) aliases.delete(alias);
+				}
+				if (instruction.opcode === "MOVE" && usedAliases.includes(instruction.src)) {
+					aliases.add(instruction.dst);
+				}
+			}
+
+			const regionEnd = Math.max(stepIp, ...loads.map((load) => load.numberCallIp));
+			const hasInteriorEntry =
+				fn.handlers.some(
+					(handler) => handler.handlerIp > stepIp && handler.handlerIp <= regionEnd,
+				) || jumpEdges.some(({ targetIp }) => targetIp > stepIp && targetIp <= regionEnd);
+			if (
+				!safe ||
+				loads.length === 0 ||
+				loads.length > 8 ||
+				doneBranch.targetIp <= regionEnd ||
+				hasInteriorEntry
+			) {
+				continue;
+			}
+
+			projections.push({
+				stepIp,
+				iterator: step.iterator,
+				next: step.next,
+				value: step.valueDst,
+				done: step.doneDst,
+				loads,
+			});
+		}
+		if (projections.length > 0) fn.nativeRegExpIteratorProjections = projections;
+		else delete fn.nativeRegExpIteratorProjections;
+	}
+}
+
+/**
  * Fuse an exact builtin `string.slice(constant)` whose only produced value is
  * immediately consumed by the exact Number intrinsic. Both calls remain as the
  * guard-miss path.
@@ -1581,6 +1735,7 @@ function emitVmDefinitionSource(
 		annotateNativeStringScanSummaries(definition);
 		annotateNativeStringSplitProjections(definition);
 		annotateNativeRegExpExecProjections(definition);
+		annotateNativeRegExpIteratorProjections(definition);
 		annotateNativeStringSliceNumberFusions(definition);
 		annotateNativeStringSearchRegExpCalls(definition);
 	}

@@ -482,6 +482,8 @@ typedef struct RegexpCaptureProjection {
     u8 span_mask;
     i32 *starts;
     i32 *ends;
+    i32 *match_start;
+    i32 *match_end;
 } RegexpCaptureProjection;
 
 // RegExpBuiltinExec(R, S): the matcher-backed exec. Returns the result array, or
@@ -621,6 +623,12 @@ static MalValue regexp_builtin_exec(
 
     if (result_kind == REGEXP_BUILTIN_EXEC_CAPTURE_PROJECTION) {
         assert(projection != nullptr && projection->count > 0);
+        if (projection->match_start != nullptr) {
+            *projection->match_start = match_start;
+        }
+        if (projection->match_end != nullptr) {
+            *projection->match_end = match_end;
+        }
         bool indices_are_own = true;
         for (u32 i = 0; i < projection->count; i++) {
             if (projection->indices[i] >= (u32) ngroups) {
@@ -2334,6 +2342,8 @@ bool mal_regexp_exec_capture_projection(
         .span_mask = capture_span_mask,
         .starts = capture_starts,
         .ends = capture_ends,
+        .match_start = nullptr,
+        .match_end = nullptr,
     };
     // This is a compiled-frame helper rather than a native callback: the
     // caller already publishes a complete GC frame. Suppress collection while
@@ -2380,6 +2390,119 @@ MalValue mal_regexp_materialize_capture_span(
     assert(start >= 0 && end >= start &&
            (usize) end <= mal_string_length(mal_value_to_string(string)));
     return regexp_substring(vm, mal_value_to_string(string), start, end);
+}
+
+int mal_regexp_try_exact_iterator_capture_projection(
+    MalVm *vm, MalValue iterator_value, MalValue next_method,
+    const u32 *capture_indices, MalValue **capture_outputs, u32 capture_count,
+    i32 *capture_starts, i32 *capture_ends, MalValue *subject_output,
+    MalValue *value_out, bool *done_out
+) {
+    if (capture_count == 0 || capture_count > 8 || capture_indices == nullptr ||
+        capture_outputs == nullptr || capture_starts == nullptr ||
+        capture_ends == nullptr || subject_output == nullptr ||
+        value_out == nullptr || done_out == nullptr) {
+        return 0;
+    }
+    for (u32 i = 0; i < capture_count; i++) {
+        if (capture_outputs[i] == nullptr || capture_indices[i] == 0 ||
+            (i > 0 && capture_indices[i - 1] >= capture_indices[i])) {
+            return 0;
+        }
+        *capture_outputs[i] = mal_value_new_undefined();
+        capture_starts[i] = -1;
+        capture_ends[i] = -1;
+    }
+    *subject_output = mal_value_new_undefined();
+    *value_out = mal_value_new_undefined();
+    *done_out = false;
+
+    if (!mal_value_is_regexp_string_iterator_object(iterator_value) ||
+        !mal_value_is_native_function_object(next_method)) {
+        return 0;
+    }
+    MalNativeFunctionCallback callback =
+        mal_native_function_object_callback(mal_value_to_native_function_object(next_method));
+    if (callback != regexp_string_iterator_next) {
+        return 0;
+    }
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, next_method) != vm->current_realm) {
+        return 0;
+    }
+#endif
+
+    MalRegExpStringIteratorObject *iterator =
+        mal_value_to_regexp_string_iterator_object(iterator_value);
+    if (!iterator->global) {
+        return 0;
+    }
+    MalRegExpObject *canonical;
+    if (!regexp_canonical_instance(vm, iterator->regexp, &canonical)) {
+        return 0;
+    }
+    if (iterator->done) {
+        *done_out = true;
+        return 1;
+    }
+
+    MalCalleeRoots call_roots;
+    mal_gc_callee_roots_begin(
+        &call_roots, iterator_value, mal_value_new_undefined(),
+        next_method, nullptr, 0);
+    MalValue roots[8];
+    for (u32 i = 0; i < capture_count; i++) {
+        roots[i] = mal_value_new_undefined();
+    }
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, capture_count);
+
+    i32 match_start = -1;
+    i32 match_end = -1;
+    RegexpCaptureProjection projection = {
+        .indices = capture_indices,
+        .values = roots,
+        .count = capture_count,
+        .span_mask = (u8) ((1u << capture_count) - 1u),
+        .starts = capture_starts,
+        .ends = capture_ends,
+        .match_start = &match_start,
+        .match_end = &match_end,
+    };
+
+    vm->gc_native_frames++;
+    MalValue result = regexp_builtin_exec(
+        vm, canonical, iterator->regexp, iterator->string,
+        REGEXP_BUILTIN_EXEC_CAPTURE_PROJECTION, false, &projection);
+    bool ok = !regexp_threw(vm);
+    if (ok && mal_value_is_null(result)) {
+        iterator->done = true;
+        *done_out = true;
+    } else if (ok) {
+        if (match_start == match_end) {
+            i64 this_index;
+            ok = regexp_get_last_index(vm, iterator->regexp, &this_index);
+            if (ok) {
+                i64 next_index = regexp_advance_string_index(
+                    iterator->string, this_index, iterator->unicode);
+                ok = regexp_set_last_index(vm, iterator->regexp, next_index);
+            }
+        }
+        if (ok) {
+            for (u32 i = 0; i < capture_count; i++) {
+                *capture_outputs[i] = roots[i];
+            }
+            *value_out = result;
+            if (mal_value_is_boolean(result)) {
+                *subject_output = mal_value_from_string(iterator->string);
+            }
+        }
+    }
+    vm->gc_native_frames--;
+
+    mal_gc_unroot(&root_span);
+    mal_gc_callee_roots_end(&call_roots);
+    return ok ? 1 : -1;
 }
 
 #else // !MAL_REGEXP
@@ -2460,6 +2583,31 @@ MalValue mal_regexp_materialize_capture_span(
     (void) start;
     (void) end;
     return mal_value_new_undefined();
+}
+
+int mal_regexp_try_exact_iterator_capture_projection(
+    MalVm *vm, MalValue iterator, MalValue next_method,
+    const u32 *capture_indices, MalValue **capture_outputs, u32 capture_count,
+    i32 *capture_starts, i32 *capture_ends, MalValue *subject_output,
+    MalValue *value_out, bool *done_out
+) {
+    (void) vm;
+    (void) iterator;
+    (void) next_method;
+    (void) capture_indices;
+    if (capture_outputs != nullptr) {
+        for (u32 i = 0; i < capture_count; i++) {
+            if (capture_outputs[i] != nullptr) {
+                *capture_outputs[i] = mal_value_new_undefined();
+            }
+            if (capture_starts != nullptr) capture_starts[i] = -1;
+            if (capture_ends != nullptr) capture_ends[i] = -1;
+        }
+    }
+    if (subject_output != nullptr) *subject_output = mal_value_new_undefined();
+    if (value_out != nullptr) *value_out = mal_value_new_undefined();
+    if (done_out != nullptr) *done_out = false;
+    return 0;
 }
 
 int mal_regexp_try_exact_iterator_step(

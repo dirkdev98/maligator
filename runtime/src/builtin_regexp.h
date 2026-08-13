@@ -85,3 +85,11 @@ int mal_regexp_try_exact_iterator_step(
     MalVm *vm, MalValue iterator, MalValue next_method,
     MalValue *value_out, bool *done_out
 );
+
+/** Exact RegExp String Iterator step with selected capture spans. */
+int mal_regexp_try_exact_iterator_capture_projection(
+    MalVm *vm, MalValue iterator, MalValue next_method,
+    const u32 *capture_indices, MalValue **capture_outputs, u32 capture_count,
+    i32 *capture_starts, i32 *capture_ends, MalValue *subject_output,
+    MalValue *value_out, bool *done_out
+);

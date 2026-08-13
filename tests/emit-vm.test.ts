@@ -1116,6 +1116,32 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_regexp_exec_capture_projection(vm,");
 	});
 
+	it("projects closed matchAll captures directly through Number", () => {
+		const output = emit(`
+			function total(value, regexp) {
+				let sum = 0;
+				for (const match of value.matchAll(regexp)) sum += Number(match[1]);
+				return sum;
+			}
+			globalThis.total = total;
+		`);
+		expect(output).toContain("mal_regexp_try_exact_iterator_capture_projection(vm,");
+		expect(output).toContain("mal_ops_string_units_to_number(");
+		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
+	});
+
+	it("keeps matchAll results materialized when capture identity escapes", () => {
+		const output = emit(`
+			function collect(value, regexp) {
+				const results = [];
+				for (const match of value.matchAll(regexp)) results.push(match);
+				return results;
+			}
+			globalThis.collect = collect;
+		`);
+		expect(output).not.toContain("mal_regexp_try_exact_iterator_capture_projection(vm,");
+	});
+
 	it("emits guarded direct collection dispatch from call metadata", () => {
 		const output = emit(`
 			function update(map, set, key, value) {
