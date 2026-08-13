@@ -39,11 +39,11 @@ prune. WPT removes its per-run native scratch tree on exit; pass
 
 ## Tiers
 
-| Tier  | Command              | Policy                    | Intended use                                                                                     |
-| ----- | -------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| Smoke | `npm run test:smoke` | Bail, 20s warm / 2m cold  | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
-| Check | `npm run test:check` | Bail, about two minutes   | All regular unit tests, curated wire/normal standards, and native regression complement          |
-| Full  | `npm run test:full`  | Bail, unbounded           | Self-hosting, remaining native coverage, standards dimensions, sanitizers, collectors, and leaks |
+| Tier  | Command              | Policy                   | Intended use                                                                                     |
+| ----- | -------------------- | ------------------------ | ------------------------------------------------------------------------------------------------ |
+| Smoke | `npm run test:smoke` | Bail, 20s warm / 2m cold | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
+| Check | `npm run test:check` | Bail, about two minutes  | All regular unit tests, curated wire/normal standards, and native regression complement          |
+| Full  | `npm run test:full`  | Bail, unbounded          | Self-hosting, remaining native coverage, standards dimensions, sanitizers, collectors, and leaks |
 
 Smoke and check own disjoint unit selections: the small
 `tests/test-suite-unit-smoke.txt` manifest is the capability proof and check derives
