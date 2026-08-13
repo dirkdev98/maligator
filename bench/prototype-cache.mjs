@@ -5,7 +5,7 @@
 
 const iterations = 20_000_000;
 const warmupIterations = Math.min(iterations, 20_000);
-const measuredRepeats = 64;
+const minimumPhaseMs = 25;
 
 function originalMethod(value) {
 	return value + 1;
@@ -75,15 +75,27 @@ loadEightLinks(eightLinkReceiver, warmupIterations);
 function measure(load, receiver) {
 	let result;
 	const start = Date.now();
-	for (let repeat = 0; repeat < measuredRepeats; repeat++) result = load(receiver, iterations);
-	return [result, (Date.now() - start) / measuredRepeats];
+	let calls = 0;
+	let elapsed;
+	do {
+		result = load(receiver, iterations);
+		calls++;
+		elapsed = Date.now() - start;
+	} while (elapsed < minimumPhaseMs);
+	return [result, elapsed / calls, calls];
 }
 
-const [runtimeResult, runtimeMs] = measure(loadRuntime, runtimeReceiver);
-const [directResult, userlandDirectMs] = measure(loadDirect, directReceiver);
-const [deepResult, userlandDeepMs] = measure(loadDeep, deepReceiver);
-const [fourLinkResult, userlandFourLinkMs] = measure(loadFourLinks, fourLinkReceiver);
-const [eightLinkResult, userlandEightLinkMs] = measure(loadEightLinks, eightLinkReceiver);
+const [runtimeResult, runtimeMs, runtimeCalls] = measure(loadRuntime, runtimeReceiver);
+const [directResult, userlandDirectMs, userlandDirectCalls] = measure(loadDirect, directReceiver);
+const [deepResult, userlandDeepMs, userlandDeepCalls] = measure(loadDeep, deepReceiver);
+const [fourLinkResult, userlandFourLinkMs, userlandFourLinkCalls] = measure(
+	loadFourLinks,
+	fourLinkReceiver,
+);
+const [eightLinkResult, userlandEightLinkMs, userlandEightLinkCalls] = measure(
+	loadEightLinks,
+	eightLinkReceiver,
+);
 
 holder.method = replacementMethod;
 if (
@@ -96,7 +108,10 @@ if (
 }
 loadAfterMutation(deepReceiver, warmupIterations);
 
-const [mutationResult, postMutationMs] = measure(loadAfterMutation, deepReceiver);
+const [mutationResult, postMutationMs, postMutationCalls] = measure(
+	loadAfterMutation,
+	deepReceiver,
+);
 
 if (
 	runtimeResult !== Array.prototype.values ||
@@ -112,6 +127,13 @@ if (
 console.log(
 	JSON.stringify({
 		iterations,
+		measuredCalls:
+			runtimeCalls +
+			userlandDirectCalls +
+			userlandDeepCalls +
+			userlandFourLinkCalls +
+			userlandEightLinkCalls +
+			postMutationCalls,
 		runtimeMs,
 		userlandDirectMs,
 		userlandDeepMs,

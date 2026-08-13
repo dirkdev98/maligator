@@ -368,6 +368,7 @@ interface SqliteBindingMetrics {
 }
 interface PrototypeCacheFixtureMetrics {
 	iterations: number;
+	measuredCalls: number;
 	runtimeMs: number;
 	userlandDirectMs: number;
 	userlandDeepMs: number;
@@ -1467,6 +1468,7 @@ function parseSqliteBindingResult(
 		typeof parsed !== "object" ||
 		parsed === null ||
 		!("iterations" in parsed) ||
+		!("measuredCalls" in parsed) ||
 		!("parametersPerCall" in parsed) ||
 		!("unboundMs" in parsed) ||
 		!("numberMs" in parsed) ||
@@ -1651,6 +1653,7 @@ function runPrototypeCacheFixture(
 	const first = results[0]!;
 	return {
 		iterations: first.iterations,
+		measuredCalls: first.measuredCalls,
 		runtimeMs: median(results.map((result) => result.runtimeMs)),
 		userlandDirectMs: median(results.map((result) => result.userlandDirectMs)),
 		userlandDeepMs: median(results.map((result) => result.userlandDeepMs)),
@@ -1688,12 +1691,26 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 	const stats = spawnSync(instrumented, [], {
 		env: { ...process.env, MAL_PERF_STATS: "1" },
 		encoding: "utf-8",
-		stdio: ["ignore", "ignore", "pipe"],
+		stdio: ["ignore", "pipe", "pipe"],
 	});
 	if (stats.status !== 0) {
 		throw new Error(`instrumented prototype-cache run failed: ${stats.stderr ?? ""}`);
 	}
 	const stderr = stats.stderr ?? "";
+	const instrumentedMetrics = parsePrototypeCacheResult(
+		stats.stdout ?? "",
+		`${instrumented} (instrumented)`,
+	);
+	const inheritedLoopIterationsElided = parsePerfIcStat(
+		stderr,
+		"inherited_loop_iterations_elided",
+	);
+	const expectedElided = instrumentedMetrics.measuredCalls * instrumentedMetrics.iterations;
+	if (inheritedLoopIterationsElided !== 0 && inheritedLoopIterationsElided !== expectedElided) {
+		throw new Error(
+			`prototype-cache summarized ${inheritedLoopIterationsElided} iterations, expected ${expectedElided}`,
+		);
+	}
 	return {
 		iterations: mal.iterations,
 		mal,
@@ -1706,10 +1723,7 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 		postMutationRatio: mal.postMutationMs / node.postMutationMs,
 		inheritedHits: parsePerfIcStat(stderr, "load_inherited_hits"),
 		inheritedLoopSummaries: parsePerfIcStat(stderr, "inherited_loop_summaries"),
-		inheritedLoopIterationsElided: parsePerfIcStat(
-			stderr,
-			"inherited_loop_iterations_elided",
-		),
+		inheritedLoopIterationsElided,
 		inheritedFills: parsePerfIcStat(stderr, "inherited_fills"),
 		inheritedRejectChain: parsePerfIcStat(stderr, "inherited_reject_chain"),
 	};
