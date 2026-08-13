@@ -112,7 +112,10 @@ compiler remarks must describe the final emitted path before they guide optimiza
       ratios, where higher is better. The general wall/throughput confidence threshold
       is 2%: require a central change of at least 2% and a confidence interval that
       excludes zero. Retain the win when representative controls do not regress. An
-      expert `--max-pairs` override now permits a longer exact comparison when the
+      independently substantial, repeatable allocation/RSS reduction is also retainable
+      when semantics are exact and representative wall-time controls show no credible
+      slowdown; do not force memory wins to manufacture a CPU headline. An expert
+      `--max-pairs` override now permits a longer exact comparison when the
       default 15-pair ceiling cannot resolve a small change; progress reporting remains.
 - [ ] Recheck profiler overhead on language, allocation-heavy, GC, and HTTP workloads.
       Keep ordinary images free of profiling instrumentation, target less than 3%
@@ -123,7 +126,9 @@ compiler remarks must describe the final emitted path before they guide optimiza
       repository-audit invocations (`plan`, `dontAsk`, and tools disabled with stdin)
       hung silently until their exact processes were terminated. Preserve host
       keychain/session access without exposing the cookie, and add a tiny read-only
-      tool-use smoke before assigning a long review.
+      tool-use smoke before assigning a long review. The external-call safety layer
+      also requires a fresh explicit approval before sending internal architecture and
+      benchmark payloads to Claude.ai; keep that disclosure separate from authentication.
 
 ## Domain roadmaps
 
