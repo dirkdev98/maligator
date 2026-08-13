@@ -49,6 +49,18 @@ test("paired comparison retains a confident two percent wall improvement", () =>
 	expect(classifyMetricSamples("string.malMs", improvement)?.status).toBe("improvement");
 });
 
+test("the confidence interval must exclude zero, not the full threshold", () => {
+	const improvements = [-1, -1.5, -2.5, -2.5, -2.5, -3, -3.5].map((change) => ({
+		base: 100,
+		head: 100 + change,
+	}));
+	const result = classifyMetricSamples("string.malMs", improvements);
+	expect(result?.medianRegressionPercent).toBeLessThan(-2);
+	expect(result?.confidenceInterval[1]).toBeGreaterThan(-2);
+	expect(result?.confidenceInterval[1]).toBeLessThan(0);
+	expect(result?.status).toBe("improvement");
+});
+
 test("paired comparison treats exact A/A as unchanged and noisy evidence as inconclusive", () => {
 	const equal = Array.from({ length: 5 }, () => ({ base: 100, head: 100 }));
 	const noisy = [

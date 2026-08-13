@@ -223,15 +223,17 @@ function classify(
 	const absoluteChange = median(
 		samples.map((sample) => Math.abs(sample.head - sample.base)),
 	);
+	const medianRegressionPercent = median(changes);
 	let status: MetricResult["status"];
 	if (policy.minimumAbsolute !== undefined && absoluteChange < policy.minimumAbsolute) {
 		status = "unchanged";
 	} else if (
-		interval[0] > policy.thresholdPercent &&
+		medianRegressionPercent > policy.thresholdPercent &&
+		interval[0] > 0 &&
 		(policy.minimumAbsolute === undefined || absoluteChange >= policy.minimumAbsolute)
 	) {
 		status = "regression";
-	} else if (interval[1] < -policy.thresholdPercent) {
+	} else if (medianRegressionPercent < -policy.thresholdPercent && interval[1] < 0) {
 		status = "improvement";
 	} else if (
 		interval[0] >= -policy.thresholdPercent &&
@@ -245,7 +247,7 @@ function classify(
 		path: metricPath,
 		direction: policy.direction,
 		thresholdPercent: policy.thresholdPercent,
-		medianRegressionPercent: median(changes),
+		medianRegressionPercent,
 		confidenceInterval: interval,
 		status,
 		samples,
