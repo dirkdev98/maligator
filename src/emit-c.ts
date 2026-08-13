@@ -1003,6 +1003,29 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += loads.length + 1;
 	}
+	const invariantJsonParseCaches = new Map<
+		number,
+		NonNullable<VmFunction["nativeInvariantJsonParseCaches"]>[number] & {
+			rootsOffset: number;
+		}
+	>();
+	for (const cache of fn.nativeInvariantJsonParseCaches ?? []) {
+		const instruction = fn.instructions[cache.callIp];
+		if (
+			instruction?.opcode !== "CALL" ||
+			instruction.dst !== cache.result ||
+			invariantJsonParseCaches.has(cache.callIp)
+		) {
+			throw new Error(
+				`Invalid invariant JSON parse cache at instruction ${cache.callIp}`,
+			);
+		}
+		invariantJsonParseCaches.set(cache.callIp, {
+			...cache,
+			rootsOffset: nextStackSlot,
+		});
+		nextStackSlot += 2;
+	}
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -1038,6 +1061,7 @@ export function emitCompiledFunction(
 		stringSplitCursorSites,
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
+		invariantJsonParseCaches,
 		directCompiledTargets,
 	);
 	if (body === null) {
@@ -1183,6 +1207,11 @@ export function emitCompiledFunction(
 		lines.push(`    MalShape *${region.shapeName} = nullptr;`);
 		lines.push(`    bool ${region.currentMaterializedName} = false;`);
 		lines.push(`    i32 ${region.elementIndexName} = -1;`);
+	}
+	for (const cache of invariantJsonParseCaches.values()) {
+		lines.push(
+			`    MalInvariantJsonParseCache __invariant_json_parse_${cache.callIp} = { .roots = &__gc_slots[${cache.rootsOffset}], .filled = false };`,
+		);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
@@ -1384,6 +1413,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -2430,6 +2460,12 @@ function emitBody(
 	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
+	invariantJsonParseCaches: ReadonlyMap<
+		number,
+		NonNullable<VmFunction["nativeInvariantJsonParseCaches"]>[number] & {
+			rootsOffset: number;
+		}
+	>,
 	directCompiledTargets: ReadonlyMap<number, number>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
@@ -3139,6 +3175,7 @@ function emitBody(
 			nativeRegExpExecProjectionActionByIp.get(ip),
 			nativeRegExpIteratorProjectionActionByIp.get(ip),
 			nativeStringSliceNumberFusionActionByIp.get(ip),
+			invariantJsonParseCaches.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -3207,6 +3244,9 @@ function emitInstruction(
 	nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction,
 	nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction,
 	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
+	invariantJsonParseCache?: NonNullable<
+		VmFunction["nativeInvariantJsonParseCaches"]
+	>[number] & { rootsOffset: number },
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -4899,6 +4939,24 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (invariantJsonParseCache !== undefined) {
+				const cache = `__invariant_json_parse_${ip}`;
+				const text = boxedOperand(instruction.arguments[0]!);
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`if (mal_builtin_json_parse_cache_try_clone(vm, &${cache}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${text}, &r${instruction.dst})) {`,
+					`  ${throwCheck}`,
+					`} else {`,
+					`  ${throwCheck}`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`  (void) mal_builtin_json_parse_cache_fill(vm, &${cache}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${text}, r${instruction.dst});`,
+					`  ${throwCheck}`,
+					`}`,
+					poll,
+				];
+			}
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site } = nativeStringSplitCursorAction;
 				const id = site.cursor.callIp;

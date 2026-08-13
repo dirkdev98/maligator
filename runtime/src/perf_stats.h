@@ -212,6 +212,12 @@ typedef struct MalPerfStats {
     u64 argument_snapshot_destination_writes;
     u64 argument_snapshot_temporary_copies;
 
+    u64 invariant_json_parse_candidates;
+    u64 invariant_json_parse_fills;
+    u64 invariant_json_parse_hits;
+    u64 invariant_json_parse_misses;
+    u64 invariant_json_parse_calls_elided;
+
     u64 call_cache_probes;
     u64 call_cache_exact_identity_hits;
     u64 call_cache_compiled_exact_hits;

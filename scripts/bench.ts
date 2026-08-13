@@ -128,6 +128,11 @@ interface LanguageMetrics {
 	shapedObjects: number;
 	stackObjects: number;
 	stackMaterializations: number;
+	invariantJsonParseCandidates: number;
+	invariantJsonParseFills: number;
+	invariantJsonParseHits: number;
+	invariantJsonParseMisses: number;
+	invariantJsonParseCallsElided: number;
 	callProbes: number;
 	callMisses: number;
 	loadMonoHits: number;
@@ -833,6 +838,42 @@ function benchLanguage(runs: number): LanguageMetrics {
 	});
 	const gcStderr = gcResult.stderr ?? "";
 	const perfStderr = perfResult.stderr ?? "";
+	const invariantJsonParseCandidates = parsePerfStat(
+		perfStderr,
+		"perf-invariant-json-parse-stats",
+		"candidates",
+	);
+	const invariantJsonParseFills = parsePerfStat(
+		perfStderr,
+		"perf-invariant-json-parse-stats",
+		"fills",
+	);
+	const invariantJsonParseHits = parsePerfStat(
+		perfStderr,
+		"perf-invariant-json-parse-stats",
+		"hits",
+	);
+	const invariantJsonParseMisses = parsePerfStat(
+		perfStderr,
+		"perf-invariant-json-parse-stats",
+		"misses",
+	);
+	const invariantJsonParseCallsElided = parsePerfStat(
+		perfStderr,
+		"perf-invariant-json-parse-stats",
+		"parse_calls_elided",
+	);
+	if (
+		invariantJsonParseCandidates !== 180 ||
+		invariantJsonParseFills !== 1 ||
+		invariantJsonParseHits !== 179 ||
+		invariantJsonParseMisses !== 1 ||
+		invariantJsonParseCallsElided !== 179
+	) {
+		throw new Error(
+			`language invariant JSON parse cache counters were ${invariantJsonParseCandidates}/${invariantJsonParseFills}/${invariantJsonParseHits}/${invariantJsonParseMisses}/${invariantJsonParseCallsElided}, expected 180/1/179/1/179`,
+		);
+	}
 	return {
 		malMs,
 		nodeMs,
@@ -847,6 +888,11 @@ function benchLanguage(runs: number): LanguageMetrics {
 			"perf-allocation-stats",
 			"stack_materializations",
 		),
+		invariantJsonParseCandidates,
+		invariantJsonParseFills,
+		invariantJsonParseHits,
+		invariantJsonParseMisses,
+		invariantJsonParseCallsElided,
 		callProbes: parsePerfStat(perfStderr, "perf-call-cache-stats", "probes"),
 		callMisses: parsePerfStat(perfStderr, "perf-call-cache-stats", "dispatch_misses"),
 		loadMonoHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_mono_hits"),
@@ -2354,6 +2400,9 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(
 			`  objects   ${entry.language.emptyObjects} empty, ${entry.language.shapedObjects} shaped, ${entry.language.stackObjects} stack, ${entry.language.stackMaterializations} materialized`,
+		);
+		console.log(
+			`  json      ${entry.language.invariantJsonParseHits}/${entry.language.invariantJsonParseCandidates} template hits, ${entry.language.invariantJsonParseCallsElided} parses elided`,
 		);
 		console.log(
 			`  calls     ${entry.language.callProbes} cache probes, ${entry.language.callMisses} misses`,

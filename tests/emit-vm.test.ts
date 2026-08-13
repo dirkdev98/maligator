@@ -1406,3 +1406,44 @@ describe("native static typeof facts", () => {
 		expect(output).toMatch(/r\d+ = r\d+ \* r\d+;/);
 	});
 });
+
+describe("activation-local invariant JSON.parse templates", () => {
+	function emit(source: string): string {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"invariant-json-parse-cache.js",
+			parseScript(source, { strict: false }),
+		);
+		return emitVmDefinition(compileSemanticProgramToVmDefinition(semantic), {
+			compiled: true,
+		});
+	}
+
+	it("emits a dedicated rooted template for an exact no-reviver parse loop", () => {
+		const output = emit(`
+			"use strict";
+			function repeated(text) {
+				let total = 0;
+				for (let index = 0; index < 4; index++) total += JSON.parse(text)[0].id;
+				return total;
+			}
+			globalThis.repeated = repeated;
+		`);
+
+		expect(output).toContain("MalInvariantJsonParseCache __invariant_json_parse_");
+		expect(output).toContain("mal_builtin_json_parse_cache_try_clone");
+		expect(output).toContain("mal_builtin_json_parse_cache_fill");
+	});
+
+	it("rejects reviver calls and one-shot parse sites", () => {
+		const output = emit(`
+			"use strict";
+			function revived(text, callback) { return JSON.parse(text, callback); }
+			function once(text) { return JSON.parse(text); }
+			globalThis.keep = [revived, once];
+		`);
+
+		expect(output).not.toContain("MalInvariantJsonParseCache __invariant_json_parse_");
+		expect(output).not.toContain("mal_builtin_json_parse_cache_try_clone");
+	});
+});

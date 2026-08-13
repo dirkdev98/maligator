@@ -397,6 +397,16 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-invariant-json-parse-stats] candidates=%llu fills=%llu hits=%llu "
+        "misses=%llu parse_calls_elided=%llu\n",
+        (unsigned long long) mal_perf_stats.invariant_json_parse_candidates,
+        (unsigned long long) mal_perf_stats.invariant_json_parse_fills,
+        (unsigned long long) mal_perf_stats.invariant_json_parse_hits,
+        (unsigned long long) mal_perf_stats.invariant_json_parse_misses,
+        (unsigned long long) mal_perf_stats.invariant_json_parse_calls_elided
+    );
+    fprintf(
+        stderr,
         "[perf-coroutine-stats] release_clear_slots=%llu allocation_init_slots=%llu\n",
         (unsigned long long) mal_perf_stats.coroutine_buffer_release_clear_slots,
         (unsigned long long) mal_perf_stats.coroutine_buffer_allocation_init_slots

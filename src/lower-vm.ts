@@ -340,6 +340,15 @@ export interface VmFunction {
 		result: number;
 	}>;
 
+	/** EMITTER-ONLY: activation-local exact no-reviver JSON.parse templates. */
+	nativeInvariantJsonParseCaches?: ReadonlyArray<{
+		callIp: number;
+		jsonObject: number;
+		parseCallee: number;
+		text: number;
+		result: number;
+	}>;
+
 	/**
 	 * COMPILE-ONLY: exact CREATE_OBJECT/CREATE_OBJECT_SHAPED sites proven safe for
 	 * native stack emission. Omitted by the wire codec, so deserialized/interpreted

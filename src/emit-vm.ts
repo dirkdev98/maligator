@@ -106,6 +106,7 @@ const C_HEADER_LINES = [
 	'#include "value_ops.h"',
 	'#include "perf_stats.h"',
 	'#include "builtin_array.h"',
+	'#include "builtin_json.h"',
 	'#include "builtin_map.h"',
 	'#include "builtin_string.h"',
 	'#include "builtin_regexp.h"',
@@ -2192,6 +2193,90 @@ function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
 	}
 }
 
+/**
+ * Mark an exact no-reviver JSON.parse inside a natural loop. Native emission
+ * keeps a private parsed template per activation and returns a fresh structural
+ * clone on hits; the template never becomes observable JavaScript state.
+ */
+function annotateNativeInvariantJsonParseCaches(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		const caches: Array<
+			NonNullable<VmFunction["nativeInvariantJsonParseCaches"]>[number]
+		> = [];
+		const entryTargets = new Set<number>(fn.handlers.map((handler) => handler.handlerIp));
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+				entryTargets.add(instruction.targetIp);
+			}
+		}
+		const latestDefinition = (register: number, beforeIp: number) => {
+			for (let ip = beforeIp - 1; ip >= 0; ip--) {
+				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
+					return { instruction: fn.instructions[ip]!, ip };
+				}
+			}
+			return undefined;
+		};
+		for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
+			const parseCall = fn.instructions[callIp]!;
+			if (parseCall.opcode !== "CALL" || parseCall.arguments.length !== 1) continue;
+			const parseLoadDef = latestDefinition(parseCall.callee, callIp);
+			const jsonLoadDef = latestDefinition(parseCall.thisValue, callIp);
+			const parseLoad = parseLoadDef?.instruction;
+			const jsonLoad = jsonLoadDef?.instruction;
+			const parsePropertyIsExact =
+				parseLoad?.opcode === "LOAD_PROPERTY_STATIC"
+					? staticStringEquals(definition, parseLoad.stringIndex, "parse")
+					: parseLoad?.opcode === "LOAD_PROPERTY"
+						? (() => {
+								const key = latestDefinition(parseLoad.key, parseLoadDef?.ip ?? 0);
+								return (
+									key?.instruction.opcode === "CREATE_STRING" &&
+									staticStringEquals(definition, key.instruction.stringIndex, "parse") &&
+									![...entryTargets].some(
+										(target) => target > key.ip && target <= (parseLoadDef?.ip ?? 0),
+									)
+								);
+							})()
+						: false;
+			if (
+				jsonLoad?.opcode !== "LOAD_INTRINSIC" ||
+				jsonLoad.intrinsic !== "JSON" ||
+				(parseLoad?.opcode !== "LOAD_PROPERTY_STATIC" &&
+					parseLoad?.opcode !== "LOAD_PROPERTY") ||
+				parseLoad.object !== jsonLoad.dst ||
+				!parsePropertyIsExact ||
+				parseCall.callee !== parseLoad.dst ||
+				parseCall.thisValue !== jsonLoad.dst ||
+				parseLoadDef === undefined ||
+				jsonLoadDef === undefined ||
+				[parseLoadDef.ip, callIp].some((ip) => entryTargets.has(ip)) ||
+				[...entryTargets].some((target) => target > jsonLoadDef.ip && target <= callIp)
+			) {
+				continue;
+			}
+			const text = decodeVmValueOperand(parseCall.arguments[0]!);
+			if (text.kind !== "register") continue;
+			const backedge = fn.instructions.findIndex(
+				(instruction, ip) =>
+					ip > callIp &&
+					(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+					instruction.targetIp <= jsonLoadDef.ip,
+			);
+			if (backedge < 0) continue;
+			caches.push({
+				callIp,
+				jsonObject: jsonLoad.dst,
+				parseCallee: parseLoad.dst,
+				text: text.register,
+				result: parseCall.dst,
+			});
+		}
+		if (caches.length > 0) fn.nativeInvariantJsonParseCaches = caches;
+		else delete fn.nativeInvariantJsonParseCaches;
+	}
+}
+
 function emitVmDefinitionSource(
 	definition: VmDefinition,
 	options: EmitOptions,
@@ -2209,6 +2294,7 @@ function emitVmDefinitionSource(
 		annotateNativeRegExpIteratorProjections(definition);
 		annotateNativeStringSliceNumberFusions(definition);
 		annotateNativeStringSearchRegExpCalls(definition);
+		annotateNativeInvariantJsonParseCaches(definition);
 	}
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
 	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.

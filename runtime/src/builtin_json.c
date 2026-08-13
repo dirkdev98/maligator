@@ -1637,6 +1637,208 @@ MalValue mal_builtin_json_parse_intrinsic(MalVm *vm, MalValue text) {
         mal_value_new_undefined(), mal_value_new_undefined());
 }
 
+static bool mal_json_parse_cache_exact_callee(
+    MalVm *vm, MalValue callee, MalValue this_value
+) {
+    if (this_value != vm->intrinsics[MAL_INTRINSIC_JSON] ||
+        !mal_value_is_native_function_object(callee)) {
+        return false;
+    }
+	if (mal_native_function_object_callback(
+			mal_value_to_native_function_object(callee)) != mal_builtin_json_parse) {
+		return false;
+	}
+#if MAL_REALMS
+	return mal_vm_callee_realm(vm, callee) == vm->current_realm;
+#else
+	return true;
+#endif
+}
+
+/*
+ * Clone the deliberately closed graph produced by the no-reviver intrinsic
+ * parser. JSON cannot encode cycles, accessors, symbols, holes, or exotic
+ * prototypes. The private template is never exposed, so its graph remains in
+ * exactly this domain for the lifetime of the activation-local cache.
+ */
+typedef struct MalJsonCloneBudget {
+    u32 depth;
+    u32 nodes;
+    u32 child_slots;
+} MalJsonCloneBudget;
+
+#define MAL_JSON_CLONE_MAX_DEPTH 64u
+#define MAL_JSON_CLONE_MAX_NODES 512u
+#define MAL_JSON_CLONE_MAX_CHILD_SLOTS 4096u
+
+static bool mal_json_clone_parsed_value_inner(
+    MalVm *vm, MalValue source, MalValue *out, MalJsonCloneBudget *budget
+) {
+	if (!mal_value_is_object(source)) {
+		*out = source;
+		return true;
+	}
+	if (budget->depth >= MAL_JSON_CLONE_MAX_DEPTH ||
+		budget->nodes >= MAL_JSON_CLONE_MAX_NODES) {
+		return false;
+	}
+	budget->depth++;
+	budget->nodes++;
+	if (mal_value_is_array_object(source)) {
+		MalArrayObject *input = mal_value_to_array_object(source);
+		if (input->object.prototype != mal_value_to_object(
+				vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
+			!mal_array_object_is_dense(input) || input->dense_count != input->length ||
+			input->length > MAL_JSON_CLONE_MAX_CHILD_SLOTS - budget->child_slots) {
+			budget->depth--;
+			return false;
+		}
+		budget->child_slots += input->length;
+        MalArrayObject *copy = mal_intrinsic_new_array(vm, 0);
+        MalValue roots[3] = {
+            source, mal_value_from_array_object(copy), mal_value_new_undefined(),
+        };
+        MalRootSpan root_span;
+        mal_gc_root(&root_span, roots, 3);
+		if (!mal_array_object_fresh_dense_reserve_exact(copy, input->length)) {
+			mal_gc_unroot(&root_span);
+			budget->depth--;
+			return false;
+        }
+        for (u32 index = 0; index < input->length; index++) {
+            input = mal_value_to_array_object(roots[0]);
+            MalValue element;
+            if (!mal_array_object_dense_get(input, index, &element) ||
+				!mal_json_clone_parsed_value_inner(vm, element, &roots[2], budget)) {
+				mal_gc_unroot(&root_span);
+				budget->depth--;
+				return false;
+            }
+            copy = mal_value_to_array_object(roots[1]);
+			if (!mal_array_object_fresh_dense_append(copy, roots[2])) {
+				mal_gc_unroot(&root_span);
+				budget->depth--;
+				return false;
+            }
+        }
+		*out = roots[1];
+		mal_gc_unroot(&root_span);
+		budget->depth--;
+		return true;
+	}
+
+    MalObject *input = mal_value_to_object(source);
+    MalObject *expected_prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+	if (input->prototype != expected_prototype || input->overflow != nullptr ||
+		input->shape == nullptr) {
+		budget->depth--;
+		return false;
+	}
+	u32 count = input->shape->inline_count;
+	if (count > MAL_SHAPE_MAX_INLINE_SLOTS ||
+		count > MAL_JSON_CLONE_MAX_CHILD_SLOTS - budget->child_slots) {
+		budget->depth--;
+		return false;
+	}
+	budget->child_slots += count;
+	if (count == 0) {
+		*out = mal_value_from_object(mal_intrinsic_new_object(vm));
+		budget->depth--;
+		return true;
+	}
+	if (input->slots == nullptr) {
+		budget->depth--;
+		return false;
+	}
+    MalValue *roots = malloc(sizeof(MalValue) * (count + 2));
+	if (roots == nullptr) {
+		mal_vm_throw_allocation_error(vm);
+		budget->depth--;
+		return false;
+    }
+    roots[0] = source;
+    roots[1] = mal_value_new_undefined();
+    for (u32 index = 0; index < count; index++) roots[index + 2] = mal_value_new_undefined();
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, (i32) count + 2);
+    bool ok = true;
+    MalShape *shape = input->shape;
+    const u8 expected_attrs = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+        MAL_PROPERTY_CONFIGURABLE;
+	for (u32 index = 0; index < count; index++) {
+        input = mal_value_to_object(roots[0]);
+		u32 slot = shape->props[index].slot;
+		if (input->shape != shape || slot >= count ||
+			shape->props[index].attrs != expected_attrs ||
+			!mal_value_is_string(shape->props[index].key) ||
+			!mal_json_clone_parsed_value_inner(
+				vm, input->slots[slot], &roots[slot + 2], budget)) {
+            ok = false;
+            break;
+        }
+    }
+    if (ok) {
+        roots[1] = mal_value_from_object(mal_object_new_shaped(
+            &vm->heap, expected_prototype, shape, &roots[2], count));
+        *out = roots[1];
+    }
+	mal_gc_unroot(&root_span);
+	free(roots);
+	budget->depth--;
+	return ok;
+}
+
+static bool mal_json_clone_parsed_value(MalVm *vm, MalValue source, MalValue *out) {
+	MalJsonCloneBudget budget = {0};
+	return mal_json_clone_parsed_value_inner(vm, source, out, &budget);
+}
+
+bool mal_builtin_json_parse_cache_try_clone(
+    MalVm *vm, MalInvariantJsonParseCache *cache, MalValue callee,
+    MalValue this_value, MalValue text, MalValue *out
+) {
+    MAL_PERF_COUNT(invariant_json_parse_candidates);
+	if (!cache->filled || cache->roots[1] != text ||
+        !mal_json_parse_cache_exact_callee(vm, callee, this_value)
+#if MAL_REALMS
+        || cache->realm != vm->current_realm
+#endif
+    ) {
+        MAL_PERF_COUNT(invariant_json_parse_misses);
+        return false;
+    }
+    if (!mal_json_clone_parsed_value(vm, cache->roots[0], out)) {
+        MAL_PERF_COUNT(invariant_json_parse_misses);
+        return false;
+    }
+    MAL_PERF_COUNT(invariant_json_parse_hits);
+    MAL_PERF_COUNT(invariant_json_parse_calls_elided);
+    return true;
+}
+
+bool mal_builtin_json_parse_cache_fill(
+    MalVm *vm, MalInvariantJsonParseCache *cache, MalValue callee,
+    MalValue this_value, MalValue text, MalValue parsed
+) {
+    if (cache->filled ||
+        !mal_value_is_string(text) ||
+		mal_string_length(mal_value_to_string(text)) > 65536 ||
+        !mal_json_parse_cache_exact_callee(vm, callee, this_value)) {
+        return false;
+    }
+    MalValue private_template;
+    if (!mal_json_clone_parsed_value(vm, parsed, &private_template)) return false;
+    cache->roots[0] = private_template;
+    cache->roots[1] = text;
+#if MAL_REALMS
+    cache->realm = vm->current_realm;
+#endif
+    cache->filled = true;
+    MAL_PERF_COUNT(invariant_json_parse_fills);
+    return true;
+}
+
 static bool mal_json_is_json_whitespace(c16 c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }

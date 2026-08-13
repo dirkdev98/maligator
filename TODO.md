@@ -104,6 +104,17 @@ confidence because CPU and allocation samples are combined, even though the CPU
 evidence remains sparse and the whole capture is biased. Confidence must be reported
 per evidence kind and capped by capture quality.
 
+An exact allocation census of that cluster provides the missing calibration. Reusing
+only the invariant JSON parse result removes 10,900,384 of 27,107,088 managed bytes,
+including 186,160 string allocations and 32,936 coallocated objects. Extending the
+source-only ceiling through normalized-row reuse reaches 11,723,136 bytes, only a
+modest additional managed reduction, and removes 50,120 coallocations in total. The
+sampler correctly found the phase, but its
+129 line-level allocation samples cannot distinguish parser strings/objects from map
+arrays and normalized rows. Add exact event-family counters or nested logical sites
+for these composite expressions; use allocation sampling to show hotspot movement,
+not to claim which sub-operation supplied the bytes.
+
 - [ ] Generate optimization remarks from final backend decisions, with exact operation
       identity and stable reason codes such as unknown target set, invalidatable epoch,
       escaping result, unsupported consumer, or representation mismatch. Do not merge
