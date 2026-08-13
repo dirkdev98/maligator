@@ -3,10 +3,9 @@
 // steady state after a prototype method is replaced. The result identities keep
 // the loads observable without adding call-dispatch cost to the measurement.
 
-import { performance } from "node:perf_hooks";
-
 const iterations = 20_000_000;
 const warmupIterations = Math.min(iterations, 20_000);
+const measuredRepeats = 64;
 
 function originalMethod(value) {
 	return value + 1;
@@ -73,25 +72,18 @@ loadDeep(deepReceiver, warmupIterations);
 loadFourLinks(fourLinkReceiver, warmupIterations);
 loadEightLinks(eightLinkReceiver, warmupIterations);
 
-let start = performance.now();
-const runtimeResult = loadRuntime(runtimeReceiver, iterations);
-const runtimeMs = performance.now() - start;
+function measure(load, receiver) {
+	let result;
+	const start = Date.now();
+	for (let repeat = 0; repeat < measuredRepeats; repeat++) result = load(receiver, iterations);
+	return [result, (Date.now() - start) / measuredRepeats];
+}
 
-start = performance.now();
-const directResult = loadDirect(directReceiver, iterations);
-const userlandDirectMs = performance.now() - start;
-
-start = performance.now();
-const deepResult = loadDeep(deepReceiver, iterations);
-const userlandDeepMs = performance.now() - start;
-
-start = performance.now();
-const fourLinkResult = loadFourLinks(fourLinkReceiver, iterations);
-const userlandFourLinkMs = performance.now() - start;
-
-start = performance.now();
-const eightLinkResult = loadEightLinks(eightLinkReceiver, iterations);
-const userlandEightLinkMs = performance.now() - start;
+const [runtimeResult, runtimeMs] = measure(loadRuntime, runtimeReceiver);
+const [directResult, userlandDirectMs] = measure(loadDirect, directReceiver);
+const [deepResult, userlandDeepMs] = measure(loadDeep, deepReceiver);
+const [fourLinkResult, userlandFourLinkMs] = measure(loadFourLinks, fourLinkReceiver);
+const [eightLinkResult, userlandEightLinkMs] = measure(loadEightLinks, eightLinkReceiver);
 
 holder.method = replacementMethod;
 if (
@@ -104,9 +96,7 @@ if (
 }
 loadAfterMutation(deepReceiver, warmupIterations);
 
-start = performance.now();
-const mutationResult = loadAfterMutation(deepReceiver, iterations);
-const postMutationMs = performance.now() - start;
+const [mutationResult, postMutationMs] = measure(loadAfterMutation, deepReceiver);
 
 if (
 	runtimeResult !== Array.prototype.values ||

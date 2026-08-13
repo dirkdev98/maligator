@@ -386,6 +386,8 @@ interface PrototypeCacheMetrics {
 	userlandEightLinkRatio: number;
 	postMutationRatio: number;
 	inheritedHits: number;
+	inheritedLoopSummaries: number;
+	inheritedLoopIterationsElided: number;
 	inheritedFills: number;
 	inheritedRejectChain: number;
 }
@@ -1669,7 +1671,6 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 	const binary = buildNativeBinary({
 		fixture,
 		name: "bench-prototype-cache",
-		nodeEnabled: true,
 	});
 	const mal = runPrototypeCacheFixture(binary, [], runs);
 	const node = runPrototypeCacheFixture("node", [fixture], runs);
@@ -1682,7 +1683,6 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 	const instrumented = buildNativeBinary({
 		fixture,
 		name: "bench-prototype-cache-stats",
-		nodeEnabled: true,
 		environment: { ...process.env, MAL_PERF_STATS: "1" },
 	});
 	const stats = spawnSync(instrumented, [], {
@@ -1705,6 +1705,11 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 		userlandEightLinkRatio: mal.userlandEightLinkMs / node.userlandEightLinkMs,
 		postMutationRatio: mal.postMutationMs / node.postMutationMs,
 		inheritedHits: parsePerfIcStat(stderr, "load_inherited_hits"),
+		inheritedLoopSummaries: parsePerfIcStat(stderr, "inherited_loop_summaries"),
+		inheritedLoopIterationsElided: parsePerfIcStat(
+			stderr,
+			"inherited_loop_iterations_elided",
+		),
 		inheritedFills: parsePerfIcStat(stderr, "inherited_fills"),
 		inheritedRejectChain: parsePerfIcStat(stderr, "inherited_reject_chain"),
 	};
@@ -2652,7 +2657,7 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  mutated   maligator ${current.mal.postMutationMs.toFixed(1)}ms${delta(current.mal.postMutationMs, prior?.mal.postMutationMs)}  node ${current.node.postMutationMs.toFixed(1)}ms  ratio ${current.postMutationRatio.toFixed(2)}x`,
 		);
 		console.log(
-			`  IC        ${current.inheritedHits} inherited hits, ${current.inheritedFills} fills, ${current.inheritedRejectChain} chain rejects`,
+			`  IC        ${current.inheritedHits} inherited hits, ${current.inheritedLoopSummaries} loop summaries / ${current.inheritedLoopIterationsElided} iterations elided, ${current.inheritedFills} fills, ${current.inheritedRejectChain} chain rejects`,
 		);
 	}
 	if (entry.gc) {
