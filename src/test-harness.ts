@@ -22,6 +22,7 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
+import { normalizeNativeFeatures } from "./build-flags.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
@@ -103,6 +104,8 @@ export interface BuildOptions {
 	regexpEnabled?: boolean;
 	/** Include Temporal and its calendar/time-zone data. Defaults to true internally. */
 	temporalEnabled?: boolean;
+	/** Compile the production profile recorder into this native fixture. */
+	profileEnabled?: boolean;
 	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
 	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled` /
@@ -167,7 +170,19 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
 	});
-	const derivation = buildDerivationFromConfig(config);
+	const baseDerivation = buildDerivationFromConfig(config);
+	const derivation = options.profileEnabled
+		? {
+				features: normalizeNativeFeatures({
+					...baseDerivation.features,
+					profileEnabled: true,
+				}),
+				cacheSuffix:
+					baseDerivation.cacheSuffix === ""
+						? "profile"
+						: `${baseDerivation.cacheSuffix}-profile`,
+			}
+		: baseDerivation;
 	const context = resolveNativeBuildContext({
 		features: derivation.features,
 		environment: options.environment,

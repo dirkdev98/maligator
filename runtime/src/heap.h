@@ -98,7 +98,11 @@ typedef struct MalHeap {
      * changed epoch as an invalidation — closing the ABA hole without rooting. */
     u32 epoch;
     /** Test-only one-shot failure consumed by mal_heap_try_alloc. */
-    bool fail_next_cell_allocation;
+	bool fail_next_cell_allocation;
+#if MAL_PROFILE
+	/** Opaque profile recorder; absent from ordinary heap layouts. */
+	void *profile_state;
+#endif
 #if MAL_GC_CONCURRENT
     /** Incremental-sweep cursor (concurrent build): the chunk + in-chunk block
      * index the lazy per-safepoint sweep has reached, and the survivor-byte total

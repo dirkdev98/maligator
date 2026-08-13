@@ -28,6 +28,7 @@
 #include "./monotonic_clock.h"
 #include "./object.h"
 #include "./perf_stats.h"
+#include "./profile.h"
 #include "./primitive_wrapper_object.h"
 #include "./promise_object.h"
 #include "./property_store.h"
@@ -1503,6 +1504,7 @@ static usize mal_gc_advance_trigger(MalVm *vm) {
  * today's mal_gc_collect body, factored so the concurrent build can reuse it for
  * STW minors and for finishing a cycle synchronously (backstop / MODE=stw). */
 static void mal_gc_collect_sync(MalVm *vm, bool major) {
+	mal_profile_event(vm, MAL_PROFILE_RECORD_GC_BEGIN, major ? 1 : 0);
     u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
@@ -1548,7 +1550,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
 
     mal_gc_advance_trigger(vm);
 
-    if (g_gc->stats_enabled) {
+	if (g_gc->stats_enabled) {
         u64 elapsed = mal_monotonic_now_ns() - start_ns;
         g_gc->collections++;
         mal_gc_stat_record(elapsed);
@@ -1563,7 +1565,8 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
         g_gc->major_count++; // a non-generational collection is always a full mark-sweep
         (void) major;
 #endif
-    }
+	}
+	mal_profile_event(vm, MAL_PROFILE_RECORD_GC_END, major ? 1 : 0);
 }
 
 #if !MAL_GC_CONCURRENT
@@ -1900,9 +1903,10 @@ void mal_gc_safepoint(MalVm *vm) {
     // is not enumerable as a root, so collecting inside one could free values it
     // still holds. Compiled frames are fine (they publish root frames); all other
     // live state is in the interpreter frames + value stack, covered by the scan.
-    if (vm->gc_native_frames != 0) {
-        return;
-    }
+	if (vm->gc_native_frames != 0) {
+		return;
+	}
+	mal_profile_safepoint(vm);
 #if MAL_GC_CONCURRENT
     mal_gc_concurrent_safepoint(vm);
 #else

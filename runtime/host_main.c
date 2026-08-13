@@ -1,5 +1,6 @@
 #include "vm.h"
 #include "perf_stats.h"
+#include "profile.h"
 #include "dev_runner.h"
 
 #include <stdio.h>  // setvbuf
@@ -114,7 +115,8 @@ int main(int argc, char **argv) {
     mal_vm_run(&vm, callable);      // synchronous top level + its microtask drain
     mal_host_run_event_loop(&vm);   // timers / I/O + their microtasks, until idle
 
-    int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+	int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+	mal_profile_finish(&vm);
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);

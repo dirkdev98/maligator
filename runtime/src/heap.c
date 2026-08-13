@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "./gc.h"
+#include "./profile.h"
 #include "./shape.h"
 
 static _Atomic(u64) g_next_heap_identity = 1;
@@ -390,7 +391,10 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
         heap->identity = atomic_fetch_add(&g_next_heap_identity, 1);
     } while (heap->identity == 0);
     heap->epoch = 0;
-    heap->fail_next_cell_allocation = false;
+	heap->fail_next_cell_allocation = false;
+#if MAL_PROFILE
+	heap->profile_state = nullptr;
+#endif
 #if MAL_GC_CONCURRENT
     heap->sweep_chunk = nullptr;
     heap->sweep_block = 0;
@@ -455,7 +459,8 @@ MalHeapType mal_heap_header_type(const MalHeapHeader *header) {
 void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
     if (ptr == nullptr) abort();
-    mal_heap_header_init(ptr, type);
+	mal_heap_header_init(ptr, type);
+	mal_profile_allocation(heap, alloc_size, (u8) type);
     return ptr;
 }
 
@@ -465,7 +470,8 @@ void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
         return nullptr;
     }
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
-    if (ptr != nullptr) mal_heap_header_init(ptr, type);
+	if (ptr != nullptr) mal_heap_header_init(ptr, type);
+	if (ptr != nullptr) mal_profile_allocation(heap, alloc_size, (u8) type);
     return ptr;
 }
 

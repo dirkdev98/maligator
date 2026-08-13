@@ -22,6 +22,7 @@
 #include "object_ops.h"
 #include "promise_object.h"
 #include "perf_stats.h"
+#include "profile.h"
 #include "proxy_object.h"
 #include "u16_buffer.h"
 #include "value_ops.h"
@@ -679,8 +680,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     // Main fiber: adopts the OS stack and the VM's now-finalized exec buffers, and
     // becomes the running fiber. Every subsequent spawned fiber gets its own stack
     // + exec slice, swapped in/out of these same MalVm fields on a context switch.
-    MalFiber *main_fiber = malloc(sizeof(MalFiber));
-    mal_fiber_init_main(main_fiber, vm);
+	MalFiber *main_fiber = malloc(sizeof(MalFiber));
+	mal_fiber_init_main(main_fiber, vm);
+	mal_profile_init(vm);
 }
 
 MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
@@ -767,6 +769,7 @@ void mal_vm_clear_kept_objects(MalVm *vm) {
 }
 
 void mal_vm_free(MalVm *vm) {
+	mal_profile_finish(vm);
     // Tear down fibers. Spawned fibers own their stack + exec buffers (freed by
     // mal_fiber_destroy); the main fiber adopted vm->value_stack / vm->frames, so
     // it only gets unlinked here and its struct freed — those buffers are released
