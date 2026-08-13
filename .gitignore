@@ -1,4 +1,5 @@
 .cache
+.maligator
 .idea
 coverage
 dist
