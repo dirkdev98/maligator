@@ -174,6 +174,60 @@ check(
 		projectedExec(/^(a)(b)(c)(d)$/, "abce") === "none",
 );
 
+function projectedScalars(regexp, value, mutate) {
+	const match = regexp.exec(value);
+	if (match === null) return "none";
+	if (mutate) String.prototype.charCodeAt = () => 777;
+	return match[1].length + ":" + match[2].charCodeAt(0);
+}
+const originalCharCodeAt = String.prototype.charCodeAt;
+check(
+	"closed exec scalar consumers preserve length and charCodeAt",
+	projectedScalars(/^(ab)(c)$/, "abc", false) === "2:99",
+);
+check(
+	"closed exec scalar consumers resurrect after method mutation",
+	projectedScalars(/^(ab)(c)$/, "abc", true) === "2:777",
+);
+String.prototype.charCodeAt = originalCharCodeAt;
+check(
+	"closed exec scalar consumers preserve empty capture charCodeAt",
+	(() => {
+		const match = /^()(c)$/.exec("c");
+		const value = match[1].charCodeAt(0);
+		return value !== value;
+	})(),
+);
+
+function projectedUnmatchedScalar(regexp, value) {
+	const match = regexp.exec(value);
+	if (match === null) return false;
+	return match[1].length;
+}
+check(
+	"closed exec scalar consumers preserve unmatched property throws",
+	throwsTypeError(() => projectedUnmatchedScalar(/^(a)?b$/, "b")),
+);
+
+function projectedNumber(regexp, value) {
+	const match = regexp.exec(value);
+	if (match === null) return "none";
+	return Number(match[1]);
+}
+check(
+	"closed exec number consumers parse capture spans",
+	projectedNumber(/^(.*)$/, "  -12.5e1  ") === -125 &&
+		projectedNumber(/^(.*)$/, "0x10") === 16 &&
+		projectedNumber(/^(.*)$/, "Infinity") === Infinity &&
+		Object.is(projectedNumber(/^(.*)$/, "-0"), -0) &&
+		projectedNumber(/^(.*)$/, "") === 0 &&
+		Number.isNaN(projectedNumber(/^(.*)$/, "nope")),
+);
+check(
+	"closed exec number consumers preserve unmatched undefined",
+	Number.isNaN(projectedNumber(/^(a)?b$/, "b")),
+);
+
 function projectedOptional(regexp, value) {
 	const match = regexp.exec(value);
 	if (match === null) return false;

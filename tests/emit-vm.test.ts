@@ -1047,7 +1047,36 @@ describe("native update-expression representation", () => {
 		`);
 		expect(output).toContain("mal_regexp_exec_capture_projection(vm,");
 		expect(output).toContain("__regexp_exec_");
+		expect(output).toContain("_starts[");
+		expect(output).toContain("mal_vm_local_watched_primitive_value_try_load_static");
 		expect(output).toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("keeps RegExp capture strings materialized when scalar results have another use", () => {
+		const output = emit(`
+			function parse(regexp, value) {
+				const match = regexp.exec(value);
+				if (match === null) return -1;
+				const capture = match[1];
+				return capture.length + capture;
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).toContain("mal_regexp_exec_capture_projection(vm,");
+		expect(output).toContain(", 0, __regexp_exec_");
+	});
+
+	it("parses a closed RegExp capture span through the exact Number intrinsic", () => {
+		const output = emit(`
+			function parse(regexp, value) {
+				const match = regexp.exec(value);
+				if (match === null) return -1;
+				return Number(match[1]);
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).toContain("mal_regexp_exec_capture_projection(vm,");
+		expect(output).toContain("mal_ops_string_units_to_number(");
 	});
 
 	it("keeps RegExp exec results materialized when identity escapes", () => {

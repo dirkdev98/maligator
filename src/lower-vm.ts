@@ -282,6 +282,10 @@ export interface VmFunction {
 			ip: number;
 			captureIndex: number;
 			dst: number;
+			consumer?:
+				| { kind: "length"; propertyIp: number }
+				| { kind: "charCodeAtZero"; propertyIp: number; callIp: number }
+				| { kind: "number"; callIp: number };
 		}>;
 	}>;
 

@@ -64,7 +64,16 @@ bool mal_regexp_exec_capture_projection(
     const u32 *capture_indices,
     MalValue **capture_outputs,
     u32 capture_count,
+    u8 capture_span_mask,
+    i32 *capture_starts,
+    i32 *capture_ends,
+    MalValue *subject_output,
     MalValue *result_out
+);
+
+/** Materialize one participating capture span for a guarded scalar consumer. */
+MalValue mal_regexp_materialize_capture_span(
+    MalVm *vm, MalValue string, i32 start, i32 end
 );
 
 /**

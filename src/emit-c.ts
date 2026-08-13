@@ -959,10 +959,11 @@ export function emitCompiledFunction(
 		}
 		regexpExecProjectionSites.set(projection.callIp, {
 			projection,
-			slotsOffset: nextStackSlot,
+			subjectSlot: nextStackSlot,
+			slotsOffset: nextStackSlot + 1,
 			loads,
 		});
-		nextStackSlot += loads.length;
+		nextStackSlot += loads.length + 1;
 	}
 	const totalSlots = nextStackSlot;
 
@@ -1793,13 +1794,20 @@ type NativeRegExpExecProjection = NonNullable<
 
 interface NativeRegExpExecProjectionSite {
 	projection: NativeRegExpExecProjection;
+	subjectSlot: number;
 	slotsOffset: number;
 	loads: Array<NativeRegExpExecProjection["loads"][number]>;
 }
 
 interface NativeRegExpExecProjectionAction {
 	site: NativeRegExpExecProjectionSite;
-	role: "call" | "capture";
+	role:
+		| "call"
+		| "capture"
+		| "length"
+		| "charCodeAtProperty"
+		| "charCodeAtCall"
+		| "number";
 	load?: NativeRegExpExecProjection["loads"][number];
 }
 
@@ -2595,6 +2603,30 @@ function emitBody(
 				role: "capture",
 				load,
 			});
+			if (load.consumer?.kind === "length") {
+				nativeRegExpExecProjectionActionByIp.set(load.consumer.propertyIp, {
+					site,
+					role: "length",
+					load,
+				});
+			} else if (load.consumer?.kind === "charCodeAtZero") {
+				nativeRegExpExecProjectionActionByIp.set(load.consumer.propertyIp, {
+					site,
+					role: "charCodeAtProperty",
+					load,
+				});
+				nativeRegExpExecProjectionActionByIp.set(load.consumer.callIp, {
+					site,
+					role: "charCodeAtCall",
+					load,
+				});
+			} else if (load.consumer?.kind === "number") {
+				nativeRegExpExecProjectionActionByIp.set(load.consumer.callIp, {
+					site,
+					role: "number",
+					load,
+				});
+			}
 		}
 	}
 	const nativeStringSliceNumberFusionActionByIp = new Map<
@@ -2638,7 +2670,16 @@ function emitBody(
 		lines.push(
 			`bool __regexp_exec_${site.projection.callIp}_fast = false;`,
 			`bool __regexp_exec_${site.projection.callIp}_projected = false;`,
+			`i32 __regexp_exec_${site.projection.callIp}_starts[${site.loads.length}];`,
+			`i32 __regexp_exec_${site.projection.callIp}_ends[${site.loads.length}];`,
 		);
+		for (const load of site.loads) {
+			if (load.consumer?.kind === "charCodeAtZero") {
+				lines.push(
+					`bool __regexp_exec_${site.projection.callIp}_char_${load.consumer.callIp}_fast = false;`,
+				);
+			}
+		}
 	}
 	for (const fusion of fn.nativeStringSliceNumberFusions ?? []) {
 		lines.push(
@@ -2648,6 +2689,9 @@ function emitBody(
 	}
 	if (
 		stringCharCodeAtFusionByIp.size > 0 ||
+		[...regexpExecProjectionSites.values()].some((site) =>
+			site.loads.some((load) => load.consumer?.kind === "charCodeAtZero"),
+		) ||
 		fn.instructions.some(
 			(instruction, ip) =>
 				loopBody.has(ip) && instruction.opcode === "LOAD_PROPERTY_STATIC",
@@ -3230,6 +3274,53 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeRegExpExecProjectionAction?.role === "length"
+			) {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
+				if (slot >= 0) {
+					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
+					const end = `__regexp_exec_${site.projection.callIp}_ends[${slot}]`;
+					const direct =
+						reps[instruction.dst] === "number"
+							? `(f64) (${end} - ${start})`
+							: `mal_value_from_i32(${end} - ${start})`;
+					return [
+						`if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0) {`,
+						`  r${instruction.dst} = ${direct};`,
+						`} else {`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
+			}
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeRegExpExecProjectionAction?.role === "charCodeAtProperty"
+			) {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
+				if (slot >= 0 && load?.consumer?.kind === "charCodeAtZero") {
+					const fast = `__regexp_exec_${site.projection.callIp}_char_${load.consumer.callIp}_fast`;
+					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
+					return [
+						`${fast} = false;`,
+						`if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0 && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst})) {`,
+						`  ${fast} = true;`,
+						`} else {`,
+						`  if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0) {`,
+						`    __gc_slots[${site.slotsOffset + slot}] = mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, __regexp_exec_${site.projection.callIp}_ends[${slot}]);`,
+						`    r${instruction.object} = __gc_slots[${site.slotsOffset + slot}];`,
+						`  }`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
+			}
 			if (stringCharCodeAtFusion !== undefined && stringCharCodeAtFusion.loadIp === ip) {
 				return [];
 			}
@@ -4373,6 +4464,59 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (nativeRegExpExecProjectionAction?.role === "number") {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
+				if (slot >= 0) {
+					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
+					const end = `__regexp_exec_${site.projection.callIp}_ends[${slot}]`;
+					const parsed = `mal_ops_string_units_to_number(mal_string_code_units(mal_value_to_string(__gc_slots[${site.subjectSlot}])) + ${start}, (usize) (${end} - ${start}))`;
+					const direct =
+						reps[instruction.dst] === "number"
+							? `mal_ops_number_as_f64(${parsed})`
+							: parsed;
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`if (__regexp_exec_${site.projection.callIp}_projected) {`,
+						`  r${instruction.dst} = ${start} < 0 ? ${reps[instruction.dst] === "number" ? "NAN" : "mal_value_new_nan()"} : ${direct};`,
+						`} else {`,
+						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
+						`}`,
+						poll,
+					];
+				}
+			}
+			if (nativeRegExpExecProjectionAction?.role === "charCodeAtCall") {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
+				if (slot >= 0 && load?.consumer?.kind === "charCodeAtZero") {
+					const fast = `__regexp_exec_${site.projection.callIp}_char_${ip}_fast`;
+					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
+					const end = `__regexp_exec_${site.projection.callIp}_ends[${slot}]`;
+					const value = `(${end} > ${start} ? mal_value_from_i32(mal_string_code_units(mal_value_to_string(__gc_slots[${site.subjectSlot}]))[${start}]) : mal_value_new_nan())`;
+					const direct =
+						reps[instruction.dst] === "number"
+							? `mal_ops_number_as_f64(${value})`
+							: value;
+					const fallbackValue =
+						reps[instruction.dst] === "number"
+							? `mal_ops_number_as_f64(${tmp}.value)`
+							: `${tmp}.value`;
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`if (${fast}) {`,
+						`  r${instruction.dst} = ${direct};`,
+						`} else {`,
+						`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${fallbackValue};`,
+						`}`,
+						poll,
+					];
+				}
+			}
 			if (nativeRegExpExecProjectionAction?.role === "call") {
 				const site = nativeRegExpExecProjectionAction.site;
 				const projection = site.projection;
@@ -4381,10 +4525,14 @@ function emitInstruction(
 				const outputs = site.loads
 					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
 					.join(", ");
+				const spanMask = site.loads.reduce(
+					(mask, load, index) => mask | (load.consumer === undefined ? 0 : 1 << index),
+					0,
+				);
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`__regexp_exec_${projection.callIp}_projected = false;`,
-					`${fast} = mal_regexp_exec_capture_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, &r${instruction.dst});`,
+					`${fast} = mal_regexp_exec_capture_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst});`,
 					`if (${fast}) {`,
 					`  ${throwCheck}`,
 					`  __regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,

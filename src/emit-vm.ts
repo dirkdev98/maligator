@@ -1191,6 +1191,20 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 			}
 			return undefined;
 		};
+		const hasOnlyUsesUntilRedefinition = (
+			register: number,
+			startIp: number,
+			allowedUses: ReadonlySet<number>,
+		): boolean => {
+			for (let ip = startIp; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (vmInstructionUsesRegister(instruction, register) && !allowedUses.has(ip)) {
+					return false;
+				}
+				if (vmInstructionDefinesRegister(instruction, register)) return true;
+			}
+			return true;
+		};
 
 		for (let callIp = 1; callIp < fn.instructions.length; callIp++) {
 			const call = fn.instructions[callIp]!;
@@ -1277,15 +1291,110 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 					if (vmInstructionDefinesRegister(instruction, alias)) aliases.delete(alias);
 				}
 			}
+			for (const captureLoad of loads) {
+				const property = fn.instructions[captureLoad.ip + 1];
+				if (
+					property?.opcode === "LOAD_PROPERTY_STATIC" &&
+					property.object === captureLoad.dst &&
+					staticStringEquals(definition, property.stringIndex, "length") &&
+					hasOnlyUsesUntilRedefinition(
+						captureLoad.dst,
+						captureLoad.ip + 1,
+						new Set([captureLoad.ip + 1]),
+					)
+				) {
+					captureLoad.consumer = { kind: "length", propertyIp: captureLoad.ip + 1 };
+					continue;
+				}
+
+				const charProperty = property;
+				const afterProperty = fn.instructions[captureLoad.ip + 2];
+				const zero =
+					afterProperty?.opcode === "CREATE_NUMBER" ? afterProperty : undefined;
+				const charCallIp = captureLoad.ip + (zero === undefined ? 2 : 3);
+				const charCall = fn.instructions[charCallIp];
+				const charArgument =
+					charCall?.opcode === "CALL" && charCall.arguments[0] !== undefined
+						? decodeVmValueOperand(charCall.arguments[0])
+						: undefined;
+				if (
+					charProperty?.opcode === "LOAD_PROPERTY_STATIC" &&
+					charProperty.object === captureLoad.dst &&
+					staticStringEquals(definition, charProperty.stringIndex, "charCodeAt") &&
+					charCall?.opcode === "CALL" &&
+					charCall.callee === charProperty.dst &&
+					charCall.thisValue === captureLoad.dst &&
+					charCall.arguments.length === 1 &&
+					((zero !== undefined &&
+						Object.is(zero.value, 0) &&
+						charArgument?.kind === "register" &&
+						charArgument.register === zero.dst) ||
+						(charArgument?.kind === "number" && Object.is(charArgument.value, 0))) &&
+					hasOnlyUsesUntilRedefinition(
+						captureLoad.dst,
+						captureLoad.ip + 1,
+						new Set([captureLoad.ip + 1, charCallIp]),
+					) &&
+					hasOnlyUsesUntilRedefinition(
+						charProperty.dst,
+						captureLoad.ip + 2,
+						new Set([charCallIp]),
+					)
+				) {
+					captureLoad.consumer = {
+						kind: "charCodeAtZero",
+						propertyIp: captureLoad.ip + 1,
+						callIp: charCallIp,
+					};
+					continue;
+				}
+
+				const numberCall = fn.instructions[captureLoad.ip + 1];
+				const numberArgument =
+					numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+						? decodeVmValueOperand(numberCall.arguments[0])
+						: undefined;
+				const numberDefinition =
+					numberCall?.opcode === "CALL"
+						? latestDefinition(numberCall.callee, captureLoad.ip)
+						: undefined;
+				if (
+					numberCall?.opcode === "CALL" &&
+					numberCall.arguments.length === 1 &&
+					numberArgument?.kind === "register" &&
+					numberArgument.register === captureLoad.dst &&
+					numberDefinition?.instruction.opcode === "LOAD_INTRINSIC" &&
+					numberDefinition.instruction.intrinsic === "Number" &&
+					![...entryTargets].some(
+						(targetIp) =>
+							targetIp > numberDefinition.ip && targetIp <= captureLoad.ip + 1,
+					) &&
+					hasOnlyUsesUntilRedefinition(
+						captureLoad.dst,
+						captureLoad.ip + 1,
+						new Set([captureLoad.ip + 1]),
+					)
+				) {
+					captureLoad.consumer = { kind: "number", callIp: captureLoad.ip + 1 };
+				}
+			}
 			const lastLoadIp = loads.at(-1)?.ip ?? -1;
+			const lastRegionIp = Math.max(
+				lastLoadIp,
+				...loads.map((entry) =>
+					entry.consumer?.kind === "charCodeAtZero" || entry.consumer?.kind === "number"
+						? entry.consumer.callIp
+						: (entry.consumer?.propertyIp ?? entry.ip),
+				),
+			);
 			const hasInteriorEntry =
 				fn.handlers.some(
-					(handler) => handler.handlerIp > callIp && handler.handlerIp <= lastLoadIp,
+					(handler) => handler.handlerIp > callIp && handler.handlerIp <= lastRegionIp,
 				) ||
 				jumpEdges.some(
 					({ sourceIp, targetIp }) =>
 						targetIp > callIp &&
-						targetIp <= lastLoadIp &&
+						targetIp <= lastRegionIp &&
 						// Only a strictly forward edge from inside the region is safe.
 						// This permits the canonical null-check branch while rejecting
 						// alternate entries and backedges that could skip this CALL.

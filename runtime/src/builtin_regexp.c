@@ -479,6 +479,9 @@ typedef struct RegexpCaptureProjection {
     const u32 *indices;
     MalValue *values;
     u32 count;
+    u8 span_mask;
+    i32 *starts;
+    i32 *ends;
 } RegexpCaptureProjection;
 
 // RegExpBuiltinExec(R, S): the matcher-backed exec. Returns the result array, or
@@ -631,7 +634,10 @@ static MalValue regexp_builtin_exec(
                 MalValue value = mal_value_new_undefined();
                 int32_t capture_start = caps[2 * capture_index];
                 int32_t capture_end = caps[2 * capture_index + 1];
-                if (capture_start >= 0) {
+                if ((projection->span_mask & (u8) (1u << i)) != 0) {
+                    projection->starts[i] = capture_start;
+                    projection->ends[i] = capture_end;
+                } else if (capture_start >= 0) {
                     value = regexp_substring(vm, s, capture_start, capture_end);
                 }
                 projection->values[i] = value;
@@ -2272,10 +2278,20 @@ bool mal_regexp_exec_capture_projection(
     const u32 *capture_indices,
     MalValue **capture_outputs,
     u32 capture_count,
+    u8 capture_span_mask,
+    i32 *capture_starts,
+    i32 *capture_ends,
+    MalValue *subject_output,
     MalValue *result_out
 ) {
     if (capture_count == 0 || capture_count > 8 || capture_indices == nullptr ||
-        capture_outputs == nullptr || result_out == nullptr) {
+        capture_outputs == nullptr || subject_output == nullptr || result_out == nullptr) {
+        return false;
+    }
+    u32 valid_span_mask = (1u << capture_count) - 1u;
+    if (((u32) capture_span_mask & ~valid_span_mask) != 0 ||
+        (capture_span_mask != 0 &&
+         (capture_starts == nullptr || capture_ends == nullptr))) {
         return false;
     }
     for (u32 i = 0; i < capture_count; i++) {
@@ -2315,6 +2331,9 @@ bool mal_regexp_exec_capture_projection(
         .indices = capture_indices,
         .values = roots,
         .count = capture_count,
+        .span_mask = capture_span_mask,
+        .starts = capture_starts,
+        .ends = capture_ends,
     };
     // This is a compiled-frame helper rather than a native callback: the
     // caller already publishes a complete GC frame. Suppress collection while
@@ -2330,10 +2349,14 @@ bool mal_regexp_exec_capture_projection(
             *capture_outputs[i] = roots[i];
         }
         *result_out = result;
+        *subject_output = mal_value_is_boolean(result)
+            ? string
+            : mal_value_new_undefined();
     } else {
         for (u32 i = 0; i < capture_count; i++) {
             *capture_outputs[i] = mal_value_new_undefined();
         }
+        *subject_output = mal_value_new_undefined();
     }
 
     mal_gc_unroot(&root_span);
@@ -2346,7 +2369,17 @@ guard_miss:
     for (u32 i = 0; i < capture_count; i++) {
         *capture_outputs[i] = mal_value_new_undefined();
     }
+    *subject_output = mal_value_new_undefined();
     return false;
+}
+
+MalValue mal_regexp_materialize_capture_span(
+    MalVm *vm, MalValue string, i32 start, i32 end
+) {
+    assert(mal_value_is_string(string));
+    assert(start >= 0 && end >= start &&
+           (usize) end <= mal_string_length(mal_value_to_string(string)));
+    return regexp_substring(vm, mal_value_to_string(string), start, end);
 }
 
 #else // !MAL_REGEXP
@@ -2398,6 +2431,10 @@ bool mal_regexp_exec_capture_projection(
     const u32 *capture_indices,
     MalValue **capture_outputs,
     u32 capture_count,
+    u8 capture_span_mask,
+    i32 *capture_starts,
+    i32 *capture_ends,
+    MalValue *subject_output,
     MalValue *result_out
 ) {
     (void) vm;
@@ -2407,8 +2444,22 @@ bool mal_regexp_exec_capture_projection(
     (void) capture_indices;
     (void) capture_outputs;
     (void) capture_count;
+    (void) capture_span_mask;
+    (void) capture_starts;
+    (void) capture_ends;
+    (void) subject_output;
     (void) result_out;
     return false;
+}
+
+MalValue mal_regexp_materialize_capture_span(
+    MalVm *vm, MalValue string, i32 start, i32 end
+) {
+    (void) vm;
+    (void) string;
+    (void) start;
+    (void) end;
+    return mal_value_new_undefined();
 }
 
 int mal_regexp_try_exact_iterator_step(
