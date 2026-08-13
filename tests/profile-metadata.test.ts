@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { matchProfileSites } from "../src/profile-metadata.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
@@ -21,6 +22,9 @@ test("profile sites keep logical identity across unrelated line insertions", () 
 
 	expect(shiftedSite.line).toBe(originalSite.line + 2);
 	expect(shiftedSite.logicalId).toBe(originalSite.logicalId);
+	const matches = matchProfileSites(original.profileSites!, shifted.profileSites!);
+	expect(matches.logical).toBeGreaterThan(0);
+	expect(matches.coverage).toBeGreaterThan(0.9);
 });
 
 test("profile metadata gives instructions dense sites and structured remarks", () => {
@@ -41,4 +45,13 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 	expect(remarks).toContainEqual(
 		expect.objectContaining({ code: "property.static-store", outcome: "applied" }),
 	);
+});
+
+test("cross-build profile matching reports duplicate structural sites as ambiguous", () => {
+	const site = compile(`function hot(object, key) { return object[key]; }`).profileSites!.find(
+		(candidate) => candidate.operation === "property",
+	)!;
+	const duplicate = { ...site, id: site.id + 1 };
+	const matches = matchProfileSites([site, duplicate], [site, duplicate]);
+	expect(matches).toMatchObject({ exact: 0, logical: 0, ambiguous: 2, unmatched: 0 });
 });

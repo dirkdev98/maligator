@@ -29,6 +29,55 @@ export interface CompilerRemark {
 	outcome: "applied" | "retained";
 }
 
+export interface ProfileSiteMatchReport {
+	exact: number;
+	logical: number;
+	ambiguous: number;
+	unmatched: number;
+	coverage: number;
+}
+
+/** Compare build-local tables without ever guessing through duplicate structural
+ * identities. A moved unique site is logical; duplicate keys are ambiguous. */
+export function matchProfileSites(
+	base: ReadonlyArray<ProfileSite>,
+	head: ReadonlyArray<ProfileSite>,
+): ProfileSiteMatchReport {
+	const baseByLogical = new Map<string, Array<ProfileSite>>();
+	const headByLogical = new Map<string, Array<ProfileSite>>();
+	for (const site of base) (baseByLogical.get(site.logicalId) ?? baseByLogical.set(site.logicalId, []).get(site.logicalId)!).push(site);
+	for (const site of head) (headByLogical.get(site.logicalId) ?? headByLogical.set(site.logicalId, []).get(site.logicalId)!).push(site);
+	let exact = 0;
+	let logical = 0;
+	let ambiguous = 0;
+	let unmatched = 0;
+	for (const site of head) {
+		const before = baseByLogical.get(site.logicalId) ?? [];
+		const after = headByLogical.get(site.logicalId) ?? [];
+		if (before.length === 0) {
+			unmatched++;
+		} else if (before.length !== 1 || after.length !== 1) {
+			ambiguous++;
+		} else if (
+			before[0]!.file === site.file &&
+			before[0]!.line === site.line &&
+			before[0]!.column === site.column &&
+			before[0]!.operation === site.operation
+		) {
+			exact++;
+		} else {
+			logical++;
+		}
+	}
+	return {
+		exact,
+		logical,
+		ambiguous,
+		unmatched,
+		coverage: head.length === 0 ? 1 : (exact + logical) / head.length,
+	};
+}
+
 function normalizedPath(value: string): string {
 	return value.replaceAll("\\", "/");
 }

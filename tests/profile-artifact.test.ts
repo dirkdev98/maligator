@@ -86,8 +86,12 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(existsSync(path.join(directory, "cpu.cpuprofile"))).toBe(true);
 	expect(existsSync(path.join(directory, "timeline.json"))).toBe(true);
 	expect(existsSync(path.join(directory, "manifest.json"))).toBe(true);
-	const profile = JSON.parse(readFileSync(path.join(directory, "cpu.cpuprofile"), "utf-8"));
+	const profile = JSON.parse(
+		readFileSync(path.join(directory, "cpu.cpuprofile"), "utf-8"),
+	) as { samples: Array<unknown> };
 	expect(profile.samples).toHaveLength(1);
-	const manifest = JSON.parse(readFileSync(path.join(directory, "manifest.json"), "utf-8"));
+	const manifest = JSON.parse(
+		readFileSync(path.join(directory, "manifest.json"), "utf-8"),
+	) as { status: string; cpuSamples: number; allocationSamples: number };
 	expect(manifest).toMatchObject({ status: "complete", cpuSamples: 1, allocationSamples: 1 });
 });

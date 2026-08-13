@@ -53,7 +53,19 @@ export interface ProfileFinding {
 	allocationSamples: number;
 	sampledBytes: number;
 	remarks: Array<CompilerRemark["code"]>;
+	confidence: "low" | "medium" | "high";
 }
+
+const REMARK_EXPLANATIONS: Record<CompilerRemark["code"], string> = {
+	"call.generic": "call stayed on generic dispatch",
+	"call.guarded": "compiler emitted guarded direct dispatch",
+	"object.heap": "object remains heap allocated",
+	"object.shaped": "compiler selected shaped-object construction",
+	"property.dynamic-load": "dynamic key kept the property load generic",
+	"property.dynamic-store": "dynamic key kept the property store generic",
+	"property.static-load": "compiler selected a static-key load cache",
+	"property.static-store": "compiler selected a static-key store cache",
+};
 
 function functionName(definition: VmDefinition, index: number): string {
 	const fn = definition.functions[index];
@@ -227,7 +239,13 @@ function cpuProfile(capture: RawCapture, prepared: PreparedProfile): object {
 
 function findings(capture: RawCapture, prepared: PreparedProfile): Array<ProfileFinding> {
 	const sites = siteIndex(prepared);
-	const bySite = new Map<number, Omit<ProfileFinding, "logicalId" | "file" | "line" | "column" | "remarks" | "cpuShare">>();
+	interface FindingAggregate {
+		siteId: number;
+		cpuSamples: number;
+		allocationSamples: number;
+		sampledBytes: number;
+	}
+	const bySite = new Map<number, FindingAggregate>();
 	let cpuTotal = 0;
 	for (const record of capture.records) {
 		const leaf = record.frames.at(-1);
@@ -250,6 +268,9 @@ function findings(capture: RawCapture, prepared: PreparedProfile): Array<Profile
 	return [...bySite.values()]
 		.map((value) => {
 			const site = prepared.sites[value.siteId]!;
+			const evidence = value.cpuSamples + value.allocationSamples;
+			const confidence: ProfileFinding["confidence"] =
+				evidence >= 100 ? "high" : evidence >= 20 ? "medium" : "low";
 			return {
 				...value,
 				logicalId: site.logicalId,
@@ -265,7 +286,11 @@ function findings(capture: RawCapture, prepared: PreparedProfile): Array<Profile
 							remarkedSite.positionId === site.positionId
 						);
 					})
+					.sort((left, right) =>
+						left.outcome === right.outcome ? 0 : left.outcome === "retained" ? -1 : 1,
+					)
 					.map((remark) => remark.code),
+				confidence,
 			};
 		})
 		.sort(
@@ -334,6 +359,8 @@ export function finalizeProfileCapture(
 			capture.droppedRecords > Math.max(1, cpuRecords.length / 100) ||
 			percentile(delays, 0.99) > (capture.intervalUs / 1000) * 4
 				? "biased"
+				: cpuRecords.length < 20 && allocationRecords.length < 20
+					? "insufficient"
 				: "good",
 	};
 	// Completeness marker is intentionally published last.
@@ -349,7 +376,10 @@ export function formatProfileFindings(values: Array<ProfileFinding>, limit = 5):
 			finding.allocationSamples > 0
 				? `${finding.allocationSamples} allocation samples`
 				: undefined,
-			finding.remarks[0],
+			finding.remarks[0] === undefined
+				? undefined
+				: REMARK_EXPLANATIONS[finding.remarks[0]],
+			finding.confidence === "low" ? "low evidence" : undefined,
 		]
 			.filter((value) => value !== undefined)
 			.join(" · ");

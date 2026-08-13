@@ -60,7 +60,9 @@ describe("production profile recorder", () => {
 			child.once("exit", (_code, exitSignal) => resolve(exitSignal));
 		});
 		// Native startup initializes the full runtime before the recorder is armed.
-		await new Promise((resolve) => setTimeout(resolve, 750));
+		await new Promise((resolve) => {
+			setTimeout(resolve, 750);
+		});
 		child.kill("SIGTERM");
 		const signal = await exited;
 		expect(signal).toBe("SIGTERM");
