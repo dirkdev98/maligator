@@ -91,6 +91,9 @@ compiler remarks must describe the final emitted path before they guide optimiza
 - [ ] Add a repeat, warmup, or minimum-duration mode for short commands and a CLI to
       render/open an existing capture. Document the interval override as an expert
       diagnostic whose overhead and bias must be rechecked.
+- [ ] Add real `--help`/unknown-option handling to `scripts/bench.ts`. Today `--help`
+      is treated as no lane selection and starts the full benchmark suite, including
+      an expensive Rust rebuild; help and invalid flags must exit before any build.
 - [ ] Use one clock domain for sampling and delay quality. `ITIMER_PROF` advances in
       process CPU time while the current expected timestamp uses monotonic wall time,
       so descheduling or I/O can be misreported as delayed safepoint sampling.
@@ -115,6 +118,12 @@ compiler remarks must describe the final emitted path before they guide optimiza
       Keep ordinary images free of profiling instrumentation, target less than 3%
       median CPU overhead for profiled images, and reject regressions in output, GC
       verification, or capture completeness.
+- [ ] Repair the authenticated Claude/Fable review harness. Host `claude auth status`
+      succeeds and a tool-free smoke prompt completes, but three noninteractive
+      repository-audit invocations (`plan`, `dontAsk`, and tools disabled with stdin)
+      hung silently until their exact processes were terminated. Preserve host
+      keychain/session access without exposing the cookie, and add a tiny read-only
+      tool-use smoke before assigning a long review.
 
 ## Domain roadmaps
 
