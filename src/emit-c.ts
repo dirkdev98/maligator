@@ -940,6 +940,16 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += elementLoads.length;
 	}
+	const stringSplitCursorSites = new Map<number, NativeStringSplitCursorSite>();
+	for (const cursor of fn.nativeStringSplitCursors ?? []) {
+		if (stringSplitCursorSites.has(cursor.callIp)) continue;
+		stringSplitCursorSites.set(cursor.callIp, {
+			cursor,
+			subjectSlot: nextStackSlot,
+			separatorSlot: nextStackSlot + 1,
+		});
+		nextStackSlot += 2;
+	}
 	const regexpExecProjectionSites = new Map<number, NativeRegExpExecProjectionSite>();
 	for (const projection of fn.nativeRegExpExecProjections ?? []) {
 		const loads = [...projection.loads].sort(
@@ -1025,6 +1035,7 @@ export function emitCompiledFunction(
 		cardinalityAccesses,
 		cardinalityPushes,
 		stringSplitProjectionSites,
+		stringSplitCursorSites,
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
 		directCompiledTargets,
@@ -1373,6 +1384,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1816,6 +1828,21 @@ interface NativeStringSplitProjectionAction {
 	site: NativeStringSplitProjectionSite;
 	role: "call" | "element" | "length";
 	load?: NativeStringSplitProjection["loads"][number];
+}
+
+type NativeStringSplitCursor = NonNullable<
+	VmFunction["nativeStringSplitCursors"]
+>[number];
+
+interface NativeStringSplitCursorSite {
+	cursor: NativeStringSplitCursor;
+	subjectSlot: number;
+	separatorSlot: number;
+}
+
+interface NativeStringSplitCursorAction {
+	site: NativeStringSplitCursorSite;
+	role: "call" | "length" | "element" | "trimProperty" | "trimCall";
 }
 
 type NativeRegExpExecProjection = NonNullable<
@@ -2300,6 +2327,7 @@ function emitBody(
 	>,
 	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
 	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
+	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
 	directCompiledTargets: ReadonlyMap<number, number>,
@@ -2641,6 +2669,24 @@ function emitBody(
 			});
 		}
 	}
+	const nativeStringSplitCursorActionByIp = new Map<
+		number,
+		NativeStringSplitCursorAction
+	>();
+	for (const site of stringSplitCursorSites.values()) {
+		const cursor = site.cursor;
+		nativeStringSplitCursorActionByIp.set(cursor.callIp, { site, role: "call" });
+		nativeStringSplitCursorActionByIp.set(cursor.lengthIp, { site, role: "length" });
+		nativeStringSplitCursorActionByIp.set(cursor.elementIp, { site, role: "element" });
+		nativeStringSplitCursorActionByIp.set(cursor.trimPropertyIp, {
+			site,
+			role: "trimProperty",
+		});
+		nativeStringSplitCursorActionByIp.set(cursor.trimCallIp, {
+			site,
+			role: "trimCall",
+		});
+	}
 	const nativeRegExpExecProjectionActionByIp = new Map<
 		number,
 		NativeRegExpExecProjectionAction
@@ -2763,6 +2809,17 @@ function emitBody(
 			`u32 __string_split_${site.projection.callIp}_length = 0;`,
 		);
 	}
+	for (const site of stringSplitCursorSites.values()) {
+		const id = site.cursor.callIp;
+		lines.push(
+			`bool __string_split_cursor_${id}_active = false;`,
+			`bool __string_split_cursor_${id}_has = false;`,
+			`bool __string_split_cursor_${id}_trim_fast = false;`,
+			`MalStringSplitCursor __string_split_cursor_${id}_state = { 0 };`,
+			`usize __string_split_cursor_${id}_start = 0;`,
+			`usize __string_split_cursor_${id}_end = 0;`,
+		);
+	}
 	for (const site of regexpExecProjectionSites.values()) {
 		lines.push(
 			`bool __regexp_exec_${site.projection.callIp}_fast = false;`,
@@ -2798,6 +2855,7 @@ function emitBody(
 	}
 	if (
 		stringCharCodeAtFusionByIp.size > 0 ||
+		stringSplitCursorSites.size > 0 ||
 		[...regexpExecProjectionSites.values()].some((site) =>
 			site.loads.some(
 				(load) =>
@@ -2939,6 +2997,7 @@ function emitBody(
 			stringCharCodeAtFusionByIp.get(ip),
 			nativeStringScanRegionActionByIp.get(ip),
 			nativeStringSplitProjectionActionByIp.get(ip),
+			nativeStringSplitCursorActionByIp.get(ip),
 			nativeRegExpExecProjectionActionByIp.get(ip),
 			nativeRegExpIteratorProjectionActionByIp.get(ip),
 			nativeStringSliceNumberFusionActionByIp.get(ip),
@@ -3006,6 +3065,7 @@ function emitInstruction(
 	stringCharCodeAtFusion?: StringCharCodeAtFusion,
 	nativeStringScanRegionAction?: NativeStringScanRegionAction,
 	nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction,
+	nativeStringSplitCursorAction?: NativeStringSplitCursorAction,
 	nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction,
 	nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction,
 	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
@@ -3916,6 +3976,19 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
+				if (nativeStringSplitCursorAction?.role === "element") {
+					const { site } = nativeStringSplitCursorAction;
+					const id = site.cursor.callIp;
+					return [
+						`if (__string_split_cursor_${id}_active) {`,
+						`  MalValue __string_split_cursor_${id}_trim_callee;`,
+						`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && mal_builtin_string_trim_span_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
+						`  if (!__string_split_cursor_${id}_trim_fast) r${instruction.dst} = mal_builtin_string_split_cursor_materialize(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end);`,
+						`} else {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (nativeStringSplitProjectionAction?.role === "element") {
 					const { site, load } = nativeStringSplitProjectionAction;
 					const slot = site.elementLoads.findIndex((entry) => entry.ip === load?.ip);
@@ -3952,6 +4025,34 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
+				if (nativeStringSplitCursorAction?.role === "length") {
+					const { site } = nativeStringSplitCursorAction;
+					const id = site.cursor.callIp;
+					const index =
+						reps[site.cursor.index] === "number"
+							? `r${site.cursor.index}`
+							: `mal_ops_number_as_f64(r${site.cursor.index})`;
+					const value = `${index} + (__string_split_cursor_${id}_has ? 1.0 : 0.0)`;
+					return [
+						`if (__string_split_cursor_${id}_active) {`,
+						`  __string_split_cursor_${id}_has = mal_builtin_string_split_cursor_next(__gc_slots[${site.subjectSlot}], __gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state, &__string_split_cursor_${id}_start, &__string_split_cursor_${id}_end);`,
+						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? value : `mal_ops_number_value(${value})`};`,
+						`  if (!__string_split_cursor_${id}_has) { __gc_slots[${site.subjectSlot}] = MAL_VALUE_UNDEFINED; __gc_slots[${site.separatorSlot}] = MAL_VALUE_UNDEFINED; }`,
+						`} else {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				if (nativeStringSplitCursorAction?.role === "trimProperty") {
+					const id = nativeStringSplitCursorAction.site.cursor.callIp;
+					return [
+						`if (__string_split_cursor_${id}_active && __string_split_cursor_${id}_trim_fast) {`,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						`} else {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				if (
 					nativeStringSplitProjectionAction !== undefined &&
 					nativeStringSplitProjectionAction.role !== "call"
@@ -4660,6 +4761,36 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (nativeStringSplitCursorAction?.role === "call") {
+				const { site } = nativeStringSplitCursorAction;
+				const id = site.cursor.callIp;
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`__string_split_cursor_${id}_active = mal_primitive_method_protector && __watched_methods_epoch != 0 && __watched_methods_epoch == vm->semantic_epochs.watched_methods && mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state);`,
+					`if (__string_split_cursor_${id}_active) {`,
+					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+					`} else {`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
+			if (nativeStringSplitCursorAction?.role === "trimCall") {
+				const id = nativeStringSplitCursorAction.site.cursor.callIp;
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`if (__string_split_cursor_${id}_active && __string_split_cursor_${id}_trim_fast) {`,
+					`  r${instruction.dst} = ${boxedOperand(instruction.thisValue)};`,
+					`} else {`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
 			if (
 				nativeRegExpExecProjectionAction?.role === "caseUpperCall" ||
 				nativeRegExpExecProjectionAction?.role === "caseLowerCall"

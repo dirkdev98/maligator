@@ -2205,6 +2205,105 @@ static MalValue mal_builtin_string_prototype_iterator(MalVm *vm, MalValue this_v
     return mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_STRING_VALUES, string_value);
 }
 
+bool mal_builtin_string_split_cursor_init(
+    MalVm *vm,
+    MalValue callee,
+    MalValue receiver,
+    MalValue separator,
+    MalValue *subject_out,
+    MalValue *separator_out,
+    MalStringSplitCursor *cursor_out
+) {
+    *subject_out = MAL_VALUE_UNDEFINED;
+    *separator_out = MAL_VALUE_UNDEFINED;
+    cursor_out->position = 0;
+    cursor_out->done = false;
+    if (!mal_value_is_string(receiver) || !mal_value_is_string(separator) ||
+        !mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) !=
+            mal_builtin_string_prototype_split ||
+        mal_string_length(mal_value_to_string(separator)) == 0) {
+        return false;
+    }
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#else
+    (void) vm;
+#endif
+    *subject_out = receiver;
+    *separator_out = separator;
+    return true;
+}
+
+bool mal_builtin_string_split_cursor_next(
+    MalValue subject_value,
+    MalValue separator_value,
+    MalStringSplitCursor *cursor,
+    usize *start_out,
+    usize *end_out
+) {
+    if (cursor->done || !mal_value_is_string(subject_value) ||
+        !mal_value_is_string(separator_value)) {
+        return false;
+    }
+    MalString *subject = mal_value_to_string(subject_value);
+    MalString *separator = mal_value_to_string(separator_value);
+    usize length = mal_string_length(subject);
+    usize separator_length = mal_string_length(separator);
+    if (separator_length == 0 || cursor->position > length) return false;
+
+    usize start = cursor->position;
+    i64 match = mal_builtin_string_find(subject, separator, start);
+    *start_out = start;
+    if (match < 0) {
+        *end_out = length;
+        cursor->done = true;
+    } else {
+        *end_out = (usize) match;
+        cursor->position = (usize) match + separator_length;
+    }
+    return true;
+}
+
+MalValue mal_builtin_string_split_cursor_materialize(
+    MalVm *vm, MalValue subject_value, usize start, usize end
+) {
+    if (!mal_value_is_string(subject_value)) return MAL_VALUE_UNDEFINED;
+    MalString *subject = mal_value_to_string(subject_value);
+    usize length = mal_string_length(subject);
+    if (start > end || end > length) return MAL_VALUE_UNDEFINED;
+    return mal_builtin_string_slice(vm, subject, start, end - start);
+}
+
+bool mal_builtin_string_trim_span_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue subject_value,
+    usize start,
+    usize end,
+    MalValue *out
+) {
+    if (!mal_value_is_string(subject_value) ||
+        !mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) !=
+            mal_builtin_string_prototype_trim) {
+        return false;
+    }
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    MalString *subject = mal_value_to_string(subject_value);
+    usize length = mal_string_length(subject);
+    if (start > end || end > length) return false;
+    const c16 *units = mal_string_code_units(subject);
+    while (start < end && mal_ecma_is_string_whitespace(units[start])) start++;
+    while (end > start && mal_ecma_is_string_whitespace(units[end - 1])) end--;
+    *out = mal_builtin_string_slice(vm, subject, start, end - start);
+    return true;
+}
+
 void mal_builtin_string_install(MalVm *vm) {
     // %String.prototype% is itself a String object with [[StringData]] = "", so
     // String.prototype.valueOf()/toString() work on the prototype and its

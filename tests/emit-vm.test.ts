@@ -1014,6 +1014,109 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_string_slice_to_number_direct(vm,");
 	});
 
+	it("streams a closed indexed String split loop directly into trim", () => {
+		const output = emit(`
+			function sum(value, separator) {
+				const parts = value.split(separator);
+				let total = 0;
+				for (let index = 0; index < parts.length; index++) {
+					const part = parts[index].trim();
+					total += part.length;
+				}
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		expect(output).toContain("mal_builtin_string_split_cursor_init(vm,");
+		expect(output).toContain("mal_builtin_string_split_cursor_next(");
+		expect(output).toContain("mal_builtin_string_trim_span_direct(vm,");
+		expect(output).toContain("mal_builtin_string_split_cursor_materialize(vm,");
+	});
+
+	it("keeps an indexed split loop generic when its Array escapes", () => {
+		const output = emit(`
+			function sum(value, separator) {
+				const parts = value.split(separator);
+				globalThis.parts = parts;
+				let total = 0;
+				for (let index = 0; index < parts.length; index++) {
+					total += parts[index].trim().length;
+				}
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		expect(output).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+	});
+
+	it("rejects split cursors whose zero index does not dominate the loop", () => {
+		const output = emit(`
+			function sum(value, separator, skip) {
+				const parts = value.split(separator);
+				let index;
+				if (skip) index = 10;
+				else index = 0;
+				let total = 0;
+				for (; index < parts.length; index++) total += parts[index].trim().length;
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		expect(output).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+	});
+
+	it("rejects split cursors when the split call does not dominate the loop", () => {
+		const output = emit(`
+			function sum(value, separator, splitNow) {
+				let parts = ["old"];
+				if (splitNow) parts = value.split(separator);
+				let total = 0;
+				for (let index = 0; index < parts.length; index++) {
+					total += parts[index].trim().length;
+				}
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		expect(output).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+	});
+
+	it("rejects one-shot split cursors when the consumer loop can run twice", () => {
+		const output = emit(`
+			function sum(value, separator) {
+				const parts = value.split(separator);
+				let total = 0;
+				for (let outer = 0; outer < 2; outer++) {
+					for (let index = 0; index < parts.length; index++) {
+						total += parts[index].trim().length;
+					}
+				}
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		expect(output).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+	});
+
+	it("rejects split cursors whose alternate exit can reenter the consumer loop", () => {
+		const output = emit(`
+			function sum(value, separator) {
+				const parts = value.split(separator);
+				let total = 0;
+				outer: for (let outer = 0; outer < 2; outer++) {
+					for (let index = 0; index < parts.length; index++) {
+						total += parts[index].trim().length;
+						if (outer === 0) continue outer;
+					}
+					return total;
+				}
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		expect(output).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+	});
+
 	it("keeps slice materialized when its result has another use", () => {
 		const output = emit(`
 			function parse(value) {

@@ -12,6 +12,25 @@ function parsed(value, start) {
 	return Number(value.slice(start));
 }
 
+function cursor(value, separator) {
+	const parts = value.split(separator);
+	let total = 0;
+	for (let index = 0; index < parts.length; index++) {
+		const part = parts[index].trim();
+		total += part.length;
+	}
+	return total;
+}
+
+function cursorThrows(value) {
+	const parts = value.split("|");
+	for (let index = 0; index < parts.length; index++) {
+		const part = parts[index].trim();
+		if (part === "throw") throw new Error("cursor body");
+	}
+	return false;
+}
+
 const results = [
 	projected("ab::x42::"),
 	projected("::x7"),
@@ -20,7 +39,17 @@ const results = [
 	parsed("x0x10", 1),
 	parsed("xInfinity", 1),
 	Number.isNaN(parsed("xnope", 1)) ? 1 : 0,
+	cursor(" a |b| c |", "|"),
+	cursor("", "|"),
+	cursor("a|| b", "|"),
+	cursor(" a\r\n b \r\n", "\r\n"),
 ];
+
+try {
+	cursorThrows("a| throw |b");
+} catch (error) {
+	results.push(error.message === "cursor body" ? 1 : 0);
+}
 
 const originalSplit = String.prototype.split;
 let splitCalls = 0;
@@ -29,6 +58,7 @@ String.prototype.split = function () {
 	return ["patched", "x9"];
 };
 results.push(projected("ignored"));
+results.push(cursor("ignored", "|"));
 String.prototype.split = originalSplit;
 
 const originalSlice = String.prototype.slice;
@@ -38,6 +68,7 @@ String.prototype.slice = function () {
 	return "17";
 };
 results.push(parsed("ignored", 1));
+results.push(cursor(" a | b ", "|"));
 String.prototype.slice = originalSlice;
 
 results.push(
@@ -52,8 +83,8 @@ results.push(
 );
 
 const passed =
-	results.join(",") === "245,9,102,-12.5,16,Infinity,1,711,17,23" &&
-	splitCalls === 1 &&
+	results.join(",") === "245,9,102,-12.5,16,Infinity,1,3,0,2,2,1,711,9,17,2,23" &&
+	splitCalls === 2 &&
 	sliceCalls === 1;
 console.log(
 	`RESULT ${passed ? "PASS" : "FAIL"} ${results.join(",")} ${splitCalls} ${sliceCalls}`,

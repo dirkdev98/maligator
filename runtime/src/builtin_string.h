@@ -120,3 +120,47 @@ bool mal_builtin_string_split_projection(
     u32 output_count,
     u32 *length_out
 );
+
+/** Loop-carried state for a compiler-proven closed String#split result. */
+typedef struct {
+    usize position;
+    bool done;
+} MalStringSplitCursor;
+
+/**
+ * Start a closed split cursor. A false result is side-effect-free and leaves the
+ * ordinary String#split call as the complete fallback.
+ */
+bool mal_builtin_string_split_cursor_init(
+    MalVm *vm,
+    MalValue callee,
+    MalValue receiver,
+    MalValue separator,
+    MalValue *subject_out,
+    MalValue *separator_out,
+    MalStringSplitCursor *cursor_out
+);
+
+/** Publish the next split element as an immutable subject span. */
+bool mal_builtin_string_split_cursor_next(
+    MalValue subject,
+    MalValue separator,
+    MalStringSplitCursor *cursor,
+    usize *start_out,
+    usize *end_out
+);
+
+/** Materialize one split span for the cold generic String method path. */
+MalValue mal_builtin_string_split_cursor_materialize(
+    MalVm *vm, MalValue subject, usize start, usize end
+);
+
+/** Guard and execute exact builtin trim directly over one split span. */
+bool mal_builtin_string_trim_span_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue subject,
+    usize start,
+    usize end,
+    MalValue *out
+);

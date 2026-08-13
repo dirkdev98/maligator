@@ -1165,6 +1165,314 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 	}
 }
 
+/** Stream one closed indexed String#split loop and materialize only trimmed elements. */
+function annotateNativeStringSplitCursors(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		const cursors: Array<NonNullable<VmFunction["nativeStringSplitCursors"]>[number]> =
+			[];
+		const latestDefinition = (register: number, beforeIp: number) => {
+			for (let ip = beforeIp - 1; ip >= 0; ip--) {
+				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
+					return { instruction: fn.instructions[ip]!, ip };
+				}
+			}
+			return undefined;
+		};
+		const usesRegister = (instruction: VmInstruction, register: number): boolean => {
+			if (
+				instruction.opcode === "CREATE_NUMBER" ||
+				instruction.opcode === "CREATE_F64" ||
+				instruction.opcode === "CREATE_BOOLEAN"
+			) {
+				return false;
+			}
+			return vmInstructionUsesRegister(instruction, register);
+		};
+		const instructionDominates = (dominatorIp: number, targetIp: number): boolean => {
+			const pending = [0];
+			const visited = new Set<number>();
+			while (pending.length > 0) {
+				const ip = pending.pop()!;
+				if (ip < 0 || ip >= fn.instructions.length || visited.has(ip)) continue;
+				visited.add(ip);
+				if (ip === dominatorIp) continue;
+				if (ip === targetIp) return false;
+				const instruction = fn.instructions[ip]!;
+				if (instruction.opcode === "JUMP") {
+					pending.push(instruction.targetIp);
+				} else if (instruction.opcode === "JUMP_IF") {
+					pending.push(instruction.targetIp, ip + 1);
+				} else if (instruction.opcode !== "RETURN" && instruction.opcode !== "THROW") {
+					pending.push(ip + 1);
+				}
+				for (const handler of fn.handlers) {
+					if (ip >= handler.startIp && ip < handler.endIp)
+						pending.push(handler.handlerIp);
+				}
+			}
+			return true;
+		};
+		const isReachableAvoiding = (
+			startIp: number,
+			targetIp: number,
+			blockedIp: number,
+		): boolean => {
+			const pending = [startIp];
+			const visited = new Set<number>();
+			while (pending.length > 0) {
+				const ip = pending.pop()!;
+				if (
+					ip < 0 ||
+					ip >= fn.instructions.length ||
+					ip === blockedIp ||
+					visited.has(ip)
+				) {
+					continue;
+				}
+				if (ip === targetIp) return true;
+				visited.add(ip);
+				const instruction = fn.instructions[ip]!;
+				if (instruction.opcode === "JUMP") {
+					pending.push(instruction.targetIp);
+				} else if (instruction.opcode === "JUMP_IF") {
+					pending.push(instruction.targetIp, ip + 1);
+				} else if (instruction.opcode !== "RETURN" && instruction.opcode !== "THROW") {
+					pending.push(ip + 1);
+				}
+				for (const handler of fn.handlers) {
+					if (ip >= handler.startIp && ip < handler.endIp)
+						pending.push(handler.handlerIp);
+				}
+			}
+			return false;
+		};
+		const jumpEdges = fn.instructions.flatMap((instruction, sourceIp) =>
+			instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF"
+				? [{ sourceIp, targetIp: instruction.targetIp }]
+				: [],
+		);
+		for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
+			const call = fn.instructions[callIp]!;
+			if (call.opcode !== "CALL" || call.arguments.length !== 1) continue;
+			const callee = decodeVmValueOperand(call.callee);
+			const receiver = decodeVmValueOperand(call.thisValue);
+			const separator = decodeVmValueOperand(call.arguments[0]!);
+			if (
+				callee.kind !== "register" ||
+				receiver.kind !== "register" ||
+				separator.kind !== "register"
+			) {
+				continue;
+			}
+			const calleeDefinition = latestDefinition(callee.register, callIp);
+			if (
+				calleeDefinition?.instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
+				calleeDefinition.instruction.object !== receiver.register ||
+				!staticStringEquals(definition, calleeDefinition.instruction.stringIndex, "split")
+			) {
+				continue;
+			}
+			if (
+				fn.instructions
+					.slice(calleeDefinition.ip + 1, callIp)
+					.some((instruction) =>
+						vmInstructionDefinesRegister(instruction, receiver.register),
+					)
+			) {
+				continue;
+			}
+			const alias = fn.instructions[callIp + 1];
+			if (alias?.opcode !== "MOVE" || alias.src !== call.dst) continue;
+			let lengthIp = -1;
+			for (let ip = callIp + 2; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (usesRegister(instruction, alias.dst)) {
+					if (
+						instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+						instruction.object === alias.dst &&
+						staticStringEquals(definition, instruction.stringIndex, "length")
+					) {
+						lengthIp = ip;
+					}
+					break;
+				}
+				if (vmInstructionDefinesRegister(instruction, alias.dst)) break;
+			}
+			if (lengthIp < 1) continue;
+			const length = fn.instructions[lengthIp]!;
+			const compare = fn.instructions[lengthIp + 1];
+			const bodyBranch = fn.instructions[lengthIp + 2];
+			const exitJump = fn.instructions[lengthIp + 3];
+			const elementIp = lengthIp + 4;
+			const element = fn.instructions[elementIp];
+			const trimProperty = fn.instructions[elementIp + 1];
+			const trimCall = fn.instructions[elementIp + 2];
+			if (
+				length.opcode !== "LOAD_PROPERTY_STATIC" ||
+				compare?.opcode !== "BINARY" ||
+				compare.operator !== "<" ||
+				compare.right !== length.dst ||
+				bodyBranch?.opcode !== "JUMP_IF" ||
+				bodyBranch.cond !== compare.dst ||
+				bodyBranch.targetIp !== elementIp ||
+				exitJump?.opcode !== "JUMP" ||
+				element?.opcode !== "LOAD_PROPERTY" ||
+				element.object !== alias.dst ||
+				element.key !== compare.left ||
+				trimProperty?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				trimProperty.object !== element.dst ||
+				!staticStringEquals(definition, trimProperty.stringIndex, "trim") ||
+				trimCall?.opcode !== "CALL" ||
+				trimCall.callee !== trimProperty.dst ||
+				trimCall.thisValue !== element.dst ||
+				trimCall.arguments.length !== 0
+			) {
+				continue;
+			}
+			const index = compare.left;
+			const backedges = jumpEdges.filter((edge) => edge.targetIp === lengthIp);
+			if (backedges.length !== 2) continue;
+			const preheader = backedges.find((edge) => edge.sourceIp === lengthIp - 1);
+			const backedge = backedges.find((edge) => edge.sourceIp > elementIp + 2);
+			if (preheader === undefined || backedge === undefined) continue;
+			const increment = fn.instructions[backedge.sourceIp - 1];
+			const indexDefinition = latestDefinition(index, lengthIp);
+			if (
+				increment?.opcode !== "UNARY" ||
+				increment.operator !== "increment" ||
+				increment.src !== index ||
+				increment.dst !== index ||
+				exitJump.targetIp !== backedge.sourceIp + 1 ||
+				indexDefinition?.instruction.opcode !== "CREATE_NUMBER" ||
+				!Object.is(indexDefinition.instruction.value, 0) ||
+				!instructionDominates(indexDefinition.ip, lengthIp) ||
+				!instructionDominates(callIp, lengthIp) ||
+				isReachableAvoiding(exitJump.targetIp, lengthIp, callIp) ||
+				fn.handlers.some(
+					(handler) =>
+						handler.handlerIp >= lengthIp && handler.handlerIp <= elementIp + 2,
+				)
+			) {
+				continue;
+			}
+			const unexpectedEntry = jumpEdges.some((edge) => {
+				if (edge.targetIp < lengthIp || edge.targetIp > backedge.sourceIp) return false;
+				if (edge.targetIp === lengthIp) {
+					return edge.sourceIp !== lengthIp - 1 && edge.sourceIp !== backedge.sourceIp;
+				}
+				if (edge.targetIp >= elementIp && edge.targetIp <= elementIp + 2) {
+					return edge.sourceIp !== lengthIp + 2 || edge.targetIp !== elementIp;
+				}
+				return edge.sourceIp <= callIp || edge.sourceIp > backedge.sourceIp;
+			});
+			if (
+				unexpectedEntry ||
+				fn.instructions.some((instruction, sourceIp) => {
+					if (sourceIp < elementIp || sourceIp > backedge.sourceIp) return false;
+					const successors =
+						instruction.opcode === "JUMP"
+							? [instruction.targetIp]
+							: instruction.opcode === "JUMP_IF"
+								? [instruction.targetIp, sourceIp + 1]
+								: instruction.opcode === "RETURN" || instruction.opcode === "THROW"
+									? []
+									: [sourceIp + 1];
+					return successors.some(
+						(targetIp) =>
+							!(sourceIp === backedge.sourceIp && targetIp === lengthIp) &&
+							(targetIp < elementIp || targetIp > backedge.sourceIp) &&
+							isReachableAvoiding(targetIp, lengthIp, callIp),
+					);
+				}) ||
+				fn.handlers.some(
+					(handler) =>
+						(handler.handlerIp >= lengthIp && handler.handlerIp <= backedge.sourceIp) ||
+						(handler.startIp <= backedge.sourceIp && handler.endIp > elementIp),
+				)
+			) {
+				continue;
+			}
+
+			let closed = true;
+			let callResultLive = true;
+			let aliasLive = true;
+			for (let ip = callIp + 1; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (
+					callResultLive &&
+					usesRegister(instruction, call.dst) &&
+					!(ip === callIp + 1 && instruction === alias)
+				) {
+					closed = false;
+					break;
+				}
+				if (
+					aliasLive &&
+					usesRegister(instruction, alias.dst) &&
+					ip !== lengthIp &&
+					ip !== elementIp
+				) {
+					closed = false;
+					break;
+				}
+				if (ip > callIp + 1 && vmInstructionDefinesRegister(instruction, call.dst)) {
+					callResultLive = false;
+				}
+				if (ip > callIp + 1 && vmInstructionDefinesRegister(instruction, alias.dst)) {
+					aliasLive = false;
+				}
+				if (!callResultLive && !aliasLive) break;
+			}
+			for (let ip = lengthIp; closed && ip <= backedge.sourceIp; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (
+					usesRegister(instruction, index) &&
+					ip !== lengthIp + 1 &&
+					ip !== elementIp &&
+					ip !== backedge.sourceIp - 1
+				) {
+					closed = false;
+				}
+			}
+			let elementLive = true;
+			for (
+				let ip = elementIp + 1;
+				closed && elementLive && ip < fn.instructions.length;
+				ip++
+			) {
+				const instruction = fn.instructions[ip]!;
+				if (
+					usesRegister(instruction, element.dst) &&
+					ip !== elementIp + 1 &&
+					ip !== elementIp + 2
+				) {
+					closed = false;
+					break;
+				}
+				if (vmInstructionDefinesRegister(instruction, element.dst)) elementLive = false;
+			}
+			if (!closed) continue;
+			cursors.push({
+				callIp,
+				callee: call.callee,
+				receiver: call.thisValue,
+				separator: call.arguments[0]!,
+				result: call.dst,
+				index,
+				lengthIp,
+				elementIp,
+				trimPropertyIp: elementIp + 1,
+				trimIcIndex: trimProperty.icIndex,
+				trimCallIp: elementIp + 2,
+				backedgeIp: backedge.sourceIp,
+				exitIp: exitJump.targetIp,
+			});
+		}
+		if (cursors.length > 0) fn.nativeStringSplitCursors = cursors;
+		else delete fn.nativeStringSplitCursors;
+	}
+}
+
 /**
  * Replace a closed exact RegExp.prototype.exec result with selected capture
  * values. The ordinary result Array remains the complete guard-miss path; a
@@ -1896,6 +2204,7 @@ function emitVmDefinitionSource(
 	if (useCompiled) {
 		annotateNativeStringScanSummaries(definition);
 		annotateNativeStringSplitProjections(definition);
+		annotateNativeStringSplitCursors(definition);
 		annotateNativeRegExpExecProjections(definition);
 		annotateNativeRegExpIteratorProjections(definition);
 		annotateNativeStringSliceNumberFusions(definition);

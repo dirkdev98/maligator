@@ -271,6 +271,23 @@ export interface VmFunction {
 		}>;
 	}>;
 
+	/** EMITTER-ONLY: one closed indexed split loop streamed as trimmed spans. */
+	nativeStringSplitCursors?: ReadonlyArray<{
+		callIp: number;
+		callee: number;
+		receiver: number;
+		separator: number;
+		result: number;
+		index: number;
+		lengthIp: number;
+		elementIp: number;
+		trimPropertyIp: number;
+		trimIcIndex: number;
+		trimCallIp: number;
+		backedgeIp: number;
+		exitIp: number;
+	}>;
+
 	/** EMITTER-ONLY: selected capture projections of an exact RegExp exec result. */
 	nativeRegExpExecProjections?: ReadonlyArray<{
 		callIp: number;

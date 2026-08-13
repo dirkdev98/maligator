@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
 
 const fixture = "tests/local/string-projection-region.js";
-const expected = "RESULT PASS 245,9,102,-12.5,16,Infinity,1,711,17,23 1 1";
+const expected = "RESULT PASS 245,9,102,-12.5,16,Infinity,1,3,0,2,2,1,711,9,17,2,23 2 1";
 
 describe("projected String producer-consumer regions", () => {
 	it.each([true, false])("preserves generic fallbacks (compiled=%s)", (compiled) => {
