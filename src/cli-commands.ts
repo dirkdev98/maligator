@@ -408,7 +408,10 @@ function compileAndBuild(
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
-					forceCompile: debugEnabled || compilerDiagnostics,
+					// Profile metadata is derived from the optimized semantic program and is
+					// not part of the portable wire schema yet. Do not accept a definition-only
+					// frontend cache hit that would discard its source-site identities.
+					forceCompile: debugEnabled || compilerDiagnostics || command.profile,
 					relocatable: command.kind !== "build" && !command.profile,
 					onCompilePhase: (phase, durationMs) => {
 						compilerPhases.push({ phase, durationMs });

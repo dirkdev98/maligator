@@ -5,6 +5,8 @@ import type {
 	IRInstruction,
 } from "./ir.ts";
 import { computeSafepointRoots } from "./liveness.ts";
+import { buildProfileMetadata } from "./profile-metadata.ts";
+import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import type { Binding } from "./semantic-analysis.ts";
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
@@ -115,6 +117,11 @@ export interface VmDefinition {
 		callerPosId?: number;
 	}>;
 
+	/** Build-local source sites and structured optimization decisions. Profile
+	 * builds emit these; ordinary generated code ignores them. */
+	profileSites?: Array<ProfileSite>;
+	profileRemarks?: Array<CompilerRemark>;
+
 	/**
 	 * CommonJS module table: index (module id) -> wrapper function index. Empty
 	 * for programs with no CommonJS modules.
@@ -220,6 +227,8 @@ export interface VmFunction {
 	 * instruction pointer; the native backend emits coalesced `pos` writes from it.
 	 */
 	positions: Array<number>;
+	/** Dense profile site for each instruction, or -1 when no source is known. */
+	profileSiteIds?: Array<number>;
 
 	/**
 	 * COMPILE-ONLY (not part of the C `MalFunction` struct): the registers the
@@ -1133,7 +1142,7 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
 		lowerFunctionToVmFunction(fn, fileIndexFor(fn.semanticFile.path)),
 	);
 
-	return {
+	const definition: VmDefinition = {
 		entrypointPath: program.semantic.entrypointPath,
 		functionCount: program.functions.length,
 		functions,
@@ -1146,6 +1155,8 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
 		files,
 		sourcePositions: program.sourcePositions,
 	};
+	buildProfileMetadata(program, definition);
+	return definition;
 }
 
 /**
