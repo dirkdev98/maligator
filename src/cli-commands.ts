@@ -103,7 +103,7 @@ interface DevelopmentBuildCache {
 }
 
 export interface DevelopmentProcessHost {
-	spawn(executablePath: string, args: Array<string>): unknown;
+	spawn(executablePath: string, args: Array<string>, environment?: NodeJS.ProcessEnv): unknown;
 	kill(handle: unknown, force?: boolean): void;
 	/** Undefined while running, otherwise the conventional process exit code. */
 	status(handle: unknown): number | undefined;
@@ -907,12 +907,53 @@ export async function devCommand(
 	};
 	const initialBuildStartedAt = Date.now();
 	let result = compileAndBuild(command, retainedContext, true);
+	let profileGeneration = 0;
+	let activeProfile:
+		| {
+				prepared: PreparedProfile;
+				directory: string;
+				capturePath: string;
+		  }
+		| undefined;
+	const nextProfile = (build: BuildCommandResult) => {
+		if (!command.profile || build.profile === undefined) return undefined;
+		profileGeneration++;
+		const capture = createProfileCapture(`dev-${profileGeneration}`, build.profile);
+		return { prepared: build.profile, ...capture };
+	};
+	const finalizeActiveProfile = (): void => {
+		if (activeProfile === undefined) return;
+		if (existsSync(activeProfile.capturePath)) {
+			try {
+				const finalized = finalizeProfileCapture(
+					activeProfile.directory,
+					activeProfile.prepared,
+					"dev",
+				);
+				writeStderr(`Profile ${activeProfile.directory}`);
+				for (const line of formatProfileFindings(finalized.findings)) writeStderr(line);
+			} catch (error) {
+				writeStderr(
+					`warning: development profile could not be finalized: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		} else {
+			writeStderr(
+				`warning: development generation did not publish ${activeProfile.capturePath}`,
+			);
+		}
+		activeProfile = undefined;
+	};
 	let states = watchedFiles(command, result.dependencies ?? []);
 	const watchHost = context.developmentWatcher;
 	const watchHandle = watchHost?.create(states.map((state) => state.file));
+	activeProfile = nextProfile(result);
 	let child: unknown = processHost.spawn(
 		result.binaryPath!,
 		result.runArguments ?? command.programArgs,
+		activeProfile === undefined
+			? undefined
+			: { MAL_PROFILE_CAPTURE: activeProfile.capturePath },
 	);
 	let stopping = false;
 	const stop = () => {
@@ -941,6 +982,7 @@ export async function devCommand(
 					writeStderr(
 						`Application ${status === 0 ? "stopped" : "crashed"} with code ${status}; waiting for changes.`,
 					);
+					finalizeActiveProfile();
 					child = undefined;
 				}
 				continue;
@@ -971,11 +1013,16 @@ export async function devCommand(
 				);
 				if (child !== undefined) {
 					await stopDevelopmentProcess(processHost, child);
+					finalizeActiveProfile();
 					child = undefined;
 				}
+				activeProfile = nextProfile(result);
 				child = processHost.spawn(
 					result.binaryPath!,
 					result.runArguments ?? command.programArgs,
+					activeProfile === undefined
+						? undefined
+						: { MAL_PROFILE_CAPTURE: activeProfile.capturePath },
 				);
 				writeStderr(
 					`Compiled in ${formatDevelopmentDuration(Date.now() - rebuildStartedAt)} · restarted`,
@@ -995,6 +1042,7 @@ export async function devCommand(
 		if (child !== undefined && processHost.status(child) === undefined) {
 			await stopDevelopmentProcess(processHost, child);
 		}
+		finalizeActiveProfile();
 	}
 }
 

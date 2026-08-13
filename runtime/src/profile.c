@@ -48,17 +48,25 @@ typedef struct MalProfileState {
     u64 expected_sample_ns;
     usize allocation_budget;
     bool finished;
-    struct sigaction previous_action;
+	struct sigaction previous_action;
+	struct sigaction previous_interrupt_action;
+	struct sigaction previous_terminate_action;
     struct itimerval previous_timer;
 } MalProfileState;
 
 static MalProfileState *g_profile = nullptr;
 static volatile sig_atomic_t g_profile_pending_ticks = 0;
+static volatile sig_atomic_t g_profile_termination_signal = 0;
 
 static void mal_profile_signal(int signal_number) {
     (void) signal_number;
     if (g_profile_pending_ticks < 0x7fff) g_profile_pending_ticks++;
     mal_gc_poll = true;
+}
+
+static void mal_profile_terminate_signal(int signal_number) {
+	g_profile_termination_signal = signal_number;
+	mal_gc_poll = true;
 }
 
 static i32 mal_profile_position_for(const MalFunction *function, i32 ip) {
@@ -125,16 +133,24 @@ static void mal_profile_record(
 void mal_profile_safepoint(MalVm *vm) {
     MalProfileState *state = g_profile;
     sig_atomic_t ticks = g_profile_pending_ticks;
-    if (state == nullptr || ticks == 0) return;
-    g_profile_pending_ticks = 0;
+	if (state == nullptr || (ticks == 0 && g_profile_termination_signal == 0)) return;
+	g_profile_pending_ticks = 0;
     if (ticks > 1) state->dropped_records += (u32) ticks - 1;
-    u64 now = mal_monotonic_now_ns();
-    u64 delay = now > state->expected_sample_ns ? now - state->expected_sample_ns : 0;
-    mal_profile_record(state, vm, MAL_PROFILE_RECORD_CPU, 0, delay, true);
-    u64 interval_ns = (u64) state->interval_us * 1000u;
-    state->expected_sample_ns = delay > interval_ns * 4
-        ? now + interval_ns
-        : state->expected_sample_ns + interval_ns * (u64) ticks;
+	if (ticks > 0) {
+		u64 now = mal_monotonic_now_ns();
+		u64 delay = now > state->expected_sample_ns ? now - state->expected_sample_ns : 0;
+		mal_profile_record(state, vm, MAL_PROFILE_RECORD_CPU, 0, delay, true);
+		u64 interval_ns = (u64) state->interval_us * 1000u;
+		state->expected_sample_ns = delay > interval_ns * 4
+			? now + interval_ns
+			: state->expected_sample_ns + interval_ns * (u64) ticks;
+	}
+	if (g_profile_termination_signal != 0) {
+		int termination_signal = g_profile_termination_signal;
+		g_profile_termination_signal = 0;
+		mal_profile_finish(vm);
+		raise(termination_signal);
+	}
 }
 
 void mal_profile_allocation(MalHeap *heap, usize size, u8 heap_type) {
@@ -237,7 +253,13 @@ void mal_profile_init(MalVm *vm) {
     action.sa_handler = mal_profile_signal;
     sigemptyset(&action.sa_mask);
     action.sa_flags = SA_RESTART;
-    sigaction(SIGPROF, &action, &state->previous_action);
+	sigaction(SIGPROF, &action, &state->previous_action);
+	struct sigaction termination_action = {0};
+	termination_action.sa_handler = mal_profile_terminate_signal;
+	sigemptyset(&termination_action.sa_mask);
+	termination_action.sa_flags = SA_RESTART;
+	sigaction(SIGINT, &termination_action, &state->previous_interrupt_action);
+	sigaction(SIGTERM, &termination_action, &state->previous_terminate_action);
     struct itimerval timer = {0};
     timer.it_interval.tv_sec = state->interval_us / 1000000u;
     timer.it_interval.tv_usec = state->interval_us % 1000000u;
@@ -251,8 +273,11 @@ void mal_profile_finish(MalVm *vm) {
     if (state == nullptr || state->vm != vm || state->finished) return;
     state->finished = true;
     setitimer(ITIMER_PROF, &state->previous_timer, nullptr);
-    sigaction(SIGPROF, &state->previous_action, nullptr);
-    g_profile_pending_ticks = 0;
+	sigaction(SIGPROF, &state->previous_action, nullptr);
+	sigaction(SIGINT, &state->previous_interrupt_action, nullptr);
+	sigaction(SIGTERM, &state->previous_terminate_action, nullptr);
+	g_profile_pending_ticks = 0;
+	g_profile_termination_signal = 0;
     vm->heap.profile_state = nullptr;
     g_profile = nullptr;
     mal_profile_publish(state);

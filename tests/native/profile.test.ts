@@ -1,14 +1,15 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildNativeBinary } from "../../src/test-harness.ts";
+import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
 
 const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-"));
 
 describe("production profile recorder", () => {
 	let binary: string;
+	let longRunningBinary: string;
 
 	beforeAll(() => {
 		binary = buildNativeBinary({
@@ -16,6 +17,14 @@ describe("production profile recorder", () => {
 			name: "profile-recorder",
 			compiled: true,
 			profileEnabled: true,
+			outDir: directory,
+		});
+		longRunningBinary = buildNativeBinary({
+			fixture: "tests/local/profile-long-running.js",
+			name: "profile-long-running",
+			compiled: true,
+			profileEnabled: true,
+			mainFile: HOST_MAIN,
 			outDir: directory,
 		});
 	});
@@ -38,5 +47,23 @@ describe("production profile recorder", () => {
 		expect(frameCount).toBeGreaterThan(0);
 		expect(view.getUint8(40)).toBe(1);
 		expect(bytes.byteLength).toBe(40 + recordCount * 40 + frameCount * 8);
+	});
+
+	it("flushes a valid capture before a development-style termination", async () => {
+		const capture = path.join(directory, "terminated.bin");
+		const child = spawn(longRunningBinary, [], {
+			env: { ...process.env, MAL_PROFILE_CAPTURE: capture },
+			stdio: "ignore",
+		});
+		const exited = new Promise<NodeJS.Signals | null>((resolve, reject) => {
+			child.once("error", reject);
+			child.once("exit", (_code, exitSignal) => resolve(exitSignal));
+		});
+		// Native startup initializes the full runtime before the recorder is armed.
+		await new Promise((resolve) => setTimeout(resolve, 750));
+		child.kill("SIGTERM");
+		const signal = await exited;
+		expect(signal).toBe("SIGTERM");
+		expect(readFileSync(capture).subarray(0, 8).toString()).toBe("MALPROF1");
 	});
 });

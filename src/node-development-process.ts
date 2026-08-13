@@ -4,9 +4,9 @@ import { runEnv } from "./build-flags.ts";
 import type { DevelopmentProcessHost } from "./cli-commands.ts";
 
 export const nodeDevelopmentProcessHost: DevelopmentProcessHost = {
-	spawn(executablePath, args) {
+	spawn(executablePath, args, environment) {
 		return spawn(executablePath, args, {
-			env: runEnv(),
+			env: { ...runEnv(), ...environment },
 			stdio: "inherit",
 			detached: process.platform !== "win32",
 		});

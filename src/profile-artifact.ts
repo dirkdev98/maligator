@@ -94,7 +94,13 @@ export function createProfileCapture(
 	cwd = process.cwd(),
 ): { directory: string; capturePath: string } {
 	const override = process.env.MALIGATOR_PROFILE_DIRECTORY;
-	const directory = path.resolve(override ?? defaultProfileDirectory(command, prepared, cwd));
+	const directory = path.resolve(
+		override === undefined
+			? defaultProfileDirectory(command, prepared, cwd)
+			: command.startsWith("dev-")
+				? path.join(override, command)
+				: override,
+	);
 	mkdirSync(directory, { recursive: true });
 	atomicJson(path.join(directory, "metadata.json"), prepared);
 	return { directory, capturePath: path.join(directory, "capture.bin") };

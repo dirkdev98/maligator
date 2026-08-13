@@ -236,10 +236,11 @@ void mal_host_run_event_loop(MalVm *vm) {
         }
         // No callback is ready. If the reactor still holds timers/fd ops, block
         // until the next fires; otherwise the isolate is idle.
-        if (mal_reactor_has_pending(&mal_host(vm)->reactor)) {
-            progressed = true;
-            mal_reactor_wait(&mal_host(vm)->reactor);
-            continue;
+		if (mal_reactor_has_pending(&mal_host(vm)->reactor)) {
+			progressed = true;
+			mal_reactor_wait(&mal_host(vm)->reactor);
+			if (mal_gc_poll) mal_gc_safepoint(vm);
+			continue;
         }
         if (!progressed || mal_host_idle_notify == nullptr) {
             break;
