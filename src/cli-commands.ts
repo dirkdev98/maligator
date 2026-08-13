@@ -677,6 +677,7 @@ function compileAndBuild(
 				return createBuildArtifact({
 					binaryPath,
 					directory: artifactDirectory,
+					executableName: name,
 					licensePath: context.installation.licensePath,
 					version: MALIGATOR_VERSION,
 					target: nativeContext.toolchain.rustTarget,
