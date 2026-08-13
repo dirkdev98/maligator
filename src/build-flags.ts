@@ -337,8 +337,11 @@ export function buildSuffix(
 }
 
 /**
- * Optimisation/debug flags for the current mode. Normal: -O2. Under a sanitizer:
- * -O1 -g (the sanitizer is slow, and -g + a non-zero -O keeps frames + symbols).
+ * Optimisation/debug flags for the current mode. Normal: -O2 -g0. The explicit
+ * debug disable keeps cross builds from inheriting Zig's DWARF default; generated
+ * production units can otherwise spend minutes building metadata that the final
+ * strip discards. Under a sanitizer: -O1 -g (the sanitizer is slow, and -g + a
+ * non-zero -O keeps frames + symbols).
  */
 export function optFlags(
 	plan?: NativeBuildPlan,
@@ -347,7 +350,7 @@ export function optFlags(
 	if (sanitizerMode(env) !== "none") {
 		return ["-O1", "-g"];
 	}
-	return plan?.lto === true ? ["-O2", ...plan.ltoFlags] : ["-O2"];
+	return plan?.lto === true ? ["-O2", "-g0", ...plan.ltoFlags] : ["-O2", "-g0"];
 }
 
 /**

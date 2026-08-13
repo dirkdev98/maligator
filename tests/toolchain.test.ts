@@ -652,8 +652,8 @@ exit 7
 		});
 
 		const invocations = readFileSync(fake.logPath, "utf-8");
-		expect(invocations).toMatch(/-O2 -flto=thin .*runtime\/src\/vm\.c/);
-		expect(invocations).toContain(`-O2 -flto=thin`);
+		expect(invocations).toMatch(/-O2 -g0 -flto=thin .*runtime\/src\/vm\.c/);
+		expect(invocations).toContain(`-O2 -g0 -flto=thin`);
 		expect(invocations).toContain(`strip --strip-all ${binary}`);
 
 		writeFileSync(fake.logPath, "");
@@ -700,7 +700,7 @@ exit 7
 			outDir: fake.root,
 		});
 		const developmentInvocation = readFileSync(fake.logPath, "utf-8");
-		expect(developmentInvocation).toContain("-O2");
+		expect(developmentInvocation).toContain("-O2 -g0");
 		expect(developmentInvocation).not.toContain("-flto");
 		expect(developmentInvocation).not.toContain("strip ");
 
@@ -719,7 +719,7 @@ exit 7
 			outDir: fake.root,
 		});
 		const invocation = readFileSync(fake.logPath, "utf-8");
-		expect(invocation).toContain("-O2");
+		expect(invocation).toContain("-O2 -g0");
 		expect(invocation).not.toContain("-flto");
 		expect(invocation).not.toContain("strip ");
 	}, 10_000);
