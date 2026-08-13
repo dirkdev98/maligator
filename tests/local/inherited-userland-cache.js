@@ -38,9 +38,14 @@ const deep = Object.create(middle);
 const zeroSentinel = {};
 
 ok("loop zero iterations", loadLoop(direct, 0, zeroSentinel) === zeroSentinel);
+ok("loop negative bound", loadLoop(direct, -1, zeroSentinel) === zeroSentinel);
+ok("loop NaN bound", loadLoop(direct, NaN, zeroSentinel) === zeroSentinel);
+ok("loop one iteration", loadLoop(direct, 1, zeroSentinel) === original);
+ok("loop fractional bound falls back", loadLoop(direct, 2.5, zeroSentinel) === original);
 for (let index = 0; index < 20; index++) {
 	ok("loop warm", loadLoop(direct, 10, zeroSentinel) === original);
 }
+ok("loop one iteration warm", loadLoop(direct, 1, zeroSentinel) === original);
 
 for (let index = 0; index < 2000; index++) {
 	ok("direct warm", loadDirect(direct) === original);

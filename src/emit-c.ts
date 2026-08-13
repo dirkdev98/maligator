@@ -1916,6 +1916,19 @@ interface InheritedLoadLoopTwin {
 	deferredRegisters: Array<number>;
 	deferredMoveIps: ReadonlySet<number>;
 	loadedName: string;
+	summary?: InheritedLoadLoopSummary;
+}
+
+/**
+ * Exact terminal state for the deliberately tiny counted-loop summary domain.
+ * The runtime guard accepts only positive integral finite bounds through 2^53;
+ * every other Number value executes the ordinary fast/generic loop twin.
+ */
+interface InheritedLoadLoopSummary {
+	index: number;
+	bound: number;
+	condition: number;
+	exitIp: number;
 }
 
 interface LoopTwinEmission {
@@ -2026,6 +2039,84 @@ function materializeDeferredInheritedValue(twin: InheritedLoadLoopTwin): Array<s
 		),
 		`}`,
 	];
+}
+
+function inheritedLoadLoopSummary(
+	fn: VmFunction,
+	reps: Array<RegisterRep>,
+	headerIp: number,
+	backedgeIp: number,
+	propertyIp: number,
+	deferred: ReturnType<typeof deferredInheritedMoveChain>,
+): InheritedLoadLoopSummary | undefined {
+	// Match the actual canonical lowering, including the initialization and both
+	// arms of the loop test. Keeping this positional proof exact makes it clear
+	// that no skipped instruction can observe an iteration.
+	const initialize = fn.instructions[headerIp - 2];
+	const preheader = fn.instructions[headerIp - 1];
+	const compare = fn.instructions[headerIp];
+	const enter = fn.instructions[headerIp + 1];
+	const exit = fn.instructions[headerIp + 2];
+	const increment = fn.instructions[backedgeIp - 1];
+	if (
+		initialize?.opcode !== "CREATE_NUMBER" ||
+		initialize.value !== 0 ||
+		preheader?.opcode !== "JUMP" ||
+		preheader.targetIp !== headerIp ||
+		compare?.opcode !== "BINARY" ||
+		compare.operator !== "<" ||
+		compare.left !== initialize.dst ||
+		enter?.opcode !== "JUMP_IF" ||
+		enter.cond !== compare.dst ||
+		enter.targetIp !== propertyIp ||
+		exit?.opcode !== "JUMP" ||
+		exit.targetIp <= backedgeIp ||
+		propertyIp !== headerIp + 3 ||
+		increment?.opcode !== "UNARY" ||
+		increment.operator !== "increment" ||
+		increment.src !== initialize.dst ||
+		increment.dst !== initialize.dst ||
+		deferred === null ||
+		reps[initialize.dst] !== "number" ||
+		reps[compare.right] !== "number" ||
+		reps[compare.dst] !== "boolean"
+	) {
+		return undefined;
+	}
+
+	// No edge or handler may reach the preheader after bypassing the adjacent
+	// zero initialization. Edges to the initializer itself remain safe.
+	if (
+		fn.instructions.some(
+			(instruction) =>
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				instruction.targetIp === headerIp - 1,
+		) ||
+		fn.handlers.some((handler) => handler.handlerIp === headerIp - 1)
+	) {
+		return undefined;
+	}
+
+	// Between the load and unit increment, its result may only flow through the
+	// already-proved deferred MOVE chain. This also excludes extra arithmetic or
+	// any other body work even when the general loop twin could clone it safely.
+	for (let ip = propertyIp + 1; ip < backedgeIp - 1; ip++) {
+		if (!deferred.moveIps.has(ip)) return undefined;
+	}
+	if (
+		fn.instructions
+			.slice(headerIp, backedgeIp + 1)
+			.some((instruction) => writeRegisters(instruction).includes(compare.right))
+	) {
+		return undefined;
+	}
+
+	return {
+		index: initialize.dst,
+		bound: compare.right,
+		condition: compare.dst,
+		exitIp: exit.targetIp,
+	};
 }
 
 /**
@@ -2139,6 +2230,14 @@ function findInheritedLoadLoopTwins(
 			load.ip,
 			load.instruction.dst,
 		);
+		const summary = inheritedLoadLoopSummary(
+			fn,
+			reps,
+			headerIp,
+			backedgeIp,
+			load.ip,
+			deferred,
+		);
 
 		candidates.push({
 			headerIp,
@@ -2151,6 +2250,7 @@ function findInheritedLoadLoopTwins(
 			deferredRegisters: deferred?.registers ?? [],
 			deferredMoveIps: deferred?.moveIps ?? new Set<number>(),
 			loadedName: `__inherited_loop_${headerIp}_loaded`,
+			summary,
 		});
 	}
 
@@ -2900,10 +3000,48 @@ function emitBody(
 			if (loopTwin.deferredRegisters.length > 0) {
 				lines.push(`    ${loopTwin.loadedName} = false;`);
 			}
-			lines.push(
-				`    if (${loopTwinValidation(loopTwin)}) goto LF${loopTwin.headerIp};`,
-				`    goto LG${loopTwin.headerIp};`,
-			);
+			const summary = loopTwin.summary;
+			if (summary === undefined) {
+				lines.push(
+					`    if (${loopTwinValidation(loopTwin)}) goto LF${loopTwin.headerIp};`,
+					`    goto LG${loopTwin.headerIp};`,
+				);
+			} else {
+				const bound = `r${summary.bound}`;
+				lines.push(
+					`    if (${loopTwinValidation(loopTwin)}) {`,
+					`      if (mal_gc_preempt_hook == nullptr && ${bound} > 0.0 && isfinite(${bound}) && trunc(${bound}) == ${bound} && ${bound} <= 9007199254740992.0) {`,
+					// Model the first iteration before the poll. The ordinary loop polls at
+					// its backedge, so a fiber mutation there must leave count=1 with the
+					// old value and resume count>1 at index 1 on the generic twin.
+					...loopTwin.deferredRegisters.map(
+						(register) => `        r${register} = ${loopTwin.probeName};`,
+					),
+					`        r${summary.index} = 1.0;`,
+					"        if (mal_gc_poll) {",
+					...(debug && loopTwin.position !== -1
+						? [
+								`          vm->native_frames[vm->native_frame_count - 1].pos_id = ${loopTwin.position};`,
+							]
+						: []),
+					"          mal_gc_safepoint(vm);",
+					`          if (${bound} > 1.0) {`,
+					`            if (!${loopTwinValidation(loopTwin)}) goto LG${loopTwin.headerIp};`,
+					...loopTwin.deferredRegisters.map(
+						(register) => `            r${register} = ${loopTwin.probeName};`,
+					),
+					"          }",
+					"        }",
+					`        mal_perf_inherited_loop_summary((u64) ${bound});`,
+					`        r${summary.condition} = false;`,
+					`        r${summary.index} = ${bound};`,
+					`        goto L${summary.exitIp};`,
+					"      }",
+					`      goto LF${loopTwin.headerIp};`,
+					"    }",
+					`    goto LG${loopTwin.headerIp};`,
+				);
+			}
 			const fastJumpTargets = new Set<number>([loopTwin.headerIp]);
 			for (let fastIp = loopTwin.headerIp; fastIp <= loopTwin.backedgeIp; fastIp++) {
 				const instruction = fn.instructions[fastIp]!;

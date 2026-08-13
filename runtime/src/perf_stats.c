@@ -623,7 +623,8 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-ic-stats] load_mono_hits=%llu load_region_hits=%llu "
-        "load_inherited_hits=%llu load_missing_hits=%llu load_missing_fills=%llu "
+        "load_inherited_hits=%llu inherited_loop_summaries=%llu "
+        "inherited_loop_iterations_elided=%llu load_missing_hits=%llu load_missing_fills=%llu "
         "load_fallbacks=%llu load_slow_mono_hits=%llu "
         "load_poly_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "
         "load_shape_hits=%llu load_shape_fills=%llu load_shape_uncacheable=%llu "
@@ -646,6 +647,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_load_mono_hits,
         (unsigned long long) mal_perf_stats.ic_load_region_hits,
         (unsigned long long) mal_perf_stats.ic_load_inherited_hits,
+        (unsigned long long) mal_perf_stats.inherited_loop_summaries,
+        (unsigned long long) mal_perf_stats.inherited_loop_iterations_elided,
         (unsigned long long) mal_perf_stats.ic_load_missing_hits,
         (unsigned long long) mal_perf_stats.ic_load_missing_fills,
         (unsigned long long) mal_perf_stats.ic_load_fallbacks,

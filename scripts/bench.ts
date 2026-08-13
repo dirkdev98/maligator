@@ -1705,8 +1705,9 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 		stderr,
 		"inherited_loop_iterations_elided",
 	);
-	const expectedElided = instrumentedMetrics.measuredCalls * instrumentedMetrics.iterations;
-	if (inheritedLoopIterationsElided !== 0 && inheritedLoopIterationsElided !== expectedElided) {
+	const expectedElided =
+		instrumentedMetrics.measuredCalls * instrumentedMetrics.iterations;
+	if (inheritedLoopIterationsElided !== expectedElided) {
 		throw new Error(
 			`prototype-cache summarized ${inheritedLoopIterationsElided} iterations, expected ${expectedElided}`,
 		);
@@ -2309,6 +2310,10 @@ function delta(
 }
 
 function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefined): void {
+	const phaseTime = (ms: number): string =>
+		ms < 0.1 ? `${(ms * 1000).toFixed(3)}us` : `${ms.toFixed(1)}ms`;
+	const phaseRatio = (ratio: number): string =>
+		ratio < 0.01 ? ratio.toFixed(6) : ratio.toFixed(2);
 	console.log("\n=== benchmark run ===");
 	if (entry.size) {
 		console.log("size (per build-config profile):");
@@ -2653,22 +2658,22 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		const prior = previous?.prototypeCache;
 		console.log("prototype-cache (inherited method loads; vs Node):");
 		console.log(
-			`  runtime   maligator ${current.mal.runtimeMs.toFixed(1)}ms${delta(current.mal.runtimeMs, prior?.mal.runtimeMs)}  node ${current.node.runtimeMs.toFixed(1)}ms  ratio ${current.runtimeRatio.toFixed(2)}x`,
+			`  runtime   maligator ${phaseTime(current.mal.runtimeMs)}${delta(current.mal.runtimeMs, prior?.mal.runtimeMs)}  node ${phaseTime(current.node.runtimeMs)}  ratio ${phaseRatio(current.runtimeRatio)}x`,
 		);
 		console.log(
-			`  user 1x   maligator ${current.mal.userlandDirectMs.toFixed(1)}ms${delta(current.mal.userlandDirectMs, prior?.mal.userlandDirectMs)}  node ${current.node.userlandDirectMs.toFixed(1)}ms  ratio ${current.userlandDirectRatio.toFixed(2)}x`,
+			`  user 1x   maligator ${phaseTime(current.mal.userlandDirectMs)}${delta(current.mal.userlandDirectMs, prior?.mal.userlandDirectMs)}  node ${phaseTime(current.node.userlandDirectMs)}  ratio ${phaseRatio(current.userlandDirectRatio)}x`,
 		);
 		console.log(
-			`  user 2x   maligator ${current.mal.userlandDeepMs.toFixed(1)}ms${delta(current.mal.userlandDeepMs, prior?.mal.userlandDeepMs)}  node ${current.node.userlandDeepMs.toFixed(1)}ms  ratio ${current.userlandDeepRatio.toFixed(2)}x`,
+			`  user 2x   maligator ${phaseTime(current.mal.userlandDeepMs)}${delta(current.mal.userlandDeepMs, prior?.mal.userlandDeepMs)}  node ${phaseTime(current.node.userlandDeepMs)}  ratio ${phaseRatio(current.userlandDeepRatio)}x`,
 		);
 		console.log(
-			`  user 4x   maligator ${current.mal.userlandFourLinkMs.toFixed(1)}ms${delta(current.mal.userlandFourLinkMs, prior?.mal.userlandFourLinkMs)}  node ${current.node.userlandFourLinkMs.toFixed(1)}ms  ratio ${current.userlandFourLinkRatio.toFixed(2)}x`,
+			`  user 4x   maligator ${phaseTime(current.mal.userlandFourLinkMs)}${delta(current.mal.userlandFourLinkMs, prior?.mal.userlandFourLinkMs)}  node ${phaseTime(current.node.userlandFourLinkMs)}  ratio ${phaseRatio(current.userlandFourLinkRatio)}x`,
 		);
 		console.log(
-			`  user 8x   maligator ${current.mal.userlandEightLinkMs.toFixed(1)}ms${delta(current.mal.userlandEightLinkMs, prior?.mal.userlandEightLinkMs)}  node ${current.node.userlandEightLinkMs.toFixed(1)}ms  ratio ${current.userlandEightLinkRatio.toFixed(2)}x`,
+			`  user 8x   maligator ${phaseTime(current.mal.userlandEightLinkMs)}${delta(current.mal.userlandEightLinkMs, prior?.mal.userlandEightLinkMs)}  node ${phaseTime(current.node.userlandEightLinkMs)}  ratio ${phaseRatio(current.userlandEightLinkRatio)}x`,
 		);
 		console.log(
-			`  mutated   maligator ${current.mal.postMutationMs.toFixed(1)}ms${delta(current.mal.postMutationMs, prior?.mal.postMutationMs)}  node ${current.node.postMutationMs.toFixed(1)}ms  ratio ${current.postMutationRatio.toFixed(2)}x`,
+			`  mutated   maligator ${phaseTime(current.mal.postMutationMs)}${delta(current.mal.postMutationMs, prior?.mal.postMutationMs)}  node ${phaseTime(current.node.postMutationMs)}  ratio ${phaseRatio(current.postMutationRatio)}x`,
 		);
 		console.log(
 			`  IC        ${current.inheritedHits} inherited hits, ${current.inheritedLoopSummaries} loop summaries / ${current.inheritedLoopIterationsElided} iterations elided, ${current.inheritedFills} fills, ${current.inheritedRejectChain} chain rejects`,

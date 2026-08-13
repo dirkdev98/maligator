@@ -86,7 +86,10 @@ function measure(load, receiver) {
 }
 
 const [runtimeResult, runtimeMs, runtimeCalls] = measure(loadRuntime, runtimeReceiver);
-const [directResult, userlandDirectMs, userlandDirectCalls] = measure(loadDirect, directReceiver);
+const [directResult, userlandDirectMs, userlandDirectCalls] = measure(
+	loadDirect,
+	directReceiver,
+);
 const [deepResult, userlandDeepMs, userlandDeepCalls] = measure(loadDeep, deepReceiver);
 const [fourLinkResult, userlandFourLinkMs, userlandFourLinkCalls] = measure(
 	loadFourLinks,

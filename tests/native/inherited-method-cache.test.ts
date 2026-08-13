@@ -221,6 +221,15 @@ describe("inherited built-in method and native call caches", () => {
 				return match ? Number(match[1]) : 0;
 			};
 			expect(field("load_inherited_hits")).toBeGreaterThan(4000);
+			if (_name === "compiled") {
+				expect(field("inherited_loop_summaries")).toBeGreaterThan(0);
+				expect(field("inherited_loop_iterations_elided")).toBeGreaterThan(
+					field("inherited_loop_summaries"),
+				);
+			} else {
+				expect(field("inherited_loop_summaries")).toBe(0);
+				expect(field("inherited_loop_iterations_elided")).toBe(0);
+			}
 			expect(field("inherited_fills")).toBeGreaterThan(5);
 			const dependencies = result.stderr
 				.split("\n")

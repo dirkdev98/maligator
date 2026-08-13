@@ -82,6 +82,17 @@ by about 8 MiB, and produced a paired 6.63% string-lane wall win. Treat this as 
 that source attribution works, while retaining the quality caveats above and requiring
 generated-code inspection plus paired measurement for every optimization claim.
 
+A fresh production profile of `bench/language.js` after the string campaign produced
+only 12 CPU samples, so every CPU ranking was low evidence. Its one strong allocation
+finding was the whole `JSON.parse(encoded).map(normalize)` expression at line 212 (129
+samples), which combines parser output, Array mapping, normalizer calls, object-rest
+copying, and result allocation under one source site. That is useful phase-level
+attribution but cannot select the object-rest optimization by itself; the existing
+exact runtime counters (466,560 exclusion checks in prior instrumented runs) and
+generated COPY_DATA_PROPERTIES sites remain the actionable proof. The profiler needs
+operation-level allocation attribution or nested logical sites before it can separate
+this cluster.
+
 - [ ] Generate optimization remarks from final backend decisions, with exact operation
       identity and stable reason codes such as unknown target set, invalidatable epoch,
       escaping result, unsupported consumer, or representation mismatch. Do not merge

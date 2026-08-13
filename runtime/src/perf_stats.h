@@ -332,6 +332,8 @@ typedef struct MalPerfStats {
     u64 ic_load_mono_hits;
     u64 ic_load_region_hits;
     u64 ic_load_inherited_hits;
+    u64 inherited_loop_summaries;
+    u64 inherited_loop_iterations_elided;
     u64 ic_load_missing_hits;
     u64 ic_load_missing_fills;
     u64 ic_load_fallbacks;
@@ -444,6 +446,11 @@ static inline void mal_perf_ic_load_region_hit(void) {
 
 static inline void mal_perf_ic_load_inherited_hit(void) {
     MAL_PERF_COUNT(ic_load_inherited_hits);
+}
+
+static inline void mal_perf_inherited_loop_summary(u64 iterations) {
+    MAL_PERF_COUNT(inherited_loop_summaries);
+    MAL_PERF_ADD(inherited_loop_iterations_elided, iterations);
 }
 
 static inline void mal_perf_ic_load_primitive_hit(void) {

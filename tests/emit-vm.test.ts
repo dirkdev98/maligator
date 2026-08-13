@@ -770,12 +770,39 @@ describe("native update-expression representation", () => {
 		);
 		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
+		expect(loopOutput).toMatch(
+			/if \(mal_gc_preempt_hook == nullptr && r\d+ > 0\.0 && isfinite\(r\d+\) && trunc\(r\d+\) == r\d+ && r\d+ <= 9007199254740992\.0\)/,
+		);
+		expect(loopOutput).toMatch(/mal_perf_inherited_loop_summary\(\(u64\) r\d+\)/);
+		expect(loopOutput).toMatch(
+			/r\d+ = __inherited_loop_\d+_probe;\s+r\d+ = 1\.0;\s+if \(mal_gc_poll\)[\s\S]*?mal_gc_safepoint\(vm\);\s+if \(r\d+ > 1\.0\)[\s\S]*?if \(!\(mal_vm_local_inherited_value_try_load_static[\s\S]*?goto LG\d+;[\s\S]*?r\d+ = __inherited_loop_\d+_probe;[\s\S]*?r\d+ = false;[\s\S]*?r\d+ = r\d+;[\s\S]*?goto L\d+;/,
+		);
 
 		const effectfulLoopOutput = emit(
 			`"use strict"; function load(object, count, mutate) { let value; for (let i = 0; i < count; i++) { value = object.value; mutate(); } return value; } globalThis.load = load;`,
 		);
 		expect(effectfulLoopOutput).not.toContain("__inherited_loop_");
 		expect(effectfulLoopOutput).not.toMatch(/goto LF\d+/);
+
+		const nonCanonicalLoopOutput = emit(
+			`"use strict"; function load(object, count) { let value; for (let i = 1; i < count; i++) value = object.value; return value; } globalThis.load = load;`,
+		);
+		expect(nonCanonicalLoopOutput).toContain("__inherited_loop_");
+		expect(nonCanonicalLoopOutput).not.toContain("9007199254740992.0");
+
+		const observableBodyOutput = emit(
+			`"use strict"; function load(object, count) { let value; let sum = 0; for (let i = 0; i < count; i++) { value = object.value; sum += i; } return [value, sum]; } globalThis.load = load;`,
+		);
+		expect(observableBodyOutput).not.toContain("9007199254740992.0");
+
+		const wrongInductionOutput = emit(
+			`"use strict"; function load(object, count) { let value; let other = 0; for (let i = 0; other < count; i++) value = object.value; return value; } globalThis.load = load;`,
+		);
+		expect(wrongInductionOutput).not.toContain("9007199254740992.0");
+
+		// The trunc guard deliberately sends fractional bounds through the existing
+		// per-iteration twin; the summary only models an exact integral final index.
+		expect(loopOutput).toMatch(/trunc\(r\d+\) == r\d+/);
 
 		const dynamicOutput = emit(
 			`"use strict"; function load(object, key) { return object[key]; } function store(object, key, value) { object[key] = value; } globalThis.keep = [load, store];`,
