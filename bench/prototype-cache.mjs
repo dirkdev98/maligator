@@ -3,6 +3,8 @@
 // steady state after a prototype method is replaced. The result identities keep
 // the loads observable without adding call-dispatch cost to the measurement.
 
+import { performance } from "node:perf_hooks";
+
 const iterations = 20_000_000;
 const warmupIterations = Math.min(iterations, 20_000);
 
@@ -71,25 +73,25 @@ loadDeep(deepReceiver, warmupIterations);
 loadFourLinks(fourLinkReceiver, warmupIterations);
 loadEightLinks(eightLinkReceiver, warmupIterations);
 
-let start = Date.now();
+let start = performance.now();
 const runtimeResult = loadRuntime(runtimeReceiver, iterations);
-const runtimeMs = Date.now() - start;
+const runtimeMs = performance.now() - start;
 
-start = Date.now();
+start = performance.now();
 const directResult = loadDirect(directReceiver, iterations);
-const userlandDirectMs = Date.now() - start;
+const userlandDirectMs = performance.now() - start;
 
-start = Date.now();
+start = performance.now();
 const deepResult = loadDeep(deepReceiver, iterations);
-const userlandDeepMs = Date.now() - start;
+const userlandDeepMs = performance.now() - start;
 
-start = Date.now();
+start = performance.now();
 const fourLinkResult = loadFourLinks(fourLinkReceiver, iterations);
-const userlandFourLinkMs = Date.now() - start;
+const userlandFourLinkMs = performance.now() - start;
 
-start = Date.now();
+start = performance.now();
 const eightLinkResult = loadEightLinks(eightLinkReceiver, iterations);
-const userlandEightLinkMs = Date.now() - start;
+const userlandEightLinkMs = performance.now() - start;
 
 holder.method = replacementMethod;
 if (
@@ -102,9 +104,9 @@ if (
 }
 loadAfterMutation(deepReceiver, warmupIterations);
 
-start = Date.now();
+start = performance.now();
 const mutationResult = loadAfterMutation(deepReceiver, iterations);
-const postMutationMs = Date.now() - start;
+const postMutationMs = performance.now() - start;
 
 if (
 	runtimeResult !== Array.prototype.values ||

@@ -1669,6 +1669,7 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 	const binary = buildNativeBinary({
 		fixture,
 		name: "bench-prototype-cache",
+		nodeEnabled: true,
 	});
 	const mal = runPrototypeCacheFixture(binary, [], runs);
 	const node = runPrototypeCacheFixture("node", [fixture], runs);
@@ -1681,6 +1682,7 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 	const instrumented = buildNativeBinary({
 		fixture,
 		name: "bench-prototype-cache-stats",
+		nodeEnabled: true,
 		environment: { ...process.env, MAL_PERF_STATS: "1" },
 	});
 	const stats = spawnSync(instrumented, [], {
