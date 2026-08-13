@@ -21,6 +21,7 @@ import {
 	runEnv,
 	sanitizerCcFlags,
 } from "../build-flags.ts";
+import { touchCacheEntry } from "../cache-management.ts";
 import { compileEntrypointToBuffer } from "../compile-program.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
@@ -855,6 +856,7 @@ async function test262RunWireBatch(files: Array<Test262File>, workerId: number) 
 		if (existsSync(wirePath)) {
 			try {
 				definition = deserializeVmDefinition(readFileSync(wirePath));
+				touchCacheEntry(wirePath);
 			} catch {
 				rmSync(wirePath, { force: true });
 			}

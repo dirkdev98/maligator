@@ -498,6 +498,10 @@ npm run test:sanitize -- tests/native/example.test.ts
 npm run test262:regressions
 npm run test262:prepare             # populate/repair the pinned full-corpus cache
 
+# Inspect or reclaim Maligator-owned rebuildable caches.
+node ./src/index.ts cache status
+node ./src/index.ts cache prune --dry-run
+
 # Show tier policy and list exact stage commands without executing them.
 npm run test:help
 npm run test:check -- --list

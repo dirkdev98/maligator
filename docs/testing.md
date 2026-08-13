@@ -17,6 +17,26 @@ The exercise records measurements rather than enforcing machine-specific timing
 thresholds. Performance changes should compare the same binary, host, and cache
 scenario before and after the change.
 
+## Cache ownership
+
+Maligator bounds its project-local rebuildable caches without touching source,
+the pinned Test262 corpus, committed baselines, or user output. Inspect usage
+with `maligator cache status`; preview or apply reclamation with
+`maligator cache prune --dry-run` and `maligator cache prune`. Explicit prune
+targets 5 GiB and normally considers entries unused for at least one day. Above
+twice the target it applies the per-family retention floors immediately, which
+prevents a burst of content-addressed artifacts from filling the disk.
+
+Build, test, standards, benchmark, and quality commands hold process leases.
+Pruning refuses to run while any live lease exists, removes stale lease files
+only after confirming their process is gone, and never caches test verdicts.
+Cache hits touch their artifact directory so retention follows actual reuse.
+Normal commands perform at most one conservative automatic maintenance check per
+day, with an 8 GiB target, a seven-day age threshold, and the same emergency cap.
+Use `--max-gb`, `--min-age-days`, and `--verbose` to tune or audit an explicit
+prune. WPT removes its per-run native scratch tree on exit; pass
+`--keep-artifacts` only when debugging generated sources or binaries.
+
 ## Tiers
 
 | Tier  | Command              | Policy                    | Intended use                                                                                     |

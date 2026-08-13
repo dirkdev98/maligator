@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { platformLinkArgs } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
+import { touchCacheEntry } from "./cache-management.ts";
 import {
 	hashDirectoryTrees,
 	hashDirectoryTreesCached,
@@ -200,6 +201,7 @@ export function ensureRustArtifacts(
 	const startedAt = performance.now();
 	const artifacts = resolveRustArtifacts(context);
 	if (validRustCache(artifacts)) {
+		touchCacheEntry(path.dirname(artifacts.targetDirectory));
 		context.onCacheEvent?.({ artifact: "rust", hit: true, path: artifacts.library });
 		context.onBuildPhase?.({
 			phase: "rust",

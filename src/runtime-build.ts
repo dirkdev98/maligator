@@ -13,6 +13,7 @@ import {
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { runtimeCcFlags } from "./build-flags.ts";
+import { touchCacheEntry } from "./cache-management.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
 import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
@@ -415,6 +416,7 @@ export function ensureNativeArtifacts(
 	const startedAt = performance.now();
 	const layout = runtimeLayout(context);
 	const cacheHit = validRuntimeCache(layout.buildDirectory, layout.cacheKey);
+	if (cacheHit) touchCacheEntry(layout.buildDirectory);
 	context.onCacheEvent?.({
 		artifact: "runtime",
 		hit: cacheHit,

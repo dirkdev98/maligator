@@ -13,6 +13,7 @@ import {
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
+import { touchCacheEntry } from "./cache-management.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
@@ -252,6 +253,7 @@ function ensureGeneratedObjects(
 		const directory = path.join(parent, key);
 		const objectPath = path.join(directory, "unit.o");
 		if (validGeneratedObject(directory, key)) {
+			touchCacheEntry(directory);
 			results[index] = objectPath;
 			cacheHits[index] = true;
 			continue;
@@ -496,6 +498,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	const cachedBinaryPath = path.join(linkCacheDirectory, "binary");
 	phaseStartedAt = performance.now();
 	if (validLinkedBinary(linkCacheDirectory, linkKey)) {
+		touchCacheEntry(linkCacheDirectory);
 		context.onCacheEvent?.({ artifact: "binary", hit: true, path: cachedBinaryPath });
 		restoreLinkedBinary(linkCacheDirectory, binaryPath);
 		context.onBuildPhase?.({

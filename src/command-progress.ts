@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { createCacheLease, maybeMaintainMaligatorCache } from "./cache-management.ts";
 
 export function formatCommandDuration(durationMs: number): string {
 	if (durationMs < 1000) return `${Math.max(0, Math.round(durationMs))}ms`;
@@ -11,6 +12,7 @@ export function formatCommandDuration(durationMs: number): string {
 export interface CommandProgressOptions {
 	stream?: NodeJS.WriteStream;
 	quiet?: boolean;
+	cacheLease?: boolean;
 }
 
 /** Stable, non-interactive progress shared by repository and product commands. */
@@ -25,6 +27,16 @@ export class CommandProgress {
 		this.name = name;
 		this.#stream = options.stream ?? process.stderr;
 		this.#quiet = options.quiet ?? false;
+		if (options.cacheLease !== false) {
+			try {
+				maybeMaintainMaligatorCache();
+			} catch {
+				// Another live command or maintenance pass owns the cache. The lease
+				// below remains the concurrency authority; automatic pruning is optional.
+			}
+			const lease = createCacheLease(name);
+			process.once("exit", () => lease.release());
+		}
 	}
 
 	get elapsedMs(): number {

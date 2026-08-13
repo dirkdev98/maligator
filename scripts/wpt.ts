@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
 import {
@@ -49,8 +49,9 @@ const requestedModes: Array<string> = [];
 const requestedBackends: Array<string> = [];
 let requestedPolicy: string | undefined;
 let canonical = false;
+let keepArtifacts = false;
 const usage =
-	"usage: npm run test:wpt -- [--canonical] [--test <curated-path>]... [--mode normal|gc-stress]... [--backend compiled|interpreted|wire]... [--policy bail|complete]";
+	"usage: npm run test:wpt -- [--canonical] [--keep-artifacts] [--test <curated-path>]... [--mode normal|gc-stress]... [--backend compiled|interpreted|wire]... [--policy bail|complete]";
 for (let index = 2; index < process.argv.length; index++) {
 	const option = process.argv[index];
 	if (option === "-h" || option === "--help") {
@@ -60,6 +61,12 @@ for (let index = 2; index < process.argv.length; index++) {
 	if (option === "--canonical") {
 		if (canonical) throw new Error(`--canonical may only be specified once\n${usage}`);
 		canonical = true;
+		continue;
+	}
+	if (option === "--keep-artifacts") {
+		if (keepArtifacts)
+			throw new Error(`--keep-artifacts may only be specified once\n${usage}`);
+		keepArtifacts = true;
 		continue;
 	}
 	const value = process.argv[index + 1];
@@ -181,6 +188,9 @@ interface ExecutionReport extends WptExecutionKey {
 }
 
 mkdirSync(buildRoot, { recursive: true });
+if (!keepArtifacts) {
+	process.once("exit", () => rmSync(buildRoot, { recursive: true, force: true }));
+}
 const executions: Array<ExecutionReport> = [];
 let aborted = false;
 progress.stage(2, 2, "build and execute WPT selection");

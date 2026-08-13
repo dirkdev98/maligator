@@ -14,10 +14,26 @@ import type { NativeBuildPlan } from "./build-flags.ts";
 import { validateBuildFragmentRequest } from "./build-fragment-cache.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { BuildReporter } from "./build-progress.ts";
+import {
+	createCacheLease,
+	DEFAULT_CACHE_MAX_BYTES,
+	DEFAULT_CACHE_MIN_AGE_MS,
+	formatCacheBytes,
+	inspectMaligatorCache,
+	maybeMaintainMaligatorCache,
+	pruneMaligatorCache,
+} from "./cache-management.ts";
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
 import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
-import type { BuildCommand, DevCommand, RunCommand, TestCommand } from "./cli.ts";
+import type {
+	BuildCommand,
+	CacheCommand,
+	DevCommand,
+	RunCommand,
+	TestCommand,
+} from "./cli.ts";
+import { CommandProgress } from "./command-progress.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
@@ -920,6 +936,7 @@ export async function runCli(
 	context: CommandContext,
 ): Promise<void> {
 	let verbose = false;
+	let cacheLease: ReturnType<typeof createCacheLease> | undefined;
 	try {
 		if (args[0] === "--maligator-internal-dependency-fragment") {
 			if (args.length !== 2) {
@@ -936,6 +953,20 @@ export async function runCli(
 			return;
 		}
 		const command = parseCliArgs(args);
+		if (
+			command.kind !== "cache" &&
+			command.kind !== "help" &&
+			command.kind !== "version" &&
+			command.kind !== "init"
+		) {
+			try {
+				maybeMaintainMaligatorCache();
+			} catch {
+				// Automatic maintenance is best-effort. Explicit cache prune reports
+				// active leases or other maintenance directly to the user.
+			}
+			cacheLease = createCacheLease(command.kind);
+		}
 		verbose =
 			(command.kind === "build" && command.internal.verbose) ||
 			((command.kind === "run" || command.kind === "dev") && command.verbose) ||
@@ -970,6 +1001,10 @@ export async function runCli(
 				),
 			);
 			if (report.toolchain === undefined) process.exit(1);
+			return;
+		}
+		if (command.kind === "cache") {
+			runCacheCommand(command);
 			return;
 		}
 		if (command.kind === "build") {
@@ -1008,5 +1043,83 @@ export async function runCli(
 			writeStderr("Run again with '--verbose' for diagnostic details.");
 		}
 		process.exit(1);
+	} finally {
+		cacheLease?.release();
 	}
+}
+
+function cacheSummaryLines(): Array<string> {
+	const status = inspectMaligatorCache();
+	const families = new Map<string, number>();
+	for (const entry of status.entries) {
+		families.set(entry.family, (families.get(entry.family) ?? 0) + entry.bytes);
+	}
+	return [
+		`Root: ${status.root}`,
+		`Total: ${formatCacheBytes(status.totalBytes)} (${formatCacheBytes(status.managedBytes)} managed)`,
+		...[...families.entries()]
+			.sort((left, right) => right[1] - left[1])
+			.map(([family, bytes]) => `  ${family}: ${formatCacheBytes(bytes)}`),
+		`Active commands: ${status.activeLeases}`,
+	];
+}
+
+function runCacheCommand(command: CacheCommand): void {
+	const progress = new CommandProgress("cache", { cacheLease: false });
+	if (command.action === "status") {
+		progress.start("inspect Maligator-owned cache");
+		progress.stage(1, 1, "scan cache");
+		for (const line of cacheSummaryLines()) log.info(line);
+		progress.stagePassed(1, 1, "scan cache");
+		progress.complete();
+		return;
+	}
+
+	const maxBytes = command.maxBytes ?? DEFAULT_CACHE_MAX_BYTES;
+	const minAgeMs = command.minAgeMs ?? DEFAULT_CACHE_MIN_AGE_MS;
+	progress.start(
+		`${command.dryRun ? "preview" : "prune"} stale rebuildable entries · target ${formatCacheBytes(maxBytes)}`,
+	);
+	const maintenanceLabel = command.dryRun
+		? "scan eligible entries"
+		: "remove stale entries";
+	progress.stage(1, 2, maintenanceLabel);
+	const result = pruneMaligatorCache({
+		maxBytes,
+		minAgeMs,
+		dryRun: command.dryRun,
+	});
+	progress.stagePassed(
+		1,
+		2,
+		maintenanceLabel,
+		`${result.removed.length} entries · ${formatCacheBytes(result.removedBytes)}`,
+	);
+	progress.stage(2, 2, command.dryRun ? "report preview" : "report result");
+	const byFamily = new Map<string, { count: number; bytes: number }>();
+	for (const entry of result.removed) {
+		const summary = byFamily.get(entry.family) ?? { count: 0, bytes: 0 };
+		summary.count++;
+		summary.bytes += entry.bytes;
+		byFamily.set(entry.family, summary);
+		if (command.verbose) {
+			log.info(
+				`${command.dryRun ? "Would remove" : "Removed"} ${entry.path} (${formatCacheBytes(entry.bytes)})`,
+			);
+		}
+	}
+	for (const [family, summary] of [...byFamily].sort(
+		(left, right) => right[1].bytes - left[1].bytes,
+	)) {
+		log.info(
+			`${command.dryRun ? "Would remove" : "Removed"} ${summary.count} from ${family} (${formatCacheBytes(summary.bytes)})`,
+		);
+	}
+	progress.stagePassed(
+		2,
+		2,
+		command.dryRun ? "report preview" : "report result",
+		`${formatCacheBytes(result.totalBytes)} remain`,
+	);
+	progress.complete();
 }

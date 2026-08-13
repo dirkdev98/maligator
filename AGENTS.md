@@ -24,6 +24,7 @@
 - `npm run test:wpt:report` - Complete compiled/normal curated WPT report
 - `npm run test:wpt:matrix-report` - Complete compiled/interpreted normal/GC-stress WPT report
 - `npm run bench` - Consolidated benchmark runner (size / language-vs-V8 / gc / http); `--update` merges selected lanes into the saved snapshot
+- `node ./src/index.ts cache status|prune` - Inspect or conservatively prune Maligator-owned rebuildable caches; use `prune --dry-run` to preview
 
 ### Manual milestone scripts (not part of `npm test`)
 

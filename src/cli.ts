@@ -53,11 +53,21 @@ export interface TestCommand {
 	compileConcurrency: number;
 }
 
+export interface CacheCommand {
+	kind: "cache";
+	action: "status" | "prune";
+	dryRun: boolean;
+	verbose: boolean;
+	maxBytes?: number;
+	minAgeMs?: number;
+}
+
 export type CliCommand =
 	| { kind: "help" }
 	| { kind: "version" }
 	| { kind: "init" }
 	| { kind: "doctor"; verbose: boolean; target?: string }
+	| CacheCommand
 	| BuildCommand
 	| RunCommand
 	| DevCommand
@@ -75,6 +85,8 @@ export const CLI_HELP = `Usage: maligator <command> [options]
 Commands:
   init                         Create maligator.build.ts
   doctor                       Check native build toolchains
+  cache status                 Show Maligator-owned cache usage
+  cache prune                  Remove stale rebuildable cache entries
   build [entry]                Compile an application
   run [entry] [-- args...]     Compile and run an application
   dev [entry] [-- args...]     Watch, rebuild, and restart an application
@@ -85,11 +97,14 @@ Options:
   --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
   --artifact <directory>       Create a deployable production artifact
-  --verbose                    Show detailed build diagnostics (build and run)
+  --verbose                    Show build diagnostics or every pruned cache entry
   --run <name>                 Filter tests by hierarchical name
   --shuffle [seed]             Shuffle deterministically and print the seed
   --repeat <count>             Repeat selected tests without recompiling
   --bail                       Stop after the first failure
+  --max-gb <number>            Cache prune target (default: 5)
+  --min-age-days <number>      Youngest cache age eligible for prune (default: 1)
+  --dry-run                    Show what cache prune would remove
   -h, --help                   Show help
   -V, --version                Show the version`;
 
@@ -297,6 +312,58 @@ function positiveInteger(value: string, option: string): number {
 	return parsed;
 }
 
+function positiveNumber(value: string, option: string): number {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		throw new CliUsageError(`option '${option}' requires a positive number`);
+	}
+	return parsed;
+}
+
+function parseCache(args: Array<string>): CliCommand {
+	const action = args[1];
+	if (action === "--help" || action === "-h") return { kind: "help" };
+	if (action !== "status" && action !== "prune") {
+		throw new CliUsageError("cache requires 'status' or 'prune'");
+	}
+	const command: CacheCommand = {
+		kind: "cache",
+		action,
+		dryRun: false,
+		verbose: false,
+	};
+	for (let index = 2; index < args.length; index++) {
+		const argument = args[index]!;
+		if (argument === "--help" || argument === "-h") return { kind: "help" };
+		if (action === "prune" && argument === "--dry-run") {
+			command.dryRun = true;
+			continue;
+		}
+		if (action === "prune" && argument === "--verbose") {
+			command.verbose = true;
+			continue;
+		}
+		if (action === "prune" && argument === "--max-gb") {
+			command.maxBytes =
+				positiveNumber(optionValue(args, index, argument), argument) * 1024 ** 3;
+			index++;
+			continue;
+		}
+		if (action === "prune" && argument === "--min-age-days") {
+			command.minAgeMs =
+				positiveNumber(optionValue(args, index, argument), argument) *
+				24 *
+				60 *
+				60 *
+				1000;
+			index++;
+			continue;
+		}
+		return unexpectedArgument(`cache ${action}`, argument);
+	}
+	return command;
+}
+
 function parseTest(args: Array<string>): CliCommand {
 	const command: TestCommand = {
 		kind: "test",
@@ -390,11 +457,14 @@ export function parseCliArgs(args: Array<string>): CliCommand {
 	if (command === "test") {
 		return parseTest(args);
 	}
+	if (command === "cache") {
+		return parseCache(args);
+	}
 
 	const suggestion = command.startsWith("-")
 		? `unknown option '${command}'`
 		: `unknown command '${command}'`;
 	throw new CliUsageError(
-		`${suggestion}; expected init, doctor, build, run, dev, or test`,
+		`${suggestion}; expected init, doctor, cache, build, run, dev, or test`,
 	);
 }

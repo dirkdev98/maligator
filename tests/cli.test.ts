@@ -131,6 +131,34 @@ describe("parseCliArgs", () => {
 		});
 	});
 
+	it("parses cache status and conservative prune controls", () => {
+		expect(parseCliArgs(["cache", "status"])).toEqual({
+			kind: "cache",
+			action: "status",
+			dryRun: false,
+			verbose: false,
+		});
+		expect(
+			parseCliArgs([
+				"cache",
+				"prune",
+				"--dry-run",
+				"--verbose",
+				"--max-gb",
+				"2.5",
+				"--min-age-days",
+				"3",
+			]),
+		).toEqual({
+			kind: "cache",
+			action: "prune",
+			dryRun: true,
+			verbose: true,
+			maxBytes: 2.5 * 1024 ** 3,
+			minAgeMs: 3 * 24 * 60 * 60 * 1000,
+		});
+	});
+
 	it("accepts the internal build diagnostics through the strict parser", () => {
 		const command = parseCliArgs([
 			"build",
