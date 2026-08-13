@@ -630,19 +630,21 @@ promise_test(function(t) {
 			selectWptExecutionDimensions(
 				first,
 				["gc-stress", "normal"],
-				["interpreted", "compiled"],
+				["interpreted", "compiled", "wire"],
 			),
 		).toEqual([
 			{ mode: "normal", backend: "compiled" },
 			{ mode: "normal", backend: "interpreted" },
+			{ mode: "normal", backend: "wire" },
 			{ mode: "gc-stress", backend: "compiled" },
 			{ mode: "gc-stress", backend: "interpreted" },
+			{ mode: "gc-stress", backend: "wire" },
 		]);
 		expect(() => selectWptExecutionDimensions(second, ["gc-stress"], [])).toThrow(
 			"does not support mode gc-stress",
 		);
 		expect(() => selectWptExecutionDimensions(first, [], ["jit"])).toThrow(
-			"compiled or interpreted",
+			"compiled, interpreted, or wire",
 		);
 	});
 

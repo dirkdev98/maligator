@@ -6,7 +6,7 @@ import * as path from "node:path";
 export const WPT_REVISION = "f0b30d60daf6a64a3b087d66732c54c8e5273dbd";
 
 export type WptMode = "normal" | "gc-stress";
-export type WptBackend = "compiled" | "interpreted";
+export type WptBackend = "compiled" | "interpreted" | "wire";
 export type WptPolicy = "bail" | "complete";
 export type WptStatus = "PASS" | "FAIL" | "TIMEOUT" | "CRASH";
 export type WptMetadataName = "title" | "global" | "variant" | "script" | "timeout";
@@ -89,7 +89,7 @@ export interface WptPinnedTest {
 }
 
 const MODES: Array<WptMode> = ["normal", "gc-stress"];
-const BACKENDS: Array<WptBackend> = ["compiled", "interpreted"];
+const BACKENDS: Array<WptBackend> = ["compiled", "interpreted", "wire"];
 
 export function parseWptPolicy(value: string | undefined): WptPolicy {
 	if (value === undefined || value === "complete") return "complete";
@@ -184,8 +184,8 @@ function parseMode(value: unknown, label: string): WptMode {
 }
 
 function parseBackend(value: unknown, label: string): WptBackend {
-	if (value !== "compiled" && value !== "interpreted") {
-		throw new Error(`${label} must be compiled or interpreted`);
+	if (value !== "compiled" && value !== "interpreted" && value !== "wire") {
+		throw new Error(`${label} must be compiled, interpreted, or wire`);
 	}
 	return value;
 }

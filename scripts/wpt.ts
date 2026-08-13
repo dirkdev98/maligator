@@ -1,8 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
+import {
+	BuildCompilationSession,
+	compileBuildFrontend,
+} from "../src/build-frontend-cache.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import { buildDevelopmentRunner } from "../src/local-build.ts";
+import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
+import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 import {
 	classifyWptResults,
 	createWptExecutionEnvironment,
@@ -42,7 +50,7 @@ const requestedBackends: Array<string> = [];
 let requestedPolicy: string | undefined;
 let canonical = false;
 const usage =
-	"usage: npm run test:wpt -- [--canonical] [--test <curated-path>]... [--mode normal|gc-stress]... [--backend compiled|interpreted]... [--policy bail|complete]";
+	"usage: npm run test:wpt -- [--canonical] [--test <curated-path>]... [--mode normal|gc-stress]... [--backend compiled|interpreted|wire]... [--policy bail|complete]";
 for (let index = 2; index < process.argv.length; index++) {
 	const option = process.argv[index];
 	if (option === "-h" || option === "--help") {
@@ -117,6 +125,27 @@ const expectations = allExpectations.filter((expectation) =>
 );
 progress.stagePassed(1, 2, "prepare pinned fixtures and expectations");
 
+const wireConfig = resolveBuildConfig({
+	engine: {
+		eval: false,
+		realms: false,
+		regexp: true,
+		temporal: false,
+		intl: { enabled: false },
+	},
+	surface: { webPlatform: true },
+});
+const wireDerivation = buildDerivationFromConfig(wireConfig);
+const wireSession = new BuildCompilationSession();
+wireSession.useCacheDirectory();
+const wireRunner = requestedBackends.includes("wire")
+	? buildDevelopmentRunner(
+			resolveNativeBuildContext({ features: wireDerivation.features }),
+			false,
+			wireDerivation.cacheSuffix,
+		).binaryPath
+	: undefined;
+
 function childErrorCode(error: Error | undefined): string | undefined {
 	if (error === undefined || !("code" in error)) return undefined;
 	return typeof error.code === "string" ? error.code : undefined;
@@ -162,19 +191,46 @@ for (const entry of tests) {
 		throw new Error(`missing loaded WPT source for ${entry.path}`);
 	for (const [variantIndex, variant] of pinned.metadata.variants.entries()) {
 		const generatedPath = path.join(buildRoot, `wpt-${manifestIndex}-${variantIndex}.js`);
-		writeFileSync(generatedPath, createWptProgram(entry, pinned, variant));
+		const generatedSource = createWptProgram(entry, pinned, variant);
+		if (
+			!existsSync(generatedPath) ||
+			readFileSync(generatedPath, "utf8") !== generatedSource
+		) {
+			writeFileSync(generatedPath, generatedSource);
+		}
 		const entryDimensions = dimensions.get(entry.path) ?? [];
 		for (const backend of new Set(entryDimensions.map((item) => item.backend))) {
 			progress.detail(`${entry.path} · ${variant || "default"} · ${backend} build`);
 			let binary: string;
+			let binaryArguments: Array<string> = [];
 			try {
-				binary = buildNativeBinary({
-					fixture: generatedPath,
-					name: `wpt-${manifestIndex}-${variantIndex}-${backend}`,
-					mainFile: "runtime/host_main.c",
-					outDir: buildRoot,
-					compiled: backend === "compiled",
-				});
+				if (backend === "wire") {
+					if (wireRunner === undefined) throw new Error("wire runtime was not prepared");
+					const wirePath = path.join(
+						buildRoot,
+						`wpt-${manifestIndex}-${variantIndex}.malw`,
+					);
+					const wireFrontend = compileBuildFrontend({
+						entrypoint: generatedPath,
+						config: wireConfig,
+						stripTypes: stripTypesWithTypeScript,
+						stripperIdentity: "wpt-wire-v1",
+						optimization: "development",
+						session: wireSession,
+					});
+					progress.detail(`${entry.path} · wire frontend cache ${wireFrontend.cache}`);
+					writeFileSync(wirePath, wireFrontend.wire);
+					binary = wireRunner;
+					binaryArguments = [wirePath];
+				} else {
+					binary = buildNativeBinary({
+						fixture: generatedPath,
+						name: `wpt-${manifestIndex}-${variantIndex}-${backend}`,
+						mainFile: "runtime/host_main.c",
+						outDir: buildRoot,
+						compiled: backend === "compiled",
+					});
+				}
 			} catch (error) {
 				for (const { mode } of entryDimensions.filter(
 					(item) => item.backend === backend,
@@ -221,7 +277,7 @@ for (const entry of tests) {
 			}
 			for (const { mode } of entryDimensions.filter((item) => item.backend === backend)) {
 				const execution: WptExecutionKey = { path: entry.path, variant, backend, mode };
-				const child = spawnSync(binary, [], {
+				const child = spawnSync(binary, binaryArguments, {
 					encoding: "utf8",
 					env: createWptExecutionEnvironment(process.env, mode),
 					timeout: 120_000,
