@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
+import type { VmDefinition } from "../lower-vm.ts";
 import type { DependencyFragmentWorker } from "../dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -206,12 +207,13 @@ function buildTestGraph(
 	options: CompileTestImageOptions,
 	entries: Array<string>,
 	session: FrontendCompilationSession,
+	entrySource = syntheticEntry(entries, options.config.surface.node),
 ): ModuleGraph {
 	const entrySet = new Set(entries);
 	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-image-entry.mts");
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
-		entrySource: syntheticEntry(entries, options.config.surface.node),
+		entrySource,
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		parseCache: session.moduleParses,
@@ -230,6 +232,39 @@ function buildTestGraph(
 			return entrySet.has(filePath) ? wrapTestEntry(source, filePath) : source;
 		},
 	});
+}
+
+export interface CompiledProfiledTestImage {
+	definition: VmDefinition;
+	entries: Array<string>;
+	dependencies: Array<string>;
+}
+
+/** Cold, production-optimized test image used only by `test --profile`. Ordinary
+ * test execution retains its relocatable interpreted cache path. */
+export function compileProfiledTestImage(
+	options: CompileTestImageOptions,
+	runOptions: object,
+): CompiledProfiledTestImage {
+	const entries = resolvedEntries(options.files);
+	if (entries.length === 0) throw new Error("a profiled test image requires at least one entry");
+	const session = options.session ?? new TestCompilationSession();
+	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
+	const entrySource = `${options.config.surface.node ? 'import "maligator:node-globals";\n' : ""}import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
+${imports}
+const __result = await __run(${JSON.stringify({ ...runOptions, files: entries })});
+console.log(${JSON.stringify("__MALIGATOR_TEST_RESULT__")} + JSON.stringify(__result));
+`;
+	const graph = buildTestGraph(options, entries, session, entrySource);
+	const dependencies = dependencyIdentities(graph, session).map((entry) => entry.path);
+	const semantic = runSemanticAnalysisForGraph(graph);
+	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
+	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	return {
+		definition: compileSemanticProgramToVmDefinition(semantic, { optimization: "full" }),
+		entries,
+		dependencies,
+	};
 }
 
 function dependencyIdentities(

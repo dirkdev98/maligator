@@ -4,7 +4,11 @@ import type { ResolvedBuildConfig } from "../build-config.ts";
 import type { CommandContext } from "../cli-commands.ts";
 import type { TestCommand } from "../cli.ts";
 import { CommandProgress } from "../command-progress.ts";
-import { compileTestImage, TestCompilationSession } from "./cache.ts";
+import {
+	compileProfiledTestImage,
+	compileTestImage,
+	TestCompilationSession,
+} from "./cache.ts";
 import type { CompiledTestImage, TestFrontendPhases } from "./cache.ts";
 import { discoverTestFiles } from "./discovery.ts";
 import {
@@ -145,6 +149,76 @@ function testConfig(command: TestCommand) {
 		repeat: command.repeat,
 		bail: command.bail,
 		timeoutMs: command.timeoutMs,
+	};
+}
+
+/** Compile the selected test graph once with the same full optimization pipeline
+ * as a production application. This is intentionally separate from the fast
+ * interpreted test cache used without `--profile`. */
+export function prepareProfiledTestCommand(
+	command: TestCommand,
+	context: CommandContext,
+	config: ResolvedBuildConfig,
+) {
+	const discoveryStartedAt = Date.now();
+	const files = discoverTestFiles(command.paths);
+	const discoveryMs = Date.now() - discoveryStartedAt;
+	if (files.length === 0) throw new Error("no test files were discovered");
+	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
+	const nodeGlobalsSource = readFileSync(context.installation.testNodeGlobalsPath, "utf-8");
+	const frontendStartedAt = Date.now();
+	const compiled = compileProfiledTestImage(
+		{
+			files,
+			config,
+			stripTypes: context.stripTypes,
+			stripperIdentity: context.installation.frontendIdentity,
+			testModuleSource: moduleSource,
+			nodeGlobalsSource,
+		},
+		testConfig(command),
+	);
+	return { ...compiled, files, discoveryMs, frontendMs: Date.now() - frontendStartedAt };
+}
+
+export function reportProfiledTestResult(
+	result: TestRunResult,
+	timing: { files: number; discoveryMs: number; frontendMs: number; executionMs: number },
+): TestCommandSummary {
+	for (const fileResult of result.files) {
+		const count =
+			fileResult.passed + fileResult.failed + fileResult.skipped + fileResult.todo;
+		output(
+			`${fileResult.failed === 0 ? "✓" : "✗"} ${relative(fileResult.file)}       ${plural(count, "test")}   ${fileResult.durationMs}ms   production AOT`,
+		);
+		reportFailures(
+			fileResult.file,
+			result.events.filter((event) => "file" in event && event.file === fileResult.file),
+		);
+	}
+	output();
+	output(
+		`${result.passed} passed, ${result.failed} failed` +
+			`${result.skipped > 0 ? `, ${result.skipped} skipped` : ""}` +
+			`${result.todo > 0 ? `, ${result.todo} todo` : ""} in ${Math.round(result.durationMs)}ms`,
+	);
+	output(
+		`Timing: discovery ${timing.discoveryMs.toFixed(1)}ms, production frontend ${timing.frontendMs.toFixed(1)}ms, execution ${timing.executionMs.toFixed(1)}ms`,
+	);
+	return {
+		exitCode: result.failed === 0 ? 0 : 1,
+		files: timing.files,
+		passed: result.passed,
+		failed: result.failed,
+		skipped: result.skipped,
+		todo: result.todo,
+		discoveryMs: timing.discoveryMs,
+		frontendMs: timing.frontendMs,
+		executionMs: timing.executionMs,
+		cacheHits: 0,
+		cacheMisses: 1,
+		artifactHits: 0,
+		artifactMisses: 0,
 	};
 }
 

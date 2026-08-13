@@ -29,7 +29,7 @@ import {
 	pruneMaligatorCache,
 } from "./cache-management.ts";
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
-import { executeBinary } from "./cli-run.ts";
+import { executeBinary, executeBinaryCaptured } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
 import type {
 	BuildCommand,
@@ -63,7 +63,13 @@ import {
 } from "./profile-artifact.ts";
 import type { PreparedProfile } from "./profile-artifact.ts";
 import { nativeBuildJobs } from "./native-command.ts";
-import { executeTestCommand } from "./testing/command.ts";
+import {
+	executeTestCommand,
+	prepareProfiledTestCommand,
+	reportProfiledTestResult,
+} from "./testing/command.ts";
+import type { TestCommandSummary } from "./testing/command.ts";
+import type { TestRunResult } from "./testing/protocol.ts";
 import {
 	formatToolchainReport,
 	formatToolCommand,
@@ -992,6 +998,121 @@ export async function devCommand(
 	}
 }
 
+const PROFILED_TEST_RESULT_PREFIX = "__MALIGATOR_TEST_RESULT__";
+
+function executeProfiledTests(
+	command: TestCommand,
+	context: CommandContext,
+	config: ResolvedBuildConfig,
+): TestCommandSummary {
+	const compiled = prepareProfiledTestCommand(command, context, config);
+	const baseDerivation = buildDerivationFromConfig(config);
+	const derivation = {
+		features: normalizeNativeFeatures({
+			...baseDerivation.features,
+			profileEnabled: true,
+		}),
+		cacheSuffix:
+			baseDerivation.cacheSuffix === ""
+				? "profile-test"
+				: `${baseDerivation.cacheSuffix}-profile-test`,
+	};
+	let toolchain: Toolchain;
+	try {
+		toolchain = requireToolchain({
+			needsCxx: config.surface.webPlatform,
+			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
+		});
+	} catch (error) {
+		if (error instanceof ToolchainError) commandError(error.message);
+		throw error;
+	}
+	const evalCompiler = context.installation.evalCompiler;
+	const compilerBake =
+		evalCompiler.kind === "source"
+			? {
+					kind: "source" as const,
+					sourceDirectory: evalCompiler.sourceDirectory,
+					entrypoint: evalCompiler.entrypoint,
+					bake: () =>
+						compileEntrypointToBuffer(evalCompiler.entrypoint, {
+							stripTypes: context.stripTypes,
+						}),
+				}
+			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
+	const nativeContext = resolveNativeBuildContext({
+		toolchain,
+		plan: selectNativeBuildPlan(toolchain, true),
+		runtimeDirectory: context.installation.runtimeDirectory,
+		features: derivation.features,
+		compilerBake,
+	});
+	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
+		cacheDirectory: ".cache/mal-cache",
+		session: new FrontendCompilationSession(),
+	});
+	const source = emitVmTranslationUnits(compiled.definition, {
+		compiled: true,
+		assets,
+		maligatorSurface: config.surface.maligator,
+	});
+	const binary = buildLocalBinary({
+		context: nativeContext,
+		name: "maligator-profile-test",
+		cSource: source,
+		verbose: false,
+		mainFile: applicationDriverPath(
+			context.installation,
+			config.surface.webPlatform,
+			config.surface.node,
+		),
+		cacheSuffix: derivation.cacheSuffix,
+	}).binaryPath;
+	const profile = prepareProfile(binary, compiled.definition);
+	const capture = createProfileCapture("test", profile);
+	const executionStartedAt = Date.now();
+	const outcome = executeBinaryCaptured(binary, [], {
+		...runEnv(),
+		MAL_PROFILE_CAPTURE: capture.capturePath,
+	});
+	const executionMs = Date.now() - executionStartedAt;
+	if (outcome.stderr !== "") process.stderr.write(outcome.stderr);
+	const outputLines = outcome.stdout.split("\n");
+	const resultLine = outputLines.find((line) => line.startsWith(PROFILED_TEST_RESULT_PREFIX));
+	const applicationOutput = outputLines
+		.filter((line) => !line.startsWith(PROFILED_TEST_RESULT_PREFIX))
+		.join("\n");
+	if (applicationOutput !== "") process.stdout.write(applicationOutput);
+	if (outcome.status !== 0 || resultLine === undefined) {
+		commandError(
+			`error: production-profile test process ${
+				outcome.signal ? `received ${outcome.signal}` : `exited with ${outcome.status ?? "unknown"}`
+			}${resultLine === undefined ? " without publishing a test result" : ""}`,
+		);
+	}
+	let testResult: TestRunResult;
+	try {
+		testResult = JSON.parse(resultLine.slice(PROFILED_TEST_RESULT_PREFIX.length)) as TestRunResult;
+	} catch (error) {
+		commandError(
+			`error: production-profile test result was invalid: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	if (existsSync(capture.capturePath)) {
+		const finalized = finalizeProfileCapture(capture.directory, profile, "test");
+		writeStderr(`Profile ${capture.directory}`);
+		for (const line of formatProfileFindings(finalized.findings)) writeStderr(line);
+	} else {
+		writeStderr(`warning: profiled tests did not publish ${capture.capturePath}`);
+	}
+	return reportProfiledTestResult(testResult, {
+		files: compiled.files.length,
+		discoveryMs: compiled.discoveryMs,
+		frontendMs: compiled.frontendMs,
+		executionMs,
+	});
+}
+
 /** Product command dispatcher shared by the Node CLI and the compiled bootstrap. */
 export async function runCli(
 	args: Array<string>,
@@ -1078,11 +1199,10 @@ export async function runCli(
 		} else {
 			let result: Awaited<ReturnType<typeof executeTestCommand>>;
 			try {
-				result = await executeTestCommand(
-					command,
-					context,
-					loadCommandConfig(command, context.stripTypes),
-				);
+				const config = loadCommandConfig(command, context.stripTypes);
+				result = command.profile
+					? executeProfiledTests(command, context, config)
+					: await executeTestCommand(command, context, config);
 			} catch (error) {
 				commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
 			}
