@@ -7,11 +7,10 @@ import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
 import type { Test262File, Test262Frontmatter } from "./types.ts";
 
-/**
- * Materialize the exact Test262 revision selected by the repository. Advancing
- * the corpus is an explicit metadata and baseline update, never a cache side effect.
- */
-export function test262Checkout() {
+const TEST262_REMOTE = `https://github.com/${TEST262_METADATA.repository}`;
+
+/** Materialize the exact Test262 revision selected by the repository. */
+export function test262PrepareCheckout() {
 	if (!existsSync(path.join(TEST262_METADATA.path, ".git"))) {
 		test262Log("Cloning repository...");
 		mkdirSync(TEST262_METADATA.path, { recursive: true });
@@ -19,11 +18,17 @@ export function test262Checkout() {
 			cwd: TEST262_METADATA.path,
 			stdio: "ignore",
 		});
-		execFileSync(
-			"git",
-			["remote", "add", "origin", `https://github.com/${TEST262_METADATA.repository}`],
-			{ cwd: TEST262_METADATA.path, stdio: "ignore" },
-		);
+		execFileSync("git", ["remote", "add", "origin", TEST262_REMOTE], {
+			cwd: TEST262_METADATA.path,
+			stdio: "ignore",
+		});
+	} else {
+		// Preparation is the only command allowed to repair/fetch the corpus. Keep
+		// it non-interactive even when an old cache was initialized with SSH.
+		execFileSync("git", ["remote", "set-url", "origin", TEST262_REMOTE], {
+			cwd: TEST262_METADATA.path,
+			stdio: "ignore",
+		});
 	}
 
 	try {
@@ -43,12 +48,28 @@ export function test262Checkout() {
 		stdio: "ignore",
 	});
 
+	return test262Checkout();
+}
+
+/**
+ * Validate the pinned full corpus without cloning, fetching, or changing its
+ * checkout. Test commands are deliberately read-only cache consumers.
+ */
+export function test262Checkout() {
+	if (!existsSync(path.join(TEST262_METADATA.path, ".git"))) {
+		throw new Error(
+			`Test262 corpus cache is missing at ${TEST262_METADATA.path}; run npm run test262:prepare`,
+		);
+	}
+
 	const sha = execFileSync("git", ["rev-parse", "HEAD"], {
 		cwd: TEST262_METADATA.path,
 		encoding: "utf-8",
 	}).trim();
 	if (sha !== TEST262_METADATA.revision) {
-		throw new Error(`Test262 checkout is ${sha}; expected ${TEST262_METADATA.revision}`);
+		throw new Error(
+			`Test262 corpus cache is ${sha}; expected ${TEST262_METADATA.revision}; run npm run test262:prepare`,
+		);
 	}
 	test262Log(`Revision: ${sha}.`);
 
