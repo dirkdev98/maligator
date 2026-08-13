@@ -93,6 +93,17 @@ generated COPY_DATA_PROPERTIES sites remain the actionable proof. The profiler n
 operation-level allocation attribution or nested logical sites before it can separate
 this cluster.
 
+A follow-up at the supported expert interval of 1 ms collected 57 CPU and 150
+allocation samples with no dropped records, but was correctly marked biased at 2.7 ms
+median / 9.0 ms p99 delay. The same line-212 cluster held 20 CPU samples (35.1%) and
+129 allocation samples; dense-array construction at line 86 held 12 CPU samples
+(21.1%), while the hottest particle property site had only 3 (5.3%). This is useful
+directional evidence for an aggregate/call-region probe, not a precise CPU ranking.
+It also exposes a presentation defect: the joined finding is labelled `high`
+confidence because CPU and allocation samples are combined, even though the CPU
+evidence remains sparse and the whole capture is biased. Confidence must be reported
+per evidence kind and capped by capture quality.
+
 - [ ] Generate optimization remarks from final backend decisions, with exact operation
       identity and stable reason codes such as unknown target set, invalidatable epoch,
       escaping result, unsupported consumer, or representation mismatch. Do not merge
