@@ -99,6 +99,10 @@ import {
 import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 import { persistBenchmarkBaseline, readBenchmarkBaseline } from "./bench-baseline.ts";
 import {
+	runBenchmarkComparison,
+	selectChangedBenchmarkLanes,
+} from "./bench-compare.ts";
+import {
 	formatOhaDuration,
 	parseOhaOutput,
 	planExpressHttpWorkload,
@@ -2694,6 +2698,11 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 
 const args = process.argv.slice(2);
 const update = args.includes("--update");
+const changed = args.includes("--changed");
+const compareIdx = args.indexOf("--compare");
+const compareRef = compareIdx >= 0 ? args[compareIdx + 1] : undefined;
+const jsonOutIdx = args.indexOf("--json-out");
+const jsonOut = jsonOutIdx >= 0 ? args[jsonOutIdx + 1] : undefined;
 const runsIdx = args.indexOf("--runs");
 const runs = runsIdx >= 0 ? Number(args[runsIdx + 1]) : 5;
 const httpSecondsIdx = args.indexOf("--http-seconds");
@@ -2704,13 +2713,12 @@ const optionValues = new Set<number>();
 if (runsIdx >= 0) optionValues.add(runsIdx + 1);
 if (httpSecondsIdx >= 0) optionValues.add(httpSecondsIdx + 1);
 if (httpRequestsIdx >= 0) optionValues.add(httpRequestsIdx + 1);
+if (compareIdx >= 0) optionValues.add(compareIdx + 1);
+if (jsonOutIdx >= 0) optionValues.add(jsonOutIdx + 1);
 const selected = args.filter(
 	(a, index) => !a.startsWith("--") && !optionValues.has(index),
 );
-const which =
-	selected.length > 0
-		? selected
-		: [
+const defaultLanes = [
 				"size",
 				"compiler",
 				"language",
@@ -2779,6 +2787,43 @@ const benchmarkLanes: Record<string, () => void> = {
 	"string-profile": () => benchStringProfile(),
 };
 
+const changedSelection = changed
+	? selectChangedBenchmarkLanes(compareRef ?? "HEAD", Object.keys(benchmarkLanes))
+	: undefined;
+const which =
+	selected.length > 0
+		? selected
+		: changedSelection === undefined
+			? defaultLanes
+			: changedSelection.lanes;
+
+if (changedSelection !== undefined) {
+	console.log(
+		`changed benchmark selection: ${changedSelection.files.length} files -> ${which.length === 0 ? "no lanes" : which.join(", ")}`,
+	);
+}
+
+if (compareIdx >= 0) {
+	if (compareRef === undefined || compareRef.startsWith("-")) {
+		throw new Error("--compare requires a Git revision");
+	}
+	if (update) throw new Error("--compare cannot update the committed benchmark baseline");
+	if (which.length === 0) {
+		console.log("No benchmark lanes correspond to the changed files.");
+		process.exit(0);
+	}
+	const comparison = runBenchmarkComparison({
+		baseRef: compareRef,
+		lanes: which,
+		pairs: runs,
+		extraArgs: [
+			...(httpSecondsIdx >= 0 ? ["--http-seconds", String(httpSeconds)] : []),
+			...(httpRequestsIdx >= 0 ? ["--http-requests", String(httpRequests)] : []),
+		],
+	});
+	process.exit(comparison.exitCode);
+}
+
 const unknownLanes = which.filter((lane) => benchmarkLanes[lane] === undefined);
 if (unknownLanes.length > 0)
 	throw new Error(`unknown benchmark lane: ${unknownLanes.join(", ")}`);
@@ -2797,6 +2842,7 @@ for (const [index, lane] of which.entries()) {
 }
 
 const baseline = readBenchmarkBaseline<BenchmarkSnapshot>(BASELINE_FILE);
+if (jsonOut !== undefined) writeFileSync(jsonOut, `${JSON.stringify(entry)}\n`);
 report(entry, baseline);
 persistBenchmarkBaseline(BASELINE_FILE, baseline, entry, update);
 if (update) {
