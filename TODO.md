@@ -106,7 +106,8 @@ compiler remarks must describe the final emitted path before they guide optimiza
       and make the maximum-pair/inconclusive outcome explicit. A no-op module comparison
       needed all 15 pairs and still left the ratio inconclusive. Preserve distinct
       policies for elapsed-time ratios, where lower is better, and HTTP throughput
-      ratios, where higher is better.
+      ratios, where higher is better. The general wall/throughput confidence threshold
+      is 2%; retain a repeatable 2% win when representative controls do not regress.
 - [ ] Recheck profiler overhead on language, allocation-heavy, GC, and HTTP workloads.
       Keep ordinary images free of profiling instrumentation, target less than 3%
       median CPU overhead for profiled images, and reject regressions in output, GC

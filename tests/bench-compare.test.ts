@@ -41,6 +41,14 @@ test("paired comparison gives time and throughput ratios opposite directions", (
 	);
 });
 
+test("paired comparison retains a confident two percent wall improvement", () => {
+	const improvement = Array.from({ length: 7 }, (_, index) => ({
+		base: 100 + index * 0.01,
+		head: 97.5 + index * 0.01,
+	}));
+	expect(classifyMetricSamples("string.malMs", improvement)?.status).toBe("improvement");
+});
+
 test("paired comparison treats exact A/A as unchanged and noisy evidence as inconclusive", () => {
 	const equal = Array.from({ length: 5 }, () => ({ base: 100, head: 100 }));
 	const noisy = [
