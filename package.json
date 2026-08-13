@@ -25,9 +25,9 @@
 	"scripts": {
 		"bench": "node ./scripts/bench.ts",
 		"bench:dx": "node ./scripts/dx-performance.ts",
-		"format": "oxfmt",
-		"lint": "eslint . --concurrency=auto --fix --cache --cache-location .cache/eslint/ && oxfmt",
-		"lint:ci": "eslint . --concurrency=auto && oxfmt --check",
+		"format": "node ./scripts/quality.ts format",
+		"lint": "node ./scripts/quality.ts lint",
+		"lint:ci": "node ./scripts/quality.ts lint-ci",
 		"release:build": "node ./scripts/release.ts build",
 		"release:create-github": "node ./scripts/release.ts create-github",
 		"release:pack": "node ./scripts/release.ts pack",
@@ -56,7 +56,7 @@
 		"test:wpt": "node ./scripts/wpt.ts",
 		"test:wpt:matrix-report": "node ./scripts/wpt.ts --canonical --mode normal --mode gc-stress --backend compiled --backend interpreted --policy complete",
 		"test:wpt:report": "node ./scripts/wpt.ts --canonical --mode normal --backend compiled --policy complete",
-		"type-check": "tsc",
+		"type-check": "node ./scripts/quality.ts type-check",
 		"update": "npx npm-check --update --save-exact",
 		"version:alpha": "node ./scripts/release.ts version-alpha"
 	},

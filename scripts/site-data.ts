@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CommandProgress } from "../src/command-progress.ts";
 import { HOST_MODULES } from "../src/host-modules.ts";
 
 const TEST262_FILE = "scripts/test262.json";
@@ -753,4 +754,10 @@ export function updateSite(): void {
 const isMain =
 	process.argv[1] !== undefined &&
 	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isMain) updateSite();
+if (isMain) {
+	const progress = new CommandProgress("site-update");
+	progress.stage(1, 1, "update site history and compatibility data");
+	updateSite();
+	progress.stagePassed(1, 1, "update site history and compatibility data");
+	progress.complete();
+}

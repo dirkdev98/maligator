@@ -9,6 +9,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { CommandProgress } from "../src/command-progress.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
 
@@ -22,6 +23,8 @@ const configPath = path.join(project, "maligator.build.ts");
 const developmentConfigPath = path.join(project, "maligator.development.build.ts");
 const fixture = "entry.mts";
 const originalPath = process.env.PATH ?? "";
+const progress = new CommandProgress("selfhost-cli");
+progress.start("build and exercise the isolated product CLI");
 
 if (spawnSync(process.execPath, ["--version"]).status !== 0) {
 	throw new Error("the Node-hosted bootstrap is unavailable");
@@ -448,3 +451,4 @@ test("reports source positions", () => {
 } finally {
 	if (createdConfig) rmSync(configPath, { force: true });
 }
+progress.complete();

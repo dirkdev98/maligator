@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { CommandProgress } from "../src/command-progress.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
 import {
 	classifyWptResults,
@@ -102,6 +103,11 @@ for (const entry of tests) {
 	}
 }
 const plannedExecutions = executionKeys.size;
+const progress = new CommandProgress("wpt");
+progress.start(
+	`${tests.length} files · ${plannedExecutions} executions · ${policy} policy`,
+);
+progress.stage(1, 2, "prepare pinned fixtures and expectations");
 const expectations = allExpectations.filter((expectation) =>
 	executionKeys.has(
 		[expectation.path, expectation.variant, expectation.backend, expectation.mode].join(
@@ -109,6 +115,7 @@ const expectations = allExpectations.filter((expectation) =>
 		),
 	),
 );
+progress.stagePassed(1, 2, "prepare pinned fixtures and expectations");
 
 function childErrorCode(error: Error | undefined): string | undefined {
 	if (error === undefined || !("code" in error)) return undefined;
@@ -147,6 +154,7 @@ interface ExecutionReport extends WptExecutionKey {
 mkdirSync(buildRoot, { recursive: true });
 const executions: Array<ExecutionReport> = [];
 let aborted = false;
+progress.stage(2, 2, "build and execute WPT selection");
 for (const entry of tests) {
 	const manifestIndex = manifest.tests.indexOf(entry);
 	const pinned = pinnedTests.get(entry.path);
@@ -157,6 +165,7 @@ for (const entry of tests) {
 		writeFileSync(generatedPath, createWptProgram(entry, pinned, variant));
 		const entryDimensions = dimensions.get(entry.path) ?? [];
 		for (const backend of new Set(entryDimensions.map((item) => item.backend))) {
+			progress.detail(`${entry.path} · ${variant || "default"} · ${backend} build`);
 			let binary: string;
 			try {
 				binary = buildNativeBinary({
@@ -197,6 +206,11 @@ for (const entry of tests) {
 						missingExpectations: classified.missing,
 					};
 					executions.push(report);
+					progress.progress(
+						executions.length,
+						plannedExecutions,
+						`${entry.path} · ${backend}/${mode}`,
+					);
 					if (shouldAbortWptRun(policy, report)) {
 						aborted = true;
 						break;
@@ -253,6 +267,11 @@ for (const entry of tests) {
 					missingExpectations: classified.missing,
 				};
 				executions.push(report);
+				progress.progress(
+					executions.length,
+					plannedExecutions,
+					`${entry.path} · ${backend}/${mode}`,
+				);
 				if (shouldAbortWptRun(policy, { ...report, terminalStatus })) {
 					aborted = true;
 					break;
@@ -299,5 +318,15 @@ console.log(
 	`WPT: ${report.summary.completedExecutions}/${report.summary.plannedExecutions} executions, ${report.summary.subtests} subtests, ${report.summary.unexpected} unexpected, ${report.summary.missingExpectations} stale expectations, ${report.summary.harnessErrors} harness errors${aborted ? " (aborted)" : ""}`,
 );
 if (aborted || unexpected.length > 0 || missing.length > 0 || harnessErrors.length > 0) {
+	progress.stageFailed(2, 2, "build and execute WPT selection");
+	progress.failed();
 	process.exitCode = 1;
+} else {
+	progress.stagePassed(
+		2,
+		2,
+		"build and execute WPT selection",
+		`${report.summary.subtests} subtests`,
+	);
+	progress.complete();
 }

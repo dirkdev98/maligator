@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { Worker } from "node:worker_threads";
+import { CommandProgress } from "../src/command-progress.ts";
 import { test262LoadCache, test262PersistCache } from "../src/test262/cache.ts";
 import { TEST262_METADATA } from "../src/test262/constants.ts";
 import {
@@ -163,6 +164,9 @@ const compileWorkers = Math.max(
 	1,
 	Math.min(configuredCompileWorkers, os.availableParallelism()),
 );
+const progress = new CommandProgress("test262");
+progress.start(`${requestedBackend}/${requestedMode} · ${policy} policy`);
+progress.stage(1, 3, "prepare pinned corpus");
 const previousOutput = existsSync(TEST262_METADATA.outputFile)
 	? (JSON.parse(readFileSync(TEST262_METADATA.outputFile, "utf-8")) as Test262Output)
 	: undefined;
@@ -187,6 +191,7 @@ if (!cacheContext.files.length) {
 	cacheContext.files = await test262CollectFiles(fileList);
 	test262PersistCache(cacheContext);
 }
+progress.stagePassed(1, 3, "prepare pinned corpus", checkoutSha.slice(0, 12));
 
 let selection = cacheContext.files;
 const includeManifest =
@@ -251,13 +256,15 @@ const batchSize = isPartialRun
 // independently; the worker/progress closures below read these live.
 let startedAt = 0;
 let completed = 0;
+let activeVariant: Test262Variant = "strict";
+let lastProgressBucket = -1;
 
 function reportProgress(processed: number) {
-	const previous = completed;
 	completed += processed;
-	if (Math.floor(completed / 2500) > Math.floor(previous / 2500)) {
-		const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0);
-		test262Log(`Progress: ${completed} / ${selection.length} (${elapsed}s)`);
+	const bucket = Math.min(20, Math.floor((completed * 20) / selection.length));
+	if (bucket > lastProgressBucket || completed === selection.length) {
+		lastProgressBucket = bucket;
+		progress.progress(completed, selection.length, `${activeVariant} tests`);
 	}
 }
 
@@ -394,6 +401,7 @@ interface VariantRun {
  * per-file verdicts and code totals for {@link combineRuns} to merge.
  */
 async function runVariant(variant: Test262Variant): Promise<VariantRun> {
+	activeVariant = variant;
 	process.env.T262_VARIANT = variant;
 	test262Log(`=== ${variant} pass ===`);
 
@@ -403,6 +411,7 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 	}
 	startedAt = Date.now();
 	completed = 0;
+	lastProgressBucket = -1;
 	const batches: Array<Array<Test262File>> = [];
 	for (let i = 0; i < selection.length; i += batchSize) {
 		batches.push(selection.slice(i, i + batchSize));
@@ -595,7 +604,14 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 
 // Build once per invocation. Reusing the harness objects across the strict and
 // sloppy passes also prevents the second pass from deleting the first report.
+progress.stage(2, 3, "prepare standard runtime");
 test262PrepareBuild();
+progress.stagePassed(2, 3, "prepare standard runtime");
+progress.stage(
+	3,
+	3,
+	onlyVariant === undefined ? "run strict and sloppy passes" : `run ${onlyVariant} pass`,
+);
 
 if (onlyVariant) {
 	// Single-pass debug run: report only, never touch the committed results.
@@ -615,4 +631,23 @@ if (onlyVariant) {
 			combineRuns(strict, sloppy);
 		}
 	}
+}
+if (process.exitCode === undefined || process.exitCode === 0) {
+	progress.stagePassed(
+		3,
+		3,
+		onlyVariant === undefined
+			? "run strict and sloppy passes"
+			: `run ${onlyVariant} pass`,
+	);
+	progress.complete();
+} else {
+	progress.stageFailed(
+		3,
+		3,
+		onlyVariant === undefined
+			? "run strict and sloppy passes"
+			: `run ${onlyVariant} pass`,
+	);
+	progress.failed();
 }

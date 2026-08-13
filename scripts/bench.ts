@@ -539,7 +539,11 @@ const SIZE_PROFILES: Array<{ name: string; config: MaligatorBuildConfig }> = [
 function benchSize(): Record<string, SizeMetrics> {
 	const result: Record<string, SizeMetrics> = {};
 	for (const [index, profile] of SIZE_PROFILES.entries()) {
-		benchmarkProgress.progress(index + 1, SIZE_PROFILES.length, `size profile ${profile.name}`);
+		benchmarkProgress.progress(
+			index + 1,
+			SIZE_PROFILES.length,
+			`size profile ${profile.name}`,
+		);
 		const config = resolveBuildConfig(profile.config);
 		const build = buildNativeBinaryResult({
 			fixture: SIZE_FIXTURE,
@@ -2776,7 +2780,8 @@ const benchmarkLanes: Record<string, () => void> = {
 };
 
 const unknownLanes = which.filter((lane) => benchmarkLanes[lane] === undefined);
-if (unknownLanes.length > 0) throw new Error(`unknown benchmark lane: ${unknownLanes.join(", ")}`);
+if (unknownLanes.length > 0)
+	throw new Error(`unknown benchmark lane: ${unknownLanes.join(", ")}`);
 benchmarkProgress.start(`${which.length} lanes · median of ${runs} samples`);
 for (const [index, lane] of which.entries()) {
 	activeBenchmarkLane = lane;

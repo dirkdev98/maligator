@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { CommandProgress } from "../src/command-progress.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 export function sanitizerEnvironment(platform: NodeJS.Platform): NodeJS.ProcessEnv {
@@ -16,7 +17,8 @@ export function sanitizerEnvironment(platform: NodeJS.Platform): NodeJS.ProcessE
 export function runSanitizerTests(args = process.argv.slice(2)): number {
 	const selected = sanitizerEnvironment(process.platform);
 	const mode = selected.MAL_UBSAN === "1" ? "UBSan" : "ASan+UBSan";
-	console.log(`sanitizer lane: ${mode} on ${process.platform}`);
+	const progress = new CommandProgress("sanitize");
+	progress.stage(1, 1, `${mode} native tests on ${process.platform}`);
 	const result = spawnSync(
 		process.execPath,
 		["node_modules/vitest/vitest.mjs", "run", "--project", "native", ...args],
@@ -26,6 +28,12 @@ export function runSanitizerTests(args = process.argv.slice(2)): number {
 		},
 	);
 	if (result.error !== undefined) throw result.error;
+	if (result.status === 0) {
+		progress.stagePassed(1, 1, `${mode} native tests on ${process.platform}`);
+		progress.complete();
+	} else {
+		progress.stageFailed(1, 1, `${mode} native tests on ${process.platform}`);
+	}
 	return result.status ?? 1;
 }
 

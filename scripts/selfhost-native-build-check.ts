@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { CommandProgress } from "../src/command-progress.ts";
 import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
@@ -10,6 +11,8 @@ import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 const root = path.resolve(".cache/selfhost-native");
 const tools = path.join(root, "tools");
 const fixture = path.resolve("tests/fixtures/selfhost-native/entry.mts");
+const progress = new CommandProgress("selfhost-native");
+progress.start("isolate tools, build the compiler, and compare native outputs");
 rmSync(root, { recursive: true, force: true });
 mkdirSync(tools, { recursive: true });
 
@@ -135,3 +138,4 @@ if (
 	);
 }
 console.log(`ok   eval-enabled self-host build consumed explicit prebuilt compiler wire`);
+progress.complete();

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { CommandProgress } from "../src/command-progress.ts";
 
 const requestedBinary = process.argv[2];
 if (requestedBinary === undefined) {
@@ -12,6 +13,8 @@ if (!existsSync(binary)) throw new Error(`maligator binary does not exist: ${bin
 
 const root = mkdtempSync(path.join(os.tmpdir(), "maligator-test-performance-"));
 const suite = path.join(root, "suite");
+const progress = new CommandProgress("test-performance");
+progress.start("measure cold, warm, and invalidated test runner paths");
 mkdirSync(suite, { recursive: true });
 
 function write(relativePath: string, source: string): void {
@@ -31,12 +34,14 @@ test("small ${index}", () => {
 }
 
 function run(label: string, selections: Array<string>): void {
+	progress.detail(`${label} started`);
 	const output = execFileSync(binary, ["test", ...selections], {
 		cwd: suite,
 		encoding: "utf-8",
 		env: process.env,
 	});
 	process.stdout.write(`\n=== ${label} ===\n${output.trim()}\n`);
+	progress.detail(`${label} completed`);
 }
 
 try {
@@ -83,6 +88,7 @@ export const shared = (value: number): number => value + 1;
 	);
 	run("changed shared dependency", ["."]);
 	run("warm async-heavy", ["async-heavy.test.ts"]);
+	progress.complete();
 } finally {
 	rmSync(root, { recursive: true, force: true });
 }

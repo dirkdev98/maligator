@@ -10,6 +10,7 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
+import { CommandProgress } from "../src/command-progress.ts";
 
 interface Sample {
 	name: string;
@@ -31,6 +32,8 @@ const argumentPrefix = sourceMode ? [path.join(repositoryRoot, "src/index.ts")] 
 const measureAssets = process.argv.slice(3).includes("--assets");
 const keepFixture = process.argv.slice(3).includes("--keep");
 const root = mkdtempSync(path.join(os.tmpdir(), "maligator-dx-performance-"));
+const progress = new CommandProgress("bench-dx");
+progress.start("create representative project and measure cold/warm workflows");
 const project = path.join(root, "project");
 const nodeModules = path.join(project, "node_modules");
 
@@ -53,6 +56,7 @@ function linkPackages(source: string): void {
 }
 
 function invoke(name: string, args: Array<string>): Sample {
+	progress.detail(`${name} started`);
 	const startedAt = performance.now();
 	const result = spawnSync(binary, [...argumentPrefix, ...args], {
 		cwd: project,
@@ -67,6 +71,7 @@ function invoke(name: string, args: Array<string>): Sample {
 			`${name} exited with ${result.status}:\n${diagnostics.slice(-24_000)}`,
 		);
 	}
+	progress.detail(`${name} completed in ${(durationMs / 1000).toFixed(1)}s`);
 	return { name, durationMs, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -92,6 +97,7 @@ function waitFor(
 }
 
 async function developmentSamples(): Promise<Array<Sample>> {
+	progress.detail("development watcher started");
 	let output = "";
 	const child = spawn(
 		binary,
@@ -120,9 +126,13 @@ async function developmentSamples(): Promise<Array<Sample>> {
 	});
 	try {
 		const readyMs = await waitFor(() => output, "Ready in");
+		progress.detail(`development watcher ready in ${(readyMs / 1000).toFixed(1)}s`);
 		const beforeEdit = output;
 		write("local.mts", "export const localRevision = 1;\n");
 		const rebuildMs = await waitFor(() => output.slice(beforeEdit.length), "Compiled in");
+		progress.detail(
+			`development leaf edit completed in ${(rebuildMs / 1000).toFixed(1)}s`,
+		);
 		return [
 			{ name: "dev cold ready", durationMs: readyMs, stdout: "", stderr: beforeEdit },
 			{
@@ -252,6 +262,7 @@ test("representative graph", () => {
 		);
 	}
 	for (const sample of samples) report(sample);
+	progress.complete();
 
 	if (!measureAssets) {
 		console.log("\nAdd --assets to measure the current native toolchain asset path.");

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { CommandProgress } from "../src/command-progress.ts";
 import { formatSiteFiles, updateSite } from "./site-data.ts";
 
 const META_FILE = "website/site-meta.json";
@@ -26,14 +27,26 @@ function build(): string {
 }
 
 let binary = "";
+const progress = new CommandProgress("site-build");
+progress.start("update generated site data and build the native server");
 for (let attempt = 0; attempt < 4; attempt++) {
+	progress.stage(attempt + 1, 4, `stabilize site metadata (attempt ${attempt + 1})`);
 	updateSite();
 	binary = build();
 	const bytes = statSync(binary).size;
 	const meta = JSON.parse(readFileSync(META_FILE, "utf8")) as {
 		binaryBytes: number | null;
 	};
-	if (meta.binaryBytes === bytes) break;
+	if (meta.binaryBytes === bytes) {
+		progress.stagePassed(attempt + 1, 4, "stabilize site metadata", `${bytes} bytes`);
+		break;
+	}
+	progress.stagePassed(
+		attempt + 1,
+		4,
+		"stabilize site metadata",
+		`refresh size to ${bytes} bytes`,
+	);
 	writeFileSync(
 		META_FILE,
 		`${JSON.stringify({ ...meta, binaryBytes: bytes }, null, 2)}\n`,
@@ -42,4 +55,5 @@ for (let attempt = 0; attempt < 4; attempt++) {
 }
 
 updateSite();
+progress.complete();
 console.log(binary);

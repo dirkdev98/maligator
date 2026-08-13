@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import type { CommandContext } from "../cli-commands.ts";
 import type { TestCommand } from "../cli.ts";
+import { CommandProgress } from "../command-progress.ts";
 import { compileTestImage, TestCompilationSession } from "./cache.ts";
 import type { CompiledTestImage, TestFrontendPhases } from "./cache.ts";
 import { discoverTestFiles } from "./discovery.ts";
@@ -153,6 +154,8 @@ export async function executeTestCommand(
 	context: CommandContext,
 	config: ResolvedBuildConfig,
 ): Promise<TestCommandSummary> {
+	const progress = new CommandProgress("test");
+	progress.start("discover, compile, and execute selected tests");
 	const globals = globalThis as typeof globalThis & TestGlobals;
 	if (globals.mal?._runWire === undefined) {
 		throw new Error(
@@ -162,11 +165,13 @@ export async function executeTestCommand(
 	}
 
 	const discoveryStartedAt = Date.now();
+	progress.stage(1, 3, "discover tests");
 	const files = discoverTestFiles(command.paths);
 	const discoveryMs = Date.now() - discoveryStartedAt;
 	if (files.length === 0) {
 		throw new Error("no test files were discovered");
 	}
+	progress.stagePassed(1, 3, "discover tests", plural(files.length, "file"));
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
 	const nodeGlobalsSource =
 		context.installation.testNodeGlobalsPath === undefined
@@ -197,6 +202,7 @@ export async function executeTestCommand(
 	const session = new TestCompilationSession();
 	const groups: Array<CompiledGroup> = [];
 	const frontendFailures: Array<FrontendFailure> = [];
+	progress.stage(2, 3, "compile test image");
 
 	const recordCompilation = (
 		entries: Array<string>,
@@ -247,6 +253,16 @@ export async function executeTestCommand(
 		}
 	};
 	compileGroup(files);
+	if (frontendFailures.length === 0) {
+		progress.stagePassed(
+			2,
+			3,
+			"compile test image",
+			`${cacheHits} cache hit/${cacheMisses} miss`,
+		);
+	} else {
+		progress.stageFailed(2, 3, "compile test image");
+	}
 
 	for (const failure of frontendFailures) {
 		failed++;
@@ -261,7 +277,13 @@ export async function executeTestCommand(
 	}
 	if (command.bail && frontendFailures.length > 0) groups.length = 0;
 
-	for (const group of groups) {
+	progress.stage(3, 3, "execute tests");
+	for (const [groupIndex, group] of groups.entries()) {
+		progress.progress(
+			groupIndex + 1,
+			groups.length,
+			`execute ${plural(group.files.length, "file")}`,
+		);
 		const executionStartedAt = Date.now();
 		globals.__maligatorTestOptions = { ...runOptions, files: group.files };
 		delete globals.__maligatorTestResult;
@@ -372,6 +394,10 @@ export async function executeTestCommand(
 			1,
 		)}ms, serialize ${phases.serializeMs.toFixed(1)}ms, workers ${phases.workerMs.toFixed(1)}ms`,
 	);
+	if (failed === 0) progress.stagePassed(3, 3, "execute tests", plural(passed, "test"));
+	else progress.stageFailed(3, 3, "execute tests");
+	if (failed === 0) progress.complete();
+	else progress.failed();
 	return {
 		exitCode: failed === 0 ? 0 : 1,
 		files: files.length,

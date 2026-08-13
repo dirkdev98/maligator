@@ -365,6 +365,7 @@ function buildRelease(args: Array<string>): void {
 }
 
 function smokeRelease(): void {
+	releaseLog("preparing host release smoke");
 	const target = targets.find(
 		(candidate) =>
 			candidate.platform === process.platform && candidate.arch === process.arch,
@@ -449,6 +450,7 @@ function smokeRelease(): void {
 		});
 
 	try {
+		releaseLog("checking CLI metadata and isolated toolchain");
 		if (!invoke(["--help"]).includes("maligator <command>")) {
 			throw new Error("host release binary did not print CLI help");
 		}
@@ -467,6 +469,7 @@ function smokeRelease(): void {
 			`export default { entry: "main.ts", outputName: "release-smoke" };\n`,
 		);
 		writeFileSync(path.join(project, "main.ts"), `console.log("release smoke app");\n`);
+		releaseLog("building and executing isolated smoke application");
 		const artifact = path.join(smokeRoot, "application");
 		invoke(["build", "--production", "--artifact", artifact]);
 		const applicationOutput = execFileSync(path.join(artifact, "bin/release-smoke"), [], {
@@ -480,6 +483,7 @@ function smokeRelease(): void {
 	} finally {
 		rmSync(smokeRoot, { recursive: true, force: true });
 	}
+	releaseLog(`host release smoke passed: ${target.rust}`);
 	console.log(`Host release smoke passed: ${target.rust}`);
 }
 

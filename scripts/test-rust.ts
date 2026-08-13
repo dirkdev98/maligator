@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { CommandProgress } from "../src/command-progress.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
 
 function selectedRustTool(rustup: string, name: "cargo" | "rustc", cwd: string): string {
@@ -16,10 +17,14 @@ function selectedRustTool(rustup: string, name: "cargo" | "rustc", cwd: string):
 
 export function runRustTests(args = process.argv.slice(2)): number {
 	const root = path.resolve(import.meta.dirname, "..");
+	const progress = new CommandProgress("test-rust");
+	progress.stage(1, 2, "resolve pinned Rust tools");
 	const rustDirectory = path.join(root, "runtime/rust");
 	const rustup = resolvePathExecutable("rustup");
 	const cargo = selectedRustTool(rustup, "cargo", rustDirectory);
 	const rustc = selectedRustTool(rustup, "rustc", rustDirectory);
+	progress.stagePassed(1, 2, "resolve pinned Rust tools");
+	progress.stage(2, 2, "run Rust tests");
 	const result = spawnSync(
 		cargo,
 		[
@@ -44,6 +49,12 @@ export function runRustTests(args = process.argv.slice(2)): number {
 		},
 	);
 	if (result.error !== undefined) throw result.error;
+	if (result.status === 0) {
+		progress.stagePassed(2, 2, "run Rust tests");
+		progress.complete();
+	} else {
+		progress.stageFailed(2, 2, "run Rust tests");
+	}
 	return result.status ?? 1;
 }
 
