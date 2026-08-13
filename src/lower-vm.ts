@@ -608,6 +608,8 @@ export type VmInstruction =
 			directStringCharCodeAt?: true;
 			/** COMPILE-ONLY: statically proven Number-position strength. */
 			directStringCharCodeAtPosition?: "integer" | "inBounds";
+			/** COMPILE-ONLY: closed String.prototype.search over a fresh RegExp literal. */
+			directStringSearchRegExp?: true;
 			/** COMPILE-ONLY: guarded intrinsic Map/Set method dispatch. */
 			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
 	  }

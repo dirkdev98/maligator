@@ -1249,6 +1249,60 @@ function annotateNativeStringSliceNumberFusions(definition: VmDefinition): void 
 	}
 }
 
+/**
+ * Mark the exact lowered shape of `primitiveString.search(/literal/flags)`.
+ * The RegExp construction remains observable in the fallback and still runs on
+ * the fast path; native emission only collapses the closed String/RegExp
+ * protocol after the freshly constructed object exists.
+ */
+function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		const entryTargets = new Set<number>(fn.handlers.map((handler) => handler.handlerIp));
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+				entryTargets.add(instruction.targetIp);
+			}
+		}
+		for (let callIp = 3; callIp < fn.instructions.length; callIp++) {
+			const call = fn.instructions[callIp]!;
+			const construct = fn.instructions[callIp - 1]!;
+			const intrinsic = fn.instructions[callIp - 2]!;
+			const load = fn.instructions[callIp - 3]!;
+			if (
+				call.opcode !== "CALL" ||
+				call.arguments.length !== 1 ||
+				construct.opcode !== "CONSTRUCT" ||
+				construct.arguments.length !== 2 ||
+				intrinsic.opcode !== "LOAD_INTRINSIC" ||
+				intrinsic.intrinsic !== "RegExp" ||
+				construct.callee !== intrinsic.dst ||
+				load.opcode !== "LOAD_PROPERTY_STATIC" ||
+				load.dst !== call.callee ||
+				load.object !== call.thisValue ||
+				!staticStringEquals(definition, load.stringIndex, "search") ||
+				[callIp - 2, callIp - 1, callIp].some((ip) => entryTargets.has(ip))
+			) {
+				continue;
+			}
+			const regexp = decodeVmValueOperand(call.arguments[0]!);
+			const pattern = decodeVmValueOperand(construct.arguments[0]!);
+			const flags = decodeVmValueOperand(construct.arguments[1]!);
+			if (
+				regexp.kind !== "register" ||
+				regexp.register !== construct.dst ||
+				pattern.kind !== "string" ||
+				flags.kind !== "string" ||
+				(definition.stringConstants[flags.index] ?? []).some(
+					(unit) => unit === "g".charCodeAt(0) || unit === "y".charCodeAt(0),
+				)
+			) {
+				continue;
+			}
+			call.directStringSearchRegExp = true;
+		}
+	}
+}
+
 function emitVmDefinitionSource(
 	definition: VmDefinition,
 	options: EmitOptions,
@@ -1262,6 +1316,7 @@ function emitVmDefinitionSource(
 		annotateNativeStringScanSummaries(definition);
 		annotateNativeStringSplitProjections(definition);
 		annotateNativeStringSliceNumberFusions(definition);
+		annotateNativeStringSearchRegExpCalls(definition);
 	}
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
 	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.

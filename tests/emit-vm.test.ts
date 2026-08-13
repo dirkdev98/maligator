@@ -1025,6 +1025,17 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_builtin_string_slice_to_number_direct(vm,");
 	});
 
+	it("fuses a closed String search over a fresh RegExp literal", () => {
+		const output = emit(`
+			function locate(value) {
+				return value.search(/needle=/);
+			}
+			globalThis.locate = locate;
+		`);
+		expect(output).toContain("mal_builtin_string_search_regexp_direct(vm,");
+		expect(output).toContain("mal_vm_call_cached(vm,");
+	});
+
 	it("emits guarded direct collection dispatch from call metadata", () => {
 		const output = emit(`
 			function update(map, set, key, value) {

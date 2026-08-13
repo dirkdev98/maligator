@@ -138,6 +138,30 @@ check(
 	"abc".search(getterSearch) === 1 && searchGetterCalls === 1,
 );
 
+const canonicalSearch = /b/g;
+canonicalSearch.lastIndex = 2;
+check(
+	"canonical search returns only the index and restores lastIndex",
+	"abc".search(canonicalSearch) === 1 && canonicalSearch.lastIndex === 2,
+);
+const stickySearch = /b/y;
+stickySearch.lastIndex = 1;
+check(
+	"canonical sticky search starts at zero and restores lastIndex",
+	"abc".search(stickySearch) === -1 && stickySearch.lastIndex === 1,
+);
+
+const customExecSearch = /b/;
+let customExecCalls = 0;
+customExecSearch.exec = function (value) {
+	customExecCalls++;
+	return { 0: "custom", index: 7, input: value, length: 1 };
+};
+check(
+	"search preserves a canonical RegExp with an own exec override",
+	"abc".search(customExecSearch) === 7 && customExecCalls === 1,
+);
+
 const originalMatch = RegExp.prototype[Symbol.match];
 let prototypeMatchCalls = 0;
 RegExp.prototype[Symbol.match] = function (value) {

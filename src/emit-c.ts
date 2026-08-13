@@ -4288,6 +4288,22 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (instruction.directStringSearchRegExp === true) {
+				const direct = `__string_search_${ip}_result`;
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`MalValue ${direct};`,
+					`if (mal_builtin_string_search_regexp_direct(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &${direct})) {`,
+					`  ${throwCheck}`,
+					`  r${instruction.dst} = ${direct};`,
+					`} else {`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
 			if (nativeStringSliceNumberFusionAction !== undefined) {
 				const fusion = nativeStringSliceNumberFusionAction.fusion;
 				const fast = `__string_slice_number_${fusion.sliceCallIp}_fast`;

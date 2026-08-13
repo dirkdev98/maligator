@@ -467,18 +467,26 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
     return mal_value_from_object((MalObject *) indices);
 }
 
+typedef enum RegexpBuiltinExecResult {
+    REGEXP_BUILTIN_EXEC_RESULT,
+    REGEXP_BUILTIN_EXEC_MATCH_ONLY,
+    REGEXP_BUILTIN_EXEC_INDEX_ONLY,
+} RegexpBuiltinExecResult;
+
 // RegExpBuiltinExec(R, S): the matcher-backed exec. Returns the result array, or
-// null on no match, or undefined with a pending throw on error.
-// match_only skips building the result array (and its substrings/groups) — used
-// by test(), where only match/no-match matters. This avoids per-call allocation
-// in the bump heap, which is critical for the Unicode-scale test262 tests that
-// call test() over ~1M code points. Returns boolean true on match (still
-// non-null, so callers checking `!== null` work) and null on no match.
-static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_value, MalString *s, bool match_only) {
+// null on no match, or undefined with a pending throw on error. The closed
+// consumers used by test() and canonical @@search do not materialize that array:
+// MATCH_ONLY returns true, while INDEX_ONLY returns the match-start number. In
+// both cases lastIndex and matcher state still follow the ordinary algorithm.
+static MalValue regexp_builtin_exec(
+    MalVm *vm, MalRegExpObject *re, MalValue r_value, MalString *s,
+    RegexpBuiltinExecResult result_kind, bool last_index_known_zero
+) {
     usize length = mal_string_length(s);
 
-    i64 last_index;
-    if (!regexp_get_last_index(vm, r_value, &last_index)) {
+    i64 last_index = 0;
+    if (!last_index_known_zero &&
+        !regexp_get_last_index(vm, r_value, &last_index)) {
         return mal_value_new_undefined();
     }
 
@@ -585,11 +593,18 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
         }
     }
 
-    if (match_only) {
+    if (result_kind == REGEXP_BUILTIN_EXEC_MATCH_ONLY) {
         if (heap_caps) {
             free(caps);
         }
         return mal_value_new_boolean(true);
+    }
+
+    if (result_kind == REGEXP_BUILTIN_EXEC_INDEX_ONLY) {
+        if (heap_caps) {
+            free(caps);
+        }
+        return mal_value_from_f64((f64) match_start);
     }
 
     MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) ngroups);
@@ -638,7 +653,10 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
 static MalValue regexp_exec_abstract(MalVm *vm, MalValue r, MalString *s, bool match_only, bool *ok) {
     MalRegExpObject *canonical;
     if (regexp_canonical_instance(vm, r, &canonical)) {
-        MalValue result = regexp_builtin_exec(vm, canonical, r, s, match_only);
+        MalValue result = regexp_builtin_exec(
+            vm, canonical, r, s,
+            match_only ? REGEXP_BUILTIN_EXEC_MATCH_ONLY : REGEXP_BUILTIN_EXEC_RESULT,
+            false);
         *ok = !regexp_threw(vm);
         return result;
     }
@@ -667,9 +685,36 @@ static MalValue regexp_exec_abstract(MalVm *vm, MalValue r, MalString *s, bool m
         *ok = false;
         return mal_value_new_undefined();
     }
-    MalValue result = regexp_builtin_exec(vm, mal_value_to_regexp_object(r), r, s, match_only);
+    MalValue result = regexp_builtin_exec(
+        vm, mal_value_to_regexp_object(r), r, s,
+        match_only ? REGEXP_BUILTIN_EXEC_MATCH_ONLY : REGEXP_BUILTIN_EXEC_RESULT,
+        false);
     *ok = !regexp_threw(vm);
     return result;
+}
+
+bool mal_regexp_try_search_index_direct(
+    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
+) {
+    MalRegExpObject *canonical;
+    if (!mal_value_is_string(string) ||
+        !regexp_canonical_instance(vm, regexp, &canonical) ||
+        (canonical->flag_bits & (MAL_REGEXP_JS_GLOBAL | MAL_REGEXP_JS_STICKY)) != 0) {
+        return false;
+    }
+    // Exact canonical shape proves slot zero is the ordinary writable data
+    // property. The direct caller already captured the native String#search
+    // method, so checking the slot is equivalent to both observable lastIndex
+    // reads without repeating generic lookup and ToLength machinery.
+    MalObject *object = (MalObject *) canonical;
+    if (!mal_ops_same_value(object->slots[0], mal_value_from_i32(0))) {
+        return false;
+    }
+    MalValue result = regexp_builtin_exec(
+        vm, canonical, regexp, mal_value_to_string(string),
+        REGEXP_BUILTIN_EXEC_INDEX_ONLY, true);
+    *out = mal_value_is_null(result) ? mal_value_from_i32(-1) : result;
+    return true;
 }
 
 // IsRegExp(argument): @@match overrides the [[RegExpMatcher]] brand.
@@ -797,7 +842,8 @@ static MalValue regexp_proto_exec(MalVm *vm, MalValue this_value, const MalValue
     if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &s)) {
         return mal_value_new_undefined();
     }
-    return regexp_builtin_exec(vm, re, this_value, s, false);
+    return regexp_builtin_exec(
+        vm, re, this_value, s, REGEXP_BUILTIN_EXEC_RESULT, false);
 }
 
 static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1135,7 +1181,23 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
     }
 
     bool ok;
-    MalValue result = regexp_exec_abstract(vm, this_value, s, false, &ok);
+    bool index_only = false;
+    MalValue result;
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, this_value, &canonical)) {
+        // Canonical @@search observes only null versus the result's `index`.
+        // Execute that closed consumer directly so the full match Array, matched
+        // substring, named properties, groups, and optional indices never exist.
+        // A custom/overridden exec makes the instance non-canonical and retains
+        // the complete abstract operation below.
+        result = regexp_builtin_exec(
+            vm, canonical, this_value, s, REGEXP_BUILTIN_EXEC_INDEX_ONLY,
+            false);
+        ok = !regexp_threw(vm);
+        index_only = ok && !mal_value_is_null(result);
+    } else {
+        result = regexp_exec_abstract(vm, this_value, s, false, &ok);
+    }
     if (!ok) {
         return mal_value_new_undefined();
     }
@@ -1158,6 +1220,9 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
 
     if (mal_value_is_null(result)) {
         return mal_value_from_i32(-1);
+    }
+    if (index_only) {
+        return result;
     }
     MalValue index;
     if (!mal_vm_get_property(vm, result, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_INDEX), &index)) {
@@ -2181,6 +2246,16 @@ bool mal_regexp_try_exact_string_dispatch(
 }
 
 bool mal_regexp_try_canonical_match_all(
+    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
+) {
+    (void) vm;
+    (void) regexp;
+    (void) string;
+    (void) out;
+    return false;
+}
+
+bool mal_regexp_try_search_index_direct(
     MalVm *vm, MalValue regexp, MalValue string, MalValue *out
 ) {
     (void) vm;

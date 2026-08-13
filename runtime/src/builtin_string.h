@@ -60,6 +60,15 @@ MalCompletion mal_builtin_string_char_code_at_direct(
     i32 arg_count
 );
 
+/** Closed native path for `primitiveString.search(/literal/)`. */
+bool mal_builtin_string_search_regexp_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue receiver,
+    MalValue regexp,
+    MalValue *out
+);
+
 /**
  * Producer-consumer fusion for exact builtin `string.slice(start)` immediately
  * consumed by the exact Number constructor. Guard failure is side-effect-free.

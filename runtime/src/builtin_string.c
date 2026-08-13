@@ -1452,6 +1452,28 @@ static MalValue mal_builtin_string_prototype_search(MalVm *vm, MalValue this_val
     return mal_builtin_string_match_like(vm, this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), MAL_INTRINSIC_SYMBOL_SEARCH);
 }
 
+bool mal_builtin_string_search_regexp_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue receiver,
+    MalValue regexp,
+    MalValue *out
+) {
+    if (!mal_value_is_string(receiver) ||
+        !mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) !=
+            mal_builtin_string_prototype_search) {
+        return false;
+    }
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) {
+        return false;
+    }
+#endif
+    return mal_regexp_try_search_index_direct(vm, regexp, receiver, out);
+}
+
 static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;

@@ -41,6 +41,15 @@ bool mal_regexp_try_canonical_match_all(
 );
 
 /**
+ * Execute a canonical, non-global/non-sticky RegExp for a closed search
+ * consumer. Returns false without side effects when observable customization
+ * requires the full String/RegExp protocol path.
+ */
+bool mal_regexp_try_search_index_direct(
+    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
+);
+
+/**
  * Advance an exact RegExp String Iterator without materializing its disposable
  * IteratorResult wrapper. Returns 1 on success, 0 when generic stepping is
  * required, and -1 when the exact step threw.
