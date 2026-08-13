@@ -204,12 +204,19 @@ test("traverses the complete pinned Express initialization graph", () => {
 		"cpus",
 		"devNull",
 		"endianness",
+		"freemem",
 		"homedir",
 		"hostname",
+		"loadavg",
+		"machine",
 		"platform",
 		"release",
 		"tmpdir",
+		"totalmem",
 		"type",
+		"uptime",
+		"userInfo",
+		"version",
 	]);
 });
 
@@ -835,7 +842,21 @@ test("canonicalizes strict assert and exposes the smoke-runner assertions", () =
 		"node:assert/strict",
 	]);
 	expect(graph.modules.get("node:assert/strict")?.host).toMatchObject({
-		named: ["equal", "deepEqual", "match"],
+		named: [
+			"deepEqual",
+			"deepStrictEqual",
+			"doesNotMatch",
+			"equal",
+			"fail",
+			"ifError",
+			"match",
+			"notDeepEqual",
+			"notDeepStrictEqual",
+			"notEqual",
+			"notStrictEqual",
+			"ok",
+			"strictEqual",
+		],
 		hasDefault: true,
 	});
 });
@@ -937,12 +958,19 @@ test("gives supported bare assert precedence over npm packages", () => {
 	expect(graph.modules.get("node:assert")?.host).toMatchObject({
 		named: [
 			"AssertionError",
-			"ok",
-			"equal",
-			"strictEqual",
 			"deepEqual",
 			"deepStrictEqual",
+			"doesNotMatch",
+			"equal",
+			"fail",
+			"ifError",
 			"match",
+			"notDeepEqual",
+			"notDeepStrictEqual",
+			"notEqual",
+			"notStrictEqual",
+			"ok",
+			"strictEqual",
 		],
 		hasDefault: true,
 	});

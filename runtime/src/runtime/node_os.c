@@ -11,6 +11,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#endif
+
 #include "array_object.h"
 #include "function_object.h"
 #include "gc.h"
@@ -84,10 +89,35 @@ static MalValue os_version(
 }
 
 static MalValue os_memory(bool available) {
+#if defined(__APPLE__)
+    u64 bytes = 0;
+    if (available) {
+        vm_statistics64_data_t statistics;
+        mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+        mach_port_t host = mach_host_self();
+        vm_size_t page_size = 0;
+        if (host_page_size(host, &page_size) != KERN_SUCCESS
+            || host_statistics64(host, HOST_VM_INFO64,
+                (host_info64_t) &statistics, &count) != KERN_SUCCESS) {
+            return mal_value_from_i32(0);
+        }
+        bytes = (u64) statistics.free_count * (u64) page_size;
+    } else {
+        size_t length = sizeof(bytes);
+        if (sysctlbyname("hw.memsize", &bytes, &length, nullptr, 0) != 0) {
+            return mal_value_from_i32(0);
+        }
+    }
+    return mal_value_from_f64_convert_nan((f64) bytes);
+#elif defined(_SC_AVPHYS_PAGES) && defined(_SC_PHYS_PAGES)
     long pages = sysconf(available ? _SC_AVPHYS_PAGES : _SC_PHYS_PAGES);
     long page_size = sysconf(_SC_PAGESIZE);
     if (pages < 0 || page_size < 0) return mal_value_from_i32(0);
     return mal_value_from_f64_convert_nan((f64) pages * (f64) page_size);
+#else
+    (void) available;
+    return mal_value_from_i32(0);
+#endif
 }
 
 static MalValue os_freemem(

@@ -29,7 +29,11 @@ for (const [name, invoke] of [
 	["ifError", () => assert.ifError(new Error("boom"))],
 ]) {
 	let threw = false;
-	try { invoke(); } catch { threw = true; }
+	try {
+		invoke();
+	} catch {
+		threw = true;
+	}
 	check(`${name} rejects invalid input`, threw);
 }
 
