@@ -1,10 +1,5 @@
 import { hash } from "node:crypto";
-import {
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
@@ -70,12 +65,17 @@ const REMARK_EXPLANATIONS: Record<CompilerRemark["code"], string> = {
 function functionName(definition: VmDefinition, index: number): string {
 	const fn = definition.functions[index];
 	if (fn === undefined) return "<unknown>";
-	return String.fromCodePoint(...(definition.stringConstants[fn.nameStringIndex] ?? [])) ||
-		"<anonymous>";
+	return (
+		String.fromCodePoint(...(definition.stringConstants[fn.nameStringIndex] ?? [])) ||
+		"<anonymous>"
+	);
 }
 
 /** Freeze the compiler-side half of a capture next to the exact linked binary. */
-export function prepareProfile(binaryPath: string, definition: VmDefinition): PreparedProfile {
+export function prepareProfile(
+	binaryPath: string,
+	definition: VmDefinition,
+): PreparedProfile {
 	const prepared: PreparedProfile = {
 		schema: 1,
 		buildId: hash("sha256", readFileSync(binaryPath), "hex"),
@@ -97,7 +97,12 @@ export function defaultProfileDirectory(
 	cwd = process.cwd(),
 ): string {
 	const timestamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
-	return path.join(cwd, ".maligator", "profiles", `${timestamp}-${command}-${prepared.buildId.slice(0, 12)}`);
+	return path.join(
+		cwd,
+		".maligator",
+		"profiles",
+		`${timestamp}-${command}-${prepared.buildId.slice(0, 12)}`,
+	);
 }
 
 export function createProfileCapture(
@@ -120,22 +125,28 @@ export function createProfileCapture(
 
 function checkedNumber(value: bigint, label: string): number {
 	const number = Number(value);
-	if (!Number.isSafeInteger(number)) throw new Error(`${label} exceeds JavaScript safe range`);
+	if (!Number.isSafeInteger(number))
+		throw new Error(`${label} exceeds JavaScript safe range`);
 	return number;
 }
 
 export function parseProfileCapture(bytes: Uint8Array): RawCapture {
-	if (bytes.byteLength < CAPTURE_HEADER_BYTES) throw new Error("profile capture is truncated");
+	if (bytes.byteLength < CAPTURE_HEADER_BYTES)
+		throw new Error("profile capture is truncated");
 	if (Buffer.from(bytes.subarray(0, 8)).toString() !== "MALPROF1") {
 		throw new Error("profile capture has an unknown magic value");
 	}
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-	if (view.getUint32(8, true) !== 1) throw new Error("profile capture schema is unsupported");
+	if (view.getUint32(8, true) !== 1)
+		throw new Error("profile capture schema is unsupported");
 	const recordCount = view.getUint32(12, true);
 	const frameCount = view.getUint32(16, true);
 	const expected =
-		CAPTURE_HEADER_BYTES + recordCount * CAPTURE_RECORD_BYTES + frameCount * CAPTURE_FRAME_BYTES;
-	if (bytes.byteLength !== expected) throw new Error("profile capture length does not match its header");
+		CAPTURE_HEADER_BYTES +
+		recordCount * CAPTURE_RECORD_BYTES +
+		frameCount * CAPTURE_FRAME_BYTES;
+	if (bytes.byteLength !== expected)
+		throw new Error("profile capture length does not match its header");
 	const frames: Array<RawFrame> = [];
 	const frameBase = CAPTURE_HEADER_BYTES + recordCount * CAPTURE_RECORD_BYTES;
 	for (let index = 0; index < frameCount; index++) {
@@ -174,7 +185,10 @@ function siteIndex(prepared: PreparedProfile): Map<string, ProfileSite> {
 	for (const site of prepared.sites) {
 		const key = `${site.functionIndex}:${site.positionId}`;
 		const existing = result.get(key);
-		if (existing === undefined || (existing.operation !== "execute" && site.operation === "execute")) {
+		if (
+			existing === undefined ||
+			(existing.operation !== "execute" && site.operation === "execute")
+		) {
 			result.set(key, site);
 		}
 	}
@@ -191,12 +205,24 @@ function cpuProfile(capture: RawCapture, prepared: PreparedProfile): object {
 	const sites = siteIndex(prepared);
 	const nodes: Array<{
 		id: number;
-		callFrame: { functionName: string; scriptId: string; url: string; lineNumber: number; columnNumber: number };
+		callFrame: {
+			functionName: string;
+			scriptId: string;
+			url: string;
+			lineNumber: number;
+			columnNumber: number;
+		};
 		children?: Array<number>;
 	}> = [
 		{
 			id: 1,
-			callFrame: { functionName: "(root)", scriptId: "0", url: "", lineNumber: -1, columnNumber: -1 },
+			callFrame: {
+				functionName: "(root)",
+				scriptId: "0",
+				url: "",
+				lineNumber: -1,
+				columnNumber: -1,
+			},
 		},
 	];
 	const nodeByStack = new Map<string, number>([["", 1]]);
@@ -361,14 +387,17 @@ export function finalizeProfileCapture(
 				? "biased"
 				: cpuRecords.length < 20 && allocationRecords.length < 20
 					? "insufficient"
-				: "good",
+					: "good",
 	};
 	// Completeness marker is intentionally published last.
 	atomicJson(path.join(directory, "manifest.json"), manifest);
 	return { findings: ranked, manifest };
 }
 
-export function formatProfileFindings(values: Array<ProfileFinding>, limit = 5): Array<string> {
+export function formatProfileFindings(
+	values: Array<ProfileFinding>,
+	limit = 5,
+): Array<string> {
 	if (values.length === 0) return ["  No source-attributed samples were captured."];
 	return values.slice(0, limit).map((finding, index) => {
 		const evidence = [

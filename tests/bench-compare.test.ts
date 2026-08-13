@@ -1,8 +1,5 @@
 import { expect, test } from "vitest";
-import {
-	classifyMetricSamples,
-	lanesForChangedFiles,
-} from "../scripts/bench-compare.ts";
+import { classifyMetricSamples, lanesForChangedFiles } from "../scripts/bench-compare.ts";
 
 test("changed source files select transparent benchmark lanes", () => {
 	const lanes = ["compiler", "language", "string", "promise", "gc", "http"];

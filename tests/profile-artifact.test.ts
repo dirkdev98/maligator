@@ -2,10 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "vitest";
-import {
-	finalizeProfileCapture,
-	parseProfileCapture,
-} from "../src/profile-artifact.ts";
+import { finalizeProfileCapture, parseProfileCapture } from "../src/profile-artifact.ts";
 import type { PreparedProfile } from "../src/profile-artifact.ts";
 
 function capture(): Uint8Array {
@@ -93,5 +90,9 @@ test("profile finalization publishes standard views and joins remarks by source 
 	const manifest = JSON.parse(
 		readFileSync(path.join(directory, "manifest.json"), "utf-8"),
 	) as { status: string; cpuSamples: number; allocationSamples: number };
-	expect(manifest).toMatchObject({ status: "complete", cpuSamples: 1, allocationSamples: 1 });
+	expect(manifest).toMatchObject({
+		status: "complete",
+		cpuSamples: 1,
+		allocationSamples: 1,
+	});
 });

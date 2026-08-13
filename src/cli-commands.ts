@@ -55,6 +55,7 @@ import {
 import { debugProgramLiveness } from "./liveness.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
+import { nativeBuildJobs } from "./native-command.ts";
 import {
 	createProfileCapture,
 	finalizeProfileCapture,
@@ -62,7 +63,6 @@ import {
 	prepareProfile,
 } from "./profile-artifact.ts";
 import type { PreparedProfile } from "./profile-artifact.ts";
-import { nativeBuildJobs } from "./native-command.ts";
 import {
 	executeTestCommand,
 	prepareProfiledTestCommand,
@@ -103,7 +103,11 @@ interface DevelopmentBuildCache {
 }
 
 export interface DevelopmentProcessHost {
-	spawn(executablePath: string, args: Array<string>, environment?: NodeJS.ProcessEnv): unknown;
+	spawn(
+		executablePath: string,
+		args: Array<string>,
+		environment?: NodeJS.ProcessEnv,
+	): unknown;
 	kill(handle: unknown, force?: boolean): void;
 	/** Undefined while running, otherwise the conventional process exit code. */
 	status(handle: unknown): number | undefined;
@@ -794,18 +798,18 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 			? createProfileCapture("run", result.profile)
 			: undefined;
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
-	const outcome = executeBinary(
-		binaryPath,
-		result.runArguments ?? command.programArgs,
-		{
-			...runEnv(),
-			...(capture === undefined ? {} : { MAL_PROFILE_CAPTURE: capture.capturePath }),
-		},
-	);
+	const outcome = executeBinary(binaryPath, result.runArguments ?? command.programArgs, {
+		...runEnv(),
+		...(capture === undefined ? {} : { MAL_PROFILE_CAPTURE: capture.capturePath }),
+	});
 	if (capture !== undefined && result.profile !== undefined) {
 		if (existsSync(capture.capturePath)) {
 			try {
-				const finalized = finalizeProfileCapture(capture.directory, result.profile, "run");
+				const finalized = finalizeProfileCapture(
+					capture.directory,
+					result.profile,
+					"run",
+				);
 				writeStderr(`Profile ${capture.directory}`);
 				for (const line of formatProfileFindings(finalized.findings)) writeStderr(line);
 			} catch (error) {
@@ -1136,7 +1140,9 @@ function executeProfiledTests(
 	const executionMs = Date.now() - executionStartedAt;
 	if (outcome.stderr !== "") process.stderr.write(outcome.stderr);
 	const outputLines = outcome.stdout.split("\n");
-	const resultLine = outputLines.find((line) => line.startsWith(PROFILED_TEST_RESULT_PREFIX));
+	const resultLine = outputLines.find((line) =>
+		line.startsWith(PROFILED_TEST_RESULT_PREFIX),
+	);
 	const applicationOutput = outputLines
 		.filter((line) => !line.startsWith(PROFILED_TEST_RESULT_PREFIX))
 		.join("\n");
@@ -1144,13 +1150,17 @@ function executeProfiledTests(
 	if (outcome.status !== 0 || resultLine === undefined) {
 		commandError(
 			`error: production-profile test process ${
-				outcome.signal ? `received ${outcome.signal}` : `exited with ${outcome.status ?? "unknown"}`
+				outcome.signal
+					? `received ${outcome.signal}`
+					: `exited with ${outcome.status ?? "unknown"}`
 			}${resultLine === undefined ? " without publishing a test result" : ""}`,
 		);
 	}
 	let testResult: TestRunResult;
 	try {
-		testResult = JSON.parse(resultLine.slice(PROFILED_TEST_RESULT_PREFIX.length)) as TestRunResult;
+		testResult = JSON.parse(
+			resultLine.slice(PROFILED_TEST_RESULT_PREFIX.length),
+		) as TestRunResult;
 	} catch (error) {
 		commandError(
 			`error: production-profile test result was invalid: ${error instanceof Error ? error.message : String(error)}`,

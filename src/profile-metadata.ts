@@ -45,8 +45,16 @@ export function matchProfileSites(
 ): ProfileSiteMatchReport {
 	const baseByLogical = new Map<string, Array<ProfileSite>>();
 	const headByLogical = new Map<string, Array<ProfileSite>>();
-	for (const site of base) (baseByLogical.get(site.logicalId) ?? baseByLogical.set(site.logicalId, []).get(site.logicalId)!).push(site);
-	for (const site of head) (headByLogical.get(site.logicalId) ?? headByLogical.set(site.logicalId, []).get(site.logicalId)!).push(site);
+	for (const site of base)
+		(
+			baseByLogical.get(site.logicalId) ??
+			baseByLogical.set(site.logicalId, []).get(site.logicalId)!
+		).push(site);
+	for (const site of head)
+		(
+			headByLogical.get(site.logicalId) ??
+			headByLogical.set(site.logicalId, []).get(site.logicalId)!
+		).push(site);
 	let exact = 0;
 	let logical = 0;
 	let ambiguous = 0;
@@ -117,7 +125,9 @@ function operationFor(instruction: VmInstruction): string {
 	return "execute";
 }
 
-function remarkFor(instruction: VmInstruction): Omit<CompilerRemark, "siteId"> | undefined {
+function remarkFor(
+	instruction: VmInstruction,
+): Omit<CompilerRemark, "siteId"> | undefined {
 	switch (instruction.opcode) {
 		case "CALL":
 		case "CALL_SPREAD":
@@ -180,9 +190,7 @@ export function buildProfileMetadata(
 					root !== "" && physicalFile.startsWith(`${root}/`)
 						? physicalFile.slice(root.length + 1)
 						: physicalFile;
-				const anchor = (lines[position.line - 1] ?? "")
-					.trim()
-					.replaceAll(/\s+/g, " ");
+				const anchor = (lines[position.line - 1] ?? "").trim().replaceAll(/\s+/g, " ");
 				siteId = sites.length;
 				sites.push({
 					id: siteId,

@@ -88,10 +88,14 @@ export function createBuildArtifact(options: BuildArtifactOptions): BuildArtifac
 		if (
 			path.isAbsolute(additional.path) ||
 			relativePath === "" ||
-			relativePath.split("/").some((part) => part === "" || part === "." || part === "..") ||
+			relativePath
+				.split("/")
+				.some((part) => part === "" || part === "." || part === "..") ||
 			manifest.files.some((file) => file.path === relativePath)
 		) {
-			throw new Error(`artifact file path must be unique and relative: ${additional.path}`);
+			throw new Error(
+				`artifact file path must be unique and relative: ${additional.path}`,
+			);
 		}
 		const destination = path.join(directory, relativePath);
 		mkdirSync(path.dirname(destination), { recursive: true });

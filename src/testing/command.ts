@@ -165,7 +165,10 @@ export function prepareProfiledTestCommand(
 	const discoveryMs = Date.now() - discoveryStartedAt;
 	if (files.length === 0) throw new Error("no test files were discovered");
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
-	const nodeGlobalsSource = readFileSync(context.installation.testNodeGlobalsPath, "utf-8");
+	const nodeGlobalsSource = readFileSync(
+		context.installation.testNodeGlobalsPath,
+		"utf-8",
+	);
 	const frontendStartedAt = Date.now();
 	const compiled = compileProfiledTestImage(
 		{

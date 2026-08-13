@@ -18,13 +18,49 @@ export const BENCHMARK_LANE_RULES: ReadonlyArray<{
 	lanes: ReadonlyArray<string>;
 }> = [
 	{ pattern: /^(scripts\/bench|bench\/)/, lanes: ["*"] },
-	{ pattern: /^src\/(ir|ir-opt|inline|escape|liveness|register-alloc|emit-c|lower-vm)/, lanes: ["compiler", "language", "module", "stack-object"] },
-	{ pattern: /^runtime\/src\/(gc|heap)/, lanes: ["gc", "language", "module", "string", "promise", "coroutine", "stack-object", "http"] },
+	{
+		pattern: /^src\/(ir|ir-opt|inline|escape|liveness|register-alloc|emit-c|lower-vm)/,
+		lanes: ["compiler", "language", "module", "stack-object"],
+	},
+	{
+		pattern: /^runtime\/src\/(gc|heap)/,
+		lanes: [
+			"gc",
+			"language",
+			"module",
+			"string",
+			"promise",
+			"coroutine",
+			"stack-object",
+			"http",
+		],
+	},
 	{ pattern: /^runtime\/src\/builtin_string/, lanes: ["string", "language", "http"] },
-	{ pattern: /^runtime\/src\/(builtin_promise|microtask|async_function)/, lanes: ["promise", "coroutine", "http"] },
-	{ pattern: /^runtime\/src\/(object|shape|property|table|key)/, lanes: ["language", "module", "stack-object", "prototype-cache", "http"] },
-	{ pattern: /^runtime\/src\/(runtime\/node_http|host\/|runtime\/web_)/, lanes: ["http"] },
-	{ pattern: /^(src\/|runtime\/)/, lanes: ["language", "module", "string", "promise", "coroutine", "arguments", "stack-object", "interpreter"] },
+	{
+		pattern: /^runtime\/src\/(builtin_promise|microtask|async_function)/,
+		lanes: ["promise", "coroutine", "http"],
+	},
+	{
+		pattern: /^runtime\/src\/(object|shape|property|table|key)/,
+		lanes: ["language", "module", "stack-object", "prototype-cache", "http"],
+	},
+	{
+		pattern: /^runtime\/src\/(runtime\/node_http|host\/|runtime\/web_)/,
+		lanes: ["http"],
+	},
+	{
+		pattern: /^(src\/|runtime\/)/,
+		lanes: [
+			"language",
+			"module",
+			"string",
+			"promise",
+			"coroutine",
+			"arguments",
+			"stack-object",
+			"interpreter",
+		],
+	},
 ];
 
 function command(
@@ -105,7 +141,10 @@ function flatten(value: unknown, prefix = ""): Map<string, number> {
 		result.set(prefix, value);
 	} else if (typeof value === "object" && value !== null) {
 		for (const [key, child] of Object.entries(value)) {
-			for (const [childPath, number] of flatten(child, prefix === "" ? key : `${prefix}.${key}`)) {
+			for (const [childPath, number] of flatten(
+				child,
+				prefix === "" ? key : `${prefix}.${key}`,
+			)) {
 				result.set(childPath, number);
 			}
 		}
@@ -113,15 +152,20 @@ function flatten(value: unknown, prefix = ""): Map<string, number> {
 	return result;
 }
 
-function metricPolicy(metricPath: string):
+function metricPolicy(
+	metricPath: string,
+):
 	| { direction: "higher" | "lower"; thresholdPercent: number; minimumAbsolute?: number }
 	| undefined {
-	if (/(^|\.)(malRps|ratio)$/.test(metricPath)) return { direction: "higher", thresholdPercent: 3 };
-	if (/(p99|rss|Pause)/i.test(metricPath)) return { direction: "lower", thresholdPercent: 5 };
+	if (/(^|\.)(malRps|ratio)$/.test(metricPath))
+		return { direction: "higher", thresholdPercent: 3 };
+	if (/(p99|rss|Pause)/i.test(metricPath))
+		return { direction: "lower", thresholdPercent: 5 };
 	if (/(binaryBytes|ArchiveBytes)$/i.test(metricPath)) {
 		return { direction: "lower", thresholdPercent: 0.5, minimumAbsolute: 32 * 1024 };
 	}
-	if (/(Ms|wallMs)$/i.test(metricPath)) return { direction: "lower", thresholdPercent: 3 };
+	if (/(Ms|wallMs)$/i.test(metricPath))
+		return { direction: "lower", thresholdPercent: 3 };
 	return undefined;
 }
 
@@ -155,7 +199,10 @@ function bootstrapInterval(values: Array<number>): [number, number] {
 		medians.push(median(sample));
 	}
 	medians.sort((left, right) => left - right);
-	return [medians[Math.floor(medians.length * 0.025)]!, medians[Math.floor(medians.length * 0.975)]!];
+	return [
+		medians[Math.floor(medians.length * 0.025)]!,
+		medians[Math.floor(medians.length * 0.975)]!,
+	];
 }
 
 function classify(
@@ -207,9 +254,13 @@ export function classifyMetricSamples(
 
 function exportBase(baseRef: string, repository: string, destination: string): void {
 	const currentLock = readFileSync(path.join(repository, "package-lock.json"), "utf-8");
-	const baseLock = command("git", ["show", `${baseRef}:package-lock.json`], { cwd: repository });
+	const baseLock = command("git", ["show", `${baseRef}:package-lock.json`], {
+		cwd: repository,
+	});
 	if (currentLock !== baseLock) {
-		throw new Error("base and head package-lock.json differ; installable dependency identity is not comparable");
+		throw new Error(
+			"base and head package-lock.json differ; installable dependency identity is not comparable",
+		);
 	}
 	const archive = path.join(destination, "base.tar");
 	const descriptor = openSync(archive, "w");
@@ -227,7 +278,11 @@ function exportBase(baseRef: string, repository: string, destination: string): v
 	mkdirSync(base, { recursive: true });
 	command("tar", ["-xf", archive, "-C", base]);
 	if (existsSync(path.join(repository, "node_modules"))) {
-		symlinkSync(path.join(repository, "node_modules"), path.join(base, "node_modules"), "dir");
+		symlinkSync(
+			path.join(repository, "node_modules"),
+			path.join(base, "node_modules"),
+			"dir",
+		);
 	}
 }
 
@@ -336,7 +391,9 @@ export function runBenchmarkComparison(options: {
 				2,
 			)}\n`,
 		);
-		console.log(`\npaired comparison against ${options.baseRef} (${options.lanes.join(", ")}):`);
+		console.log(
+			`\npaired comparison against ${options.baseRef} (${options.lanes.join(", ")}):`,
+		);
 		for (const metric of metrics) {
 			console.log(
 				`  ${metric.status.padEnd(12)} ${metric.path} ${metric.medianRegressionPercent >= 0 ? "+" : ""}${metric.medianRegressionPercent.toFixed(2)}% ` +

@@ -98,10 +98,7 @@ import {
 } from "../src/test-harness.ts";
 import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 import { persistBenchmarkBaseline, readBenchmarkBaseline } from "./bench-baseline.ts";
-import {
-	runBenchmarkComparison,
-	selectChangedBenchmarkLanes,
-} from "./bench-compare.ts";
+import { runBenchmarkComparison, selectChangedBenchmarkLanes } from "./bench-compare.ts";
 import {
 	formatOhaDuration,
 	parseOhaOutput,
@@ -2719,21 +2716,21 @@ const selected = args.filter(
 	(a, index) => !a.startsWith("--") && !optionValues.has(index),
 );
 const defaultLanes = [
-				"size",
-				"compiler",
-				"language",
-				"module",
-				"string",
-				"promise",
-				"coroutine",
-				"arguments",
-				"stack-object",
-				"interpreter",
-				"sqlite-binding",
-				"prototype-cache",
-				"gc",
-				"http",
-			];
+	"size",
+	"compiler",
+	"language",
+	"module",
+	"string",
+	"promise",
+	"coroutine",
+	"arguments",
+	"stack-object",
+	"interpreter",
+	"sqlite-binding",
+	"prototype-cache",
+	"gc",
+	"http",
+];
 
 const entry: BenchmarkSnapshot = {};
 const benchmarkLanes: Record<string, () => void> = {

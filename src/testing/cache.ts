@@ -3,7 +3,6 @@ import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
-import type { VmDefinition } from "../lower-vm.ts";
 import type { DependencyFragmentWorker } from "../dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -13,6 +12,7 @@ import {
 	frontendWirePath,
 } from "../frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
+import type { VmDefinition } from "../lower-vm.ts";
 import type { BuildModuleGraphOptions, ModuleGraph } from "../module-graph.ts";
 import { buildModuleGraph } from "../module-graph.ts";
 import {
@@ -247,7 +247,8 @@ export function compileProfiledTestImage(
 	runOptions: object,
 ): CompiledProfiledTestImage {
 	const entries = resolvedEntries(options.files);
-	if (entries.length === 0) throw new Error("a profiled test image requires at least one entry");
+	if (entries.length === 0)
+		throw new Error("a profiled test image requires at least one entry");
 	const session = options.session ?? new TestCompilationSession();
 	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
 	const entrySource = `${options.config.surface.node ? 'import "maligator:node-globals";\n' : ""}import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
