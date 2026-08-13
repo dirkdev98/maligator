@@ -1066,6 +1066,54 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_call_cached(vm,");
 	});
 
+	it("summarizes a closed ASCII capture case chain to its terminal length", () => {
+		const output = emit(`
+			function normalizedLength(regexp, value) {
+				const match = regexp.exec(value);
+				if (match === null) return -1;
+				const normalized = match[1].toUpperCase().toLowerCase();
+				return normalized.length;
+			}
+			globalThis.normalizedLength = normalizedLength;
+		`);
+		expect(output).toContain("mal_regexp_exec_capture_projection(vm,");
+		expect(output).toContain("mal_builtin_string_ascii_case_chain_length_span(vm,");
+		expect(output).toContain("mal_regexp_materialize_capture_span(vm,");
+		expect(output).toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("keeps capture case intermediates materialized when they escape", () => {
+		const output = emit(`
+			function normalizedLength(regexp, value, consume) {
+				const match = regexp.exec(value);
+				if (match === null) return -1;
+				const upper = match[1].toUpperCase();
+				consume(upper);
+				return upper.toLowerCase().length;
+			}
+			globalThis.normalizedLength = normalizedLength;
+		`);
+		expect(output).not.toContain("mal_builtin_string_ascii_case_chain_length_span(vm,");
+	});
+
+	it("rejects a capture case summary when control can skip its producer", () => {
+		const output = emit(`
+			function normalizedLength(regexp, values) {
+				let normalized = "old";
+				let total = 0;
+				for (let index = 0; index < values.length; index++) {
+					const match = regexp.exec(values[index]);
+					if (match === null) continue;
+					if (index === 0) normalized = match[1].toUpperCase().toLowerCase();
+					total += normalized.length;
+				}
+				return total;
+			}
+			globalThis.normalizedLength = normalizedLength;
+		`);
+		expect(output).not.toContain("mal_builtin_string_ascii_case_chain_length_span(vm,");
+	});
+
 	it("keeps RegExp capture strings materialized when scalar results have another use", () => {
 		const output = emit(`
 			function parse(regexp, value) {

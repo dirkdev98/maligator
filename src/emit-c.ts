@@ -1837,7 +1837,12 @@ interface NativeRegExpExecProjectionAction {
 		| "length"
 		| "charCodeAtProperty"
 		| "charCodeAtCall"
-		| "number";
+		| "number"
+		| "caseUpperProperty"
+		| "caseUpperCall"
+		| "caseLowerProperty"
+		| "caseLowerCall"
+		| "caseLength";
 	load?: NativeRegExpExecProjection["loads"][number];
 }
 
@@ -2674,6 +2679,16 @@ function emitBody(
 					role: "number",
 					load,
 				});
+			} else if (load.consumer?.kind === "asciiCaseLength") {
+				for (const [ip, role] of [
+					[load.consumer.upperPropertyIp, "caseUpperProperty"],
+					[load.consumer.upperCallIp, "caseUpperCall"],
+					[load.consumer.lowerPropertyIp, "caseLowerProperty"],
+					[load.consumer.lowerCallIp, "caseLowerCall"],
+					[load.consumer.lengthPropertyIp, "caseLength"],
+				] as const) {
+					nativeRegExpExecProjectionActionByIp.set(ip, { site, role, load });
+				}
 			}
 		}
 	}
@@ -2760,6 +2775,11 @@ function emitBody(
 				lines.push(
 					`bool __regexp_exec_${site.projection.callIp}_char_${load.consumer.callIp}_fast = false;`,
 				);
+			} else if (load.consumer?.kind === "asciiCaseLength") {
+				lines.push(
+					`bool __regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_fast = false;`,
+					`u32 __regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_length = 0;`,
+				);
 			}
 		}
 	}
@@ -2779,7 +2799,11 @@ function emitBody(
 	if (
 		stringCharCodeAtFusionByIp.size > 0 ||
 		[...regexpExecProjectionSites.values()].some((site) =>
-			site.loads.some((load) => load.consumer?.kind === "charCodeAtZero"),
+			site.loads.some(
+				(load) =>
+					load.consumer?.kind === "charCodeAtZero" ||
+					load.consumer?.kind === "asciiCaseLength",
+			),
 		) ||
 		fn.instructions.some(
 			(instruction, ip) =>
@@ -3365,6 +3389,70 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeRegExpExecProjectionAction?.role === "caseUpperProperty"
+			) {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
+				if (slot >= 0 && load?.consumer?.kind === "asciiCaseLength") {
+					const fast = `__regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_fast`;
+					const length = `__regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_length`;
+					const start = `__regexp_exec_${site.projection.callIp}_starts[${slot}]`;
+					const end = `__regexp_exec_${site.projection.callIp}_ends[${slot}]`;
+					return [
+						`MalValue __regexp_exec_${site.projection.callIp}_case_lower_${load.consumer.upperCallIp};`,
+						`${fast} = __regexp_exec_${site.projection.callIp}_projected && ${start} >= 0 && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${instruction.icIndex}], &r${instruction.dst}) && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${load.consumer.lowerIcIndex}], &__regexp_exec_${site.projection.callIp}_case_lower_${load.consumer.upperCallIp}) && mal_builtin_string_ascii_case_chain_length_span(vm, r${instruction.dst}, __regexp_exec_${site.projection.callIp}_case_lower_${load.consumer.upperCallIp}, __gc_slots[${site.subjectSlot}], ${start}, ${end}, &${length});`,
+						`if (!${fast}) {`,
+						`  if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0) {`,
+						`    __gc_slots[${site.slotsOffset + slot}] = mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, ${end});`,
+						`    r${instruction.object} = __gc_slots[${site.slotsOffset + slot}];`,
+						`  }`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
+			}
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeRegExpExecProjectionAction?.role === "caseLowerProperty"
+			) {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				if (load?.consumer?.kind === "asciiCaseLength") {
+					const fast = `__regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_fast`;
+					return [
+						`if (${fast}) {`,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						`} else {`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
+			}
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				nativeRegExpExecProjectionAction?.role === "caseLength"
+			) {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				if (load?.consumer?.kind === "asciiCaseLength") {
+					const fast = `__regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_fast`;
+					const length = `__regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_length`;
+					const direct =
+						reps[instruction.dst] === "number"
+							? `(f64) ${length}`
+							: `mal_value_from_i32((i32) ${length})`;
+					return [
+						`if (${fast}) {`,
+						`  r${instruction.dst} = ${direct};`,
+						`} else {`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${instruction.stringIndex}]), &__property_ic[${instruction.icIndex}]);`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
+			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
 				nativeRegExpIteratorProjectionAction?.role === "capture"
@@ -4572,6 +4660,26 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (
+				nativeRegExpExecProjectionAction?.role === "caseUpperCall" ||
+				nativeRegExpExecProjectionAction?.role === "caseLowerCall"
+			) {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				if (load?.consumer?.kind === "asciiCaseLength") {
+					const fast = `__regexp_exec_${site.projection.callIp}_case_${load.consumer.upperCallIp}_fast`;
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`if (${fast}) {`,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						`} else {`,
+						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`  r${instruction.dst} = ${tmp}.value;`,
+						`}`,
+						poll,
+					];
+				}
+			}
 			if (nativeRegExpIteratorProjectionAction?.role === "number") {
 				const { site, load } = nativeRegExpIteratorProjectionAction;
 				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);

@@ -1205,6 +1205,30 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 			}
 			return true;
 		};
+		const instructionDominates = (dominatorIp: number, targetIp: number): boolean => {
+			const pending = [0];
+			const visited = new Set<number>();
+			while (pending.length > 0) {
+				const ip = pending.pop()!;
+				if (ip < 0 || ip >= fn.instructions.length || visited.has(ip)) continue;
+				visited.add(ip);
+				if (ip === dominatorIp) continue;
+				if (ip === targetIp) return false;
+				const instruction = fn.instructions[ip]!;
+				if (instruction.opcode === "JUMP") {
+					pending.push(instruction.targetIp);
+				} else if (instruction.opcode === "JUMP_IF") {
+					pending.push(instruction.targetIp, ip + 1);
+				} else if (instruction.opcode !== "RETURN" && instruction.opcode !== "THROW") {
+					pending.push(ip + 1);
+				}
+				for (const handler of fn.handlers) {
+					if (ip >= handler.startIp && ip < handler.endIp)
+						pending.push(handler.handlerIp);
+				}
+			}
+			return true;
+		};
 
 		for (let callIp = 1; callIp < fn.instructions.length; callIp++) {
 			const call = fn.instructions[callIp]!;
@@ -1293,6 +1317,105 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 			}
 			for (const captureLoad of loads) {
 				const property = fn.instructions[captureLoad.ip + 1];
+				const upperProperty = property;
+				const upperCall = fn.instructions[captureLoad.ip + 2];
+				const lowerProperty = fn.instructions[captureLoad.ip + 3];
+				const lowerCall = fn.instructions[captureLoad.ip + 4];
+				const possibleCaseMove = fn.instructions[captureLoad.ip + 5];
+				const caseMove =
+					possibleCaseMove?.opcode === "MOVE" &&
+					lowerCall?.opcode === "CALL" &&
+					possibleCaseMove.src === lowerCall.dst
+						? possibleCaseMove
+						: undefined;
+				const caseResult =
+					caseMove?.dst ?? (lowerCall?.opcode === "CALL" ? lowerCall.dst : -1);
+				const caseSearchStart = captureLoad.ip + (caseMove === undefined ? 5 : 6);
+				let caseLengthIp = -1;
+				for (let ip = caseSearchStart; ip < fn.instructions.length; ip++) {
+					const instruction = fn.instructions[ip]!;
+					if (vmInstructionUsesRegister(instruction, caseResult)) {
+						if (
+							instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+							instruction.object === caseResult &&
+							staticStringEquals(definition, instruction.stringIndex, "length")
+						) {
+							caseLengthIp = ip;
+						}
+						break;
+					}
+					if (vmInstructionDefinesRegister(instruction, caseResult)) break;
+				}
+				const caseLength = fn.instructions[caseLengthIp];
+				if (
+					upperProperty?.opcode === "LOAD_PROPERTY_STATIC" &&
+					upperProperty.object === captureLoad.dst &&
+					staticStringEquals(definition, upperProperty.stringIndex, "toUpperCase") &&
+					upperCall?.opcode === "CALL" &&
+					upperCall.callee === upperProperty.dst &&
+					upperCall.thisValue === captureLoad.dst &&
+					upperCall.arguments.length === 0 &&
+					lowerProperty?.opcode === "LOAD_PROPERTY_STATIC" &&
+					lowerProperty.object === upperCall.dst &&
+					staticStringEquals(definition, lowerProperty.stringIndex, "toLowerCase") &&
+					lowerCall?.opcode === "CALL" &&
+					lowerCall.callee === lowerProperty.dst &&
+					lowerCall.thisValue === upperCall.dst &&
+					lowerCall.arguments.length === 0 &&
+					caseLength?.opcode === "LOAD_PROPERTY_STATIC" &&
+					caseLength.object === caseResult &&
+					staticStringEquals(definition, caseLength.stringIndex, "length") &&
+					![
+						captureLoad.ip + 1,
+						captureLoad.ip + 2,
+						captureLoad.ip + 3,
+						captureLoad.ip + 4,
+						...(caseMove === undefined ? [] : [captureLoad.ip + 5]),
+					].some((ip) => entryTargets.has(ip)) &&
+					hasOnlyUsesUntilRedefinition(
+						captureLoad.dst,
+						captureLoad.ip + 1,
+						new Set([captureLoad.ip + 1, captureLoad.ip + 2]),
+					) &&
+					hasOnlyUsesUntilRedefinition(
+						upperProperty.dst,
+						captureLoad.ip + 2,
+						new Set([captureLoad.ip + 2]),
+					) &&
+					hasOnlyUsesUntilRedefinition(
+						upperCall.dst,
+						captureLoad.ip + 3,
+						new Set([captureLoad.ip + 3, captureLoad.ip + 4]),
+					) &&
+					hasOnlyUsesUntilRedefinition(
+						lowerProperty.dst,
+						captureLoad.ip + 4,
+						new Set([captureLoad.ip + 4]),
+					) &&
+					hasOnlyUsesUntilRedefinition(
+						lowerCall.dst,
+						captureLoad.ip + 5,
+						new Set(caseMove === undefined ? [caseLengthIp] : [captureLoad.ip + 5]),
+					) &&
+					(caseMove === undefined ||
+						hasOnlyUsesUntilRedefinition(
+							caseMove.dst,
+							captureLoad.ip + 6,
+							new Set([caseLengthIp]),
+						)) &&
+					caseLengthIp >= caseSearchStart
+				) {
+					captureLoad.consumer = {
+						kind: "asciiCaseLength",
+						upperPropertyIp: captureLoad.ip + 1,
+						upperCallIp: captureLoad.ip + 2,
+						lowerPropertyIp: captureLoad.ip + 3,
+						lowerIcIndex: lowerProperty.icIndex,
+						lowerCallIp: captureLoad.ip + 4,
+						lengthPropertyIp: caseLengthIp,
+					};
+					continue;
+				}
 				if (
 					property?.opcode === "LOAD_PROPERTY_STATIC" &&
 					property.object === captureLoad.dst &&
@@ -1384,7 +1507,9 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 				...loads.map((entry) =>
 					entry.consumer?.kind === "charCodeAtZero" || entry.consumer?.kind === "number"
 						? entry.consumer.callIp
-						: (entry.consumer?.propertyIp ?? entry.ip),
+						: entry.consumer?.kind === "asciiCaseLength"
+							? entry.consumer.lengthPropertyIp
+							: (entry.consumer?.propertyIp ?? entry.ip),
 				),
 			);
 			const hasInteriorEntry =
@@ -1406,11 +1531,19 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 					ip <= lastLoadIp &&
 					vmInstructionDefinesRegister(instruction, stableAlias),
 			);
+			const caseProducerBypassed = loads.some((load) => {
+				const consumer = load.consumer;
+				return (
+					consumer?.kind === "asciiCaseLength" &&
+					!instructionDominates(consumer.upperPropertyIp, consumer.lengthPropertyIp)
+				);
+			});
 			if (
 				!safe ||
 				loads.length === 0 ||
 				loads.length > 8 ||
 				hasInteriorEntry ||
+				caseProducerBypassed ||
 				stableAliasRedefined
 			) {
 				continue;

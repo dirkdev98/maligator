@@ -78,6 +78,17 @@ bool mal_builtin_string_search_literal_direct(
     MalValue *out
 );
 
+/** Allocation-free summary of a closed ASCII upper/lower-case capture chain. */
+bool mal_builtin_string_ascii_case_chain_length_span(
+    MalVm *vm,
+    MalValue upper_callee,
+    MalValue lower_callee,
+    MalValue subject,
+    i32 start,
+    i32 end,
+    u32 *length_out
+);
+
 /**
  * Producer-consumer fusion for exact builtin `string.slice(start)` immediately
  * consumed by the exact Number constructor. Guard failure is side-effect-free.

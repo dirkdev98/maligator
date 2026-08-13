@@ -1285,6 +1285,49 @@ static MalValue mal_builtin_string_prototype_to_lower_case(MalVm *vm, MalValue t
     return mal_builtin_string_case_impl(vm, this_value, false);
 }
 
+bool mal_builtin_string_ascii_case_chain_length_span(
+    MalVm *vm,
+    MalValue upper_callee,
+    MalValue lower_callee,
+    MalValue subject,
+    i32 start,
+    i32 end,
+    u32 *length_out
+) {
+    if (!mal_value_is_native_function_object(upper_callee) ||
+        !mal_value_is_native_function_object(lower_callee) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(upper_callee)) !=
+            mal_builtin_string_prototype_to_upper_case ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(lower_callee)) !=
+            mal_builtin_string_prototype_to_lower_case ||
+        !mal_value_is_string(subject) || start < 0 || end < start || end - start > 64) {
+        return false;
+    }
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, upper_callee) != vm->current_realm ||
+        mal_vm_callee_realm(vm, lower_callee) != vm->current_realm) {
+        return false;
+    }
+#else
+    (void) vm;
+#endif
+    MalString *string = mal_value_to_string(subject);
+    if (mal_string_storage(string) == MAL_STRING_STORAGE_CONS ||
+        (usize) end > mal_string_length(string)) {
+        return false;
+    }
+    const c16 *units = mal_string_code_units(string);
+    for (i32 index = start; index < end; index++) {
+        if (units[index] > 0x7f) {
+            return false;
+        }
+    }
+    *length_out = (u32) (end - start);
+    return true;
+}
+
 // A code unit is a surrogate paired with its neighbour, a lone surrogate, or an
 // ordinary unit. isWellFormed is false when any lone surrogate is present.
 static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

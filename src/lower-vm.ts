@@ -285,7 +285,16 @@ export interface VmFunction {
 			consumer?:
 				| { kind: "length"; propertyIp: number }
 				| { kind: "charCodeAtZero"; propertyIp: number; callIp: number }
-				| { kind: "number"; callIp: number };
+				| { kind: "number"; callIp: number }
+				| {
+						kind: "asciiCaseLength";
+						upperPropertyIp: number;
+						upperCallIp: number;
+						lowerPropertyIp: number;
+						lowerIcIndex: number;
+						lowerCallIp: number;
+						lengthPropertyIp: number;
+				  };
 		}>;
 	}>;
 
