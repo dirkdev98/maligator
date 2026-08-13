@@ -67,6 +67,7 @@ describe("parseCliArgs", () => {
 			kind: "run",
 			entry: "src/main.ts",
 			verbose: false,
+			profile: false,
 			programArgs: ["--flag", "two words", "-x"],
 		});
 		expect(parseCliArgs(["run", "src/main.ts", "--verbose"])).toMatchObject({
@@ -82,6 +83,7 @@ describe("parseCliArgs", () => {
 			kind: "dev",
 			entry: "src/main.ts",
 			verbose: true,
+			profile: false,
 			programArgs: ["--flag", "two words"],
 		});
 	});
@@ -109,10 +111,31 @@ describe("parseCliArgs", () => {
 			bail: true,
 			timeoutMs: 5000,
 			compileConcurrency: 1,
+			profile: false,
 		});
 		expect(parseCliArgs(["test", "--shuffle"])).toMatchObject({
 			kind: "test",
 			shuffle: true,
+		});
+	});
+
+	it("parses one profile flag consistently across existing commands", () => {
+		expect(parseCliArgs(["build", "src/main.ts", "--profile"])).toMatchObject({
+			kind: "build",
+			production: true,
+			profile: true,
+		});
+		expect(parseCliArgs(["run", "src/main.ts", "--profile"])).toMatchObject({
+			kind: "run",
+			profile: true,
+		});
+		expect(parseCliArgs(["dev", "src/main.ts", "--profile"])).toMatchObject({
+			kind: "dev",
+			profile: true,
+		});
+		expect(parseCliArgs(["test", "src", "--profile"])).toMatchObject({
+			kind: "test",
+			profile: true,
 		});
 	});
 
@@ -423,7 +446,7 @@ describe("development coordinator", () => {
 		);
 
 		await devCommand(
-			{ kind: "dev", entry, verbose: false, programArgs: [] },
+			{ kind: "dev", entry, verbose: false, profile: false, programArgs: [] },
 			{
 				stripTypes: stripTypesWithTypeScript,
 				installation,
@@ -474,7 +497,7 @@ describe("development coordinator", () => {
 		);
 
 		await devCommand(
-			{ kind: "dev", entry, verbose: false, programArgs: [] },
+			{ kind: "dev", entry, verbose: false, profile: false, programArgs: [] },
 			{
 				stripTypes: stripTypesWithTypeScript,
 				installation,

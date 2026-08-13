@@ -9,7 +9,12 @@ import {
 	resolveOutputName,
 } from "./build-config.ts";
 import type { BuildConfigTypeStripper, ResolvedBuildConfig } from "./build-config.ts";
-import { gmallocEnabled, runEnv, selectNativeBuildPlan } from "./build-flags.ts";
+import {
+	gmallocEnabled,
+	normalizeNativeFeatures,
+	runEnv,
+	selectNativeBuildPlan,
+} from "./build-flags.ts";
 import type { NativeBuildPlan } from "./build-flags.ts";
 import { validateBuildFragmentRequest } from "./build-fragment-cache.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
@@ -231,6 +236,7 @@ function selectToolchain(
 	if (command.kind === "build" && command.internal.serializePath !== undefined) return {};
 	if (
 		command.kind !== "build" &&
+		!command.profile &&
 		compatibleDevelopmentRunner(config, context) !== undefined
 	) {
 		return {};
@@ -238,7 +244,7 @@ function selectToolchain(
 	const selectionKey = JSON.stringify({
 		needsCxx: config.surface.webPlatform,
 		target: command.kind === "build" ? command.target : undefined,
-		production: command.kind === "build" && command.production,
+		production: command.profile || (command.kind === "build" && command.production),
 	});
 	const retained = context.developmentCache?.toolchains.get(selectionKey);
 	if (retained !== undefined) return retained;
@@ -250,7 +256,7 @@ function selectToolchain(
 		});
 		const plan = selectNativeBuildPlan(
 			toolchain,
-			command.kind === "build" && command.production,
+			command.profile || (command.kind === "build" && command.production),
 		);
 		const selection = { toolchain, plan };
 		context.developmentCache?.toolchains.set(selectionKey, selection);
@@ -304,11 +310,13 @@ function compileAndBuild(
 			: resolveOutputName(buildConfig);
 	const verbose = command.kind === "build" ? command.internal.verbose : command.verbose;
 	const reporter = new BuildReporter(verbose, compact && !verbose);
+	const production = command.profile || (command.kind === "build" && command.production);
 	reporter.start(
 		name,
-		command.kind === "build" && command.production ? "production" : "development",
+		production ? "production" : "development",
 		command.kind !== "build" ? "Preparing" : "Building",
 	);
+	reporter.detail("Profile", command.profile ? "enabled" : "disabled");
 	reporter.detail("Entrypoint", entrypointPath);
 	reporter.detail("Config", command.configPath ?? "automatic/default");
 	reporter.detail(
@@ -396,13 +404,12 @@ function compileAndBuild(
 					stripTypes: context.stripTypes,
 					stripperIdentity: context.installation.frontendIdentity,
 					session: frontendSession,
-					optimization:
-						command.kind === "build" && command.production ? "full" : "development",
+					optimization: production ? "full" : "development",
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
 					forceCompile: debugEnabled || compilerDiagnostics,
-					relocatable: command.kind !== "build",
+					relocatable: command.kind !== "build" && !command.profile,
 					onCompilePhase: (phase, durationMs) => {
 						compilerPhases.push({ phase, durationMs });
 					},
@@ -493,7 +500,7 @@ function compileAndBuild(
 	}
 
 	const packagedRunner =
-		command.kind !== "build"
+		command.kind !== "build" && !command.profile
 			? compatibleDevelopmentRunner(buildConfig, context)
 			: undefined;
 	if (command.kind !== "build" && packagedRunner !== undefined) {
@@ -535,7 +542,19 @@ function compileAndBuild(
 						}),
 				}
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
-	const derivation = buildDerivationFromConfig(buildConfig);
+	const baseDerivation = buildDerivationFromConfig(buildConfig);
+	const derivation = command.profile
+		? {
+				features: normalizeNativeFeatures({
+					...baseDerivation.features,
+					profileEnabled: true,
+				}),
+				cacheSuffix:
+					baseDerivation.cacheSuffix === ""
+						? "profile"
+						: `${baseDerivation.cacheSuffix}-profile`,
+			}
+		: baseDerivation;
 	reporter.detail(
 		"Rust features",
 		derivation.features.cargoFeatures.length === 0
@@ -584,7 +603,7 @@ function compileAndBuild(
 			);
 		},
 	});
-	if (command.kind !== "build") {
+	if (command.kind !== "build" && !command.profile) {
 		const wirePaths = reporter.phase("Cache development image", () =>
 			frontend.artifacts.map((artifact) => artifact.path),
 		);

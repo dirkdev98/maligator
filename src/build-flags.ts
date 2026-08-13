@@ -95,6 +95,7 @@ export interface NativeFeatureSpec {
 	regexpEnabled: boolean;
 	temporalEnabled: boolean;
 	nodeEnabled: boolean;
+	profileEnabled: boolean;
 	intlFeatures: Array<string>;
 	cDefines: Array<string>;
 	cargoFeatures: Array<string>;
@@ -115,6 +116,7 @@ export function normalizeNativeFeatures(
 	const regexpEnabled = input.regexpEnabled ?? true;
 	const temporalEnabled = input.temporalEnabled ?? true;
 	const nodeEnabled = input.nodeEnabled ?? false;
+	const profileEnabled = input.profileEnabled ?? false;
 	const services = Object.values(INTL_SERVICE_FEATURES);
 	const knownCargoFeatures = new Set(services.map(({ cargo }) => cargo));
 	const knownDisableDefines = new Set(services.map(({ define }) => `-D${define}=0`));
@@ -164,6 +166,7 @@ export function normalizeNativeFeatures(
 		...(regexpEnabled ? [] : ["-DMAL_REGEXP=0"]),
 		...(temporalEnabled ? [] : ["-DMAL_TEMPORAL=0"]),
 		...(nodeEnabled ? ["-DMAL_NODE=1"] : []),
+		...(profileEnabled ? ["-DMAL_PROFILE=1"] : []),
 	];
 	const cargoFeatures = sortedUnique([
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
@@ -180,6 +183,7 @@ export function normalizeNativeFeatures(
 		regexpEnabled,
 		temporalEnabled,
 		nodeEnabled,
+		profileEnabled,
 		intlFeatures,
 		cDefines,
 		cargoFeatures,
@@ -378,6 +382,8 @@ export interface FeatureDefineOpts {
 	temporalEnabled?: boolean;
 	/** `-DMAL_NODE=1` when the node host built-in surface is enabled (default off). */
 	nodeEnabled?: boolean;
+	/** `-DMAL_PROFILE=1` for the production-faithful profiling runtime. */
+	profileEnabled?: boolean;
 }
 
 /**
@@ -401,6 +407,7 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	const temporalFlag = opts.temporalEnabled === false ? ["-DMAL_TEMPORAL=0"] : [];
 	// node defaults OFF (C default MAL_NODE=0), so only the ON case emits a flag.
 	const nodeFlag = opts.nodeEnabled === true ? ["-DMAL_NODE=1"] : [];
+	const profileFlag = opts.profileEnabled === true ? ["-DMAL_PROFILE=1"] : [];
 	return [
 		...evalFlag,
 		...realmsFlag,
@@ -409,6 +416,7 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 		...regexpFlag,
 		...temporalFlag,
 		...nodeFlag,
+		...profileFlag,
 	];
 }
 

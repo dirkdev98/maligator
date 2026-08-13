@@ -22,6 +22,7 @@ export interface BuildCommand {
 	target?: string;
 	artifactDirectory?: string;
 	production: boolean;
+	profile: boolean;
 	internal: InternalBuildOptions;
 }
 
@@ -30,6 +31,7 @@ export interface RunCommand {
 	entry?: string;
 	configPath?: string;
 	verbose: boolean;
+	profile: boolean;
 	programArgs: Array<string>;
 }
 
@@ -38,6 +40,7 @@ export interface DevCommand {
 	entry?: string;
 	configPath?: string;
 	verbose: boolean;
+	profile: boolean;
 	programArgs: Array<string>;
 }
 
@@ -51,6 +54,7 @@ export interface TestCommand {
 	bail: boolean;
 	timeoutMs: number;
 	compileConcurrency: number;
+	profile: boolean;
 }
 
 export interface CacheCommand {
@@ -96,6 +100,7 @@ Options:
   --config <path>              Use an explicit build configuration
   --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
+  --profile                    Build production code and record a performance profile
   --artifact <directory>       Create a deployable production artifact
   --verbose                    Show build diagnostics or every pruned cache entry
   --run <name>                 Filter tests by hierarchical name
@@ -156,6 +161,7 @@ function parseBuild(args: Array<string>): CliCommand {
 	const command: BuildCommand = {
 		kind: "build",
 		production: false,
+		profile: false,
 		internal: {
 			emitC: false,
 			verbose: false,
@@ -189,6 +195,11 @@ function parseBuild(args: Array<string>): CliCommand {
 			continue;
 		}
 		if (argument === "--production") {
+			command.production = true;
+			continue;
+		}
+		if (argument === "--profile") {
+			command.profile = true;
 			command.production = true;
 			continue;
 		}
@@ -271,6 +282,7 @@ function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
 	const command: RunCommand | DevCommand = {
 		kind,
 		verbose: false,
+		profile: false,
 		programArgs: [],
 	};
 
@@ -290,6 +302,10 @@ function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
 		}
 		if (argument === "--verbose") {
 			command.verbose = true;
+			continue;
+		}
+		if (argument === "--profile") {
+			command.profile = true;
 			continue;
 		}
 		if (argument.startsWith("-")) {
@@ -372,6 +388,7 @@ function parseTest(args: Array<string>): CliCommand {
 		bail: false,
 		timeoutMs: 5000,
 		compileConcurrency: 1,
+		profile: false,
 	};
 
 	for (let index = 1; index < args.length; index++) {
@@ -417,6 +434,10 @@ function parseTest(args: Array<string>): CliCommand {
 		}
 		if (argument === "--bail") {
 			command.bail = true;
+			continue;
+		}
+		if (argument === "--profile") {
+			command.profile = true;
 			continue;
 		}
 		if (argument.startsWith("-")) return unexpectedArgument("test", argument);

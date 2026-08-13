@@ -107,6 +107,12 @@ typedef size_t usize;
 #define MAL_NODE 0
 #endif
 
+/* Production-faithful source profiler. Profile builds opt in explicitly so
+ * ordinary binaries retain identical generated/runtime code and cache identity. */
+#ifndef MAL_PROFILE
+#define MAL_PROFILE 0
+#endif
+
 // GC build-dimension gates. These MUST live here (the shared low-level header
 // every TU includes first) rather than in gc.h: heap.h gates the header's `dirty`
 // remembered-set byte on `#if MAL_GC_GENERATIONAL` but includes only defaults.h,
