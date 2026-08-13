@@ -17,6 +17,36 @@ The exercise records measurements rather than enforcing machine-specific timing
 thresholds. Performance changes should compare the same binary, host, and cache
 scenario before and after the change.
 
+## Paired performance comparisons
+
+Use a paired comparison for Maligator changes instead of reading a single delta
+against the committed snapshot:
+
+```sh
+npm run bench -- language --compare HEAD --runs 5
+npm run bench -- --changed --compare HEAD
+```
+
+The runner exports the requested Git revision to a temporary directory, verifies
+that its lockfile matches the working tree, warms both trees, and alternates the
+base/head execution order. `--changed` maps the Git diff to the smallest relevant
+benchmark lanes. It starts with the requested number of pairs and may collect up to
+15 while a result remains uncertain.
+
+Every classified metric reports the paired median change and a bootstrapped 95%
+confidence interval. Wall time and throughput require a 3% effect; p99 latency,
+RSS, and GC pause metrics require 5%; binary size requires 0.5% and at least 32 KiB.
+The outcomes are `improvement`, `regression`, `unchanged`, and `inconclusive`. Only
+a statistically supported practical regression returns nonzero. An inconclusive
+result remains evidence to inspect, not a passing performance claim.
+
+Raw reports are retained under `.cache/bench-comparisons/`. They include every
+paired sample, metric direction, threshold, interval, source revision, selected
+lanes, and environment identity. The comparison refuses different
+`package-lock.json` contents rather than silently measuring different dependencies.
+The base revision must contain the paired-runner support; use a recent checkpoint
+when investigating older history.
+
 ## Cache ownership
 
 Maligator bounds its project-local rebuildable caches without touching source,

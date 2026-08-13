@@ -31,10 +31,10 @@ the command layer; native stages do not infer runtime ownership from the applica
 ```text
 maligator init
 maligator doctor [--verbose] [--target rust-triple]
-maligator build [entry] [--production] [--artifact directory] [--target rust-triple] [--config path]
-maligator run [entry] [--config path] [-- args...]
-maligator dev [entry] [--config path] [-- args...]
-maligator test [path ...] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
+maligator build [entry] [--production] [--profile] [--artifact directory] [--target rust-triple] [--config path]
+maligator run [entry] [--profile] [--config path] [-- args...]
+maligator dev [entry] [--profile] [--config path] [-- args...]
+maligator test [path ...] [--profile] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
 ```
 
 The working directory is always the project root. Relative entries and `--config`
@@ -56,6 +56,13 @@ at interactive cadence while dependencies under `node_modules` are checked less
 frequently. A compilation error leaves the watcher running so the next edit can
 recover. This is process restart, not in-process hot-module replacement.
 
+Add `--profile` to any of these four commands for a separately compiled,
+production-optimized image with bounded CPU, allocation, and GC evidence. `run`,
+`dev`, and `test` turn the capture into source-ranked findings and standard profile
+artifacts without introducing a separate profiling command. See
+[`docs/profiling.md`](docs/profiling.md) for workflows, artifact formats, quality
+signals, overhead policy, and current limitations.
+
 Use `build --production` and launch the reported binary directly for production.
 Adding `--artifact <directory>` creates a deployable artifact and therefore requires
 `--production`. The destination must be absent or empty. Its build-owned layout is:
@@ -64,6 +71,7 @@ Adding `--artifact <directory>` creates a deployable artifact and therefore requ
 artifact/
 ├── artifact.json
 ├── LICENSE
+├── profile.json          # only with --profile
 ├── SHA256SUMS
 └── bin/
     └── <application>
@@ -78,13 +86,18 @@ Unknown options, missing option values, and extra positional arguments are error
 
 ## Application tests
 
-`maligator test` is an interpreter-only toolchain path. It discovers
+Ordinary `maligator test` is an interpreter-only toolchain path. It discovers
 `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`, loads a shared dependency
 base plus independently cached registration fragments, and runs them in the
 interpreter already embedded in the Maligator executable. It never emits C or
 invokes a native compiler/linker. The content-addressed cache stores frontend
 wire artifacts, not successful results; every selected test executes on every
 command.
+
+`test --profile` is the explicit exception: it compiles the selected graph as one
+production AOT image so the profiler observes the code users ship. It retains test
+selection and reporting behavior but is intentionally a cold, toolchain-backed
+diagnostic path.
 
 ```typescript
 import { beforeEach, describe, expect, test } from "maligator:test";
@@ -485,6 +498,8 @@ npm run type-check
 npm run lint
 npm run bench                         # compare only; never updates the baseline
 npm run bench -- language --update  # update only the selected baseline lanes
+npm run bench -- language --compare HEAD --runs 5
+npm run bench -- --changed --compare HEAD
 
 # Complete standards reports without baseline updates. Ask before full Test262.
 npm run test262:report
@@ -508,7 +523,9 @@ npm run test:check -- --list
 ```
 
 See [`docs/testing.md`](docs/testing.md) for tier contents, fail-fast versus
-completion policies, full-matrix coverage, and where new tests belong.
+completion policies, paired performance comparisons, full-matrix coverage, and
+where new tests belong. See [`docs/profiling.md`](docs/profiling.md) for application
+performance investigation.
 
 ## Structure
 
