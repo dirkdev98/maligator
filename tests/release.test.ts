@@ -32,8 +32,10 @@ describe("build artifacts", () => {
 		const source = path.join(root, "source");
 		const license = path.join(root, "LICENSE");
 		const directory = path.join(root, "artifact");
+		const profile = path.join(root, "profile.json");
 		writeFileSync(source, "native-binary");
 		writeFileSync(license, "MIT");
+		writeFileSync(profile, '{"schema":1}\n');
 		chmodSync(source, 0o755);
 
 		const result = createBuildArtifact({
@@ -44,6 +46,7 @@ describe("build artifacts", () => {
 			version: MALIGATOR_VERSION,
 			target: "aarch64-apple-darwin",
 			production: true,
+			additionalFiles: [{ sourcePath: profile, path: "profile.json" }],
 		});
 
 		expect(readFileSync(result.binaryPath, "utf-8")).toBe("native-binary");
@@ -64,12 +67,21 @@ describe("build artifacts", () => {
 					sha256: "e5dcffe836b6ec8a58e492419b550e65fb8cbdc308503979e5dacb33ac7ea3b7",
 					bytes: 3,
 				},
+				{
+					path: "profile.json",
+					sha256: "6b823fa123b900a4139de2101277275af8329f3a3d34c00ef3bf4fc6bf60287e",
+					bytes: 13,
+				},
 			],
 		});
 		expect(readFileSync(path.join(directory, "LICENSE"), "utf-8")).toBe("MIT");
+		expect(readFileSync(path.join(directory, "profile.json"), "utf-8")).toBe(
+			'{"schema":1}\n',
+		);
 		expect(readFileSync(result.checksumsPath, "utf-8")).toBe(
 			`${result.manifest.files[0]!.sha256}  bin/maligator\n` +
-				`${result.manifest.files[1]!.sha256}  LICENSE\n`,
+				`${result.manifest.files[1]!.sha256}  LICENSE\n` +
+				`${result.manifest.files[2]!.sha256}  profile.json\n`,
 		);
 		expect(() =>
 			createBuildArtifact({

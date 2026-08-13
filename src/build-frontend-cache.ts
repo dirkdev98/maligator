@@ -106,6 +106,8 @@ export interface CompileBuildFrontendOptions {
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	optimization?: "development" | "full";
+	/** Include source-site identities and compiler remarks in the live definition. */
+	profile?: boolean;
 	cacheDirectory?: string;
 	session?: FrontendCompilationSession;
 	/** Apply build-time eval/RegExp policy checks. Defaults to true. */
@@ -594,6 +596,7 @@ function compileDefinition(
 ): VmDefinition {
 	return compileSemanticProgramToVmDefinition(semantic, {
 		optimization: options.optimization,
+		profile: options.profile,
 		afterOptimization: options.afterOptimization,
 		runPhase(phase, run) {
 			const phaseStartedAt = Date.now();

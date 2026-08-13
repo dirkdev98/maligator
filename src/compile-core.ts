@@ -15,6 +15,8 @@ export type CompileCorePhase =
 
 export interface CompileCoreOptions {
 	optimization?: "development" | "full";
+	/** Derive source-site identities and compiler remarks for a profiled image. */
+	profile?: boolean;
 	ir?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -45,5 +47,7 @@ export function compileSemanticProgramToVmDefinition(
 			? allocateDevelopmentRegisters(ir)
 			: allocateRegisters(ir),
 	);
-	return runPhase("lower to vm", () => lowerIrProgramToVmDefinition(ir));
+	return runPhase("lower to vm", () =>
+		lowerIrProgramToVmDefinition(ir, options.profile === true),
+	);
 }

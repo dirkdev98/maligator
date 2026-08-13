@@ -261,7 +261,10 @@ console.log(${JSON.stringify("__MALIGATOR_TEST_RESULT__")} + JSON.stringify(__re
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	return {
-		definition: compileSemanticProgramToVmDefinition(semantic, { optimization: "full" }),
+		definition: compileSemanticProgramToVmDefinition(semantic, {
+			optimization: "full",
+			profile: true,
+		}),
 		entries,
 		dependencies,
 	};

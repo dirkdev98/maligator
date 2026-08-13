@@ -164,7 +164,9 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 	);
 	// Tests intentionally bypass build policy so disabled-feature fixtures can
 	// compile and assert the runtime behavior of the reduced engine.
-	const definition = compileSemanticProgramToVmDefinition(semanticProgram);
+	const definition = compileSemanticProgramToVmDefinition(semanticProgram, {
+		profile: options.profileEnabled,
+	});
 	const cSource = emitVmDefinition(definition, {
 		compiled: options.compiled ?? true,
 		assets: includeConfiguredAssets(config.assets),

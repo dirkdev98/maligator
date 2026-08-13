@@ -17,6 +17,7 @@ export interface BuildArtifactOptions {
 	version: string;
 	target: string;
 	production: boolean;
+	additionalFiles?: Array<{ sourcePath: string; path: string }>;
 }
 
 export interface BuildArtifactManifest {
@@ -80,6 +81,26 @@ export function createBuildArtifact(options: BuildArtifactOptions): BuildArtifac
 			path: "LICENSE",
 			sha256: hash("sha256", license, "hex"),
 			bytes: license.length,
+		});
+	}
+	for (const additional of options.additionalFiles ?? []) {
+		const relativePath = additional.path.replaceAll("\\", "/");
+		if (
+			path.isAbsolute(additional.path) ||
+			relativePath === "" ||
+			relativePath.split("/").some((part) => part === "" || part === "." || part === "..") ||
+			manifest.files.some((file) => file.path === relativePath)
+		) {
+			throw new Error(`artifact file path must be unique and relative: ${additional.path}`);
+		}
+		const destination = path.join(directory, relativePath);
+		mkdirSync(path.dirname(destination), { recursive: true });
+		copyFileSync(additional.sourcePath, destination);
+		const contents = readFileSync(destination);
+		manifest.files.push({
+			path: relativePath,
+			sha256: hash("sha256", contents, "hex"),
+			bytes: contents.length,
 		});
 	}
 	const manifestPath = path.join(directory, "artifact.json");

@@ -419,6 +419,7 @@ function compileAndBuild(
 					stripperIdentity: context.installation.frontendIdentity,
 					session: frontendSession,
 					optimization: production ? "full" : "development",
+					profile: command.profile,
 					enforcePolicies: !(
 						command.kind === "build" && command.internal.serializePath !== undefined
 					),
@@ -739,6 +740,15 @@ function compileAndBuild(
 					version: MALIGATOR_VERSION,
 					target: nativeContext.toolchain.rustTarget,
 					production: true,
+					additionalFiles:
+						preparedProfile === undefined
+							? undefined
+							: [
+									{
+										sourcePath: `${binaryPath}.profile.json`,
+										path: "profile.json",
+									},
+								],
 				});
 			} catch (error) {
 				commandError(

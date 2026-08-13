@@ -1125,7 +1125,10 @@ export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
 /**
  * Lower optimized IR to a VM definition that can then be emitted as C.
  */
-export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDefinition {
+export function lowerIrProgramToVmDefinition(
+	program: IntermediateProgram,
+	profile = false,
+): VmDefinition {
 	// Build the debug-info file table: distinct source paths in first-seen order.
 	const files: Array<string> = [];
 	const fileToIndex = new Map<string, number>();
@@ -1155,7 +1158,7 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
 		files,
 		sourcePositions: program.sourcePositions,
 	};
-	buildProfileMetadata(program, definition);
+	if (profile) buildProfileMetadata(program, definition);
 	return definition;
 }
 

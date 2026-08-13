@@ -10,8 +10,21 @@ function compile(source: string) {
 		"/project/src/profile-fixture.js",
 		parseScript(source, { strict: true }),
 	);
-	return compileSemanticProgramToVmDefinition(semantic);
+	return compileSemanticProgramToVmDefinition(semantic, { profile: true });
 }
+
+test("ordinary compilation skips profile-only metadata", () => {
+	const source = `function hot(object, key) { return object[key]; }`;
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		source,
+		"/project/src/ordinary-fixture.js",
+		parseScript(source, { strict: true }),
+	);
+	const definition = compileSemanticProgramToVmDefinition(semantic);
+
+	expect(definition.profileSites).toBeUndefined();
+	expect(definition.profileRemarks).toBeUndefined();
+});
 
 test("profile sites keep logical identity across unrelated line insertions", () => {
 	const source = `function hot(object, key) { return object[key]; }\nhot(globalThis, "x");`;
