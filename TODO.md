@@ -75,6 +75,12 @@ hot `String#split` and `slice` sites stayed generic even though the final genera
 contains `mal_builtin_string_split_projection` and
 `mal_builtin_string_slice_to_number_direct` at those sites. Raw samples are useful;
 compiler remarks must describe the final emitted path before they guide optimization.
+The raw sampler has nevertheless proven useful for target selection: its line-60
+`String#search` signal led to the fixed-literal RegExp construction-elision checkpoint.
+That checkpoint removed the exact 105,600 targeted executions, cut managed allocation
+by about 8 MiB, and produced a paired 6.63% string-lane wall win. Treat this as evidence
+that source attribution works, while retaining the quality caveats above and requiring
+generated-code inspection plus paired measurement for every optimization claim.
 
 - [ ] Generate optimization remarks from final backend decisions, with exact operation
       identity and stable reason codes such as unknown target set, invalidatable epoch,

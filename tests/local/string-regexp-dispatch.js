@@ -13,6 +13,32 @@ function throwsTypeError(fn) {
 	return false;
 }
 
+function fixedLiteralSearch(value) {
+	return value.search(/needle=/);
+}
+check(
+	"closed fixed RegExp literal search preserves substring positions",
+	fixedLiteralSearch("needle=value") === 0 &&
+		fixedLiteralSearch("xxneedle=value") === 2 &&
+		fixedLiteralSearch("no match") === -1 &&
+		fixedLiteralSearch("😀needle=value") === 2,
+);
+let fixedObjectCalls = 0;
+const fixedObjectReceiver = {
+	search(regexp) {
+		fixedObjectCalls++;
+		return regexp instanceof RegExp ? 47 : -1;
+	},
+};
+check(
+	"closed fixed RegExp literal search preserves object receiver dispatch",
+	fixedLiteralSearch(fixedObjectReceiver) === 47 && fixedObjectCalls === 1,
+);
+check(
+	"closed fixed RegExp literal search preserves null receiver throws",
+	throwsTypeError(() => fixedLiteralSearch(null)),
+);
+
 const primitiveCases = [
 	[BigInt.prototype, 1n, "a1b1c", "1", 1, 3],
 	[Boolean.prototype, true, "atruebtruec", "true", 1, 6],
@@ -432,6 +458,54 @@ check(
 	"RegExp iteration keeps its initially captured next method",
 	capturedNextCount === 2,
 );
+
+const savedPrototypeSearch = RegExp.prototype[Symbol.search];
+const savedPrototypeExec = RegExp.prototype.exec;
+RegExp.prototype.exec = function (value) {
+	return { 0: "custom", index: value.length + 5, input: value, length: 1 };
+};
+check(
+	"closed fixed RegExp literal search observes prototype exec mutation",
+	fixedLiteralSearch("needle=value") === 17,
+);
+RegExp.prototype.exec = savedPrototypeExec;
+
+RegExp.prototype[Symbol.search] = function () {
+	return 41;
+};
+check(
+	"closed fixed RegExp literal search observes protocol mutation",
+	fixedLiteralSearch("needle=value") === 41,
+);
+RegExp.prototype[Symbol.search] = function () {
+	throw new RangeError("custom search throw");
+};
+let fixedSearchCaught = false;
+try {
+	fixedLiteralSearch("needle=value");
+} catch (error) {
+	fixedSearchCaught =
+		error instanceof RangeError && error.message === "custom search throw";
+}
+check(
+	"closed fixed RegExp literal search preserves throwing protocol",
+	fixedSearchCaught,
+);
+RegExp.prototype[Symbol.search] = savedPrototypeSearch;
+check(
+	"closed fixed RegExp literal search remains correct after protocol restore",
+	fixedLiteralSearch("needle=value") === 0,
+);
+
+const savedStringSearch = String.prototype.search;
+String.prototype.search = function () {
+	return 43;
+};
+check(
+	"closed fixed RegExp literal search observes method replacement",
+	fixedLiteralSearch("needle=value") === 43,
+);
+String.prototype.search = savedStringSearch;
 
 let passed = 0;
 for (const [name, condition] of results) {

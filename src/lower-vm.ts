@@ -643,6 +643,8 @@ export type VmInstruction =
 			directStringCharCodeAtPosition?: "integer" | "inBounds";
 			/** COMPILE-ONLY: closed String.prototype.search over a fresh RegExp literal. */
 			directStringSearchRegExp?: true;
+			/** COMPILE-ONLY: consume an elided fixed RegExp literal search result. */
+			directStringSearchLiteralConstructIp?: number;
 			/** COMPILE-ONLY: guarded intrinsic Map/Set method dispatch. */
 			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
 	  }
@@ -654,6 +656,13 @@ export type VmInstruction =
 			arguments: Array<number>;
 			/** COMPILE-ONLY: guarded direct script-constructor target for native emission. */
 			directFunctionIndex?: number;
+			/** COMPILE-ONLY: fixed literal search attempted at this construction site. */
+			directStringSearchLiteral?: {
+				callIp: number;
+				searchCallee: number;
+				receiver: number;
+				patternStringIndex: number;
+			};
 	  }
 	| {
 			opcode: "THROW";

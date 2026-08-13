@@ -2730,6 +2730,18 @@ function emitBody(
 			`u32 __string_scan_${region.entryIp}_matches = 0;`,
 		);
 	}
+	for (const instruction of fn.instructions) {
+		if (
+			instruction.opcode !== "CONSTRUCT" ||
+			instruction.directStringSearchLiteral === undefined
+		) {
+			continue;
+		}
+		lines.push(
+			`bool __string_search_literal_${instruction.directStringSearchLiteral.callIp}_fast = false;`,
+			`MalValue __string_search_literal_${instruction.directStringSearchLiteral.callIp}_result = MAL_VALUE_UNDEFINED;`,
+		);
+	}
 	for (const site of stringSplitProjectionSites.values()) {
 		lines.push(
 			`bool __string_split_${site.projection.callIp}_fast = false;`,
@@ -4664,6 +4676,31 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (
+				instruction.directStringSearchRegExp === true &&
+				instruction.directStringSearchLiteralConstructIp !== undefined
+			) {
+				const fast = `__string_search_literal_${ip}_fast`;
+				const direct = `__string_search_literal_${ip}_result`;
+				const regexpDirect = `__string_search_${ip}_result`;
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`if (${fast}) {`,
+					`  r${instruction.dst} = ${direct};`,
+					`} else {`,
+					`  MalValue ${regexpDirect};`,
+					`  if (mal_builtin_string_search_regexp_direct(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &${regexpDirect})) {`,
+					`    ${throwCheck}`,
+					`    r${instruction.dst} = ${regexpDirect};`,
+					`  } else {`,
+					`    MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`    if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`    r${instruction.dst} = ${tmp}.value;`,
+					`  }`,
+					`}`,
+					poll,
+				];
+			}
 			if (instruction.directStringSearchRegExp === true) {
 				const direct = `__string_search_${ip}_result`;
 				return [
@@ -4938,6 +4975,22 @@ function emitInstruction(
 				instruction.directFunctionIndex === undefined
 					? `mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`
 					: `mal_vm_construct_direct(vm, ${instruction.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
+			if (instruction.directStringSearchLiteral !== undefined) {
+				const site = instruction.directStringSearchLiteral;
+				const fast = `__string_search_literal_${site.callIp}_fast`;
+				const direct = `__string_search_literal_${site.callIp}_result`;
+				return [
+					`${fast} = mal_builtin_string_search_literal_direct(vm, ${boxedOperand(site.searchCallee)}, ${boxedOperand(site.receiver)}, &mal_strings${suffix}[${site.patternStringIndex}], &${direct});`,
+					`if (${fast}) {`,
+					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+					`} else {`,
+					`  MalCompletion ${tmp} = ${construct};`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
 			return [
 				`MalCompletion ${tmp} = ${construct};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,

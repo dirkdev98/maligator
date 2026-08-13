@@ -1668,12 +1668,7 @@ function annotateNativeStringSliceNumberFusions(definition: VmDefinition): void 
 	}
 }
 
-/**
- * Mark the exact lowered shape of `primitiveString.search(/literal/flags)`.
- * The RegExp construction remains observable in the fallback and still runs on
- * the fast path; native emission only collapses the closed String/RegExp
- * protocol after the freshly constructed object exists.
- */
+/** Mark the exact lowered shape of `primitiveString.search(/literal/flags)`. */
 function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
 	for (const fn of definition.functions) {
 		const entryTargets = new Set<number>(fn.handlers.map((handler) => handler.handlerIp));
@@ -1716,6 +1711,40 @@ function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
 				)
 			) {
 				continue;
+			}
+			const patternUnits = definition.stringConstants[pattern.index] ?? [];
+			const flagsUnits = definition.stringConstants[flags.index] ?? [];
+			const fixedLiteral =
+				patternUnits.length > 0 &&
+				flagsUnits.length === 0 &&
+				patternUnits.every(
+					(unit) =>
+						unit <= 0x7f && !"\\\\^$.*+?{}[]()|".includes(String.fromCharCode(unit)),
+				);
+			let literalHasOtherUse = false;
+			if (fixedLiteral) {
+				const callee = decodeVmValueOperand(call.callee);
+				const receiver = decodeVmValueOperand(call.thisValue);
+				literalHasOtherUse =
+					(callee.kind === "register" && callee.register === construct.dst) ||
+					(receiver.kind === "register" && receiver.register === construct.dst);
+				for (let ip = callIp; ip < fn.instructions.length; ip++) {
+					const instruction = fn.instructions[ip]!;
+					if (vmInstructionUsesRegister(instruction, construct.dst) && ip !== callIp) {
+						literalHasOtherUse = true;
+						break;
+					}
+					if (vmInstructionDefinesRegister(instruction, construct.dst)) break;
+				}
+			}
+			if (fixedLiteral && !literalHasOtherUse) {
+				construct.directStringSearchLiteral = {
+					callIp,
+					searchCallee: call.callee,
+					receiver: call.thisValue,
+					patternStringIndex: pattern.index,
+				};
+				call.directStringSearchLiteralConstructIp = callIp - 1;
 			}
 			call.directStringSearchRegExp = true;
 		}

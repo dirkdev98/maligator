@@ -69,6 +69,15 @@ bool mal_builtin_string_search_regexp_direct(
     MalValue *out
 );
 
+/** Allocation-free fixed-literal search used before constructing a closed RegExp. */
+bool mal_builtin_string_search_literal_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue receiver,
+    MalString *pattern,
+    MalValue *out
+);
+
 /**
  * Producer-consumer fusion for exact builtin `string.slice(start)` immediately
  * consumed by the exact Number constructor. Guard failure is side-effect-free.

@@ -1032,8 +1032,22 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.locate = locate;
 		`);
+		expect(output).toContain("mal_builtin_string_search_literal_direct(vm,");
 		expect(output).toContain("mal_builtin_string_search_regexp_direct(vm,");
+		expect(output).toContain("mal_vm_construct_value(vm,");
 		expect(output).toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("keeps RegExp literals materialized when fixed search proof does not apply", () => {
+		for (const source of [
+			`function locate(value) { return value.search(/need.e=/); }`,
+			`function locate(value) { return value.search(/needle=/i); }`,
+			`function locate(value) { return value.search(/needle\\=/); }`,
+			`function locate(value) { const regexp = /needle=/; consume(regexp); return value.search(regexp); }`,
+		]) {
+			const output = emit(`${source} globalThis.locate = locate;`);
+			expect(output).not.toContain("mal_builtin_string_search_literal_direct(vm,");
+		}
 	});
 
 	it("projects selected captures from a closed RegExp exec result", () => {
