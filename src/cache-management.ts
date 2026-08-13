@@ -278,7 +278,7 @@ export function maybeMaintainMaligatorCache(
 	}
 	const result = pruneMaligatorCache({
 		cacheRoot: root,
-		maxBytes: 8 * GIB,
+		maxBytes: AUTOMATIC_CACHE_MAX_BYTES,
 		minAgeMs: 7 * DAY,
 	});
 	mkdirSync(path.dirname(statePath), { recursive: true });
@@ -297,6 +297,7 @@ export function touchCacheEntry(target: string): void {
 
 export const DEFAULT_CACHE_MAX_BYTES = 5 * GIB;
 export const DEFAULT_CACHE_MIN_AGE_MS = DAY;
+export const AUTOMATIC_CACHE_MAX_BYTES = 16 * GIB;
 
 export function formatCacheBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
