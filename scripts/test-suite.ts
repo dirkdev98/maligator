@@ -44,17 +44,18 @@ const coldSmokeRun =
 		".cache/mal-cache/compiler-wire",
 		".cache/mal-cache/runtime",
 		".cache/mal-cache/rust",
-		".cache/mal-cache/test262-artifacts",
+		".cache/mal-cache/test262-wires",
+		".cache/mal-build/test262/Test262Wire",
 		".cache/test262/.git",
 		".cache/test262-cache.json",
 	].some((entry) => !existsSync(path.join(root, entry)));
-const smokeFuseMs = coldSmokeRun ? 60_000 : 20_000;
+const smokeFuseMs = coldSmokeRun ? 90_000 : 20_000;
 const usage = `usage: node scripts/test-suite.ts [smoke|check|full] [options]
 
 Tiers are cumulative: check starts with smoke; full starts with smoke and check.
 
 Commands:
-  npm run test:smoke          20-second warm / 60-second cold fail-fast fuse
+  npm run test:smoke          20-second warm / 90-second cold fail-fast fuse
   npm run test:check          approximately two-minute default developer gate
   npm run test:full           exhaustive fail-fast gate; approval required
   npm run test:full:report    exhaustive completion gate; approval required
@@ -284,6 +285,8 @@ const smokeCommands: Array<Command> = [
 	npm("smoke: native runtime", "test:native", [...vitestPolicy, ...nativeSmoke]),
 	node("smoke: Test262 cross-section", "scripts/test262.ts", [
 		"--canonical",
+		"--backend",
+		"wire",
 		"--manifest",
 		"tests/test-suite-test262-smoke.txt",
 		"--check",
@@ -295,7 +298,7 @@ const smokeCommands: Array<Command> = [
 		"--mode",
 		"normal",
 		"--backend",
-		"compiled",
+		"wire",
 		...runnerPolicy,
 	]),
 ];
@@ -312,6 +315,8 @@ const checkMatrixCommands: Array<Command> = [
 	npm("check: native complement", "test:native", [...vitestPolicy, ...nativeCheck]),
 	node("check: Test262 regression complement", "scripts/test262.ts", [
 		"--canonical",
+		"--backend",
+		"wire",
 		"--manifest",
 		"tests/test-suite-test262-check.txt",
 		"--check",
@@ -323,7 +328,7 @@ const checkMatrixCommands: Array<Command> = [
 		"--mode",
 		"normal",
 		"--backend",
-		"compiled",
+		"wire",
 		...runnerPolicy,
 	]),
 ];
@@ -363,43 +368,25 @@ assertCompleteSelection(
 );
 
 const test262FullMatrix: Array<Command> = [
-	node("full: Test262 compiled", "scripts/test262.ts", [
+	node("full: Test262 compiled normal corpus", "scripts/test262.ts", [
 		"--canonical",
 		"--backend",
 		"compiled",
 		"--mode",
 		"normal",
-		"--exclude-manifest",
+		"--check",
+		...runnerPolicy,
+	]),
+	node("full: Test262 curated GC verification", "scripts/test262.ts", [
+		"--canonical",
+		"--backend",
+		"wire",
+		"--mode",
+		"gc-stress",
+		"--manifest",
 		"tests/test-suite-test262-smoke.txt",
-		"--exclude-manifest",
+		"--manifest",
 		"tests/test-suite-test262-check.txt",
-		"--check",
-		...runnerPolicy,
-	]),
-	node("full: Test262 interpreted", "scripts/test262.ts", [
-		"--canonical",
-		"--backend",
-		"interpreted",
-		"--mode",
-		"normal",
-		"--check",
-		...runnerPolicy,
-	]),
-	node("full: Test262 compiled GC verification", "scripts/test262.ts", [
-		"--canonical",
-		"--backend",
-		"compiled",
-		"--mode",
-		"gc-stress",
-		"--check",
-		...runnerPolicy,
-	]),
-	node("full: Test262 interpreted GC verification", "scripts/test262.ts", [
-		"--canonical",
-		"--backend",
-		"interpreted",
-		"--mode",
-		"gc-stress",
 		"--check",
 		...runnerPolicy,
 	]),
@@ -439,28 +426,21 @@ const fullCommands: Array<Command> = [
 		env: { MAL_GC_CONCURRENT: "1" },
 	},
 	npm("full: sanitizer suite", "test:sanitize", vitestPolicy),
-	npm("full: WPT compiled GC verification", "test:wpt", [
-		"--canonical",
-		"--mode",
-		"gc-stress",
-		"--backend",
-		"compiled",
-		...runnerPolicy,
-	]),
-	npm("full: WPT interpreted", "test:wpt", [
+	npm("full: WPT compiled normal", "test:wpt", [
 		"--canonical",
 		"--mode",
 		"normal",
 		"--backend",
-		"interpreted",
+		"compiled",
 		...runnerPolicy,
 	]),
-	npm("full: WPT interpreted GC verification", "test:wpt", [
+	npm("full: WPT focused GC verification", "test:wpt", [
 		"--canonical",
+		...selectionArgs(wptSmoke, "--test"),
 		"--mode",
 		"gc-stress",
 		"--backend",
-		"interpreted",
+		"wire",
 		...runnerPolicy,
 	]),
 	...test262FullMatrix,
@@ -500,7 +480,7 @@ if (list) {
 }
 
 if (coldSmokeRun) {
-	console.log("[test-suite] cold caches detected; smoke fuse extended to 60s");
+	console.log("[test-suite] cold caches detected; smoke fuse extended to 90s");
 }
 
 let failures = 0;

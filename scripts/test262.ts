@@ -56,7 +56,7 @@ const usage = `usage: node scripts/test262.ts [options]
 
 Options:
   --canonical                  scrub ambient test dimensions
-  --backend compiled|interpreted
+  --backend compiled|interpreted|wire
   --mode normal|gc-stress
   --manifest <file>            include listed paths; repeat to union manifests
   --exclude-manifest <file>    omit listed paths; repeat to union manifests
@@ -110,8 +110,12 @@ function parseArguments(): Test262Arguments {
 
 const arguments_ = parseArguments();
 const requestedBackend = arguments_.backend ?? "compiled";
-if (requestedBackend !== "compiled" && requestedBackend !== "interpreted") {
-	throw new Error(`--backend only supports 'compiled' or 'interpreted'`);
+if (
+	requestedBackend !== "compiled" &&
+	requestedBackend !== "interpreted" &&
+	requestedBackend !== "wire"
+) {
+	throw new Error(`--backend only supports 'compiled', 'interpreted', or 'wire'`);
 }
 const requestedMode = arguments_.mode ?? "normal";
 if (requestedMode !== "normal" && requestedMode !== "gc-stress") {
@@ -131,6 +135,7 @@ if (
 	reexecWithCleanTestEnvironment("TEST262_CANONICAL_CHILD", {
 		...tuning,
 		...(requestedBackend === "interpreted" ? { MAL_INTERP: "1" } : {}),
+		...(requestedBackend === "wire" ? { T262_WIRE: "1" } : {}),
 		...(requestedMode === "gc-stress" ? { MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" } : {}),
 	});
 }
@@ -418,7 +423,9 @@ async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 	}
 	const workerCount = test262WorkerCount(compileWorkers, batches.length);
 	test262Log(
-		`Throughput: batch ${batchSize}, ${workerCount} compile workers, generated C -O0, runtime -O2, full IR, LTO off.`,
+		requestedBackend === "wire"
+			? `Throughput: batch ${batchSize}, ${workerCount} compile workers, cached MalW, shared runtime, full IR.`
+			: `Throughput: batch ${batchSize}, ${workerCount} compile workers, generated C -O0, runtime -O2, full IR, LTO off.`,
 	);
 
 	const run = await runWithWorkers(workerCount, batches, variant);
@@ -561,7 +568,7 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 		JSON.stringify(
 			{
 				schemaVersion: 1,
-				backend: process.env.MAL_INTERP === "1" ? "interpreted" : "compiled",
+				backend: requestedBackend,
 				mode: process.env.MAL_GC_STRESS ? "gc-stress" : "normal",
 				policy,
 				complete: true,

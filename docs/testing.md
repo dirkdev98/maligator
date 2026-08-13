@@ -21,8 +21,8 @@ scenario before and after the change.
 
 | Tier  | Command              | Policy                    | Intended use                                                                                     |
 | ----- | -------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| Smoke | `npm run test:smoke` | Bail, 20s warm / 60s cold | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
-| Check | `npm run test:check` | Bail, about two minutes   | All regular unit tests, curated compiled/normal standards, and native regression complement      |
+| Smoke | `npm run test:smoke` | Bail, 20s warm / 90s cold | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
+| Check | `npm run test:check` | Bail, about two minutes   | All regular unit tests, curated wire/normal standards, and native regression complement          |
 | Full  | `npm run test:full`  | Bail, unbounded           | Self-hosting, remaining native coverage, standards dimensions, sanitizers, collectors, and leaks |
 
 Smoke and check own disjoint unit selections: the small
@@ -40,16 +40,17 @@ differential follows the two-minute matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 
 The smoke fuse measures its cumulative stages and fails if they exceed 20
-seconds on a warm run. It allows 60 seconds when the reusable native or Test262
+seconds on a warm run. It allows 90 seconds when the reusable native or Test262
 cache roots are missing. It does not kill a native build in progress because
 terminating an npm wrapper can orphan compiler descendants. Both budgets include
 cache population rather than silently excluding it from the measurement.
 
-The compiled/normal Test262 smoke and check manifests are excluded from that
-dimension's full-corpus command because they have already run cumulatively. Check
-likewise owns every curated compiled/normal WPT; full adds only the interpreted and
-GC-stress dimensions. Manifest validation rejects overlap, unknown paths, omissions
-from the curated WPT set, and duplicate stage invocations.
+Smoke and check compile their standards selections to cached MalW and execute
+them in reusable standard runtimes. Full reruns the complete Test262 corpus and
+curated WPT set through the authoritative compiled/normal path, then applies GC
+stress only to representative curated selections. Manifest validation rejects
+overlap, unknown paths, omissions from the curated WPT set, and duplicate stage
+invocations.
 
 ## Policies
 
@@ -71,10 +72,10 @@ npm run test:full:report
 
 `test262:report` runs the authoritative compiled/normal corpus without updating
 the committed baseline. `test:wpt:report` runs every currently curated WPT in
-compiled/normal mode. `test:wpt:matrix-report` explicitly requires normal and
-GC-stress execution on both backends, rather than relying on each manifest
-entry's defaults. `test:full:report` completes every full-gate stage and all
-backend/GC correctness dimensions even if an earlier stage fails. Test262 writes
+compiled/normal mode. `test:wpt:matrix-report` remains an explicit diagnostic
+that requires normal and GC-stress execution on the compiled and interpreted
+backends; it is not part of the routine full gate. `test:full:report` completes
+every full-gate stage even if an earlier stage fails. Test262 writes
 dimension-specific strict, sloppy, and combined reports under
 `.cache/mal-build/test262*/`.
 
@@ -89,19 +90,20 @@ Plain `npm run test262` is the explicit baseline-update command and may rewrite
 `scripts/test262.json`. Both it and `npm run test262:report` traverse the full
 corpus; ask before running either command, `test:full`, or `test:full:report`.
 
-## Full Matrix
+## Full standards policy
 
-The exhaustive standards matrix is:
+The full gate uses these deliberately non-Cartesian standards dimensions:
 
-| Backend     | Runtime mode                      |
-| ----------- | --------------------------------- |
-| Compiled    | Normal                            |
-| Interpreted | Normal                            |
-| Compiled    | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
-| Interpreted | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
+| Selection                   | Backend  | Runtime mode                      |
+| --------------------------- | -------- | --------------------------------- |
+| Complete Test262 corpus     | Compiled | Normal                            |
+| Curated Test262 regressions | Wire     | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
+| Complete curated WPT set    | Compiled | Normal                            |
+| WPT smoke cross-section     | Wire     | `MAL_GC_STRESS=1 MAL_GC_VERIFY=1` |
 
-Normal and GC-verification executions reuse the same backend binary. The full
-gate additionally runs the targeted GC suite under non-generational and
+Wire executions cache compiler artifacts but always execute every selected test
+in a fork-isolated standard runtime. The full gate additionally runs the targeted
+GC suite under non-generational and
 concurrent collector builds, the platform sanitizer lane, and the macOS leak
 audit. "Full WPT" means every test in the pinned server-runtime curated corpus,
 not the complete browser WPT repository.
@@ -123,13 +125,16 @@ npm run test:native -- tests/native/example.test.ts
 npm run test:sanitize -- tests/native/example.test.ts
 npm run test:rust
 npm run test262:regressions
-npm run test262:regressions -- --backend interpreted --mode gc-stress
+npm run test262:prepare
 npm run test:wpt -- --test url/url-tojson.any.js --mode normal
 ```
 
 `npm run test:unit` is the unit-only watch loop. Add `-- --run` for one-shot unit
 execution; `npm test run` runs both Vitest projects once. The Rust lane is
-full-only because it compiles the feature-complete crate. The full Test262 corpus
+full-only because it compiles the feature-complete crate. `test262:prepare` is
+the only Test262 command that clones, fetches, or checks out the pinned full
+corpus. All execution commands consume that cached checkout read-only and name
+this recovery command when it is absent or stale. The full Test262 corpus
 requires explicit approval; targeted filters and manifests do not.
 
 Use `npm run test:help` for tier policy and
@@ -171,10 +176,13 @@ they want before adding the test.
   the direct lane covers the same curated set as the cumulative check tier.
 - Every Test262 manifest path must exist in the pinned corpus; missing paths fail.
 - Test262 checkout and cache revisions must match `TEST262_METADATA.revision`.
-  To advance the corpus, update that revision deliberately, run the approved
-  baseline-update command, and commit the resulting `scripts/test262.json` change.
+  Run `npm run test262:prepare` to populate or repair the cached full corpus;
+  never vendor upstream Test262 files. To advance the corpus, update that revision
+  deliberately, run the approved baseline-update command, and commit the resulting
+  `scripts/test262.json` change.
 - WPT smoke/check manifests are disjoint curated subsets; the full tier reruns
-  the complete curated backend/GC matrix in one report-producing invocation.
+  compiled/normal across the complete curated set and GC stress on the smoke
+  cross-section.
 - Keep smoke to a broad semantic cross-section. Add a Test262 path to check only
   when the failure mode is costly, cross-cutting, recurrent, or otherwise more
   valuable than ordinary full-corpus coverage; novelty alone is not a reason.

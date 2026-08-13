@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import {
+	existsSync,
 	mkdirSync,
 	readFileSync,
 	readdirSync,
@@ -24,6 +25,7 @@ import { compileEntrypointToBuffer } from "../compile-program.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
+import { buildLocalBinary } from "../local-build.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
 import type { VmDefinition } from "../lower-vm.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";
@@ -33,6 +35,7 @@ import { ensureNativeArtifacts } from "../runtime-build.ts";
 import type { NativeArtifacts } from "../runtime-build.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-program.ts";
+import { deserializeVmDefinition, serializeVmDefinition } from "../serialize-vm.ts";
 import { requireToolchain } from "../toolchain.ts";
 import type { Toolchain } from "../toolchain.ts";
 import { stripTypesWithTypeScript } from "../typescript-strip.ts";
@@ -113,6 +116,7 @@ export type Test262NativeArtifactPaths = {
 export type Test262NativeBuildInputs = {
 	toolchain: Toolchain;
 	artifacts: Test262NativeArtifactPaths;
+	wireRunner?: string;
 };
 
 let nativeBuildInputs: Test262NativeBuildInputs | undefined;
@@ -128,6 +132,7 @@ export function test262NativeBuildInputs(): Test262NativeBuildInputs {
 export function test262SetNativeBuildInputs(inputs: Test262NativeBuildInputs): void {
 	nativeBuildInputs = {
 		toolchain: inputs.toolchain,
+		wireRunner: inputs.wireRunner,
 		artifacts: {
 			c: { engine: inputs.artifacts.c.engine },
 			rust: { linkArgs: [...inputs.artifacts.rust.linkArgs] },
@@ -140,9 +145,17 @@ export function test262NativeArtifacts(): Test262NativeArtifactPaths {
 }
 
 export function test262ReportPath(variant: "strict" | "sloppy" | "combined"): string {
-	const backend = process.env.MAL_INTERP === "1" ? "interpreted" : "compiled";
+	const backend = wireBackend()
+		? "wire"
+		: process.env.MAL_INTERP === "1"
+			? "interpreted"
+			: "compiled";
 	const mode = process.env.MAL_GC_STRESS ? "gc-stress" : "normal";
 	return `${BUILD_PATH}/report-${backend}-${mode}-${variant}.json`;
+}
+
+function wireBackend(): boolean {
+	return process.env.T262_WIRE === "1";
 }
 
 /**
@@ -327,7 +340,19 @@ export function test262PrepareBuild() {
 		},
 	});
 	const artifacts = ensureNativeArtifacts(nativeContext);
-	test262SetNativeBuildInputs({ toolchain, artifacts });
+	const wireRunner = wireBackend()
+		? buildLocalBinary({
+				context: nativeContext,
+				name: "Test262Wire",
+				cSource: '#include "vm.h"\n',
+				verbose: false,
+				mainFile: path.resolve("runtime/test262_wire.c"),
+				outDir: BUILD_PATH,
+			}).binaryPath
+		: undefined;
+	test262SetNativeBuildInputs({ toolchain, artifacts, wireRunner });
+
+	if (wireBackend()) return;
 
 	// The mains include gc.h, whose header layout + barrier code differ under
 	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib;
@@ -746,6 +771,116 @@ interface RunnableBatchEntry extends BatchEntry {
 	helperFunctionIndices: Array<number>;
 }
 
+interface WireBatchEntry extends BatchEntry {
+	wirePath: string;
+}
+
+function test262WirePath(source: string): string {
+	const variant = process.env.T262_VARIANT ?? "unknown";
+	const key = batchCacheKey(
+		buildFingerprint([], test262Toolchain().fingerprint),
+		`wire-v1-${variant}`,
+		[source],
+	);
+	const directory = path.join(".cache/mal-cache/test262-wires", variant);
+	mkdirSync(directory, { recursive: true });
+	return path.join(directory, `${key}.malw`);
+}
+
+async function executeWireBatch(
+	entries: Array<WireBatchEntry>,
+	workerId: number,
+): Promise<Set<number>> {
+	const runner = test262NativeBuildInputs().wireRunner;
+	if (runner === undefined) throw new Error("Test262 wire runner was not prepared");
+	const timeoutScale = gmallocEnabled() ? 12 : process.env.MAL_GC_STRESS ? 8 : 1;
+	const runTimeoutMs = TEST262_METADATA.runTimeoutMs * timeoutScale;
+	let stdout = "";
+	try {
+		const result = await execFileAsync(
+			runner,
+			["--all", String(runTimeoutMs), ...entries.map((entry) => entry.wirePath)],
+			{
+				timeout: entries.length * runTimeoutMs + 15_000,
+				maxBuffer: 64 * 1024 * 1024,
+				env: runEnv(),
+			},
+		);
+		stdout = result.stdout;
+	} catch (error) {
+		stdout = (error as { stdout?: string }).stdout ?? "";
+	}
+
+	const resolved = parseBatchOutput(stdout, entries);
+	const unreported = entries.filter((entry) => !resolved.has(entry.index));
+	if (unreported.length > 0) {
+		const outputPath = path.join(BUILD_PATH, `wire${workerId}.last-stdout.txt`);
+		writeFileSync(outputPath, stdout);
+		test262Log(
+			`Wire driver on worker ${workerId} left ${unreported.length}/${entries.length} unreported (stdout saved), retrying singly.`,
+		);
+	}
+	for (const entry of unreported) {
+		entry.file.result = "UNKNOWN";
+		let singleStdout = "";
+		try {
+			const result = await execFileAsync(
+				runner,
+				["--all", String(runTimeoutMs), entry.wirePath],
+				{
+					timeout: runTimeoutMs + 5_000,
+					maxBuffer: 4 * 1024 * 1024,
+					env: runEnv(),
+				},
+			);
+			singleStdout = result.stdout;
+		} catch (error) {
+			singleStdout = (error as { stdout?: string }).stdout ?? "";
+		}
+		const singleEntry: WireBatchEntry = { ...entry, index: 0 };
+		if (!parseBatchOutput(singleStdout, [singleEntry]).has(0)) {
+			entry.file.result = "CRASHED";
+			countReason(FAILURE_COUNTS, FAILURE_CACHE, "wire driver failed", entry.file);
+		}
+	}
+	return resolved;
+}
+
+async function test262RunWireBatch(files: Array<Test262File>, workerId: number) {
+	const entries: Array<WireBatchEntry> = [];
+	for (const file of files) {
+		const source = composeSource(file);
+		const wirePath = test262WirePath(source);
+		let definition: VmDefinition | undefined;
+		if (existsSync(wirePath)) {
+			try {
+				definition = deserializeVmDefinition(readFileSync(wirePath));
+			} catch {
+				rmSync(wirePath, { force: true });
+			}
+		}
+
+		if (definition === undefined) {
+			const outcome = test262CompileToC(file, source);
+			applyOutcome(file, outcome);
+			definition = outcome.definition;
+			if (definition === undefined) continue;
+			writeFileSync(wirePath, serializeVmDefinition(definition));
+		} else {
+			applyOutcome(file, {
+				definition,
+				result: "UNKNOWN",
+				failure: undefined,
+				stats: definitionStats(definition),
+			});
+		}
+
+		entries.push({ file, index: entries.length, wirePath });
+	}
+
+	if (entries.length > 0) await executeWireBatch(entries, workerId);
+}
+
 /** Link a compiled batch object against the parent-selected artifacts. Cheap (~3% of cc). */
 async function linkBatch(objectPath: string, binPath: string): Promise<number> {
 	const startedAt = performance.now();
@@ -864,6 +999,10 @@ function applyManifest(
  * re-running. The binary is always executed, so results are never cached.
  */
 export async function test262RunBatch(files: Array<Test262File>, workerId: number) {
+	if (wireBackend()) {
+		await test262RunWireBatch(files, workerId);
+		return;
+	}
 	const useCache = cacheEnabled();
 	const baseName = path.join(BUILD_PATH, `batch${workerId}`);
 	const paths = files.map((file) => file.path);

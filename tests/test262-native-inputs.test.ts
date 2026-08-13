@@ -34,6 +34,7 @@ describe("Test262 native build inputs", () => {
 				c: { engine: "/artifacts/libLibMaligator.a" },
 				rust: { linkArgs: ["/artifacts/libmal_rust.a", "-lpthread"] },
 			},
+			wireRunner: "/artifacts/Test262Wire",
 		};
 
 		const cloned = structuredClone(inputs);
@@ -42,5 +43,6 @@ describe("Test262 native build inputs", () => {
 
 		expect(test262NativeBuildInputs().toolchain.fingerprint).toBe("selected-toolchain");
 		expect(test262NativeBuildInputs().artifacts).toEqual(inputs.artifacts);
+		expect(test262NativeBuildInputs().wireRunner).toBe("/artifacts/Test262Wire");
 	});
 });

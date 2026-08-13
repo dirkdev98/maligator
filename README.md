@@ -474,7 +474,7 @@ node ./src/index.ts build path/to/entry.ts
 # Default developer gate; smoke is its fast initial fuse.
 npm run test:check
 
-# Standalone 20-second warm / 60-second cold fuse.
+# Standalone 20-second warm / 90-second cold fuse.
 npm run test:smoke
 
 # Exhaustive gates. Ask before running either command: they include full Test262.
@@ -496,6 +496,7 @@ npm test run                     # one-shot unit and native projects
 npm run test:native
 npm run test:sanitize -- tests/native/example.test.ts
 npm run test262:regressions
+npm run test262:prepare             # populate/repair the pinned full-corpus cache
 
 # Show tier policy and list exact stage commands without executing them.
 npm run test:help

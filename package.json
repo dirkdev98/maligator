@@ -42,7 +42,7 @@
 		"test": "vitest",
 		"test262": "node ./scripts/test262.ts --canonical",
 		"test262:prepare": "node ./scripts/test262-prepare.ts",
-		"test262:regressions": "node ./scripts/test262.ts --canonical --manifest tests/test-suite-test262-smoke.txt --manifest tests/test-suite-test262-check.txt --check --policy complete",
+		"test262:regressions": "node ./scripts/test262.ts --canonical --backend wire --manifest tests/test-suite-test262-smoke.txt --manifest tests/test-suite-test262-check.txt --check --policy complete",
 		"test262:report": "node ./scripts/test262.ts --canonical --check --policy complete",
 		"test:check": "node ./scripts/test-suite.ts check",
 		"test:full": "node ./scripts/test-suite.ts full",

@@ -2,7 +2,7 @@
 
 ## Commands
 
-- `npm run test:smoke` - Optional 20-second warm / 60-second cold fuse; runs first inside larger gates
+- `npm run test:smoke` - Optional 20-second warm / 90-second cold fuse; runs first inside larger gates
 - `npm run test:check` - Default approximately two-minute developer gate; excludes slow toolchain integration
 - `npm run test:full` - Exhaustive fail-fast gate; includes full Test262, so ask before running
 - `npm run test:full:report` - Exhaustive completion policy; ask before running
@@ -36,7 +36,7 @@
 - Build-time (own build dir): `MAL_ASAN`, `MAL_UBSAN`, `MAL_GC_GENERATIONAL`, `MAL_GC_CONCURRENT`, `MAL_PERF_STATS` (set again at runtime to enable and print the compiled counters).
 - Runtime GC/performance instruments (same binary): `MAL_GC_STRESS`, `MAL_GC_VERIFY`, `MAL_GC_OFF`, `MAL_GC_THRESHOLD`, `MAL_GC_MAJOR_EVERY`, `MAL_GC_STATS`, `MAL_HOST_GC`, `MAL_GC_AT_EXIT`, `MAL_GMALLOC`.
 - Backend: `MAL_INTERP=1` forces the bytecode interpreter (test262 runner); the native harness takes a `compiled` flag directly.
-- Test262 runner: `--filter`, `--manifest <file>`, `--exclude-manifest <file>`, `--variant strict|sloppy`, `--backend compiled|interpreted`, `--mode normal|gc-stress`, `--check`, `--policy bail|complete`, `--canonical`, `--random`.
+- Test262 runner: `--filter`, `--manifest <file>`, `--exclude-manifest <file>`, `--variant strict|sloppy`, `--backend compiled|interpreted|wire`, `--mode normal|gc-stress`, `--check`, `--policy bail|complete`, `--canonical`, `--random`.
 - WPT runner: repeatable `--test`, `--mode normal|gc-stress`, `--backend compiled|interpreted`, `--policy bail|complete`, and `--canonical`.
 
 ## Code Style
