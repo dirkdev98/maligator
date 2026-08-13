@@ -1468,7 +1468,6 @@ function parseSqliteBindingResult(
 		typeof parsed !== "object" ||
 		parsed === null ||
 		!("iterations" in parsed) ||
-		!("measuredCalls" in parsed) ||
 		!("parametersPerCall" in parsed) ||
 		!("unboundMs" in parsed) ||
 		!("numberMs" in parsed) ||
@@ -1612,6 +1611,7 @@ function parsePrototypeCacheResult(
 		typeof parsed !== "object" ||
 		parsed === null ||
 		!("iterations" in parsed) ||
+		!("measuredCalls" in parsed) ||
 		!("runtimeMs" in parsed) ||
 		!("userlandDirectMs" in parsed) ||
 		!("userlandDeepMs" in parsed) ||
