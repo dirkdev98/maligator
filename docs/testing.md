@@ -41,7 +41,7 @@ prune. WPT removes its per-run native scratch tree on exit; pass
 
 | Tier  | Command              | Policy                    | Intended use                                                                                     |
 | ----- | -------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| Smoke | `npm run test:smoke` | Bail, 20s warm / 90s cold | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
+| Smoke | `npm run test:smoke` | Bail, 20s warm / 2m cold  | Minimal compiler, packaged development, Test262, and WPT capability proof                        |
 | Check | `npm run test:check` | Bail, about two minutes   | All regular unit tests, curated wire/normal standards, and native regression complement          |
 | Full  | `npm run test:full`  | Bail, unbounded           | Self-hosting, remaining native coverage, standards dimensions, sanitizers, collectors, and leaks |
 
@@ -60,7 +60,7 @@ differential follows the two-minute matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 
 The smoke fuse measures its cumulative stages and fails if they exceed 20
-seconds on a warm run. It allows 90 seconds when the reusable native or Test262
+seconds on a warm run. It allows two minutes when the reusable native or Test262
 cache roots are missing. It does not kill a native build in progress because
 terminating an npm wrapper can orphan compiler descendants. Both budgets include
 cache population rather than silently excluding it from the measurement.

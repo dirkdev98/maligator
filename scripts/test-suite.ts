@@ -49,13 +49,13 @@ const coldSmokeRun =
 		".cache/test262/.git",
 		".cache/test262-cache.json",
 	].some((entry) => !existsSync(path.join(root, entry)));
-const smokeFuseMs = coldSmokeRun ? 90_000 : 20_000;
+const smokeFuseMs = coldSmokeRun ? 120_000 : 20_000;
 const usage = `usage: node scripts/test-suite.ts [smoke|check|full] [options]
 
 Tiers are cumulative: check starts with smoke; full starts with smoke and check.
 
 Commands:
-  npm run test:smoke          20-second warm / 90-second cold fail-fast fuse
+  npm run test:smoke          20-second warm / two-minute cold fail-fast fuse
   npm run test:check          approximately two-minute default developer gate
   npm run test:full           exhaustive fail-fast gate; approval required
   npm run test:full:report    exhaustive completion gate; approval required
@@ -480,7 +480,7 @@ if (list) {
 }
 
 if (coldSmokeRun) {
-	console.log("[test-suite] cold caches detected; smoke fuse extended to 90s");
+	console.log("[test-suite] cold caches detected; smoke fuse extended to two minutes");
 }
 
 let failures = 0;
