@@ -89,6 +89,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
+import { CommandProgress } from "../src/command-progress.ts";
 import { compileSourceToBuffer } from "../src/compile.ts";
 import {
 	buildNativeBinary,
@@ -106,6 +107,8 @@ import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
 const MIN_NODE_COMPARISON_MS = 60;
+const benchmarkProgress = new CommandProgress("bench");
+let activeBenchmarkLane = "benchmark";
 
 interface SizeMetrics {
 	binaryBytes: number;
@@ -445,6 +448,7 @@ function timeCommand(
 ): number {
 	const times: Array<number> = [];
 	for (let i = 0; i < runs; i++) {
+		benchmarkProgress.progress(i + 1, runs, `${activeBenchmarkLane} sample`);
 		const start = process.hrtime.bigint();
 		const r = spawnSync(cmd, args, { env: { ...process.env, ...env }, stdio: "ignore" });
 		if (r.status !== 0) {
@@ -534,7 +538,8 @@ const SIZE_PROFILES: Array<{ name: string; config: MaligatorBuildConfig }> = [
 
 function benchSize(): Record<string, SizeMetrics> {
 	const result: Record<string, SizeMetrics> = {};
-	for (const profile of SIZE_PROFILES) {
+	for (const [index, profile] of SIZE_PROFILES.entries()) {
+		benchmarkProgress.progress(index + 1, SIZE_PROFILES.length, `size profile ${profile.name}`);
 		const config = resolveBuildConfig(profile.config);
 		const build = buildNativeBinaryResult({
 			fixture: SIZE_FIXTURE,
@@ -575,6 +580,7 @@ function benchCompiler(runs: number): CompilerMetrics {
 	let wire = compileSourceToBuffer(source);
 	const times: Array<number> = [];
 	for (let i = 0; i < runs; i++) {
+		benchmarkProgress.progress(i + 1, runs, "compiler sample");
 		const start = process.hrtime.bigint();
 		wire = compileSourceToBuffer(source);
 		times.push(Number(process.hrtime.bigint() - start) / 1e6);
@@ -725,6 +731,7 @@ function benchSelfCompile(runs: number): SelfCompileMetrics {
 	try {
 		const target = prepareSelfCompileSource(path.join(root, "source"));
 		for (let index = 0; index < runs; index++) {
+			benchmarkProgress.progress(index + 1, runs, "self-compile paired sample");
 			const nodeOutput = path.join(root, `node-${index}`);
 			const maligatorOutput = path.join(root, `maligator-${index}`);
 			let node: SelfCompileRun;
@@ -2717,27 +2724,72 @@ const which =
 			];
 
 const entry: BenchmarkSnapshot = {};
+const benchmarkLanes: Record<string, () => void> = {
+	size: () => {
+		entry.size = benchSize();
+	},
+	compiler: () => {
+		entry.compiler = benchCompiler(runs);
+	},
+	"self-compile": () => {
+		entry.selfCompile = benchSelfCompile(runs);
+	},
+	language: () => {
+		entry.language = benchLanguage(runs);
+	},
+	module: () => {
+		entry.module = benchModule(runs);
+	},
+	string: () => {
+		entry.string = benchString(runs);
+	},
+	promise: () => {
+		entry.promise = benchPromise(runs);
+	},
+	coroutine: () => {
+		entry.coroutine = benchCoroutine(runs);
+	},
+	arguments: () => {
+		entry.arguments = benchArguments(runs);
+	},
+	"stack-object": () => {
+		entry.stackObject = benchStackObject(runs);
+	},
+	interpreter: () => {
+		entry.interpreter = benchInterpreter(runs);
+	},
+	"sqlite-binding": () => {
+		entry.sqliteBinding = benchSqliteBinding(runs);
+	},
+	"prototype-cache": () => {
+		entry.prototypeCache = benchPrototypeCache(runs);
+	},
+	gc: () => {
+		entry.gc = benchGc(runs);
+	},
+	http: () => {
+		const http = benchHttp(httpSeconds, 50);
+		if (http !== null) entry.http = http;
+	},
+	"http-profile": () => benchHttpProfile(httpRequests, 50),
+	"string-profile": () => benchStringProfile(),
+};
 
-if (which.includes("size")) entry.size = benchSize();
-if (which.includes("compiler")) entry.compiler = benchCompiler(runs);
-if (which.includes("self-compile")) entry.selfCompile = benchSelfCompile(runs);
-if (which.includes("language")) entry.language = benchLanguage(runs);
-if (which.includes("module")) entry.module = benchModule(runs);
-if (which.includes("string")) entry.string = benchString(runs);
-if (which.includes("promise")) entry.promise = benchPromise(runs);
-if (which.includes("coroutine")) entry.coroutine = benchCoroutine(runs);
-if (which.includes("arguments")) entry.arguments = benchArguments(runs);
-if (which.includes("stack-object")) entry.stackObject = benchStackObject(runs);
-if (which.includes("interpreter")) entry.interpreter = benchInterpreter(runs);
-if (which.includes("sqlite-binding")) entry.sqliteBinding = benchSqliteBinding(runs);
-if (which.includes("prototype-cache")) entry.prototypeCache = benchPrototypeCache(runs);
-if (which.includes("gc")) entry.gc = benchGc(runs);
-if (which.includes("http")) {
-	const http = benchHttp(httpSeconds, 50);
-	if (http !== null) entry.http = http;
+const unknownLanes = which.filter((lane) => benchmarkLanes[lane] === undefined);
+if (unknownLanes.length > 0) throw new Error(`unknown benchmark lane: ${unknownLanes.join(", ")}`);
+benchmarkProgress.start(`${which.length} lanes · median of ${runs} samples`);
+for (const [index, lane] of which.entries()) {
+	activeBenchmarkLane = lane;
+	benchmarkProgress.stage(index + 1, which.length, lane);
+	try {
+		benchmarkLanes[lane]!();
+		benchmarkProgress.stagePassed(index + 1, which.length, lane);
+	} catch (error) {
+		benchmarkProgress.stageFailed(index + 1, which.length, lane);
+		benchmarkProgress.failed();
+		throw error;
+	}
 }
-if (which.includes("http-profile")) benchHttpProfile(httpRequests, 50);
-if (which.includes("string-profile")) benchStringProfile();
 
 const baseline = readBenchmarkBaseline<BenchmarkSnapshot>(BASELINE_FILE);
 report(entry, baseline);
@@ -2747,3 +2799,4 @@ if (update) {
 } else {
 	console.log("\n(run with --update to merge these sections into the saved baseline)");
 }
+benchmarkProgress.complete();

@@ -1,12 +1,5 @@
 import { performance } from "node:perf_hooks";
-
-function formatDuration(durationMs: number): string {
-	if (durationMs < 1000) return `${Math.max(0, Math.round(durationMs))}ms`;
-	if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`;
-	const minutes = Math.floor(durationMs / 60_000);
-	const seconds = Math.round((durationMs - minutes * 60_000) / 1000);
-	return `${minutes}m ${seconds}s`;
-}
+import { formatCommandDuration } from "./command-progress.ts";
 
 function writeLine(stream: NodeJS.WriteStream, message: string): void {
 	stream.write(`${message}\n`);
@@ -42,19 +35,19 @@ export class BuildReporter {
 		if (this.verbose) {
 			writeLine(
 				process.stderr,
-				`[+${formatDuration(startedAt - this.#startedAt)}] ${label} started`,
+				`[+${formatCommandDuration(startedAt - this.#startedAt)}] ${label} started`,
 			);
 		} else {
 			process.stderr.write(`  ${label}... `);
 		}
 		try {
 			const result = run();
-			const elapsed = formatDuration(performance.now() - startedAt);
+			const elapsed = formatCommandDuration(performance.now() - startedAt);
 			const suffix = detail?.(result);
 			if (this.verbose) {
 				writeLine(
 					process.stderr,
-					`[+${formatDuration(performance.now() - this.#startedAt)}] ${label} completed in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}`,
+					`[+${formatCommandDuration(performance.now() - this.#startedAt)}] ${label} completed in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}`,
 				);
 			} else {
 				process.stderr.write(
@@ -63,11 +56,11 @@ export class BuildReporter {
 			}
 			return result;
 		} catch (error) {
-			const elapsed = formatDuration(performance.now() - startedAt);
+			const elapsed = formatCommandDuration(performance.now() - startedAt);
 			if (this.verbose) {
 				writeLine(
 					process.stderr,
-					`[+${formatDuration(performance.now() - this.#startedAt)}] ${label} failed after ${elapsed}`,
+					`[+${formatCommandDuration(performance.now() - this.#startedAt)}] ${label} failed after ${elapsed}`,
 				);
 			} else {
 				process.stderr.write(`failed after ${elapsed}\n`);
@@ -83,7 +76,7 @@ export class BuildReporter {
 	timing(label: string, durationMs: number, detail?: string): void {
 		this.detail(
 			label,
-			`${formatDuration(durationMs)}${detail === undefined ? "" : ` · ${detail}`}`,
+			`${formatCommandDuration(durationMs)}${detail === undefined ? "" : ` · ${detail}`}`,
 		);
 	}
 
@@ -102,7 +95,7 @@ export class BuildReporter {
 		}
 		writeLine(
 			process.stderr,
-			`${label} ${resultPath} in ${formatDuration(performance.now() - this.#startedAt)}`,
+			`${label} ${resultPath} in ${formatCommandDuration(performance.now() - this.#startedAt)}`,
 		);
 		if (emitResult) writeLine(process.stdout, resultPath);
 	}

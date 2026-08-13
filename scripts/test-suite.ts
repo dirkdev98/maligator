@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { CommandProgress, formatCommandDuration } from "../src/command-progress.ts";
 import { hashDirectoryTrees } from "../src/file-tree.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
@@ -196,27 +197,26 @@ function selectionArgs(entries: Array<string>, option: string): Array<string> {
 	return entries.flatMap((entry) => [option, entry]);
 }
 
-function logCommand(command: Command) {
-	console.log(`\n[test-suite] ${command.name}`);
-}
-
-function runCommand(command: Command): boolean {
-	logCommand(command);
-	const startedAt = Date.now();
+function runCommand(
+	command: Command,
+	progress: CommandProgress,
+	current: number,
+	total: number,
+): boolean {
+	progress.stage(current, total, command.name);
 	const result = spawnSync(command.command, command.args, {
 		cwd: root,
 		env: cleanTestEnvironment(command.env),
 		stdio: "inherit",
 	});
-	const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
 	if (result.status === 0) {
-		console.log(`[test-suite] ${command.name} passed in ${elapsed}s`);
+		progress.stagePassed(current, total, command.name);
 		return true;
 	}
 	if (result.error?.message) console.error(`[test-suite] ${result.error.message}`);
 	else if (result.signal) console.error(`[test-suite] terminated by ${result.signal}`);
 	else console.error(`[test-suite] exited with status ${result.status ?? "unknown"}`);
-	console.error(`[test-suite] ${command.name} failed after ${elapsed}s`);
+	progress.stageFailed(current, total, command.name);
 	return false;
 }
 
@@ -505,12 +505,19 @@ if (coldSmokeRun) {
 
 let failures = 0;
 const smokeStarted = Date.now();
+const commands = [...smokeCommands, ...laterCommands];
+const progress = new CommandProgress("test-suite");
+progress.start(
+	`${tier} gate · ${commands.length} stages · ${coldSmokeRun ? "cold" : "warm"} smoke budget ${formatCommandDuration(smokeFuseMs)}`,
+);
+let stageIndex = 0;
 for (const command of smokeCommands) {
+	stageIndex++;
 	if (policy === "bail" && Date.now() - smokeStarted >= smokeFuseMs) {
 		console.error("[test-suite] smoke fuse expired before all stages started");
 		process.exit(1);
 	}
-	if (!runCommand(command)) {
+	if (!runCommand(command, progress, stageIndex, commands.length)) {
 		failures++;
 		if (policy === "bail") process.exit(1);
 	}
@@ -528,7 +535,8 @@ if (failures === 0) {
 }
 
 for (const command of laterCommands) {
-	if (!runCommand(command)) {
+	stageIndex++;
+	if (!runCommand(command, progress, stageIndex, commands.length)) {
 		failures++;
 		if (policy === "bail") process.exit(1);
 	}
@@ -538,4 +546,4 @@ if (failures > 0) {
 	console.error(`\n[test-suite] ${failures} stage${failures === 1 ? "" : "s"} failed`);
 	process.exit(1);
 }
-console.log(`\n[test-suite] ${tier} passed`);
+progress.complete(`${tier} passed`);
