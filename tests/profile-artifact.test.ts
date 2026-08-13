@@ -1,0 +1,93 @@
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { expect, test } from "vitest";
+import {
+	finalizeProfileCapture,
+	parseProfileCapture,
+} from "../src/profile-artifact.ts";
+import type { PreparedProfile } from "../src/profile-artifact.ts";
+
+function capture(): Uint8Array {
+	const bytes = new Uint8Array(40 + 2 * 40 + 2 * 8);
+	bytes.set(Buffer.from("MALPROF1"));
+	const view = new DataView(bytes.buffer);
+	view.setUint32(8, 1, true);
+	view.setUint32(12, 2, true);
+	view.setUint32(16, 2, true);
+	view.setUint32(28, 10_000, true);
+	view.setBigUint64(32, 123n, true);
+	view.setUint8(40, 1);
+	view.setBigUint64(48, 10_000_000n, true);
+	view.setBigUint64(64, 1_000_000n, true);
+	view.setUint32(72, 0, true);
+	view.setUint32(76, 1, true);
+	view.setUint8(80, 2);
+	view.setBigUint64(88, 20_000_000n, true);
+	view.setBigUint64(96, 64n, true);
+	view.setUint32(112, 1, true);
+	view.setUint32(116, 1, true);
+	view.setInt32(120, 0, true);
+	view.setInt32(124, 5, true);
+	view.setInt32(128, 0, true);
+	view.setInt32(132, 5, true);
+	return bytes;
+}
+
+const prepared: PreparedProfile = {
+	schema: 1,
+	buildId: "a".repeat(64),
+	entrypoint: "/project/app.js",
+	functions: [{ name: "hot", file: "app.js" }],
+	sites: [
+		{
+			id: 0,
+			logicalId: "site-v1-hot",
+			functionIndex: 0,
+			positionId: 5,
+			file: "app.js",
+			line: 7,
+			column: 2,
+			operation: "execute",
+		},
+		{
+			id: 1,
+			logicalId: "site-v1-property",
+			functionIndex: 0,
+			positionId: 5,
+			file: "app.js",
+			line: 7,
+			column: 2,
+			operation: "property",
+		},
+	],
+	remarks: [
+		{ siteId: 1, phase: "lowering", code: "property.dynamic-load", outcome: "retained" },
+	],
+};
+
+test("profile capture parser rejects truncation and invalid frame references", () => {
+	expect(() => parseProfileCapture(capture().subarray(0, 39))).toThrow("truncated");
+	const invalid = capture();
+	new DataView(invalid.buffer).setUint32(72, 99, true);
+	expect(() => parseProfileCapture(invalid)).toThrow("outside");
+});
+
+test("profile finalization publishes standard views and joins remarks by source site", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-artifact-"));
+	writeFileSync(path.join(directory, "capture.bin"), capture());
+	const result = finalizeProfileCapture(directory, prepared, "run");
+
+	expect(result.findings[0]).toMatchObject({
+		cpuSamples: 1,
+		allocationSamples: 1,
+		remarks: ["property.dynamic-load"],
+	});
+	expect(existsSync(path.join(directory, "cpu.cpuprofile"))).toBe(true);
+	expect(existsSync(path.join(directory, "timeline.json"))).toBe(true);
+	expect(existsSync(path.join(directory, "manifest.json"))).toBe(true);
+	const profile = JSON.parse(readFileSync(path.join(directory, "cpu.cpuprofile"), "utf-8"));
+	expect(profile.samples).toHaveLength(1);
+	const manifest = JSON.parse(readFileSync(path.join(directory, "manifest.json"), "utf-8"));
+	expect(manifest).toMatchObject({ status: "complete", cpuSamples: 1, allocationSamples: 1 });
+});
