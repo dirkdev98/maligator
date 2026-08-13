@@ -271,6 +271,20 @@ export interface VmFunction {
 		}>;
 	}>;
 
+	/** EMITTER-ONLY: selected capture projections of an exact RegExp exec result. */
+	nativeRegExpExecProjections?: ReadonlyArray<{
+		callIp: number;
+		callee: number;
+		receiver: number;
+		input: number;
+		result: number;
+		loads: ReadonlyArray<{
+			ip: number;
+			captureIndex: number;
+			dst: number;
+		}>;
+	}>;
+
 	/** EMITTER-ONLY: exact builtin String slice immediately consumed by Number. */
 	nativeStringSliceNumberFusions?: ReadonlyArray<{
 		sliceCallIp: number;

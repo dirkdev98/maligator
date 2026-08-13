@@ -50,6 +50,24 @@ bool mal_regexp_try_search_index_direct(
 );
 
 /**
+ * Execute an exact built-in RegExp.prototype.exec call whose result is proven
+ * closed over selected constant capture-index reads. A guarded hit returns null
+ * or true when projection is possible. If an index is not an own match-result
+ * property, it returns the fully materialized result Array from the same matcher
+ * execution so inherited indexed properties remain observable.
+ */
+bool mal_regexp_exec_capture_projection(
+    MalVm *vm,
+    MalValue callee,
+    MalValue regexp,
+    MalValue string,
+    const u32 *capture_indices,
+    MalValue **capture_outputs,
+    u32 capture_count,
+    MalValue *result_out
+);
+
+/**
  * Advance an exact RegExp String Iterator without materializing its disposable
  * IteratorResult wrapper. Returns 1 on success, 0 when generic stepping is
  * required, and -1 when the exact step threw.

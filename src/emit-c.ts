@@ -940,6 +940,30 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += elementLoads.length;
 	}
+	const regexpExecProjectionSites = new Map<number, NativeRegExpExecProjectionSite>();
+	for (const projection of fn.nativeRegExpExecProjections ?? []) {
+		const loads = [...projection.loads].sort(
+			(left, right) => left.captureIndex - right.captureIndex,
+		);
+		if (
+			loads.length === 0 ||
+			loads.length > 8 ||
+			regexpExecProjectionSites.has(projection.callIp) ||
+			loads.some(
+				(load, index) =>
+					load.captureIndex <= 0 ||
+					(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
+			)
+		) {
+			continue;
+		}
+		regexpExecProjectionSites.set(projection.callIp, {
+			projection,
+			slotsOffset: nextStackSlot,
+			loads,
+		});
+		nextStackSlot += loads.length;
+	}
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -972,6 +996,7 @@ export function emitCompiledFunction(
 		cardinalityAccesses,
 		cardinalityPushes,
 		stringSplitProjectionSites,
+		regexpExecProjectionSites,
 		directCompiledTargets,
 	);
 	if (body === null) {
@@ -1318,6 +1343,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1761,6 +1787,22 @@ interface NativeStringSplitProjectionAction {
 	load?: NativeStringSplitProjection["loads"][number];
 }
 
+type NativeRegExpExecProjection = NonNullable<
+	VmFunction["nativeRegExpExecProjections"]
+>[number];
+
+interface NativeRegExpExecProjectionSite {
+	projection: NativeRegExpExecProjection;
+	slotsOffset: number;
+	loads: Array<NativeRegExpExecProjection["loads"][number]>;
+}
+
+interface NativeRegExpExecProjectionAction {
+	site: NativeRegExpExecProjectionSite;
+	role: "call" | "capture";
+	load?: NativeRegExpExecProjection["loads"][number];
+}
+
 type NativeStringSliceNumberFusion = NonNullable<
 	VmFunction["nativeStringSliceNumberFusions"]
 >[number];
@@ -2198,6 +2240,7 @@ function emitBody(
 	>,
 	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
 	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
+	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	directCompiledTargets: ReadonlyMap<number, number>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
@@ -2537,6 +2580,23 @@ function emitBody(
 			});
 		}
 	}
+	const nativeRegExpExecProjectionActionByIp = new Map<
+		number,
+		NativeRegExpExecProjectionAction
+	>();
+	for (const site of regexpExecProjectionSites.values()) {
+		nativeRegExpExecProjectionActionByIp.set(site.projection.callIp, {
+			site,
+			role: "call",
+		});
+		for (const load of site.loads) {
+			nativeRegExpExecProjectionActionByIp.set(load.ip, {
+				site,
+				role: "capture",
+				load,
+			});
+		}
+	}
 	const nativeStringSliceNumberFusionActionByIp = new Map<
 		number,
 		NativeStringSliceNumberFusionAction
@@ -2572,6 +2632,12 @@ function emitBody(
 		lines.push(
 			`bool __string_split_${site.projection.callIp}_fast = false;`,
 			`u32 __string_split_${site.projection.callIp}_length = 0;`,
+		);
+	}
+	for (const site of regexpExecProjectionSites.values()) {
+		lines.push(
+			`bool __regexp_exec_${site.projection.callIp}_fast = false;`,
+			`bool __regexp_exec_${site.projection.callIp}_projected = false;`,
 		);
 	}
 	for (const fusion of fn.nativeStringSliceNumberFusions ?? []) {
@@ -2716,6 +2782,7 @@ function emitBody(
 			stringCharCodeAtFusionByIp.get(ip),
 			nativeStringScanRegionActionByIp.get(ip),
 			nativeStringSplitProjectionActionByIp.get(ip),
+			nativeRegExpExecProjectionActionByIp.get(ip),
 			nativeStringSliceNumberFusionActionByIp.get(ip),
 		);
 		if (emitted === null) {
@@ -2781,6 +2848,7 @@ function emitInstruction(
 	stringCharCodeAtFusion?: StringCharCodeAtFusion,
 	nativeStringScanRegionAction?: NativeStringScanRegionAction,
 	nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction,
+	nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction,
 	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
@@ -3164,6 +3232,23 @@ function emitInstruction(
 		case "LOAD_PROPERTY_STATIC": {
 			if (stringCharCodeAtFusion !== undefined && stringCharCodeAtFusion.loadIp === ip) {
 				return [];
+			}
+			if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				nativeRegExpExecProjectionAction?.role === "capture"
+			) {
+				const { site, load } = nativeRegExpExecProjectionAction;
+				const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
+				if (slot >= 0) {
+					return [
+						`if (__regexp_exec_${site.projection.callIp}_projected) {`,
+						`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
+						`} else {`,
+						`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(instruction.object)}, ${boxedOperand(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
 			}
 			if (
 				loopTwinEmission?.kind === "fast" &&
@@ -4288,6 +4373,29 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (nativeRegExpExecProjectionAction?.role === "call") {
+				const site = nativeRegExpExecProjectionAction.site;
+				const projection = site.projection;
+				const fast = `__regexp_exec_${projection.callIp}_fast`;
+				const indices = site.loads.map((load) => load.captureIndex).join(", ");
+				const outputs = site.loads
+					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
+					.join(", ");
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`__regexp_exec_${projection.callIp}_projected = false;`,
+					`${fast} = mal_regexp_exec_capture_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, &r${instruction.dst});`,
+					`if (${fast}) {`,
+					`  ${throwCheck}`,
+					`  __regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
+					`} else {`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
 			if (instruction.directStringSearchRegExp === true) {
 				const direct = `__string_search_${ip}_result`;
 				return [

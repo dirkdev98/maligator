@@ -162,6 +162,135 @@ check(
 	"abc".search(customExecSearch) === 7 && customExecCalls === 1,
 );
 
+function projectedExec(regexp, value) {
+	const match = regexp.exec(value);
+	if (match === null) return "none";
+	return match[1] + ":" + match[2] + ":" + match[3] + ":" + match[4];
+}
+
+check(
+	"closed exec consumers preserve selected captures",
+	projectedExec(/^(a)(b)(c)(d)$/, "abcd") === "a:b:c:d" &&
+		projectedExec(/^(a)(b)(c)(d)$/, "abce") === "none",
+);
+
+function projectedOptional(regexp, value) {
+	const match = regexp.exec(value);
+	if (match === null) return false;
+	return match[1] === undefined;
+}
+check(
+	"closed exec consumers preserve unmatched captures",
+	projectedOptional(/^(a)?b$/, "b"),
+);
+
+function projectedUnconditional(regexp, value) {
+	const match = regexp.exec(value);
+	return match[1];
+}
+let projectedNoMatchThrew = false;
+try {
+	projectedUnconditional(/(z)/, "a");
+} catch (error) {
+	projectedNoMatchThrew = error instanceof TypeError;
+}
+check(
+	"projected no-match preserves an unconditional property throw",
+	projectedNoMatchThrew,
+);
+
+function projectedOutOfRange(regexp, value) {
+	const match = regexp.exec(value);
+	if (match === null) return "none";
+	return match[37];
+}
+let inheritedCaptureGets = 0;
+const inheritedCapture = {};
+const reentrantLastIndex = /a/;
+reentrantLastIndex.lastIndex = {
+	valueOf() {
+		Object.defineProperty(Array.prototype, "37", {
+			configurable: true,
+			get() {
+				inheritedCaptureGets++;
+				return inheritedCapture;
+			},
+		});
+		return 0;
+	},
+};
+check(
+	"projected exec materializes out-of-range inherited indices",
+	projectedOutOfRange(reentrantLastIndex, "a") === inheritedCapture &&
+		inheritedCaptureGets === 1,
+);
+delete Array.prototype[37];
+
+const manyCaptures = new RegExp(`^${"(a)".repeat(37)}$`);
+check(
+	"projected exec supports heap-backed capture buffers",
+	projectedOutOfRange(manyCaptures, "a".repeat(37)) === "a",
+);
+
+function projectedFirst(regexp, value) {
+	const match = regexp.exec(value);
+	if (match === null) return "none";
+	return match[1];
+}
+const projectedGlobal = /(a)/g;
+projectedGlobal.lastIndex = 1;
+check(
+	"projected exec preserves global lastIndex updates",
+	projectedFirst(projectedGlobal, "ba") === "a" && projectedGlobal.lastIndex === 2,
+);
+const projectedSticky = /(a)/y;
+projectedSticky.lastIndex = 1;
+check(
+	"projected exec preserves sticky no-match resets",
+	projectedFirst(projectedSticky, "bb") === "none" && projectedSticky.lastIndex === 0,
+);
+
+const projectedCustomExec = /(a)/;
+let projectedCustomCalls = 0;
+projectedCustomExec.exec = function () {
+	projectedCustomCalls++;
+	return { 1: "custom" };
+};
+check(
+	"projected exec falls back for an own exec override",
+	projectedFirst(projectedCustomExec, "a") === "custom" && projectedCustomCalls === 1,
+);
+
+let projectedInputCoercions = 0;
+const projectedInputObject = {
+	toString() {
+		projectedInputCoercions++;
+		return "a";
+	},
+};
+check(
+	"projected exec falls back for input coercion",
+	projectedFirst(/(a)/, projectedInputObject) === "a" && projectedInputCoercions === 1,
+);
+
+const projectedLastIndexError = {};
+const projectedThrowingLastIndex = /(a)/g;
+projectedThrowingLastIndex.lastIndex = {
+	valueOf() {
+		throw projectedLastIndexError;
+	},
+};
+let projectedCaughtLastIndexError = false;
+try {
+	projectedFirst(projectedThrowingLastIndex, "a");
+} catch (error) {
+	projectedCaughtLastIndexError = error === projectedLastIndexError;
+}
+check(
+	"projected exec preserves lastIndex coercion exceptions",
+	projectedCaughtLastIndexError,
+);
+
 const originalMatch = RegExp.prototype[Symbol.match];
 let prototypeMatchCalls = 0;
 RegExp.prototype[Symbol.match] = function (value) {

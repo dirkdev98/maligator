@@ -108,6 +108,7 @@ const C_HEADER_LINES = [
 	'#include "builtin_array.h"',
 	'#include "builtin_map.h"',
 	'#include "builtin_string.h"',
+	'#include "builtin_regexp.h"',
 	'#include "builtin_math.h"',
 	// The compiled (emit-c) for-of lowering uses the iterator-record helpers.
 	'#include "builtin_iterator.h"',
@@ -1165,6 +1166,161 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 }
 
 /**
+ * Replace a closed exact RegExp.prototype.exec result with selected capture
+ * values. The ordinary result Array remains the complete guard-miss path; a
+ * guarded hit exposes only a null/non-null marker plus constant capture loads.
+ */
+function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		const projections: Array<
+			NonNullable<VmFunction["nativeRegExpExecProjections"]>[number]
+		> = [];
+		const entryTargets = new Set<number>(fn.handlers.map((handler) => handler.handlerIp));
+		const jumpEdges: Array<{ sourceIp: number; targetIp: number }> = [];
+		for (const [sourceIp, instruction] of fn.instructions.entries()) {
+			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+				entryTargets.add(instruction.targetIp);
+				jumpEdges.push({ sourceIp, targetIp: instruction.targetIp });
+			}
+		}
+		const latestDefinition = (register: number, beforeIp: number) => {
+			for (let ip = beforeIp - 1; ip >= 0; ip--) {
+				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
+					return { instruction: fn.instructions[ip]!, ip };
+				}
+			}
+			return undefined;
+		};
+
+		for (let callIp = 1; callIp < fn.instructions.length; callIp++) {
+			const call = fn.instructions[callIp]!;
+			const load = fn.instructions[callIp - 1]!;
+			if (
+				call.opcode !== "CALL" ||
+				call.arguments.length !== 1 ||
+				load.opcode !== "LOAD_PROPERTY_STATIC" ||
+				load.dst !== call.callee ||
+				load.object !== call.thisValue ||
+				!staticStringEquals(definition, load.stringIndex, "exec") ||
+				entryTargets.has(callIp)
+			) {
+				continue;
+			}
+
+			const immediateAlias = fn.instructions[callIp + 1];
+			if (
+				immediateAlias?.opcode !== "MOVE" ||
+				immediateAlias.src !== call.dst ||
+				entryTargets.has(callIp + 1)
+			) {
+				continue;
+			}
+			const stableAlias = immediateAlias.dst;
+			const aliases = new Set<number>([call.dst, stableAlias]);
+			const loads: Array<
+				NonNullable<VmFunction["nativeRegExpExecProjections"]>[number]["loads"][number]
+			> = [];
+			const captureIndices = new Set<number>();
+			let safe = true;
+			for (let ip = callIp + 2; ip < fn.instructions.length && aliases.size > 0; ip++) {
+				const instruction = fn.instructions[ip]!;
+				const usedAliases = [...aliases].filter(
+					(alias) =>
+						instruction.opcode !== "CREATE_NUMBER" &&
+						instruction.opcode !== "CREATE_F64" &&
+						vmInstructionUsesRegister(instruction, alias),
+				);
+				let accepted = usedAliases.length === 0;
+				if (
+					instruction.opcode === "BINARY" &&
+					(instruction.operator === "===" || instruction.operator === "!==") &&
+					usedAliases.length === 1
+				) {
+					const other = aliases.has(instruction.left)
+						? instruction.right
+						: instruction.left;
+					const definition = latestDefinition(other, ip);
+					accepted =
+						definition?.instruction.opcode === "CREATE_NULL" &&
+						![...entryTargets].some(
+							(targetIp) => targetIp > definition.ip && targetIp <= ip,
+						);
+				} else if (
+					instruction.opcode === "LOAD_PROPERTY" &&
+					instruction.object === stableAlias &&
+					usedAliases.length === 1
+				) {
+					const key = latestDefinition(instruction.key, ip);
+					if (
+						key?.instruction.opcode === "CREATE_NUMBER" &&
+						Number.isInteger(key.instruction.value) &&
+						key.instruction.value > 0 &&
+						key.instruction.value <= 0xffff &&
+						![...entryTargets].some((targetIp) => targetIp > key.ip && targetIp <= ip) &&
+						!captureIndices.has(key.instruction.value)
+					) {
+						loads.push({
+							ip,
+							captureIndex: key.instruction.value,
+							dst: instruction.dst,
+						});
+						captureIndices.add(key.instruction.value);
+						accepted = true;
+					}
+				}
+				if (!accepted) {
+					safe = false;
+					break;
+				}
+
+				for (const alias of [...aliases]) {
+					if (vmInstructionDefinesRegister(instruction, alias)) aliases.delete(alias);
+				}
+			}
+			const lastLoadIp = loads.at(-1)?.ip ?? -1;
+			const hasInteriorEntry =
+				fn.handlers.some(
+					(handler) => handler.handlerIp > callIp && handler.handlerIp <= lastLoadIp,
+				) ||
+				jumpEdges.some(
+					({ sourceIp, targetIp }) =>
+						targetIp > callIp &&
+						targetIp <= lastLoadIp &&
+						// Only a strictly forward edge from inside the region is safe.
+						// This permits the canonical null-check branch while rejecting
+						// alternate entries and backedges that could skip this CALL.
+						(sourceIp <= callIp || sourceIp >= targetIp),
+				);
+			const stableAliasRedefined = fn.instructions.some(
+				(instruction, ip) =>
+					ip > callIp + 1 &&
+					ip <= lastLoadIp &&
+					vmInstructionDefinesRegister(instruction, stableAlias),
+			);
+			if (
+				!safe ||
+				loads.length === 0 ||
+				loads.length > 8 ||
+				hasInteriorEntry ||
+				stableAliasRedefined
+			) {
+				continue;
+			}
+			projections.push({
+				callIp,
+				callee: call.callee,
+				receiver: call.thisValue,
+				input: call.arguments[0]!,
+				result: call.dst,
+				loads,
+			});
+		}
+		if (projections.length > 0) fn.nativeRegExpExecProjections = projections;
+		else delete fn.nativeRegExpExecProjections;
+	}
+}
+
+/**
  * Fuse an exact builtin `string.slice(constant)` whose only produced value is
  * immediately consumed by the exact Number intrinsic. Both calls remain as the
  * guard-miss path.
@@ -1315,6 +1471,7 @@ function emitVmDefinitionSource(
 	if (useCompiled) {
 		annotateNativeStringScanSummaries(definition);
 		annotateNativeStringSplitProjections(definition);
+		annotateNativeRegExpExecProjections(definition);
 		annotateNativeStringSliceNumberFusions(definition);
 		annotateNativeStringSearchRegExpCalls(definition);
 	}

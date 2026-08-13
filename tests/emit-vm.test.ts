@@ -1036,6 +1036,57 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_call_cached(vm,");
 	});
 
+	it("projects selected captures from a closed RegExp exec result", () => {
+		const output = emit(`
+			function parse(regexp, value) {
+				const match = regexp.exec(value);
+				if (match === null) return -1;
+				return match[1].length + match[2].charCodeAt(0);
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).toContain("mal_regexp_exec_capture_projection(vm,");
+		expect(output).toContain("__regexp_exec_");
+		expect(output).toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("keeps RegExp exec results materialized when identity escapes", () => {
+		const output = emit(`
+			function parse(regexp, value) {
+				const match = regexp.exec(value);
+				return match;
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).not.toContain("mal_regexp_exec_capture_projection(vm,");
+	});
+
+	it("rejects RegExp exec projection across an ambiguous result alias", () => {
+		const output = emit(`
+			function parse(regexp, value, replace) {
+				const match = regexp.exec(value);
+				let alias = match;
+				if (replace) alias = { 1: "replacement" };
+				return alias[1];
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).not.toContain("mal_regexp_exec_capture_projection(vm,");
+	});
+
+	it("rejects RegExp exec projection when a branch enters after the call", () => {
+		const output = emit(`
+			function parse(regexp, value, replace) {
+				let match = { 1: "old" };
+				if (replace) match = { 1: "replacement" };
+				else match = regexp.exec(value);
+				return match[1];
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).not.toContain("mal_regexp_exec_capture_projection(vm,");
+	});
+
 	it("emits guarded direct collection dispatch from call metadata", () => {
 		const output = emit(`
 			function update(map, set, key, value) {
