@@ -1112,7 +1112,7 @@ Mal.serve({
 		<!-- site-data:start -->
 		<script id="site-data" type="application/json">
 			{
-				"version": "0.1.0-alpha.12",
+				"version": "0.1.0-alpha.13",
 				"test262": [
 					{
 						"commit": "b0cffda1",
@@ -1464,10 +1464,43 @@ Mal.serve({
 						"platform": "darwin",
 						"arch": "arm64",
 						"nodeVersion": "v24.14.1"
+					},
+					{
+						"commit": "cf04906c",
+						"date": "2026-08-13T12:03:39+02:00",
+						"maligatorMs": 96868.815625,
+						"nodeMs": 13993.799083,
+						"maligatorPhases": {
+							"graphMs": 392,
+							"semanticMs": 944,
+							"compileToIrMs": 468,
+							"optimizeMs": 87381,
+							"regallocMs": 2959,
+							"lowerMs": 1743,
+							"emitMs": 2830,
+							"writeMs": 52
+						},
+						"nodePhases": {
+							"graphMs": 92,
+							"semanticMs": 151,
+							"compileToIrMs": 109,
+							"optimizeMs": 12189,
+							"regallocMs": 467,
+							"lowerMs": 238,
+							"emitMs": 566,
+							"writeMs": 24
+						},
+						"runs": 7,
+						"units": 7,
+						"maligatorCodeUnits": 49200799,
+						"nodeCodeUnits": 49198573,
+						"platform": "darwin",
+						"arch": "arm64",
+						"nodeVersion": "v24.14.1"
 					}
 				],
 				"binary": {
-					"binaryBytes": 5211080,
+					"binaryBytes": 5278088,
 					"binaryPlatform": "aarch64-apple-darwin",
 					"binaryProfile": "production"
 				}

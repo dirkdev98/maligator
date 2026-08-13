@@ -491,11 +491,42 @@ const WPT_DOMAINS: Array<WptDomain> = [
 					"streams/readable-streams/count-queuing-strategy-integration.any.js",
 					"streams/readable-streams/floating-point-total-queue-size.any.js",
 					"streams/readable-streams/general.any.js",
+					"streams/readable-streams/patched-global.any.js",
+					"streams/readable-streams/reentrant-strategies.any.js",
+					"streams/readable-streams/templated.any.js",
 				],
+			},
+			{
+				name: "ReadableStream byte sources",
+				tests: [
+					"streams/readable-byte-streams/general.any.js",
+					"streams/readable-byte-streams/patched-global.any.js",
+					"streams/readable-byte-streams/templated.any.js",
+				],
+			},
+			{
+				name: "ReadableStreamBYOBReader#read",
+				tests: [
+					"streams/readable-byte-streams/bad-buffers-and-views.any.js",
+					"streams/readable-byte-streams/read-min.any.js",
+				],
+			},
+			{
+				name: "ReadableByteStreamController#byobRequest",
+				tests: ["streams/readable-byte-streams/construct-byob-request.any.js"],
+			},
+			{
+				name: "ReadableByteStreamController#enqueue",
+				tests: ["streams/readable-byte-streams/enqueue-with-detached-buffer.any.js"],
+			},
+			{
+				name: "ReadableStreamBYOBRequest#respond",
+				tests: ["streams/readable-byte-streams/respond-after-enqueue.any.js"],
 			},
 			{
 				name: "ReadableStream#pipeTo",
 				tests: [
+					"streams/piping/abort.any.js",
 					"streams/piping/general-addition.any.js",
 					"streams/piping/close-propagation-backward.any.js",
 					"streams/piping/close-propagation-forward.any.js",
@@ -517,17 +548,30 @@ const WPT_DOMAINS: Array<WptDomain> = [
 			},
 			{
 				name: "ReadableStream#tee",
-				tests: ["streams/readable-streams/tee.any.js"],
+				tests: [
+					"streams/readable-byte-streams/tee.any.js",
+					"streams/readable-streams/tee.any.js",
+				],
+			},
+			{
+				name: "ReadableStream#values / @@asyncIterator",
+				tests: ["streams/readable-streams/async-iterator.any.js"],
+			},
+			{
+				name: "ReadableStream.from",
+				tests: ["streams/readable-streams/from.any.js"],
 			},
 			{
 				name: "WritableStream#constructor",
 				tests: [
 					"streams/writable-streams/bad-strategies.any.js",
+					"streams/writable-streams/bad-underlying-sinks.any.js",
 					"streams/writable-streams/byte-length-queuing-strategy.any.js",
 					"streams/writable-streams/count-queuing-strategy.any.js",
 					"streams/writable-streams/floating-point-total-queue-size.any.js",
 					"streams/writable-streams/constructor.any.js",
 					"streams/writable-streams/properties.any.js",
+					"streams/writable-streams/reentrant-strategy.any.js",
 					"streams/writable-streams/start.any.js",
 				],
 			},

@@ -505,7 +505,7 @@
 				</div>
 				<aside class="summary-board" aria-label="Compatibility inventory summary">
 					<!-- compatibility-summary:start -->
-					<strong>90</strong><span>fully passing WPT files</span> <strong>37</strong
+					<strong>107</strong><span>fully passing WPT files</span> <strong>37</strong
 					><span>recognized Node.js modules</span> <strong>0</strong
 					><span>suppressed WPT failures</span>
 					<!-- compatibility-summary:end -->
@@ -735,7 +735,7 @@
 						<section class="inventory-group" aria-labelledby="wpt-streams">
 							<div class="inventory-heading">
 								<h3 id="wpt-streams">Streams</h3>
-								<span>10 API slices</span>
+								<span>17 API slices</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -748,6 +748,34 @@
 									<tbody>
 										<tr>
 											<td><code class="api-name">ReadableStream#constructor</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">ReadableStream byte sources</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">ReadableStreamBYOBReader#read</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
+													>ReadableByteStreamController#byobRequest</code
+												>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">ReadableByteStreamController#enqueue</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">ReadableStreamBYOBRequest#respond</code>
+											</td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -768,6 +796,18 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">ReadableStream#tee</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
+													>ReadableStream#values / @@asyncIterator</code
+												>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">ReadableStream.from</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -919,7 +959,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:assert">
 							<div class="inventory-heading">
 								<h3 id="node:assert"><code>node:assert</code></h3>
-								<span>7 recognized APIs · default export</span>
+								<span>14 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -935,18 +975,6 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
-											<td><code class="api-name">node:assert#ok</code></td>
-											<td><span class="status partial">Partial implementation</span></td>
-										</tr>
-										<tr>
-											<td><code class="api-name">node:assert#equal</code></td>
-											<td><span class="status partial">Partial implementation</span></td>
-										</tr>
-										<tr>
-											<td><code class="api-name">node:assert#strictEqual</code></td>
-											<td><span class="status partial">Partial implementation</span></td>
-										</tr>
-										<tr>
 											<td><code class="api-name">node:assert#deepEqual</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -955,7 +983,49 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:assert#doesNotMatch</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert#equal</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert#fail</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert#ifError</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:assert#match</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert#notDeepEqual</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:assert#notDeepStrictEqual</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert#notEqual</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert#notStrictEqual</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert#ok</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert#strictEqual</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -968,7 +1038,7 @@
 						>
 							<div class="inventory-heading">
 								<h3 id="node:assert/strict"><code>node:assert/strict</code></h3>
-								<span>3 recognized APIs · default export</span>
+								<span>13 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -980,15 +1050,69 @@
 									</thead>
 									<tbody>
 										<tr>
-											<td><code class="api-name">node:assert/strict#equal</code></td>
-											<td><span class="status partial">Partial implementation</span></td>
-										</tr>
-										<tr>
 											<td><code class="api-name">node:assert/strict#deepEqual</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td>
+												<code class="api-name">node:assert/strict#deepStrictEqual</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:assert/strict#doesNotMatch</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert/strict#equal</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert/strict#fail</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert/strict#ifError</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:assert/strict#match</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:assert/strict#notDeepEqual</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
+													>node:assert/strict#notDeepStrictEqual</code
+												>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert/strict#notEqual</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:assert/strict#notStrictEqual</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:assert/strict#ok</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:assert/strict#strictEqual</code>
+											</td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -1401,7 +1525,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:fs">
 							<div class="inventory-heading">
 								<h3 id="node:fs"><code>node:fs</code></h3>
-								<span>19 recognized APIs · default export</span>
+								<span>21 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1414,6 +1538,10 @@
 									<tbody>
 										<tr>
 											<td><code class="api-name">node:fs#Stats</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs#appendFileSync</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -1477,6 +1605,10 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:fs#unlinkSync</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:fs#write</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -1498,7 +1630,7 @@
 						>
 							<div class="inventory-heading">
 								<h3 id="node:fs/promises"><code>node:fs/promises</code></h3>
-								<span>3 recognized APIs · default export</span>
+								<span>11 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1510,7 +1642,19 @@
 									</thead>
 									<tbody>
 										<tr>
+											<td><code class="api-name">node:fs/promises#appendFile</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#copyFile</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:fs/promises#lstat</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#mkdir</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -1519,6 +1663,26 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:fs/promises#readdir</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#rename</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#rm</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#stat</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#unlink</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:fs/promises#writeFile</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -1755,7 +1919,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:os">
 							<div class="inventory-heading">
 								<h3 id="node:os"><code>node:os</code></h3>
-								<span>7 recognized APIs · default export</span>
+								<span>19 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1766,6 +1930,10 @@
 										</tr>
 									</thead>
 									<tbody>
+										<tr>
+											<td><code class="api-name">node:os#EOL</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
 										<tr>
 											<td><code class="api-name">node:os#arch</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
@@ -1779,7 +1947,31 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:os#devNull</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#endianness</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#freemem</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#homedir</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:os#hostname</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#loadavg</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#machine</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -1792,6 +1984,26 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:os#tmpdir</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#totalmem</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#type</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#uptime</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#userInfo</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:os#version</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -2309,7 +2521,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:util">
 							<div class="inventory-heading">
 								<h3 id="node:util"><code>node:util</code></h3>
-								<span>9 recognized APIs · default export</span>
+								<span>20 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -2342,6 +2554,50 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:util#inspect</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isArray</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isBoolean</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isBuffer</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isFunction</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isNull</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isNullOrUndefined</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isNumber</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isObject</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isString</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isSymbol</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#isUndefined</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
