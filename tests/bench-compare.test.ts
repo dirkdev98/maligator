@@ -28,6 +28,19 @@ test("paired comparison fails a clear slowdown and accepts a sub-threshold chang
 	expect(classifyMetricSamples("language.malMs", small)?.status).toBe("unchanged");
 });
 
+test("paired comparison gives time and throughput ratios opposite directions", () => {
+	const lower = Array.from({ length: 7 }, () => ({ base: 2, head: 1 }));
+	const higher = Array.from({ length: 7 }, () => ({ base: 1, head: 2 }));
+	expect(classifyMetricSamples("language.ratio", lower)?.status).toBe("improvement");
+	expect(classifyMetricSamples("prototypeCache.runtimeRatio", lower)?.status).toBe(
+		"improvement",
+	);
+	expect(classifyMetricSamples("http.ratio", higher)?.status).toBe("improvement");
+	expect(classifyMetricSamples("http.express.middleware.ratio", higher)?.status).toBe(
+		"improvement",
+	);
+});
+
 test("paired comparison treats exact A/A as unchanged and noisy evidence as inconclusive", () => {
 	const equal = Array.from({ length: 5 }, () => ({ base: 100, head: 100 }));
 	const noisy = [

@@ -157,8 +157,15 @@ function metricPolicy(
 ):
 	| { direction: "higher" | "lower"; thresholdPercent: number; minimumAbsolute?: number }
 	| undefined {
-	if (/(^|\.)(malRps|ratio)$/.test(metricPath))
+	if (/(^|\.)malRps$/.test(metricPath))
 		return { direction: "higher", thresholdPercent: 3 };
+	// HTTP publishes Maligator/Node throughput, while every other ratio in the
+	// benchmark snapshot is Maligator/Node elapsed time. Their desirable
+	// directions are therefore opposite despite sharing the same leaf name.
+	if (/^http(?:\..+)?\.ratio$/.test(metricPath))
+		return { direction: "higher", thresholdPercent: 3 };
+	if (/(^|\.)(ratio|[A-Za-z]+Ratio)$/.test(metricPath))
+		return { direction: "lower", thresholdPercent: 3 };
 	if (/(p99|rss|Pause)/i.test(metricPath))
 		return { direction: "lower", thresholdPercent: 5 };
 	if (/(binaryBytes|ArchiveBytes)$/i.test(metricPath)) {

@@ -57,6 +57,61 @@ Compiler optimization and analysis are owned by the
 [compiler roadmap](docs/roadmaps/compiler.md). Test262 compiler and suite throughput
 is owned by the [Test262 performance roadmap](test262-perf-todo.md).
 
+## Performance profiling follow-up
+
+The integrated production profiler is useful now: one `--profile` switch preserves
+ordinary production builds, publishes complete self-describing artifacts, attributes
+logical JavaScript stacks, reports capture delay and drops, and the paired benchmark
+runner retains exact revisions and raw samples. On `bench/string.js`, a default run
+collected 17 CPU and 1,387 allocation samples with no drops and 4.2 ms p99 sampling
+delay; a 2 ms interval collected 77 CPU samples but correctly marked the capture
+biased after six dropped records and 8.0 ms p99 delay. A 31-run product A/B measured
+the profile image about 3.0% slower than the ordinary image, leaving little overhead
+margin. These measurements are diagnostic evidence, not a committed benchmark
+baseline.
+
+The highest-priority issue is trust in the explanation layer. The current report says
+hot `String#split` and `slice` sites stayed generic even though the final generated C
+contains `mal_builtin_string_split_projection` and
+`mal_builtin_string_slice_to_number_direct` at those sites. Raw samples are useful;
+compiler remarks must describe the final emitted path before they guide optimization.
+
+- [ ] Generate optimization remarks from final backend decisions, with exact operation
+      identity and stable reason codes such as unknown target set, invalidatable epoch,
+      escaping result, unsupported consumer, or representation mismatch. Do not merge
+      multiple same-kind operations that share one source position.
+- [ ] Split CPU and allocation evidence quality. Report CPU sample counts or intervals
+      beside percentages, and never upgrade a one-sample CPU claim to high confidence
+      because the same site has many allocation samples.
+- [ ] Make allocation evidence physically meaningful: preserve heap/cell kind, include
+      raw payload and native backing allocations where practical, and either estimate
+      bytes using the sampling interval and an unbiased sampling scheme or rename the
+      current sum of triggering allocation sizes. State clearly that this is neither
+      retained memory nor RSS.
+- [ ] Add a repeat, warmup, or minimum-duration mode for short commands and a CLI to
+      render/open an existing capture. Document the interval override as an expert
+      diagnostic whose overhead and bias must be rechecked.
+- [ ] Use one clock domain for sampling and delay quality. `ITIMER_PROF` advances in
+      process CPU time while the current expected timestamp uses monotonic wall time,
+      so descheduling or I/O can be misreported as delayed safepoint sampling.
+- [ ] Make capture integrity explicit: fingerprint the metadata/build in `capture.bin`,
+      count per-stack depth truncation as dropped frames, report unattributed CPU
+      records, and use all CPU records rather than only mapped leaves as the share
+      denominator.
+- [ ] Add optional native/runtime attribution so a hot logical site can be separated
+      into dispatch, string scan, allocation, GC, regexp, and host work without raising
+      the default profile above its current overhead envelope.
+- [ ] Improve paired-benchmark turnaround: show adaptive pair progress, avoid treating a
+      redundant derived ratio as decisive when both component timings are unchanged,
+      and make the maximum-pair/inconclusive outcome explicit. A no-op module comparison
+      needed all 15 pairs and still left the ratio inconclusive. Preserve distinct
+      policies for elapsed-time ratios, where lower is better, and HTTP throughput
+      ratios, where higher is better.
+- [ ] Recheck profiler overhead on language, allocation-heavy, GC, and HTTP workloads.
+      Keep ordinary images free of profiling instrumentation, target less than 3%
+      median CPU overhead for profiled images, and reject regressions in output, GC
+      verification, or capture completeness.
+
 ## Domain roadmaps
 
 - [Compiler optimization and analysis](docs/roadmaps/compiler.md)
