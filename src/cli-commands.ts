@@ -55,6 +55,13 @@ import {
 import { debugProgramLiveness } from "./liveness.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
+import {
+	createProfileCapture,
+	finalizeProfileCapture,
+	formatProfileFindings,
+	prepareProfile,
+} from "./profile-artifact.ts";
+import type { PreparedProfile } from "./profile-artifact.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { executeTestCommand } from "./testing/command.ts";
 import {
@@ -179,6 +186,7 @@ export interface BuildCommandResult {
 	artifactDirectory?: string;
 	runArguments?: Array<string>;
 	dependencies?: Array<string>;
+	profile?: PreparedProfile;
 }
 
 class CommandError extends Error {
@@ -707,6 +715,11 @@ function compileAndBuild(
 			return caches.join(" · ");
 		},
 	);
+	const preparedProfile = command.profile
+		? reporter.phase("Prepare profile metadata", () =>
+				prepareProfile(binaryPath, frontend.definition),
+			)
+		: undefined;
 	let resultPath = binaryPath;
 	if (command.kind === "build" && command.artifactDirectory !== undefined) {
 		const artifactDirectory = command.artifactDirectory;
@@ -733,6 +746,7 @@ function compileAndBuild(
 			binaryPath,
 			artifactDirectory: artifact.directory,
 			dependencies,
+			...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 		};
 	}
 	reporter.complete(
@@ -740,7 +754,11 @@ function compileAndBuild(
 		resultPath,
 		command.kind === "build",
 	);
-	return { binaryPath, dependencies };
+	return {
+		binaryPath,
+		dependencies,
+		...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
+	};
 }
 
 /** Compile and link one parsed `build` command without owning process dispatch. */
@@ -755,12 +773,34 @@ export function buildCommand(
 export function runCommand(command: RunCommand, context: CommandContext): void {
 	const result = compileAndBuild(command, context);
 	const binaryPath = result.binaryPath!;
+	const capture =
+		command.profile && result.profile !== undefined
+			? createProfileCapture("run", result.profile)
+			: undefined;
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
 	const outcome = executeBinary(
 		binaryPath,
 		result.runArguments ?? command.programArgs,
-		runEnv(),
+		{
+			...runEnv(),
+			...(capture === undefined ? {} : { MAL_PROFILE_CAPTURE: capture.capturePath }),
+		},
 	);
+	if (capture !== undefined && result.profile !== undefined) {
+		if (existsSync(capture.capturePath)) {
+			try {
+				const finalized = finalizeProfileCapture(capture.directory, result.profile, "run");
+				writeStderr(`Profile ${capture.directory}`);
+				for (const line of formatProfileFindings(finalized.findings)) writeStderr(line);
+			} catch (error) {
+				writeStderr(
+					`warning: profile capture could not be finalized: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		} else {
+			writeStderr(`warning: profiled process did not publish ${capture.capturePath}`);
+		}
+	}
 	if (outcome.status === 0) {
 		writeStderr("Exited with code 0");
 		return;
