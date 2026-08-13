@@ -3,7 +3,7 @@
  * diffs selected lanes against their last saved values:
  *
  *   node scripts/bench.ts [size|language|stack-object|gc|http|http-profile ...]
- *     [--runs N] [--update]
+ *     [--runs N] [--max-pairs N] [--update]
  *
  * Benches (default: all):
  *   - size      linked binary + per-archive bytes across a build-config matrix
@@ -2702,12 +2702,15 @@ const jsonOutIdx = args.indexOf("--json-out");
 const jsonOut = jsonOutIdx >= 0 ? args[jsonOutIdx + 1] : undefined;
 const runsIdx = args.indexOf("--runs");
 const runs = runsIdx >= 0 ? Number(args[runsIdx + 1]) : 5;
+const maxPairsIdx = args.indexOf("--max-pairs");
+const maxPairs = maxPairsIdx >= 0 ? Number(args[maxPairsIdx + 1]) : undefined;
 const httpSecondsIdx = args.indexOf("--http-seconds");
 const httpSeconds = httpSecondsIdx >= 0 ? Number(args[httpSecondsIdx + 1]) : 10;
 const httpRequestsIdx = args.indexOf("--http-requests");
 const httpRequests = httpRequestsIdx >= 0 ? Number(args[httpRequestsIdx + 1]) : 100_000;
 const optionValues = new Set<number>();
 if (runsIdx >= 0) optionValues.add(runsIdx + 1);
+if (maxPairsIdx >= 0) optionValues.add(maxPairsIdx + 1);
 if (httpSecondsIdx >= 0) optionValues.add(httpSecondsIdx + 1);
 if (httpRequestsIdx >= 0) optionValues.add(httpRequestsIdx + 1);
 if (compareIdx >= 0) optionValues.add(compareIdx + 1);
@@ -2813,6 +2816,7 @@ if (compareIdx >= 0) {
 		baseRef: compareRef,
 		lanes: which,
 		pairs: runs,
+		maxPairs,
 		extraArgs: [
 			...(httpSecondsIdx >= 0 ? ["--http-seconds", String(httpSeconds)] : []),
 			...(httpRequestsIdx >= 0 ? ["--http-requests", String(httpRequests)] : []),
