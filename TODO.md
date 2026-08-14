@@ -128,6 +128,18 @@ counters to source sites. Finally, emit a final-backend remark for the retained
 activation-local parse-template fill/hit/fallback: line 212 still reports only a
 generic call and static load, hiding the optimization that moved the profile.
 
+The post-affine 1 ms capture at `8429611e` provides a second useful movement check.
+It completed with no drops, but remained biased: 34 CPU and 57 allocation samples at
+2.39 ms median / 10.69 ms p99 effective delay. The former dense-range producer no
+longer appears as an allocation center after 800 Arrays, 800,000 stores, and
+1,600,000 loads were virtualized, while line 212 still carries 9 CPU and 38 allocation
+samples. Twelve allocation samples are absent from `allocations.json`. The report
+labels line 212 medium confidence even though the CPU evidence is sparse and capture
+quality is biased, and the remaining line-88 finding still says `property.dynamic-load`
+instead of reporting the final affine substitution. This confirms that final-backend
+operation identity plus separate CPU/allocation confidence is the highest-value next
+profiler improvement; collecting more samples alone will not repair the explanation.
+
 - [ ] Generate optimization remarks from final backend decisions, with exact operation
       identity and stable reason codes such as unknown target set, invalidatable epoch,
       escaping result, unsupported consumer, or representation mismatch. Do not merge
@@ -173,14 +185,14 @@ generic call and static load, hiding the optimization that moved the profile.
       Keep ordinary images free of profiling instrumentation, target less than 3%
       median CPU overhead for profiled images, and reject regressions in output, GC
       verification, or capture completeness.
-- [ ] Repair the authenticated Claude/Fable review harness. Host `claude auth status`
-      succeeds and a tool-free smoke prompt completes, but three noninteractive
-      repository-audit invocations (`plan`, `dontAsk`, and tools disabled with stdin)
-      hung silently until their exact processes were terminated. Preserve host
-      keychain/session access without exposing the cookie, and add a tiny read-only
-      tool-use smoke before assigning a long review. The external-call safety layer
-      also requires a fresh explicit approval before sending internal architecture and
-      benchmark payloads to Claude.ai; keep that disclosure separate from authentication.
+- [ ] Harden the authenticated Claude/Fable review harness. The host keychain/session
+      path now completes long read-only repository audits through the 30-minute alarm
+      wrapper without exposing the cookie, including the affine/provider reviews on
+      2026-08-14. Keep the tiny read-only smoke and exact timeout/process cleanup because
+      earlier `plan`, `dontAsk`, and stdin invocations hung silently. The external-call
+      safety layer still requires fresh explicit approval before sending internal
+      architecture and benchmark payloads to Claude.ai; keep that disclosure separate
+      from authentication.
 
 ## Domain roadmaps
 
