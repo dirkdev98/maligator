@@ -464,6 +464,63 @@ describe("native update-expression representation", () => {
 
 	it.each([
 		[
+			"one consumer",
+			`function rangeKernel() { const a = []; for (let i = 0; i < 8; i++) a[i] = i; let sum = 0; for (let i = 0; i < 8; i++) sum += a[i]; return sum; }`,
+			1,
+		],
+		[
+			"three consumers",
+			`function rangeKernel() { const a = []; for (let i = 0; i < 8; i++) a[i] = i; let sum = 0; for (let i = 0; i < 8; i++) sum += a[i]; for (let i = 0; i < 8; i++) sum += a[(i * 3) % 8]; for (let i = 0; i < 8; i++) sum += a[(i + 1) % 8]; return sum; }`,
+			3,
+		],
+	])("virtualizes a closed identity range with %s", (_name, kernel, loadCount) => {
+		const output = emit(`"use strict"; ${kernel} globalThis.rangeKernel = rangeKernel;`);
+		expect(output).toContain("mal_gc_preempt_hook == nullptr");
+		expect(output).toContain("mal_array_elements_protector");
+		expect(output).toContain("semantic_epochs.array_elements != 0");
+		expect(output).toContain("array_affine_range_allocations_elided");
+		expect(output.match(/array_affine_range_stores_elided/g)).toHaveLength(1);
+		expect(output.match(/array_affine_range_loads_elided/g)).toHaveLength(loadCount);
+		// The generic allocation, stores, loads, and original backedge polls remain
+		// present as the scheduler/protector fallback.
+		expect(output).toContain("mal_vm_op_create_array");
+		expect(output).toContain("mal_vm_array_try_store");
+		expect(output).toContain("mal_vm_array_try_load");
+		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
+	});
+
+	it.each([
+		[
+			"a non-identity producer",
+			`function rangeKernel() { const a = []; for (let i = 0; i < 8; i++) a[i] = i * 2; let sum = 0; for (let i = 0; i < 8; i++) sum += a[i]; return sum; }`,
+		],
+		[
+			"an out-of-range consumer",
+			`function rangeKernel() { const a = []; for (let i = 0; i < 8; i++) a[i] = i; let sum = 0; for (let i = 0; i < 8; i++) sum += a[i + 1]; return sum; }`,
+		],
+		[
+			"a partially completed producer",
+			`function rangeKernel() { const a = []; for (let i = 0; i < 8; i++) { if (i === 4) break; a[i] = i; } let sum = 0; for (let i = 0; i < 8; i++) sum += a[i]; return sum; }`,
+		],
+		[
+			"a consumer load after pre-increment",
+			`function rangeKernel() { const a = []; for (let i = 0; i < 8; i++) a[i] = i; let sum = 0; for (let i = 0; i < 8;) { i++; sum += a[i]; } return sum; }`,
+		],
+		[
+			"an aggregate escape",
+			`function rangeKernel() { const a = []; for (let i = 0; i < 8; i++) a[i] = i; return a; }`,
+		],
+		[
+			"a possible reentrant call",
+			`function rangeKernel() { const a = []; for (let i = 0; i < 8; i++) a[i] = i; unknown(); let sum = 0; for (let i = 0; i < 8; i++) sum += a[i]; return sum; }`,
+		],
+	])("does not virtualize %s", (_name, kernel) => {
+		const output = emit(`"use strict"; ${kernel} globalThis.rangeKernel = rangeKernel;`);
+		expect(output).not.toContain("array_affine_range_allocations_elided");
+	});
+
+	it.each([
+		[
 			"a pre-loop escape",
 			`function fill(observe) { const array = []; observe(array); for (let i = 0; i < 8; i++) array[i] = i; return array; }`,
 		],

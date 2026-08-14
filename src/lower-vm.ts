@@ -601,6 +601,11 @@ export type VmInstruction =
 			nativeCardinalityRegion?: { maximumLength: number };
 			/** COMPILE-ONLY: exact capacity for a proven pristine indexed fill. */
 			nativeFreshDenseReserveLength?: number;
+			/** EMITTER-ONLY: private identity-range Array virtualization action. */
+			nativeAffineRangeVirtualization?: {
+				allocationIp: number;
+				role: "allocation";
+			};
 	  }
 	| {
 			opcode: "INSTANTIATE_LITERAL_TEMPLATE";
@@ -821,6 +826,11 @@ export type VmInstruction =
 				allocationInstructionIndex: number;
 				fieldSlot?: number;
 			};
+			/** EMITTER-ONLY: load from a private `array[i] = i` virtual range. */
+			nativeAffineRangeVirtualization?: {
+				allocationIp: number;
+				role: "load";
+			};
 	  }
 	| {
 			opcode: "LOAD_PROPERTY_STATIC";
@@ -859,6 +869,11 @@ export type VmInstruction =
 				stateIndex: number;
 				mask: number;
 				direct: boolean;
+			};
+			/** EMITTER-ONLY: producer store for a private identity virtual range. */
+			nativeAffineRangeVirtualization?: {
+				allocationIp: number;
+				role: "store";
 			};
 	  }
 	| {

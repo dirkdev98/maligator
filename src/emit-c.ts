@@ -1063,6 +1063,19 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += 2;
 	}
+	const affineRangeAllocations = fn.instructions
+		.map((instruction, ip) => ({ instruction, ip }))
+		.filter(
+			(
+				entry,
+			): entry is {
+				instruction: Extract<VmInstruction, { opcode: "CREATE_ARRAY" }>;
+				ip: number;
+			} =>
+				entry.instruction.opcode === "CREATE_ARRAY" &&
+				entry.instruction.nativeAffineRangeVirtualization?.role === "allocation" &&
+				entry.instruction.nativeAffineRangeVirtualization.allocationIp === entry.ip,
+		);
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -1255,6 +1268,9 @@ export function emitCompiledFunction(
 		lines.push(
 			`    MalPrivateAggregateMemo __private_aggregate_memo_${memo.callIp} = { .roots = &__gc_slots[${memo.rootsOffset}], .state = MAL_PRIVATE_AGGREGATE_MEMO_EMPTY, .private_ok = false, .admitted = false };`,
 		);
+	}
+	for (const allocation of affineRangeAllocations) {
+		lines.push(`    bool __affine_range_${allocation.ip} = false;`);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
@@ -3609,6 +3625,33 @@ function emitInstruction(
 					`}`,
 				];
 			}
+			if (instruction.nativeAffineRangeVirtualization?.role === "allocation") {
+				const allocationIp = instruction.nativeAffineRangeVirtualization.allocationIp;
+				// A future scheduler-enabled version must snapshot array_elements and,
+				// after a taken producer poll invalidates it, materialize dense own
+				// elements [0, index) before resuming the unchanged next [[Set]].
+				// This first slice instead admits only activations that cannot preempt.
+				const ordinary = [
+					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
+					...(instruction.nativeFreshDenseReserveLength === undefined
+						? []
+						: [
+								`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.nativeFreshDenseReserveLength});`,
+							]),
+				];
+				return [
+					"MAL_PERF_COUNT(array_affine_range_candidates);",
+					`__affine_range_${allocationIp} = mal_gc_preempt_hook == nullptr && mal_array_elements_protector && vm->semantic_epochs.array_elements != 0;`,
+					`if (__affine_range_${allocationIp}) {`,
+					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+					"  MAL_PERF_COUNT(array_affine_range_virtualizations);",
+					"  MAL_PERF_COUNT(array_affine_range_allocations_elided);",
+					`} else {`,
+					"  MAL_PERF_COUNT(array_affine_range_guard_fallbacks);",
+					...ordinary.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (instruction.nativeFreshDenseReserveLength !== undefined) {
 				return [
 					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
@@ -4262,6 +4305,23 @@ function emitInstruction(
 						];
 					}
 				}
+				if (instruction.nativeAffineRangeVirtualization?.role === "load") {
+					const allocationIp = instruction.nativeAffineRangeVirtualization.allocationIp;
+					const direct =
+						reps[instruction.dst] === "number"
+							? reps[instruction.key] === "number"
+								? num(instruction.key)
+								: `mal_ops_number_as_f64(${boxed(instruction.key)})`
+							: boxed(instruction.key);
+					return [
+						`if (__affine_range_${allocationIp}) {`,
+						`  r${instruction.dst} = ${direct};`,
+						`  MAL_PERF_COUNT(array_affine_range_loads_elided);`,
+						`} else {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
 				return ordinary;
 			}
 			if (!reg.consolidated) {
@@ -4546,7 +4606,7 @@ function emitInstruction(
 				commit: false,
 			};
 			if (reg.kind === "array" && instruction.opcode === "STORE_PROPERTY") {
-				return [
+				const ordinary = [
 					...(reg.declare
 						? [
 								`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`,
@@ -4557,6 +4617,17 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
+				if (instruction.nativeAffineRangeVirtualization?.role === "store") {
+					const allocationIp = instruction.nativeAffineRangeVirtualization.allocationIp;
+					return [
+						`if (__affine_range_${allocationIp}) {`,
+						`  MAL_PERF_COUNT(array_affine_range_stores_elided);`,
+						`} else {`,
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
+				}
+				return ordinary;
 			}
 			if (!reg.consolidated) {
 				const probe =

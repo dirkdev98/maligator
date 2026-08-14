@@ -144,6 +144,12 @@ interface LanguageMetrics {
 	indexedFillAllocationsAvoided: number;
 	indexedFillRawBytesAvoided: number;
 	indexedFillGuardFallbacks: number;
+	affineRangeCandidates: number;
+	affineRangeVirtualizations: number;
+	affineRangeGuardFallbacks: number;
+	affineRangeAllocationsElided: number;
+	affineRangeStoresElided: number;
+	affineRangeLoadsElided: number;
 	callProbes: number;
 	callMisses: number;
 	loadMonoHits: number;
@@ -945,14 +951,47 @@ function benchLanguage(runs: number): LanguageMetrics {
 		"indexed_fill_guard_fallbacks",
 	);
 	if (
-		indexedFillReserves !== 800 ||
-		indexedFillReservedSlots !== 800_000 ||
-		indexedFillAllocationsAvoided !== 6_400 ||
-		indexedFillRawBytesAvoided !== 6_528_000 ||
+		indexedFillReserves !== 0 ||
+		indexedFillReservedSlots !== 0 ||
+		indexedFillAllocationsAvoided !== 0 ||
+		indexedFillRawBytesAvoided !== 0 ||
 		indexedFillGuardFallbacks !== 0
 	) {
 		throw new Error(
-			`language indexed fill reserve counters were ${indexedFillReserves}/${indexedFillReservedSlots}/${indexedFillAllocationsAvoided}/${indexedFillRawBytesAvoided}/${indexedFillGuardFallbacks}, expected 800/800000/6400/6528000/0`,
+			`language indexed fill reserve counters were ${indexedFillReserves}/${indexedFillReservedSlots}/${indexedFillAllocationsAvoided}/${indexedFillRawBytesAvoided}/${indexedFillGuardFallbacks}, expected 0/0/0/0/0 after affine range virtualization`,
+		);
+	}
+	const affineRangeCandidates = parsePerfArrayStat(perfStderr, "affine_range_candidates");
+	const affineRangeVirtualizations = parsePerfArrayStat(
+		perfStderr,
+		"affine_range_virtualizations",
+	);
+	const affineRangeGuardFallbacks = parsePerfArrayStat(
+		perfStderr,
+		"affine_range_guard_fallbacks",
+	);
+	const affineRangeAllocationsElided = parsePerfArrayStat(
+		perfStderr,
+		"affine_range_allocations_elided",
+	);
+	const affineRangeStoresElided = parsePerfArrayStat(
+		perfStderr,
+		"affine_range_stores_elided",
+	);
+	const affineRangeLoadsElided = parsePerfArrayStat(
+		perfStderr,
+		"affine_range_loads_elided",
+	);
+	if (
+		affineRangeCandidates !== 800 ||
+		affineRangeVirtualizations !== 800 ||
+		affineRangeGuardFallbacks !== 0 ||
+		affineRangeAllocationsElided !== 800 ||
+		affineRangeStoresElided !== 800_000 ||
+		affineRangeLoadsElided !== 1_600_000
+	) {
+		throw new Error(
+			`language affine range counters were ${affineRangeCandidates}/${affineRangeVirtualizations}/${affineRangeGuardFallbacks}/${affineRangeAllocationsElided}/${affineRangeStoresElided}/${affineRangeLoadsElided}, expected 800/800/0/800/800000/1600000`,
 		);
 	}
 	return {
@@ -985,6 +1024,12 @@ function benchLanguage(runs: number): LanguageMetrics {
 		indexedFillAllocationsAvoided,
 		indexedFillRawBytesAvoided,
 		indexedFillGuardFallbacks,
+		affineRangeCandidates,
+		affineRangeVirtualizations,
+		affineRangeGuardFallbacks,
+		affineRangeAllocationsElided,
+		affineRangeStoresElided,
+		affineRangeLoadsElided,
 		callProbes: parsePerfStat(perfStderr, "perf-call-cache-stats", "probes"),
 		callMisses: parsePerfStat(perfStderr, "perf-call-cache-stats", "dispatch_misses"),
 		loadMonoHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_mono_hits"),
@@ -2501,6 +2546,9 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(
 			`  arrays    ${entry.language.indexedFillReserves} exact reserves, ${entry.language.indexedFillAllocationsAvoided} growth allocations and ${humanBytes(entry.language.indexedFillRawBytesAvoided)} avoided`,
+		);
+		console.log(
+			`  ranges    ${entry.language.affineRangeVirtualizations}/${entry.language.affineRangeCandidates} virtualized, ${entry.language.affineRangeAllocationsElided} allocations, ${entry.language.affineRangeStoresElided} stores, and ${entry.language.affineRangeLoadsElided} loads elided (${entry.language.affineRangeGuardFallbacks} guard fallbacks)`,
 		);
 		console.log(
 			`  calls     ${entry.language.callProbes} cache probes, ${entry.language.callMisses} misses`,

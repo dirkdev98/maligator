@@ -266,6 +266,12 @@ typedef struct MalPerfStats {
     u64 array_indexed_fill_allocations_avoided;
     u64 array_indexed_fill_raw_bytes_avoided;
     u64 array_indexed_fill_guard_fallbacks;
+    u64 array_affine_range_candidates;
+    u64 array_affine_range_virtualizations;
+    u64 array_affine_range_guard_fallbacks;
+    u64 array_affine_range_allocations_elided;
+    u64 array_affine_range_stores_elided;
+    u64 array_affine_range_loads_elided;
     u64 array_push_direct_hits;
     u64 array_push_direct_fallbacks;
 

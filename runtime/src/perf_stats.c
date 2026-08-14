@@ -430,6 +430,9 @@ static void mal_perf_stats_print(void) {
         "indexed_fill_reserves=%llu indexed_fill_reserved_slots=%llu "
         "indexed_fill_allocations_avoided=%llu indexed_fill_raw_bytes_avoided=%llu "
         "indexed_fill_guard_fallbacks=%llu "
+        "affine_range_candidates=%llu affine_range_virtualizations=%llu "
+        "affine_range_guard_fallbacks=%llu affine_range_allocations_elided=%llu "
+        "affine_range_stores_elided=%llu affine_range_loads_elided=%llu "
         "push_direct_hits=%llu push_direct_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
@@ -442,6 +445,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_indexed_fill_allocations_avoided,
         (unsigned long long) mal_perf_stats.array_indexed_fill_raw_bytes_avoided,
         (unsigned long long) mal_perf_stats.array_indexed_fill_guard_fallbacks,
+        (unsigned long long) mal_perf_stats.array_affine_range_candidates,
+        (unsigned long long) mal_perf_stats.array_affine_range_virtualizations,
+        (unsigned long long) mal_perf_stats.array_affine_range_guard_fallbacks,
+        (unsigned long long) mal_perf_stats.array_affine_range_allocations_elided,
+        (unsigned long long) mal_perf_stats.array_affine_range_stores_elided,
+        (unsigned long long) mal_perf_stats.array_affine_range_loads_elided,
         (unsigned long long) mal_perf_stats.array_push_direct_hits,
         (unsigned long long) mal_perf_stats.array_push_direct_fallbacks
     );

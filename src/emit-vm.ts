@@ -619,6 +619,7 @@ function privateAggregateDefinedRegisters(instruction: VmInstruction): Array<num
 		case "CREATE_NULL":
 		case "CREATE_ARRAY":
 		case "CREATE_FUNCTION":
+		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC":
 		case "BINARY":
 		case "UNARY":
@@ -627,6 +628,456 @@ function privateAggregateDefinedRegisters(instruction: VmInstruction): Array<num
 			return [instruction.dst];
 		default:
 			return [];
+	}
+}
+
+interface NativeIntegerRange {
+	minimum: number;
+	maximum: number;
+}
+
+/**
+ * Virtualize the deliberately tiny identity-range shape used by the language
+ * benchmark: a private fresh `[]`, filled exactly by `array[i] = i`, then read
+ * only by bounded indexed loops. This emitter-only pass independently rebuilds
+ * the producer/use/CFG/range proof after wire loading, so compile-only capacity
+ * hints, bytecode, and interpreted semantics are never semantic authority.
+ *
+ * Native emission admits the virtual path only when there is no scheduler
+ * preemption hook and the Array-elements protector is live. Therefore every
+ * original poll stays in place, while fibers and poisoned prototypes execute
+ * the complete allocation/store/load fallback from the first instruction.
+ */
+function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): void {
+	// With zero parameters/captures and no calls, globals, object/string producers,
+	// handlers, or non-aggregate property operations, every remaining BINARY/UNARY
+	// operand is a locally produced primitive. None can invoke user coercion or
+	// invalidate Array prototype state between the admission guard and the loads.
+	const safeOpcodes = new Set<VmInstruction["opcode"]>([
+		"CREATE_NUMBER",
+		"CREATE_F64",
+		"CREATE_BOOLEAN",
+		"CREATE_UNDEFINED",
+		"CREATE_NULL",
+		"CREATE_ARRAY",
+		"MOVE",
+		"BINARY",
+		"UNARY",
+		"JUMP",
+		"JUMP_IF",
+		"LOAD_PROPERTY",
+		"STORE_PROPERTY",
+		"RETURN",
+	]);
+	const usedRegisters = (instruction: VmInstruction): Array<number> => {
+		switch (instruction.opcode) {
+			case "MOVE":
+				return [instruction.src];
+			case "BINARY":
+				return [instruction.left, instruction.right];
+			case "UNARY":
+				return [instruction.src];
+			case "JUMP_IF":
+				return [instruction.cond];
+			case "LOAD_PROPERTY":
+				return [instruction.object, instruction.key];
+			case "STORE_PROPERTY":
+				return [instruction.object, instruction.key, instruction.value];
+			case "RETURN":
+				return [instruction.value];
+			default:
+				return [];
+		}
+	};
+
+	for (const fn of definition.functions) {
+		for (const instruction of fn.instructions) {
+			if (
+				instruction.opcode === "CREATE_ARRAY" ||
+				instruction.opcode === "LOAD_PROPERTY" ||
+				instruction.opcode === "STORE_PROPERTY"
+			) {
+				delete instruction.nativeAffineRangeVirtualization;
+			}
+		}
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			fn.parameterCount !== 0 ||
+			fn.needsArguments ||
+			fn.mappedArguments ||
+			fn.capturedCount !== 0 ||
+			fn.handlers.length > 0 ||
+			fn.instructions.some((instruction) => !safeOpcodes.has(instruction.opcode))
+		) {
+			continue;
+		}
+		const allocations = fn.instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					instruction: Extract<VmInstruction, { opcode: "CREATE_ARRAY" }>;
+					ip: number;
+				} =>
+					entry.instruction.opcode === "CREATE_ARRAY" && entry.instruction.length === 0,
+			);
+		// One site keeps the first structural checkpoint easy to audit and gives
+		// each generated activation exactly one scalar virtual-state local.
+		if (allocations.length !== 1) continue;
+		const allocation = allocations[0]!;
+
+		const cfg = buildNativeProofCfg(fn);
+		const reaching = privateAggregateReachingDefinitions(fn, cfg);
+		const aliasDefinitions = new Set<number>([allocation.ip]);
+		let aliasesChanged = true;
+		while (aliasesChanged) {
+			aliasesChanged = false;
+			for (let ip = 0; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (instruction.opcode !== "MOVE" || aliasDefinitions.has(ip)) continue;
+				const definitions = reaching[instruction.src]?.[ip];
+				if (
+					definitions !== undefined &&
+					definitions.size > 0 &&
+					[...definitions].every((definitionIp) => aliasDefinitions.has(definitionIp))
+				) {
+					aliasDefinitions.add(ip);
+					aliasesChanged = true;
+				}
+			}
+		}
+		const isAggregateUse = (register: number, ip: number): boolean => {
+			const definitions = reaching[register]?.[ip];
+			return (
+				definitions !== undefined &&
+				definitions.size > 0 &&
+				[...definitions].every((definitionIp) => aliasDefinitions.has(definitionIp))
+			);
+		};
+
+		const stores: Array<{
+			instruction: Extract<VmInstruction, { opcode: "STORE_PROPERTY" }>;
+			ip: number;
+		}> = [];
+		const loads: Array<{
+			instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
+			ip: number;
+		}> = [];
+		let closed = true;
+		for (let ip = 0; ip < fn.instructions.length && closed; ip++) {
+			const instruction = fn.instructions[ip]!;
+			for (const register of new Set(usedRegisters(instruction))) {
+				if (!isAggregateUse(register, ip)) continue;
+				if (instruction.opcode === "MOVE" && instruction.src === register) continue;
+				if (
+					instruction.opcode === "STORE_PROPERTY" &&
+					instruction.object === register &&
+					instruction.key === instruction.value
+				) {
+					if (!stores.some((entry) => entry.ip === ip)) stores.push({ instruction, ip });
+					continue;
+				}
+				if (instruction.opcode === "LOAD_PROPERTY" && instruction.object === register) {
+					if (!loads.some((entry) => entry.ip === ip)) loads.push({ instruction, ip });
+					continue;
+				}
+				closed = false;
+				break;
+			}
+		}
+		if (!closed || stores.length !== 1 || loads.length === 0 || loads.length > 8)
+			continue;
+		if (
+			fn.instructions.some(
+				(instruction, ip) =>
+					(instruction.opcode === "LOAD_PROPERTY" ||
+						instruction.opcode === "STORE_PROPERTY") &&
+					!stores.some((entry) => entry.ip === ip) &&
+					!loads.some((entry) => entry.ip === ip),
+			)
+		) {
+			continue;
+		}
+		const store = stores[0]!;
+		const producerLoop = cfg.loops
+			.filter((loop) => loop.body.has(store.ip))
+			.sort((left, right) => left.body.size - right.body.size)[0];
+		if (producerLoop === undefined) continue;
+
+		const constantAt = (register: number, useIp: number): number | undefined => {
+			const definitions = reaching[register]?.[useIp];
+			if (definitions?.size !== 1) return undefined;
+			const definitionIp = [...definitions][0]!;
+			const instruction = fn.instructions[definitionIp];
+			return instruction?.opcode === "CREATE_NUMBER" ||
+				instruction?.opcode === "CREATE_F64"
+				? instruction.value
+				: undefined;
+		};
+		const canonicalCounter = (
+			loop: NativeProofCfg["loops"][number],
+			maximumBound: number,
+		):
+			| {
+					register: number;
+					bound: number;
+					comparisonIp: number;
+					boundDefinitionIp: number;
+					initializerIp: number;
+					incrementIp: number;
+			  }
+			| undefined => {
+			for (const ip of loop.body) {
+				const comparison = fn.instructions[ip];
+				const branch = fn.instructions[ip + 1];
+				if (
+					comparison?.opcode !== "BINARY" ||
+					comparison.operator !== "<" ||
+					branch?.opcode !== "JUMP_IF" ||
+					branch.cond !== comparison.dst ||
+					!loop.body.has(branch.targetIp)
+				) {
+					continue;
+				}
+				const bound = constantAt(comparison.right, ip);
+				if (!Number.isSafeInteger(bound) || bound! <= 0 || bound! > maximumBound)
+					continue;
+				const boundDefinitions = reaching[comparison.right]?.[ip];
+				if (boundDefinitions?.size !== 1) continue;
+				const boundDefinitionIp = [...boundDefinitions][0]!;
+				const counter = comparison.left;
+				const definitions = reaching[counter]?.[ip];
+				if (definitions?.size !== 2) continue;
+				let sawZero = false;
+				let sawIncrement = false;
+				let initializerIp = -1;
+				let incrementIp = -1;
+				for (const definitionIp of definitions) {
+					const definition = fn.instructions[definitionIp];
+					if (
+						(definition?.opcode === "CREATE_NUMBER" ||
+							definition?.opcode === "CREATE_F64") &&
+						definition.value === 0 &&
+						!loop.body.has(definitionIp)
+					) {
+						sawZero = true;
+						initializerIp = definitionIp;
+					} else if (
+						definition?.opcode === "UNARY" &&
+						definition.operator === "increment" &&
+						definition.dst === counter &&
+						definition.src === counter &&
+						loop.body.has(definitionIp)
+					) {
+						sawIncrement = true;
+						incrementIp = definitionIp;
+					}
+				}
+				if (sawZero && sawIncrement) {
+					return {
+						register: counter,
+						bound: bound!,
+						comparisonIp: ip,
+						boundDefinitionIp,
+						initializerIp,
+						incrementIp,
+					};
+				}
+			}
+			return undefined;
+		};
+		const producerCounter = canonicalCounter(producerLoop, 65_536);
+		const producerBranch =
+			producerCounter === undefined
+				? undefined
+				: fn.instructions[producerCounter.comparisonIp + 1];
+		const producerBackedge = fn.instructions[producerLoop.backedge];
+		const producerExit =
+			producerCounter === undefined
+				? undefined
+				: fn.instructions[producerCounter.comparisonIp + 2];
+		if (
+			producerCounter === undefined ||
+			store.instruction.key !== producerCounter.register ||
+			store.instruction.value !== producerCounter.register ||
+			producerCounter.initializerIp <= allocation.ip ||
+			producerCounter.comparisonIp + 2 >= store.ip ||
+			producerExit?.opcode !== "JUMP" ||
+			producerLoop.body.has(producerExit.targetIp) ||
+			producerBranch?.opcode !== "JUMP_IF" ||
+			producerBranch.targetIp !== store.ip ||
+			producerCounter.incrementIp !== store.ip + 1 ||
+			producerLoop.backedge !== producerCounter.incrementIp + 1 ||
+			producerBackedge?.opcode !== "JUMP" ||
+			producerBackedge.targetIp !== producerLoop.header ||
+			!cfg.dominators[producerLoop.header]!.has(allocation.ip) ||
+			!cfg.dominators[producerLoop.header]!.has(producerCounter.initializerIp) ||
+			!cfg.dominators[store.ip]!.has(allocation.ip) ||
+			[...producerLoop.body].some((ip) =>
+				cfg.predecessors[ip]!.some(
+					(predecessor) =>
+						!producerLoop.body.has(predecessor) && ip !== producerLoop.header,
+				),
+			)
+		) {
+			continue;
+		}
+		const producerInstructions = new Set([
+			producerCounter.boundDefinitionIp,
+			producerCounter.comparisonIp,
+			producerCounter.comparisonIp + 1,
+			producerCounter.comparisonIp + 2,
+			store.ip,
+			producerCounter.incrementIp,
+			producerLoop.backedge,
+		]);
+		if ([...producerLoop.body].some((ip) => !producerInstructions.has(ip))) continue;
+		for (let ip = allocation.ip + 1; ip < producerLoop.header; ip++) {
+			const instruction = fn.instructions[ip]!;
+			if (
+				ip === producerCounter.initializerIp ||
+				(instruction.opcode === "MOVE" && aliasDefinitions.has(ip)) ||
+				(instruction.opcode === "JUMP" && instruction.targetIp === producerLoop.header)
+			) {
+				continue;
+			}
+			closed = false;
+			break;
+		}
+		if (!closed) continue;
+		const length = producerCounter.bound;
+
+		let rangesProven = true;
+		for (const load of loads) {
+			const consumerLoop = cfg.loops
+				.filter((loop) => loop.body.has(load.ip) && loop.backedge > producerLoop.backedge)
+				.sort((left, right) => left.body.size - right.body.size)[0];
+			const counter =
+				consumerLoop === undefined ? undefined : canonicalCounter(consumerLoop, length);
+			const consumerBackedge =
+				consumerLoop === undefined ? undefined : fn.instructions[consumerLoop.backedge];
+			const consumerBranch =
+				counter === undefined ? undefined : fn.instructions[counter.comparisonIp + 1];
+			const consumerExit =
+				counter === undefined ? undefined : fn.instructions[counter.comparisonIp + 2];
+			if (
+				consumerLoop === undefined ||
+				counter === undefined ||
+				producerLoop.backedge >= consumerLoop.header ||
+				!cfg.dominators[load.ip]!.has(allocation.ip) ||
+				!cfg.dominators[load.ip]!.has(producerExit.targetIp) ||
+				!cfg.dominators[load.ip]!.has(consumerLoop.header) ||
+				!cfg.dominators[load.ip]!.has(counter.comparisonIp) ||
+				!cfg.dominators[consumerLoop.header]!.has(counter.initializerIp) ||
+				consumerBranch?.opcode !== "JUMP_IF" ||
+				!cfg.dominators[load.ip]!.has(consumerBranch.targetIp) ||
+				consumerExit?.opcode !== "JUMP" ||
+				consumerLoop.body.has(consumerExit.targetIp) ||
+				load.ip >= counter.incrementIp ||
+				counter.incrementIp !== consumerLoop.backedge - 1 ||
+				consumerBackedge?.opcode !== "JUMP" ||
+				consumerBackedge.targetIp !== consumerLoop.header ||
+				[...consumerLoop.body].some((ip) =>
+					cfg.predecessors[ip]!.some(
+						(predecessor) =>
+							!consumerLoop.body.has(predecessor) && ip !== consumerLoop.header,
+					),
+				)
+			) {
+				rangesProven = false;
+				break;
+			}
+			const counterDefinitions = reaching[counter.register]?.[load.ip];
+			if (
+				counterDefinitions?.size !== 2 ||
+				!counterDefinitions.has(counter.initializerIp) ||
+				!counterDefinitions.has(counter.incrementIp)
+			) {
+				rangesProven = false;
+				break;
+			}
+			const inferRange = (
+				register: number,
+				useIp: number,
+				seen = new Set<number>(),
+			): NativeIntegerRange | undefined => {
+				if (register === counter.register) {
+					return { minimum: 0, maximum: counter.bound - 1 };
+				}
+				if (seen.has(register)) return undefined;
+				seen.add(register);
+				const definitions = reaching[register]?.[useIp];
+				if (definitions?.size !== 1) return undefined;
+				const definitionIp = [...definitions][0]!;
+				const definition = fn.instructions[definitionIp];
+				if (
+					definition?.opcode === "CREATE_NUMBER" ||
+					definition?.opcode === "CREATE_F64"
+				) {
+					return Number.isSafeInteger(definition.value)
+						? { minimum: definition.value, maximum: definition.value }
+						: undefined;
+				}
+				if (definition?.opcode === "MOVE") {
+					return inferRange(definition.src, definitionIp, seen);
+				}
+				if (definition?.opcode !== "BINARY") return undefined;
+				const left = inferRange(definition.left, definitionIp, new Set(seen));
+				const right = inferRange(definition.right, definitionIp, new Set(seen));
+				if (left === undefined || right === undefined) return undefined;
+				let result: NativeIntegerRange | undefined;
+				if (definition.operator === "+") {
+					result = {
+						minimum: left.minimum + right.minimum,
+						maximum: left.maximum + right.maximum,
+					};
+				} else if (
+					definition.operator === "*" &&
+					left.minimum >= 0 &&
+					right.minimum >= 0
+				) {
+					result = {
+						minimum: left.minimum * right.minimum,
+						maximum: left.maximum * right.maximum,
+					};
+				} else if (
+					definition.operator === "%" &&
+					left.minimum >= 0 &&
+					right.minimum === right.maximum &&
+					right.minimum > 0
+				) {
+					result = { minimum: 0, maximum: right.minimum - 1 };
+				}
+				return result !== undefined &&
+					Number.isSafeInteger(result.minimum) &&
+					Number.isSafeInteger(result.maximum)
+					? result
+					: undefined;
+			};
+			const range = inferRange(load.instruction.key, load.ip);
+			if (range === undefined || range.minimum < 0 || range.maximum >= length) {
+				rangesProven = false;
+				break;
+			}
+		}
+		if (!rangesProven) continue;
+
+		allocation.instruction.nativeAffineRangeVirtualization = {
+			allocationIp: allocation.ip,
+			role: "allocation",
+		};
+		store.instruction.nativeAffineRangeVirtualization = {
+			allocationIp: allocation.ip,
+			role: "store",
+		};
+		for (const load of loads) {
+			load.instruction.nativeAffineRangeVirtualization = {
+				allocationIp: allocation.ip,
+				role: "load",
+			};
+		}
 	}
 }
 
@@ -2990,6 +3441,7 @@ function emitVmDefinitionSource(
 		annotateNativeStringSliceNumberFusions(definition);
 		annotateNativeStringSearchRegExpCalls(definition);
 		annotateNativePrivateAggregateMemos(definition);
+		annotateNativeAffineRangeVirtualizations(definition);
 		annotateNativeInvariantJsonParseCaches(definition);
 	}
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
