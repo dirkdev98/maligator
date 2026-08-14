@@ -1026,6 +1026,43 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += 2;
 	}
+	const privateAggregateMemos = new Map<
+		number,
+		NonNullable<VmFunction["nativePrivateAggregateMemos"]>[number] & {
+			rootsOffset: number;
+		}
+	>();
+	for (const memo of fn.nativePrivateAggregateMemos ?? []) {
+		const instruction = fn.instructions[memo.callIp];
+		const allocation = fn.instructions[memo.allocationIp];
+		const callee =
+			instruction?.opcode === "CALL"
+				? decodeVmValueOperand(instruction.callee)
+				: undefined;
+		const input =
+			instruction?.opcode === "CALL" && instruction.arguments.length === 1
+				? decodeVmValueOperand(instruction.arguments[0]!)
+				: undefined;
+		if (
+			instruction?.opcode !== "CALL" ||
+			instruction.dst !== memo.result ||
+			callee?.kind !== "register" ||
+			callee.register !== memo.callee ||
+			instruction.arguments.length !== 1 ||
+			input?.kind !== "register" ||
+			input.register !== memo.input ||
+			instruction.directFunctionIndex !== memo.targetFunctionIndex ||
+			allocation?.opcode !== "CREATE_ARRAY" ||
+			privateAggregateMemos.has(memo.callIp)
+		) {
+			throw new Error(`Invalid private aggregate memo at instruction ${memo.callIp}`);
+		}
+		privateAggregateMemos.set(memo.callIp, {
+			...memo,
+			rootsOffset: nextStackSlot,
+		});
+		nextStackSlot += 2;
+	}
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -1062,6 +1099,7 @@ export function emitCompiledFunction(
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
 		invariantJsonParseCaches,
+		privateAggregateMemos,
 		directCompiledTargets,
 	);
 	if (body === null) {
@@ -1211,6 +1249,11 @@ export function emitCompiledFunction(
 	for (const cache of invariantJsonParseCaches.values()) {
 		lines.push(
 			`    MalInvariantJsonParseCache __invariant_json_parse_${cache.callIp} = { .roots = &__gc_slots[${cache.rootsOffset}], .filled = false };`,
+		);
+	}
+	for (const memo of privateAggregateMemos.values()) {
+		lines.push(
+			`    MalPrivateAggregateMemo __private_aggregate_memo_${memo.callIp} = { .roots = &__gc_slots[${memo.rootsOffset}], .state = MAL_PRIVATE_AGGREGATE_MEMO_EMPTY, .private_ok = false, .admitted = false };`,
 		);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
@@ -1413,6 +1456,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -2466,12 +2510,28 @@ function emitBody(
 			rootsOffset: number;
 		}
 	>,
+	privateAggregateMemos: ReadonlyMap<
+		number,
+		NonNullable<VmFunction["nativePrivateAggregateMemos"]>[number] & {
+			rootsOffset: number;
+		}
+	>,
 	directCompiledTargets: ReadonlyMap<number, number>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
 			jumpTargets.add(instruction.targetIp);
+		}
+	}
+	type PrivateAggregateMemoSite =
+		typeof privateAggregateMemos extends ReadonlyMap<number, infer Site> ? Site : never;
+	const privateAggregateAllocationByIp = new Map<number, PrivateAggregateMemoSite>();
+	const privateAggregatePushByIp = new Map<number, PrivateAggregateMemoSite>();
+	for (const memo of privateAggregateMemos.values()) {
+		privateAggregateAllocationByIp.set(memo.allocationIp, memo);
+		for (const pushIp of memo.constructionPushIps) {
+			privateAggregatePushByIp.set(pushIp, memo);
 		}
 	}
 	// Static property sites inside a natural flattened loop are the ones where
@@ -3176,6 +3236,8 @@ function emitBody(
 			nativeRegExpIteratorProjectionActionByIp.get(ip),
 			nativeStringSliceNumberFusionActionByIp.get(ip),
 			invariantJsonParseCaches.get(ip),
+			privateAggregateMemos.get(ip),
+			privateAggregatePushByIp.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -3189,6 +3251,14 @@ function emitBody(
 		}
 		for (const line of emitted) {
 			lines.push(`    ${line}`);
+		}
+		const allocationMemo = privateAggregateAllocationByIp.get(ip);
+		if (allocationMemo !== undefined) {
+			const allocation = fn.instructions[ip];
+			if (allocation?.opcode !== "CREATE_ARRAY") return null;
+			lines.push(
+				`    mal_builtin_array_private_aggregate_memo_init(vm, &__private_aggregate_memo_${allocationMemo.callIp}, r${allocation.dst});`,
+			);
 		}
 	}
 
@@ -3246,6 +3316,12 @@ function emitInstruction(
 	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
 	invariantJsonParseCache?: NonNullable<
 		VmFunction["nativeInvariantJsonParseCaches"]
+	>[number] & { rootsOffset: number },
+	privateAggregateMemo?: NonNullable<
+		VmFunction["nativePrivateAggregateMemos"]
+	>[number] & { rootsOffset: number },
+	privateAggregatePushMemo?: NonNullable<
+		VmFunction["nativePrivateAggregateMemos"]
 	>[number] & { rootsOffset: number },
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
@@ -4945,6 +5021,33 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (privateAggregateMemo !== undefined) {
+				const memo = `__private_aggregate_memo_${ip}`;
+				const callee = `__private_aggregate_callee_${ip}`;
+				const input = boxedOperand(instruction.arguments[0]!);
+				return [
+					`MalValue ${callee} = ${boxedOperand(instruction.callee)};`,
+					`if (!mal_builtin_array_private_aggregate_memo_probe(vm, &${memo}, ${callee}, ${boxedOperand(instruction.thisValue)}, ${input}, ${privateAggregateMemo.targetFunctionIndex}, &r${instruction.dst})) {`,
+					`  if (mal_vm_callee_has_index(vm, ${callee}, ${privateAggregateMemo.targetFunctionIndex})) {`,
+					`    if (!mal_vm_enter_compiled(vm, ${privateAggregateMemo.targetFunctionIndex})) ${onThrow}`,
+					`    const MalFunction *__private_aggregate_function_${ip} = &vm->definition->functions[${privateAggregateMemo.targetFunctionIndex}];`,
+					`    MalValue __private_aggregate_value_${ip} = mal_compiled_${privateAggregateMemo.targetFunctionIndex}${suffix}(vm, mal_vm_callee_this(vm, __private_aggregate_function_${ip}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${callee})->creation_env, ${callee}, nullptr);`,
+					`    mal_vm_leave_compiled(vm);`,
+					`    if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`    r${instruction.dst} = __private_aggregate_value_${ip};`,
+					`  } else {`,
+					`    static MalCallCache __cc_${ip};`,
+					`    MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${privateAggregateMemo.targetFunctionIndex}, ${callee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`    if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`    r${instruction.dst} = ${tmp}.value;`,
+					`  }`,
+					`  ${poll}`,
+					`  mal_builtin_array_private_aggregate_memo_fill(vm, &${memo}, ${callee}, ${boxedOperand(instruction.thisValue)}, ${input}, ${privateAggregateMemo.targetFunctionIndex}, r${instruction.dst});`,
+					`} else {`,
+					`  ${poll}`,
+					`}`,
+				];
+			}
 			if (invariantJsonParseCache !== undefined) {
 				const cache = `__invariant_json_parse_${ip}`;
 				const text = boxedOperand(instruction.arguments[0]!);
@@ -5267,7 +5370,7 @@ function emitInstruction(
 					`  r${target.itemRegister} = ${current};`,
 					`  ${target.currentMaterializedName} = true;`,
 					`  static MalCallCache __cc_${ip};`,
-					`  MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, &${current}, 1);`,
+					`  MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, &${current}, 1, nullptr);`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`  ${poll}`,
@@ -5289,11 +5392,19 @@ function emitInstruction(
 				];
 			}
 			if (instruction.directArrayPush) {
+				const exact = `__private_aggregate_push_exact_${ip}`;
+				const memo = privateAggregatePushMemo;
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					...(memo === undefined ? [] : [`bool ${exact} = false;`]),
+					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, ${memo === undefined ? "nullptr" : `&${exact}`});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${tmp}.value;`,
+					...(memo === undefined
+						? []
+						: [
+								`mal_builtin_array_private_aggregate_memo_note_push(vm, &__private_aggregate_memo_${memo.callIp}, ${exact});`,
+							]),
 					poll,
 				];
 			}

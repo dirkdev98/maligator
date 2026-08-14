@@ -133,6 +133,12 @@ interface LanguageMetrics {
 	invariantJsonParseHits: number;
 	invariantJsonParseMisses: number;
 	invariantJsonParseCallsElided: number;
+	privateAggregateMemoCandidates: number;
+	privateAggregateMemoFills: number;
+	privateAggregateMemoHits: number;
+	privateAggregateMemoMisses: number;
+	privateAggregateMemoCallsElided: number;
+	privateAggregateMemoGuardFallbacks: number;
 	indexedFillReserves: number;
 	indexedFillReservedSlots: number;
 	indexedFillAllocationsAvoided: number;
@@ -879,6 +885,48 @@ function benchLanguage(runs: number): LanguageMetrics {
 			`language invariant JSON parse cache counters were ${invariantJsonParseCandidates}/${invariantJsonParseFills}/${invariantJsonParseHits}/${invariantJsonParseMisses}/${invariantJsonParseCallsElided}, expected 180/1/179/1/179`,
 		);
 	}
+	const privateAggregateMemoCandidates = parsePerfStat(
+		perfStderr,
+		"perf-private-aggregate-memo-stats",
+		"candidates",
+	);
+	const privateAggregateMemoFills = parsePerfStat(
+		perfStderr,
+		"perf-private-aggregate-memo-stats",
+		"fills",
+	);
+	const privateAggregateMemoHits = parsePerfStat(
+		perfStderr,
+		"perf-private-aggregate-memo-stats",
+		"hits",
+	);
+	const privateAggregateMemoMisses = parsePerfStat(
+		perfStderr,
+		"perf-private-aggregate-memo-stats",
+		"misses",
+	);
+	const privateAggregateMemoCallsElided = parsePerfStat(
+		perfStderr,
+		"perf-private-aggregate-memo-stats",
+		"calls_elided",
+	);
+	const privateAggregateMemoGuardFallbacks = parsePerfStat(
+		perfStderr,
+		"perf-private-aggregate-memo-stats",
+		"guard_fallbacks",
+	);
+	if (
+		privateAggregateMemoCandidates !== 1500 ||
+		privateAggregateMemoFills !== 1 ||
+		privateAggregateMemoHits !== 1499 ||
+		privateAggregateMemoMisses !== 1 ||
+		privateAggregateMemoCallsElided !== 1499 ||
+		privateAggregateMemoGuardFallbacks !== 0
+	) {
+		throw new Error(
+			`language private aggregate memo counters were ${privateAggregateMemoCandidates}/${privateAggregateMemoFills}/${privateAggregateMemoHits}/${privateAggregateMemoMisses}/${privateAggregateMemoCallsElided}/${privateAggregateMemoGuardFallbacks}, expected 1500/1/1499/1/1499/0`,
+		);
+	}
 	const indexedFillReserves = parsePerfArrayStat(perfStderr, "indexed_fill_reserves");
 	const indexedFillReservedSlots = parsePerfArrayStat(
 		perfStderr,
@@ -926,6 +974,12 @@ function benchLanguage(runs: number): LanguageMetrics {
 		invariantJsonParseHits,
 		invariantJsonParseMisses,
 		invariantJsonParseCallsElided,
+		privateAggregateMemoCandidates,
+		privateAggregateMemoFills,
+		privateAggregateMemoHits,
+		privateAggregateMemoMisses,
+		privateAggregateMemoCallsElided,
+		privateAggregateMemoGuardFallbacks,
 		indexedFillReserves,
 		indexedFillReservedSlots,
 		indexedFillAllocationsAvoided,
@@ -2441,6 +2495,9 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(
 			`  json      ${entry.language.invariantJsonParseHits}/${entry.language.invariantJsonParseCandidates} template hits, ${entry.language.invariantJsonParseCallsElided} parses elided`,
+		);
+		console.log(
+			`  aggregate ${entry.language.privateAggregateMemoHits}/${entry.language.privateAggregateMemoCandidates} memo hits, ${entry.language.privateAggregateMemoCallsElided} calls elided`,
 		);
 		console.log(
 			`  arrays    ${entry.language.indexedFillReserves} exact reserves, ${entry.language.indexedFillAllocationsAvoided} growth allocations and ${humanBytes(entry.language.indexedFillRawBytesAvoided)} avoided`,

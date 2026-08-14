@@ -527,6 +527,701 @@ function staticStringEquals(
 	);
 }
 
+interface NativeProofCfg {
+	successors: Array<ReadonlyArray<number>>;
+	predecessors: Array<ReadonlyArray<number>>;
+	dominators: Array<ReadonlySet<number>>;
+	loops: Array<{ header: number; backedge: number; body: ReadonlySet<number> }>;
+}
+
+/** Build the exact ordinary-control CFG used by emitter-only proof annotations. */
+function buildNativeProofCfg(fn: VmFunction): NativeProofCfg {
+	const count = fn.instructions.length;
+	const successors = fn.instructions.map((instruction, ip): Array<number> => {
+		const handlerTargets = fn.handlers
+			.filter((handler) => handler.startIp <= ip && ip < handler.endIp)
+			.map((handler) => handler.handlerIp);
+		if (instruction.opcode === "JUMP") return [instruction.targetIp];
+		if (instruction.opcode === "JUMP_IF") {
+			return ip + 1 < count ? [instruction.targetIp, ip + 1] : [instruction.targetIp];
+		}
+		if (instruction.opcode === "RETURN") return [];
+		if (instruction.opcode === "THROW") return handlerTargets.slice(0, 1);
+		return ip + 1 < count ? [ip + 1, ...handlerTargets] : handlerTargets;
+	});
+	const predecessors: Array<Array<number>> = Array.from({ length: count }, () => []);
+	for (let ip = 0; ip < count; ip++) {
+		for (const successor of successors[ip]!) {
+			if (successor >= 0 && successor < count) predecessors[successor]!.push(ip);
+		}
+	}
+	const all = new Set(Array.from({ length: count }, (_, ip) => ip));
+	const dominators: Array<Set<number>> = Array.from({ length: count }, (_, ip) =>
+		ip === 0 ? new Set([0]) : new Set(all),
+	);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let ip = 1; ip < count; ip++) {
+			const incoming = predecessors[ip]!;
+			const next =
+				incoming.length === 0
+					? new Set<number>()
+					: new Set(
+							[...dominators[incoming[0]!]!].filter((candidate) =>
+								incoming.every((predecessor) => dominators[predecessor]!.has(candidate)),
+							),
+						);
+			next.add(ip);
+			const current = dominators[ip]!;
+			if (
+				current.size !== next.size ||
+				[...current].some((candidate) => !next.has(candidate))
+			) {
+				dominators[ip] = next;
+				changed = true;
+			}
+		}
+	}
+	const loops: Array<{ header: number; backedge: number; body: ReadonlySet<number> }> =
+		[];
+	for (let from = 0; from < count; from++) {
+		for (const to of successors[from]!) {
+			if (to > from || !dominators[from]!.has(to)) continue;
+			const body = new Set<number>([to, from]);
+			const work = from === to ? [] : [from];
+			while (work.length > 0) {
+				const current = work.pop()!;
+				for (const predecessor of predecessors[current]!) {
+					if (body.has(predecessor)) continue;
+					body.add(predecessor);
+					if (predecessor !== to) work.push(predecessor);
+				}
+			}
+			loops.push({ header: to, backedge: from, body });
+		}
+	}
+	return { successors, predecessors, dominators, loops };
+}
+
+function privateAggregateDefinedRegisters(instruction: VmInstruction): Array<number> {
+	switch (instruction.opcode) {
+		case "GET_ITERATOR":
+			return [instruction.iteratorDst, instruction.nextDst];
+		case "ITERATOR_STEP":
+			return [instruction.valueDst, instruction.doneDst];
+		case "MOVE":
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "CREATE_BOOLEAN":
+		case "CREATE_STRING":
+		case "CREATE_UNDEFINED":
+		case "CREATE_NULL":
+		case "CREATE_ARRAY":
+		case "CREATE_FUNCTION":
+		case "LOAD_PROPERTY_STATIC":
+		case "BINARY":
+		case "UNARY":
+		case "CALL":
+		case "CATCH":
+			return [instruction.dst];
+		default:
+			return [];
+	}
+}
+
+/** Register uses for the deliberately closed caller/target opcode vocabulary. */
+function privateAggregateUsedRegisters(instruction: VmInstruction): Array<number> | null {
+	const operand = (value: number): Array<number> =>
+		decodeVmValueOperand(value).kind === "register" ? [value] : [];
+	switch (instruction.opcode) {
+		case "MOVE":
+			return [instruction.src];
+		case "RETURN":
+		case "THROW":
+			return [instruction.value];
+		case "JUMP_IF":
+			return [instruction.cond];
+		case "JUMP":
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "CREATE_BOOLEAN":
+		case "CREATE_STRING":
+		case "CREATE_UNDEFINED":
+		case "CREATE_NULL":
+		case "CREATE_ARRAY":
+		case "CREATE_FUNCTION":
+		case "CATCH":
+			return [];
+		case "LOAD_PROPERTY_STATIC":
+			return [instruction.object];
+		case "BINARY":
+			return [instruction.left, instruction.right];
+		case "UNARY":
+			return [instruction.src];
+		case "CALL":
+			return [
+				...operand(instruction.callee),
+				...operand(instruction.thisValue),
+				...instruction.arguments.flatMap(operand),
+			];
+		case "GET_ITERATOR":
+			return [instruction.source];
+		case "ITERATOR_STEP":
+			return [instruction.iterator, instruction.next];
+		case "ITERATOR_CLOSE":
+			return [instruction.iterator];
+		default:
+			return null;
+	}
+}
+
+/** Classical forward reaching definitions, including synthetic parameter defs. */
+function privateAggregateReachingDefinitions(
+	fn: VmFunction,
+	cfg: NativeProofCfg,
+): Array<Array<ReadonlySet<number>>> {
+	const result: Array<Array<ReadonlySet<number>>> = [];
+	for (let register = 0; register < fn.registerCount; register++) {
+		const incoming: Array<Set<number>> = Array.from(
+			{ length: fn.instructions.length },
+			() => new Set(),
+		);
+		if (register < fn.parameterCount && incoming.length > 0) {
+			incoming[0]!.add(-register - 1);
+		}
+		const outgoing: Array<Set<number>> = Array.from(
+			{ length: fn.instructions.length },
+			() => new Set(),
+		);
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (let ip = 0; ip < fn.instructions.length; ip++) {
+				const nextIncoming = new Set<number>();
+				if (ip === 0 && register < fn.parameterCount) nextIncoming.add(-register - 1);
+				for (const predecessor of cfg.predecessors[ip]!) {
+					for (const definition of outgoing[predecessor]!) {
+						nextIncoming.add(definition);
+					}
+				}
+				const defines = privateAggregateDefinedRegisters(fn.instructions[ip]!).includes(
+					register,
+				);
+				const nextOutgoing = defines ? new Set([ip]) : new Set(nextIncoming);
+				const same = (left: Set<number>, right: Set<number>) =>
+					left.size === right.size && [...left].every((value) => right.has(value));
+				if (!same(incoming[ip]!, nextIncoming)) {
+					incoming[ip] = nextIncoming;
+					changed = true;
+				}
+				if (!same(outgoing[ip]!, nextOutgoing)) {
+					outgoing[ip] = nextOutgoing;
+					changed = true;
+				}
+			}
+		}
+		result[register] = incoming;
+	}
+	return result;
+}
+
+const PRIVATE_AGGREGATE_NUMBER = 1 << 0;
+const PRIVATE_AGGREGATE_BOOLEAN = 1 << 1;
+const PRIVATE_AGGREGATE_STRING = 1 << 2;
+const PRIVATE_AGGREGATE_ARRAY = 1 << 3;
+const PRIVATE_AGGREGATE_ITERATOR = 1 << 4;
+const PRIVATE_AGGREGATE_NEXT = 1 << 5;
+
+/**
+ * Prove the target is a closed Number reduction over one canonical Array iterator.
+ * Exceptional edges are admitted only for explicit primitive throws caught by the
+ * innermost local handler. Exact builtin iteration and Number operators cannot take
+ * the generic exceptional edges that remain in the bytecode fallback CFG.
+ */
+function isPrivateDenseNumberReducer(fn: VmFunction): boolean {
+	if (
+		fn.parameterCount !== 1 ||
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.needsArguments ||
+		fn.mappedArguments ||
+		fn.capturedCount !== 0 ||
+		fn.isClassConstructor ||
+		fn.isDerivedConstructor ||
+		fn.argumentSnapshotCount !== 0 ||
+		fn.argumentSnapshotPlan.length !== 0
+	) {
+		return false;
+	}
+	const allowed = new Set<VmInstruction["opcode"]>([
+		"MOVE",
+		"RETURN",
+		"JUMP_IF",
+		"JUMP",
+		"CREATE_NUMBER",
+		"CREATE_F64",
+		"CREATE_BOOLEAN",
+		"CREATE_STRING",
+		"CREATE_UNDEFINED",
+		"CREATE_NULL",
+		"THROW",
+		"CATCH",
+		"BINARY",
+		"GET_ITERATOR",
+		"ITERATOR_STEP",
+		"ITERATOR_CLOSE",
+	]);
+	if (fn.instructions.some((instruction) => !allowed.has(instruction.opcode))) {
+		return false;
+	}
+	if (
+		fn.instructions.some((instruction) =>
+			privateAggregateDefinedRegisters(instruction).includes(0),
+		)
+	) {
+		return false;
+	}
+	const gets = fn.instructions.filter(
+		(instruction): instruction is Extract<VmInstruction, { opcode: "GET_ITERATOR" }> =>
+			instruction.opcode === "GET_ITERATOR",
+	);
+	const steps = fn.instructions.filter(
+		(instruction): instruction is Extract<VmInstruction, { opcode: "ITERATOR_STEP" }> =>
+			instruction.opcode === "ITERATOR_STEP",
+	);
+	if (
+		gets.length !== 1 ||
+		steps.length !== 1 ||
+		gets[0]!.source !== 0 ||
+		steps[0]!.iterator !== gets[0]!.iteratorDst ||
+		steps[0]!.next !== gets[0]!.nextDst
+	) {
+		return false;
+	}
+	for (const instruction of fn.instructions) {
+		const uses = privateAggregateUsedRegisters(instruction);
+		if (uses === null) return false;
+		if (
+			uses.includes(0) &&
+			!(instruction.opcode === "GET_ITERATOR" && instruction === gets[0])
+		) {
+			return false;
+		}
+	}
+	const cfg = buildNativeProofCfg(fn);
+	const stepIp = fn.instructions.indexOf(steps[0]!);
+	const doneBranch = fn.instructions[stepIp + 1];
+	const valueEntryIp = stepIp + 2;
+	if (
+		!cfg.loops.some((loop) => loop.body.has(stepIp)) ||
+		doneBranch?.opcode !== "JUMP_IF" ||
+		doneBranch.cond !== steps[0]!.doneDst ||
+		doneBranch.targetIp === valueEntryIp ||
+		!cfg.dominators[valueEntryIp]?.has(stepIp)
+	) {
+		return false;
+	}
+	const reaching = privateAggregateReachingDefinitions(fn, cfg);
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		if (
+			!privateAggregateUsedRegisters(fn.instructions[ip]!)?.includes(steps[0]!.valueDst)
+		) {
+			continue;
+		}
+		const definitions = reaching[steps[0]!.valueDst]?.[ip];
+		if (
+			definitions?.has(stepIp) &&
+			(!cfg.dominators[ip]!.has(valueEntryIp) || ip === doneBranch.targetIp)
+		) {
+			return false;
+		}
+	}
+
+	type State = Uint8Array;
+	const states: Array<State | undefined> = Array.from(
+		{ length: fn.instructions.length },
+		() => undefined,
+	);
+	const caught = new Uint8Array(fn.instructions.length);
+	const entry = new Uint8Array(fn.registerCount);
+	entry[0] = PRIVATE_AGGREGATE_ARRAY;
+	states[0] = entry;
+	const work = [0];
+	let reachablePrimitiveThrows = 0;
+	let sawNumberReturn = false;
+	const merge = (ip: number, state: State): void => {
+		const current = states[ip];
+		if (current === undefined) {
+			states[ip] = state.slice();
+			work.push(ip);
+			return;
+		}
+		let changed = false;
+		for (let register = 0; register < state.length; register++) {
+			const joined = current[register]! | state[register]!;
+			if (joined !== current[register]) {
+				current[register] = joined;
+				changed = true;
+			}
+		}
+		if (changed) work.push(ip);
+	};
+	const ordinarySuccessors = (ip: number): Array<number> => {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "JUMP") return [instruction.targetIp];
+		if (instruction.opcode === "JUMP_IF") {
+			return ip + 1 < fn.instructions.length
+				? [instruction.targetIp, ip + 1]
+				: [instruction.targetIp];
+		}
+		if (instruction.opcode === "RETURN" || instruction.opcode === "THROW") return [];
+		return ip + 1 < fn.instructions.length ? [ip + 1] : [];
+	};
+	const handlerFor = (ip: number) =>
+		fn.handlers
+			.filter((handler) => handler.startIp <= ip && ip < handler.endIp)
+			.sort(
+				(left, right) => left.endIp - left.startIp - (right.endIp - right.startIp),
+			)[0];
+	while (work.length > 0) {
+		const ip = work.pop()!;
+		const before = states[ip];
+		if (before === undefined) continue;
+		const after = before.slice();
+		const instruction = fn.instructions[ip]!;
+		const exact = (register: number, type: number) => after[register] === type;
+		let valid = true;
+		switch (instruction.opcode) {
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+				after[instruction.dst] = PRIVATE_AGGREGATE_NUMBER;
+				break;
+			case "CREATE_BOOLEAN":
+				after[instruction.dst] = PRIVATE_AGGREGATE_BOOLEAN;
+				break;
+			case "CREATE_STRING":
+				after[instruction.dst] = PRIVATE_AGGREGATE_STRING;
+				break;
+			case "CREATE_UNDEFINED":
+			case "CREATE_NULL":
+				after[instruction.dst] = PRIVATE_AGGREGATE_STRING;
+				break;
+			case "MOVE":
+				if (after[instruction.src] === 0) valid = false;
+				else after[instruction.dst] = after[instruction.src]!;
+				break;
+			case "GET_ITERATOR":
+				if (!exact(instruction.source, PRIVATE_AGGREGATE_ARRAY)) valid = false;
+				after[instruction.iteratorDst] = PRIVATE_AGGREGATE_ITERATOR;
+				after[instruction.nextDst] = PRIVATE_AGGREGATE_NEXT;
+				break;
+			case "ITERATOR_STEP":
+				if (
+					!exact(instruction.iterator, PRIVATE_AGGREGATE_ITERATOR) ||
+					!exact(instruction.next, PRIVATE_AGGREGATE_NEXT)
+				) {
+					valid = false;
+				}
+				after[instruction.valueDst] = PRIVATE_AGGREGATE_NUMBER;
+				after[instruction.doneDst] = PRIVATE_AGGREGATE_BOOLEAN;
+				break;
+			case "BINARY": {
+				const numeric = new Set(["+", "-", "*", "/", "%", "**"]);
+				const comparison = new Set(["===", "!==", "<", "<=", ">", ">="]);
+				if (numeric.has(instruction.operator)) {
+					if (
+						!exact(instruction.left, PRIVATE_AGGREGATE_NUMBER) ||
+						!exact(instruction.right, PRIVATE_AGGREGATE_NUMBER)
+					) {
+						valid = false;
+					}
+					after[instruction.dst] = PRIVATE_AGGREGATE_NUMBER;
+				} else if (comparison.has(instruction.operator)) {
+					const left = after[instruction.left]!;
+					const right = after[instruction.right]!;
+					const scalar =
+						PRIVATE_AGGREGATE_NUMBER |
+						PRIVATE_AGGREGATE_BOOLEAN |
+						PRIVATE_AGGREGATE_STRING;
+					if (
+						left === 0 ||
+						right === 0 ||
+						(left & ~scalar) !== 0 ||
+						(right & ~scalar) !== 0
+					) {
+						valid = false;
+					}
+					after[instruction.dst] = PRIVATE_AGGREGATE_BOOLEAN;
+				} else {
+					valid = false;
+				}
+				break;
+			}
+			case "JUMP_IF":
+				valid = exact(instruction.cond, PRIVATE_AGGREGATE_BOOLEAN);
+				break;
+			case "CATCH":
+				if (caught[ip] === 0) valid = false;
+				else after[instruction.dst] = caught[ip]!;
+				break;
+			case "THROW": {
+				const thrown = after[instruction.value]!;
+				const primitives =
+					PRIVATE_AGGREGATE_NUMBER | PRIVATE_AGGREGATE_BOOLEAN | PRIVATE_AGGREGATE_STRING;
+				const handler = handlerFor(ip);
+				if (thrown === 0 || (thrown & ~primitives) !== 0 || handler === undefined) {
+					valid = false;
+					break;
+				}
+				reachablePrimitiveThrows++;
+				const previousCaught = caught[handler.handlerIp]!;
+				caught[handler.handlerIp] = previousCaught | thrown;
+				merge(handler.handlerIp, after);
+				if (caught[handler.handlerIp] !== previousCaught) work.push(handler.handlerIp);
+				break;
+			}
+			case "ITERATOR_CLOSE":
+				// Exact builtin dense iteration cannot reach abrupt-close machinery.
+				valid = false;
+				break;
+			case "RETURN":
+				valid = exact(instruction.value, PRIVATE_AGGREGATE_NUMBER);
+				sawNumberReturn ||= valid;
+				break;
+			case "JUMP":
+				break;
+			default:
+				valid = false;
+		}
+		if (!valid) return false;
+		if (instruction.opcode === "THROW" || instruction.opcode === "RETURN") continue;
+		for (const successor of ordinarySuccessors(ip)) merge(successor, after);
+	}
+	return sawNumberReturn && reachablePrimitiveThrows > 0;
+}
+
+/**
+ * Find one deliberately narrow caller: one fresh Array, exact push-only private
+ * construction, then one exact reducer call in a side-effect-free natural loop.
+ */
+function annotateNativePrivateAggregateMemos(definition: VmDefinition): void {
+	const reducerTargets = new Set<number>();
+	for (let index = 0; index < definition.functions.length; index++) {
+		if (isPrivateDenseNumberReducer(definition.functions[index]!))
+			reducerTargets.add(index);
+	}
+	for (const fn of definition.functions) {
+		delete fn.nativePrivateAggregateMemos;
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			fn.needsArguments ||
+			fn.mappedArguments ||
+			fn.capturedCount !== 0 ||
+			fn.isClassConstructor ||
+			fn.isDerivedConstructor ||
+			fn.argumentSnapshotCount !== 0 ||
+			fn.argumentSnapshotPlan.length !== 0 ||
+			fn.handlers.length > 0 ||
+			fn.instructions.some(
+				(instruction) => privateAggregateUsedRegisters(instruction) === null,
+			)
+		) {
+			continue;
+		}
+		const allocations = fn.instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					instruction: Extract<VmInstruction, { opcode: "CREATE_ARRAY" }>;
+					ip: number;
+				} =>
+					entry.instruction.opcode === "CREATE_ARRAY" && entry.instruction.length === 0,
+			);
+		if (allocations.length !== 1) continue;
+		const cfg = buildNativeProofCfg(fn);
+		const allocation = allocations[0]!;
+		if (cfg.loops.some((loop) => loop.body.has(allocation.ip))) continue;
+		const reaching = privateAggregateReachingDefinitions(fn, cfg);
+		const aliasDefinitions = new Set<number>([allocation.ip]);
+		let aliasChanged = true;
+		while (aliasChanged) {
+			aliasChanged = false;
+			for (let ip = 0; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (instruction.opcode !== "MOVE" || aliasDefinitions.has(ip)) continue;
+				const definitions = reaching[instruction.src]?.[ip];
+				if (
+					definitions !== undefined &&
+					definitions.size > 0 &&
+					[...definitions].every((definitionIp) => aliasDefinitions.has(definitionIp))
+				) {
+					aliasDefinitions.add(ip);
+					aliasChanged = true;
+				}
+			}
+		}
+		const isAggregateUse = (register: number, ip: number): boolean => {
+			const definitions = reaching[register]?.[ip];
+			return (
+				definitions !== undefined &&
+				definitions.size > 0 &&
+				[...definitions].every((definitionIp) => aliasDefinitions.has(definitionIp))
+			);
+		};
+		const candidates = fn.instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				(
+					entry,
+				): entry is {
+					instruction: Extract<VmInstruction, { opcode: "CALL" }>;
+					ip: number;
+				} => {
+					if (
+						entry.instruction.opcode !== "CALL" ||
+						entry.instruction.arguments.length !== 1 ||
+						entry.instruction.directFunctionIndex === undefined ||
+						!reducerTargets.has(entry.instruction.directFunctionIndex) ||
+						decodeVmValueOperand(entry.instruction.thisValue).kind !== "undefined"
+					) {
+						return false;
+					}
+					const argument = decodeVmValueOperand(entry.instruction.arguments[0]!);
+					return (
+						argument.kind === "register" && isAggregateUse(argument.register, entry.ip)
+					);
+				},
+			);
+		if (candidates.length !== 1) continue;
+		const candidate = candidates[0]!;
+		const callLoop = cfg.loops.find((loop) => loop.body.has(candidate.ip));
+		if (callLoop === undefined || !cfg.dominators[candidate.ip]!.has(allocation.ip)) {
+			continue;
+		}
+		const callee = decodeVmValueOperand(candidate.instruction.callee);
+		const input = decodeVmValueOperand(candidate.instruction.arguments[0]!);
+		if (callee.kind !== "register" || input.kind !== "register") continue;
+		const reachesAny = (start: number, targets: ReadonlySet<number>): boolean => {
+			const seen = new Set<number>();
+			const work = [...cfg.successors[start]!];
+			while (work.length > 0) {
+				const ip = work.pop()!;
+				if (targets.has(ip)) return true;
+				if (seen.has(ip)) continue;
+				seen.add(ip);
+				work.push(...cfg.successors[ip]!);
+			}
+			return false;
+		};
+		const calleeDefinitions = reaching[callee.register]?.[candidate.ip];
+		if (calleeDefinitions?.size !== 1) continue;
+		let calleeDefinitionIp = [...calleeDefinitions][0]!;
+		const seenCalleeDefinitions = new Set<number>();
+		let provedCallee = false;
+		while (!seenCalleeDefinitions.has(calleeDefinitionIp)) {
+			seenCalleeDefinitions.add(calleeDefinitionIp);
+			const definition = fn.instructions[calleeDefinitionIp];
+			if (
+				definition?.opcode === "CREATE_FUNCTION" &&
+				definition.functionIndex === candidate.instruction.directFunctionIndex
+			) {
+				provedCallee = true;
+				break;
+			}
+			if (definition?.opcode !== "MOVE") {
+				calleeDefinitionIp = -1;
+				break;
+			}
+			const previous = reaching[definition.src]?.[calleeDefinitionIp];
+			if (previous?.size !== 1) {
+				calleeDefinitionIp = -1;
+				break;
+			}
+			calleeDefinitionIp = [...previous][0]!;
+		}
+		if (!provedCallee) continue;
+
+		const pushes: Array<number> = [];
+		let valid = true;
+		for (let ip = 0; ip < fn.instructions.length && valid; ip++) {
+			const instruction = fn.instructions[ip]!;
+			const uses = privateAggregateUsedRegisters(instruction)!;
+			for (const register of uses) {
+				if (!isAggregateUse(register, ip)) continue;
+				if (instruction.opcode === "MOVE" && instruction.src === register) continue;
+				if (
+					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+					instruction.object === register &&
+					staticStringEquals(definition, instruction.stringIndex, "push")
+				) {
+					continue;
+				}
+				if (instruction.opcode === "CALL") {
+					const thisValue = decodeVmValueOperand(instruction.thisValue);
+					const aggregateArguments = instruction.arguments.filter((argument) => {
+						const decoded = decodeVmValueOperand(argument);
+						return decoded.kind === "register" && isAggregateUse(decoded.register, ip);
+					});
+					if (instruction === candidate.instruction && aggregateArguments.length === 1) {
+						continue;
+					}
+					if (
+						instruction.directArrayPush === true &&
+						thisValue.kind === "register" &&
+						isAggregateUse(thisValue.register, ip) &&
+						aggregateArguments.length === 0 &&
+						instruction.arguments.length === 1
+					) {
+						if (!pushes.includes(ip)) pushes.push(ip);
+						continue;
+					}
+				}
+				valid = false;
+				break;
+			}
+		}
+		if (!valid || pushes.length === 0) continue;
+		const constructionTargets = new Set([allocation.ip, ...pushes]);
+		if (
+			pushes.some(
+				(ip) =>
+					ip >= candidate.ip ||
+					callLoop.body.has(ip) ||
+					!cfg.dominators[ip]!.has(allocation.ip),
+			) ||
+			reachesAny(candidate.ip, constructionTargets) ||
+			pushes.some((pushIp) => reachesAny(pushIp, new Set([allocation.ip])))
+		) {
+			continue;
+		}
+		// The whole caller is closed: no other call or aggregate-observing operation
+		// can re-enter JavaScript between construction and memo hits.
+		if (
+			fn.instructions.some(
+				(instruction, ip) =>
+					instruction.opcode === "CALL" && ip !== candidate.ip && !pushes.includes(ip),
+			)
+		) {
+			continue;
+		}
+		fn.nativePrivateAggregateMemos = [
+			{
+				allocationIp: allocation.ip,
+				constructionPushIps: pushes,
+				callIp: candidate.ip,
+				targetFunctionIndex: candidate.instruction.directFunctionIndex!,
+				callee: callee.register,
+				input: input.register,
+				result: candidate.instruction.dst,
+			},
+		];
+	}
+}
+
 /**
  * Recognize a deliberately narrow aggregate producer: scan one String by code
  * unit, append exactly one shaped record per unit to a fresh Array, count one
@@ -2294,6 +2989,7 @@ function emitVmDefinitionSource(
 		annotateNativeRegExpIteratorProjections(definition);
 		annotateNativeStringSliceNumberFusions(definition);
 		annotateNativeStringSearchRegExpCalls(definition);
+		annotateNativePrivateAggregateMemos(definition);
 		annotateNativeInvariantJsonParseCaches(definition);
 	}
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles

@@ -407,6 +407,17 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-private-aggregate-memo-stats] candidates=%llu fills=%llu hits=%llu "
+        "misses=%llu calls_elided=%llu guard_fallbacks=%llu\n",
+        (unsigned long long) mal_perf_stats.private_aggregate_memo_candidates,
+        (unsigned long long) mal_perf_stats.private_aggregate_memo_fills,
+        (unsigned long long) mal_perf_stats.private_aggregate_memo_hits,
+        (unsigned long long) mal_perf_stats.private_aggregate_memo_misses,
+        (unsigned long long) mal_perf_stats.private_aggregate_memo_calls_elided,
+        (unsigned long long) mal_perf_stats.private_aggregate_memo_guard_fallbacks
+    );
+    fprintf(
+        stderr,
         "[perf-coroutine-stats] release_clear_slots=%llu allocation_init_slots=%llu\n",
         (unsigned long long) mal_perf_stats.coroutine_buffer_release_clear_slots,
         (unsigned long long) mal_perf_stats.coroutine_buffer_allocation_init_slots

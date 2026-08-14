@@ -7,6 +7,7 @@ import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
+import { deserializeVmDefinition, serializeVmDefinition } from "../src/serialize-vm.ts";
 
 const instructions: Array<VmInstruction> = [
 	{ opcode: "CREATE_F64", dst: 0, value: -0 },
@@ -989,7 +990,7 @@ describe("native update-expression representation", () => {
 			globalThis.length = values.push(1, 2, 3);
 		`);
 		expect(output).toContain("mal_builtin_array_push_direct(vm, &__cc_");
-		expect(output).toContain(", 3);");
+		expect(output).toContain(", 3, nullptr);");
 	});
 
 	it("emits guarded primitive String charCodeAt dispatch from call metadata", () => {
@@ -1008,6 +1009,114 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
 		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
 		expect(output).toContain(", 1);");
+	});
+
+	it("emits an activation-local memo for a private dense Number reducer", () => {
+		const output = emit(`
+			function control() {
+				function classify(values) {
+					let sum = 0;
+					let errors = 0;
+					for (const value of values) {
+						try {
+							if (value % 7 === 0) throw "div7";
+							sum += value % 100;
+						} catch (error) {
+							errors = errors + 1;
+						}
+					}
+					return sum + errors * 1000;
+				}
+				const data = [];
+				for (let index = 0; index < 20; index++) data.push(index * 31 + 1);
+				let result = 0;
+				for (let round = 0; round < 4; round++) result += classify(data);
+				return result;
+			}
+			globalThis.result = control();
+		`);
+		expect(output).toContain("MalPrivateAggregateMemo __private_aggregate_memo_");
+		expect(output).toContain("mal_builtin_array_private_aggregate_memo_init");
+		expect(output).toContain("mal_builtin_array_private_aggregate_memo_note_push");
+		expect(output).toContain("mal_builtin_array_private_aggregate_memo_probe");
+		expect(output).toContain("mal_builtin_array_private_aggregate_memo_fill");
+	});
+
+	it("recomputes private aggregate metadata after a wire round trip", () => {
+		const source = `
+			function control() {
+				function classify(values) {
+					let sum = 0, errors = 0;
+					for (const value of values) {
+						try { if (value % 7 === 0) throw "div7"; sum += value % 100; }
+						catch (error) { errors = errors + 1; }
+					}
+					return sum + errors * 1000;
+				}
+				const data = [];
+				for (let index = 0; index < 20; index++) data.push(index * 31 + 1);
+				let result = 0;
+				for (let round = 0; round < 4; round++) result += classify(data);
+				return result;
+			}
+			globalThis.result = control();
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"private-aggregate-wire.js",
+			parseScript(source, { strict: false }),
+		);
+		const definition = compileSemanticProgramToVmDefinition(semantic);
+		const decoded = deserializeVmDefinition(serializeVmDefinition(definition));
+		const output = emitVmDefinition(decoded, { compiled: true });
+		expect(output).toContain("MalPrivateAggregateMemo __private_aggregate_memo_");
+	});
+
+	it("rejects observable reducers and aggregate aliases", () => {
+		const output = emit(`
+			let calls = 0;
+			function control(leak) {
+				function classify(values) {
+					let sum = 0;
+					for (const value of values) { calls++; sum += value; }
+					return sum;
+				}
+				const data = [];
+				for (let index = 0; index < 20; index++) data.push(index);
+				leak.value = data;
+				let result = 0;
+				for (let round = 0; round < 4; round++) result += classify(data);
+				return result;
+			}
+			globalThis.control = control;
+		`);
+		expect(output).not.toContain("MalPrivateAggregateMemo __private_aggregate_memo_");
+	});
+
+	it("rejects mixed caught payloads used as Numbers", () => {
+		const output = emit(`
+			function control() {
+				function classify(values) {
+					let sum = 0;
+					for (const value of values) {
+						try {
+							if (value % 2 === 0) throw 1;
+							throw "not-a-number";
+						} catch (error) {
+							sum = sum + error;
+						}
+					}
+					return sum;
+				}
+				const data = [];
+				for (let index = 0; index < 20; index++) data.push(index);
+				let result = 0;
+				for (let round = 0; round < 4; round++) result = result + classify(data);
+				return result;
+			}
+			globalThis.result = control();
+		`);
+		expect(output).not.toContain("MalPrivateAggregateMemo __private_aggregate_memo_");
 	});
 
 	it("uses a relational loop proof for bounded primitive String charCodeAt", () => {

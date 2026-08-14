@@ -10,6 +10,7 @@
 #include "builtin_promise.h"
 #include "checked_size.h"
 #include "function_object.h"
+#include "gc.h"
 #include "heap_string.h"
 #include "perf_stats.h"
 #include "primitive_wrapper_object.h"
@@ -1443,14 +1444,44 @@ bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
         live.desc.value == callee;
 }
 
+static bool mal_builtin_array_private_iterator_protocol_guard(MalVm *vm) {
+    MalValue array_prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    MalValue iterator_prototype_value =
+        vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE];
+    if (!mal_value_is_array_object(array_prototype_value) ||
+        !mal_value_is_object(iterator_prototype_value)) {
+        return false;
+    }
+    MalPropertyLookup values = mal_object_get_own(
+        mal_value_to_object(array_prototype_value),
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR));
+    if (!values.present || (values.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        !mal_value_is_native_function_object(values.desc.value) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(values.desc.value)) !=
+            mal_array_values_callback) {
+        return false;
+    }
+    MalPropertyLookup next = mal_object_get_own(
+        mal_value_to_object(iterator_prototype_value),
+        mal_intrinsic_string_key(vm, "next"));
+    return next.present && !(next.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+        mal_value_is_native_function_object(next.desc.value) &&
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(next.desc.value)) ==
+            mal_array_iterator_next_callback;
+}
+
 MalCompletion mal_builtin_array_push_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
-    i32 arg_count
+    i32 arg_count,
+    bool *exact_hit_out
 ) {
+    if (exact_hit_out != nullptr) *exact_hit_out = false;
     if (arg_count >= 0 && mal_value_is_array_object(this_value) &&
         callee == vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH] &&
         mal_builtin_array_push_virtual_guard(vm)) {
@@ -1461,6 +1492,7 @@ MalCompletion mal_builtin_array_push_direct(
             array->object.prototype == mal_value_to_object(prototype_value) &&
             !mal_object_get_own(&array->object, push_key).present) {
             if (mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
+                if (exact_hit_out != nullptr) *exact_hit_out = true;
                 MAL_PERF_COUNT(array_push_direct_hits);
                 return (MalCompletion) {
                     .kind = MAL_COMPLETION_NORMAL,
@@ -1473,6 +1505,160 @@ MalCompletion mal_builtin_array_push_direct(
     MAL_PERF_COUNT(array_push_direct_fallbacks);
     return mal_vm_call_cached(
         vm, fallback_cache, callee, this_value, args, arg_count);
+}
+
+static bool mal_private_aggregate_exact_array(
+    MalVm *vm, MalValue input, MalArrayObject **array_out
+) {
+    if (!mal_value_is_array_object(input)) return false;
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    if (!mal_value_is_array_object(prototype)) return false;
+    MalArrayObject *array = mal_value_to_array_object(input);
+    if (array->object.prototype != mal_value_to_object(prototype) ||
+        array->object.shape != mal_shape_root(&vm->heap) ||
+        array->object.slots != nullptr || array->object.overflow != nullptr ||
+        array->dense_deopted || !array->object.extensible || !array->length_writable ||
+        array->dense_count != array->length ||
+        (array->length != 0 && array->elements == nullptr)) {
+        return false;
+    }
+    *array_out = array;
+    return true;
+}
+
+static bool mal_private_aggregate_guards(
+    MalVm *vm, const MalPrivateAggregateMemo *cache, MalValue callee,
+    MalValue this_value, MalValue input, i32 function_index
+) {
+    if (!cache->private_ok || mal_gc_preempt_hook != nullptr ||
+        !mal_primitive_method_protector || !mal_array_elements_protector ||
+        cache->watched_methods_epoch == 0 || cache->array_elements_epoch == 0 ||
+        cache->watched_methods_epoch != vm->semantic_epochs.watched_methods ||
+        cache->array_elements_epoch != vm->semantic_epochs.array_elements ||
+        !mal_value_is_undefined(this_value) || cache->roots[1] != input ||
+        !mal_vm_callee_has_index(vm, callee, function_index)) {
+        return false;
+    }
+#if MAL_REALMS
+    if (cache->realm != vm->current_realm) return false;
+#endif
+    MalArrayObject *array;
+    return mal_private_aggregate_exact_array(vm, input, &array) &&
+        (cache->state == MAL_PRIVATE_AGGREGATE_MEMO_EMPTY ||
+         array->length == cache->input_length);
+}
+
+void mal_builtin_array_private_aggregate_memo_init(
+    MalVm *vm, MalPrivateAggregateMemo *cache, MalValue input
+) {
+    cache->roots[0] = MAL_VALUE_UNDEFINED;
+    cache->roots[1] = input;
+    cache->result = MAL_VALUE_UNDEFINED;
+    cache->watched_methods_epoch = vm->semantic_epochs.watched_methods;
+    cache->array_elements_epoch = vm->semantic_epochs.array_elements;
+    cache->input_length = 0;
+#if MAL_REALMS
+    cache->realm = vm->current_realm;
+#endif
+    cache->state = MAL_PRIVATE_AGGREGATE_MEMO_EMPTY;
+    cache->admitted = false;
+    MalArrayObject *array;
+    cache->private_ok =
+        mal_gc_preempt_hook == nullptr &&
+        mal_primitive_method_protector &&
+        mal_array_elements_protector &&
+        mal_builtin_array_private_iterator_protocol_guard(vm) &&
+        cache->watched_methods_epoch != 0 &&
+        cache->array_elements_epoch != 0 &&
+        mal_private_aggregate_exact_array(vm, input, &array) &&
+        array->length == 0;
+}
+
+void mal_builtin_array_private_aggregate_memo_note_push(
+    MalVm *vm, MalPrivateAggregateMemo *cache, bool exact_hit
+) {
+    if (!cache->private_ok) return;
+    cache->private_ok =
+        exact_hit &&
+        mal_gc_preempt_hook == nullptr &&
+        mal_primitive_method_protector &&
+        mal_array_elements_protector &&
+        cache->watched_methods_epoch == vm->semantic_epochs.watched_methods &&
+        cache->array_elements_epoch == vm->semantic_epochs.array_elements;
+}
+
+bool mal_builtin_array_private_aggregate_memo_probe(
+    MalVm *vm, MalPrivateAggregateMemo *cache, MalValue callee,
+    MalValue this_value, MalValue input, i32 function_index, MalValue *out
+) {
+    MAL_PERF_COUNT(private_aggregate_memo_candidates);
+    if (cache->state == MAL_PRIVATE_AGGREGATE_MEMO_FILLED) {
+        MalArrayObject *array;
+        if (cache->roots[0] == callee &&
+            mal_private_aggregate_guards(
+                vm, cache, callee, this_value, input, function_index) &&
+            mal_private_aggregate_exact_array(vm, input, &array) &&
+            array->length == cache->input_length) {
+            *out = cache->result;
+            MAL_PERF_COUNT(private_aggregate_memo_hits);
+            MAL_PERF_COUNT(private_aggregate_memo_calls_elided);
+            return true;
+        }
+        cache->state = MAL_PRIVATE_AGGREGATE_MEMO_DISABLED;
+        cache->admitted = false;
+        MAL_PERF_COUNT(private_aggregate_memo_guard_fallbacks);
+        MAL_PERF_COUNT(private_aggregate_memo_misses);
+        return false;
+    }
+    MAL_PERF_COUNT(private_aggregate_memo_misses);
+    if (cache->state == MAL_PRIVATE_AGGREGATE_MEMO_DISABLED ||
+        !mal_private_aggregate_guards(
+            vm, cache, callee, this_value, input, function_index)) {
+        if (cache->state != MAL_PRIVATE_AGGREGATE_MEMO_DISABLED) {
+            MAL_PERF_COUNT(private_aggregate_memo_guard_fallbacks);
+        }
+        cache->state = MAL_PRIVATE_AGGREGATE_MEMO_DISABLED;
+        cache->admitted = false;
+        return false;
+    }
+    MalArrayObject *array;
+    if (!mal_private_aggregate_exact_array(vm, input, &array)) {
+        cache->state = MAL_PRIVATE_AGGREGATE_MEMO_DISABLED;
+        MAL_PERF_COUNT(private_aggregate_memo_guard_fallbacks);
+        return false;
+    }
+    for (u32 index = 0; index < array->length; index++) {
+        if (!mal_ops_is_number(array->elements[index])) {
+            cache->state = MAL_PRIVATE_AGGREGATE_MEMO_DISABLED;
+            MAL_PERF_COUNT(private_aggregate_memo_guard_fallbacks);
+            return false;
+        }
+    }
+    cache->input_length = array->length;
+    cache->admitted = true;
+    return false;
+}
+
+void mal_builtin_array_private_aggregate_memo_fill(
+    MalVm *vm, MalPrivateAggregateMemo *cache, MalValue callee,
+    MalValue this_value, MalValue input, i32 function_index, MalValue result
+) {
+    if (cache->state != MAL_PRIVATE_AGGREGATE_MEMO_EMPTY || !cache->admitted ||
+        !mal_ops_is_number(result) ||
+        !mal_private_aggregate_guards(
+            vm, cache, callee, this_value, input, function_index)) {
+        if (cache->state == MAL_PRIVATE_AGGREGATE_MEMO_EMPTY) {
+            cache->state = MAL_PRIVATE_AGGREGATE_MEMO_DISABLED;
+            MAL_PERF_COUNT(private_aggregate_memo_guard_fallbacks);
+        }
+        cache->admitted = false;
+        return;
+    }
+    cache->roots[0] = callee;
+    cache->result = result;
+    cache->state = MAL_PRIVATE_AGGREGATE_MEMO_FILLED;
+    cache->admitted = false;
+    MAL_PERF_COUNT(private_aggregate_memo_fills);
 }
 
 static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

@@ -40,8 +40,45 @@ MalCompletion mal_builtin_array_push_direct(
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
-    i32 arg_count
+    i32 arg_count,
+    bool *exact_hit_out
 );
+
+typedef enum MalPrivateAggregateMemoState {
+    MAL_PRIVATE_AGGREGATE_MEMO_EMPTY = 0,
+    MAL_PRIVATE_AGGREGATE_MEMO_FILLED = 1,
+    MAL_PRIVATE_AGGREGATE_MEMO_DISABLED = 2,
+} MalPrivateAggregateMemoState;
+
+/**
+ * Activation-local cache for one compiler-proven private dense-Number reducer.
+ * `roots` points at caller-owned GC slots [callee, input]. The cached result is
+ * admitted only when it is an immediate Number and therefore needs no root.
+ */
+typedef struct MalPrivateAggregateMemo {
+    MalValue *roots;
+    MalValue result;
+    u64 watched_methods_epoch;
+    u64 array_elements_epoch;
+    u32 input_length;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+    MalPrivateAggregateMemoState state;
+    bool private_ok;
+    bool admitted;
+} MalPrivateAggregateMemo;
+
+void mal_builtin_array_private_aggregate_memo_init(
+    MalVm *vm, MalPrivateAggregateMemo *cache, MalValue input);
+void mal_builtin_array_private_aggregate_memo_note_push(
+    MalVm *vm, MalPrivateAggregateMemo *cache, bool exact_hit);
+bool mal_builtin_array_private_aggregate_memo_probe(
+    MalVm *vm, MalPrivateAggregateMemo *cache, MalValue callee,
+    MalValue this_value, MalValue input, i32 function_index, MalValue *out);
+void mal_builtin_array_private_aggregate_memo_fill(
+    MalVm *vm, MalPrivateAggregateMemo *cache, MalValue callee,
+    MalValue this_value, MalValue input, i32 function_index, MalValue result);
 
 /**
  * Whether a freshly-created ordinary Array can execute the intrinsic push

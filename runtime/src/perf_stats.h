@@ -218,6 +218,13 @@ typedef struct MalPerfStats {
     u64 invariant_json_parse_misses;
     u64 invariant_json_parse_calls_elided;
 
+    u64 private_aggregate_memo_candidates;
+    u64 private_aggregate_memo_fills;
+    u64 private_aggregate_memo_hits;
+    u64 private_aggregate_memo_misses;
+    u64 private_aggregate_memo_calls_elided;
+    u64 private_aggregate_memo_guard_fallbacks;
+
     u64 call_cache_probes;
     u64 call_cache_exact_identity_hits;
     u64 call_cache_compiled_exact_hits;

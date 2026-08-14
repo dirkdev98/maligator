@@ -350,6 +350,21 @@ export interface VmFunction {
 	}>;
 
 	/**
+	 * EMITTER-ONLY: activation-local result memo for an exact script call whose
+	 * sole aggregate argument is a private, push-constructed dense Number Array.
+	 * Recomputed from the lowered CFG after wire loading; never serialized.
+	 */
+	nativePrivateAggregateMemos?: ReadonlyArray<{
+		allocationIp: number;
+		constructionPushIps: ReadonlyArray<number>;
+		callIp: number;
+		targetFunctionIndex: number;
+		callee: number;
+		input: number;
+		result: number;
+	}>;
+
+	/**
 	 * COMPILE-ONLY: exact CREATE_OBJECT/CREATE_OBJECT_SHAPED sites proven safe for
 	 * native stack emission. Omitted by the wire codec, so deserialized/interpreted
 	 * functions retain ordinary heap allocation semantics.
