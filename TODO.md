@@ -155,6 +155,11 @@ profiler improvement; collecting more samples alone will not repair the explanat
 - [ ] Add a repeat, warmup, or minimum-duration mode for short commands and a CLI to
       render/open an existing capture. Document the interval override as an expert
       diagnostic whose overhead and bias must be rechecked.
+- [ ] Add an optional deterministic phase/function timer for benchmark target selection.
+      The post-affine 34-sample capture cannot distinguish unattributed native loops
+      from helper-visible sites, so inexpensive entry/exit wall totals for the seven
+      language phases would replace modeled ceilings without pretending sparse samples
+      can rank them. Keep this disabled in ordinary product images.
 - [ ] Add real `--help`/unknown-option handling to `scripts/bench.ts`. Today `--help`
       is treated as no lane selection and starts the full benchmark suite, including
       an expensive Rust rebuild; help and invalid flags must exit before any build.
