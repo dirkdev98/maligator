@@ -3526,6 +3526,32 @@ static bool mal_array_default_species(MalVm *vm, MalValue recv) {
            mal_intrinsic_species_getter;
 }
 
+bool mal_builtin_array_exact_map_guard(
+    MalVm *vm, MalValue callee, MalValue receiver
+) {
+    if (!mal_primitive_method_protector || !mal_array_elements_protector ||
+        !mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) != mal_builtin_array_map ||
+        !mal_array_method_is_default_builtin(
+            vm, receiver, (const byte *) "map", mal_builtin_array_map) ||
+        !mal_array_default_species(vm, receiver)) {
+        return false;
+    }
+#if MAL_REALMS
+    return mal_vm_callee_realm(vm, callee) == vm->current_realm;
+#else
+    return true;
+#endif
+}
+
+bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver) {
+    return mal_primitive_method_protector && mal_array_elements_protector &&
+        mal_array_method_is_default_builtin(
+            vm, receiver, (const byte *) "map", mal_builtin_array_map) &&
+        mal_array_default_species(vm, receiver);
+}
+
 /**
  * Eligibility predicate for the compiler's guarded array-iteration inlining
  * (intrinsic slot MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE, invoked via

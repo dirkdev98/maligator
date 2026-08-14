@@ -418,6 +418,26 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-invariant-json-map-stats] candidates=%llu fills=%llu hits=%llu "
+        "misses=%llu guard_fallbacks=%llu parse_calls_elided=%llu "
+        "map_calls_elided=%llu callback_calls_elided=%llu rows_cloned=%llu "
+        "intermediate_containers_elided=%llu property_loads_elided=%llu "
+        "exclusion_checks_elided=%llu\n",
+        (unsigned long long) mal_perf_stats.invariant_json_map_candidates,
+        (unsigned long long) mal_perf_stats.invariant_json_map_fills,
+        (unsigned long long) mal_perf_stats.invariant_json_map_hits,
+        (unsigned long long) mal_perf_stats.invariant_json_map_misses,
+        (unsigned long long) mal_perf_stats.invariant_json_map_guard_fallbacks,
+        (unsigned long long) mal_perf_stats.invariant_json_map_parse_calls_elided,
+        (unsigned long long) mal_perf_stats.invariant_json_map_map_calls_elided,
+        (unsigned long long) mal_perf_stats.invariant_json_map_callback_calls_elided,
+        (unsigned long long) mal_perf_stats.invariant_json_map_rows_cloned,
+        (unsigned long long) mal_perf_stats.invariant_json_map_intermediate_containers_elided,
+        (unsigned long long) mal_perf_stats.invariant_json_map_property_loads_elided,
+        (unsigned long long) mal_perf_stats.invariant_json_map_exclusion_checks_elided
+    );
+    fprintf(
+        stderr,
         "[perf-coroutine-stats] release_clear_slots=%llu allocation_init_slots=%llu\n",
         (unsigned long long) mal_perf_stats.coroutine_buffer_release_clear_slots,
         (unsigned long long) mal_perf_stats.coroutine_buffer_allocation_init_slots

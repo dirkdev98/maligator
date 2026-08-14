@@ -29,6 +29,11 @@ bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalVal
  */
 bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_out);
 
+/** Side-effect-free exact Array.prototype.map + default species guard. */
+bool mal_builtin_array_exact_map_guard(
+    MalVm *vm, MalValue callee, MalValue receiver);
+bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver);
+
 /**
  * Guarded native-backend dispatch for a direct `.push(...)` site. A fully intact
  * intrinsic method on an eligible ordinary dense Array appends directly; every

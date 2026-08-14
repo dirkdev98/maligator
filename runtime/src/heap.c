@@ -402,6 +402,9 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     } while (heap->identity == 0);
     heap->epoch = 0;
 	heap->fail_next_cell_allocation = false;
+#if MAL_PERF_STATS
+    heap->fail_next_raw_allocation = false;
+#endif
 #if MAL_PROFILE
 	heap->profile_state = nullptr;
 #endif
@@ -489,6 +492,16 @@ void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size) {
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
     if (ptr == nullptr) abort();
     return ptr;
+}
+
+void *mal_heap_try_alloc_raw(MalHeap *heap, usize alloc_size) {
+#if MAL_PERF_STATS
+    if (heap->fail_next_raw_allocation) {
+        heap->fail_next_raw_allocation = false;
+        return nullptr;
+    }
+#endif
+    return mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
 }
 
 static inline bool mal_gc_ptr_in_chunk(const MalGcChunk *chunk, const void *ptr) {

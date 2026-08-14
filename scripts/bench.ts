@@ -133,6 +133,18 @@ interface LanguageMetrics {
 	invariantJsonParseHits: number;
 	invariantJsonParseMisses: number;
 	invariantJsonParseCallsElided: number;
+	invariantJsonMapCandidates: number;
+	invariantJsonMapFills: number;
+	invariantJsonMapHits: number;
+	invariantJsonMapMisses: number;
+	invariantJsonMapGuardFallbacks: number;
+	invariantJsonMapParseCallsElided: number;
+	invariantJsonMapMapCallsElided: number;
+	invariantJsonMapCallbackCallsElided: number;
+	invariantJsonMapRowsCloned: number;
+	invariantJsonMapIntermediateContainersElided: number;
+	invariantJsonMapPropertyLoadsElided: number;
+	invariantJsonMapExclusionChecksElided: number;
 	privateAggregateMemoCandidates: number;
 	privateAggregateMemoFills: number;
 	privateAggregateMemoHits: number;
@@ -891,6 +903,48 @@ function benchLanguage(runs: number): LanguageMetrics {
 			`language invariant JSON parse cache counters were ${invariantJsonParseCandidates}/${invariantJsonParseFills}/${invariantJsonParseHits}/${invariantJsonParseMisses}/${invariantJsonParseCallsElided}, expected 180/1/179/1/179`,
 		);
 	}
+	const jsonMapStat = (field: string) =>
+		parsePerfStat(perfStderr, "perf-invariant-json-map-stats", field);
+	const invariantJsonMapCandidates = jsonMapStat("candidates");
+	const invariantJsonMapFills = jsonMapStat("fills");
+	const invariantJsonMapHits = jsonMapStat("hits");
+	const invariantJsonMapMisses = jsonMapStat("misses");
+	const invariantJsonMapGuardFallbacks = jsonMapStat("guard_fallbacks");
+	const invariantJsonMapParseCallsElided = jsonMapStat("parse_calls_elided");
+	const invariantJsonMapMapCallsElided = jsonMapStat("map_calls_elided");
+	const invariantJsonMapCallbackCallsElided = jsonMapStat("callback_calls_elided");
+	const invariantJsonMapRowsCloned = jsonMapStat("rows_cloned");
+	const invariantJsonMapIntermediateContainersElided = jsonMapStat(
+		"intermediate_containers_elided",
+	);
+	const invariantJsonMapPropertyLoadsElided = jsonMapStat("property_loads_elided");
+	const invariantJsonMapExclusionChecksElided = jsonMapStat("exclusion_checks_elided");
+	const invariantJsonMapActual = [
+		invariantJsonMapCandidates,
+		invariantJsonMapFills,
+		invariantJsonMapHits,
+		invariantJsonMapMisses,
+		invariantJsonMapGuardFallbacks,
+		invariantJsonMapParseCallsElided,
+		invariantJsonMapMapCallsElided,
+		invariantJsonMapCallbackCallsElided,
+		invariantJsonMapRowsCloned,
+		invariantJsonMapIntermediateContainersElided,
+		invariantJsonMapPropertyLoadsElided,
+		invariantJsonMapExclusionChecksElided,
+	];
+	const invariantJsonMapExpected = [
+		180, 1, 179, 1, 0, 179, 179, 17184, 17184, 33115, 136219, 463968,
+	];
+	if (
+		invariantJsonMapActual.some(
+			(value, index) => value !== invariantJsonMapExpected[index],
+		)
+	) {
+		throw new Error(
+			`language invariant JSON map counters were ${invariantJsonMapActual.join("/")}, expected ${invariantJsonMapExpected.join("/")}`,
+		);
+	}
 	const privateAggregateMemoCandidates = parsePerfStat(
 		perfStderr,
 		"perf-private-aggregate-memo-stats",
@@ -1013,6 +1067,18 @@ function benchLanguage(runs: number): LanguageMetrics {
 		invariantJsonParseHits,
 		invariantJsonParseMisses,
 		invariantJsonParseCallsElided,
+		invariantJsonMapCandidates,
+		invariantJsonMapFills,
+		invariantJsonMapHits,
+		invariantJsonMapMisses,
+		invariantJsonMapGuardFallbacks,
+		invariantJsonMapParseCallsElided,
+		invariantJsonMapMapCallsElided,
+		invariantJsonMapCallbackCallsElided,
+		invariantJsonMapRowsCloned,
+		invariantJsonMapIntermediateContainersElided,
+		invariantJsonMapPropertyLoadsElided,
+		invariantJsonMapExclusionChecksElided,
 		privateAggregateMemoCandidates,
 		privateAggregateMemoFills,
 		privateAggregateMemoHits,
@@ -2540,6 +2606,9 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(
 			`  json      ${entry.language.invariantJsonParseHits}/${entry.language.invariantJsonParseCandidates} template hits, ${entry.language.invariantJsonParseCallsElided} parses elided`,
+		);
+		console.log(
+			`  json-map  ${entry.language.invariantJsonMapHits}/${entry.language.invariantJsonMapCandidates} final-row hits, ${entry.language.invariantJsonMapCallbackCallsElided} callbacks elided`,
 		);
 		console.log(
 			`  aggregate ${entry.language.privateAggregateMemoHits}/${entry.language.privateAggregateMemoCandidates} memo hits, ${entry.language.privateAggregateMemoCallsElided} calls elided`,

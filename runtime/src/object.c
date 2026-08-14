@@ -283,6 +283,23 @@ MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *
     return object;
 }
 
+MalObject *mal_object_try_new_shaped(
+    MalHeap *heap, MalObject *prototype, MalShape *shape,
+    const MalValue *values, u32 count
+) {
+    assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    assert(shape->inline_count == count);
+    MalObject *object = mal_heap_try_alloc(
+        heap, sizeof(MalObject) + sizeof(MalValue) * count, MAL_HEAP_OBJECT);
+    if (object == nullptr) return nullptr;
+    mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
+    object->shape = shape;
+    object->slots = (MalValue *) (object + 1);
+    memcpy(object->slots, values, sizeof(MalValue) * count);
+    g_slot_coallocations++;
+    return object;
+}
+
 void mal_object_set_shaped_values(
     MalObject *object, MalShape *shape, const MalValue *values, u32 count
 ) {

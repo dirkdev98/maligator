@@ -350,6 +350,32 @@ export interface VmFunction {
 	}>;
 
 	/**
+	 * EMITTER-ONLY: activation-local final primitive-record templates for one
+	 * exact adjacent JSON.parse(text).map(pureProjection) chain. The complete
+	 * proof is recomputed after wire loading; the ordinary parse/map instructions
+	 * remain the fallback and interpreter semantics.
+	 */
+	nativeInvariantJsonMapTemplates?: ReadonlyArray<{
+		parseCallIp: number;
+		mapLoadIp: number;
+		mapCallIp: number;
+		jsonObject: number;
+		parseCallee: number;
+		text: number;
+		parseResult: number;
+		mapCallee: number;
+		callback: number;
+		mapResult: number;
+		targetFunctionIndex: number;
+		captures: ReadonlyArray<{ ownerFunctionIndex: number; index: number }>;
+		rowPropertyLoads: number;
+		primitiveRowStringIndices: ReadonlyArray<number>;
+		nestedBaseStringIndex: number;
+		nestedValueStringIndex: number;
+		excludedStringIndices: ReadonlyArray<number>;
+	}>;
+
+	/**
 	 * EMITTER-ONLY: activation-local result memo for an exact script call whose
 	 * sole aggregate argument is a private, push-constructed dense Number Array.
 	 * Recomputed from the lowered CFG after wire loading; never serialized.

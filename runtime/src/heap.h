@@ -99,6 +99,10 @@ typedef struct MalHeap {
     u32 epoch;
     /** Test-only one-shot failure consumed by mal_heap_try_alloc. */
 	bool fail_next_cell_allocation;
+#if MAL_PERF_STATS
+    /** Test-only one-shot failure consumed by mal_heap_try_alloc_raw. */
+    bool fail_next_raw_allocation;
+#endif
 #if MAL_PROFILE
 	/** Opaque profile recorder; absent from ordinary heap layouts. */
 	void *profile_state;
@@ -437,6 +441,9 @@ void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
  * owner-held buffer (a RAW cell, or LOS for large buffers).
  */
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size);
+
+/** Fallible raw-buffer allocation. Does not mutate the VM completion or abort. */
+void *mal_heap_try_alloc_raw(MalHeap *heap, usize alloc_size);
 
 /** Bytes charged to `heap.bytes_allocated` for one request of this size. */
 usize mal_heap_allocation_charge(usize alloc_size);

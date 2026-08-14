@@ -131,6 +131,8 @@ MalObject *mal_object_try_new(MalHeap *heap, MalObject *prototype);
 /** Allocate an ordinary object and its known inline slots in one managed cell. */
 MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                  const MalValue *values, u32 count);
+MalObject *mal_object_try_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
+                                     const MalValue *values, u32 count);
 
 /** Install a known final shape and bulk-copy its values into one exact slot buffer. */
 void mal_object_set_shaped_values(

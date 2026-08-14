@@ -106,6 +106,44 @@ bool mal_array_object_fresh_dense_reserve_exact(MalArrayObject *array, u32 neede
     return true;
 }
 
+bool mal_array_object_try_fresh_dense_reserve_exact(
+    MalArrayObject *array, u32 needed
+) {
+    if (array->dense_deopted || !array->object.extensible || !array->length_writable ||
+        array->length != 0 || array->dense_count != 0 || array->capacity != 0 ||
+        array->elements != nullptr) {
+        return false;
+    }
+    if (needed == 0) {
+        return true;
+    }
+    if ((usize) needed > SIZE_MAX / sizeof(MalValue)) {
+        return false;
+    }
+    MalValue *elements = mal_heap_try_alloc_raw(
+        mal_gc_current_heap(), sizeof(MalValue) * (usize) needed);
+    if (elements == nullptr) {
+        return false;
+    }
+    array->elements = elements;
+    array->capacity = needed;
+
+    MAL_PERF_COUNT(array_fresh_dense_exact_reserves);
+    MAL_PERF_ADD(array_fresh_dense_reserved_slots, needed);
+#if MAL_PERF_STATS
+    u64 geometric_capacity = 0;
+    u64 geometric_growths = 0;
+    if (mal_perf_stats_enabled) {
+        while (geometric_capacity < needed) {
+            geometric_capacity = geometric_capacity == 0 ? 4 : geometric_capacity * 2;
+            geometric_growths++;
+        }
+    }
+    MAL_PERF_ADD(array_fresh_dense_growths_avoided, geometric_growths);
+#endif
+    return true;
+}
+
 bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value) {
     u32 index = array->dense_count;
     if (array->dense_deopted || !array->object.extensible || !array->length_writable ||
@@ -199,6 +237,14 @@ MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
     MalArrayObject *array = mal_heap_alloc(heap, sizeof(MalArrayObject), MAL_HEAP_ARRAY_OBJECT);
     mal_array_object_init(heap, array, prototype);
 
+    return array;
+}
+
+MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype) {
+    MalArrayObject *array = mal_heap_try_alloc(
+        heap, sizeof(MalArrayObject), MAL_HEAP_ARRAY_OBJECT);
+    if (array == nullptr) return nullptr;
+    mal_array_object_init(heap, array, prototype);
     return array;
 }
 

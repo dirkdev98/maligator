@@ -73,6 +73,14 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed);
 bool mal_array_object_fresh_dense_reserve_exact(MalArrayObject *array, u32 needed);
 
 /**
+ * Fallible exact reserve for a pristine private Array. Unlike the ordinary
+ * reserve helper, allocation failure returns false without aborting or changing
+ * the Array, so it is suitable for semantically invisible speculative state.
+ */
+bool mal_array_object_try_fresh_dense_reserve_exact(
+    MalArrayObject *array, u32 needed);
+
+/**
  * Append a default-data element to an intrinsic ordinary Array that has remained
  * private to its native builder since creation. This is CreateDataProperty-style:
  * it does not resolve inherited indexed properties. Capacity grows geometrically.
@@ -121,6 +129,7 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
  * Allocate and initialize a new array object.
  */
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype);
+MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype);
 
 /**
  * Return the raw array length field.

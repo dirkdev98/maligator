@@ -1009,7 +1009,46 @@ export function emitCompiledFunction(
 			rootsOffset: number;
 		}
 	>();
+	const invariantJsonMapTemplates = new Map<
+		number,
+		NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
+			rootsOffset: number;
+		}
+	>();
+	for (const template of fn.nativeInvariantJsonMapTemplates ?? []) {
+		const parse = fn.instructions[template.parseCallIp];
+		const load = fn.instructions[template.mapLoadIp];
+		const call = fn.instructions[template.mapCallIp];
+		if (
+			parse?.opcode !== "CALL" ||
+			parse.dst !== template.parseResult ||
+			parse.callee !== template.parseCallee ||
+			parse.thisValue !== template.jsonObject ||
+			load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			load.object !== template.parseResult ||
+			load.dst !== template.mapCallee ||
+			call?.opcode !== "CALL" ||
+			call.callee !== template.mapCallee ||
+			call.thisValue !== template.parseResult ||
+			call.dst !== template.mapResult ||
+			template.mapLoadIp !== template.parseCallIp + 1 ||
+			template.mapCallIp !== template.parseCallIp + 2 ||
+			template.captures.length === 0 ||
+			template.captures.length > 8 ||
+			invariantJsonMapTemplates.has(template.parseCallIp)
+		) {
+			throw new Error(
+				`Invalid invariant JSON map template at instruction ${template.parseCallIp}`,
+			);
+		}
+		invariantJsonMapTemplates.set(template.parseCallIp, {
+			...template,
+			rootsOffset: nextStackSlot,
+		});
+		nextStackSlot += 4 + template.captures.length;
+	}
 	for (const cache of fn.nativeInvariantJsonParseCaches ?? []) {
+		if (invariantJsonMapTemplates.has(cache.callIp)) continue;
 		const instruction = fn.instructions[cache.callIp];
 		if (
 			instruction?.opcode !== "CALL" ||
@@ -1112,6 +1151,7 @@ export function emitCompiledFunction(
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
 		invariantJsonParseCaches,
+		invariantJsonMapTemplates,
 		privateAggregateMemos,
 		directCompiledTargets,
 	);
@@ -1262,6 +1302,12 @@ export function emitCompiledFunction(
 	for (const cache of invariantJsonParseCaches.values()) {
 		lines.push(
 			`    MalInvariantJsonParseCache __invariant_json_parse_${cache.callIp} = { .roots = &__gc_slots[${cache.rootsOffset}], .filled = false };`,
+		);
+	}
+	for (const template of invariantJsonMapTemplates.values()) {
+		lines.push(
+			`    MalInvariantJsonMapTemplate __invariant_json_map_${template.parseCallIp} = { .roots = &__gc_slots[${template.rootsOffset}], .state = MAL_INVARIANT_JSON_MAP_EMPTY };`,
+			`    bool __invariant_json_map_${template.parseCallIp}_hit = false;`,
 		);
 	}
 	for (const memo of privateAggregateMemos.values()) {
@@ -1472,6 +1518,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -2526,6 +2573,12 @@ function emitBody(
 			rootsOffset: number;
 		}
 	>,
+	invariantJsonMapTemplates: ReadonlyMap<
+		number,
+		NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
+			rootsOffset: number;
+		}
+	>,
 	privateAggregateMemos: ReadonlyMap<
 		number,
 		NonNullable<VmFunction["nativePrivateAggregateMemos"]>[number] & {
@@ -2549,6 +2602,19 @@ function emitBody(
 		for (const pushIp of memo.constructionPushIps) {
 			privateAggregatePushByIp.set(pushIp, memo);
 		}
+	}
+	type InvariantJsonMapSite =
+		typeof invariantJsonMapTemplates extends ReadonlyMap<number, infer Site>
+			? Site
+			: never;
+	const invariantJsonMapActions = new Map<
+		number,
+		{ site: InvariantJsonMapSite; role: "parse" | "mapLoad" | "mapCall" }
+	>();
+	for (const site of invariantJsonMapTemplates.values()) {
+		invariantJsonMapActions.set(site.parseCallIp, { site, role: "parse" });
+		invariantJsonMapActions.set(site.mapLoadIp, { site, role: "mapLoad" });
+		invariantJsonMapActions.set(site.mapCallIp, { site, role: "mapCall" });
 	}
 	// Static property sites inside a natural flattened loop are the ones where
 	// cloning the dependency-registered inherited-value fast path pays for its
@@ -3208,7 +3274,7 @@ function emitBody(
 			lines.push(`    ${cursor.name} = nullptr;`);
 		}
 
-		const emitted = emitInstruction(
+		let emitted = emitInstruction(
 			fn.instructions[ip]!,
 			ip,
 			suffix,
@@ -3252,11 +3318,17 @@ function emitBody(
 			nativeRegExpIteratorProjectionActionByIp.get(ip),
 			nativeStringSliceNumberFusionActionByIp.get(ip),
 			invariantJsonParseCaches.get(ip),
+			invariantJsonMapActions.get(ip),
 			privateAggregateMemos.get(ip),
 			privateAggregatePushByIp.get(ip),
 		);
 		if (emitted === null) {
 			return null;
+		}
+		const jsonMapAction = invariantJsonMapActions.get(ip);
+		if (jsonMapAction?.role === "mapLoad") {
+			const hit = `__invariant_json_map_${jsonMapAction.site.parseCallIp}_hit`;
+			emitted = [`if (!${hit}) {`, ...emitted.map((line) => `  ${line}`), `}`];
 		}
 		if (debug && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
 			const pos = fn.positions[ip] ?? -1;
@@ -3333,6 +3405,12 @@ function emitInstruction(
 	invariantJsonParseCache?: NonNullable<
 		VmFunction["nativeInvariantJsonParseCaches"]
 	>[number] & { rootsOffset: number },
+	invariantJsonMapAction?: {
+		site: NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
+			rootsOffset: number;
+		};
+		role: "parse" | "mapLoad" | "mapCall";
+	},
 	privateAggregateMemo?: NonNullable<
 		VmFunction["nativePrivateAggregateMemos"]
 	>[number] & { rootsOffset: number },
@@ -5092,6 +5170,48 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (invariantJsonMapAction?.role === "parse") {
+				const site = invariantJsonMapAction.site;
+				const cache = `__invariant_json_map_${site.parseCallIp}`;
+				const hit = `${cache}_hit`;
+				const text = boxed(site.text);
+				const captures = `((MalJsonProjectionCapture[]){ ${site.captures.map((capture) => `{ .owner_function_index = ${capture.ownerFunctionIndex}, .index = ${capture.index} }`).join(", ")} })`;
+				return [
+					`static MalCallCache __cc_${ip};`,
+					`${hit} = mal_builtin_json_map_template_try_clone(vm, &${cache}, ${boxed(site.parseCallee)}, ${boxed(site.jsonObject)}, ${text}, ${boxed(site.callback)}, ${site.targetFunctionIndex}, ${captures}, ${site.captures.length}, &r${site.mapResult});`,
+					`if (${hit}) {`,
+					`  r${site.parseResult} = MAL_VALUE_UNDEFINED;`,
+					`} else {`,
+					`  ${throwCheck}`,
+					`  if (${cache}.state == MAL_INVARIANT_JSON_MAP_EMPTY) { ${cache}.roots[1] = ${text}; ${cache}.roots[2] = ${boxed(site.callback)}; ${cache}.roots[3] = ${boxed(site.parseCallee)}; }`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
+			if (invariantJsonMapAction?.role === "mapCall") {
+				const site = invariantJsonMapAction.site;
+				const cache = `__invariant_json_map_${site.parseCallIp}`;
+				const hit = `${cache}_hit`;
+				const captures = `((MalJsonProjectionCapture[]){ ${site.captures.map((capture) => `{ .owner_function_index = ${capture.ownerFunctionIndex}, .index = ${capture.index} }`).join(", ")} })`;
+				const values = (indices: ReadonlyArray<number>) =>
+					`((MalValue[]){ ${indices.map((index) => `mal_value_from_string(vm->string_constant_atoms[${index}])`).join(", ")} })`;
+				return [
+					`if (!${hit}) {`,
+					`  static MalCallCache __cc_${ip};`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`  ${poll}`,
+					`  (void) mal_builtin_json_map_template_fill(vm, &${cache}, ${cache}.roots[3], vm->intrinsics[MAL_INTRINSIC_JSON], ${cache}.roots[1], ${boxed(site.mapCallee)}, ${boxed(site.parseResult)}, ${cache}.roots[2], ${site.targetFunctionIndex}, ${captures}, ${site.captures.length}, r${site.mapResult}, ${values(site.primitiveRowStringIndices)}, ${site.primitiveRowStringIndices.length}, mal_value_from_string(vm->string_constant_atoms[${site.nestedBaseStringIndex}]), mal_value_from_string(vm->string_constant_atoms[${site.nestedValueStringIndex}]), ${values(site.excludedStringIndices)}, ${site.excludedStringIndices.length}, ${site.rowPropertyLoads});`,
+					`  ${throwCheck}`,
+					`} else {`,
+					`  ${poll}`,
+					`}`,
+				];
+			}
 			if (privateAggregateMemo !== undefined) {
 				const memo = `__private_aggregate_memo_${ip}`;
 				const callee = `__private_aggregate_callee_${ip}`;

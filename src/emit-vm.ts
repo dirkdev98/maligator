@@ -503,6 +503,22 @@ function vmInstructionUsesRegister(
 	}
 }
 
+/** The generic scanner's `value` key is a register for stores/returns but a
+ * literal payload for CREATE_NUMBER/F64/BOOLEAN. Semantic identity proofs must
+ * not confuse equal literal bits with a physical-register use. */
+function nativeInstructionUsesRegister(
+	instruction: VmInstruction,
+	register: number,
+): boolean {
+	if (
+		instruction.opcode === "CREATE_NUMBER" ||
+		instruction.opcode === "CREATE_F64" ||
+		instruction.opcode === "CREATE_BOOLEAN"
+	)
+		return false;
+	return vmInstructionUsesRegister(instruction, register);
+}
+
 function vmInstructionDefinesRegister(
 	instruction: VmInstruction,
 	register: number,
@@ -3423,6 +3439,657 @@ function annotateNativeInvariantJsonParseCaches(definition: VmDefinition): void 
 	}
 }
 
+/** Generic post-wire reaching definitions for emitter-only semantic proofs. */
+function nativeReachingDefinitions(
+	fn: VmFunction,
+	cfg: NativeProofCfg,
+): Array<Array<ReadonlySet<number>>> {
+	const result: Array<Array<ReadonlySet<number>>> = [];
+	for (let register = 0; register < fn.registerCount; register++) {
+		const incoming = Array.from(
+			{ length: fn.instructions.length },
+			() => new Set<number>(),
+		);
+		const outgoing = Array.from(
+			{ length: fn.instructions.length },
+			() => new Set<number>(),
+		);
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (let ip = 0; ip < fn.instructions.length; ip++) {
+				const nextIncoming = new Set<number>();
+				if (ip === 0 && register < fn.parameterCount) nextIncoming.add(-register - 1);
+				for (const predecessor of cfg.predecessors[ip]!) {
+					for (const definition of outgoing[predecessor]!) nextIncoming.add(definition);
+				}
+				const nextOutgoing = vmInstructionDefinesRegister(fn.instructions[ip]!, register)
+					? new Set([ip])
+					: new Set(nextIncoming);
+				const same = (left: Set<number>, right: Set<number>) =>
+					left.size === right.size && [...left].every((value) => right.has(value));
+				if (!same(incoming[ip]!, nextIncoming)) {
+					incoming[ip] = nextIncoming;
+					changed = true;
+				}
+				if (!same(outgoing[ip]!, nextOutgoing)) {
+					outgoing[ip] = nextOutgoing;
+					changed = true;
+				}
+			}
+		}
+		result[register] = incoming;
+	}
+	return result;
+}
+
+function nativeResolveMoves(
+	fn: VmFunction,
+	reaching: Array<Array<ReadonlySet<number>>>,
+	register: number,
+	ip: number,
+): { instruction?: VmInstruction; ip: number } | undefined {
+	const seen = new Set<string>();
+	let currentRegister = register;
+	let currentIp = ip;
+	while (true) {
+		const key = `${currentRegister}:${currentIp}`;
+		if (seen.has(key)) return undefined;
+		seen.add(key);
+		const definitions = reaching[currentRegister]?.[currentIp];
+		if (definitions?.size !== 1) return undefined;
+		const definitionIp = [...definitions][0]!;
+		const instruction = definitionIp >= 0 ? fn.instructions[definitionIp] : undefined;
+		if (instruction?.opcode !== "MOVE") return { instruction, ip: definitionIp };
+		currentRegister = instruction.src;
+		currentIp = definitionIp;
+	}
+}
+
+/**
+ * Prove the tiny closure factory used by the first linked projection. Runtime
+ * callback identity remains the authority; this proof only selects a target.
+ */
+function nativeProjectionFactoryTarget(
+	definition: VmDefinition,
+	functionIndex: number,
+): number | undefined {
+	const fn = definition.functions[functionIndex];
+	if (
+		fn === undefined ||
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.needsArguments ||
+		fn.mappedArguments ||
+		fn.handlers.length > 0 ||
+		fn.argumentSnapshotCount !== 0
+	)
+		return undefined;
+	const allowed = new Set<VmInstruction["opcode"]>([
+		"MOVE",
+		"RETURN",
+		"JUMP",
+		"JUMP_IF",
+		"CREATE_NUMBER",
+		"CREATE_F64",
+		"CREATE_BOOLEAN",
+		"CREATE_STRING",
+		"CREATE_UNDEFINED",
+		"CREATE_EMPTY",
+		"CREATE_NULL",
+		"CREATE_FUNCTION",
+		"STORE_CAPTURED",
+		"ENV_PUSH",
+		"ENV_COPY",
+		"ENV_POP",
+		"BINARY",
+	]);
+	if (fn.instructions.some((instruction) => !allowed.has(instruction.opcode)))
+		return undefined;
+	const creates = fn.instructions
+		.map((instruction, ip) => ({ instruction, ip }))
+		.filter(
+			(
+				entry,
+			): entry is {
+				instruction: Extract<VmInstruction, { opcode: "CREATE_FUNCTION" }>;
+				ip: number;
+			} => entry.instruction.opcode === "CREATE_FUNCTION",
+		);
+	const returns = fn.instructions
+		.map((instruction, ip) => ({ instruction, ip }))
+		.filter(
+			(
+				entry,
+			): entry is {
+				instruction: Extract<VmInstruction, { opcode: "RETURN" }>;
+				ip: number;
+			} => entry.instruction.opcode === "RETURN",
+		);
+	if (creates.length !== 1 || returns.length !== 1) return undefined;
+	const cfg = buildNativeProofCfg(fn);
+	const reaching = nativeReachingDefinitions(fn, cfg);
+	if (
+		nativeResolveMoves(fn, reaching, returns[0]!.instruction.value, returns[0]!.ip)
+			?.ip !== creates[0]!.ip
+	) {
+		return undefined;
+	}
+	const target = creates[0]!.instruction.functionIndex;
+	const targetFn = definition.functions[target];
+	if (targetFn === undefined) return undefined;
+	for (const load of targetFn.instructions) {
+		if (load.opcode !== "LOAD_CAPTURED") continue;
+		const stores: Array<{ owner: number; ip: number }> = [];
+		for (let owner = 0; owner < definition.functions.length; owner++) {
+			for (let ip = 0; ip < definition.functions[owner]!.instructions.length; ip++) {
+				const instruction = definition.functions[owner]!.instructions[ip]!;
+				if (
+					instruction.opcode === "STORE_CAPTURED" &&
+					instruction.ownerFunctionIndex === load.ownerFunctionIndex &&
+					instruction.index === load.index
+				)
+					stores.push({ owner, ip });
+			}
+		}
+		if (
+			load.ownerFunctionIndex !== functionIndex ||
+			stores.length === 0 ||
+			stores.some(
+				(store) =>
+					store.owner !== functionIndex ||
+					store.ip >= creates[0]!.ip ||
+					!cfg.dominators[creates[0]!.ip]!.has(store.ip),
+			)
+		)
+			return undefined;
+	}
+	return target;
+}
+
+interface NativePrimitiveProjectionProof {
+	captures: Array<{ ownerFunctionIndex: number; index: number }>;
+	rowPropertyLoads: number;
+	primitiveRowStringIndices: Array<number>;
+	nestedBaseStringIndex: number;
+	nestedValueStringIndex: number;
+	excludedStringIndices: Array<number>;
+}
+
+/**
+ * Deliberately narrow pure projection: JSON row reads, one nested optional read,
+ * object rest into one fresh result, primitive arithmetic, and exact Math.round.
+ */
+function proveNativePrimitiveProjection(
+	definition: VmDefinition,
+	functionIndex: number,
+): NativePrimitiveProjectionProof | undefined {
+	const fn = definition.functions[functionIndex];
+	if (
+		fn === undefined ||
+		fn.parameterCount !== 1 ||
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.needsArguments ||
+		fn.mappedArguments ||
+		fn.handlers.length > 0 ||
+		fn.argumentSnapshotCount !== 0 ||
+		fn.argumentSnapshotPlan.length !== 0
+	)
+		return undefined;
+	const allowed = new Set<VmInstruction["opcode"]>([
+		"MOVE",
+		"RETURN",
+		"JUMP",
+		"JUMP_IF",
+		"CREATE_NUMBER",
+		"CREATE_F64",
+		"CREATE_BOOLEAN",
+		"CREATE_STRING",
+		"CREATE_UNDEFINED",
+		"CREATE_NULL",
+		"LOAD_CALLEE",
+		"LOAD_INTRINSIC",
+		"LOAD_CAPTURED",
+		"LOAD_PROPERTY_STATIC",
+		"REQUIRE_COERCIBLE",
+		"COPY_DATA_PROPERTIES",
+		"DEFINE_PROPERTY",
+		"BINARY",
+		"CALL",
+	]);
+	if (fn.instructions.some((instruction) => !allowed.has(instruction.opcode)))
+		return undefined;
+	const cfg = buildNativeProofCfg(fn);
+	const reaching = nativeReachingDefinitions(fn, cfg);
+	const resolvesParameter = (register: number, ip: number) =>
+		nativeResolveMoves(fn, reaching, register, ip)?.ip === -1;
+	const stringAt = (register: number, ip: number): number | undefined => {
+		const resolved = nativeResolveMoves(fn, reaching, register, ip)?.instruction;
+		return resolved?.opcode === "CREATE_STRING" ? resolved.stringIndex : undefined;
+	};
+	const captures = new Map<string, { ownerFunctionIndex: number; index: number }>();
+	let copyIp = -1;
+	let rowLoads = 0;
+	let nestedLoads = 0;
+	let nestedBaseStringIndex = -1;
+	let nestedValueStringIndex = -1;
+	let nestedBaseLoadIp = -1;
+	let roundLoadIp = -1;
+	let roundCalls = 0;
+	let returnCount = 0;
+	let excludedStringIndices: Array<number> = [];
+	const rowLoadStringIndices: Array<number> = [];
+	const reachable = new Set<number>();
+	const work = fn.instructions.length > 0 ? [0] : [];
+	while (work.length > 0) {
+		const ip = work.pop()!;
+		if (reachable.has(ip)) continue;
+		reachable.add(ip);
+		for (const successor of cfg.successors[ip]!) work.push(successor);
+	}
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		if (!reachable.has(ip)) return undefined;
+		const instruction = fn.instructions[ip]!;
+		switch (instruction.opcode) {
+			case "LOAD_CAPTURED":
+				captures.set(`${instruction.ownerFunctionIndex}:${instruction.index}`, {
+					ownerFunctionIndex: instruction.ownerFunctionIndex,
+					index: instruction.index,
+				});
+				break;
+			case "LOAD_INTRINSIC":
+				if (instruction.intrinsic !== "Math") return undefined;
+				break;
+			case "REQUIRE_COERCIBLE":
+				if (!resolvesParameter(instruction.src, ip)) return undefined;
+				break;
+			case "LOAD_PROPERTY_STATIC": {
+				if (resolvesParameter(instruction.object, ip)) {
+					rowLoads++;
+					rowLoadStringIndices.push(instruction.stringIndex);
+					break;
+				}
+				const base = nativeResolveMoves(fn, reaching, instruction.object, ip);
+				if (
+					base?.instruction?.opcode === "LOAD_PROPERTY_STATIC" &&
+					resolvesParameter(base.instruction.object, base.ip)
+				) {
+					nestedLoads++;
+					nestedBaseStringIndex = base.instruction.stringIndex;
+					nestedValueStringIndex = instruction.stringIndex;
+					nestedBaseLoadIp = base.ip;
+					break;
+				}
+				const namespace = base;
+				if (
+					namespace?.instruction?.opcode === "LOAD_INTRINSIC" &&
+					namespace.instruction.intrinsic === "Math" &&
+					staticStringEquals(definition, instruction.stringIndex, "round")
+				) {
+					roundLoadIp = ip;
+					break;
+				}
+				return undefined;
+			}
+			case "COPY_DATA_PROPERTIES": {
+				if (!resolvesParameter(instruction.src, ip) || copyIp !== -1) return undefined;
+				const keys = instruction.excluded.map((register) => stringAt(register, ip));
+				if (keys.some((key) => key === undefined)) return undefined;
+				excludedStringIndices = keys as Array<number>;
+				copyIp = ip;
+				break;
+			}
+			case "DEFINE_PROPERTY":
+				if (
+					nativeResolveMoves(fn, reaching, instruction.object, ip)?.ip !== copyIp ||
+					stringAt(instruction.key, ip) === undefined ||
+					!instruction.enumerable ||
+					!instruction.writable ||
+					!instruction.configurable
+				)
+					return undefined;
+				break;
+			case "CALL": {
+				const callee = nativeResolveMoves(fn, reaching, instruction.callee, ip);
+				const receiver = nativeResolveMoves(fn, reaching, instruction.thisValue, ip);
+				if (
+					callee?.ip !== roundLoadIp ||
+					receiver?.instruction?.opcode !== "LOAD_INTRINSIC" ||
+					receiver.instruction.intrinsic !== "Math" ||
+					instruction.arguments.length !== 1
+				) {
+					return undefined;
+				}
+				roundCalls++;
+				break;
+			}
+			case "BINARY":
+				if (
+					!["+", "-", "*", "/", "%", "**", "===", "!==", "==", "!="].includes(
+						instruction.operator,
+					)
+				)
+					return undefined;
+				break;
+			case "RETURN":
+				returnCount++;
+				break;
+		}
+	}
+	if (
+		captures.size === 0 ||
+		rowLoads !== 6 ||
+		nestedLoads !== 1 ||
+		nestedBaseStringIndex < 0 ||
+		nestedValueStringIndex < 0 ||
+		roundCalls !== 1 ||
+		returnCount !== 1 ||
+		excludedStringIndices.length !== 6
+	)
+		return undefined;
+
+	/*
+	 * Typed provenance closes the effect lattice. JSON row leaves and captured
+	 * Numbers are primitives; the one nested base is deliberately not. Therefore
+	 * arithmetic cannot invoke valueOf/toString and property definitions cannot
+	 * publish an object capture. Merges are accepted only when every reaching
+	 * definition proves the same primitive domain.
+	 */
+	const primitiveMemo = new Map<string, boolean>();
+	const primitiveVisiting = new Set<string>();
+	const isNullishAt = (register: number, ip: number): boolean => {
+		const definitions = reaching[register]?.[ip];
+		if (definitions === undefined || definitions.size === 0) return false;
+		return [...definitions].every((definitionIp) => {
+			if (definitionIp < 0) return false;
+			const instruction = fn.instructions[definitionIp]!;
+			return (
+				instruction.opcode === "CREATE_NULL" ||
+				instruction.opcode === "CREATE_UNDEFINED" ||
+				(instruction.opcode === "MOVE" && isNullishAt(instruction.src, definitionIp))
+			);
+		});
+	};
+	const isPrimitiveAt = (register: number, ip: number): boolean => {
+		const key = `${register}:${ip}`;
+		const known = primitiveMemo.get(key);
+		if (known !== undefined) return known;
+		if (primitiveVisiting.has(key)) return false;
+		primitiveVisiting.add(key);
+		const definitions = reaching[register]?.[ip];
+		const result =
+			definitions !== undefined &&
+			definitions.size > 0 &&
+			[...definitions].every((definitionIp) => {
+				if (definitionIp < 0) return false;
+				const instruction = fn.instructions[definitionIp]!;
+				switch (instruction.opcode) {
+					case "CREATE_NUMBER":
+					case "CREATE_F64":
+					case "CREATE_BOOLEAN":
+					case "CREATE_STRING":
+					case "CREATE_UNDEFINED":
+					case "CREATE_NULL":
+						return true;
+					case "MOVE":
+						return isPrimitiveAt(instruction.src, definitionIp);
+					case "LOAD_CAPTURED":
+						return true; // exact Number value is snapshotted/rechecked at runtime
+					case "LOAD_PROPERTY_STATIC": {
+						if (resolvesParameter(instruction.object, definitionIp)) {
+							return definitionIp !== nestedBaseLoadIp;
+						}
+						const base = nativeResolveMoves(
+							fn,
+							reaching,
+							instruction.object,
+							definitionIp,
+						);
+						return base?.ip === nestedBaseLoadIp;
+					}
+					case "BINARY": {
+						if (["===", "!=="].includes(instruction.operator)) return true;
+						if (["==", "!="].includes(instruction.operator)) {
+							return (
+								isNullishAt(instruction.left, definitionIp) ||
+								isNullishAt(instruction.right, definitionIp)
+							);
+						}
+						return (
+							isPrimitiveAt(instruction.left, definitionIp) &&
+							isPrimitiveAt(instruction.right, definitionIp)
+						);
+					}
+					case "CALL":
+						if (
+							nativeResolveMoves(fn, reaching, instruction.callee, definitionIp)?.ip !==
+								roundLoadIp ||
+							instruction.arguments.length !== 1
+						)
+							return false;
+						{
+							const argument = decodeVmValueOperand(instruction.arguments[0]!);
+							return (
+								argument.kind === "register" &&
+								isPrimitiveAt(argument.register, definitionIp)
+							);
+						}
+					default:
+						return false;
+				}
+			});
+		primitiveVisiting.delete(key);
+		primitiveMemo.set(key, result);
+		return result;
+	};
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (
+			instruction.opcode === "BINARY" &&
+			!["===", "!==", "==", "!="].includes(instruction.operator) &&
+			(!isPrimitiveAt(instruction.left, ip) || !isPrimitiveAt(instruction.right, ip))
+		)
+			return undefined;
+		if (instruction.opcode === "CALL") {
+			const argument = decodeVmValueOperand(instruction.arguments[0]!);
+			if (argument.kind !== "register" || !isPrimitiveAt(argument.register, ip))
+				return undefined;
+		}
+		if (instruction.opcode === "DEFINE_PROPERTY" && !isPrimitiveAt(instruction.value, ip))
+			return undefined;
+	}
+
+	/* Every reachable completion returns the sole fresh rest object. Its aliases
+	 * may only feed definitions on that object or the final return. */
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		for (let register = 0; register < fn.registerCount; register++) {
+			if (
+				nativeResolveMoves(fn, reaching, register, ip)?.ip !== copyIp ||
+				!nativeInstructionUsesRegister(fn.instructions[ip]!, register)
+			)
+				continue;
+			const instruction = fn.instructions[ip]!;
+			if (instruction.opcode === "DEFINE_PROPERTY" && instruction.object === register)
+				continue;
+			if (instruction.opcode === "RETURN" && instruction.value === register) continue;
+			return undefined;
+		}
+	}
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (
+			instruction.opcode === "RETURN" &&
+			nativeResolveMoves(fn, reaching, instruction.value, ip)?.ip !== copyIp
+		)
+			return undefined;
+		if (cfg.successors[ip]!.length === 0 && instruction.opcode !== "RETURN")
+			return undefined;
+	}
+
+	/* LOAD_CALLEE is emitted by ordinary closures but must remain dead: observing
+	 * it in a computation would escape the typed primitive domain. */
+	for (let loadIp = 0; loadIp < fn.instructions.length; loadIp++) {
+		const load = fn.instructions[loadIp]!;
+		if (load.opcode !== "LOAD_CALLEE") continue;
+		for (let ip = loadIp + 1; ip < fn.instructions.length; ip++) {
+			if (
+				nativeInstructionUsesRegister(fn.instructions[ip]!, load.dst) &&
+				nativeResolveMoves(fn, reaching, load.dst, ip)?.ip === loadIp
+			)
+				return undefined;
+		}
+	}
+	const primitiveRowStringIndices = rowLoadStringIndices.filter(
+		(index) => index !== nestedBaseStringIndex,
+	);
+	return {
+		captures: [...captures.values()],
+		rowPropertyLoads: rowLoads + 1,
+		primitiveRowStringIndices,
+		nestedBaseStringIndex,
+		nestedValueStringIndex,
+		excludedStringIndices,
+	};
+}
+
+/** Link one exact adjacent parse/map chain to a private final-row template. */
+function annotateNativeInvariantJsonMapTemplates(definition: VmDefinition): void {
+	const projections = new Map<number, NativePrimitiveProjectionProof>();
+	for (let index = 0; index < definition.functions.length; index++) {
+		const proof = proveNativePrimitiveProjection(definition, index);
+		if (proof !== undefined) projections.set(index, proof);
+	}
+	const uniquelyFactoryCreatedProjectionTargets = new Set<number>();
+	for (let index = 0; index < definition.functions.length; index++) {
+		const target = nativeProjectionFactoryTarget(definition, index);
+		if (target !== undefined && projections.has(target)) {
+			uniquelyFactoryCreatedProjectionTargets.add(target);
+		}
+	}
+	for (const fn of definition.functions) {
+		delete fn.nativeInvariantJsonMapTemplates;
+		if (fn.isGenerator || fn.isAsync) continue;
+		const cfg = buildNativeProofCfg(fn);
+		const reaching = nativeReachingDefinitions(fn, cfg);
+		const templates: Array<
+			NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number]
+		> = [];
+		for (let p = 0; p + 3 < fn.instructions.length; p++) {
+			const parse = fn.instructions[p]!;
+			const mapLoad = fn.instructions[p + 1]!;
+			const mapCall = fn.instructions[p + 2]!;
+			const handlerOverlap = fn.handlers.some(
+				(handler) =>
+					(handler.startIp < p + 4 && handler.endIp > p) ||
+					(handler.handlerIp >= p && handler.handlerIp < p + 4),
+			);
+			if (
+				parse.opcode !== "CALL" ||
+				parse.arguments.length !== 1 ||
+				handlerOverlap ||
+				mapLoad.opcode !== "LOAD_PROPERTY_STATIC" ||
+				mapLoad.object !== parse.dst ||
+				mapLoad.dst === parse.dst ||
+				!staticStringEquals(definition, mapLoad.stringIndex, "map") ||
+				mapCall.opcode !== "CALL" ||
+				mapCall.callee !== mapLoad.dst ||
+				mapCall.thisValue !== parse.dst ||
+				mapCall.dst === parse.dst ||
+				mapCall.arguments.length !== 1 ||
+				cfg.predecessors[p + 1]!.length !== 1 ||
+				cfg.predecessors[p + 1]![0] !== p ||
+				cfg.predecessors[p + 2]!.length !== 1 ||
+				cfg.predecessors[p + 2]![0] !== p + 1 ||
+				cfg.predecessors[p + 3]!.length !== 1 ||
+				cfg.predecessors[p + 3]![0] !== p + 2 ||
+				!cfg.loops.some((loop) => loop.body.has(p))
+			)
+				continue;
+			const json = nativeResolveMoves(fn, reaching, parse.thisValue, p);
+			const parseLoad = nativeResolveMoves(fn, reaching, parse.callee, p);
+			if (
+				json?.instruction?.opcode !== "LOAD_INTRINSIC" ||
+				json.instruction.intrinsic !== "JSON" ||
+				parseLoad?.instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				parseLoad.instruction.object !== json.instruction.dst ||
+				!staticStringEquals(definition, parseLoad.instruction.stringIndex, "parse")
+			)
+				continue;
+			const text = decodeVmValueOperand(parse.arguments[0]!);
+			const callback = decodeVmValueOperand(mapCall.arguments[0]!);
+			if (text.kind !== "register" || callback.kind !== "register") continue;
+			const callbackDefinition = nativeResolveMoves(
+				fn,
+				reaching,
+				callback.register,
+				p + 2,
+			);
+			let target: number | undefined;
+			if (callbackDefinition?.instruction?.opcode === "CREATE_FUNCTION") {
+				target = callbackDefinition.instruction.functionIndex;
+			} else if (callbackDefinition?.instruction?.opcode === "CALL") {
+				if (callbackDefinition.instruction.directFunctionIndex !== undefined) {
+					target = nativeProjectionFactoryTarget(
+						definition,
+						callbackDefinition.instruction.directFunctionIndex,
+					);
+				} else if (uniquelyFactoryCreatedProjectionTargets.size === 1) {
+					/* The ordinary callback-producing call is not statically trusted. A
+					 * unique lexical factory target only selects metadata; runtime exact
+					 * function-index, identity, realm, and captured-value guards remain
+					 * semantic authority before every hit. */
+					target = [...uniquelyFactoryCreatedProjectionTargets][0]!;
+				}
+			}
+			if (target === undefined) continue;
+			const projection = projections.get(target);
+			if (projection === undefined) continue;
+			let privateParseResult = true;
+			for (let ip = p + 1; ip < fn.instructions.length && privateParseResult; ip++) {
+				const instruction = fn.instructions[ip]!;
+				for (let register = 0; register < fn.registerCount; register++) {
+					if (
+						nativeResolveMoves(fn, reaching, register, ip)?.ip !== p ||
+						!nativeInstructionUsesRegister(instruction, register)
+					)
+						continue;
+					if (
+						ip === p + 1 &&
+						instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+						instruction.object === register
+					)
+						continue;
+					if (
+						ip === p + 2 &&
+						instruction.opcode === "CALL" &&
+						instruction.thisValue === register
+					)
+						continue;
+					privateParseResult = false;
+					break;
+				}
+			}
+			if (!privateParseResult) continue;
+			templates.push({
+				parseCallIp: p,
+				mapLoadIp: p + 1,
+				mapCallIp: p + 2,
+				jsonObject: parse.thisValue,
+				parseCallee: parse.callee,
+				text: text.register,
+				parseResult: parse.dst,
+				mapCallee: mapLoad.dst,
+				callback: callback.register,
+				mapResult: mapCall.dst,
+				targetFunctionIndex: target,
+				...projection,
+			});
+		}
+		if (templates.length > 0) fn.nativeInvariantJsonMapTemplates = templates;
+	}
+}
+
 function emitVmDefinitionSource(
 	definition: VmDefinition,
 	options: EmitOptions,
@@ -3442,6 +4109,7 @@ function emitVmDefinitionSource(
 		annotateNativeStringSearchRegExpCalls(definition);
 		annotateNativePrivateAggregateMemos(definition);
 		annotateNativeAffineRangeVirtualizations(definition);
+		annotateNativeInvariantJsonMapTemplates(definition);
 		annotateNativeInvariantJsonParseCaches(definition);
 	}
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles

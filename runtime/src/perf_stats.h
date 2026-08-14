@@ -218,6 +218,19 @@ typedef struct MalPerfStats {
     u64 invariant_json_parse_misses;
     u64 invariant_json_parse_calls_elided;
 
+    u64 invariant_json_map_candidates;
+    u64 invariant_json_map_fills;
+    u64 invariant_json_map_hits;
+    u64 invariant_json_map_misses;
+    u64 invariant_json_map_guard_fallbacks;
+    u64 invariant_json_map_parse_calls_elided;
+    u64 invariant_json_map_map_calls_elided;
+    u64 invariant_json_map_callback_calls_elided;
+    u64 invariant_json_map_rows_cloned;
+    u64 invariant_json_map_intermediate_containers_elided;
+    u64 invariant_json_map_property_loads_elided;
+    u64 invariant_json_map_exclusion_checks_elided;
+
     u64 private_aggregate_memo_candidates;
     u64 private_aggregate_memo_fills;
     u64 private_aggregate_memo_hits;

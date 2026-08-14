@@ -7,7 +7,11 @@
 
 #include "builtin_array.h"
 #include "checked_size.h"
+#include "function_object.h"
+#include "gc.h"
 #include "heap_string.h"
+#include "object_ops.h"
+#include "perf_stats.h"
 #include "primitive_wrapper_object.h"
 #include "property_iter.h"
 #include "proxy_object.h"
@@ -1835,6 +1839,421 @@ bool mal_builtin_json_parse_cache_fill(
     cache->realm = vm->current_realm;
 #endif
     cache->filled = true;
+    MAL_PERF_COUNT(invariant_json_parse_fills);
+    return true;
+}
+
+static bool mal_json_map_primitive(MalValue value) {
+    return mal_ops_is_number(value) || mal_value_is_string(value) ||
+        mal_value_is_boolean(value) || mal_value_is_nil(value);
+}
+
+static bool mal_json_map_exact_array(MalVm *vm, MalValue value, MalArrayObject **out) {
+    if (!mal_value_is_array_object(value)) return false;
+    MalArrayObject *array = mal_value_to_array_object(value);
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    if (!mal_value_is_object(prototype) ||
+        array->object.prototype != mal_value_to_object(prototype) ||
+        array->object.shape != mal_shape_root(&vm->heap) ||
+        array->object.slots != nullptr || array->object.overflow != nullptr ||
+        array->dense_deopted || !array->object.extensible ||
+        !array->length_writable || array->dense_count != array->length ||
+        (array->length != 0 && array->elements == nullptr) ||
+        array->length > MAL_JSON_CLONE_MAX_NODES) return false;
+    *out = array;
+    return true;
+}
+
+static bool mal_json_map_exact_row(MalVm *vm, MalValue value, MalObject **out) {
+    if (!mal_value_is_object(value)) return false;
+    MalObject *object = mal_value_to_object(value);
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];
+    if (object->header.type != MAL_HEAP_OBJECT || !mal_value_is_object(prototype) ||
+        object->prototype != mal_value_to_object(prototype) || object->shape == nullptr ||
+        object->overflow != nullptr || !object->extensible ||
+        object->shape->inline_count == 0 ||
+        object->shape->inline_count > MAL_SHAPE_MAX_INLINE_SLOTS ||
+        object->slots == nullptr) return false;
+    const u8 attrs = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+        MAL_PROPERTY_CONFIGURABLE;
+    for (u32 i = 0; i < object->shape->inline_count; i++) {
+        if (object->shape->props[i].attrs != attrs ||
+            object->shape->props[i].slot >= object->shape->inline_count ||
+            !mal_value_is_string(object->shape->props[i].key)) return false;
+    }
+    *out = object;
+    return true;
+}
+
+static MalValue mal_json_map_own_or_undefined(MalObject *object, MalValue key) {
+    MalPropertyLookup lookup = mal_object_get_own(object, mal_key_from_value(key));
+    return lookup.present && !(lookup.desc.flags & MAL_PROPERTY_ACCESSOR)
+        ? lookup.desc.value : MAL_VALUE_UNDEFINED;
+}
+
+static bool mal_json_map_count_graph_inner(
+    MalVm *vm, MalValue value, MalJsonCloneBudget *budget
+) {
+    if (!mal_value_is_object(value)) return mal_json_map_primitive(value);
+    if (budget->depth >= MAL_JSON_CLONE_MAX_DEPTH ||
+        budget->nodes >= MAL_JSON_CLONE_MAX_NODES) return false;
+    budget->depth++;
+    budget->nodes++;
+    bool ok = true;
+    if (mal_value_is_array_object(value)) {
+        MalArrayObject *array;
+        ok = mal_json_map_exact_array(vm, value, &array) &&
+            array->length <= MAL_JSON_CLONE_MAX_CHILD_SLOTS - budget->child_slots;
+        if (ok) {
+            budget->child_slots += array->length;
+            for (u32 i = 0; ok && i < array->length; i++) {
+                MalValue child;
+                ok = mal_array_object_dense_get(array, i, &child) &&
+                    mal_json_map_count_graph_inner(vm, child, budget);
+            }
+        }
+    } else {
+        MalObject *object;
+        ok = mal_json_map_exact_row(vm, value, &object) &&
+            object->shape->inline_count <=
+                MAL_JSON_CLONE_MAX_CHILD_SLOTS - budget->child_slots;
+        if (ok) {
+            budget->child_slots += object->shape->inline_count;
+            for (u32 i = 0; ok && i < object->shape->inline_count; i++) {
+                ok = mal_json_map_count_graph_inner(
+                    vm, object->slots[object->shape->props[i].slot], budget);
+            }
+        }
+    }
+    budget->depth--;
+    return ok;
+}
+
+static bool mal_json_map_callback_guard(
+    MalVm *vm, MalInvariantJsonMapTemplate *cache, MalValue callback,
+    i32 target_function_index, const MalJsonProjectionCapture *captures,
+    u32 capture_count, bool filled
+) {
+    if (!mal_vm_callee_has_index(vm, callback, target_function_index) ||
+        capture_count == 0 || capture_count > 8) return false;
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, callback) != vm->current_realm) return false;
+#endif
+    MalEnv *env = mal_value_to_function_object(callback)->creation_env;
+    for (u32 i = 0; i < capture_count; i++) {
+        MalValue value = mal_vm_load_captured(
+            env, captures[i].owner_function_index, captures[i].index);
+        if (!mal_ops_is_number(value) || (filled && cache->roots[4 + i] != value)) {
+            return false;
+        }
+    }
+    return !filled || cache->roots[2] == callback;
+}
+
+static bool mal_json_map_template_guards(
+    MalVm *vm, MalInvariantJsonMapTemplate *cache,
+    MalValue parse_callee, MalValue json_this, MalValue text,
+    MalValue callback, i32 target_function_index,
+    const MalJsonProjectionCapture *captures, u32 capture_count
+) {
+    if (cache->state != MAL_INVARIANT_JSON_MAP_FILLED ||
+        mal_gc_preempt_hook != nullptr || !mal_primitive_method_protector ||
+        !mal_array_elements_protector || cache->roots[1] != text ||
+		cache->roots[3] != parse_callee ||
+        cache->watched_methods_epoch == 0 || cache->array_elements_epoch == 0 ||
+        cache->watched_methods_epoch != vm->semantic_epochs.watched_methods ||
+        cache->array_elements_epoch != vm->semantic_epochs.array_elements ||
+        !mal_json_parse_cache_exact_callee(vm, parse_callee, json_this) ||
+        !mal_builtin_array_default_map_guard(vm, cache->roots[0]) ||
+        !mal_json_map_callback_guard(vm, cache, callback, target_function_index,
+                                     captures, capture_count, true)) return false;
+#if MAL_REALMS
+    return cache->realm == vm->current_realm;
+#else
+    return true;
+#endif
+}
+
+static bool mal_json_map_clone_rows(
+    MalVm *vm, MalValue source, MalShape *shape, u32 row_count,
+    u32 slot_count, MalValue *out
+) {
+    MalArrayObject *array;
+    if (!mal_json_map_exact_array(vm, source, &array) || array->length != row_count ||
+        slot_count == 0 || slot_count > MAL_SHAPE_MAX_INLINE_SLOTS ||
+        row_count > SIZE_MAX / slot_count ||
+        (usize) row_count * slot_count > SIZE_MAX / sizeof(MalValue)) return false;
+    usize value_count = (usize) row_count * slot_count;
+    MalValue *values = value_count == 0 ? nullptr : malloc(sizeof(MalValue) * value_count);
+    if (value_count != 0 && values == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    bool ok = true;
+    for (u32 row = 0; ok && row < row_count; row++) {
+        MalValue row_value;
+        MalObject *object;
+        ok = mal_array_object_dense_get(array, row, &row_value) &&
+            mal_json_map_exact_row(vm, row_value, &object) && object->shape == shape;
+        for (u32 slot = 0; ok && slot < slot_count; slot++) {
+            MalValue value = object->slots[slot];
+            ok = mal_json_map_primitive(value);
+            values[(usize) row * slot_count + slot] = value;
+        }
+    }
+    if (ok) {
+        *out = mal_vm_materialize_virtual_record_array(
+            vm, shape, values, row_count, slot_count);
+        ok = vm->completion.kind != MAL_COMPLETION_THROW;
+    }
+    free(values);
+    return ok;
+}
+
+/* Fill is semantically invisible and therefore must be non-throwing. Every
+ * allocation here is fallible; a partial graph stays rooted until abandoned. */
+static bool mal_json_map_try_clone_rows(
+    MalVm *vm, MalInvariantJsonMapTemplate *cache,
+    MalValue source, MalShape *shape, u32 row_count,
+    u32 slot_count, MalValue *out
+) {
+    MalArrayObject *input;
+    if (!mal_json_map_exact_array(vm, source, &input) || input->length != row_count ||
+        slot_count == 0 || slot_count > MAL_SHAPE_MAX_INLINE_SLOTS) return false;
+    MalObject *array_prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
+#if MAL_PERF_STATS
+    const char *fail_fill = getenv("MAL_JSON_MAP_TEMPLATE_FAIL_FILL_ALLOC");
+    bool inject_fill_failure = !cache->test_fill_failure_consumed &&
+        fail_fill != nullptr && strcmp(fail_fill, "0") != 0;
+    if (inject_fill_failure && strcmp(fail_fill, "array") == 0) {
+        cache->test_fill_failure_consumed = true;
+        vm->heap.fail_next_cell_allocation = true;
+    }
+#endif
+    MalArrayObject *copy = mal_array_object_try_new(&vm->heap, array_prototype);
+    if (copy == nullptr) return false;
+    MalValue roots[3] = {
+        source, mal_value_from_array_object(copy), MAL_VALUE_UNDEFINED,
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+#if MAL_PERF_STATS
+    if (inject_fill_failure && strcmp(fail_fill, "raw") == 0) {
+        cache->test_fill_failure_consumed = true;
+        vm->heap.fail_next_raw_allocation = true;
+    }
+#endif
+    bool ok = mal_array_object_try_fresh_dense_reserve_exact(copy, row_count);
+    MalObject *object_prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    for (u32 row = 0; ok && row < row_count; row++) {
+        input = mal_value_to_array_object(roots[0]);
+        MalValue row_value;
+        MalObject *object;
+        ok = mal_array_object_dense_get(input, row, &row_value) &&
+            mal_json_map_exact_row(vm, row_value, &object) && object->shape == shape;
+        if (!ok) break;
+#if MAL_PERF_STATS
+        if (inject_fill_failure && strcmp(fail_fill, "partial-row") == 0 && row == 1) {
+            cache->test_fill_failure_consumed = true;
+            vm->heap.fail_next_cell_allocation = true;
+        }
+#endif
+        MalObject *row_copy = mal_object_try_new_shaped(
+            &vm->heap, object_prototype, shape, object->slots, slot_count);
+        if (row_copy == nullptr) {
+            ok = false;
+            break;
+        }
+        roots[2] = mal_value_from_object(row_copy);
+        copy = mal_value_to_array_object(roots[1]);
+        ok = mal_array_object_fresh_dense_append(copy, roots[2]);
+    }
+    if (ok) *out = roots[1];
+    mal_gc_unroot(&span);
+    return ok;
+}
+
+bool mal_builtin_json_map_template_try_clone(
+    MalVm *vm, MalInvariantJsonMapTemplate *cache,
+    MalValue parse_callee, MalValue json_this, MalValue text,
+    MalValue callback, i32 target_function_index,
+    const MalJsonProjectionCapture *captures, u32 capture_count,
+    MalValue *out
+) {
+    MAL_PERF_COUNT(invariant_json_map_candidates);
+    MAL_PERF_COUNT(invariant_json_parse_candidates);
+    if (cache->state != MAL_INVARIANT_JSON_MAP_FILLED) {
+        MAL_PERF_COUNT(invariant_json_map_misses);
+        MAL_PERF_COUNT(invariant_json_parse_misses);
+        return false;
+    }
+    if (!mal_json_map_template_guards(vm, cache, parse_callee, json_this, text,
+                                      callback, target_function_index,
+                                      captures, capture_count)) {
+        MAL_PERF_COUNT(invariant_json_map_guard_fallbacks);
+        MAL_PERF_COUNT(invariant_json_map_misses);
+        MAL_PERF_COUNT(invariant_json_parse_misses);
+        cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+        return false;
+    }
+    if (!mal_json_map_clone_rows(vm, cache->roots[0], cache->row_shape,
+                                 cache->row_count, cache->slot_count, out)) {
+        MAL_PERF_COUNT(invariant_json_map_misses);
+        MAL_PERF_COUNT(invariant_json_parse_misses);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+            MAL_PERF_COUNT(invariant_json_map_guard_fallbacks);
+        }
+        return false;
+    }
+    MAL_PERF_COUNT(invariant_json_map_hits);
+    MAL_PERF_COUNT(invariant_json_map_parse_calls_elided);
+    MAL_PERF_COUNT(invariant_json_map_map_calls_elided);
+    MAL_PERF_ADD(invariant_json_map_callback_calls_elided, cache->row_count);
+    MAL_PERF_ADD(invariant_json_map_rows_cloned, cache->row_count);
+    MAL_PERF_ADD(invariant_json_map_intermediate_containers_elided,
+                 cache->source_container_count);
+    MAL_PERF_ADD(invariant_json_map_property_loads_elided,
+                 cache->property_loads_per_map);
+    MAL_PERF_ADD(invariant_json_map_exclusion_checks_elided,
+                 cache->exclusion_checks_per_map);
+    MAL_PERF_COUNT(invariant_json_parse_hits);
+    MAL_PERF_COUNT(invariant_json_parse_calls_elided);
+    return true;
+}
+
+bool mal_builtin_json_map_template_fill(
+    MalVm *vm, MalInvariantJsonMapTemplate *cache,
+    MalValue parse_callee, MalValue json_this, MalValue text,
+    MalValue map_callee, MalValue parsed, MalValue callback,
+    i32 target_function_index,
+    const MalJsonProjectionCapture *captures, u32 capture_count,
+    MalValue mapped, const MalValue *primitive_row_keys,
+    u32 primitive_row_key_count, MalValue nested_base_key,
+    MalValue nested_value_key, const MalValue *excluded_keys,
+    u32 excluded_key_count, u32 row_property_loads
+) {
+    if (cache->state != MAL_INVARIANT_JSON_MAP_EMPTY) return false;
+    if (mal_gc_preempt_hook != nullptr || !mal_primitive_method_protector ||
+        !mal_array_elements_protector || !mal_value_is_string(text) ||
+        mal_string_length(mal_value_to_string(text)) > 65536 ||
+        !mal_json_parse_cache_exact_callee(vm, parse_callee, json_this) ||
+        !mal_builtin_array_exact_map_guard(vm, map_callee, parsed) ||
+        !mal_json_map_callback_guard(vm, cache, callback, target_function_index,
+                                     captures, capture_count, false)) {
+        cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+        return false;
+    }
+    MalArrayObject *source;
+    MalArrayObject *result;
+    if (parsed == mapped || !mal_json_map_exact_array(vm, parsed, &source) ||
+        !mal_json_map_exact_array(vm, mapped, &result) ||
+        source->length != result->length || source->length == 0) {
+        cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+        return false;
+    }
+    MalJsonCloneBudget budget = {0};
+    if (!mal_json_map_count_graph_inner(vm, parsed, &budget)) {
+        cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+        return false;
+    }
+    u32 exclusion_checks = 0;
+    u32 nested_loads = 0;
+    for (u32 row = 0; row < source->length; row++) {
+        MalValue row_value;
+        MalObject *object;
+        if (!mal_array_object_dense_get(source, row, &row_value) ||
+            !mal_json_map_exact_row(vm, row_value, &object)) {
+            cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+            return false;
+        }
+        for (u32 key = 0; key < primitive_row_key_count; key++) {
+            if (!mal_json_map_primitive(
+                    mal_json_map_own_or_undefined(object, primitive_row_keys[key]))) {
+                cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+                return false;
+            }
+        }
+        MalValue nested = mal_json_map_own_or_undefined(object, nested_base_key);
+        if (!mal_value_is_nil(nested)) {
+            MalObject *nested_object;
+            if (!mal_json_map_exact_row(vm, nested, &nested_object) ||
+                !mal_json_map_primitive(
+                    mal_json_map_own_or_undefined(nested_object, nested_value_key))) {
+                cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+                return false;
+            }
+            nested_loads++;
+        }
+        for (u32 prop = 0; prop < object->shape->inline_count; prop++) {
+            for (u32 excluded = 0; excluded < excluded_key_count; excluded++) {
+                exclusion_checks++;
+                if (mal_key_value_equals(object->shape->props[prop].key,
+                                         excluded_keys[excluded])) break;
+            }
+        }
+    }
+    MalValue first_row;
+    MalObject *first;
+    if (!mal_array_object_dense_get(result, 0, &first_row) ||
+        !mal_json_map_exact_row(vm, first_row, &first)) {
+        cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+        return false;
+    }
+    for (u32 row = 0; row < result->length; row++) {
+        MalValue row_value;
+        MalObject *object;
+        if (!mal_array_object_dense_get(result, row, &row_value) ||
+            !mal_json_map_exact_row(vm, row_value, &object) ||
+            object->shape != first->shape) {
+            cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+            return false;
+        }
+        for (u32 prior = 0; prior < row; prior++) {
+            MalValue prior_value;
+            if (!mal_array_object_dense_get(result, prior, &prior_value) ||
+                prior_value == row_value) {
+                cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+                return false;
+            }
+        }
+        for (u32 slot = 0; slot < first->shape->inline_count; slot++) {
+            if (!mal_json_map_primitive(object->slots[slot])) {
+                cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+                return false;
+            }
+        }
+    }
+    MalValue private_template;
+    if (!mal_json_map_try_clone_rows(vm, cache, mapped, first->shape, result->length,
+                                     first->shape->inline_count, &private_template)) {
+        cache->state = MAL_INVARIANT_JSON_MAP_DISABLED;
+        return false;
+    }
+    cache->roots[0] = private_template;
+    cache->roots[1] = text;
+    cache->roots[2] = callback;
+    cache->roots[3] = parse_callee;
+    MalEnv *callback_env = mal_value_to_function_object(callback)->creation_env;
+    for (u32 i = 0; i < capture_count; i++) {
+        cache->roots[4 + i] = mal_vm_load_captured(
+            callback_env, captures[i].owner_function_index, captures[i].index);
+    }
+    cache->watched_methods_epoch = vm->semantic_epochs.watched_methods;
+    cache->array_elements_epoch = vm->semantic_epochs.array_elements;
+    cache->row_count = result->length;
+    cache->slot_count = first->shape->inline_count;
+    cache->row_shape = first->shape;
+    cache->source_container_count = budget.nodes;
+    cache->property_loads_per_map = 1 + source->length * row_property_loads + nested_loads;
+    cache->exclusion_checks_per_map = exclusion_checks;
+#if MAL_REALMS
+    cache->realm = vm->current_realm;
+#endif
+    cache->state = MAL_INVARIANT_JSON_MAP_FILLED;
+    MAL_PERF_COUNT(invariant_json_map_fills);
     MAL_PERF_COUNT(invariant_json_parse_fills);
     return true;
 }

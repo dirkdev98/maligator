@@ -1661,3 +1661,127 @@ describe("activation-local invariant JSON.parse templates", () => {
 		expect(output).not.toContain("mal_builtin_json_parse_cache_try_clone");
 	});
 });
+
+describe("linked invariant JSON.parse map templates", () => {
+	const projection = `
+		function factory(rate = 0) {
+			return function normalize({
+				id, customer = "guest", qty = 1, price = 0, discount = 0, meta, ...rest
+			}) {
+				return {
+					...rest, id, customer, qty,
+					net: Math.round((qty * price - discount) * (1 + rate)),
+					region: meta?.region ?? "unknown",
+				};
+			};
+		}
+	`;
+
+	function annotated(source: string): VmDefinition {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"invariant-json-map-template.js",
+			parseScript(source, { strict: false }),
+		);
+		const compiled = compileSemanticProgramToVmDefinition(semantic);
+		const postWire = deserializeVmDefinition(serializeVmDefinition(compiled));
+		emitVmDefinition(postWire, { compiled: true });
+		return postWire;
+	}
+
+	const templateCount = (definition: VmDefinition) =>
+		definition.functions.reduce(
+			(count, fn) => count + (fn.nativeInvariantJsonMapTemplates?.length ?? 0),
+			0,
+		);
+
+	it("recomputes one exact post-wire primitive projection candidate", () => {
+		const definition = annotated(`${projection}
+			function repeated(text) {
+				const normalize = factory(0.1);
+				let total = 0;
+				for (let index = 0; index < 4; index++) {
+					const rows = JSON.parse(text).map(normalize);
+					total += rows.length;
+				}
+				return total;
+			}
+			globalThis.repeated = repeated;
+		`);
+		expect(templateCount(definition)).toBe(1);
+		const template = definition.functions.flatMap((fn) => [
+			...(fn.nativeInvariantJsonMapTemplates ?? []),
+		])[0]!;
+		expect(template.captures).toHaveLength(1);
+		expect(template.primitiveRowStringIndices).toHaveLength(5);
+		expect(template.excludedStringIndices).toHaveLength(6);
+		expect(template.rowPropertyLoads).toBe(7);
+		const output = emitVmDefinition(definition, { compiled: true });
+		expect(output).toContain("MalInvariantJsonMapTemplate __invariant_json_map_");
+		expect(output).toContain("mal_builtin_json_map_template_try_clone");
+		expect(output).toContain("mal_builtin_json_map_template_fill");
+		expect(output).toContain("vm->intrinsics[MAL_INTRINSIC_JSON]");
+	});
+
+	it("rejects object-producing effects and capture writers after closure creation", () => {
+		const effectful = annotated(`
+			function factory(rate) {
+				return function normalize({id, customer, qty, price, discount, meta, ...rest}) {
+					return {...rest, id, customer, qty,
+						net: Math.round((qty * price - discount) * (1 + rate.valueOf())),
+						region: meta?.region ?? "unknown"};
+				};
+			}
+			function repeated(text) {
+				const normalize = factory({valueOf() { globalThis.effect = 1; return 0; }});
+				for (let index = 0; index < 4; index++) JSON.parse(text).map(normalize);
+			}
+		`);
+		expect(templateCount(effectful)).toBe(0);
+
+		const writtenCapture = annotated(`
+			function factory(rate = 0) {
+				const callback = function normalize({
+					id, customer = "guest", qty = 1, price = 0, discount = 0, meta, ...rest
+				}) {
+					return {...rest, id, customer, qty,
+						net: Math.round((qty * price - discount) * (1 + rate)),
+						region: meta?.region ?? "unknown"};
+				};
+				rate = 2;
+				return callback;
+			}
+			function repeated(text) {
+				const normalize = factory(0.1);
+				for (let index = 0; index < 4; index++) JSON.parse(text).map(normalize);
+			}
+		`);
+		expect(templateCount(writtenCapture)).toBe(0);
+	});
+
+	it("rejects a published parse result and a loop-carried callback overwrite", () => {
+		const published = annotated(`${projection}
+			let leaked;
+			function repeated(text) {
+				const normalize = factory(0.1);
+				for (let index = 0; index < 4; index++) {
+					const parsed = JSON.parse(text);
+					leaked = parsed;
+					parsed.map(normalize);
+				}
+			}
+		`);
+		expect(templateCount(published)).toBe(0);
+
+		const overwritten = annotated(`${projection}
+			function repeated(text) {
+				let normalize = factory(0.1);
+				for (let index = 0; index < 4; index++) {
+					JSON.parse(text).map(normalize);
+					normalize = (row) => row;
+				}
+			}
+		`);
+		expect(templateCount(overwritten)).toBe(0);
+	});
+});
