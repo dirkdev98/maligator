@@ -584,6 +584,8 @@ export type VmInstruction =
 			length: number;
 			/** COMPILE-ONLY: native bounded push-only virtual array state. */
 			nativeCardinalityRegion?: { maximumLength: number };
+			/** COMPILE-ONLY: exact capacity for a proven pristine indexed fill. */
+			nativeFreshDenseReserveLength?: number;
 	  }
 	| {
 			opcode: "INSTANTIATE_LITERAL_TEMPLATE";
@@ -1772,6 +1774,7 @@ function lowerInstructionToVmInstruction(
 				opcode: "CREATE_ARRAY",
 				dst: instruction.registers[0],
 				length: instruction.length,
+				nativeFreshDenseReserveLength: instruction.nativeFreshDenseReserveLength,
 				nativeCardinalityRegion:
 					instruction.nativeCardinalityRegion === undefined
 						? undefined

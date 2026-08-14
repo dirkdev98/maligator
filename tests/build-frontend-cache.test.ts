@@ -131,6 +131,27 @@ describe("normal build frontend cache", () => {
 		);
 	});
 
+	it("retains fresh dense indexed-fill reserves across a frontend cache hit", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			entrypoint,
+			`export function fill() { const array = []; for (let i = 0; i < 1000; i++) array[i] = i; return array; }\n`,
+		);
+
+		const cold = compile(entrypoint, cacheDirectory);
+		const warm = compile(entrypoint, cacheDirectory);
+		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
+		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+
+		expect(cold.cache).toBe("miss");
+		expect(warm.cache).toBe("hit");
+		expect(coldC).toContain("mal_vm_try_fresh_dense_indexed_fill_reserve");
+		expect(warmC).toBe(coldC);
+	});
+
 	it("invalidates changed sources and package-resolution inputs", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

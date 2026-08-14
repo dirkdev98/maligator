@@ -3533,6 +3533,12 @@ function emitInstruction(
 					`}`,
 				];
 			}
+			if (instruction.nativeFreshDenseReserveLength !== undefined) {
+				return [
+					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
+					`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.nativeFreshDenseReserveLength});`,
+				];
+			}
 			return [`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`];
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return [

@@ -739,6 +739,10 @@ export type IRInstruction =
 			type: "createArray";
 			/** COMPILE-ONLY: bounded push-only array virtualized by native code. */
 			nativeCardinalityRegion?: { id: number; maximumLength: number };
+			/** COMPILE-ONLY: a pristine empty Array is immediately followed by an
+			 * exact canonical `[0, length)` indexed fill. Native code may reserve the
+			 * final dense capacity before executing the otherwise-unchanged loop. */
+			nativeFreshDenseReserveLength?: number;
 
 			// [destination]
 			registers: [number];

@@ -21,8 +21,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 28 for bounded String#charCodeAt compiler metadata.
-export const WIRE_VERSION = 28;
+// Bumped to 29 for fresh dense indexed-fill reserve compiler metadata.
+export const WIRE_VERSION = 29;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -657,7 +657,10 @@ export function serializeVmDefinition(
 					return instruction.nativeFiniteConstruction !== undefined;
 				}
 				if (instruction.opcode === "CREATE_ARRAY") {
-					return instruction.nativeCardinalityRegion !== undefined;
+					return (
+						instruction.nativeCardinalityRegion !== undefined ||
+						instruction.nativeFreshDenseReserveLength !== undefined
+					);
 				}
 				return (
 					instruction.opcode === "BINARY" &&
@@ -668,6 +671,13 @@ export function serializeVmDefinition(
 		w.u32(instructionMetadata.length);
 		for (const { instruction, instructionIndex } of instructionMetadata) {
 			w.u32(instructionIndex);
+			if (
+				instruction.opcode === "CREATE_ARRAY" &&
+				instruction.nativeCardinalityRegion !== undefined &&
+				instruction.nativeFreshDenseReserveLength !== undefined
+			) {
+				throw new RangeError("serialize-vm: conflicting CREATE_ARRAY compiler metadata");
+			}
 			if (
 				(instruction.opcode === "LOAD_PROPERTY" ||
 					instruction.opcode === "STORE_PROPERTY") &&
@@ -759,6 +769,19 @@ export function serializeVmDefinition(
 			) {
 				w.u8(8);
 				w.i32(instruction.nativeCardinalityRegion.maximumLength);
+			} else if (
+				instruction.opcode === "CREATE_ARRAY" &&
+				instruction.nativeFreshDenseReserveLength !== undefined
+			) {
+				if (
+					!Number.isInteger(instruction.nativeFreshDenseReserveLength) ||
+					instruction.nativeFreshDenseReserveLength < 1 ||
+					instruction.nativeFreshDenseReserveLength > 65_536
+				) {
+					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
+				}
+				w.u8(12);
+				w.i32(instruction.nativeFreshDenseReserveLength);
 			} else if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				instruction.nativePrimitiveStringLength === true
@@ -1655,6 +1678,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid cardinality-region metadata");
 				}
 				instruction.nativeCardinalityRegion = { maximumLength };
+			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
+				const reserveLength = r.i32();
+				if (reserveLength < 1 || reserveLength > 65_536) {
+					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
+				}
+				instruction.nativeFreshDenseReserveLength = reserveLength;
 			} else if (
 				tag === 9 &&
 				(instruction.opcode === "LOAD_PROPERTY" ||

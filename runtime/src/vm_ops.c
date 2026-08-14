@@ -42,6 +42,52 @@ u64 mal_vm_stack_object_materialization_count(void) {
     return g_stack_object_materializations;
 }
 
+bool mal_vm_try_fresh_dense_indexed_fill_reserve(
+    MalVm *vm, MalValue array_value, u32 needed
+) {
+    if (!mal_array_elements_protector || vm->semantic_epochs.array_elements == 0 ||
+        !mal_value_is_array_object(array_value)) {
+        MAL_PERF_COUNT(array_indexed_fill_guard_fallbacks);
+        return false;
+    }
+    MalArrayObject *array = mal_value_to_array_object(array_value);
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    if (!mal_value_is_array_object(prototype) ||
+        array->object.prototype != mal_value_to_object(prototype)) {
+        MAL_PERF_COUNT(array_indexed_fill_guard_fallbacks);
+        return false;
+    }
+    if (!mal_array_object_fresh_dense_reserve_exact(array, needed)) {
+        MAL_PERF_COUNT(array_indexed_fill_guard_fallbacks);
+        return false;
+    }
+
+#if MAL_PERF_STATS
+    if (mal_perf_stats_enabled) {
+        u64 geometric_allocations = 0;
+        u64 geometric_bytes = 0;
+        u32 capacity = 0;
+        while (capacity < needed) {
+            capacity = capacity == 0 ? 4 : capacity * 2;
+            geometric_allocations++;
+            geometric_bytes += mal_heap_allocation_charge(sizeof(MalValue) * (usize) capacity);
+        }
+        u64 exact_bytes = mal_heap_allocation_charge(sizeof(MalValue) * (usize) needed);
+        MAL_PERF_COUNT(array_indexed_fill_reserves);
+        MAL_PERF_ADD(array_indexed_fill_reserved_slots, needed);
+        MAL_PERF_ADD(
+            array_indexed_fill_allocations_avoided,
+            geometric_allocations == 0 ? 0 : geometric_allocations - 1
+        );
+        MAL_PERF_ADD(
+            array_indexed_fill_raw_bytes_avoided,
+            geometric_bytes > exact_bytes ? geometric_bytes - exact_bytes : 0
+        );
+    }
+#endif
+    return true;
+}
+
 bool mal_vm_try_string_scan_summary(
     MalVm *vm, MalValue input, c16 match_code_unit,
     u32 *length_out, u32 *match_count_out

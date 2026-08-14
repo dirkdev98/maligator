@@ -339,6 +339,12 @@ describe("serialize-vm", () => {
 				direct: false,
 			},
 		});
+		metadataInstructions.push({
+			opcode: "CREATE_ARRAY",
+			dst: 6,
+			length: 0,
+			nativeFreshDenseReserveLength: 65_536,
+		});
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
@@ -346,7 +352,7 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					instructions: metadataInstructions,
-					positions: [...mainFn.positions, 2, 2, 2, 2, 2, 2, 2, 2],
+					positions: [...mainFn.positions, 2, 2, 2, 2, 2, 2, 2, 2, 2],
 					gcRootRegisters: [0, 3, 7],
 					stackObjectSites: [{ instructionIndex: 4, slotCount: 2 }],
 					stackObjectAccesses: [
@@ -361,6 +367,45 @@ describe("serialize-vm", () => {
 
 		expect(deserializeVmDefinition(serializeVmDefinition(cachedDefinition))).toEqual(
 			cachedDefinition,
+		);
+	});
+
+	it("validates fresh dense indexed-fill reserve metadata", () => {
+		const reserveDefinition = (reserveLength: number): VmDefinition => ({
+			...definition,
+			functionCount: 1,
+			functions: [
+				{
+					...mainFn,
+					registerCount: 1,
+					instructions: [
+						{
+							opcode: "CREATE_ARRAY",
+							dst: 0,
+							length: 0,
+							nativeFreshDenseReserveLength: reserveLength,
+						},
+					],
+					positions: [0],
+					handlers: [],
+				},
+			],
+		});
+
+		for (const invalid of [0, 65_537]) {
+			expect(() => serializeVmDefinition(reserveDefinition(invalid))).toThrow(
+				/invalid indexed-fill reserve metadata/,
+			);
+		}
+
+		const malformed = serializeVmDefinition(reserveDefinition(1), {
+			debugInfo: false,
+		});
+		// The compiler-metadata tail ends in tag 12 followed by ZigZag i32(1).
+		expect(malformed.at(-2)).toBe(12);
+		malformed[malformed.length - 1] = 0;
+		expect(() => deserializeVmDefinition(malformed)).toThrow(
+			/invalid indexed-fill reserve metadata/,
 		);
 	});
 

@@ -416,6 +416,9 @@ static void mal_perf_stats_print(void) {
         "[perf-array-stats] fresh_dense_stores=%llu fresh_dense_growths=%llu "
         "fresh_dense_fallbacks=%llu fresh_dense_exact_reserves=%llu "
         "fresh_dense_reserved_slots=%llu fresh_dense_growths_avoided=%llu "
+        "indexed_fill_reserves=%llu indexed_fill_reserved_slots=%llu "
+        "indexed_fill_allocations_avoided=%llu indexed_fill_raw_bytes_avoided=%llu "
+        "indexed_fill_guard_fallbacks=%llu "
         "push_direct_hits=%llu push_direct_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
@@ -423,6 +426,11 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_fresh_dense_exact_reserves,
         (unsigned long long) mal_perf_stats.array_fresh_dense_reserved_slots,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths_avoided,
+        (unsigned long long) mal_perf_stats.array_indexed_fill_reserves,
+        (unsigned long long) mal_perf_stats.array_indexed_fill_reserved_slots,
+        (unsigned long long) mal_perf_stats.array_indexed_fill_allocations_avoided,
+        (unsigned long long) mal_perf_stats.array_indexed_fill_raw_bytes_avoided,
+        (unsigned long long) mal_perf_stats.array_indexed_fill_guard_fallbacks,
         (unsigned long long) mal_perf_stats.array_push_direct_hits,
         (unsigned long long) mal_perf_stats.array_push_direct_fallbacks
     );

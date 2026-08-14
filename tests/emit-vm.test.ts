@@ -451,6 +451,54 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 	});
 
+	it("pre-reserves a pristine canonical indexed fill without replacing its stores", () => {
+		const output = emit(
+			`"use strict"; function fill() { const array = []; for (let i = 0; i < 1000; i++) array[i] = i; return array; } globalThis.fill = fill;`,
+		);
+		expect(output).toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
+		expect(output).toContain(", 1000);");
+		expect(output).toContain("mal_vm_array_try_store");
+		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
+	});
+
+	it.each([
+		[
+			"a pre-loop escape",
+			`function fill(observe) { const array = []; observe(array); for (let i = 0; i < 8; i++) array[i] = i; return array; }`,
+		],
+		[
+			"an alternate producer path",
+			`function fill(skip) { const array = []; for (let i = 0; i < 8; i++) { if (skip && i === 2) continue; array[i] = i; } return array; }`,
+		],
+		[
+			"an offset index",
+			`function fill() { const array = []; for (let i = 0; i < 8; i++) array[i + 1] = i; return array; }`,
+		],
+		[
+			"a dynamic bound",
+			`function fill(length) { const array = []; for (let i = 0; i < length; i++) array[i] = i; return array; }`,
+		],
+		[
+			"a reentrant RHS call",
+			`function fill(value) { const array = []; for (let i = 0; i < 8; i++) array[i] = value(i); return array; }`,
+		],
+		[
+			"an allocating RHS",
+			`function fill() { const array = []; for (let i = 0; i < 8; i++) array[i] = { value: i }; return array; }`,
+		],
+		[
+			"a potentially coercive RHS",
+			`function fill(value) { const array = []; for (let i = 0; i < 8; i++) array[i] = value + i; return array; }`,
+		],
+		[
+			"an explicit throw path",
+			`function fill() { const array = []; for (let i = 0; i < 8; i++) { if (i === 4) throw new Error("stop"); array[i] = i; } return array; }`,
+		],
+	])("keeps %s on geometric allocation", (_name, source) => {
+		const output = emit(`"use strict"; ${source} globalThis.fill = fill;`);
+		expect(output).not.toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
+	});
+
 	it("validates a dense Array-values iterator once per iterator record", () => {
 		const output = emit(
 			`"use strict"; function sum(values) { let total = 0; for (const value of values) total += value; return total; } globalThis.sum = sum;`,

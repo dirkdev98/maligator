@@ -1514,6 +1514,9 @@ static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalVal
     return false;
 }
 
+/** Reserve the final capacity of a compiler-proven pristine indexed-fill Array. */
+bool mal_vm_try_fresh_dense_indexed_fill_reserve(MalVm *vm, MalValue array_value, u32 needed);
+
 /**
  * Numeric-index variants of the fast load/store, for an `obj[i]` site whose index
  * the native backend holds as a raw f64 (number-rep). They take the index UNBOXED

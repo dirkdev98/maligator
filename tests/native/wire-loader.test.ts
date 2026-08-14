@@ -224,6 +224,35 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads and validates fresh dense indexed-fill reserve metadata", () => {
+		const reserveDefinition: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					instructions: [
+						{
+							opcode: "CREATE_ARRAY",
+							dst: 0,
+							length: 0,
+							nativeFreshDenseReserveLength: 1,
+						},
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+			],
+		};
+		const wire = serializeVmDefinition(reserveDefinition, { debugInfo: false });
+		const wirePath = path.join(directory, "indexed-fill-reserve.malw");
+		writeFileSync(wirePath, wire);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+
+		expect(wire.at(-2)).toBe(12);
+		wire[wire.length - 1] = 0;
+		rejectsWire("indexed-fill-reserve-zero", wire);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

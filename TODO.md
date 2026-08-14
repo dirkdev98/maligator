@@ -115,6 +115,19 @@ arrays and normalized rows. Add exact event-family counters or nested logical si
 for these composite expressions; use allocation sampling to show hotspot movement,
 not to claim which sub-operation supplied the bytes.
 
+The first post-cache 1 ms profile confirms hotspot movement but sharpens the same
+trust limits. It was complete with no drops, yet globally biased: 52 CPU and 60
+allocation samples at a 2.94 ms median / 11.53 ms p99 effective delay. The dense
+range fill at line 86 repeated as the leading CPU signal (11/52, after 12/57 in the
+previous capture), while the former parse/map cluster fell from 129/150 to 40/60
+allocation samples. Thirteen allocation samples are absent from `allocations.json`;
+surface unattributed counts and bytes explicitly. RAW/native backing allocations are
+also invisible, so the range Array's roughly 13.1 MB of vector growth traffic appears
+as only one 64-byte allocation sample. Sample those families or join exact RAW event
+counters to source sites. Finally, emit a final-backend remark for the retained
+activation-local parse-template fill/hit/fallback: line 212 still reports only a
+generic call and static load, hiding the optimization that moved the profile.
+
 - [ ] Generate optimization remarks from final backend decisions, with exact operation
       identity and stable reason codes such as unknown target set, invalidatable epoch,
       escaping result, unsupported consumer, or representation mismatch. Do not merge

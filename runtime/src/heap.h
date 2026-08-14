@@ -438,6 +438,9 @@ void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
  */
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size);
 
+/** Bytes charged to `heap.bytes_allocated` for one request of this size. */
+usize mal_heap_allocation_charge(usize alloc_size);
+
 /**
  * Free a raw buffer previously returned by mal_heap_alloc_raw. Returns an
  * in-block cell to its block's free list, or releases its LOS record. Used by

@@ -315,6 +315,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	const residualFeatures = optimizationFeatures(program);
 	if (residualFeatures.call && residualFeatures.property)
 		annotateDirectArrayPushSites(program);
+	if (residualFeatures.property) annotateFreshDenseIndexedReserves(program);
 	if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
 		annotateCardinalityOnlyArrayRegions(program);
 	if (residualFeatures.object) annotateStackObjectSites(program);
@@ -335,6 +336,365 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	annotateTerminalYieldSites(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);
+}
+
+const MAX_FRESH_DENSE_INDEXED_RESERVE = 65_536;
+const FRESH_DENSE_NUMERIC_OPERATORS = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+/**
+ * Mark a pristine `[]` whose first indexed use is the exact canonical producer
+ * `for (let i = 0; i < constant; i++) array[i] = value`. Native code may reserve
+ * the final element capacity immediately after Array creation, but still executes
+ * every original store, branch, poll, and later observation. The annotation is
+ * therefore only an allocation-layout hint; the interpreter ignores it.
+ */
+function annotateFreshDenseIndexedReserves(program: IntermediateProgram): void {
+	for (const fn of program.functions) {
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			functionUsesWith(fn) ||
+			fn.semanticFile.hasDirectEval.size > 0 ||
+			fn.blocks.some((block) =>
+				block.instructions.some(
+					(instruction) =>
+						instruction.type === "tryBegin" ||
+						instruction.type === "tryEnd" ||
+						instruction.type === "catch",
+				),
+			)
+		) {
+			continue;
+		}
+
+		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
+		const locations = registerIndex.locations!;
+		const definitions = registerIndex.uniqueDefinitions;
+		const incoming = fn.blocks.map(() => new Set<number>());
+		const successors = fn.blocks.map((block, blockIndex) => {
+			const result = new Set<number>();
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "jump" && instruction.type !== "jumpIf") continue;
+				for (const target of instruction.blocks) {
+					if (target >= 0 && target < fn.blocks.length) result.add(target);
+				}
+			}
+			const last = block.instructions[block.instructions.length - 1];
+			if (
+				last?.type !== "jump" &&
+				last?.type !== "return" &&
+				last?.type !== "throw" &&
+				blockIndex + 1 < fn.blocks.length
+			) {
+				result.add(blockIndex + 1);
+			}
+			for (const target of result) incoming[target]!.add(blockIndex);
+			return result;
+		});
+		const reachable = new Set<number>();
+		const worklist = fn.blocks.length === 0 ? [] : [0];
+		while (worklist.length > 0) {
+			const block = worklist.pop()!;
+			if (reachable.has(block)) continue;
+			reachable.add(block);
+			for (const successor of successors[block]!) worklist.push(successor);
+		}
+		const dominators = fn.blocks.map((_, blockIndex) =>
+			blockIndex === 0 ? new Set([0]) : new Set(reachable),
+		);
+		let dominatorsChanged = true;
+		while (dominatorsChanged) {
+			dominatorsChanged = false;
+			for (const blockIndex of reachable) {
+				if (blockIndex === 0) continue;
+				const predecessors = [...incoming[blockIndex]!].filter((value) =>
+					reachable.has(value),
+				);
+				const next =
+					predecessors.length === 0
+						? new Set<number>()
+						: new Set(
+								[...dominators[predecessors[0]!]!].filter((candidate) =>
+									predecessors.every((value) => dominators[value]!.has(candidate)),
+								),
+							);
+				next.add(blockIndex);
+				const current = dominators[blockIndex]!;
+				if (
+					next.size !== current.size ||
+					[...next].some((candidate) => !current.has(candidate))
+				) {
+					dominators[blockIndex] = next;
+					dominatorsChanged = true;
+				}
+			}
+		}
+
+		for (const allocationBlock of fn.blocks) {
+			for (const allocation of allocationBlock.instructions) {
+				if (
+					allocation.type !== "createArray" ||
+					allocation.length !== 0 ||
+					definitions.get(allocation.registers[0]) !== allocation
+				) {
+					continue;
+				}
+				const allocationLocation = locations.get(allocation)!;
+				const aliases = new Set<number>([allocation.registers[0]]);
+				const aliasWorklist = [allocation.registers[0]];
+				while (aliasWorklist.length > 0) {
+					const alias = aliasWorklist.pop()!;
+					for (const use of registerIndex.uses.get(alias) ?? []) {
+						if (use.instruction.type !== "move" || use.position !== 1) continue;
+						const target = use.instruction.registers[0];
+						if (definitions.get(target) !== use.instruction) continue;
+						if (!aliases.has(target)) {
+							aliases.add(target);
+							aliasWorklist.push(target);
+						}
+					}
+				}
+
+				const stores = new Set<Extract<IRInstruction, { type: "storeProperty" }>>();
+				for (const alias of aliases) {
+					for (const use of registerIndex.uses.get(alias) ?? []) {
+						if (use.instruction.type === "storeProperty" && use.position === 0) {
+							stores.add(use.instruction);
+						}
+					}
+				}
+				if (stores.size !== 1) continue;
+				const store = [...stores][0]!;
+				const storeLocation = locations.get(store)!;
+				const bodyIndex = storeLocation.blockIndex;
+				const body = fn.blocks[bodyIndex]!;
+				const bodyControls = body.instructions.filter(
+					(instruction) =>
+						instruction.type === "jump" ||
+						instruction.type === "jumpIf" ||
+						instruction.type === "return" ||
+						instruction.type === "throw",
+				);
+				if (bodyControls.length !== 1 || bodyControls[0]!.type !== "jump") continue;
+				const headerIndex = bodyControls[0]!.blocks[0];
+				if (headerIndex === undefined || headerIndex === bodyIndex) continue;
+				const header = fn.blocks[headerIndex]!;
+				const branches = header.instructions.filter(
+					(instruction): instruction is Extract<IRInstruction, { type: "jumpIf" }> =>
+						instruction.type === "jumpIf",
+				);
+				const exits = header.instructions.filter(
+					(instruction): instruction is Extract<IRInstruction, { type: "jump" }> =>
+						instruction.type === "jump",
+				);
+				if (
+					branches.length !== 1 ||
+					branches[0]!.blocks[0] !== bodyIndex ||
+					exits.length !== 1
+				) {
+					continue;
+				}
+				const exitIndex = exits[0]!.blocks[0];
+				if (
+					exitIndex === undefined ||
+					incoming[exitIndex]?.size !== 1 ||
+					!incoming[exitIndex].has(headerIndex)
+				) {
+					continue;
+				}
+				const comparison = definitions.get(branches[0]!.registers[0]);
+				if (comparison?.type !== "binary" || comparison.operator !== "<") continue;
+				if (locations.get(comparison)?.blockIndex !== headerIndex) continue;
+				const counter = comparison.registers[1];
+				const bound = exactIntegerConstant(definitions.get(comparison.registers[2]));
+				if (
+					bound === undefined ||
+					bound <= 0 ||
+					bound > MAX_FRESH_DENSE_INDEXED_RESERVE ||
+					store.registers[1] !== counter
+				) {
+					continue;
+				}
+				const boundDefinition = definitions.get(comparison.registers[2]);
+				if (
+					header.instructions.some(
+						(instruction) =>
+							instruction.type !== "sourcePos" &&
+							instruction !== comparison &&
+							instruction !== boundDefinition &&
+							instruction !== branches[0] &&
+							instruction !== exits[0],
+					)
+				) {
+					continue;
+				}
+				const counterDefinitions = registerIndex.definitions.get(counter) ?? [];
+				const initializers = counterDefinitions.filter(
+					({ instruction }) =>
+						(instruction.type === "createNumber" || instruction.type === "createF64") &&
+						instruction.value === 0,
+				);
+				const increments = counterDefinitions.filter(
+					({ instruction }) =>
+						instruction.type === "unary" &&
+						instruction.operator === "increment" &&
+						instruction.registers[0] === counter &&
+						instruction.registers[1] === counter,
+				);
+				if (
+					counterDefinitions.length !== 2 ||
+					initializers.length !== 1 ||
+					increments.length !== 1
+				) {
+					continue;
+				}
+				const initializerLocation = locations.get(initializers[0]!.instruction)!;
+				const incrementLocation = locations.get(increments[0]!.instruction)!;
+				if (
+					initializerLocation.blockIndex !== allocationLocation.blockIndex ||
+					initializerLocation.instructionIndex <= allocationLocation.instructionIndex ||
+					incrementLocation.blockIndex !== bodyIndex ||
+					incrementLocation.instructionIndex <= storeLocation.instructionIndex ||
+					incoming[headerIndex]!.size !== 2 ||
+					!incoming[headerIndex]!.has(allocationLocation.blockIndex) ||
+					!incoming[headerIndex]!.has(bodyIndex) ||
+					incoming[bodyIndex]!.size !== 1 ||
+					!incoming[bodyIndex]!.has(headerIndex)
+				) {
+					continue;
+				}
+				const preheader = fn.blocks[allocationLocation.blockIndex]!;
+				const preheaderControls = preheader.instructions.filter(
+					(instruction) =>
+						instruction.type === "jump" ||
+						instruction.type === "jumpIf" ||
+						instruction.type === "return" ||
+						instruction.type === "throw",
+				);
+				if (
+					preheaderControls.length !== 1 ||
+					preheaderControls[0]!.type !== "jump" ||
+					preheaderControls[0]!.blocks[0] !== headerIndex
+				) {
+					continue;
+				}
+				const harmlessAfterAllocation = new Set([
+					"sourcePos",
+					"move",
+					"createNumber",
+					"createF64",
+					"jump",
+				]);
+				if (
+					preheader.instructions
+						.slice(allocationLocation.instructionIndex + 1)
+						.some((instruction) => !harmlessAfterAllocation.has(instruction.type))
+				) {
+					continue;
+				}
+
+				// Reserving moves all geometric element-vector allocations to the fresh
+				// Array site. Keep this first slice deliberately total and pure: every RHS
+				// value must derive only from the numeric ordinal/literals through numeric
+				// operations, and the body may contain no calls, allocations, coercive
+				// unknowns, explicit throws, or other observable work across that move.
+				const valueDependencies = new Set<IRInstruction>();
+				const numericMemo = new Map<number, boolean>();
+				const proveNumeric = (register: number): boolean => {
+					if (register === counter) return true;
+					const memo = numericMemo.get(register);
+					if (memo !== undefined) return memo;
+					numericMemo.set(register, false);
+					const definition = definitions.get(register);
+					if (definition === undefined) return false;
+					if (definition.type === "createNumber" || definition.type === "createF64") {
+						numericMemo.set(register, true);
+						if (locations.get(definition)?.blockIndex === bodyIndex) {
+							valueDependencies.add(definition);
+						}
+						return true;
+					}
+					if (locations.get(definition)?.blockIndex !== bodyIndex) return false;
+					valueDependencies.add(definition);
+					let proven = false;
+					if (definition.type === "move") {
+						proven = proveNumeric(definition.registers[1]);
+					} else if (
+						definition.type === "unary" &&
+						(definition.operator === "+" ||
+							definition.operator === "-" ||
+							definition.operator === "~")
+					) {
+						proven = proveNumeric(definition.registers[1]);
+					} else if (
+						definition.type === "binary" &&
+						FRESH_DENSE_NUMERIC_OPERATORS.has(definition.operator)
+					) {
+						proven =
+							proveNumeric(definition.registers[1]) &&
+							proveNumeric(definition.registers[2]);
+					}
+					numericMemo.set(register, proven);
+					return proven;
+				};
+				if (!proveNumeric(store.registers[2])) continue;
+				if (
+					body.instructions.some((instruction) => {
+						if (instruction.type === "sourcePos") return false;
+						if (
+							instruction === store ||
+							instruction === increments[0]!.instruction ||
+							instruction === bodyControls[0]
+						) {
+							return false;
+						}
+						return !valueDependencies.has(instruction);
+					})
+				) {
+					continue;
+				}
+
+				let usesAreOrdered = true;
+				for (const alias of aliases) {
+					for (const use of registerIndex.uses.get(alias) ?? []) {
+						if (use.instruction === store && use.position === 0) continue;
+						if (use.instruction.type === "move" && use.position === 1) {
+							const moveLocation = locations.get(use.instruction)!;
+							if (
+								moveLocation.blockIndex === allocationLocation.blockIndex &&
+								moveLocation.instructionIndex > allocationLocation.instructionIndex &&
+								moveLocation.instructionIndex < initializerLocation.instructionIndex
+							) {
+								continue;
+							}
+						}
+						const useLocation = locations.get(use.instruction)!;
+						if (!dominators[useLocation.blockIndex]!.has(exitIndex)) {
+							usesAreOrdered = false;
+							break;
+						}
+					}
+					if (!usesAreOrdered) break;
+				}
+				if (!usesAreOrdered) continue;
+
+				allocation.nativeFreshDenseReserveLength = bound;
+			}
+		}
+	}
 }
 
 /**

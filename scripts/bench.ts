@@ -133,6 +133,11 @@ interface LanguageMetrics {
 	invariantJsonParseHits: number;
 	invariantJsonParseMisses: number;
 	invariantJsonParseCallsElided: number;
+	indexedFillReserves: number;
+	indexedFillReservedSlots: number;
+	indexedFillAllocationsAvoided: number;
+	indexedFillRawBytesAvoided: number;
+	indexedFillGuardFallbacks: number;
 	callProbes: number;
 	callMisses: number;
 	loadMonoHits: number;
@@ -874,6 +879,34 @@ function benchLanguage(runs: number): LanguageMetrics {
 			`language invariant JSON parse cache counters were ${invariantJsonParseCandidates}/${invariantJsonParseFills}/${invariantJsonParseHits}/${invariantJsonParseMisses}/${invariantJsonParseCallsElided}, expected 180/1/179/1/179`,
 		);
 	}
+	const indexedFillReserves = parsePerfArrayStat(perfStderr, "indexed_fill_reserves");
+	const indexedFillReservedSlots = parsePerfArrayStat(
+		perfStderr,
+		"indexed_fill_reserved_slots",
+	);
+	const indexedFillAllocationsAvoided = parsePerfArrayStat(
+		perfStderr,
+		"indexed_fill_allocations_avoided",
+	);
+	const indexedFillRawBytesAvoided = parsePerfArrayStat(
+		perfStderr,
+		"indexed_fill_raw_bytes_avoided",
+	);
+	const indexedFillGuardFallbacks = parsePerfArrayStat(
+		perfStderr,
+		"indexed_fill_guard_fallbacks",
+	);
+	if (
+		indexedFillReserves !== 800 ||
+		indexedFillReservedSlots !== 800_000 ||
+		indexedFillAllocationsAvoided !== 6_400 ||
+		indexedFillRawBytesAvoided !== 6_528_000 ||
+		indexedFillGuardFallbacks !== 0
+	) {
+		throw new Error(
+			`language indexed fill reserve counters were ${indexedFillReserves}/${indexedFillReservedSlots}/${indexedFillAllocationsAvoided}/${indexedFillRawBytesAvoided}/${indexedFillGuardFallbacks}, expected 800/800000/6400/6528000/0`,
+		);
+	}
 	return {
 		malMs,
 		nodeMs,
@@ -893,6 +926,11 @@ function benchLanguage(runs: number): LanguageMetrics {
 		invariantJsonParseHits,
 		invariantJsonParseMisses,
 		invariantJsonParseCallsElided,
+		indexedFillReserves,
+		indexedFillReservedSlots,
+		indexedFillAllocationsAvoided,
+		indexedFillRawBytesAvoided,
+		indexedFillGuardFallbacks,
 		callProbes: parsePerfStat(perfStderr, "perf-call-cache-stats", "probes"),
 		callMisses: parsePerfStat(perfStderr, "perf-call-cache-stats", "dispatch_misses"),
 		loadMonoHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_mono_hits"),
@@ -2403,6 +2441,9 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(
 			`  json      ${entry.language.invariantJsonParseHits}/${entry.language.invariantJsonParseCandidates} template hits, ${entry.language.invariantJsonParseCallsElided} parses elided`,
+		);
+		console.log(
+			`  arrays    ${entry.language.indexedFillReserves} exact reserves, ${entry.language.indexedFillAllocationsAvoided} growth allocations and ${humanBytes(entry.language.indexedFillRawBytesAvoided)} avoided`,
 		);
 		console.log(
 			`  calls     ${entry.language.callProbes} cache probes, ${entry.language.callMisses} misses`,

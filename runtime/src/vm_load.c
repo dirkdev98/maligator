@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 28u        // bounded String#charCodeAt compiler metadata
+#define WIRE_VERSION 29u        // fresh dense indexed-fill reserve compiler metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1573,7 +1573,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 
         u32 instruction_metadata_count = rd_count(&r, 2);
         for (u32 metadata = 0; r.ok && metadata < instruction_metadata_count; metadata++) {
-            (void) rd_u32(&r); // instruction index
+            u32 instruction_index = rd_u32(&r);
             u8 tag = rd_u8(&r);
             if (tag == 1) { // CALL
                 (void) rd_i32(&r);
@@ -1674,6 +1674,13 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
             } else if (tag == 11) { // guarded primitive-String length load
                 // No payload: generated native code alone consumes this hint.
+            } else if (tag == 12) { // CREATE_ARRAY exact indexed-fill reserve
+                i32 reserve_length = rd_i32(&r);
+                if (instruction_index >= (u32) functions[i].instruction_count ||
+                    functions[i].instructions[instruction_index].opcode != MAL_OP_CREATE_ARRAY ||
+                    reserve_length < 1 || reserve_length > 65536) {
+                    r.ok = false;
+                }
             } else {
                 r.ok = false;
             }

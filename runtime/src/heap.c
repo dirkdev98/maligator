@@ -164,6 +164,16 @@ static void mal_gc_ensure_tables(void) {
     g_tables_ready = true;
 }
 
+usize mal_heap_allocation_charge(usize alloc_size) {
+    mal_gc_ensure_tables();
+    usize size = alloc_size == 0 ? 1 : alloc_size;
+    if (size > MAL_GC_LARGE_THRESHOLD) {
+        return size;
+    }
+    usize slot = (size + MAL_GC_CELL_ALIGN - 1) / MAL_GC_CELL_ALIGN;
+    return g_class_cell_size[g_size_to_class[slot]];
+}
+
 /* mmap a region of `size` bytes aligned to `align` (a power of two). Records the
  * raw mapping in *mmap_base_out / *mmap_size_out for later munmap. */
 static void *mal_gc_aligned_mmap(usize size, usize align, void **mmap_base_out, usize *mmap_size_out) {
