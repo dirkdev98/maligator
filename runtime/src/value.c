@@ -453,6 +453,17 @@ bool mal_value_is_truthy(MalValue value) {
         return mal_bigint_value(mal_value_to_bigint(value)) != 0;
     }
 
+    // ±Infinity and -0 also have static encodings, whose all-ones exponent bits
+    // make mal_value_is_f64 reject them. Kept behind the common cases, but ahead
+    // of the fallthrough that would otherwise report the falsy -0 as truthy.
+    if (value == MAL_VALUE_NEGATIVE_ZERO) {
+        return false;
+    }
+
+    if (value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) {
+        return true;
+    }
+
     // Any object is truthy.
     return true;
 }

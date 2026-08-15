@@ -418,6 +418,17 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-numeric-fold-stats] candidates=%llu regions=%llu guard_fallbacks=%llu "
+        "element_fallbacks=%llu callback_calls_elided=%llu math_calls_elided=%llu\n",
+        (unsigned long long) mal_perf_stats.numeric_fold_candidates,
+        (unsigned long long) mal_perf_stats.numeric_fold_regions,
+        (unsigned long long) mal_perf_stats.numeric_fold_guard_fallbacks,
+        (unsigned long long) mal_perf_stats.numeric_fold_element_fallbacks,
+        (unsigned long long) mal_perf_stats.numeric_fold_callback_calls_elided,
+        (unsigned long long) mal_perf_stats.numeric_fold_math_calls_elided
+    );
+    fprintf(
+        stderr,
         "[perf-invariant-json-map-stats] candidates=%llu fills=%llu hits=%llu "
         "misses=%llu guard_fallbacks=%llu parse_calls_elided=%llu "
         "map_calls_elided=%llu callback_calls_elided=%llu rows_cloned=%llu "

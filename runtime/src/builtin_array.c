@@ -6,6 +6,7 @@
 
 #include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
+#include "builtin_math.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
 #include "checked_size.h"
@@ -1507,7 +1508,14 @@ MalCompletion mal_builtin_array_push_direct(
         vm, fallback_cache, callee, this_value, args, arg_count);
 }
 
-static bool mal_private_aggregate_exact_array(
+/**
+ * An ordinary current-Realm Array whose every index is its own hole-free dense
+ * element and which carries no own named property at all. Indexed reads on such
+ * a receiver never consult the prototype chain, run a getter, or observe a
+ * shape, so a proof region may read `elements` directly instead of replaying
+ * HasProperty + Get.
+ */
+static bool mal_array_exact_ordinary_dense(
     MalVm *vm, MalValue input, MalArrayObject **array_out
 ) {
     if (!mal_value_is_array_object(input)) return false;
@@ -1543,7 +1551,7 @@ static bool mal_private_aggregate_guards(
     if (cache->realm != vm->current_realm) return false;
 #endif
     MalArrayObject *array;
-    return mal_private_aggregate_exact_array(vm, input, &array) &&
+    return mal_array_exact_ordinary_dense(vm, input, &array) &&
         (cache->state == MAL_PRIVATE_AGGREGATE_MEMO_EMPTY ||
          array->length == cache->input_length);
 }
@@ -1570,7 +1578,7 @@ void mal_builtin_array_private_aggregate_memo_init(
         mal_builtin_array_private_iterator_protocol_guard(vm) &&
         cache->watched_methods_epoch != 0 &&
         cache->array_elements_epoch != 0 &&
-        mal_private_aggregate_exact_array(vm, input, &array) &&
+        mal_array_exact_ordinary_dense(vm, input, &array) &&
         array->length == 0;
 }
 
@@ -1597,7 +1605,7 @@ bool mal_builtin_array_private_aggregate_memo_probe(
         if (cache->roots[0] == callee &&
             mal_private_aggregate_guards(
                 vm, cache, callee, this_value, input, function_index) &&
-            mal_private_aggregate_exact_array(vm, input, &array) &&
+            mal_array_exact_ordinary_dense(vm, input, &array) &&
             array->length == cache->input_length) {
             *out = cache->result;
             MAL_PERF_COUNT(private_aggregate_memo_hits);
@@ -1622,7 +1630,7 @@ bool mal_builtin_array_private_aggregate_memo_probe(
         return false;
     }
     MalArrayObject *array;
-    if (!mal_private_aggregate_exact_array(vm, input, &array)) {
+    if (!mal_array_exact_ordinary_dense(vm, input, &array)) {
         cache->state = MAL_PRIVATE_AGGREGATE_MEMO_DISABLED;
         MAL_PERF_COUNT(private_aggregate_memo_guard_fallbacks);
         return false;
@@ -1659,6 +1667,30 @@ void mal_builtin_array_private_aggregate_memo_fill(
     cache->state = MAL_PRIVATE_AGGREGATE_MEMO_FILLED;
     cache->admitted = false;
     MAL_PERF_COUNT(private_aggregate_memo_fills);
+}
+
+bool mal_builtin_array_numeric_fold_admit(
+    MalVm *vm,
+    MalValue receiver,
+    u32 math_unary_mask,
+    const MalValue **elements_out,
+    u32 *length_out
+) {
+    MAL_PERF_COUNT(numeric_fold_candidates);
+    MalArrayObject *array;
+    if (mal_gc_preempt_hook != nullptr || !mal_primitive_method_protector ||
+        !mal_array_elements_protector ||
+        !mal_array_method_is_default_builtin(
+            vm, receiver, (const byte *) "reduce", mal_builtin_array_reduce) ||
+        !mal_array_exact_ordinary_dense(vm, receiver, &array) ||
+        (math_unary_mask != 0 &&
+         !mal_builtin_math_unary_defaults_intact(vm, math_unary_mask))) {
+        MAL_PERF_COUNT(numeric_fold_guard_fallbacks);
+        return false;
+    }
+    *elements_out = array->elements;
+    *length_out = array->length;
+    return true;
 }
 
 static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

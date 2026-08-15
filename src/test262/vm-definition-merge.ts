@@ -408,6 +408,11 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 				gcRootRegisters:
 					fn.gcRootRegisters === undefined ? undefined : [...fn.gcRootRegisters],
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
+				nativeNumericHofRegions: fn.nativeNumericHofRegions?.map((region) => ({
+					...region,
+					callbackFunctionIndex: region.callbackFunctionIndex + base.function,
+					operations: region.operations.map((operation) => ({ ...operation })),
+				})),
 			})),
 		);
 	}

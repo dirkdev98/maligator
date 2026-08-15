@@ -77,6 +77,20 @@ bool mal_builtin_math_unary_fast(
     MalValue callee, MalMathUnaryOp *cached_op, MalValue argument, MalValue *result
 );
 
+/** One operation's bit in the mask mal_builtin_math_unary_defaults_intact takes. */
+#define MAL_MATH_UNARY_BIT(op) (1u << (u32) MAL_MATH_UNARY_##op)
+
+/**
+ * Whether every operation named by `mask` is still the original builtin: an own,
+ * non-accessor data property of the Math intrinsic holding the native function
+ * with that callback. A compiled region that replaces several proven Math calls
+ * with straight-line native arithmetic proves the whole set once, before reading
+ * any input, and then runs to completion without executing JavaScript. An
+ * operation the implementation has no default row for is never provable, so an
+ * unknown or empty mask fails closed.
+ */
+bool mal_builtin_math_unary_defaults_intact(MalVm *vm, u32 mask);
+
 typedef enum MalMathBinaryOp {
     MAL_MATH_BINARY_NONE,
     MAL_MATH_BINARY_MIN,

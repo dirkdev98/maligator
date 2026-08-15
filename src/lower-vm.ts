@@ -3,6 +3,7 @@ import type {
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
+	IRNumericHofPlanOperation,
 } from "./ir.ts";
 import { computeSafepointRoots } from "./liveness.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
@@ -388,6 +389,28 @@ export interface VmFunction {
 		callee: number;
 		input: number;
 		result: number;
+	}>;
+
+	/**
+	 * SERIALIZED COMPILER METADATA: bounded numeric callback plans captured before
+	 * HOF lowering erases callback identity. The interpreter ignores this table;
+	 * native emission may consume only plans that pass wire validation.
+	 */
+	nativeNumericHofRegions?: ReadonlyArray<{
+		method: "reduce";
+		guardCallIp: number;
+		initialValueIp: number;
+		initialMoveIp: number;
+		fastResultIp: number;
+		fastExitIp: number;
+		slowCallIp: number;
+		callbackFunctionIndex: number;
+		receiver: number;
+		initial: number;
+		result: number;
+		pollPolicy: "end-only-no-preempt";
+		operations: ReadonlyArray<IRNumericHofPlanOperation>;
+		resultOperand: number;
 	}>;
 
 	/**
@@ -1439,6 +1462,10 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
 		stackObjectSiteId: number;
 	}> = [];
+	const pendingNumericHofRegions: Array<{
+		guard: Extract<IRInstruction, { type: "call" }>;
+		region: NonNullable<Extract<IRInstruction, { type: "call" }>["numericHofRegion"]>;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1525,6 +1552,12 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 					instruction: vmInstruction,
 					allocation: instruction.nativeCardinalityPush.allocation,
 					stackObjectSiteId: instruction.cardinalityPushStackObjectSiteId,
+				});
+			}
+			if (instruction.type === "call" && instruction.numericHofRegion !== undefined) {
+				pendingNumericHofRegions.push({
+					guard: instruction,
+					region: instruction.numericHofRegion,
 				});
 			}
 			if (
@@ -1656,6 +1689,69 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			pushedStackObjectAllocationInstructionIndex,
 		};
 	}
+	const nativeNumericHofRegions: Array<
+		NonNullable<VmFunction["nativeNumericHofRegions"]>[number]
+	> = [];
+	for (const pending of pendingNumericHofRegions) {
+		const guardCallIp = instructionIndexByIrInstruction.get(pending.guard);
+		const initialValueIp = instructionIndexByIrInstruction.get(
+			pending.region.initialValue,
+		);
+		const initialMoveIp = instructionIndexByIrInstruction.get(pending.region.initialMove);
+		const fastResultIp = instructionIndexByIrInstruction.get(pending.region.fastResult);
+		const fastExitIp = instructionIndexByIrInstruction.get(pending.region.fastExit);
+		const slowCallIp = instructionIndexByIrInstruction.get(pending.region.slowCall);
+		if (
+			guardCallIp === undefined ||
+			initialValueIp === undefined ||
+			initialMoveIp === undefined ||
+			fastResultIp === undefined ||
+			fastExitIp === undefined ||
+			slowCallIp === undefined
+		) {
+			continue; // an optimizer removed an anchor; fail closed without reconstruction
+		}
+		const guard = instructions[guardCallIp];
+		const initialValue = instructions[initialValueIp];
+		const initialMove = instructions[initialMoveIp];
+		const fastResult = instructions[fastResultIp];
+		const fastExit = instructions[fastExitIp];
+		const slowCall = instructions[slowCallIp];
+		const receiverOperand =
+			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[0]!) : undefined;
+		const slowReceiverOperand =
+			slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.thisValue) : undefined;
+		if (
+			guard?.opcode !== "CALL" ||
+			(initialValue?.opcode !== "CREATE_NUMBER" &&
+				initialValue?.opcode !== "CREATE_F64") ||
+			initialMove?.opcode !== "MOVE" ||
+			fastResult?.opcode !== "MOVE" ||
+			fastExit?.opcode !== "JUMP" ||
+			slowCall?.opcode !== "CALL" ||
+			receiverOperand?.kind !== "register" ||
+			slowReceiverOperand?.kind !== "register" ||
+			slowReceiverOperand.register !== receiverOperand.register
+		) {
+			continue;
+		}
+		nativeNumericHofRegions.push({
+			method: pending.region.method,
+			guardCallIp,
+			initialValueIp,
+			initialMoveIp,
+			fastResultIp,
+			fastExitIp,
+			slowCallIp,
+			callbackFunctionIndex: pending.region.callbackFunctionIndex,
+			receiver: receiverOperand.register,
+			initial: initialMove.src,
+			result: fastResult.dst,
+			pollPolicy: "end-only-no-preempt",
+			operations: pending.region.operations,
+			resultOperand: pending.region.resultOperand,
+		});
+	}
 
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation
@@ -1719,6 +1815,8 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			stackObjectInheritedAccesses.length > 0 ? stackObjectInheritedAccesses : undefined,
 		stackObjectMaterializations:
 			stackObjectMaterializations.length > 0 ? stackObjectMaterializations : undefined,
+		nativeNumericHofRegions:
+			nativeNumericHofRegions.length > 0 ? nativeNumericHofRegions : undefined,
 	};
 }
 

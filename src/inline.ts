@@ -24,8 +24,19 @@
 
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
 import type { IRRegisterIndex } from "./ir-register-index.ts";
-import { addInlineSourcePosition, getOrCreateStringConstant } from "./ir.ts";
-import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
+import {
+	addInlineSourcePosition,
+	getOrCreateStringConstant,
+	NUMERIC_HOF_INPUT_ACCUMULATOR,
+	NUMERIC_HOF_INPUT_ELEMENT,
+} from "./ir.ts";
+import type {
+	IntermediateProgram,
+	IRBlock,
+	IRFunction,
+	IRInstruction,
+	IRNumericHofPlanOperation,
+} from "./ir.ts";
 import { definedRegister } from "./register-alloc.ts";
 import { log } from "./utils.ts";
 
@@ -1300,7 +1311,7 @@ const HOF_CALLBACK_METHODS = new Set([
 
 export interface HofInlineSite {
 	/** The `call` instruction (`[dst, callee, recv, callback, ...]`). */
-	call: IRInstruction;
+	call: Extract<IRInstruction, { type: "call" }>;
 	/** The method name (e.g. "forEach"). */
 	method: string;
 	/** Register holding the receiver (also the call's `this`). */
@@ -2364,6 +2375,171 @@ interface HofCaptureShadow {
 	readonly write: boolean;
 }
 
+/** Compile a deliberately tiny, side-effect-free numeric callback language while
+ * the exact HOF callback identity is still available. This is provenance, not an
+ * optimizer guess: unsupported control flow, captures, coercions, or calls reject. */
+function compileNumericReducePlan(
+	program: IntermediateProgram,
+	callback: IRFunction,
+): { operations: Array<IRNumericHofPlanOperation>; resultOperand: number } | undefined {
+	if (
+		callback.parameterCount !== 2 ||
+		callback.nextCapturedIndex !== 0 ||
+		callback.isGenerator === true ||
+		callback.isAsync === true ||
+		callback.argumentsObjectRegister !== undefined ||
+		callback.mappedArguments === true ||
+		(callback.mappedArgumentSlots?.length ?? 0) !== 0 ||
+		callback.classContext?.isConstructor === true ||
+		callback.classContext?.isDerivedConstructor === true ||
+		callback.directEvalPersistentScopeRegister !== undefined
+	) {
+		return undefined;
+	}
+	type Value =
+		| { kind: "number"; operand: number }
+		| { kind: "math" }
+		| { kind: "string"; value: string }
+		| { kind: "mathFunction"; operation: "abs" | "sqrt" | "sin" };
+	const values = new Map<number, Value>([
+		[0, { kind: "number", operand: NUMERIC_HOF_INPUT_ACCUMULATOR }],
+		[1, { kind: "number", operand: NUMERIC_HOF_INPUT_ELEMENT }],
+	]);
+	const locals = new Map<number, Value>();
+	const operations: Array<IRNumericHofPlanOperation> = [];
+	const numeric = (register: number): number | undefined => {
+		const value = values.get(register);
+		return value?.kind === "number" ? value.operand : undefined;
+	};
+	const defineOperation = (register: number, operation: IRNumericHofPlanOperation) => {
+		if (operations.length >= 32) return false;
+		const operand = operations.push(operation) - 1;
+		values.set(register, { kind: "number", operand });
+		return true;
+	};
+
+	const visited = new Set<number>();
+	let blockIndex = 0;
+	while (!visited.has(blockIndex)) {
+		visited.add(blockIndex);
+		const block = callback.blocks[blockIndex];
+		if (block === undefined) return undefined;
+		let nextBlock: number | undefined;
+		for (let index = 0; index < block.instructions.length; index++) {
+			const instruction = block.instructions[index]!;
+			switch (instruction.type) {
+				case "sourcePos":
+					break;
+				case "storeLocal": {
+					const value = values.get(instruction.registers[0]);
+					if (value === undefined) return undefined;
+					locals.set(instruction.index, value);
+					break;
+				}
+				case "loadLocal": {
+					const value = locals.get(instruction.index);
+					if (value === undefined) return undefined;
+					values.set(instruction.registers[0], value);
+					break;
+				}
+				case "move": {
+					const value = values.get(instruction.registers[1]);
+					if (value === undefined) return undefined;
+					values.set(instruction.registers[0], value);
+					break;
+				}
+				case "createNumber":
+				case "createF64":
+					if (
+						!defineOperation(instruction.registers[0], {
+							type: "constant",
+							value: instruction.value,
+						})
+					)
+						return undefined;
+					break;
+				case "loadIntrinsic":
+					if (instruction.intrinsic !== "Math") return undefined;
+					values.set(instruction.registers[0], { kind: "math" });
+					break;
+				case "createString":
+					values.set(instruction.registers[0], {
+						kind: "string",
+						value: decodeStringConstant(program, instruction.stringIndex),
+					});
+					break;
+				case "loadProperty": {
+					const object = values.get(instruction.registers[1]);
+					const key = values.get(instruction.registers[2]);
+					if (
+						object?.kind !== "math" ||
+						key?.kind !== "string" ||
+						(key.value !== "abs" && key.value !== "sqrt" && key.value !== "sin")
+					)
+						return undefined;
+					values.set(instruction.registers[0], {
+						kind: "mathFunction",
+						operation: key.value,
+					});
+					break;
+				}
+				case "call": {
+					const callee = values.get(instruction.registers[1]);
+					const receiver = values.get(instruction.registers[2]);
+					const value = numeric(instruction.registers[3]!);
+					if (
+						callee?.kind !== "mathFunction" ||
+						receiver?.kind !== "math" ||
+						instruction.registers.length !== 4 ||
+						value === undefined ||
+						!defineOperation(instruction.registers[0], {
+							type: "math",
+							operation: callee.operation,
+							value,
+						})
+					)
+						return undefined;
+					break;
+				}
+				case "binary": {
+					if (!["+", "-", "*", "/", "%"].includes(instruction.operator)) {
+						return undefined;
+					}
+					const left = numeric(instruction.registers[1]);
+					const right = numeric(instruction.registers[2]);
+					if (left === undefined || right === undefined) return undefined;
+					if (
+						!defineOperation(instruction.registers[0], {
+							type: "binary",
+							operator: instruction.operator as "+" | "-" | "*" | "/" | "%",
+							left,
+							right,
+						})
+					)
+						return undefined;
+					break;
+				}
+				case "jump":
+					if (index !== block.instructions.length - 1) return undefined;
+					nextBlock = instruction.blocks[0];
+					break;
+				case "return": {
+					if (index !== block.instructions.length - 1) return undefined;
+					const resultOperand = numeric(instruction.registers[0]);
+					return resultOperand === undefined || operations.length === 0
+						? undefined
+						: { operations, resultOperand };
+				}
+				default:
+					return undefined;
+			}
+		}
+		if (nextBlock === undefined) return undefined;
+		blockIndex = nextBlock;
+	}
+	return undefined;
+}
+
 /** Captures that can use a caller-local register on one guarded HOF fast path.
  * A third function could observe the environment during re-entrant property access,
  * so only slots accessed by the owner and this callback are eligible. */
@@ -2478,6 +2654,15 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			const destination = callRegisters[0]!;
 			const receiver = callRegisters[2]!; // === site.receiverRegister (call's `this`)
 			const callback = callRegisters[3]!;
+			const callbackTarget = program.functions.find(
+				(candidate) => candidate.functionIndex === site.callbackTarget,
+			);
+			const numericReducePlan =
+				spec.accumulator === true &&
+				spec.backward !== true &&
+				callbackTarget !== undefined
+					? compileNumericReducePlan(program, callbackTarget)
+					: undefined;
 
 			const post = host.instructions.slice(index + 1);
 			if (post.length === 0 || containsTryMarker(post)) {
@@ -2491,6 +2676,10 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			if (spec.accumulator && initialValue === undefined) {
 				continue;
 			}
+			const initialValueDefinition =
+				initialValue === undefined
+					? undefined
+					: buildIRRegisterIndex(fn).uniqueDefinitions.get(initialValue);
 
 			// To let the fast path allocate nothing, the slow path re-creates the
 			// closure rather than sharing the one defined before the call: once the
@@ -2577,6 +2766,11 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				}
 			};
 
+			const eligibilityCall: Extract<IRInstruction, { type: "call" }> = {
+				type: "call",
+				registers: [eligible, eligibleFn, undefinedReg, receiver, methodIdReg],
+			};
+
 			// Host: pre + the guard (compute eligibility, branch to fast or slow).
 			host.instructions = [
 				...host.instructions.slice(0, index),
@@ -2587,10 +2781,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				},
 				{ type: "createNumber", registers: [methodIdReg], value: spec.methodId },
 				{ type: "createUndefined", registers: [undefinedReg] },
-				{
-					type: "call",
-					registers: [eligible, eligibleFn, undefinedReg, receiver, methodIdReg],
-				},
+				eligibilityCall,
 				{ type: "jumpIf", registers: [eligible], blocks: [fastInit] },
 				{ type: "jump", blocks: [slowPath] },
 			];
@@ -2656,12 +2847,14 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					intrinsic: "__arrayFlatMapAppend",
 				});
 			}
+			let accumulatorInitialMove: Extract<IRInstruction, { type: "move" }> | undefined;
 			if (spec.accumulator) {
 				// acc = initial value (guaranteed present: checked above).
-				fastInitInstructions.push({
+				accumulatorInitialMove = {
 					type: "move",
 					registers: [accumulatorReg, initialValue!],
-				});
+				};
+				fastInitInstructions.push(accumulatorInitialMove);
 			}
 			fastInitInstructions.push({ type: "jump", blocks: [loopCond] });
 			fn.blocks.push({ instructions: fastInitInstructions });
@@ -2836,15 +3029,20 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					});
 				}
 			}
-			afterLoopInstructions.push({ type: "jump", blocks: [join] });
+			const fastExit: Extract<IRInstruction, { type: "jump" }> = {
+				type: "jump",
+				blocks: [join],
+			};
+			afterLoopInstructions.push(fastExit);
 			fn.blocks.push({ instructions: afterLoopInstructions });
 			// slowPath: run the original method. When the callback is a direct
 			// createFunction, re-create it here so the fast path's closure becomes dead
 			// (DCE'd → no allocation on the common path); else use the original call.
+			let slowCallAnchor: Extract<IRInstruction, { type: "call" }> | undefined;
 			if (callbackDefinition !== undefined) {
 				const freshCallback = fn.nextRegisterDestination;
 				fn.nextRegisterDestination += 1;
-				const slowCall: IRInstruction = {
+				const slowCall: Extract<IRInstruction, { type: "call" }> = {
 					type: "call",
 					registers: [
 						destination,
@@ -2854,6 +3052,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 						...callRegisters.slice(4),
 					],
 				};
+				slowCallAnchor = slowCall;
 				hofSubstitutedCalls.add(slowCall);
 				fn.blocks.push({
 					instructions: [
@@ -2868,7 +3067,30 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				});
 			} else {
 				hofSubstitutedCalls.add(site.call);
+				slowCallAnchor = site.call;
 				fn.blocks.push({ instructions: [site.call, { type: "jump", blocks: [join] }] });
+			}
+			if (
+				numericReducePlan !== undefined &&
+				callbackDefinition !== undefined &&
+				callbackDefinition.functionIndex === site.callbackTarget &&
+				(initialValueDefinition?.type === "createNumber" ||
+					initialValueDefinition?.type === "createF64") &&
+				accumulatorInitialMove !== undefined &&
+				afterLoopValue.type === "move" &&
+				slowCallAnchor !== undefined
+			) {
+				eligibilityCall.numericHofRegion = {
+					method: "reduce",
+					callbackFunctionIndex: site.callbackTarget,
+					operations: numericReducePlan.operations,
+					resultOperand: numericReducePlan.resultOperand,
+					initialValue: initialValueDefinition,
+					initialMove: accumulatorInitialMove,
+					fastResult: afterLoopValue,
+					fastExit,
+					slowCall: slowCallAnchor,
+				};
 			}
 			// join: the host's tail after the call.
 			fn.blocks.push({ instructions: post });

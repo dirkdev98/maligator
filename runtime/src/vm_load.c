@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 29u        // fresh dense indexed-fill reserve compiler metadata
+#define WIRE_VERSION 30u        // serialized numeric-HOF proof plans
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1683,6 +1683,77 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
             } else {
                 r.ok = false;
+            }
+        }
+
+        u32 numeric_hof_count = rd_count(&r, 13);
+        for (u32 region = 0; r.ok && region < numeric_hof_count; region++) {
+            i32 guard_ip = rd_i32(&r);
+            i32 initial_value_ip = rd_i32(&r);
+            i32 initial_ip = rd_i32(&r);
+            i32 result_ip = rd_i32(&r);
+            i32 exit_ip = rd_i32(&r);
+            i32 slow_ip = rd_i32(&r);
+            i32 callback_function = rd_i32(&r);
+            i32 receiver = rd_i32(&r);
+            i32 initial = rd_i32(&r);
+            i32 result = rd_i32(&r);
+            u8 poll_policy = rd_u8(&r);
+            i32 result_operand = rd_i32(&r);
+            u32 operation_count = rd_count(&r, 2);
+            const MalFunction *fn = &functions[i];
+#define MAL_HOF_IP_OPCODE(ip, op) \
+            ((ip) >= 0 && (ip) < fn->instruction_count && \
+             fn->instructions[(ip)].opcode == (op))
+            i32 initial_value_dst = MAL_HOF_IP_OPCODE(initial_value_ip, MAL_OP_CREATE_NUMBER)
+                ? fn->instructions[initial_value_ip].as.create_number.dst
+                : MAL_HOF_IP_OPCODE(initial_value_ip, MAL_OP_CREATE_F64)
+                    ? fn->instructions[initial_value_ip].as.create_f64.dst
+                    : -1;
+            if (!MAL_HOF_IP_OPCODE(guard_ip, MAL_OP_CALL) ||
+                (!MAL_HOF_IP_OPCODE(initial_value_ip, MAL_OP_CREATE_NUMBER) &&
+                 !MAL_HOF_IP_OPCODE(initial_value_ip, MAL_OP_CREATE_F64)) ||
+                !MAL_HOF_IP_OPCODE(initial_ip, MAL_OP_MOVE) ||
+                !MAL_HOF_IP_OPCODE(result_ip, MAL_OP_MOVE) ||
+                !MAL_HOF_IP_OPCODE(exit_ip, MAL_OP_JUMP) ||
+                !MAL_HOF_IP_OPCODE(slow_ip, MAL_OP_CALL) ||
+                callback_function < 0 || callback_function >= function_count ||
+                receiver < 0 || receiver >= fn->register_count ||
+                initial < 0 || initial >= fn->register_count ||
+                result < 0 || result >= fn->register_count || poll_policy != 1 ||
+                operation_count == 0 || operation_count > 32 ||
+                fn->instructions[initial_ip].as.move.src != initial_value_dst ||
+                fn->instructions[initial_ip].as.move.src != initial ||
+                fn->instructions[result_ip].as.move.dst != result) {
+                r.ok = false;
+            }
+#undef MAL_HOF_IP_OPCODE
+            if (!(result_operand == -1 || result_operand == -2 ||
+                  (result_operand >= 0 && (u32) result_operand < operation_count))) {
+                r.ok = false;
+            }
+            for (u32 operation = 0; r.ok && operation < operation_count; operation++) {
+                u8 tag = rd_u8(&r);
+                if (tag == 1) {
+                    (void) rd_u64(&r);
+                } else if (tag == 2) {
+                    u8 binary = rd_u8(&r);
+                    i32 left = rd_i32(&r);
+                    i32 right = rd_i32(&r);
+                    bool left_ok = left == -1 || left == -2 ||
+                        (left >= 0 && (u32) left < operation);
+                    bool right_ok = right == -1 || right == -2 ||
+                        (right >= 0 && (u32) right < operation);
+                    if (binary >= 5 || !left_ok || !right_ok) r.ok = false;
+                } else if (tag == 3) {
+                    u8 math = rd_u8(&r);
+                    i32 value = rd_i32(&r);
+                    bool value_ok = value == -1 || value == -2 ||
+                        (value >= 0 && (u32) value < operation);
+                    if (math >= 3 || !value_ok) r.ok = false;
+                } else {
+                    r.ok = false;
+                }
             }
         }
     }

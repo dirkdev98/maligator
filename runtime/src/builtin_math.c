@@ -10,6 +10,7 @@
 
 #include "builtin_iterator.h"
 #include "float16.h"
+#include "object_ops.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -180,6 +181,73 @@ bool mal_builtin_math_unary_fast(
     }
     *cached_op = MAL_MATH_UNARY_NONE;
     return false;
+}
+
+typedef struct MalMathUnaryDefault {
+    MalMathUnaryOp op;
+    const char *name;
+    MalNativeFunctionCallback callback;
+} MalMathUnaryDefault;
+
+#define MAL_MATH_UNARY_DEFAULT(op, name) \
+    { MAL_MATH_UNARY_##op, #name, mal_builtin_math_##name }
+
+static const MalMathUnaryDefault mal_math_unary_defaults[] = {
+    MAL_MATH_UNARY_DEFAULT(ABS, abs),
+    MAL_MATH_UNARY_DEFAULT(FLOOR, floor),
+    MAL_MATH_UNARY_DEFAULT(CEIL, ceil),
+    MAL_MATH_UNARY_DEFAULT(TRUNC, trunc),
+    MAL_MATH_UNARY_DEFAULT(SQRT, sqrt),
+    MAL_MATH_UNARY_DEFAULT(CBRT, cbrt),
+    MAL_MATH_UNARY_DEFAULT(SIGN, sign),
+    MAL_MATH_UNARY_DEFAULT(LOG, log),
+    MAL_MATH_UNARY_DEFAULT(LOG2, log2),
+    MAL_MATH_UNARY_DEFAULT(LOG10, log10),
+    MAL_MATH_UNARY_DEFAULT(EXP, exp),
+    MAL_MATH_UNARY_DEFAULT(SIN, sin),
+    MAL_MATH_UNARY_DEFAULT(COS, cos),
+    MAL_MATH_UNARY_DEFAULT(TAN, tan),
+    MAL_MATH_UNARY_DEFAULT(ASIN, asin),
+    MAL_MATH_UNARY_DEFAULT(ACOS, acos),
+    MAL_MATH_UNARY_DEFAULT(ATAN, atan),
+    MAL_MATH_UNARY_DEFAULT(SINH, sinh),
+    MAL_MATH_UNARY_DEFAULT(COSH, cosh),
+    MAL_MATH_UNARY_DEFAULT(TANH, tanh),
+    MAL_MATH_UNARY_DEFAULT(ASINH, asinh),
+    MAL_MATH_UNARY_DEFAULT(ACOSH, acosh),
+    MAL_MATH_UNARY_DEFAULT(ATANH, atanh),
+    MAL_MATH_UNARY_DEFAULT(LOG1P, log1p),
+    MAL_MATH_UNARY_DEFAULT(EXPM1, expm1),
+    MAL_MATH_UNARY_DEFAULT(FROUND, fround),
+    MAL_MATH_UNARY_DEFAULT(ROUND, round),
+};
+
+#undef MAL_MATH_UNARY_DEFAULT
+
+bool mal_builtin_math_unary_defaults_intact(MalVm *vm, u32 mask) {
+    MalValue math_value = vm->intrinsics[MAL_INTRINSIC_MATH];
+    if (mask == 0 || !mal_value_is_object(math_value)) {
+        return false;
+    }
+    MalObject *math = mal_value_to_object(math_value);
+    u32 remaining = mask;
+    for (usize index = 0; index < countof(mal_math_unary_defaults) && remaining != 0; index++) {
+        const MalMathUnaryDefault *entry = &mal_math_unary_defaults[index];
+        u32 bit = 1u << (u32) entry->op;
+        if ((remaining & bit) == 0) {
+            continue;
+        }
+        MalPropertyLookup lookup = mal_object_get_own(
+            math, mal_intrinsic_string_key(vm, (const byte *) entry->name));
+        if (!lookup.present || (lookup.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+            !mal_value_is_native_function_object(lookup.desc.value) ||
+            mal_native_function_object_callback(
+                mal_value_to_native_function_object(lookup.desc.value)) != entry->callback) {
+            return false;
+        }
+        remaining &= ~bit;
+    }
+    return remaining == 0;
 }
 
 // Math.round: spec rounds halves toward +Infinity, but preserves -0 for

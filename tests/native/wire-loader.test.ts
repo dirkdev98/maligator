@@ -3,7 +3,10 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { compileEntrypointToBuffer } from "../../src/compile-program.ts";
+import {
+	compileEntrypoint,
+	compileEntrypointToBuffer,
+} from "../../src/compile-program.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 import type { VmDefinition, VmFunction } from "../../src/lower-vm.ts";
 import { serializeVmDefinition } from "../../src/serialize-vm.ts";
@@ -248,9 +251,43 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		expect(wire.at(-2)).toBe(12);
-		wire[wire.length - 1] = 0;
+		expect(wire.at(-3)).toBe(12);
+		expect(wire.at(-1)).toBe(0); // empty numeric-HOF region table
+		wire[wire.length - 2] = 0;
 		rejectsWire("indexed-fill-reserve-zero", wire);
+	});
+
+	it("loads a nonempty numeric HOF proof region payload", () => {
+		const entrypoint = path.join(directory, "numeric-hof-region.mjs");
+		writeFileSync(
+			entrypoint,
+			`function run() {
+				const values = [];
+				for (let index = 0; index < 20; index++) values.push(index / 20);
+				let result = 0;
+				for (let round = 0; round < 4; round++) {
+					result += values.reduce(
+						(sum, value) => sum + Math.sqrt(value) * Math.sin(value) + Math.abs(value - 0.5),
+						0,
+					);
+				}
+				return result;
+			}
+			globalThis.result = run();\n`,
+		);
+		const numericDefinition = compileEntrypoint(entrypoint, {
+			stripTypes: stripTypesWithTypeScript,
+		});
+		expect(
+			numericDefinition.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? []),
+		).toHaveLength(1);
+		const wirePath = path.join(directory, "numeric-hof-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(numericDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
 	it("loads and executes persisted argument snapshot prefixes", () => {

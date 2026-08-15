@@ -4,6 +4,7 @@ import {
 	emitTypeofResult,
 	emitUnaryOperator,
 } from "./emit-vm.ts";
+import { NUMERIC_HOF_INPUT_ACCUMULATOR, NUMERIC_HOF_INPUT_ELEMENT } from "./ir.ts";
 import { computeArgumentRetentionLimit, decodeVmValueOperand } from "./lower-vm.ts";
 import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.ts";
 
@@ -1102,6 +1103,23 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += 2;
 	}
+	const numericHofRegions = new Map<number, NumericHofRegionSite>();
+	for (const region of fn.nativeNumericHofRegions ?? []) {
+		const guard = fn.instructions[region.guardCallIp];
+		const fastResult = fn.instructions[region.fastResultIp];
+		if (
+			guard?.opcode !== "CALL" ||
+			fastResult?.opcode !== "MOVE" ||
+			fastResult.dst !== region.result ||
+			numericHofRegions.has(region.guardCallIp)
+		) {
+			throw new Error(`Invalid numeric HOF region at instruction ${region.guardCallIp}`);
+		}
+		numericHofRegions.set(region.guardCallIp, {
+			...region,
+			accumulator: fastResult.src,
+		});
+	}
 	const affineRangeAllocations = fn.instructions
 		.map((instruction, ip) => ({ instruction, ip }))
 		.filter(
@@ -1153,6 +1171,7 @@ export function emitCompiledFunction(
 		invariantJsonParseCaches,
 		invariantJsonMapTemplates,
 		privateAggregateMemos,
+		numericHofRegions,
 		directCompiledTargets,
 	);
 	if (body === null) {
@@ -1518,6 +1537,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -2433,6 +2453,123 @@ interface FiniteRecordRegion {
 	fastName: string;
 }
 
+/** A serialized numeric reduce plan plus the accumulator the ordinary fast path
+ * threads, which is the register the native fold writes before rejoining it. */
+type NumericHofRegionSite = NonNullable<VmFunction["nativeNumericHofRegions"]>[number] & {
+	accumulator: number;
+};
+
+/** The C expression each proven Math operation lowers to, and the bit that proves
+ * the corresponding builtin is still installed. Every expression must stay
+ * identical to that builtin's own (MAL_BUILTIN_MATH_UNARY in builtin_math.c);
+ * the fold's whole claim is that it computes what the call would have. */
+const NUMERIC_FOLD_MATH_OPS = {
+	abs: { call: "fabs", bit: "ABS" },
+	sqrt: { call: "sqrt", bit: "SQRT" },
+	sin: { call: "sin", bit: "SIN" },
+} as const;
+
+/**
+ * Straight-line native arithmetic for one proven numeric `reduce` region. The
+ * ordinary guarded loop this replaces reads every element through HasProperty +
+ * Get and calls the callback, whose Math operations each re-resolve an
+ * inline-cached property and re-prove the native callback; the plan is exactly
+ * that callback as f64 code.
+ *
+ * Nothing is written and nothing is observable until the fold completes, so a
+ * non-Number element simply abandons the attempt and lets the untouched region
+ * produce the result. A completed fold writes the accumulator and rejoins the
+ * region at its accumulator read, leaving the result register, the source
+ * position, and every later instruction exactly as they were.
+ *
+ * Returns null when a register representation leaves nothing to prove — the
+ * region then emits as if it had never been admitted.
+ */
+function emitNumericFoldRegion(
+	region: NumericHofRegionSite,
+	reps: Array<RegisterRep>,
+): Array<string> | null {
+	const initialRep = reps[region.initial];
+	if (
+		reps[region.receiver] !== "boxed" ||
+		reps[region.accumulator] === "boolean" ||
+		initialRep === "boolean"
+	) {
+		return null;
+	}
+	const prefix = `__fold_${region.guardCallIp}`;
+	const accumulator = `${prefix}_accumulator`;
+	const element = `${prefix}_element`;
+	const operand = (value: number): string =>
+		value === NUMERIC_HOF_INPUT_ACCUMULATOR
+			? accumulator
+			: value === NUMERIC_HOF_INPUT_ELEMENT
+				? element
+				: `${prefix}_op${value}`;
+	const mathBits = new Set<string>();
+	const plan: Array<string> = [];
+	for (const [index, operation] of region.operations.entries()) {
+		const name = `${prefix}_op${index}`;
+		if (operation.type === "constant") {
+			plan.push(`f64 ${name} = ${cF64Literal(operation.value)};`);
+		} else if (operation.type === "binary") {
+			const expression = nativeNumberExpr(
+				operation.operator,
+				operand(operation.left),
+				operand(operation.right),
+			);
+			if (expression === null) return null;
+			plan.push(`f64 ${name} = ${expression};`);
+		} else {
+			const math = NUMERIC_FOLD_MATH_OPS[operation.operation];
+			mathBits.add(math.bit);
+			plan.push(`f64 ${name} = ${math.call}(${operand(operation.value)});`);
+		}
+	}
+	const mathCalls = region.operations.filter(
+		(operation) => operation.type === "math",
+	).length;
+	const mask =
+		mathBits.size === 0
+			? "0"
+			: [...mathBits].map((bit) => `MAL_MATH_UNARY_BIT(${bit})`).join(" | ");
+	// A number-rep register always holds a Number; a boxed initial value is only a
+	// Number by the region's proof, so it is still checked here.
+	const initialIsNumber =
+		initialRep === "number" ? "" : `mal_ops_is_number(r${region.initial}) && `;
+	const initialValue =
+		initialRep === "number"
+			? `r${region.initial}`
+			: `mal_ops_number_as_f64(r${region.initial})`;
+	const foldedResult =
+		reps[region.accumulator] === "number"
+			? accumulator
+			: `mal_ops_number_value(${accumulator})`;
+	return [
+		`{`,
+		`  const MalValue *${prefix}_elements;`,
+		`  u32 ${prefix}_length;`,
+		`  if (${initialIsNumber}mal_builtin_array_numeric_fold_admit(vm, r${region.receiver}, ${mask}, &${prefix}_elements, &${prefix}_length)) {`,
+		`    f64 ${accumulator} = ${initialValue};`,
+		`    u32 ${prefix}_index = 0;`,
+		`    for (; ${prefix}_index < ${prefix}_length; ${prefix}_index++) {`,
+		`      MalValue ${prefix}_boxed = ${prefix}_elements[${prefix}_index];`,
+		`      if (!mal_ops_is_number(${prefix}_boxed)) break;`,
+		`      f64 ${element} = mal_ops_number_as_f64(${prefix}_boxed);`,
+		...plan.map((line) => `      ${line}`),
+		`      ${accumulator} = ${operand(region.resultOperand)};`,
+		`    }`,
+		`    mal_perf_numeric_fold_region(${prefix}_index, ${prefix}_length, ${mathCalls});`,
+		`    if (${prefix}_index == ${prefix}_length) {`,
+		`      r${region.accumulator} = ${foldedResult};`,
+		`      if (mal_gc_poll) mal_gc_safepoint(vm);`,
+		`      goto L${region.fastResultIp};`,
+		`    }`,
+		`  }`,
+		`}`,
+	];
+}
+
 interface CardinalityRegion {
 	allocationInstructionIndex: number;
 	arrayRegister: number;
@@ -2585,6 +2722,7 @@ function emitBody(
 			rootsOffset: number;
 		}
 	>,
+	numericHofRegions: ReadonlyMap<number, NumericHofRegionSite>,
 	directCompiledTargets: ReadonlyMap<number, number>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
@@ -2592,6 +2730,11 @@ function emitBody(
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
 			jumpTargets.add(instruction.targetIp);
 		}
+	}
+	// A completed native fold rejoins the ordinary region at its accumulator read,
+	// which is a jump target already unless a later pass straightened that edge.
+	for (const region of numericHofRegions.values()) {
+		jumpTargets.add(region.fastResultIp);
 	}
 	type PrivateAggregateMemoSite =
 		typeof privateAggregateMemos extends ReadonlyMap<number, infer Site> ? Site : never;
@@ -3272,6 +3415,12 @@ function emitBody(
 		}
 		for (const cursor of denseIteratorCursorResets.get(ip) ?? []) {
 			lines.push(`    ${cursor.name} = nullptr;`);
+		}
+		const numericHofRegion = numericHofRegions.get(ip);
+		if (numericHofRegion !== undefined) {
+			for (const line of emitNumericFoldRegion(numericHofRegion, reps) ?? []) {
+				lines.push(`    ${line}`);
+			}
 		}
 
 		let emitted = emitInstruction(

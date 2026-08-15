@@ -2,6 +2,7 @@ import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
 	countPropertyIcSites,
+	decodeVmValueOperand,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
@@ -21,10 +22,13 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 29 for fresh dense indexed-fill reserve compiler metadata.
-export const WIRE_VERSION = 29;
+// Bumped to 30 for serialized numeric-HOF proof plans.
+export const WIRE_VERSION = 30;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
+
+const NUMERIC_HOF_BINOPS = ["+", "-", "*", "/", "%"] as const;
+const NUMERIC_HOF_MATH_OPS = ["abs", "sqrt", "sin"] as const;
 
 /**
  * Canonical opcode order = the wire tag (a u8 index into this array). The C
@@ -807,6 +811,39 @@ export function serializeVmDefinition(
 				}
 			}
 		}
+
+		w.u32(fn.nativeNumericHofRegions?.length ?? 0);
+		for (const region of fn.nativeNumericHofRegions ?? []) {
+			validateNumericHofRegion(fn, region, def.functions.length);
+			w.i32(region.guardCallIp);
+			w.i32(region.initialValueIp);
+			w.i32(region.initialMoveIp);
+			w.i32(region.fastResultIp);
+			w.i32(region.fastExitIp);
+			w.i32(region.slowCallIp);
+			w.i32(region.callbackFunctionIndex);
+			w.i32(region.receiver);
+			w.i32(region.initial);
+			w.i32(region.result);
+			w.u8(1); // end-only-no-preempt
+			w.i32(region.resultOperand);
+			w.u32(region.operations.length);
+			for (const operation of region.operations) {
+				if (operation.type === "constant") {
+					w.u8(1);
+					w.f64(operation.value);
+				} else if (operation.type === "binary") {
+					w.u8(2);
+					w.u8(NUMERIC_HOF_BINOPS.indexOf(operation.operator));
+					w.i32(operation.left);
+					w.i32(operation.right);
+				} else {
+					w.u8(3);
+					w.u8(NUMERIC_HOF_MATH_OPS.indexOf(operation.operation));
+					w.i32(operation.value);
+				}
+			}
+		}
 	}
 
 	return w.finish();
@@ -925,6 +962,130 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 	}
 	if (finiteConstructionIndices.some((index) => index < 0 || index >= expected)) {
 		throw new RangeError("serialize-vm: finite construction property IC out of range");
+	}
+}
+
+function validateNumericHofRegion(
+	fn: VmFunction,
+	region: NonNullable<VmFunction["nativeNumericHofRegions"]>[number],
+	functionCount: number,
+): void {
+	const registerValid = (value: number) =>
+		Number.isInteger(value) && value >= 0 && value < fn.registerCount;
+	const operandValid = (value: number, before: number) =>
+		value === -1 ||
+		value === -2 ||
+		(Number.isInteger(value) && value >= 0 && value < before);
+	const guard = fn.instructions[region.guardCallIp];
+	const intrinsic = fn.instructions[region.guardCallIp - 1];
+	const guardBranch = fn.instructions[region.guardCallIp + 1];
+	const slowBranch = fn.instructions[region.guardCallIp + 2];
+	const initialValue = fn.instructions[region.initialValueIp];
+	const initialMove = fn.instructions[region.initialMoveIp];
+	const fastResult = fn.instructions[region.fastResultIp];
+	const fastExit = fn.instructions[region.fastExitIp];
+	const callbackCreate = fn.instructions[region.slowCallIp - 1];
+	const slowCall = fn.instructions[region.slowCallIp];
+	const slowExit = fn.instructions[region.slowCallIp + 1];
+	const guardReceiver =
+		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[0]!) : undefined;
+	const guardMethod =
+		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[1]!) : undefined;
+	const guardThis =
+		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.thisValue) : undefined;
+	const slowThis =
+		slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.thisValue) : undefined;
+	const slowCallback =
+		slowCall?.opcode === "CALL"
+			? decodeVmValueOperand(slowCall.arguments[0]!)
+			: undefined;
+	const slowInitial =
+		slowCall?.opcode === "CALL"
+			? decodeVmValueOperand(slowCall.arguments[1]!)
+			: undefined;
+	const initialNumber =
+		initialValue?.opcode === "CREATE_NUMBER" || initialValue?.opcode === "CREATE_F64"
+			? initialValue.value
+			: undefined;
+	if (
+		region.method !== "reduce" ||
+		region.pollPolicy !== "end-only-no-preempt" ||
+		guard?.opcode !== "CALL" ||
+		intrinsic?.opcode !== "LOAD_INTRINSIC" ||
+		intrinsic.intrinsic !== "__arrayIterationEligible" ||
+		guard.callee !== intrinsic.dst ||
+		guardThis?.kind !== "undefined" ||
+		guard.argumentCount !== 2 ||
+		guardReceiver?.kind !== "register" ||
+		guardReceiver.register !== region.receiver ||
+		guardMethod?.kind !== "number" ||
+		guardMethod.value !== 7 ||
+		guardBranch?.opcode !== "JUMP_IF" ||
+		guardBranch.cond !== guard.dst ||
+		slowBranch?.opcode !== "JUMP" ||
+		callbackCreate?.opcode !== "CREATE_FUNCTION" ||
+		callbackCreate.functionIndex !== region.callbackFunctionIndex ||
+		slowBranch.targetIp !== region.slowCallIp - 1 ||
+		(initialValue?.opcode !== "CREATE_NUMBER" && initialValue?.opcode !== "CREATE_F64") ||
+		initialMove?.opcode !== "MOVE" ||
+		initialMove.src !== initialValue.dst ||
+		initialMove.src !== region.initial ||
+		fastResult?.opcode !== "MOVE" ||
+		fastResult.src !== initialMove.dst ||
+		fastResult.dst !== region.result ||
+		region.fastExitIp !== region.fastResultIp + 1 ||
+		fastExit?.opcode !== "JUMP" ||
+		slowCall?.opcode !== "CALL" ||
+		slowCall.dst !== region.result ||
+		slowThis?.kind !== "register" ||
+		slowThis.register !== region.receiver ||
+		slowCall.argumentCount !== 2 ||
+		slowCallback?.kind !== "register" ||
+		slowCallback.register !== callbackCreate.dst ||
+		!(
+			(slowInitial?.kind === "number" && Object.is(slowInitial.value, initialNumber)) ||
+			(slowInitial?.kind === "register" && slowInitial.register === region.initial)
+		) ||
+		slowExit?.opcode !== "JUMP" ||
+		fastExit.targetIp !== slowExit.targetIp ||
+		region.callbackFunctionIndex < 0 ||
+		region.callbackFunctionIndex >= functionCount ||
+		!registerValid(region.receiver) ||
+		!registerValid(region.initial) ||
+		!registerValid(region.result) ||
+		region.operations.length === 0 ||
+		region.operations.length > 32 ||
+		!operandValid(region.resultOperand, region.operations.length) ||
+		region.initialValueIp >= region.guardCallIp
+	) {
+		throw new RangeError("serialize-vm: invalid numeric-HOF region metadata");
+	}
+	for (let index = 0; index < region.operations.length; index++) {
+		const operation = region.operations[index]!;
+		switch (operation.type) {
+			case "constant":
+				if (typeof operation.value !== "number") {
+					throw new RangeError("serialize-vm: invalid numeric-HOF constant");
+				}
+				break;
+			case "binary":
+				if (
+					!NUMERIC_HOF_BINOPS.includes(operation.operator) ||
+					!operandValid(operation.left, index) ||
+					!operandValid(operation.right, index)
+				)
+					throw new RangeError("serialize-vm: invalid numeric-HOF expression plan");
+				break;
+			case "math":
+				if (
+					!NUMERIC_HOF_MATH_OPS.includes(operation.operation) ||
+					!operandValid(operation.value, index)
+				)
+					throw new RangeError("serialize-vm: invalid numeric-HOF expression plan");
+				break;
+			default:
+				throw new RangeError("serialize-vm: invalid numeric-HOF expression plan");
+		}
 	}
 }
 
@@ -1749,6 +1910,77 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					"serialize-vm: compiler instruction metadata opcode mismatch",
 				);
 			}
+		}
+
+		const numericHofRegionCount = r.count(13);
+		if (numericHofRegionCount > 0) {
+			const regions: Array<NonNullable<VmFunction["nativeNumericHofRegions"]>[number]> =
+				[];
+			for (let regionIndex = 0; regionIndex < numericHofRegionCount; regionIndex++) {
+				const guardCallIp = r.i32();
+				const initialValueIp = r.i32();
+				const initialMoveIp = r.i32();
+				const fastResultIp = r.i32();
+				const fastExitIp = r.i32();
+				const slowCallIp = r.i32();
+				const callbackFunctionIndex = r.i32();
+				const receiver = r.i32();
+				const initial = r.i32();
+				const result = r.i32();
+				const pollPolicy = r.u8();
+				const resultOperand = r.i32();
+				const operationCount = r.count(2);
+				if (pollPolicy !== 1 || operationCount === 0 || operationCount > 32) {
+					throw new RangeError("serialize-vm: invalid numeric-HOF plan header");
+				}
+				const operations: Array<
+					NonNullable<VmFunction["nativeNumericHofRegions"]>[number]["operations"][number]
+				> = [];
+				for (let operationIndex = 0; operationIndex < operationCount; operationIndex++) {
+					const tag = r.u8();
+					if (tag === 1) {
+						operations.push({ type: "constant", value: r.f64() });
+					} else if (tag === 2) {
+						const operator = NUMERIC_HOF_BINOPS[r.u8()];
+						if (operator === undefined) {
+							throw new RangeError("serialize-vm: invalid numeric-HOF binary opcode");
+						}
+						operations.push({
+							type: "binary",
+							operator,
+							left: r.i32(),
+							right: r.i32(),
+						});
+					} else if (tag === 3) {
+						const operation = NUMERIC_HOF_MATH_OPS[r.u8()];
+						if (operation === undefined) {
+							throw new RangeError("serialize-vm: invalid numeric-HOF Math opcode");
+						}
+						operations.push({ type: "math", operation, value: r.i32() });
+					} else {
+						throw new RangeError("serialize-vm: invalid numeric-HOF plan opcode");
+					}
+				}
+				const region = {
+					method: "reduce" as const,
+					guardCallIp,
+					initialValueIp,
+					initialMoveIp,
+					fastResultIp,
+					fastExitIp,
+					slowCallIp,
+					callbackFunctionIndex,
+					receiver,
+					initial,
+					result,
+					pollPolicy: "end-only-no-preempt" as const,
+					operations,
+					resultOperand,
+				};
+				validateNumericHofRegion(fn, region, functions.length);
+				regions.push(region);
+			}
+			fn.nativeNumericHofRegions = regions;
 		}
 	}
 	if (r.remaining() !== 0) {

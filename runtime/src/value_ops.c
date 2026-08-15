@@ -342,6 +342,13 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
         return mal_ops_string_from_ascii(heap, "-Infinity");
     }
 
+    // Number::toString(-0) is "0". The static -0 encoding (produced by the
+    // int32 multiply fast path) has all-ones exponent bits, so mal_value_is_f64
+    // rejects it and it would otherwise reach the object fallthrough below.
+    if (value == MAL_VALUE_NEGATIVE_ZERO) {
+        return mal_ops_string_from_ascii(heap, "0");
+    }
+
     if (mal_value_is_int32(value)) {
         i32 integer = mal_value_to_i32(value);
         MalVm *owner = nullptr;

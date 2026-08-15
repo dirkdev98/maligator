@@ -92,3 +92,28 @@ void mal_builtin_array_private_aggregate_memo_fill(
  * call boundary and materialize on rejection.
  */
 bool mal_builtin_array_push_virtual_guard(MalVm *vm);
+
+/**
+ * Admit one compiler-proven numeric `Array.prototype.reduce` region to run as
+ * straight-line native f64 arithmetic over the receiver's own dense storage.
+ * `math_unary_mask` names every Math operation the proven callback resolves
+ * through the Math intrinsic (see MAL_MATH_UNARY_BIT).
+ *
+ * On success `*elements_out` may be read directly for `[0, *length_out)`: the
+ * admitted region allocates nothing, calls no JavaScript, and takes no
+ * safepoint, so neither the dense storage nor the element values can change
+ * before it ends. That is also why admission refuses while a preemption hook is
+ * installed — the region replaces the per-element polls of the ordinary loop.
+ *
+ * The elements are NOT proven to be Numbers here. A region reads them under its
+ * own per-element check and abandons the native attempt at the first element
+ * that is not one, which is free precisely because nothing it did was
+ * observable.
+ */
+bool mal_builtin_array_numeric_fold_admit(
+    MalVm *vm,
+    MalValue receiver,
+    u32 math_unary_mask,
+    const MalValue **elements_out,
+    u32 *length_out
+);

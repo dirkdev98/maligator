@@ -507,6 +507,46 @@ export interface IRFunction {
 	pendingLabels?: Array<string>;
 }
 
+/** The two callback inputs a plan operand can name; every other operand is the
+ * index of an earlier node in the same plan. */
+export const NUMERIC_HOF_INPUT_ACCUMULATOR = -1;
+export const NUMERIC_HOF_INPUT_ELEMENT = -2;
+
+/** One SSA node in a compiler-proven, capture-free numeric Array HOF callback.
+ * Negative operands are the callback inputs (see NUMERIC_HOF_INPUT_*);
+ * non-negative operands name an earlier node in the same plan. */
+export type IRNumericHofPlanOperation =
+	| { type: "constant"; value: number }
+	| {
+			type: "binary";
+			operator: "+" | "-" | "*" | "/" | "%";
+			left: number;
+			right: number;
+	  }
+	| {
+			type: "math";
+			operation: "abs" | "sqrt" | "sin";
+			value: number;
+	  };
+
+/**
+ * Compile-only provenance for one guarded HOF expansion. Instruction references
+ * are deliberately retained from the semantic transform: lowering either resolves
+ * every anchor after register allocation or drops the plan. Native emission must
+ * never rediscover this contract from an opcode pattern.
+ */
+export interface IRNumericHofRegion {
+	method: "reduce";
+	callbackFunctionIndex: number;
+	operations: ReadonlyArray<IRNumericHofPlanOperation>;
+	resultOperand: number;
+	initialValue: IRInstruction;
+	initialMove: IRInstruction;
+	fastResult: IRInstruction;
+	fastExit: IRInstruction;
+	slowCall: IRInstruction;
+}
+
 interface IRLoopContext {
 	/**
 	 * break targets the innermost breakable (loop/switch) or, when labeled, the
@@ -918,6 +958,8 @@ export type IRInstruction =
 			 * and receiver brand are still validated at runtime.
 			 */
 			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
+			/** First-class proof plan for a guarded, capture-free numeric reduce. */
+			numericHofRegion?: IRNumericHofRegion;
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }

@@ -238,6 +238,13 @@ typedef struct MalPerfStats {
     u64 private_aggregate_memo_calls_elided;
     u64 private_aggregate_memo_guard_fallbacks;
 
+    u64 numeric_fold_candidates;
+    u64 numeric_fold_regions;
+    u64 numeric_fold_guard_fallbacks;
+    u64 numeric_fold_element_fallbacks;
+    u64 numeric_fold_callback_calls_elided;
+    u64 numeric_fold_math_calls_elided;
+
     u64 call_cache_probes;
     u64 call_cache_exact_identity_hits;
     u64 call_cache_compiled_exact_hits;
@@ -488,6 +495,23 @@ static inline void mal_perf_ic_load_inherited_hit(void) {
 static inline void mal_perf_inherited_loop_summary(u64 iterations) {
     MAL_PERF_COUNT(inherited_loop_summaries);
     MAL_PERF_ADD(inherited_loop_iterations_elided, iterations);
+}
+
+/**
+ * One admitted native numeric fold. `folded` is the number of elements the
+ * region consumed before it either completed or hit a non-Number and abandoned
+ * the attempt, leaving the ordinary guarded loop to produce the result.
+ */
+static inline void mal_perf_numeric_fold_region(
+    u64 folded, u64 length, u64 math_calls_per_element
+) {
+    if (folded != length) {
+        MAL_PERF_COUNT(numeric_fold_element_fallbacks);
+        return;
+    }
+    MAL_PERF_COUNT(numeric_fold_regions);
+    MAL_PERF_ADD(numeric_fold_callback_calls_elided, folded);
+    MAL_PERF_ADD(numeric_fold_math_calls_elided, folded * math_calls_per_element);
 }
 
 static inline void mal_perf_ic_load_primitive_hit(void) {

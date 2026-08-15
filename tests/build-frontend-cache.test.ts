@@ -131,6 +131,47 @@ describe("normal build frontend cache", () => {
 		);
 	});
 
+	it("retains numeric HOF proof regions across a frontend cache hit", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			entrypoint,
+			`function run() {
+				const values = [];
+				for (let index = 0; index < 20; index++) values.push(index / 20);
+				let result = 0;
+				for (let round = 0; round < 4; round++) {
+					result += values.reduce(
+						(sum, value) => sum + Math.sqrt(value) * Math.sin(value) + Math.abs(value - 0.5),
+						0,
+					);
+				}
+				return result;
+			}
+			globalThis.result = run();\n`,
+		);
+
+		const cold = compile(entrypoint, cacheDirectory);
+		const warm = compile(entrypoint, cacheDirectory);
+		const coldRegions = cold.definition.functions.flatMap(
+			(fn) => fn.nativeNumericHofRegions ?? [],
+		);
+		const warmRegions = warm.definition.functions.flatMap(
+			(fn) => fn.nativeNumericHofRegions ?? [],
+		);
+		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
+		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+
+		expect(cold.cache).toBe("miss");
+		expect(warm.cache).toBe("hit");
+		expect(coldRegions).toHaveLength(1);
+		expect(warmRegions).toEqual(coldRegions);
+		expect(coldC).toContain("mal_builtin_array_numeric_fold_admit(");
+		expect(warmC).toBe(coldC);
+	});
+
 	it("retains fresh dense indexed-fill reserves across a frontend cache hit", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

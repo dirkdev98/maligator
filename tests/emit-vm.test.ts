@@ -1099,6 +1099,146 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_array_private_aggregate_memo_fill");
 	});
 
+	it("carries a trusted numeric reduce plan through lowering and the wire", () => {
+		const source = `
+			function run() {
+				const values = [];
+				for (let i = 0; i < 20; i++) values.push(i / 20);
+				let result = 0;
+				for (let round = 0; round < 4; round++) {
+					result += values.reduce(
+						(sum, value) => sum + Math.sqrt(value) * Math.sin(value) + Math.abs(value - 0.5),
+						0,
+					);
+				}
+				return result;
+			}
+			globalThis.result = run();
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"numeric-hof-plan.js",
+			parseScript(source, { strict: false }),
+		);
+		const definition = compileSemanticProgramToVmDefinition(semantic);
+		const regions = definition.functions.flatMap(
+			(fn) => fn.nativeNumericHofRegions ?? [],
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]?.operations.map((operation) => operation.type)).toEqual([
+			"math",
+			"math",
+			"binary",
+			"binary",
+			"constant",
+			"binary",
+			"math",
+			"binary",
+		]);
+		const decoded = deserializeVmDefinition(serializeVmDefinition(definition));
+		expect(decoded.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? [])).toEqual(
+			regions,
+		);
+		const emitted = emitVmDefinition(decoded, { compiled: true });
+		const region = regions[0]!;
+		expect(emitted).toContain(
+			`mal_builtin_array_numeric_fold_admit(vm, r${region.receiver}, MAL_MATH_UNARY_BIT(SQRT) | MAL_MATH_UNARY_BIT(SIN) | MAL_MATH_UNARY_BIT(ABS)`,
+		);
+		// The whole callback becomes straight-line f64 arithmetic, and a completed
+		// fold rejoins the untouched region at its accumulator read.
+		expect(emitted).toContain(`sqrt(__fold_${region.guardCallIp}_element)`);
+		expect(emitted).toContain(`sin(__fold_${region.guardCallIp}_element)`);
+		expect(emitted).toContain(`fabs(__fold_${region.guardCallIp}_op5)`);
+		expect(emitted).toContain(`goto L${region.fastResultIp};`);
+		expect(emitted).toContain(
+			`mal_perf_numeric_fold_region(__fold_${region.guardCallIp}_index, __fold_${region.guardCallIp}_length, 3)`,
+		);
+		const forgedRegion = decoded.functions.flatMap(
+			(fn) => fn.nativeNumericHofRegions ?? [],
+		)[0]!;
+		forgedRegion.operations = [
+			{ type: "bogus" },
+		] as unknown as typeof forgedRegion.operations;
+		forgedRegion.resultOperand = 0;
+		expect(() => serializeVmDefinition(decoded)).toThrow(/numeric-HOF expression plan/);
+	});
+
+	it("rejects stale numeric reduce certificates and unsupported empty plans", () => {
+		const source = `
+			function run() {
+				const values = [];
+				for (let i = 0; i < 20; i++) values.push(i);
+				let result = 0;
+				for (let round = 0; round < 4; round++) {
+					result += values.reduce((sum, value) => sum + Math.abs(value), 0);
+				}
+				return result;
+			}
+			globalThis.result = run();
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"numeric-hof-invalid.js",
+			parseScript(source, { strict: false }),
+		);
+		const definition = compileSemanticProgramToVmDefinition(semantic);
+		const region = definition.functions.flatMap(
+			(fn) => fn.nativeNumericHofRegions ?? [],
+		)[0];
+		expect(region).toBeDefined();
+		(region as { fastExitIp: number }).fastExitIp = region!.guardCallIp;
+		expect(() => serializeVmDefinition(definition)).toThrow(
+			/numeric-HOF region metadata/,
+		);
+
+		const zeroSource = `
+			function run() {
+				const values = [];
+				for (let index = 0; index < 20; index++) values.push(index);
+				let result = 0;
+				for (let round = 0; round < 4; round++) {
+					result += values.reduce((sum, value) => sum, 0);
+				}
+				return result;
+			}
+			globalThis.result = run();
+		`;
+		const zeroSemantic = analyzeSourceAndRunSemanticAnalysis(
+			zeroSource,
+			"numeric-hof-zero.js",
+			parseScript(zeroSource, { strict: false }),
+		);
+		const zeroDefinition = compileSemanticProgramToVmDefinition(zeroSemantic);
+		expect(
+			zeroDefinition.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? []),
+		).toHaveLength(0);
+	});
+
+	it("serializes a numeric reduce proof with a non-immediate initial value", () => {
+		const source = `
+			function run() {
+				const values = [];
+				for (let index = 0; index < 20; index++) values.push(index);
+				let result = 0;
+				for (let round = 0; round < 4; round++) {
+					result += values.reduce((sum, value) => sum + value, 0.5);
+				}
+				return result;
+			}
+			globalThis.result = run();
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"numeric-hof-f64-initial.js",
+			parseScript(source, { strict: false }),
+		);
+		const definition = compileSemanticProgramToVmDefinition(semantic);
+		expect(
+			definition.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? []),
+		).toHaveLength(1);
+		expect(() => serializeVmDefinition(definition)).not.toThrow();
+	});
+
 	it("recomputes private aggregate metadata after a wire round trip", () => {
 		const source = `
 			function control() {

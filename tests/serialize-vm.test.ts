@@ -401,9 +401,10 @@ describe("serialize-vm", () => {
 		const malformed = serializeVmDefinition(reserveDefinition(1), {
 			debugInfo: false,
 		});
-		// The compiler-metadata tail ends in tag 12 followed by ZigZag i32(1).
-		expect(malformed.at(-2)).toBe(12);
-		malformed[malformed.length - 1] = 0;
+		// The instruction metadata ends in tag 12 + ZigZag i32(1), followed by
+		// the empty numeric-HOF region table.
+		expect(malformed.at(-3)).toBe(12);
+		malformed[malformed.length - 2] = 0;
 		expect(() => deserializeVmDefinition(malformed)).toThrow(
 			/invalid indexed-fill reserve metadata/,
 		);
