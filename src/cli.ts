@@ -23,6 +23,7 @@ export interface BuildCommand {
 	artifactDirectory?: string;
 	production: boolean;
 	profile: boolean;
+	profileCompiler?: boolean;
 	internal: InternalBuildOptions;
 }
 
@@ -32,6 +33,7 @@ export interface RunCommand {
 	configPath?: string;
 	verbose: boolean;
 	profile: boolean;
+	profileCompiler?: boolean;
 	programArgs: Array<string>;
 }
 
@@ -41,6 +43,7 @@ export interface DevCommand {
 	configPath?: string;
 	verbose: boolean;
 	profile: boolean;
+	profileCompiler?: boolean;
 	programArgs: Array<string>;
 }
 
@@ -55,6 +58,7 @@ export interface TestCommand {
 	timeoutMs: number;
 	compileConcurrency: number;
 	profile: boolean;
+	profileCompiler?: boolean;
 }
 
 export interface CacheCommand {
@@ -100,7 +104,7 @@ Options:
   --config <path>              Use an explicit build configuration
   --target <rust-triple>       Cross-build through Zig (build and doctor)
   --production                 Build with production optimizations
-  --profile                    Build production code and record a performance profile
+  --profile[=compiler]         Sample production code, or add exact compiler counters
   --artifact <directory>       Create a deployable production artifact
   --verbose                    Show build diagnostics or every pruned cache entry
   --run <name>                 Filter tests by hierarchical name
@@ -198,8 +202,9 @@ function parseBuild(args: Array<string>): CliCommand {
 			command.production = true;
 			continue;
 		}
-		if (argument === "--profile") {
+		if (argument === "--profile" || argument === "--profile=compiler") {
 			command.profile = true;
+			if (argument === "--profile=compiler") command.profileCompiler = true;
 			command.production = true;
 			continue;
 		}
@@ -304,8 +309,9 @@ function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
 			command.verbose = true;
 			continue;
 		}
-		if (argument === "--profile") {
+		if (argument === "--profile" || argument === "--profile=compiler") {
 			command.profile = true;
+			if (argument === "--profile=compiler") command.profileCompiler = true;
 			continue;
 		}
 		if (argument.startsWith("-")) {
@@ -436,8 +442,9 @@ function parseTest(args: Array<string>): CliCommand {
 			command.bail = true;
 			continue;
 		}
-		if (argument === "--profile") {
+		if (argument === "--profile" || argument === "--profile=compiler") {
 			command.profile = true;
+			if (argument === "--profile=compiler") command.profileCompiler = true;
 			continue;
 		}
 		if (argument.startsWith("-")) return unexpectedArgument("test", argument);

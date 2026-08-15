@@ -1862,6 +1862,13 @@ static void mal_vm_run_until_frame_count(
 
         while (true) {
         mal_vm_interpreter_dispatch:
+#if MAL_PROFILE && MAL_PERF_STATS
+            i32 profile_site_id = frame->function->profile_site_ids == nullptr
+                ? -1
+                : frame->function->profile_site_ids[instruction_pointer];
+            MAL_PROFILE_SITE_EVENT(
+                vm, profile_site_id, MAL_PROFILE_SITE_EXECUTION, 1);
+#endif
             const MalInstruction *instruction = &instructions[instruction_pointer++];
 
         switch (instruction->opcode) {
@@ -3014,6 +3021,9 @@ bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
         .function_index = function_index,
         .pos_id = -1,
+#if MAL_PROFILE
+        .site_id = -1,
+#endif
         .enter_seq = vm->frame_seq++,
         .hidden = false,
     };

@@ -6,27 +6,30 @@ export interface ProfileSite {
 	/** Deliberately non-unique across structurally identical sites: consumers must
 	 * report ambiguity rather than silently joining the wrong locations. */
 	logicalId: string;
+	/** Stable syntactic operation before cloning/inlining. */
+	originId: string;
+	/** Exact optimized instance, including its inline caller chain. */
+	instanceId: string;
+	/** Source expression/statement region used for explicitly coarse attribution. */
+	regionId: string;
 	functionIndex: number;
+	instructionIndex: number;
 	positionId: number;
 	file: string;
 	line: number;
 	column: number;
 	operation: string;
+	inlineChain: Array<{ functionIndex: number; positionId: number }>;
 }
 
 export interface CompilerRemark {
 	siteId: number;
-	phase: "lowering";
-	code:
-		| "call.generic"
-		| "call.guarded"
-		| "object.heap"
-		| "object.shaped"
-		| "property.dynamic-load"
-		| "property.dynamic-store"
-		| "property.static-load"
-		| "property.static-store";
-	outcome: "applied" | "retained";
+	phase: "ir" | "lowering" | "native-backend" | "bytecode-backend";
+	operation: string;
+	code: string;
+	outcome: "applied" | "elided" | "guarded" | "retained" | "fallback";
+	reasonCode?: string;
+	details?: Record<string, string | number | boolean>;
 }
 
 export interface ProfileSiteMatchReport {
@@ -116,40 +119,92 @@ function logicalId(value: string): string {
 	return `site-v1-${stableHash(value, 0x811c9dc5)}${stableHash(value, 0x9e3779b9)}`;
 }
 
-function operationFor(instruction: VmInstruction): string {
+const PROFILE_ALLOCATION_OPCODES = new Set<VmInstruction["opcode"]>([
+	"CREATE_ARGUMENTS_OBJECT",
+	"CREATE_ARRAY",
+	"CREATE_FUNCTION",
+	"CREATE_MODULE_NAMESPACE",
+	"CREATE_OBJECT",
+	"CREATE_OBJECT_SHAPED",
+	"CREATE_PRIVATE_NAME",
+	"CREATE_PRIVATE_NAMES",
+	"CREATE_REST_ARGUMENTS",
+	"CREATE_TEMPLATE_OBJECT",
+]);
+
+export function profileOperationForInstruction(instruction: VmInstruction): string {
 	const opcode = instruction.opcode;
 	if (opcode.startsWith("CALL")) return "call";
 	if (opcode.startsWith("CONSTRUCT")) return "construct";
 	if (opcode.includes("PROPERTY")) return "property";
-	if (opcode.startsWith("CREATE_")) return "allocation";
+	if (PROFILE_ALLOCATION_OPCODES.has(opcode)) return "allocation";
+	if (opcode === "BINARY") return "binary";
+	if (opcode === "UNARY") return "unary";
 	return "execute";
 }
 
-function remarkFor(
-	instruction: VmInstruction,
-): Omit<CompilerRemark, "siteId"> | undefined {
-	switch (instruction.opcode) {
-		case "CALL":
-		case "CALL_SPREAD":
-		case "CALL_SPREAD_ITERABLE":
-			return { phase: "lowering", code: "call.generic", outcome: "retained" };
-		case "GUARD_FUNCTION_INDEX":
-			return { phase: "lowering", code: "call.guarded", outcome: "applied" };
-		case "LOAD_PROPERTY":
-			return { phase: "lowering", code: "property.dynamic-load", outcome: "retained" };
-		case "LOAD_PROPERTY_STATIC":
-			return { phase: "lowering", code: "property.static-load", outcome: "applied" };
-		case "STORE_PROPERTY":
-			return { phase: "lowering", code: "property.dynamic-store", outcome: "retained" };
-		case "STORE_PROPERTY_STATIC":
-			return { phase: "lowering", code: "property.static-store", outcome: "applied" };
-		case "CREATE_OBJECT":
-			return { phase: "lowering", code: "object.heap", outcome: "retained" };
-		case "CREATE_OBJECT_SHAPED":
-			return { phase: "lowering", code: "object.shaped", outcome: "applied" };
-		default:
-			return undefined;
+function remarkableOperation(operation: string): boolean {
+	return (
+		operation === "call" ||
+		operation === "construct" ||
+		operation === "property" ||
+		operation === "allocation" ||
+		operation === "binary" ||
+		operation === "unary"
+	);
+}
+
+interface FinalCompiledFunction {
+	profileDecisions: Array<{
+		instructionIndex: number;
+		operation: string;
+		code: string;
+		outcome: CompilerRemark["outcome"];
+		reasonCode?: string;
+		details?: Record<string, string | number | boolean>;
+	}>;
+}
+
+/** Publish remarks only after the backend has selected its final emitted variant. */
+export function finalizeCompilerRemarks(
+	definition: VmDefinition,
+	compiled: ReadonlyArray<FinalCompiledFunction | null>,
+): void {
+	if (definition.profileSites === undefined) return;
+	const remarks: Array<CompilerRemark> = [];
+	for (const [functionIndex, fn] of definition.functions.entries()) {
+		const emitted = compiled[functionIndex];
+		if (emitted === null || emitted === undefined) {
+			for (const siteId of fn.profileSiteIds ?? []) {
+				if (siteId < 0) continue;
+				const site = definition.profileSites[siteId];
+				if (site === undefined || !remarkableOperation(site.operation)) continue;
+				remarks.push({
+					siteId,
+					phase: "bytecode-backend",
+					operation: site.operation,
+					code: `${site.operation}.bytecode`,
+					outcome: "fallback",
+					reasonCode: "native-backend-not-selected",
+				});
+			}
+			continue;
+		}
+		for (const decision of emitted.profileDecisions) {
+			const siteId = fn.profileSiteIds?.[decision.instructionIndex] ?? -1;
+			if (siteId < 0) continue;
+			remarks.push({
+				siteId,
+				phase: "native-backend",
+				operation: decision.operation,
+				code: decision.code,
+				outcome: decision.outcome,
+				...(decision.reasonCode === undefined ? {} : { reasonCode: decision.reasonCode }),
+				...(decision.details === undefined ? {} : { details: decision.details }),
+			});
+		}
 	}
+	definition.profileRemarks = remarks;
 }
 
 /** Derive dense runtime IDs plus conservative cross-build keys from the final
@@ -165,58 +220,97 @@ export function buildProfileMetadata(
 		program.semantic.files.map((file) => [normalizedPath(file.path), file] as const),
 	);
 	const sites: Array<ProfileSite> = [];
-	const remarks: Array<CompilerRemark> = [];
-	const siteByPhysicalKey = new Map<string, number>();
-	const remarkKeys = new Set<string>();
+	const relativeFile = (file: string): string =>
+		root !== "" && file.startsWith(`${root}/`) ? file.slice(root.length + 1) : file;
+	const functionName = (functionIndex: number): string => {
+		const candidate = definition.functions[functionIndex];
+		const units =
+			candidate === undefined
+				? undefined
+				: definition.stringConstants[candidate.nameStringIndex];
+		return units === undefined
+			? "<anonymous>"
+			: String.fromCodePoint(...units) || "<anonymous>";
+	};
+	const functionFile = (functionIndex: number): string => {
+		const candidate = definition.functions[functionIndex];
+		return normalizedPath(
+			candidate === undefined
+				? "<unknown>"
+				: (definition.files[candidate.fileIndex] ?? "<unknown>"),
+		);
+	};
 
 	for (const [functionIndex, fn] of definition.functions.entries()) {
 		const physicalFile = normalizedPath(definition.files[fn.fileIndex] ?? "<unknown>");
-		const source = fileByPath.get(physicalFile)?.contents ?? "";
-		const lines = source.split("\n");
-		const nameUnits = definition.stringConstants[fn.nameStringIndex] ?? [];
-		const functionName = String.fromCodePoint(...nameUnits) || "<anonymous>";
 		const siteIds = new Array<number>(fn.instructions.length).fill(-1);
+		const occurrenceByOrigin = new Map<string, number>();
 
 		for (const [instructionIndex, instruction] of fn.instructions.entries()) {
 			const positionId = fn.positions[instructionIndex] ?? -1;
 			if (positionId < 0) continue;
 			const position = definition.sourcePositions[positionId];
 			if (position === undefined) continue;
-			const operation = operationFor(instruction);
-			const physicalKey = `${functionIndex}:${positionId}:${operation}`;
-			let siteId = siteByPhysicalKey.get(physicalKey);
-			if (siteId === undefined) {
-				const relativeFile =
-					root !== "" && physicalFile.startsWith(`${root}/`)
-						? physicalFile.slice(root.length + 1)
-						: physicalFile;
-				const anchor = (lines[position.line - 1] ?? "").trim().replaceAll(/\s+/g, " ");
-				siteId = sites.length;
-				sites.push({
-					id: siteId,
-					logicalId: logicalId(
-						`${relativeFile}\u0000${functionName}\u0000${anchor}\u0000${position.column}\u0000${operation}`,
-					),
-					functionIndex,
-					positionId,
-					file: relativeFile,
-					line: position.line,
-					column: position.column,
-					operation,
+			const operation = profileOperationForInstruction(instruction);
+			const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
+			const leafFile = functionFile(leafFunctionIndex);
+			const leafSource = fileByPath.get(leafFile)?.contents ?? "";
+			const anchor = (leafSource.split("\n")[position.line - 1] ?? "")
+				.trim()
+				.replaceAll(/\s+/g, " ");
+			const occurrenceKey = `${positionId}:${operation}`;
+			const occurrence = occurrenceByOrigin.get(occurrenceKey) ?? 0;
+			occurrenceByOrigin.set(occurrenceKey, occurrence + 1);
+			const originKey = `${relativeFile(leafFile)}\u0000${functionName(leafFunctionIndex)}\u0000${anchor}\u0000${position.column}\u0000${operation}\u0000${occurrence}`;
+			const inlineChain: Array<{ functionIndex: number; positionId: number }> = [];
+			let chainPositionId = positionId;
+			let guard = 0;
+			while (chainPositionId >= 0 && guard++ < 1024) {
+				const chainPosition = definition.sourcePositions[chainPositionId];
+				if (chainPosition === undefined) break;
+				inlineChain.push({
+					functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
+					positionId: chainPositionId,
 				});
-				siteByPhysicalKey.set(physicalKey, siteId);
+				chainPositionId = chainPosition.callerPosId ?? -1;
 			}
+			const chainKey = inlineChain
+				.map((entry) => {
+					const chainPosition = definition.sourcePositions[entry.positionId]!;
+					const chainFile = functionFile(entry.functionIndex);
+					const chainSource = fileByPath.get(chainFile)?.contents ?? "";
+					const chainAnchor = (chainSource.split("\n")[chainPosition.line - 1] ?? "")
+						.trim()
+						.replaceAll(/\s+/g, " ");
+					return `${relativeFile(chainFile)}:${functionName(entry.functionIndex)}:${chainAnchor}:${chainPosition.column}`;
+				})
+				.join("<-");
+			const originId = logicalId(originKey);
+			const instanceId = logicalId(`${originKey}\u0000${chainKey}`);
+			const regionId = logicalId(
+				`${relativeFile(physicalFile)}\u0000${functionName(functionIndex)}\u0000${chainKey}`,
+			);
+			const siteId = sites.length;
+			sites.push({
+				id: siteId,
+				logicalId: instanceId,
+				originId,
+				instanceId,
+				regionId,
+				functionIndex,
+				instructionIndex,
+				positionId,
+				file: relativeFile(leafFile),
+				line: position.line,
+				column: position.column,
+				operation,
+				inlineChain,
+			});
 			siteIds[instructionIndex] = siteId;
-			const remark = remarkFor(instruction);
-			const remarkKey = remark === undefined ? "" : `${siteId}:${remark.code}`;
-			if (remark !== undefined && !remarkKeys.has(remarkKey)) {
-				remarkKeys.add(remarkKey);
-				remarks.push({ siteId, ...remark });
-			}
 		}
 		fn.profileSiteIds = siteIds;
 	}
 
 	definition.profileSites = sites;
-	definition.profileRemarks = remarks;
+	definition.profileRemarks = [];
 }

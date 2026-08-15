@@ -139,6 +139,19 @@ describe("parseCliArgs", () => {
 		});
 	});
 
+	it("keeps exact compiler counters behind an explicit profile mode", () => {
+		for (const command of ["build", "run", "dev", "test"]) {
+			expect(parseCliArgs([command, "src/main.ts", "--profile=compiler"])).toMatchObject({
+				kind: command,
+				profile: true,
+				profileCompiler: true,
+			});
+		}
+		expect(() => parseCliArgs(["run", "src/main.ts", "--profile=unknown"])).toThrow(
+			CliUsageError,
+		);
+	});
+
 	it("parses verbose doctor output", () => {
 		expect(parseCliArgs(["doctor"])).toEqual({ kind: "doctor", verbose: false });
 		expect(parseCliArgs(["doctor", "--verbose"])).toEqual({

@@ -835,6 +835,10 @@ typedef struct MalFunction {
     const MalExceptionHandler *handlers;
     MalCompiledFunction compiled;
     const MalLineEntry *positions;
+#if MAL_PROFILE
+    /** Profile-only dense site id parallel to instructions. */
+    const i32 *profile_site_ids;
+#endif
 
     i32 name_string_index;
     MalFunctionKind kind;
@@ -907,8 +911,8 @@ typedef struct MalFunction {
     bool has_prototype;
 } MalFunction;
 
-static_assert(sizeof(MalFunction) <= 136,
-              "function metadata outgrew its packed 136-byte layout");
+static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 144 : 136),
+              "function metadata outgrew its packed layout");
 
 /**
  * One host export's destination: the export/global name and the global slot the
@@ -1028,6 +1032,10 @@ typedef struct MalVmDefinition {
     const char *const *files;
     i32 source_position_count;
     const MalSourcePos *source_positions;
+#if MAL_PROFILE
+    /** Number of dense operation sites in this exact generated definition. */
+    i32 profile_site_count;
+#endif
 
     /** Immutable configured assets baked into this native executable. */
     i32 asset_count;
@@ -1098,6 +1106,9 @@ typedef struct MalEnv {
 typedef struct MalNativeFrame {
     i32 function_index;
     i32 pos_id;
+#if MAL_PROFILE
+    i32 site_id;
+#endif
     u64 enter_seq;
     bool hidden;
 } MalNativeFrame;

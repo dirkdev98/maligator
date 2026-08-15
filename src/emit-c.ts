@@ -7,6 +7,7 @@ import {
 import { NUMERIC_HOF_INPUT_ACCUMULATOR, NUMERIC_HOF_INPUT_ELEMENT } from "./ir.ts";
 import { computeArgumentRetentionLimit, decodeVmValueOperand } from "./lower-vm.ts";
 import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.ts";
+import { profileOperationForInstruction } from "./profile-metadata.ts";
 
 /**
  * The native-C backend: lower an eligible function straight to a C function
@@ -52,6 +53,15 @@ import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.t
  */
 type RegisterRep = "boxed" | "number" | "boolean";
 
+export interface BackendProfileDecision {
+	instructionIndex: number;
+	operation: string;
+	code: string;
+	outcome: "applied" | "elided" | "guarded" | "retained" | "fallback";
+	reasonCode?: string;
+	details?: Record<string, string | number | boolean>;
+}
+
 export interface CompiledFunction {
 	/** The C symbol to install as MalFunction.compiled. */
 	symbol: string;
@@ -59,6 +69,8 @@ export interface CompiledFunction {
 	nativeNumberArgumentCount: number;
 	/** Exact targets this body actually invokes through their numeric entry. */
 	nativeNumberCallTargets: ReadonlySet<number>;
+	/** Final decisions from the exact emitted variant, never an exploratory pass. */
+	profileDecisions: Array<BackendProfileDecision>;
 	/**
 	 * The full `static MalValue ...(...) { ... }` definition — plus, for a function
 	 * that speculatively unboxes params, its fully-boxed fallback variant emitted
@@ -1146,6 +1158,7 @@ export function emitCompiledFunction(
 	const needsRootFrame = totalSlots > 0 || capturesEnv || hasWith;
 	const gcUnlink = needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "";
 
+	const profileDecisions: Array<BackendProfileDecision> = [];
 	const body = emitBody(
 		fn,
 		suffix,
@@ -1173,6 +1186,7 @@ export function emitCompiledFunction(
 		privateAggregateMemos,
 		numericHofRegions,
 		directCompiledTargets,
+		profileDecisions,
 	);
 	if (body === null) {
 		return null;
@@ -1472,6 +1486,7 @@ export function emitCompiledFunction(
 			...fallbackNativeNumberCallTargets,
 			...nativeNumberCallTargets,
 		]),
+		profileDecisions,
 	};
 }
 
@@ -1529,6 +1544,7 @@ function emitResumableFunction(
 	// thisSlot is -1: a coroutine is never a derived constructor, and `this` is read
 	// from the this_value parameter (which the resume path is invoked with from the
 	// saved frame), so no mutable this-slot is needed.
+	const profileDecisions: Array<BackendProfileDecision> = [];
 	const body = emitBody(
 		fn,
 		suffix,
@@ -1556,6 +1572,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
+		profileDecisions,
 	);
 	if (body === null) {
 		return null;
@@ -1689,6 +1706,7 @@ function emitResumableFunction(
 		source: lines.join("\n"),
 		nativeNumberArgumentCount: 0,
 		nativeNumberCallTargets: new Set(),
+		profileDecisions,
 	};
 }
 
@@ -2724,6 +2742,7 @@ function emitBody(
 	>,
 	numericHofRegions: ReadonlyMap<number, NumericHofRegionSite>,
 	directCompiledTargets: ReadonlyMap<number, number>,
+	profileDecisions: Array<BackendProfileDecision>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -3310,11 +3329,13 @@ function emitBody(
 	// Publish source positions only before operations that can synchronously capture
 	// this frame. Pure arithmetic/control-flow transitions need no native-frame write.
 	let lastPublishedPos = -1;
+	let lastPublishedSite = -1;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
 			// Control can arrive with a different published position.
 			lastPublishedPos = -1;
+			lastPublishedSite = -1;
 		}
 		const loopTwin = inheritedLoadLoopTwinByHeader.get(ip);
 		if (loopTwin !== undefined) {
@@ -3412,6 +3433,7 @@ function emitBody(
 			}
 			lines.push(`LG${loopTwin.headerIp}:;`);
 			lastPublishedPos = -1;
+			lastPublishedSite = -1;
 		}
 		for (const cursor of denseIteratorCursorResets.get(ip) ?? []) {
 			lines.push(`    ${cursor.name} = nullptr;`);
@@ -3486,6 +3508,40 @@ function emitBody(
 				lastPublishedPos = pos;
 			}
 		}
+		const profileSiteId = fn.profileSiteIds?.[ip] ?? -1;
+		if (
+			debug &&
+			profileSiteId >= 0 &&
+			nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps) &&
+			profileSiteId !== lastPublishedSite
+		) {
+			lines.push(
+				`    vm->native_frames[vm->native_frame_count - 1].site_id = ${profileSiteId};`,
+			);
+			lastPublishedSite = profileSiteId;
+		}
+		if (profileSiteId >= 0) {
+			lines.push(
+				`    MAL_PROFILE_SITE_EVENT(vm, ${profileSiteId}, MAL_PROFILE_SITE_EXECUTION, 1);`,
+			);
+			const operationSite = profileOperationInstruction(fn.instructions[ip]!);
+			const boxingSite = profileBoxesNativeValue(emitted);
+			if (operationSite || boxingSite) {
+				profileDecisions.push(
+					...profileDecisionsForInstruction(fn.instructions[ip]!, ip, emitted),
+				);
+				const instrumented: Array<string> = [];
+				for (const line of emitted) {
+					const boxed = instrumentProfileBoxing(line, profileSiteId);
+					instrumented.push(
+						operationSite
+							? instrumentProfileFallback(fn.instructions[ip]!, boxed, profileSiteId)
+							: boxed,
+					);
+				}
+				emitted = instrumented;
+			}
+		}
 		for (const line of emitted) {
 			lines.push(`    ${line}`);
 		}
@@ -3500,6 +3556,255 @@ function emitBody(
 	}
 
 	return lines;
+}
+
+function profileOperationInstruction(instruction: VmInstruction): boolean {
+	return profileDecisionOperation(instruction) !== "execute";
+}
+
+function profileDecisionOperation(instruction: VmInstruction): string {
+	return profileOperationForInstruction(instruction);
+}
+
+/** Classify the exact emitted body, after every native specialization pass. */
+function profileDecisionsForInstruction(
+	instruction: VmInstruction,
+	instructionIndex: number,
+	emitted: ReadonlyArray<string>,
+): Array<BackendProfileDecision> {
+	const operation = profileDecisionOperation(instruction);
+	const source = emitted.join("\n");
+	const decision = (
+		code: string,
+		outcome: BackendProfileDecision["outcome"],
+		reasonCode?: string,
+	): BackendProfileDecision => ({
+		instructionIndex,
+		operation,
+		code,
+		outcome,
+		...(reasonCode === undefined ? {} : { reasonCode }),
+		details: {
+			opcode: instruction.opcode,
+			...(instruction.opcode === "BINARY" || instruction.opcode === "UNARY"
+				? { operator: instruction.operator }
+				: {}),
+		},
+	});
+	const decisions: Array<BackendProfileDecision> = [];
+
+	if (operation === "call" || operation === "construct") {
+		if (/mal_compiled_\d+.*_native_numbers\(/.test(source)) {
+			decisions.push(
+				decision(
+					`${operation}.direct-native`,
+					source.includes("mal_vm_call_direct(") ? "guarded" : "applied",
+					source.includes("mal_vm_call_direct(") ? "callee-identity-guard" : undefined,
+				),
+			);
+		} else if (/mal_compiled_\d+/.test(source)) {
+			decisions.push(
+				decision(
+					`${operation}.direct-compiled`,
+					source.includes("mal_vm_call_direct(") ? "guarded" : "applied",
+					source.includes("mal_vm_call_direct(") ? "callee-identity-guard" : undefined,
+				),
+			);
+		} else if (
+			/__string_split_|__regexp_exec_|__invariant_json_|__private_aggregate_|mal_builtin_string_search_regexp_direct|mal_builtin_string_slice_to_number/.test(
+				source,
+			)
+		) {
+			decisions.push(
+				decision(`${operation}.projected`, "guarded", "guarded-semantic-fallback"),
+			);
+		} else if (/mal_builtin_.*_direct\(/.test(source)) {
+			decisions.push(
+				decision(
+					`${operation}.builtin-direct`,
+					"retained",
+					"runtime-helper-owned-dispatch",
+				),
+			);
+		} else if (source.includes("mal_vm_call_cached(")) {
+			decisions.push(
+				decision(
+					`${operation}.inline-cache`,
+					"retained",
+					"runtime-target-guard-required",
+				),
+			);
+		} else {
+			decisions.push(
+				decision(`${operation}.runtime`, "retained", "unsupported-native-call"),
+			);
+		}
+	} else if (operation === "property") {
+		if (
+			/__stack_object_|__finite_record_|__cardinality_|__regexp_exec_|__string_split_|__affine_range_/.test(
+				source,
+			)
+		) {
+			decisions.push(
+				decision("property.projected", "guarded", "guarded-semantic-fallback"),
+			);
+		} else if (source.includes("mal_vm_finite_property_")) {
+			decisions.push(decision("property.finite-key", "guarded", "finite-key-guard"));
+		} else if (source.includes("mal_vm_local_watched_")) {
+			decisions.push(decision("property.watched", "guarded", "invalidatable-epoch"));
+		} else if (/mal_vm_array_fast_(load_index|store_index)\(/.test(source)) {
+			decisions.push(
+				decision(
+					"property.array-inline-cache",
+					"guarded",
+					"runtime-shape-guard-required",
+				),
+			);
+		} else if (/mal_vm_op_(load|store)_property_ic\(/.test(source)) {
+			decisions.push(
+				decision(
+					instruction.opcode.endsWith("_STATIC")
+						? "property.static-inline-cache"
+						: "property.dynamic-inline-cache",
+					"retained",
+					"runtime-shape-guard-required",
+				),
+			);
+		} else {
+			decisions.push(decision("property.native", "applied"));
+		}
+	} else if (operation === "allocation") {
+		if (source.includes("__stack_object_")) {
+			decisions.push(decision("allocation.stack", "elided"));
+		} else if (/__affine_range_|__finite_record_|__cardinality_/.test(source)) {
+			decisions.push(
+				decision("allocation.virtualized", "guarded", "guarded-materialization"),
+			);
+		} else if (source.includes("mal_vm_create_object_finite_construction")) {
+			decisions.push(
+				decision(
+					"allocation.finite-shape",
+					"retained",
+					"runtime-helper-owned-materialization",
+				),
+			);
+		} else {
+			decisions.push(decision("allocation.heap", "retained", "heap-identity-retained"));
+		}
+	} else if (operation === "binary" || operation === "unary") {
+		if (source.includes("mal_ops_is_number(")) {
+			decisions.push(decision(`${operation}.native`, "guarded", "numeric-type-guard"));
+		} else if (/mal_vm_(binary|unary)_op\(/.test(source)) {
+			decisions.push(
+				decision(`${operation}.runtime`, "retained", "representation-not-proven-native"),
+			);
+		} else {
+			decisions.push(decision(`${operation}.native`, "applied"));
+		}
+	}
+
+	if (profileBoxesNativeValue(emitted)) {
+		decisions.push({
+			instructionIndex,
+			operation: "boxing",
+			code: "boxing.value-materialization",
+			outcome: "retained",
+			reasonCode: "boxed-representation-required",
+			details: { opcode: instruction.opcode },
+		});
+	}
+	return decisions;
+}
+
+function profileFallbackFunctions(instruction: VmInstruction): Array<string> {
+	const operation = profileDecisionOperation(instruction);
+	if (operation === "call" || operation === "construct") {
+		return operation === "construct"
+			? ["mal_vm_construct_value(", "mal_vm_construct_direct("]
+			: ["mal_vm_call_cached(", "mal_vm_call_direct("];
+	}
+	if (operation === "property") {
+		return [
+			"mal_vm_array_fast_load_index(",
+			"mal_vm_array_fast_store_index(",
+			"mal_vm_op_load_property_ic(",
+			"mal_vm_op_store_property_ic(",
+			"mal_vm_finite_property_load(",
+			"mal_vm_finite_property_store(",
+		];
+	}
+	if (operation === "allocation") {
+		return [
+			"mal_vm_op_create_object(",
+			"mal_vm_create_object_shaped(",
+			"mal_vm_op_create_array(",
+		];
+	}
+	if (operation === "binary") return ["mal_vm_binary_op("];
+	if (operation === "unary") return ["mal_vm_unary_op("];
+	return [];
+}
+
+function profileBoxesNativeValue(lines: ReadonlyArray<string>): boolean {
+	return lines.some(
+		(line) =>
+			line.includes("mal_ops_number_value(") || line.includes("mal_value_new_boolean("),
+	);
+}
+
+function instrumentProfileBoxing(line: string, siteId: number): string {
+	return instrumentProfileExpressions(
+		line,
+		["mal_ops_number_value(", "mal_value_new_boolean("],
+		(value) => `MAL_PROFILE_SITE_BOX(vm, ${siteId}, ${value})`,
+	);
+}
+
+function instrumentProfileFallback(
+	instruction: VmInstruction,
+	line: string,
+	siteId: number,
+): string {
+	return instrumentProfileExpressions(
+		line,
+		profileFallbackFunctions(instruction),
+		(value) => `MAL_PROFILE_FALLBACK_VALUE(vm, ${siteId}, ${value})`,
+	);
+}
+
+function instrumentProfileExpressions(
+	line: string,
+	calls: ReadonlyArray<string>,
+	wrap: (value: string) => string,
+): string {
+	let output = "";
+	let cursor = 0;
+	while (cursor < line.length) {
+		const candidates = calls
+			.map((call) => ({ call, index: line.indexOf(call, cursor) }))
+			.filter((candidate) => candidate.index >= 0)
+			.sort((left, right) => left.index - right.index);
+		const candidate = candidates[0];
+		if (candidate === undefined) break;
+		let depth = 0;
+		let end = -1;
+		for (
+			let index = candidate.index + candidate.call.length - 1;
+			index < line.length;
+			index++
+		) {
+			if (line[index] === "(") depth++;
+			else if (line[index] === ")" && --depth === 0) {
+				end = index;
+				break;
+			}
+		}
+		if (end < 0) break;
+		output += line.slice(cursor, candidate.index);
+		output += wrap(line.slice(candidate.index, end + 1));
+		cursor = end + 1;
+	}
+	return output + line.slice(cursor);
 }
 
 /**

@@ -217,6 +217,20 @@ function writeStderr(message: string): void {
 	process.stderr.write(`${message}\n`);
 }
 
+type ProfileCommand = BuildCommand | RunCommand | DevCommand | TestCommand;
+
+function compilerProfileBuildEnvironment(command: ProfileCommand): NodeJS.ProcessEnv {
+	return command.profileCompiler === true
+		? { ...process.env, MAL_PERF_STATS: "1" }
+		: process.env;
+}
+
+function compilerProfileRuntimeEnvironment(
+	command: ProfileCommand,
+): Record<string, string> {
+	return command.profileCompiler === true ? { MAL_PROFILE_COMPILER: "1" } : {};
+}
+
 function loadCommandConfig(
 	command: BuildCommand | RunCommand | DevCommand | TestCommand,
 	stripTypes: BuildConfigTypeStripper,
@@ -334,7 +348,14 @@ function compileAndBuild(
 		production ? "production" : "development",
 		command.kind !== "build" ? "Preparing" : "Building",
 	);
-	reporter.detail("Profile", command.profile ? "enabled" : "disabled");
+	reporter.detail(
+		"Profile",
+		command.profile
+			? command.profileCompiler === true
+				? "compiler counters"
+				: "sampling"
+			: "disabled",
+	);
 	reporter.detail("Entrypoint", entrypointPath);
 	reporter.detail("Config", command.configPath ?? "automatic/default");
 	reporter.detail(
@@ -571,10 +592,13 @@ function compileAndBuild(
 					...baseDerivation.features,
 					profileEnabled: true,
 				}),
-				cacheSuffix:
-					baseDerivation.cacheSuffix === ""
-						? "profile"
-						: `${baseDerivation.cacheSuffix}-profile`,
+				cacheSuffix: [
+					baseDerivation.cacheSuffix,
+					"profile",
+					command.profileCompiler ? "compiler" : "",
+				]
+					.filter((part) => part !== "")
+					.join("-"),
 			}
 		: baseDerivation;
 	reporter.detail(
@@ -583,11 +607,13 @@ function compileAndBuild(
 			? "(none)"
 			: derivation.features.cargoFeatures.join(", "),
 	);
-	reporter.detail("Native compile jobs", nativeBuildJobs(process.env));
+	const nativeEnvironment = compilerProfileBuildEnvironment(command);
+	reporter.detail("Native compile jobs", nativeBuildJobs(nativeEnvironment));
 	const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
 	let generatedObjects = 0;
 	let generatedObjectHits = 0;
 	const nativeContext = resolveNativeBuildContext({
+		environment: nativeEnvironment,
 		toolchain,
 		plan,
 		runtimeDirectory: context.installation.runtimeDirectory,
@@ -728,7 +754,11 @@ function compileAndBuild(
 	);
 	const preparedProfile = command.profile
 		? reporter.phase("Prepare profile metadata", () =>
-				prepareProfile(binaryPath, frontend.definition),
+				prepareProfile(
+					binaryPath,
+					frontend.definition,
+					command.profileCompiler === true ? "compiler" : "sampling",
+				),
 			)
 		: undefined;
 	let resultPath = binaryPath;
@@ -801,6 +831,7 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 	const outcome = executeBinary(binaryPath, result.runArguments ?? command.programArgs, {
 		...runEnv(),
 		...(capture === undefined ? {} : { MAL_PROFILE_CAPTURE: capture.capturePath }),
+		...compilerProfileRuntimeEnvironment(command),
 	});
 	if (capture !== undefined && result.profile !== undefined) {
 		if (existsSync(capture.capturePath)) {
@@ -967,7 +998,10 @@ export async function devCommand(
 		result.runArguments ?? command.programArgs,
 		activeProfile === undefined
 			? undefined
-			: { MAL_PROFILE_CAPTURE: activeProfile.capturePath },
+			: {
+					MAL_PROFILE_CAPTURE: activeProfile.capturePath,
+					...compilerProfileRuntimeEnvironment(command),
+				},
 	);
 	let stopping = false;
 	const stop = () => {
@@ -1036,7 +1070,10 @@ export async function devCommand(
 					result.runArguments ?? command.programArgs,
 					activeProfile === undefined
 						? undefined
-						: { MAL_PROFILE_CAPTURE: activeProfile.capturePath },
+						: {
+								MAL_PROFILE_CAPTURE: activeProfile.capturePath,
+								...compilerProfileRuntimeEnvironment(command),
+							},
 				);
 				writeStderr(
 					`Compiled in ${formatDevelopmentDuration(Date.now() - rebuildStartedAt)} · restarted`,
@@ -1074,10 +1111,13 @@ function executeProfiledTests(
 			...baseDerivation.features,
 			profileEnabled: true,
 		}),
-		cacheSuffix:
-			baseDerivation.cacheSuffix === ""
-				? "profile-test"
-				: `${baseDerivation.cacheSuffix}-profile-test`,
+		cacheSuffix: [
+			baseDerivation.cacheSuffix,
+			"profile-test",
+			command.profileCompiler ? "compiler" : "",
+		]
+			.filter((part) => part !== "")
+			.join("-"),
 	};
 	let toolchain: Toolchain;
 	try {
@@ -1103,6 +1143,7 @@ function executeProfiledTests(
 				}
 			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 	const nativeContext = resolveNativeBuildContext({
+		environment: compilerProfileBuildEnvironment(command),
 		toolchain,
 		plan: selectNativeBuildPlan(toolchain, true),
 		runtimeDirectory: context.installation.runtimeDirectory,
@@ -1130,12 +1171,17 @@ function executeProfiledTests(
 		),
 		cacheSuffix: derivation.cacheSuffix,
 	}).binaryPath;
-	const profile = prepareProfile(binary, compiled.definition);
+	const profile = prepareProfile(
+		binary,
+		compiled.definition,
+		command.profileCompiler === true ? "compiler" : "sampling",
+	);
 	const capture = createProfileCapture("test", profile);
 	const executionStartedAt = Date.now();
 	const outcome = executeBinaryCaptured(binary, [], {
 		...runEnv(),
 		MAL_PROFILE_CAPTURE: capture.capturePath,
+		...compilerProfileRuntimeEnvironment(command),
 	});
 	const executionMs = Date.now() - executionStartedAt;
 	if (outcome.stderr !== "") process.stderr.write(outcome.stderr);

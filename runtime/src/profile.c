@@ -19,10 +19,12 @@
 #define MAL_PROFILE_MAX_STACK 128u
 #define MAL_PROFILE_DEFAULT_INTERVAL_US 10000u
 #define MAL_PROFILE_ALLOCATION_INTERVAL 65536u
+#define MAL_PROFILE_MAX_COUNTER_SITES 65536u
 
 typedef struct MalProfileFrame {
     i32 function_index;
     i32 position_id;
+    i32 site_id;
 } MalProfileFrame;
 
 typedef struct MalProfileRecord {
@@ -48,9 +50,14 @@ typedef struct MalProfileState {
     u64 expected_sample_ns;
     usize allocation_budget;
     bool finished;
-	struct sigaction previous_action;
-	struct sigaction previous_interrupt_action;
-	struct sigaction previous_terminate_action;
+    bool compiler_enabled;
+    u32 counter_site_count;
+    u32 total_site_count;
+    u64 *site_counters;
+    u64 unattributed_site_counters[MAL_PROFILE_SITE_EVENT_COUNT];
+    struct sigaction previous_action;
+    struct sigaction previous_interrupt_action;
+    struct sigaction previous_terminate_action;
     struct itimerval previous_timer;
 } MalProfileState;
 
@@ -65,8 +72,8 @@ static void mal_profile_signal(int signal_number) {
 }
 
 static void mal_profile_terminate_signal(int signal_number) {
-	g_profile_termination_signal = signal_number;
-	mal_gc_poll = true;
+    g_profile_termination_signal = signal_number;
+    mal_gc_poll = true;
 }
 
 static i32 mal_profile_position_for(const MalFunction *function, i32 ip) {
@@ -77,6 +84,47 @@ static i32 mal_profile_position_for(const MalFunction *function, i32 ip) {
     }
     return found;
 }
+
+static i32 mal_profile_site_for(const MalFunction *function, i32 ip) {
+    if (function->profile_site_ids == nullptr || ip < 0 || ip >= function->instruction_count) {
+        return -1;
+    }
+    return function->profile_site_ids[ip];
+}
+
+static i32 mal_profile_current_site(MalVm *vm) {
+    MalVmFrame *interpreted = vm->frame_count > 0 ? &vm->frames[vm->frame_count - 1] : nullptr;
+    MalNativeFrame *native = nullptr;
+    for (i32 index = vm->native_frame_count - 1; index >= 0; index--) {
+        if (!vm->native_frames[index].hidden) {
+            native = &vm->native_frames[index];
+            break;
+        }
+    }
+    if (native != nullptr &&
+        (interpreted == nullptr || native->enter_seq > interpreted->enter_seq)) {
+        return native->site_id;
+    }
+    if (interpreted == nullptr) return -1;
+    return mal_profile_site_for(
+        interpreted->function, interpreted->instruction_pointer - 1);
+}
+
+#if MAL_PERF_STATS
+void mal_profile_site_event(MalVm *vm, i32 site_id, u8 event, u64 value) {
+    (void) vm;
+    MalProfileState *state = g_profile;
+    if (state == nullptr || state->finished || !state->compiler_enabled ||
+        event >= MAL_PROFILE_SITE_EVENT_COUNT) {
+        return;
+    }
+    if (site_id < 0 || (u32) site_id >= state->counter_site_count) {
+        state->unattributed_site_counters[event] += value;
+        return;
+    }
+    state->site_counters[(usize) site_id * MAL_PROFILE_SITE_EVENT_COUNT + event] += value;
+}
+#endif
 
 static u32 mal_profile_copy_stack(MalProfileState *state, MalVm *vm) {
     u32 start = state->frame_count;
@@ -98,12 +146,15 @@ static u32 mal_profile_copy_stack(MalProfileState *state, MalVm *vm) {
         if (take_interpreted) {
             MalVmFrame *frame = &vm->frames[interpreted++];
             output->function_index = frame->function_index;
+            i32 ip = frame->instruction_pointer - 1;
             output->position_id = mal_profile_position_for(
-                frame->function, frame->instruction_pointer - 1);
+                frame->function, ip);
+            output->site_id = mal_profile_site_for(frame->function, ip);
         } else {
             MalNativeFrame *frame = &vm->native_frames[native++];
             output->function_index = frame->function_index;
             output->position_id = frame->pos_id;
+            output->site_id = frame->site_id;
         }
     }
     return state->frame_count - start;
@@ -132,6 +183,12 @@ static void mal_profile_record(
 
 void mal_profile_safepoint(MalVm *vm) {
     MalProfileState *state = g_profile;
+#if MAL_PERF_STATS
+    if (state != nullptr && state->compiler_enabled) {
+        mal_profile_site_event(
+            vm, mal_profile_current_site(vm), MAL_PROFILE_SITE_SAFEPOINT, 1);
+    }
+#endif
     sig_atomic_t ticks = g_profile_pending_ticks;
 	if (state == nullptr || (ticks == 0 && g_profile_termination_signal == 0)) return;
 	g_profile_pending_ticks = 0;
@@ -157,6 +214,15 @@ void mal_profile_allocation(MalHeap *heap, usize size, u8 heap_type) {
     (void) heap_type;
     MalProfileState *state = (MalProfileState *) heap->profile_state;
     if (state == nullptr || state->finished) return;
+#if MAL_PERF_STATS
+    if (state->compiler_enabled) {
+        i32 site_id = mal_profile_current_site(state->vm);
+        mal_profile_site_event(
+            state->vm, site_id, MAL_PROFILE_SITE_ALLOCATION_COUNT, 1);
+        mal_profile_site_event(
+            state->vm, site_id, MAL_PROFILE_SITE_ALLOCATION_BYTES, (u64) size);
+    }
+#endif
     if (size < state->allocation_budget) {
         state->allocation_budget -= size;
         return;
@@ -166,6 +232,13 @@ void mal_profile_allocation(MalHeap *heap, usize size, u8 heap_type) {
 }
 
 void mal_profile_event(MalVm *vm, u8 kind, u64 value) {
+#if MAL_PERF_STATS
+    MalProfileState *state = g_profile;
+    if (state != nullptr && state->compiler_enabled && kind == MAL_PROFILE_RECORD_GC_BEGIN) {
+        mal_profile_site_event(
+            vm, mal_profile_current_site(vm), MAL_PROFILE_SITE_GC, 1);
+    }
+#endif
     mal_profile_record(g_profile, vm, kind, value, 0, false);
 }
 
@@ -192,8 +265,8 @@ static void mal_profile_publish(MalProfileState *state) {
                 state->output_path, strerror(errno));
         return;
     }
-    fwrite("MALPROF1", 1, 8, file);
-    mal_profile_write_u32(file, 1);
+    fwrite("MALPROF2", 1, 8, file);
+    mal_profile_write_u32(file, 2);
     mal_profile_write_u32(file, state->record_count);
     mal_profile_write_u32(file, state->frame_count);
     mal_profile_write_u32(file, state->dropped_records);
@@ -213,10 +286,44 @@ static void mal_profile_publish(MalProfileState *state) {
     for (u32 index = 0; index < state->frame_count; index++) {
         mal_profile_write_i32(file, state->frames[index].function_index);
         mal_profile_write_i32(file, state->frames[index].position_id);
+        mal_profile_write_i32(file, state->frames[index].site_id);
     }
     if (fclose(file) != 0) {
         fprintf(stderr, "warning: could not finalize profile capture %s\n", state->output_path);
     }
+}
+
+static void mal_profile_publish_site_counters(MalProfileState *state) {
+    if (!state->compiler_enabled ||
+        (state->counter_site_count > 0 && state->site_counters == nullptr)) return;
+    usize output_length = strlen(state->output_path);
+    char *path = malloc(output_length + sizeof(".compiler"));
+    if (path == nullptr) return;
+    memcpy(path, state->output_path, output_length);
+    memcpy(path + output_length, ".compiler", sizeof(".compiler"));
+    FILE *file = fopen(path, "wb");
+    if (file == nullptr) {
+        fprintf(stderr, "warning: could not write compiler profile %s: %s\n",
+                path, strerror(errno));
+        free(path);
+        return;
+    }
+    fwrite("MALSITE1", 1, 8, file);
+    mal_profile_write_u32(file, 1);
+    mal_profile_write_u32(file, state->counter_site_count);
+    mal_profile_write_u32(file, state->total_site_count);
+    mal_profile_write_u32(file, MAL_PROFILE_SITE_EVENT_COUNT);
+    for (u32 event = 0; event < MAL_PROFILE_SITE_EVENT_COUNT; event++) {
+        mal_profile_write_u64(file, state->unattributed_site_counters[event]);
+    }
+    usize count = (usize) state->counter_site_count * MAL_PROFILE_SITE_EVENT_COUNT;
+    for (usize index = 0; index < count; index++) {
+        mal_profile_write_u64(file, state->site_counters[index]);
+    }
+    if (fclose(file) != 0) {
+        fprintf(stderr, "warning: could not finalize compiler profile %s\n", path);
+    }
+    free(path);
 }
 
 void mal_profile_init(MalVm *vm) {
@@ -226,9 +333,9 @@ void mal_profile_init(MalVm *vm) {
     if (state == nullptr) return;
     state->records = calloc(MAL_PROFILE_MAX_RECORDS, sizeof(MalProfileRecord));
     state->frames = calloc(MAL_PROFILE_MAX_FRAMES, sizeof(MalProfileFrame));
-	usize output_length = strlen(output_path);
-	state->output_path = malloc(output_length + 1);
-	if (state->output_path != nullptr) memcpy(state->output_path, output_path, output_length + 1);
+    usize output_length = strlen(output_path);
+    state->output_path = malloc(output_length + 1);
+    if (state->output_path != nullptr) memcpy(state->output_path, output_path, output_length + 1);
     if (state->records == nullptr || state->frames == nullptr || state->output_path == nullptr) {
         free(state->records);
         free(state->frames);
@@ -246,6 +353,25 @@ void mal_profile_init(MalVm *vm) {
     state->start_ns = mal_monotonic_now_ns();
     state->expected_sample_ns = state->start_ns + (u64) state->interval_us * 1000u;
     state->allocation_budget = MAL_PROFILE_ALLOCATION_INTERVAL;
+    state->compiler_enabled = getenv("MAL_PROFILE_COMPILER") != nullptr;
+#if MAL_PERF_STATS
+    if (state->compiler_enabled) {
+        state->total_site_count = vm->definition->profile_site_count > 0
+            ? (u32) vm->definition->profile_site_count
+            : 0;
+        state->counter_site_count = state->total_site_count > MAL_PROFILE_MAX_COUNTER_SITES
+            ? MAL_PROFILE_MAX_COUNTER_SITES
+            : state->total_site_count;
+        state->site_counters = calloc(
+            (usize) state->counter_site_count * MAL_PROFILE_SITE_EVENT_COUNT,
+            sizeof(u64));
+        if (state->counter_site_count > 0 && state->site_counters == nullptr) {
+            state->compiler_enabled = false;
+        }
+    }
+#else
+    state->compiler_enabled = false;
+#endif
     vm->heap.profile_state = state;
     g_profile = state;
 
@@ -281,8 +407,10 @@ void mal_profile_finish(MalVm *vm) {
     vm->heap.profile_state = nullptr;
     g_profile = nullptr;
     mal_profile_publish(state);
+    mal_profile_publish_site_counters(state);
     free(state->records);
     free(state->frames);
+    free(state->site_counters);
     free(state->output_path);
     free(state);
 }

@@ -25,11 +25,11 @@ hit-path specialization and call/control-flow analysis before new allocation reg
 - [ ] Split the language lane into loops, objects, arrays, allocation, intrinsics,
       control flow, and application phase metrics while retaining its aggregate
       checksum and wall-time regression signal.
-- [ ] Extend the source-aware residual object and partial-escape inline reports into
+- [x] Extend the source-aware residual object and partial-escape inline reports into
       structured optimization remarks for every allocation, call, property, and
       boxing site. Preserve a stable identity through inlining and record each
       applied transform or precise rejection reason.
-- [ ] Extend the workload-only aggregate allocation, call-cache, and property-cache
+- [x] Extend the workload-only aggregate allocation, call-cache, and property-cache
       counters to stable source sites, boxing fallbacks, and safepoints. Keep all
       runtime storage and increments behind the build-time `MAL_PERF_STATS` gate and
       collect them only in separately instrumented binaries.

@@ -822,7 +822,7 @@ void mal_perf_stats_init(void) {
         return;
     }
     mal_perf_stats_enabled = true;
-    if (!registered) {
+    if (!registered && getenv("MAL_PROFILE_COMPILER") == nullptr) {
         registered = true;
         atexit(mal_perf_stats_print);
     }

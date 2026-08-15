@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
+import { emitVmDefinition } from "../src/emit-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { matchProfileSites } from "../src/profile-metadata.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -48,6 +49,7 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 	const definition = compile(
 		`function hot(object, key) { object.fixed = {}; return object[key]; } hot(globalThis, "x");`,
 	);
+	emitVmDefinition(definition);
 	const sites = definition.profileSites!;
 	const remarks = definition.profileRemarks!;
 
@@ -59,11 +61,34 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 			.every((id) => id < sites.length),
 	).toBe(true);
 	expect(remarks).toContainEqual(
-		expect.objectContaining({ code: "property.dynamic-load", outcome: "retained" }),
+		expect.objectContaining({
+			phase: "native-backend",
+			operation: "property",
+			code: "property.native",
+			outcome: "applied",
+		}),
 	);
+	expect(
+		remarks.find(
+			(remark) =>
+				remark.operation === "property" && remark.details?.opcode === "LOAD_PROPERTY",
+		),
+	).toBeDefined();
 	expect(remarks).toContainEqual(
-		expect.objectContaining({ code: "property.static-store", outcome: "applied" }),
+		expect.objectContaining({ operation: "allocation", code: "allocation.heap" }),
 	);
+});
+
+test("same-position operations retain distinct optimized instance identities", () => {
+	const definition = compile(
+		`function hot(object) { object.left = {}; object.right = {}; return object; } hot(globalThis);`,
+	);
+	const sites = definition.profileSites!.filter(
+		(site) => site.operation === "property" || site.operation === "allocation",
+	);
+	expect(new Set(sites.map((site) => site.id)).size).toBe(sites.length);
+	expect(new Set(sites.map((site) => site.instanceId)).size).toBe(sites.length);
+	expect(sites.every((site) => site.originId !== "" && site.regionId !== "")).toBe(true);
 });
 
 test("cross-build profile matching reports duplicate structural sites as ambiguous", () => {

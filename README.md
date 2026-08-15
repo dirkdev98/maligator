@@ -31,10 +31,10 @@ the command layer; native stages do not infer runtime ownership from the applica
 ```text
 maligator init
 maligator doctor [--verbose] [--target rust-triple]
-maligator build [entry] [--production] [--profile] [--artifact directory] [--target rust-triple] [--config path]
-maligator run [entry] [--profile] [--config path] [-- args...]
-maligator dev [entry] [--profile] [--config path] [-- args...]
-maligator test [path ...] [--profile] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
+maligator build [entry] [--production] [--profile[=compiler]] [--artifact directory] [--target rust-triple] [--config path]
+maligator run [entry] [--profile[=compiler]] [--config path] [-- args...]
+maligator dev [entry] [--profile[=compiler]] [--config path] [-- args...]
+maligator test [path ...] [--profile[=compiler]] [--run name] [--shuffle [seed]] [--repeat count] [--bail]
 ```
 
 The working directory is always the project root. Relative entries and `--config`
@@ -59,7 +59,9 @@ recover. This is process restart, not in-process hot-module replacement.
 Add `--profile` to any of these four commands for a separately compiled,
 production-optimized image with bounded CPU, allocation, and GC evidence. `run`,
 `dev`, and `test` turn the capture into source-ranked findings and standard profile
-artifacts without introducing a separate profiling command. See
+artifacts without introducing a separate profiling command. Use
+`--profile=compiler` for the separately instrumented exact source-site census of
+executions, fallbacks, allocation, boxing, safepoints, and GC. See
 [`docs/profiling.md`](docs/profiling.md) for workflows, artifact formats, quality
 signals, overhead policy, and current limitations.
 

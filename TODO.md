@@ -140,11 +140,11 @@ instead of reporting the final affine substitution. This confirms that final-bac
 operation identity plus separate CPU/allocation confidence is the highest-value next
 profiler improvement; collecting more samples alone will not repair the explanation.
 
-- [ ] Generate optimization remarks from final backend decisions, with exact operation
+- [x] Generate optimization remarks from final backend decisions, with exact operation
       identity and stable reason codes such as unknown target set, invalidatable epoch,
       escaping result, unsupported consumer, or representation mismatch. Do not merge
       multiple same-kind operations that share one source position.
-- [ ] Split CPU and allocation evidence quality. Report CPU sample counts or intervals
+- [x] Split CPU and allocation evidence quality. Report CPU sample counts or intervals
       beside percentages, and never upgrade a one-sample CPU claim to high confidence
       because the same site has many allocation samples.
 - [ ] Make allocation evidence physically meaningful: preserve heap/cell kind, include
@@ -173,7 +173,7 @@ profiler improvement; collecting more samples alone will not repair the explanat
 - [ ] Add optional native/runtime attribution so a hot logical site can be separated
       into dispatch, string scan, allocation, GC, regexp, and host work without raising
       the default profile above its current overhead envelope.
-- [ ] Add a bounded top-K exact event census keyed by final-backend logical site or
+- [x] Add a bounded exact event census keyed by final-backend logical site or
       region ID. Attribute load-region, store-region, watched-load, call, boxing,
       allocation count, and allocation bytes to the final emitted operation so the
       report can expose facts such as the particle region's 13.5 million loads and

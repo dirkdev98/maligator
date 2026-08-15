@@ -10,6 +10,7 @@ import {
 	decodeVmValueOperand,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
+import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
 
@@ -105,6 +106,7 @@ const C_HEADER_LINES = [
 	'#include "vm_ops.h"',
 	'#include "value_ops.h"',
 	'#include "perf_stats.h"',
+	'#include "profile.h"',
 	'#include "builtin_array.h"',
 	'#include "builtin_json.h"',
 	'#include "builtin_map.h"',
@@ -160,6 +162,7 @@ function malFunctionRow(
 	mappedArgumentSlotsSymbol: string,
 	handlersSymbol: string,
 	compiledSymbol: string,
+	profileSiteIdsSymbol: string,
 	debug: { positionsSymbol: string; positionCount: number; fileIndex: number },
 	omitBytecode = false,
 ): Array<string> {
@@ -195,6 +198,9 @@ function malFunctionRow(
 		`.position_count = ${debug.positionCount}`,
 		`.positions = ${debug.positionsSymbol}`,
 	];
+	if (fn.profileSiteIds !== undefined) {
+		fields.push(`.profile_site_ids = ${profileSiteIdsSymbol}`);
+	}
 	return [`    { ${fields.join(", ")} },`];
 }
 
@@ -4253,6 +4259,7 @@ function emitVmDefinitionSource(
 			lines.push("");
 		}
 	}
+	finalizeCompilerRemarks(definition, compiled);
 	if (splitCompiledFunctions) {
 		if (compiled.some((fn) => fn !== null)) {
 			lines.push(
@@ -4285,6 +4292,7 @@ function emitVmDefinitionSource(
 	);
 
 	const positionInfo: Array<{ symbol: string; count: number }> = [];
+	const profileSiteSymbols: Array<string> = [];
 
 	for (let i = 0; i < definition.functions.length; ++i) {
 		const fn = definition.functions[i]!;
@@ -4336,6 +4344,16 @@ function emitVmDefinitionSource(
 		} else {
 			positionInfo.push({ symbol: "nullptr", count: 0 });
 		}
+		if (fn.profileSiteIds !== undefined) {
+			const symbol = `mal_function_${i}_profile_site_ids${suffix}`;
+			lines.push(
+				`static const i32 ${symbol}[] = { ${fn.profileSiteIds.join(", ")} };`,
+				"",
+			);
+			profileSiteSymbols.push(symbol);
+		} else {
+			profileSiteSymbols.push("nullptr");
+		}
 	}
 
 	lines.push(`static const MalFunction mal_functions${suffix}[] = {`);
@@ -4358,6 +4376,7 @@ function emitVmDefinitionSource(
 					: "nullptr",
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
 				compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
+				profileSiteSymbols[i]!,
 				{
 					positionsSymbol: positionInfo[i]!.symbol,
 					positionCount: positionInfo[i]!.count,
@@ -4681,6 +4700,9 @@ function malVmDefinitionStruct(
 		`    .files = ${hasFiles ? `mal_files${suffix}` : "nullptr"},`,
 		`    .source_position_count = ${hasPositions ? definition.sourcePositions.length : 0},`,
 		`    .source_positions = ${hasPositions ? `mal_source_positions${suffix}` : "nullptr"},`,
+		...(definition.profileSites === undefined
+			? []
+			: [`    .profile_site_count = ${definition.profileSites.length},`]),
 		`    .asset_count = ${assets.length},`,
 		`    .assets = ${assets.length > 0 ? `mal_assets${suffix}` : "nullptr"},`,
 		`    .host_install_count = ${hostInstalls.length},`,
@@ -4842,6 +4864,7 @@ export function emitBatch(
 					mappedArgumentSlotsSymbols[i]!,
 					handlerSymbols[i]!,
 					compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
+					"nullptr",
 					// The batch path strips debug info (test262 does not use it).
 					{ positionsSymbol: "nullptr", positionCount: 0, fileIndex: 0 },
 					omitBytecode[i],
