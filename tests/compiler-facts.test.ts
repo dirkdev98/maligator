@@ -276,6 +276,13 @@ describe("canonical builtin-call IR facts", () => {
 			kind: "known",
 			proof: { dependencies: [{ kind: "world", fact: "primordials.locked" }] },
 		});
+		expect(call.knownBuiltinCall?.semantics).toMatchObject({
+			kind: "known",
+			value: {
+				result: "array-length",
+				lowerings: ["generic", "guarded-dense-append"],
+			},
+		});
 		expect(call.knownBuiltinCall?.sourceSite).toContain("builtin-call.js");
 		executeIROptimizations(ir);
 		const loweredCall = lowerIrProgramToVmDefinition(ir)

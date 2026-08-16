@@ -235,6 +235,11 @@ is general rather than a registry-shaped collection of special cases.
 - [ ] Migrate closed `String.prototype.split` projection and cursor lowering to the
       known-call/effect/representation facts. Preserve its generic fallback for
       mutable or unsupported consumers and erase it when facts make it unreachable.
+  - [x] Publish registry effects, result semantics, and supported lowerings beside
+        canonical builtin identity facts. Require the split projection/cursor
+        consumers to license `projected-elements` or `split-cursor-spans`
+        representations from those facts and retain their whole-region/on-demand
+        generic twin contracts.
 - [ ] Lower statically known Math calls through builtin-call IR. Preserve argument
       evaluation, coercion, exceptions, and Realm identity; use native numeric
       arguments/results when representation facts allow it.

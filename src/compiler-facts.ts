@@ -278,8 +278,15 @@ export function mergeEffectSummaries(
 export interface KnownBuiltinCall {
 	readonly operation: string;
 	readonly identity: CompilerFact<string>;
+	readonly semantics: CompilerFact<KnownBuiltinSemantics>;
 	/** Logical site identity is attached when source-position metadata is available. */
 	readonly sourceSite?: SourceSiteId;
+}
+
+export interface KnownBuiltinSemantics {
+	readonly effects: ReadonlyArray<EffectKind>;
+	readonly result: string;
+	readonly lowerings: ReadonlyArray<string>;
 }
 
 /** Proof requirements retained by a speculative lowering or virtual region. */
@@ -326,10 +333,16 @@ export function knownBuiltinCallProves(
 	call: KnownBuiltinCall | undefined,
 	operation: string,
 ): boolean {
+	const descriptor = builtinOperations.find((candidate) => candidate.id === operation);
 	return (
+		descriptor !== undefined &&
 		call?.operation === operation &&
 		call.identity.kind === "known" &&
-		call.identity.value === operation
+		call.identity.value === operation &&
+		call.semantics.kind === "known" &&
+		call.semantics.value.result === descriptor.result &&
+		call.semantics.value.effects.join("\0") === descriptor.effects.join("\0") &&
+		call.semantics.value.lowerings.join("\0") === descriptor.lowerings.join("\0")
 	);
 }
 
@@ -351,6 +364,7 @@ export interface CompilerSiteFacts {
 	readonly escape?: CompilerFact<ValueEscapeFact>;
 	readonly representation?: CompilerFact<RepresentationFact>;
 	readonly builtinIdentity?: CompilerFact<string>;
+	readonly builtinSemantics?: CompilerFact<KnownBuiltinSemantics>;
 	readonly immutableBinding?: CompilerFact<"immutable">;
 }
 

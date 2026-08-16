@@ -211,7 +211,10 @@ export function ensureCompilerSiteFacts(
 					...(escapeFact === undefined ? {} : { escape: escapeFact }),
 					...(representation === undefined ? {} : { representation }),
 					...(instruction.type === "call" && instruction.knownBuiltinCall !== undefined
-						? { builtinIdentity: instruction.knownBuiltinCall.identity }
+						? {
+								builtinIdentity: instruction.knownBuiltinCall.identity,
+								builtinSemantics: instruction.knownBuiltinCall.semantics,
+							}
 						: {}),
 					...(binding === undefined ? {} : { immutableBinding: binding }),
 				};
@@ -220,6 +223,7 @@ export function ensureCompilerSiteFacts(
 					facts.escape !== undefined ||
 					facts.representation !== undefined ||
 					facts.builtinIdentity !== undefined ||
+					facts.builtinSemantics !== undefined ||
 					facts.immutableBinding !== undefined
 				) {
 					sites.set(id, facts);

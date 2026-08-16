@@ -22,6 +22,7 @@
  * a non-spread call site supplies their exact raw argument values during substitution.
  */
 
+import { builtinOperationDescriptor } from "./builtin-registry.ts";
 import type {
 	CompilerOptimizationDecision,
 	OptimizationDecisionReason,
@@ -77,29 +78,46 @@ function recordGuardedBuiltinCall(
 					`builtin-call:${operation}`,
 				);
 	const sharedIdentity = program.facts.builtinIdentities.get(operation);
+	const descriptor = builtinOperationDescriptor(operation);
+	if (descriptor === undefined) throw new Error(`Unknown builtin operation ${operation}`);
+	const identity =
+		sharedIdentity?.kind === "known"
+			? knownFact(sharedIdentity.value, {
+					scope:
+						site === undefined
+							? { kind: "function", id: fn.functionIndex }
+							: { kind: "site", id: site },
+					dependencies: sharedIdentity.proof.dependencies,
+					obligations: [
+						...sharedIdentity.proof.obligations,
+						{
+							kind: "fallback" as const,
+							id: `generic-call:${site ?? `${fn.functionIndex}:${guardOrdinal}`}`,
+						},
+					],
+					origin: `guarded-builtin-site-analysis:${sharedIdentity.proof.origin}`,
+				})
+			: (sharedIdentity ?? {
+					kind: "unknown" as const,
+					reason: "not-analyzed" as const,
+				});
 	instruction.knownBuiltinCall = {
 		operation,
-		identity:
-			sharedIdentity?.kind === "known"
-				? knownFact(sharedIdentity.value, {
-						scope:
-							site === undefined
-								? { kind: "function", id: fn.functionIndex }
-								: { kind: "site", id: site },
-						dependencies: sharedIdentity.proof.dependencies,
-						obligations: [
-							...sharedIdentity.proof.obligations,
-							{
-								kind: "fallback",
-								id: `generic-call:${site ?? `${fn.functionIndex}:${guardOrdinal}`}`,
-							},
-						],
-						origin: `guarded-builtin-site-analysis:${sharedIdentity.proof.origin}`,
-					})
-				: (sharedIdentity ?? {
-						kind: "unknown",
-						reason: "not-analyzed",
-					}),
+		identity,
+		semantics:
+			identity.kind === "known"
+				? knownFact(
+						{
+							effects: descriptor.effects,
+							result: descriptor.result,
+							lowerings: descriptor.lowerings,
+						},
+						{
+							...identity.proof,
+							origin: `builtin-registry-semantics:${descriptor.id}`,
+						},
+					)
+				: identity,
 		...(site === undefined ? {} : { sourceSite: site }),
 	};
 }

@@ -1,5 +1,7 @@
+import { builtinOperationDescriptor } from "./builtin-registry.ts";
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
-import type { CompilerGuardPlan } from "./compiler-facts.ts";
+import { knownBuiltinCallProves } from "./compiler-facts.ts";
+import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
 import type {
 	IntermediateProgram,
 	IRFunction,
@@ -181,8 +183,21 @@ export interface VmGuardedBuiltinCall {
 export function vmCallProvesBuiltin(
 	instruction: Extract<VmInstruction, { opcode: "CALL" }>,
 	operation: VmGuardedBuiltinOperation,
+	requirements?: {
+		readonly lowering: string;
+		readonly result: string;
+		readonly effects: ReadonlyArray<EffectKind>;
+	},
 ): boolean {
-	return instruction.guardedBuiltinCall?.operation === operation;
+	if (instruction.guardedBuiltinCall?.operation !== operation) return false;
+	if (requirements === undefined) return true;
+	const descriptor = builtinOperationDescriptor(operation);
+	return (
+		descriptor !== undefined &&
+		descriptor.lowerings.includes(requirements.lowering) &&
+		descriptor.result === requirements.result &&
+		descriptor.effects.join("\0") === requirements.effects.join("\0")
+	);
 }
 
 /**
@@ -361,6 +376,8 @@ export interface VmFunction {
 
 	/** EMITTER-ONLY: selected element/length projections of an exact String split. */
 	nativeStringSplitProjections?: ReadonlyArray<{
+		license: VmRegionLicense;
+		resultRepresentation: "projected-elements";
 		propertyIp: number;
 		callIp: number;
 		callee: number;
@@ -378,6 +395,7 @@ export interface VmFunction {
 	/** EMITTER-ONLY: one closed indexed split loop streamed as trimmed spans. */
 	nativeStringSplitCursors?: ReadonlyArray<{
 		license: VmRegionLicense;
+		resultRepresentation: "split-cursor-spans";
 		propertyIp: number;
 		callIp: number;
 		callee: number;
@@ -1987,7 +2005,7 @@ function lowerGuardedBuiltinCall(
 	if (
 		call === undefined ||
 		call.identity.kind !== "known" ||
-		call.identity.value !== call.operation ||
+		!knownBuiltinCallProves(call, call.operation) ||
 		(call.operation !== "Array.prototype.push" &&
 			call.operation !== "String.prototype.charCodeAt" &&
 			call.operation !== "String.prototype.slice" &&

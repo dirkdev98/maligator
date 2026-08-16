@@ -971,9 +971,7 @@ export function emitCompiledFunction(
 			slotsOffset: nextStackSlot,
 			elementLoads,
 			lockedIdentity:
-				call?.opcode === "CALL" &&
-				call.guardedBuiltinCall !== undefined &&
-				vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard),
+				call?.opcode === "CALL" && vmGuardIsWorldInvariant(projection.license.guard),
 		});
 		nextStackSlot += elementLoads.length;
 	}

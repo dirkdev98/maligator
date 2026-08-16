@@ -263,6 +263,12 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	...mathOperations,
 ];
 
+export function builtinOperationDescriptor(
+	id: string,
+): BuiltinOperationDescriptor | undefined {
+	return builtinOperations.find((operation) => operation.id === id);
+}
+
 function featureGuard(feature: BuiltinFeature): string {
 	switch (feature) {
 		case "always":

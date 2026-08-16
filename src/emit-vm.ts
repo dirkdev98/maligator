@@ -2213,6 +2213,14 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
  * remain as the guard-miss path.
  */
 function annotateNativeStringSplitProjections(definition: VmDefinition): void {
+	const splitEffects = [
+		"coerce",
+		"property-access",
+		"call-user-code",
+		"allocate",
+		"throw",
+		"safepoint",
+	] as const;
 	for (const fn of definition.functions) {
 		const projections: Array<
 			NonNullable<VmFunction["nativeStringSplitProjections"]>[number]
@@ -2236,7 +2244,11 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 			const load = fn.instructions[callIp - 1]!;
 			if (
 				call.opcode !== "CALL" ||
-				!vmCallProvesBuiltin(call, "String.prototype.split") ||
+				!vmCallProvesBuiltin(call, "String.prototype.split", {
+					lowering: "projected-string-split",
+					result: "array-of-strings",
+					effects: splitEffects,
+				}) ||
 				call.arguments.length !== 1 ||
 				load.opcode !== "LOAD_PROPERTY_STATIC" ||
 				load.dst !== call.callee ||
@@ -2323,7 +2335,11 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 			if (!safe || elementLoads.length === 0 || elementLoads.length > 8) {
 				continue;
 			}
+			const license = vmRegionLicense([call.guardedBuiltinCall?.guard], "whole-region");
+			if (license === undefined) continue;
 			projections.push({
+				license,
+				resultRepresentation: "projected-elements",
 				propertyIp: callIp - 1,
 				callIp,
 				callee: call.callee,
@@ -2340,6 +2356,15 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 
 /** Stream one closed indexed String#split loop and materialize only trimmed elements. */
 function annotateNativeStringSplitCursors(definition: VmDefinition): void {
+	const splitEffects = [
+		"coerce",
+		"property-access",
+		"call-user-code",
+		"allocate",
+		"throw",
+		"safepoint",
+	] as const;
+	const trimEffects = ["coerce", "allocate", "throw", "safepoint"] as const;
 	for (const fn of definition.functions) {
 		const cursors: Array<NonNullable<VmFunction["nativeStringSplitCursors"]>[number]> =
 			[];
@@ -2428,7 +2453,11 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 			const call = fn.instructions[callIp]!;
 			if (
 				call.opcode !== "CALL" ||
-				!vmCallProvesBuiltin(call, "String.prototype.split") ||
+				!vmCallProvesBuiltin(call, "String.prototype.split", {
+					lowering: "closed-string-split",
+					result: "array-of-strings",
+					effects: splitEffects,
+				}) ||
 				call.arguments.length !== 1
 			)
 				continue;
@@ -2501,7 +2530,11 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 				trimProperty.object !== element.dst ||
 				!staticStringEquals(definition, trimProperty.stringIndex, "trim") ||
 				trimCall?.opcode !== "CALL" ||
-				!vmCallProvesBuiltin(trimCall, "String.prototype.trim") ||
+				!vmCallProvesBuiltin(trimCall, "String.prototype.trim", {
+					lowering: "split-cursor-span",
+					result: "string",
+					effects: trimEffects,
+				}) ||
 				trimCall.callee !== trimProperty.dst ||
 				trimCall.thisValue !== element.dst ||
 				trimCall.arguments.length !== 0
@@ -2658,6 +2691,7 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 			}
 			cursors.push({
 				license,
+				resultRepresentation: "split-cursor-spans",
 				propertyIp: calleeDefinition.ip,
 				callIp,
 				callee: call.callee,
