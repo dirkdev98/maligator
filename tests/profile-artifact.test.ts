@@ -70,23 +70,30 @@ function captureWithNestedPhases(): Uint8Array {
 	return bytes;
 }
 
-function compilerCapture(): Uint8Array {
-	const bytes = new Uint8Array(64 + 8 * 8 + 2 * 8 * 8 + 32);
-	bytes.set(Buffer.from("MALSITE3"));
+function compilerCapture(schema: 3 | 4 = 4): Uint8Array {
+	const eventCount = schema === 4 ? 12 : 8;
+	const bytes = new Uint8Array(64 + eventCount * 8 + 2 * eventCount * 8 + 32);
+	bytes.set(Buffer.from(`MALSITE${schema}`));
 	const view = new DataView(bytes.buffer);
-	view.setUint32(8, 3, true);
+	view.setUint32(8, schema, true);
 	view.setUint32(12, 2, true);
 	view.setUint32(16, 2, true);
-	view.setUint32(20, 8, true);
+	view.setUint32(20, eventCount, true);
 	view.setUint32(24, 1, true);
 	bytes.set(profileIdentityBytes(), 32);
-	const sites = 64 + 8 * 8;
+	const sites = 64 + eventCount * 8;
 	view.setBigUint64(sites + 8, 10n, true);
 	view.setBigUint64(sites + 3 * 8, 2n, true);
 	view.setBigUint64(sites + 5 * 8, 5n, true);
 	view.setBigUint64(sites + 7 * 8, 128n, true);
 	view.setBigUint64(sites + 9 * 8, 160n, true);
-	const allocation = sites + 2 * 8 * 8;
+	if (schema === 4) {
+		view.setBigUint64(sites + 17 * 8, 7n, true);
+		view.setBigUint64(sites + 19 * 8, 4n, true);
+		view.setBigUint64(sites + 21 * 8, 2n, true);
+		view.setBigUint64(sites + 23 * 8, 1n, true);
+	}
+	const allocation = sites + 2 * eventCount * 8;
 	view.setInt32(allocation, 1, true);
 	view.setUint8(allocation + 4, 2);
 	view.setUint8(allocation + 5, 3);
@@ -239,12 +246,28 @@ test("compiler counter parser validates its independent schema", () => {
 		fallbacks: 2,
 		allocationRequestedBytes: 128,
 		allocationChargedBytes: 160,
+		runtimeDispatch: 7,
+		runtimeString: 4,
+		runtimeRegExp: 2,
+		runtimeHost: 1,
 	});
 	expect(parsed.allocations[0]).toMatchObject({
 		siteId: 1,
 		family: 3,
 		count: 5,
 		chargedBytes: 160,
+	});
+});
+
+test("schema-three compiler counters remain readable with empty runtime categories", () => {
+	const parsed = parseCompilerCapture(compilerCapture(3));
+	expect(parsed).toMatchObject({ schema: 3, captureIdentity: prepared.captureIdentity });
+	expect(parsed.bySite[1]).toMatchObject({
+		executions: 10,
+		runtimeDispatch: 0,
+		runtimeString: 0,
+		runtimeRegExp: 0,
+		runtimeHost: 0,
 	});
 });
 
@@ -335,6 +358,10 @@ test("profile finalization publishes standard views and joins remarks by source 
 		allocationCount: 5,
 		requestedBytes: 128,
 		chargedBytes: 160,
+		runtimeDispatch: 7,
+		runtimeString: 4,
+		runtimeRegExp: 2,
+		runtimeHost: 1,
 	});
 	const report = formatProfileReport(result).join("\n");
 	expect(report).toContain("Sampling 10.00 ms process-cpu CPU / 64 KiB poisson");
@@ -342,6 +369,17 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(report).toContain("estimated charged allocation traffic");
 	expect(report).toContain("Exact allocation families array/raw-payload 160 B");
 	expect(report).toContain("Compiler coverage 2/2 sites (100.0%)");
+	expect(report).toContain(
+		"Runtime 7 native dispatches · 4 string · 2 regexp · 1 host entries",
+	);
+	expect(report).toContain("Exact native dispatch sites");
+	expect(report).toContain("7 native dispatch entries");
+	expect(report).toContain("Exact string runtime sites");
+	expect(report).toContain("4 string runtime entries");
+	expect(report).toContain("Exact RegExp runtime sites");
+	expect(report).toContain("2 RegExp runtime entries");
+	expect(report).toContain("Exact host runtime sites");
+	expect(report).toContain("1 host runtime entry");
 	expect(report).toContain("Phases 2 spans · 40.0 ms measured monotonic wall");
 	expect(report).toContain("graph · 40.0 ms / 30.0 ms · 1 span");
 	expect(report).toContain("Exact fallback pressure");
@@ -349,6 +387,30 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(report).toContain("Exact allocation sites");
 	expect(report).toContain("160 B charged / 5 allocations");
 	expect(report).toContain("top array/raw-payload 160 B");
+	const property = result.findings.find((finding) => finding.siteId === 1)!;
+	const combinedRuntimeReport = formatProfileReport({
+		findings: [
+			...result.findings,
+			{
+				...property,
+				siteId: 2,
+				compiler: {
+					...property.compiler!,
+					runtimeDispatch: 0,
+					runtimeString: 6,
+					runtimeRegExp: 0,
+					runtimeHost: 0,
+				},
+			},
+		],
+		manifest: {
+			...result.manifest,
+			compiler: { ...result.manifest.compiler!, runtimeString: 10 },
+		},
+	}).join("\n");
+	expect(combinedRuntimeReport).toContain(
+		"10 string runtime entries · 2 generated sites",
+	);
 });
 
 test("unmatched phase markers bias the capture instead of fabricating a duration", () => {

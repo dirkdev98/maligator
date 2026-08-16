@@ -3456,6 +3456,9 @@ MalCompletion mal_vm_call_value(
     const MalValue *args,
     i32 arg_count
 ) {
+#if MAL_PROFILE && MAL_PERF_STATS
+    i32 saved_profile_site = vm->profile_current_site_id;
+#endif
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         // A pending throw poisons further calls, so iterating natives without
         // explicit bail-outs cannot clobber the original error.
@@ -3464,7 +3467,12 @@ MalCompletion mal_vm_call_value(
 
     // A callable proxy routes [[Call]] through its apply trap.
     if (mal_value_is_proxy_object(callee)) {
-        return mal_proxy_apply(vm, mal_value_to_proxy_object(callee), this_value, args, arg_count);
+        MalCompletion proxy_completion =
+            mal_proxy_apply(vm, mal_value_to_proxy_object(callee), this_value, args, arg_count);
+#if MAL_PROFILE && MAL_PERF_STATS
+        vm->profile_current_site_id = saved_profile_site;
+#endif
+        return proxy_completion;
     }
 
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, args, arg_count, true);
@@ -3482,7 +3490,10 @@ MalCompletion mal_vm_call_value(
 #endif
 
     if (mal_value_is_native_function_object(resolution.callee)) {
-        MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
+        MalNativeFunctionObject *native_function =
+            mal_value_to_native_function_object(resolution.callee);
+        MAL_PROFILE_NATIVE_CALL(vm, native_function);
+        MalNativeFunctionCallback callback = mal_native_function_object_callback(native_function);
         // A native builtin holds its MalValue scratch (receiver, partial results)
         // in C locals the root scan cannot see, and many re-enter JS for callbacks
         // (where a safepoint could otherwise collect). Count it as a live C frame
@@ -3544,6 +3555,9 @@ MalCompletion mal_vm_call_value(
     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
     free(resolution.owned_args);
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->profile_current_site_id = saved_profile_site;
+#endif
     return completion;
 }
 
@@ -3603,8 +3617,11 @@ MalCompletion mal_vm_call_cached(
             if (cc->kind[v] != MAL_CALL_CACHE_NATIVE || cc->callee[v] != callee) {
                 continue;
             }
-            MalNativeFunctionCallback callback = mal_native_function_object_callback(
-                mal_value_to_native_function_object(callee));
+            MalNativeFunctionObject *native_function =
+                mal_value_to_native_function_object(callee);
+            MAL_PROFILE_NATIVE_CALL(vm, native_function);
+            MalNativeFunctionCallback callback =
+                mal_native_function_object_callback(native_function);
             MAL_PERF_COUNT(call_cache_exact_identity_hits);
             MAL_PERF_COUNT(call_cache_native_exact_hits);
             MalString *native_name = mal_native_function_object_name(
@@ -3621,8 +3638,14 @@ MalCompletion mal_vm_call_cached(
             mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(),
                                       callee, args, arg_count);
             vm->gc_native_frames++;
+#if MAL_PROFILE && MAL_PERF_STATS
+            i32 saved_profile_site = vm->profile_current_site_id;
+#endif
             MalValue value = callback(
                 vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
+#if MAL_PROFILE && MAL_PERF_STATS
+            vm->profile_current_site_id = saved_profile_site;
+#endif
             vm->gc_native_frames--;
             mal_gc_callee_roots_end(&ncr);
 #if MAL_REALMS
@@ -3682,6 +3705,9 @@ MalCompletion mal_vm_call_cached(
     return completion;
 
 call_compiled:
+#if MAL_PROFILE && MAL_PERF_STATS
+    i32 saved_profile_site = vm->profile_current_site_id;
+#endif
 #if MAL_REALMS
     MalRealm *saved_realm = vm->current_realm;
     mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
@@ -3689,6 +3715,9 @@ call_compiled:
     if (!mal_vm_enter_compiled(vm, function_index)) {
 #if MAL_REALMS
         mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+#if MAL_PROFILE && MAL_PERF_STATS
+        vm->profile_current_site_id = saved_profile_site;
 #endif
         return vm->completion;
     }
@@ -3700,6 +3729,9 @@ call_compiled:
     mal_vm_leave_compiled(vm);
 #if MAL_REALMS
     mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->profile_current_site_id = saved_profile_site;
 #endif
     return vm->completion.kind == MAL_COMPLETION_THROW
         ? vm->completion
@@ -3915,13 +3947,21 @@ MalCompletion mal_vm_construct_direct(
 }
 
 MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target) {
+#if MAL_PROFILE && MAL_PERF_STATS
+    i32 saved_profile_site = vm->profile_current_site_id;
+#endif
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return vm->completion;
     }
 
     // A constructable proxy routes [[Construct]] through its construct trap.
     if (mal_value_is_proxy_object(callee)) {
-        return mal_proxy_construct(vm, mal_value_to_proxy_object(callee), args, arg_count, new_target);
+        MalCompletion proxy_completion =
+            mal_proxy_construct(vm, mal_value_to_proxy_object(callee), args, arg_count, new_target);
+#if MAL_PROFILE && MAL_PERF_STATS
+        vm->profile_current_site_id = saved_profile_site;
+#endif
+        return proxy_completion;
     }
 
     // [[Construct]] ignores the bound this.
@@ -3938,6 +3978,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
     if (!mal_vm_is_constructor(vm, resolution.callee)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
         free(resolution.owned_args);
+#if MAL_PROFILE && MAL_PERF_STATS
+        vm->profile_current_site_id = saved_profile_site;
+#endif
         return vm->completion;
     }
 
@@ -3954,7 +3997,11 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
 
     if (mal_value_is_native_function_object(resolution.callee)) {
         // Native constructors allocate their own this; new_target signals construct.
-        MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
+        MalNativeFunctionObject *native_function =
+            mal_value_to_native_function_object(resolution.callee);
+        MAL_PROFILE_NATIVE_CALL(vm, native_function);
+        MalNativeFunctionCallback callback =
+            mal_native_function_object_callback(native_function);
         MalCalleeRoots ncr;
         mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), effective_new_target,
                                   resolution.callee, resolution.args, resolution.arg_count);
@@ -3971,6 +4018,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
             mal_vm_realm_switch_to(vm, saved_realm);
 #endif
             free(resolution.owned_args);
+#if MAL_PROFILE && MAL_PERF_STATS
+            vm->profile_current_site_id = saved_profile_site;
+#endif
             return vm->completion;
         }
 
@@ -4010,6 +4060,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
                     free(resolution.owned_args);
+#if MAL_PROFILE && MAL_PERF_STATS
+                    vm->profile_current_site_id = saved_profile_site;
+#endif
                     return vm->completion;
                 }
                 mal_object_set_prototype(value_object, derived_prototype);
@@ -4046,6 +4099,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
                     free(resolution.owned_args);
+#if MAL_PROFILE && MAL_PERF_STATS
+                    vm->profile_current_site_id = saved_profile_site;
+#endif
                     return vm->completion;
                 }
                 this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
@@ -4122,6 +4178,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
     free(resolution.owned_args);
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->profile_current_site_id = saved_profile_site;
+#endif
     return completion;
 }
 

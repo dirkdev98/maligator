@@ -601,7 +601,13 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_typed_array_install(vm);
     mal_builtin_data_view_install(vm);
     mal_builtin_error_install(vm);
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->heap.profile_native_category = MAL_PROFILE_SITE_RUNTIME_STRING;
+#endif
     mal_builtin_string_install(vm);
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->heap.profile_native_category = 0;
+#endif
     mal_builtin_number_install(vm);
     mal_builtin_boolean_install(vm);
     mal_builtin_math_install(vm);
@@ -615,7 +621,13 @@ void mal_intrinsics_init(MalVm *vm) {
 #if MAL_TEMPORAL
     mal_builtin_temporal_install(vm);
 #endif
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->heap.profile_native_category = MAL_PROFILE_SITE_RUNTIME_REGEXP;
+#endif
     mal_builtin_regexp_install(vm);
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->heap.profile_native_category = 0;
+#endif
     mal_builtin_intl_install(vm);
     mal_builtin_uri_install(vm);
 

@@ -25,6 +25,7 @@
 #include "module_namespace_object.h"
 #include "object_ops.h"
 #include "primitive_wrapper_object.h"
+#include "profile.h"
 #include "property_iter.h"
 #include "proxy_object.h"
 #include "shape.h"
@@ -1783,9 +1784,11 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
             }
         }
     } else if (mal_value_is_native_function_object(resolution.callee)) {
-        MalNativeFunctionCallback callback = mal_native_function_object_callback(
-            mal_value_to_native_function_object(resolution.callee)
-        );
+        MalNativeFunctionObject *native_function =
+            mal_value_to_native_function_object(resolution.callee);
+        MAL_PROFILE_NATIVE_CALL(vm, native_function);
+        MalNativeFunctionCallback callback =
+            mal_native_function_object_callback(native_function);
         // The callback may push frames and realloc the frame array, which
         // invalidates any frame pointers. Snapshot what we need and
         // re-resolve the frame afterwards.
@@ -1949,9 +1952,11 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             free(resolution.owned_args);
             return;
         }
-        MalNativeFunctionCallback callback = mal_native_function_object_callback(
-            mal_value_to_native_function_object(resolution.callee)
-        );
+        MalNativeFunctionObject *native_function =
+            mal_value_to_native_function_object(resolution.callee);
+        MAL_PROFILE_NATIVE_CALL(vm, native_function);
+        MalNativeFunctionCallback callback =
+            mal_native_function_object_callback(native_function);
         i32 caller_frame_index = vm->frame_count - 1;
         MalCalleeRoots ncr;
         mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), resolution.callee,

@@ -3531,17 +3531,14 @@ function emitBody(
 				profileDecisions.push(
 					...profileDecisionsForInstruction(fn.instructions[ip]!, ip, emitted),
 				);
-				const instrumented: Array<string> = [];
-				for (const line of emitted) {
-					const boxed = instrumentProfileBoxing(line, profileSiteId);
-					instrumented.push(
-						operationSite
-							? instrumentProfileFallback(fn.instructions[ip]!, boxed, profileSiteId)
-							: boxed,
-					);
-				}
-				emitted = instrumented;
 			}
+			emitted = emitted.map((line) => {
+				const boxed = instrumentProfileBoxing(line, profileSiteId);
+				const fallback = operationSite
+					? instrumentProfileFallback(fn.instructions[ip]!, boxed, profileSiteId)
+					: boxed;
+				return instrumentProfileRuntime(fallback, profileSiteId);
+			});
 		}
 		for (const line of emitted) {
 			lines.push(`    ${line}`);
@@ -3771,6 +3768,30 @@ function instrumentProfileFallback(
 		profileFallbackFunctions(instruction),
 		(value) => `MAL_PROFILE_FALLBACK_VALUE(vm, ${siteId}, ${value})`,
 	);
+}
+
+function instrumentProfileRuntime(line: string, siteId: number): string {
+	const categories = [
+		{
+			event: "MAL_PROFILE_SITE_RUNTIME_REGEXP",
+			pattern: /\bmal_regexp_[A-Za-z0-9_]+\(/gu,
+		},
+		{
+			event: "MAL_PROFILE_SITE_RUNTIME_STRING",
+			pattern: /\bmal_builtin_string_[A-Za-z0-9_]+\(/gu,
+		},
+	] as const;
+	let output = line;
+	for (const category of categories) {
+		const calls = [...output.matchAll(category.pattern)].map((match) => match[0]);
+		if (calls.length === 0) continue;
+		output = instrumentProfileExpressions(
+			output,
+			[...new Set(calls)],
+			(value) => `MAL_PROFILE_RUNTIME_VALUE(vm, ${siteId}, ${category.event}, ${value})`,
+		);
+	}
+	return output;
 }
 
 function instrumentProfileExpressions(

@@ -8,6 +8,7 @@
 
 typedef struct MalVm MalVm;
 typedef struct MalHeap MalHeap;
+typedef struct MalNativeFunctionObject MalNativeFunctionObject;
 
 enum {
     MAL_PROFILE_RECORD_CPU = 1,
@@ -27,7 +28,11 @@ enum {
     MAL_PROFILE_SITE_BOXING = 5,
     MAL_PROFILE_SITE_SAFEPOINT = 6,
     MAL_PROFILE_SITE_GC = 7,
-    MAL_PROFILE_SITE_EVENT_COUNT = 8,
+    MAL_PROFILE_SITE_RUNTIME_DISPATCH = 8,
+    MAL_PROFILE_SITE_RUNTIME_STRING = 9,
+    MAL_PROFILE_SITE_RUNTIME_REGEXP = 10,
+    MAL_PROFILE_SITE_RUNTIME_HOST = 11,
+    MAL_PROFILE_SITE_EVENT_COUNT = 12,
 };
 
 typedef enum MalProfileAllocationStorage : u8 {
@@ -71,6 +76,7 @@ void mal_profile_phase(MalVm *vm, u32 phase_id, bool begin);
 #if defined(MAL_PERF_STATS) && MAL_PERF_STATS
 void mal_profile_site_event(MalVm *vm, i32 site_id, u8 event, u64 value);
 void mal_profile_safepoint_compiler(MalVm *vm);
+void mal_profile_native_call(MalVm *vm, const MalNativeFunctionObject *function);
 #define MAL_PROFILE_SITE_EVENT(vm, site_id, event, value) \
     mal_profile_site_event((vm), (site_id), (event), (value))
 #define MAL_PROFILE_CURRENT_SITE(vm, site_id) ((vm)->profile_current_site_id = (site_id))
@@ -78,11 +84,17 @@ void mal_profile_safepoint_compiler(MalVm *vm);
     (mal_profile_site_event((vm), (site_id), MAL_PROFILE_SITE_BOXING, 1), (value))
 #define MAL_PROFILE_FALLBACK_VALUE(vm, site_id, value) \
     (mal_profile_site_event((vm), (site_id), MAL_PROFILE_SITE_FALLBACK, 1), (value))
+#define MAL_PROFILE_RUNTIME_VALUE(vm, site_id, event, value) \
+    (mal_profile_site_event((vm), (site_id), (event), 1), (value))
+#define MAL_PROFILE_NATIVE_CALL(vm, function) \
+    mal_profile_native_call((vm), (function))
 #else
 #define MAL_PROFILE_SITE_EVENT(vm, site_id, event, value) ((void) 0)
 #define MAL_PROFILE_CURRENT_SITE(vm, site_id) ((void) 0)
 #define MAL_PROFILE_SITE_BOX(vm, site_id, value) (value)
 #define MAL_PROFILE_FALLBACK_VALUE(vm, site_id, value) (value)
+#define MAL_PROFILE_RUNTIME_VALUE(vm, site_id, event, value) (value)
+#define MAL_PROFILE_NATIVE_CALL(vm, function) ((void) 0)
 #endif
 static inline void mal_profile_safepoint(MalVm *vm) {
 #if defined(MAL_PERF_STATS) && MAL_PERF_STATS
@@ -127,4 +139,6 @@ static inline void mal_profile_phase(MalVm *vm, u32 phase_id, bool begin) {
 #define MAL_PROFILE_CURRENT_SITE(vm, site_id) ((void) 0)
 #define MAL_PROFILE_SITE_BOX(vm, site_id, value) (value)
 #define MAL_PROFILE_FALLBACK_VALUE(vm, site_id, value) (value)
+#define MAL_PROFILE_RUNTIME_VALUE(vm, site_id, event, value) (value)
+#define MAL_PROFILE_NATIVE_CALL(vm, function) ((void) 0)
 #endif

@@ -72,6 +72,11 @@ typedef struct MalNativeFunctionObject {
      */
     bool is_constructor;
 
+#if MAL_PROFILE && MAL_PERF_STATS
+    /** Exact-profile subsystem owning this native callback, or zero for core runtime. */
+    u8 profile_category;
+#endif
+
     /**
      * Internal slots (the spec's [[...]] closure state). Heap-owned, nullptr
      * when the function carries none. Created via

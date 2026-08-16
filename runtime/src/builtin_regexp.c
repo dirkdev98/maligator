@@ -2101,6 +2101,7 @@ bool mal_regexp_try_exact_string_dispatch(
     MalCalleeRoots roots;
     mal_gc_callee_roots_begin(
         &roots, regexp, mal_value_new_undefined(), lookup.desc.value, args, arg_count);
+    MAL_PROFILE_NATIVE_CALL(vm, mal_value_to_native_function_object(lookup.desc.value));
     vm->gc_native_frames++;
     MalValue result = callback(
         vm, regexp, args, arg_count, mal_value_new_undefined(), lookup.desc.value);

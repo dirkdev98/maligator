@@ -108,6 +108,10 @@ typedef struct MalHeap {
 	void *profile_state;
 	/** Remaining charged bytes before the next Poisson allocation sample. */
 	usize profile_allocation_budget;
+#if MAL_PERF_STATS
+	/** Exact-profile category stamped onto native functions created in this scope. */
+	u8 profile_native_category;
+#endif
 #endif
 #if MAL_GC_CONCURRENT
     /** Incremental-sweep cursor (concurrent build): the chunk + in-chunk block

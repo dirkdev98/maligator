@@ -34,10 +34,18 @@ const COMPILER_V2_EVENT_NAMES = [
 	"safepoints",
 	"gc",
 ] as const;
+const COMPILER_V4_EVENT_NAMES = [
+	...COMPILER_V2_EVENT_NAMES,
+	"runtimeDispatch",
+	"runtimeString",
+	"runtimeRegExp",
+	"runtimeHost",
+] as const;
 
 type CompilerEventName =
 	| (typeof COMPILER_V1_EVENT_NAMES)[number]
-	| (typeof COMPILER_V2_EVENT_NAMES)[number];
+	| (typeof COMPILER_V2_EVENT_NAMES)[number]
+	| (typeof COMPILER_V4_EVENT_NAMES)[number];
 type CompilerEvents = Record<CompilerEventName, number>;
 
 const ALLOCATION_STORAGE_NAMES = [
@@ -115,7 +123,7 @@ export interface CompilerAllocationCounter {
 }
 
 interface CompilerCapture {
-	schema: 1 | 2 | 3;
+	schema: 1 | 2 | 3 | 4;
 	captureIdentity?: string;
 	trackedSiteCount: number;
 	totalSiteCount: number;
@@ -406,6 +414,10 @@ function emptyCompilerEvents(): CompilerEvents {
 		boxing: 0,
 		safepoints: 0,
 		gc: 0,
+		runtimeDispatch: 0,
+		runtimeString: 0,
+		runtimeRegExp: 0,
+		runtimeHost: 0,
 	};
 }
 
@@ -426,14 +438,20 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 	if (bytes.byteLength < COMPILER_V1_HEADER_BYTES)
 		throw new Error("compiler profile is truncated");
 	const magic = Buffer.from(bytes.subarray(0, 8)).toString();
-	if (magic !== "MALSITE1" && magic !== "MALSITE2" && magic !== "MALSITE3")
+	if (
+		magic !== "MALSITE1" &&
+		magic !== "MALSITE2" &&
+		magic !== "MALSITE3" &&
+		magic !== "MALSITE4"
+	)
 		throw new Error("compiler profile has an unknown magic value");
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const schema = view.getUint32(8, true);
 	if (
 		(magic === "MALSITE1" && schema !== 1) ||
 		(magic === "MALSITE2" && schema !== 2) ||
-		(magic === "MALSITE3" && schema !== 3)
+		(magic === "MALSITE3" && schema !== 3) ||
+		(magic === "MALSITE4" && schema !== 4)
 	)
 		throw new Error("compiler profile schema is unsupported");
 	const trackedSiteCount = view.getUint32(12, true);
@@ -463,10 +481,11 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 
 	if (bytes.byteLength < COMPILER_V2_HEADER_BYTES)
 		throw new Error("compiler profile is truncated");
-	if (eventCount !== COMPILER_V2_EVENT_NAMES.length)
+	const eventNames = schema === 4 ? COMPILER_V4_EVENT_NAMES : COMPILER_V2_EVENT_NAMES;
+	if (eventCount !== eventNames.length)
 		throw new Error("compiler profile event schema is unsupported");
 	const allocationCount = view.getUint32(24, true);
-	const headerBytes = schema === 3 ? COMPILER_V3_HEADER_BYTES : COMPILER_V2_HEADER_BYTES;
+	const headerBytes = schema >= 3 ? COMPILER_V3_HEADER_BYTES : COMPILER_V2_HEADER_BYTES;
 	if (bytes.byteLength < headerBytes) throw new Error("compiler profile is truncated");
 	const eventBytes = eventCount * 8;
 	const allocationBytes = allocationCount * 32;
@@ -475,7 +494,7 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 	if (bytes.byteLength !== expected)
 		throw new Error("compiler profile length does not match its header");
 	const unattributed = emptyCompilerEvents();
-	for (const [eventIndex, name] of COMPILER_V2_EVENT_NAMES.entries()) {
+	for (const [eventIndex, name] of eventNames.entries()) {
 		unattributed[name] = checkedNumber(
 			view.getBigUint64(headerBytes + eventIndex * 8, true),
 			`compiler event ${name}`,
@@ -483,7 +502,7 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 	}
 	const bySite = Array.from({ length: trackedSiteCount }, () => emptyCompilerEvents());
 	const siteBase = headerBytes + eventBytes;
-	for (const [eventIndex, name] of COMPILER_V2_EVENT_NAMES.entries()) {
+	for (const [eventIndex, name] of eventNames.entries()) {
 		for (let siteId = 0; siteId < trackedSiteCount; siteId++) {
 			bySite[siteId]![name] = checkedNumber(
 				view.getBigUint64(siteBase + (eventIndex * trackedSiteCount + siteId) * 8, true),
@@ -512,8 +531,8 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 		});
 	}
 	return {
-		schema: schema as 2 | 3,
-		...(schema === 3
+		schema: schema as 2 | 3 | 4,
+		...(schema >= 3
 			? { captureIdentity: Buffer.from(bytes.subarray(32, 64)).toString("hex") }
 			: {}),
 		trackedSiteCount,
@@ -940,6 +959,10 @@ export interface ProfileManifest {
 		boxing: number;
 		safepoints: number;
 		gc: number;
+		runtimeDispatch: number;
+		runtimeString: number;
+		runtimeRegExp: number;
+		runtimeHost: number;
 		allocationCount: number;
 		requestedBytes: number;
 		chargedBytes: number;
@@ -1169,7 +1192,7 @@ export function finalizeProfileCapture(
 		? parseCompilerCapture(readFileSync(compilerPath))
 		: undefined;
 	if (capture.schema === 4 && compiler !== undefined) {
-		if (compiler.schema !== 3 || compiler.captureIdentity !== captureIdentity) {
+		if (compiler.schema < 3 || compiler.captureIdentity !== captureIdentity) {
 			throw new Error(
 				"compiler profile identity does not match the sampling capture, metadata, and build",
 			);
@@ -1215,7 +1238,7 @@ export function finalizeProfileCapture(
 	);
 	if (compiler !== undefined) {
 		atomicJson(path.join(directory, "compiler.json"), {
-			schema: 2,
+			schema: 3,
 			trackedSiteCount: compiler.trackedSiteCount,
 			totalSiteCount: compiler.totalSiteCount,
 			unattributed: compiler.unattributed,
@@ -1315,6 +1338,10 @@ export function finalizeProfileCapture(
 						boxing: compilerEventTotal(compiler, "boxing"),
 						safepoints: compilerEventTotal(compiler, "safepoints"),
 						gc: compilerEventTotal(compiler, "gc"),
+						runtimeDispatch: compilerEventTotal(compiler, "runtimeDispatch"),
+						runtimeString: compilerEventTotal(compiler, "runtimeString"),
+						runtimeRegExp: compilerEventTotal(compiler, "runtimeRegExp"),
+						runtimeHost: compilerEventTotal(compiler, "runtimeHost"),
 						allocationCount: compilerEventTotal(compiler, "allocationCount"),
 						requestedBytes: compilerEventTotal(compiler, "allocationRequestedBytes"),
 						chargedBytes: compilerEventTotal(compiler, "allocationChargedBytes"),
@@ -1424,6 +1451,52 @@ function formatExactFallbackFindings(
 				decision === undefined ? "" : ` · ${decision}`
 			}`;
 		});
+}
+
+function formatExactRuntimeFindings(
+	values: Array<ProfileFinding>,
+	event: "runtimeDispatch" | "runtimeString" | "runtimeRegExp" | "runtimeHost",
+	label: string,
+	limit: number,
+): Array<string> {
+	const sources = new Map<
+		string,
+		{ finding: ProfileFinding; entries: number; generatedSites: number }
+	>();
+	for (const finding of values) {
+		const entries = finding.compiler?.[event] ?? 0;
+		if (entries === 0) continue;
+		const key = JSON.stringify([
+			finding.file,
+			finding.line,
+			finding.column,
+			finding.operation,
+		]);
+		const source = sources.get(key);
+		if (source === undefined) {
+			sources.set(key, { finding, entries, generatedSites: 1 });
+		} else {
+			source.entries += entries;
+			source.generatedSites++;
+			if (finding.siteId < source.finding.siteId) source.finding = finding;
+		}
+	}
+	return [...sources.values()]
+		.sort(
+			(left, right) =>
+				right.entries - left.entries || left.finding.siteId - right.finding.siteId,
+		)
+		.slice(0, limit)
+		.map(
+			(source, index) =>
+				`  ${index + 1}. ${source.finding.file}:${source.finding.line}:${source.finding.column + 1} · ${source.finding.operation} · ${formatCount(
+					source.entries,
+				)} ${label} ${source.entries === 1 ? "entry" : "entries"}${
+					source.generatedSites === 1
+						? ""
+						: ` · ${formatCount(source.generatedSites)} generated sites`
+				}`,
+		);
 }
 
 function formatExactAllocationFindings(
@@ -1578,6 +1651,20 @@ export function formatProfileReport(
 				manifest.compiler.chargedBytes,
 			)} charged allocation`,
 		);
+		const runtimeEntries =
+			manifest.compiler.runtimeDispatch +
+			manifest.compiler.runtimeString +
+			manifest.compiler.runtimeRegExp +
+			manifest.compiler.runtimeHost;
+		if (runtimeEntries > 0) {
+			lines.push(
+				`  Runtime ${formatCount(manifest.compiler.runtimeDispatch)} native dispatches · ${formatCount(
+					manifest.compiler.runtimeString,
+				)} string · ${formatCount(manifest.compiler.runtimeRegExp)} regexp · ${formatCount(
+					manifest.compiler.runtimeHost,
+				)} host entries`,
+			);
+		}
 		const siteCoverage =
 			manifest.compiler.totalSiteCount === 0
 				? 1
@@ -1615,6 +1702,23 @@ export function formatProfileReport(
 			);
 		}
 		const exactLimit = Math.min(5, limit);
+		const runtimeRankings = [
+			{ event: "runtimeDispatch", label: "native dispatch" },
+			{ event: "runtimeString", label: "string runtime" },
+			{ event: "runtimeRegExp", label: "RegExp runtime" },
+			{ event: "runtimeHost", label: "host runtime" },
+		] as const;
+		for (const ranking of runtimeRankings) {
+			const runtimeFindings = formatExactRuntimeFindings(
+				result.findings,
+				ranking.event,
+				ranking.label,
+				ranking.event === "runtimeDispatch" ? exactLimit : Math.min(3, exactLimit),
+			);
+			if (runtimeFindings.length === 0) continue;
+			lines.push(`  Exact ${ranking.label} sites`);
+			lines.push(...runtimeFindings);
+		}
 		const fallbackFindings = formatExactFallbackFindings(result.findings, exactLimit);
 		if (fallbackFindings.length > 0) {
 			lines.push("  Exact fallback pressure");

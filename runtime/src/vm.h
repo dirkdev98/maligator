@@ -6,6 +6,7 @@
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "profile.h"
 #include "shape.h"
 #include "value.h"
 
@@ -1953,7 +1954,14 @@ static inline void mal_vm_run_definition_host_installs(
     for (i32 i = 0; i < definition->host_install_count; i++) {
         const MalHostInstall *install = &definition->host_installs[i];
         if (install->installer != nullptr) {
+#if MAL_PROFILE && MAL_PERF_STATS
+            u8 previous_profile_category = vm->heap.profile_native_category;
+            vm->heap.profile_native_category = MAL_PROFILE_SITE_RUNTIME_HOST;
+#endif
             install->installer(vm, install->slots, install->slot_count, launch);
+#if MAL_PROFILE && MAL_PERF_STATS
+            vm->heap.profile_native_category = previous_profile_category;
+#endif
         }
     }
 }

@@ -3,7 +3,8 @@
 Maligator profiles through the commands developers already use. `--profile` builds
 a sampling image. `--profile=compiler` adds an exact source-site census for compiler
 work: site executions, guarded fallbacks, allocator-charged allocation count/bytes,
-boxing, safepoints, and GC starts. Both are separately compiled production images;
+boxing, safepoints, GC starts, and native dispatch/string/RegExp/host entries. Both
+are separately compiled production images;
 ordinary development images and production binaries contain neither profile metadata
 nor counter increments.
 
@@ -108,6 +109,15 @@ remark records the backend phase, operation, stable decision code, outcome, reas
 code, opcode details, and exact site ID. Functions that remain in bytecode receive an
 explicit `native-backend-not-selected` fallback rather than a guessed native remark.
 
+Exact compiler mode also attributes native/runtime boundaries to the current source
+site. Every native callback entry counts as dispatch; functions created by the String,
+RegExp, or reached host-module installers carry a stable subsystem tag, and direct
+specialized String/RegExp helpers are counted in generated code. These are exact
+entry counts, not sampled or modeled CPU time. Use them to distinguish what kind of
+runtime work a hot site requested, then use phase timing and paired benchmarks for
+elapsed-time claims. Allocation count/bytes and GC starts remain separate per-site
+events in the same census.
+
 ## Report layout
 
 The completeness marker, `manifest.json`, is published last. Its absence means the
@@ -121,7 +131,7 @@ to carry the same identity. Legacy v1-v3 captures remain readable but are marked
 | File                   | Purpose                                                              |
 | ---------------------- | -------------------------------------------------------------------- |
 | `capture.bin`          | Bounded v4 raw evidence, bound to its build and metadata             |
-| `capture.bin.compiler` | Exact v3 census carrying the same capture identity                   |
+| `capture.bin.compiler` | Exact v4 census carrying the same capture identity                   |
 | `metadata.json`        | Exact build ID, functions, source sites, and compiler remarks        |
 | `cpu.cpuprofile`       | Logical JS stacks for Chromium DevTools-compatible viewers           |
 | `timeline.json`        | GC and phase begin/end events in trace-event form                    |
@@ -166,7 +176,8 @@ or adding an event source.
 
 Compiler-census images have a separate cache identity and no low-overhead promise.
 Dense totals cover every emitted source site and are allocated only when exact
-profiling is active. The storage/family/object-kind breakdown is a sparse
+profiling is active. Its twelve rows cover execution, fallback, allocation, boxing,
+safepoint, GC, and runtime subsystem entries. The storage/family/object-kind breakdown is a sparse
 open-addressed table capped at 16,384 slots and 75% occupancy;
 new keys beyond that point aggregate into an explicit overflow row, while the dense
 global and per-site count/requested/charged totals remain exact.

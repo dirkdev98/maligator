@@ -11,6 +11,7 @@
 #include <sys/time.h>
 
 #include "gc.h"
+#include "function_object.h"
 #include "heap.h"
 #include "monotonic_clock.h"
 #include "vm.h"
@@ -147,6 +148,14 @@ void mal_profile_safepoint_compiler(MalVm *vm) {
     if (state != nullptr && state->compiler_enabled) {
         mal_profile_site_event(
             vm, mal_profile_current_site(vm), MAL_PROFILE_SITE_SAFEPOINT, 1);
+    }
+}
+
+void mal_profile_native_call(MalVm *vm, const MalNativeFunctionObject *function) {
+    i32 site_id = mal_profile_current_site(vm);
+    mal_profile_site_event(vm, site_id, MAL_PROFILE_SITE_RUNTIME_DISPATCH, 1);
+    if (function->profile_category != 0) {
+        mal_profile_site_event(vm, site_id, function->profile_category, 1);
     }
 }
 #endif
@@ -568,8 +577,8 @@ static void mal_profile_publish_site_counters(MalProfileState *state) {
     }
     u32 allocation_entry_count = state->allocation_counter_count
         + (state->allocation_overflow.occupied ? 1 : 0);
-    fwrite("MALSITE3", 1, 8, file);
-    mal_profile_write_u32(file, 3);
+    fwrite("MALSITE4", 1, 8, file);
+    mal_profile_write_u32(file, 4);
     mal_profile_write_u32(file, state->counter_site_count);
     mal_profile_write_u32(file, state->total_site_count);
     mal_profile_write_u32(file, MAL_PROFILE_SITE_EVENT_COUNT);

@@ -15,6 +15,7 @@ describe("production profile recorder", () => {
 	let longRunningBinary: string;
 	let compilerBinary: string;
 	let phaseBinary: string;
+	let runtimeBinary: string;
 
 	beforeAll(() => {
 		binary = buildNativeBinary({
@@ -52,6 +53,15 @@ describe("production profile recorder", () => {
 			name: "profile-phases",
 			compiled: true,
 			profileEnabled: true,
+			outDir: directory,
+		});
+		runtimeBinary = buildNativeBinary({
+			fixture: "tests/local/profile-runtime.mjs",
+			name: "profile-runtime-attribution",
+			compiled: true,
+			profileEnabled: true,
+			nodeEnabled: true,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
 			outDir: directory,
 		});
 	});
@@ -169,5 +179,27 @@ describe("production profile recorder", () => {
 			[6, 1],
 		]);
 		expect(records[3]!.timestampNs).toBeGreaterThanOrEqual(records[0]!.timestampNs);
+	});
+
+	it("attributes native dispatch, string, regexp, and host entries to exact sites", () => {
+		const capture = path.join(directory, "runtime-attribution.bin");
+		const result = spawnSync(runtimeBinary, [], {
+			env: {
+				...process.env,
+				MAL_PROFILE_CAPTURE: capture,
+				MAL_PROFILE_COMPILER: "1",
+				MAL_PROFILE_IDENTITY: captureIdentity,
+			},
+			encoding: "utf-8",
+		});
+		expect(result.status).toBe(0);
+		const compiler = parseCompilerCapture(readFileSync(`${capture}.compiler`));
+		const total = (
+			name: "runtimeDispatch" | "runtimeString" | "runtimeRegExp" | "runtimeHost",
+		): number => compiler.bySite.reduce((sum, events) => sum + events[name], 0);
+		expect(total("runtimeDispatch")).toBeGreaterThan(0);
+		expect(total("runtimeString")).toBeGreaterThan(0);
+		expect(total("runtimeRegExp")).toBeGreaterThan(0);
+		expect(total("runtimeHost")).toBeGreaterThan(0);
 	});
 });

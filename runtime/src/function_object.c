@@ -61,6 +61,9 @@ static void mal_native_function_init_state(
     function->callback = callback;
     function->length = length;
     function->is_constructor = false;
+#if MAL_PROFILE && MAL_PERF_STATS
+    function->profile_category = heap->profile_native_category;
+#endif
     function->slots = nullptr;
     function->slot_count = 0;
 #if MAL_REALMS
