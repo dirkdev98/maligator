@@ -307,6 +307,20 @@ test("runs one assertion", () => {
 	}
 	console.log("ok   test runner executes and reports a minimal explicit test");
 
+	writeFileSync(path.join(project, "package.json"), `{"type":"module"}\n`);
+	const esmTest = invokeCaptured(["test", "minimal-runner.test.ts"], testOnlyEnv);
+	if (
+		esmTest.signal !== null ||
+		esmTest.status !== 0 ||
+		!esmTest.stdout.includes("minimal-runner.test.ts") ||
+		!esmTest.stdout.includes("1 passed, 0 failed")
+	) {
+		throw new Error(
+			`standalone ESM test did not complete normally: status=${esmTest.status} signal=${esmTest.signal}\n${esmTest.stdout}\n${esmTest.stderr}`,
+		);
+	}
+	console.log("ok   test runner executes a minimal test in a standalone ESM package");
+
 	writeFileSync(
 		path.join(project, "example.test.ts"),
 		`import { beforeEach, expect, test } from "maligator:test";
