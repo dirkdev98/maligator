@@ -1053,6 +1053,7 @@ export function emitCompiledFunction(
 			separatorSlot: nextStackSlot + 1,
 			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
 			semanticEpochStable,
+			epochName: `__string_split_cursor_${cursor.callIp}_semantic_epoch`,
 			lockedIdentity:
 				call?.opcode === "CALL_BUILTIN" ||
 				(call?.opcode === "CALL" &&
@@ -2158,6 +2159,7 @@ interface NativeStringSplitCursorSite {
 	separatorSlot: number;
 	trimCalleeSlot?: number;
 	semanticEpochStable: boolean;
+	epochName: string;
 	lockedIdentity: boolean;
 	lockedTrimIdentity: boolean;
 }
@@ -3599,6 +3601,9 @@ function emitBody(
 			`MalStringSplitCursor __string_split_cursor_${id}_state = { 0 };`,
 			`usize __string_split_cursor_${id}_start = 0;`,
 			`usize __string_split_cursor_${id}_end = 0;`,
+			...(site.semanticEpochStable || site.trimCalleeSlot === undefined
+				? []
+				: [`u64 ${site.epochName} = 0;`]),
 		);
 	}
 	for (const site of regexpExecProjectionSites.values()) {
@@ -5206,13 +5211,16 @@ function emitInstruction(
 				if (nativeStringSplitCursorAction?.role === "element") {
 					const { site } = nativeStringSplitCursorAction;
 					const id = site.cursor.callIp;
+					const semanticValidation = site.semanticEpochStable
+						? ""
+						: `${semanticDependencyValidationGuard(site.cursor.license.guard, site.epochName)} && `;
 					const trim = site.lockedTrimIdentity
 						? [
 								`  __string_split_cursor_${id}_trim_fast = mal_builtin_string_trim_span_direct_locked(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
 							]
 						: site.trimCalleeSlot !== undefined
 							? [
-									`  __string_split_cursor_${id}_trim_fast = ${site.semanticEpochStable ? "" : "__watched_methods_epoch == vm->semantic_epochs.watched_methods && "}mal_builtin_string_trim_span_direct_licensed(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
+									`  __string_split_cursor_${id}_trim_fast = ${semanticValidation}mal_builtin_string_trim_span_direct_licensed(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
 								]
 							: [
 									`  MalValue __string_split_cursor_${id}_trim_callee;`,
@@ -6183,7 +6191,10 @@ function emitInstruction(
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitCursorAction;
 				const id = site.cursor.callIp;
-				const admission = regionAdmissionGuard(site.cursor.license);
+				const admission = regionAdmissionGuard(
+					site.cursor.license,
+					site.semanticEpochStable ? undefined : site.epochName,
+				);
 				const trimIdentity =
 					site.trimCalleeSlot === undefined
 						? "true"

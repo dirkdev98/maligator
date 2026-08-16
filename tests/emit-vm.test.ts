@@ -1735,7 +1735,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_string_trim_identity(vm,");
 		expect(output).toContain("mal_builtin_string_trim_span_direct_licensed(vm,");
 		expect(output).toMatch(
-			/__watched_methods_epoch == vm->semantic_epochs\.watched_methods && mal_builtin_string_trim_span_direct_licensed/,
+			/mal_vm_semantic_dependencies_validate\(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS, __string_split_cursor_\d+_semantic_epoch\) && mal_builtin_string_trim_span_direct_licensed/,
 		);
 		expect(output).toContain("mal_builtin_string_split_cursor_materialize(vm,");
 
