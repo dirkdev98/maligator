@@ -291,9 +291,9 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_THROW_TYPE_ERROR,
     /**
      * Internal helper backing the compiler's guarded array-iteration inlining. Not
-     * exposed as a global. `__arrayIterationEligible(arr, methodId)` returns a
-     * boolean: true iff `arr.<method>` is provably the original builtin (so an
-     * inlined loop is semantically identical). Loaded via LOAD_INTRINSIC.
+     * exposed as a global. `__arrayIterationEligible(callee, arr, methodId)`
+     * returns true iff the already-loaded method is the original builtin and the
+     * receiver admits the compiler's inlined loop. Loaded via LOAD_INTRINSIC.
      */
     MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE,
     /*

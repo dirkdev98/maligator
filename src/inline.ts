@@ -27,7 +27,7 @@ import type {
 	CompilerOptimizationDecision,
 	OptimizationDecisionReason,
 } from "./compiler-diagnostics.ts";
-import { knownFact, sourceSiteId } from "./compiler-facts.ts";
+import { knownBuiltinCallProves, knownFact, sourceSiteId } from "./compiler-facts.ts";
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
 import type { IRRegisterIndex } from "./ir-register-index.ts";
 import {
@@ -2650,8 +2650,9 @@ export function optInlineMethod(program: IntermediateProgram): boolean {
 // every / find / findIndex) with a runtime-guarded inlined loop so the callback
 // becomes a *direct* call that the direct-call inliner folds in — eliminating the
 // per-call closure + its captured `MalEnv` + the per-element dispatch. The guard
-// (`__arrayIterationEligible(arr, methodId)`) proves at runtime that `arr.method`
-// is the original builtin; if not, the slow path runs the original call unchanged.
+// (`__arrayIterationEligible(callee, arr, methodId)`) proves at runtime that the
+// already-loaded method is the original builtin; if not, the slow path runs the
+// original call unchanged.
 // The loop matches each method's observable semantics: length read once; the
 // hole-skipping methods (forEach/some/every) do a `HasProperty` (`in`) check before
 // the live `Get`, the find family visits every index (holes → undefined) — so it is
@@ -3067,6 +3068,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 	const { byCaller } = findHofInlineSites(program);
 
 	for (const fn of program.functions) {
+		let builtinGuardOrdinal = 0;
 		const sites = byCaller.get(fn.functionIndex);
 		if (sites === undefined) {
 			continue;
@@ -3076,6 +3078,17 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			if (spec === undefined) {
 				continue; // method has no inlined loop shape yet (map/filter/…)
 			}
+			const operation = `Array.prototype.${site.method}`;
+			const positionId = instructionPosition(fn, site.call);
+			recordGuardedBuiltinCall(
+				program,
+				fn,
+				site.call,
+				operation,
+				builtinGuardOrdinal++,
+				positionId < 0 ? undefined : positionId,
+			);
+			if (!knownBuiltinCallProves(site.call.knownBuiltinCall, operation)) continue;
 
 			// Locate the call by reference (earlier substitutions shift blocks).
 			let host: IRBlock | undefined;
@@ -3213,7 +3226,14 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 
 			const eligibilityCall: Extract<IRInstruction, { type: "call" }> = {
 				type: "call",
-				registers: [eligible, eligibleFn, undefinedReg, receiver, methodIdReg],
+				registers: [
+					eligible,
+					eligibleFn,
+					undefinedReg,
+					callRegisters[1]!,
+					receiver,
+					methodIdReg,
+				],
 			};
 
 			// Host: pre + the guard (compute eligibility, branch to fast or slow).
@@ -3496,6 +3516,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 						freshCallback,
 						...callRegisters.slice(4),
 					],
+					knownBuiltinCall: site.call.knownBuiltinCall,
 				};
 				slowCallAnchor = slowCall;
 				hofSubstitutedCalls.add(slowCall);

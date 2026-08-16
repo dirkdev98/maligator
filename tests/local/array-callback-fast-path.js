@@ -71,6 +71,24 @@ check(
 );
 
 check(
+	"loaded own override remains authoritative after argument effects",
+	(() => {
+		const values = [1];
+		let customCalls = 0;
+		let callbackTotal = 0;
+		values.forEach = function (callback) {
+			customCalls++;
+			callback(7);
+		};
+		const callback = (value) => {
+			callbackTotal += value;
+		};
+		values.forEach((delete values.forEach, callback));
+		return customCalls === 1 && callbackTotal === 7;
+	})(),
+);
+
+check(
 	"prototype override retains callback",
 	(() => {
 		const original = Array.prototype.forEach;

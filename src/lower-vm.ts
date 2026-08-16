@@ -129,6 +129,18 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Math.min",
 	"Math.max",
 	"RegExp.prototype.exec",
+	"Array.prototype.forEach",
+	"Array.prototype.some",
+	"Array.prototype.every",
+	"Array.prototype.find",
+	"Array.prototype.findIndex",
+	"Array.prototype.map",
+	"Array.prototype.filter",
+	"Array.prototype.reduce",
+	"Array.prototype.reduceRight",
+	"Array.prototype.findLast",
+	"Array.prototype.findLastIndex",
+	"Array.prototype.flatMap",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];

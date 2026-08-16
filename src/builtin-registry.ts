@@ -18,7 +18,7 @@ export interface BuiltinOperationDescriptor {
 	readonly id: string;
 	readonly owner: string;
 	readonly key: string;
-	readonly receiver: "none" | "any" | "string" | "regexp" | "map" | "set";
+	readonly receiver: "none" | "any" | "array" | "string" | "regexp" | "map" | "set";
 	readonly arity: { readonly minimum: number; readonly maximum?: number };
 	readonly evaluationOrder: "receiver-then-arguments" | "arguments-left-to-right";
 	readonly coercionOrder: ReadonlyArray<string>;
@@ -181,6 +181,44 @@ const mathBinaryOperations: ReadonlyArray<BuiltinOperationDescriptor> =
 		}),
 	);
 
+const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
+	[
+		["forEach", "undefined", false],
+		["some", "boolean", false],
+		["every", "boolean", false],
+		["find", "any", false],
+		["findIndex", "number", false],
+		["map", "array", true],
+		["filter", "array", true],
+		["reduce", "any", false],
+		["reduceRight", "any", false],
+		["findLast", "any", false],
+		["findLastIndex", "number", false],
+		["flatMap", "array", true],
+	] as const
+).map(
+	([key, result, allocates]): BuiltinOperationDescriptor => ({
+		id: `Array.prototype.${key}`,
+		owner: "Array.prototype",
+		key,
+		receiver: "array",
+		arity: { minimum: 1 },
+		evaluationOrder: "receiver-then-arguments",
+		coercionOrder: ["receiver-object", "receiver-length"],
+		effects: [
+			"coerce",
+			"property-access",
+			"call-user-code",
+			...(allocates ? (["allocate"] as const) : []),
+			"throw",
+			"safepoint",
+		],
+		result,
+		realm: "semantic-identity",
+		lowerings: ["generic", "inlined-callback-loop"],
+	}),
+);
+
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	{
 		id: "Array.prototype.push",
@@ -306,6 +344,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		realm: "semantic-identity",
 		lowerings: ["generic", "capture-projection"],
 	},
+	...arrayIterationOperations,
 	...mathOperations,
 	...mathBinaryOperations,
 ];

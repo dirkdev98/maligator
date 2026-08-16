@@ -3587,35 +3587,54 @@ bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver) {
 /**
  * Eligibility predicate for the compiler's guarded array-iteration inlining
  * (intrinsic slot MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE, invoked via
- * LOAD_INTRINSIC + call). args[0] = receiver, args[1] = a method id (a Number the
- * compiler bakes in). Returns a boolean: whether `recv.<method>` is the original
- * builtin (so the inlined loop is observably identical). map/filter additionally
- * require a default @@species (their fast path builds a plain Array). Side-effect-free.
+ * LOAD_INTRINSIC + call). args[0] = the method value captured by the ordinary
+ * property Get, args[1] = receiver, args[2] = a compiler-baked method id. Validating
+ * that already-loaded value preserves Get-before-arguments evaluation order and
+ * avoids a second property lookup. map/filter/flatMap additionally require a default
+ * @@species because their fast paths build a plain Array. Side-effect-free.
  */
 static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
-    if (arg_count < 2) {
+    if (arg_count < 3 || !mal_value_is_array_object(args[1]) ||
+        !mal_value_is_native_function_object(args[0])) {
         return mal_value_new_boolean(false);
     }
-    MalValue recv = args[0];
-    i32 method_id = (i32) mal_ops_number_as_f64(args[1]);
-    bool eligible = false;
+    MalValue loaded_method = args[0];
+    MalValue recv = args[1];
+    i32 method_id = (i32) mal_ops_number_as_f64(args[2]);
+    MalObject *receiver = (MalObject *) mal_value_to_array_object(recv);
+    MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    if (!mal_value_is_object(prototype_value) ||
+        receiver->prototype != mal_value_to_object(prototype_value)) {
+        return mal_value_new_boolean(false);
+    }
+
+    MalNativeFunctionCallback expected = nullptr;
     switch (method_id) {
-        case 0: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "forEach", mal_builtin_array_for_each); break;
-        case 1: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "some", mal_builtin_array_some); break;
-        case 2: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "every", mal_builtin_array_every); break;
-        case 3: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "find", mal_builtin_array_find); break;
-        case 4: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "findIndex", mal_builtin_array_find_index); break;
-        case 5: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "map", mal_builtin_array_map) && mal_array_default_species(vm, recv); break;
-        case 6: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "filter", mal_builtin_array_filter) && mal_array_default_species(vm, recv); break;
-        case 7: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "reduce", mal_builtin_array_reduce); break;
-        case 8: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "reduceRight", mal_builtin_array_reduce_right); break;
-        case 9: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "findLast", mal_builtin_array_find_last); break;
-        case 10: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "findLastIndex", mal_builtin_array_find_last_index); break;
-        case 11: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "flatMap", mal_builtin_array_flat_map) && mal_array_default_species(vm, recv); break;
-        default: eligible = false; break;
+        case 0: expected = mal_builtin_array_for_each; break;
+        case 1: expected = mal_builtin_array_some; break;
+        case 2: expected = mal_builtin_array_every; break;
+        case 3: expected = mal_builtin_array_find; break;
+        case 4: expected = mal_builtin_array_find_index; break;
+        case 5: expected = mal_builtin_array_map; break;
+        case 6: expected = mal_builtin_array_filter; break;
+        case 7: expected = mal_builtin_array_reduce; break;
+        case 8: expected = mal_builtin_array_reduce_right; break;
+        case 9: expected = mal_builtin_array_find_last; break;
+        case 10: expected = mal_builtin_array_find_last_index; break;
+        case 11: expected = mal_builtin_array_flat_map; break;
+        default: return mal_value_new_boolean(false);
+    }
+    bool eligible =
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(loaded_method)) == expected;
+#if MAL_REALMS
+    eligible = eligible && mal_vm_callee_realm(vm, loaded_method) == vm->current_realm;
+#endif
+    if (eligible && (method_id == 5 || method_id == 6 || method_id == 11)) {
+        eligible = mal_array_default_species(vm, recv);
     }
     return mal_value_new_boolean(eligible);
 }

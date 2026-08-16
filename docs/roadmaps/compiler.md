@@ -271,6 +271,11 @@ is general rather than a registry-shaped collection of special cases.
       semantics are stable, prioritizing measured `reduce`, `forEach`, `map`, and
       `sort` boundaries. Use these to validate user-callback effect summaries and
       native-loop fusion.
+  - [x] Publish canonical identity/effect/result facts for the 12 implemented Array
+        callback-loop substitutions and preserve them on their slow-path calls and
+        through the frontend wire format. Make the region guard validate the method
+        value captured by the original property Get, not re-read the property after
+        argument effects; retain exact receiver, Realm, and species checks.
 
 #### Allocation and representation consumers
 

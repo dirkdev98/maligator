@@ -741,6 +741,57 @@ test("arr.forEach(arrow) is replaced by a guarded inlined loop", () => {
 	).toBeGreaterThan(0);
 });
 
+test("inlined Array iteration regions retain canonical builtin semantics", () => {
+	const ir = optimizedProgram(`
+		(function () {
+			const values = [1, 2, 3];
+			values.forEach(value => void value);
+			return values.reduce((sum, value) => sum + value, 0);
+		})();
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	const operations = calls
+		.flatMap((call) =>
+			call.knownBuiltinCall === undefined ? [] : [call.knownBuiltinCall],
+		)
+		.sort((left, right) => left.operation.localeCompare(right.operation));
+	expect(operations.map((operation) => operation.operation)).toEqual([
+		"Array.prototype.forEach",
+		"Array.prototype.reduce",
+	]);
+	expect(operations[0]?.semantics).toMatchObject({
+		kind: "known",
+		value: {
+			effects: ["coerce", "property-access", "call-user-code", "throw", "safepoint"],
+			result: "undefined",
+			lowerings: ["generic", "inlined-callback-loop"],
+		},
+	});
+});
+
+test("Array iteration guards validate the callee captured before argument effects", () => {
+	const source = `
+		(function () {
+			const values = [1];
+			values.forEach = function (callback) { callback(7); };
+			const callback = value => value;
+			values.forEach((delete values.forEach, callback));
+		})();
+	`;
+	expect(
+		programInstrCount(
+			source,
+			(instruction) =>
+				instruction.type === "loadIntrinsic" &&
+				(instruction as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+		),
+	).toBeGreaterThan(0);
+});
+
 test("the forEach callback closure is sunk to the slow path (fast path allocates none)", () => {
 	// After the fast-path callback is inlined, the original createFunction is dead and
 	// DCE'd; a single createFunction remains, isolated on the slow (fallback) block.
