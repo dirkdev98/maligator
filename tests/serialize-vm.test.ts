@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildArgumentSnapshotPlan } from "../src/lower-vm.ts";
+import {
+	buildArgumentSnapshotPlan,
+	VM_GUARDED_BUILTIN_OPERATIONS,
+} from "../src/lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
 import {
 	deserializeVmDefinition,
@@ -221,16 +224,7 @@ describe("serialize-vm", () => {
 	});
 
 	it("round-trips every guarded builtin with world and epoch dependencies", () => {
-		const operations = [
-			"Array.prototype.push",
-			"String.prototype.charCodeAt",
-			"String.prototype.slice",
-			"String.prototype.split",
-			"String.prototype.trim",
-			"Map.prototype.get",
-			"Map.prototype.set",
-			"Set.prototype.add",
-		] as const;
+		const operations = VM_GUARDED_BUILTIN_OPERATIONS;
 		const dependencies = [
 			{ kind: "world", fact: "primordials.locked" },
 			{ kind: "epoch", family: "watched-methods" },

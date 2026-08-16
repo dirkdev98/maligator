@@ -11,6 +11,7 @@ import {
 	annotateDirectArrayPushSites,
 	annotateDirectCallTargets,
 	annotateDirectCollectionSites,
+	annotateDirectMathSites,
 	annotateDirectStringCharCodeAtSites,
 	annotateDirectStringSliceSites,
 	annotateDirectStringSplitSites,
@@ -481,6 +482,8 @@ export function executeIROptimizations(
 			annotateBoundedStringCharCodeAtPositions(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectCollectionSites(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectMathSites(program);
 		if (residualFeatures.call) annotateDirectCallTargets(program);
 		if (residualFeatures.call) optImmediateCallOperands(program);
 		optDeadInstructionElimination(program);
@@ -586,6 +589,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-direct-collections",
 			annotateDirectCollectionSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-direct-math",
+			annotateDirectMathSites,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

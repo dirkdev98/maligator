@@ -1018,11 +1018,16 @@ describe("native update-expression representation", () => {
 	});
 
 	it("guards direct unary and binary Math calls by exact callbacks", () => {
-		const output = emit(
-			`"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } globalThis.calculate = calculate;`,
-		);
+		const source = `"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } function constants() { const a = 1.25; const b = -0; return Math.floor(a) + Math.max(a, b); } globalThis.keep = [calculate, constants];`;
+		const output = emit(source);
 		expect(output).toContain("mal_builtin_math_unary_fast");
 		expect(output).toContain("mal_builtin_math_binary_fast");
+		expect(output).not.toContain("mal_builtin_math_unary_number_known");
+		expect(output).not.toContain("mal_builtin_math_binary_number_known");
+
+		const lockedOutput = emitLocked(source);
+		expect(lockedOutput).toContain("mal_builtin_math_unary_number_known");
+		expect(lockedOutput).toContain("mal_builtin_math_binary_number_known");
 	});
 
 	it("publishes positions at observable seams and guards residual TDZ helpers", () => {

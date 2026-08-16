@@ -90,15 +90,53 @@ export function rebaseVmValueOperand(operand: number, stringBase: number): numbe
 		: operand;
 }
 
-export type VmGuardedBuiltinOperation =
-	| "Array.prototype.push"
-	| "String.prototype.charCodeAt"
-	| "String.prototype.slice"
-	| "String.prototype.split"
-	| "String.prototype.trim"
-	| "Map.prototype.get"
-	| "Map.prototype.set"
-	| "Set.prototype.add";
+export const VM_GUARDED_BUILTIN_OPERATIONS = [
+	"Array.prototype.push",
+	"String.prototype.charCodeAt",
+	"String.prototype.slice",
+	"String.prototype.split",
+	"String.prototype.trim",
+	"Map.prototype.get",
+	"Map.prototype.set",
+	"Set.prototype.add",
+	"Math.abs",
+	"Math.floor",
+	"Math.ceil",
+	"Math.round",
+	"Math.trunc",
+	"Math.sqrt",
+	"Math.cbrt",
+	"Math.sign",
+	"Math.log",
+	"Math.log2",
+	"Math.log10",
+	"Math.exp",
+	"Math.sin",
+	"Math.cos",
+	"Math.tan",
+	"Math.asin",
+	"Math.acos",
+	"Math.atan",
+	"Math.sinh",
+	"Math.cosh",
+	"Math.tanh",
+	"Math.asinh",
+	"Math.acosh",
+	"Math.atanh",
+	"Math.log1p",
+	"Math.expm1",
+	"Math.fround",
+	"Math.min",
+	"Math.max",
+] as const;
+
+export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];
+
+function isVmGuardedBuiltinOperation(
+	operation: string,
+): operation is VmGuardedBuiltinOperation {
+	return (VM_GUARDED_BUILTIN_OPERATIONS as ReadonlyArray<string>).includes(operation);
+}
 
 export type VmSemanticDependency =
 	| { readonly kind: "world"; readonly fact: "primordials.locked" }
@@ -2006,14 +2044,7 @@ function lowerGuardedBuiltinCall(
 		call === undefined ||
 		call.identity.kind !== "known" ||
 		!knownBuiltinCallProves(call, call.operation) ||
-		(call.operation !== "Array.prototype.push" &&
-			call.operation !== "String.prototype.charCodeAt" &&
-			call.operation !== "String.prototype.slice" &&
-			call.operation !== "String.prototype.split" &&
-			call.operation !== "String.prototype.trim" &&
-			call.operation !== "Map.prototype.get" &&
-			call.operation !== "Map.prototype.set" &&
-			call.operation !== "Set.prototype.add")
+		!isVmGuardedBuiltinOperation(call.operation)
 	) {
 		return undefined;
 	}

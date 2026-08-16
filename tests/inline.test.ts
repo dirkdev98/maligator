@@ -293,6 +293,36 @@ test("direct trim sites carry canonical primitive String identity metadata", () 
 	).toHaveLength(2);
 });
 
+test("direct Math calls carry canonical numeric semantics", () => {
+	const ir = optimizedProgram(`
+		function calculate(value, other) {
+			const namespace = Math;
+			return Math.floor(value) + namespace["max"](value, other);
+		}
+		function detached(value) {
+			const method = Math.floor;
+			return method(value);
+		}
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	const mathCalls = calls.filter((call) =>
+		call.knownBuiltinCall?.operation.startsWith("Math."),
+	);
+	expect(mathCalls).toHaveLength(2);
+	expect(mathCalls.map((call) => call.knownBuiltinCall?.operation).sort()).toEqual([
+		"Math.floor",
+		"Math.max",
+	]);
+	expect(mathCalls[0]?.knownBuiltinCall?.semantics).toMatchObject({
+		kind: "known",
+		value: { effects: ["coerce", "throw"], result: "number" },
+	});
+});
+
 test("direct collection methods carry guarded Map and Set dispatch metadata", () => {
 	const ir = optimizedProgram(`
 		function update(map, set, key, value) {

@@ -3,6 +3,7 @@ import {
 	compressPositions,
 	countPropertyIcSites,
 	decodeVmValueOperand,
+	VM_GUARDED_BUILTIN_OPERATIONS,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./lower-vm.ts";
 
@@ -22,13 +23,38 @@ import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./low
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 35 for guard plans and canonical String split/trim/slice metadata.
-export const WIRE_VERSION = 35;
+// Bumped to 36 for guard plans and canonical String/Math builtin-call metadata.
+export const WIRE_VERSION = 36;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
 const NUMERIC_HOF_BINOPS = ["+", "-", "*", "/", "%"] as const;
 const NUMERIC_HOF_MATH_OPS = ["abs", "sqrt", "sin"] as const;
+
+const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
+	"Map.prototype.get",
+	"Map.prototype.set",
+	"Set.prototype.add",
+	"String.prototype.split",
+	"String.prototype.trim",
+	"String.prototype.slice",
+	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Math.")),
+] as const;
+
+function taggedGuardedBuiltinOperation(operation: string | undefined): number {
+	if (
+		operation === undefined ||
+		operation === "Array.prototype.push" ||
+		operation === "String.prototype.charCodeAt"
+	) {
+		return 0;
+	}
+	const index = (TAGGED_GUARDED_BUILTIN_OPERATIONS as ReadonlyArray<string>).indexOf(
+		operation,
+	);
+	if (index < 0) throw new RangeError(`serialize-vm: unsupported builtin ${operation}`);
+	return index + 1;
+}
 
 /**
  * Canonical opcode order = the wire tag (a u8 index into this array). The C
@@ -771,23 +797,7 @@ export function serializeVmDefinition(
 						(instruction.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
 						(guardedDependency?.kind === "world" ? 64 : 0),
 				);
-				w.u8(
-					guardedOperation === undefined ||
-						guardedOperation === "Array.prototype.push" ||
-						guardedOperation === "String.prototype.charCodeAt"
-						? 0
-						: guardedOperation === "Map.prototype.get"
-							? 1
-							: guardedOperation === "Map.prototype.set"
-								? 2
-								: guardedOperation === "Set.prototype.add"
-									? 3
-									: guardedOperation === "String.prototype.split"
-										? 4
-										: guardedOperation === "String.prototype.trim"
-											? 5
-											: 6,
-				);
+				w.u8(taggedGuardedBuiltinOperation(guardedOperation));
 				if (instruction.nativeCardinalityPush !== undefined) {
 					w.i32(instruction.nativeCardinalityPush.allocationInstructionIndex);
 					w.i32(
@@ -1799,7 +1809,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					flags > 127 ||
 					((flags & 48) !== 0 && (flags & 4) === 0) ||
 					(flags & 48) === 48 ||
-					collectionTag > 6 ||
+					collectionTag > TAGGED_GUARDED_BUILTIN_OPERATIONS.length ||
 					guardedBuiltinCount > 1 ||
 					((flags & 64) !== 0 && guardedBuiltinCount !== 1)
 				) {
@@ -1836,16 +1846,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							? "Array.prototype.push"
 							: (flags & 4) !== 0
 								? "String.prototype.charCodeAt"
-								: (
-										[
-											"Map.prototype.get",
-											"Map.prototype.set",
-											"Set.prototype.add",
-											"String.prototype.split",
-											"String.prototype.trim",
-											"String.prototype.slice",
-										] as const
-									)[collectionTag - 1]!;
+								: TAGGED_GUARDED_BUILTIN_OPERATIONS[collectionTag - 1]!;
 					instruction.guardedBuiltinCall = {
 						operation,
 						guard: {

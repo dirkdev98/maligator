@@ -22,7 +22,7 @@
  * a non-spread call site supplies their exact raw argument values during substitution.
  */
 
-import { builtinOperationDescriptor } from "./builtin-registry.ts";
+import { builtinOperationDescriptor, builtinOperations } from "./builtin-registry.ts";
 import type {
 	CompilerOptimizationDecision,
 	OptimizationDecisionReason,
@@ -833,6 +833,86 @@ export function annotateDirectStringTrimSites(program: IntermediateProgram): num
 		"trim",
 		"String.prototype.trim",
 	);
+}
+
+/**
+ * Attach canonical registry facts to direct `Math.name(...)` calls. Property and
+ * argument evaluation remain ordinary IR; later lowering chooses a native-number
+ * operation only when the call's identity, semantic descriptor, arity, and
+ * representation facts all agree.
+ */
+export function annotateDirectMathSites(program: IntermediateProgram): number {
+	const mathOperationByKey = new Map(
+		builtinOperations
+			.filter(
+				(operation) =>
+					operation.owner === "Math" && operation.lowerings.includes("native-number"),
+			)
+			.map((operation) => [operation.key, operation.id] as const),
+	);
+	let count = 0;
+	for (const fn of program.functions) {
+		let guardOrdinal = 0;
+		let positionId: number | undefined;
+		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const moveRoot = (initial: number): number => {
+			let register = initial;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+
+		for (const block of fn.blocks) {
+			positionId = undefined;
+			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") {
+					positionId = instruction.pos;
+					continue;
+				}
+				if (instruction.type !== "call") continue;
+				const callee = definitions.get(instruction.registers[1]);
+				if (callee === undefined) continue;
+
+				let receiver: number;
+				let nameStringIndex: number;
+				if (callee.type === "loadPropertyStatic") {
+					receiver = callee.registers[1];
+					nameStringIndex = callee.stringIndex;
+				} else if (callee.type === "loadProperty") {
+					receiver = callee.registers[1];
+					const key = definitions.get(callee.registers[2]);
+					if (key?.type !== "createString") continue;
+					nameStringIndex = key.stringIndex;
+				} else {
+					continue;
+				}
+
+				const receiverRoot = moveRoot(receiver);
+				if (receiverRoot !== moveRoot(instruction.registers[2])) continue;
+				const origin = definitions.get(receiverRoot);
+				if (origin?.type !== "loadIntrinsic" || origin.intrinsic !== "Math") continue;
+				const operation = mathOperationByKey.get(
+					decodeStringConstant(program, nameStringIndex),
+				);
+				if (operation === undefined) continue;
+				recordGuardedBuiltinCall(
+					program,
+					fn,
+					instruction,
+					operation,
+					guardOrdinal++,
+					positionId,
+				);
+				count++;
+			}
+		}
+	}
+	return count;
 }
 
 /**

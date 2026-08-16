@@ -1,3 +1,8 @@
+import { builtinOperationDescriptor } from "./builtin-registry.ts";
+import {
+	compilerFactIsWorldInvariant,
+	knownBuiltinCallProves,
+} from "./compiler-facts.ts";
 import {
 	buildIRRegisterIndex,
 	definedRegisters,
@@ -215,6 +220,26 @@ function producedRep(
 				return src === null ? null : src === "number" ? "number" : "boxed";
 			}
 			return "boxed";
+		}
+		case "call": {
+			const call = instruction.knownBuiltinCall;
+			const descriptor =
+				call === undefined ? undefined : builtinOperationDescriptor(call.operation);
+			const arguments_ = instruction.registers.slice(3);
+			if (
+				call === undefined ||
+				descriptor?.nativeNumberArity !== arguments_.length ||
+				!knownBuiltinCallProves(call, call.operation) ||
+				!compilerFactIsWorldInvariant(call.identity)
+			) {
+				return "boxed";
+			}
+			for (const argument of arguments_) {
+				const rep = repOf(argument);
+				if (rep === null) return null;
+				if (rep !== "number") return "boxed";
+			}
+			return "number";
 		}
 		default:
 			return "boxed";

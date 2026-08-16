@@ -1,3 +1,4 @@
+import { builtinOperationDescriptor } from "./builtin-registry.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
@@ -73,6 +74,41 @@ export interface BackendProfileDecision {
 	reasonCode?: string;
 	details?: Record<string, string | number | boolean>;
 }
+
+const MATH_UNARY_NATIVE_OP: ReadonlyMap<string, string> = new Map([
+	["Math.abs", "MAL_MATH_UNARY_ABS"],
+	["Math.floor", "MAL_MATH_UNARY_FLOOR"],
+	["Math.ceil", "MAL_MATH_UNARY_CEIL"],
+	["Math.round", "MAL_MATH_UNARY_ROUND"],
+	["Math.trunc", "MAL_MATH_UNARY_TRUNC"],
+	["Math.sqrt", "MAL_MATH_UNARY_SQRT"],
+	["Math.cbrt", "MAL_MATH_UNARY_CBRT"],
+	["Math.sign", "MAL_MATH_UNARY_SIGN"],
+	["Math.log", "MAL_MATH_UNARY_LOG"],
+	["Math.log2", "MAL_MATH_UNARY_LOG2"],
+	["Math.log10", "MAL_MATH_UNARY_LOG10"],
+	["Math.exp", "MAL_MATH_UNARY_EXP"],
+	["Math.sin", "MAL_MATH_UNARY_SIN"],
+	["Math.cos", "MAL_MATH_UNARY_COS"],
+	["Math.tan", "MAL_MATH_UNARY_TAN"],
+	["Math.asin", "MAL_MATH_UNARY_ASIN"],
+	["Math.acos", "MAL_MATH_UNARY_ACOS"],
+	["Math.atan", "MAL_MATH_UNARY_ATAN"],
+	["Math.sinh", "MAL_MATH_UNARY_SINH"],
+	["Math.cosh", "MAL_MATH_UNARY_COSH"],
+	["Math.tanh", "MAL_MATH_UNARY_TANH"],
+	["Math.asinh", "MAL_MATH_UNARY_ASINH"],
+	["Math.acosh", "MAL_MATH_UNARY_ACOSH"],
+	["Math.atanh", "MAL_MATH_UNARY_ATANH"],
+	["Math.log1p", "MAL_MATH_UNARY_LOG1P"],
+	["Math.expm1", "MAL_MATH_UNARY_EXPM1"],
+	["Math.fround", "MAL_MATH_UNARY_FROUND"],
+] as const);
+
+const MATH_BINARY_NATIVE_OP: ReadonlyMap<string, string> = new Map([
+	["Math.min", "MAL_MATH_BINARY_MIN"],
+	["Math.max", "MAL_MATH_BINARY_MAX"],
+] as const);
 
 export interface CompiledFunction {
 	/** The C symbol to install as MalFunction.compiled. */
@@ -1994,6 +2030,31 @@ function producedRep(
 			}
 			return "boxed";
 		}
+		case "CALL": {
+			const guarded = instruction.guardedBuiltinCall;
+			const descriptor =
+				guarded === undefined ? undefined : builtinOperationDescriptor(guarded.operation);
+			if (
+				guarded === undefined ||
+				!vmGuardIsWorldInvariant(guarded.guard) ||
+				descriptor?.nativeNumberArity !== instruction.arguments.length
+			) {
+				return "boxed";
+			}
+			for (const operand of instruction.arguments) {
+				const decoded = decodeVmValueOperand(operand);
+				if (decoded.kind === "register" && reps[decoded.register] === null) {
+					return null;
+				}
+				if (decoded.kind !== "number" && decoded.kind !== "register") {
+					return "boxed";
+				}
+				if (decoded.kind === "register" && reps[decoded.register] !== "number") {
+					return "boxed";
+				}
+			}
+			return "number";
+		}
 		default:
 			return "boxed";
 	}
@@ -2959,59 +3020,20 @@ function emitBody(
 		inheritedLoadLoopTwins.map((twin) => [twin.backedgeIp, twin] as const),
 	);
 
-	// A direct Math method call retains the loaded callee across argument evaluation.
-	// Track that provenance only within straight-line regions; the runtime still guards
-	// the exact native callback, so mutation before or during argument evaluation falls
-	// back or invokes the already-loaded original method exactly as required.
+	// Canonical Math calls arrive through the shared builtin-call fact path. The
+	// property Get and argument evaluation remain ordinary instructions; this only
+	// selects the numeric consumer after identity/effect/result validation in IR.
 	const mathUnaryCalls = new Set<number>();
 	const mathBinaryCalls = new Set<number>();
-	{
-		const mathObjects = new Set<number>();
-		const mathCallees = new Set<number>();
-		for (let ip = 0; ip < fn.instructions.length; ip++) {
-			if (jumpTargets.has(ip)) {
-				mathObjects.clear();
-				mathCallees.clear();
-			}
-			const instruction = fn.instructions[ip]!;
-			if (
-				instruction.opcode === "CALL" &&
-				mathCallees.has(instruction.callee) &&
-				mathObjects.has(instruction.thisValue)
-			) {
-				if (instruction.arguments.length === 1) mathUnaryCalls.add(ip);
-				if (instruction.arguments.length === 2) mathBinaryCalls.add(ip);
-			}
-
-			const moveFromMathObject =
-				instruction.opcode === "MOVE" && mathObjects.has(instruction.src);
-			const moveFromMathCallee =
-				instruction.opcode === "MOVE" && mathCallees.has(instruction.src);
-			const loadFromMath =
-				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-				mathObjects.has(instruction.object);
-			for (const register of writeRegisters(instruction)) {
-				mathObjects.delete(register);
-				mathCallees.delete(register);
-			}
-			if (
-				(instruction.opcode === "LOAD_INTRINSIC" && instruction.intrinsic === "Math") ||
-				moveFromMathObject
-			) {
-				mathObjects.add(instruction.dst);
-			}
-			if (loadFromMath || moveFromMathCallee) {
-				mathCallees.add(instruction.dst);
-			}
-			if (
-				instruction.opcode === "JUMP" ||
-				instruction.opcode === "JUMP_IF" ||
-				instruction.opcode === "RETURN" ||
-				instruction.opcode === "THROW"
-			) {
-				mathObjects.clear();
-				mathCallees.clear();
-			}
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode !== "CALL") continue;
+		const operation = instruction.guardedBuiltinCall?.operation;
+		if (operation?.startsWith("Math.") !== true) continue;
+		if (operation !== "Math.min" && operation !== "Math.max") {
+			if (instruction.arguments.length === 1) mathUnaryCalls.add(ip);
+		} else if (instruction.arguments.length === 2) {
+			mathBinaryCalls.add(ip);
 		}
 	}
 
@@ -6400,6 +6422,20 @@ function emitInstruction(
 			}
 			if (mathUnaryCall) {
 				const argument = instruction.arguments[0]!;
+				const nativeOperation = MATH_UNARY_NATIVE_OP.get(
+					instruction.guardedBuiltinCall?.operation ?? "",
+				);
+				const nativeArgument = nativeNumberOperand(argument);
+				if (
+					reps[instruction.dst] === "number" &&
+					nativeOperation !== undefined &&
+					nativeArgument !== null
+				) {
+					return [
+						`r${instruction.dst} = mal_builtin_math_unary_number_known(${nativeOperation}, ${nativeArgument});`,
+						poll,
+					];
+				}
 				return [
 					`static MalMathUnaryOp __math_${ip};`,
 					`MalValue __math_result_${ip};`,
@@ -6417,6 +6453,22 @@ function emitInstruction(
 			if (mathBinaryCall) {
 				const left = instruction.arguments[0]!;
 				const right = instruction.arguments[1]!;
+				const nativeOperation = MATH_BINARY_NATIVE_OP.get(
+					instruction.guardedBuiltinCall?.operation ?? "",
+				);
+				const nativeLeft = nativeNumberOperand(left);
+				const nativeRight = nativeNumberOperand(right);
+				if (
+					reps[instruction.dst] === "number" &&
+					nativeOperation !== undefined &&
+					nativeLeft !== null &&
+					nativeRight !== null
+				) {
+					return [
+						`r${instruction.dst} = mal_builtin_math_binary_number_known(${nativeOperation}, ${nativeLeft}, ${nativeRight});`,
+						poll,
+					];
+				}
 				return [
 					`static MalMathBinaryOp __math_${ip};`,
 					`MalValue __math_result_${ip};`,

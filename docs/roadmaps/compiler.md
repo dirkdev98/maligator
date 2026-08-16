@@ -243,6 +243,13 @@ is general rather than a registry-shaped collection of special cases.
 - [ ] Lower statically known Math calls through builtin-call IR. Preserve argument
       evaluation, coercion, exceptions, and Realm identity; use native numeric
       arguments/results when representation facts allow it.
+  - [x] Publish canonical facts for the currently supported unary Math operations
+        and two-argument `min`/`max`, preserve them through the frontend wire format,
+        and make locked exact-arity numeric calls native in both register allocation
+        and C emission. Mutable calls retain exact-callback guards and generic
+        fallback.
+  - [ ] Remove the now-dead Math property Get and generic call twin in IR when the
+        locked identity and numeric lowering proofs make both unreachable.
 - [ ] Add closed `RegExp.prototype.exec` capture projection as the first stateful and
       effect-sensitive projection. Preserve `lastIndex`, capture, coercion, and
       unmatched-value semantics with materialization on unsupported consumers.

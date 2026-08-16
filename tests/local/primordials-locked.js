@@ -112,6 +112,26 @@ check(
 	}) === 2 && splitCoercions === 1,
 );
 
+function lockedNumericMath() {
+	const negativeFraction = -0.4;
+	const positive = 1.25;
+	const negativeZero = -0;
+	return [
+		Math.round(negativeFraction),
+		Math.floor(positive),
+		Math.max(positive, negativeZero),
+		Math.min(0, negativeZero),
+	];
+}
+const lockedMathResults = lockedNumericMath();
+check(
+	"locked Math native-number semantics",
+	Object.is(lockedMathResults[0], -0) &&
+		lockedMathResults[1] === 1 &&
+		lockedMathResults[2] === 1.25 &&
+		Object.is(lockedMathResults[3], -0),
+);
+
 for (const [name, value] of [
 	["Object", Object],
 	["String", String],

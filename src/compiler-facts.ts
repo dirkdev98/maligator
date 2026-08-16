@@ -346,6 +346,17 @@ export function knownBuiltinCallProves(
 	);
 }
 
+/** A known fact whose validity depends only on immutable whole-world policy. */
+export function compilerFactIsWorldInvariant<T>(
+	fact: CompilerFact<T> | undefined,
+): fact is Extract<CompilerFact<T>, { kind: "known" }> {
+	return (
+		fact?.kind === "known" &&
+		fact.proof.dependencies.length > 0 &&
+		fact.proof.dependencies.every((dependency) => dependency.kind === "world")
+	);
+}
+
 export type ValueEscapeFact = "none" | "invoked" | "returned" | "retained";
 
 export type ShapeFact =

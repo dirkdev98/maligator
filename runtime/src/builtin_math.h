@@ -68,6 +68,9 @@ typedef enum MalMathUnaryOp {
     MAL_MATH_UNARY_ROUND,
 } MalMathUnaryOp;
 
+/** Locked-world numeric lowering after canonical identity and number proofs. */
+f64 mal_builtin_math_unary_number_known(MalMathUnaryOp operation, f64 argument);
+
 /**
  * Fast path for a compiled direct Math method call with a numeric argument. The
  * exact native callback guard preserves monkey-patching semantics; the cached
@@ -96,6 +99,11 @@ typedef enum MalMathBinaryOp {
     MAL_MATH_BINARY_MIN,
     MAL_MATH_BINARY_MAX,
 } MalMathBinaryOp;
+
+/** Locked-world two-number Math.min/Math.max lowering. */
+f64 mal_builtin_math_binary_number_known(
+    MalMathBinaryOp operation, f64 left, f64 right
+);
 
 /** Exact-callback fast path for two-number Math.min/Math.max calls. */
 bool mal_builtin_math_binary_fast(

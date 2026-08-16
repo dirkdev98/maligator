@@ -1,4 +1,6 @@
 import { expect, test } from "vitest";
+import { knownFact } from "../src/compiler-facts.ts";
+import type { KnownBuiltinCall } from "../src/compiler-facts.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.ts";
 import {
 	allocateDevelopmentRegisters,
@@ -242,4 +244,46 @@ test("keeps an appended-block numeric loop induction unboxed", () => {
 	} as unknown as IRFunction;
 
 	expect(inferVirtualReps(fn).get(0)).toBe("number");
+});
+
+test("keeps locked native-number builtin results unboxed before allocation", () => {
+	const proof = {
+		scope: { kind: "world" as const },
+		dependencies: [{ kind: "world" as const, fact: "primordials.locked" as const }],
+		obligations: [{ kind: "fallback" as const, id: "generic-call:test" }],
+		origin: "test",
+	};
+	const knownBuiltinCall: KnownBuiltinCall = {
+		operation: "Math.floor",
+		identity: knownFact("Math.floor", proof),
+		semantics: knownFact(
+			{
+				effects: ["coerce", "throw"],
+				result: "number",
+				lowerings: ["generic", "native-number"],
+			},
+			proof,
+		),
+	};
+	const fn = {
+		parameterCount: 0,
+		nextRegisterDestination: 4,
+		blocks: [
+			{
+				instructions: [
+					{ type: "createNumber", registers: [0], value: 1.25 },
+					{ type: "createObject", registers: [1] },
+					{ type: "createObject", registers: [2] },
+					{
+						type: "call",
+						registers: [3, 1, 2, 0],
+						knownBuiltinCall,
+					},
+					{ type: "return", registers: [3] },
+				] as Array<IRInstruction>,
+			},
+		],
+	} as unknown as IRFunction;
+
+	expect(inferVirtualReps(fn).get(3)).toBe("number");
 });

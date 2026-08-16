@@ -26,6 +26,8 @@ export interface BuiltinOperationDescriptor {
 	readonly result: string;
 	readonly realm: "semantic-identity" | "realm-object-identity";
 	readonly lowerings: ReadonlyArray<string>;
+	/** Exact argument count currently accepted by the unboxed numeric lowering. */
+	readonly nativeNumberArity?: number;
 }
 
 /**
@@ -114,9 +116,29 @@ const mathOperationKeys = [
 	["Math.floor", "floor"],
 	["Math.ceil", "ceil"],
 	["Math.round", "round"],
+	["Math.trunc", "trunc"],
 	["Math.sqrt", "sqrt"],
+	["Math.cbrt", "cbrt"],
+	["Math.sign", "sign"],
+	["Math.log", "log"],
+	["Math.log2", "log2"],
+	["Math.log10", "log10"],
+	["Math.exp", "exp"],
 	["Math.sin", "sin"],
 	["Math.cos", "cos"],
+	["Math.tan", "tan"],
+	["Math.asin", "asin"],
+	["Math.acos", "acos"],
+	["Math.atan", "atan"],
+	["Math.sinh", "sinh"],
+	["Math.cosh", "cosh"],
+	["Math.tanh", "tanh"],
+	["Math.asinh", "asinh"],
+	["Math.acosh", "acosh"],
+	["Math.atanh", "atanh"],
+	["Math.log1p", "log1p"],
+	["Math.expm1", "expm1"],
+	["Math.fround", "fround"],
 ] as const;
 
 const mathOperations: ReadonlyArray<BuiltinOperationDescriptor> = mathOperationKeys.map(
@@ -132,8 +154,32 @@ const mathOperations: ReadonlyArray<BuiltinOperationDescriptor> = mathOperationK
 		result: "number",
 		realm: "semantic-identity",
 		lowerings: ["generic", "native-number"],
+		nativeNumberArity: 1,
 	}),
 );
+
+const mathBinaryOperationKeys = [
+	["Math.min", "min"],
+	["Math.max", "max"],
+] as const;
+
+const mathBinaryOperations: ReadonlyArray<BuiltinOperationDescriptor> =
+	mathBinaryOperationKeys.map(
+		([id, key]): BuiltinOperationDescriptor => ({
+			id,
+			owner: "Math",
+			key,
+			receiver: "none",
+			arity: { minimum: 0 },
+			evaluationOrder: "arguments-left-to-right",
+			coercionOrder: ["arguments-number-left-to-right"],
+			effects: ["coerce", "throw"],
+			result: "number",
+			realm: "semantic-identity",
+			lowerings: ["generic", "native-number"],
+			nativeNumberArity: 2,
+		}),
+	);
 
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	{
@@ -261,6 +307,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		lowerings: ["generic", "capture-projection"],
 	},
 	...mathOperations,
+	...mathBinaryOperations,
 ];
 
 export function builtinOperationDescriptor(
