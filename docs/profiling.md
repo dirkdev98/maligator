@@ -18,8 +18,10 @@ maligator run src/index.ts --profile=compiler -- workload-argument
 `run --profile` is the shortest path from a representative workload to a report.
 It builds with the full optimizer, runs the program once, prints capture quality,
 sampling delay, attribution coverage, GC pauses, charged allocation families, exact
-compiler totals when enabled, and the seven hottest source findings. It leaves the
-complete capture under
+compiler totals when enabled, exact fallback/allocation leaders, and the seven hottest
+mixed source findings. The exact leader lists are independently ranked from the dense
+census, so a high-volume site cannot disappear merely because cooperative sampling
+missed it. It leaves the complete capture under
 `.maligator/profiles/<timestamp>-run-<build-id>/`. Set
 `MALIGATOR_PROFILE_DIRECTORY` when automation needs a known output directory.
 

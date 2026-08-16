@@ -1287,6 +1287,70 @@ export function formatProfileFindings(
 	});
 }
 
+function findingDecisionLabel(finding: ProfileFinding): string | undefined {
+	const decision = finding.decisions[0];
+	if (decision === undefined) return undefined;
+	return `${decision.code}${
+		decision.reasonCode === undefined ? "" : ` [${decision.reasonCode}]`
+	}`;
+}
+
+function formatExactFallbackFindings(
+	values: Array<ProfileFinding>,
+	limit: number,
+): Array<string> {
+	return values
+		.filter((finding) => (finding.compiler?.fallbacks ?? 0) > 0)
+		.sort(
+			(left, right) =>
+				(right.compiler?.fallbacks ?? 0) - (left.compiler?.fallbacks ?? 0) ||
+				left.siteId - right.siteId,
+		)
+		.slice(0, limit)
+		.map((finding, index) => {
+			const compiler = finding.compiler!;
+			const rate =
+				compiler.executions === 0
+					? "execution count unavailable"
+					: `${((compiler.fallbacks / compiler.executions) * 100).toFixed(1)}%`;
+			const decision = findingDecisionLabel(finding);
+			return `  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation} · ${formatCount(
+				compiler.fallbacks,
+			)} fallback / ${formatCount(compiler.executions)} executions (${rate})${
+				decision === undefined ? "" : ` · ${decision}`
+			}`;
+		});
+}
+
+function formatExactAllocationFindings(
+	values: Array<ProfileFinding>,
+	limit: number,
+): Array<string> {
+	return values
+		.filter((finding) => (finding.compiler?.allocationChargedBytes ?? 0) > 0)
+		.sort(
+			(left, right) =>
+				(right.compiler?.allocationChargedBytes ?? 0) -
+					(left.compiler?.allocationChargedBytes ?? 0) || left.siteId - right.siteId,
+		)
+		.slice(0, limit)
+		.map((finding, index) => {
+			const compiler = finding.compiler!;
+			const family = finding.compilerAllocations
+				?.filter((allocation) => allocation.chargedBytes > 0)
+				.sort((left, right) => right.chargedBytes - left.chargedBytes)[0];
+			return `  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation} · ${formatBytes(
+				compiler.allocationChargedBytes,
+			)} charged / ${formatCount(compiler.allocationCount)} allocations${
+				family === undefined
+					? ""
+					: ` · top ${allocationFamilyName(family.family)}/${allocationStorageName(
+							family.storage,
+						)} ${formatBytes(family.chargedBytes)}`
+			}`;
+		});
+}
+
 function formatBytes(value: number): string {
 	if (!Number.isFinite(value) || value <= 0) return "0 B";
 	const units = ["B", "KiB", "MiB", "GiB"];
@@ -1414,6 +1478,17 @@ export function formatProfileReport(
 					manifest.compiler.overflow.count,
 				)} allocations; global exact totals remain complete`,
 			);
+		}
+		const exactLimit = Math.min(5, limit);
+		const fallbackFindings = formatExactFallbackFindings(result.findings, exactLimit);
+		if (fallbackFindings.length > 0) {
+			lines.push("  Exact fallback pressure");
+			lines.push(...fallbackFindings);
+		}
+		const allocationFindings = formatExactAllocationFindings(result.findings, exactLimit);
+		if (allocationFindings.length > 0) {
+			lines.push("  Exact allocation sites");
+			lines.push(...allocationFindings);
 		}
 	}
 	lines.push("  Hot source sites");

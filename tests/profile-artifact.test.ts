@@ -297,4 +297,9 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(report).toContain("estimated charged allocation traffic");
 	expect(report).toContain("Exact allocation families array/raw-payload 160 B");
 	expect(report).toContain("Compiler coverage 2/2 sites (100.0%)");
+	expect(report).toContain("Exact fallback pressure");
+	expect(report).toContain("2 fallback / 10 executions (20.0%)");
+	expect(report).toContain("Exact allocation sites");
+	expect(report).toContain("160 B charged / 5 allocations");
+	expect(report).toContain("top array/raw-payload 160 B");
 });
