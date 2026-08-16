@@ -253,6 +253,26 @@ test("direct split sites carry canonical primitive String identity metadata", ()
 	).toHaveLength(2);
 });
 
+test("direct trim sites carry canonical primitive String identity metadata", () => {
+	const ir = optimizedProgram(`
+		function clean(value) {
+			return value.trim() + value["trim"]();
+		}
+		function detached(value) {
+			const method = value.trim;
+			return method();
+		}
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	expect(
+		calls.filter((call) => call.knownBuiltinCall?.operation === "String.prototype.trim"),
+	).toHaveLength(2);
+});
+
 test("direct collection methods carry guarded Map and Set dispatch metadata", () => {
 	const ir = optimizedProgram(`
 		function update(map, set, key, value) {

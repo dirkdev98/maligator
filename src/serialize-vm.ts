@@ -22,8 +22,8 @@ import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./low
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 33 for guard plans and canonical String.prototype.split call metadata.
-export const WIRE_VERSION = 33;
+// Bumped to 34 for guard plans and canonical String split/trim call metadata.
+export const WIRE_VERSION = 34;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -782,7 +782,9 @@ export function serializeVmDefinition(
 								? 2
 								: guardedOperation === "Set.prototype.add"
 									? 3
-									: 4,
+									: guardedOperation === "String.prototype.split"
+										? 4
+										: 5,
 				);
 				if (instruction.nativeCardinalityPush !== undefined) {
 					w.i32(instruction.nativeCardinalityPush.allocationInstructionIndex);
@@ -1795,7 +1797,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					flags > 127 ||
 					((flags & 48) !== 0 && (flags & 4) === 0) ||
 					(flags & 48) === 48 ||
-					collectionTag > 4 ||
+					collectionTag > 5 ||
 					guardedBuiltinCount > 1 ||
 					((flags & 64) !== 0 && guardedBuiltinCount !== 1)
 				) {
@@ -1838,6 +1840,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 											"Map.prototype.set",
 											"Set.prototype.add",
 											"String.prototype.split",
+											"String.prototype.trim",
 										] as const
 									)[collectionTag - 1]!;
 					instruction.guardedBuiltinCall = {

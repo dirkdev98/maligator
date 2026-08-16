@@ -92,6 +92,7 @@ export type VmGuardedBuiltinOperation =
 	| "Array.prototype.push"
 	| "String.prototype.charCodeAt"
 	| "String.prototype.split"
+	| "String.prototype.trim"
 	| "Map.prototype.get"
 	| "Map.prototype.set"
 	| "Set.prototype.add";
@@ -1938,6 +1939,7 @@ function lowerGuardedBuiltinCall(
 		(call.operation !== "Array.prototype.push" &&
 			call.operation !== "String.prototype.charCodeAt" &&
 			call.operation !== "String.prototype.split" &&
+			call.operation !== "String.prototype.trim" &&
 			call.operation !== "Map.prototype.get" &&
 			call.operation !== "Map.prototype.set" &&
 			call.operation !== "Set.prototype.add")

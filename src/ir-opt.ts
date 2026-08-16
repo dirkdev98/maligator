@@ -13,6 +13,7 @@ import {
 	annotateDirectCollectionSites,
 	annotateDirectStringCharCodeAtSites,
 	annotateDirectStringSplitSites,
+	annotateDirectStringTrimSites,
 	decodeStringConstant,
 	optEliminateCapturedSlots,
 	optEmptyDeadFunctions,
@@ -472,6 +473,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringSplitSites(program);
 		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectStringTrimSites(program);
+		if (residualFeatures.call && residualFeatures.property)
 			annotateBoundedStringCharCodeAtPositions(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectCollectionSites(program);
@@ -560,6 +563,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-direct-string-split",
 			annotateDirectStringSplitSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-direct-string-trim",
+			annotateDirectStringTrimSites,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

@@ -2500,6 +2500,7 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 				trimProperty.object !== element.dst ||
 				!staticStringEquals(definition, trimProperty.stringIndex, "trim") ||
 				trimCall?.opcode !== "CALL" ||
+				!vmCallProvesBuiltin(trimCall, "String.prototype.trim") ||
 				trimCall.callee !== trimProperty.dst ||
 				trimCall.thisValue !== element.dst ||
 				trimCall.arguments.length !== 0

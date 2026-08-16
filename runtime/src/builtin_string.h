@@ -189,3 +189,12 @@ bool mal_builtin_string_trim_span_direct(
     usize end,
     MalValue *out
 );
+
+/** Locked-world span trim with the builtin identity proved by C emission. */
+bool mal_builtin_string_trim_span_direct_locked(
+    MalVm *vm,
+    MalValue subject,
+    usize start,
+    usize end,
+    MalValue *out
+);

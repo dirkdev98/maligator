@@ -207,6 +207,8 @@ the same facts unconditionally.
   - [x] Let locked String split projections and cursors fuse the adjacent property
         Get into their generic twin and call identity-free runtime helpers; keep
         receiver, separator, coercion, and materialization guards local.
+  - [x] Give the split cursor's `trim` consumer its own canonical builtin fact and
+        let locked regions remove the per-element property probe and callback check.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.

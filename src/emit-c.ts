@@ -974,6 +974,7 @@ export function emitCompiledFunction(
 	for (const cursor of fn.nativeStringSplitCursors ?? []) {
 		if (stringSplitCursorSites.has(cursor.callIp)) continue;
 		const call = fn.instructions[cursor.callIp];
+		const trimCall = fn.instructions[cursor.trimCallIp];
 		stringSplitCursorSites.set(cursor.callIp, {
 			cursor,
 			subjectSlot: nextStackSlot,
@@ -982,6 +983,10 @@ export function emitCompiledFunction(
 				call?.opcode === "CALL" &&
 				call.guardedBuiltinCall !== undefined &&
 				vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard),
+			lockedTrimIdentity:
+				trimCall?.opcode === "CALL" &&
+				trimCall.guardedBuiltinCall !== undefined &&
+				vmGuardIsWorldInvariant(trimCall.guardedBuiltinCall.guard),
 		});
 		nextStackSlot += 2;
 	}
@@ -2038,6 +2043,7 @@ interface NativeStringSplitCursorSite {
 	subjectSlot: number;
 	separatorSlot: number;
 	lockedIdentity: boolean;
+	lockedTrimIdentity: boolean;
 }
 
 interface NativeStringSplitCursorAction {
@@ -4952,10 +4958,17 @@ function emitInstruction(
 				if (nativeStringSplitCursorAction?.role === "element") {
 					const { site } = nativeStringSplitCursorAction;
 					const id = site.cursor.callIp;
+					const trim = site.lockedTrimIdentity
+						? [
+								`  __string_split_cursor_${id}_trim_fast = mal_builtin_string_trim_span_direct_locked(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
+							]
+						: [
+								`  MalValue __string_split_cursor_${id}_trim_callee;`,
+								`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && mal_builtin_string_trim_span_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
+							];
 					return [
 						`if (__string_split_cursor_${id}_active) {`,
-						`  MalValue __string_split_cursor_${id}_trim_callee;`,
-						`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && mal_builtin_string_trim_span_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
+						...trim,
 						`  if (!__string_split_cursor_${id}_trim_fast) r${instruction.dst} = mal_builtin_string_split_cursor_materialize(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end);`,
 						`} else {`,
 						...ordinary.map((line) => `  ${line}`),

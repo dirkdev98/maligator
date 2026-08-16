@@ -225,6 +225,7 @@ describe("serialize-vm", () => {
 			"Array.prototype.push",
 			"String.prototype.charCodeAt",
 			"String.prototype.split",
+			"String.prototype.trim",
 			"Map.prototype.get",
 			"Map.prototype.set",
 			"Set.prototype.add",

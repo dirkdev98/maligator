@@ -1471,7 +1471,11 @@ describe("native update-expression representation", () => {
 
 		const lockedOutput = emitLocked(code);
 		expect(lockedOutput).toContain("mal_builtin_string_split_cursor_init_locked(vm,");
+		expect(lockedOutput).toContain("mal_builtin_string_trim_span_direct_locked(vm,");
 		expect(lockedOutput).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+		expect(lockedOutput).not.toContain(
+			"mal_vm_local_watched_primitive_value_try_load_static",
+		);
 		expect(lockedOutput).not.toContain(
 			"mal_primitive_method_protector && __watched_methods_epoch",
 		);

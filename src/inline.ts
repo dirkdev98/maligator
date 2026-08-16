@@ -703,8 +703,11 @@ export function annotateDirectArrayPushSites(program: IntermediateProgram): numb
 
 function annotateDirectPrimitiveStringMethodSites(
 	program: IntermediateProgram,
-	methodName: "charCodeAt" | "split",
-	operation: "String.prototype.charCodeAt" | "String.prototype.split",
+	methodName: "charCodeAt" | "split" | "trim",
+	operation:
+		| "String.prototype.charCodeAt"
+		| "String.prototype.split"
+		| "String.prototype.trim",
 ): number {
 	let count = 0;
 	for (const fn of program.functions) {
@@ -792,6 +795,15 @@ export function annotateDirectStringSplitSites(program: IntermediateProgram): nu
 		program,
 		"split",
 		"String.prototype.split",
+	);
+}
+
+/** Canonical identity fact consumed by closed split-cursor span trimming. */
+export function annotateDirectStringTrimSites(program: IntermediateProgram): number {
+	return annotateDirectPrimitiveStringMethodSites(
+		program,
+		"trim",
+		"String.prototype.trim",
 	);
 }
 

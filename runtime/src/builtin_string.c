@@ -2338,23 +2338,27 @@ MalValue mal_builtin_string_split_cursor_materialize(
     return mal_builtin_string_slice(vm, subject, start, end - start);
 }
 
-bool mal_builtin_string_trim_span_direct(
+static bool mal_builtin_string_trim_span_direct_impl(
     MalVm *vm,
     MalValue callee,
     MalValue subject_value,
     usize start,
     usize end,
-    MalValue *out
+    MalValue *out,
+    bool identity_locked
 ) {
     if (!mal_value_is_string(subject_value) ||
-        !mal_value_is_native_function_object(callee) ||
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(callee)) !=
-            mal_builtin_string_prototype_trim) {
+        (!identity_locked &&
+         (!mal_value_is_native_function_object(callee) ||
+          mal_native_function_object_callback(
+              mal_value_to_native_function_object(callee)) !=
+              mal_builtin_string_prototype_trim))) {
         return false;
     }
 #if MAL_REALMS
-    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+    if (!identity_locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#else
+    (void) vm;
 #endif
     MalString *subject = mal_value_to_string(subject_value);
     usize length = mal_string_length(subject);
@@ -2364,6 +2368,29 @@ bool mal_builtin_string_trim_span_direct(
     while (end > start && mal_ecma_is_string_whitespace(units[end - 1])) end--;
     *out = mal_builtin_string_slice(vm, subject, start, end - start);
     return true;
+}
+
+bool mal_builtin_string_trim_span_direct(
+    MalVm *vm,
+    MalValue callee,
+    MalValue subject_value,
+    usize start,
+    usize end,
+    MalValue *out
+) {
+    return mal_builtin_string_trim_span_direct_impl(
+        vm, callee, subject_value, start, end, out, false);
+}
+
+bool mal_builtin_string_trim_span_direct_locked(
+    MalVm *vm,
+    MalValue subject_value,
+    usize start,
+    usize end,
+    MalValue *out
+) {
+    return mal_builtin_string_trim_span_direct_impl(
+        vm, MAL_VALUE_UNDEFINED, subject_value, start, end, out, true);
 }
 
 void mal_builtin_string_install(MalVm *vm) {
