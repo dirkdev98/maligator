@@ -233,7 +233,7 @@ describe("serialize-vm", () => {
 			{ kind: "epoch", family: "watched-methods" },
 		] as const;
 		for (const operation of operations) {
-			for (const identityDependency of dependencies) {
+			for (const dependency of dependencies) {
 				let replaced = false;
 				const guardedDefinition: VmDefinition = {
 					...definition,
@@ -246,8 +246,10 @@ describe("serialize-vm", () => {
 								...instruction,
 								guardedBuiltinCall: {
 									operation,
-									identityDependency,
-									fallback: "generic-call",
+									guard: {
+										dependencies: [dependency],
+										obligations: ["generic-call"],
+									},
 								},
 							};
 						}),
@@ -275,8 +277,10 @@ describe("serialize-vm", () => {
 						directCallTargetFunctionIndex: 1,
 						guardedBuiltinCall: {
 							operation: "String.prototype.charCodeAt",
-							identityDependency: { kind: "world", fact: "primordials.locked" },
-							fallback: "generic-call",
+							guard: {
+								dependencies: [{ kind: "world", fact: "primordials.locked" }],
+								obligations: ["generic-call"],
+							},
 						},
 						directStringCharCodeAtPosition: "inBounds",
 					};

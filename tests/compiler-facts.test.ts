@@ -289,8 +289,10 @@ describe("canonical builtin-call IR facts", () => {
 			opcode: "CALL",
 			guardedBuiltinCall: {
 				operation: "Array.prototype.push",
-				identityDependency: { kind: "world", fact: "primordials.locked" },
-				fallback: "generic-call",
+				guard: {
+					dependencies: [{ kind: "world", fact: "primordials.locked" }],
+					obligations: ["generic-call"],
+				},
 			},
 		});
 	});
@@ -330,8 +332,10 @@ describe("canonical builtin-call IR facts", () => {
 		expect(loweredCall).toMatchObject({
 			opcode: "CALL",
 			guardedBuiltinCall: {
-				identityDependency: { kind: "epoch", family: "watched-methods" },
-				fallback: "generic-call",
+				guard: {
+					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					obligations: ["generic-call"],
+				},
 			},
 		});
 	});

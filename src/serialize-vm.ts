@@ -693,12 +693,16 @@ export function serializeVmDefinition(
 			} else if (instruction.opcode === "CALL") {
 				const guardedBuiltin = instruction.guardedBuiltinCall;
 				const guardedOperation = guardedBuiltin?.operation;
+				const guardedDependency = guardedBuiltin?.guard.dependencies[0];
 				if (
 					guardedBuiltin !== undefined &&
-					(guardedBuiltin.fallback !== "generic-call" ||
-						(guardedBuiltin.identityDependency.kind === "world"
-							? guardedBuiltin.identityDependency.fact !== "primordials.locked"
-							: guardedBuiltin.identityDependency.family !== "watched-methods"))
+					(guardedBuiltin.guard.dependencies.length !== 1 ||
+						guardedBuiltin.guard.obligations.length !== 1 ||
+						guardedBuiltin.guard.obligations[0] !== "generic-call" ||
+						guardedDependency === undefined ||
+						(guardedDependency.kind === "world"
+							? guardedDependency.fact !== "primordials.locked"
+							: guardedDependency.family !== "watched-methods"))
 				) {
 					throw new RangeError("serialize-vm: invalid guarded builtin fact");
 				}
@@ -720,7 +724,7 @@ export function serializeVmDefinition(
 						(instruction.nativeCardinalityPush !== undefined ? 8 : 0) |
 						(instruction.directStringCharCodeAtPosition === "integer" ? 16 : 0) |
 						(instruction.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
-						(guardedBuiltin?.identityDependency.kind === "world" ? 64 : 0),
+						(guardedDependency?.kind === "world" ? 64 : 0),
 				);
 				w.u8(
 					guardedOperation === undefined ||
@@ -1768,11 +1772,14 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 									)[collectionTag - 1]!;
 					instruction.guardedBuiltinCall = {
 						operation,
-						identityDependency:
-							(flags & 64) !== 0
-								? { kind: "world", fact: "primordials.locked" }
-								: { kind: "epoch", family: "watched-methods" },
-						fallback: "generic-call",
+						guard: {
+							dependencies: [
+								(flags & 64) !== 0
+									? { kind: "world", fact: "primordials.locked" }
+									: { kind: "epoch", family: "watched-methods" },
+							],
+							obligations: ["generic-call"],
+						},
 					};
 				}
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {

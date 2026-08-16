@@ -94,14 +94,30 @@ export type VmGuardedBuiltinOperation =
 	| "Map.prototype.set"
 	| "Set.prototype.add";
 
+export type VmSemanticDependency =
+	| { readonly kind: "world"; readonly fact: "primordials.locked" }
+	| {
+			readonly kind: "epoch";
+			readonly family:
+				| "primitive-methods"
+				| "watched-methods"
+				| "array-elements"
+				| "global-bindings"
+				| "object-shapes";
+	  };
+
+export type VmGuardObligation = "generic-call" | "materialize";
+
+/** Backend-neutral proof contract retained across frontend-cache serialization. */
+export interface VmGuardPlan {
+	readonly dependencies: ReadonlyArray<VmSemanticDependency>;
+	readonly obligations: ReadonlyArray<VmGuardObligation>;
+}
+
 export interface VmGuardedBuiltinCall {
 	readonly operation: VmGuardedBuiltinOperation;
-	/** The shared semantic fact that keeps the intrinsic identity valid. */
-	readonly identityDependency:
-		| { readonly kind: "world"; readonly fact: "primordials.locked" }
-		| { readonly kind: "epoch"; readonly family: "watched-methods" };
-	/** Every guarded lowering retains ordinary call dispatch on a failed local guard. */
-	readonly fallback: "generic-call";
+	/** The shared semantic facts and fallback contract for this specialization. */
+	readonly guard: VmGuardPlan;
 }
 
 export function vmCallProvesBuiltin(
@@ -1882,21 +1898,32 @@ function lowerGuardedBuiltinCall(
 	) {
 		return undefined;
 	}
-	if (call.identity.proof.dependencies.length !== 1) return undefined;
-	const dependency = call.identity.proof.dependencies[0]!;
-	if (
-		(dependency.kind !== "world" || dependency.fact !== "primordials.locked") &&
-		(dependency.kind !== "epoch" || dependency.family !== "watched-methods")
-	) {
+	const dependencies: Array<VmSemanticDependency> = [];
+	for (const dependency of call.identity.proof.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencies.push({ kind: "world", fact: "primordials.locked" });
+			continue;
+		}
+		if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencies.push({ kind: "epoch", family: "watched-methods" });
+			continue;
+		}
+		return undefined;
+	}
+	const obligations = [
+		...new Set(
+			call.identity.proof.obligations.map(
+				(obligation): VmGuardObligation =>
+					obligation.kind === "fallback" ? "generic-call" : "materialize",
+			),
+		),
+	];
+	if (dependencies.length === 0 || !obligations.includes("generic-call")) {
 		return undefined;
 	}
 	return {
 		operation: call.operation,
-		identityDependency:
-			dependency.kind === "world"
-				? { kind: "world", fact: "primordials.locked" }
-				: { kind: "epoch", family: "watched-methods" },
-		fallback: "generic-call",
+		guard: { dependencies, obligations },
 	};
 }
 
