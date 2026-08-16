@@ -188,13 +188,14 @@ profiler improvement; collecting more samples alone will not repair the explanat
 - [ ] Add optional native/runtime attribution so a hot logical site can be separated
       into dispatch, string scan, allocation, GC, regexp, and host work without raising
       the default profile above its current overhead envelope.
-- [x] Add a bounded exact event census keyed by final-backend logical site or
+- [x] Add an exact event census keyed by final-backend logical site or
       region ID. Attribute load-region, store-region, watched-load, call, boxing,
       allocation count, and allocation bytes to the final emitted operation so the
       report can expose facts such as the particle region's 13.5 million loads and
       4.5 million stores or the reduce region's roughly 2.4 million watched Math
       operations without reconstructing them from global counters and sparse samples.
-      Keep the table optional and bounded so ordinary product images remain unchanged.
+      Keep the table compiler-profile-only so ordinary product images remain unchanged;
+      exact images cover every emitted source site and report attribution explicitly.
 - [ ] Improve paired-benchmark turnaround: show adaptive pair progress, avoid treating a
       redundant derived ratio as decisive when both component timings are unchanged,
       and make the maximum-pair/inconclusive outcome explicit. A no-op module comparison

@@ -13,4 +13,4 @@ function descend(depth) {
 	return (descend(depth - 1) + depth) >>> 0;
 }
 
-console.log(descend(160));
+console.log(descend(320));

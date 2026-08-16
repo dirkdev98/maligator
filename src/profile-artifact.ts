@@ -1261,6 +1261,25 @@ export function formatProfileReport(
 				manifest.compiler.chargedBytes,
 			)} charged allocation`,
 		);
+		const siteCoverage =
+			manifest.compiler.totalSiteCount === 0
+				? 1
+				: manifest.compiler.trackedSiteCount / manifest.compiler.totalSiteCount;
+		const attributedExecutions =
+			manifest.compiler.executions - manifest.compiler.unattributed.executions;
+		const executionAttribution =
+			manifest.compiler.executions === 0
+				? 1
+				: attributedExecutions / manifest.compiler.executions;
+		lines.push(
+			`  Compiler coverage ${formatCount(manifest.compiler.trackedSiteCount)}/${formatCount(
+				manifest.compiler.totalSiteCount,
+			)} sites (${(siteCoverage * 100).toFixed(1)}%) · ${(
+				executionAttribution * 100
+			).toFixed(1)}% executions attributed (${formatCount(
+				manifest.compiler.unattributed.executions,
+			)} unattributed)`,
+		);
 		const compilerFamilies = manifest.compiler.families
 			.slice(0, 4)
 			.map(

@@ -259,4 +259,5 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(report).toContain("GC 0 collections");
 	expect(report).toContain("estimated charged allocation traffic");
 	expect(report).toContain("Exact allocation families array/raw-payload 160 B");
+	expect(report).toContain("Compiler coverage 2/2 sites (100.0%)");
 });

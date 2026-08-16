@@ -28,7 +28,7 @@ which optimized operation executed. This mode builds with `MAL_PERF_STATS`, stor
 its dense counter table separately, and is intentionally more intrusive than the
 sampling image. It is the machine-readable choice for agents: `compiler.json`
 contains stable identities, final-backend decisions and reason codes, and exact
-event counts for each tracked site. Do not use its wall time as a production
+event counts for every emitted source site. Do not use its wall time as a production
 performance measurement.
 
 `dev --profile` preserves one capture per generation. Successful restarts,
@@ -57,8 +57,8 @@ process CPU time; monotonic wall time remains the artifact timeline. The runtime
 records a bounded logical JS stack at existing VM safe points, outside the signal
 handler and without allocating
 on the managed heap. Multiple delivered ticks handled at one safe point share one
-stack walk but retain separate delay records. Stacks deeper than 128 logical frames
-retain the leaf-most 128 frames, add an explicit missing-outer-frames node to
+stack walk but retain separate delay records. Stacks deeper than 256 logical frames
+retain the leaf-most 256 frames, add an explicit missing-outer-frames node to
 `cpu.cpuprofile`, and count every omitted frame. It also samples managed cells, raw
 payloads, selected native backing stores, and records major/minor GC begin/end events.
 This gives compiled and interpreted frames the same source identity while keeping
@@ -133,7 +133,8 @@ cannot safely return to a VM safe point may leave a partial directory.
 
 The sampler is compiled out of ordinary binaries. Exact counters are additionally
 compiled out of sampling-only profile images. Sampling images begin with small
-record/frame buffers and grow them only as evidence arrives. For an active sampling
+record/frame buffers, grow them only as evidence arrives, and allow up to 262,144
+records before reporting explicit loss. For an active sampling
 build, the acceptance target is less than 3% median overhead across language,
 allocation-heavy, GC, and HTTP lanes, with output parity, GC verification, and zero
 capture loss. Run `npm run bench:profile-overhead`; its alternating pairs and raw JSON
@@ -142,8 +143,9 @@ make the check reproducible. The 2026-08-15 five-pair check measured 1.14%, 1.46
 or adding an event source.
 
 Compiler-census images have a separate cache identity and no low-overhead promise.
-Dense totals track at most 65,536 source sites. The storage/family/object-kind
-breakdown is a sparse open-addressed table capped at 16,384 slots and 75% occupancy;
+Dense totals cover every emitted source site and are allocated only when exact
+profiling is active. The storage/family/object-kind breakdown is a sparse
+open-addressed table capped at 16,384 slots and 75% occupancy;
 new keys beyond that point aggregate into an explicit overflow row, while the dense
 global and per-site count/requested/charged totals remain exact.
 

@@ -81,7 +81,7 @@ describe("production profile recorder", () => {
 		);
 		expect(parsed.droppedFrames).toBeGreaterThan(0);
 		expect(truncated).toBeDefined();
-		expect(truncated?.frames).toHaveLength(128);
+		expect(truncated?.frames).toHaveLength(256);
 		expect(truncated?.frames.at(-1)?.siteId).toBeGreaterThanOrEqual(0);
 	});
 
@@ -118,6 +118,7 @@ describe("production profile recorder", () => {
 		expect(result.status).toBe(0);
 		const compiler = parseCompilerCapture(readFileSync(`${capture}.compiler`));
 		expect(compiler.totalSiteCount).toBeGreaterThan(0);
+		expect(compiler.trackedSiteCount).toBe(compiler.totalSiteCount);
 		expect(compiler.bySite.some((events) => events.executions > 0)).toBe(true);
 		expect(compiler.bySite.some((events) => events.safepoints > 0)).toBe(true);
 		expect(compiler.allocations.some((entry) => entry.chargedBytes > 0)).toBe(true);

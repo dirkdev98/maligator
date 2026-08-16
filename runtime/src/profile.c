@@ -15,12 +15,11 @@
 #include "monotonic_clock.h"
 #include "vm.h"
 
-#define MAL_PROFILE_MAX_RECORDS 65536u
+#define MAL_PROFILE_MAX_RECORDS 262144u
 #define MAL_PROFILE_MAX_FRAMES 1048576u
-#define MAL_PROFILE_MAX_STACK 128u
+#define MAL_PROFILE_MAX_STACK 256u
 #define MAL_PROFILE_DEFAULT_INTERVAL_US 10000u
 #define MAL_PROFILE_ALLOCATION_INTERVAL 524288u
-#define MAL_PROFILE_MAX_COUNTER_SITES 65536u
 #define MAL_PROFILE_INITIAL_RECORDS 1024u
 #define MAL_PROFILE_INITIAL_FRAMES 8192u
 #define MAL_PROFILE_MAX_ALLOCATION_COUNTERS 16384u
@@ -622,17 +621,17 @@ void mal_profile_init(MalVm *vm) {
         state->total_site_count = vm->definition->profile_site_count > 0
             ? (u32) vm->definition->profile_site_count
             : 0;
-        state->counter_site_count = state->total_site_count > MAL_PROFILE_MAX_COUNTER_SITES
-            ? MAL_PROFILE_MAX_COUNTER_SITES
-            : state->total_site_count;
+        state->counter_site_count = state->total_site_count;
         state->site_counters = calloc(
             (usize) state->counter_site_count * MAL_PROFILE_SITE_EVENT_COUNT,
             sizeof(u64));
         if (state->counter_site_count > 0 && state->site_counters == nullptr) {
             state->compiler_enabled = false;
         } else {
-            u32 desired = state->counter_site_count > 512
-                ? state->counter_site_count * 2 : 1024;
+            u32 desired = state->counter_site_count > MAL_PROFILE_MAX_ALLOCATION_COUNTERS / 2
+                ? MAL_PROFILE_MAX_ALLOCATION_COUNTERS
+                : state->counter_site_count > 512
+                    ? state->counter_site_count * 2 : 1024;
             state->allocation_counter_capacity = 1024;
             while (state->allocation_counter_capacity < desired &&
                    state->allocation_counter_capacity < MAL_PROFILE_MAX_ALLOCATION_COUNTERS) {
