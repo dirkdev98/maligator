@@ -95,6 +95,27 @@ check(
 );
 check("asN zero width", BigInt.asUintN(0, MAX) === 0n && BigInt.asIntN(0, MIN) === 0n);
 
+const bigintMap = new Map();
+bigintMap.set(BigInt("64"), "first");
+check("Map finds equal BigInt key", bigintMap.get(32n + 32n) === "first");
+bigintMap.set(64n, "updated");
+check(
+	"Map updates equal BigInt key",
+	bigintMap.size === 1 && bigintMap.get(BigInt("64")) === "updated",
+);
+bigintMap.set(BigInt("-170141183460469231731687303715884105728"), "minimum");
+check("Map hashes full-width BigInt key", bigintMap.get(MIN + 0n) === "minimum");
+check(
+	"Map deletes equal BigInt key",
+	bigintMap.delete(BigInt("64")) && !bigintMap.has(64n),
+);
+
+const bigintSet = new Set([BigInt("128"), 64n + 64n, 128n]);
+check(
+	"Set deduplicates equal BigInt keys",
+	bigintSet.size === 1 && bigintSet.has(BigInt("128")),
+);
+
 const unsigned = new BigUint64Array(new SharedArrayBuffer(8));
 unsigned[0] = 1n;
 check("Atomics BigInt add returns old", Atomics.add(unsigned, 0, MAX) === 1n);

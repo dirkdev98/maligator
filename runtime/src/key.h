@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "defaults.h"
+#include "heap_bigint.h"
 #include "heap_string.h"
 #include "perf_stats.h"
 #include "value.h"
@@ -96,7 +97,10 @@ static inline u32 mal_key_index_value(MalKey key) {
         : (u32) mal_value_to_f64(key.value);
 }
 
-/** String keys compare by code units; all other key values compare by bits. */
+/**
+ * String keys compare by code units and BigInt keys by numeric value; all
+ * other key values compare by their canonicalized bits.
+ */
 static inline bool mal_key_value_equals(MalValue left, MalValue right) {
     MAL_PERF_COUNT(key_equals_calls);
     if (left == right) {
@@ -106,6 +110,10 @@ static inline bool mal_key_value_equals(MalValue left, MalValue right) {
     if (mal_value_is_string(left) && mal_value_is_string(right)) {
         MAL_PERF_COUNT(key_string_fallbacks);
         return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
+    }
+    if (mal_value_is_bigint(left) && mal_value_is_bigint(right)) {
+        return mal_bigint_value(mal_value_to_bigint(left)) ==
+            mal_bigint_value(mal_value_to_bigint(right));
     }
     MAL_PERF_COUNT(key_non_string_misses);
     return false;

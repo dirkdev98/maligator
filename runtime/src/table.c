@@ -82,12 +82,18 @@ static u64 mal_table_hash_mix(u64 value) {
 
 // Hash and equality operate directly on the stored key value (kind-free): the
 // value's bits already encode its class (an int32 INDEX never bit-equals an
-// f64 NUMBER, etc.), so two keys are equal iff their values are bit-equal — or,
-// for two distinct string pointers, equal by code units. This is behaviour-
-// identical to the former kind-guarded comparison but needs no stored kind.
+// f64 NUMBER, etc.). Strings compare/hash by code units and BigInts by their
+// numeric backing value; all other canonicalized values use their bits. This
+// needs no separately stored kind.
 static u64 mal_table_hash_value(MalValue value) {
     if (mal_value_is_string(value)) {
         return mal_table_hash_mix(mal_string_hash(mal_value_to_string(value)));
+    }
+    if (mal_value_is_bigint(value)) {
+        u128 bits = (u128) mal_bigint_value(mal_value_to_bigint(value));
+        u64 low = (u64) bits;
+        u64 high = (u64) (bits >> 64);
+        return mal_table_hash_mix(low ^ mal_table_hash_mix(high ^ 0x9e3779b97f4a7c15ull));
     }
 
     return mal_table_hash_mix(value);

@@ -56,6 +56,10 @@ MalKey mal_map_key_from_value(MalValue value) {
         return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
     }
 
+    if (mal_value_is_bigint(value)) {
+        return (MalKey) {.kind = MAL_KEY_NUMBER, .value = value};
+    }
+
     // true / false / null / undefined.
     return (MalKey) {.kind = MAL_KEY_STATIC, .value = value};
 }
