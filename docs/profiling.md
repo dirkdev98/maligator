@@ -107,8 +107,10 @@ The compiler assigns one dense capture-local ID per optimized instruction instan
 same-kind operations at the same source position are never coalesced. Every site has
 an `originId` for its syntactic origin, an `instanceId` that includes the inline
 caller chain, and a `regionId` for explicitly coarse aggregation. Exact dense IDs are
-safe within one build. Cross-build matching accepts a unique structural match and
-reports duplicate origins as ambiguous instead of guessing.
+safe within one build. When a printed ranking contains otherwise identical source
+coordinates and operations, it appends that dense site ID so the rows remain visibly
+distinct. Cross-build matching accepts a unique structural match and reports duplicate
+origins as ambiguous instead of guessing.
 
 Remarks are emitted only after the final native variant has been selected. Each
 remark records the backend phase, operation, stable decision code, outcome, reason

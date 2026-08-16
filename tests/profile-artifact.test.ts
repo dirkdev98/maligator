@@ -473,6 +473,12 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(combinedRuntimeReport).toContain(
 		"10 string runtime entries · 2 generated sites",
 	);
+	expect(combinedRuntimeReport).toContain(
+		"app.js:7:3 · property · site 1 · 2 fallback / 10 executions",
+	);
+	expect(combinedRuntimeReport).toContain(
+		"app.js:7:3 · property · site 2 · 2 fallback / 10 executions",
+	);
 });
 
 test("phase summary preserves evidence outside measured spans", () => {

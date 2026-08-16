@@ -1519,7 +1519,9 @@ export function formatProfileFindings(
 	limit = 7,
 ): Array<string> {
 	if (values.length === 0) return ["  No source-attributed samples were captured."];
-	return values.slice(0, limit).flatMap((finding, index) => {
+	const displayed = values.slice(0, limit);
+	const duplicateSources = duplicateSourceOperations(displayed);
+	return displayed.flatMap((finding, index) => {
 		const primaryDecision = finding.decisions[0];
 		const evidence = [
 			finding.cpuSamples > 0
@@ -1543,7 +1545,10 @@ export function formatProfileFindings(
 			.filter((value) => value !== undefined)
 			.join(" · ");
 		const result = [
-			`  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation}`,
+			`  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation}${formatSiteDisambiguator(
+				finding,
+				duplicateSources,
+			)}`,
 			`     ${evidence}`,
 		];
 		if (primaryDecision !== undefined) {
@@ -1559,6 +1564,30 @@ export function formatProfileFindings(
 	});
 }
 
+function sourceOperationKey(finding: ProfileFinding): string {
+	return JSON.stringify([finding.file, finding.line, finding.column, finding.operation]);
+}
+
+function duplicateSourceOperations(values: Array<ProfileFinding>): Set<string> {
+	const counts = new Map<string, number>();
+	for (const finding of values) {
+		const key = sourceOperationKey(finding);
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+	}
+	return new Set(
+		[...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key),
+	);
+}
+
+function formatSiteDisambiguator(
+	finding: ProfileFinding,
+	duplicateSources: Set<string>,
+): string {
+	return duplicateSources.has(sourceOperationKey(finding))
+		? ` · site ${finding.siteId}`
+		: "";
+}
+
 function findingDecisionLabel(finding: ProfileFinding): string | undefined {
 	const decision = finding.decisions[0];
 	if (decision === undefined) return undefined;
@@ -1571,27 +1600,31 @@ function formatExactFallbackFindings(
 	values: Array<ProfileFinding>,
 	limit: number,
 ): Array<string> {
-	return values
+	const displayed = values
 		.filter((finding) => (finding.compiler?.fallbacks ?? 0) > 0)
 		.sort(
 			(left, right) =>
 				(right.compiler?.fallbacks ?? 0) - (left.compiler?.fallbacks ?? 0) ||
 				left.siteId - right.siteId,
 		)
-		.slice(0, limit)
-		.map((finding, index) => {
-			const compiler = finding.compiler!;
-			const rate =
-				compiler.executions === 0
-					? "execution count unavailable"
-					: `${((compiler.fallbacks / compiler.executions) * 100).toFixed(1)}%`;
-			const decision = findingDecisionLabel(finding);
-			return `  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation} · ${formatCount(
-				compiler.fallbacks,
-			)} fallback / ${formatCount(compiler.executions)} executions (${rate})${
-				decision === undefined ? "" : ` · ${decision}`
-			}`;
-		});
+		.slice(0, limit);
+	const duplicateSources = duplicateSourceOperations(displayed);
+	return displayed.map((finding, index) => {
+		const compiler = finding.compiler!;
+		const rate =
+			compiler.executions === 0
+				? "execution count unavailable"
+				: `${((compiler.fallbacks / compiler.executions) * 100).toFixed(1)}%`;
+		const decision = findingDecisionLabel(finding);
+		return `  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation}${formatSiteDisambiguator(
+			finding,
+			duplicateSources,
+		)} · ${formatCount(
+			compiler.fallbacks,
+		)} fallback / ${formatCount(compiler.executions)} executions (${rate})${
+			decision === undefined ? "" : ` · ${decision}`
+		}`;
+	});
 }
 
 function formatExactRuntimeFindings(
@@ -1607,12 +1640,7 @@ function formatExactRuntimeFindings(
 	for (const finding of values) {
 		const entries = finding.compiler?.[event] ?? 0;
 		if (entries === 0) continue;
-		const key = JSON.stringify([
-			finding.file,
-			finding.line,
-			finding.column,
-			finding.operation,
-		]);
+		const key = sourceOperationKey(finding);
 		const source = sources.get(key);
 		if (source === undefined) {
 			sources.set(key, { finding, entries, generatedSites: 1 });
@@ -1644,29 +1672,33 @@ function formatExactAllocationFindings(
 	values: Array<ProfileFinding>,
 	limit: number,
 ): Array<string> {
-	return values
+	const displayed = values
 		.filter((finding) => (finding.compiler?.allocationChargedBytes ?? 0) > 0)
 		.sort(
 			(left, right) =>
 				(right.compiler?.allocationChargedBytes ?? 0) -
 					(left.compiler?.allocationChargedBytes ?? 0) || left.siteId - right.siteId,
 		)
-		.slice(0, limit)
-		.map((finding, index) => {
-			const compiler = finding.compiler!;
-			const family = finding.compilerAllocations
-				?.filter((allocation) => allocation.chargedBytes > 0)
-				.sort((left, right) => right.chargedBytes - left.chargedBytes)[0];
-			return `  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation} · ${formatBytes(
-				compiler.allocationChargedBytes,
-			)} charged / ${formatCount(compiler.allocationCount)} allocations${
-				family === undefined
-					? ""
-					: ` · top ${allocationFamilyName(family.family)}/${allocationStorageName(
-							family.storage,
-						)} ${formatBytes(family.chargedBytes)}`
-			}`;
-		});
+		.slice(0, limit);
+	const duplicateSources = duplicateSourceOperations(displayed);
+	return displayed.map((finding, index) => {
+		const compiler = finding.compiler!;
+		const family = finding.compilerAllocations
+			?.filter((allocation) => allocation.chargedBytes > 0)
+			.sort((left, right) => right.chargedBytes - left.chargedBytes)[0];
+		return `  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation}${formatSiteDisambiguator(
+			finding,
+			duplicateSources,
+		)} · ${formatBytes(
+			compiler.allocationChargedBytes,
+		)} charged / ${formatCount(compiler.allocationCount)} allocations${
+			family === undefined
+				? ""
+				: ` · top ${allocationFamilyName(family.family)}/${allocationStorageName(
+						family.storage,
+					)} ${formatBytes(family.chargedBytes)}`
+		}`;
+	});
 }
 
 function formatBytes(value: number): string {
