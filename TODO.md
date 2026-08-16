@@ -228,7 +228,9 @@ profiler improvement; collecting more samples alone will not repair the explanat
       verification, or capture completeness. `npm run bench:profile-overhead` now
       builds both images, alternates pairs, parses every capture, and gates all four
       lanes; the 2026-08-15 five-pair medians were 1.14%, 1.46%, 1.14%, and 1.87%
-      respectively, with complete captures.
+      respectively, with complete captures. After the v4 phase/runtime attribution
+      work, the 2026-08-16 medians were 0.38%, 0.99%, 2.21%, and 0.09%; all captures
+      again had zero record or frame loss.
 - [ ] Harden the authenticated Claude/Fable review harness. The host keychain/session
       path now completes long read-only repository audits through the 30-minute alarm
       wrapper without exposing the cookie, including the affine/provider reviews on

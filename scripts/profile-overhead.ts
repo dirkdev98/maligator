@@ -104,7 +104,10 @@ function median(values: Array<number>): number {
 function validateCapture(capturePath: string): CaptureHealth {
 	if (!existsSync(capturePath)) throw new Error(`profile omitted ${capturePath}`);
 	const capture = parseProfileCapture(readFileSync(capturePath));
-	if (capture.schema !== 3 || capture.samplingClock !== "process-cpu") {
+	// Phase markers extended the raw format from v3 to v4 without changing the
+	// process-CPU/Poisson sampling contract this gate verifies. Accept that
+	// contract instead of pinning the newest additive container version.
+	if (capture.schema < 3 || capture.samplingClock !== "process-cpu") {
 		throw new Error(`${capturePath} used an obsolete capture or sampling clock`);
 	}
 	const health = {
