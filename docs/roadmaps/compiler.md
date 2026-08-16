@@ -202,6 +202,8 @@ the same facts unconditionally.
         retain heap materialization as their generic twin.
   - [x] Let locked primitive-String `charCodeAt` fusions remove the watched-method
         property probe while retaining the ordinary Get+Call twin for local misses.
+  - [x] Make String split projections and cursors consume the canonical
+        `String.prototype.split` identity fact instead of matching only syntax.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.

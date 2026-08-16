@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 32u        // builtin, numeric-HOF, cardinality, and stack guards
+#define WIRE_VERSION 33u        // guard plans and canonical split-call metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1588,7 +1588,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 u8 collection_tag = rd_u8(&r);
                 u8 guarded_builtin_count = ((flags & 2) != 0 ? 1 : 0) +
                     ((flags & 4) != 0 ? 1 : 0) + (collection_tag != 0 ? 1 : 0);
-                if (flags > 127 || collection_tag > 3 || guarded_builtin_count > 1 ||
+                if (flags > 127 || collection_tag > 4 || guarded_builtin_count > 1 ||
                     ((flags & 48) != 0 && (flags & 4) == 0) ||
                     (flags & 48) == 48 ||
                     ((flags & 64) != 0 && guarded_builtin_count != 1)) {

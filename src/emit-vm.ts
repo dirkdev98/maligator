@@ -2235,6 +2235,7 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 			const load = fn.instructions[callIp - 1]!;
 			if (
 				call.opcode !== "CALL" ||
+				!vmCallProvesBuiltin(call, "String.prototype.split") ||
 				call.arguments.length !== 1 ||
 				load.opcode !== "LOAD_PROPERTY_STATIC" ||
 				load.dst !== call.callee ||
@@ -2423,7 +2424,12 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 		);
 		for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
 			const call = fn.instructions[callIp]!;
-			if (call.opcode !== "CALL" || call.arguments.length !== 1) continue;
+			if (
+				call.opcode !== "CALL" ||
+				!vmCallProvesBuiltin(call, "String.prototype.split") ||
+				call.arguments.length !== 1
+			)
+				continue;
 			const callee = decodeVmValueOperand(call.callee);
 			const receiver = decodeVmValueOperand(call.thisValue);
 			const separator = decodeVmValueOperand(call.arguments[0]!);

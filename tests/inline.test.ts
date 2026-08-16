@@ -233,6 +233,26 @@ test("direct charCodeAt sites carry guarded primitive String dispatch metadata",
 	).toBe(true);
 });
 
+test("direct split sites carry canonical primitive String identity metadata", () => {
+	const ir = optimizedProgram(`
+		function fields(value) {
+			return value.split(",") + value["split"](";");
+		}
+		function detached(value) {
+			const method = value.split;
+			return method(",");
+		}
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	expect(
+		calls.filter((call) => call.knownBuiltinCall?.operation === "String.prototype.split"),
+	).toHaveLength(2);
+});
+
 test("direct collection methods carry guarded Map and Set dispatch metadata", () => {
 	const ir = optimizedProgram(`
 		function update(map, set, key, value) {

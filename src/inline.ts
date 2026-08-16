@@ -701,15 +701,10 @@ export function annotateDirectArrayPushSites(program: IntermediateProgram): numb
 	return count;
 }
 
-/**
- * Mark direct `receiver.charCodeAt(...)` sites for guarded primitive-String
- * dispatch. The property Get and all arguments remain evaluated normally.
- * Receiver provenance only proves that the loaded method is called with the
- * same `this`; the runtime admits the fast path solely for a primitive String,
- * the live builtin callback, and an absent or numeric position.
- */
-export function annotateDirectStringCharCodeAtSites(
+function annotateDirectPrimitiveStringMethodSites(
 	program: IntermediateProgram,
+	methodName: "charCodeAt" | "split",
+	operation: "String.prototype.charCodeAt" | "String.prototype.split",
 ): number {
 	let count = 0;
 	for (const fn of program.functions) {
@@ -755,7 +750,7 @@ export function annotateDirectStringCharCodeAtSites(
 
 				if (
 					moveRoot(receiver) !== moveRoot(instruction.registers[2]) ||
-					decodeStringConstant(program, nameStringIndex) !== "charCodeAt"
+					decodeStringConstant(program, nameStringIndex) !== methodName
 				) {
 					continue;
 				}
@@ -763,7 +758,7 @@ export function annotateDirectStringCharCodeAtSites(
 					program,
 					fn,
 					instruction,
-					"String.prototype.charCodeAt",
+					operation,
 					guardOrdinal++,
 					positionId,
 				);
@@ -772,6 +767,32 @@ export function annotateDirectStringCharCodeAtSites(
 		}
 	}
 	return count;
+}
+
+/**
+ * Mark direct `receiver.charCodeAt(...)` sites for guarded primitive-String
+ * dispatch. The property Get and all arguments remain evaluated normally.
+ * Receiver provenance only proves that the loaded method is called with the
+ * same `this`; the runtime admits the fast path solely for a primitive String,
+ * the live builtin callback, and an absent or numeric position.
+ */
+export function annotateDirectStringCharCodeAtSites(
+	program: IntermediateProgram,
+): number {
+	return annotateDirectPrimitiveStringMethodSites(
+		program,
+		"charCodeAt",
+		"String.prototype.charCodeAt",
+	);
+}
+
+/** Canonical identity fact consumed by split projection and cursor regions. */
+export function annotateDirectStringSplitSites(program: IntermediateProgram): number {
+	return annotateDirectPrimitiveStringMethodSites(
+		program,
+		"split",
+		"String.prototype.split",
+	);
 }
 
 /**
