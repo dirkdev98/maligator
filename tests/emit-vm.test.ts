@@ -509,6 +509,28 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
 	});
 
+	it("lowers region facts through one semantic-dependency admission bridge", () => {
+		const source = `
+			function summarize(seed) {
+				const rows = [];
+				for (let i = 0; i < 6; i++) rows.push({ index: i, value: seed + i });
+				return rows.length;
+			}
+			globalThis.summarize = summarize;
+		`;
+		const mutableOutput = emit(source);
+		expect(mutableOutput).toContain(
+			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS | MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS | MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS",
+		);
+		expect(mutableOutput).toContain("mal_builtin_array_push_virtual_guard(vm)");
+
+		const lockedOutput = emitLocked(source);
+		expect(lockedOutput).toContain("mal_vm_materialize_virtual_record_array");
+		expect(lockedOutput).toMatch(/__cardinality_\d+_fast = true;/);
+		expect(lockedOutput).not.toContain("mal_vm_semantic_dependencies_admit(vm,");
+		expect(lockedOutput).not.toContain("mal_builtin_array_push_virtual_guard(vm)");
+	});
+
 	it.each([
 		[
 			"one consumer",

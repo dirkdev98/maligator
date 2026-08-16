@@ -11,6 +11,59 @@
 #include "vm.h"
 
 /**
+ * Runtime admission for compiler facts backed by semantic epochs. Generated code
+ * names the dependencies it consumes; this is the one compatibility bridge from
+ * those names to the legacy protectors and per-VM epoch storage. Locked-world
+ * dependencies disappear before emission and therefore never call this helper.
+ *
+ * `primitive-methods` and `watched-methods` currently share one invalidation path,
+ * but keep distinct bits so the compiler contract does not inherit that runtime
+ * implementation detail. The activity snapshot lets a region validate all of its
+ * dependencies with one comparison after a potentially reentrant operation.
+ */
+typedef enum MalSemanticDependencyMask {
+    MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS = 1 << 0,
+    MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS = 1 << 1,
+    MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS = 1 << 2,
+} MalSemanticDependencyMask;
+
+static inline bool mal_vm_semantic_dependencies_hold(
+    const MalVm *vm, u8 dependencies
+) {
+    const u8 watched =
+        MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS |
+        MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS;
+    if ((dependencies & watched) != 0 &&
+        (!mal_primitive_method_protector ||
+         vm->semantic_epochs.watched_methods == 0)) {
+        return false;
+    }
+    if ((dependencies & MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS) != 0 &&
+        (!mal_array_elements_protector ||
+         vm->semantic_epochs.array_elements == 0)) {
+        return false;
+    }
+    return true;
+}
+
+static inline bool mal_vm_semantic_dependencies_admit(
+    const MalVm *vm, u8 dependencies, u64 *activity_epoch_out
+) {
+    if (!mal_vm_semantic_dependencies_hold(vm, dependencies)) return false;
+    if (activity_epoch_out == nullptr) return true;
+    *activity_epoch_out = vm->semantic_epochs.activity;
+    return *activity_epoch_out != 0;
+}
+
+static inline bool mal_vm_semantic_dependencies_validate(
+    const MalVm *vm, u8 dependencies, u64 activity_epoch
+) {
+    return activity_epoch != 0 &&
+        activity_epoch == vm->semantic_epochs.activity &&
+        mal_vm_semantic_dependencies_hold(vm, dependencies);
+}
+
+/**
  * Speculative-call-inlining guard: whether `callee` is a plain function object with the
  * given function index — the candidate the call site was inlined against. A miss deopts to
  * the real call (so a reassigned global, a bound/native/proxy callee, or any other function

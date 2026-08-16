@@ -19,6 +19,7 @@ import type {
 	VmGuardPlan,
 	VmInstruction,
 	VmRegionLicense,
+	VmSemanticDependency,
 } from "./lower-vm.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 
@@ -1425,7 +1426,9 @@ export function emitCompiledFunction(
 	}
 	for (const region of cardinalityRegions.values()) {
 		lines.push(`    bool ${region.fastName} = false;`);
-		lines.push(`    u64 ${region.epochName} = 0;`);
+		if (!region.semanticEpochStable) {
+			lines.push(`    u64 ${region.epochName} = 0;`);
+		}
 		lines.push(`    u32 ${region.countName} = 0;`);
 		lines.push(`    MalShape *${region.shapeName} = nullptr;`);
 		lines.push(`    bool ${region.currentMaterializedName} = false;`);
@@ -2608,12 +2611,48 @@ interface StackObjectSite {
 	cardinalityRegion?: CardinalityRegion;
 }
 
-type RegionDependencyConditions = Partial<
-	Record<
-		Extract<VmGuardPlan["dependencies"][number], { kind: "epoch" }>["family"],
-		string
-	>
->;
+function semanticDependencyMask(
+	dependencies: ReadonlyArray<VmSemanticDependency>,
+): string | undefined {
+	const masks = new Set<string>();
+	for (const dependency of dependencies) {
+		if (dependency.kind === "world") continue;
+		switch (dependency.family) {
+			case "primitive-methods":
+				masks.add("MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS");
+				break;
+			case "watched-methods":
+				masks.add("MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS");
+				break;
+			case "array-elements":
+				masks.add("MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS");
+				break;
+			case "global-bindings":
+			case "object-shapes":
+				throw new Error(`Unsupported native semantic dependency ${dependency.family}`);
+		}
+	}
+	return masks.size === 0 ? undefined : [...masks].sort().join(" | ");
+}
+
+/** Translate named epoch dependencies only through the shared runtime bridge. */
+function semanticDependencyAdmissionGuard(
+	guard: VmGuardPlan,
+	activityEpochName?: string,
+): string {
+	const mask = semanticDependencyMask(guard.dependencies);
+	if (mask === undefined) return "true";
+	return `mal_vm_semantic_dependencies_admit(vm, ${mask}, ${activityEpochName === undefined ? "nullptr" : `&${activityEpochName}`})`;
+}
+
+function semanticDependencyValidationGuard(
+	guard: VmGuardPlan,
+	activityEpochName: string,
+): string {
+	const mask = semanticDependencyMask(guard.dependencies);
+	if (mask === undefined) return "true";
+	return `mal_vm_semantic_dependencies_validate(vm, ${mask}, ${activityEpochName})`;
+}
 
 /**
  * Translate one named region license at its admission point. Local brand,
@@ -2623,7 +2662,7 @@ type RegionDependencyConditions = Partial<
  */
 function regionAdmissionGuard(
 	license: VmRegionLicense,
-	conditions: RegionDependencyConditions,
+	activityEpochName?: string,
 ): string {
 	if (
 		license.genericTwin !== "retained" ||
@@ -2637,16 +2676,7 @@ function regionAdmissionGuard(
 	) {
 		throw new Error("Virtual region lacks its materialization contract");
 	}
-	const emitted: Array<string> = [];
-	for (const dependency of license.guard.dependencies) {
-		if (dependency.kind === "world") continue;
-		const condition = conditions[dependency.family];
-		if (condition === undefined) {
-			throw new Error(`Missing region dependency ${dependency.family}`);
-		}
-		emitted.push(condition);
-	}
-	return emitted.length === 0 ? "true" : emitted.join(" && ");
+	return semanticDependencyAdmissionGuard(license.guard, activityEpochName);
 }
 
 function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
@@ -2658,14 +2688,7 @@ function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
 	) {
 		throw new Error("Inherited stack-object site lacks its fallback contract");
 	}
-	const conditions = guard.dependencies.map((dependency) => {
-		if (dependency.kind === "world") return "true";
-		if (dependency.family === "primitive-methods") {
-			return "mal_primitive_method_protector";
-		}
-		throw new Error(`Unsupported inherited-stack dependency ${dependency.family}`);
-	});
-	return conditions.length === 0 ? "false" : conditions.join(" && ");
+	return semanticDependencyAdmissionGuard(guard);
 }
 
 interface FiniteRecordRegion {
@@ -2814,12 +2837,13 @@ interface CardinalityRegion {
 }
 
 function cardinalityAdmissionGuard(region: CardinalityRegion): string {
-	return regionAdmissionGuard(region.license, {
-		"primitive-methods": "mal_primitive_method_protector",
-		"watched-methods": "mal_builtin_array_push_virtual_guard(vm)",
-		"array-elements":
-			"mal_array_elements_protector && vm->semantic_epochs.array_elements != 0",
-	});
+	const semantic = regionAdmissionGuard(
+		region.license,
+		region.semanticEpochStable ? undefined : region.epochName,
+	);
+	return vmGuardIsWorldInvariant(region.license.guard)
+		? semantic
+		: `${semantic} && mal_builtin_array_push_virtual_guard(vm)`;
 }
 
 /**
@@ -4262,7 +4286,7 @@ function emitInstruction(
 	const cardinalityEpochGuard = (target: CardinalityRegion): string =>
 		target.semanticEpochStable
 			? ""
-			: ` && ${target.epochName} == vm->semantic_epochs.activity`;
+			: ` && ${semanticDependencyValidationGuard(target.license.guard, target.epochName)}`;
 
 	// GC safepoint poll. Emitted at call returns and loop
 	// back-edges so a compiled function is interruptible for collection. Near-free
@@ -4463,8 +4487,6 @@ function emitInstruction(
 					`${cardinalityRegion.shapeName} = __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}];`,
 					`if (${cardinalityRegion.shapeName} == nullptr) { ${cardinalityRegion.shapeName} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${cardinalityRegion.itemSite.slotCount}); __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}] = ${cardinalityRegion.shapeName}; }`,
 					`${cardinalityRegion.fastName} = ${cardinalityAdmissionGuard(cardinalityRegion)};`,
-					`${cardinalityRegion.epochName} = vm->semantic_epochs.activity;`,
-					`${cardinalityRegion.fastName} = ${cardinalityRegion.fastName} && ${cardinalityRegion.epochName} != 0;`,
 					`${cardinalityRegion.countName} = 0;`,
 					`${cardinalityRegion.elementIndexName} = -1;`,
 					`if (${cardinalityRegion.fastName}) {`,
@@ -6117,10 +6139,7 @@ function emitInstruction(
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitCursorAction;
 				const id = site.cursor.callIp;
-				const admission = regionAdmissionGuard(site.cursor.license, {
-					"watched-methods":
-						"__watched_methods_epoch != 0 && __watched_methods_epoch == vm->semantic_epochs.watched_methods",
-				});
+				const admission = regionAdmissionGuard(site.cursor.license);
 				const trimIdentity =
 					site.trimCalleeSlot === undefined
 						? "true"

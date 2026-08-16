@@ -211,6 +211,11 @@ the same facts unconditionally.
         let locked regions remove the per-element property probe and callback check.
   - [x] Give the projected slice-to-Number consumer a canonical `slice` fact and let
         locked fusions move the adjacent property Get into their generic twin.
+  - [x] Lower primitive-method, watched-method, and array-element dependencies
+        through one native admission/revalidation bridge. Make inherited stack
+        objects, cardinality regions, and split cursors consume their named guards;
+        locked-world dependencies collapse before emission, while mutable regions
+        retain the generic twin and one combined semantic-activity snapshot.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.
