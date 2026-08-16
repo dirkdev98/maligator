@@ -54,5 +54,5 @@ describe("engine.primordials: locked", () => {
 	it("holds under GC stress", () => {
 		assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60_000 }));
 		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 60_000 }));
-	});
+	}, 120_000);
 });
