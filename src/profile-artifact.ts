@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import * as path from "node:path";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
+import { profilePhaseName } from "./profile-phases.ts";
 
 const CAPTURE_LEGACY_HEADER_BYTES = 40;
 const CAPTURE_V3_HEADER_BYTES = 48;
@@ -843,6 +844,7 @@ function profileQuality(capture: RawCapture): ProfileQuality {
 	return capture.droppedFrames > 0 ||
 		capture.droppedRecords > 0 ||
 		summarizeGc(capture.records).incompleteEvents > 0 ||
+		summarizePhases(capture.records).incompleteEvents > 0 ||
 		percentile(delays, 0.99) > (capture.intervalUs / 1000) * 4
 		? "biased"
 		: cpuRecords.length < 20 && allocationRecords.length < 20
@@ -877,6 +879,23 @@ interface GcSummary {
 	incompleteEvents: number;
 }
 
+export interface ProfilePhaseTiming {
+	id: number;
+	name: string;
+	spans: number;
+	inclusiveMs: number;
+	selfMs: number;
+	maxInclusiveMs: number;
+}
+
+export interface ProfilePhaseSummary {
+	clock: "monotonic-wall";
+	spans: number;
+	measuredWallMs: number;
+	incompleteEvents: number;
+	timings: Array<ProfilePhaseTiming>;
+}
+
 export interface ProfileManifest {
 	schema: 4;
 	status: "complete";
@@ -900,6 +919,7 @@ export interface ProfileManifest {
 		families: Array<AllocationFamilySummary>;
 	};
 	gc: GcSummary;
+	phases: ProfilePhaseSummary;
 	attribution: {
 		cpuSamples: number;
 		unattributedCpuSamples: number;
@@ -971,6 +991,77 @@ function summarizeGc(records: Array<RawRecord>): GcSummary {
 		totalPauseMs,
 		maxPauseMs,
 		incompleteEvents: begins.length + unmatchedEnds,
+	};
+}
+
+function summarizePhases(records: Array<RawRecord>): ProfilePhaseSummary {
+	interface OpenPhase {
+		id: number;
+		startedAtNs: number;
+		childNs: number;
+	}
+	interface AccumulatedPhase {
+		id: number;
+		spans: number;
+		inclusiveNs: number;
+		selfNs: number;
+		maxInclusiveNs: number;
+	}
+	const open: Array<OpenPhase> = [];
+	const accumulated = new Map<number, AccumulatedPhase>();
+	let measuredWallNs = 0;
+	let incompleteEvents = 0;
+	let spans = 0;
+	for (const record of records) {
+		if (record.kind === 5) {
+			open.push({ id: record.value, startedAtNs: record.timestampNs, childNs: 0 });
+			continue;
+		}
+		if (record.kind !== 6) continue;
+		const active = open.at(-1);
+		if (active === undefined || active.id !== record.value) {
+			incompleteEvents++;
+			continue;
+		}
+		open.pop();
+		const inclusiveNs = Math.max(0, record.timestampNs - active.startedAtNs);
+		const selfNs = Math.max(0, inclusiveNs - active.childNs);
+		let summary = accumulated.get(active.id);
+		if (summary === undefined) {
+			summary = {
+				id: active.id,
+				spans: 0,
+				inclusiveNs: 0,
+				selfNs: 0,
+				maxInclusiveNs: 0,
+			};
+			accumulated.set(active.id, summary);
+		}
+		summary.spans++;
+		summary.inclusiveNs += inclusiveNs;
+		summary.selfNs += selfNs;
+		summary.maxInclusiveNs = Math.max(summary.maxInclusiveNs, inclusiveNs);
+		spans++;
+		const parent = open.at(-1);
+		if (parent === undefined) measuredWallNs += inclusiveNs;
+		else parent.childNs += inclusiveNs;
+	}
+	incompleteEvents += open.length;
+	return {
+		clock: "monotonic-wall",
+		spans,
+		measuredWallMs: measuredWallNs / 1e6,
+		incompleteEvents,
+		timings: [...accumulated.values()]
+			.map((phase) => ({
+				id: phase.id,
+				name: profilePhaseName(phase.id),
+				spans: phase.spans,
+				inclusiveMs: phase.inclusiveNs / 1e6,
+				selfMs: phase.selfNs / 1e6,
+				maxInclusiveMs: phase.maxInclusiveNs / 1e6,
+			}))
+			.sort((left, right) => right.inclusiveMs - left.inclusiveMs || left.id - right.id),
 	};
 }
 
@@ -1091,21 +1182,33 @@ export function finalizeProfileCapture(
 	const delays = cpuRecords.map((record) => record.auxiliary / 1e6);
 	const allocation = summarizeAllocationSamples(capture, allocationRecords);
 	const gc = summarizeGc(capture.records);
+	const phases = summarizePhases(capture.records);
 	atomicJson(path.join(directory, "cpu.cpuprofile"), cpuProfile(capture, prepared));
 	atomicJson(
 		path.join(directory, "timeline.json"),
 		capture.records
-			.filter((record) => record.kind >= 3)
+			.filter(
+				(record) =>
+					record.kind === 3 ||
+					record.kind === 4 ||
+					record.kind === 5 ||
+					record.kind === 6,
+			)
 			.map((record) => ({
-				name: record.kind === 3 ? "GC" : "GC",
-				cat: "maligator.gc",
-				ph: record.kind === 3 ? "B" : "E",
+				name:
+					record.kind === 3 || record.kind === 4 ? "GC" : profilePhaseName(record.value),
+				cat: record.kind === 3 || record.kind === 4 ? "maligator.gc" : "maligator.phase",
+				ph: record.kind === 3 || record.kind === 5 ? "B" : "E",
 				ts: record.timestampNs / 1000,
 				pid: 1,
 				tid: 1,
-				args: { major: record.value === 1 },
+				args:
+					record.kind === 3 || record.kind === 4
+						? { major: record.value === 1 }
+						: { id: record.value },
 			})),
 	);
+	atomicJson(path.join(directory, "phases.json"), { schema: 1, ...phases });
 	atomicJson(
 		path.join(directory, "allocations.json"),
 		ranked.filter((finding) => finding.allocationSamples > 0),
@@ -1169,6 +1272,7 @@ export function finalizeProfileCapture(
 		allocationSamples: allocationRecords.length,
 		allocation,
 		gc,
+		phases,
 		attribution: {
 			cpuSamples: ranked.reduce((total, finding) => total + finding.cpuSamples, 0),
 			unattributedCpuSamples:
@@ -1367,6 +1471,11 @@ function formatCount(value: number): string {
 	return Math.round(value).toLocaleString("en-US");
 }
 
+function formatDuration(valueMs: number): string {
+	if (valueMs >= 1000) return `${(valueMs / 1000).toFixed(2)} s`;
+	return `${valueMs.toFixed(valueMs < 10 ? 2 : 1)} ms`;
+}
+
 export function formatProfileReport(
 	result: { findings: Array<ProfileFinding>; manifest: ProfileManifest },
 	limit = 7,
@@ -1430,6 +1539,32 @@ export function formatProfileReport(
 			)
 			.join(" · ");
 		if (topFamilies !== "") lines.push(`  Allocation families ${topFamilies}`);
+	}
+	if (manifest.phases.spans > 0 || manifest.phases.incompleteEvents > 0) {
+		lines.push(
+			`  Phases ${formatCount(manifest.phases.spans)} spans · ${formatDuration(
+				manifest.phases.measuredWallMs,
+			)} measured monotonic wall${
+				manifest.phases.incompleteEvents === 0
+					? ""
+					: ` · ${formatCount(manifest.phases.incompleteEvents)} unmatched events`
+			}`,
+		);
+		if (manifest.phases.timings.length > 0) {
+			lines.push("  Phase timing (inclusive / self)");
+			lines.push(
+				...manifest.phases.timings
+					.slice(0, limit)
+					.map(
+						(phase, index) =>
+							`  ${index + 1}. ${phase.name} · ${formatDuration(
+								phase.inclusiveMs,
+							)} / ${formatDuration(phase.selfMs)} · ${formatCount(phase.spans)} span${
+								phase.spans === 1 ? "" : "s"
+							}`,
+					),
+			);
+		}
 	}
 	if (manifest.compiler !== undefined) {
 		const fallbackRate =

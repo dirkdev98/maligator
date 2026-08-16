@@ -12,9 +12,17 @@ import { runSemanticAnalysisForGraph } from "./semantic-program.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
 
 export type CompileEntrypointPhase = "graph" | "semantic" | CompileCorePhase;
+export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize";
 
 export interface CompileEntrypointOptions extends BuildModuleGraphOptions {
 	runPhase?: <T>(phase: CompileEntrypointPhase, run: () => T) => T;
+}
+
+export interface CompileEntrypointToBufferOptions extends Omit<
+	CompileEntrypointOptions,
+	"runPhase"
+> {
+	runPhase?: <T>(phase: CompileEntrypointToBufferPhase, run: () => T) => T;
 }
 
 /** Compile an on-disk entrypoint and its module graph to the portable wire format. */
@@ -39,7 +47,11 @@ export function compileEntrypoint(
 /** Compile an on-disk entrypoint and its module graph to the portable wire format. */
 export function compileEntrypointToBuffer(
 	entrypointPath: string,
-	options: CompileEntrypointOptions = {},
+	options: CompileEntrypointToBufferOptions = {},
 ): Uint8Array {
-	return serializeVmDefinition(compileEntrypoint(entrypointPath, options));
+	const definition = compileEntrypoint(entrypointPath, options);
+	const runPhase =
+		options.runPhase ??
+		(<T>(_phase: CompileEntrypointToBufferPhase, run: () => T): T => run());
+	return runPhase("serialize", () => serializeVmDefinition(definition));
 }

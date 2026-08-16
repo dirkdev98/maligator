@@ -14,6 +14,7 @@ describe("production profile recorder", () => {
 	let deepStackBinary: string;
 	let longRunningBinary: string;
 	let compilerBinary: string;
+	let phaseBinary: string;
 
 	beforeAll(() => {
 		binary = buildNativeBinary({
@@ -44,6 +45,13 @@ describe("production profile recorder", () => {
 			compiled: true,
 			profileEnabled: true,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
+			outDir: directory,
+		});
+		phaseBinary = buildNativeBinary({
+			fixture: "tests/local/profile-phases.js",
+			name: "profile-phases",
+			compiled: true,
+			profileEnabled: true,
 			outDir: directory,
 		});
 	});
@@ -138,5 +146,28 @@ describe("production profile recorder", () => {
 		expect(compiler.bySite.some((events) => events.executions > 0)).toBe(true);
 		expect(compiler.bySite.some((events) => events.safepoints > 0)).toBe(true);
 		expect(compiler.allocations.some((entry) => entry.chargedBytes > 0)).toBe(true);
+	});
+
+	it("records explicitly nested phase boundaries on the monotonic timeline", () => {
+		const capture = path.join(directory, "phases.bin");
+		const result = spawnSync(phaseBinary, [], {
+			env: {
+				...process.env,
+				MAL_PROFILE_CAPTURE: capture,
+				MAL_PROFILE_IDENTITY: captureIdentity,
+			},
+			encoding: "utf-8",
+		});
+		expect(result.status).toBe(0);
+		const records = parseProfileCapture(readFileSync(capture)).records.filter(
+			(record) => record.kind === 5 || record.kind === 6,
+		);
+		expect(records.map((record) => [record.kind, record.value])).toEqual([
+			[5, 1],
+			[5, 2],
+			[6, 2],
+			[6, 1],
+		]);
+		expect(records[3]!.timestampNs).toBeGreaterThanOrEqual(records[0]!.timestampNs);
 	});
 });

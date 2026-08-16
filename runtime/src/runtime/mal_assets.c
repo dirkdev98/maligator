@@ -22,6 +22,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "posix_fs.h"
+#include "profile.h"
 #include "typed_array_object.h"
 #include "utf8.h"
 #include "value.h"
@@ -603,6 +604,50 @@ static MalValue mal_assets_materialize(
     return result;
 }
 
+#if MAL_PROFILE
+static bool mal_profile_phase_argument(MalVm *vm, const MalValue *args, i32 argc, u32 *out) {
+    if (argc < 1 || !mal_value_is_int32(args[0])) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "mal profile phase ID must be a positive integer");
+        return false;
+    }
+    i32 phase_id = mal_value_to_i32(args[0]);
+    if (phase_id <= 0) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "mal profile phase ID must be positive");
+        return false;
+    }
+    *out = (u32) phase_id;
+    return true;
+}
+
+static MalValue mal_profile_phase_begin(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    u32 phase_id;
+    if (mal_profile_phase_argument(vm, args, argc, &phase_id)) {
+        mal_profile_phase(vm, phase_id, true);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_profile_phase_end(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    u32 phase_id;
+    if (mal_profile_phase_argument(vm, args, argc, &phase_id)) {
+        mal_profile_phase(vm, phase_id, false);
+    }
+    return mal_value_new_undefined();
+}
+#endif
+
 void mal_host_install_maligator(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) slots;
@@ -633,6 +678,12 @@ void mal_host_install_maligator(
         vm, mal, (const byte *) "_developmentProcessStatus", 1, mal_dev_process_status);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_waitDevelopmentChange", 2, mal_dev_wait_change);
+#if MAL_PROFILE
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_profilePhaseBegin", 1, mal_profile_phase_begin);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_profilePhaseEnd", 1, mal_profile_phase_end);
+#endif
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_intrinsic_define_data(
         vm, global_this, (const byte *) "mal", roots[0], MAL_ASSET_VISIBLE);

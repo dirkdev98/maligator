@@ -1,6 +1,28 @@
 import { writeFileSync } from "node:fs";
 import { stripCompactTypes } from "./compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
+import { profilePhaseId } from "./profile-phases.ts";
+import type { ProfilePhaseName } from "./profile-phases.ts";
+
+interface ProfileRuntime {
+	_profilePhaseBegin?: (phaseId: number) => void;
+	_profilePhaseEnd?: (phaseId: number) => void;
+}
+
+const profileRuntime = (globalThis as typeof globalThis & { mal?: ProfileRuntime }).mal;
+const profilePhaseBegin = profileRuntime?._profilePhaseBegin;
+const profilePhaseEnd = profileRuntime?._profilePhaseEnd;
+
+function runProfilePhase<T>(phase: ProfilePhaseName, run: () => T): T {
+	if (profilePhaseBegin === undefined || profilePhaseEnd === undefined) return run();
+	const id = profilePhaseId(phase);
+	profilePhaseBegin(id);
+	try {
+		return run();
+	} finally {
+		profilePhaseEnd(id);
+	}
+}
 
 const inputPath = process.argv[2];
 const outputPath = process.argv[3];
@@ -25,5 +47,6 @@ const bytes = compileEntrypointToBuffer(inputPath, {
 		host: { scheduler: "single" },
 		surface: { webPlatform: false, node: true, maligator: true },
 	},
+	runPhase: runProfilePhase,
 });
 writeFileSync(outputPath, bytes);

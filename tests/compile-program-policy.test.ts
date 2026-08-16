@@ -42,6 +42,27 @@ describe("compileEntrypoint build policy", () => {
 		]);
 	});
 
+	test("reports serialization as the seventh wire compiler phase", () => {
+		const phases: Array<string> = [];
+		const bytes = compileEntrypointToBuffer(entrypoint("const answer = 40 + 2;"), {
+			runPhase: (phase, run) => {
+				phases.push(phase);
+				return run();
+			},
+		});
+
+		expect(bytes.length).toBeGreaterThan(0);
+		expect(phases).toEqual([
+			"graph",
+			"semantic",
+			"compile to ir",
+			"ir optimizations",
+			"register allocation",
+			"lower to vm",
+			"serialize",
+		]);
+	});
+
 	test("allows disabled-feature usage when no build config is supplied", () => {
 		expect(() =>
 			compileEntrypointToBuffer(entrypoint('eval("1 + 1"); /a/.test("a");')),

@@ -21,7 +21,9 @@ sampling delay, attribution coverage, GC pauses, charged allocation families, ex
 compiler totals when enabled, exact fallback/allocation leaders, and the seven hottest
 mixed source findings. The exact leader lists are independently ranked from the dense
 census, so a high-volume site cannot disappear merely because cooperative sampling
-missed it. It leaves the complete capture under
+missed it. Profiled self-host compiler runs also print deterministic monotonic-wall
+totals for graph construction, semantics, IR compilation, optimization, register
+allocation, lowering, and serialization. It leaves the complete capture under
 `.maligator/profiles/<timestamp>-run-<build-id>/`. Set
 `MALIGATOR_PROFILE_DIRECTORY` when automation needs a known output directory.
 
@@ -67,6 +69,14 @@ retain the leaf-most 256 frames, add an explicit missing-outer-frames node to
 payloads, selected native backing stores, and records major/minor GC begin/end events.
 This gives compiled and interpreted frames the same source identity while keeping
 native implementation frames out of the user-facing result.
+
+Profile-enabled images may additionally emit explicitly nested phase boundaries.
+The self-host compiler wraps its seven existing synchronous phase callbacks with
+these markers. Finalization validates strict nesting, reports inclusive and self
+monotonic-wall time, and marks a capture biased rather than inventing a duration when
+an entry or exit is missing. Phase timing is deterministic event instrumentation,
+not a replacement for paired production benchmarks: it includes GC and host work
+that happens inside a phase and should be used to select a target for measurement.
 
 Allocation sampling uses independent Poisson inclusion over allocator-charged bytes
 with a 512 KiB mean interval. Each sample preserves requested bytes, charged bytes,
@@ -114,7 +124,8 @@ to carry the same identity. Legacy v1-v3 captures remain readable but are marked
 | `capture.bin.compiler` | Exact v3 census carrying the same capture identity                   |
 | `metadata.json`        | Exact build ID, functions, source sites, and compiler remarks        |
 | `cpu.cpuprofile`       | Logical JS stacks for Chromium DevTools-compatible viewers           |
-| `timeline.json`        | GC begin/end events in trace-event form                              |
+| `timeline.json`        | GC and phase begin/end events in trace-event form                    |
+| `phases.json`          | Nested phase spans with inclusive, self, and maximum wall time       |
 | `allocations.json`     | Source-ranked sampled allocation evidence                            |
 | `remarks.jsonl`        | Structured optimizer decisions for profile sites                     |
 | `compiler.json`        | Source-ranked exact counters and final decisions (compiler mode)     |
@@ -125,7 +136,8 @@ The joined findings keep CPU and allocation confidence separate and use all CPU
 records as the percentage denominator. `manifest.json` reports attributed and
 unattributed records; Poisson estimates and literal requested/charged sample sums;
 storage/family breakdowns; stack truncation; GC totals and pauses; and exact compiler
-totals. Consumers can distinguish the estimate from its sampled evidence.
+totals. It also carries phase span completeness and aggregates when a workload emits
+phase markers. Consumers can distinguish the estimate from its sampled evidence.
 
 The findings explain decisions such as a dynamic property cache, a guarded direct
 call, or an object that retained observable heap identity. A retained
@@ -140,7 +152,8 @@ provide live attach, continuous production collection, heap snapshots, automatic
 profile-guided recompilation, or per-test timeout stack capture. Fatal signals that
 cannot safely return to a VM safe point may leave a partial directory.
 
-The sampler is compiled out of ordinary binaries. Exact counters are additionally
+The sampler and private phase-marker runtime methods are compiled out of ordinary
+binaries. Exact counters are additionally
 compiled out of sampling-only profile images. Sampling images begin with small
 record/frame buffers, grow them only as evidence arrives, and allow up to 262,144
 records before reporting explicit loss. For an active sampling

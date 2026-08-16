@@ -467,6 +467,15 @@ void mal_profile_event(MalVm *vm, u8 kind, u64 value) {
         MAL_PROFILE_OBJECT_TYPE_NONE);
 }
 
+void mal_profile_phase(MalVm *vm, u32 phase_id, bool begin) {
+    mal_profile_record(
+        g_profile, vm,
+        begin ? MAL_PROFILE_RECORD_PHASE_BEGIN : MAL_PROFILE_RECORD_PHASE_END,
+        phase_id, 0, false,
+        MAL_PROFILE_ALLOCATION_NONE, MAL_PROFILE_ALLOCATION_FAMILY_UNKNOWN,
+        MAL_PROFILE_OBJECT_TYPE_NONE);
+}
+
 static void mal_profile_write_u32(FILE *file, u32 value) {
     u8 bytes[4];
     for (u32 index = 0; index < 4; index++) bytes[index] = (u8) (value >> (index * 8));

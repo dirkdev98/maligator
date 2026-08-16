@@ -32,7 +32,7 @@ describe("mal.assets.materialize", () => {
 		);
 		writeFileSync(
 			entry,
-			`console.log(globalThis.mal === mal && typeof mal.assets.materialize === "function");
+			`console.log(globalThis.mal === mal && typeof mal.assets.materialize === "function" && typeof mal._profilePhaseBegin === "undefined" && typeof mal._profilePhaseEnd === "undefined");
 const explicit = mal.assets.materialize("fixture", { baseDirectory: ${JSON.stringify(baseDirectory)} });
 console.log(explicit);
 console.log(explicit === mal.assets.materialize("fixture", { baseDirectory: ${JSON.stringify(baseDirectory)} }));

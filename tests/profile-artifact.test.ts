@@ -45,6 +45,31 @@ function capture(): Uint8Array {
 	return bytes;
 }
 
+function captureWithNestedPhases(): Uint8Array {
+	const base = capture();
+	const recordCount = 6;
+	const frameBase = 80 + recordCount * 40;
+	const bytes = new Uint8Array(frameBase + 2 * 12);
+	bytes.set(base.subarray(0, 80 + 2 * 40));
+	bytes.set(base.subarray(80 + 2 * 40), frameBase);
+	const view = new DataView(bytes.buffer);
+	view.setUint32(12, recordCount, true);
+	const events = [
+		{ kind: 5, timestampNs: 30_000_000n, phaseId: 1n },
+		{ kind: 5, timestampNs: 40_000_000n, phaseId: 2n },
+		{ kind: 6, timestampNs: 50_000_000n, phaseId: 2n },
+		{ kind: 6, timestampNs: 70_000_000n, phaseId: 1n },
+	];
+	for (let index = 0; index < events.length; index++) {
+		const event = events[index]!;
+		const offset = 80 + (index + 2) * 40;
+		view.setUint8(offset, event.kind);
+		view.setBigUint64(offset + 8, event.timestampNs, true);
+		view.setBigUint64(offset + 16, event.phaseId, true);
+	}
+	return bytes;
+}
+
 function compilerCapture(): Uint8Array {
 	const bytes = new Uint8Array(64 + 8 * 8 + 2 * 8 * 8 + 32);
 	bytes.set(Buffer.from("MALSITE3"));
@@ -252,7 +277,7 @@ test("profile finalization rejects compiler counters from another capture", () =
 
 test("profile finalization publishes standard views and joins remarks by source site", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-artifact-"));
-	writeFileSync(path.join(directory, "capture.bin"), capture());
+	writeFileSync(path.join(directory, "capture.bin"), captureWithNestedPhases());
 	writeFileSync(path.join(directory, "capture.bin.compiler"), compilerCapture());
 	const result = finalizeProfileCapture(directory, prepared, "run");
 
@@ -266,6 +291,7 @@ test("profile finalization publishes standard views and joins remarks by source 
 	});
 	expect(existsSync(path.join(directory, "cpu.cpuprofile"))).toBe(true);
 	expect(existsSync(path.join(directory, "timeline.json"))).toBe(true);
+	expect(existsSync(path.join(directory, "phases.json"))).toBe(true);
 	expect(existsSync(path.join(directory, "manifest.json"))).toBe(true);
 	expect(existsSync(path.join(directory, "compiler.json"))).toBe(true);
 	const profile = JSON.parse(
@@ -286,6 +312,25 @@ test("profile finalization publishes standard views and joins remarks by source 
 		allocationSamples: 1,
 		clocks: { sampling: "process-cpu" },
 	});
+	expect(result.manifest.phases).toMatchObject({
+		clock: "monotonic-wall",
+		spans: 2,
+		measuredWallMs: 40,
+		incompleteEvents: 0,
+		timings: [
+			{ id: 1, name: "graph", spans: 1, inclusiveMs: 40, selfMs: 30 },
+			{ id: 2, name: "semantic", spans: 1, inclusiveMs: 10, selfMs: 10 },
+		],
+	});
+	const timeline = JSON.parse(
+		readFileSync(path.join(directory, "timeline.json"), "utf-8"),
+	) as Array<{ name: string; cat: string; ph: string }>;
+	expect(timeline).toEqual([
+		expect.objectContaining({ name: "graph", cat: "maligator.phase", ph: "B" }),
+		expect.objectContaining({ name: "semantic", cat: "maligator.phase", ph: "B" }),
+		expect.objectContaining({ name: "semantic", cat: "maligator.phase", ph: "E" }),
+		expect.objectContaining({ name: "graph", cat: "maligator.phase", ph: "E" }),
+	]);
 	expect(result.manifest.compiler).toMatchObject({
 		allocationCount: 5,
 		requestedBytes: 128,
@@ -297,9 +342,24 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(report).toContain("estimated charged allocation traffic");
 	expect(report).toContain("Exact allocation families array/raw-payload 160 B");
 	expect(report).toContain("Compiler coverage 2/2 sites (100.0%)");
+	expect(report).toContain("Phases 2 spans · 40.0 ms measured monotonic wall");
+	expect(report).toContain("graph · 40.0 ms / 30.0 ms · 1 span");
 	expect(report).toContain("Exact fallback pressure");
 	expect(report).toContain("2 fallback / 10 executions (20.0%)");
 	expect(report).toContain("Exact allocation sites");
 	expect(report).toContain("160 B charged / 5 allocations");
 	expect(report).toContain("top array/raw-payload 160 B");
+});
+
+test("unmatched phase markers bias the capture instead of fabricating a duration", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-phase-mismatch-"));
+	const bytes = captureWithNestedPhases();
+	new DataView(bytes.buffer).setBigUint64(80 + 5 * 40 + 16, 2n, true);
+	writeFileSync(path.join(directory, "capture.bin"), bytes);
+	const result = finalizeProfileCapture(directory, prepared, "run");
+	expect(result.manifest.quality).toBe("biased");
+	expect(result.manifest.phases).toMatchObject({
+		spans: 1,
+		incompleteEvents: 2,
+	});
 });

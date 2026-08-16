@@ -14,6 +14,8 @@ enum {
     MAL_PROFILE_RECORD_ALLOCATION = 2,
     MAL_PROFILE_RECORD_GC_BEGIN = 3,
     MAL_PROFILE_RECORD_GC_END = 4,
+    MAL_PROFILE_RECORD_PHASE_BEGIN = 5,
+    MAL_PROFILE_RECORD_PHASE_END = 6,
 };
 
 enum {
@@ -65,6 +67,7 @@ void mal_profile_allocation(
 void mal_profile_native_allocation(
     MalHeap *heap, usize size, MalProfileAllocationFamily family);
 void mal_profile_event(MalVm *vm, u8 kind, u64 value);
+void mal_profile_phase(MalVm *vm, u32 phase_id, bool begin);
 #if defined(MAL_PERF_STATS) && MAL_PERF_STATS
 void mal_profile_site_event(MalVm *vm, i32 site_id, u8 event, u64 value);
 void mal_profile_safepoint_compiler(MalVm *vm);
@@ -114,6 +117,11 @@ static inline void mal_profile_event(MalVm *vm, u8 kind, u64 value) {
     (void) vm;
     (void) kind;
     (void) value;
+}
+static inline void mal_profile_phase(MalVm *vm, u32 phase_id, bool begin) {
+    (void) vm;
+    (void) phase_id;
+    (void) begin;
 }
 #define MAL_PROFILE_SITE_EVENT(vm, site_id, event, value) ((void) 0)
 #define MAL_PROFILE_CURRENT_SITE(vm, site_id) ((void) 0)

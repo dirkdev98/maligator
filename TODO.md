@@ -167,11 +167,15 @@ profiler improvement; collecting more samples alone will not repair the explanat
 - [ ] Add a repeat, warmup, or minimum-duration mode for short commands and a CLI to
       render/open an existing capture. Document the interval override as an expert
       diagnostic whose overhead and bias must be rechecked.
-- [ ] Add an optional deterministic phase/function timer for benchmark target selection.
+- [x] Add an optional deterministic phase/function timer for benchmark target selection.
       The post-affine 34-sample capture cannot distinguish unattributed native loops
       from helper-visible sites, so inexpensive entry/exit wall totals for the seven
       language phases would replace modeled ceilings without pretending sparse samples
-      can rank them. Keep this disabled in ordinary product images.
+      can rank them. Profile-enabled self-host images now record strictly nested phase
+      boundaries for graph, semantics, IR compilation, optimization, register
+      allocation, lowering, and serialization. Reports publish monotonic-wall inclusive
+      and self time in `phases.json` and `timeline.json`; unmatched boundaries bias the
+      capture. The marker methods are absent from ordinary product images.
 - [ ] Add real `--help`/unknown-option handling to `scripts/bench.ts`. Today `--help`
       is treated as no lane selection and starts the full benchmark suite, including
       an expensive Rust rebuild; help and invalid flags must exit before any build.
