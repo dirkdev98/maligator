@@ -190,7 +190,7 @@ paths.
 Make the current mutable fast paths consumers of facts, then let locked builds prove
 the same facts unconditionally.
 
-- [ ] Express `mal_primitive_method_protector`, watched-method epochs, property/cache
+- [x] Express `mal_primitive_method_protector`, watched-method epochs, property/cache
       identities, and array-element protectors as named fact dependencies rather than
       emitter-local conditions.
   - [x] Make guarded Array/String/Map/Set calls consume one canonical builtin-identity
@@ -243,6 +243,11 @@ the same facts unconditionally.
       helper bodies in IR before C emission.
 - [ ] Keep mutable performance neutral or better. A locked-world optimization must not
       be implemented by slowing the generic or epoch-guarded path.
+  - [x] Pair the Phase 3 emitter convergence against pre-convergence checkpoint
+        `8e8172b0` over five interleaved String and prototype-cache samples. The
+        classified metrics contain no regressions: String and the stable inherited
+        post-mutation metric are unchanged; noisier prototype submetrics remain
+        inconclusive rather than being recorded as wins.
 
 ### Phase 4: reference consumers and partial specialization
 
