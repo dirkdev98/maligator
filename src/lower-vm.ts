@@ -258,6 +258,42 @@ export interface VmSemanticProtectorFact {
 	readonly guard: VmGuardPlan;
 }
 
+/**
+ * Resolve one program semantic fact through the same validation contract for
+ * every post-wire analysis and backend. Program facts are canonical: a family
+ * occurs at most once, names either its matching mutable epoch or the locked
+ * primordial world, and always retains the generic operation as its twin.
+ *
+ * Keeping this query beside the VM fact representation prevents consumers from
+ * acquiring subtly different definitions of a valid protector fact.
+ */
+export function vmSemanticProtectorGuard(
+	facts: ReadonlyArray<VmSemanticProtectorFact> | undefined,
+	family: VmRuntimeSemanticEpochFamily,
+): VmGuardPlan | undefined {
+	let result: VmGuardPlan | undefined;
+	for (const fact of facts ?? []) {
+		if (fact.family !== family) continue;
+		if (result !== undefined) throw new Error(`Duplicate ${family} semantic facts`);
+		result = fact.guard;
+	}
+	if (result === undefined) return undefined;
+	const dependency = result.dependencies[0];
+	if (
+		result.dependencies.length !== 1 ||
+		dependency === undefined ||
+		(dependency.kind === "world"
+			? dependency.fact !== "primordials.locked"
+			: dependency.family !== family)
+	) {
+		throw new Error(`${family} semantic fact has a mismatched dependency`);
+	}
+	if (result.obligations.length !== 1 || result.obligations[0] !== "fallback") {
+		throw new Error(`${family} semantic fact lacks its generic twin`);
+	}
+	return result;
+}
+
 function vmSemanticDependencyKey(dependency: VmSemanticDependency): string {
 	return dependency.kind === "world"
 		? `world:${dependency.fact}`

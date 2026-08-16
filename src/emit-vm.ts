@@ -10,6 +10,7 @@ import {
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
 	vmRegionLicense,
+	vmSemanticProtectorGuard,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
@@ -754,19 +755,10 @@ interface NativeIntegerRange {
  * the complete allocation/store/load fallback from the first instruction.
  */
 function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): void {
-	const arrayElementFacts =
-		definition.semanticProtectors?.filter((fact) => fact.family === "array-elements") ??
-		[];
-	if (arrayElementFacts.length > 1) {
-		throw new Error("Duplicate Array-elements semantic facts");
-	}
-	const arrayElementGuard = arrayElementFacts[0]?.guard;
-	if (
-		arrayElementGuard !== undefined &&
-		!arrayElementGuard.obligations.includes("fallback")
-	) {
-		throw new Error("Array-elements semantic fact lacks its generic twin");
-	}
+	const arrayElementGuard = vmSemanticProtectorGuard(
+		definition.semanticProtectors,
+		"array-elements",
+	);
 	// With zero parameters/captures and no calls, globals, object/string producers,
 	// handlers, or non-aggregate property operations, every remaining BINARY/UNARY
 	// operand is a locally produced primitive. None can invoke user coercion or

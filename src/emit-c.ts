@@ -12,6 +12,7 @@ import {
 	vmCallProvesBuiltin,
 	vmGuardIsWorldInvariant,
 	vmRegionLicense,
+	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
 import type {
 	VmExceptionHandler,
@@ -1289,7 +1290,7 @@ export function emitCompiledFunction(
 		privateAggregateMemos,
 		numericHofRegions,
 		directCompiledTargets,
-		semanticProtectorGuard(semanticProtectors, "watched-methods"),
+		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 	);
 	if (body === null) {
@@ -1680,7 +1681,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
-		semanticProtectorGuard(semanticProtectors, "watched-methods"),
+		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 	);
 	if (body === null) {
@@ -2660,19 +2661,6 @@ function semanticDependencyValidationGuard(
 	const mask = semanticDependencyMask(guard.dependencies);
 	if (mask === undefined) return "true";
 	return `mal_vm_semantic_dependencies_validate(vm, ${mask}, ${activityEpochName})`;
-}
-
-function semanticProtectorGuard(
-	facts: ReadonlyArray<VmSemanticProtectorFact>,
-	family: VmSemanticProtectorFact["family"],
-): VmGuardPlan | undefined {
-	const matching = facts.filter((fact) => fact.family === family);
-	if (matching.length > 1) throw new Error(`Duplicate ${family} semantic facts`);
-	const guard = matching[0]?.guard;
-	if (guard !== undefined && !guard.obligations.includes("fallback")) {
-		throw new Error(`${family} semantic fact lacks its generic twin`);
-	}
-	return guard;
 }
 
 /**

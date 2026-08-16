@@ -5,7 +5,7 @@ import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
 import { emitCompiledFunction } from "../src/emit-c.ts";
 import { emitBatch, emitVmDefinition, emitVmTranslationUnits } from "../src/emit-vm.ts";
-import { vmRegionLicense } from "../src/lower-vm.ts";
+import { vmRegionLicense, vmSemanticProtectorGuard } from "../src/lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -125,6 +125,42 @@ describe("emit-vm instruction packing", () => {
 			genericTwin: "retained",
 			materialization: "on-demand",
 		});
+	});
+
+	it("validates program semantic facts through one query surface", () => {
+		const locked = {
+			dependencies: [{ kind: "world" as const, fact: "primordials.locked" as const }],
+			obligations: ["fallback" as const],
+		};
+		expect(
+			vmSemanticProtectorGuard(
+				[{ family: "array-elements", guard: locked }],
+				"array-elements",
+			),
+		).toBe(locked);
+		expect(() =>
+			vmSemanticProtectorGuard(
+				[
+					{ family: "array-elements", guard: locked },
+					{ family: "array-elements", guard: locked },
+				],
+				"array-elements",
+			),
+		).toThrow("Duplicate array-elements semantic facts");
+		expect(() =>
+			vmSemanticProtectorGuard(
+				[
+					{
+						family: "array-elements",
+						guard: {
+							dependencies: [{ kind: "epoch", family: "watched-methods" }],
+							obligations: ["fallback"],
+						},
+					},
+				],
+				"array-elements",
+			),
+		).toThrow("array-elements semantic fact has a mismatched dependency");
 	});
 
 	it("emits complete data-property descriptor attributes", () => {
