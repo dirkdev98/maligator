@@ -175,7 +175,9 @@ profiler improvement; collecting more samples alone will not repair the explanat
       boundaries for graph, semantics, IR compilation, optimization, register
       allocation, lowering, and serialization. Reports publish monotonic-wall inclusive
       and self time in `phases.json` and `timeline.json`; unmatched boundaries bias the
-      capture. The marker methods are absent from ordinary product images.
+      capture. CPU samples, Poisson-estimated charged allocation, and exact GC pauses
+      are assigned to the innermost active phase, which keeps evidence additive across
+      nested spans. The marker methods are absent from ordinary product images.
 - [ ] Add real `--help`/unknown-option handling to `scripts/bench.ts`. Today `--help`
       is treated as no lane selection and starts the full benchmark suite, including
       an expensive Rust rebuild; help and invalid flags must exit before any build.

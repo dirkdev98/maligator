@@ -47,7 +47,7 @@ function capture(): Uint8Array {
 
 function captureWithNestedPhases(): Uint8Array {
 	const base = capture();
-	const recordCount = 6;
+	const recordCount = 8;
 	const frameBase = 80 + recordCount * 40;
 	const bytes = new Uint8Array(frameBase + 2 * 12);
 	bytes.set(base.subarray(0, 80 + 2 * 40));
@@ -55,17 +55,19 @@ function captureWithNestedPhases(): Uint8Array {
 	const view = new DataView(bytes.buffer);
 	view.setUint32(12, recordCount, true);
 	const events = [
-		{ kind: 5, timestampNs: 30_000_000n, phaseId: 1n },
-		{ kind: 5, timestampNs: 40_000_000n, phaseId: 2n },
-		{ kind: 6, timestampNs: 50_000_000n, phaseId: 2n },
-		{ kind: 6, timestampNs: 70_000_000n, phaseId: 1n },
+		{ kind: 5, timestampNs: 5_000_000n, value: 1n },
+		{ kind: 5, timestampNs: 15_000_000n, value: 2n },
+		{ kind: 3, timestampNs: 17_000_000n, value: 0n },
+		{ kind: 4, timestampNs: 19_000_000n, value: 0n },
+		{ kind: 6, timestampNs: 25_000_000n, value: 2n },
+		{ kind: 6, timestampNs: 30_000_000n, value: 1n },
 	];
 	for (let index = 0; index < events.length; index++) {
 		const event = events[index]!;
 		const offset = 80 + (index + 2) * 40;
 		view.setUint8(offset, event.kind);
 		view.setBigUint64(offset + 8, event.timestampNs, true);
-		view.setBigUint64(offset + 16, event.phaseId, true);
+		view.setBigUint64(offset + 16, event.value, true);
 	}
 	return bytes;
 }
@@ -337,20 +339,53 @@ test("profile finalization publishes standard views and joins remarks by source 
 	});
 	expect(result.manifest.phases).toMatchObject({
 		clock: "monotonic-wall",
+		evidenceAttribution: "innermost",
+		unphased: {
+			cpuSamples: 0,
+			allocationSamples: 0,
+			estimatedChargedBytes: 0,
+			gcCollections: 0,
+			gcPauseMs: 0,
+		},
 		spans: 2,
-		measuredWallMs: 40,
+		measuredWallMs: 25,
 		incompleteEvents: 0,
 		timings: [
-			{ id: 1, name: "graph", spans: 1, inclusiveMs: 40, selfMs: 30 },
-			{ id: 2, name: "semantic", spans: 1, inclusiveMs: 10, selfMs: 10 },
+			{
+				id: 1,
+				name: "graph",
+				spans: 1,
+				inclusiveMs: 25,
+				selfMs: 15,
+				cpuSamples: 1,
+				allocationSamples: 0,
+				gcCollections: 0,
+			},
+			{
+				id: 2,
+				name: "semantic",
+				spans: 1,
+				inclusiveMs: 10,
+				selfMs: 10,
+				cpuSamples: 0,
+				allocationSamples: 1,
+				gcCollections: 1,
+				gcPauseMs: 2,
+			},
 		],
 	});
+	expect(result.manifest.phases.timings[1]!.estimatedChargedBytes).toBeCloseTo(
+		65_576,
+		-1,
+	);
 	const timeline = JSON.parse(
 		readFileSync(path.join(directory, "timeline.json"), "utf-8"),
 	) as Array<{ name: string; cat: string; ph: string }>;
 	expect(timeline).toEqual([
 		expect.objectContaining({ name: "graph", cat: "maligator.phase", ph: "B" }),
 		expect.objectContaining({ name: "semantic", cat: "maligator.phase", ph: "B" }),
+		expect.objectContaining({ name: "GC", cat: "maligator.gc", ph: "B" }),
+		expect.objectContaining({ name: "GC", cat: "maligator.gc", ph: "E" }),
 		expect.objectContaining({ name: "semantic", cat: "maligator.phase", ph: "E" }),
 		expect.objectContaining({ name: "graph", cat: "maligator.phase", ph: "E" }),
 	]);
@@ -365,7 +400,7 @@ test("profile finalization publishes standard views and joins remarks by source 
 	});
 	const report = formatProfileReport(result).join("\n");
 	expect(report).toContain("Sampling 10.00 ms process-cpu CPU / 64 KiB poisson");
-	expect(report).toContain("GC 0 collections");
+	expect(report).toContain("GC 1 collections");
 	expect(report).toContain("estimated charged allocation traffic");
 	expect(report).toContain("Exact allocation families array/raw-payload 160 B");
 	expect(report).toContain("Compiler coverage 2/2 sites (100.0%)");
@@ -380,8 +415,10 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(report).toContain("2 RegExp runtime entries");
 	expect(report).toContain("Exact host runtime sites");
 	expect(report).toContain("1 host runtime entry");
-	expect(report).toContain("Phases 2 spans · 40.0 ms measured monotonic wall");
-	expect(report).toContain("graph · 40.0 ms / 30.0 ms · 1 span");
+	expect(report).toContain("Phases 2 spans · 25.0 ms measured monotonic wall");
+	expect(report).toContain("graph · 25.0 ms / 15.0 ms · 100.0% wall · 1 span · 1 CPU");
+	expect(report).toContain("semantic · 10.0 ms / 10.0 ms · 40.0% wall · 1 span");
+	expect(report).toContain("64 KiB allocation (100.0%) · 1 GC / 2.00 ms");
 	expect(report).toContain("Exact fallback pressure");
 	expect(report).toContain("2 fallback / 10 executions (20.0%)");
 	expect(report).toContain("Exact allocation sites");
@@ -413,10 +450,25 @@ test("profile finalization publishes standard views and joins remarks by source 
 	);
 });
 
+test("phase summary preserves evidence outside measured spans", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-unphased-"));
+	writeFileSync(path.join(directory, "capture.bin"), capture());
+	const result = finalizeProfileCapture(directory, prepared, "run");
+	expect(result.manifest.phases).toMatchObject({
+		spans: 0,
+		unphased: {
+			cpuSamples: 1,
+			allocationSamples: 1,
+			gcCollections: 0,
+		},
+	});
+	expect(result.manifest.phases.unphased.estimatedChargedBytes).toBeCloseTo(65_576, -1);
+});
+
 test("unmatched phase markers bias the capture instead of fabricating a duration", () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-phase-mismatch-"));
 	const bytes = captureWithNestedPhases();
-	new DataView(bytes.buffer).setBigUint64(80 + 5 * 40 + 16, 2n, true);
+	new DataView(bytes.buffer).setBigUint64(80 + 7 * 40 + 16, 2n, true);
 	writeFileSync(path.join(directory, "capture.bin"), bytes);
 	const result = finalizeProfileCapture(directory, prepared, "run");
 	expect(result.manifest.quality).toBe("biased");

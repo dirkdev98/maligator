@@ -856,14 +856,18 @@ function atomicJson(file: string, value: unknown): void {
 	renameSync(temporary, file);
 }
 
-function profileQuality(capture: RawCapture): ProfileQuality {
+function profileQuality(
+	capture: RawCapture,
+	gc: GcSummary,
+	phases: ProfilePhaseSummary,
+): ProfileQuality {
 	const cpuRecords = capture.records.filter((record) => record.kind === 1);
 	const allocationRecords = capture.records.filter((record) => record.kind === 2);
 	const delays = cpuRecords.map((record) => record.auxiliary / 1e6);
 	return capture.droppedFrames > 0 ||
 		capture.droppedRecords > 0 ||
-		summarizeGc(capture.records).incompleteEvents > 0 ||
-		summarizePhases(capture.records).incompleteEvents > 0 ||
+		gc.incompleteEvents > 0 ||
+		phases.incompleteEvents > 0 ||
 		percentile(delays, 0.99) > (capture.intervalUs / 1000) * 4
 		? "biased"
 		: cpuRecords.length < 20 && allocationRecords.length < 20
@@ -905,10 +909,23 @@ export interface ProfilePhaseTiming {
 	inclusiveMs: number;
 	selfMs: number;
 	maxInclusiveMs: number;
+	cpuSamples: number;
+	allocationSamples: number;
+	estimatedChargedBytes: number;
+	gcCollections: number;
+	gcPauseMs: number;
 }
 
 export interface ProfilePhaseSummary {
 	clock: "monotonic-wall";
+	evidenceAttribution: "innermost";
+	unphased: {
+		cpuSamples: number;
+		allocationSamples: number;
+		estimatedChargedBytes: number;
+		gcCollections: number;
+		gcPauseMs: number;
+	};
 	spans: number;
 	measuredWallMs: number;
 	incompleteEvents: number;
@@ -1017,7 +1034,7 @@ function summarizeGc(records: Array<RawRecord>): GcSummary {
 	};
 }
 
-function summarizePhases(records: Array<RawRecord>): ProfilePhaseSummary {
+function summarizePhases(capture: RawCapture): ProfilePhaseSummary {
 	interface OpenPhase {
 		id: number;
 		startedAtNs: number;
@@ -1030,14 +1047,85 @@ function summarizePhases(records: Array<RawRecord>): ProfilePhaseSummary {
 		selfNs: number;
 		maxInclusiveNs: number;
 	}
+	interface PhaseEvidence {
+		cpuSamples: number;
+		allocationSamples: number;
+		estimatedChargedBytes: number;
+		gcCollections: number;
+		gcPauseNs: number;
+	}
 	const open: Array<OpenPhase> = [];
 	const accumulated = new Map<number, AccumulatedPhase>();
+	const evidence = new Map<number, PhaseEvidence>();
+	const unphased: PhaseEvidence = {
+		cpuSamples: 0,
+		allocationSamples: 0,
+		estimatedChargedBytes: 0,
+		gcCollections: 0,
+		gcPauseNs: 0,
+	};
+	const gcBegins: Array<{ timestampNs: number; phaseId?: number }> = [];
 	let measuredWallNs = 0;
 	let incompleteEvents = 0;
 	let spans = 0;
-	for (const record of records) {
+	const phaseEvidence = (id: number): PhaseEvidence => {
+		let value = evidence.get(id);
+		if (value === undefined) {
+			value = {
+				cpuSamples: 0,
+				allocationSamples: 0,
+				estimatedChargedBytes: 0,
+				gcCollections: 0,
+				gcPauseNs: 0,
+			};
+			evidence.set(id, value);
+		}
+		return value;
+	};
+	const ordered = capture.records
+		.map((record, index) => ({ record, index }))
+		.sort(
+			(left, right) =>
+				left.record.timestampNs - right.record.timestampNs || left.index - right.index,
+		);
+	for (const { record } of ordered) {
 		if (record.kind === 5) {
-			open.push({ id: record.value, startedAtNs: record.timestampNs, childNs: 0 });
+			open.push({
+				id: record.value,
+				startedAtNs: record.timestampNs,
+				childNs: 0,
+			});
+			continue;
+		}
+		const activePhaseId = open.at(-1)?.id;
+		if (record.kind === 1) {
+			(activePhaseId === undefined ? unphased : phaseEvidence(activePhaseId))
+				.cpuSamples++;
+			continue;
+		}
+		if (record.kind === 2) {
+			const activeEvidence =
+				activePhaseId === undefined ? unphased : phaseEvidence(activePhaseId);
+			activeEvidence.allocationSamples++;
+			activeEvidence.estimatedChargedBytes +=
+				record.auxiliary * allocationSampleWeight(capture, record);
+			continue;
+		}
+		if (record.kind === 3) {
+			gcBegins.push({
+				timestampNs: record.timestampNs,
+				...(activePhaseId === undefined ? {} : { phaseId: activePhaseId }),
+			});
+			continue;
+		}
+		if (record.kind === 4) {
+			const begin = gcBegins.pop();
+			if (begin !== undefined) {
+				const activeEvidence =
+					begin.phaseId === undefined ? unphased : phaseEvidence(begin.phaseId);
+				activeEvidence.gcCollections++;
+				activeEvidence.gcPauseNs += Math.max(0, record.timestampNs - begin.timestampNs);
+			}
 			continue;
 		}
 		if (record.kind !== 6) continue;
@@ -1072,18 +1160,34 @@ function summarizePhases(records: Array<RawRecord>): ProfilePhaseSummary {
 	incompleteEvents += open.length;
 	return {
 		clock: "monotonic-wall",
+		evidenceAttribution: "innermost",
+		unphased: {
+			cpuSamples: unphased.cpuSamples,
+			allocationSamples: unphased.allocationSamples,
+			estimatedChargedBytes: unphased.estimatedChargedBytes,
+			gcCollections: unphased.gcCollections,
+			gcPauseMs: unphased.gcPauseNs / 1e6,
+		},
 		spans,
 		measuredWallMs: measuredWallNs / 1e6,
 		incompleteEvents,
 		timings: [...accumulated.values()]
-			.map((phase) => ({
-				id: phase.id,
-				name: profilePhaseName(phase.id),
-				spans: phase.spans,
-				inclusiveMs: phase.inclusiveNs / 1e6,
-				selfMs: phase.selfNs / 1e6,
-				maxInclusiveMs: phase.maxInclusiveNs / 1e6,
-			}))
+			.map((phase) => {
+				const phaseEvidence = evidence.get(phase.id);
+				return {
+					id: phase.id,
+					name: profilePhaseName(phase.id),
+					spans: phase.spans,
+					inclusiveMs: phase.inclusiveNs / 1e6,
+					selfMs: phase.selfNs / 1e6,
+					maxInclusiveMs: phase.maxInclusiveNs / 1e6,
+					cpuSamples: phaseEvidence?.cpuSamples ?? 0,
+					allocationSamples: phaseEvidence?.allocationSamples ?? 0,
+					estimatedChargedBytes: phaseEvidence?.estimatedChargedBytes ?? 0,
+					gcCollections: phaseEvidence?.gcCollections ?? 0,
+					gcPauseMs: (phaseEvidence?.gcPauseNs ?? 0) / 1e6,
+				};
+			})
 			.sort((left, right) => right.inclusiveMs - left.inclusiveMs || left.id - right.id),
 	};
 }
@@ -1098,7 +1202,13 @@ function summarizeCompilerAllocations(
 		const key = `${storage}:${family}`;
 		let summary = families.get(key);
 		if (summary === undefined) {
-			summary = { storage, family, count: 0, requestedBytes: 0, chargedBytes: 0 };
+			summary = {
+				storage,
+				family,
+				count: 0,
+				requestedBytes: 0,
+				chargedBytes: 0,
+			};
 			families.set(key, summary);
 		}
 		summary.count += allocation.count;
@@ -1198,14 +1308,14 @@ export function finalizeProfileCapture(
 			);
 		}
 	}
-	const quality = profileQuality(capture);
-	const ranked = findings(capture, prepared, quality, compiler);
 	const cpuRecords = capture.records.filter((record) => record.kind === 1);
 	const allocationRecords = capture.records.filter((record) => record.kind === 2);
 	const delays = cpuRecords.map((record) => record.auxiliary / 1e6);
 	const allocation = summarizeAllocationSamples(capture, allocationRecords);
 	const gc = summarizeGc(capture.records);
-	const phases = summarizePhases(capture.records);
+	const phases = summarizePhases(capture);
+	const quality = profileQuality(capture, gc, phases);
+	const ranked = findings(capture, prepared, quality, compiler);
 	atomicJson(path.join(directory, "cpu.cpuprofile"), cpuProfile(capture, prepared));
 	atomicJson(
 		path.join(directory, "timeline.json"),
@@ -1231,7 +1341,7 @@ export function finalizeProfileCapture(
 						: { id: record.value },
 			})),
 	);
-	atomicJson(path.join(directory, "phases.json"), { schema: 1, ...phases });
+	atomicJson(path.join(directory, "phases.json"), { schema: 2, ...phases });
 	atomicJson(
 		path.join(directory, "allocations.json"),
 		ranked.filter((finding) => finding.allocationSamples > 0),
@@ -1276,7 +1386,10 @@ export function finalizeProfileCapture(
 		prepared.remarks.map((remark) => JSON.stringify(remark)).join("\n") +
 			(prepared.remarks.length === 0 ? "" : "\n"),
 	);
-	atomicJson(path.join(directory, "summary.json"), { schema: 3, findings: ranked });
+	atomicJson(path.join(directory, "summary.json"), {
+		schema: 3,
+		findings: ranked,
+	});
 	const truncatedRecords = capture.records.filter((record) => record.omittedFrames > 0);
 	const compilerOverflow =
 		compiler?.allocations.find((entry) => entry.siteId === -2) ?? null;
@@ -1614,6 +1727,19 @@ export function formatProfileReport(
 		if (topFamilies !== "") lines.push(`  Allocation families ${topFamilies}`);
 	}
 	if (manifest.phases.spans > 0 || manifest.phases.incompleteEvents > 0) {
+		const unphasedEvidence = [
+			manifest.phases.unphased.cpuSamples === 0
+				? undefined
+				: `${formatCount(manifest.phases.unphased.cpuSamples)} CPU`,
+			manifest.phases.unphased.allocationSamples === 0
+				? undefined
+				: `${formatBytes(manifest.phases.unphased.estimatedChargedBytes)} allocation`,
+			manifest.phases.unphased.gcCollections === 0
+				? undefined
+				: `${formatCount(manifest.phases.unphased.gcCollections)} GC / ${formatDuration(
+						manifest.phases.unphased.gcPauseMs,
+					)}`,
+		].filter((value): value is string => value !== undefined);
 		lines.push(
 			`  Phases ${formatCount(manifest.phases.spans)} spans · ${formatDuration(
 				manifest.phases.measuredWallMs,
@@ -1621,21 +1747,50 @@ export function formatProfileReport(
 				manifest.phases.incompleteEvents === 0
 					? ""
 					: ` · ${formatCount(manifest.phases.incompleteEvents)} unmatched events`
+			}${
+				unphasedEvidence.length === 0
+					? ""
+					: ` · outside phases ${unphasedEvidence.join(" · ")}`
 			}`,
 		);
 		if (manifest.phases.timings.length > 0) {
-			lines.push("  Phase timing (inclusive / self)");
+			lines.push("  Phase timing (inclusive / self; evidence uses innermost phase)");
 			lines.push(
-				...manifest.phases.timings
-					.slice(0, limit)
-					.map(
-						(phase, index) =>
-							`  ${index + 1}. ${phase.name} · ${formatDuration(
-								phase.inclusiveMs,
-							)} / ${formatDuration(phase.selfMs)} · ${formatCount(phase.spans)} span${
-								phase.spans === 1 ? "" : "s"
-							}`,
-					),
+				...manifest.phases.timings.slice(0, limit).map((phase, index) => {
+					const wallShare =
+						manifest.phases.measuredWallMs === 0
+							? 0
+							: phase.inclusiveMs / manifest.phases.measuredWallMs;
+					const evidence = [
+						phase.cpuSamples === 0
+							? undefined
+							: `${formatCount(phase.cpuSamples)} CPU (${(
+									(manifest.cpuSamples === 0
+										? 0
+										: phase.cpuSamples / manifest.cpuSamples) * 100
+								).toFixed(1)}%)`,
+						phase.allocationSamples === 0
+							? undefined
+							: `${formatBytes(phase.estimatedChargedBytes)} allocation (${(
+									(manifest.allocation.estimatedChargedBytes === 0
+										? 0
+										: phase.estimatedChargedBytes /
+											manifest.allocation.estimatedChargedBytes) * 100
+								).toFixed(1)}%)`,
+						phase.gcCollections === 0
+							? undefined
+							: `${formatCount(phase.gcCollections)} GC / ${formatDuration(
+									phase.gcPauseMs,
+								)}`,
+					].filter((value): value is string => value !== undefined);
+					return `  ${index + 1}. ${phase.name} · ${formatDuration(
+						phase.inclusiveMs,
+					)} / ${formatDuration(phase.selfMs)} · ${(wallShare * 100).toFixed(
+						1,
+					)}% wall · ${formatCount(phase.spans)} span${
+						phase.spans === 1 ? "" : "s"
+					}${evidence.length === 0 ? "" : ` · ${evidence.join(" · ")}`}`;
+				}),
 			);
 		}
 	}

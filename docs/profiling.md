@@ -74,10 +74,14 @@ native implementation frames out of the user-facing result.
 Profile-enabled images may additionally emit explicitly nested phase boundaries.
 The self-host compiler wraps its seven existing synchronous phase callbacks with
 these markers. Finalization validates strict nesting, reports inclusive and self
-monotonic-wall time, and marks a capture biased rather than inventing a duration when
-an entry or exit is missing. Phase timing is deterministic event instrumentation,
-not a replacement for paired production benchmarks: it includes GC and host work
-that happens inside a phase and should be used to select a target for measurement.
+monotonic-wall time, and attributes CPU samples, estimated charged allocation, and
+GC pauses to the innermost active phase. Innermost attribution keeps nested-phase
+evidence additive while inclusive wall time still exposes the whole span. A missing
+entry or exit marks the capture biased rather than inventing a duration, and evidence
+recorded outside every measured span remains explicit as `unphased`. Phase timing is
+deterministic event instrumentation, but its CPU and allocation evidence remains
+sampled; it is not a replacement for paired production benchmarks. Use it to select a
+target for measurement.
 
 Allocation sampling uses independent Poisson inclusion over allocator-charged bytes
 with a 512 KiB mean interval. Each sample preserves requested bytes, charged bytes,
