@@ -255,13 +255,18 @@ is general rather than a registry-shaped collection of special cases.
           analysis through lowering. Native emission erases both only when its
           representation proof selects the no-fallback numeric call; bytecode keeps
           the complete generic twin for interpreted execution.
-- [ ] Add closed `RegExp.prototype.exec` capture projection as the first stateful and
+- [x] Add closed `RegExp.prototype.exec` capture projection as the first stateful and
       effect-sensitive projection. Preserve `lastIndex`, capture, coercion, and
       unmatched-value semantics with materialization on unsupported consumers.
   - [x] Publish canonical `RegExp.prototype.exec` identity, effect, result, and
         capture-projection facts through IR and the frontend wire format. License
         the existing whole-region projection from those facts while retaining the
         ordinary call and result materialization as its mutable/guard-miss twin.
+  - [x] Prove an exact unaliased RegExp literal from its intrinsic construction,
+        dominance, and complete use set. In locked native code, erase its `exec`
+        property Get, callback/Realm checks, and generic call twin while keeping
+        input coercion, `lastIndex`, throws, and capture materialization in the
+        projected helper. Mutable and interpreted code retain the ordinary twin.
 - [ ] Specialize higher-order intrinsics when callback identity and iteration
       semantics are stable, prioritizing measured `reduce`, `forEach`, `map`, and
       `sort` boundaries. Use these to validate user-callback effect summaries and

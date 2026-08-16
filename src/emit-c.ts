@@ -2155,6 +2155,7 @@ interface NativeRegExpExecProjectionSite {
 interface NativeRegExpExecProjectionAction {
 	site: NativeRegExpExecProjectionSite;
 	role:
+		| "property"
 		| "call"
 		| "capture"
 		| "length"
@@ -2167,6 +2168,7 @@ interface NativeRegExpExecProjectionAction {
 		| "caseLowerCall"
 		| "caseLength";
 	load?: NativeRegExpExecProjection["loads"][number];
+	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
 type NativeRegExpIteratorProjection = NonNullable<
@@ -3357,10 +3359,28 @@ function emitBody(
 		NativeRegExpExecProjectionAction
 	>();
 	for (const site of regexpExecProjectionSites.values()) {
+		const propertyInstruction = fn.instructions[site.projection.propertyIp];
+		const propertyLoad =
+			site.projection.lockedFreshLiteral &&
+			vmGuardIsWorldInvariant(site.projection.license.guard) &&
+			site.projection.propertyIp + 1 === site.projection.callIp &&
+			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
+			handlerTargets[site.projection.propertyIp] ===
+				handlerTargets[site.projection.callIp]
+				? propertyInstruction
+				: undefined;
 		nativeRegExpExecProjectionActionByIp.set(site.projection.callIp, {
 			site,
 			role: "call",
+			propertyLoad,
 		});
+		if (propertyLoad !== undefined) {
+			nativeRegExpExecProjectionActionByIp.set(site.projection.propertyIp, {
+				site,
+				role: "property",
+				propertyLoad,
+			});
+		}
 		for (const load of site.loads) {
 			nativeRegExpExecProjectionActionByIp.set(load.ip, {
 				site,
@@ -4568,7 +4588,8 @@ function emitInstruction(
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				(nativeStringSplitProjectionAction?.role === "property" ||
 					nativeStringSplitCursorAction?.role === "property" ||
-					nativeStringSliceNumberFusionAction?.role === "property")
+					nativeStringSliceNumberFusionAction?.role === "property" ||
+					nativeRegExpExecProjectionAction?.role === "property")
 			) {
 				return [];
 			}
@@ -6155,7 +6176,7 @@ function emitInstruction(
 				}
 			}
 			if (nativeRegExpExecProjectionAction?.role === "call") {
-				const site = nativeRegExpExecProjectionAction.site;
+				const { site, propertyLoad } = nativeRegExpExecProjectionAction;
 				const projection = site.projection;
 				const fast = `__regexp_exec_${projection.callIp}_fast`;
 				const indices = site.loads.map((load) => load.captureIndex).join(", ");
@@ -6166,10 +6187,20 @@ function emitInstruction(
 					(mask, load, index) => mask | (load.consumer === undefined ? 0 : 1 << index),
 					0,
 				);
+				if (propertyLoad !== undefined) {
+					return [
+						`__regexp_exec_${projection.callIp}_projected = false;`,
+						`mal_regexp_exec_capture_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst});`,
+						throwCheck,
+						`__regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
+						poll,
+					];
+				}
+				const project = `mal_regexp_exec_capture_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst})`;
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`__regexp_exec_${projection.callIp}_projected = false;`,
-					`${fast} = mal_regexp_exec_capture_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst});`,
+					`${fast} = ${project};`,
 					`if (${fast}) {`,
 					`  ${throwCheck}`,
 					`  __regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,

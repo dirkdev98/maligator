@@ -468,7 +468,10 @@ export interface VmFunction {
 	nativeRegExpExecProjections?: ReadonlyArray<{
 		license: VmRegionLicense;
 		resultRepresentation: "regexp-capture-projection";
+		propertyIp: number;
 		callIp: number;
+		/** Locked exact literal: property/callback/Realm identity is not observable. */
+		lockedFreshLiteral: boolean;
 		callee: number;
 		receiver: number;
 		input: number;

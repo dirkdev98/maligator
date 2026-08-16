@@ -3111,10 +3111,39 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 			}
 			const license = vmRegionLicense([call.guardedBuiltinCall?.guard], "whole-region");
 			if (license === undefined) continue;
+			let lockedFreshLiteral = false;
+			const receiverDefinition = latestDefinition(call.thisValue, callIp - 1);
+			if (receiverDefinition?.instruction.opcode === "CONSTRUCT") {
+				const receiverConstruct = receiverDefinition.instruction;
+				const constructorDefinition = latestDefinition(
+					receiverConstruct.callee,
+					receiverDefinition.ip,
+				);
+				const constructorIntrinsic = constructorDefinition?.instruction;
+				const argument = decodeVmValueOperand(call.arguments[0]!);
+				lockedFreshLiteral =
+					license.guard.dependencies.every((dependency) => dependency.kind === "world") &&
+					receiverConstruct.dst === call.thisValue &&
+					receiverConstruct.arguments.length === 2 &&
+					constructorDefinition !== undefined &&
+					constructorIntrinsic?.opcode === "LOAD_INTRINSIC" &&
+					constructorIntrinsic.intrinsic === "RegExp" &&
+					constructorIntrinsic.dst === receiverConstruct.callee &&
+					instructionDominates(constructorDefinition.ip, receiverDefinition.ip) &&
+					instructionDominates(receiverDefinition.ip, callIp) &&
+					(argument.kind !== "register" || argument.register !== call.thisValue) &&
+					hasOnlyUsesUntilRedefinition(
+						call.thisValue,
+						receiverDefinition.ip + 1,
+						new Set([callIp - 1, callIp]),
+					);
+			}
 			projections.push({
 				license,
 				resultRepresentation: "regexp-capture-projection",
+				propertyIp: callIp - 1,
 				callIp,
+				lockedFreshLiteral,
 				callee: call.callee,
 				receiver: call.thisValue,
 				input: call.arguments[0]!,

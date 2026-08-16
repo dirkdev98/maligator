@@ -1679,6 +1679,19 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_call_cached(vm,");
 	});
 
+	it("removes locked exec identity checks for a fresh unaliased RegExp literal", () => {
+		const output = emitLocked(`
+			function parse(value) {
+				const match = /([a-z]+)=([0-9]+)/.exec(value);
+				if (match === null) return -1;
+				return match[1].length + Number(match[2]);
+			}
+			globalThis.parse = parse;
+		`);
+		expect(output).toContain("mal_regexp_exec_capture_projection_locked(vm,");
+		expect(output).not.toContain("mal_regexp_exec_capture_projection(vm,");
+	});
+
 	it("summarizes a closed ASCII capture case chain to its terminal length", () => {
 		const output = emit(`
 			function normalizedLength(regexp, value) {

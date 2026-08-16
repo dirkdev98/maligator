@@ -132,6 +132,35 @@ check(
 		Object.is(lockedMathResults[3], -0),
 );
 
+function lockedLiteralExec(value) {
+	const match = /([a-z]+)=([0-9]+)/.exec(value);
+	if (match === null) return -1;
+	return match[1].length * 100 + Number(match[2]);
+}
+check("locked fresh RegExp exec projection", lockedLiteralExec("age=42") === 342);
+let literalExecCoercions = 0;
+check(
+	"locked fresh RegExp exec preserves input coercion",
+	lockedLiteralExec({
+		toString() {
+			literalExecCoercions++;
+			return "id=7";
+		},
+	}) === 207 && literalExecCoercions === 1,
+);
+const literalExecError = new Error("literal exec coercion");
+let literalExecCaught = false;
+try {
+	lockedLiteralExec({
+		toString() {
+			throw literalExecError;
+		},
+	});
+} catch (error) {
+	literalExecCaught = error === literalExecError;
+}
+check("locked fresh RegExp exec preserves coercion exceptions", literalExecCaught);
+
 for (const [name, value] of [
 	["Object", Object],
 	["String", String],

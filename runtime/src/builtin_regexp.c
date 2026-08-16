@@ -2286,8 +2286,9 @@ void mal_builtin_regexp_install(MalVm *vm) {
     regexp_define_getter(vm, prototype, (const byte *) "hasIndices", (const byte *) "get hasIndices", regexp_proto_get_has_indices);
 }
 
-bool mal_regexp_exec_capture_projection(
+static bool regexp_exec_capture_projection_impl(
     MalVm *vm,
+    bool locked_identity,
     MalValue callee,
     MalValue regexp,
     MalValue string,
@@ -2316,14 +2317,15 @@ bool mal_regexp_exec_capture_projection(
             return false;
         }
     }
-    if (!mal_value_is_string(string) ||
-        !mal_value_is_native_function_object(callee) ||
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(callee)) != regexp_proto_exec) {
+    if ((!locked_identity && !mal_value_is_string(string)) ||
+        (!locked_identity &&
+         (!mal_value_is_native_function_object(callee) ||
+          mal_native_function_object_callback(
+              mal_value_to_native_function_object(callee)) != regexp_proto_exec))) {
         goto guard_miss;
     }
 #if MAL_REALMS
-    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) {
+    if (!locked_identity && mal_vm_callee_realm(vm, callee) != vm->current_realm) {
         goto guard_miss;
     }
 #endif
@@ -2336,6 +2338,20 @@ bool mal_regexp_exec_capture_projection(
     MalCalleeRoots call_roots;
     mal_gc_callee_roots_begin(
         &call_roots, regexp, mal_value_new_undefined(), callee, args, 1);
+    MalString *subject;
+    if (mal_value_is_string(args[0])) {
+        subject = mal_value_to_string(args[0]);
+    } else if (!locked_identity || !mal_vm_to_string(vm, args[0], &subject)) {
+        for (u32 i = 0; i < capture_count; i++) {
+            *capture_outputs[i] = mal_value_new_undefined();
+        }
+        *subject_output = mal_value_new_undefined();
+        *result_out = mal_value_new_undefined();
+        mal_gc_callee_roots_end(&call_roots);
+        return locked_identity;
+    } else {
+        args[0] = mal_value_from_string(subject);
+    }
     MalValue roots[8];
     for (u32 i = 0; i < capture_count; i++) {
         roots[i] = mal_value_new_undefined();
@@ -2359,7 +2375,7 @@ bool mal_regexp_exec_capture_projection(
     // the explicit span additionally documents the emitter-only capture roots.
     vm->gc_native_frames++;
     MalValue result = regexp_builtin_exec(
-        vm, canonical, regexp, mal_value_to_string(string),
+        vm, canonical, regexp, subject,
         REGEXP_BUILTIN_EXEC_CAPTURE_PROJECTION, false, &projection);
     vm->gc_native_frames--;
     if (!regexp_threw(vm)) {
@@ -2368,7 +2384,7 @@ bool mal_regexp_exec_capture_projection(
         }
         *result_out = result;
         *subject_output = mal_value_is_boolean(result)
-            ? string
+            ? args[0]
             : mal_value_new_undefined();
     } else {
         for (u32 i = 0; i < capture_count; i++) {
@@ -2389,6 +2405,47 @@ guard_miss:
     }
     *subject_output = mal_value_new_undefined();
     return false;
+}
+
+bool mal_regexp_exec_capture_projection(
+    MalVm *vm,
+    MalValue callee,
+    MalValue regexp,
+    MalValue string,
+    const u32 *capture_indices,
+    MalValue **capture_outputs,
+    u32 capture_count,
+    u8 capture_span_mask,
+    i32 *capture_starts,
+    i32 *capture_ends,
+    MalValue *subject_output,
+    MalValue *result_out
+) {
+    return regexp_exec_capture_projection_impl(
+        vm, false, callee, regexp, string, capture_indices, capture_outputs,
+        capture_count, capture_span_mask, capture_starts, capture_ends,
+        subject_output, result_out);
+}
+
+void mal_regexp_exec_capture_projection_locked(
+    MalVm *vm,
+    MalValue regexp,
+    MalValue string,
+    const u32 *capture_indices,
+    MalValue **capture_outputs,
+    u32 capture_count,
+    u8 capture_span_mask,
+    i32 *capture_starts,
+    i32 *capture_ends,
+    MalValue *subject_output,
+    MalValue *result_out
+) {
+    bool handled = regexp_exec_capture_projection_impl(
+        vm, true, mal_value_new_undefined(), regexp, string, capture_indices,
+        capture_outputs, capture_count, capture_span_mask, capture_starts,
+        capture_ends, subject_output, result_out);
+    assert(handled);
+    (void) handled;
 }
 
 MalValue mal_regexp_materialize_capture_span(
@@ -2581,6 +2638,32 @@ bool mal_regexp_exec_capture_projection(
     (void) subject_output;
     (void) result_out;
     return false;
+}
+
+void mal_regexp_exec_capture_projection_locked(
+    MalVm *vm,
+    MalValue regexp,
+    MalValue string,
+    const u32 *capture_indices,
+    MalValue **capture_outputs,
+    u32 capture_count,
+    u8 capture_span_mask,
+    i32 *capture_starts,
+    i32 *capture_ends,
+    MalValue *subject_output,
+    MalValue *result_out
+) {
+    (void) vm;
+    (void) regexp;
+    (void) string;
+    (void) capture_indices;
+    (void) capture_outputs;
+    (void) capture_count;
+    (void) capture_span_mask;
+    (void) capture_starts;
+    (void) capture_ends;
+    (void) subject_output;
+    (void) result_out;
 }
 
 MalValue mal_regexp_materialize_capture_span(
