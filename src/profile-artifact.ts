@@ -6,11 +6,13 @@ import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 
 const CAPTURE_LEGACY_HEADER_BYTES = 40;
 const CAPTURE_V3_HEADER_BYTES = 48;
+const CAPTURE_V4_HEADER_BYTES = 80;
 const CAPTURE_RECORD_BYTES = 40;
 const CAPTURE_FRAME_V1_BYTES = 8;
 const CAPTURE_FRAME_V2_BYTES = 12;
 const COMPILER_V1_HEADER_BYTES = 24;
 const COMPILER_V2_HEADER_BYTES = 32;
+const COMPILER_V3_HEADER_BYTES = 64;
 const COMPILER_V1_EVENT_NAMES = [
 	"executions",
 	"fastPaths",
@@ -59,9 +61,10 @@ const ALLOCATION_FAMILY_NAMES = [
 ];
 
 export interface PreparedProfile {
-	schema: 1 | 2;
+	schema: 1 | 2 | 3;
 	mode: "sampling" | "compiler";
 	buildId: string;
+	captureIdentity?: string;
 	entrypoint: string;
 	functions: Array<{ name: string; file: string }>;
 	sites: Array<ProfileSite>;
@@ -89,7 +92,8 @@ interface RawRecord {
 }
 
 interface RawCapture {
-	schema: 1 | 2 | 3;
+	schema: 1 | 2 | 3 | 4;
+	captureIdentity?: string;
 	intervalUs: number;
 	allocationIntervalBytes: number;
 	allocationSampling: "legacy-fixed" | "poisson";
@@ -110,11 +114,56 @@ export interface CompilerAllocationCounter {
 }
 
 interface CompilerCapture {
+	schema: 1 | 2 | 3;
+	captureIdentity?: string;
 	trackedSiteCount: number;
 	totalSiteCount: number;
 	unattributed: CompilerEvents;
 	bySite: Array<CompilerEvents>;
 	allocations: Array<CompilerAllocationCounter>;
+}
+
+function canonicalJson(value: unknown): string {
+	if (
+		value === null ||
+		typeof value === "string" ||
+		typeof value === "number" ||
+		typeof value === "boolean"
+	) {
+		const encoded = JSON.stringify(value);
+		if (encoded === undefined) throw new Error("profile metadata is not serializable");
+		return encoded;
+	}
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (typeof value !== "object") throw new Error("profile metadata is not serializable");
+	return `{${Object.entries(value)
+		.filter(([, entry]) => entry !== undefined)
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+		.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+		.join(",")}}`;
+}
+
+/** Content identity binding the linked binary hash to its complete profile sidecar. */
+export function profileCaptureIdentity(prepared: PreparedProfile): string {
+	const payload = Object.fromEntries(
+		Object.entries(prepared).filter(([key]) => key !== "captureIdentity"),
+	);
+	return hash("sha256", canonicalJson(payload), "hex");
+}
+
+function validatedCaptureIdentity(prepared: PreparedProfile): string {
+	const identity = prepared.captureIdentity;
+	if (
+		prepared.schema !== 3 ||
+		identity === undefined ||
+		!/^[0-9a-f]{64}$/u.test(identity)
+	) {
+		throw new Error("profile metadata does not contain a valid capture identity");
+	}
+	if (profileCaptureIdentity(prepared) !== identity) {
+		throw new Error("profile metadata capture identity does not match its contents");
+	}
+	return identity;
 }
 
 export interface ProfileFinding {
@@ -188,7 +237,7 @@ export function prepareProfile(
 	mode: PreparedProfile["mode"] = "sampling",
 ): PreparedProfile {
 	const prepared: PreparedProfile = {
-		schema: 2,
+		schema: 3,
 		mode,
 		buildId: hash("sha256", readFileSync(binaryPath), "hex"),
 		entrypoint: definition.entrypointPath,
@@ -199,6 +248,7 @@ export function prepareProfile(
 		sites: definition.profileSites ?? [],
 		remarks: definition.profileRemarks ?? [],
 	};
+	prepared.captureIdentity = profileCaptureIdentity(prepared);
 	atomicJson(`${binaryPath}.profile.json`, prepared);
 	return prepared;
 }
@@ -221,7 +271,12 @@ export function createProfileCapture(
 	command: string,
 	prepared: PreparedProfile,
 	cwd = process.cwd(),
-): { directory: string; capturePath: string } {
+): {
+	directory: string;
+	capturePath: string;
+	environment: { MAL_PROFILE_CAPTURE: string; MAL_PROFILE_IDENTITY: string };
+} {
+	const captureIdentity = validatedCaptureIdentity(prepared);
 	const override = process.env.MALIGATOR_PROFILE_DIRECTORY;
 	const directory = path.resolve(
 		override === undefined
@@ -232,7 +287,15 @@ export function createProfileCapture(
 	);
 	mkdirSync(directory, { recursive: true });
 	atomicJson(path.join(directory, "metadata.json"), prepared);
-	return { directory, capturePath: path.join(directory, "capture.bin") };
+	const capturePath = path.join(directory, "capture.bin");
+	return {
+		directory,
+		capturePath,
+		environment: {
+			MAL_PROFILE_CAPTURE: capturePath,
+			MAL_PROFILE_IDENTITY: captureIdentity,
+		},
+	};
 }
 
 function checkedNumber(value: bigint, label: string): number {
@@ -246,7 +309,12 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 	if (bytes.byteLength < CAPTURE_LEGACY_HEADER_BYTES)
 		throw new Error("profile capture is truncated");
 	const magic = Buffer.from(bytes.subarray(0, 8)).toString();
-	if (magic !== "MALPROF1" && magic !== "MALPROF2" && magic !== "MALPROF3") {
+	if (
+		magic !== "MALPROF1" &&
+		magic !== "MALPROF2" &&
+		magic !== "MALPROF3" &&
+		magic !== "MALPROF4"
+	) {
 		throw new Error("profile capture has an unknown magic value");
 	}
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -254,12 +322,17 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 	if (
 		(magic === "MALPROF1" && schema !== 1) ||
 		(magic === "MALPROF2" && schema !== 2) ||
-		(magic === "MALPROF3" && schema !== 3)
+		(magic === "MALPROF3" && schema !== 3) ||
+		(magic === "MALPROF4" && schema !== 4)
 	)
 		throw new Error("profile capture schema is unsupported");
-	const typedSchema = schema as 1 | 2 | 3;
+	const typedSchema = schema as 1 | 2 | 3 | 4;
 	const headerBytes =
-		schema === 3 ? CAPTURE_V3_HEADER_BYTES : CAPTURE_LEGACY_HEADER_BYTES;
+		schema === 4
+			? CAPTURE_V4_HEADER_BYTES
+			: schema === 3
+				? CAPTURE_V3_HEADER_BYTES
+				: CAPTURE_LEGACY_HEADER_BYTES;
 	if (bytes.byteLength < headerBytes) throw new Error("profile capture is truncated");
 	const recordCount = view.getUint32(12, true);
 	const frameCount = view.getUint32(16, true);
@@ -286,7 +359,7 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 		if (frameOffset + recordFrameCount > frames.length) {
 			throw new Error("profile capture record references frames outside the capture");
 		}
-		const frameOmission = schema === 3 ? view.getUint32(offset + 4, true) : 0;
+		const frameOmission = schema >= 3 ? view.getUint32(offset + 4, true) : 0;
 		records.push({
 			kind: view.getUint8(offset),
 			timestampNs: checkedNumber(view.getBigUint64(offset + 8, true), "timestamp"),
@@ -295,21 +368,26 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 			omittedFrames: frameOmission & 0x3fff_ffff,
 			depthTruncated: (frameOmission & 0x8000_0000) !== 0,
 			capacityTruncated: (frameOmission & 0x4000_0000) !== 0,
-			allocationStorage: schema === 3 ? view.getUint8(offset + 1) : 0,
-			allocationFamily: schema === 3 ? view.getUint8(offset + 2) : 0,
-			allocationObjectType: schema === 3 ? view.getUint8(offset + 3) : 0xff,
+			allocationStorage: schema >= 3 ? view.getUint8(offset + 1) : 0,
+			allocationFamily: schema >= 3 ? view.getUint8(offset + 2) : 0,
+			allocationObjectType: schema >= 3 ? view.getUint8(offset + 3) : 0xff,
 			frames: frames.slice(frameOffset, frameOffset + recordFrameCount),
 		});
 	}
 	return {
 		schema: typedSchema,
+		...(schema === 4
+			? {
+					captureIdentity: Buffer.from(bytes.subarray(48, 80)).toString("hex"),
+				}
+			: {}),
 		intervalUs: view.getUint32(28, true),
 		allocationIntervalBytes:
-			schema === 3
+			schema >= 3
 				? checkedNumber(view.getBigUint64(40, true), "allocation interval")
 				: 65_536,
-		allocationSampling: schema === 3 ? "poisson" : "legacy-fixed",
-		samplingClock: schema === 3 ? "process-cpu" : "legacy-mixed",
+		allocationSampling: schema >= 3 ? "poisson" : "legacy-fixed",
+		samplingClock: schema >= 3 ? "process-cpu" : "legacy-mixed",
 		droppedRecords: view.getUint32(20, true),
 		droppedFrames: view.getUint32(24, true),
 		records,
@@ -347,11 +425,15 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 	if (bytes.byteLength < COMPILER_V1_HEADER_BYTES)
 		throw new Error("compiler profile is truncated");
 	const magic = Buffer.from(bytes.subarray(0, 8)).toString();
-	if (magic !== "MALSITE1" && magic !== "MALSITE2")
+	if (magic !== "MALSITE1" && magic !== "MALSITE2" && magic !== "MALSITE3")
 		throw new Error("compiler profile has an unknown magic value");
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const schema = view.getUint32(8, true);
-	if ((magic === "MALSITE1" && schema !== 1) || (magic === "MALSITE2" && schema !== 2))
+	if (
+		(magic === "MALSITE1" && schema !== 1) ||
+		(magic === "MALSITE2" && schema !== 2) ||
+		(magic === "MALSITE3" && schema !== 3)
+	)
 		throw new Error("compiler profile schema is unsupported");
 	const trackedSiteCount = view.getUint32(12, true);
 	const totalSiteCount = view.getUint32(16, true);
@@ -368,7 +450,14 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 		const bySite = Array.from({ length: trackedSiteCount }, (_, siteId) =>
 			compilerV1EventsAt(view, COMPILER_V1_HEADER_BYTES + eventBytes * (siteId + 1)),
 		);
-		return { trackedSiteCount, totalSiteCount, unattributed, bySite, allocations: [] };
+		return {
+			schema: 1,
+			trackedSiteCount,
+			totalSiteCount,
+			unattributed,
+			bySite,
+			allocations: [],
+		};
 	}
 
 	if (bytes.byteLength < COMPILER_V2_HEADER_BYTES)
@@ -376,24 +465,23 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 	if (eventCount !== COMPILER_V2_EVENT_NAMES.length)
 		throw new Error("compiler profile event schema is unsupported");
 	const allocationCount = view.getUint32(24, true);
+	const headerBytes = schema === 3 ? COMPILER_V3_HEADER_BYTES : COMPILER_V2_HEADER_BYTES;
+	if (bytes.byteLength < headerBytes) throw new Error("compiler profile is truncated");
 	const eventBytes = eventCount * 8;
 	const allocationBytes = allocationCount * 32;
 	const expected =
-		COMPILER_V2_HEADER_BYTES +
-		eventBytes +
-		trackedSiteCount * eventBytes +
-		allocationBytes;
+		headerBytes + eventBytes + trackedSiteCount * eventBytes + allocationBytes;
 	if (bytes.byteLength !== expected)
 		throw new Error("compiler profile length does not match its header");
 	const unattributed = emptyCompilerEvents();
 	for (const [eventIndex, name] of COMPILER_V2_EVENT_NAMES.entries()) {
 		unattributed[name] = checkedNumber(
-			view.getBigUint64(COMPILER_V2_HEADER_BYTES + eventIndex * 8, true),
+			view.getBigUint64(headerBytes + eventIndex * 8, true),
 			`compiler event ${name}`,
 		);
 	}
 	const bySite = Array.from({ length: trackedSiteCount }, () => emptyCompilerEvents());
-	const siteBase = COMPILER_V2_HEADER_BYTES + eventBytes;
+	const siteBase = headerBytes + eventBytes;
 	for (const [eventIndex, name] of COMPILER_V2_EVENT_NAMES.entries()) {
 		for (let siteId = 0; siteId < trackedSiteCount; siteId++) {
 			bySite[siteId]![name] = checkedNumber(
@@ -422,7 +510,17 @@ export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
 			),
 		});
 	}
-	return { trackedSiteCount, totalSiteCount, unattributed, bySite, allocations };
+	return {
+		schema: schema as 2 | 3,
+		...(schema === 3
+			? { captureIdentity: Buffer.from(bytes.subarray(32, 64)).toString("hex") }
+			: {}),
+		trackedSiteCount,
+		totalSiteCount,
+		unattributed,
+		bySite,
+		allocations,
+	};
 }
 
 function positionSiteIndex(prepared: PreparedProfile): Map<string, ProfileSite> {
@@ -780,11 +878,12 @@ interface GcSummary {
 }
 
 export interface ProfileManifest {
-	schema: 3;
+	schema: 4;
 	status: "complete";
 	command: string;
 	mode: PreparedProfile["mode"];
 	buildId: string;
+	captureIdentity: string;
 	entrypoint: string;
 	captureSchema: number;
 	intervalUs: number;
@@ -960,6 +1059,17 @@ export function finalizeProfileCapture(
 	command: string,
 ): { findings: Array<ProfileFinding>; manifest: ProfileManifest } {
 	const capture = parseProfileCapture(readFileSync(path.join(directory, "capture.bin")));
+	let captureIdentity: string;
+	if (capture.schema === 4) {
+		captureIdentity = validatedCaptureIdentity(prepared);
+		if (capture.captureIdentity !== captureIdentity) {
+			throw new Error("profile capture identity does not match its metadata and build");
+		}
+	} else {
+		// Legacy raw captures predate identity binding. Retain read compatibility,
+		// but never claim an unverified identity in their completed manifest.
+		captureIdentity = "legacy-unbound";
+	}
 	const compilerPath = path.join(directory, "capture.bin.compiler");
 	if (prepared.mode === "compiler" && !existsSync(compilerPath)) {
 		throw new Error("compiler profile counter artifact is missing");
@@ -967,6 +1077,13 @@ export function finalizeProfileCapture(
 	const compiler = existsSync(compilerPath)
 		? parseCompilerCapture(readFileSync(compilerPath))
 		: undefined;
+	if (capture.schema === 4 && compiler !== undefined) {
+		if (compiler.schema !== 3 || compiler.captureIdentity !== captureIdentity) {
+			throw new Error(
+				"compiler profile identity does not match the sampling capture, metadata, and build",
+			);
+		}
+	}
 	const quality = profileQuality(capture);
 	const ranked = findings(capture, prepared, quality, compiler);
 	const cpuRecords = capture.records.filter((record) => record.kind === 1);
@@ -1038,11 +1155,12 @@ export function finalizeProfileCapture(
 	const compilerOverflow =
 		compiler?.allocations.find((entry) => entry.siteId === -2) ?? null;
 	const manifest: ProfileManifest = {
-		schema: 3,
+		schema: 4,
 		status: "complete",
 		command,
 		mode: prepared.mode,
 		buildId: prepared.buildId,
+		captureIdentity,
 		entrypoint: prepared.entrypoint,
 		captureSchema: capture.schema,
 		intervalUs: capture.intervalUs,

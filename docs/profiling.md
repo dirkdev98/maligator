@@ -46,8 +46,10 @@ ordinary interpreter-backed test loop.
 to `profile.json` and covered by `artifact.json` and `SHA256SUMS`. The turnkey
 report finalization currently belongs to `run`, `dev`, and `test`; a directly
 launched profiled binary writes its raw capture only when given a
-`MAL_PROFILE_CAPTURE` path. A directly launched `--profile=compiler` binary also
-needs `MAL_PROFILE_COMPILER=1`; it publishes the exact census at
+`MAL_PROFILE_CAPTURE` path. Turnkey commands also pass the sidecar's
+`MAL_PROFILE_IDENTITY` automatically; direct launchers that intend to finalize the
+capture must pass the `captureIdentity` from `<binary>.profile.json`. A directly
+launched `--profile=compiler` binary also needs `MAL_PROFILE_COMPILER=1`; it publishes the exact census at
 `$MAL_PROFILE_CAPTURE.compiler`.
 
 ## What is recorded
@@ -98,11 +100,16 @@ explicit `native-backend-not-selected` fallback rather than a guessed native rem
 
 The completeness marker, `manifest.json`, is published last. Its absence means the
 directory is partial and should not be treated as a finished report.
+Current raw captures embed a SHA-256 identity over the linked binary hash and the
+canonical complete metadata sidecar. Finalization recomputes and verifies that
+identity before reading source sites, and requires the separate exact-counter file
+to carry the same identity. Legacy v1-v3 captures remain readable but are marked
+`legacy-unbound`; new captures fail closed when files from different builds are mixed.
 
 | File                   | Purpose                                                              |
 | ---------------------- | -------------------------------------------------------------------- |
-| `capture.bin`          | Bounded v3 raw CPU/Poisson-allocation/GC records                     |
-| `capture.bin.compiler` | Exact v2 event and allocation-family census                          |
+| `capture.bin`          | Bounded v4 raw evidence, bound to its build and metadata             |
+| `capture.bin.compiler` | Exact v3 census carrying the same capture identity                   |
 | `metadata.json`        | Exact build ID, functions, source sites, and compiler remarks        |
 | `cpu.cpuprofile`       | Logical JS stacks for Chromium DevTools-compatible viewers           |
 | `timeline.json`        | GC begin/end events in trace-event form                              |

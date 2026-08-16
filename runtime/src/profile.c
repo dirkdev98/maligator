@@ -72,6 +72,7 @@ typedef struct MalProfileState {
     u64 start_ns;
     u64 expected_sample_cpu_ns;
     u64 allocation_rng;
+    u8 capture_identity[32];
     bool finished;
     bool compiler_enabled;
     u32 counter_site_count;
@@ -482,6 +483,25 @@ static void mal_profile_write_u64(FILE *file, u64 value) {
     fwrite(bytes, 1, sizeof(bytes), file);
 }
 
+static i32 mal_profile_hex_digit(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    return -1;
+}
+
+static bool mal_profile_parse_identity(const char *encoded, u8 output[32]) {
+    if (encoded == nullptr || strlen(encoded) != 64) return false;
+    u8 parsed[32];
+    for (u32 index = 0; index < 32; index++) {
+        i32 high = mal_profile_hex_digit(encoded[index * 2]);
+        i32 low = mal_profile_hex_digit(encoded[index * 2 + 1]);
+        if (high < 0 || low < 0) return false;
+        parsed[index] = (u8) ((high << 4) | low);
+    }
+    memcpy(output, parsed, sizeof(parsed));
+    return true;
+}
+
 static void mal_profile_publish(MalProfileState *state) {
     FILE *file = fopen(state->output_path, "wb");
     if (file == nullptr) {
@@ -489,8 +509,8 @@ static void mal_profile_publish(MalProfileState *state) {
                 state->output_path, strerror(errno));
         return;
     }
-    fwrite("MALPROF3", 1, 8, file);
-    mal_profile_write_u32(file, 3);
+    fwrite("MALPROF4", 1, 8, file);
+    mal_profile_write_u32(file, 4);
     mal_profile_write_u32(file, state->record_count);
     mal_profile_write_u32(file, state->frame_count);
     mal_profile_write_u32(file, state->dropped_records);
@@ -498,6 +518,7 @@ static void mal_profile_publish(MalProfileState *state) {
     mal_profile_write_u32(file, state->interval_us);
     mal_profile_write_u64(file, state->start_ns);
     mal_profile_write_u64(file, MAL_PROFILE_ALLOCATION_INTERVAL);
+    fwrite(state->capture_identity, 1, sizeof(state->capture_identity), file);
     for (u32 index = 0; index < state->record_count; index++) {
         MalProfileRecord *record = &state->records[index];
         fputc(record->kind, file);
@@ -538,13 +559,14 @@ static void mal_profile_publish_site_counters(MalProfileState *state) {
     }
     u32 allocation_entry_count = state->allocation_counter_count
         + (state->allocation_overflow.occupied ? 1 : 0);
-    fwrite("MALSITE2", 1, 8, file);
-    mal_profile_write_u32(file, 2);
+    fwrite("MALSITE3", 1, 8, file);
+    mal_profile_write_u32(file, 3);
     mal_profile_write_u32(file, state->counter_site_count);
     mal_profile_write_u32(file, state->total_site_count);
     mal_profile_write_u32(file, MAL_PROFILE_SITE_EVENT_COUNT);
     mal_profile_write_u32(file, allocation_entry_count);
     mal_profile_write_u32(file, 0);
+    fwrite(state->capture_identity, 1, sizeof(state->capture_identity), file);
     for (u32 event = 0; event < MAL_PROFILE_SITE_EVENT_COUNT; event++) {
         mal_profile_write_u64(file, state->unattributed_site_counters[event]);
     }
@@ -614,6 +636,11 @@ void mal_profile_init(MalVm *vm) {
         mal_process_cpu_now_ns() + (u64) state->interval_us * 1000u;
     state->allocation_rng = state->start_ns ^ (u64) (uptr) state ^ 0x9e3779b97f4a7c15ull;
     if (state->allocation_rng == 0) state->allocation_rng = 1;
+    const char *capture_identity = getenv("MAL_PROFILE_IDENTITY");
+    if (!mal_profile_parse_identity(capture_identity, state->capture_identity) &&
+        capture_identity != nullptr) {
+        fprintf(stderr, "warning: MAL_PROFILE_IDENTITY must be 64 lowercase hexadecimal characters\n");
+    }
     vm->heap.profile_allocation_budget = mal_profile_next_allocation_budget(state);
     state->compiler_enabled = getenv("MAL_PROFILE_COMPILER") != nullptr;
 #if MAL_PERF_STATS

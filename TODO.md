@@ -183,8 +183,11 @@ profiler improvement; collecting more samples alone will not repair the explanat
       unattributed CPU/allocation records, and use all CPU records as the share
       denominator. Any dropped record, omitted frame, or unmatched GC event biases
       the capture.
-- [ ] Fingerprint the exact metadata/build in `capture.bin` so a raw capture cannot be
-      finalized against a structurally plausible but incorrect sidecar.
+- [x] Fingerprint the exact metadata/build in `capture.bin` so a raw capture cannot be
+      finalized against a structurally plausible but incorrect sidecar. Current raw
+      sampling and exact-counter artifacts carry the same SHA-256 identity over the
+      binary hash and canonical metadata; finalization verifies all three before
+      publishing derived reports, while legacy captures are explicitly unbound.
 - [ ] Add optional native/runtime attribution so a hot logical site can be separated
       into dispatch, string scan, allocation, GC, regexp, and host work without raising
       the default profile above its current overhead envelope.

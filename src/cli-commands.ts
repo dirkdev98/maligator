@@ -830,7 +830,7 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
 	const outcome = executeBinary(binaryPath, result.runArguments ?? command.programArgs, {
 		...runEnv(),
-		...(capture === undefined ? {} : { MAL_PROFILE_CAPTURE: capture.capturePath }),
+		...(capture === undefined ? {} : capture.environment),
 		...compilerProfileRuntimeEnvironment(command),
 	});
 	if (capture !== undefined && result.profile !== undefined) {
@@ -958,6 +958,10 @@ export async function devCommand(
 				prepared: PreparedProfile;
 				directory: string;
 				capturePath: string;
+				environment: {
+					MAL_PROFILE_CAPTURE: string;
+					MAL_PROFILE_IDENTITY: string;
+				};
 		  }
 		| undefined;
 	const nextProfile = (build: BuildCommandResult) => {
@@ -999,7 +1003,7 @@ export async function devCommand(
 		activeProfile === undefined
 			? undefined
 			: {
-					MAL_PROFILE_CAPTURE: activeProfile.capturePath,
+					...activeProfile.environment,
 					...compilerProfileRuntimeEnvironment(command),
 				},
 	);
@@ -1071,7 +1075,7 @@ export async function devCommand(
 					activeProfile === undefined
 						? undefined
 						: {
-								MAL_PROFILE_CAPTURE: activeProfile.capturePath,
+								...activeProfile.environment,
 								...compilerProfileRuntimeEnvironment(command),
 							},
 				);
@@ -1180,7 +1184,7 @@ function executeProfiledTests(
 	const executionStartedAt = Date.now();
 	const outcome = executeBinaryCaptured(binary, [], {
 		...runEnv(),
-		MAL_PROFILE_CAPTURE: capture.capturePath,
+		...capture.environment,
 		...compilerProfileRuntimeEnvironment(command),
 	});
 	const executionMs = Date.now() - executionStartedAt;

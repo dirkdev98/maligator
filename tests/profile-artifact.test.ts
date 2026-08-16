@@ -7,52 +7,55 @@ import {
 	formatProfileReport,
 	parseCompilerCapture,
 	parseProfileCapture,
+	profileCaptureIdentity,
 } from "../src/profile-artifact.ts";
 import type { PreparedProfile } from "../src/profile-artifact.ts";
 
 function capture(): Uint8Array {
-	const bytes = new Uint8Array(48 + 2 * 40 + 2 * 12);
-	bytes.set(Buffer.from("MALPROF3"));
+	const bytes = new Uint8Array(80 + 2 * 40 + 2 * 12);
+	bytes.set(Buffer.from("MALPROF4"));
 	const view = new DataView(bytes.buffer);
-	view.setUint32(8, 3, true);
+	view.setUint32(8, 4, true);
 	view.setUint32(12, 2, true);
 	view.setUint32(16, 2, true);
 	view.setUint32(28, 10_000, true);
 	view.setBigUint64(32, 123n, true);
 	view.setBigUint64(40, 65_536n, true);
-	view.setUint8(48, 1);
-	view.setBigUint64(56, 10_000_000n, true);
-	view.setBigUint64(72, 1_000_000n, true);
-	view.setUint32(80, 0, true);
-	view.setUint32(84, 1, true);
-	view.setUint8(88, 2);
-	view.setUint8(89, 2);
-	view.setUint8(90, 3);
-	view.setUint8(91, 0xff);
-	view.setBigUint64(96, 20_000_000n, true);
-	view.setBigUint64(104, 64n, true);
-	view.setBigUint64(112, 80n, true);
-	view.setUint32(120, 1, true);
-	view.setUint32(124, 1, true);
-	view.setInt32(128, 0, true);
-	view.setInt32(132, 5, true);
-	view.setInt32(136, 1, true);
-	view.setInt32(140, 0, true);
-	view.setInt32(144, 5, true);
-	view.setInt32(148, 1, true);
+	bytes.set(profileIdentityBytes(), 48);
+	view.setUint8(80, 1);
+	view.setBigUint64(88, 10_000_000n, true);
+	view.setBigUint64(104, 1_000_000n, true);
+	view.setUint32(112, 0, true);
+	view.setUint32(116, 1, true);
+	view.setUint8(120, 2);
+	view.setUint8(121, 2);
+	view.setUint8(122, 3);
+	view.setUint8(123, 0xff);
+	view.setBigUint64(128, 20_000_000n, true);
+	view.setBigUint64(136, 64n, true);
+	view.setBigUint64(144, 80n, true);
+	view.setUint32(152, 1, true);
+	view.setUint32(156, 1, true);
+	view.setInt32(160, 0, true);
+	view.setInt32(164, 5, true);
+	view.setInt32(168, 1, true);
+	view.setInt32(172, 0, true);
+	view.setInt32(176, 5, true);
+	view.setInt32(180, 1, true);
 	return bytes;
 }
 
 function compilerCapture(): Uint8Array {
-	const bytes = new Uint8Array(32 + 8 * 8 + 2 * 8 * 8 + 32);
-	bytes.set(Buffer.from("MALSITE2"));
+	const bytes = new Uint8Array(64 + 8 * 8 + 2 * 8 * 8 + 32);
+	bytes.set(Buffer.from("MALSITE3"));
 	const view = new DataView(bytes.buffer);
-	view.setUint32(8, 2, true);
+	view.setUint32(8, 3, true);
 	view.setUint32(12, 2, true);
 	view.setUint32(16, 2, true);
 	view.setUint32(20, 8, true);
 	view.setUint32(24, 1, true);
-	const sites = 32 + 8 * 8;
+	bytes.set(profileIdentityBytes(), 32);
+	const sites = 64 + 8 * 8;
 	view.setBigUint64(sites + 8, 10n, true);
 	view.setBigUint64(sites + 3 * 8, 2n, true);
 	view.setBigUint64(sites + 5 * 8, 5n, true);
@@ -103,7 +106,7 @@ function legacyV2Capture(): Uint8Array {
 }
 
 const prepared: PreparedProfile = {
-	schema: 2,
+	schema: 3,
 	mode: "sampling",
 	buildId: "a".repeat(64),
 	entrypoint: "/project/app.js",
@@ -150,17 +153,24 @@ const prepared: PreparedProfile = {
 		},
 	],
 };
+prepared.captureIdentity = profileCaptureIdentity(prepared);
+
+function profileIdentityBytes(): Uint8Array {
+	if (prepared.captureIdentity === undefined)
+		throw new Error("test profile identity was not initialized");
+	return Buffer.from(prepared.captureIdentity, "hex");
+}
 
 test("profile capture parser rejects truncation and invalid frame references", () => {
 	expect(() => parseProfileCapture(capture().subarray(0, 39))).toThrow("truncated");
 	const invalid = capture();
-	new DataView(invalid.buffer).setUint32(80, 99, true);
+	new DataView(invalid.buffer).setUint32(112, 99, true);
 	expect(() => parseProfileCapture(invalid)).toThrow("outside");
 });
 
 test("profile capture reports per-record stack truncation and physical allocation kind", () => {
 	const bytes = capture();
-	new DataView(bytes.buffer).setUint32(52, 0x8000_0003, true);
+	new DataView(bytes.buffer).setUint32(84, 0x8000_0003, true);
 	const parsed = parseProfileCapture(bytes);
 	expect(parsed.records[0]).toMatchObject({
 		omittedFrames: 3,
@@ -211,6 +221,33 @@ test("compiler counter parser validates its independent schema", () => {
 		count: 5,
 		chargedBytes: 160,
 	});
+});
+
+test("profile finalization rejects a raw capture from another metadata or build identity", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-mismatch-"));
+	const mismatched = capture();
+	mismatched[48] = mismatched[48]! ^ 0xff;
+	writeFileSync(path.join(directory, "capture.bin"), mismatched);
+	expect(() => finalizeProfileCapture(directory, prepared, "run")).toThrow(
+		"capture identity does not match",
+	);
+
+	writeFileSync(path.join(directory, "capture.bin"), capture());
+	const changedMetadata = { ...prepared, buildId: "b".repeat(64) };
+	expect(() => finalizeProfileCapture(directory, changedMetadata, "run")).toThrow(
+		"identity does not match its contents",
+	);
+});
+
+test("profile finalization rejects compiler counters from another capture", () => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-site-mismatch-"));
+	writeFileSync(path.join(directory, "capture.bin"), capture());
+	const mismatched = compilerCapture();
+	mismatched[32] = mismatched[32]! ^ 0xff;
+	writeFileSync(path.join(directory, "capture.bin.compiler"), mismatched);
+	expect(() => finalizeProfileCapture(directory, prepared, "run")).toThrow(
+		"compiler profile identity does not match",
+	);
 });
 
 test("profile finalization publishes standard views and joins remarks by source site", () => {
