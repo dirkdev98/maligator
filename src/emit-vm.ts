@@ -4359,6 +4359,8 @@ function emitVmDefinitionSource(
 			debug,
 			undefined,
 			splitCompiledFunctions ? "external" : "static",
+			new Map(),
+			definition.semanticProtectors ?? [],
 		);
 		if (emitted === null) return null;
 		if (
@@ -4407,6 +4409,7 @@ function emitVmDefinitionSource(
 				undefined,
 				"static",
 				directCompiledTargets,
+				definition.semanticProtectors ?? [],
 			);
 		});
 		const usedNativeNumberTargets = new Set<number>();
@@ -4434,6 +4437,7 @@ function emitVmDefinitionSource(
 					undefined,
 					"static",
 					directCompiledTargets,
+					definition.semanticProtectors ?? [],
 				);
 			});
 		}
@@ -4977,7 +4981,18 @@ export function emitBatch(
 
 		const compiled = definition.functions.map((fn, i) =>
 			// The batch path strips debug info, so compiled bodies emit no pos writes.
-			useCompiled ? emitCompiledFunction(fn, i, suffix, false) : null,
+			useCompiled
+				? emitCompiledFunction(
+						fn,
+						i,
+						suffix,
+						false,
+						undefined,
+						"static",
+						new Map(),
+						definition.semanticProtectors ?? [],
+					)
+				: null,
 		);
 		for (const fn of compiled) {
 			if (fn !== null) {

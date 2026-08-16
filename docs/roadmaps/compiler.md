@@ -216,6 +216,10 @@ the same facts unconditionally.
         objects, cardinality regions, and split cursors consume their named guards;
         locked-world dependencies collapse before emission, while mutable regions
         retain the generic twin and one combined semantic-activity snapshot.
+  - [x] Thread the program-level Watched-methods fact into every compiled function
+        variant. Mutable local property/cache probes acquire their epoch through the
+        shared admission bridge, locked builds snapshot it without a protector
+        condition, and definitions without the fact disable the optional fast path.
   - [x] Retain the three runtime-backed protector facts as program metadata through
         MALW v42 so analyses that intentionally rebuild after frontend-cache loading
         consume the same world/epoch proof. Migrate affine-range virtualization to

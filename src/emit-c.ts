@@ -20,6 +20,7 @@ import type {
 	VmInstruction,
 	VmRegionLicense,
 	VmSemanticDependency,
+	VmSemanticProtectorFact,
 } from "./lower-vm.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 
@@ -658,6 +659,7 @@ export function emitCompiledFunction(
 	override?: { symbol: string; promotable: Set<number> },
 	linkage: "static" | "external" = "static",
 	directCompiledTargets: ReadonlyMap<number, number> = new Map(),
+	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -665,7 +667,7 @@ export function emitCompiledFunction(
 	// is only ever set for the boxed fallback of a promoting normal function, never a
 	// coroutine.)
 	if (fn.isGenerator || fn.isAsync) {
-		return emitResumableFunction(fn, index, suffix, debug, linkage);
+		return emitResumableFunction(fn, index, suffix, debug, linkage, semanticProtectors);
 	}
 
 	// A function with its own captured slots needs a per-activation MalEnv node
@@ -1286,6 +1288,7 @@ export function emitCompiledFunction(
 		privateAggregateMemos,
 		numericHofRegions,
 		directCompiledTargets,
+		semanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 	);
 	if (body === null) {
@@ -1365,6 +1368,7 @@ export function emitCompiledFunction(
 			{ symbol: boxedSymbol, promotable: new Set() },
 			linkage,
 			directCompiledTargets,
+			semanticProtectors,
 		);
 		if (boxed === null) {
 			return null; // the promoting variant lowered, so this cannot happen
@@ -1612,6 +1616,7 @@ function emitResumableFunction(
 	suffix: string,
 	debug: boolean,
 	linkage: "static" | "external",
+	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>,
 ): CompiledFunction | null {
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
@@ -1674,6 +1679,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
+		semanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 	);
 	if (body === null) {
@@ -2654,6 +2660,19 @@ function semanticDependencyValidationGuard(
 	return `mal_vm_semantic_dependencies_validate(vm, ${mask}, ${activityEpochName})`;
 }
 
+function semanticProtectorGuard(
+	facts: ReadonlyArray<VmSemanticProtectorFact>,
+	family: VmSemanticProtectorFact["family"],
+): VmGuardPlan | undefined {
+	const matching = facts.filter((fact) => fact.family === family);
+	if (matching.length > 1) throw new Error(`Duplicate ${family} semantic facts`);
+	const guard = matching[0]?.guard;
+	if (guard !== undefined && !guard.obligations.includes("fallback")) {
+		throw new Error(`${family} semantic fact lacks its generic twin`);
+	}
+	return guard;
+}
+
 /**
  * Translate one named region license at its admission point. Local brand,
  * callback, shape, and argument checks stay beside the runtime protocol; this
@@ -2990,6 +3009,7 @@ function emitBody(
 	>,
 	numericHofRegions: ReadonlyMap<number, NumericHofRegionSite>,
 	directCompiledTargets: ReadonlyMap<number, number>,
+	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
@@ -3629,9 +3649,17 @@ function emitBody(
 				loopBody.has(ip) && instruction.opcode === "LOAD_PROPERTY_STATIC",
 		)
 	) {
-		lines.push(
-			"u64 __watched_methods_epoch = mal_primitive_method_protector ? vm->semantic_epochs.watched_methods : 0;",
-		);
+		const watchedMethodsAdmission =
+			watchedMethodsGuard === undefined
+				? "false"
+				: semanticDependencyAdmissionGuard(watchedMethodsGuard);
+		const watchedMethodsEpoch =
+			watchedMethodsAdmission === "true"
+				? "vm->semantic_epochs.watched_methods"
+				: watchedMethodsAdmission === "false"
+					? "0"
+					: `${watchedMethodsAdmission} ? vm->semantic_epochs.watched_methods : 0`;
+		lines.push(`u64 __watched_methods_epoch = ${watchedMethodsEpoch};`);
 	}
 	// Pair-fusion temporaries live for the whole C function so intervening property
 	// loads retain their original position and control-flow labels never jump over a

@@ -1000,14 +1000,23 @@ describe("native update-expression representation", () => {
 			"mal_vm_local_watched_inherited_value_try_load_static(",
 		);
 
-		const loopOutput = emit(
-			`"use strict"; function load(object, count) { let value; for (let i = 0; i < count; i++) value = object.value; return value; } globalThis.load = load;`,
-		);
+		const loopSource = `"use strict"; function load(object, count) { let value; for (let i = 0; i < count; i++) value = object.value; return value; } globalThis.load = load;`;
+		const loopOutput = emit(loopSource);
 		expect(loopOutput).toContain("mal_vm_local_inherited_value_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_local_watched_inherited_value_try_load_static(");
 		expect(loopOutput).toContain(
-			"mal_primitive_method_protector ? vm->semantic_epochs.watched_methods : 0",
+			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS, nullptr) ? vm->semantic_epochs.watched_methods : 0",
 		);
+		expect(loopOutput).not.toContain("mal_primitive_method_protector ?");
+
+		const lockedLoopOutput = emitLocked(loopSource);
+		expect(lockedLoopOutput).toContain(
+			"u64 __watched_methods_epoch = vm->semantic_epochs.watched_methods;",
+		);
+		expect(lockedLoopOutput).not.toContain(
+			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS",
+		);
+		expect(lockedLoopOutput).not.toContain("mal_primitive_method_protector ?");
 		expect(loopOutput).toContain("__inherited_loop_");
 		expect(loopOutput).toMatch(/goto LF\d+/);
 		expect(loopOutput).toMatch(/goto LG\d+/);
