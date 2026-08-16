@@ -2103,7 +2103,9 @@ type NativeStringSliceNumberFusion = NonNullable<
 
 interface NativeStringSliceNumberFusionAction {
 	fusion: NativeStringSliceNumberFusion;
-	role: "slice" | "number";
+	role: "property" | "slice" | "number";
+	lockedIdentity: boolean;
+	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
 /**
@@ -3320,13 +3322,37 @@ function emitBody(
 		NativeStringSliceNumberFusionAction
 	>();
 	for (const fusion of fn.nativeStringSliceNumberFusions ?? []) {
+		const sliceCall = fn.instructions[fusion.sliceCallIp];
+		const propertyInstruction = fn.instructions[fusion.propertyIp];
+		const lockedIdentity =
+			sliceCall?.opcode === "CALL" &&
+			sliceCall.guardedBuiltinCall !== undefined &&
+			vmGuardIsWorldInvariant(sliceCall.guardedBuiltinCall.guard);
+		const propertyLoad =
+			lockedIdentity &&
+			fusion.propertyIp + 1 === fusion.sliceCallIp &&
+			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
+			handlerTargets[fusion.propertyIp] === handlerTargets[fusion.sliceCallIp]
+				? propertyInstruction
+				: undefined;
 		nativeStringSliceNumberFusionActionByIp.set(fusion.sliceCallIp, {
 			fusion,
 			role: "slice",
+			lockedIdentity,
+			propertyLoad,
 		});
+		if (propertyLoad !== undefined) {
+			nativeStringSliceNumberFusionActionByIp.set(fusion.propertyIp, {
+				fusion,
+				role: "property",
+				lockedIdentity,
+				propertyLoad,
+			});
+		}
 		nativeStringSliceNumberFusionActionByIp.set(fusion.numberCallIp, {
 			fusion,
 			role: "number",
+			lockedIdentity,
 		});
 	}
 
@@ -4424,7 +4450,8 @@ function emitInstruction(
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				(nativeStringSplitProjectionAction?.role === "property" ||
-					nativeStringSplitCursorAction?.role === "property")
+					nativeStringSplitCursorAction?.role === "property" ||
+					nativeStringSliceNumberFusionAction?.role === "property")
 			) {
 				return [];
 			}
@@ -6067,17 +6094,27 @@ function emitInstruction(
 				];
 			}
 			if (nativeStringSliceNumberFusionAction !== undefined) {
-				const fusion = nativeStringSliceNumberFusionAction.fusion;
+				const { fusion, lockedIdentity, propertyLoad } =
+					nativeStringSliceNumberFusionAction;
 				const fast = `__string_slice_number_${fusion.sliceCallIp}_fast`;
 				const value = `__string_slice_number_${fusion.sliceCallIp}_value`;
 				if (nativeStringSliceNumberFusionAction.role === "slice") {
+					const convert = lockedIdentity
+						? `mal_builtin_string_slice_to_number_direct_locked(vm, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${value})`
+						: `mal_builtin_string_slice_to_number_direct(vm, ${boxedOperand(instruction.callee)}, ${boxed(fusion.numberCallee)}, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${value})`;
 					return [
 						`static MalCallCache __cc_${ip};`,
-						`${fast} = mal_builtin_string_slice_to_number_direct(vm, ${boxedOperand(instruction.callee)}, ${boxed(fusion.numberCallee)}, ${boxedOperand(instruction.thisValue)}, ${cF64Literal(fusion.sliceStart)}, &${value});`,
+						`${fast} = ${convert};`,
 						`if (${fast}) {`,
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 						`  ${poll}`,
 						`} else {`,
+						...(propertyLoad === undefined
+							? []
+							: [
+									`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${propertyLoad.stringIndex}]), &__property_ic[${propertyLoad.icIndex}]);`,
+									`  ${throwCheck}`,
+								]),
 						`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 						`  r${instruction.dst} = ${tmp}.value;`,

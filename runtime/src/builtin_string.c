@@ -801,20 +801,22 @@ static MalValue mal_builtin_string_prototype_slice(MalVm *vm, MalValue this_valu
     return mal_builtin_string_slice(vm, string, start, end - start);
 }
 
-bool mal_builtin_string_slice_to_number_direct(
+static bool mal_builtin_string_slice_to_number_direct_impl(
     MalVm *vm,
     MalValue slice_callee,
     MalValue number_callee,
     MalValue receiver,
     f64 relative_start,
-    f64 *number_out
+    f64 *number_out,
+    bool identities_locked
 ) {
     if (!mal_value_is_string(receiver) ||
-        !mal_value_is_native_function_object(slice_callee) ||
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(slice_callee)) !=
-            mal_builtin_string_prototype_slice ||
-        number_callee != vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR]) {
+        (!identities_locked &&
+         (!mal_value_is_native_function_object(slice_callee) ||
+          mal_native_function_object_callback(
+              mal_value_to_native_function_object(slice_callee)) !=
+              mal_builtin_string_prototype_slice ||
+          number_callee != vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR]))) {
         return false;
     }
 
@@ -826,6 +828,29 @@ bool mal_builtin_string_slice_to_number_direct(
         mal_string_code_units(string) + start, length - start);
     *number_out = mal_ops_number_as_f64(number);
     return true;
+}
+
+bool mal_builtin_string_slice_to_number_direct(
+    MalVm *vm,
+    MalValue slice_callee,
+    MalValue number_callee,
+    MalValue receiver,
+    f64 relative_start,
+    f64 *number_out
+) {
+    return mal_builtin_string_slice_to_number_direct_impl(
+        vm, slice_callee, number_callee, receiver, relative_start, number_out, false);
+}
+
+bool mal_builtin_string_slice_to_number_direct_locked(
+    MalVm *vm,
+    MalValue receiver,
+    f64 relative_start,
+    f64 *number_out
+) {
+    return mal_builtin_string_slice_to_number_direct_impl(
+        vm, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, receiver, relative_start, number_out,
+        true);
 }
 
 static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

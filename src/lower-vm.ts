@@ -91,6 +91,7 @@ export function rebaseVmValueOperand(operand: number, stringBase: number): numbe
 export type VmGuardedBuiltinOperation =
 	| "Array.prototype.push"
 	| "String.prototype.charCodeAt"
+	| "String.prototype.slice"
 	| "String.prototype.split"
 	| "String.prototype.trim"
 	| "Map.prototype.get"
@@ -389,6 +390,7 @@ export interface VmFunction {
 
 	/** EMITTER-ONLY: exact builtin String slice immediately consumed by Number. */
 	nativeStringSliceNumberFusions?: ReadonlyArray<{
+		propertyIp: number;
 		sliceCallIp: number;
 		numberCallIp: number;
 		numberCallee: number;
@@ -1938,6 +1940,7 @@ function lowerGuardedBuiltinCall(
 		call.identity.value !== call.operation ||
 		(call.operation !== "Array.prototype.push" &&
 			call.operation !== "String.prototype.charCodeAt" &&
+			call.operation !== "String.prototype.slice" &&
 			call.operation !== "String.prototype.split" &&
 			call.operation !== "String.prototype.trim" &&
 			call.operation !== "Map.prototype.get" &&

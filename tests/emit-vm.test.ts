@@ -1442,11 +1442,18 @@ describe("native update-expression representation", () => {
 
 		const lockedOutput = emitLocked(code);
 		expect(lockedOutput).toContain("mal_builtin_string_split_projection_locked(vm,");
+		expect(lockedOutput).toContain(
+			"mal_builtin_string_slice_to_number_direct_locked(vm,",
+		);
 		expect(lockedOutput).not.toContain("mal_builtin_string_split_projection(vm,");
+		expect(lockedOutput).not.toContain("mal_builtin_string_slice_to_number_direct(vm,");
 		// The adjacent property Get is absent from the hot attempt and reconstructed
 		// inside the local-guard fallback before the ordinary call.
 		expect(lockedOutput).toMatch(
 			/mal_builtin_string_split_projection_locked\([^\n]+\);[\s\S]*?else \{\n\s+r\d+ = mal_vm_op_load_property_ic\(/,
+		);
+		expect(lockedOutput).toMatch(
+			/mal_builtin_string_slice_to_number_direct_locked\([^\n]+\);[\s\S]*?else \{\n\s+r\d+ = mal_vm_op_load_property_ic\(/,
 		);
 	});
 

@@ -12,6 +12,7 @@ import {
 	annotateDirectCallTargets,
 	annotateDirectCollectionSites,
 	annotateDirectStringCharCodeAtSites,
+	annotateDirectStringSliceSites,
 	annotateDirectStringSplitSites,
 	annotateDirectStringTrimSites,
 	decodeStringConstant,
@@ -471,6 +472,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringCharCodeAtSites(program);
 		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectStringSliceSites(program);
+		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringSplitSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringTrimSites(program);
@@ -558,6 +561,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-direct-string-char-code-at",
 			annotateDirectStringCharCodeAtSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-direct-string-slice",
+			annotateDirectStringSliceSites,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

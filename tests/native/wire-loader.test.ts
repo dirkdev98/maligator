@@ -138,38 +138,46 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("snapshot-clobber", wire);
 	});
 
-	it("accepts canonical String trim identity metadata", () => {
-		const trimDefinition: VmDefinition = {
-			...definition,
-			functions: [
-				{
-					...fn,
-					instructions: [
-						{ opcode: "CREATE_UNDEFINED", dst: 0 },
-						{ opcode: "RETURN", value: 0 },
-						{
-							opcode: "CALL",
-							dst: 0,
-							callee: 0,
-							thisValue: 0,
-							argumentCount: 0,
-							arguments: [],
-							guardedBuiltinCall: {
-								operation: "String.prototype.trim",
-								guard: {
-									dependencies: [{ kind: "world", fact: "primordials.locked" }],
-									obligations: ["fallback"],
+	it("accepts canonical String method identity metadata", () => {
+		for (const operation of [
+			"String.prototype.trim",
+			"String.prototype.slice",
+		] as const) {
+			const methodDefinition: VmDefinition = {
+				...definition,
+				functions: [
+					{
+						...fn,
+						instructions: [
+							{ opcode: "CREATE_UNDEFINED", dst: 0 },
+							{ opcode: "RETURN", value: 0 },
+							{
+								opcode: "CALL",
+								dst: 0,
+								callee: 0,
+								thisValue: 0,
+								argumentCount: 0,
+								arguments: [],
+								guardedBuiltinCall: {
+									operation,
+									guard: {
+										dependencies: [{ kind: "world", fact: "primordials.locked" }],
+										obligations: ["fallback"],
+									},
 								},
 							},
-						},
-					],
-				},
-			],
-		};
-		const wirePath = path.join(directory, "guarded-string-trim.malw");
-		writeFileSync(wirePath, serializeVmDefinition(trimDefinition, { debugInfo: false }));
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
+						],
+					},
+				],
+			};
+			const wirePath = path.join(directory, `guarded-${operation}.malw`);
+			writeFileSync(
+				wirePath,
+				serializeVmDefinition(methodDefinition, { debugInfo: false }),
+			);
+			const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+			expect(result.status, result.stderr || result.stdout).toBe(0);
+		}
 	});
 
 	it("rejects malformed varints and trailing data", () => {

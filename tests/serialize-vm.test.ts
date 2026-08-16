@@ -224,6 +224,7 @@ describe("serialize-vm", () => {
 		const operations = [
 			"Array.prototype.push",
 			"String.prototype.charCodeAt",
+			"String.prototype.slice",
 			"String.prototype.split",
 			"String.prototype.trim",
 			"Map.prototype.get",

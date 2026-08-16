@@ -59,6 +59,8 @@ check(
 );
 let splitGetterCalls = 0;
 let splitMethodCalls = 0;
+let sliceGetterCalls = 0;
+let sliceMethodCalls = 0;
 check(
 	"locked split projection own-method fallback",
 	lockedSplitProjection({
@@ -66,12 +68,28 @@ check(
 			splitGetterCalls++;
 			return function (separator) {
 				splitMethodCalls++;
-				return separator === "::" ? ["ab", "x42", ""] : [];
+				return separator === "::"
+					? [
+							"ab",
+							{
+								get slice() {
+									sliceGetterCalls++;
+									return function (start) {
+										sliceMethodCalls++;
+										return start === 1 ? "42" : "0";
+									};
+								},
+							},
+							"",
+						]
+					: [];
 			};
 		},
 	}) === 245 &&
 		splitGetterCalls === 1 &&
-		splitMethodCalls === 1,
+		splitMethodCalls === 1 &&
+		sliceGetterCalls === 1 &&
+		sliceMethodCalls === 1,
 );
 
 function lockedSplitCursor(value, separator) {

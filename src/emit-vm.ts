@@ -3237,6 +3237,7 @@ function annotateNativeStringSliceNumberFusions(definition: VmDefinition): void 
 					: undefined;
 			if (
 				sliceCall.opcode !== "CALL" ||
+				!vmCallProvesBuiltin(sliceCall, "String.prototype.slice") ||
 				sliceCall.arguments.length !== 1 ||
 				load.opcode !== "LOAD_PROPERTY_STATIC" ||
 				load.dst !== sliceCall.callee ||
@@ -3274,6 +3275,7 @@ function annotateNativeStringSliceNumberFusions(definition: VmDefinition): void 
 			}
 			if (resultEscapes) continue;
 			fusions.push({
+				propertyIp: sliceCallIp - 1,
 				sliceCallIp,
 				numberCallIp: sliceCallIp + 1,
 				numberCallee: numberCall.callee,

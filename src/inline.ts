@@ -703,9 +703,10 @@ export function annotateDirectArrayPushSites(program: IntermediateProgram): numb
 
 function annotateDirectPrimitiveStringMethodSites(
 	program: IntermediateProgram,
-	methodName: "charCodeAt" | "split" | "trim",
+	methodName: "charCodeAt" | "slice" | "split" | "trim",
 	operation:
 		| "String.prototype.charCodeAt"
+		| "String.prototype.slice"
 		| "String.prototype.split"
 		| "String.prototype.trim",
 ): number {
@@ -795,6 +796,15 @@ export function annotateDirectStringSplitSites(program: IntermediateProgram): nu
 		program,
 		"split",
 		"String.prototype.split",
+	);
+}
+
+/** Canonical identity fact consumed by the direct slice-to-Number fusion. */
+export function annotateDirectStringSliceSites(program: IntermediateProgram): number {
+	return annotateDirectPrimitiveStringMethodSites(
+		program,
+		"slice",
+		"String.prototype.slice",
 	);
 }
 

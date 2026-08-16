@@ -102,6 +102,14 @@ bool mal_builtin_string_slice_to_number_direct(
     f64 *number_out
 );
 
+/** Locked slice identity plus compiler-proven exact Number intrinsic. */
+bool mal_builtin_string_slice_to_number_direct_locked(
+    MalVm *vm,
+    MalValue receiver,
+    f64 relative_start,
+    f64 *number_out
+);
+
 #define MAL_STRING_SPLIT_PROJECTION_MAX_OUTPUTS 8u
 
 /**
