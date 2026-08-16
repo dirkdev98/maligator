@@ -99,19 +99,7 @@ copyFileSync(cli, distributedCli);
 chmodSync(distributedCli, 0o755);
 console.log(`ok   compiled self-contained product CLI (${distributedCli})`);
 
-function invoke(args: Array<string>, envOverrides: Record<string, string> = {}): string {
-	return execFileSync(distributedCli, args, {
-		cwd: project,
-		env: { ...isolatedEnv, ...envOverrides },
-		encoding: "utf-8",
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-}
-
-function invokeFailure(
-	args: Array<string>,
-	envOverrides: Record<string, string> = {},
-): string {
+function invokeCaptured(args: Array<string>, envOverrides: Record<string, string> = {}) {
 	const result = spawnSync(distributedCli, args, {
 		cwd: project,
 		env: { ...isolatedEnv, ...envOverrides },
@@ -119,6 +107,31 @@ function invokeFailure(
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	if (result.error) throw result.error;
+	return result;
+}
+
+function invoke(args: Array<string>, envOverrides: Record<string, string> = {}): string {
+	const result = invokeCaptured(args, envOverrides);
+	if (result.signal !== null || result.status !== 0) {
+		throw new Error(
+			`maligator ${args.join(" ")} ${
+				result.signal ? `received ${result.signal}` : `exited with ${result.status}`
+			}:\n${result.stdout}\n${result.stderr}`,
+		);
+	}
+	return result.stdout;
+}
+
+function invokeFailure(
+	args: Array<string>,
+	envOverrides: Record<string, string> = {},
+): string {
+	const result = invokeCaptured(args, envOverrides);
+	if (result.signal !== null) {
+		throw new Error(
+			`failing command received ${result.signal}: maligator ${args.join(" ")}\n${result.stdout}\n${result.stderr}`,
+		);
+	}
 	if (result.status === 0) {
 		throw new Error(`command unexpectedly succeeded: maligator ${args.join(" ")}`);
 	}
@@ -271,6 +284,28 @@ setTimeout(() => {
 	console.log(
 		"ok   target materialized binary assets, executed eval, and forwarded arguments",
 	);
+
+	writeFileSync(
+		path.join(project, "minimal-runner.test.ts"),
+		`import { expect, test } from "maligator:test";
+
+test("runs one assertion", () => {
+	expect(1 + 1).toBe(2);
+});
+`,
+	);
+	const minimalTest = invokeCaptured(["test", "minimal-runner.test.ts"], testOnlyEnv);
+	if (
+		minimalTest.signal !== null ||
+		minimalTest.status !== 0 ||
+		!minimalTest.stdout.includes("minimal-runner.test.ts") ||
+		!minimalTest.stdout.includes("1 passed, 0 failed")
+	) {
+		throw new Error(
+			`minimal explicit test did not complete normally: status=${minimalTest.status} signal=${minimalTest.signal}\n${minimalTest.stdout}\n${minimalTest.stderr}`,
+		);
+	}
+	console.log("ok   test runner executes and reports a minimal explicit test");
 
 	writeFileSync(
 		path.join(project, "example.test.ts"),
