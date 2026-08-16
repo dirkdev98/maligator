@@ -23,6 +23,7 @@ import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
+import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
@@ -140,6 +141,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 		options.config ??
 		resolveBuildConfig({
 			engine: {
+				primordials: "mutable",
 				eval: options.evalEnabled ?? true,
 				realms: options.realmsEnabled ?? true,
 				regexp: options.regexpEnabled ?? true,
@@ -165,6 +167,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 	// Tests intentionally bypass build policy so disabled-feature fixtures can
 	// compile and assert the runtime behavior of the reduced engine.
 	const definition = compileSemanticProgramToVmDefinition(semanticProgram, {
+		facts: compilerProgramFactsFromConfig(config),
 		profile: options.profileEnabled,
 	});
 	const cSource = emitVmDefinition(definition, {

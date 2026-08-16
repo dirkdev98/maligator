@@ -7,6 +7,7 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { selectNativeBuildPlan } from "./build-flags.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
+import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
@@ -89,7 +90,9 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		path.join(repositoryRoot, "src/product-cli-entry.mts"),
 		{ buildConfig: config, stripTypes: stripTypesWithTypeScript },
 	);
-	const definition = compileSemanticProgramToVmDefinition(semanticProgram);
+	const definition = compileSemanticProgramToVmDefinition(semanticProgram, {
+		facts: compilerProgramFactsFromConfig(config),
+	});
 	const assets = includeConfiguredAssets(config.assets, repositoryRoot);
 	const compilerWire = assets.find((asset) => asset.name === "compilerWire");
 	if (compilerWire?.files.length !== 1) {

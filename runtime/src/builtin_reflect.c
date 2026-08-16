@@ -11,6 +11,7 @@
 #include "object_ops.h"
 #include "primitive_wrapper_object.h"
 #include "property_iter.h"
+#include "primordials.h"
 #include "proxy_object.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
@@ -474,7 +475,14 @@ static MalValue mal_reflect_set_prototype_of(MalVm *vm, MalValue this_value, con
     }
 
     MalObject *prototype = mal_value_is_object(proto_value) ? mal_value_to_object(proto_value) : nullptr;
-    return mal_value_new_boolean(mal_object_set_prototype(mal_value_to_object(target), prototype));
+    MalObject *target_object = mal_value_to_object(target);
+    bool success = mal_object_set_prototype(target_object, prototype);
+    if (!success && mal_object_is_locked_primordial(target_object)) {
+        mal_primordials_throw_mutation(
+            vm, "Cannot set prototype of locked primordial");
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(success);
 }
 
 static MalValue mal_reflect_is_extensible(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

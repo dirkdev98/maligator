@@ -31,7 +31,8 @@ if (fixture === undefined) {
 const strict = process.argv.includes("--strict");
 const stress = process.argv.includes("--stress");
 const source = readFileSync(path.resolve(fixture), "utf-8");
-const features = normalizeNativeFeatures();
+// Differential/conformance fixtures intentionally exercise monkey-patching.
+const features = normalizeNativeFeatures({ primordialsLocked: false });
 const context = resolveNativeBuildContext({
 	features,
 	compilerBake: {

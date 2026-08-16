@@ -12,6 +12,8 @@ typedef enum MalPropertyFlags {
     MAL_PROPERTY_ENUMERABLE = 1 << 1,
     MAL_PROPERTY_CONFIGURABLE = 1 << 2,
     MAL_PROPERTY_ACCESSOR = 1 << 3,
+    /** Internal marker for a protected global primordial binding. */
+    MAL_PROPERTY_PRIMORDIAL = 1 << 4,
 } MalPropertyFlags;
 
 /**

@@ -1,5 +1,7 @@
 import type { ESTree } from "meriyah";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
+import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
+import type { CompilerProgramFacts, KnownBuiltinCall } from "./compiler-facts.ts";
 import {
 	DIRECT_EVAL_PRIVATE_FIELD,
 	DIRECT_EVAL_PRIVATE_GETTER,
@@ -40,6 +42,8 @@ export interface IntermediateProgram {
 	 * The semantic program that we are compiling.
 	 */
 	semantic: SemanticProgram;
+	/** Shared immutable analysis seed and program summaries. */
+	facts: CompilerProgramFacts;
 
 	/**
 	 * Eval-completion mode: compile the entry (Script) so it returns its
@@ -913,6 +917,12 @@ export type IRInstruction =
 
 			// [destination, callee, this, ...arguments]
 			registers: [number, number, number, ...Array<number>];
+			/**
+			 * Canonical fact-system call target. Phase 0 records this alongside the
+			 * legacy lowering hints; code generation intentionally ignores it until
+			 * later phases migrate each optimization.
+			 */
+			knownBuiltinCall?: KnownBuiltinCall;
 			/**
 			 * COMPILE-ONLY: the exact ordinary script-function index held by the callee.
 			 * Native lowering guards the live callee before entering this target and
@@ -1828,10 +1838,12 @@ export function compileSemanticProgramToIr(
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
+		facts?: CompilerProgramFacts;
 	} = {},
 ) {
 	const program: IntermediateProgram = {
 		semantic,
+		facts: options.facts ?? conservativeCompilerProgramFacts(),
 
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,

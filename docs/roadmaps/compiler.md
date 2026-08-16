@@ -33,11 +33,11 @@ downstream C compiler to rediscover the proof.
 
 The knowledge levels are cumulative capabilities, not separate backends:
 
-| Knowledge level | Available guarantee | Primary generated form and beneficiaries |
-| --- | --- | --- |
-| Universal | Ordinary JavaScript semantics; identities and mutations may be dynamic | Generic operations plus local inlining, escape analysis, scalar replacement, shape/value propagation, and DCE valid for all code |
-| Epoch-guarded | A cached identity, shape, or semantic condition remains valid for a recorded epoch | One entry/region guard, unchecked cache or known-slot hit paths inside the region, and a generic twin for invalidation |
-| Proof-specialized | Local call, consumer, effect, escape, or representation facts establish a narrower operation | Known-builtin calls, split/capture projection, native numeric regions, allocation sinking, and materialization only at proven escape boundaries |
+| Knowledge level    | Available guarantee                                                                                | Primary generated form and beneficiaries                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Universal          | Ordinary JavaScript semantics; identities and mutations may be dynamic                             | Generic operations plus local inlining, escape analysis, scalar replacement, shape/value propagation, and DCE valid for all code                  |
+| Epoch-guarded      | A cached identity, shape, or semantic condition remains valid for a recorded epoch                 | One entry/region guard, unchecked cache or known-slot hit paths inside the region, and a generic twin for invalidation                            |
+| Proof-specialized  | Local call, consumer, effect, escape, or representation facts establish a narrower operation       | Known-builtin calls, split/capture projection, native numeric regions, allocation sinking, and materialization only at proven escape boundaries   |
 | Locked whole world | Primordial authority is locked and the compiler knows every source and host entry that can execute | No primordial lookup or epoch guards, direct lowering, cross-call fusion, whole-program inlining and DCE, and removal of unreachable generic code |
 
 A locked build with runtime eval is authority-closed but not source-closed: primordial
@@ -119,26 +119,26 @@ an epoch-backed fact in a mutable world, or decline with a stable reason code.
 
 ### Phase 0: fact-system design
 
-- [ ] Define the fact representation, scopes, dependency identities, invalidation
+- [x] Define the fact representation, scopes, dependency identities, invalidation
       rules, and merge behavior at control-flow and call boundaries. Do not embed
       fallback C snippets in facts; represent the proof and let lowering select the
       implementation.
-- [ ] Create one declarative builtin/primordial descriptor registry containing owner,
+- [x] Create one declarative builtin/primordial descriptor registry containing owner,
       key, semantic identity, receiver/arity rules, evaluation and coercion ordering,
       effects, result facts, Realm behavior, and available lowerings. Generate the
       compiler/runtime identity plumbing from it.
-- [ ] Introduce a canonical known-call/builtin-call IR representation so Math, String,
+- [x] Introduce a canonical known-call/builtin-call IR representation so Math, String,
       RegExp, JSON, and collection intrinsics do not depend on independent syntax
       recognizers in the C emitter.
-- [ ] Compute function and module effect/reachability summaries to a fixed point.
+- [x] Compute function and module effect/reachability summaries to a fixed point.
       Cache summaries by source identity, compiler version, and relevant world facts;
       changing unrelated build features should not invalidate them.
-- [ ] Preserve fact and source-site identity through inlining and IR cloning, or
+- [x] Preserve fact and source-site identity through inlining and IR cloning, or
       deliberately re-run the affected analyses. Joins must expose which input lost a
       proof.
-- [ ] Make resolved build configuration seed world facts once. Optimization passes
+- [x] Make resolved build configuration seed world facts once. Optimization passes
       must consume those facts rather than branch directly on configuration fields.
-- [ ] Give every applied transform and declined opportunity a stable reason code,
+- [x] Give every applied transform and declined opportunity a stable reason code,
       including unknown target set, invalidatable epoch, escaping result, observable
       identity, unsupported consumer, representation mismatch, eval visibility, and
       open-world reachability.
@@ -149,18 +149,18 @@ an epoch-backed fact in a mutable world, or decline with a stable reason code.
 
 Establish the semantic contract before removing guards or fallbacks.
 
-- [ ] Add the default-locked configuration, public types, schema validation, cache
+- [x] Add the default-locked configuration, public types, schema validation, cache
       derivation, generated build flags, and explicit mutable Test262 configuration.
-- [ ] Generate or validate the complete protected primordial graph from the shared
+- [x] Generate or validate the complete protected primordial graph from the shared
       descriptor source, including per-Realm initialization and intrinsic-bearing
       global bindings.
-- [ ] Route every ordinary and reflective mutation path through one runtime policy.
+- [x] Route every ordinary and reflective mutation path through one runtime policy.
       Cover strict and sloppy assignment, deletion, property definition, prototype
       mutation, eval-created code, and cross-Realm access with focused regressions.
-- [ ] Add source-aware warnings for statically visible locked-primordial mutation.
+- [x] Add source-aware warnings for statically visible locked-primordial mutation.
       The warning and runtime error should identify the affected binding/object and
       property when available.
-- [ ] Prove that mutable builds retain existing ECMAScript behavior and that command
+- [x] Prove that mutable builds retain existing ECMAScript behavior and that command
       selection cannot change the configured policy.
 
 ### Phase 2: facts without new specialization

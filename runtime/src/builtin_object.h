@@ -64,3 +64,7 @@ bool mal_builtin_object_define_own_property_parsed(
  * sloppy-mode this-binding (OrdinaryCallBindThis) and Object.prototype methods.
  */
 MalValue mal_builtin_object_box_primitive(MalVm *vm, MalValue value);
+
+/** Shared SetIntegrityLevel implementation used by Object.freeze/seal and Realm init. */
+bool mal_builtin_object_set_integrity(
+    MalVm *vm, MalValue target, bool clear_writable);

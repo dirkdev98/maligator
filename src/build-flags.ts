@@ -88,6 +88,7 @@ export interface NativeFeatureInput extends FeatureDefineOpts {
  * backend and are always derived together.
  */
 export interface NativeFeatureSpec {
+	primordialsLocked: boolean;
 	evalEnabled: boolean;
 	realmsEnabled: boolean;
 	intlEnabled: boolean;
@@ -109,6 +110,7 @@ function sortedUnique(values: Array<string>): Array<string> {
 export function normalizeNativeFeatures(
 	input: NativeFeatureInput = {},
 ): NativeFeatureSpec {
+	const primordialsLocked = input.primordialsLocked ?? true;
 	const evalEnabled = input.evalEnabled ?? true;
 	const realmsEnabled = input.realmsEnabled ?? true;
 	const intlEnabled = input.intlEnabled ?? true;
@@ -159,6 +161,7 @@ export function normalizeNativeFeatures(
 	}
 
 	const cDefines = [
+		...(primordialsLocked ? [] : ["-DMAL_PRIMORDIALS_LOCKED=0"]),
 		...(evalEnabled ? [] : ["-DMAL_EVAL=0"]),
 		...(realmsEnabled ? [] : ["-DMAL_REALMS=0"]),
 		...(intlEnabled ? intlDefines : ["-DMAL_INTL=0"]),
@@ -176,6 +179,7 @@ export function normalizeNativeFeatures(
 		...(nodeEnabled ? ["node-argon2", "node-tls", "node-zlib"] : []),
 	]);
 	return {
+		primordialsLocked,
 		evalEnabled,
 		realmsEnabled,
 		intlEnabled,
@@ -371,6 +375,8 @@ export function optFlags(
  * unlike the default-on features above — only the ON case emits a define).
  */
 export interface FeatureDefineOpts {
+	/** `-DMAL_PRIMORDIALS_LOCKED=0` for compatibility/conformance builds. */
+	primordialsLocked?: boolean;
 	evalEnabled?: boolean;
 	realmsEnabled?: boolean;
 	intlEnabled?: boolean;
@@ -396,6 +402,8 @@ export interface FeatureDefineOpts {
  * symbols at link).
  */
 export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
+	const primordialFlag =
+		opts.primordialsLocked === false ? ["-DMAL_PRIMORDIALS_LOCKED=0"] : [];
 	const evalFlag = opts.evalEnabled === false ? ["-DMAL_EVAL=0"] : [];
 	const realmsFlag = opts.realmsEnabled === false ? ["-DMAL_REALMS=0"] : [];
 	// Intl off → -DMAL_INTL=0 (per-service gates default to MAL_INTL, so all off).
@@ -409,6 +417,7 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	const nodeFlag = opts.nodeEnabled === true ? ["-DMAL_NODE=1"] : [];
 	const profileFlag = opts.profileEnabled === true ? ["-DMAL_PROFILE=1"] : [];
 	return [
+		...primordialFlag,
 		...evalFlag,
 		...realmsFlag,
 		...intlFlags,

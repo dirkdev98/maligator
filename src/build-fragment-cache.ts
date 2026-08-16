@@ -13,6 +13,8 @@ import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import type { BuildFrontendPhases } from "./build-frontend-cache.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
+import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import {
 	compileDependencyFragments,
 	DEVELOPMENT_LINKED_MODULES_GLOBAL,
@@ -109,6 +111,9 @@ export class UnsupportedBuildFragmentsError extends Error {
 export interface CompileBuildFragmentsOptions {
 	graph: ModuleGraph;
 	config: ResolvedBuildConfig;
+	facts: CompilerProgramFacts;
+	/** Reuse whole-graph analysis already required by locked-world diagnostics. */
+	semantic?: SemanticProgram;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	cacheDirectory?: string;
@@ -407,6 +412,7 @@ function compileArtifact(
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	options.phases.semanticMs += Date.now() - semanticStartedAt;
 	const definition = compileSemanticProgramToVmDefinition(semantic, {
+		facts: options.facts,
 		optimization: "development",
 		runPhase(phase, run) {
 			const startedAt = Date.now();
@@ -578,7 +584,7 @@ function validateLinkage(
 	const marker = path.join(root, "linkages", `${key}.valid`);
 	if (existsSync(marker)) return;
 	const startedAt = Date.now();
-	const semantic = runSemanticAnalysisForGraph(options.graph);
+	const semantic = options.semantic ?? runSemanticAnalysisForGraph(options.graph);
 	const linkage = linkModules(semantic);
 	assertSnapshotSafeExports(semantic, linkage, plans);
 	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
@@ -663,6 +669,7 @@ export function validateBuildFragmentRequest(
 		const options: CompileBuildFragmentsOptions = {
 			graph,
 			config: request.config,
+			facts: compilerProgramFactsFromConfig(request.config),
 			stripTypes,
 			stripperIdentity: request.stripperIdentity,
 			cacheDirectory: request.cacheDirectory,
@@ -698,16 +705,17 @@ export function compileBuildFragments(
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const parallelValidation =
-		options.dependencyWorker === undefined
+		options.dependencyWorker === undefined || options.semantic !== undefined
 			? undefined
 			: prepareParallelLinkageValidation(root, identity, options, plans);
-	if (options.dependencyWorker === undefined) {
+	if (options.dependencyWorker === undefined || options.semantic !== undefined) {
 		validateLinkage(root, identity, options, plans);
 	}
 	const dependencyArtifacts = compileDependencyFragments({
 		graph: options.graph,
 		targets: plans.map(({ target, commonjs }) => ({ target, commonjs })),
 		config: options.config,
+		facts: options.facts,
 		stripTypes: options.stripTypes,
 		stripperIdentity: options.stripperIdentity,
 		cacheDirectory: options.cacheDirectory,

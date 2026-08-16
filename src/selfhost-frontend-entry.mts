@@ -38,6 +38,7 @@ const bytes = compileEntrypointToBuffer(inputPath, {
 		assets: {},
 		modules: { aliases: {} },
 		engine: {
+			primordials: "locked",
 			eval: false,
 			realms: false,
 			regexp: true,

@@ -60,7 +60,7 @@ export default defineBuild({
 	assets: {
 		templates: { type: "directory", path: "templates", include: ["**/*.html"] },
 	},
-	engine: { intl: { enabled: true, features: ["number-format"] } },
+	engine: { primordials: "mutable", intl: { enabled: true, features: ["number-format"] } },
 	surface: { webPlatform: true, maligator: true },
 });
 
@@ -72,6 +72,13 @@ defineBuild({
 				"not-an-intl-service",
 			],
 		},
+	},
+});
+
+defineBuild({
+	engine: {
+		// @ts-expect-error Primordial policy is a closed public union.
+		primordials: "frozen",
 	},
 });
 `,

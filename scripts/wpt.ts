@@ -139,6 +139,7 @@ const wireConfig = resolveBuildConfig({
 		regexp: true,
 		temporal: false,
 		intl: { enabled: false },
+		primordials: "mutable",
 	},
 	surface: { webPlatform: true },
 });

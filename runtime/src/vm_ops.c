@@ -19,6 +19,7 @@
 #include "generator_object.h"
 #include "intrinsics.h"
 #include "promise_object.h"
+#include "primordials.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -3422,6 +3423,13 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         return mal_proxy_set(vm, mal_value_to_proxy_object(target), key, value, receiver);
     }
 
+    if (target == receiver && mal_value_is_object(target) &&
+        mal_object_is_locked_primordial(mal_value_to_object(target))) {
+        mal_primordials_throw_property_mutation(
+            vm, "Cannot assign locked primordial property '", key);
+        return false;
+    }
+
     // IntegerIndexedElementSet coerces the value before checking index validity.
     // A valid index with a distinct receiver takes OrdinarySetWithOwnDescriptor
     // below; an invalid index with a distinct receiver is a successful no-op.
@@ -3505,6 +3513,12 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
                 MAL_PROPERTY_CONFIGURABLE);
     }
 
+    if (own_present && (own_desc.flags & MAL_PROPERTY_PRIMORDIAL)) {
+        mal_primordials_throw_property_mutation(
+            vm, "Cannot assign locked primordial binding '", key);
+        return false;
+    }
+
     if (own_desc.flags & MAL_PROPERTY_ACCESSOR) {
         if (!mal_value_is_callable(own_desc.setter)) {
             return false;
@@ -3561,6 +3575,11 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         return false;
     }
     if (receiver_present) {
+        if (receiver_desc.flags & MAL_PROPERTY_PRIMORDIAL) {
+            mal_primordials_throw_property_mutation(
+                vm, "Cannot assign locked primordial binding '", key);
+            return false;
+        }
         if ((receiver_desc.flags & MAL_PROPERTY_ACCESSOR) ||
             !(receiver_desc.flags & MAL_PROPERTY_WRITABLE)) {
             return false;
@@ -3633,8 +3652,27 @@ bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key) {
     }
 
     MalObject *object = mal_value_to_object(object_value);
+    if (mal_object_is_locked_primordial(object)) {
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(vm, object_value, key, &present, &desc)) {
+            return false;
+        }
+        if (!present) return true;
+        mal_primordials_throw_property_mutation(
+            vm, "Cannot delete locked primordial property '", key);
+        return false;
+    }
 
-    if (mal_object_get_own(object, key).present) {
+    MalPropertyLookup ordinary_own = mal_object_get_own(object, key);
+    if (ordinary_own.present &&
+        (ordinary_own.desc.flags & MAL_PROPERTY_PRIMORDIAL)) {
+        mal_primordials_throw_property_mutation(
+            vm, "Cannot delete locked primordial binding '", key);
+        return false;
+    }
+
+    if (ordinary_own.present) {
         bool deleted = mal_object_delete_own(object, key);
         if (deleted && mal_object_is_mapped_arguments(object)) {
             mal_arguments_object_unmap((MalArgumentsObject *) object, key);
@@ -4948,6 +4986,12 @@ static void mal_vm_op_store_property_keyed(
         return;
     }
 
+    if (mal_object_is_locked_primordial(mal_value_to_object(object_value))) {
+        mal_primordials_throw_property_mutation(
+            vm, "Cannot assign locked primordial property '", key);
+        return;
+    }
+
     // Integer-indexed TypedArray writes go through IntegerIndexedElementSet
     // (coerce, then write in-bounds; out-of-bounds is silently dropped) and
     // never define an ordinary property.
@@ -5576,6 +5620,12 @@ void mal_vm_op_store_global_property(
         bool function_check = mal_value_is_empty(value);
         bool var_check = mal_value_is_null(value);
         bool function_initialization = !function_check && !var_check && !mal_value_is_undefined(value);
+        if (own.present && (own.desc.flags & MAL_PROPERTY_PRIMORDIAL) &&
+            (function_check || function_initialization)) {
+            mal_primordials_throw_property_mutation(
+                vm, "Cannot declare locked primordial binding '", key);
+            return;
+        }
         if (function_check) {
             if (!own.present) {
                 global_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);

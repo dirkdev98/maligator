@@ -22,6 +22,7 @@
  * a non-spread call site supplies their exact raw argument values during substitution.
  */
 
+import { knownFact, sourceSiteId } from "./compiler-facts.ts";
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
 import type { IRRegisterIndex } from "./ir-register-index.ts";
 import {
@@ -45,6 +46,52 @@ const MAX_INLINE_INSTRUCTIONS = 40;
 
 /** Maximum exact loaded-callee alternatives emitted at one method call site. */
 const MAX_METHOD_INLINE_TARGETS = 3;
+
+function recordGuardedBuiltinCall(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	instruction: Extract<IRInstruction, { type: "call" }>,
+	operation: string,
+	guardOrdinal: number,
+	positionId: number | undefined,
+): void {
+	const position =
+		positionId === undefined ? undefined : program.sourcePositions[positionId];
+	const positionOwner =
+		position?.inlinedFunctionIndex === undefined
+			? fn
+			: program.functions.find(
+					(candidate) => candidate.functionIndex === position.inlinedFunctionIndex,
+				);
+	const site =
+		position === undefined || positionOwner === undefined
+			? undefined
+			: sourceSiteId(
+					positionOwner.semanticFile.path,
+					position.line,
+					position.column,
+					`builtin-call:${operation}`,
+				);
+	instruction.knownBuiltinCall = {
+		operation,
+		identity: knownFact(operation, {
+			scope:
+				site === undefined
+					? { kind: "function", id: fn.functionIndex }
+					: { kind: "site", id: site },
+			dependencies: [
+				{ kind: "epoch", family: "watched-methods" },
+				{
+					kind: "guard",
+					id: site ?? `builtin:${fn.functionIndex}:${guardOrdinal}`,
+				},
+			],
+			obligations: [{ kind: "fallback", id: "generic-call" }],
+			origin: "guarded-builtin-site-analysis",
+		}),
+		...(site === undefined ? {} : { sourceSite: site }),
+	};
+}
 
 /**
  * Instruction kinds that make a function unsafe to inline as-is: `this` /
@@ -570,6 +617,8 @@ export function annotateDirectCallTargets(program: IntermediateProgram): number 
 export function annotateDirectArrayPushSites(program: IntermediateProgram): number {
 	let count = 0;
 	for (const fn of program.functions) {
+		let guardOrdinal = 0;
+		let positionId: number | undefined;
 		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
 		const provenanceThroughMoves = (
 			register: number,
@@ -585,7 +634,12 @@ export function annotateDirectArrayPushSites(program: IntermediateProgram): numb
 		};
 
 		for (const block of fn.blocks) {
+			positionId = undefined;
 			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") {
+					positionId = instruction.pos;
+					continue;
+				}
 				if (instruction.type !== "call") continue;
 				const callee = definitions.get(instruction.registers[1]);
 				if (callee === undefined) continue;
@@ -622,6 +676,14 @@ export function annotateDirectArrayPushSites(program: IntermediateProgram): numb
 					continue;
 				}
 				instruction.directArrayPush = true;
+				recordGuardedBuiltinCall(
+					program,
+					fn,
+					instruction,
+					"Array.prototype.push",
+					guardOrdinal++,
+					positionId,
+				);
 				count++;
 			}
 		}
@@ -641,6 +703,8 @@ export function annotateDirectStringCharCodeAtSites(
 ): number {
 	let count = 0;
 	for (const fn of program.functions) {
+		let guardOrdinal = 0;
+		let positionId: number | undefined;
 		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
 		const moveRoot = (initial: number): number => {
 			let register = initial;
@@ -655,7 +719,12 @@ export function annotateDirectStringCharCodeAtSites(
 		};
 
 		for (const block of fn.blocks) {
+			positionId = undefined;
 			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") {
+					positionId = instruction.pos;
+					continue;
+				}
 				if (instruction.type !== "call") continue;
 				const callee = definitions.get(instruction.registers[1]);
 				if (callee === undefined) continue;
@@ -681,6 +750,14 @@ export function annotateDirectStringCharCodeAtSites(
 					continue;
 				}
 				instruction.directStringCharCodeAt = true;
+				recordGuardedBuiltinCall(
+					program,
+					fn,
+					instruction,
+					"String.prototype.charCodeAt",
+					guardOrdinal++,
+					positionId,
+				);
 				count++;
 			}
 		}
@@ -698,6 +775,8 @@ export function annotateDirectStringCharCodeAtSites(
 export function annotateDirectCollectionSites(program: IntermediateProgram): number {
 	let count = 0;
 	for (const fn of program.functions) {
+		let guardOrdinal = 0;
+		let positionId: number | undefined;
 		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
 		const provenanceThroughMoves = (
 			register: number,
@@ -713,7 +792,12 @@ export function annotateDirectCollectionSites(program: IntermediateProgram): num
 		};
 
 		for (const block of fn.blocks) {
+			positionId = undefined;
 			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") {
+					positionId = instruction.pos;
+					continue;
+				}
 				if (instruction.type !== "call") continue;
 				const callee = definitions.get(instruction.registers[1]);
 				if (callee === undefined) continue;
@@ -763,6 +847,18 @@ export function annotateDirectCollectionSites(program: IntermediateProgram): num
 				}
 
 				instruction.directCollectionOp = operation;
+				recordGuardedBuiltinCall(
+					program,
+					fn,
+					instruction,
+					operation === "mapGet"
+						? "Map.prototype.get"
+						: operation === "mapSet"
+							? "Map.prototype.set"
+							: "Set.prototype.add",
+					guardOrdinal++,
+					positionId,
+				);
 				count++;
 			}
 		}

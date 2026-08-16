@@ -24,6 +24,7 @@ const compilerBake = {
 export function setup(): void {
 	const config = resolveBuildConfig({
 		engine: {
+			primordials: "mutable",
 			eval: true,
 			regexp: true,
 			realms: true,

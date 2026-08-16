@@ -3,6 +3,7 @@
 	"ignorePatterns": [
 		"scripts/test262.json",
 		"bench/baseline.json",
+		"runtime/src/generated/primordial_registry.inc",
 		"runtime/rust/target",
 		"runtime/vendor",
 		"tests/wpt/fixtures"

@@ -4,6 +4,8 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
+import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
@@ -59,6 +61,7 @@ export interface CompileDependencyFragmentsOptions {
 	graph: ModuleGraph;
 	targets: Array<DependencyFragmentTarget>;
 	config: ResolvedBuildConfig;
+	facts: CompilerProgramFacts;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	cacheDirectory?: string;
@@ -296,6 +299,7 @@ function compileIsland(
 	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 	options.phases.semanticMs += Date.now() - semanticStartedAt;
 	const definition = compileSemanticProgramToVmDefinition(semantic, {
+		facts: options.facts,
 		optimization: "development",
 		runPhase(phase, run) {
 			const startedAt = Date.now();
@@ -385,6 +389,7 @@ export function compileDependencyFragmentRequest(
 		graph,
 		targets: request.targets,
 		config: request.config,
+		facts: compilerProgramFactsFromConfig(request.config),
 		stripTypes,
 		stripperIdentity: request.stripperIdentity,
 		cacheDirectory: request.cacheDirectory,

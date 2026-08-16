@@ -4,6 +4,7 @@ import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../compiler-facts.ts";
 import {
 	compileDependencyFragments,
 	DEVELOPMENT_LINKED_MODULES_GLOBAL,
@@ -735,6 +736,7 @@ export function compileRelocatableTestImage(
 		graph: planning,
 		targets: dependencyTargets,
 		config: options.config,
+		facts: compilerProgramFactsFromConfig(options.config),
 		stripTypes: options.stripTypes,
 		stripperIdentity: options.stripperIdentity,
 		cacheDirectory: options.cacheDirectory,

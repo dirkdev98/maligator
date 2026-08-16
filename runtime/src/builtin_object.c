@@ -9,6 +9,7 @@
 #include "heap_symbol.h"
 #include "module_namespace_object.h"
 #include "primitive_wrapper_object.h"
+#include "primordials.h"
 #include "property_iter.h"
 #include "proxy_object.h"
 #include "rooted_collection.h"
@@ -114,7 +115,7 @@ done:
     return ok;
 }
 
-MalDefineOwnStatus mal_builtin_object_try_define_parsed(
+static MalDefineOwnStatus mal_builtin_object_try_define_parsed_impl(
     MalVm *vm, MalObject *target, MalKey key,
     const MalPropertyDescriptorParse *parsed) {
     MalPropertyDescriptorParse parse = *parsed;
@@ -327,6 +328,23 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
             (parse.has_writable && !(parse.desc.flags & MAL_PROPERTY_WRITABLE))) {
             mal_arguments_object_unmap(mapped_arguments, key);
         }
+    }
+    return status;
+}
+
+MalDefineOwnStatus mal_builtin_object_try_define_parsed(
+    MalVm *vm, MalObject *target, MalKey key,
+    const MalPropertyDescriptorParse *parsed
+) {
+    MalPropertyLookup before = mal_object_get_own(target, key);
+    MalDefineOwnStatus status =
+        mal_builtin_object_try_define_parsed_impl(vm, target, key, parsed);
+    if (status == MAL_DEFINE_OWN_REJECTED &&
+        (mal_object_is_locked_primordial(target) ||
+         (before.present && (before.desc.flags & MAL_PROPERTY_PRIMORDIAL))) &&
+        vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_primordials_throw_property_mutation(
+            vm, "Cannot define locked primordial property '", key);
     }
     return status;
 }
@@ -1277,7 +1295,7 @@ static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value,
  * SetIntegrityLevel: prevent extensions, snapshot [[OwnPropertyKeys]], then
  * clear CONFIGURABLE (and for freeze WRITABLE on data properties) per key.
  */
-static bool mal_builtin_object_set_integrity(
+bool mal_builtin_object_set_integrity(
     MalVm *vm, MalValue target, bool clear_writable
 ) {
     bool prevented;

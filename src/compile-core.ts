@@ -1,3 +1,5 @@
+import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
+import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { executeIRDevelopmentOptimizations, executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
@@ -14,6 +16,7 @@ export type CompileCorePhase =
 	| "lower to vm";
 
 export interface CompileCoreOptions {
+	facts?: CompilerProgramFacts;
 	optimization?: "development" | "full";
 	/** Derive source-site identities and compiler remarks for a profiled image. */
 	profile?: boolean;
@@ -34,7 +37,13 @@ export function compileSemanticProgramToVmDefinition(
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
 	const ir = runPhase("compile to ir", () =>
-		compileSemanticProgramToIr(semantic, options.ir),
+		compileSemanticProgramToIr(semantic, {
+			...options.ir,
+			facts: {
+				...(options.facts ?? conservativeCompilerProgramFacts()),
+				compilationMode: options.optimization ?? "full",
+			},
+		}),
 	);
 	runPhase("ir optimizations", () =>
 		options.optimization === "development"

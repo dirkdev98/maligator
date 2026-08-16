@@ -45,6 +45,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "perf_stats.h"
+#include "primordials.h"
 #include "table.h"
 #include "typed_array_object.h"
 #include "vm.h"
@@ -980,4 +981,6 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
             vm, global_this, "__mal_reset_perf_stats",
             mal_intrinsic_perf_stats_reset);
     }
+
+    mal_primordials_lock(vm);
 }

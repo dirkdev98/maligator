@@ -27,6 +27,11 @@ export interface MaligatorBuildConfig {
 	};
 	engine?: {
 		/**
+		 * Lock ECMAScript primordials for this entire build. Locked is the default;
+		 * mutable is intended for conformance suites and compatibility experiments.
+		 */
+		primordials?: "locked" | "mutable";
+		/**
 		 * `true` embeds the runtime compiler. `false` keeps eval/Function present
 		 * but makes dynamic compilation throw at runtime. `"compile-check"` also
 		 * rejects statically visible eval/Function calls during the build.

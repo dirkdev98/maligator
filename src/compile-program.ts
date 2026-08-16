@@ -1,9 +1,12 @@
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import type { CompilerDiagnostic } from "./compiler-diagnostics.ts";
+import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { BuildModuleGraphOptions } from "./module-graph.ts";
 import { buildModuleGraph } from "./module-graph.ts";
+import { collectPrimordialMutationDiagnostics } from "./primordial-diagnostics.ts";
 import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
@@ -16,6 +19,7 @@ export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize
 
 export interface CompileEntrypointOptions extends BuildModuleGraphOptions {
 	runPhase?: <T>(phase: CompileEntrypointPhase, run: () => T) => T;
+	onDiagnostic?: (diagnostic: CompilerDiagnostic) => void;
 }
 
 export interface CompileEntrypointToBufferOptions extends Omit<
@@ -32,16 +36,29 @@ export function compileEntrypoint(
 ): VmDefinition {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileEntrypointPhase, run: () => T): T => run());
+	const facts =
+		options.buildConfig === undefined
+			? undefined
+			: compilerProgramFactsFromConfig(options.buildConfig);
 	const graph = runPhase("graph", () => buildModuleGraph(entrypointPath, options));
 	const semantic = runPhase("semantic", () => {
 		const result = runSemanticAnalysisForGraph(graph);
 		if (options.buildConfig !== undefined) {
 			assertEvalPolicy(options.buildConfig, collectDisallowedEvalUsage(result));
 			assertRegexpPolicy(options.buildConfig, collectDisallowedRegexpUsage(result));
+			for (const diagnostic of collectPrimordialMutationDiagnostics(
+				result,
+				facts!.world,
+			)) {
+				options.onDiagnostic?.(diagnostic);
+			}
 		}
 		return result;
 	});
-	return compileSemanticProgramToVmDefinition(semantic, { runPhase });
+	return compileSemanticProgramToVmDefinition(semantic, {
+		facts,
+		runPhase,
+	});
 }
 
 /** Compile an on-disk entrypoint and its module graph to the portable wire format. */

@@ -465,8 +465,10 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
         return MAL_DEFINE_OWN_REJECTED;
     }
 
-    mal_property_write_entry(table, lookup.entry, desc);
-    mal_gc_card_desc(&object->header, desc); // old object -> young desc refs
+    MalPropertyDesc stored = *desc;
+    stored.flags |= lookup.desc.flags & MAL_PROPERTY_PRIMORDIAL;
+    mal_property_write_entry(table, lookup.entry, &stored);
+    mal_gc_card_desc(&object->header, &stored); // old object -> young desc refs
     return MAL_DEFINE_OWN_APPLIED;
 }
 

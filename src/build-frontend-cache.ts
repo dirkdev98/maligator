@@ -18,6 +18,9 @@ import {
 } from "./build-fragment-cache.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import type { CompilerDiagnostic } from "./compiler-diagnostics.ts";
+import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
+import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -32,6 +35,7 @@ import { vmDefinitionStats } from "./lower-vm.ts";
 import type { VmDefinitionStats } from "./lower-vm.ts";
 import type { BuildModuleGraphOptions, ModuleGraph } from "./module-graph.ts";
 import { buildModuleGraph } from "./module-graph.ts";
+import { collectPrimordialMutationDiagnostics } from "./primordial-diagnostics.ts";
 import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
@@ -44,20 +48,21 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 3;
-const BUILD_FRONTEND_PIPELINE_VERSION = 5;
+const BUILD_FRONTEND_CACHE_SCHEMA = 4;
+const BUILD_FRONTEND_PIPELINE_VERSION = 6;
 const BUILD_FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/build-frontend";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 3;
+	schema: 4;
 	identity: string;
 	contentKey: string;
 	artifacts: Array<BuildFrontendArtifactIdentity>;
 	definitionStats: VmDefinitionStats;
 	entrypoint: string;
 	dependencies: Array<BuildDependencyIdentity>;
+	diagnostics: Array<CompilerDiagnostic>;
 }
 
 interface BuildFrontendArtifactIdentity {
@@ -95,6 +100,7 @@ export interface CompiledBuildFrontend {
 	fileDigests: { hits: number; misses: number };
 	artifacts: Array<BuildFrontendArtifact>;
 	definitionStats: VmDefinitionStats;
+	diagnostics: Array<CompilerDiagnostic>;
 	wires?: Array<Uint8Array>;
 	fragmentArtifacts?: { hits: number; misses: number };
 	fragmentFallback?: string;
@@ -279,6 +285,7 @@ function loadCached(
 			artifacts: Array<BuildFrontendArtifact>;
 			definitionStats: VmDefinitionStats;
 			dependencies: Array<BuildDependencyIdentity>;
+			diagnostics: Array<CompilerDiagnostic>;
 	  }
 	| undefined {
 	const manifest = readManifest(manifestPath(root, entrypoint, identity));
@@ -290,6 +297,7 @@ function loadCached(
 		manifest.artifacts.length === 0 ||
 		!manifest.artifacts.every(validArtifactIdentity) ||
 		!validDefinitionStats(manifest.definitionStats) ||
+		!Array.isArray(manifest.diagnostics) ||
 		!Array.isArray(manifest.dependencies) ||
 		!artifactsUnchanged(manifest.artifacts, artifactRoot) ||
 		!dependenciesUnchanged(manifest.dependencies, session)
@@ -320,6 +328,7 @@ function loadCached(
 			})),
 			definitionStats: manifest.definitionStats,
 			dependencies: manifest.dependencies,
+			diagnostics: manifest.diagnostics,
 		};
 	} catch {
 		return undefined;
@@ -458,6 +467,7 @@ export function compileBuildFrontend(
 				fileDigests: fileDigestStats(),
 				artifacts: cached.artifacts,
 				definitionStats: cached.definitionStats,
+				diagnostics: cached.diagnostics,
 			};
 		}
 	}
@@ -469,8 +479,21 @@ export function compileBuildFrontend(
 		parseCache: session.moduleParses,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
+	const facts = compilerProgramFactsFromConfig(options.config);
 
-	const semanticStartedAt = Date.now();
+	let sharedSemantic: ReturnType<typeof runSemanticAnalysisForGraph> | undefined;
+	const semanticForGraph = () => {
+		if (sharedSemantic !== undefined) return sharedSemantic;
+		const semanticStartedAt = Date.now();
+		sharedSemantic = runSemanticAnalysisForGraph(graph);
+		phases.semanticMs += Date.now() - semanticStartedAt;
+		return sharedSemantic;
+	};
+	const world = facts.world;
+	const diagnostics =
+		world.primordialPolicy === "locked"
+			? collectPrimordialMutationDiagnostics(semanticForGraph(), world)
+			: [];
 	let definition: VmDefinition;
 	let wires: Array<Uint8Array> | undefined;
 	let fragmentArtifactIdentities: Array<BuildFrontendArtifactIdentity> | undefined;
@@ -487,6 +510,8 @@ export function compileBuildFrontend(
 			const fragments = compileBuildFragments({
 				graph,
 				config: options.config,
+				facts,
+				semantic: sharedSemantic,
 				stripTypes: options.stripTypes,
 				stripperIdentity: options.stripperIdentity,
 				cacheDirectory: options.cacheDirectory,
@@ -514,23 +539,21 @@ export function compileBuildFrontend(
 		} catch (error) {
 			if (!(error instanceof UnsupportedBuildFragmentsError)) throw error;
 			fragmentFallback = error.message;
-			const semantic = runSemanticAnalysisForGraph(graph);
+			const semantic = semanticForGraph();
 			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-			phases.semanticMs += Date.now() - semanticStartedAt;
-			definition = compileDefinition(semantic, options, phases);
+			definition = compileDefinition(semantic, facts, options, phases);
 			const serializeStartedAt = Date.now();
 			wires = [serializeVmDefinition(definition)];
 			phases.serializeMs += Date.now() - serializeStartedAt;
 		}
 	} else {
-		const semantic = runSemanticAnalysisForGraph(graph);
+		const semantic = semanticForGraph();
 		if (options.enforcePolicies !== false) {
 			assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 			assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 		}
-		phases.semanticMs = Date.now() - semanticStartedAt;
-		definition = compileDefinition(semantic, options, phases);
+		definition = compileDefinition(semantic, facts, options, phases);
 		const serializeStartedAt = Date.now();
 		wires = [serializeVmDefinition(definition)];
 		phases.serializeMs = Date.now() - serializeStartedAt;
@@ -560,6 +583,7 @@ export function compileBuildFrontend(
 			definitionStats,
 			entrypoint,
 			dependencies,
+			diagnostics,
 		} satisfies BuildFrontendManifest)}\n`,
 	);
 
@@ -584,6 +608,7 @@ export function compileBuildFrontend(
 			size: artifact.size,
 		})),
 		definitionStats,
+		diagnostics,
 		fragmentArtifacts,
 		fragmentFallback,
 	};
@@ -591,10 +616,12 @@ export function compileBuildFrontend(
 
 function compileDefinition(
 	semantic: Parameters<typeof compileSemanticProgramToVmDefinition>[0],
+	facts: CompilerProgramFacts,
 	options: CompileBuildFrontendOptions,
 	phases: BuildFrontendPhases,
 ): VmDefinition {
 	return compileSemanticProgramToVmDefinition(semantic, {
+		facts,
 		optimization: options.optimization,
 		profile: options.profile,
 		afterOptimization: options.afterOptimization,

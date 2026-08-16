@@ -302,6 +302,7 @@ export function test262PrepareBuild() {
 	);
 	const config = resolveBuildConfig({
 		engine: {
+			primordials: "mutable",
 			eval: true,
 			realms: true,
 			regexp: true,

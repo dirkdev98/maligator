@@ -6,6 +6,7 @@
 #include "intrinsics.h"
 #include "object_ops.h"
 #include "property_iter.h"
+#include "primordials.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -1021,8 +1022,13 @@ static bool mal_proxy_set_prototype_of_snapshot(
                 vm, mal_value_to_proxy_object(target), proto, success_out);
         }
         MalObject *proto_object = mal_value_is_object(proto) ? mal_value_to_object(proto) : nullptr;
-        *success_out = mal_object_set_prototype(
-            mal_value_to_object(target), proto_object);
+        MalObject *target_object = mal_value_to_object(target);
+        *success_out = mal_object_set_prototype(target_object, proto_object);
+        if (!*success_out && mal_object_is_locked_primordial(target_object)) {
+            mal_primordials_throw_mutation(
+                vm, "Cannot set prototype of locked primordial");
+            return false;
+        }
         return true;
     }
 

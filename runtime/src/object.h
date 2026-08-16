@@ -60,6 +60,10 @@ typedef struct MalObject {
     bool slots_owned : 1;
     /** A private Error.captureStackTrace id must be released at finalization. */
     bool has_captured_stack : 1;
+    /** This object belongs to the protected ECMAScript primordial graph. */
+    bool primordial_locked : 1;
+    /** DFS marker used only while a Realm's primordial graph is finalized. */
+    bool primordial_locking : 1;
     MalShape *shape;
     struct MalObject *prototype;
     /** Inline named-property values for the shape; null in dictionary mode. */
@@ -87,6 +91,10 @@ static inline void mal_object_mark_as_prototype(MalObject *object) {
     if (object != nullptr && !object->is_prototype) {
         object->is_prototype = true;
     }
+}
+
+static inline bool mal_object_is_locked_primordial(const MalObject *object) {
+    return object != nullptr && object->primordial_locked;
 }
 
 /**

@@ -489,6 +489,12 @@ function compileAndBuild(
 		(result) => `frontend cache ${result.cache}`,
 	);
 	reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
+	for (const diagnostic of frontend.diagnostics) {
+		reporter.warning(
+			`${diagnostic.path}:${diagnostic.line}:${diagnostic.column} ` +
+				`[${diagnostic.code}] ${diagnostic.message}`,
+		);
+	}
 	reporter.detail(
 		"Module parses",
 		`${frontend.moduleParses.hits} reused, ${frontend.moduleParses.misses} parsed`,

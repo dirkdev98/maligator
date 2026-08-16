@@ -91,6 +91,21 @@ describe("normal build frontend cache", () => {
 		expect(run("./second.mjs").cache).toBe("miss");
 	});
 
+	it("stores and replays structured primordial diagnostics", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(entrypoint, `Math.extra = 1;\n`);
+
+		const cold = compile(entrypoint, cacheDirectory);
+		const warm = compile(entrypoint, cacheDirectory);
+		expect(cold.cache).toBe("miss");
+		expect(warm.cache).toBe("hit");
+		expect(cold.diagnostics).toHaveLength(1);
+		expect(cold.diagnostics[0]?.code).toBe("primordial.mutation");
+		expect(warm.diagnostics).toEqual(cold.diagnostics);
+	});
+
 	it("invalidates a changed wire identity before exposing a lazy artifact handle", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

@@ -38,6 +38,7 @@ function writeConfig(dir: string, contents: string): void {
 describe("resolveBuildConfig defaults", () => {
 	it("defaults eval OFF and picks the conservative product surface", () => {
 		const config = resolveBuildConfig({});
+		expect(config.engine.primordials).toBe("locked");
 		expect(config.engine.eval).toBe(false);
 		expect(config.engine.intl.enabled).toBe(false);
 		expect(config.host.scheduler).toBe("single");
@@ -61,6 +62,15 @@ describe("resolveBuildConfig defaults", () => {
 		expect(config.engine.eval).toBe(true);
 		expect(resolveBuildConfig({ engine: { eval: "compile-check" } }).engine.eval).toBe(
 			"compile-check",
+		);
+	});
+
+	it("allows conformance builds to opt into mutable primordials", () => {
+		const config = resolveBuildConfig({ engine: { primordials: "mutable" } });
+		expect(config.engine.primordials).toBe("mutable");
+		expect(buildDerivationFromConfig(config).features.primordialsLocked).toBe(false);
+		expect(buildDerivationFromConfig(config).features.cDefines).toContain(
+			"-DMAL_PRIMORDIALS_LOCKED=0",
 		);
 	});
 });
@@ -176,6 +186,14 @@ describe("loadBuildConfig", () => {
 		writeConfig(dir, JSON.stringify({ engine: { eval: "yes" } }));
 		expect(() => loadBuildConfig(undefined, dir)).toThrow(
 			/'engine\.eval' must be a boolean or "compile-check"/,
+		);
+	});
+
+	it("rejects an unknown primordial policy", () => {
+		const dir = tmpdir();
+		writeConfig(dir, JSON.stringify({ engine: { primordials: "frozen" } }));
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(
+			/'engine\.primordials' must be "locked" or "mutable"/,
 		);
 	});
 
@@ -381,6 +399,28 @@ describe("buildConfigCacheSuffix", () => {
 		expect(buildConfigCacheSuffix(off)).toBe(suffix);
 	});
 
+	it("separates mutable and locked primordial artifacts", () => {
+		const locked = resolveBuildConfig({
+			engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		});
+		const mutable = resolveBuildConfig({
+			engine: {
+				primordials: "mutable",
+				eval: true,
+				realms: true,
+				temporal: true,
+				intl: { enabled: true },
+			},
+			surface: { webPlatform: true },
+		});
+		expect(buildConfigCacheSuffix(locked)).toBe("");
+		expect(buildConfigCacheSuffix(mutable)).toMatch(/^[0-9a-f]{8}$/);
+		expect(featureDefines({ primordialsLocked: false })).toContain(
+			"-DMAL_PRIMORDIALS_LOCKED=0",
+		);
+	});
+
 	it("compile-check shares eval-off runtime features and cache identity", () => {
 		const off = resolveBuildConfig({ engine: { eval: false } });
 		const checked = resolveBuildConfig({ engine: { eval: "compile-check" } });
@@ -517,6 +557,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			c.surface.webPlatform &&
 			c.engine.regexp &&
 			c.engine.temporal &&
+			c.engine.primordials === "locked" &&
 			!c.surface.node
 		) {
 			return "";
@@ -528,6 +569,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			web: c.surface.webPlatform,
 			regexp: c.engine.regexp,
 			temporal: c.engine.temporal,
+			primordials: c.engine.primordials,
 			node: c.surface.node,
 			realms: c.engine.realms,
 		});
@@ -563,7 +605,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			engine: { eval: true, intl: { enabled: true } },
 			surface: { webPlatform: true, node: true },
 		});
-		expect(buildConfigCacheSuffix(nodeOn)).toBe("b04ab3b5");
+		expect(buildConfigCacheSuffix(nodeOn)).toBe("cd505751");
 	});
 
 	it("does not include executable assets in the output suffix", () => {

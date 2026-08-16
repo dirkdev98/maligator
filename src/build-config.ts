@@ -33,6 +33,7 @@ export interface ResolvedBuildConfig {
 	assets: Record<string, AssetInclusion>;
 	modules: { aliases: Record<string, string> };
 	engine: {
+		primordials: "locked" | "mutable";
 		eval: boolean | "compile-check";
 		realms: boolean;
 		regexp: boolean;
@@ -126,6 +127,10 @@ const evalLeaf: Leaf = {
 			`a boolean or "compile-check"`,
 		),
 };
+const primordialsLeaf: Leaf = {
+	leaf: (value, at) =>
+		expect(value === "locked" || value === "mutable", at, `"locked" or "mutable"`),
+};
 const stringLeaf: Leaf = {
 	leaf: (value, at) => expect(typeof value === "string", at, "a string"),
 };
@@ -218,6 +223,7 @@ const CONFIG_SCHEMA: ObjectSchema = {
 		modules: { object: { aliases: stringRecordLeaf } },
 		engine: {
 			object: {
+				primordials: primordialsLeaf,
 				eval: evalLeaf,
 				realms: booleanLeaf,
 				regexp: booleanLeaf,
@@ -277,6 +283,7 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 		assets: { ...(config.assets ?? {}) },
 		modules: { aliases: { ...(config.modules?.aliases ?? {}) } },
 		engine: {
+			primordials: config.engine?.primordials ?? "locked",
 			eval: config.engine?.eval ?? false,
 			realms: config.engine?.realms ?? false,
 			// RegExp is core ECMAScript, so it defaults ON (unlike eval/Intl/web) —
@@ -630,7 +637,8 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	// The generated binary depends on eval, whether Intl is on, which services are selected
 	// (each flips a -DMAL_INTL_HAS_* define), web-platform (web_url.c gating), regexp
 	// (builtin_regexp/regexp_object/gc/string gating), Temporal, and node (the host built-in
-	// surface), but NOT on the locale set (that only changes Rust/ICU datagen).
+	// surface), primordial policy, but NOT on the locale set (that only changes
+	// Rust/ICU datagen).
 	// Empty services = all; eval + realms + Intl + all-services + web + regexp + Temporal on and
 	// node off = canonical.
 	const services = selectedIntlServices(config).sort();
@@ -647,6 +655,7 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		web &&
 		regexp &&
 		temporal &&
+		config.engine.primordials === "locked" &&
 		!node
 	) {
 		return "";
@@ -658,6 +667,7 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		web,
 		regexp,
 		temporal,
+		primordials: config.engine.primordials,
 		node,
 		realms,
 	});
@@ -682,6 +692,7 @@ export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDer
 	const intlFeatures = intlCargoFeatures(config);
 	const intlServiceDefines = intlDisabledDefines(config);
 	const features = normalizeNativeFeatures({
+		primordialsLocked: config.engine.primordials === "locked",
 		evalEnabled: config.engine.eval === true,
 		realmsEnabled: config.engine.realms,
 		intlEnabled: config.engine.intl.enabled,

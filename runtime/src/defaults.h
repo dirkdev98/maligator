@@ -1,5 +1,11 @@
 #pragma once
 
+// Product builds lock the ECMAScript primordial graph. Compatibility and
+// conformance builds opt out explicitly through the generated feature defines.
+#ifndef MAL_PRIMORDIALS_LOCKED
+#define MAL_PRIMORDIALS_LOCKED 1
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
