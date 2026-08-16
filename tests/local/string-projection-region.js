@@ -31,6 +31,17 @@ function cursorThrows(value) {
 	return false;
 }
 
+function cursorRevalidates(value, separator, afterElement) {
+	const parts = value.split(separator);
+	let total = 0;
+	for (let index = 0; index < parts.length; index++) {
+		const part = parts[index].trim();
+		total += part.length;
+		afterElement(index);
+	}
+	return total;
+}
+
 const results = [
 	projected("ab::x42::"),
 	projected("::x7"),
@@ -50,6 +61,23 @@ try {
 } catch (error) {
 	results.push(error.message === "cursor body" ? 1 : 0);
 }
+
+const originalTrim = String.prototype.trim;
+cursorRevalidates(" a | b | c ", "|", () => {});
+let trimCalls = 0;
+let trimPatched = false;
+results.push(
+	cursorRevalidates(" a | b | c ", "|", () => {
+		if (trimPatched) return;
+		trimPatched = true;
+		String.prototype.trim = function () {
+			trimCalls++;
+			return "xxxx";
+		};
+	}),
+);
+results.push(trimCalls);
+String.prototype.trim = originalTrim;
 
 const originalSplit = String.prototype.split;
 let splitCalls = 0;
@@ -83,7 +111,7 @@ results.push(
 );
 
 const passed =
-	results.join(",") === "245,9,102,-12.5,16,Infinity,1,3,0,2,2,1,711,9,17,2,23" &&
+	results.join(",") === "245,9,102,-12.5,16,Infinity,1,3,0,2,2,1,9,2,711,9,17,2,23" &&
 	splitCalls === 2 &&
 	sliceCalls === 1;
 console.log(

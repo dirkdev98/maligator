@@ -214,7 +214,11 @@ the same facts unconditionally.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.
-- [ ] Retain a generic twin when invalidation or a local guard can fail. Define the
+  - [x] Give split cursors one combined split/trim region license. Mutable builds
+        validate the trim cache and callback once, use unchecked span trimming in
+        stable regions, and revalidate only the watched-method epoch after a
+        potentially invalidating loop operation.
+- [x] Retain a generic twin when invalidation or a local guard can fail. Define the
       shared fallback/materialization contract before adding loaded-field numeric
       layouts or more speculative object representations.
 - [ ] In locked builds, turn primordial dependencies into world invariants and remove

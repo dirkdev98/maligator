@@ -2363,6 +2363,21 @@ MalValue mal_builtin_string_split_cursor_materialize(
     return mal_builtin_string_slice(vm, subject, start, end - start);
 }
 
+bool mal_builtin_string_trim_identity(MalVm *vm, MalValue callee) {
+    if (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)) !=
+            mal_builtin_string_prototype_trim) {
+        return false;
+    }
+#if MAL_REALMS
+    return mal_vm_callee_realm(vm, callee) == vm->current_realm;
+#else
+    (void) vm;
+    return true;
+#endif
+}
+
 static bool mal_builtin_string_trim_span_direct_impl(
     MalVm *vm,
     MalValue callee,
@@ -2373,18 +2388,9 @@ static bool mal_builtin_string_trim_span_direct_impl(
     bool identity_locked
 ) {
     if (!mal_value_is_string(subject_value) ||
-        (!identity_locked &&
-         (!mal_value_is_native_function_object(callee) ||
-          mal_native_function_object_callback(
-              mal_value_to_native_function_object(callee)) !=
-              mal_builtin_string_prototype_trim))) {
+        (!identity_locked && !mal_builtin_string_trim_identity(vm, callee))) {
         return false;
     }
-#if MAL_REALMS
-    if (!identity_locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
-#else
-    (void) vm;
-#endif
     MalString *subject = mal_value_to_string(subject_value);
     usize length = mal_string_length(subject);
     if (start > end || end > length) return false;
@@ -2408,6 +2414,17 @@ bool mal_builtin_string_trim_span_direct(
 }
 
 bool mal_builtin_string_trim_span_direct_locked(
+    MalVm *vm,
+    MalValue subject_value,
+    usize start,
+    usize end,
+    MalValue *out
+) {
+    return mal_builtin_string_trim_span_direct_impl(
+        vm, MAL_VALUE_UNDEFINED, subject_value, start, end, out, true);
+}
+
+bool mal_builtin_string_trim_span_direct_licensed(
     MalVm *vm,
     MalValue subject_value,
     usize start,

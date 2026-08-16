@@ -10,12 +10,14 @@ import {
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
 	vmGuardIsWorldInvariant,
+	vmRegionLicense,
 } from "./lower-vm.ts";
 import type {
 	VmExceptionHandler,
 	VmFunction,
 	VmGuardPlan,
 	VmInstruction,
+	VmRegionLicense,
 } from "./lower-vm.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 
@@ -861,11 +863,16 @@ export function emitCompiledFunction(
 		) {
 			continue;
 		}
+		const license = vmRegionLicense(
+			[instruction.nativeCardinalityRegion.guard],
+			"whole-region",
+		);
+		if (license === undefined) continue;
 		const region: CardinalityRegion = {
 			allocationInstructionIndex: ip,
 			arrayRegister: receiver.register,
 			maximumLength: instruction.nativeCardinalityRegion.maximumLength,
-			guard: instruction.nativeCardinalityRegion.guard,
+			license,
 			semanticEpochStable: false,
 			epochName: `__cardinality_${ip}_semantic_epoch`,
 			itemSite: pushedSite,
@@ -975,10 +982,29 @@ export function emitCompiledFunction(
 		if (stringSplitCursorSites.has(cursor.callIp)) continue;
 		const call = fn.instructions[cursor.callIp];
 		const trimCall = fn.instructions[cursor.trimCallIp];
+		const lockedLicense = vmGuardIsWorldInvariant(cursor.license.guard);
+		const cursorOperations = new Set([
+			cursor.lengthIp,
+			cursor.elementIp,
+			cursor.trimPropertyIp,
+			cursor.trimCallIp,
+			...cursor.primitiveStringLengthIps,
+		]);
+		let semanticEpochStable = true;
+		for (let ip = cursor.callIp + 1; ip <= cursor.backedgeIp; ip++) {
+			if (cursorOperations.has(ip)) continue;
+			if (nativeInstructionMayInvalidateSemanticEpoch(fn.instructions[ip]!, reps)) {
+				semanticEpochStable = false;
+				break;
+			}
+		}
+		const hoistTrimIdentity = !lockedLicense;
 		stringSplitCursorSites.set(cursor.callIp, {
 			cursor,
 			subjectSlot: nextStackSlot,
 			separatorSlot: nextStackSlot + 1,
+			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
+			semanticEpochStable,
 			lockedIdentity:
 				call?.opcode === "CALL" &&
 				call.guardedBuiltinCall !== undefined &&
@@ -988,7 +1014,7 @@ export function emitCompiledFunction(
 				trimCall.guardedBuiltinCall !== undefined &&
 				vmGuardIsWorldInvariant(trimCall.guardedBuiltinCall.guard),
 		});
-		nextStackSlot += 2;
+		nextStackSlot += hoistTrimIdentity ? 3 : 2;
 	}
 	const regexpExecProjectionSites = new Map<number, NativeRegExpExecProjectionSite>();
 	for (const projection of fn.nativeRegExpExecProjections ?? []) {
@@ -1902,6 +1928,8 @@ function nativeInstructionMayInvalidateSemanticEpoch(
 		case "STORE_PROPERTY":
 			if (instruction.nativeClosedGlobalTable?.direct === true) return false;
 			return true;
+		case "LOAD_PROPERTY_STATIC":
+			return instruction.nativePrimitiveStringLength !== true;
 		case "BINARY":
 			if (
 				instruction.operator === "+" &&
@@ -2042,6 +2070,8 @@ interface NativeStringSplitCursorSite {
 	cursor: NativeStringSplitCursor;
 	subjectSlot: number;
 	separatorSlot: number;
+	trimCalleeSlot?: number;
+	semanticEpochStable: boolean;
 	lockedIdentity: boolean;
 	lockedTrimIdentity: boolean;
 }
@@ -2499,6 +2529,47 @@ interface StackObjectSite {
 	cardinalityRegion?: CardinalityRegion;
 }
 
+type RegionDependencyConditions = Partial<
+	Record<
+		Extract<VmGuardPlan["dependencies"][number], { kind: "epoch" }>["family"],
+		string
+	>
+>;
+
+/**
+ * Translate one named region license at its admission point. Local brand,
+ * callback, shape, and argument checks stay beside the runtime protocol; this
+ * function owns only shared semantic dependencies and verifies that a generic
+ * twin exists before C emission may consume them.
+ */
+function regionAdmissionGuard(
+	license: VmRegionLicense,
+	conditions: RegionDependencyConditions,
+): string {
+	if (
+		license.genericTwin !== "retained" ||
+		!license.guard.obligations.includes("fallback")
+	) {
+		throw new Error("Speculative region lacks its generic twin");
+	}
+	if (
+		license.materialization !== "none" &&
+		!license.guard.obligations.includes("materialize")
+	) {
+		throw new Error("Virtual region lacks its materialization contract");
+	}
+	const emitted: Array<string> = [];
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world") continue;
+		const condition = conditions[dependency.family];
+		if (condition === undefined) {
+			throw new Error(`Missing region dependency ${dependency.family}`);
+		}
+		emitted.push(condition);
+	}
+	return emitted.length === 0 ? "true" : emitted.join(" && ");
+}
+
 function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
 	const guard = site.inheritedGuard;
 	if (
@@ -2646,7 +2717,7 @@ interface CardinalityRegion {
 	allocationInstructionIndex: number;
 	arrayRegister: number;
 	maximumLength: number;
-	guard: VmGuardPlan;
+	license: VmRegionLicense;
 	/** Every instruction in the complete virtual lifetime is unable to run JS or
 	 * invalidate either semantic family, so admission licenses all later uses. */
 	semanticEpochStable: boolean;
@@ -2664,26 +2735,12 @@ interface CardinalityRegion {
 }
 
 function cardinalityAdmissionGuard(region: CardinalityRegion): string {
-	const conditions: Array<string> = [];
-	for (const dependency of region.guard.dependencies) {
-		if (dependency.kind === "world") continue;
-		switch (dependency.family) {
-			case "primitive-methods":
-				conditions.push("mal_primitive_method_protector");
-				break;
-			case "watched-methods":
-				conditions.push("mal_builtin_array_push_virtual_guard(vm)");
-				break;
-			case "array-elements":
-				conditions.push(
-					"mal_array_elements_protector && vm->semantic_epochs.array_elements != 0",
-				);
-				break;
-			default:
-				throw new Error(`Unsupported cardinality dependency ${dependency.family}`);
-		}
-	}
-	return conditions.length === 0 ? "true" : conditions.join(" && ");
+	return regionAdmissionGuard(region.license, {
+		"primitive-methods": "mal_primitive_method_protector",
+		"watched-methods": "mal_builtin_array_push_virtual_guard(vm)",
+		"array-elements":
+			"mal_array_elements_protector && vm->semantic_epochs.array_elements != 0",
+	});
 }
 
 /**
@@ -3436,7 +3493,7 @@ function emitBody(
 	}
 	if (
 		stringCharCodeAtFusionByIp.size > 0 ||
-		stringSplitCursorSites.size > 0 ||
+		[...stringSplitCursorSites.values()].some((site) => !site.lockedIdentity) ||
 		[...regexpExecProjectionSites.values()].some((site) =>
 			site.loads.some(
 				(load) =>
@@ -4989,10 +5046,14 @@ function emitInstruction(
 						? [
 								`  __string_split_cursor_${id}_trim_fast = mal_builtin_string_trim_span_direct_locked(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
 							]
-						: [
-								`  MalValue __string_split_cursor_${id}_trim_callee;`,
-								`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && mal_builtin_string_trim_span_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
-							];
+						: site.trimCalleeSlot !== undefined
+							? [
+									`  __string_split_cursor_${id}_trim_fast = ${site.semanticEpochStable ? "" : "__watched_methods_epoch == vm->semantic_epochs.watched_methods && "}mal_builtin_string_trim_span_direct_licensed(vm, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
+								]
+							: [
+									`  MalValue __string_split_cursor_${id}_trim_callee;`,
+									`  __string_split_cursor_${id}_trim_fast = mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${site.cursor.trimIcIndex}], &__string_split_cursor_${id}_trim_callee) && mal_builtin_string_trim_span_direct(vm, __string_split_cursor_${id}_trim_callee, __gc_slots[${site.subjectSlot}], __string_split_cursor_${id}_start, __string_split_cursor_${id}_end, &r${instruction.dst});`,
+								];
 					return [
 						`if (__string_split_cursor_${id}_active) {`,
 						...trim,
@@ -5892,9 +5953,17 @@ function emitInstruction(
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitCursorAction;
 				const id = site.cursor.callIp;
+				const admission = regionAdmissionGuard(site.cursor.license, {
+					"watched-methods":
+						"__watched_methods_epoch != 0 && __watched_methods_epoch == vm->semantic_epochs.watched_methods",
+				});
+				const trimIdentity =
+					site.trimCalleeSlot === undefined
+						? "true"
+						: `mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${site.cursor.trimIcIndex}], &__gc_slots[${site.trimCalleeSlot}]) && mal_builtin_string_trim_identity(vm, __gc_slots[${site.trimCalleeSlot}])`;
 				const initialize = site.lockedIdentity
 					? `mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`
-					: `mal_primitive_method_protector && __watched_methods_epoch != 0 && __watched_methods_epoch == vm->semantic_epochs.watched_methods && mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`;
+					: `${admission} && ${trimIdentity} && mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`;
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`__string_split_cursor_${id}_active = ${initialize};`,

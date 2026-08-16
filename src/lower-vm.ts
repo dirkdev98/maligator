@@ -118,6 +118,53 @@ export interface VmGuardPlan {
 	readonly obligations: ReadonlyArray<VmGuardObligation>;
 }
 
+/**
+ * Complete backend contract for a speculative region. The ordinary VM
+ * instructions are always the semantic twin; `materialization` says how a
+ * virtual value becomes observable when either the license or a local guard
+ * fails. Keeping this beside the named dependencies prevents individual
+ * emitters from silently inventing a guard-only fast path with no deopt plan.
+ */
+export interface VmRegionLicense {
+	readonly guard: VmGuardPlan;
+	readonly genericTwin: "retained";
+	readonly materialization: "none" | "on-demand" | "whole-region";
+}
+
+function vmSemanticDependencyKey(dependency: VmSemanticDependency): string {
+	return dependency.kind === "world"
+		? `world:${dependency.fact}`
+		: `epoch:${dependency.family}`;
+}
+
+/** Merge site facts into one region-sized license without losing obligations. */
+export function vmRegionLicense(
+	guards: ReadonlyArray<VmGuardPlan | undefined>,
+	materialization: VmRegionLicense["materialization"],
+): VmRegionLicense | undefined {
+	const dependencies = new Map<string, VmSemanticDependency>();
+	const obligations = new Set<VmGuardObligation>();
+	for (const guard of guards) {
+		if (guard === undefined) return undefined;
+		for (const dependency of guard.dependencies) {
+			dependencies.set(vmSemanticDependencyKey(dependency), dependency);
+		}
+		for (const obligation of guard.obligations) obligations.add(obligation);
+	}
+	if (dependencies.size === 0 || !obligations.has("fallback")) return undefined;
+	if (materialization !== "none") obligations.add("materialize");
+	return {
+		guard: {
+			dependencies: [...dependencies.entries()]
+				.sort(([left], [right]) => left.localeCompare(right))
+				.map(([, dependency]) => dependency),
+			obligations: [...obligations].sort(),
+		},
+		genericTwin: "retained",
+		materialization,
+	};
+}
+
 export function vmGuardIsWorldInvariant(guard: VmGuardPlan): boolean {
 	return (
 		guard.dependencies.length > 0 &&
@@ -330,6 +377,7 @@ export interface VmFunction {
 
 	/** EMITTER-ONLY: one closed indexed split loop streamed as trimmed spans. */
 	nativeStringSplitCursors?: ReadonlyArray<{
+		license: VmRegionLicense;
 		propertyIp: number;
 		callIp: number;
 		callee: number;
@@ -342,6 +390,8 @@ export interface VmFunction {
 		trimPropertyIp: number;
 		trimIcIndex: number;
 		trimCallIp: number;
+		/** Primitive String length reads licensed by the exact trim result. */
+		primitiveStringLengthIps: ReadonlyArray<number>;
 		backedgeIp: number;
 		exitIp: number;
 	}>;

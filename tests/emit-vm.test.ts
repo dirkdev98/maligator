@@ -5,6 +5,7 @@ import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
 import { emitCompiledFunction } from "../src/emit-c.ts";
 import { emitBatch, emitVmDefinition, emitVmTranslationUnits } from "../src/emit-vm.ts";
+import { vmRegionLicense } from "../src/lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -96,6 +97,36 @@ const definition: VmDefinition = {
 };
 
 describe("emit-vm instruction packing", () => {
+	it("combines semantic dependencies with one retained region twin", () => {
+		const license = vmRegionLicense(
+			[
+				{
+					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					obligations: ["fallback"],
+				},
+				{
+					dependencies: [
+						{ kind: "epoch", family: "watched-methods" },
+						{ kind: "epoch", family: "primitive-methods" },
+					],
+					obligations: ["fallback"],
+				},
+			],
+			"on-demand",
+		);
+		expect(license).toEqual({
+			guard: {
+				dependencies: [
+					{ kind: "epoch", family: "primitive-methods" },
+					{ kind: "epoch", family: "watched-methods" },
+				],
+				obligations: ["fallback", "materialize"],
+			},
+			genericTwin: "retained",
+			materialization: "on-demand",
+		});
+	});
+
 	it("emits complete data-property descriptor attributes", () => {
 		const descriptorDefinition = {
 			...definition,
@@ -1473,7 +1504,11 @@ describe("native update-expression representation", () => {
 		const output = emit(code);
 		expect(output).toContain("mal_builtin_string_split_cursor_init(vm,");
 		expect(output).toContain("mal_builtin_string_split_cursor_next(");
-		expect(output).toContain("mal_builtin_string_trim_span_direct(vm,");
+		expect(output).toContain("mal_builtin_string_trim_identity(vm,");
+		expect(output).toContain("mal_builtin_string_trim_span_direct_licensed(vm,");
+		expect(output).toMatch(
+			/__watched_methods_epoch == vm->semantic_epochs\.watched_methods && mal_builtin_string_trim_span_direct_licensed/,
+		);
 		expect(output).toContain("mal_builtin_string_split_cursor_materialize(vm,");
 
 		const lockedOutput = emitLocked(code);

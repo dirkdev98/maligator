@@ -188,6 +188,9 @@ MalValue mal_builtin_string_split_cursor_materialize(
     MalVm *vm, MalValue subject, usize start, usize end
 );
 
+/** Validate the exact current-Realm trim callback once for a licensed region. */
+bool mal_builtin_string_trim_identity(MalVm *vm, MalValue callee);
+
 /** Guard and execute exact builtin trim directly over one split span. */
 bool mal_builtin_string_trim_span_direct(
     MalVm *vm,
@@ -200,6 +203,15 @@ bool mal_builtin_string_trim_span_direct(
 
 /** Locked-world span trim with the builtin identity proved by C emission. */
 bool mal_builtin_string_trim_span_direct_locked(
+    MalVm *vm,
+    MalValue subject,
+    usize start,
+    usize end,
+    MalValue *out
+);
+
+/** Mutable-world region variant after one entry identity/epoch validation. */
+bool mal_builtin_string_trim_span_direct_licensed(
     MalVm *vm,
     MalValue subject,
     usize start,

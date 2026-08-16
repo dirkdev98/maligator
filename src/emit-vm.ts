@@ -9,6 +9,7 @@ import {
 	countPropertyIcSites,
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
+	vmRegionLicense,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
@@ -2630,7 +2631,33 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 				if (vmInstructionDefinesRegister(instruction, element.dst)) elementLive = false;
 			}
 			if (!closed) continue;
+			const license = vmRegionLicense(
+				[call.guardedBuiltinCall?.guard, trimCall.guardedBuiltinCall?.guard],
+				"on-demand",
+			);
+			if (license === undefined) continue;
+			const primitiveStringLengthIps: Array<number> = [];
+			const trimResultAliases = new Set([trimCall.dst]);
+			for (let ip = elementIp + 3; ip <= backedge.sourceIp; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (
+					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+					trimResultAliases.has(instruction.object) &&
+					staticStringEquals(definition, instruction.stringIndex, "length")
+				) {
+					primitiveStringLengthIps.push(ip);
+				}
+				const moveAlias =
+					instruction.opcode === "MOVE" && trimResultAliases.has(instruction.src);
+				for (const alias of [...trimResultAliases]) {
+					if (vmInstructionDefinesRegister(instruction, alias)) {
+						trimResultAliases.delete(alias);
+					}
+				}
+				if (moveAlias) trimResultAliases.add(instruction.dst);
+			}
 			cursors.push({
+				license,
 				propertyIp: calleeDefinition.ip,
 				callIp,
 				callee: call.callee,
@@ -2643,6 +2670,7 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 				trimPropertyIp: elementIp + 1,
 				trimIcIndex: trimProperty.icIndex,
 				trimCallIp: elementIp + 2,
+				primitiveStringLengthIps,
 				backedgeIp: backedge.sourceIp,
 				exitIp: exitJump.targetIp,
 			});
