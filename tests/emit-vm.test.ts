@@ -1369,6 +1369,7 @@ describe("native update-expression representation", () => {
 		);
 		const emitted = emitVmDefinition(decoded, { compiled: true });
 		const region = regions[0]!;
+		const regionEntryIp = region.entryIp;
 		const mutableAdmission = emitted
 			.split("\n")
 			.find((line) => line.includes("mal_builtin_array_numeric_fold_local_admit"));
@@ -1376,12 +1377,12 @@ describe("native update-expression representation", () => {
 		expect(mutableAdmission).toContain(`r${region.receiver}`);
 		// The whole callback becomes straight-line f64 arithmetic, and a completed
 		// fold rejoins the untouched region at its accumulator read.
-		expect(emitted).toContain(`sqrt(__fold_${region.guardCallIp}_element)`);
-		expect(emitted).toContain(`sin(__fold_${region.guardCallIp}_element)`);
-		expect(emitted).toContain(`fabs(__fold_${region.guardCallIp}_op5)`);
-		expect(emitted).toContain(`goto L${region.fastResultIp};`);
+		expect(emitted).toContain(`sqrt(__fold_${regionEntryIp}_element)`);
+		expect(emitted).toContain(`sin(__fold_${regionEntryIp}_element)`);
+		expect(emitted).toContain(`fabs(__fold_${regionEntryIp}_op5)`);
+		expect(emitted).toContain(`goto L${region.completionIp};`);
 		expect(emitted).toContain(
-			`mal_perf_numeric_fold_region(__fold_${region.guardCallIp}_index, __fold_${region.guardCallIp}_length, 3)`,
+			`mal_perf_numeric_fold_region(__fold_${regionEntryIp}_index, __fold_${regionEntryIp}_length, 3)`,
 		);
 		const lockedDefinition = compileSemanticProgramToVmDefinition(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
@@ -1430,6 +1431,48 @@ describe("native update-expression representation", () => {
 		expect(admitted).toEqual(mathUnaryOperationKeys.map(([, operation]) => operation));
 	});
 
+	it("round-trips a closed locked numeric reduce without method dispatch", () => {
+		const source = `
+			globalThis.result = [0.25, 1, 4].reduce(
+				(sum, value) => sum + Math.sqrt(value),
+				0,
+			);
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"numeric-hof-closed.js",
+			parseScript(source, { strict: false }),
+		);
+		const definition = compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
+		const regions = definition.functions.flatMap(
+			(fn) => fn.nativeNumericHofRegions ?? [],
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]?.dispatch.kind).toBe("closed");
+		expect(regions[0]?.entryIp).toBe(regions[0]?.initialMoveIp);
+		expect(
+			definition.functions.some((fn) =>
+				fn.instructions.some(
+					(instruction) =>
+						instruction.opcode === "LOAD_INTRINSIC" &&
+						instruction.intrinsic === "__arrayIterationEligible",
+				),
+			),
+		).toBe(false);
+		const decoded = deserializeVmDefinition(serializeVmDefinition(definition));
+		expect(decoded.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? [])).toEqual(
+			regions,
+		);
+		const emitted = emitVmDefinition(decoded, { compiled: true });
+		const admission = emitted
+			.split("\n")
+			.find((line) => line.includes("mal_builtin_array_numeric_fold_local_admit"));
+		expect(admission).toBeDefined();
+		expect(admission).not.toContain("mal_vm_semantic_dependencies_admit");
+	});
+
 	it("rejects stale numeric reduce certificates and unsupported empty plans", () => {
 		const source = `
 			function run() {
@@ -1453,7 +1496,7 @@ describe("native update-expression representation", () => {
 			(fn) => fn.nativeNumericHofRegions ?? [],
 		)[0];
 		expect(region).toBeDefined();
-		(region as { fastExitIp: number }).fastExitIp = region!.guardCallIp;
+		(region as { completionIp: number }).completionIp = -1;
 		expect(() => serializeVmDefinition(definition)).toThrow(
 			/numeric-HOF region metadata/,
 		);

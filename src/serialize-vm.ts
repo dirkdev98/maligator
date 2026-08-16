@@ -34,8 +34,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 43 for complete unary-Math numeric HOF plans.
-export const WIRE_VERSION = 43;
+// Bumped to 44 for closed-dispatch numeric HOF regions.
+export const WIRE_VERSION = 44;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1056,15 +1056,21 @@ export function serializeVmDefinition(
 		for (const region of fn.nativeNumericHofRegions ?? []) {
 			validateNumericHofRegion(fn, region, def.functions.length);
 			const { dependencyMask, obligationMask } = numericHofGuardMasks(region.license);
-			w.i32(region.guardCallIp);
-			w.i32(region.initialValueIp);
+			w.u8(region.dispatch.kind === "guarded" ? 1 : 2);
+			w.i32(
+				region.dispatch.kind === "guarded"
+					? region.dispatch.guardCallIp
+					: region.dispatch.receiverAllocationIp,
+			);
+			w.i32(region.dispatch.kind === "guarded" ? region.dispatch.slowCallIp : -1);
+			w.i32(region.entryIp);
+			w.f64(region.initialValue);
 			w.i32(region.initialMoveIp);
-			w.i32(region.fastResultIp);
-			w.i32(region.fastExitIp);
-			w.i32(region.slowCallIp);
+			w.i32(region.completionIp);
 			w.i32(region.callbackFunctionIndex);
 			w.i32(region.receiver);
 			w.i32(region.initial);
+			w.i32(region.accumulator);
 			w.i32(region.result);
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
@@ -1213,103 +1219,126 @@ function validateNumericHofRegion(
 	region: NonNullable<VmFunction["nativeNumericHofRegions"]>[number],
 	functionCount: number,
 ): void {
-	numericHofGuardMasks(region.license);
+	const { dependencyMask } = numericHofGuardMasks(region.license);
 	const registerValid = (value: number) =>
 		Number.isInteger(value) && value >= 0 && value < fn.registerCount;
 	const operandValid = (value: number, before: number) =>
 		value === -1 ||
 		value === -2 ||
 		(Number.isInteger(value) && value >= 0 && value < before);
-	const guard = fn.instructions[region.guardCallIp];
-	const intrinsic = fn.instructions[region.guardCallIp - 1];
-	const guardBranch = fn.instructions[region.guardCallIp + 1];
-	const slowBranch = fn.instructions[region.guardCallIp + 2];
-	const initialValue = fn.instructions[region.initialValueIp];
 	const initialMove = fn.instructions[region.initialMoveIp];
-	const fastResult = fn.instructions[region.fastResultIp];
-	const fastExit = fn.instructions[region.fastExitIp];
-	const callbackCreate = fn.instructions[region.slowCallIp - 1];
-	const slowCall = fn.instructions[region.slowCallIp];
-	const slowExit = fn.instructions[region.slowCallIp + 1];
-	const guardCallee =
-		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[0]!) : undefined;
-	const guardReceiver =
-		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[1]!) : undefined;
-	const guardMethod =
-		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[2]!) : undefined;
-	const guardThis =
-		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.thisValue) : undefined;
-	const slowThis =
-		slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.thisValue) : undefined;
-	const slowCallee =
-		slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.callee) : undefined;
-	const slowCallback =
-		slowCall?.opcode === "CALL"
-			? decodeVmValueOperand(slowCall.arguments[0]!)
+	const entry = fn.instructions[region.entryIp];
+	const completion = fn.instructions[region.completionIp];
+	const completionMove =
+		completion?.opcode === "MOVE" && completion.src === region.accumulator
+			? completion
 			: undefined;
-	const slowInitial =
-		slowCall?.opcode === "CALL"
-			? decodeVmValueOperand(slowCall.arguments[1]!)
-			: undefined;
-	const initialNumber =
-		initialValue?.opcode === "CREATE_NUMBER" || initialValue?.opcode === "CREATE_F64"
-			? initialValue.value
-			: undefined;
+	const completionExit =
+		completionMove === undefined ? undefined : fn.instructions[region.completionIp + 1];
 	if (
 		region.method !== "reduce" ||
 		region.pollPolicy !== "end-only-no-preempt" ||
-		guard?.opcode !== "CALL" ||
-		intrinsic?.opcode !== "LOAD_INTRINSIC" ||
-		intrinsic.intrinsic !== "__arrayIterationEligible" ||
-		guard.callee !== intrinsic.dst ||
-		guardThis?.kind !== "undefined" ||
-		guard.argumentCount !== 3 ||
-		guardCallee?.kind !== "register" ||
-		slowCallee?.kind !== "register" ||
-		guardCallee.register !== slowCallee.register ||
-		guardReceiver?.kind !== "register" ||
-		guardReceiver.register !== region.receiver ||
-		guardMethod?.kind !== "number" ||
-		guardMethod.value !== 7 ||
-		guardBranch?.opcode !== "JUMP_IF" ||
-		guardBranch.cond !== guard.dst ||
-		slowBranch?.opcode !== "JUMP" ||
-		callbackCreate?.opcode !== "CREATE_FUNCTION" ||
-		callbackCreate.functionIndex !== region.callbackFunctionIndex ||
-		slowBranch.targetIp !== region.slowCallIp - 1 ||
-		(initialValue?.opcode !== "CREATE_NUMBER" && initialValue?.opcode !== "CREATE_F64") ||
+		typeof region.initialValue !== "number" ||
+		entry === undefined ||
 		initialMove?.opcode !== "MOVE" ||
-		initialMove.src !== initialValue.dst ||
 		initialMove.src !== region.initial ||
-		fastResult?.opcode !== "MOVE" ||
-		fastResult.src !== initialMove.dst ||
-		fastResult.dst !== region.result ||
-		region.fastExitIp !== region.fastResultIp + 1 ||
-		fastExit?.opcode !== "JUMP" ||
-		slowCall?.opcode !== "CALL" ||
-		slowCall.dst !== region.result ||
-		slowThis?.kind !== "register" ||
-		slowThis.register !== region.receiver ||
-		slowCall.argumentCount !== 2 ||
-		slowCallback?.kind !== "register" ||
-		slowCallback.register !== callbackCreate.dst ||
-		!(
-			(slowInitial?.kind === "number" && Object.is(slowInitial.value, initialNumber)) ||
-			(slowInitial?.kind === "register" && slowInitial.register === region.initial)
-		) ||
-		slowExit?.opcode !== "JUMP" ||
-		fastExit.targetIp !== slowExit.targetIp ||
+		initialMove.dst !== region.accumulator ||
+		completion === undefined ||
+		region.result !== (completionMove?.dst ?? region.accumulator) ||
 		region.callbackFunctionIndex < 0 ||
 		region.callbackFunctionIndex >= functionCount ||
 		!registerValid(region.receiver) ||
 		!registerValid(region.initial) ||
+		!registerValid(region.accumulator) ||
 		!registerValid(region.result) ||
 		region.operations.length === 0 ||
 		region.operations.length > 32 ||
-		!operandValid(region.resultOperand, region.operations.length) ||
-		region.initialValueIp >= region.guardCallIp
+		!operandValid(region.resultOperand, region.operations.length)
 	) {
 		throw new RangeError("serialize-vm: invalid numeric-HOF region metadata");
+	}
+	if (region.dispatch.kind === "guarded") {
+		const { guardCallIp, slowCallIp } = region.dispatch;
+		const guard = fn.instructions[guardCallIp];
+		const intrinsic = fn.instructions[guardCallIp - 1];
+		const guardBranch = fn.instructions[guardCallIp + 1];
+		const slowBranch = fn.instructions[guardCallIp + 2];
+		const callbackCreate = fn.instructions[slowCallIp - 1];
+		const slowCall = fn.instructions[slowCallIp];
+		const slowExit = fn.instructions[slowCallIp + 1];
+		const guardCallee =
+			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[0]!) : undefined;
+		const guardReceiver =
+			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[1]!) : undefined;
+		const guardMethod =
+			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[2]!) : undefined;
+		const guardThis =
+			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.thisValue) : undefined;
+		const slowThis =
+			slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.thisValue) : undefined;
+		const slowCallee =
+			slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.callee) : undefined;
+		const slowCallback =
+			slowCall?.opcode === "CALL"
+				? decodeVmValueOperand(slowCall.arguments[0]!)
+				: undefined;
+		const slowInitial =
+			slowCall?.opcode === "CALL"
+				? decodeVmValueOperand(slowCall.arguments[1]!)
+				: undefined;
+		if (
+			guard?.opcode !== "CALL" ||
+			intrinsic?.opcode !== "LOAD_INTRINSIC" ||
+			intrinsic.intrinsic !== "__arrayIterationEligible" ||
+			guard.callee !== intrinsic.dst ||
+			guardThis?.kind !== "undefined" ||
+			guard.argumentCount !== 3 ||
+			guardCallee?.kind !== "register" ||
+			slowCallee?.kind !== "register" ||
+			guardCallee.register !== slowCallee.register ||
+			guardReceiver?.kind !== "register" ||
+			guardReceiver.register !== region.receiver ||
+			guardMethod?.kind !== "number" ||
+			guardMethod.value !== 7 ||
+			guardBranch?.opcode !== "JUMP_IF" ||
+			guardBranch.cond !== guard.dst ||
+			slowBranch?.opcode !== "JUMP" ||
+			callbackCreate?.opcode !== "CREATE_FUNCTION" ||
+			callbackCreate.functionIndex !== region.callbackFunctionIndex ||
+			slowBranch.targetIp !== slowCallIp - 1 ||
+			slowCall?.opcode !== "CALL" ||
+			slowCall.dst !== region.result ||
+			slowThis?.kind !== "register" ||
+			slowThis.register !== region.receiver ||
+			slowCall.argumentCount !== 2 ||
+			slowCallback?.kind !== "register" ||
+			slowCallback.register !== callbackCreate.dst ||
+			!(
+				(slowInitial?.kind === "number" &&
+					Object.is(slowInitial.value, region.initialValue)) ||
+				(slowInitial?.kind === "register" && slowInitial.register === region.initial)
+			) ||
+			slowExit?.opcode !== "JUMP" ||
+			(completionMove === undefined
+				? slowExit.targetIp !== region.completionIp
+				: completionExit?.opcode !== "JUMP" ||
+					completionExit.targetIp !== slowExit.targetIp) ||
+			region.entryIp !== guardCallIp ||
+			guardCallIp >= region.initialMoveIp
+		) {
+			throw new RangeError("serialize-vm: invalid guarded numeric-HOF dispatch");
+		}
+	} else {
+		const allocation = fn.instructions[region.dispatch.receiverAllocationIp];
+		if (
+			dependencyMask !== 1 ||
+			allocation?.opcode !== "CREATE_ARRAY" ||
+			allocation.dst !== region.receiver ||
+			region.entryIp !== region.initialMoveIp ||
+			region.dispatch.receiverAllocationIp >= region.entryIp
+		) {
+			throw new RangeError("serialize-vm: invalid closed numeric-HOF dispatch");
+		}
 	}
 	for (let index = 0; index < region.operations.length; index++) {
 		const operation = region.operations[index]!;
@@ -2292,22 +2321,30 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			const regions: Array<NonNullable<VmFunction["nativeNumericHofRegions"]>[number]> =
 				[];
 			for (let regionIndex = 0; regionIndex < numericHofRegionCount; regionIndex++) {
-				const guardCallIp = r.i32();
-				const initialValueIp = r.i32();
+				const dispatchTag = r.u8();
+				const dispatchPrimaryIp = r.i32();
+				const dispatchSecondaryIp = r.i32();
+				const entryIp = r.i32();
+				const initialValue = r.f64();
 				const initialMoveIp = r.i32();
-				const fastResultIp = r.i32();
-				const fastExitIp = r.i32();
-				const slowCallIp = r.i32();
+				const completionIp = r.i32();
 				const callbackFunctionIndex = r.i32();
 				const receiver = r.i32();
 				const initial = r.i32();
+				const accumulator = r.i32();
 				const result = r.i32();
 				const dependencyMask = r.u8();
 				const obligationMask = r.u8();
 				const pollPolicy = r.u8();
 				const resultOperand = r.i32();
 				const operationCount = r.count(2);
-				if (pollPolicy !== 1 || operationCount === 0 || operationCount > 32) {
+				if (
+					(dispatchTag !== 1 && dispatchTag !== 2) ||
+					(dispatchTag === 2 && dispatchSecondaryIp !== -1) ||
+					pollPolicy !== 1 ||
+					operationCount === 0 ||
+					operationCount > 32
+				) {
 					throw new RangeError("serialize-vm: invalid numeric-HOF plan header");
 				}
 				const operations: Array<
@@ -2355,15 +2392,25 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						genericTwin: "retained" as const,
 						materialization: "none" as const,
 					},
-					guardCallIp,
-					initialValueIp,
+					dispatch:
+						dispatchTag === 1
+							? {
+									kind: "guarded" as const,
+									guardCallIp: dispatchPrimaryIp,
+									slowCallIp: dispatchSecondaryIp,
+								}
+							: {
+									kind: "closed" as const,
+									receiverAllocationIp: dispatchPrimaryIp,
+								},
+					entryIp,
+					initialValue,
 					initialMoveIp,
-					fastResultIp,
-					fastExitIp,
-					slowCallIp,
+					completionIp,
 					callbackFunctionIndex,
 					receiver,
 					initial,
+					accumulator,
 					result,
 					pollPolicy: "end-only-no-preempt" as const,
 					operations,

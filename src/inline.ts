@@ -3217,7 +3217,6 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				use.instruction.type === "move" &&
 				(registerIndex.uses.get(use.instruction.registers[0]) ?? []).length === 0;
 			const lockedExactReceiver =
-				numericReducePlan === undefined &&
 				compilerFactIsWorldInvariant(site.call.knownBuiltinCall?.identity) &&
 				receiverDefinition?.type === "createArray" &&
 				allocationLocation?.blockIndex === hostBlockIndex &&
@@ -3669,6 +3668,19 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				slowCallAnchor = site.call;
 				fn.blocks.push({ instructions: [site.call, { type: "jump", blocks: [join] }] });
 			}
+			const numericDispatch =
+				lockedExactReceiver && receiverDefinition?.type === "createArray"
+					? ({
+							kind: "closed",
+							receiverAllocation: receiverDefinition,
+						} as const)
+					: slowCallAnchor === undefined
+						? undefined
+						: ({
+								kind: "guarded",
+								eligibility: eligibilityCall,
+								slowCall: slowCallAnchor,
+							} as const);
 			if (
 				numericReducePlan !== undefined &&
 				callbackDefinition !== undefined &&
@@ -3677,9 +3689,9 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					initialValueDefinition?.type === "createF64") &&
 				accumulatorInitialMove !== undefined &&
 				afterLoopValue.type === "move" &&
-				slowCallAnchor !== undefined
+				numericDispatch !== undefined
 			) {
-				eligibilityCall.numericHofRegion = {
+				accumulatorInitialMove.numericHofRegion = {
 					method: "reduce",
 					license: {
 						guard: numericReducePlan.guard,
@@ -3689,11 +3701,8 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					callbackFunctionIndex: site.callbackTarget,
 					operations: numericReducePlan.operations,
 					resultOperand: numericReducePlan.resultOperand,
-					initialValue: initialValueDefinition,
-					initialMove: accumulatorInitialMove,
-					fastResult: afterLoopValue,
-					fastExit,
-					slowCall: slowCallAnchor,
+					initialValue: initialValueDefinition.value,
+					dispatch: numericDispatch,
 				};
 			}
 			// join: the host's tail after the call.

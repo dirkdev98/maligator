@@ -562,11 +562,18 @@ export interface IRNumericHofRegion {
 	callbackFunctionIndex: number;
 	operations: ReadonlyArray<IRNumericHofPlanOperation>;
 	resultOperand: number;
-	initialValue: IRInstruction;
-	initialMove: IRInstruction;
-	fastResult: IRInstruction;
-	fastExit: IRInstruction;
-	slowCall: IRInstruction;
+	/** Exact numeric initial accumulator proven before the loop transform. */
+	initialValue: number;
+	readonly dispatch:
+		| {
+				readonly kind: "guarded";
+				readonly eligibility: Extract<IRInstruction, { type: "call" }>;
+				readonly slowCall: Extract<IRInstruction, { type: "call" }>;
+		  }
+		| {
+				readonly kind: "closed";
+				readonly receiverAllocation: Extract<IRInstruction, { type: "createArray" }>;
+		  };
 }
 
 interface IRLoopContext {
@@ -727,6 +734,9 @@ export type IRInstruction =
 
 			// [dest, source]
 			registers: [number, number];
+			/** First-class proof plan for a native numeric reduce nested inside the
+			 * ordinary inlined loop. A failed local admission continues at this move. */
+			numericHofRegion?: IRNumericHofRegion;
 	  }
 	| {
 			type: "return";
@@ -1037,8 +1047,6 @@ export type IRInstruction =
 			 * and receiver brand are still validated at runtime.
 			 */
 			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
-			/** First-class proof plan for a guarded, capture-free numeric reduce. */
-			numericHofRegion?: IRNumericHofRegion;
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }

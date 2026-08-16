@@ -333,6 +333,13 @@ is general rather than a registry-shaped collection of special cases.
         erase that semantic guard, retain only local dense/type fallback, and accept
         the complete registered unary numeric Math surface without a runtime identity
         table or helper body.
+    - [x] Compose the locked fresh-Array proof with numeric fusion instead of making
+          the two specializations exclusive. Mark the inlined accumulator
+          initialization as the durable region certificate: guarded builds attempt
+          fusion at their existing entry guard and retain the ordinary call twin;
+          closed builds enter on that post-construction marker, erase method dispatch,
+          and identify the proven allocation explicitly. Either form retains the
+          inlined loop as the numeric layout/type fallback.
 
 #### Allocation and representation consumers
 

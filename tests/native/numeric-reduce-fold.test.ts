@@ -33,6 +33,8 @@ describe("native numeric reduce fold", () => {
 	let counts: string;
 	let countsLocked: string;
 	let countsInterpreted: string;
+	let closedLocked: string;
+	let closedLockedInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -67,6 +69,21 @@ describe("native numeric reduce fold", () => {
 			outDir,
 			config: resolveBuildConfig({}),
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		closedLocked = buildNativeBinary({
+			fixture: "tests/local/numeric-reduce-closed.js",
+			name: "numeric-reduce-closed-locked",
+			compiled: true,
+			outDir,
+			config: resolveBuildConfig({}),
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		closedLockedInterpreted = buildNativeBinary({
+			fixture: "tests/local/numeric-reduce-closed.js",
+			name: "numeric-reduce-closed-locked-ni",
+			compiled: false,
+			outDir,
+			config: resolveBuildConfig({}),
 		});
 	});
 
@@ -108,5 +125,22 @@ describe("native numeric reduce fold", () => {
 		expect(field(result.stderr, "regions")).toBe(100);
 		expect(field(result.stderr, "guard_fallbacks")).toBe(0);
 		expect(field(result.stderr, "callback_calls_elided")).toBe(10000);
+	});
+
+	it("keeps the native fold after locked fresh-Array dispatch erasure", () => {
+		const result = spawnSync(closedLocked, [], {
+			env: { ...process.env, MAL_PERF_STATS: "1" },
+			encoding: "utf-8",
+			timeout: 60000,
+		});
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		assertPassLine(result.stdout, "numeric-reduce-closed");
+		expect(result.stdout).toBe(run(closedLockedInterpreted, "numeric-reduce-closed"));
+		expect(field(result.stderr, "candidates")).toBe(100);
+		expect(field(result.stderr, "regions")).toBe(100);
+		expect(field(result.stderr, "guard_fallbacks")).toBe(0);
+		expect(field(result.stderr, "element_fallbacks")).toBe(0);
+		expect(field(result.stderr, "callback_calls_elided")).toBe(500);
+		expect(field(result.stderr, "math_calls_elided")).toBe(500);
 	});
 });

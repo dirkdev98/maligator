@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 43u        // complete unary-Math numeric HOF plans
+#define WIRE_VERSION 44u        // closed-dispatch numeric HOF regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1809,15 +1809,17 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 
         u32 numeric_hof_count = rd_count(&r, 13);
         for (u32 region = 0; r.ok && region < numeric_hof_count; region++) {
-            i32 guard_ip = rd_i32(&r);
-            i32 initial_value_ip = rd_i32(&r);
+            u8 dispatch_tag = rd_u8(&r);
+            i32 dispatch_primary_ip = rd_i32(&r);
+            i32 dispatch_secondary_ip = rd_i32(&r);
+            i32 entry_ip = rd_i32(&r);
+            (void) rd_u64(&r); // exact numeric initial accumulator
             i32 initial_ip = rd_i32(&r);
-            i32 result_ip = rd_i32(&r);
-            i32 exit_ip = rd_i32(&r);
-            i32 slow_ip = rd_i32(&r);
+            i32 completion_ip = rd_i32(&r);
             i32 callback_function = rd_i32(&r);
             i32 receiver = rd_i32(&r);
             i32 initial = rd_i32(&r);
+            i32 accumulator = rd_i32(&r);
             i32 result = rd_i32(&r);
             u8 dependency_mask = rd_u8(&r);
             u8 obligation_mask = rd_u8(&r);
@@ -1828,28 +1830,37 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 #define MAL_HOF_IP_OPCODE(ip, op) \
             ((ip) >= 0 && (ip) < fn->instruction_count && \
              fn->instructions[(ip)].opcode == (op))
-            i32 initial_value_dst = MAL_HOF_IP_OPCODE(initial_value_ip, MAL_OP_CREATE_NUMBER)
-                ? fn->instructions[initial_value_ip].as.create_number.dst
-                : MAL_HOF_IP_OPCODE(initial_value_ip, MAL_OP_CREATE_F64)
-                    ? fn->instructions[initial_value_ip].as.create_f64.dst
-                    : -1;
-            if (!MAL_HOF_IP_OPCODE(guard_ip, MAL_OP_CALL) ||
-                (!MAL_HOF_IP_OPCODE(initial_value_ip, MAL_OP_CREATE_NUMBER) &&
-                 !MAL_HOF_IP_OPCODE(initial_value_ip, MAL_OP_CREATE_F64)) ||
+            bool dispatch_ok =
+                (dispatch_tag == 1 &&
+                 entry_ip == dispatch_primary_ip &&
+                 MAL_HOF_IP_OPCODE(dispatch_primary_ip, MAL_OP_CALL) &&
+                 MAL_HOF_IP_OPCODE(dispatch_secondary_ip, MAL_OP_CALL)) ||
+                (dispatch_tag == 2 && dispatch_secondary_ip == -1 &&
+                 dependency_mask == 1 &&
+                 MAL_HOF_IP_OPCODE(dispatch_primary_ip, MAL_OP_CREATE_ARRAY) &&
+                 fn->instructions[dispatch_primary_ip].as.create_array.dst == receiver &&
+                 dispatch_primary_ip < entry_ip && entry_ip == initial_ip &&
+                 MAL_HOF_IP_OPCODE(entry_ip, MAL_OP_MOVE));
+            bool completion_ok = completion_ip >= 0 && completion_ip < fn->instruction_count;
+            if (completion_ok && fn->instructions[completion_ip].opcode == MAL_OP_MOVE &&
+                fn->instructions[completion_ip].as.move.src == accumulator) {
+                completion_ok = fn->instructions[completion_ip].as.move.dst == result;
+            } else {
+                completion_ok = result == accumulator;
+            }
+            if (!dispatch_ok ||
                 !MAL_HOF_IP_OPCODE(initial_ip, MAL_OP_MOVE) ||
-                !MAL_HOF_IP_OPCODE(result_ip, MAL_OP_MOVE) ||
-                !MAL_HOF_IP_OPCODE(exit_ip, MAL_OP_JUMP) ||
-                !MAL_HOF_IP_OPCODE(slow_ip, MAL_OP_CALL) ||
+                !completion_ok ||
                 callback_function < 0 || callback_function >= function_count ||
                 receiver < 0 || receiver >= fn->register_count ||
                 initial < 0 || initial >= fn->register_count ||
+                accumulator < 0 || accumulator >= fn->register_count ||
                 result < 0 || result >= fn->register_count ||
                 (dependency_mask != 1 && dependency_mask != 14) ||
                 obligation_mask != 1 || poll_policy != 1 ||
                 operation_count == 0 || operation_count > 32 ||
-                fn->instructions[initial_ip].as.move.src != initial_value_dst ||
                 fn->instructions[initial_ip].as.move.src != initial ||
-                fn->instructions[result_ip].as.move.dst != result) {
+                fn->instructions[initial_ip].as.move.dst != accumulator) {
                 r.ok = false;
             }
 #undef MAL_HOF_IP_OPCODE

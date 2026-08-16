@@ -705,16 +705,22 @@ export interface VmFunction {
 	nativeNumericHofRegions?: ReadonlyArray<{
 		method: "reduce";
 		license: VmRegionLicense;
-		guardCallIp: number;
-		initialValueIp: number;
+		dispatch:
+			| {
+					kind: "guarded";
+					guardCallIp: number;
+					slowCallIp: number;
+			  }
+			| { kind: "closed"; receiverAllocationIp: number };
+		entryIp: number;
 		initialMoveIp: number;
-		fastResultIp: number;
-		fastExitIp: number;
-		slowCallIp: number;
+		completionIp: number;
 		callbackFunctionIndex: number;
 		receiver: number;
 		initial: number;
+		accumulator: number;
 		result: number;
+		initialValue: number;
 		pollPolicy: "end-only-no-preempt";
 		operations: ReadonlyArray<IRNumericHofPlanOperation>;
 		resultOperand: number;
@@ -1815,8 +1821,8 @@ function lowerFunctionToVmFunction(
 		stackObjectSiteId: number;
 	}> = [];
 	const pendingNumericHofRegions: Array<{
-		guard: Extract<IRInstruction, { type: "call" }>;
-		region: NonNullable<Extract<IRInstruction, { type: "call" }>["numericHofRegion"]>;
+		initialMove: Extract<IRInstruction, { type: "move" }>;
+		region: NonNullable<Extract<IRInstruction, { type: "move" }>["numericHofRegion"]>;
 	}> = [];
 	const pendingNativeMathCalls: Array<{
 		receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
@@ -1920,9 +1926,9 @@ function lowerFunctionToVmFunction(
 					stackObjectSiteId: instruction.cardinalityPushStackObjectSiteId,
 				});
 			}
-			if (instruction.type === "call" && instruction.numericHofRegion !== undefined) {
+			if (instruction.type === "move" && instruction.numericHofRegion !== undefined) {
 				pendingNumericHofRegions.push({
-					guard: instruction,
+					initialMove: instruction,
 					region: instruction.numericHofRegion,
 				});
 			}
@@ -2099,51 +2105,102 @@ function lowerFunctionToVmFunction(
 	> = [];
 	for (const pending of pendingNumericHofRegions) {
 		const licenseGuard = lowerGuardPlan(pending.region.license.guard);
-		const guardCallIp = instructionIndexByIrInstruction.get(pending.guard);
-		const initialValueIp = instructionIndexByIrInstruction.get(
-			pending.region.initialValue,
+		const initialMoveIp = instructionIndexByIrInstruction.get(pending.initialMove);
+		let initialMoveBlockIndex = -1;
+		let initialMoveBlockInstructionIndex = -1;
+		for (const [blockIndex, block] of fn.blocks.entries()) {
+			const instructionIndex = block.instructions.indexOf(pending.initialMove);
+			if (instructionIndex < 0) continue;
+			initialMoveBlockIndex = blockIndex;
+			initialMoveBlockInstructionIndex = instructionIndex;
+			break;
+		}
+		const entryJump =
+			initialMoveBlockIndex < 0
+				? undefined
+				: fn.blocks[initialMoveBlockIndex]?.instructions[
+						initialMoveBlockInstructionIndex + 1
+					];
+		const loopConditionBlock =
+			entryJump?.type === "jump" ? fn.blocks[entryJump.blocks[0]] : undefined;
+		const exitJump = loopConditionBlock?.instructions.findLast(
+			(instruction): instruction is Extract<IRInstruction, { type: "jump" }> =>
+				instruction.type === "jump",
 		);
-		const initialMoveIp = instructionIndexByIrInstruction.get(pending.region.initialMove);
-		const fastResultIp = instructionIndexByIrInstruction.get(pending.region.fastResult);
-		const fastExitIp = instructionIndexByIrInstruction.get(pending.region.fastExit);
-		const slowCallIp = instructionIndexByIrInstruction.get(pending.region.slowCall);
+		const completionIp =
+			exitJump === undefined ? undefined : blockStartIps.get(exitJump.blocks[0]);
 		if (
 			licenseGuard === undefined ||
 			pending.region.license.genericTwin !== "retained" ||
 			pending.region.license.materialization !== "none" ||
-			guardCallIp === undefined ||
-			initialValueIp === undefined ||
 			initialMoveIp === undefined ||
-			fastResultIp === undefined ||
-			fastExitIp === undefined ||
-			slowCallIp === undefined
+			completionIp === undefined
 		) {
-			continue; // an optimizer removed an anchor; fail closed without reconstruction
+			continue; // an optimizer removed the marked loop shape; fail closed
 		}
-		const guard = instructions[guardCallIp];
-		const initialValue = instructions[initialValueIp];
 		const initialMove = instructions[initialMoveIp];
-		const fastResult = instructions[fastResultIp];
-		const fastExit = instructions[fastExitIp];
-		const slowCall = instructions[slowCallIp];
-		const receiverOperand =
-			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[1]!) : undefined;
-		const slowReceiverOperand =
-			slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.thisValue) : undefined;
-		if (
-			guard?.opcode !== "CALL" ||
-			(initialValue?.opcode !== "CREATE_NUMBER" &&
-				initialValue?.opcode !== "CREATE_F64") ||
-			initialMove?.opcode !== "MOVE" ||
-			fastResult?.opcode !== "MOVE" ||
-			fastExit?.opcode !== "JUMP" ||
-			slowCall?.opcode !== "CALL" ||
-			receiverOperand?.kind !== "register" ||
-			slowReceiverOperand?.kind !== "register" ||
-			slowReceiverOperand.register !== receiverOperand.register
-		) {
+		if (initialMove?.opcode !== "MOVE") {
 			continue;
 		}
+		let receiver: number;
+		let entryIp: number;
+		let dispatch: NonNullable<VmFunction["nativeNumericHofRegions"]>[number]["dispatch"];
+		if (pending.region.dispatch.kind === "guarded") {
+			const guardCallIp = instructionIndexByIrInstruction.get(
+				pending.region.dispatch.eligibility,
+			);
+			const slowCallIp = instructionIndexByIrInstruction.get(
+				pending.region.dispatch.slowCall,
+			);
+			if (guardCallIp === undefined || slowCallIp === undefined) continue;
+			const guard = instructions[guardCallIp];
+			const slowCall = instructions[slowCallIp];
+			const receiverOperand =
+				guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[1]!) : undefined;
+			const slowReceiverOperand =
+				slowCall?.opcode === "CALL"
+					? decodeVmValueOperand(slowCall.thisValue)
+					: undefined;
+			if (
+				guard?.opcode !== "CALL" ||
+				slowCall?.opcode !== "CALL" ||
+				receiverOperand?.kind !== "register" ||
+				slowReceiverOperand?.kind !== "register" ||
+				slowReceiverOperand.register !== receiverOperand.register
+			) {
+				continue;
+			}
+			receiver = receiverOperand.register;
+			entryIp = guardCallIp;
+			dispatch = { kind: "guarded", guardCallIp, slowCallIp };
+		} else {
+			const receiverAllocationIp = instructionIndexByIrInstruction.get(
+				pending.region.dispatch.receiverAllocation,
+			);
+			const allocation =
+				receiverAllocationIp === undefined
+					? undefined
+					: instructions[receiverAllocationIp];
+			if (
+				receiverAllocationIp === undefined ||
+				allocation?.opcode !== "CREATE_ARRAY" ||
+				!licenseGuard.dependencies.every((dependency) => dependency.kind === "world")
+			) {
+				continue;
+			}
+			receiver = allocation.dst;
+			if (receiverAllocationIp >= initialMoveIp) continue;
+			// A closed receiver needs no early semantic dispatch guard. Anchor the
+			// speculative fold on its durable accumulator marker: a local miss then
+			// emits this MOVE and continues through the untouched inlined loop.
+			entryIp = initialMoveIp;
+			dispatch = { kind: "closed", receiverAllocationIp };
+		}
+		const completion = instructions[completionIp];
+		const result =
+			completion?.opcode === "MOVE" && completion.src === initialMove.dst
+				? completion.dst
+				: initialMove.dst;
 		nativeNumericHofRegions.push({
 			method: pending.region.method,
 			license: {
@@ -2151,16 +2208,16 @@ function lowerFunctionToVmFunction(
 				genericTwin: "retained",
 				materialization: "none",
 			},
-			guardCallIp,
-			initialValueIp,
+			dispatch,
+			entryIp,
 			initialMoveIp,
-			fastResultIp,
-			fastExitIp,
-			slowCallIp,
+			completionIp,
 			callbackFunctionIndex: pending.region.callbackFunctionIndex,
-			receiver: receiverOperand.register,
+			receiver,
 			initial: initialMove.src,
-			result: fastResult.dst,
+			accumulator: initialMove.dst,
+			result,
+			initialValue: pending.region.initialValue,
 			pollPolicy: "end-only-no-preempt",
 			operations: pending.region.operations,
 			resultOperand: pending.region.resultOperand,

@@ -442,6 +442,7 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
 				nativeNumericHofRegions: fn.nativeNumericHofRegions?.map((region) => ({
 					...region,
+					dispatch: { ...region.dispatch },
 					license: {
 						...region.license,
 						guard: {
