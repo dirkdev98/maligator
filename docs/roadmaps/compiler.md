@@ -248,8 +248,13 @@ is general rather than a registry-shaped collection of special cases.
         and make locked exact-arity numeric calls native in both register allocation
         and C emission. Mutable calls retain exact-callback guards and generic
         fallback.
-  - [ ] Remove the now-dead Math property Get and generic call twin in IR when the
-        locked identity and numeric lowering proofs make both unreachable.
+  - [ ] Remove the now-dead Math namespace load, property Get, and generic call twin
+        in IR when the locked identity and numeric lowering proofs make them
+        unreachable.
+    - [x] Carry exclusive namespace/property producer identities from canonical IR
+          analysis through lowering. Native emission erases both only when its
+          representation proof selects the no-fallback numeric call; bytecode keeps
+          the complete generic twin for interpreted execution.
 - [ ] Add closed `RegExp.prototype.exec` capture projection as the first stateful and
       effect-sensitive projection. Preserve `lastIndex`, capture, coercion, and
       unmatched-value semantics with materialization on unsupported consumers.

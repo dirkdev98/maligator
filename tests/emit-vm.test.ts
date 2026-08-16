@@ -1030,6 +1030,18 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).toContain("mal_builtin_math_binary_number_known");
 	});
 
+	it("erases locked Math property Gets only for no-fallback numeric calls", () => {
+		const source = `"use strict"; function calculate() { return Math.floor(1.25); } globalThis.keep = calculate;`;
+		const mutableOutput = emit(source);
+		expect(mutableOutput).toContain("mal_vm_op_load_property_ic");
+		expect(mutableOutput).toMatch(/r\d+ = vm->intrinsics\[MAL_INTRINSIC_MATH\];/);
+
+		const lockedOutput = emitLocked(source);
+		expect(lockedOutput).toContain("mal_builtin_math_unary_number_known");
+		expect(lockedOutput).not.toContain("mal_vm_op_load_property_ic");
+		expect(lockedOutput).not.toMatch(/r\d+ = vm->intrinsics\[MAL_INTRINSIC_MATH\];/);
+	});
+
 	it("publishes positions at observable seams and guards residual TDZ helpers", () => {
 		const output = emit(
 			`"use strict"; globalThis.read = function read() { return value; }; let value = 1;`,

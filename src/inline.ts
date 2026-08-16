@@ -854,7 +854,8 @@ export function annotateDirectMathSites(program: IntermediateProgram): number {
 	for (const fn of program.functions) {
 		let guardOrdinal = 0;
 		let positionId: number | undefined;
-		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const registerIndex = buildIRRegisterIndex(fn);
+		const definitions = registerIndex.uniqueDefinitions;
 		const moveRoot = (initial: number): number => {
 			let register = initial;
 			const seen = new Set<number>();
@@ -908,6 +909,26 @@ export function annotateDirectMathSites(program: IntermediateProgram): number {
 					guardOrdinal++,
 					positionId,
 				);
+				const calleeUses = registerIndex.uses.get(callee.registers[0]) ?? [];
+				const receiverUses = registerIndex.uses.get(receiverRoot) ?? [];
+				if (
+					callee.type === "loadPropertyStatic" &&
+					receiver === receiverRoot &&
+					instruction.registers[2] === receiverRoot &&
+					calleeUses.length === 1 &&
+					calleeUses[0]?.instruction === instruction &&
+					calleeUses[0]?.position === 1 &&
+					receiverUses.length === 2 &&
+					receiverUses.some((use) => use.instruction === callee && use.position === 1) &&
+					receiverUses.some(
+						(use) => use.instruction === instruction && use.position === 2,
+					)
+				) {
+					instruction.knownBuiltinCallGenericTwin = {
+						receiver: origin,
+						property: callee,
+					};
+				}
 				count++;
 			}
 		}

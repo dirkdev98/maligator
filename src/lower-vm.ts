@@ -412,6 +412,17 @@ export interface VmFunction {
 		matchCodeUnit: number;
 	}>;
 
+	/**
+	 * EMITTER-ONLY: Math namespace/property producers retained as the interpreted
+	 * generic twin of a canonical numeric call. Native emission may erase them only
+	 * when locked identity and representation proofs select the no-fallback call.
+	 */
+	nativeMathCalls?: ReadonlyArray<{
+		receiverIp: number;
+		propertyIp: number;
+		callIp: number;
+	}>;
+
 	/** EMITTER-ONLY: selected element/length projections of an exact String split. */
 	nativeStringSplitProjections?: ReadonlyArray<{
 		license: VmRegionLicense;
@@ -1638,6 +1649,11 @@ function lowerFunctionToVmFunction(
 		guard: Extract<IRInstruction, { type: "call" }>;
 		region: NonNullable<Extract<IRInstruction, { type: "call" }>["numericHofRegion"]>;
 	}> = [];
+	const pendingNativeMathCalls: Array<{
+		receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
+		property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+		call: Extract<IRInstruction, { type: "call" }>;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1731,6 +1747,15 @@ function lowerFunctionToVmFunction(
 				pendingNumericHofRegions.push({
 					guard: instruction,
 					region: instruction.numericHofRegion,
+				});
+			}
+			if (
+				instruction.type === "call" &&
+				instruction.knownBuiltinCallGenericTwin !== undefined
+			) {
+				pendingNativeMathCalls.push({
+					...instruction.knownBuiltinCallGenericTwin,
+					call: instruction,
 				});
 			}
 			if (
@@ -1937,6 +1962,15 @@ function lowerFunctionToVmFunction(
 			resultOperand: pending.region.resultOperand,
 		});
 	}
+	const nativeMathCalls = pendingNativeMathCalls.map((pending) => {
+		const receiverIp = instructionIndexByIrInstruction.get(pending.receiver);
+		const propertyIp = instructionIndexByIrInstruction.get(pending.property);
+		const callIp = instructionIndexByIrInstruction.get(pending.call);
+		if (receiverIp === undefined || propertyIp === undefined || callIp === undefined) {
+			throw new Error("Known builtin generic twin was removed before lowering");
+		}
+		return { receiverIp, propertyIp, callIp };
+	});
 
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation
@@ -1997,6 +2031,7 @@ function lowerFunctionToVmFunction(
 			? compilerSiteIds
 			: undefined,
 		gcRootRegisters,
+		nativeMathCalls: nativeMathCalls.length > 0 ? nativeMathCalls : undefined,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
 		stackObjectInheritedAccesses:

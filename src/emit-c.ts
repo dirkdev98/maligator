@@ -3036,6 +3036,37 @@ function emitBody(
 			mathBinaryCalls.add(ip);
 		}
 	}
+	const elidedLockedMathGenericTwinIps = new Set<number>();
+	for (const site of fn.nativeMathCalls ?? []) {
+		const call = fn.instructions[site.callIp];
+		const property = fn.instructions[site.propertyIp];
+		if (
+			call?.opcode !== "CALL" ||
+			property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			call.guardedBuiltinCall === undefined ||
+			!vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard) ||
+			reps[call.dst] !== "number"
+		) {
+			continue;
+		}
+		const operation = call.guardedBuiltinCall.operation;
+		const nativeOperation =
+			call.arguments.length === 1
+				? MATH_UNARY_NATIVE_OP.get(operation)
+				: MATH_BINARY_NATIVE_OP.get(operation);
+		if (nativeOperation === undefined) continue;
+		const argumentsAreNative = call.arguments.every((operand) => {
+			const decoded = decodeVmValueOperand(operand);
+			return (
+				decoded.kind === "number" ||
+				(decoded.kind === "register" && reps[decoded.register] === "number")
+			);
+		});
+		if (argumentsAreNative) {
+			elidedLockedMathGenericTwinIps.add(site.receiverIp);
+			elidedLockedMathGenericTwinIps.add(site.propertyIp);
+		}
+	}
 
 	// A synchronous iterator record captures its `next` method exactly once. When
 	// GET_ITERATOR and ITERATOR_STEP retain the same allocated register pair, keep
@@ -3615,37 +3646,39 @@ function emitBody(
 			}
 			for (let fastIp = loopTwin.headerIp; fastIp <= loopTwin.backedgeIp; fastIp++) {
 				if (fastJumpTargets.has(fastIp)) lines.push(`LF${fastIp}:;`);
-				const fast = emitInstruction(
-					fn.instructions[fastIp]!,
-					fastIp,
-					suffix,
-					reps,
-					fn.strict,
-					undefined,
-					gcUnlink,
-					thisSlot,
-					coro,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					directCompiledTargets,
-					false,
-					false,
-					true,
-					fn.mappedArguments,
-					fn.mappedArgumentSlots,
-					fn.hasPrototype,
-					{ twin: loopTwin, kind: "fast", publishPosition: debug },
-				);
+				const fast = elidedLockedMathGenericTwinIps.has(fastIp)
+					? []
+					: emitInstruction(
+							fn.instructions[fastIp]!,
+							fastIp,
+							suffix,
+							reps,
+							fn.strict,
+							undefined,
+							gcUnlink,
+							thisSlot,
+							coro,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							directCompiledTargets,
+							false,
+							false,
+							true,
+							fn.mappedArguments,
+							fn.mappedArgumentSlots,
+							fn.hasPrototype,
+							{ twin: loopTwin, kind: "fast", publishPosition: debug },
+						);
 				if (fast === null) return null;
 				for (const line of fast) lines.push(`    ${line}`);
 			}
@@ -3663,54 +3696,57 @@ function emitBody(
 			}
 		}
 
-		let emitted = emitInstruction(
-			fn.instructions[ip]!,
-			ip,
-			suffix,
-			reps,
-			fn.strict,
-			handlerTargets[ip],
-			gcUnlink,
-			thisSlot,
-			coro,
-			denseIteratorCursorActions.get(ip),
-			regionGuard.get(ip),
-			stackObjectSites.get(ip),
-			stackObjectAccesses.get(ip),
-			stackObjectMaterializations.get(ip),
-			stackObjectInheritedAccesses.get(ip),
-			finiteRecordRegions.get(ip),
-			finiteRecordStores.get(ip),
-			finiteRecordAccesses.get(ip),
-			cardinalityRegions.get(ip),
-			cardinalityAccesses.get(ip),
-			cardinalityPushes.get(ip),
-			directCompiledTargets,
-			mathUnaryCalls.has(ip),
-			mathBinaryCalls.has(ip),
-			loopBody.has(ip),
-			fn.mappedArguments,
-			fn.mappedArgumentSlots,
-			fn.hasPrototype,
-			inheritedLoadLoopTwinByBackedge.has(ip)
-				? {
-						twin: inheritedLoadLoopTwinByBackedge.get(ip)!,
-						kind: "generic",
-						publishPosition: debug,
-					}
-				: undefined,
-			stringCharCodeAtFusionByIp.get(ip),
-			nativeStringScanRegionActionByIp.get(ip),
-			nativeStringSplitProjectionActionByIp.get(ip),
-			nativeStringSplitCursorActionByIp.get(ip),
-			nativeRegExpExecProjectionActionByIp.get(ip),
-			nativeRegExpIteratorProjectionActionByIp.get(ip),
-			nativeStringSliceNumberFusionActionByIp.get(ip),
-			invariantJsonParseCaches.get(ip),
-			invariantJsonMapActions.get(ip),
-			privateAggregateMemos.get(ip),
-			privateAggregatePushByIp.get(ip),
-		);
+		const elidedLockedMathGenericTwin = elidedLockedMathGenericTwinIps.has(ip);
+		let emitted = elidedLockedMathGenericTwin
+			? []
+			: emitInstruction(
+					fn.instructions[ip]!,
+					ip,
+					suffix,
+					reps,
+					fn.strict,
+					handlerTargets[ip],
+					gcUnlink,
+					thisSlot,
+					coro,
+					denseIteratorCursorActions.get(ip),
+					regionGuard.get(ip),
+					stackObjectSites.get(ip),
+					stackObjectAccesses.get(ip),
+					stackObjectMaterializations.get(ip),
+					stackObjectInheritedAccesses.get(ip),
+					finiteRecordRegions.get(ip),
+					finiteRecordStores.get(ip),
+					finiteRecordAccesses.get(ip),
+					cardinalityRegions.get(ip),
+					cardinalityAccesses.get(ip),
+					cardinalityPushes.get(ip),
+					directCompiledTargets,
+					mathUnaryCalls.has(ip),
+					mathBinaryCalls.has(ip),
+					loopBody.has(ip),
+					fn.mappedArguments,
+					fn.mappedArgumentSlots,
+					fn.hasPrototype,
+					inheritedLoadLoopTwinByBackedge.has(ip)
+						? {
+								twin: inheritedLoadLoopTwinByBackedge.get(ip)!,
+								kind: "generic",
+								publishPosition: debug,
+							}
+						: undefined,
+					stringCharCodeAtFusionByIp.get(ip),
+					nativeStringScanRegionActionByIp.get(ip),
+					nativeStringSplitProjectionActionByIp.get(ip),
+					nativeStringSplitCursorActionByIp.get(ip),
+					nativeRegExpExecProjectionActionByIp.get(ip),
+					nativeRegExpIteratorProjectionActionByIp.get(ip),
+					nativeStringSliceNumberFusionActionByIp.get(ip),
+					invariantJsonParseCaches.get(ip),
+					invariantJsonMapActions.get(ip),
+					privateAggregateMemos.get(ip),
+					privateAggregatePushByIp.get(ip),
+				);
 		if (emitted === null) {
 			return null;
 		}
@@ -3719,7 +3755,11 @@ function emitBody(
 			const hit = `__invariant_json_map_${jsonMapAction.site.parseCallIp}_hit`;
 			emitted = [`if (!${hit}) {`, ...emitted.map((line) => `  ${line}`), `}`];
 		}
-		if (debug && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
+		if (
+			debug &&
+			!elidedLockedMathGenericTwin &&
+			nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)
+		) {
 			const pos = fn.positions[ip] ?? -1;
 			if (pos !== -1 && pos !== lastPublishedPos) {
 				lines.push(`    vm->native_frames[vm->native_frame_count - 1].pos_id = ${pos};`);

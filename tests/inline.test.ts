@@ -321,6 +321,9 @@ test("direct Math calls carry canonical numeric semantics", () => {
 		kind: "known",
 		value: { effects: ["coerce", "throw"], result: "number" },
 	});
+	expect(
+		mathCalls.filter((call) => call.knownBuiltinCallGenericTwin !== undefined),
+	).toHaveLength(2);
 });
 
 test("direct collection methods carry guarded Map and Set dispatch metadata", () => {

@@ -939,6 +939,15 @@ export type IRInstruction =
 			 */
 			knownBuiltinCall?: KnownBuiltinCall;
 			/**
+			 * COMPILE-ONLY: ordinary receiver/property producers retained as the
+			 * interpreted generic twin of a canonical builtin call. Native lowering may
+			 * erase them only when the call proof removes every fallback edge.
+			 */
+			knownBuiltinCallGenericTwin?: {
+				receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
+				property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+			};
+			/**
 			 * COMPILE-ONLY: the exact ordinary script-function index held by the callee.
 			 * Native lowering guards the live callee before entering this target and
 			 * falls back to generic dispatch on a mismatch.
