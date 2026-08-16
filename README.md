@@ -57,8 +57,9 @@ frequently. A compilation error leaves the watcher running so the next edit can
 recover. This is process restart, not in-process hot-module replacement.
 
 Add `--profile` to any of these four commands for a separately compiled,
-production-optimized image with bounded CPU, allocation, and GC evidence. `run`,
-`dev`, and `test` turn the capture into source-ranked findings and standard profile
+production-optimized image with bounded CPU, Poisson-sampled charged allocation,
+and GC-pause evidence. `run`, `dev`, and `test` turn the capture into source-ranked
+findings and standard profile
 artifacts without introducing a separate profiling command. Use
 `--profile=compiler` for the separately instrumented exact source-site census of
 executions, fallbacks, allocation, boxing, safepoints, and GC. See

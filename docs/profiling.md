@@ -2,10 +2,10 @@
 
 Maligator profiles through the commands developers already use. `--profile` builds
 a sampling image. `--profile=compiler` adds an exact source-site census for compiler
-work: site executions, guarded fallbacks, managed allocation count/bytes, boxing,
-safepoints, and GC starts. Both are separately compiled production images; ordinary
-development images and production binaries contain neither profile metadata nor
-counter increments.
+work: site executions, guarded fallbacks, allocator-charged allocation count/bytes,
+boxing, safepoints, and GC starts. Both are separately compiled production images;
+ordinary development images and production binaries contain neither profile metadata
+nor counter increments.
 
 ```sh
 maligator run src/index.ts --profile -- workload-argument
@@ -16,8 +16,10 @@ maligator run src/index.ts --profile=compiler -- workload-argument
 ```
 
 `run --profile` is the shortest path from a representative workload to a report.
-It builds with the full optimizer, runs the program once, prints the five hottest
-source findings, and leaves the complete capture under
+It builds with the full optimizer, runs the program once, prints capture quality,
+sampling delay, attribution coverage, GC pauses, charged allocation families, exact
+compiler totals when enabled, and the seven hottest source findings. It leaves the
+complete capture under
 `.maligator/profiles/<timestamp>-run-<build-id>/`. Set
 `MALIGATOR_PROFILE_DIRECTORY` when automation needs a known output directory.
 
@@ -50,16 +52,33 @@ needs `MAL_PROFILE_COMPILER=1`; it publishes the exact census at
 
 ## What is recorded
 
-The sampling signal only requests work. The runtime records a bounded logical JS
-stack at existing VM safe points, outside the signal handler and without allocating
-on the managed heap. It also samples managed allocations and records major/minor GC
-begin and end events. This gives compiled and interpreted frames the same source
-identity while keeping native implementation frames out of the user-facing result.
+The sampling signal only requests work. `ITIMER_PROF` and delay accounting both use
+process CPU time; monotonic wall time remains the artifact timeline. The runtime
+records a bounded logical JS stack at existing VM safe points, outside the signal
+handler and without allocating
+on the managed heap. Multiple delivered ticks handled at one safe point share one
+stack walk but retain separate delay records. Stacks deeper than 128 logical frames
+retain the leaf-most 128 frames, add an explicit missing-outer-frames node to
+`cpu.cpuprofile`, and count every omitted frame. It also samples managed cells, raw
+payloads, selected native backing stores, and records major/minor GC begin/end events.
+This gives compiled and interpreted frames the same source identity while keeping
+native implementation frames out of the user-facing result.
+
+Allocation sampling uses independent Poisson inclusion over allocator-charged bytes
+with a 512 KiB mean interval. Each sample preserves requested bytes, charged bytes,
+storage (`managed-cell`, `raw-payload`, or `native-backing`), a coarse stable family,
+and the exact managed object kind when available. The report applies the sample's
+inclusion probability to estimate requested and charged allocation traffic. Charged
+means managed size-class capacity, or requested size where an external allocator's
+usable size is unavailable. It is allocation traffic—not retained memory, live heap,
+peak RSS, or an OS page commitment.
 
 Because sampling is cooperative, long native calls or code with sparse safe points
-can delay samples. The manifest reports median and p99 delay plus dropped record and
-frame counts. Treat `quality: "biased"` as a prompt to change the workload or inspect
-the raw evidence; treat `"insufficient"` as a request for a longer run. CPU and
+can delay samples. The manifest reports median and p99 process-CPU delay, dropped
+records, per-stack omitted frames, unmatched GC events, and attributed/unattributed
+counts. Any loss or truncation marks the capture biased. Treat `quality: "biased"`
+as a prompt to change the workload or inspect the raw evidence; treat
+`"insufficient"` as a request for a longer run. CPU and
 allocation evidence are graded independently; either kind with fewer than 20 samples
 is labelled low, and a biased capture caps both labels at low.
 
@@ -82,8 +101,8 @@ directory is partial and should not be treated as a finished report.
 
 | File                   | Purpose                                                              |
 | ---------------------- | -------------------------------------------------------------------- |
-| `capture.bin`          | Bounded, versioned raw CPU/allocation/GC records                     |
-| `capture.bin.compiler` | Exact counter stream from `--profile=compiler`                       |
+| `capture.bin`          | Bounded v3 raw CPU/Poisson-allocation/GC records                     |
+| `capture.bin.compiler` | Exact v2 event and allocation-family census                          |
 | `metadata.json`        | Exact build ID, functions, source sites, and compiler remarks        |
 | `cpu.cpuprofile`       | Logical JS stacks for Chromium DevTools-compatible viewers           |
 | `timeline.json`        | GC begin/end events in trace-event form                              |
@@ -95,8 +114,9 @@ directory is partial and should not be treated as a finished report.
 
 The joined findings keep CPU and allocation confidence separate and use all CPU
 records as the percentage denominator. `manifest.json` reports attributed and
-unattributed record counts plus the literal sum of sampled trigger sizes; that byte
-sum is neither retained memory, RSS, nor an unbiased allocation estimate.
+unattributed records; Poisson estimates and literal requested/charged sample sums;
+storage/family breakdowns; stack truncation; GC totals and pauses; and exact compiler
+totals. Consumers can distinguish the estimate from its sampled evidence.
 
 The findings explain decisions such as a dynamic property cache, a guarded direct
 call, or an object that retained observable heap identity. A retained
@@ -112,12 +132,20 @@ profile-guided recompilation, or per-test timeout stack capture. Fatal signals t
 cannot safely return to a VM safe point may leave a partial directory.
 
 The sampler is compiled out of ordinary binaries. Exact counters are additionally
-compiled out of sampling-only profile images. For an active sampling build, the
-acceptance target is less than 3% wall-time overhead on a representative CPU lane,
-with sample delay and drops reported rather than hidden. Re-measure this contract
-when changing the profiler or adding a new event source. Compiler-census images have
-a separate cache identity and no low-overhead promise; the counter table tracks at
-most 65,536 dense sites and reports the full site count and overflow events.
+compiled out of sampling-only profile images. Sampling images begin with small
+record/frame buffers and grow them only as evidence arrives. For an active sampling
+build, the acceptance target is less than 3% median overhead across language,
+allocation-heavy, GC, and HTTP lanes, with output parity, GC verification, and zero
+capture loss. Run `npm run bench:profile-overhead`; its alternating pairs and raw JSON
+make the check reproducible. The 2026-08-15 five-pair check measured 1.14%, 1.46%,
+1.14%, and 1.87% respectively. Re-measure this contract when changing the profiler
+or adding an event source.
+
+Compiler-census images have a separate cache identity and no low-overhead promise.
+Dense totals track at most 65,536 source sites. The storage/family/object-kind
+breakdown is a sparse open-addressed table capped at 16,384 slots and 75% occupancy;
+new keys beyond that point aggregate into an explicit overflow row, while the dense
+global and per-site count/requested/charged totals remain exact.
 
 For changes to Maligator itself, use the paired benchmark workflow in
 [`testing.md`](testing.md). It alternates base and head runs, retains raw samples,

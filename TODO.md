@@ -70,6 +70,18 @@ the profile image about 3.0% slower than the ordinary image, leaving little over
 margin. These measurements are diagnostic evidence, not a committed benchmark
 baseline.
 
+The recorder has since moved its sample-delay accounting onto process CPU time,
+made stack truncation explicit while retaining the true leaf, and replaced the
+64 KiB allocation trigger with 512 KiB Poisson sampling over allocator-charged
+bytes. Managed cells, raw payloads, and selected native backing stores now retain
+coarse allocation families plus requested and charged sizes. The common sampling
+budget decrement is inline, and record/frame buffers grow on demand instead of
+eagerly reserving roughly 15 MiB. A five-pair `bench:profile-overhead` recheck on
+2026-08-15 measured 1.14% language, 1.46% allocation-heavy, 1.14% GC, and 1.87%
+Express median overhead, with identical output, GC verification preflights, and no
+dropped records or frames in any lane. Keep these local measurements reproducible
+evidence rather than a committed benchmark baseline.
+
 The highest-priority issue is trust in the explanation layer. The current report says
 hot `String#split` and `slice` sites stayed generic even though the final generated C
 contains `mal_builtin_string_split_projection` and
@@ -147,7 +159,7 @@ profiler improvement; collecting more samples alone will not repair the explanat
 - [x] Split CPU and allocation evidence quality. Report CPU sample counts or intervals
       beside percentages, and never upgrade a one-sample CPU claim to high confidence
       because the same site has many allocation samples.
-- [ ] Make allocation evidence physically meaningful: preserve heap/cell kind, include
+- [x] Make allocation evidence physically meaningful: preserve heap/cell kind, include
       raw payload and native backing allocations where practical, and either estimate
       bytes using the sampling interval and an unbiased sampling scheme or rename the
       current sum of triggering allocation sizes. State clearly that this is neither
@@ -163,13 +175,16 @@ profiler improvement; collecting more samples alone will not repair the explanat
 - [ ] Add real `--help`/unknown-option handling to `scripts/bench.ts`. Today `--help`
       is treated as no lane selection and starts the full benchmark suite, including
       an expensive Rust rebuild; help and invalid flags must exit before any build.
-- [ ] Use one clock domain for sampling and delay quality. `ITIMER_PROF` advances in
+- [x] Use one clock domain for sampling and delay quality. `ITIMER_PROF` advances in
       process CPU time while the current expected timestamp uses monotonic wall time,
       so descheduling or I/O can be misreported as delayed safepoint sampling.
-- [ ] Make capture integrity explicit: fingerprint the metadata/build in `capture.bin`,
-      count per-stack depth truncation as dropped frames, report unattributed CPU
-      records, and use all CPU records rather than only mapped leaves as the share
-      denominator.
+- [x] Count per-stack depth/capacity truncation as omitted frames, preserve the true
+      leaf in the retained tail, render missing outer frames explicitly, report
+      unattributed CPU/allocation records, and use all CPU records as the share
+      denominator. Any dropped record, omitted frame, or unmatched GC event biases
+      the capture.
+- [ ] Fingerprint the exact metadata/build in `capture.bin` so a raw capture cannot be
+      finalized against a structurally plausible but incorrect sidecar.
 - [ ] Add optional native/runtime attribution so a hot logical site can be separated
       into dispatch, string scan, allocation, GC, regexp, and host work without raising
       the default profile above its current overhead envelope.
@@ -193,10 +208,13 @@ profiler improvement; collecting more samples alone will not repair the explanat
       slowdown; do not force memory wins to manufacture a CPU headline. An expert
       `--max-pairs` override now permits a longer exact comparison when the
       default 15-pair ceiling cannot resolve a small change; progress reporting remains.
-- [ ] Recheck profiler overhead on language, allocation-heavy, GC, and HTTP workloads.
+- [x] Recheck profiler overhead on language, allocation-heavy, GC, and HTTP workloads.
       Keep ordinary images free of profiling instrumentation, target less than 3%
       median CPU overhead for profiled images, and reject regressions in output, GC
-      verification, or capture completeness.
+      verification, or capture completeness. `npm run bench:profile-overhead` now
+      builds both images, alternates pairs, parses every capture, and gates all four
+      lanes; the 2026-08-15 five-pair medians were 1.14%, 1.46%, 1.14%, and 1.87%
+      respectively, with complete captures.
 - [ ] Harden the authenticated Claude/Fable review harness. The host keychain/session
       path now completes long read-only repository audits through the 30-minute alarm
       wrapper without exposing the cookie, including the affine/provider reviews on
