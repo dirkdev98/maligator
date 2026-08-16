@@ -579,7 +579,46 @@ function blankTopLevelTypeDeclarations(
 			if (source[i] === "{" || source[i] === "(" || source[i] === "[") depth++;
 			if (source[i] === "}" || source[i] === ")" || source[i] === "]") depth--;
 		}
-		if (depth !== 0) continue;
+		if (output[word.start] !== source[word.start]) continue;
+		if (depth !== 0) {
+			// Type aliases and interfaces are also erasable block-level declarations.
+			// Restrict the compact recognizer to statement boundaries so ordinary
+			// runtime uses of contextual names such as `type` remain untouched.
+			const before = previousCodeIndex(source, code, word.start - 1);
+			if (!"{;}".includes(source[before]!)) continue;
+			if (word.text === "type") {
+				const name = wordAt(source, code, nextCodeIndex(source, code, word.end));
+				const equals = name ? findCodeChar(source, code, "=", name.end) : -1;
+				if (
+					name &&
+					equals >= 0 &&
+					!hasStatementBoundary(source, code, name.end, equals)
+				) {
+					blankTypeDeclaration(
+						output,
+						source,
+						code,
+						word.start,
+						findStatementEnd(source, code, name.end, filePath),
+					);
+				}
+			} else if (word.text === "interface") {
+				const name = wordAt(source, code, nextCodeIndex(source, code, word.end));
+				if (name === undefined) continue;
+				const open = findCodeChar(source, code, "{", name.end);
+				if (open < 0 || hasStatementBoundary(source, code, name.end, open)) continue;
+				const close = matching(source, code, open, "{", "}", filePath);
+				const semicolon = nextCodeIndex(source, code, close + 1);
+				blankTypeDeclaration(
+					output,
+					source,
+					code,
+					word.start,
+					source[semicolon] === ";" ? semicolon + 1 : close + 1,
+				);
+			}
+			continue;
+		}
 
 		const start = word.start;
 		const next = words[wi + 1];
@@ -648,7 +687,13 @@ function blankTopLevelTypeDeclarations(
 			const name = wordAt(source, code, afterType);
 			const equals = name ? findCodeChar(source, code, "=", name.end) : -1;
 			if (name && equals >= 0 && !hasStatementBoundary(source, code, name.end, equals)) {
-				blank(output, source, start, findStatementEnd(source, code, name.end, filePath));
+				blankTypeDeclaration(
+					output,
+					source,
+					code,
+					start,
+					findStatementEnd(source, code, name.end, filePath),
+				);
 				continue;
 			}
 			fail(filePath, word.start, "malformed export type declarations");
@@ -666,7 +711,13 @@ function blankTopLevelTypeDeclarations(
 			}
 			const close = matching(source, code, open, "{", "}", filePath);
 			const semicolon = nextCodeIndex(source, code, close + 1);
-			blank(output, source, start, source[semicolon] === ";" ? semicolon + 1 : close + 1);
+			blankTypeDeclaration(
+				output,
+				source,
+				code,
+				start,
+				source[semicolon] === ";" ? semicolon + 1 : close + 1,
+			);
 			continue;
 		}
 
@@ -674,7 +725,13 @@ function blankTopLevelTypeDeclarations(
 			const name = wordAt(source, code, nextCodeIndex(source, code, word.end));
 			const equals = name ? findCodeChar(source, code, "=", name.end) : -1;
 			if (name && equals >= 0 && !hasStatementBoundary(source, code, name.end, equals)) {
-				blank(output, source, start, findStatementEnd(source, code, name.end, filePath));
+				blankTypeDeclaration(
+					output,
+					source,
+					code,
+					start,
+					findStatementEnd(source, code, name.end, filePath),
+				);
 			}
 			continue;
 		}
@@ -685,9 +742,33 @@ function blankTopLevelTypeDeclarations(
 			if (source[open] !== "{") continue;
 			const close = matching(source, code, open, "{", "}", filePath);
 			const semicolon = nextCodeIndex(source, code, close + 1);
-			blank(output, source, start, source[semicolon] === ";" ? semicolon + 1 : close + 1);
+			blankTypeDeclaration(
+				output,
+				source,
+				code,
+				start,
+				source[semicolon] === ";" ? semicolon + 1 : close + 1,
+			);
 		}
 	}
+}
+
+function blankTypeDeclaration(
+	output: Array<string>,
+	source: string,
+	code: Array<boolean>,
+	start: number,
+	end: number,
+): void {
+	blank(output, source, start, end);
+	let previous = start - 1;
+	while (
+		previous >= 0 &&
+		(!code[previous] || /\s/u.test(output[previous]!) || output[previous] === "")
+	)
+		previous--;
+	if (output[previous] === "}" || (output[previous] === ";" && source[previous] !== ";"))
+		output[start] = ";";
 }
 
 function hasStatementBoundary(
@@ -829,6 +910,18 @@ function blankClassMembers(
 		if (!code[i]) continue;
 		const char = source[i]!;
 		if (braces === 0 && parentheses === 0 && brackets === 0 && char === "(") {
+			const memberStart = findClassMemberStart(source, code, bodyOpen, i);
+			let initializer = false;
+			for (let cursor = memberStart; cursor < i; cursor++) {
+				if (code[cursor] && source[cursor] === "=" && source[cursor + 1] !== ">") {
+					initializer = true;
+					break;
+				}
+			}
+			if (initializer) {
+				parentheses++;
+				continue;
+			}
 			const close = matching(source, code, i, "(", ")", filePath);
 			const after = nextCodeIndex(source, code, close + 1);
 			let memberEnd = after;
@@ -973,6 +1066,7 @@ function blankGenericSyntax(
 	words: Array<Word>,
 	filePath: string,
 ): void {
+	const functionGenerics = new Set<number>();
 	for (let wi = 0; wi < words.length; wi++) {
 		const word = words[wi]!;
 		if (word.text !== "function") continue;
@@ -982,15 +1076,26 @@ function blankGenericSyntax(
 		if (!name) continue;
 		i = nextCodeIndex(source, code, name.end);
 		if (source[i] !== "<") continue;
+		functionGenerics.add(i);
 		const close = matching(source, code, i, "<", ">", filePath);
-		if (source[nextCodeIndex(source, code, close + 1)] !== "(") {
+		const parametersOpen = nextCodeIndex(source, code, close + 1);
+		if (source[parametersOpen] !== "(") {
 			fail(filePath, i, "malformed generic functions");
 		}
-		blank(output, source, i, close + 1);
+		if (
+			source.slice(i, parametersOpen).includes("\n") ||
+			source.slice(i, parametersOpen).includes("\r")
+		) {
+			blank(output, source, i, parametersOpen + 1);
+			output[i] = "(";
+		} else {
+			blank(output, source, i, close + 1);
+		}
 	}
 
 	for (let open = 0; open < source.length; open++) {
 		if (!code[open] || source[open] !== "<") continue;
+		if (functionGenerics.has(open)) continue;
 		const before = previousCodeIndex(source, code, open - 1);
 		if (
 			!isIdentifierPart(source[before]) &&
@@ -1169,9 +1274,13 @@ function blankVariableAnnotations(
 				continue;
 			}
 			const char = source[i]!;
-			if (nested === 0 && char === ";") break;
+			// A declaration inside a `for` header ends at the header's closing
+			// parenthesis. That delimiter was opened before this local scan, so it
+			// must not make the relative nesting depth negative and let the scan
+			// consume unrelated statements after the loop.
+			if (nested === 0 && (char === ";" || char === ")")) break;
 			if (char === "(" || char === "[" || char === "{") nested++;
-			if (char === ")" || char === "]" || char === "}") nested--;
+			if ((char === ")" || char === "]" || char === "}") && nested > 0) nested--;
 			if (char === "<") angles++;
 			if (char === ">" && angles > 0) angles--;
 			if (nested === 0 && angles === 0 && char === "=") initialized = true;
@@ -1202,7 +1311,20 @@ function blankFunctionAnnotations(
 			const previous = previousCodeIndex(source, code, word.start - 1);
 			if ("{,;}".includes(source[previous]!)) continue;
 		}
-		const open = findCodeChar(source, code, "(", word.end);
+		let header = immediate;
+		if (source[header] === "*") header = nextCodeIndex(source, code, header + 1);
+		const name = wordAt(source, code, header);
+		if (name !== undefined) {
+			header = nextCodeIndex(source, code, name.end);
+			if (source[header] === "<") {
+				header = nextCodeIndex(
+					source,
+					code,
+					matching(source, code, header, "<", ">", filePath) + 1,
+				);
+			}
+		}
+		const open = source[header] === "(" ? header : -1;
 		if (open < 0) fail(filePath, word.start, "generic or malformed functions");
 		const close = matching(source, code, open, "(", ")", filePath);
 		blankParameterAnnotations(source, code, output, open, close, filePath);
@@ -1246,6 +1368,7 @@ function blankMethodAnnotations(
 	filePath: string,
 ): void {
 	const controlWords = new Set(["if", "for", "while", "switch", "catch", "with"]);
+	const methodModifiers = new Set(["async", "get", "set"]);
 	for (let open = 0; open < source.length; open++) {
 		if (!code[open] || source[open] !== "(") continue;
 		let preceding = wordAtPreviousCode(source, code, open);
@@ -1266,6 +1389,20 @@ function blankMethodAnnotations(
 			preceding = wordAtPreviousCode(source, code, genericOpen);
 		}
 		if (preceding === undefined || controlWords.has(preceding.text)) continue;
+		let declarationStart = preceding.start;
+		let beforeDeclaration = previousCodeIndex(source, code, declarationStart - 1);
+		if (source[beforeDeclaration] === "*") {
+			declarationStart = beforeDeclaration;
+			beforeDeclaration = previousCodeIndex(source, code, beforeDeclaration - 1);
+		}
+		const modifier = wordAtPreviousCode(source, code, declarationStart);
+		if (modifier !== undefined && methodModifiers.has(modifier.text)) {
+			declarationStart = modifier.start;
+			beforeDeclaration = previousCodeIndex(source, code, declarationStart - 1);
+		}
+		// Calls followed by a ternary `:` otherwise look like a method return
+		// annotation. A method name must begin an object/class member.
+		if (!"{,;}".includes(source[beforeDeclaration]!)) continue;
 		const close = matching(source, code, open, "(", ")", filePath);
 		const after = nextCodeIndex(source, code, close + 1);
 		// A typed arrow property has the same `name: (parameters): Return`
@@ -1344,7 +1481,7 @@ function isTypeAssertionOperator(
 	return (
 		isIdentifierStart(source[next]) ||
 		(source[next] !== undefined && source[next] >= "0" && source[next] <= "9") ||
-		"({[\"'-".includes(source[next]!) ||
+		"({[\"'-|&".includes(source[next]!) ||
 		source[rawNext] === "`"
 	);
 }
@@ -1516,21 +1653,6 @@ function blankArrowAnnotations(
 		if (!code[arrow] || source[arrow] !== "=" || source[arrow + 1] !== ">") continue;
 		const head = findParenthesizedArrowHead(source, code, arrow);
 		if (head !== undefined) {
-			if (head.returnColon !== undefined) {
-				blank(output, source, head.returnColon, arrow);
-				if (
-					source.slice(head.parametersClose, arrow).includes("\n") ||
-					source.slice(head.parametersClose, arrow).includes("\r")
-				) {
-					// JavaScript forbids a line terminator between the parameter list and
-					// `=>`. For a multiline return annotation, relocate the erased closing
-					// parenthesis to the final type token, matching TypeScript's blank-space
-					// transform while preserving every source offset and line.
-					const relocatedClose = previousCodeIndex(source, code, arrow - 1);
-					output[head.parametersClose] = " ";
-					output[relocatedClose] = ")";
-				}
-			}
 			const open = matchingBackward(
 				source,
 				code,
@@ -1539,6 +1661,24 @@ function blankArrowAnnotations(
 				")",
 				filePath,
 			);
+			if (head.returnColon !== undefined) {
+				blank(output, source, head.returnColon, arrow);
+				if (
+					source.slice(open, arrow).includes("\n") ||
+					source.slice(open, arrow).includes("\r")
+				) {
+					// JavaScript forbids a line terminator between the parameter list and
+					// `=>`. For a multiline return annotation, relocate the erased closing
+					// parenthesis to the final type token, matching TypeScript's blank-space
+					// transform while preserving every source offset and line.
+					let relocatedClose = arrow - 1;
+					while (relocatedClose >= 0 && /\s/u.test(source[relocatedClose]!)) {
+						relocatedClose--;
+					}
+					output[head.parametersClose] = " ";
+					output[relocatedClose] = ")";
+				}
+			}
 			blankParameterAnnotations(
 				source,
 				code,
@@ -1672,6 +1812,23 @@ function findTypeEnd(
 	for (let i = start; i < source.length; i++) {
 		if (!code[i]) continue;
 		const char = source[i]!;
+		// A function return annotation may itself start with an object type:
+		// `function value(): { ok: boolean } { ... }`. In that position the first
+		// top-level `{` opens the type and the next one opens the function body.
+		// Treating both as body delimiters made valid object return types look empty.
+		if (
+			!sawType &&
+			parentheses === 0 &&
+			brackets === 0 &&
+			braces === 0 &&
+			angles === 0 &&
+			char === "{" &&
+			delimiters.includes("{")
+		) {
+			sawType = true;
+			braces++;
+			continue;
+		}
 		if (
 			parentheses === 0 &&
 			brackets === 0 &&
@@ -1691,7 +1848,14 @@ function findTypeEnd(
 		else if (char === "}" && braces > 0) braces--;
 		else if (char === "<") angles++;
 		else if (char === ">" && angles > 0) angles--;
-		if (isIdentifierStart(char) || char === '"' || char === "'") sawType = true;
+		if (
+			isIdentifierStart(char) ||
+			char === '"' ||
+			char === "'" ||
+			char === "[" ||
+			char === "("
+		)
+			sawType = true;
 	}
 	fail(filePath, start, "unterminated type annotations");
 }
@@ -1845,7 +2009,8 @@ function matchingBackward(
 	let depth = 0;
 	for (let i = start; i >= 0; i--) {
 		if (!code[i]) continue;
-		if (source[i] === close) depth++;
+		if (source[i] === close && !(open === "<" && close === ">" && source[i - 1] === "="))
+			depth++;
 		if (source[i] === open && --depth === 0) return i;
 	}
 	fail(filePath, start, `unbalanced '${close}' syntax`);

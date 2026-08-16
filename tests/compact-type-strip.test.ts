@@ -38,6 +38,34 @@ function render(model: Model, prefix: string): string {
 		expect(stripped.split("\n")[1]).toBe("type = sideEffect();");
 	});
 
+	test("strips block-level type aliases and interfaces", () => {
+		const source = `function collect(values: readonly string[]): number {
+	type Selected = Extract<typeof values[number], string>;
+	interface Candidate {
+		value: Selected;
+	}
+	const candidate: Candidate = { value: values[0]! };
+	return candidate.value.length;
+}`;
+		const stripped = stripCompactTypes(source, "local-types.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "local-types.ts"));
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
+	test("preserves statement boundaries before later type declarations", () => {
+		const source = `function runtime() {}
+export interface Model {
+	value: number;
+}
+type Result = Model | undefined;
+const value = runtime();`;
+
+		expect(stripCompactTypes(source, "type-boundary.ts")).toBe(
+			stripTypesWithTypeScript(source, "type-boundary.ts"),
+		);
+	});
+
 	test("strips Node-compatible inline type specifiers", () => {
 		const source = `import DefaultModel, { type Model } from "./default-model.ts";
 import { type Model, value, type Other as Alias } from "./model.ts";
@@ -92,6 +120,19 @@ interface Container<ValueType> extends Iterable<ValueType> {
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "result.ts"));
 	});
 
+	test("matches generic function boundaries containing callback arrows", () => {
+		const source = `function recurseAst<
+	Args extends Array<unknown>,
+	Callback extends (node: ESTree.Node, ...args: Args) => void,
+>(node: ESTree.Node, callback: Callback, ...args: Args): void {
+	callback(node, ...args);
+}`;
+		const stripped = stripCompactTypes(source, "generic-callback.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "generic-callback.ts"));
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
 	test("does not treat a const type parameter as a variable declaration", () => {
 		const source = `export type Result<ErrorType, ValueType> =
 	| { readonly ok: true; readonly value: ValueType }
@@ -118,6 +159,22 @@ console.log(parseWidget(false));`;
 		expect(stripped).toBe(
 			stripTypesWithTypeScript(source, "object-property-as-const.ts"),
 		);
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
+	test("stops variable annotation scans at for-of header boundaries", () => {
+		const source = `function visit(values: readonly string[]): void {
+	for (const value of values) use(value);
+}
+function immediateValue(
+	instruction: IRInstruction | undefined,
+): IRImmediateValue | undefined {
+	if (instruction === undefined) return undefined;
+	return { kind: "undefined" };
+}`;
+		const stripped = stripCompactTypes(source, "for-of-boundary.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "for-of-boundary.ts"));
 		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
 	});
 
@@ -188,6 +245,17 @@ const template = input as \`literal\`;`;
 		const stripped = stripCompactTypes(source, "assertion-operators.ts");
 
 		expect(stripped).toBe(stripTypesWithTypeScript(source, "assertion-operators.ts"));
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
+	});
+
+	test("strips chained assertions whose union starts on the next line", () => {
+		const source = `const assignmentPattern = element as unknown as
+	| ESTree.AssignmentPattern
+	| null
+	| undefined;`;
+		const stripped = stripCompactTypes(source, "multiline-assertion.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "multiline-assertion.ts"));
 		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
 	});
 
@@ -290,6 +358,12 @@ const asserted = access!.isUnlocked;`;
 	if (typeof value !== "string") throw new Error();
 };`,
 		],
+		[
+			"multiline literal-union return",
+			`const resolve = (
+	name: string,
+): Binding | null | "ambiguous" => name as never;`,
+		],
 	])("matches TypeScript for %s", (_name, source) => {
 		const stripped = stripCompactTypes(source, "arrow-matrix.ts");
 		expect(stripped).toHaveLength(source.length);
@@ -336,6 +410,14 @@ const validateExercise = (
 
 	test.each([
 		[
+			"function declaration object return types",
+			`function terminalConditional(
+	block: IRFunction["blocks"][number],
+): { condition: number; ifTrue: number; ifFalse: number } | undefined {
+	return block.condition;
+}`,
+		],
+		[
 			"object return types",
 			`const make = (value: string): { readonly value: string } => ({ value });`,
 		],
@@ -378,6 +460,18 @@ const validateExercise = (
 		).toThrow(/parameter properties/);
 	});
 
+	test("preserves class field initializers containing calls", () => {
+		const source = `class Writer {
+	private buf = new ArrayBuffer(1024);
+	private view = new DataView(this.buf);
+	private pos = 0;
+}`;
+
+		expect(stripCompactTypes(source, "class-fields.ts")).toBe(
+			stripTypesWithTypeScript(source, "class-fields.ts"),
+		);
+	});
+
 	test("strips object method parameters and return annotations", () => {
 		const source = `export const store = {
 	set(name: string, value: number): void {
@@ -392,6 +486,16 @@ const validateExercise = (
 		expect(stripCompactTypes(source, "object-methods.ts")).toBe(
 			stripTypesWithTypeScript(source, "object-methods.ts"),
 		);
+	});
+
+	test("does not treat ternary call expressions as method annotations", () => {
+		const source = `function choose(flag: boolean, input: Input): number {
+	return flag ? compileStaticString(input.name) : -1;
+}`;
+		const stripped = stripCompactTypes(source, "ternary-call.ts");
+
+		expect(stripped).toBe(stripTypesWithTypeScript(source, "ternary-call.ts"));
+		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
 	});
 
 	test("strips typed async arrow properties without erasing the arrow", () => {
