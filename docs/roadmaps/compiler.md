@@ -232,7 +232,7 @@ the same facts unconditionally.
 Use a small set of semantically different consumers to validate that the fact system
 is general rather than a registry-shaped collection of special cases.
 
-- [ ] Migrate closed `String.prototype.split` projection and cursor lowering to the
+- [x] Migrate closed `String.prototype.split` projection and cursor lowering to the
       known-call/effect/representation facts. Preserve its generic fallback for
       mutable or unsupported consumers and erase it when facts make it unreachable.
   - [x] Publish registry effects, result semantics, and supported lowerings beside
@@ -255,6 +255,12 @@ is general rather than a registry-shaped collection of special cases.
         region license, retained twin, materialization contract, and exact consumer
         instructions through VM lowering; retain VM recognition only to rebuild
         compile-only metadata after a frontend-wire cache round trip.
+  - [x] Select the closed indexed split-to-trim cursor in IR after final dead-code
+        cleanup. Prove dominance, single-entry/single-run control flow, complete
+        result/index/element use sets, and a combined split/trim license before
+        register allocation; carry exact operations through lowering and retain VM
+        recognition only for frontend-wire compatibility. Let an exact locked
+        primitive split use direct builtin cursor initialization and fallback.
 - [x] Lower statically known Math calls through builtin-call IR. Preserve argument
       evaluation, coercion, exceptions, and Realm identity; use native numeric
       arguments/results when representation facts allow it.

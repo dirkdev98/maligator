@@ -8,6 +8,7 @@ import type {
 	IRImmediateValue,
 	IRInstruction,
 	IRNumericHofPlanOperation,
+	IRStringSplitCursor,
 	IRStringSplitProjection,
 } from "./ir.ts";
 import { computeSafepointRoots } from "./liveness.ts";
@@ -1759,6 +1760,10 @@ function lowerFunctionToVmFunction(
 		call: Extract<IRInstruction, { type: "call" | "callBuiltin" }>;
 		projection: IRStringSplitProjection;
 	}> = [];
+	const pendingStringSplitCursors: Array<{
+		call: Extract<IRInstruction, { type: "call" | "callBuiltin" }>;
+		cursor: IRStringSplitCursor;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1861,6 +1866,15 @@ function lowerFunctionToVmFunction(
 				pendingStringSplitProjections.push({
 					call: instruction,
 					projection: instruction.stringSplitProjection,
+				});
+			}
+			if (
+				(instruction.type === "call" || instruction.type === "callBuiltin") &&
+				instruction.stringSplitCursor !== undefined
+			) {
+				pendingStringSplitCursors.push({
+					call: instruction,
+					cursor: instruction.stringSplitCursor,
 				});
 			}
 			if (
@@ -2131,6 +2145,76 @@ function lowerFunctionToVmFunction(
 			};
 		},
 	);
+	const nativeStringSplitCursors = pendingStringSplitCursors.map(({ call, cursor }) => {
+		const callIp = instructionIndexByIrInstruction.get(call);
+		const propertyIp =
+			cursor.property === undefined
+				? -1
+				: instructionIndexByIrInstruction.get(cursor.property);
+		const lengthIp = instructionIndexByIrInstruction.get(cursor.length);
+		const elementIp = instructionIndexByIrInstruction.get(cursor.element);
+		const trimPropertyIp = instructionIndexByIrInstruction.get(cursor.trimProperty);
+		const trimCallIp = instructionIndexByIrInstruction.get(cursor.trimCall);
+		const backedgeIp = instructionIndexByIrInstruction.get(cursor.backedge);
+		const exitIp = blockStartIps.get(cursor.exitBlock);
+		const trimIcIndex = propertyIcIndexByInstruction.get(cursor.trimProperty);
+		const guard = lowerGuardPlan(cursor.license.guard);
+		if (
+			callIp === undefined ||
+			propertyIp === undefined ||
+			lengthIp === undefined ||
+			elementIp === undefined ||
+			trimPropertyIp === undefined ||
+			trimCallIp === undefined ||
+			backedgeIp === undefined ||
+			exitIp === undefined ||
+			trimIcIndex === undefined ||
+			guard === undefined ||
+			!guard.obligations.includes("fallback") ||
+			!guard.obligations.includes("materialize")
+		) {
+			throw new Error("String split cursor lost its retained-twin contract");
+		}
+		const loweredCall = instructions[callIp];
+		if (
+			(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_BUILTIN") ||
+			loweredCall.arguments.length !== 1
+		) {
+			throw new Error("String split cursor call changed before lowering");
+		}
+		const primitiveStringLengthIps = cursor.primitiveStringLengths.map((load) => {
+			const ip = instructionIndexByIrInstruction.get(load);
+			if (ip === undefined) {
+				throw new Error(
+					"String split cursor primitive length was removed before lowering",
+				);
+			}
+			return ip;
+		});
+		return {
+			license: {
+				guard,
+				genericTwin: cursor.license.genericTwin,
+				materialization: cursor.license.materialization,
+			},
+			resultRepresentation: cursor.resultRepresentation,
+			propertyIp,
+			callIp,
+			callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
+			receiver: loweredCall.thisValue,
+			separator: loweredCall.arguments[0]!,
+			result: loweredCall.dst,
+			index: cursor.compare.registers[1],
+			lengthIp,
+			elementIp,
+			trimPropertyIp,
+			trimIcIndex,
+			trimCallIp,
+			primitiveStringLengthIps,
+			backedgeIp,
+			exitIp,
+		};
+	});
 
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation
@@ -2194,6 +2278,8 @@ function lowerFunctionToVmFunction(
 		nativeMathCalls: nativeMathCalls.length > 0 ? nativeMathCalls : undefined,
 		nativeStringSplitProjections:
 			nativeStringSplitProjections.length > 0 ? nativeStringSplitProjections : undefined,
+		nativeStringSplitCursors:
+			nativeStringSplitCursors.length > 0 ? nativeStringSplitCursors : undefined,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
 		stackObjectInheritedAccesses:

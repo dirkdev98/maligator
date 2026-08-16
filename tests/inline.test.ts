@@ -327,6 +327,66 @@ test("closed split projections are selected and licensed in IR", () => {
 	expect(direct.stringSplitProjection?.property).toBeUndefined();
 });
 
+test("closed split cursors are selected and jointly licensed in IR", () => {
+	const source = (receiver: string) => `
+		globalThis.sum = function sum(separator) {
+			const parts = ${receiver}.split(separator);
+			let total = 0;
+			for (let index = 0; index < parts.length; index++) {
+				const part = parts[index].trim();
+				total += part.length;
+			}
+			return total;
+		};
+	`;
+	const mutable = optimizedProgram(source('globalThis["cursor-input"]'));
+	const mutableCall = mutable.functions
+		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
+		.find(
+			(instruction) =>
+				instruction.type === "call" && instruction.stringSplitCursor !== undefined,
+		);
+	expect(mutableCall?.type).toBe("call");
+	if (mutableCall?.type !== "call") throw new Error("missing mutable split cursor");
+	expect(mutableCall.stringSplitCursor).toMatchObject({
+		resultRepresentation: "split-cursor-spans",
+		license: {
+			genericTwin: "retained",
+			materialization: "on-demand",
+			guard: {
+				dependencies: [{ kind: "epoch", family: "watched-methods" }],
+			},
+		},
+		resultAlias: { type: "move" },
+		length: { type: "loadPropertyStatic" },
+		element: { type: "loadProperty" },
+		trimCall: { type: "call" },
+		primitiveStringLengths: [{ type: "loadPropertyStatic" }],
+		backedge: { type: "jump" },
+	});
+	expect(
+		new Set(
+			mutableCall.stringSplitCursor?.license.guard.obligations.map(
+				(obligation) => obligation.kind,
+			),
+		),
+	).toEqual(new Set(["fallback", "materialize"]));
+
+	const locked = optimizedLockedProgram(source('" alpha ; beta "'));
+	const direct = locked.functions
+		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
+		.find(
+			(instruction) =>
+				instruction.type === "callBuiltin" && instruction.stringSplitCursor !== undefined,
+		);
+	expect(direct?.type).toBe("callBuiltin");
+	if (direct?.type !== "callBuiltin") throw new Error("missing locked split cursor");
+	expect(direct.stringSplitCursor?.license.guard.dependencies).toEqual([
+		{ kind: "world", fact: "primordials.locked" },
+	]);
+	expect(direct.stringSplitCursor?.property).toBeUndefined();
+});
+
 test("direct slice sites carry canonical primitive String identity metadata", () => {
 	const ir = optimizedProgram(`
 		function tail(value) {

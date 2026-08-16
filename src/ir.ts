@@ -678,6 +678,29 @@ export interface IRStringSplitProjection {
 	>;
 }
 
+/** Backend-neutral contract for one closed indexed String#split consumer loop. */
+export interface IRStringSplitCursor {
+	readonly license: {
+		readonly guard: CompilerGuardPlan;
+		readonly genericTwin: "retained";
+		readonly materialization: "on-demand";
+	};
+	readonly resultRepresentation: "split-cursor-spans";
+	/** Ordinary property producer retained by a dynamic-call twin. */
+	readonly property?: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+	readonly resultAlias: Extract<IRInstruction, { type: "move" }>;
+	readonly length: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+	readonly compare: Extract<IRInstruction, { type: "binary" }>;
+	readonly element: Extract<IRInstruction, { type: "loadProperty" }>;
+	readonly trimProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+	readonly trimCall: Extract<IRInstruction, { type: "call" }>;
+	readonly primitiveStringLengths: ReadonlyArray<
+		Extract<IRInstruction, { type: "loadPropertyStatic" }>
+	>;
+	readonly backedge: Extract<IRInstruction, { type: "jump" }>;
+	readonly exitBlock: number;
+}
+
 export type IRInstruction =
 	| {
 			/**
@@ -964,6 +987,8 @@ export type IRInstruction =
 			knownBuiltinCall?: KnownBuiltinCall;
 			/** Closed projected-result representation selected from canonical facts. */
 			stringSplitProjection?: IRStringSplitProjection;
+			/** Closed indexed consumer loop selected from canonical facts. */
+			stringSplitCursor?: IRStringSplitCursor;
 			/**
 			 * COMPILE-ONLY: ordinary receiver/property producers retained as the
 			 * interpreted generic twin of a canonical builtin call. Native lowering may
@@ -1045,6 +1070,8 @@ export type IRInstruction =
 			knownBuiltinCall: KnownBuiltinCall;
 			/** Closed projected-result representation selected from canonical facts. */
 			stringSplitProjection?: IRStringSplitProjection;
+			/** Closed indexed consumer loop selected from canonical facts. */
+			stringSplitCursor?: IRStringSplitCursor;
 	  }
 	| {
 			type: "construct";

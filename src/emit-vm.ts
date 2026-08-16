@@ -2404,7 +2404,11 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 	}
 }
 
-/** Stream one closed indexed String#split loop and materialize only trimmed elements. */
+/**
+ * Compatibility fallback for cached/legacy VM definitions that do not carry the
+ * IR-selected split cursor. Fresh compilations arrive with the combined split/trim
+ * region license already established before register allocation.
+ */
 function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 	const splitEffects = [
 		"coerce",
@@ -2416,8 +2420,10 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 	] as const;
 	const trimEffects = ["coerce", "allocate", "throw", "safepoint"] as const;
 	for (const fn of definition.functions) {
-		const cursors: Array<NonNullable<VmFunction["nativeStringSplitCursors"]>[number]> =
-			[];
+		const cursors: Array<NonNullable<VmFunction["nativeStringSplitCursors"]>[number]> = [
+			...(fn.nativeStringSplitCursors ?? []),
+		];
+		const selectedCallIps = new Set(cursors.map((cursor) => cursor.callIp));
 		const latestDefinition = (register: number, beforeIp: number) => {
 			for (let ip = beforeIp - 1; ip >= 0; ip--) {
 				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
@@ -2500,6 +2506,7 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 				: [],
 		);
 		for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
+			if (selectedCallIps.has(callIp)) continue;
 			const call = fn.instructions[callIp]!;
 			if (
 				call.opcode !== "CALL" ||

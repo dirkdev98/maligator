@@ -1051,9 +1051,10 @@ export function emitCompiledFunction(
 			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
 			semanticEpochStable,
 			lockedIdentity:
-				call?.opcode === "CALL" &&
-				call.guardedBuiltinCall !== undefined &&
-				vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard),
+				call?.opcode === "CALL_BUILTIN" ||
+				(call?.opcode === "CALL" &&
+					call.guardedBuiltinCall !== undefined &&
+					vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard)),
 			lockedTrimIdentity:
 				trimCall?.opcode === "CALL" &&
 				trimCall.guardedBuiltinCall !== undefined &&
@@ -5976,6 +5977,20 @@ function emitInstruction(
 				instruction.arguments.length === 0
 					? "nullptr"
 					: `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`;
+			if (nativeStringSplitCursorAction?.role === "call") {
+				const { site } = nativeStringSplitCursorAction;
+				const id = site.cursor.callIp;
+				return [
+					`__string_split_cursor_${id}_active = mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state);`,
+					`if (__string_split_cursor_${id}_active) {`,
+					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+					`} else {`,
+					`  r${instruction.dst} = mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					`}`,
+					throwCheck,
+					poll,
+				];
+			}
 			if (nativeStringSplitProjectionAction?.role === "call") {
 				const { site } = nativeStringSplitProjectionAction;
 				const projection = site.projection;

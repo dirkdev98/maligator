@@ -35,6 +35,7 @@ import {
 	buildIRRegisterIndex,
 	definedRegisters,
 	destinationCount,
+	usedRegisters,
 } from "./ir-register-index.ts";
 import { debugIntermediateProgram, getOrCreateStringConstant } from "./ir.ts";
 import type {
@@ -42,6 +43,7 @@ import type {
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
+	IRStringSplitCursor,
 	IRStringSplitProjection,
 	IRTypeofResult,
 } from "./ir.ts";
@@ -281,6 +283,8 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 				const argumentStart = instruction.type === "call" ? 3 : 2;
 				if (
 					!knownBuiltinCallProves(call, "String.prototype.split") ||
+					call?.semantics.kind !== "known" ||
+					!call.semantics.value.lowerings.includes("projected-string-split") ||
 					instruction.registers.length !== argumentStart + 1 ||
 					(registerIndex.definitions.get(instruction.registers[0])?.length ?? 0) !== 1
 				) {
@@ -363,7 +367,7 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 				}
 				const elementCount = loads.filter((load) => load.kind === "element").length;
 				const guard = compilerGuardPlan(
-					[call?.identity],
+					[call?.identity, call?.semantics],
 					[
 						{
 							kind: "materialize",
@@ -393,6 +397,412 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 				};
 				count++;
 			}
+		}
+	}
+	return count;
+}
+
+/**
+ * Select one closed indexed split loop while block identity, exact call facts,
+ * and virtual-register uses are still available. The ordinary split Array and
+ * element/trim operations remain the complete on-demand materialization twin.
+ */
+function annotateStringSplitCursorRegions(program: IntermediateProgram): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type === "call" || instruction.type === "callBuiltin") {
+					delete instruction.stringSplitCursor;
+				}
+			}
+		}
+
+		const blockStartIps = new Map<number, number>();
+		let nextIp = 0;
+		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
+			blockStartIps.set(blockIndex, nextIp);
+			for (const instruction of fn.blocks[blockIndex]!.instructions) {
+				if (
+					instruction.type !== "sourcePos" &&
+					instruction.type !== "tryBegin" &&
+					instruction.type !== "tryEnd"
+				) {
+					nextIp++;
+				}
+			}
+		}
+		const instructions: Array<IRInstruction> = [];
+		const handlers: Array<{ startIp: number; endIp: number; handlerIp: number }> = [];
+		const openHandlers: Array<{ startIp: number; handlerIp: number }> = [];
+		let validHandlers = true;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") continue;
+				if (instruction.type === "tryBegin") {
+					const handlerIp = blockStartIps.get(instruction.blocks[0]);
+					if (handlerIp === undefined) {
+						validHandlers = false;
+						continue;
+					}
+					openHandlers.push({ startIp: instructions.length, handlerIp });
+					continue;
+				}
+				if (instruction.type === "tryEnd") {
+					const handler = openHandlers.pop();
+					if (handler === undefined) validHandlers = false;
+					else handlers.push({ ...handler, endIp: instructions.length });
+					continue;
+				}
+				instructions.push(instruction);
+			}
+		}
+		if (!validHandlers || openHandlers.length > 0) continue;
+
+		const usesRegister = (instruction: IRInstruction, register: number): boolean =>
+			usedRegisters(instruction).includes(register);
+		const definesRegister = (instruction: IRInstruction, register: number): boolean =>
+			definedRegisters(instruction).includes(register);
+		const latestDefinition = (register: number, beforeIp: number) => {
+			for (let ip = beforeIp - 1; ip >= 0; ip--) {
+				const instruction = instructions[ip]!;
+				if (definesRegister(instruction, register)) return { instruction, ip };
+			}
+			return undefined;
+		};
+		const jumpTarget = (
+			instruction: Extract<IRInstruction, { type: "jump" | "jumpIf" }>,
+		) => blockStartIps.get(instruction.blocks[0]);
+		const successors = (ip: number): Array<number> => {
+			const instruction = instructions[ip];
+			if (instruction === undefined) return [];
+			let result: Array<number>;
+			if (instruction.type === "jump") {
+				const target = jumpTarget(instruction);
+				result = target === undefined ? [] : [target];
+			} else if (instruction.type === "jumpIf") {
+				const target = jumpTarget(instruction);
+				result = [target, ip + 1].filter(
+					(candidate): candidate is number =>
+						candidate !== undefined && candidate < instructions.length,
+				);
+			} else if (instruction.type === "return" || instruction.type === "throw") {
+				result = [];
+			} else {
+				result = ip + 1 < instructions.length ? [ip + 1] : [];
+			}
+			for (const handler of handlers) {
+				if (ip >= handler.startIp && ip < handler.endIp) result.push(handler.handlerIp);
+			}
+			return [...new Set(result)];
+		};
+		const instructionDominates = (dominatorIp: number, targetIp: number): boolean => {
+			const pending = [0];
+			const visited = new Set<number>();
+			while (pending.length > 0) {
+				const ip = pending.pop()!;
+				if (ip < 0 || ip >= instructions.length || visited.has(ip)) continue;
+				visited.add(ip);
+				if (ip === dominatorIp) continue;
+				if (ip === targetIp) return false;
+				pending.push(...successors(ip));
+			}
+			return true;
+		};
+		const isReachableAvoiding = (
+			startIp: number,
+			targetIp: number,
+			blockedIp: number,
+		): boolean => {
+			const pending = [startIp];
+			const visited = new Set<number>();
+			while (pending.length > 0) {
+				const ip = pending.pop()!;
+				if (ip < 0 || ip >= instructions.length || ip === blockedIp || visited.has(ip)) {
+					continue;
+				}
+				if (ip === targetIp) return true;
+				visited.add(ip);
+				pending.push(...successors(ip));
+			}
+			return false;
+		};
+		const jumpEdges = instructions.flatMap((instruction, sourceIp) => {
+			if (instruction.type !== "jump" && instruction.type !== "jumpIf") return [];
+			const targetIp = jumpTarget(instruction);
+			return targetIp === undefined ? [] : [{ sourceIp, targetIp }];
+		});
+
+		for (let callIp = 0; callIp < instructions.length; callIp++) {
+			const call = instructions[callIp]!;
+			if (call.type !== "call" && call.type !== "callBuiltin") continue;
+			const splitFact = call.knownBuiltinCall;
+			const argumentStart = call.type === "call" ? 3 : 2;
+			if (
+				splitFact === undefined ||
+				!knownBuiltinCallProves(splitFact, "String.prototype.split") ||
+				splitFact.semantics.kind !== "known" ||
+				!splitFact.semantics.value.lowerings.includes("closed-string-split") ||
+				call.registers.length !== argumentStart + 1
+			) {
+				continue;
+			}
+
+			const receiver = call.type === "call" ? call.registers[2] : call.registers[1];
+			let property: Extract<IRInstruction, { type: "loadPropertyStatic" }> | undefined;
+			if (call.type === "call") {
+				const calleeDefinition = latestDefinition(call.registers[1], callIp);
+				if (
+					calleeDefinition?.instruction.type !== "loadPropertyStatic" ||
+					calleeDefinition.instruction.registers[1] !== receiver ||
+					decodeStringConstant(program, calleeDefinition.instruction.stringIndex) !==
+						"split" ||
+					instructions
+						.slice(calleeDefinition.ip + 1, callIp)
+						.some((instruction) => definesRegister(instruction, receiver))
+				) {
+					continue;
+				}
+				property = calleeDefinition.instruction;
+			}
+
+			const resultAlias = instructions[callIp + 1];
+			if (
+				resultAlias?.type !== "move" ||
+				resultAlias.registers[1] !== call.registers[0]
+			) {
+				continue;
+			}
+			let lengthIp = -1;
+			for (let ip = callIp + 2; ip < instructions.length; ip++) {
+				const instruction = instructions[ip]!;
+				if (usesRegister(instruction, resultAlias.registers[0])) {
+					if (
+						instruction.type === "loadPropertyStatic" &&
+						instruction.registers[1] === resultAlias.registers[0] &&
+						decodeStringConstant(program, instruction.stringIndex) === "length"
+					) {
+						lengthIp = ip;
+					}
+					break;
+				}
+				if (definesRegister(instruction, resultAlias.registers[0])) break;
+			}
+			if (lengthIp < 1) continue;
+			const length = instructions[lengthIp]!;
+			const compare = instructions[lengthIp + 1];
+			const bodyBranch = instructions[lengthIp + 2];
+			const exitJump = instructions[lengthIp + 3];
+			const elementIp = lengthIp + 4;
+			const element = instructions[elementIp];
+			const trimProperty = instructions[elementIp + 1];
+			const trimCall = instructions[elementIp + 2];
+			if (
+				length.type !== "loadPropertyStatic" ||
+				compare?.type !== "binary" ||
+				compare.operator !== "<" ||
+				compare.registers[2] !== length.registers[0] ||
+				bodyBranch?.type !== "jumpIf" ||
+				bodyBranch.registers[0] !== compare.registers[0] ||
+				jumpTarget(bodyBranch) !== elementIp ||
+				exitJump?.type !== "jump" ||
+				element?.type !== "loadProperty" ||
+				element.registers[1] !== resultAlias.registers[0] ||
+				element.registers[2] !== compare.registers[1] ||
+				trimProperty?.type !== "loadPropertyStatic" ||
+				trimProperty.registers[1] !== element.registers[0] ||
+				decodeStringConstant(program, trimProperty.stringIndex) !== "trim" ||
+				trimCall?.type !== "call" ||
+				!knownBuiltinCallProves(trimCall.knownBuiltinCall, "String.prototype.trim") ||
+				trimCall.knownBuiltinCall?.semantics.kind !== "known" ||
+				!trimCall.knownBuiltinCall.semantics.value.lowerings.includes(
+					"split-cursor-span",
+				) ||
+				trimCall.registers[1] !== trimProperty.registers[0] ||
+				trimCall.registers[2] !== element.registers[0] ||
+				trimCall.registers.length !== 3
+			) {
+				continue;
+			}
+
+			const index = compare.registers[1];
+			const backedges = jumpEdges.filter((edge) => edge.targetIp === lengthIp);
+			if (backedges.length !== 2) continue;
+			const preheader = backedges.find((edge) => edge.sourceIp === lengthIp - 1);
+			const backedge = backedges.find((edge) => edge.sourceIp > elementIp + 2);
+			if (preheader === undefined || backedge === undefined) continue;
+			const increment = instructions[backedge.sourceIp - 1];
+			const backedgeInstruction = instructions[backedge.sourceIp];
+			const indexDefinition = latestDefinition(index, lengthIp);
+			const exitIp = jumpTarget(exitJump);
+			if (
+				increment?.type !== "unary" ||
+				increment.operator !== "increment" ||
+				increment.registers[1] !== index ||
+				increment.registers[0] !== index ||
+				backedgeInstruction?.type !== "jump" ||
+				exitIp !== backedge.sourceIp + 1 ||
+				indexDefinition?.instruction.type !== "createNumber" ||
+				!Object.is(indexDefinition.instruction.value, 0) ||
+				!instructionDominates(indexDefinition.ip, lengthIp) ||
+				!instructionDominates(callIp, lengthIp) ||
+				isReachableAvoiding(exitIp, lengthIp, callIp) ||
+				handlers.some(
+					(handler) =>
+						handler.handlerIp >= lengthIp && handler.handlerIp <= elementIp + 2,
+				)
+			) {
+				continue;
+			}
+			const unexpectedEntry = jumpEdges.some((edge) => {
+				if (edge.targetIp < lengthIp || edge.targetIp > backedge.sourceIp) return false;
+				if (edge.targetIp === lengthIp) {
+					return edge.sourceIp !== lengthIp - 1 && edge.sourceIp !== backedge.sourceIp;
+				}
+				if (edge.targetIp >= elementIp && edge.targetIp <= elementIp + 2) {
+					return edge.sourceIp !== lengthIp + 2 || edge.targetIp !== elementIp;
+				}
+				return edge.sourceIp <= callIp || edge.sourceIp > backedge.sourceIp;
+			});
+			if (
+				unexpectedEntry ||
+				instructions.some((instruction, sourceIp) => {
+					if (sourceIp < elementIp || sourceIp > backedge.sourceIp) return false;
+					return successors(sourceIp).some(
+						(targetIp) =>
+							!(sourceIp === backedge.sourceIp && targetIp === lengthIp) &&
+							(targetIp < elementIp || targetIp > backedge.sourceIp) &&
+							isReachableAvoiding(targetIp, lengthIp, callIp),
+					);
+				}) ||
+				handlers.some(
+					(handler) =>
+						(handler.handlerIp >= lengthIp && handler.handlerIp <= backedge.sourceIp) ||
+						(handler.startIp <= backedge.sourceIp && handler.endIp > elementIp),
+				)
+			) {
+				continue;
+			}
+
+			let closed = true;
+			let callResultLive = true;
+			let aliasLive = true;
+			for (let ip = callIp + 1; ip < instructions.length; ip++) {
+				const instruction = instructions[ip]!;
+				if (
+					callResultLive &&
+					usesRegister(instruction, call.registers[0]) &&
+					!(ip === callIp + 1 && instruction === resultAlias)
+				) {
+					closed = false;
+					break;
+				}
+				if (
+					aliasLive &&
+					usesRegister(instruction, resultAlias.registers[0]) &&
+					ip !== lengthIp &&
+					ip !== elementIp
+				) {
+					closed = false;
+					break;
+				}
+				if (ip > callIp + 1 && definesRegister(instruction, call.registers[0])) {
+					callResultLive = false;
+				}
+				if (ip > callIp + 1 && definesRegister(instruction, resultAlias.registers[0])) {
+					aliasLive = false;
+				}
+				if (!callResultLive && !aliasLive) break;
+			}
+			for (let ip = lengthIp; closed && ip <= backedge.sourceIp; ip++) {
+				const instruction = instructions[ip]!;
+				if (
+					usesRegister(instruction, index) &&
+					ip !== lengthIp + 1 &&
+					ip !== elementIp &&
+					ip !== backedge.sourceIp - 1
+				) {
+					closed = false;
+				}
+			}
+			let elementLive = true;
+			for (
+				let ip = elementIp + 1;
+				closed && elementLive && ip < instructions.length;
+				ip++
+			) {
+				const instruction = instructions[ip]!;
+				if (
+					usesRegister(instruction, element.registers[0]) &&
+					ip !== elementIp + 1 &&
+					ip !== elementIp + 2
+				) {
+					closed = false;
+					break;
+				}
+				if (definesRegister(instruction, element.registers[0])) elementLive = false;
+			}
+			if (!closed) continue;
+
+			const trimFact = trimCall.knownBuiltinCall;
+			const guard = compilerGuardPlan(
+				[
+					splitFact.identity,
+					splitFact.semantics,
+					trimFact?.identity,
+					trimFact?.semantics,
+				],
+				[
+					{
+						kind: "materialize",
+						id: `string-split-cursor:${splitFact.sourceSite ?? fn.functionIndex}`,
+					},
+				],
+			);
+			if (
+				guard === undefined ||
+				!guard.obligations.some((obligation) => obligation.kind === "fallback") ||
+				!guard.obligations.some((obligation) => obligation.kind === "materialize")
+			) {
+				continue;
+			}
+			const primitiveStringLengths: Array<
+				IRStringSplitCursor["primitiveStringLengths"][number]
+			> = [];
+			const trimResultAliases = new Set([trimCall.registers[0]]);
+			for (let ip = elementIp + 3; ip <= backedge.sourceIp; ip++) {
+				const instruction = instructions[ip]!;
+				if (
+					instruction.type === "loadPropertyStatic" &&
+					trimResultAliases.has(instruction.registers[1]) &&
+					decodeStringConstant(program, instruction.stringIndex) === "length"
+				) {
+					primitiveStringLengths.push(instruction);
+				}
+				const moveAlias =
+					instruction.type === "move" && trimResultAliases.has(instruction.registers[1]);
+				for (const alias of [...trimResultAliases]) {
+					if (definesRegister(instruction, alias)) trimResultAliases.delete(alias);
+				}
+				if (moveAlias && instruction.type === "move") {
+					trimResultAliases.add(instruction.registers[0]);
+				}
+			}
+			call.stringSplitCursor = {
+				license: { guard, genericTwin: "retained", materialization: "on-demand" },
+				resultRepresentation: "split-cursor-spans",
+				...(property === undefined ? {} : { property }),
+				resultAlias,
+				length,
+				compare,
+				element,
+				trimProperty,
+				trimCall,
+				primitiveStringLengths,
+				backedge: backedgeInstruction,
+				exitBlock: exitJump.blocks[0],
+			};
+			count++;
 		}
 	}
 	return count;
@@ -811,6 +1221,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call) annotateDirectCallTargets(program);
 		if (residualFeatures.call) optImmediateCallOperands(program);
 		optDeadInstructionElimination(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateStringSplitCursorRegions(program);
 		annotateFiniteStringConcats(program);
 		annotateNativeNumericFusions(program);
 		annotateTerminalYieldSites(program);
@@ -953,6 +1365,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"post-annotation-dead-instruction-elimination",
 			optDeadInstructionElimination,
+		);
+		runFinalPass(
+			"annotate-string-split-cursors",
+			annotateStringSplitCursorRegions,
+			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass("annotate-finite-string-concats", annotateFiniteStringConcats);
 		runFinalPass("annotate-native-numeric-fusions", annotateNativeNumericFusions);

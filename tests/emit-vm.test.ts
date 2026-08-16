@@ -1548,6 +1548,48 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("carries IR-selected split cursor licenses through lowering", () => {
+		const source = `globalThis.sum = function sum(value, separator) {
+			const parts = value.split(separator);
+			let total = 0;
+			for (let index = 0; index < parts.length; index++) {
+				const part = parts[index].trim();
+				total += part.length;
+			}
+			return total;
+		};`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"split-cursor-lowering.js",
+			parseScript(source, { strict: false }),
+		);
+		const lowered = compileSemanticProgramToVmDefinition(semantic);
+		const cursors = lowered.functions.flatMap((fn) => fn.nativeStringSplitCursors ?? []);
+		expect(cursors).toHaveLength(1);
+		expect(cursors[0]).toMatchObject({
+			resultRepresentation: "split-cursor-spans",
+			license: {
+				genericTwin: "retained",
+				materialization: "on-demand",
+				guard: {
+					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					obligations: ["fallback", "materialize"],
+				},
+			},
+		});
+		expect(cursors[0]?.primitiveStringLengthIps).toHaveLength(1);
+
+		const cached = deserializeVmDefinition(
+			serializeVmDefinition(lowered, { debugInfo: false }),
+		);
+		expect(
+			cached.functions.flatMap((fn) => fn.nativeStringSplitCursors ?? []),
+		).toHaveLength(0);
+		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+			"mal_builtin_string_split_cursor_init(vm,",
+		);
+	});
+
 	it("emits exact locked primitive String split calls without dynamic dispatch", () => {
 		const code = `
 			function make(separator, limit) {
@@ -1611,6 +1653,26 @@ describe("native update-expression representation", () => {
 		);
 		expect(lockedOutput).toMatch(
 			/mal_builtin_string_split_cursor_init_locked\([^\n]+\);[\s\S]*?else \{\n\s+r\d+ = mal_vm_op_load_property_ic\(/,
+		);
+
+		const directLockedOutput = emitLocked(`
+			function sum(separator) {
+				const parts = " alpha ; beta ".split(separator);
+				let total = 0;
+				for (let index = 0; index < parts.length; index++) {
+					total += parts[index].trim().length;
+				}
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		expect(directLockedOutput).toContain(
+			"mal_builtin_string_split_cursor_init_locked(vm,",
+		);
+		expect(directLockedOutput).toContain("mal_builtin_string_split_direct(vm,");
+		expect(directLockedOutput).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+		expect(directLockedOutput).toMatch(
+			/mal_builtin_string_split_cursor_init_locked\([^\n]+\);[\s\S]*?else \{\n\s+r\d+ = mal_builtin_string_split_direct\(/,
 		);
 	});
 
