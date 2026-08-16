@@ -113,6 +113,7 @@ const FS: HostModuleSpec = {
 		"statSync",
 		"stat",
 		"unlinkSync",
+		"utimesSync",
 		"write",
 		"writeFileSync",
 		"writeSync",

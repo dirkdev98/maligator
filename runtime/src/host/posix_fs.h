@@ -66,6 +66,11 @@ int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written);
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */
 int mal_posix_fs_stat(const char *path, MalPosixStat *out);
 
+/* Set access and modification timestamps with nanosecond precision. */
+int mal_posix_fs_utimes(const char *path,
+    i64 atime_seconds, i64 atime_nanoseconds,
+    i64 mtime_seconds, i64 mtime_nanoseconds);
+
 /* lstat(2) `path` into `*out` (does not follow symlinks). */
 int mal_posix_fs_lstat(const char *path, MalPosixStat *out);
 

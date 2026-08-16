@@ -239,6 +239,16 @@ int mal_posix_fs_stat(const char *path, MalPosixStat *out) {
     return 0;
 }
 
+int mal_posix_fs_utimes(const char *path,
+    i64 atime_seconds, i64 atime_nanoseconds,
+    i64 mtime_seconds, i64 mtime_nanoseconds) {
+    struct timespec times[2] = {
+        { .tv_sec = (time_t) atime_seconds, .tv_nsec = (long) atime_nanoseconds },
+        { .tv_sec = (time_t) mtime_seconds, .tv_nsec = (long) mtime_nanoseconds },
+    };
+    return utimensat(AT_FDCWD, path, times, 0) == 0 ? 0 : errno;
+}
+
 int mal_posix_fs_lstat(const char *path, MalPosixStat *out) {
     struct stat st;
     if (lstat(path, &st) != 0) return errno;

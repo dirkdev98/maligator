@@ -14,6 +14,7 @@ import {
 	rmSync,
 	statSync,
 	unlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import fsPromises, {
@@ -62,6 +63,18 @@ mkdirSync(nested, { recursive: true });
 check("recursive mkdir accepts an existing directory", statSync(nested).isDirectory());
 
 writeFileSync(textFile, "héllo 😀");
+const touchedAt = new Date(1_600_000_000_123);
+utimesSync(textFile, touchedAt, touchedAt);
+check(
+	"utimesSync accepts Date timestamps",
+	Math.abs(statSync(textFile).mtimeMs - touchedAt.getTime()) < 1,
+);
+const touchedSeconds = 1_600_000_000.25;
+utimesSync(textFile, touchedSeconds, touchedSeconds);
+check(
+	"utimesSync accepts numeric seconds",
+	Math.abs(statSync(textFile).mtimeMs - touchedSeconds * 1000) < 1,
+);
 appendFileSync(textFile, " + sync");
 eq("appendFileSync appends text", readFileSync(textFile, "utf8"), "héllo 😀 + sync");
 await appendFile(textFile, " + promise");

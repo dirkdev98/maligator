@@ -10,7 +10,7 @@ import {
 	productCompilerInstallation,
 } from "../src/cli-commands.ts";
 import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
-import { executeBinary } from "../src/cli-run.ts";
+import { executeBinary, executeBinaryCaptured } from "../src/cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
 import {
 	PRODUCT_RUNTIME_ASSET_INCLUDE,
@@ -421,6 +421,23 @@ describe("executeBinary", () => {
 			"ignore",
 		);
 		expect(outcome).toEqual({ status: undefined, signal: "SIGTERM" });
+	});
+
+	it("captures output and preserves a non-zero status", () => {
+		const outcome = executeBinaryCaptured(
+			process.execPath,
+			[
+				"-e",
+				`process.stdout.write("out"); process.stderr.write("err"); process.exit(23);`,
+			],
+			process.env,
+		);
+		expect(outcome).toEqual({
+			status: 23,
+			signal: undefined,
+			stdout: "out",
+			stderr: "err",
+		});
 	});
 });
 

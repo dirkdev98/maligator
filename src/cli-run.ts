@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export interface RunOutcome {
 	status?: number;
@@ -36,12 +36,24 @@ export function executeBinaryCaptured(
 	args: Array<string>,
 	env: NodeJS.ProcessEnv,
 ): CapturedRunOutcome {
-	const result = spawnSync(binaryPath, args, { env, encoding: "utf-8" });
-	if (result.error) throw result.error;
-	return {
-		status: result.status ?? undefined,
-		signal: result.signal ?? undefined,
-		stdout: result.stdout ?? "",
-		stderr: result.stderr ?? "",
-	};
+	try {
+		const stdout = execFileSync(binaryPath, args, { env, encoding: "utf-8" });
+		return { status: 0, stdout, stderr: "" };
+	} catch (error) {
+		const result = error as Error & {
+			status?: number | null;
+			signal?: NodeJS.Signals | null;
+			stdout?: string | null;
+			stderr?: string | null;
+		};
+		const hasStatus = result.status !== undefined && result.status !== null;
+		const hasSignal = result.signal !== undefined && result.signal !== null;
+		if (!hasStatus && !hasSignal) throw error;
+		return {
+			status: result.status ?? undefined,
+			signal: result.signal ?? undefined,
+			stdout: result.stdout ?? "",
+			stderr: result.stderr ?? "",
+		};
+	}
 }

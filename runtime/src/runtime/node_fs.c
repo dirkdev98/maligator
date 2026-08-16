@@ -470,6 +470,58 @@ static MalValue node_fs_lstat_sync(
     return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
 }
 
+static bool node_fs_time_value(MalVm *vm, MalValue value, i64 *seconds, i64 *nanoseconds) {
+    f64 milliseconds;
+    if (mal_value_is_date_object(value)) {
+        milliseconds = mal_value_to_date_object(value)->date_value;
+    } else {
+        f64 seconds_value;
+        if (!mal_vm_to_number(vm, value, &seconds_value)) return false;
+        milliseconds = seconds_value * 1000.0;
+    }
+    if (!isfinite(milliseconds)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "utimesSync time must be a finite number or Date");
+        return false;
+    }
+    f64 whole_seconds = floor(milliseconds / 1000.0);
+    if (whole_seconds < (f64) INT64_MIN || whole_seconds > (f64) INT64_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "utimesSync time is outside the supported range");
+        return false;
+    }
+    *seconds = (i64) whole_seconds;
+    *nanoseconds = (i64) ((milliseconds - whole_seconds * 1000.0) * 1000000.0);
+    return true;
+}
+
+static MalValue node_fs_utimes_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    i64 atime_seconds;
+    i64 atime_nanoseconds;
+    i64 mtime_seconds;
+    i64 mtime_nanoseconds;
+    if (!node_fs_time_value(vm,
+            argc >= 2 ? args[1] : mal_value_new_undefined(),
+            &atime_seconds, &atime_nanoseconds)
+        || !node_fs_time_value(vm,
+            argc >= 3 ? args[2] : mal_value_new_undefined(),
+            &mtime_seconds, &mtime_nanoseconds)) {
+        free(path);
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_utimes(path,
+        atime_seconds, atime_nanoseconds, mtime_seconds, mtime_nanoseconds);
+    if (err != 0) node_fs_throw_errno(vm, err, "utime", path);
+    free(path);
+    return mal_value_new_undefined();
+}
+
 static MalValue node_fs_readdir_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -1306,6 +1358,9 @@ static MalValue node_fs_export(
     if (strcmp(name, "unlinkSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "unlinkSync", 1, node_fs_unlink_sync);
     }
+    if (strcmp(name, "utimesSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "utimesSync", 3, node_fs_utimes_sync);
+    }
     if (strcmp(name, "writeSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "writeSync", 2, node_fs_write_sync);
     }
@@ -1400,7 +1455,7 @@ void mal_host_install_node_fs(
     static const char *names[] = {
         "Stats", "appendFileSync", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
 		"mkdtempSync", "readFile", "readFileSync", "readdir", "readdirSync", "realpathSync", "renameSync",
-        "rmSync", "statSync", "stat", "unlinkSync", "write", "writeFileSync", "writeSync",
+        "rmSync", "statSync", "stat", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan module_root;
