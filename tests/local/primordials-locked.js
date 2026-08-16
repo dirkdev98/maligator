@@ -57,6 +57,11 @@ check(
 	"locked split projection static identity",
 	lockedSplitProjection("ab::x42::") === 245,
 );
+function lockedExactSplitProjection() {
+	const fields = "ab::x42::".split("::");
+	return fields[0].length * 100 + fields[1].length * 10 + fields.length;
+}
+check("locked exact split projection direct call", lockedExactSplitProjection() === 233);
 let splitGetterCalls = 0;
 let splitMethodCalls = 0;
 let sliceGetterCalls = 0;

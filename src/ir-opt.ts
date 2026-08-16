@@ -161,9 +161,10 @@ function optLowerLockedMathNumberCalls(program: IntermediateProgram): boolean {
  * callback, so invoking the builtin directly preserves all remaining split
  * semantics (including @@split dispatch, coercion, allocation, and throws).
  *
- * Projection/cursor consumers stay in their retained-twin form for now: their
- * result property accesses license a more specialized representation downstream,
- * and replacing that call here would otherwise hide the existing native region.
+ * Result consumers remain ordinary IR. Backend-neutral direct calls can still be
+ * licensed for a stronger projected/cursor representation downstream; a local
+ * representation miss falls back to the exact builtin rather than reconstructing
+ * dynamic property resolution and generic dispatch.
  */
 function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean {
 	let changed = false;
@@ -181,28 +182,6 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 			}
 			return register;
 		};
-		const resultFeedsPropertyAccess = (initial: number): boolean => {
-			const pending = [initial];
-			const aliases = new Set<number>();
-			while (pending.length > 0) {
-				const register = pending.pop()!;
-				if (aliases.has(register)) continue;
-				aliases.add(register);
-				for (const use of registerIndex.uses.get(register) ?? []) {
-					if (
-						(use.instruction.type === "loadProperty" ||
-							use.instruction.type === "loadPropertyStatic") &&
-						use.position === 1
-					) {
-						return true;
-					}
-					if (use.instruction.type === "move" && use.position === 1) {
-						pending.push(use.instruction.registers[0]);
-					}
-				}
-			}
-			return false;
-		};
 		const removedProperties = new Set<IRInstruction>();
 		for (const block of fn.blocks) {
 			for (let index = 0; index < block.instructions.length; index++) {
@@ -213,8 +192,7 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 					call === undefined ||
 					call.operation !== "String.prototype.split" ||
 					!knownBuiltinCallProves(call, "String.prototype.split") ||
-					!compilerFactIsWorldInvariant(call.identity) ||
-					resultFeedsPropertyAccess(instruction.registers[0])
+					!compilerFactIsWorldInvariant(call.identity)
 				) {
 					continue;
 				}

@@ -14,7 +14,12 @@ import {
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
-import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
+import type {
+	VmDefinition,
+	VmFunction,
+	VmInstruction,
+	VmRegionLicense,
+} from "./lower-vm.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
@@ -2258,26 +2263,42 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 		for (let callIp = 1; callIp < fn.instructions.length; callIp++) {
 			const call = fn.instructions[callIp]!;
 			const load = fn.instructions[callIp - 1]!;
-			if (
-				call.opcode !== "CALL" ||
-				!vmCallProvesBuiltin(call, "String.prototype.split", {
+			const direct =
+				call.opcode === "CALL_BUILTIN" && call.operation === "String.prototype.split";
+			const guarded =
+				call.opcode === "CALL" &&
+				vmCallProvesBuiltin(call, "String.prototype.split", {
 					lowering: "projected-string-split",
 					result: "array-of-strings",
 					effects: splitEffects,
-				}) ||
+				});
+			if (
+				(!direct && !guarded) ||
 				call.arguments.length !== 1 ||
-				load.opcode !== "LOAD_PROPERTY_STATIC" ||
-				load.dst !== call.callee ||
-				load.object !== call.thisValue ||
-				!staticStringEquals(definition, load.stringIndex, "split") ||
+				(guarded &&
+					(load.opcode !== "LOAD_PROPERTY_STATIC" ||
+						load.dst !== call.callee ||
+						load.object !== call.thisValue ||
+						!staticStringEquals(definition, load.stringIndex, "split"))) ||
 				jumpTargets.has(callIp)
 			) {
 				continue;
 			}
 			const separator = decodeVmValueOperand(call.arguments[0]!);
+			const separatorStringIndex =
+				separator.kind === "string"
+					? separator.index
+					: separator.kind === "register"
+						? (() => {
+								const producer = latestDefinition(separator.register, callIp);
+								return producer?.instruction.opcode === "CREATE_STRING"
+									? producer.instruction.stringIndex
+									: undefined;
+							})()
+						: undefined;
 			if (
-				separator.kind !== "string" ||
-				(definition.stringConstants[separator.index]?.length ?? 0) === 0
+				separatorStringIndex === undefined ||
+				(definition.stringConstants[separatorStringIndex]?.length ?? 0) === 0
 			) {
 				continue;
 			}
@@ -2351,16 +2372,27 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 			if (!safe || elementLoads.length === 0 || elementLoads.length > 8) {
 				continue;
 			}
-			const license = vmRegionLicense([call.guardedBuiltinCall?.guard], "whole-region");
+			const license: VmRegionLicense | undefined = direct
+				? {
+						guard: {
+							dependencies: [{ kind: "world", fact: "primordials.locked" }],
+							obligations: ["fallback", "materialize"],
+						},
+						genericTwin: "retained",
+						materialization: "whole-region",
+					}
+				: call.opcode === "CALL"
+					? vmRegionLicense([call.guardedBuiltinCall?.guard], "whole-region")
+					: undefined;
 			if (license === undefined) continue;
 			projections.push({
 				license,
 				resultRepresentation: "projected-elements",
-				propertyIp: callIp - 1,
+				propertyIp: direct ? -1 : callIp - 1,
 				callIp,
-				callee: call.callee,
+				callee: call.opcode === "CALL" ? call.callee : -1,
 				receiver: call.thisValue,
-				separatorStringIndex: separator.index,
+				separatorStringIndex,
 				result: call.dst,
 				loads,
 			});

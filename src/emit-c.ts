@@ -1017,7 +1017,8 @@ export function emitCompiledFunction(
 			slotsOffset: nextStackSlot,
 			elementLoads,
 			lockedIdentity:
-				call?.opcode === "CALL" && vmGuardIsWorldInvariant(projection.license.guard),
+				call?.opcode === "CALL_BUILTIN" ||
+				(call?.opcode === "CALL" && vmGuardIsWorldInvariant(projection.license.guard)),
 		});
 		nextStackSlot += elementLoads.length;
 	}
@@ -5975,6 +5976,25 @@ function emitInstruction(
 				instruction.arguments.length === 0
 					? "nullptr"
 					: `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`;
+			if (nativeStringSplitProjectionAction?.role === "call") {
+				const { site } = nativeStringSplitProjectionAction;
+				const projection = site.projection;
+				const fast = `__string_split_${projection.callIp}_fast`;
+				const indices = site.elementLoads.map((load) => load.index).join(", ");
+				const outputs = site.elementLoads
+					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
+					.join(", ");
+				return [
+					`${fast} = mal_builtin_string_split_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length);`,
+					`if (${fast}) {`,
+					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+					`} else {`,
+					`  r${instruction.dst} = mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					`}`,
+					throwCheck,
+					poll,
+				];
+			}
 			return [
 				`r${instruction.dst} = mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
 				throwCheck,

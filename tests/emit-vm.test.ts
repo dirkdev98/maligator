@@ -1520,6 +1520,19 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).not.toContain("mal_vm_call_cached(vm,");
 	});
 
+	it("projects exact locked primitive String split calls after IR dispatch erasure", () => {
+		const code = `
+			function first() {
+				return "alpha,beta".split(",")[0];
+			}
+			globalThis.first = first;
+		`;
+		const lockedOutput = emitLocked(code);
+		expect(lockedOutput).toContain("mal_builtin_string_split_projection_locked(vm,");
+		expect(lockedOutput).toContain("mal_builtin_string_split_direct(vm,");
+		expect(lockedOutput).not.toContain("mal_vm_call_cached(vm,");
+	});
+
 	it("streams a closed indexed String split loop directly into trim", () => {
 		const code = `
 			function sum(value, separator) {

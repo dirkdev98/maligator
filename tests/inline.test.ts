@@ -447,14 +447,14 @@ test("locked exact primitive String split calls erase dynamic dispatch in IR", (
 	const projected = optimizedLockedProgram(
 		`globalThis.first = function first() { return "a,b".split(",")[0]; };`,
 	).functions.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions));
-	expect(projected.some((instruction) => instruction.type === "callBuiltin")).toBe(false);
+	expect(projected.some((instruction) => instruction.type === "callBuiltin")).toBe(true);
 	expect(
 		projected.some(
 			(instruction) =>
 				instruction.type === "call" &&
 				instruction.knownBuiltinCall?.operation === "String.prototype.split",
 		),
-	).toBe(true);
+	).toBe(false);
 });
 
 test("direct RegExp exec calls carry canonical capture-projection semantics", () => {

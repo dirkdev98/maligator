@@ -245,6 +245,11 @@ is general rather than a registry-shaped collection of special cases.
         the property Get and generic call in IR, preserve full split semantics in
         native code and MALW v40, and leave projection/cursor-shaped result uses for
         their stronger retained-twin representation pass.
+  - [x] Let exact primitive locked split calls enter projected-result selection
+        after dynamic dispatch has already been erased in IR. Keep the virtual
+        projection's local materialization fallback as a direct exact builtin call,
+        so compiled code never reconstructs the property Get or generic dispatch
+        and interpreted code shares the same direct-call operation.
 - [x] Lower statically known Math calls through builtin-call IR. Preserve argument
       evaluation, coercion, exceptions, and Realm identity; use native numeric
       arguments/results when representation facts allow it.
