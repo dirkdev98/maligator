@@ -1021,6 +1021,14 @@ static MalValue mal_builtin_object_keys(MalVm *vm, MalValue this_value, const Ma
     );
 }
 
+MalValue mal_builtin_object_keys_known(
+    MalVm *vm, const MalValue *args, i32 arg_count
+) {
+    return mal_builtin_object_keys(
+        vm, MAL_VALUE_UNDEFINED, args, arg_count, MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED);
+}
+
 static MalValue mal_builtin_object_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_object_collect(

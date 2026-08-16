@@ -16,6 +16,11 @@ MalValue mal_builtin_object_has_own_known(
     MalVm *vm, const MalValue *args, i32 arg_count
 );
 
+/** Exact Object.keys invocation after the locked namespace/property seam. */
+MalValue mal_builtin_object_keys_known(
+    MalVm *vm, const MalValue *args, i32 arg_count
+);
+
 /**
  * Object.prototype.toString: the "[object Tag]" fallback, also used by
  * builtins that delegate to it for non-array receivers.

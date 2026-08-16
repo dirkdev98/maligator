@@ -80,6 +80,11 @@ export const exactBuiltinCallDescriptors = {
 		forwardedArgumentLimit: 2,
 		cOperation: "MAL_DIRECT_BUILTIN_MAP_SET",
 	},
+	"Object.keys": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_OBJECT_KEYS",
+	},
 } as const satisfies Record<string, ExactBuiltinCallDescriptor>;
 
 export type DirectBuiltinOperationId = keyof typeof exactBuiltinCallDescriptors;
@@ -299,6 +304,19 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		effects: ["coerce", "property-access", "call-user-code", "throw", "safepoint"],
 		result: "boolean",
 		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	},
+	{
+		id: "Object.keys",
+		owner: "Object",
+		key: "keys",
+		receiver: "none",
+		arity: { minimum: 0, maximum: 1 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: ["argument-object", "own-property-keys"],
+		effects: ["property-access", "call-user-code", "allocate", "throw", "safepoint"],
+		result: "array-of-strings",
+		realm: "realm-object-identity",
 		lowerings: ["generic", "exact-builtin-call"],
 	},
 	{

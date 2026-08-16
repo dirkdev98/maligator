@@ -43,5 +43,23 @@ const key = {
 	},
 };
 ok("key coercion", known({ value: 1 }, key));
-ok("check count", checks === 6);
+
+function knownKeys(value) {
+	return Object.keys(value);
+}
+ok("keys order", knownKeys({ 2: true, 1: true, later: true }).join(",") === "1,2,later");
+ok("keys string exotic", knownKeys("abc").join(",") === "0,1,2");
+let ownKeysCalls = 0;
+const keysProxy = new Proxy(
+	{ visible: 1 },
+	{
+		ownKeys(target) {
+			ownKeysCalls++;
+			return Reflect.ownKeys(target);
+		},
+	},
+);
+ok("keys proxy trap", knownKeys(keysProxy)[0] === "visible" && ownKeysCalls === 1);
+
+ok("check count", checks === 9);
 console.log("object-has-own-known PASS");

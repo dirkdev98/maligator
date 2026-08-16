@@ -6088,6 +6088,13 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (instruction.operation === "Object.keys") {
+				return [
+					`r${instruction.dst} = mal_builtin_object_keys_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
 			if (instruction.operation === "String.prototype.charCodeAt") {
 				return [
 					`r${instruction.dst} = mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,

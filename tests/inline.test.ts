@@ -672,6 +672,42 @@ test("locked Object.hasOwn calls erase the namespace dispatch seam", () => {
 	).toBe(true);
 });
 
+test("locked Object.keys calls erase the namespace dispatch seam", () => {
+	const source = `
+		globalThis.keysKnown = function keysKnown(value, ignored) {
+			return Object.keys(value, ignored);
+		};
+	`;
+	const locked = optimizedLockedProgram(source);
+	const lockedInstructions = locked.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	const direct = lockedInstructions.find(
+		(instruction) =>
+			instruction.type === "callBuiltin" && instruction.operation === "Object.keys",
+	);
+	expect(direct).toMatchObject({ type: "callBuiltin", operation: "Object.keys" });
+	if (direct?.type === "callBuiltin") expect(direct.registers).toHaveLength(3);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "loadPropertyStatic" &&
+				decodeStringConstant(locked, instruction.stringIndex) === "keys",
+		),
+	).toBe(false);
+
+	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		mutableInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Object.keys",
+		),
+	).toBe(true);
+});
+
 test("locked private fresh Map.get erases dynamic dispatch", () => {
 	const source = `
 		globalThis.readPrivateMap = function readPrivateMap(key) {

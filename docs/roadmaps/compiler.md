@@ -294,6 +294,10 @@ is general rather than a registry-shaped collection of special cases.
         while erasing the locked property/callback seam; deliberately keep used
         `set` results on the guarded generic path until result-alias tracking can
         prove their complete downstream use set.
+  - [x] Admit exact locked `Object.keys` namespace calls through the shared
+        intrinsic-producer proof. Erase the namespace/property/callback seam while
+        retaining ordinary ToObject, own-key order, Proxy traps, descriptor checks,
+        allocation, exceptions, and Realm-local result arrays in the builtin.
   - [x] Select closed constant-index split projections in IR from the canonical call
         facts and the result's complete move/use set. Carry the representation,
         region license, retained twin, materialization contract, and exact consumer

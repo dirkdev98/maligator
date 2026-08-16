@@ -2205,6 +2205,10 @@ void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instructio
             result = mal_builtin_map_set_known(
                 vm, receiver, &vm->value_stack[base], argument_count);
             break;
+        case MAL_DIRECT_BUILTIN_OBJECT_KEYS:
+            result = mal_builtin_object_keys_known(
+                vm, &vm->value_stack[base], argument_count);
+            break;
     }
     vm->value_stack_size = base;
     callable->registers[instruction->as.call_builtin.dst] = result;

@@ -171,13 +171,14 @@ describe("builtin and primordial registry", () => {
 			"String.prototype.charCodeAt",
 			"Map.prototype.get",
 			"Map.prototype.set",
+			"Object.keys",
 		]);
 		expect(exactBuiltinCallDescriptor("Object.hasOwn")).toMatchObject({
 			id: "Object.hasOwn",
 			receiverProof: "intrinsic-object",
 			forwardedArgumentLimit: 2,
 		});
-		expect(exactBuiltinCallDescriptor("Object.keys")).toBeUndefined();
+		expect(exactBuiltinCallDescriptor("Object.entries")).toBeUndefined();
 	});
 });
 
