@@ -645,6 +645,20 @@ MalCompletion mal_builtin_string_char_code_at_direct(
         vm, fallback_cache, callee, this_value, args, arg_count);
 }
 
+MalValue mal_builtin_string_char_code_at_known(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
+) {
+    if (arg_count >= 0 && mal_value_is_string(this_value) &&
+        (arg_count == 0 || mal_ops_is_number(args[0]))) {
+        f64 position = arg_count == 0 ? 0 : mal_ops_number_as_f64(args[0]);
+        return mal_builtin_string_char_code_at_number(this_value, position);
+    }
+    MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);
+    return mal_builtin_string_prototype_char_code_at(
+        vm, this_value, args, arg_count, MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED);
+}
+
 static MalValue mal_builtin_string_prototype_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     f64 relative = arg_count >= 1 ? mal_builtin_string_arg_to_number(vm, args[0]) : 0;

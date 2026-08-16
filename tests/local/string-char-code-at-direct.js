@@ -22,6 +22,11 @@ ok("fractional position", codeUnit("ABC", 1.9) === 66);
 ok("NaN position", codeUnit("ABC", NaN) === 65);
 ok("undefined position", codeUnit("ABC", undefined) === 65);
 
+function exactLiteral(position) {
+	return "Maligator".charCodeAt(position);
+}
+ok("locked exact literal", exactLiteral(3) === 105);
+
 let coercions = 0;
 const position = {
 	valueOf() {
@@ -74,5 +79,5 @@ ok("prototype replacement", codeUnit("override", 3) === 11);
 String.prototype.charCodeAt = original;
 ok("restored method remains conformant", codeUnit("Z", 0) === 90);
 
-ok("checks ran", passed === 14);
+ok("checks ran", passed === 15);
 console.log("string-char-code-at-direct PASS");

@@ -196,6 +196,7 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 				if (
 					call === undefined ||
 					(call.operation !== "String.prototype.split" &&
+						call.operation !== "String.prototype.charCodeAt" &&
 						call.operation !== "Array.prototype.push" &&
 						call.operation !== "Object.hasOwn") ||
 					!knownBuiltinCallProves(call, call.operation) ||
@@ -216,7 +217,10 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 				) {
 					continue;
 				}
-				if (call.operation === "String.prototype.split") {
+				if (
+					call.operation === "String.prototype.split" ||
+					call.operation === "String.prototype.charCodeAt"
+				) {
 					if (receiver?.type !== "createString") continue;
 				} else if (call.operation === "Array.prototype.push") {
 					const exact = analyzeExactFreshArrayUse(fn, {
@@ -240,7 +244,11 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 						instruction.registers[2],
 						...instruction.registers.slice(
 							3,
-							call.operation === "String.prototype.split" ? 5 : undefined,
+							call.operation === "String.prototype.split"
+								? 5
+								: call.operation === "String.prototype.charCodeAt"
+									? 4
+									: undefined,
 						),
 					],
 					operation: call.operation,

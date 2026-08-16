@@ -183,6 +183,7 @@ export const VM_DIRECT_BUILTIN_OPERATIONS = [
 	"String.prototype.split",
 	"Array.prototype.push",
 	"Object.hasOwn",
+	"String.prototype.charCodeAt",
 ] as const;
 
 type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];

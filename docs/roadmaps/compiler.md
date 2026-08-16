@@ -202,6 +202,10 @@ the same facts unconditionally.
         retain heap materialization as their generic twin.
   - [x] Let locked primitive-String `charCodeAt` fusions remove the watched-method
         property probe while retaining the ordinary Get+Call twin for local misses.
+  - [x] Promote exact primitive-String `charCodeAt` calls to backend-neutral direct
+        builtin IR in locked builds. Erase the property Get and callback identity,
+        use the non-coercing kernel for Number positions, and retain full coercion
+        and exception semantics for unsupported positions.
   - [x] Make String split projections and cursors consume the canonical
         `String.prototype.split` identity fact instead of matching only syntax.
   - [x] Let locked String split projections and cursors fuse the adjacent property

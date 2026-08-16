@@ -137,6 +137,7 @@ typedef enum MalDirectBuiltinOp {
     MAL_DIRECT_BUILTIN_STRING_SPLIT,
     MAL_DIRECT_BUILTIN_ARRAY_PUSH,
     MAL_DIRECT_BUILTIN_OBJECT_HAS_OWN,
+    MAL_DIRECT_BUILTIN_STRING_CHAR_CODE_AT,
 } MalDirectBuiltinOp;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */

@@ -665,6 +665,46 @@ test("locked Object.hasOwn calls erase the namespace dispatch seam", () => {
 	).toBe(true);
 });
 
+test("locked exact primitive String charCodeAt erases dynamic dispatch", () => {
+	const source = `
+		globalThis.charKnown = function charKnown(position, ignored) {
+			return "Maligator".charCodeAt(position, ignored);
+		};
+	`;
+	const lockedProgram = optimizedLockedProgram(source);
+	const lockedInstructions = lockedProgram.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	const direct = lockedInstructions.find(
+		(instruction) =>
+			instruction.type === "callBuiltin" &&
+			instruction.operation === "String.prototype.charCodeAt",
+	);
+	expect(direct).toMatchObject({
+		type: "callBuiltin",
+		operation: "String.prototype.charCodeAt",
+	});
+	if (direct?.type === "callBuiltin") expect(direct.registers).toHaveLength(3);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "loadPropertyStatic" &&
+				decodeStringConstant(lockedProgram, instruction.stringIndex) === "charCodeAt",
+		),
+	).toBe(false);
+
+	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		mutableInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "String.prototype.charCodeAt",
+		),
+	).toBe(true);
+});
+
 test("direct RegExp exec calls carry canonical capture-projection semantics", () => {
 	const ir = optimizedProgram(`
 		function parse(regexp, value) {

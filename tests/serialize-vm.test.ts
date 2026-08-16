@@ -66,6 +66,14 @@ const instructions: Array<VmInstruction> = [
 		arguments: [0, 3],
 		operation: "Object.hasOwn",
 	},
+	{
+		opcode: "CALL_BUILTIN",
+		dst: 9,
+		thisValue: 3,
+		argumentCount: 1,
+		arguments: [0],
+		operation: "String.prototype.charCodeAt",
+	},
 	{ opcode: "TYPEOF_COMPARE", dst: 9, src: 8, expected: "number", negated: true },
 	{ opcode: "TRY_BEGIN", handlerIp: 0 },
 	{

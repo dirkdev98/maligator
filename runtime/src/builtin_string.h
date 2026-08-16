@@ -60,6 +60,13 @@ MalCompletion mal_builtin_string_char_code_at_direct(
     i32 arg_count
 );
 
+/** Exact %String.prototype.charCodeAt% invocation after locked primitive-String
+ * property resolution was erased. Numeric positions use the semantic kernel;
+ * coercive positions retain the complete builtin algorithm. */
+MalValue mal_builtin_string_char_code_at_known(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
+);
+
 /** Closed native path for `primitiveString.search(/literal/)`. */
 bool mal_builtin_string_search_regexp_direct(
     MalVm *vm,
