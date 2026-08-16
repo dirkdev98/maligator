@@ -4,24 +4,59 @@ import * as path from "node:path";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 
-const CAPTURE_HEADER_BYTES = 40;
+const CAPTURE_LEGACY_HEADER_BYTES = 40;
+const CAPTURE_V3_HEADER_BYTES = 48;
 const CAPTURE_RECORD_BYTES = 40;
 const CAPTURE_FRAME_V1_BYTES = 8;
 const CAPTURE_FRAME_V2_BYTES = 12;
-const COMPILER_HEADER_BYTES = 24;
-const COMPILER_EVENT_NAMES = [
+const COMPILER_V1_HEADER_BYTES = 24;
+const COMPILER_V2_HEADER_BYTES = 32;
+const COMPILER_V1_EVENT_NAMES = [
 	"executions",
 	"fastPaths",
 	"fallbacks",
 	"allocationCount",
-	"allocationBytes",
+	"allocationRequestedBytes",
+	"boxing",
+	"safepoints",
+	"gc",
+] as const;
+const COMPILER_V2_EVENT_NAMES = [
+	"executions",
+	"fallbacks",
+	"allocationCount",
+	"allocationRequestedBytes",
+	"allocationChargedBytes",
 	"boxing",
 	"safepoints",
 	"gc",
 ] as const;
 
-type CompilerEventName = (typeof COMPILER_EVENT_NAMES)[number];
+type CompilerEventName =
+	| (typeof COMPILER_V1_EVENT_NAMES)[number]
+	| (typeof COMPILER_V2_EVENT_NAMES)[number];
 type CompilerEvents = Record<CompilerEventName, number>;
+
+const ALLOCATION_STORAGE_NAMES = [
+	"none",
+	"managed-cell",
+	"raw-payload",
+	"native-backing",
+];
+const ALLOCATION_FAMILY_NAMES = [
+	"unknown",
+	"object",
+	"string",
+	"array",
+	"function",
+	"collection",
+	"buffer",
+	"regexp",
+	"promise",
+	"iterator",
+	"host",
+	"metadata",
+];
 
 export interface PreparedProfile {
 	schema: 1 | 2;
@@ -43,15 +78,35 @@ interface RawRecord {
 	kind: number;
 	timestampNs: number;
 	value: number;
-	delayNs: number;
+	auxiliary: number;
+	omittedFrames: number;
+	depthTruncated: boolean;
+	capacityTruncated: boolean;
+	allocationStorage: number;
+	allocationFamily: number;
+	allocationObjectType: number;
 	frames: Array<RawFrame>;
 }
 
 interface RawCapture {
+	schema: 1 | 2 | 3;
 	intervalUs: number;
+	allocationIntervalBytes: number;
+	allocationSampling: "legacy-fixed" | "poisson";
+	samplingClock: "legacy-mixed" | "process-cpu";
 	droppedRecords: number;
 	droppedFrames: number;
 	records: Array<RawRecord>;
+}
+
+export interface CompilerAllocationCounter {
+	siteId: number;
+	storage: number;
+	family: number;
+	objectType: number;
+	count: number;
+	requestedBytes: number;
+	chargedBytes: number;
 }
 
 interface CompilerCapture {
@@ -59,6 +114,7 @@ interface CompilerCapture {
 	totalSiteCount: number;
 	unattributed: CompilerEvents;
 	bySite: Array<CompilerEvents>;
+	allocations: Array<CompilerAllocationCounter>;
 }
 
 export interface ProfileFinding {
@@ -77,9 +133,22 @@ export interface ProfileFinding {
 	cpuShare: number;
 	allocationSamples: number;
 	sampledBytes: number;
+	sampledChargedBytes: number;
+	estimatedRequestedBytes: number;
+	estimatedChargedBytes: number;
+	allocationEstimated: boolean;
+	allocationFamilies: Array<{
+		storage: string;
+		family: string;
+		samples: number;
+		requestedBytes: number;
+		chargedBytes: number;
+		estimatedChargedBytes: number;
+	}>;
 	remarks: Array<CompilerRemark["code"]>;
 	decisions: Array<CompilerRemark>;
 	compiler?: CompilerEvents;
+	compilerAllocations?: Array<CompilerAllocationCounter>;
 	cpuConfidence: "none" | "low" | "medium" | "high";
 	allocationConfidence: "none" | "low" | "medium" | "high";
 }
@@ -174,25 +243,33 @@ function checkedNumber(value: bigint, label: string): number {
 }
 
 export function parseProfileCapture(bytes: Uint8Array): RawCapture {
-	if (bytes.byteLength < CAPTURE_HEADER_BYTES)
+	if (bytes.byteLength < CAPTURE_LEGACY_HEADER_BYTES)
 		throw new Error("profile capture is truncated");
 	const magic = Buffer.from(bytes.subarray(0, 8)).toString();
-	if (magic !== "MALPROF1" && magic !== "MALPROF2") {
+	if (magic !== "MALPROF1" && magic !== "MALPROF2" && magic !== "MALPROF3") {
 		throw new Error("profile capture has an unknown magic value");
 	}
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const schema = view.getUint32(8, true);
-	if ((magic === "MALPROF1" && schema !== 1) || (magic === "MALPROF2" && schema !== 2))
+	if (
+		(magic === "MALPROF1" && schema !== 1) ||
+		(magic === "MALPROF2" && schema !== 2) ||
+		(magic === "MALPROF3" && schema !== 3)
+	)
 		throw new Error("profile capture schema is unsupported");
+	const typedSchema = schema as 1 | 2 | 3;
+	const headerBytes =
+		schema === 3 ? CAPTURE_V3_HEADER_BYTES : CAPTURE_LEGACY_HEADER_BYTES;
+	if (bytes.byteLength < headerBytes) throw new Error("profile capture is truncated");
 	const recordCount = view.getUint32(12, true);
 	const frameCount = view.getUint32(16, true);
 	const frameBytes = schema === 1 ? CAPTURE_FRAME_V1_BYTES : CAPTURE_FRAME_V2_BYTES;
 	const expected =
-		CAPTURE_HEADER_BYTES + recordCount * CAPTURE_RECORD_BYTES + frameCount * frameBytes;
+		headerBytes + recordCount * CAPTURE_RECORD_BYTES + frameCount * frameBytes;
 	if (bytes.byteLength !== expected)
 		throw new Error("profile capture length does not match its header");
 	const frames: Array<RawFrame> = [];
-	const frameBase = CAPTURE_HEADER_BYTES + recordCount * CAPTURE_RECORD_BYTES;
+	const frameBase = headerBytes + recordCount * CAPTURE_RECORD_BYTES;
 	for (let index = 0; index < frameCount; index++) {
 		const offset = frameBase + index * frameBytes;
 		frames.push({
@@ -203,22 +280,36 @@ export function parseProfileCapture(bytes: Uint8Array): RawCapture {
 	}
 	const records: Array<RawRecord> = [];
 	for (let index = 0; index < recordCount; index++) {
-		const offset = CAPTURE_HEADER_BYTES + index * CAPTURE_RECORD_BYTES;
+		const offset = headerBytes + index * CAPTURE_RECORD_BYTES;
 		const frameOffset = view.getUint32(offset + 32, true);
 		const recordFrameCount = view.getUint32(offset + 36, true);
 		if (frameOffset + recordFrameCount > frames.length) {
 			throw new Error("profile capture record references frames outside the capture");
 		}
+		const frameOmission = schema === 3 ? view.getUint32(offset + 4, true) : 0;
 		records.push({
 			kind: view.getUint8(offset),
 			timestampNs: checkedNumber(view.getBigUint64(offset + 8, true), "timestamp"),
 			value: checkedNumber(view.getBigUint64(offset + 16, true), "record value"),
-			delayNs: checkedNumber(view.getBigUint64(offset + 24, true), "sample delay"),
+			auxiliary: checkedNumber(view.getBigUint64(offset + 24, true), "record auxiliary"),
+			omittedFrames: frameOmission & 0x3fff_ffff,
+			depthTruncated: (frameOmission & 0x8000_0000) !== 0,
+			capacityTruncated: (frameOmission & 0x4000_0000) !== 0,
+			allocationStorage: schema === 3 ? view.getUint8(offset + 1) : 0,
+			allocationFamily: schema === 3 ? view.getUint8(offset + 2) : 0,
+			allocationObjectType: schema === 3 ? view.getUint8(offset + 3) : 0xff,
 			frames: frames.slice(frameOffset, frameOffset + recordFrameCount),
 		});
 	}
 	return {
+		schema: typedSchema,
 		intervalUs: view.getUint32(28, true),
+		allocationIntervalBytes:
+			schema === 3
+				? checkedNumber(view.getBigUint64(40, true), "allocation interval")
+				: 65_536,
+		allocationSampling: schema === 3 ? "poisson" : "legacy-fixed",
+		samplingClock: schema === 3 ? "process-cpu" : "legacy-mixed",
 		droppedRecords: view.getUint32(20, true),
 		droppedFrames: view.getUint32(24, true),
 		records,
@@ -231,46 +322,107 @@ function emptyCompilerEvents(): CompilerEvents {
 		fastPaths: 0,
 		fallbacks: 0,
 		allocationCount: 0,
-		allocationBytes: 0,
+		allocationRequestedBytes: 0,
+		allocationChargedBytes: 0,
 		boxing: 0,
 		safepoints: 0,
 		gc: 0,
 	};
 }
 
-function compilerEventsAt(view: DataView, offset: number): CompilerEvents {
+function compilerV1EventsAt(view: DataView, offset: number): CompilerEvents {
 	const events = emptyCompilerEvents();
-	for (const [index, name] of COMPILER_EVENT_NAMES.entries()) {
-		events[name] = checkedNumber(
+	for (const [index, name] of COMPILER_V1_EVENT_NAMES.entries()) {
+		const value = checkedNumber(
 			view.getBigUint64(offset + index * 8, true),
 			`compiler event ${name}`,
 		);
+		events[name] = value;
+		if (name === "allocationRequestedBytes") events.allocationChargedBytes = value;
 	}
 	return events;
 }
 
 export function parseCompilerCapture(bytes: Uint8Array): CompilerCapture {
-	if (bytes.byteLength < COMPILER_HEADER_BYTES)
+	if (bytes.byteLength < COMPILER_V1_HEADER_BYTES)
 		throw new Error("compiler profile is truncated");
-	if (Buffer.from(bytes.subarray(0, 8)).toString() !== "MALSITE1")
+	const magic = Buffer.from(bytes.subarray(0, 8)).toString();
+	if (magic !== "MALSITE1" && magic !== "MALSITE2")
 		throw new Error("compiler profile has an unknown magic value");
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-	if (view.getUint32(8, true) !== 1)
+	const schema = view.getUint32(8, true);
+	if ((magic === "MALSITE1" && schema !== 1) || (magic === "MALSITE2" && schema !== 2))
 		throw new Error("compiler profile schema is unsupported");
 	const trackedSiteCount = view.getUint32(12, true);
 	const totalSiteCount = view.getUint32(16, true);
 	const eventCount = view.getUint32(20, true);
-	if (eventCount !== COMPILER_EVENT_NAMES.length)
+	if (schema === 1) {
+		if (eventCount !== COMPILER_V1_EVENT_NAMES.length)
+			throw new Error("compiler profile event schema is unsupported");
+		const eventBytes = eventCount * 8;
+		const expected =
+			COMPILER_V1_HEADER_BYTES + eventBytes + trackedSiteCount * eventBytes;
+		if (bytes.byteLength !== expected)
+			throw new Error("compiler profile length does not match its header");
+		const unattributed = compilerV1EventsAt(view, COMPILER_V1_HEADER_BYTES);
+		const bySite = Array.from({ length: trackedSiteCount }, (_, siteId) =>
+			compilerV1EventsAt(view, COMPILER_V1_HEADER_BYTES + eventBytes * (siteId + 1)),
+		);
+		return { trackedSiteCount, totalSiteCount, unattributed, bySite, allocations: [] };
+	}
+
+	if (bytes.byteLength < COMPILER_V2_HEADER_BYTES)
+		throw new Error("compiler profile is truncated");
+	if (eventCount !== COMPILER_V2_EVENT_NAMES.length)
 		throw new Error("compiler profile event schema is unsupported");
+	const allocationCount = view.getUint32(24, true);
 	const eventBytes = eventCount * 8;
-	const expected = COMPILER_HEADER_BYTES + eventBytes + trackedSiteCount * eventBytes;
+	const allocationBytes = allocationCount * 32;
+	const expected =
+		COMPILER_V2_HEADER_BYTES +
+		eventBytes +
+		trackedSiteCount * eventBytes +
+		allocationBytes;
 	if (bytes.byteLength !== expected)
 		throw new Error("compiler profile length does not match its header");
-	const unattributed = compilerEventsAt(view, COMPILER_HEADER_BYTES);
-	const bySite = Array.from({ length: trackedSiteCount }, (_, siteId) =>
-		compilerEventsAt(view, COMPILER_HEADER_BYTES + eventBytes * (siteId + 1)),
-	);
-	return { trackedSiteCount, totalSiteCount, unattributed, bySite };
+	const unattributed = emptyCompilerEvents();
+	for (const [eventIndex, name] of COMPILER_V2_EVENT_NAMES.entries()) {
+		unattributed[name] = checkedNumber(
+			view.getBigUint64(COMPILER_V2_HEADER_BYTES + eventIndex * 8, true),
+			`compiler event ${name}`,
+		);
+	}
+	const bySite = Array.from({ length: trackedSiteCount }, () => emptyCompilerEvents());
+	const siteBase = COMPILER_V2_HEADER_BYTES + eventBytes;
+	for (const [eventIndex, name] of COMPILER_V2_EVENT_NAMES.entries()) {
+		for (let siteId = 0; siteId < trackedSiteCount; siteId++) {
+			bySite[siteId]![name] = checkedNumber(
+				view.getBigUint64(siteBase + (eventIndex * trackedSiteCount + siteId) * 8, true),
+				`compiler site ${siteId} event ${name}`,
+			);
+		}
+	}
+	const allocations: Array<CompilerAllocationCounter> = [];
+	const allocationBase = siteBase + trackedSiteCount * eventBytes;
+	for (let index = 0; index < allocationCount; index++) {
+		const offset = allocationBase + index * 32;
+		allocations.push({
+			siteId: view.getInt32(offset, true),
+			storage: view.getUint8(offset + 4),
+			family: view.getUint8(offset + 5),
+			objectType: view.getUint8(offset + 6),
+			count: checkedNumber(view.getBigUint64(offset + 8, true), "allocation count"),
+			requestedBytes: checkedNumber(
+				view.getBigUint64(offset + 16, true),
+				"allocation requested bytes",
+			),
+			chargedBytes: checkedNumber(
+				view.getBigUint64(offset + 24, true),
+				"allocation charged bytes",
+			),
+		});
+	}
+	return { trackedSiteCount, totalSiteCount, unattributed, bySite, allocations };
 }
 
 function positionSiteIndex(prepared: PreparedProfile): Map<string, ProfileSite> {
@@ -324,6 +476,27 @@ function cpuProfile(capture: RawCapture, prepared: PreparedProfile): object {
 	for (const record of capture.records.filter((entry) => entry.kind === 1)) {
 		let parent = 1;
 		let stackKey = "";
+		if (record.omittedFrames > 0) {
+			stackKey = `/truncated:${record.omittedFrames}`;
+			let id = nodeByStack.get(stackKey);
+			if (id === undefined) {
+				id = nodes.length + 1;
+				nodes.push({
+					id,
+					callFrame: {
+						functionName: `[truncated: ${record.omittedFrames} outer frames]`,
+						scriptId: "0",
+						url: "",
+						lineNumber: -1,
+						columnNumber: -1,
+					},
+				});
+				nodeByStack.set(stackKey, id);
+				const parentNode = nodes[parent - 1]!;
+				(parentNode.children ??= []).push(id);
+			}
+			parent = id;
+		}
 		for (const frame of record.frames) {
 			stackKey += `/${frame.functionIndex}:${frame.positionId}:${frame.siteId}`;
 			let id = nodeByStack.get(stackKey);
@@ -368,6 +541,22 @@ function evidenceConfidence(
 	return count >= 100 ? "high" : count >= 20 ? "medium" : "low";
 }
 
+function allocationStorageName(value: number): string {
+	return ALLOCATION_STORAGE_NAMES[value] ?? `storage-${value}`;
+}
+
+function allocationFamilyName(value: number): string {
+	return ALLOCATION_FAMILY_NAMES[value] ?? `family-${value}`;
+}
+
+function allocationSampleWeight(capture: RawCapture, record: RawRecord): number {
+	if (capture.allocationSampling !== "poisson") return 0;
+	const chargedBytes = record.auxiliary;
+	if (chargedBytes <= 0 || capture.allocationIntervalBytes <= 0) return 0;
+	const probability = -Math.expm1(-chargedBytes / capture.allocationIntervalBytes);
+	return probability <= 0 ? 0 : 1 / probability;
+}
+
 function findings(
 	capture: RawCapture,
 	prepared: PreparedProfile,
@@ -380,6 +569,20 @@ function findings(
 		cpuSamples: number;
 		allocationSamples: number;
 		sampledBytes: number;
+		sampledChargedBytes: number;
+		estimatedRequestedBytes: number;
+		estimatedChargedBytes: number;
+		allocationFamilies: Map<
+			string,
+			{
+				storage: string;
+				family: string;
+				samples: number;
+				requestedBytes: number;
+				chargedBytes: number;
+				estimatedChargedBytes: number;
+			}
+		>;
 	}
 	const bySite = new Map<number, FindingAggregate>();
 	const cpuTotal = capture.records.filter((record) => record.kind === 1).length;
@@ -392,7 +595,16 @@ function findings(
 		if (site === undefined) continue;
 		let value = bySite.get(site.id);
 		if (value === undefined) {
-			value = { siteId: site.id, cpuSamples: 0, allocationSamples: 0, sampledBytes: 0 };
+			value = {
+				siteId: site.id,
+				cpuSamples: 0,
+				allocationSamples: 0,
+				sampledBytes: 0,
+				sampledChargedBytes: 0,
+				estimatedRequestedBytes: 0,
+				estimatedChargedBytes: 0,
+				allocationFamilies: new Map(),
+			};
 			bySite.set(site.id, value);
 		}
 		if (record.kind === 1) {
@@ -400,6 +612,29 @@ function findings(
 		} else if (record.kind === 2) {
 			value.allocationSamples++;
 			value.sampledBytes += record.value;
+			value.sampledChargedBytes += record.auxiliary;
+			const weight = allocationSampleWeight(capture, record);
+			value.estimatedRequestedBytes += record.value * weight;
+			value.estimatedChargedBytes += record.auxiliary * weight;
+			const storage = allocationStorageName(record.allocationStorage);
+			const family = allocationFamilyName(record.allocationFamily);
+			const key = `${storage}:${family}`;
+			let allocation = value.allocationFamilies.get(key);
+			if (allocation === undefined) {
+				allocation = {
+					storage,
+					family,
+					samples: 0,
+					requestedBytes: 0,
+					chargedBytes: 0,
+					estimatedChargedBytes: 0,
+				};
+				value.allocationFamilies.set(key, allocation);
+			}
+			allocation.samples++;
+			allocation.requestedBytes += record.value;
+			allocation.chargedBytes += record.auxiliary;
+			allocation.estimatedChargedBytes += record.auxiliary * weight;
 		}
 	}
 	for (let siteId = 0; siteId < (compiler?.bySite.length ?? 0); siteId++) {
@@ -411,6 +646,10 @@ function findings(
 				cpuSamples: 0,
 				allocationSamples: 0,
 				sampledBytes: 0,
+				sampledChargedBytes: 0,
+				estimatedRequestedBytes: 0,
+				estimatedChargedBytes: 0,
+				allocationFamilies: new Map(),
 			});
 		}
 	}
@@ -449,7 +688,17 @@ function findings(
 									: 0),
 						};
 			return {
-				...value,
+				siteId: value.siteId,
+				cpuSamples: value.cpuSamples,
+				allocationSamples: value.allocationSamples,
+				sampledBytes: value.sampledBytes,
+				sampledChargedBytes: value.sampledChargedBytes,
+				estimatedRequestedBytes: value.estimatedRequestedBytes,
+				estimatedChargedBytes: value.estimatedChargedBytes,
+				allocationEstimated: capture.allocationSampling === "poisson",
+				allocationFamilies: [...value.allocationFamilies.values()].sort(
+					(left, right) => right.estimatedChargedBytes - left.estimatedChargedBytes,
+				),
 				logicalId: site.logicalId,
 				originId: site.originId,
 				instanceId: site.instanceId,
@@ -464,6 +713,13 @@ function findings(
 				remarks: decisions.map((remark) => remark.code),
 				decisions,
 				...(compilerEvents === undefined ? {} : { compiler: compilerEvents }),
+				...(compiler === undefined
+					? {}
+					: {
+							compilerAllocations: compiler.allocations.filter(
+								(allocation) => allocation.siteId === site.id,
+							),
+						}),
 				cpuConfidence,
 				allocationConfidence,
 			};
@@ -472,7 +728,7 @@ function findings(
 			(left, right) =>
 				right.cpuSamples - left.cpuSamples ||
 				(right.compiler?.executions ?? 0) - (left.compiler?.executions ?? 0) ||
-				right.sampledBytes - left.sampledBytes,
+				right.sampledChargedBytes - left.sampledChargedBytes,
 		);
 }
 
@@ -485,8 +741,10 @@ function atomicJson(file: string, value: unknown): void {
 function profileQuality(capture: RawCapture): ProfileQuality {
 	const cpuRecords = capture.records.filter((record) => record.kind === 1);
 	const allocationRecords = capture.records.filter((record) => record.kind === 2);
-	const delays = cpuRecords.map((record) => record.delayNs / 1e6);
-	return capture.droppedRecords > Math.max(1, cpuRecords.length / 100) ||
+	const delays = cpuRecords.map((record) => record.auxiliary / 1e6);
+	return capture.droppedFrames > 0 ||
+		capture.droppedRecords > 0 ||
+		summarizeGc(capture.records).incompleteEvents > 0 ||
 		percentile(delays, 0.99) > (capture.intervalUs / 1000) * 4
 		? "biased"
 		: cpuRecords.length < 20 && allocationRecords.length < 20
@@ -494,11 +752,213 @@ function profileQuality(capture: RawCapture): ProfileQuality {
 			: "good";
 }
 
+interface AllocationFamilySummary {
+	storage: string;
+	family: string;
+	samples: number;
+	requestedBytes: number;
+	chargedBytes: number;
+	estimatedRequestedBytes: number;
+	estimatedChargedBytes: number;
+}
+
+interface CompilerAllocationFamilySummary {
+	storage: string;
+	family: string;
+	count: number;
+	requestedBytes: number;
+	chargedBytes: number;
+}
+
+interface GcSummary {
+	collections: number;
+	major: number;
+	minor: number;
+	totalPauseMs: number;
+	maxPauseMs: number;
+	incompleteEvents: number;
+}
+
+export interface ProfileManifest {
+	schema: 3;
+	status: "complete";
+	command: string;
+	mode: PreparedProfile["mode"];
+	buildId: string;
+	entrypoint: string;
+	captureSchema: number;
+	intervalUs: number;
+	clocks: { timeline: "monotonic"; sampling: RawCapture["samplingClock"] };
+	cpuSamples: number;
+	allocationSamples: number;
+	allocation: {
+		sampling: RawCapture["allocationSampling"];
+		intervalBytes: number;
+		sampledRequestedBytes: number;
+		sampledChargedBytes: number;
+		estimatedRequestedBytes: number;
+		estimatedChargedBytes: number;
+		families: Array<AllocationFamilySummary>;
+	};
+	gc: GcSummary;
+	attribution: {
+		cpuSamples: number;
+		unattributedCpuSamples: number;
+		allocationSamples: number;
+		unattributedAllocationSamples: number;
+		sampledTriggerBytes: number;
+		attributedSampledTriggerBytes: number;
+		chargedTriggerBytes: number;
+		attributedChargedTriggerBytes: number;
+	};
+	compiler?: {
+		trackedSiteCount: number;
+		totalSiteCount: number;
+		unattributed: CompilerEvents;
+		allocationEntries: number;
+		executions: number;
+		fallbacks: number;
+		boxing: number;
+		safepoints: number;
+		gc: number;
+		allocationCount: number;
+		requestedBytes: number;
+		chargedBytes: number;
+		families: Array<CompilerAllocationFamilySummary>;
+		overflow: CompilerAllocationCounter | null;
+	};
+	droppedRecords: number;
+	droppedFrames: number;
+	stackTruncation: {
+		records: number;
+		omittedFrames: number;
+		depthLimitedRecords: number;
+		capacityLimitedRecords: number;
+	};
+	sampleDelayMs: { median: number; p99: number };
+	quality: ProfileQuality;
+}
+
+function summarizeGc(records: Array<RawRecord>): GcSummary {
+	const begins: Array<{ timestampNs: number; major: boolean }> = [];
+	let collections = 0;
+	let major = 0;
+	let minor = 0;
+	let totalPauseMs = 0;
+	let maxPauseMs = 0;
+	let unmatchedEnds = 0;
+	for (const record of records) {
+		if (record.kind === 3) {
+			const isMajor = record.value === 1;
+			begins.push({ timestampNs: record.timestampNs, major: isMajor });
+			collections++;
+			if (isMajor) major++;
+			else minor++;
+		} else if (record.kind === 4) {
+			const begin = begins.pop();
+			if (begin === undefined) {
+				unmatchedEnds++;
+				continue;
+			}
+			const pauseMs = Math.max(0, record.timestampNs - begin.timestampNs) / 1e6;
+			totalPauseMs += pauseMs;
+			maxPauseMs = Math.max(maxPauseMs, pauseMs);
+		}
+	}
+	return {
+		collections,
+		major,
+		minor,
+		totalPauseMs,
+		maxPauseMs,
+		incompleteEvents: begins.length + unmatchedEnds,
+	};
+}
+
+function summarizeCompilerAllocations(
+	allocations: Array<CompilerAllocationCounter>,
+): Array<CompilerAllocationFamilySummary> {
+	const families = new Map<string, CompilerAllocationFamilySummary>();
+	for (const allocation of allocations) {
+		const storage = allocationStorageName(allocation.storage);
+		const family = allocationFamilyName(allocation.family);
+		const key = `${storage}:${family}`;
+		let summary = families.get(key);
+		if (summary === undefined) {
+			summary = { storage, family, count: 0, requestedBytes: 0, chargedBytes: 0 };
+			families.set(key, summary);
+		}
+		summary.count += allocation.count;
+		summary.requestedBytes += allocation.requestedBytes;
+		summary.chargedBytes += allocation.chargedBytes;
+	}
+	return [...families.values()].sort(
+		(left, right) => right.chargedBytes - left.chargedBytes,
+	);
+}
+
+function compilerEventTotal(compiler: CompilerCapture, event: CompilerEventName): number {
+	return (
+		compiler.unattributed[event] +
+		compiler.bySite.reduce((total, events) => total + events[event], 0)
+	);
+}
+
+function summarizeAllocationSamples(
+	capture: RawCapture,
+	records: Array<RawRecord>,
+): ProfileManifest["allocation"] {
+	const families = new Map<string, AllocationFamilySummary>();
+	let sampledRequestedBytes = 0;
+	let sampledChargedBytes = 0;
+	let estimatedRequestedBytes = 0;
+	let estimatedChargedBytes = 0;
+	for (const record of records) {
+		const weight = allocationSampleWeight(capture, record);
+		const storage = allocationStorageName(record.allocationStorage);
+		const family = allocationFamilyName(record.allocationFamily);
+		const key = `${storage}:${family}`;
+		let summary = families.get(key);
+		if (summary === undefined) {
+			summary = {
+				storage,
+				family,
+				samples: 0,
+				requestedBytes: 0,
+				chargedBytes: 0,
+				estimatedRequestedBytes: 0,
+				estimatedChargedBytes: 0,
+			};
+			families.set(key, summary);
+		}
+		summary.samples++;
+		summary.requestedBytes += record.value;
+		summary.chargedBytes += record.auxiliary;
+		summary.estimatedRequestedBytes += record.value * weight;
+		summary.estimatedChargedBytes += record.auxiliary * weight;
+		sampledRequestedBytes += record.value;
+		sampledChargedBytes += record.auxiliary;
+		estimatedRequestedBytes += record.value * weight;
+		estimatedChargedBytes += record.auxiliary * weight;
+	}
+	return {
+		sampling: capture.allocationSampling,
+		intervalBytes: capture.allocationIntervalBytes,
+		sampledRequestedBytes,
+		sampledChargedBytes,
+		estimatedRequestedBytes,
+		estimatedChargedBytes,
+		families: [...families.values()].sort(
+			(left, right) => right.estimatedChargedBytes - left.estimatedChargedBytes,
+		),
+	};
+}
+
 export function finalizeProfileCapture(
 	directory: string,
 	prepared: PreparedProfile,
 	command: string,
-): { findings: Array<ProfileFinding>; manifest: object } {
+): { findings: Array<ProfileFinding>; manifest: ProfileManifest } {
 	const capture = parseProfileCapture(readFileSync(path.join(directory, "capture.bin")));
 	const compilerPath = path.join(directory, "capture.bin.compiler");
 	if (prepared.mode === "compiler" && !existsSync(compilerPath)) {
@@ -511,7 +971,9 @@ export function finalizeProfileCapture(
 	const ranked = findings(capture, prepared, quality, compiler);
 	const cpuRecords = capture.records.filter((record) => record.kind === 1);
 	const allocationRecords = capture.records.filter((record) => record.kind === 2);
-	const delays = cpuRecords.map((record) => record.delayNs / 1e6);
+	const delays = cpuRecords.map((record) => record.auxiliary / 1e6);
+	const allocation = summarizeAllocationSamples(capture, allocationRecords);
+	const gc = summarizeGc(capture.records);
 	atomicJson(path.join(directory, "cpu.cpuprofile"), cpuProfile(capture, prepared));
 	atomicJson(
 		path.join(directory, "timeline.json"),
@@ -533,10 +995,15 @@ export function finalizeProfileCapture(
 	);
 	if (compiler !== undefined) {
 		atomicJson(path.join(directory, "compiler.json"), {
-			schema: 1,
+			schema: 2,
 			trackedSiteCount: compiler.trackedSiteCount,
 			totalSiteCount: compiler.totalSiteCount,
 			unattributed: compiler.unattributed,
+			allocations: compiler.allocations.map((allocation) => ({
+				...allocation,
+				storageName: allocationStorageName(allocation.storage),
+				familyName: allocationFamilyName(allocation.family),
+			})),
 			sites: ranked
 				.filter((finding) => finding.compiler !== undefined)
 				.map((finding) => ({
@@ -553,6 +1020,11 @@ export function finalizeProfileCapture(
 					operation: finding.operation,
 					decisions: finding.decisions,
 					events: finding.compiler,
+					allocations: finding.compilerAllocations?.map((allocation) => ({
+						...allocation,
+						storageName: allocationStorageName(allocation.storage),
+						familyName: allocationFamilyName(allocation.family),
+					})),
 				})),
 		});
 	}
@@ -561,17 +1033,24 @@ export function finalizeProfileCapture(
 		prepared.remarks.map((remark) => JSON.stringify(remark)).join("\n") +
 			(prepared.remarks.length === 0 ? "" : "\n"),
 	);
-	atomicJson(path.join(directory, "summary.json"), { schema: 2, findings: ranked });
-	const manifest = {
-		schema: 2,
+	atomicJson(path.join(directory, "summary.json"), { schema: 3, findings: ranked });
+	const truncatedRecords = capture.records.filter((record) => record.omittedFrames > 0);
+	const compilerOverflow =
+		compiler?.allocations.find((entry) => entry.siteId === -2) ?? null;
+	const manifest: ProfileManifest = {
+		schema: 3,
 		status: "complete",
 		command,
 		mode: prepared.mode,
 		buildId: prepared.buildId,
 		entrypoint: prepared.entrypoint,
+		captureSchema: capture.schema,
 		intervalUs: capture.intervalUs,
+		clocks: { timeline: "monotonic", sampling: capture.samplingClock },
 		cpuSamples: cpuRecords.length,
 		allocationSamples: allocationRecords.length,
+		allocation,
+		gc,
 		attribution: {
 			cpuSamples: ranked.reduce((total, finding) => total + finding.cpuSamples, 0),
 			unattributedCpuSamples:
@@ -592,6 +1071,14 @@ export function finalizeProfileCapture(
 				(total, finding) => total + finding.sampledBytes,
 				0,
 			),
+			chargedTriggerBytes: allocationRecords.reduce(
+				(total, record) => total + record.auxiliary,
+				0,
+			),
+			attributedChargedTriggerBytes: ranked.reduce(
+				(total, finding) => total + finding.sampledChargedBytes,
+				0,
+			),
 		},
 		compiler:
 			compiler === undefined
@@ -600,9 +1087,32 @@ export function finalizeProfileCapture(
 						trackedSiteCount: compiler.trackedSiteCount,
 						totalSiteCount: compiler.totalSiteCount,
 						unattributed: compiler.unattributed,
+						allocationEntries: compiler.allocations.length,
+						executions: compilerEventTotal(compiler, "executions"),
+						fallbacks: compilerEventTotal(compiler, "fallbacks"),
+						boxing: compilerEventTotal(compiler, "boxing"),
+						safepoints: compilerEventTotal(compiler, "safepoints"),
+						gc: compilerEventTotal(compiler, "gc"),
+						allocationCount: compilerEventTotal(compiler, "allocationCount"),
+						requestedBytes: compilerEventTotal(compiler, "allocationRequestedBytes"),
+						chargedBytes: compilerEventTotal(compiler, "allocationChargedBytes"),
+						families: summarizeCompilerAllocations(compiler.allocations),
+						overflow: compilerOverflow,
 					},
 		droppedRecords: capture.droppedRecords,
 		droppedFrames: capture.droppedFrames,
+		stackTruncation: {
+			records: truncatedRecords.length,
+			omittedFrames: truncatedRecords.reduce(
+				(total, record) => total + record.omittedFrames,
+				0,
+			),
+			depthLimitedRecords: truncatedRecords.filter((record) => record.depthTruncated)
+				.length,
+			capacityLimitedRecords: truncatedRecords.filter(
+				(record) => record.capacityTruncated,
+			).length,
+		},
 		sampleDelayMs: {
 			median: percentile(delays, 0.5),
 			p99: percentile(delays, 0.99),
@@ -616,31 +1126,160 @@ export function finalizeProfileCapture(
 
 export function formatProfileFindings(
 	values: Array<ProfileFinding>,
-	limit = 5,
+	limit = 7,
 ): Array<string> {
 	if (values.length === 0) return ["  No source-attributed samples were captured."];
-	return values.slice(0, limit).map((finding, index) => {
+	return values.slice(0, limit).flatMap((finding, index) => {
 		const primaryDecision = finding.decisions[0];
 		const evidence = [
 			finding.cpuSamples > 0
 				? `${(finding.cpuShare * 100).toFixed(1)}% CPU (${finding.cpuSamples} samples, ${finding.cpuConfidence})`
 				: undefined,
 			finding.allocationSamples > 0
-				? `${finding.allocationSamples} allocation samples (${finding.allocationConfidence})`
+				? `${finding.allocationSamples} allocation samples · ${formatBytes(
+						finding.allocationEstimated
+							? finding.estimatedChargedBytes
+							: finding.sampledChargedBytes,
+					)} ${finding.allocationEstimated ? "estimated charged" : "sampled trigger"} (${finding.allocationConfidence})`
 				: undefined,
 			finding.compiler === undefined
 				? undefined
-				: `${finding.compiler.executions} exact executions · ${finding.compiler.fastPaths} fast · ${finding.compiler.fallbacks} fallback · ${finding.compiler.allocationBytes} allocated bytes`,
-			primaryDecision === undefined
-				? undefined
-				: `${REMARK_EXPLANATIONS[primaryDecision.code] ?? primaryDecision.code}${
-						primaryDecision.reasonCode === undefined
-							? ""
-							: ` [${primaryDecision.reasonCode}]`
-					}`,
+				: `${formatCount(finding.compiler.executions)} exact · ${formatCount(
+						finding.compiler.fastPaths,
+					)} fast · ${formatCount(finding.compiler.fallbacks)} fallback · ${formatBytes(
+						finding.compiler.allocationChargedBytes,
+					)} charged`,
 		]
 			.filter((value) => value !== undefined)
 			.join(" · ");
-		return `  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} — ${evidence}`;
+		const result = [
+			`  ${index + 1}. ${finding.file}:${finding.line}:${finding.column + 1} · ${finding.operation}`,
+			`     ${evidence}`,
+		];
+		if (primaryDecision !== undefined) {
+			result.push(
+				`     ${REMARK_EXPLANATIONS[primaryDecision.code] ?? primaryDecision.code}${
+					primaryDecision.reasonCode === undefined
+						? ""
+						: ` [${primaryDecision.reasonCode}]`
+				}`,
+			);
+		}
+		return result;
 	});
+}
+
+function formatBytes(value: number): string {
+	if (!Number.isFinite(value) || value <= 0) return "0 B";
+	const units = ["B", "KiB", "MiB", "GiB"];
+	let scaled = value;
+	let unit = 0;
+	while (scaled >= 1024 && unit < units.length - 1) {
+		scaled /= 1024;
+		unit++;
+	}
+	return `${scaled >= 10 || unit === 0 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unit]}`;
+}
+
+function formatCount(value: number): string {
+	return Math.round(value).toLocaleString("en-US");
+}
+
+export function formatProfileReport(
+	result: { findings: Array<ProfileFinding>; manifest: ProfileManifest },
+	limit = 7,
+): Array<string> {
+	const { manifest } = result;
+	const cpuAttributed =
+		manifest.cpuSamples === 0 ? 0 : manifest.attribution.cpuSamples / manifest.cpuSamples;
+	const allocationAttributed =
+		manifest.allocationSamples === 0
+			? 0
+			: manifest.attribution.allocationSamples / manifest.allocationSamples;
+	const lines = [
+		`  Quality ${manifest.quality} · ${formatCount(manifest.cpuSamples)} CPU samples · ${formatCount(
+			manifest.allocationSamples,
+		)} allocation samples`,
+		`  Sampling ${(manifest.intervalUs / 1000).toFixed(2)} ms ${manifest.clocks.sampling} CPU / ${formatBytes(
+			manifest.allocation.intervalBytes,
+		)} ${manifest.allocation.sampling} allocation · delay ${manifest.sampleDelayMs.median.toFixed(
+			2,
+		)} ms median / ${manifest.sampleDelayMs.p99.toFixed(2)} ms p99 · ${formatCount(
+			manifest.droppedRecords,
+		)} dropped records`,
+		`  Attribution ${(cpuAttributed * 100).toFixed(1)}% CPU (${formatCount(
+			manifest.attribution.unattributedCpuSamples,
+		)} unattributed) / ${(allocationAttributed * 100).toFixed(
+			1,
+		)}% allocation (${formatCount(
+			manifest.attribution.unattributedAllocationSamples,
+		)} unattributed) · ${formatCount(
+			manifest.stackTruncation.records,
+		)} truncated stacks / ${formatCount(
+			manifest.stackTruncation.omittedFrames,
+		)} omitted stack frames`,
+		`  GC ${formatCount(manifest.gc.collections)} collections (${formatCount(
+			manifest.gc.major,
+		)} major / ${formatCount(manifest.gc.minor)} minor) · ${manifest.gc.totalPauseMs.toFixed(
+			2,
+		)} ms total / ${manifest.gc.maxPauseMs.toFixed(2)} ms max${
+			manifest.gc.incompleteEvents === 0
+				? ""
+				: ` · ${formatCount(manifest.gc.incompleteEvents)} unmatched events`
+		}`,
+	];
+	if (manifest.allocationSamples > 0) {
+		const estimate =
+			manifest.allocation.sampling === "poisson"
+				? `${formatBytes(manifest.allocation.estimatedChargedBytes)} estimated charged allocation traffic`
+				: `${formatBytes(manifest.allocation.sampledChargedBytes)} sampled trigger traffic`;
+		lines.push(
+			`  Allocation ${estimate} · ${formatBytes(
+				manifest.allocation.sampledRequestedBytes,
+			)} requested / ${formatBytes(manifest.allocation.sampledChargedBytes)} charged in samples`,
+		);
+		const topFamilies = manifest.allocation.families
+			.slice(0, 4)
+			.map(
+				(family) =>
+					`${family.family}/${family.storage} ${formatBytes(
+						family.estimatedChargedBytes || family.chargedBytes,
+					)}`,
+			)
+			.join(" · ");
+		if (topFamilies !== "") lines.push(`  Allocation families ${topFamilies}`);
+	}
+	if (manifest.compiler !== undefined) {
+		const fallbackRate =
+			manifest.compiler.executions === 0
+				? 0
+				: manifest.compiler.fallbacks / manifest.compiler.executions;
+		lines.push(
+			`  Compiler ${formatCount(manifest.compiler.executions)} executions · ${formatCount(
+				manifest.compiler.fallbacks,
+			)} fallbacks (${(fallbackRate * 100).toFixed(2)}%) · ${formatBytes(
+				manifest.compiler.chargedBytes,
+			)} charged allocation`,
+		);
+		const compilerFamilies = manifest.compiler.families
+			.slice(0, 4)
+			.map(
+				(family) =>
+					`${family.family}/${family.storage} ${formatBytes(family.chargedBytes)}`,
+			)
+			.join(" · ");
+		if (compilerFamilies !== "") {
+			lines.push(`  Exact allocation families ${compilerFamilies}`);
+		}
+		if (manifest.compiler.overflow !== null) {
+			lines.push(
+				`  Exact allocation breakdown overflowed ${formatCount(
+					manifest.compiler.overflow.count,
+				)} allocations; global exact totals remain complete`,
+			);
+		}
+	}
+	lines.push("  Hot source sites");
+	lines.push(...formatProfileFindings(result.findings, limit));
+	return lines;
 }

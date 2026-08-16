@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "gc.h"
+#include "profile.h"
 #include "value.h"
 
 static_assert(sizeof(MalBoundFunctionObject) % alignof(MalValue) == 0,
@@ -25,7 +26,11 @@ MalBoundFunctionObject *mal_bound_function_object_new(
     bound->target = target;
     bound->bound_this = bound_this;
     bound->bound_count = bound_count;
-    bound->bound_args = bound_count > 0 ? mal_heap_alloc_raw(heap, sizeof(MalValue) * bound_count) : nullptr;
+    bound->bound_args = bound_count > 0
+        ? mal_heap_alloc_raw_profiled(
+            heap, sizeof(MalValue) * bound_count,
+            MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION)
+        : nullptr;
     for (i32 i = 0; i < bound_count; i++) {
         bound->bound_args[i] = bound_args[i];
     }

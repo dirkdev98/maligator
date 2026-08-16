@@ -106,6 +106,8 @@ typedef struct MalHeap {
 #if MAL_PROFILE
 	/** Opaque profile recorder; absent from ordinary heap layouts. */
 	void *profile_state;
+	/** Remaining charged bytes before the next Poisson allocation sample. */
+	usize profile_allocation_budget;
 #endif
 #if MAL_GC_CONCURRENT
     /** Incremental-sweep cursor (concurrent build): the chunk + in-chunk block
@@ -442,8 +444,14 @@ void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
  */
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size);
 
+/** Raw allocation with a stable profiler family; equivalent when profiling is off. */
+void *mal_heap_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profile_family);
+
 /** Fallible raw-buffer allocation. Does not mutate the VM completion or abort. */
 void *mal_heap_try_alloc_raw(MalHeap *heap, usize alloc_size);
+
+/** Fallible raw allocation with a stable profiler family. */
+void *mal_heap_try_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profile_family);
 
 /** Bytes charged to `heap.bytes_allocated` for one request of this size. */
 usize mal_heap_allocation_charge(usize alloc_size);
@@ -464,6 +472,9 @@ void gc_free_raw(MalHeap *heap, void *ptr);
  * Copies the smaller of the old and new sizes. Owner-held only (no header).
  */
 void *gc_realloc_raw(MalHeap *heap, void *ptr, usize new_size);
+
+/** Raw grow with a stable profiler family for any newly allocated replacement. */
+void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profile_family);
 
 /** Finalizer applied to a dead cell during the sweep (frees owned buffers). */
 typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);

@@ -407,6 +407,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
 #endif
 #if MAL_PROFILE
 	heap->profile_state = nullptr;
+	heap->profile_allocation_budget = 0;
 #endif
 #if MAL_GC_CONCURRENT
     heap->sweep_chunk = nullptr;
@@ -469,11 +470,90 @@ MalHeapType mal_heap_header_type(const MalHeapHeader *header) {
     return header->type;
 }
 
+#if MAL_PROFILE
+static MalProfileAllocationFamily mal_profile_family_for_heap_type(MalHeapType type) {
+    switch (type) {
+        case MAL_HEAP_STRING:
+            return MAL_PROFILE_ALLOCATION_FAMILY_STRING;
+        case MAL_HEAP_FUNCTION_OBJECT:
+        case MAL_HEAP_NATIVE_FUNCTION_OBJECT:
+        case MAL_HEAP_BOUND_FUNCTION_OBJECT:
+            return MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION;
+        case MAL_HEAP_ARRAY_OBJECT:
+            return MAL_PROFILE_ALLOCATION_FAMILY_ARRAY;
+        case MAL_HEAP_MAP_OBJECT:
+        case MAL_HEAP_SET_OBJECT:
+            return MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION;
+        case MAL_HEAP_ARRAY_BUFFER_OBJECT:
+        case MAL_HEAP_TYPED_ARRAY_OBJECT:
+        case MAL_HEAP_DATA_VIEW_OBJECT:
+            return MAL_PROFILE_ALLOCATION_FAMILY_BUFFER;
+        case MAL_HEAP_PROMISE_OBJECT:
+            return MAL_PROFILE_ALLOCATION_FAMILY_PROMISE;
+        case MAL_HEAP_ITERATOR_OBJECT:
+        case MAL_HEAP_GENERATOR_OBJECT:
+        case MAL_HEAP_ITERATOR_HELPER_OBJECT:
+        case MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT:
+            return MAL_PROFILE_ALLOCATION_FAMILY_ITERATOR;
+        case MAL_HEAP_REGEXP_OBJECT:
+            return MAL_PROFILE_ALLOCATION_FAMILY_REGEXP;
+        case MAL_HEAP_ENV:
+        case MAL_HEAP_SHAPE:
+            return MAL_PROFILE_ALLOCATION_FAMILY_METADATA;
+        case MAL_HEAP_RESPONSE_OBJECT:
+        case MAL_HEAP_REQUEST_OBJECT:
+        case MAL_HEAP_HEADERS_OBJECT:
+        case MAL_HEAP_HEADERS_ITERATOR_OBJECT:
+        case MAL_HEAP_BLOB_OBJECT:
+        case MAL_HEAP_FORM_DATA_OBJECT:
+        case MAL_HEAP_FORM_DATA_ITERATOR_OBJECT:
+        case MAL_HEAP_URL_OBJECT:
+        case MAL_HEAP_URL_SEARCH_PARAMS_OBJECT:
+        case MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT:
+        case MAL_HEAP_EVENT_TARGET_OBJECT:
+        case MAL_HEAP_READABLE_STREAM_OBJECT:
+        case MAL_HEAP_NODE_ZLIB_OBJECT:
+        case MAL_HEAP_NODE_SQLITE_DATABASE_OBJECT:
+        case MAL_HEAP_NODE_SQLITE_STATEMENT_OBJECT:
+        case MAL_HEAP_ASYNC_CONTEXT:
+        case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
+        case MAL_HEAP_ASYNC_RESOURCE_STATE:
+        case MAL_HEAP_ASYNC_RUN_SCOPE_STATE:
+            return MAL_PROFILE_ALLOCATION_FAMILY_HOST;
+        default:
+            return MAL_PROFILE_ALLOCATION_FAMILY_OBJECT;
+    }
+}
+
+#if !MAL_PERF_STATS
+static inline void mal_heap_profile_allocation(
+    MalHeap *heap, usize requested_size, usize charged_size,
+    MalProfileAllocationStorage storage, MalProfileAllocationFamily family,
+    u8 object_type
+) {
+    if (heap->profile_state == nullptr) return;
+    if (charged_size < heap->profile_allocation_budget) {
+        heap->profile_allocation_budget -= charged_size;
+        return;
+    }
+    mal_profile_allocation(
+        heap, requested_size, charged_size, storage, family, object_type);
+}
+#else
+#define mal_heap_profile_allocation mal_profile_allocation
+#endif
+#else
+#define mal_heap_profile_allocation(...) ((void) 0)
+#endif
+
 void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
     if (ptr == nullptr) abort();
 	mal_heap_header_init(ptr, type);
-	mal_profile_allocation(heap, alloc_size, (u8) type);
+	mal_heap_profile_allocation(
+        heap, alloc_size, mal_heap_allocation_charge(alloc_size),
+        MAL_PROFILE_ALLOCATION_MANAGED_CELL, mal_profile_family_for_heap_type(type),
+        (u8) type);
     return ptr;
 }
 
@@ -484,24 +564,50 @@ void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
     }
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
 	if (ptr != nullptr) mal_heap_header_init(ptr, type);
-	if (ptr != nullptr) mal_profile_allocation(heap, alloc_size, (u8) type);
+	if (ptr != nullptr) {
+        mal_heap_profile_allocation(
+            heap, alloc_size, mal_heap_allocation_charge(alloc_size),
+            MAL_PROFILE_ALLOCATION_MANAGED_CELL, mal_profile_family_for_heap_type(type),
+            (u8) type);
+    }
     return ptr;
 }
 
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size) {
+    return mal_heap_alloc_raw_profiled(
+        heap, alloc_size, MAL_PROFILE_ALLOCATION_FAMILY_UNKNOWN);
+}
+
+void *mal_heap_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profile_family) {
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
     if (ptr == nullptr) abort();
+    mal_heap_profile_allocation(
+        heap, alloc_size, mal_heap_allocation_charge(alloc_size),
+        MAL_PROFILE_ALLOCATION_RAW_PAYLOAD,
+        (MalProfileAllocationFamily) profile_family, MAL_PROFILE_OBJECT_TYPE_NONE);
     return ptr;
 }
 
 void *mal_heap_try_alloc_raw(MalHeap *heap, usize alloc_size) {
+    return mal_heap_try_alloc_raw_profiled(
+        heap, alloc_size, MAL_PROFILE_ALLOCATION_FAMILY_UNKNOWN);
+}
+
+void *mal_heap_try_alloc_raw_profiled(MalHeap *heap, usize alloc_size, u8 profile_family) {
 #if MAL_PERF_STATS
     if (heap->fail_next_raw_allocation) {
         heap->fail_next_raw_allocation = false;
         return nullptr;
     }
 #endif
-    return mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
+    void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
+    if (ptr != nullptr) {
+        mal_heap_profile_allocation(
+            heap, alloc_size, mal_heap_allocation_charge(alloc_size),
+            MAL_PROFILE_ALLOCATION_RAW_PAYLOAD,
+            (MalProfileAllocationFamily) profile_family, MAL_PROFILE_OBJECT_TYPE_NONE);
+    }
+    return ptr;
 }
 
 static inline bool mal_gc_ptr_in_chunk(const MalGcChunk *chunk, const void *ptr) {
@@ -807,8 +913,13 @@ void gc_free_raw(MalHeap *heap, void *ptr) {
 }
 
 void *gc_realloc_raw(MalHeap *heap, void *ptr, usize new_size) {
+    return gc_realloc_raw_profiled(
+        heap, ptr, new_size, MAL_PROFILE_ALLOCATION_FAMILY_UNKNOWN);
+}
+
+void *gc_realloc_raw_profiled(MalHeap *heap, void *ptr, usize new_size, u8 profile_family) {
     if (ptr == nullptr) {
-        return mal_heap_alloc_raw(heap, new_size);
+        return mal_heap_alloc_raw_profiled(heap, new_size, profile_family);
     }
     // Recover the current cell's byte capacity (size-class cell size for an in-block
     // cell, recorded payload size for a LOS record) to decide whether the request
@@ -825,7 +936,7 @@ void *gc_realloc_raw(MalHeap *heap, void *ptr, usize new_size) {
         return ptr; // fits the current cell already (grow within slack, or a shrink)
     }
     // Outgrew the cell: RAW has no in-place grow, so alloc-new / copy / free-old.
-    void *fresh = mal_heap_alloc_raw(heap, new_size);
+    void *fresh = mal_heap_alloc_raw_profiled(heap, new_size, profile_family);
     memcpy(fresh, ptr, old_size); // old_size < new_size, so the copy stays in bounds
     gc_free_raw(heap, ptr);
     return fresh;

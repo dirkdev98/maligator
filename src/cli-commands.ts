@@ -59,7 +59,7 @@ import { nativeBuildJobs } from "./native-command.ts";
 import {
 	createProfileCapture,
 	finalizeProfileCapture,
-	formatProfileFindings,
+	formatProfileReport,
 	prepareProfile,
 } from "./profile-artifact.ts";
 import type { PreparedProfile } from "./profile-artifact.ts";
@@ -842,7 +842,7 @@ export function runCommand(command: RunCommand, context: CommandContext): void {
 					"run",
 				);
 				writeStderr(`Profile ${capture.directory}`);
-				for (const line of formatProfileFindings(finalized.findings)) writeStderr(line);
+				for (const line of formatProfileReport(finalized)) writeStderr(line);
 			} catch (error) {
 				writeStderr(
 					`warning: profile capture could not be finalized: ${error instanceof Error ? error.message : String(error)}`,
@@ -976,7 +976,7 @@ export async function devCommand(
 					"dev",
 				);
 				writeStderr(`Profile ${activeProfile.directory}`);
-				for (const line of formatProfileFindings(finalized.findings)) writeStderr(line);
+				for (const line of formatProfileReport(finalized)) writeStderr(line);
 			} catch (error) {
 				writeStderr(
 					`warning: development profile could not be finalized: ${error instanceof Error ? error.message : String(error)}`,
@@ -1215,7 +1215,7 @@ function executeProfiledTests(
 	if (existsSync(capture.capturePath)) {
 		const finalized = finalizeProfileCapture(capture.directory, profile, "test");
 		writeStderr(`Profile ${capture.directory}`);
-		for (const line of formatProfileFindings(finalized.findings)) writeStderr(line);
+		for (const line of formatProfileReport(finalized)) writeStderr(line);
 	} else {
 		writeStderr(`warning: profiled tests did not publish ${capture.capturePath}`);
 	}

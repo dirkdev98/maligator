@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "object_ops.h"
+#include "profile.h"
 #include "secure_scrub.h"
 
 static MalArrayBufferReleaseObserver g_release_observer;
@@ -22,6 +23,10 @@ MalArrayBufferObject *mal_array_buffer_object_new(
     // Resizable buffers reserve the maximum so the backing store never moves.
     u32 capacity = resizable ? max_byte_length : byte_length;
     buffer->data = capacity > 0 ? calloc(capacity, 1) : nullptr;
+    if (buffer->data != nullptr) {
+        mal_profile_native_allocation(
+            heap, capacity, MAL_PROFILE_ALLOCATION_FAMILY_BUFFER);
+    }
     buffer->byte_length = byte_length;
     buffer->max_byte_length = resizable ? max_byte_length : byte_length;
     buffer->resizable = resizable;

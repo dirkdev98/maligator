@@ -1581,6 +1581,10 @@ typedef struct MalVm {
     MalNativeFrame *native_frames;
     i32 native_frame_count;
     i32 native_frame_capacity;
+#if MAL_PROFILE
+    /** Last source site published by either backend; profile attribution is O(1). */
+    i32 profile_current_site_id;
+#endif
 
     /**
      * Monotonic frame-entry counter. Each interpreted frame (push / generator

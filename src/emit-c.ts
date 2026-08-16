@@ -3522,6 +3522,7 @@ function emitBody(
 		}
 		if (profileSiteId >= 0) {
 			lines.push(
+				`    MAL_PROFILE_CURRENT_SITE(vm, ${profileSiteId});`,
 				`    MAL_PROFILE_SITE_EVENT(vm, ${profileSiteId}, MAL_PROFILE_SITE_EXECUTION, 1);`,
 			);
 			const operationSite = profileOperationInstruction(fn.instructions[ip]!);

@@ -6,6 +6,7 @@
 #include "heap_string.h"
 #include "object_ops.h"
 #include "perf_stats.h"
+#include "profile.h"
 
 // Largest gap (new index minus the current dense_count) the dense vector will span
 // with holes. A store beyond this is treated as sparse: the array deoptimizes to
@@ -55,8 +56,9 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     // RAW block returns to the OS. gc_realloc_raw grows by alloc-new / copy /
     // free-old (RAW has no in-place grow); no safepoint runs inside it, so the
     // detached old buffer is never observed by the collector.
-    MalValue *grown = gc_realloc_raw(
-        mal_gc_current_heap(), array->elements, sizeof(MalValue) * (usize) needed);
+    MalValue *grown = gc_realloc_raw_profiled(
+        mal_gc_current_heap(), array->elements, sizeof(MalValue) * (usize) needed,
+        MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
     if (grown == nullptr) {
         return false;
     }
@@ -120,8 +122,9 @@ bool mal_array_object_try_fresh_dense_reserve_exact(
     if ((usize) needed > SIZE_MAX / sizeof(MalValue)) {
         return false;
     }
-    MalValue *elements = mal_heap_try_alloc_raw(
-        mal_gc_current_heap(), sizeof(MalValue) * (usize) needed);
+    MalValue *elements = mal_heap_try_alloc_raw_profiled(
+        mal_gc_current_heap(), sizeof(MalValue) * (usize) needed,
+        MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
     if (elements == nullptr) {
         return false;
     }

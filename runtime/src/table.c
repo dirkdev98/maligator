@@ -7,6 +7,7 @@
 #include "./heap.h"
 #include "./heap_string.h"
 #include "./perf_stats.h"
+#include "./profile.h"
 
 #define MAL_TABLE_SMALL_MIN_CAPACITY 4
 #define MAL_TABLE_GLOBAL_MIN_CAPACITY 16
@@ -142,10 +143,14 @@ static void mal_table_allocate_storage(MalTable *table) {
     if (table->slot_capacity != 0) return;
     u32 capacity = mal_table_initial_capacity(table);
     MalHeap *heap = mal_gc_current_heap();
-    table->slots = mal_heap_alloc_raw(heap, capacity * sizeof(*table->slots));
+    table->slots = mal_heap_alloc_raw_profiled(
+        heap, capacity * sizeof(*table->slots),
+        MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
     for (u32 i = 0; i < capacity; i++) table->slots[i] = MAL_TABLE_EMPTY;
     table->entries =
-        mal_heap_alloc_raw(heap, capacity * sizeof(*table->entries));
+        mal_heap_alloc_raw_profiled(
+            heap, capacity * sizeof(*table->entries),
+            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
     table->slot_capacity = capacity;
     table->entry_capacity = capacity;
     MAL_PERF_COUNT(tables[table->role].storage_allocations);
@@ -177,7 +182,8 @@ static void mal_table_rehash(MalTable *table, u32 capacity) {
         stats->rehash_entries += table->size;
     }
     MalHeap *heap = mal_gc_current_heap();
-    i32 *slots = mal_heap_alloc_raw(heap, capacity * sizeof(i32));
+    i32 *slots = mal_heap_alloc_raw_profiled(
+        heap, capacity * sizeof(i32), MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
     for (u32 i = 0; i < capacity; i++) {
         slots[i] = MAL_TABLE_EMPTY;
     }
@@ -225,8 +231,10 @@ static void mal_table_grow_entries_if_needed(MalTable *table) {
     }
 
     table->entry_capacity *= 2;
-    table->entries =
-        gc_realloc_raw(mal_gc_current_heap(), table->entries, sizeof(MalTableEntry) * table->entry_capacity);
+    table->entries = gc_realloc_raw_profiled(
+        mal_gc_current_heap(), table->entries,
+        sizeof(MalTableEntry) * table->entry_capacity,
+        MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
 }
 
 static bool mal_table_should_compact(const MalTable *table) {
@@ -243,7 +251,8 @@ static bool mal_table_should_compact(const MalTable *table) {
 // symbol/atom tables, by mal_vm_free BEFORE mal_heap_free — see mal_table_free).
 MalTable *mal_table_new(MalTableMode mode, MalTableRole role) {
     MalHeap *heap = mal_gc_current_heap();
-    MalTable *table = mal_heap_alloc_raw(heap, sizeof(MalTable));
+    MalTable *table = mal_heap_alloc_raw_profiled(
+        heap, sizeof(MalTable), MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
 
     table->mode = mode;
     table->role = role;
@@ -478,8 +487,9 @@ void mal_table_compact(MalTable *table) {
         // fits its existing size class. Compaction is a memory release point,
         // so allocate the smaller class explicitly and return the old cell.
         MalHeap *heap = mal_gc_current_heap();
-        MalTableEntry *entries = mal_heap_alloc_raw(
-            heap, sizeof(*entries) * target_entries);
+        MalTableEntry *entries = mal_heap_alloc_raw_profiled(
+            heap, sizeof(*entries) * target_entries,
+            MAL_PROFILE_ALLOCATION_FAMILY_COLLECTION);
         memcpy(entries, table->entries,
                sizeof(*entries) * table->entry_count);
         gc_free_raw(heap, table->entries);

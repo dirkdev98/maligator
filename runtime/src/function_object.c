@@ -4,6 +4,7 @@
 
 #include "gc.h"
 #include "heap_string.h"
+#include "profile.h"
 #include "value.h"
 
 static_assert(sizeof(MalFunctionObject) % alignof(MalValue) == 0,
@@ -211,7 +212,9 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity(
     MalNativeFunctionObject *function =
         mal_native_function_object_new_arity(heap, prototype, name, length, callback);
     if (slot_count > 0) {
-        function->slots = mal_heap_alloc_raw(heap, sizeof(MalValue) * slot_count);
+        function->slots = mal_heap_alloc_raw_profiled(
+            heap, sizeof(MalValue) * slot_count,
+            MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION);
         function->slot_count = slot_count;
         for (i32 i = 0; i < slot_count; i++) {
             function->slots[i] = slots[i];
@@ -241,7 +244,9 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
         &function->object, length_key, mal_value_from_i32(length), name_key, name,
         (MalValue *) (function + 1));
     if (slot_count > 0) {
-        function->slots = mal_heap_alloc_raw(heap, sizeof(MalValue) * slot_count);
+        function->slots = mal_heap_alloc_raw_profiled(
+            heap, sizeof(MalValue) * slot_count,
+            MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION);
         function->slot_count = slot_count;
         for (i32 i = 0; i < slot_count; i++) {
             function->slots[i] = slots[i];

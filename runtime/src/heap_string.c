@@ -6,6 +6,7 @@
 #include "gc.h"
 #include "checked_size.h"
 #include "perf_stats.h"
+#include "profile.h"
 #include "vm.h"
 
 static void mal_string_require_valid_length(usize length) {
@@ -185,7 +186,8 @@ void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_unit
         mal_string_init_inline(string, code_units, length);
         return;
     }
-    c16 *owned_code_units = mal_heap_alloc_raw(heap, sizeof(c16) * length);
+    c16 *owned_code_units = mal_heap_alloc_raw_profiled(
+        heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
 
     if (length > 0) {
         memcpy(owned_code_units, code_units, sizeof(c16) * length);
@@ -251,7 +253,8 @@ static MalString *mal_string_copy_range(
     MalStringRangePart *stack = malloc(sizeof(MalStringRangePart) * capacity);
     if (stack == nullptr) abort();
 
-    c16 *code_units = mal_heap_alloc_raw(heap, sizeof(c16) * length);
+    c16 *code_units = mal_heap_alloc_raw_profiled(
+        heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     usize count = 0;
     usize end = offset + length;
     stack[count++] = (MalStringRangePart) {.string = parent, .offset = 0};
@@ -533,7 +536,8 @@ MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) 
         mal_string_init_inline(string, code_units, length);
         return string;
     }
-    c16 *code_units = mal_heap_alloc_raw(heap, sizeof(c16) * length);
+    c16 *code_units = mal_heap_alloc_raw_profiled(
+        heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
 
     for (usize i = 0; i < length; i++) {
         code_units[i] = (u8) bytes[i];
@@ -565,7 +569,9 @@ const c16 *mal_string_flatten(MalString *mutable) {
         abort();
     }
 
-    c16 *code_units = mal_heap_alloc_raw(mal_gc_current_heap(), sizeof(c16) * mutable->length);
+    c16 *code_units = mal_heap_alloc_raw_profiled(
+        mal_gc_current_heap(), sizeof(c16) * mutable->length,
+        MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     usize count = 0;
     usize offset = 0;
     stack[count++] = (MalStringFlattenTask) {.string = mutable};

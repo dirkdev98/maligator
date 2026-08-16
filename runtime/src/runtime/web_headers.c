@@ -11,6 +11,7 @@
 #include "object.h"
 #include "object_ops.h"
 #include "property_store.h"
+#include "profile.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -57,7 +58,9 @@ static MalString *mal_headers_lowercase_name(MalVm *vm, const MalString *name) {
     const c16 *units = mal_string_code_units(name);
     // Heap-owned rather than malloc'd: mal_heap_alloc_raw cannot return null, so
     // there is no allocation-failure path to leave the buffer unwritten.
-    c16 *out = mal_heap_alloc_raw(&vm->heap, sizeof(c16) * (len == 0 ? 1 : len));
+    c16 *out = mal_heap_alloc_raw_profiled(
+        &vm->heap, sizeof(c16) * (len == 0 ? 1 : len),
+        MAL_PROFILE_ALLOCATION_FAMILY_HOST);
     for (usize i = 0; i < len; i++) {
         c16 unit = units[i];
         out[i] = unit >= 'A' && unit <= 'Z' ? (c16) (unit + ('a' - 'A')) : unit;
@@ -99,8 +102,9 @@ MalHeadersObject *mal_headers_create(MalVm *vm) {
 
 MalString *mal_headers_new_lowercase_name(
     MalVm *vm, const char *name, usize name_len) {
-    c16 *units = mal_heap_alloc_raw(
-        &vm->heap, sizeof(c16) * (name_len == 0 ? 1 : name_len));
+    c16 *units = mal_heap_alloc_raw_profiled(
+        &vm->heap, sizeof(c16) * (name_len == 0 ? 1 : name_len),
+        MAL_PROFILE_ALLOCATION_FAMILY_HOST);
     for (usize i = 0; i < name_len; i++) {
         u8 unit = (u8) name[i];
         units[i] = unit >= 'A' && unit <= 'Z'
@@ -744,7 +748,9 @@ static MalValue mal_headers_join(MalVm *vm, MalHeadersObject *h, const MalString
         return mal_value_new_null();
     }
     total += (usize) (matches - 1) * 2;
-    c16 *buf = mal_heap_alloc_raw(&vm->heap, sizeof(c16) * (total == 0 ? 1 : total));
+    c16 *buf = mal_heap_alloc_raw_profiled(
+        &vm->heap, sizeof(c16) * (total == 0 ? 1 : total),
+        MAL_PROFILE_ALLOCATION_FAMILY_HOST);
     usize offset = 0;
     i32 seen = 0;
     for (i32 i = 0; i < h->count; i++) {

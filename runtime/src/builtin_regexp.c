@@ -14,6 +14,7 @@
 #include "intrinsics.h"
 #include "mal_regexp.h"
 #include "object_ops.h"
+#include "profile.h"
 #include "regexp_object.h"
 #include "u16_buffer.h"
 #include "utf16.h"
@@ -580,6 +581,8 @@ static MalValue regexp_builtin_exec(
             regexp_throw_string_length(vm);
             return mal_value_new_undefined();
         }
+        mal_profile_native_allocation(
+            &vm->heap, capture_bytes, MAL_PROFILE_ALLOCATION_FAMILY_REGEXP);
         mal_regexp_copy_captures(re->matcher, caps, (int32_t) capture_count);
         heap_caps = true;
     }
@@ -1604,6 +1607,10 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         if (n_captures > 0 && captures == nullptr) {
             regexp_throw_string_length(vm);
             goto done;
+        }
+        if (captures != nullptr) {
+            mal_profile_native_allocation(
+                &vm->heap, capture_bytes, MAL_PROFILE_ALLOCATION_FAMILY_REGEXP);
         }
         caps_span.slots = captures;
         caps_span.count = 0;

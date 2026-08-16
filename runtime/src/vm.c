@@ -588,6 +588,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->native_frames = nullptr;
     vm->native_frame_count = 0;
     vm->native_frame_capacity = 0;
+#if MAL_PROFILE
+    vm->profile_current_site_id = -1;
+#endif
     vm->frame_seq = 0;
     vm->captured_traces = nullptr;
     vm->captured_trace_free_next = nullptr;
@@ -1866,6 +1869,7 @@ static void mal_vm_run_until_frame_count(
             i32 profile_site_id = frame->function->profile_site_ids == nullptr
                 ? -1
                 : frame->function->profile_site_ids[instruction_pointer];
+            vm->profile_current_site_id = profile_site_id;
             MAL_PROFILE_SITE_EVENT(
                 vm, profile_site_id, MAL_PROFILE_SITE_EXECUTION, 1);
 #endif

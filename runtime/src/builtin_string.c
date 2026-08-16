@@ -13,6 +13,7 @@
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "perf_stats.h"
+#include "profile.h"
 #include "primitive_wrapper_object.h"
 #include "rooted_collection.h"
 #include "u16_buffer.h"
@@ -1007,7 +1008,8 @@ static MalValue mal_builtin_string_create_html(
                 mal_builtin_string_throw_length(vm);
                 goto failed;
             }
-            c16 *escaped = mal_heap_alloc_raw(&vm->heap, bytes);
+            c16 *escaped = mal_heap_alloc_raw_profiled(
+                &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
             usize out = 0;
             static const c16 replacement[] = {'&', 'q', 'u', 'o', 't', ';'};
             for (usize i = 0; i < source_length; i++) {
@@ -1178,7 +1180,8 @@ lazy_done:
     }
 
     const c16 *source = mal_string_code_units(string);
-    c16 *code_units = mal_heap_alloc_raw(&vm->heap, bytes);
+    c16 *code_units = mal_heap_alloc_raw_profiled(
+        &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     usize filled = length;
     memcpy(code_units, source, sizeof(c16) * length);
     while (filled < result_length) {
@@ -1260,7 +1263,8 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
         return mal_builtin_string_from_units(vm, code_units, length);
     }
 
-    c16 *code_units = mal_heap_alloc_raw(&vm->heap, sizeof(c16) * length);
+    c16 *code_units = mal_heap_alloc_raw_profiled(
+        &vm->heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     if (changed_at > 0) {
         memcpy(code_units, source, sizeof(c16) * changed_at);
     }

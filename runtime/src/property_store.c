@@ -5,6 +5,7 @@
 #include "./gc.h"
 #include "./heap.h"
 #include "./perf_stats.h"
+#include "./profile.h"
 
 typedef struct MalPropertyAccessors {
     MalValue getter;
@@ -47,8 +48,9 @@ static void mal_property_entry_write(
     if (is_accessor) {
         MalPropertyAccessors *accessors = data;
         if (!was_accessor) {
-            accessors = mal_heap_alloc_raw(
-                mal_gc_current_heap(), sizeof(*accessors));
+            accessors = mal_heap_alloc_raw_profiled(
+                mal_gc_current_heap(), sizeof(*accessors),
+                MAL_PROFILE_ALLOCATION_FAMILY_OBJECT);
             mal_table_entry_set_owned_data(table, entry, accessors);
             MAL_PERF_COUNT(property_accessor_sidecar_allocations);
         }
