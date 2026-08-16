@@ -1,5 +1,6 @@
 import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
+import { ensureCompilerSiteFacts } from "./compiler-site-facts.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { executeIRDevelopmentOptimizations, executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
@@ -39,6 +40,7 @@ export function compileSemanticProgramToVmDefinition(
 	const ir = runPhase("compile to ir", () =>
 		compileSemanticProgramToIr(semantic, {
 			...options.ir,
+			collectOptimizationDiagnostics: options.profile === true,
 			facts: {
 				...(options.facts ?? conservativeCompilerProgramFacts()),
 				compilationMode: options.optimization ?? "full",
@@ -50,6 +52,7 @@ export function compileSemanticProgramToVmDefinition(
 			? executeIRDevelopmentOptimizations(ir)
 			: executeIROptimizations(ir),
 	);
+	if (options.profile === true) ensureCompilerSiteFacts(ir);
 	options.afterOptimization?.(ir);
 	runPhase("register allocation", () =>
 		options.optimization === "development"

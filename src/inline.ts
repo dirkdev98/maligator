@@ -22,6 +22,10 @@
  * a non-spread call site supplies their exact raw argument values during substitution.
  */
 
+import type {
+	CompilerOptimizationDecision,
+	OptimizationDecisionReason,
+} from "./compiler-diagnostics.ts";
 import { knownFact, sourceSiteId } from "./compiler-facts.ts";
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
 import type { IRRegisterIndex } from "./ir-register-index.ts";
@@ -1936,6 +1940,68 @@ function instructionCount(fn: IRFunction): number {
 	return count;
 }
 
+function instructionPosition(fn: IRFunction, target: IRInstruction): number {
+	let position = -1;
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type === "sourcePos") position = instruction.pos;
+			else if (instruction === target) return position;
+		}
+	}
+	return -1;
+}
+
+function recordInlineDecision(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	call: IRInstruction,
+	outcome: "applied" | "declined",
+	reason: OptimizationDecisionReason | "inline" | "guarded-inline",
+): void {
+	const decisions = program.optimizationDecisions;
+	if (decisions === undefined) return;
+	const positionId = instructionPosition(fn, call);
+	const code: CompilerOptimizationDecision["code"] =
+		outcome === "applied"
+			? `optimization.applied.${reason}`
+			: `optimization.declined.${reason as OptimizationDecisionReason}`;
+	if (
+		decisions.some(
+			(decision) =>
+				decision.functionIndex === fn.functionIndex &&
+				decision.positionId === positionId &&
+				decision.code === code,
+		)
+	) {
+		return;
+	}
+	decisions.push({
+		functionIndex: fn.functionIndex,
+		positionId,
+		operation: "call",
+		phase: "optimization",
+		code,
+		outcome,
+		...(outcome === "declined" ? { reason: reason as OptimizationDecisionReason } : {}),
+	});
+}
+
+function inlineShapeDeclineReason(fn: IRFunction): OptimizationDecisionReason {
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type === "createFunction") return "inner-closure";
+			if (
+				instruction.type === "tryBegin" ||
+				instruction.type === "tryEnd" ||
+				instruction.type === "catch"
+			) {
+				return "exception-region";
+			}
+		}
+	}
+	return "relocation";
+}
+
 /**
  * Inline direct calls. For each inlinable call to a target T, shift T's registers
  * above the caller's and move the call's arguments into T's parameter registers
@@ -1964,15 +2030,24 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 		}
 		for (const { call, target } of candidates) {
 			if (instructionCount(fn) >= MAX_CALLER_INSTRUCTIONS) {
-				break; // expansion guard
+				recordInlineDecision(program, fn, call, "declined", "expansion-limit");
+				continue;
 			}
 			const targetFn = targetOf.get(target);
 			if (targetFn === undefined) {
+				recordInlineDecision(program, fn, call, "declined", "unavailable-world-fact");
 				continue;
 			}
 			const singleBlock = singleReturnBlock(targetFn);
 			const multiBlocks = singleBlock === null ? multiBlockInlinable(targetFn) : null;
 			if (singleBlock === null && multiBlocks === null) {
+				recordInlineDecision(
+					program,
+					fn,
+					call,
+					"declined",
+					inlineShapeDeclineReason(targetFn),
+				);
 				continue; // not an inlinable shape (yet)
 			}
 
@@ -1988,14 +2063,17 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 				}
 			}
 			if (host === undefined) {
+				recordInlineDecision(program, fn, call, "declined", "relocation");
 				continue; // already removed/rewritten by a prior step
 			}
 			if (hasStackObjectMaterialization(targetFn) && blockIsInCycle(fn, host)) {
 				partialEscapeInlineBlocked.add(call);
+				recordInlineDecision(program, fn, call, "declined", "escape-cost-barrier");
 				continue; // preserve rare materialization instead of allocating every iteration
 			}
 
 			if (singleBlock === null && isCallInTry(fn, host, index)) {
+				recordInlineDecision(program, fn, call, "declined", "exception-region");
 				continue; // multi-block relocation would move code out of the enclosing try
 			}
 
@@ -2063,6 +2141,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 						registers: [destination, offset + returnRegister],
 					});
 				}
+				recordInlineDecision(program, fn, call, "applied", "inline");
 				host.instructions.splice(index, 1, ...inlined);
 				changed = true;
 				continue;
@@ -2080,10 +2159,12 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 				// Empty post shouldn't happen; a try marker in the relocated tail would be
 				// reordered relative to its pair in the flattened stream → unbalanced
 				// handler ranges (see containsTryMarker).
+				recordInlineDecision(program, fn, call, "declined", "relocation");
 				continue;
 			}
 			// Host: pre + jump to the inlined entry (the target's block 0, which begins with
 			// the parameter binding buildInlinedBlocks prepends).
+			recordInlineDecision(program, fn, call, "applied", "inline");
 			host.instructions = [
 				...host.instructions.slice(0, index),
 				{ type: "jump", blocks: [base] },
@@ -2137,18 +2218,33 @@ function inlineGuardedCallSite(
 	call: IRInstruction,
 	targetFns: ReadonlyArray<IRFunction>,
 	thisSource: number | null,
+	emptyTargetReason: OptimizationDecisionReason = "unavailable-world-fact",
 ): boolean {
+	if (targetFns.length === 0) {
+		recordInlineDecision(program, fn, call, "declined", emptyTargetReason);
+		return false;
+	}
+	if (guardedInlineSubstituted.has(call)) {
+		return false;
+	}
 	if (
-		targetFns.length === 0 ||
-		guardedInlineSubstituted.has(call) ||
 		instructionCount(fn) +
 			targetFns.reduce((sum, target) => sum + instructionCount(target), 0) >=
-			MAX_CALLER_INSTRUCTIONS
+		MAX_CALLER_INSTRUCTIONS
 	) {
+		recordInlineDecision(program, fn, call, "declined", "expansion-limit");
 		return false;
 	}
 	const targetBlocks = targetFns.map((target) => multiBlockInlinable(target));
 	if (targetBlocks.some((blocks) => blocks === null)) {
+		const rejected = targetFns.find((_target, index) => targetBlocks[index] === null);
+		recordInlineDecision(
+			program,
+			fn,
+			call,
+			"declined",
+			rejected === undefined ? "relocation" : inlineShapeDeclineReason(rejected),
+		);
 		return false; // not a splice-able control-flow shape
 	}
 	// Locate the call by reference (earlier substitutions shift indices/blocks).
@@ -2162,11 +2258,17 @@ function inlineGuardedCallSite(
 			break;
 		}
 	}
-	if (host === undefined || isCallInTry(fn, host, index)) {
+	if (host === undefined) {
+		recordInlineDecision(program, fn, call, "declined", "relocation");
+		return false;
+	}
+	if (isCallInTry(fn, host, index)) {
+		recordInlineDecision(program, fn, call, "declined", "exception-region");
 		return false; // gone / relocating out of an enclosing try (see multi-block inliner)
 	}
 	const expansionDepth = guardedInlineDepth.get(call) ?? 0;
 	if (expansionDepth >= MAX_GUARDED_INLINE_DEPTH) {
+		recordInlineDecision(program, fn, call, "declined", "expansion-limit");
 		return false;
 	}
 	if (
@@ -2174,6 +2276,7 @@ function inlineGuardedCallSite(
 		blockIsInCycle(fn, host)
 	) {
 		partialEscapeInlineBlocked.add(call);
+		recordInlineDecision(program, fn, call, "declined", "escape-cost-barrier");
 		return false;
 	}
 
@@ -2184,6 +2287,7 @@ function inlineGuardedCallSite(
 	const args = callRegisters.slice(3);
 	const post = host.instructions.slice(index + 1);
 	if (post.length === 0 || containsTryMarker(post)) {
+		recordInlineDecision(program, fn, call, "declined", "relocation");
 		return false;
 	}
 
@@ -2210,6 +2314,7 @@ function inlineGuardedCallSite(
 	const joinIndex = deoptIndex + 1;
 
 	// Host: test each candidate against the already-loaded callee, then deopt.
+	recordInlineDecision(program, fn, call, "applied", "guarded-inline");
 	host.instructions = [
 		...host.instructions.slice(0, index),
 		...layouts.flatMap(({ targetFn, guardRegister, entryIndex }) => [
@@ -2295,7 +2400,16 @@ export function optInlineMethod(program: IntermediateProgram): boolean {
 					(target): target is IRFunction =>
 						target !== undefined && isInlinableMethodTarget(target),
 				);
-			if (inlineGuardedCallSite(program, fn, call, targetFns, receiverRegister)) {
+			if (
+				inlineGuardedCallSite(
+					program,
+					fn,
+					call,
+					targetFns,
+					receiverRegister,
+					"unsupported-consumer",
+				)
+			) {
 				changed = true;
 			}
 		}

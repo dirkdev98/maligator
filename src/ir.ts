@@ -1,5 +1,6 @@
 import type { ESTree } from "meriyah";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
+import type { CompilerOptimizationDecision } from "./compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
 import type { CompilerProgramFacts, KnownBuiltinCall } from "./compiler-facts.ts";
 import {
@@ -44,6 +45,8 @@ export interface IntermediateProgram {
 	semantic: SemanticProgram;
 	/** Shared immutable analysis seed and program summaries. */
 	facts: CompilerProgramFacts;
+	/** Profile-only structured decisions recorded while transforms still see candidates. */
+	optimizationDecisions?: Array<CompilerOptimizationDecision>;
 
 	/**
 	 * Eval-completion mode: compile the entry (Script) so it returns its
@@ -1839,11 +1842,14 @@ export function compileSemanticProgramToIr(
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
 		facts?: CompilerProgramFacts;
+		collectOptimizationDiagnostics?: boolean;
 	} = {},
 ) {
 	const program: IntermediateProgram = {
 		semantic,
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
+		optimizationDecisions:
+			options.collectOptimizationDiagnostics === true ? [] : undefined,
 
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,

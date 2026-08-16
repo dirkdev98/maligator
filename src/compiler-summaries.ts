@@ -6,6 +6,7 @@ import type {
 } from "./compiler-facts.ts";
 import { encodeDirectEvalContext } from "./direct-eval-context.ts";
 import { analyzeProgramEscape } from "./escape.ts";
+import type { ProgramEscape } from "./escape.ts";
 import type { IntermediateProgram, IRFunction } from "./ir.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
@@ -20,6 +21,17 @@ export interface SharedProgramSummaries {
 
 const summaryCache = new Map<string, SharedProgramSummaries>();
 const localSummaries = new WeakMap<IntermediateProgram, SharedProgramSummaries>();
+const localEscape = new WeakMap<IntermediateProgram, ProgramEscape>();
+
+/** Program-object keyed because register/instruction identity cannot cross sessions. */
+export function ensureCompilerEscape(program: IntermediateProgram): ProgramEscape {
+	let escape = localEscape.get(program);
+	if (escape === undefined) {
+		escape = analyzeProgramEscape(program);
+		localEscape.set(program, escape);
+	}
+	return escape;
+}
 
 /** Only facts that can change these summaries participate in invalidation. */
 export function compilerSummaryCacheIdentity(program: IntermediateProgram): string {
@@ -226,7 +238,7 @@ function collectInstructionEffects(fn: IRFunction): Set<EffectKind> {
 
 function computeSummaries(program: IntermediateProgram): SharedProgramSummaries {
 	const identity = compilerSummaryCacheIdentity(program);
-	const escape = analyzeProgramEscape(program);
+	const escape = ensureCompilerEscape(program);
 	const functionByIndex = new Map(program.functions.map((fn) => [fn.functionIndex, fn]));
 	const functionEffects = new Map<string, FunctionEffectSummary>();
 

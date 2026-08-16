@@ -5,6 +5,28 @@ export type CompilerDiagnosticCode =
 	| `optimization.applied.${string}`
 	| `optimization.declined.${UnknownFactReason}`;
 
+export type OptimizationDecisionReason =
+	| "inner-closure"
+	| "exception-region"
+	| "relocation"
+	| "expansion-limit"
+	| "escape-cost-barrier"
+	| "unavailable-world-fact"
+	| "unsupported-consumer"
+	| UnknownFactReason;
+
+export interface CompilerOptimizationDecision {
+	readonly functionIndex: number;
+	readonly positionId: number;
+	readonly operation: "call" | "allocation" | "property" | "boxing";
+	readonly phase: "analysis" | "optimization" | "lowering";
+	readonly code:
+		| `optimization.applied.${string}`
+		| `optimization.declined.${OptimizationDecisionReason}`;
+	readonly outcome: "applied" | "declined";
+	readonly reason?: OptimizationDecisionReason;
+}
+
 export interface CompilerDiagnostic {
 	readonly code: CompilerDiagnosticCode;
 	readonly severity: "warning" | "remark";

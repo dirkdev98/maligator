@@ -222,6 +222,15 @@ const REMARK_EXPLANATIONS: Record<string, string> = {
 	"call.direct-native": "call uses the native-number compiled ABI",
 	"call.inline-cache": "dynamic call retains its runtime target cache",
 	"call.projected": "call result is projected behind a semantic fallback",
+	"call.generic": "call stayed on generic dispatch",
+	"call.guarded": "compiler emitted guarded direct dispatch",
+	"boxing.generic": "operation retains generic boxed semantics",
+	"object.heap": "object remains heap allocated",
+	"object.shaped": "compiler selected shaped-object construction",
+	"property.dynamic-load": "dynamic key kept the property load generic",
+	"property.dynamic-store": "dynamic key kept the property store generic",
+	"property.static-load": "compiler selected a static-key load cache",
+	"property.static-store": "compiler selected a static-key store cache",
 	"property.dynamic-inline-cache": "dynamic key retains its runtime shape cache",
 	"property.array-inline-cache": "array access uses a guarded indexed cache",
 	"property.finite-key": "property access uses a guarded finite-key projection",
@@ -797,6 +806,7 @@ function findings(
 					elided: 0,
 					guarded: 1,
 					retained: 2,
+					declined: 3,
 					fallback: 3,
 				};
 				return rank[left.outcome] - rank[right.outcome];
@@ -1554,9 +1564,9 @@ export function formatProfileFindings(
 		if (primaryDecision !== undefined) {
 			result.push(
 				`     ${REMARK_EXPLANATIONS[primaryDecision.code] ?? primaryDecision.code}${
-					primaryDecision.reasonCode === undefined
+					(primaryDecision.reasonCode ?? primaryDecision.reason) === undefined
 						? ""
-						: ` [${primaryDecision.reasonCode}]`
+						: ` [${primaryDecision.reasonCode ?? primaryDecision.reason}]`
 				}`,
 			);
 		}
@@ -1592,7 +1602,9 @@ function findingDecisionLabel(finding: ProfileFinding): string | undefined {
 	const decision = finding.decisions[0];
 	if (decision === undefined) return undefined;
 	return `${decision.code}${
-		decision.reasonCode === undefined ? "" : ` [${decision.reasonCode}]`
+		(decision.reasonCode ?? decision.reason) === undefined
+			? ""
+			: ` [${decision.reasonCode ?? decision.reason}]`
 	}`;
 }
 

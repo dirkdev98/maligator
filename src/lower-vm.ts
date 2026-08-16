@@ -230,6 +230,8 @@ export interface VmFunction {
 	positions: Array<number>;
 	/** Dense profile site for each instruction, or -1 when no source is known. */
 	profileSiteIds?: Array<number>;
+	/** Compile-only bridge from VM instructions to final shared compiler facts. */
+	compilerSiteIds?: Array<string | undefined>;
 
 	/**
 	 * COMPILE-ONLY (not part of the C `MalFunction` struct): the registers the
@@ -1302,7 +1304,11 @@ export function lowerIrProgramToVmDefinition(
 		return index;
 	};
 	const functions = program.functions.map((fn) =>
-		lowerFunctionToVmFunction(fn, fileIndexFor(fn.semanticFile.path)),
+		lowerFunctionToVmFunction(
+			fn,
+			fileIndexFor(fn.semanticFile.path),
+			profile ? program.facts.instructionSites : undefined,
+		),
 	);
 
 	const definition: VmDefinition = {
@@ -1390,7 +1396,11 @@ function buildHostInstalls(
  * Lower a function to a VM function. Note that we drop blocks and instead move to jumps to
  * absolute instructions.
  */
-function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunction {
+function lowerFunctionToVmFunction(
+	fn: IRFunction,
+	fileIndex: number,
+	instructionSites?: WeakMap<object, { id: string }>,
+): VmFunction {
 	// Source-position and exception-range markers carry no executable opcode, so
 	// block start IPs count only instructions that survive flattening.
 	const blockStartIps = new Map<number, number>();
@@ -1410,6 +1420,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 	}
 
 	const instructions: Array<VmInstruction> = [];
+	const compilerSiteIds: Array<string | undefined> = [];
 	let propertyIcCount = 0;
 	const propertyIcIndexByInstruction = new Map<IRInstruction, number>();
 	for (const block of fn.blocks) {
@@ -1516,6 +1527,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 					break;
 			}
 			instructions.push(vmInstruction);
+			compilerSiteIds.push(instructionSites?.get(instruction)?.id);
 			if (
 				(instruction.type === "loadProperty" ||
 					instruction.type === "loadPropertyStatic") &&
@@ -1808,6 +1820,9 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		handlers,
 		fileIndex,
 		positions,
+		compilerSiteIds: compilerSiteIds.some((site) => site !== undefined)
+			? compilerSiteIds
+			: undefined,
 		gcRootRegisters,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,

@@ -314,6 +314,10 @@ export function escapeOfRegister(
 					raise(position === 1 ? "none" : "retained");
 					break;
 				}
+				case "loadPropertyStatic": {
+					raise(position === 1 ? "none" : "retained"); // [dst, object]
+					break;
+				}
 				case "loadPrototype": {
 					raise(position === 1 ? "none" : "retained"); // [dst, object]
 					break;
@@ -328,6 +332,10 @@ export function escapeOfRegister(
 					// [object, key, value]; writing INTO the object (pos 0) does not make
 					// the object escape. Being the key or the stored value does.
 					raise(position === 0 ? "none" : "retained");
+					break;
+				}
+				case "storePropertyStatic": {
+					raise(position === 0 ? "none" : "retained"); // [object, value]
 					break;
 				}
 				case "move": {

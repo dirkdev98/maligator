@@ -1,3 +1,4 @@
+import type { CompilerSiteFacts, FactDependency } from "./compiler-facts.ts";
 import type { IntermediateProgram } from "./ir.ts";
 import type { VmDefinition, VmInstruction } from "./lower-vm.ts";
 
@@ -24,12 +25,32 @@ export interface ProfileSite {
 
 export interface CompilerRemark {
 	siteId: number;
-	phase: "ir" | "lowering" | "native-backend" | "bytecode-backend";
+	phase:
+		| "analysis"
+		| "optimization"
+		| "ir"
+		| "lowering"
+		| "native-backend"
+		| "bytecode-backend";
 	operation: string;
 	code: string;
-	outcome: "applied" | "elided" | "guarded" | "retained" | "fallback";
+	outcome:
+		| "applied"
+		| "declined"
+		| "elided"
+		| "guarded"
+		| "retained"
+		| "fallback";
+	reason?: string;
 	reasonCode?: string;
 	details?: Record<string, string | number | boolean>;
+	facts?: {
+		escape?: string;
+		representation?: string;
+		shape?: string;
+		dependencies: ReadonlyArray<string>;
+		obligations: ReadonlyArray<string>;
+	};
 }
 
 export interface ProfileSiteMatchReport {
@@ -134,24 +155,233 @@ const PROFILE_ALLOCATION_OPCODES = new Set<VmInstruction["opcode"]>([
 
 export function profileOperationForInstruction(instruction: VmInstruction): string {
 	const opcode = instruction.opcode;
-	if (opcode.startsWith("CALL")) return "call";
-	if (opcode.startsWith("CONSTRUCT")) return "construct";
-	if (opcode.includes("PROPERTY")) return "property";
-	if (PROFILE_ALLOCATION_OPCODES.has(opcode)) return "allocation";
-	if (opcode === "BINARY") return "binary";
-	if (opcode === "UNARY") return "unary";
+	if (opcode.startsWith("CALL") || opcode === "GUARD_FUNCTION_INDEX") return "call";
+	if (opcode.startsWith("CONSTRUCT")) return "call";
+	if (
+		opcode.includes("PROPERTY") ||
+		opcode === "LOAD_PROTOTYPE" ||
+		opcode === "SET_PROTOTYPE"
+	) {
+		return "property";
+	}
+	if (
+		PROFILE_ALLOCATION_OPCODES.has(opcode) ||
+		opcode === "INSTANTIATE_LITERAL_TEMPLATE" ||
+		opcode === "CREATE_BIGINT"
+	) {
+		return "allocation";
+	}
+	if (
+		opcode === "BINARY" ||
+		opcode === "UNARY" ||
+		opcode === "TO_PROPERTY_KEY" ||
+		opcode === "REQUIRE_COERCIBLE"
+	) {
+		return "boxing";
+	}
 	return "execute";
 }
 
 function remarkableOperation(operation: string): boolean {
 	return (
 		operation === "call" ||
-		operation === "construct" ||
 		operation === "property" ||
 		operation === "allocation" ||
-		operation === "binary" ||
-		operation === "unary"
+		operation === "boxing"
 	);
+}
+
+function remarkForInstruction(
+	instruction: VmInstruction,
+): Omit<CompilerRemark, "siteId"> | undefined {
+	const operation = profileOperationForInstruction(instruction);
+	switch (instruction.opcode) {
+		case "CALL":
+		case "CALL_SPREAD":
+		case "CALL_SPREAD_ITERABLE":
+			return {
+				phase: "lowering",
+				operation,
+				code: "call.generic",
+				outcome: "retained",
+			};
+		case "GUARD_FUNCTION_INDEX":
+			return {
+				phase: "lowering",
+				operation,
+				code: "call.guarded",
+				outcome: "applied",
+			};
+		case "LOAD_PROPERTY":
+			return {
+				phase: "lowering",
+				operation,
+				code: "property.dynamic-load",
+				outcome: "retained",
+			};
+		case "LOAD_PROPERTY_STATIC":
+			return {
+				phase: "lowering",
+				operation,
+				code: "property.static-load",
+				outcome: "applied",
+			};
+		case "STORE_PROPERTY":
+			return {
+				phase: "lowering",
+				operation,
+				code: "property.dynamic-store",
+				outcome: "retained",
+			};
+		case "STORE_PROPERTY_STATIC":
+			return {
+				phase: "lowering",
+				operation,
+				code: "property.static-store",
+				outcome: "applied",
+			};
+		case "CREATE_OBJECT":
+			return {
+				phase: "lowering",
+				operation,
+				code: "object.heap",
+				outcome: "retained",
+			};
+		case "CREATE_OBJECT_SHAPED":
+			return {
+				phase: "lowering",
+				operation,
+				code: "object.shaped",
+				outcome: "applied",
+			};
+		default:
+			switch (operation) {
+				case "allocation":
+					return {
+						phase: "lowering",
+						operation,
+						code: "allocation.heap",
+						outcome: "retained",
+					};
+				case "call":
+					return {
+						phase: "lowering",
+						operation,
+						code: "call.generic",
+						outcome: "retained",
+					};
+				case "property":
+					return {
+						phase: "lowering",
+						operation,
+						code: "property.dynamic-load",
+						outcome: "retained",
+					};
+				case "boxing":
+					return {
+						phase: "lowering",
+						operation,
+						code: "boxing.generic",
+						outcome: "retained",
+					};
+				default:
+					return undefined;
+			}
+	}
+}
+
+function dependencyLabel(dependency: FactDependency): string {
+	switch (dependency.kind) {
+		case "world":
+			return `world:${dependency.fact}`;
+		case "epoch":
+			return `epoch:${dependency.family}`;
+		case "guard":
+			return `guard:${dependency.id}`;
+		case "summary":
+			return `summary:${dependency.id}`;
+	}
+}
+
+function factRemarks(
+	site: CompilerSiteFacts | undefined,
+	operation: string,
+): Array<Omit<CompilerRemark, "siteId">> {
+	if (site === undefined) return [];
+	const remarks: Array<Omit<CompilerRemark, "siteId">> = [];
+	const details = (
+		fact:
+			| CompilerSiteFacts["shape"]
+			| CompilerSiteFacts["escape"]
+			| CompilerSiteFacts["representation"]
+			| CompilerSiteFacts["builtinIdentity"]
+			| CompilerSiteFacts["immutableBinding"],
+	): NonNullable<CompilerRemark["facts"]> | undefined => {
+		if (fact?.kind !== "known") return undefined;
+		return {
+			...(site.escape?.kind === "known" ? { escape: site.escape.value } : {}),
+			...(site.representation?.kind === "known"
+				? { representation: site.representation.value }
+				: {}),
+			...(site.shape?.kind === "known"
+				? { shape: JSON.stringify(site.shape.value) }
+				: {}),
+			dependencies: fact.proof.dependencies.map(dependencyLabel),
+			obligations: fact.proof.obligations.map(
+				(obligation) => `${obligation.kind}:${obligation.id}`,
+			),
+		};
+	};
+	if (site.shape?.kind === "known") {
+		remarks.push({
+			phase: "analysis",
+			operation,
+			code: "optimization.applied.known-shape",
+			outcome: "applied",
+			facts: details(site.shape),
+		});
+	}
+	if (site.representation?.kind === "known" && site.representation.value === "stack") {
+		remarks.push({
+			phase: "optimization",
+			operation,
+			code: "optimization.applied.stack-representation",
+			outcome: "applied",
+			facts: details(site.representation),
+		});
+		if (
+			site.representation.proof.obligations.some(
+				(obligation) => obligation.kind === "materialize",
+			)
+		) {
+			remarks.push({
+				phase: "optimization",
+				operation,
+				code: "optimization.applied.partial-escape-materialization",
+				outcome: "applied",
+				facts: details(site.representation),
+			});
+		}
+	}
+	if (site.builtinIdentity?.kind === "known") {
+		remarks.push({
+			phase: "analysis",
+			operation,
+			code: "optimization.applied.known-builtin",
+			outcome: "applied",
+			facts: details(site.builtinIdentity),
+		});
+	}
+	if (site.immutableBinding?.kind === "known") {
+		remarks.push({
+			phase: "analysis",
+			operation,
+			code: "optimization.applied.immutable-binding",
+			outcome: "applied",
+			facts: details(site.immutableBinding),
+		});
+	}
+	return remarks;
 }
 
 interface FinalCompiledFunction {
@@ -171,7 +401,7 @@ export function finalizeCompilerRemarks(
 	compiled: ReadonlyArray<FinalCompiledFunction | null>,
 ): void {
 	if (definition.profileSites === undefined) return;
-	const remarks: Array<CompilerRemark> = [];
+	const remarks: Array<CompilerRemark> = [...(definition.profileRemarks ?? [])];
 	for (const [functionIndex, fn] of definition.functions.entries()) {
 		const emitted = compiled[functionIndex];
 		if (emitted === null || emitted === undefined) {
@@ -220,6 +450,15 @@ export function buildProfileMetadata(
 		program.semantic.files.map((file) => [normalizedPath(file.path), file] as const),
 	);
 	const sites: Array<ProfileSite> = [];
+	const remarks: Array<CompilerRemark> = [];
+	const remarkKeys = new Set<string>();
+	const decisionSiteByKey = new Map<string, number>();
+	const addRemark = (siteId: number, remark: Omit<CompilerRemark, "siteId">): void => {
+		const remarkKey = `${siteId}:${remark.code}:${remark.reason ?? ""}`;
+		if (remarkKeys.has(remarkKey)) return;
+		remarkKeys.add(remarkKey);
+		remarks.push({ siteId, ...remark });
+	};
 	const relativeFile = (file: string): string =>
 		root !== "" && file.startsWith(`${root}/`) ? file.slice(root.length + 1) : file;
 	const functionName = (functionIndex: number): string => {
@@ -239,6 +478,70 @@ export function buildProfileMetadata(
 				? "<unknown>"
 				: (definition.files[candidate.fileIndex] ?? "<unknown>"),
 		);
+	};
+	const ensureDecisionSite = (
+		functionIndex: number,
+		positionId: number,
+		operation: string,
+	): number | undefined => {
+		const decisionKey = `${functionIndex}:${positionId}:${operation}`;
+		const existing = decisionSiteByKey.get(decisionKey);
+		if (existing !== undefined) return existing;
+		const position = definition.sourcePositions[positionId];
+		if (position === undefined) return undefined;
+		const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
+		const leafFile = functionFile(leafFunctionIndex);
+		const leafSource = fileByPath.get(leafFile)?.contents ?? "";
+		const anchor = (leafSource.split("\n")[position.line - 1] ?? "")
+			.trim()
+			.replaceAll(/\s+/g, " ");
+		const inlineChain: Array<{ functionIndex: number; positionId: number }> = [];
+		let chainPositionId = positionId;
+		let guard = 0;
+		while (chainPositionId >= 0 && guard++ < 1024) {
+			const chainPosition = definition.sourcePositions[chainPositionId];
+			if (chainPosition === undefined) break;
+			inlineChain.push({
+				functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
+				positionId: chainPositionId,
+			});
+			chainPositionId = chainPosition.callerPosId ?? -1;
+		}
+		const chainKey = inlineChain
+			.map((entry) => {
+				const chainPosition = definition.sourcePositions[entry.positionId]!;
+				const chainFile = functionFile(entry.functionIndex);
+				const chainSource = fileByPath.get(chainFile)?.contents ?? "";
+				const chainAnchor = (chainSource.split("\n")[chainPosition.line - 1] ?? "")
+					.trim()
+					.replaceAll(/\s+/g, " ");
+				return `${relativeFile(chainFile)}:${functionName(entry.functionIndex)}:${chainAnchor}:${chainPosition.column}`;
+			})
+			.join("<-");
+		const originKey = `${relativeFile(leafFile)}\u0000${functionName(leafFunctionIndex)}\u0000${anchor}\u0000${position.column}\u0000${operation}\u00000`;
+		const originId = logicalId(originKey);
+		const instanceId = logicalId(`${originKey}\u0000${chainKey}`);
+		const physicalFile = functionFile(functionIndex);
+		const siteId = sites.length;
+		sites.push({
+			id: siteId,
+			logicalId: instanceId,
+			originId,
+			instanceId,
+			regionId: logicalId(
+				`${relativeFile(physicalFile)}\u0000${functionName(functionIndex)}\u0000${chainKey}`,
+			),
+			functionIndex,
+			instructionIndex: -1,
+			positionId,
+			file: relativeFile(leafFile),
+			line: position.line,
+			column: position.column,
+			operation,
+			inlineChain,
+		});
+		decisionSiteByKey.set(decisionKey, siteId);
+		return siteId;
 	};
 
 	for (const [functionIndex, fn] of definition.functions.entries()) {
@@ -307,10 +610,39 @@ export function buildProfileMetadata(
 				inlineChain,
 			});
 			siteIds[instructionIndex] = siteId;
+			const decisionKey = `${functionIndex}:${positionId}:${operation}`;
+			if (!decisionSiteByKey.has(decisionKey)) {
+				decisionSiteByKey.set(decisionKey, siteId);
+			}
+			const compilerSiteId = fn.compilerSiteIds?.[instructionIndex];
+			const compilerSite =
+				compilerSiteId === undefined ? undefined : program.facts.sites.get(compilerSiteId);
+			for (const remark of [
+				remarkForInstruction(instruction),
+				...factRemarks(compilerSite, operation),
+			]) {
+				if (remark !== undefined) addRemark(siteId, remark);
+			}
 		}
 		fn.profileSiteIds = siteIds;
 	}
 
+	for (const decision of program.optimizationDecisions ?? []) {
+		const siteId = ensureDecisionSite(
+			decision.functionIndex,
+			decision.positionId,
+			decision.operation,
+		);
+		if (siteId === undefined) continue;
+		addRemark(siteId, {
+			phase: decision.phase,
+			operation: decision.operation,
+			code: decision.code,
+			outcome: decision.outcome,
+			...(decision.reason === undefined ? {} : { reason: decision.reason }),
+		});
+	}
+
 	definition.profileSites = sites;
-	definition.profileRemarks = [];
+	definition.profileRemarks = remarks;
 }

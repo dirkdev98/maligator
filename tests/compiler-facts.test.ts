@@ -16,11 +16,13 @@ import {
 	worldFactsFromConfig,
 } from "../src/compiler-facts.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
+import { ensureCompilerSiteFacts } from "../src/compiler-site-facts.ts";
 import {
 	compilerSummaryCacheIdentity,
 	ensureCompilerSummaries,
 } from "../src/compiler-summaries.ts";
 import { annotateDirectArrayPushSites } from "../src/inline.ts";
+import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
@@ -300,5 +302,59 @@ describe("canonical builtin-call IR facts", () => {
 			kind: "known",
 			proof: { dependencies: [{ kind: "epoch", family: "watched-methods" }] },
 		});
+	});
+});
+
+describe("residual instruction facts", () => {
+	it("records shape, escape, stack representation, and materialization obligations", () => {
+		const ir = compileSemanticProgramToIr(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function f(value, escape) {
+					const object = { x: value };
+					if (escape) return object;
+					return typeof object === "object" ? object.x : 0;
+				}
+				globalThis.keep = f;`,
+				"site-facts.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		executeIROptimizations(ir);
+		const allocation = [...ensureCompilerSiteFacts(ir).values()].find(
+			(site) => site.instruction === "createObjectShaped",
+		);
+		expect(allocation?.shape).toMatchObject({
+			kind: "known",
+			value: { kind: "object", keys: ["x"] },
+		});
+		expect(allocation?.escape).toMatchObject({ kind: "known", value: "returned" });
+		expect(allocation?.representation).toMatchObject({
+			kind: "known",
+			value: "stack",
+			proof: { obligations: [{ kind: "materialize" }] },
+		});
+		expect(allocation?.sourceSite).toContain("site-facts.js");
+	});
+
+	it("attaches builtin and immutable binding facts without changing lowering", () => {
+		const ir = compileSemanticProgramToIr(
+			analyzeSourceAndRunSemanticAnalysis(
+				`array.push(1); globalThis.keep = Math;`,
+				"identity-sites.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		annotateDirectArrayPushSites(ir);
+		const sites = [...ensureCompilerSiteFacts(ir).values()];
+		expect(
+			sites.find((site) => site.builtinIdentity !== undefined)?.builtinIdentity,
+		).toMatchObject({
+			kind: "known",
+			value: "Array.prototype.push",
+			proof: { dependencies: [{ kind: "world", fact: "primordials.locked" }] },
+		});
+		expect(
+			sites.find((site) => site.immutableBinding !== undefined)?.immutableBinding,
+		).toMatchObject({ kind: "known", value: "immutable" });
 	});
 });

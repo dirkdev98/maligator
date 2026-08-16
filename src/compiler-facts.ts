@@ -282,6 +282,27 @@ export interface KnownBuiltinCall {
 	readonly sourceSite?: SourceSiteId;
 }
 
+export type ValueEscapeFact = "none" | "invoked" | "returned" | "retained";
+
+export type ShapeFact =
+	| { readonly kind: "object"; readonly keys: ReadonlyArray<string> }
+	| { readonly kind: "array"; readonly elements: "dense" | "unknown" };
+
+export type RepresentationFact = "heap" | "stack";
+
+/** Residual facts keyed to a final optimized instruction, before register reuse. */
+export interface CompilerSiteFacts {
+	readonly id: string;
+	readonly sourceSite?: SourceSiteId;
+	readonly functionId: string;
+	readonly instruction: string;
+	readonly shape?: CompilerFact<ShapeFact>;
+	readonly escape?: CompilerFact<ValueEscapeFact>;
+	readonly representation?: CompilerFact<RepresentationFact>;
+	readonly builtinIdentity?: CompilerFact<string>;
+	readonly immutableBinding?: CompilerFact<"immutable">;
+}
+
 export interface CompilerProgramFacts {
 	readonly world: WorldFacts;
 	readonly compilationMode: "development" | "full";
@@ -291,6 +312,10 @@ export interface CompilerProgramFacts {
 	readonly builtinIdentities: ReadonlyMap<string, CompilerFact<string>>;
 	/** Global primordial aliases which the locked-world contract makes immutable. */
 	readonly immutableGlobalBindings: ReadonlyMap<string, CompilerFact<"immutable">>;
+	/** Final residual sites. Populated lazily before register allocation. */
+	readonly sites: ReadonlyMap<string, CompilerSiteFacts>;
+	/** Object identity bridge for lowering/profile metadata; never serialized. */
+	readonly instructionSites: WeakMap<object, CompilerSiteFacts>;
 	readonly functionEffects: ReadonlyMap<string, FunctionEffectSummary>;
 	readonly moduleEffects: ReadonlyMap<string, ModuleEffectSummary>;
 }
@@ -373,6 +398,8 @@ function compilerProgramFacts(world: WorldFacts): CompilerProgramFacts {
 		world,
 		compilationMode: "full",
 		...sharedSemanticFacts(world),
+		sites: new Map(),
+		instructionSites: new WeakMap(),
 		functionEffects: new Map(),
 		moduleEffects: new Map(),
 	};
