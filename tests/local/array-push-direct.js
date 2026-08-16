@@ -9,6 +9,11 @@ ok("multi argument return", dense.push(2, 3, 4) === 4);
 ok("multi argument values", dense.join(",") === "1,2,3,4");
 ok("zero argument return", dense.push() === 4);
 
+function exactFreshPush(a, b, c) {
+	return [10].push(a, b, c);
+}
+ok("locked exact fresh push", exactFreshPush(1, 2, 3) === 4);
+
 const collected = [];
 for (let i = 0; i < 3000; i++) collected.push({ value: i });
 let sum = 0;
@@ -105,5 +110,5 @@ try {
 }
 ok("large length fallback", maxLengthThrew && maxLength.length === 4294967295);
 
-ok("check count", checks === 14);
+ok("check count", checks === 15);
 console.log("array-push-direct PASS");

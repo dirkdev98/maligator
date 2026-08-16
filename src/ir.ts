@@ -1079,7 +1079,7 @@ export type IRInstruction =
 			type: "callBuiltin";
 			// [destination, this, ...arguments]
 			registers: [number, number, ...Array<number>];
-			operation: "String.prototype.split";
+			operation: "Array.prototype.push" | "String.prototype.split";
 			/** Canonical facts remain attached after dynamic dispatch is erased. */
 			knownBuiltinCall: KnownBuiltinCall;
 			/** Closed projected-result representation selected from canonical facts. */

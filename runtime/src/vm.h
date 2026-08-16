@@ -135,6 +135,7 @@ typedef enum MalOpcode {
 /** Exact builtin dispatch order mirrored by VM_DIRECT_BUILTIN_OPERATIONS. */
 typedef enum MalDirectBuiltinOp {
     MAL_DIRECT_BUILTIN_STRING_SPLIT,
+    MAL_DIRECT_BUILTIN_ARRAY_PUSH,
 } MalDirectBuiltinOp;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */

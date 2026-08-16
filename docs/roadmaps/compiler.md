@@ -338,6 +338,11 @@ is general rather than a registry-shaped collection of special cases.
           repeating Array-brand, index, bounds, or hole checks; a failed dense
           allocation retains the ordinary property operation as its table-backed
           representation fallback.
+    - [x] Lower a locked one-shot `freshArray.push(...)` through the shared exact
+          fresh-Array fact into backend-neutral builtin-call IR. Erase the method
+          Get and callback identity check, support arbitrary arity in MALW and both
+          backends, and retain the complete builtin algorithm when the ordinary
+          dense representation cannot append directly.
   - [x] License capture-free numeric `reduce` regions with the canonical reduce,
         unary-Math, primitive-method, and array-element facts through IR, MALW, and
         native emission. Mutable builds admit the combined epochs once; locked builds

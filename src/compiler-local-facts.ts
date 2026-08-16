@@ -30,14 +30,42 @@ export function analyzeExactFreshArrayUse(
 	site: {
 		readonly receiver: number;
 		readonly callee: number;
-		readonly property: Extract<IRInstruction, { type: "loadProperty" }>;
+		readonly property: Extract<
+			IRInstruction,
+			{ type: "loadProperty" | "loadPropertyStatic" }
+		>;
 		readonly call: Extract<IRInstruction, { type: "call" }>;
 	},
 ): ExactFreshArrayUseAnalysis {
 	const index = buildIRRegisterIndex(fn, { locations: true });
-	const allocation = index.uniqueDefinitions.get(site.receiver);
+	let allocationRegister = site.receiver;
+	const rootSeen = new Set<number>();
+	while (!rootSeen.has(allocationRegister)) {
+		rootSeen.add(allocationRegister);
+		const definition = index.uniqueDefinitions.get(allocationRegister);
+		if (definition?.type !== "move") break;
+		allocationRegister = definition.registers[1];
+	}
+	const allocation = index.uniqueDefinitions.get(allocationRegister);
 	if (allocation?.type !== "createArray") {
 		return { fact: unknownFact("representation-mismatch") };
+	}
+	const aliases = new Set<number>([allocation.registers[0]]);
+	const aliasWorklist = [allocation.registers[0]];
+	while (aliasWorklist.length > 0) {
+		const alias = aliasWorklist.pop()!;
+		for (const use of index.uses.get(alias) ?? []) {
+			if (use.instruction.type !== "move" || use.position !== 1) continue;
+			const target = use.instruction.registers[0];
+			if (index.uniqueDefinitions.get(target) !== use.instruction) continue;
+			if (!aliases.has(target)) {
+				aliases.add(target);
+				aliasWorklist.push(target);
+			}
+		}
+	}
+	if (!aliases.has(site.receiver)) {
+		return { fact: unknownFact("conflicting-control-flow"), allocation };
 	}
 	const allocationLocation = index.locations?.get(allocation);
 	const propertyLocation = index.locations?.get(site.property);
@@ -67,41 +95,37 @@ export function analyzeExactFreshArrayUse(
 	let maximumIndex = -1;
 	let sawProperty = false;
 	let sawCall = false;
-	for (const use of index.uses.get(site.receiver) ?? []) {
-		if (use.instruction === site.property && use.position === 1) {
-			sawProperty = true;
-			continue;
-		}
-		if (use.instruction === site.call && use.position === 2) {
-			sawCall = true;
-			continue;
-		}
-		if (use.position === 0 && use.instruction.type === "defineProperty") {
-			const location = index.locations?.get(use.instruction);
-			const key = index.uniqueDefinitions.get(use.instruction.registers[1]);
-			if (
-				location?.blockIndex !== allocationLocation.blockIndex ||
-				location.instructionIndex <= allocationLocation.instructionIndex ||
-				location.instructionIndex >= propertyLocation.instructionIndex ||
-				key?.type !== "createNumber" ||
-				!Number.isInteger(key.value) ||
-				key.value < 0 ||
-				key.value >= 0xffff_ffff
-			) {
-				return { fact: unknownFact("unsupported-consumer"), allocation };
+	for (const alias of aliases) {
+		for (const use of index.uses.get(alias) ?? []) {
+			if (use.instruction === site.property && use.position === 1) {
+				sawProperty = true;
+				continue;
 			}
-			initializedIndices.add(key.value);
-			maximumIndex = Math.max(maximumIndex, key.value);
-			continue;
+			if (use.instruction === site.call && use.position === 2) {
+				sawCall = true;
+				continue;
+			}
+			if (use.position === 0 && use.instruction.type === "defineProperty") {
+				const location = index.locations?.get(use.instruction);
+				const key = index.uniqueDefinitions.get(use.instruction.registers[1]);
+				if (
+					location?.blockIndex !== allocationLocation.blockIndex ||
+					location.instructionIndex <= allocationLocation.instructionIndex ||
+					location.instructionIndex >= propertyLocation.instructionIndex ||
+					key?.type !== "createNumber" ||
+					!Number.isInteger(key.value) ||
+					key.value < 0 ||
+					key.value >= 0xffff_ffff
+				) {
+					return { fact: unknownFact("unsupported-consumer"), allocation };
+				}
+				initializedIndices.add(key.value);
+				maximumIndex = Math.max(maximumIndex, key.value);
+				continue;
+			}
+			if (use.position === 1 && use.instruction.type === "move") continue;
+			return { fact: unknownFact("observable-identity"), allocation };
 		}
-		if (
-			use.position === 1 &&
-			use.instruction.type === "move" &&
-			(index.uses.get(use.instruction.registers[0]) ?? []).length === 0
-		) {
-			continue;
-		}
-		return { fact: unknownFact("observable-identity"), allocation };
 	}
 	if (!sawProperty || !sawCall) {
 		return { fact: unknownFact("unsupported-consumer"), allocation };

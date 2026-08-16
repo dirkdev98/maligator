@@ -574,6 +574,61 @@ test("locked exact primitive String split calls erase dynamic dispatch in IR", (
 	).toBe(false);
 });
 
+test("locked exact fresh Array push erases dynamic dispatch in IR", () => {
+	const source = `
+		globalThis.pushKnown = function pushKnown(a, b, c) {
+			return [1].push(a, b, c);
+		};
+	`;
+	const lockedProgram = optimizedLockedProgram(source);
+	const lockedInstructions = lockedProgram.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	const direct = lockedInstructions.find(
+		(instruction) =>
+			instruction.type === "callBuiltin" &&
+			instruction.operation === "Array.prototype.push",
+	);
+	expect(direct).toMatchObject({
+		type: "callBuiltin",
+		operation: "Array.prototype.push",
+	});
+	if (direct?.type === "callBuiltin") expect(direct.registers).toHaveLength(5);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "loadPropertyStatic" &&
+				decodeStringConstant(lockedProgram, instruction.stringIndex) === "push",
+		),
+	).toBe(false);
+
+	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		mutableInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Array.prototype.push",
+		),
+	).toBe(true);
+
+	const observed = optimizedLockedProgram(`
+		globalThis.pushObserved = function pushObserved() {
+			const values = [1];
+			values.push(2);
+			return values;
+		};
+	`).functions.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions));
+	expect(
+		observed.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Array.prototype.push",
+		),
+	).toBe(true);
+});
+
 test("direct RegExp exec calls carry canonical capture-projection semantics", () => {
 	const ir = optimizedProgram(`
 		function parse(regexp, value) {

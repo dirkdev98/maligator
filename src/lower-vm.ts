@@ -179,7 +179,10 @@ export const VM_MATH_UNARY_NUMBER_OPERATIONS = [
 export const VM_MATH_BINARY_NUMBER_OPERATIONS = ["Math.min", "Math.max"] as const;
 
 /** Exact builtin calls whose dynamic property/callback seam was erased in IR. */
-export const VM_DIRECT_BUILTIN_OPERATIONS = ["String.prototype.split"] as const;
+export const VM_DIRECT_BUILTIN_OPERATIONS = [
+	"String.prototype.split",
+	"Array.prototype.push",
+] as const;
 
 type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];
 type VmMathBinaryNumberOperation = (typeof VM_MATH_BINARY_NUMBER_OPERATIONS)[number];

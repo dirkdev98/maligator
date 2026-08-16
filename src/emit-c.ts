@@ -6070,11 +6070,18 @@ function emitInstruction(
 			];
 		}
 		case "CALL_BUILTIN": {
-			if (instruction.operation !== "String.prototype.split") return null;
 			const argsExpr =
 				instruction.arguments.length === 0
 					? "nullptr"
 					: `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`;
+			if (instruction.operation === "Array.prototype.push") {
+				return [
+					`r${instruction.dst} = mal_builtin_array_push_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
+			if (instruction.operation !== "String.prototype.split") return null;
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site } = nativeStringSplitCursorAction;
 				const id = site.cursor.callIp;

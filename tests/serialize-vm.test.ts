@@ -50,6 +50,14 @@ const instructions: Array<VmInstruction> = [
 		arguments: [1, 2],
 		operation: "String.prototype.split",
 	},
+	{
+		opcode: "CALL_BUILTIN",
+		dst: 9,
+		thisValue: 10,
+		argumentCount: 3,
+		arguments: [0, 1, 2],
+		operation: "Array.prototype.push",
+	},
 	{ opcode: "TYPEOF_COMPARE", dst: 9, src: 8, expected: "number", negated: true },
 	{ opcode: "TRY_BEGIN", handlerIp: 0 },
 	{

@@ -49,6 +49,13 @@ MalCompletion mal_builtin_array_push_direct(
     bool *exact_hit_out
 );
 
+/** Exact %Array.prototype.push% invocation after locked property resolution was
+ * erased by the compiler. Dense ordinary Arrays append without callback/identity
+ * guards; every representation or semantic miss executes the builtin algorithm. */
+MalValue mal_builtin_array_push_known(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
+);
+
 typedef enum MalPrivateAggregateMemoState {
     MAL_PRIVATE_AGGREGATE_MEMO_EMPTY = 0,
     MAL_PRIVATE_AGGREGATE_MEMO_FILLED = 1,

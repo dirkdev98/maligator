@@ -2160,22 +2160,36 @@ void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
 }
 
 void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
     const i32 *data = mal_op_instruction_data(
         callable, instruction->as.call_builtin.data_offset);
-    i32 argument_count = data[0] < 2 ? data[0] : 2;
-    MalValue arguments[2];
-    for (i32 i = 0; i < argument_count; i++) {
-        arguments[i] = mal_op_value_operand(callable, data[i + 1]);
+    i32 argument_count = data[0];
+    if (vm->value_stack_size + argument_count > vm->value_stack_capacity) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Maximum call stack size exceeded");
+        return;
     }
+    i32 base = vm->value_stack_size;
+    for (i32 i = 0; i < argument_count; i++) {
+        vm->value_stack[base + i] = mal_op_value_operand(callable, data[i + 1]);
+    }
+    vm->value_stack_size = base + argument_count;
     MalValue receiver = mal_op_value_operand(
         callable, instruction->as.call_builtin.this_value);
+    MalValue result = MAL_VALUE_UNDEFINED;
     switch ((MalDirectBuiltinOp) instruction->as.call_builtin.operation) {
         case MAL_DIRECT_BUILTIN_STRING_SPLIT:
-            callable->registers[instruction->as.call_builtin.dst] =
-                mal_builtin_string_split_direct(
-                    callable->vm, receiver, arguments, argument_count);
-            return;
+            result = mal_builtin_string_split_direct(
+                vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_ARRAY_PUSH:
+            result = mal_builtin_array_push_known(
+                vm, receiver, &vm->value_stack[base], argument_count);
+            break;
     }
+    vm->value_stack_size = base;
+    callable->registers[instruction->as.call_builtin.dst] = result;
 }
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction) {

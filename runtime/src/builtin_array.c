@@ -1429,6 +1429,26 @@ done:
     return ret;
 }
 
+MalValue mal_builtin_array_push_known(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
+) {
+    if (arg_count >= 0 && mal_value_is_array_object(this_value) &&
+        mal_array_elements_protector) {
+        MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+        MalArrayObject *array = mal_value_to_array_object(this_value);
+        if (mal_value_is_array_object(prototype_value) &&
+            array->object.prototype == mal_value_to_object(prototype_value) &&
+            mal_array_object_dense_append_many(array, args, (u32) arg_count)) {
+            MAL_PERF_COUNT(array_push_direct_hits);
+            return mal_ops_number_value((f64) array->length);
+        }
+    }
+    MAL_PERF_COUNT(array_push_direct_fallbacks);
+    return mal_builtin_array_push(
+        vm, this_value, args, arg_count, MAL_VALUE_UNDEFINED,
+        vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH]);
+}
+
 bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
     MalValue callee = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH];
     MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];

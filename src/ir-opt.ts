@@ -8,6 +8,7 @@ import {
 	compilerGuardPlan,
 	knownBuiltinCallProves,
 } from "./compiler-facts.ts";
+import { analyzeExactFreshArrayUse } from "./compiler-local-facts.ts";
 import {
 	optimizationMetrics,
 	optimizationPassDelta,
@@ -193,8 +194,9 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 				const call = instruction.knownBuiltinCall;
 				if (
 					call === undefined ||
-					call.operation !== "String.prototype.split" ||
-					!knownBuiltinCallProves(call, "String.prototype.split") ||
+					(call.operation !== "String.prototype.split" &&
+						call.operation !== "Array.prototype.push") ||
+					!knownBuiltinCallProves(call, call.operation) ||
 					!compilerFactIsWorldInvariant(call.identity)
 				) {
 					continue;
@@ -206,21 +208,34 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 				if (
 					callee?.type !== "loadPropertyStatic" ||
 					moveRoot(callee.registers[1]) !== receiverRoot ||
-					receiver?.type !== "createString" ||
 					calleeUses.length !== 1 ||
 					calleeUses[0]?.instruction !== instruction ||
 					calleeUses[0]?.position !== 1
 				) {
 					continue;
 				}
+				if (call.operation === "String.prototype.split") {
+					if (receiver?.type !== "createString") continue;
+				} else {
+					const exact = analyzeExactFreshArrayUse(fn, {
+						receiver: receiverRoot,
+						callee: instruction.registers[1],
+						property: callee,
+						call: instruction,
+					});
+					if (exact.fact.kind !== "known") continue;
+				}
 				block.instructions[index] = {
 					type: "callBuiltin",
 					registers: [
 						instruction.registers[0],
 						instruction.registers[2],
-						...instruction.registers.slice(3, 5),
+						...instruction.registers.slice(
+							3,
+							call.operation === "String.prototype.split" ? 5 : undefined,
+						),
 					],
-					operation: "String.prototype.split",
+					operation: call.operation,
 					knownBuiltinCall: call,
 				};
 				removedProperties.add(callee);
