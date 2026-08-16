@@ -2,7 +2,7 @@ import type {
 	OptimizationAblation,
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
-import { knownBuiltinCallProves } from "./compiler-facts.ts";
+import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
 import {
 	optimizationMetrics,
 	optimizationPassDelta,
@@ -2779,10 +2779,21 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 					),
 				);
 				if (indexedFieldSlots.some((slot) => slot < 0)) continue;
+				const identity = pushCall.knownBuiltinCall?.identity;
+				const guard = compilerGuardPlan(
+					[
+						identity,
+						program.facts.protectors.get("primitive-methods"),
+						program.facts.protectors.get("array-elements"),
+					],
+					[{ kind: "materialize", id: `cardinality-array:${nextRegionId}` }],
+				);
+				if (guard === undefined) continue;
 
 				allocation.nativeCardinalityRegion = {
 					id: nextRegionId++,
 					maximumLength: bound - start,
+					guard,
 				};
 				for (const load of pushLoads) {
 					load.nativeCardinalityAccess = { role: "push", allocation };

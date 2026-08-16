@@ -5,7 +5,11 @@ import type {
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
-import type { CompilerProgramFacts, KnownBuiltinCall } from "./compiler-facts.ts";
+import type {
+	CompilerGuardPlan,
+	CompilerProgramFacts,
+	KnownBuiltinCall,
+} from "./compiler-facts.ts";
 import {
 	DIRECT_EVAL_PRIVATE_FIELD,
 	DIRECT_EVAL_PRIVATE_GETTER,
@@ -790,7 +794,11 @@ export type IRInstruction =
 	| {
 			type: "createArray";
 			/** COMPILE-ONLY: bounded push-only array virtualized by native code. */
-			nativeCardinalityRegion?: { id: number; maximumLength: number };
+			nativeCardinalityRegion?: {
+				id: number;
+				maximumLength: number;
+				guard: CompilerGuardPlan;
+			};
 			/** COMPILE-ONLY: a pristine empty Array is immediately followed by an
 			 * exact canonical `[0, length)` indexed fill. Native code may reserve the
 			 * final dense capacity before executing the otherwise-unchanged loop. */

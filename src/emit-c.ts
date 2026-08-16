@@ -10,7 +10,12 @@ import {
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
 } from "./lower-vm.ts";
-import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.ts";
+import type {
+	VmExceptionHandler,
+	VmFunction,
+	VmGuardPlan,
+	VmInstruction,
+} from "./lower-vm.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 
 /**
@@ -858,6 +863,7 @@ export function emitCompiledFunction(
 			allocationInstructionIndex: ip,
 			arrayRegister: receiver.register,
 			maximumLength: instruction.nativeCardinalityRegion.maximumLength,
+			guard: instruction.nativeCardinalityRegion.guard,
 			semanticEpochStable: false,
 			epochName: `__cardinality_${ip}_semantic_epoch`,
 			itemSite: pushedSite,
@@ -2596,6 +2602,7 @@ interface CardinalityRegion {
 	allocationInstructionIndex: number;
 	arrayRegister: number;
 	maximumLength: number;
+	guard: VmGuardPlan;
 	/** Every instruction in the complete virtual lifetime is unable to run JS or
 	 * invalidate either semantic family, so admission licenses all later uses. */
 	semanticEpochStable: boolean;
@@ -2610,6 +2617,29 @@ interface CardinalityRegion {
 	shapeName: string;
 	currentMaterializedName: string;
 	elementIndexName: string;
+}
+
+function cardinalityAdmissionGuard(region: CardinalityRegion): string {
+	const conditions: Array<string> = [];
+	for (const dependency of region.guard.dependencies) {
+		if (dependency.kind === "world") continue;
+		switch (dependency.family) {
+			case "primitive-methods":
+				conditions.push("mal_primitive_method_protector");
+				break;
+			case "watched-methods":
+				conditions.push("mal_builtin_array_push_virtual_guard(vm)");
+				break;
+			case "array-elements":
+				conditions.push(
+					"mal_array_elements_protector && vm->semantic_epochs.array_elements != 0",
+				);
+				break;
+			default:
+				throw new Error(`Unsupported cardinality dependency ${dependency.family}`);
+		}
+	}
+	return conditions.length === 0 ? "true" : conditions.join(" && ");
 }
 
 /**
@@ -4173,7 +4203,7 @@ function emitInstruction(
 				return [
 					`${cardinalityRegion.shapeName} = __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}];`,
 					`if (${cardinalityRegion.shapeName} == nullptr) { ${cardinalityRegion.shapeName} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${cardinalityRegion.itemSite.slotCount}); __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}] = ${cardinalityRegion.shapeName}; }`,
-					`${cardinalityRegion.fastName} = mal_primitive_method_protector && mal_builtin_array_push_virtual_guard(vm);`,
+					`${cardinalityRegion.fastName} = ${cardinalityAdmissionGuard(cardinalityRegion)};`,
 					`${cardinalityRegion.epochName} = vm->semantic_epochs.activity;`,
 					`${cardinalityRegion.fastName} = ${cardinalityRegion.fastName} && ${cardinalityRegion.epochName} != 0;`,
 					`${cardinalityRegion.countName} = 0;`,

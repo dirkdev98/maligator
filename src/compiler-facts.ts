@@ -282,6 +282,45 @@ export interface KnownBuiltinCall {
 	readonly sourceSite?: SourceSiteId;
 }
 
+/** Proof requirements retained by a speculative lowering or virtual region. */
+export interface CompilerGuardPlan {
+	readonly dependencies: ReadonlyArray<FactDependency>;
+	readonly obligations: ReadonlyArray<FactObligation>;
+}
+
+/**
+ * Combine independently-produced facts without inventing a new authority source.
+ * Unknown inputs conservatively disable the consumer; named requirements are
+ * deduplicated so locked-world proofs naturally collapse to one world dependency.
+ */
+export function compilerGuardPlan(
+	facts: ReadonlyArray<CompilerFact<unknown> | undefined>,
+	additionalObligations: ReadonlyArray<FactObligation> = [],
+): CompilerGuardPlan | undefined {
+	const dependencies = new Map<string, FactDependency>();
+	const obligations = new Map<string, FactObligation>();
+	for (const fact of facts) {
+		if (fact?.kind !== "known") return undefined;
+		for (const dependency of fact.proof.dependencies) {
+			dependencies.set(dependencyKey(dependency), dependency);
+		}
+		for (const obligation of fact.proof.obligations) {
+			obligations.set(`${obligation.kind}:${obligation.id}`, obligation);
+		}
+	}
+	for (const obligation of additionalObligations) {
+		obligations.set(`${obligation.kind}:${obligation.id}`, obligation);
+	}
+	return {
+		dependencies: [...dependencies.entries()]
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([, dependency]) => dependency),
+		obligations: [...obligations.entries()]
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([, obligation]) => obligation),
+	};
+}
+
 /** True only when the call's canonical identity fact proves this exact operation. */
 export function knownBuiltinCallProves(
 	call: KnownBuiltinCall | undefined,

@@ -4,7 +4,7 @@ import {
 	countPropertyIcSites,
 	decodeVmValueOperand,
 } from "./lower-vm.ts";
-import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
+import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./lower-vm.ts";
 
 /**
  * Sequential binary wire format for a {@link VmDefinition}, consumed at
@@ -22,8 +22,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 30 for numeric-HOF plans and canonical guarded-builtin dependencies.
-export const WIRE_VERSION = 30;
+// Bumped to 31 for builtin, numeric-HOF, and cardinality-region guard plans.
+export const WIRE_VERSION = 31;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -495,6 +495,28 @@ function utf8Decode(bytes: Array<number>): string {
 	return out;
 }
 
+function cardinalityGuardMasks(guard: VmGuardPlan): {
+	dependencyMask: number;
+	obligationMask: number;
+} {
+	let dependencyMask = 0;
+	for (const dependency of guard.dependencies) {
+		if (dependency.kind === "world") dependencyMask |= 1;
+		else if (dependency.family === "primitive-methods") dependencyMask |= 2;
+		else if (dependency.family === "watched-methods") dependencyMask |= 4;
+		else if (dependency.family === "array-elements") dependencyMask |= 8;
+		else throw new RangeError("serialize-vm: unsupported cardinality dependency");
+	}
+	let obligationMask = 0;
+	for (const obligation of guard.obligations) {
+		obligationMask |= obligation === "generic-call" ? 1 : 2;
+	}
+	if ((dependencyMask !== 1 && dependencyMask !== 14) || obligationMask !== 3) {
+		throw new RangeError("serialize-vm: invalid cardinality guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 /**
  * Serialize a lowered definition to the binary wire format. With `debugInfo`
  * false the file/source-position/per-function position tables are dropped
@@ -797,6 +819,11 @@ export function serializeVmDefinition(
 			) {
 				w.u8(8);
 				w.i32(instruction.nativeCardinalityRegion.maximumLength);
+				const { dependencyMask, obligationMask } = cardinalityGuardMasks(
+					instruction.nativeCardinalityRegion.guard,
+				);
+				w.u8(dependencyMask);
+				w.u8(obligationMask);
 			} else if (
 				instruction.opcode === "CREATE_ARRAY" &&
 				instruction.nativeFreshDenseReserveLength !== undefined
@@ -1883,10 +1910,30 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				};
 			} else if (tag === 8 && instruction.opcode === "CREATE_ARRAY") {
 				const maximumLength = r.i32();
-				if (maximumLength <= 0 || maximumLength > 32) {
+				const dependencyMask = r.u8();
+				const obligationMask = r.u8();
+				if (
+					maximumLength <= 0 ||
+					maximumLength > 32 ||
+					(dependencyMask !== 1 && dependencyMask !== 14) ||
+					obligationMask !== 3
+				) {
 					throw new RangeError("serialize-vm: invalid cardinality-region metadata");
 				}
-				instruction.nativeCardinalityRegion = { maximumLength };
+				instruction.nativeCardinalityRegion = {
+					maximumLength,
+					guard: {
+						dependencies:
+							dependencyMask === 1
+								? [{ kind: "world", fact: "primordials.locked" }]
+								: [
+										{ kind: "epoch", family: "array-elements" },
+										{ kind: "epoch", family: "primitive-methods" },
+										{ kind: "epoch", family: "watched-methods" },
+									],
+						obligations: ["generic-call", "materialize"],
+					},
+				};
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
 				const reserveLength = r.i32();
 				if (reserveLength < 1 || reserveLength > 65_536) {

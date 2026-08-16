@@ -193,6 +193,11 @@ the same facts unconditionally.
 - [ ] Express `mal_primitive_method_protector`, watched-method epochs, property/cache
       identities, and array-element protectors as named fact dependencies rather than
       emitter-local conditions.
+  - [x] Make guarded Array/String/Map/Set calls consume one canonical builtin-identity
+        fact through lowering, frontend-cache serialization, and C emission.
+  - [x] Make the bounded cardinality-array region combine builtin identity,
+        primitive-method, and array-element facts with explicit generic-call and
+        materialization obligations.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.

@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 30u        // numeric-HOF plans and guarded-builtin dependencies
+#define WIRE_VERSION 31u        // builtin, numeric-HOF, and cardinality guard plans
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1651,7 +1651,11 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
             } else if (tag == 8) { // CREATE_ARRAY cardinality region
                 i32 maximum_length = rd_i32(&r);
-                if (maximum_length <= 0 || maximum_length > 32) {
+                u8 dependency_mask = rd_u8(&r);
+                u8 obligation_mask = rd_u8(&r);
+                if (maximum_length <= 0 || maximum_length > 32 ||
+                    (dependency_mask != 1 && dependency_mask != 14) ||
+                    obligation_mask != 3) {
                     r.ok = false;
                 }
             } else if (tag == 9) { // LOAD_PROPERTY cardinality access

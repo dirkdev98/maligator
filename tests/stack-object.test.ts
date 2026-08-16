@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compileSourceToBuffer } from "../src/compile.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
 import { emitVmDefinition } from "../src/emit-vm.ts";
 import { debugStackAlloc } from "../src/escape.ts";
 import { debugInlinableCalls } from "../src/inline.ts";
@@ -544,6 +546,16 @@ describe("cardinality-only array and transitive record regions", () => {
 				instruction.nativeCardinalityRegion !== undefined,
 		);
 		expect(region?.nativeCardinalityRegion?.maximumLength).toBe(6);
+		expect(region?.nativeCardinalityRegion?.guard).toMatchObject({
+			dependencies: [
+				{ kind: "epoch", family: "array-elements" },
+				{ kind: "epoch", family: "primitive-methods" },
+				{ kind: "epoch", family: "watched-methods" },
+			],
+		});
+		expect(
+			region?.nativeCardinalityRegion?.guard.obligations.map(({ kind }) => kind),
+		).toContain("materialize");
 		expect(
 			instructions(program).filter(
 				(instruction) =>
@@ -581,6 +593,7 @@ describe("cardinality-only array and transitive record regions", () => {
 
 		const emitted = emitVmDefinition(definition, { compiled: true });
 		expect(emitted).toContain("mal_builtin_array_push_virtual_guard(vm)");
+		expect(emitted).toContain("mal_array_elements_protector");
 		expect(emitted).toContain("vm->semantic_epochs.activity");
 		expect(emitted).not.toContain(
 			"mal_primitive_method_protector && mal_array_elements_protector",
@@ -600,6 +613,27 @@ describe("cardinality-only array and transitive record regions", () => {
 		).toBe(true);
 		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
 			"mal_vm_materialize_virtual_record_array",
+		);
+
+		const lockedDefinition = compileSemanticProgramToVmDefinition(semantic(source), {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
+		const lockedRegion = lockedDefinition.functions
+			.flatMap(({ instructions }) => instructions)
+			.find(
+				(instruction) =>
+					instruction.opcode === "CREATE_ARRAY" &&
+					instruction.nativeCardinalityRegion !== undefined,
+			);
+		expect(
+			lockedRegion?.opcode === "CREATE_ARRAY"
+				? lockedRegion.nativeCardinalityRegion?.guard.dependencies
+				: undefined,
+		).toEqual([{ kind: "world", fact: "primordials.locked" }]);
+		const lockedEmitted = emitVmDefinition(lockedDefinition, { compiled: true });
+		expect(lockedEmitted).toMatch(/__cardinality_\d+_fast = true;/);
+		expect(lockedEmitted).not.toMatch(
+			/__cardinality_\d+_fast = .*mal_builtin_array_push_virtual_guard/,
 		);
 	});
 

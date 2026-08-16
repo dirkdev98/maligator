@@ -1,4 +1,5 @@
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
+import type { CompilerGuardPlan } from "./compiler-facts.ts";
 import type {
 	IntermediateProgram,
 	IRFunction,
@@ -691,7 +692,7 @@ export type VmInstruction =
 			dst: number;
 			length: number;
 			/** COMPILE-ONLY: native bounded push-only virtual array state. */
-			nativeCardinalityRegion?: { maximumLength: number };
+			nativeCardinalityRegion?: { maximumLength: number; guard: VmGuardPlan };
 			/** COMPILE-ONLY: exact capacity for a proven pristine indexed fill. */
 			nativeFreshDenseReserveLength?: number;
 			/** EMITTER-ONLY: private identity-range Array virtualization action. */
@@ -1877,6 +1878,31 @@ function lowerFunctionToVmFunction(
 /**
  * Map the IR to the VM instruction set.
  */
+function lowerGuardPlan(plan: CompilerGuardPlan): VmGuardPlan | undefined {
+	const dependencies: Array<VmSemanticDependency> = [];
+	for (const dependency of plan.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencies.push({ kind: "world", fact: "primordials.locked" });
+			continue;
+		}
+		if (dependency.kind === "epoch") {
+			dependencies.push({ kind: "epoch", family: dependency.family });
+			continue;
+		}
+		return undefined;
+	}
+	const obligations = [
+		...new Set(
+			plan.obligations.map(
+				(obligation): VmGuardObligation =>
+					obligation.kind === "fallback" ? "generic-call" : "materialize",
+			),
+		),
+	];
+	if (dependencies.length === 0 || obligations.length === 0) return undefined;
+	return { dependencies, obligations };
+}
+
 function lowerGuardedBuiltinCall(
 	instruction: Extract<IRInstruction, { type: "call" }>,
 ): VmGuardedBuiltinCall | undefined {
@@ -1885,45 +1911,21 @@ function lowerGuardedBuiltinCall(
 		call === undefined ||
 		call.identity.kind !== "known" ||
 		call.identity.value !== call.operation ||
-		!call.identity.proof.obligations.some((obligation) => obligation.kind === "fallback")
+		(call.operation !== "Array.prototype.push" &&
+			call.operation !== "String.prototype.charCodeAt" &&
+			call.operation !== "Map.prototype.get" &&
+			call.operation !== "Map.prototype.set" &&
+			call.operation !== "Set.prototype.add")
 	) {
 		return undefined;
 	}
-	if (
-		call.operation !== "Array.prototype.push" &&
-		call.operation !== "String.prototype.charCodeAt" &&
-		call.operation !== "Map.prototype.get" &&
-		call.operation !== "Map.prototype.set" &&
-		call.operation !== "Set.prototype.add"
-	) {
-		return undefined;
-	}
-	const dependencies: Array<VmSemanticDependency> = [];
-	for (const dependency of call.identity.proof.dependencies) {
-		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
-			dependencies.push({ kind: "world", fact: "primordials.locked" });
-			continue;
-		}
-		if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
-			dependencies.push({ kind: "epoch", family: "watched-methods" });
-			continue;
-		}
-		return undefined;
-	}
-	const obligations = [
-		...new Set(
-			call.identity.proof.obligations.map(
-				(obligation): VmGuardObligation =>
-					obligation.kind === "fallback" ? "generic-call" : "materialize",
-			),
-		),
-	];
-	if (dependencies.length === 0 || !obligations.includes("generic-call")) {
+	const guard = lowerGuardPlan(call.identity.proof);
+	if (guard === undefined || !guard.obligations.includes("generic-call")) {
 		return undefined;
 	}
 	return {
 		operation: call.operation,
-		guard: { dependencies, obligations },
+		guard,
 	};
 }
 
@@ -2027,17 +2029,28 @@ function lowerInstructionToVmInstruction(
 				valueRegisters: instruction.registers.slice(1),
 				shapeCacheIndex: -1,
 			};
-		case "createArray":
+		case "createArray": {
+			let nativeCardinalityRegion:
+				| { maximumLength: number; guard: VmGuardPlan }
+				| undefined;
+			if (instruction.nativeCardinalityRegion !== undefined) {
+				const guard = lowerGuardPlan(instruction.nativeCardinalityRegion.guard);
+				if (guard === undefined || !guard.obligations.includes("materialize")) {
+					throw new Error("Cardinality region lacks a materialization guard plan");
+				}
+				nativeCardinalityRegion = {
+					maximumLength: instruction.nativeCardinalityRegion.maximumLength,
+					guard,
+				};
+			}
 			return {
 				opcode: "CREATE_ARRAY",
 				dst: instruction.registers[0],
 				length: instruction.length,
 				nativeFreshDenseReserveLength: instruction.nativeFreshDenseReserveLength,
-				nativeCardinalityRegion:
-					instruction.nativeCardinalityRegion === undefined
-						? undefined
-						: { maximumLength: instruction.nativeCardinalityRegion.maximumLength },
+				nativeCardinalityRegion,
 			};
+		}
 		case "instantiateLiteralTemplate":
 			return {
 				opcode: "INSTANTIATE_LITERAL_TEMPLATE",
