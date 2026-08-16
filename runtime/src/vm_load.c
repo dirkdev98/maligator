@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 40u        // canonical, numeric Math, and direct builtin calls
+#define WIRE_VERSION 41u        // semantic facts and direct builtin call metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1606,6 +1606,26 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             slots[slot].name = name;
             slots[slot].slot = rd_i32(&r);
         }
+    }
+
+    /* Program-level compiler facts consumed only by post-wire native analyses. */
+    u32 semantic_protector_count = rd_count(&r, 3);
+    u8 semantic_protector_tags = 0;
+    if (semantic_protector_count > 3) {
+        r.ok = false;
+    }
+    for (u32 i = 0; r.ok && i < semantic_protector_count; i++) {
+        u8 tag = rd_u8(&r);
+        u8 dependency_mask = rd_u8(&r);
+        u8 obligation_mask = rd_u8(&r);
+        if (tag < 1 || tag > 3 ||
+            (dependency_mask != 1 && dependency_mask != (u8) (1u << tag)) ||
+            obligation_mask != 1 ||
+            (semantic_protector_tags & (u8) (1u << tag)) != 0) {
+            r.ok = false;
+            continue;
+        }
+        semantic_protector_tags |= (u8) (1u << tag);
     }
 
     /*

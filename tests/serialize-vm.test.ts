@@ -280,6 +280,38 @@ describe("serialize-vm", () => {
 		}
 	});
 
+	it("round-trips program-level semantic protector facts", () => {
+		const semanticDefinition: VmDefinition = {
+			...definition,
+			semanticProtectors: [
+				{
+					family: "primitive-methods",
+					guard: {
+						dependencies: [{ kind: "world", fact: "primordials.locked" }],
+						obligations: ["fallback"],
+					},
+				},
+				{
+					family: "watched-methods",
+					guard: {
+						dependencies: [{ kind: "epoch", family: "watched-methods" }],
+						obligations: ["fallback"],
+					},
+				},
+				{
+					family: "array-elements",
+					guard: {
+						dependencies: [{ kind: "epoch", family: "array-elements" }],
+						obligations: ["fallback"],
+					},
+				},
+			],
+		};
+		expect(deserializeVmDefinition(serializeVmDefinition(semanticDefinition))).toEqual(
+			semanticDefinition,
+		);
+	});
+
 	it("retains native-code generation metadata for frontend cache hits", () => {
 		const metadataInstructions: Array<VmInstruction> = mainFn.instructions.map(
 			(instruction) => {

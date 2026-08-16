@@ -47,6 +47,44 @@ function definition(overrides: Partial<VmDefinition> = {}): VmDefinition {
 }
 
 describe("Test262 VM definition merger", () => {
+	it("retains one shared semantic world and rejects mixed facts", () => {
+		const semanticProtectors: NonNullable<VmDefinition["semanticProtectors"]> = [
+			{
+				family: "array-elements",
+				guard: {
+					dependencies: [{ kind: "epoch", family: "array-elements" }],
+					obligations: ["fallback"],
+				},
+			},
+		];
+		const merged = mergeVmDefinitions([
+			definition({ semanticProtectors }),
+			definition({ semanticProtectors }),
+		]).definition;
+		expect(merged.semanticProtectors).toEqual(semanticProtectors);
+		expect(merged.semanticProtectors).not.toBe(semanticProtectors);
+
+		expect(() =>
+			mergeVmDefinitions([definition({ semanticProtectors }), definition()]),
+		).toThrow("semantic protector facts do not match");
+		expect(() =>
+			mergeVmDefinitions([
+				definition({ semanticProtectors }),
+				definition({
+					semanticProtectors: [
+						{
+							family: "array-elements",
+							guard: {
+								dependencies: [{ kind: "world", fact: "primordials.locked" }],
+								obligations: ["fallback"],
+							},
+						},
+					],
+				}),
+			]),
+		).toThrow("semantic protector facts do not match");
+	});
+
 	it("clones and rebases every current definition-level index family", () => {
 		const first = definition({
 			functions: [

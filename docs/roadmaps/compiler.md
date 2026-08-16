@@ -216,6 +216,10 @@ the same facts unconditionally.
         objects, cardinality regions, and split cursors consume their named guards;
         locked-world dependencies collapse before emission, while mutable regions
         retain the generic twin and one combined semantic-activity snapshot.
+  - [x] Retain the three runtime-backed protector facts as program metadata through
+        MALW v41 so analyses that intentionally rebuild after frontend-cache loading
+        consume the same world/epoch proof. Migrate affine-range virtualization to
+        the Array-elements fact and erase its semantic guard in locked builds.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.

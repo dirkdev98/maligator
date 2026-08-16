@@ -1,6 +1,6 @@
 import { builtinOperationDescriptor } from "./builtin-registry.ts";
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
-import { knownBuiltinCallProves } from "./compiler-facts.ts";
+import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
 import type {
 	IntermediateProgram,
@@ -247,6 +247,17 @@ export interface VmRegionLicense {
 	readonly materialization: "none" | "on-demand" | "whole-region";
 }
 
+export type VmRuntimeSemanticEpochFamily =
+	| "primitive-methods"
+	| "watched-methods"
+	| "array-elements";
+
+/** Program-level semantic facts available to analyses that run after wire loading. */
+export interface VmSemanticProtectorFact {
+	readonly family: VmRuntimeSemanticEpochFamily;
+	readonly guard: VmGuardPlan;
+}
+
 function vmSemanticDependencyKey(dependency: VmSemanticDependency): string {
 	return dependency.kind === "world"
 		? `world:${dependency.fact}`
@@ -326,6 +337,9 @@ export interface VmDefinition {
 	bigintConstants: Array<bigint>;
 	literalTemplateData: Array<number>;
 	globalCount: number;
+	/** Runtime-backed facts retained for post-wire native analyses. Hand-built
+	 * definitions may omit them and conservatively decline those transforms. */
+	semanticProtectors?: ReadonlyArray<VmSemanticProtectorFact>;
 
 	/**
 	 * Debug-info file table: file id -> source path (relative to the compiler's
@@ -911,6 +925,7 @@ export type VmInstruction =
 			nativeAffineRangeVirtualization?: {
 				allocationIp: number;
 				role: "allocation";
+				guard: VmGuardPlan;
 			};
 	  }
 	| {
@@ -1591,6 +1606,19 @@ export function lowerIrProgramToVmDefinition(
 		bigintConstants: program.bigintConstants,
 		literalTemplateData: program.literalTemplateData,
 		globalCount: program.nextGlobalIndex,
+		semanticProtectors: (
+			["primitive-methods", "watched-methods", "array-elements"] as const
+		).map((family) => {
+			const plan = compilerGuardPlan(
+				[program.facts.protectors.get(family)],
+				[{ kind: "fallback", id: `semantic-protector:${family}` }],
+			);
+			const guard = plan === undefined ? undefined : lowerGuardPlan(plan);
+			if (guard === undefined || !guard.obligations.includes("fallback")) {
+				throw new Error(`Runtime semantic fact ${family} lost its fallback contract`);
+			}
+			return { family, guard };
+		}),
 		cjsModuleFunctionIndices: program.cjsWrapperFunctionIndex,
 		hostInstalls: buildHostInstalls(program, functions),
 		files,

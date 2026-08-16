@@ -404,7 +404,9 @@ describe("stack-object native metadata and C emission", () => {
 		expect(source).toContain("MAL_IC_MODE_INHERITED_VALUE");
 		expect(source).toContain("->poly_count > 0");
 		expect(source).toContain("->poly_count == 0");
-		expect(source).toContain("mal_primitive_method_protector");
+		expect(source).toContain(
+			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS, nullptr)",
+		);
 		expect(source).toContain("->receiver_type == MAL_HEAP_OBJECT");
 		expect(source).toContain("_inherited_fast");
 		expect(source).toMatch(/if \(__stack_object_\d+_inherited_fast\) \{/);
@@ -615,11 +617,10 @@ describe("cardinality-only array and transitive record regions", () => {
 
 		const emitted = emitVmDefinition(definition, { compiled: true });
 		expect(emitted).toContain("mal_builtin_array_push_virtual_guard(vm)");
-		expect(emitted).toContain("mal_array_elements_protector");
-		expect(emitted).toContain("vm->semantic_epochs.activity");
-		expect(emitted).not.toContain(
-			"mal_primitive_method_protector && mal_array_elements_protector",
+		expect(emitted).toContain(
+			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS | MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS | MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS",
 		);
+		expect(emitted).toContain("mal_vm_semantic_dependencies_validate(vm,");
 		expect(emitted).toContain("mal_vm_materialize_virtual_record_array");
 		expect(emitted).toMatch(/__gc_slots\[\d+ \+ __cardinality_\d+_count \* 2/);
 
@@ -676,7 +677,7 @@ describe("cardinality-only array and transitive record regions", () => {
 		expect(stable).toMatch(
 			/if \(__cardinality_\d+_fast && __cardinality_\d+_count < 4\) \{/,
 		);
-		expect(stable).not.toContain("== vm->semantic_epochs.activity");
+		expect(stable).not.toContain("mal_vm_semantic_dependencies_validate(vm,");
 
 		const reentrant = emitVmDefinition(
 			compileSemanticProgramToVmDefinition(
@@ -695,7 +696,7 @@ describe("cardinality-only array and transitive record regions", () => {
 			{ compiled: true },
 		);
 		expect(reentrant).toMatch(
-			/__cardinality_\d+_semantic_epoch == vm->semantic_epochs\.activity/,
+			/mal_vm_semantic_dependencies_validate\(vm,[^\n]+__cardinality_\d+_semantic_epoch\)/,
 		);
 	});
 

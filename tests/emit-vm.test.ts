@@ -545,8 +545,9 @@ describe("native update-expression representation", () => {
 	])("virtualizes a closed identity range with %s", (_name, kernel, loadCount) => {
 		const output = emit(`"use strict"; ${kernel} globalThis.rangeKernel = rangeKernel;`);
 		expect(output).toContain("mal_gc_preempt_hook == nullptr");
-		expect(output).toContain("mal_array_elements_protector");
-		expect(output).toContain("semantic_epochs.array_elements != 0");
+		expect(output).toContain(
+			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS, nullptr)",
+		);
 		expect(output).toContain("array_affine_range_allocations_elided");
 		expect(output.match(/array_affine_range_stores_elided/g)).toHaveLength(1);
 		expect(output.match(/array_affine_range_loads_elided/g)).toHaveLength(loadCount);
@@ -556,6 +557,54 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_array_try_store");
 		expect(output).toContain("mal_vm_array_try_load");
 		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
+	});
+
+	it("erases the affine-range semantic guard in a locked world", () => {
+		const output = emitLocked(`
+			function rangeKernel() {
+				const array = [];
+				for (let i = 0; i < 8; i++) array[i] = i;
+				let total = 0;
+				for (let i = 0; i < 8; i++) total += array[i];
+				return total;
+			}
+			globalThis.rangeKernel = rangeKernel;
+		`);
+		expect(output).toContain("array_affine_range_allocations_elided");
+		expect(output).toContain("= mal_gc_preempt_hook == nullptr;");
+		expect(output).not.toContain("mal_vm_semantic_dependencies_admit(vm,");
+	});
+
+	it("reselects affine ranges from semantic facts after a wire round trip", () => {
+		const source = `
+			function rangeKernel() {
+				const array = [];
+				for (let i = 0; i < 8; i++) array[i] = i;
+				let total = 0;
+				for (let i = 0; i < 8; i++) total += array[i];
+				return total;
+			}
+			globalThis.rangeKernel = rangeKernel;
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"affine-range-wire-facts.js",
+			parseScript(source, { strict: false }),
+		);
+		const lowered = compileSemanticProgramToVmDefinition(semantic);
+		const cached = deserializeVmDefinition(
+			serializeVmDefinition(lowered, { debugInfo: false }),
+		);
+		expect(cached.semanticProtectors).toContainEqual({
+			family: "array-elements",
+			guard: {
+				dependencies: [{ kind: "epoch", family: "array-elements" }],
+				obligations: ["fallback"],
+			},
+		});
+		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+			"array_affine_range_allocations_elided",
+		);
 	});
 
 	it.each([

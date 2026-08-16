@@ -8,7 +8,13 @@ import {
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
-import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./lower-vm.ts";
+import type {
+	VmDefinition,
+	VmFunction,
+	VmGuardPlan,
+	VmInstruction,
+	VmSemanticProtectorFact,
+} from "./lower-vm.ts";
 
 /**
  * Sequential binary wire format for a {@link VmDefinition}, consumed at
@@ -26,8 +32,8 @@ import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./low
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 40 for canonical metadata, numeric Math, and exact direct-builtin calls.
-export const WIRE_VERSION = 40;
+// Bumped to 41 for semantic facts and exact direct-builtin call metadata.
+export const WIRE_VERSION = 41;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -597,6 +603,37 @@ function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	return { dependencyMask, obligationMask };
 }
 
+const SEMANTIC_PROTECTOR_TAGS = {
+	"primitive-methods": 1,
+	"watched-methods": 2,
+	"array-elements": 3,
+} as const;
+
+function semanticProtectorGuardMasks(fact: VmSemanticProtectorFact): {
+	dependencyMask: number;
+	obligationMask: number;
+} {
+	let dependencyMask = 0;
+	for (const dependency of fact.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === fact.family) {
+			dependencyMask |= 1 << SEMANTIC_PROTECTOR_TAGS[fact.family];
+		} else {
+			throw new RangeError("serialize-vm: mismatched semantic protector dependency");
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of fact.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	const epochMask = 1 << SEMANTIC_PROTECTOR_TAGS[fact.family];
+	if ((dependencyMask !== 1 && dependencyMask !== epochMask) || obligationMask !== 1) {
+		throw new RangeError("serialize-vm: invalid semantic protector fact");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 /**
  * Serialize a lowered definition to the binary wire format. With `debugInfo`
  * false the file/source-position/per-function position tables are dropped
@@ -687,6 +724,22 @@ export function serializeVmDefinition(
 			for (const byte of name) w.u8(byte);
 			w.i32(entry.slot);
 		}
+	}
+
+	const semanticProtectors = [...(def.semanticProtectors ?? [])];
+	if (
+		semanticProtectors.length > 3 ||
+		new Set(semanticProtectors.map((fact) => fact.family)).size !==
+			semanticProtectors.length
+	) {
+		throw new RangeError("serialize-vm: duplicate semantic protector facts");
+	}
+	w.u32(semanticProtectors.length);
+	for (const fact of semanticProtectors) {
+		const { dependencyMask, obligationMask } = semanticProtectorGuardMasks(fact);
+		w.u8(SEMANTIC_PROTECTOR_TAGS[fact.family]);
+		w.u8(dependencyMask);
+		w.u8(obligationMask);
 	}
 
 	// Native-code generation needs metadata that the interpreter ignores. Keep it
@@ -1768,6 +1821,46 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		hostInstalls.push({ installer: utf8Decode(installerBytes), exports: hostExports });
 	}
 
+	const semanticProtectorCount = r.count(3);
+	if (semanticProtectorCount > 3) {
+		throw new RangeError("serialize-vm: too many semantic protector facts");
+	}
+	const semanticProtectors: Array<VmSemanticProtectorFact> = [];
+	const seenSemanticProtectors = new Set<VmSemanticProtectorFact["family"]>();
+	for (let index = 0; index < semanticProtectorCount; index++) {
+		const tag = r.u8();
+		const family =
+			tag === 1
+				? "primitive-methods"
+				: tag === 2
+					? "watched-methods"
+					: tag === 3
+						? "array-elements"
+						: undefined;
+		const dependencyMask = r.u8();
+		const obligationMask = r.u8();
+		if (
+			family === undefined ||
+			seenSemanticProtectors.has(family) ||
+			(dependencyMask !== 1 && dependencyMask !== 1 << tag) ||
+			obligationMask !== 1
+		) {
+			throw new RangeError("serialize-vm: invalid semantic protector fact");
+		}
+		seenSemanticProtectors.add(family);
+		semanticProtectors.push({
+			family,
+			guard: {
+				dependencies: [
+					dependencyMask === 1
+						? { kind: "world", fact: "primordials.locked" }
+						: { kind: "epoch", family },
+				],
+				obligations: ["fallback"],
+			},
+		});
+	}
+
 	const compilerMetadataFunctionCount = r.count(1);
 	if (compilerMetadataFunctionCount !== functions.length) {
 		throw new Error("serialize-vm: compiler metadata function count mismatch");
@@ -2199,6 +2292,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		bigintConstants,
 		literalTemplateData,
 		globalCount,
+		...(semanticProtectors.length === 0 ? {} : { semanticProtectors }),
 		hostInstalls,
 		files,
 		sourcePositions,

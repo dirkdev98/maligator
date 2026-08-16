@@ -4498,7 +4498,11 @@ function emitInstruction(
 				];
 			}
 			if (instruction.nativeAffineRangeVirtualization?.role === "allocation") {
-				const allocationIp = instruction.nativeAffineRangeVirtualization.allocationIp;
+				const { allocationIp, guard } = instruction.nativeAffineRangeVirtualization;
+				if (!guard.obligations.includes("fallback")) {
+					throw new Error("Affine range virtualization lacks its generic twin");
+				}
+				const semanticAdmission = semanticDependencyAdmissionGuard(guard);
 				// A future scheduler-enabled version must snapshot array_elements and,
 				// after a taken producer poll invalidates it, materialize dense own
 				// elements [0, index) before resuming the unchanged next [[Set]].
@@ -4513,7 +4517,7 @@ function emitInstruction(
 				];
 				return [
 					"MAL_PERF_COUNT(array_affine_range_candidates);",
-					`__affine_range_${allocationIp} = mal_gc_preempt_hook == nullptr && mal_array_elements_protector && vm->semantic_epochs.array_elements != 0;`,
+					`__affine_range_${allocationIp} = mal_gc_preempt_hook == nullptr${semanticAdmission === "true" ? "" : ` && ${semanticAdmission}`};`,
 					`if (__affine_range_${allocationIp}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					"  MAL_PERF_COUNT(array_affine_range_virtualizations);",

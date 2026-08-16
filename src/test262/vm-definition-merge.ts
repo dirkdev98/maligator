@@ -356,6 +356,28 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 		cjsModuleFunctionIndices: [],
 		hostInstalls: [],
 	};
+	const semanticDefinitions = definitions.filter(
+		(definition) => definition.semanticProtectors !== undefined,
+	);
+	if (semanticDefinitions.length > 0) {
+		const firstFacts = semanticDefinitions[0]!.semanticProtectors!;
+		const signature = JSON.stringify(firstFacts);
+		if (
+			semanticDefinitions.length !== definitions.length ||
+			semanticDefinitions.some(
+				(definition) => JSON.stringify(definition.semanticProtectors) !== signature,
+			)
+		) {
+			throw new Error("VM definition semantic protector facts do not match");
+		}
+		merged.semanticProtectors = firstFacts.map((fact) => ({
+			family: fact.family,
+			guard: {
+				dependencies: fact.guard.dependencies.map((dependency) => ({ ...dependency })),
+				obligations: [...fact.guard.obligations],
+			},
+		}));
+	}
 	const functionBases: Array<number> = [];
 
 	for (const definition of definitions) {

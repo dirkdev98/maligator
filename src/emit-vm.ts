@@ -675,9 +675,11 @@ interface NativeIntegerRange {
 /**
  * Virtualize the deliberately tiny identity-range shape used by the language
  * benchmark: a private fresh `[]`, filled exactly by `array[i] = i`, then read
- * only by bounded indexed loops. This emitter-only pass independently rebuilds
+ * only by bounded indexed loops. This post-wire pass independently rebuilds
  * the producer/use/CFG/range proof after wire loading, so compile-only capacity
- * hints, bytecode, and interpreted semantics are never semantic authority.
+ * hints, bytecode, and interpreted semantics are never semantic authority. Its
+ * Array-elements dependency comes from the shared program facts retained in the
+ * wire rather than from knowledge of runtime protectors in the pass or emitter.
  *
  * Native emission admits the virtual path only when there is no scheduler
  * preemption hook and the Array-elements protector is live. Therefore every
@@ -685,6 +687,19 @@ interface NativeIntegerRange {
  * the complete allocation/store/load fallback from the first instruction.
  */
 function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): void {
+	const arrayElementFacts =
+		definition.semanticProtectors?.filter((fact) => fact.family === "array-elements") ??
+		[];
+	if (arrayElementFacts.length > 1) {
+		throw new Error("Duplicate Array-elements semantic facts");
+	}
+	const arrayElementGuard = arrayElementFacts[0]?.guard;
+	if (
+		arrayElementGuard !== undefined &&
+		!arrayElementGuard.obligations.includes("fallback")
+	) {
+		throw new Error("Array-elements semantic fact lacks its generic twin");
+	}
 	// With zero parameters/captures and no calls, globals, object/string producers,
 	// handlers, or non-aggregate property operations, every remaining BINARY/UNARY
 	// operand is a locally produced primitive. None can invoke user coercion or
@@ -736,6 +751,7 @@ function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): voi
 				delete instruction.nativeAffineRangeVirtualization;
 			}
 		}
+		if (arrayElementGuard === undefined) continue;
 		if (
 			fn.isGenerator ||
 			fn.isAsync ||
@@ -1103,6 +1119,7 @@ function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): voi
 		allocation.instruction.nativeAffineRangeVirtualization = {
 			allocationIp: allocation.ip,
 			role: "allocation",
+			guard: arrayElementGuard,
 		};
 		store.instruction.nativeAffineRangeVirtualization = {
 			allocationIp: allocation.ip,
