@@ -75,6 +75,11 @@ export const exactBuiltinCallDescriptors = {
 		forwardedArgumentLimit: 1,
 		cOperation: "MAL_DIRECT_BUILTIN_MAP_GET",
 	},
+	"Map.prototype.set": {
+		receiverProof: "exact-fresh-map",
+		forwardedArgumentLimit: 2,
+		cOperation: "MAL_DIRECT_BUILTIN_MAP_SET",
+	},
 } as const satisfies Record<string, ExactBuiltinCallDescriptor>;
 
 export type DirectBuiltinOperationId = keyof typeof exactBuiltinCallDescriptors;
@@ -340,11 +345,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 			effects: ["throw", "safepoint"],
 			result: key === "get" ? "any" : "receiver",
 			realm: "semantic-identity",
-			lowerings: [
-				"generic",
-				"guarded-native-collection",
-				...(key === "get" ? (["exact-builtin-call"] as const) : []),
-			],
+			lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 		}),
 	),
 	{

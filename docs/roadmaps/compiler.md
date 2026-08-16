@@ -289,6 +289,11 @@ is general rather than a registry-shaped collection of special cases.
         callback dispatch across multiple calls and loops; reject iterable
         construction, escaping identity, own-method writes, extracted callbacks,
         and observed `set` return values as one whole-value fact.
+  - [x] Admit `Map.prototype.set` through the same private-fresh Map proof and
+        direct builtin ABI. Preserve key/value evaluation and the receiver return
+        while erasing the locked property/callback seam; deliberately keep used
+        `set` results on the guarded generic path until result-alias tracking can
+        prove their complete downstream use set.
   - [x] Select closed constant-index split projections in IR from the canonical call
         facts and the result's complete move/use set. Carry the representation,
         region license, retained twin, materialization contract, and exact consumer

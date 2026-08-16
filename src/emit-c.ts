@@ -6102,6 +6102,13 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (instruction.operation === "Map.prototype.set") {
+				return [
+					`r${instruction.dst} = mal_builtin_map_set_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
 			if (instruction.operation !== "String.prototype.split") return null;
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site } = nativeStringSplitCursorAction;

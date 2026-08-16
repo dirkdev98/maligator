@@ -170,6 +170,7 @@ describe("builtin and primordial registry", () => {
 			"Object.hasOwn",
 			"String.prototype.charCodeAt",
 			"Map.prototype.get",
+			"Map.prototype.set",
 		]);
 		expect(exactBuiltinCallDescriptor("Object.hasOwn")).toMatchObject({
 			id: "Object.hasOwn",

@@ -282,6 +282,21 @@ static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, co
         arg_count >= 2 ? args[1] : mal_value_new_undefined());
 }
 
+MalValue mal_builtin_map_set_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    return mal_builtin_map_prototype_set(
+        vm,
+        this_value,
+        args,
+        arg_count,
+        mal_value_new_undefined(),
+        mal_value_new_undefined());
+}
+
 MalCompletion mal_builtin_collection_direct(
     MalVm *vm,
     MalCallCache *fallback_cache,

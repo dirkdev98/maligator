@@ -691,6 +691,13 @@ test("locked private fresh Map.get erases dynamic dispatch", () => {
 				instruction.operation === "Map.prototype.get",
 		),
 	).toBe(true);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "callBuiltin" &&
+				instruction.operation === "Map.prototype.set",
+		),
+	).toBe(true);
 
 	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
@@ -700,6 +707,13 @@ test("locked private fresh Map.get erases dynamic dispatch", () => {
 			(instruction) =>
 				instruction.type === "call" &&
 				instruction.knownBuiltinCall?.operation === "Map.prototype.get",
+		),
+	).toBe(true);
+	expect(
+		mutableInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Map.prototype.set",
 		),
 	).toBe(true);
 
@@ -715,6 +729,20 @@ test("locked private fresh Map.get erases dynamic dispatch", () => {
 			(instruction) =>
 				instruction.type === "call" &&
 				instruction.knownBuiltinCall?.operation === "Map.prototype.get",
+		),
+	).toBe(true);
+
+	const observedSet = optimizedLockedProgram(`
+		globalThis.returnPrivateMap = function returnPrivateMap(key, value) {
+			const values = new Map();
+			return values.set(key, value);
+		};
+	`).functions.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions));
+	expect(
+		observedSet.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Map.prototype.set",
 		),
 	).toBe(true);
 });

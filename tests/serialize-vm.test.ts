@@ -82,6 +82,14 @@ const instructions: Array<VmInstruction> = [
 		arguments: [0],
 		operation: "Map.prototype.get",
 	},
+	{
+		opcode: "CALL_BUILTIN",
+		dst: 9,
+		thisValue: 10,
+		argumentCount: 2,
+		arguments: [0, 1],
+		operation: "Map.prototype.set",
+	},
 	{ opcode: "TYPEOF_COMPARE", dst: 9, src: 8, expected: "number", negated: true },
 	{ opcode: "TRY_BEGIN", handlerIp: 0 },
 	{
