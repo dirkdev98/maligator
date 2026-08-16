@@ -22,7 +22,7 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 30 for serialized numeric-HOF proof plans.
+// Bumped to 30 for numeric-HOF plans and canonical guarded-builtin dependencies.
 export const WIRE_VERSION = 30;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
@@ -629,9 +629,7 @@ export function serializeVmDefinition(
 						instruction.directFunctionIndex !== undefined ||
 						instruction.directFunctionCall === true ||
 						instruction.directCallTargetFunctionIndex !== undefined ||
-						instruction.directArrayPush === true ||
-						instruction.directStringCharCodeAt === true ||
-						instruction.directCollectionOp !== undefined ||
+						instruction.guardedBuiltinCall !== undefined ||
 						instruction.nativeCardinalityPush !== undefined
 					);
 				}
@@ -693,23 +691,45 @@ export function serializeVmDefinition(
 				w.i32(instruction.nativeClosedGlobalTable.mask);
 				w.u8(instruction.nativeClosedGlobalTable.direct ? 1 : 0);
 			} else if (instruction.opcode === "CALL") {
+				const guardedBuiltin = instruction.guardedBuiltinCall;
+				const guardedOperation = guardedBuiltin?.operation;
+				if (
+					guardedBuiltin !== undefined &&
+					(guardedBuiltin.fallback !== "generic-call" ||
+						(guardedBuiltin.identityDependency.kind === "world"
+							? guardedBuiltin.identityDependency.fact !== "primordials.locked"
+							: guardedBuiltin.identityDependency.family !== "watched-methods"))
+				) {
+					throw new RangeError("serialize-vm: invalid guarded builtin fact");
+				}
+				if (
+					(instruction.directStringCharCodeAtPosition !== undefined &&
+						guardedOperation !== "String.prototype.charCodeAt") ||
+					(instruction.nativeCardinalityPush !== undefined &&
+						guardedOperation !== "Array.prototype.push")
+				) {
+					throw new RangeError("serialize-vm: mismatched guarded builtin metadata");
+				}
 				w.u8(1);
 				w.i32(instruction.directFunctionIndex ?? -1);
 				w.i32(instruction.directCallTargetFunctionIndex ?? -1);
 				w.u8(
 					(instruction.directFunctionCall === true ? 1 : 0) |
-						(instruction.directArrayPush === true ? 2 : 0) |
-						(instruction.directStringCharCodeAt === true ? 4 : 0) |
+						(guardedOperation === "Array.prototype.push" ? 2 : 0) |
+						(guardedOperation === "String.prototype.charCodeAt" ? 4 : 0) |
 						(instruction.nativeCardinalityPush !== undefined ? 8 : 0) |
 						(instruction.directStringCharCodeAtPosition === "integer" ? 16 : 0) |
-						(instruction.directStringCharCodeAtPosition === "inBounds" ? 32 : 0),
+						(instruction.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
+						(guardedBuiltin?.identityDependency.kind === "world" ? 64 : 0),
 				);
 				w.u8(
-					instruction.directCollectionOp === undefined
+					guardedOperation === undefined ||
+						guardedOperation === "Array.prototype.push" ||
+						guardedOperation === "String.prototype.charCodeAt"
 						? 0
-						: instruction.directCollectionOp === "mapGet"
+						: guardedOperation === "Map.prototype.get"
 							? 1
-							: instruction.directCollectionOp === "mapSet"
+							: guardedOperation === "Map.prototype.set"
 								? 2
 								: 3,
 				);
@@ -1692,13 +1712,19 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				const directCallTargetFunctionIndex = r.i32();
 				const flags = r.u8();
 				const collectionTag = r.u8();
+				const guardedBuiltinCount =
+					((flags & 2) !== 0 ? 1 : 0) +
+					((flags & 4) !== 0 ? 1 : 0) +
+					(collectionTag !== 0 ? 1 : 0);
 				if (
 					directFunctionIndex < -1 ||
 					directCallTargetFunctionIndex < -1 ||
-					flags > 63 ||
+					flags > 127 ||
 					((flags & 48) !== 0 && (flags & 4) === 0) ||
 					(flags & 48) === 48 ||
-					collectionTag > 3
+					collectionTag > 3 ||
+					guardedBuiltinCount > 1 ||
+					((flags & 64) !== 0 && guardedBuiltinCount !== 1)
 				) {
 					throw new RangeError("serialize-vm: invalid CALL compiler metadata");
 				}
@@ -1708,8 +1734,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					instruction.directCallTargetFunctionIndex = directCallTargetFunctionIndex;
 				}
 				if ((flags & 1) !== 0) instruction.directFunctionCall = true;
-				if ((flags & 2) !== 0) instruction.directArrayPush = true;
-				if ((flags & 4) !== 0) instruction.directStringCharCodeAt = true;
 				if ((flags & 16) !== 0) instruction.directStringCharCodeAtPosition = "integer";
 				if ((flags & 32) !== 0) instruction.directStringCharCodeAtPosition = "inBounds";
 				if ((flags & 8) !== 0) {
@@ -1729,10 +1753,27 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						pushedStackObjectAllocationInstructionIndex,
 					};
 				}
-				if (collectionTag !== 0) {
-					instruction.directCollectionOp = (["mapGet", "mapSet", "setAdd"] as const)[
-						collectionTag - 1
-					];
+				if (guardedBuiltinCount === 1) {
+					const operation =
+						(flags & 2) !== 0
+							? "Array.prototype.push"
+							: (flags & 4) !== 0
+								? "String.prototype.charCodeAt"
+								: (
+										[
+											"Map.prototype.get",
+											"Map.prototype.set",
+											"Set.prototype.add",
+										] as const
+									)[collectionTag - 1]!;
+					instruction.guardedBuiltinCall = {
+						operation,
+						identityDependency:
+							(flags & 64) !== 0
+								? { kind: "world", fact: "primordials.locked" }
+								: { kind: "epoch", family: "watched-methods" },
+						fallback: "generic-call",
+					};
 				}
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
 				const directFunctionIndex = r.i32();

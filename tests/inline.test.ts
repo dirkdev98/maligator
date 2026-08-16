@@ -195,7 +195,9 @@ test("direct push sites carry guarded Array dispatch metadata", () => {
 			block.instructions.filter((instruction) => instruction.type === "call"),
 		),
 	);
-	const marked = calls.filter((call) => call.directArrayPush);
+	const marked = calls.filter(
+		(call) => call.knownBuiltinCall?.operation === "Array.prototype.push",
+	);
 	// The plain-object override remains a guarded candidate and must miss at runtime;
 	// the bare-this stream protocol is the only statically excluded method shape.
 	expect(marked).toHaveLength(3);
@@ -217,9 +219,17 @@ test("direct charCodeAt sites carry guarded primitive String dispatch metadata",
 			block.instructions.filter((instruction) => instruction.type === "call"),
 		),
 	);
-	expect(calls.filter((call) => call.directStringCharCodeAt)).toHaveLength(2);
 	expect(
-		calls.some((call) => call.directStringCharCodeAt && call.registers.length === 4),
+		calls.filter(
+			(call) => call.knownBuiltinCall?.operation === "String.prototype.charCodeAt",
+		),
+	).toHaveLength(2);
+	expect(
+		calls.some(
+			(call) =>
+				call.knownBuiltinCall?.operation === "String.prototype.charCodeAt" &&
+				call.registers.length === 4,
+		),
 	).toBe(true);
 });
 
@@ -243,15 +253,25 @@ test("direct collection methods carry guarded Map and Set dispatch metadata", ()
 	const marked = ir.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) =>
 			block.instructions.flatMap((instruction) =>
-				instruction.type === "call" && instruction.directCollectionOp !== undefined
-					? [instruction.directCollectionOp]
+				instruction.type === "call" &&
+				(instruction.knownBuiltinCall?.operation === "Map.prototype.get" ||
+					instruction.knownBuiltinCall?.operation === "Map.prototype.set" ||
+					instruction.knownBuiltinCall?.operation === "Set.prototype.add")
+					? [instruction.knownBuiltinCall.operation]
 					: [],
 			),
 		),
 	);
 	// The unknown parameters and captured plain object are both guarded
 	// candidates; only the bare-this protocol call is statically excluded.
-	expect(marked).toEqual(["mapGet", "mapSet", "setAdd", "mapGet", "mapSet", "setAdd"]);
+	expect(marked).toEqual([
+		"Map.prototype.get",
+		"Map.prototype.set",
+		"Set.prototype.add",
+		"Map.prototype.get",
+		"Map.prototype.set",
+		"Set.prototype.add",
+	]);
 });
 
 test("immutable ordinary script constructors retain their exact function index", () => {

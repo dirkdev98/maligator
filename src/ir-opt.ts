@@ -2,6 +2,7 @@ import type {
 	OptimizationAblation,
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
+import { knownBuiltinCallProves } from "./compiler-facts.ts";
 import {
 	optimizationMetrics,
 	optimizationPassDelta,
@@ -1560,7 +1561,10 @@ function annotateBoundedStringCharCodeAtPositions(program: IntermediateProgram):
 				for (const instruction of fn.blocks[blockIndex]!.instructions) {
 					if (
 						instruction.type !== "call" ||
-						instruction.directStringCharCodeAt !== true ||
+						!knownBuiltinCallProves(
+							instruction.knownBuiltinCall,
+							"String.prototype.charCodeAt",
+						) ||
 						instruction.registers.length !== 4 ||
 						moveRoot(instruction.registers[2]) !== receiverRoot ||
 						moveRoot(instruction.registers[3]!) !== positionRoot
@@ -2517,7 +2521,10 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 						if (
 							use.instruction.type === "call" &&
 							use.position === 2 &&
-							use.instruction.directArrayPush &&
+							knownBuiltinCallProves(
+								use.instruction.knownBuiltinCall,
+								"Array.prototype.push",
+							) &&
 							use.instruction.registers.length === 4
 						) {
 							pushCalls.add(use.instruction);
@@ -2595,7 +2602,7 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 						}
 						const call = calleeUses[0]!.instruction;
 						if (
-							!call.directArrayPush ||
+							!knownBuiltinCallProves(call.knownBuiltinCall, "Array.prototype.push") ||
 							call.registers.length !== 4 ||
 							!aliases.has(call.registers[2]) ||
 							call.registers[3]! < 0

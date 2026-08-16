@@ -24,6 +24,7 @@ import {
 import { annotateDirectArrayPushSites } from "../src/inline.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
+import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 describe("compiler fact contracts", () => {
@@ -252,7 +253,7 @@ describe("shared effect and reachability summaries", () => {
 });
 
 describe("canonical builtin-call IR facts", () => {
-	it("records the proof target and logical source site without changing legacy lowering", () => {
+	it("lowers locked identity proofs into a named world dependency", () => {
 		const ir = compileSemanticProgramToIr(
 			analyzeSourceAndRunSemanticAnalysis(
 				`function append(array) { return array.push(1); }\nappend([]);\n`,
@@ -271,12 +272,27 @@ describe("canonical builtin-call IR facts", () => {
 			);
 		expect(call?.type).toBe("call");
 		if (call?.type !== "call") throw new Error("missing canonical builtin call");
-		expect(call.directArrayPush).toBe(true);
 		expect(call.knownBuiltinCall?.identity).toMatchObject({
 			kind: "known",
 			proof: { dependencies: [{ kind: "world", fact: "primordials.locked" }] },
 		});
 		expect(call.knownBuiltinCall?.sourceSite).toContain("builtin-call.js");
+		executeIROptimizations(ir);
+		const loweredCall = lowerIrProgramToVmDefinition(ir)
+			.functions.flatMap(({ instructions }) => instructions)
+			.find(
+				(instruction) =>
+					instruction.opcode === "CALL" &&
+					instruction.guardedBuiltinCall?.operation === "Array.prototype.push",
+			);
+		expect(loweredCall).toMatchObject({
+			opcode: "CALL",
+			guardedBuiltinCall: {
+				operation: "Array.prototype.push",
+				identityDependency: { kind: "world", fact: "primordials.locked" },
+				fallback: "generic-call",
+			},
+		});
 	});
 
 	it("keeps existing mutable lowering backed by the watched-method epoch", () => {
@@ -294,13 +310,29 @@ describe("canonical builtin-call IR facts", () => {
 			.flatMap(({ instructions }) => instructions)
 			.find(
 				(instruction) =>
-					instruction.type === "call" && instruction.directArrayPush === true,
+					instruction.type === "call" &&
+					instruction.knownBuiltinCall?.operation === "Array.prototype.push",
 			);
 		expect(call?.type).toBe("call");
 		if (call?.type !== "call") throw new Error("missing mutable builtin call");
 		expect(call.knownBuiltinCall?.identity).toMatchObject({
 			kind: "known",
 			proof: { dependencies: [{ kind: "epoch", family: "watched-methods" }] },
+		});
+		executeIROptimizations(ir);
+		const loweredCall = lowerIrProgramToVmDefinition(ir)
+			.functions.flatMap(({ instructions }) => instructions)
+			.find(
+				(instruction) =>
+					instruction.opcode === "CALL" &&
+					instruction.guardedBuiltinCall?.operation === "Array.prototype.push",
+			);
+		expect(loweredCall).toMatchObject({
+			opcode: "CALL",
+			guardedBuiltinCall: {
+				identityDependency: { kind: "epoch", family: "watched-methods" },
+				fallback: "generic-call",
+			},
 		});
 	});
 });

@@ -8,6 +8,7 @@ import {
 	countLiteralShapeSites,
 	countPropertyIcSites,
 	decodeVmValueOperand,
+	vmCallProvesBuiltin,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
@@ -1643,7 +1644,7 @@ function annotateNativePrivateAggregateMemos(definition: VmDefinition): void {
 						continue;
 					}
 					if (
-						instruction.directArrayPush === true &&
+						vmCallProvesBuiltin(instruction, "Array.prototype.push") &&
 						thisValue.kind === "register" &&
 						isAggregateUse(thisValue.register, ip) &&
 						aggregateArguments.length === 0 &&
@@ -1755,7 +1756,7 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 					ip: number;
 				} =>
 					entry.instruction.opcode === "CALL" &&
-					entry.instruction.directArrayPush === true,
+					vmCallProvesBuiltin(entry.instruction, "Array.prototype.push"),
 			);
 		const returns = instructions
 			.map((instruction, ip) => ({ instruction, ip }))
@@ -2049,7 +2050,7 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 						ip: number;
 					} =>
 						entry.instruction.opcode === "CALL" &&
-						entry.instruction.directArrayPush === true,
+						vmCallProvesBuiltin(entry.instruction, "Array.prototype.push"),
 				);
 			if (boundedCalls.length !== 1 || pushes.length !== 2) continue;
 

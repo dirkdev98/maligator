@@ -686,7 +686,6 @@ export function annotateDirectArrayPushSites(program: IntermediateProgram): numb
 				) {
 					continue;
 				}
-				instruction.directArrayPush = true;
 				recordGuardedBuiltinCall(
 					program,
 					fn,
@@ -760,7 +759,6 @@ export function annotateDirectStringCharCodeAtSites(
 				) {
 					continue;
 				}
-				instruction.directStringCharCodeAt = true;
 				recordGuardedBuiltinCall(
 					program,
 					fn,
@@ -857,7 +855,6 @@ export function annotateDirectCollectionSites(program: IntermediateProgram): num
 					continue;
 				}
 
-				instruction.directCollectionOp = operation;
 				recordGuardedBuiltinCall(
 					program,
 					fn,

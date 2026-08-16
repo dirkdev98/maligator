@@ -5,7 +5,11 @@ import {
 	emitUnaryOperator,
 } from "./emit-vm.ts";
 import { NUMERIC_HOF_INPUT_ACCUMULATOR, NUMERIC_HOF_INPUT_ELEMENT } from "./ir.ts";
-import { computeArgumentRetentionLimit, decodeVmValueOperand } from "./lower-vm.ts";
+import {
+	computeArgumentRetentionLimit,
+	decodeVmValueOperand,
+	vmCallProvesBuiltin,
+} from "./lower-vm.ts";
 import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 
@@ -3069,7 +3073,7 @@ function emitBody(
 		if (
 			load.opcode !== "LOAD_PROPERTY_STATIC" ||
 			call.opcode !== "CALL" ||
-			call.directStringCharCodeAt !== true ||
+			!vmCallProvesBuiltin(call, "String.prototype.charCodeAt") ||
 			call.callee !== load.dst ||
 			call.thisValue !== load.object ||
 			jumpTargets.has(loadIp + 1) ||
@@ -6047,12 +6051,17 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			if (instruction.directCollectionOp !== undefined) {
+			const guardedBuiltinOperation = instruction.guardedBuiltinCall?.operation;
+			if (
+				guardedBuiltinOperation === "Map.prototype.get" ||
+				guardedBuiltinOperation === "Map.prototype.set" ||
+				guardedBuiltinOperation === "Set.prototype.add"
+			) {
 				const operation = {
-					mapGet: "MAL_BUILTIN_COLLECTION_MAP_GET",
-					mapSet: "MAL_BUILTIN_COLLECTION_MAP_SET",
-					setAdd: "MAL_BUILTIN_COLLECTION_SET_ADD",
-				}[instruction.directCollectionOp];
+					"Map.prototype.get": "MAL_BUILTIN_COLLECTION_MAP_GET",
+					"Map.prototype.set": "MAL_BUILTIN_COLLECTION_MAP_SET",
+					"Set.prototype.add": "MAL_BUILTIN_COLLECTION_SET_ADD",
+				}[guardedBuiltinOperation];
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_collection_direct(vm, &__cc_${ip}, ${operation}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
@@ -6061,7 +6070,7 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (instruction.directArrayPush) {
+			if (vmCallProvesBuiltin(instruction, "Array.prototype.push")) {
 				const exact = `__private_aggregate_push_exact_${ip}`;
 				const memo = privateAggregatePushMemo;
 				return [
@@ -6078,7 +6087,7 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (instruction.directStringCharCodeAt) {
+			if (vmCallProvesBuiltin(instruction, "String.prototype.charCodeAt")) {
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,

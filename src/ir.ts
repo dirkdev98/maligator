@@ -926,9 +926,8 @@ export type IRInstruction =
 			// [destination, callee, this, ...arguments]
 			registers: [number, number, number, ...Array<number>];
 			/**
-			 * Canonical fact-system call target. Phase 0 records this alongside the
-			 * legacy lowering hints; code generation intentionally ignores it until
-			 * later phases migrate each optimization.
+			 * Canonical fact-system call target. Consumers must validate the identity
+			 * proof and preserve its fallback obligation before specializing the call.
 			 */
 			knownBuiltinCall?: KnownBuiltinCall;
 			/**
@@ -945,12 +944,6 @@ export type IRInstruction =
 			directFunctionCall?: true;
 			/** Exact ordinary script target used by directFunctionCall, when known. */
 			directCallTargetFunctionIndex?: number;
-			/**
-			 * COMPILE-ONLY: a direct `.push(...)` method site eligible for guarded
-			 * intrinsic Array dense-append dispatch in native code. The runtime still
-			 * validates the loaded callee, receiver, prototype, and dense state.
-			 */
-			directArrayPush?: true;
 			/** COMPILE-ONLY: this direct push is the sole mutator of a bounded
 			 * cardinality-only array. The referenced allocation owns region state. */
 			nativeCardinalityPush?: {
@@ -958,12 +951,6 @@ export type IRInstruction =
 			};
 			/** COMPILE-ONLY: stack-object argument materialized only on region deopt. */
 			cardinalityPushStackObjectSiteId?: number;
-			/**
-			 * COMPILE-ONLY: a direct `.charCodeAt(...)` method site eligible for
-			 * guarded primitive-String dispatch in native code. The runtime still
-			 * validates the loaded callee, receiver, and integer argument.
-			 */
-			directStringCharCodeAt?: true;
 			/**
 			 * COMPILE-ONLY: the Number position is statically known to be an exact
 			 * non-negative integer and, for `inBounds`, below this primitive String

@@ -87,6 +87,30 @@ export function rebaseVmValueOperand(operand: number, stringBase: number): numbe
 		: operand;
 }
 
+export type VmGuardedBuiltinOperation =
+	| "Array.prototype.push"
+	| "String.prototype.charCodeAt"
+	| "Map.prototype.get"
+	| "Map.prototype.set"
+	| "Set.prototype.add";
+
+export interface VmGuardedBuiltinCall {
+	readonly operation: VmGuardedBuiltinOperation;
+	/** The shared semantic fact that keeps the intrinsic identity valid. */
+	readonly identityDependency:
+		| { readonly kind: "world"; readonly fact: "primordials.locked" }
+		| { readonly kind: "epoch"; readonly family: "watched-methods" };
+	/** Every guarded lowering retains ordinary call dispatch on a failed local guard. */
+	readonly fallback: "generic-call";
+}
+
+export function vmCallProvesBuiltin(
+	instruction: Extract<VmInstruction, { opcode: "CALL" }>,
+	operation: VmGuardedBuiltinOperation,
+): boolean {
+	return instruction.guardedBuiltinCall?.operation === operation;
+}
+
 /**
  * Keep inline with the C struct
  */
@@ -740,23 +764,19 @@ export type VmInstruction =
 			directFunctionCall?: true;
 			/** COMPILE-ONLY: exact script receiver of directFunctionCall, when known. */
 			directCallTargetFunctionIndex?: number;
-			/** COMPILE-ONLY: guarded intrinsic Array.prototype.push dispatch. */
-			directArrayPush?: true;
+			/** COMPILE-ONLY: canonical guarded intrinsic identity and fallback plan. */
+			guardedBuiltinCall?: VmGuardedBuiltinCall;
 			/** COMPILE-ONLY: append a proven stack record to virtual history. */
 			nativeCardinalityPush?: {
 				allocationInstructionIndex: number;
 				pushedStackObjectAllocationInstructionIndex: number;
 			};
-			/** COMPILE-ONLY: guarded intrinsic String.prototype.charCodeAt dispatch. */
-			directStringCharCodeAt?: true;
 			/** COMPILE-ONLY: statically proven Number-position strength. */
 			directStringCharCodeAtPosition?: "integer" | "inBounds";
 			/** COMPILE-ONLY: closed String.prototype.search over a fresh RegExp literal. */
 			directStringSearchRegExp?: true;
 			/** COMPILE-ONLY: consume an elided fixed RegExp literal search result. */
 			directStringSearchLiteralConstructIp?: number;
-			/** COMPILE-ONLY: guarded intrinsic Map/Set method dispatch. */
-			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
 	  }
 	| {
 			opcode: "CONSTRUCT";
@@ -1841,6 +1861,45 @@ function lowerFunctionToVmFunction(
 /**
  * Map the IR to the VM instruction set.
  */
+function lowerGuardedBuiltinCall(
+	instruction: Extract<IRInstruction, { type: "call" }>,
+): VmGuardedBuiltinCall | undefined {
+	const call = instruction.knownBuiltinCall;
+	if (
+		call === undefined ||
+		call.identity.kind !== "known" ||
+		call.identity.value !== call.operation ||
+		!call.identity.proof.obligations.some((obligation) => obligation.kind === "fallback")
+	) {
+		return undefined;
+	}
+	if (
+		call.operation !== "Array.prototype.push" &&
+		call.operation !== "String.prototype.charCodeAt" &&
+		call.operation !== "Map.prototype.get" &&
+		call.operation !== "Map.prototype.set" &&
+		call.operation !== "Set.prototype.add"
+	) {
+		return undefined;
+	}
+	if (call.identity.proof.dependencies.length !== 1) return undefined;
+	const dependency = call.identity.proof.dependencies[0]!;
+	if (
+		(dependency.kind !== "world" || dependency.fact !== "primordials.locked") &&
+		(dependency.kind !== "epoch" || dependency.family !== "watched-methods")
+	) {
+		return undefined;
+	}
+	return {
+		operation: call.operation,
+		identityDependency:
+			dependency.kind === "world"
+				? { kind: "world", fact: "primordials.locked" }
+				: { kind: "epoch", family: "watched-methods" },
+		fallback: "generic-call",
+	};
+}
+
 function lowerInstructionToVmInstruction(
 	blockStartIps: Map<number, number>,
 	instruction: IRInstruction,
@@ -2061,10 +2120,8 @@ function lowerInstructionToVmInstruction(
 				directFunctionIndex: instruction.directFunctionIndex,
 				directFunctionCall: instruction.directFunctionCall,
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
-				directArrayPush: instruction.directArrayPush,
-				directStringCharCodeAt: instruction.directStringCharCodeAt,
+				guardedBuiltinCall: lowerGuardedBuiltinCall(instruction),
 				directStringCharCodeAtPosition: instruction.directStringCharCodeAtPosition,
-				directCollectionOp: instruction.directCollectionOp,
 			};
 		case "construct":
 			return {

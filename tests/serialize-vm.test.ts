@@ -220,6 +220,47 @@ describe("serialize-vm", () => {
 		expect(restored).toEqual(definition);
 	});
 
+	it("round-trips every guarded builtin with world and epoch dependencies", () => {
+		const operations = [
+			"Array.prototype.push",
+			"String.prototype.charCodeAt",
+			"Map.prototype.get",
+			"Map.prototype.set",
+			"Set.prototype.add",
+		] as const;
+		const dependencies = [
+			{ kind: "world", fact: "primordials.locked" },
+			{ kind: "epoch", family: "watched-methods" },
+		] as const;
+		for (const operation of operations) {
+			for (const identityDependency of dependencies) {
+				let replaced = false;
+				const guardedDefinition: VmDefinition = {
+					...definition,
+					functions: definition.functions.map((fn) => ({
+						...fn,
+						instructions: fn.instructions.map((instruction) => {
+							if (replaced || instruction.opcode !== "CALL") return instruction;
+							replaced = true;
+							return {
+								...instruction,
+								guardedBuiltinCall: {
+									operation,
+									identityDependency,
+									fallback: "generic-call",
+								},
+							};
+						}),
+					})),
+				};
+				expect(replaced).toBe(true);
+				expect(deserializeVmDefinition(serializeVmDefinition(guardedDefinition))).toEqual(
+					guardedDefinition,
+				);
+			}
+		}
+	});
+
 	it("retains native-code generation metadata for frontend cache hits", () => {
 		const metadataInstructions: Array<VmInstruction> = mainFn.instructions.map(
 			(instruction) => {
@@ -232,10 +273,12 @@ describe("serialize-vm", () => {
 						directFunctionIndex: 1,
 						directFunctionCall: true,
 						directCallTargetFunctionIndex: 1,
-						directArrayPush: true,
-						directStringCharCodeAt: true,
+						guardedBuiltinCall: {
+							operation: "String.prototype.charCodeAt",
+							identityDependency: { kind: "world", fact: "primordials.locked" },
+							fallback: "generic-call",
+						},
 						directStringCharCodeAtPosition: "inBounds",
-						directCollectionOp: "mapSet",
 					};
 				}
 				if (instruction.opcode === "BINARY") {

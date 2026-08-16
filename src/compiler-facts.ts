@@ -282,6 +282,18 @@ export interface KnownBuiltinCall {
 	readonly sourceSite?: SourceSiteId;
 }
 
+/** True only when the call's canonical identity fact proves this exact operation. */
+export function knownBuiltinCallProves(
+	call: KnownBuiltinCall | undefined,
+	operation: string,
+): boolean {
+	return (
+		call?.operation === operation &&
+		call.identity.kind === "known" &&
+		call.identity.value === operation
+	);
+}
+
 export type ValueEscapeFact = "none" | "invoked" | "returned" | "retained";
 
 export type ShapeFact =
