@@ -39,6 +39,7 @@ import {
 	knownFact,
 	sourceSiteId,
 } from "./compiler-facts.ts";
+import { analyzeExactFreshArrayUse } from "./compiler-local-facts.ts";
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
 import type { IRRegisterIndex } from "./ir-register-index.ts";
 import {
@@ -3177,67 +3178,26 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				numericReduceGuard === undefined || numericReduceCandidate === undefined
 					? undefined
 					: { ...numericReduceCandidate, guard: numericReduceGuard };
-			const registerIndex = buildIRRegisterIndex(fn, { locations: true });
-			const receiverDefinition = registerIndex.uniqueDefinitions.get(receiver);
-			const receiverUses = registerIndex.uses.get(receiver) ?? [];
-			const calleeUses = registerIndex.uses.get(callRegisters[1]!) ?? [];
-			const allocationLocation =
-				receiverDefinition === undefined
-					? undefined
-					: registerIndex.locations?.get(receiverDefinition);
-			const propertyLocation = registerIndex.locations?.get(site.property);
-			const callLocation = registerIndex.locations?.get(site.call);
-			const hostBlockIndex = fn.blocks.indexOf(host);
-			const numericElementInitialization = (use: (typeof receiverUses)[number]) => {
-				if (use.position !== 0 || use.instruction.type !== "defineProperty") {
-					return false;
-				}
-				const location = registerIndex.locations?.get(use.instruction);
-				if (
-					location?.blockIndex !== hostBlockIndex ||
-					allocationLocation === undefined ||
-					propertyLocation === undefined ||
-					location.instructionIndex <= allocationLocation.instructionIndex ||
-					location.instructionIndex >= propertyLocation.instructionIndex
-				) {
-					return false;
-				}
-				const keyDefinition = registerIndex.uniqueDefinitions.get(
-					use.instruction.registers[1],
-				);
-				return (
-					keyDefinition?.type === "createNumber" &&
-					Number.isInteger(keyDefinition.value) &&
-					keyDefinition.value >= 0 &&
-					keyDefinition.value < 0xffff_ffff
-				);
-			};
-			const deadMoveAlias = (use: (typeof receiverUses)[number]) =>
-				use.position === 1 &&
-				use.instruction.type === "move" &&
-				(registerIndex.uses.get(use.instruction.registers[0]) ?? []).length === 0;
+			const exactFreshReceiver = analyzeExactFreshArrayUse(fn, {
+				receiver,
+				callee: callRegisters[1]!,
+				property: site.property,
+				call: site.call,
+			});
 			const lockedExactReceiver =
 				compilerFactIsWorldInvariant(site.call.knownBuiltinCall?.identity) &&
-				receiverDefinition?.type === "createArray" &&
-				allocationLocation?.blockIndex === hostBlockIndex &&
-				propertyLocation?.blockIndex === hostBlockIndex &&
-				callLocation?.blockIndex === hostBlockIndex &&
-				allocationLocation.instructionIndex < propertyLocation.instructionIndex &&
-				propertyLocation.instructionIndex < callLocation.instructionIndex &&
-				calleeUses.length === 1 &&
-				calleeUses[0]?.instruction === site.call &&
-				calleeUses[0]?.position === 1 &&
-				receiverUses.some(
-					(use) => use.instruction === site.property && use.position === 1,
-				) &&
-				receiverUses.some((use) => use.instruction === site.call && use.position === 2) &&
-				receiverUses.every(
-					(use) =>
-						(use.instruction === site.property && use.position === 1) ||
-						(use.instruction === site.call && use.position === 2) ||
-						numericElementInitialization(use) ||
-						deadMoveAlias(use),
-				);
+				exactFreshReceiver.fact.kind === "known";
+			const closedFreshArray = lockedExactReceiver
+				? exactFreshReceiver.fact.value
+				: undefined;
+			// Hole coverage remains stable only when the callback cannot receive the
+			// Array argument and mutate a later index. Captured aliases were already
+			// rejected by the exact-use fact; dynamic `arguments`/rest consumers are
+			// rejected by HOF-site eligibility.
+			const callbackReceiverParameter = spec.accumulator ? 3 : 2;
+			const callbackCannotObserveReceiver =
+				callbackTarget !== undefined &&
+				callbackTarget.parameterCount <= callbackReceiverParameter;
 
 			const post = host.instructions.slice(index + 1);
 			if (post.length === 0 || containsTryMarker(post)) {
@@ -3310,7 +3270,11 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			let next = base;
 			const fastInit = next++;
 			const loopCond = next++;
-			const holeCheck = spec.skipHoles ? next++ : -1;
+			const requiresHoleCheck =
+				spec.skipHoles &&
+				(closedFreshArray?.indexedCoverage !== "complete" ||
+					!callbackCannotObserveReceiver);
+			const holeCheck = requiresHoleCheck ? next++ : -1;
 			const callBlock = next++;
 			const appendBlock = spec.buildsResult === "filter" ? next++ : -1;
 			const loopIncr = next++;
@@ -3319,7 +3283,11 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			const slowPath = lockedExactReceiver ? -1 : next++;
 			const join = next++;
 
-			const lengthString = getOrCreateStringConstant(program, "length");
+			const needsLengthKey =
+				closedFreshArray === undefined || spec.buildsResult === "map";
+			const lengthString = needsLengthKey
+				? getOrCreateStringConstant(program, "length")
+				: -1;
 
 			const valueInstruction = (
 				kind: "undefined" | "true" | "false" | "neg1" | "element" | "index",
@@ -3382,11 +3350,24 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 
 			// fastInit: len = arr.length; one = 1; i = 0 (forward) or len-1 (backward,
 			// with a zero bound for the `i >= 0` test); plus result-array setup.
-			const fastInitInstructions: Array<IRInstruction> = [
-				{ type: "createString", registers: [lengthKeyReg], stringIndex: lengthString },
-				{ type: "loadProperty", registers: [lengthReg, receiver, lengthKeyReg] },
+			const fastInitInstructions: Array<IRInstruction> = [];
+			if (needsLengthKey) {
+				fastInitInstructions.push({
+					type: "createString",
+					registers: [lengthKeyReg],
+					stringIndex: lengthString,
+				});
+			}
+			fastInitInstructions.push(
+				closedFreshArray === undefined
+					? { type: "loadProperty", registers: [lengthReg, receiver, lengthKeyReg] }
+					: {
+							type: "createNumber",
+							registers: [lengthReg],
+							value: closedFreshArray.length,
+						},
 				{ type: "createNumber", registers: [oneReg], value: 1 },
-			];
+			);
 			for (const shadow of captureShadows) {
 				fastInitInstructions.push({
 					type: "loadCaptured",
@@ -3466,13 +3447,13 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					{
 						type: "jumpIf",
 						registers: [condReg],
-						blocks: [spec.skipHoles ? holeCheck : callBlock],
+						blocks: [requiresHoleCheck ? holeCheck : callBlock],
 					},
 					{ type: "jump", blocks: [afterLoop] },
 				],
 			});
 			// holeCheck (hole-skipping methods): if (i in arr) call, else skip.
-			if (spec.skipHoles) {
+			if (requiresHoleCheck) {
 				fn.blocks.push({
 					instructions: [
 						{ type: "binary", operator: "in", registers: [hasReg, indexReg, receiver] },
@@ -3669,10 +3650,10 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				fn.blocks.push({ instructions: [site.call, { type: "jump", blocks: [join] }] });
 			}
 			const numericDispatch =
-				lockedExactReceiver && receiverDefinition?.type === "createArray"
+				lockedExactReceiver && exactFreshReceiver.allocation !== undefined
 					? ({
 							kind: "closed",
-							receiverAllocation: receiverDefinition,
+							receiverAllocation: exactFreshReceiver.allocation,
 						} as const)
 					: slowCallAnchor === undefined
 						? undefined

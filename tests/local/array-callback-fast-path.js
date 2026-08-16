@@ -29,6 +29,18 @@ check(
 );
 
 check(
+	"callback receiver mutation preserves later holes",
+	(() => {
+		let visits = 0;
+		[1, 2, 3].forEach((_value, index, array) => {
+			if (index === 0) delete array[2];
+			visits++;
+		});
+		return visits === 2;
+	})(),
+);
+
+check(
 	"reduce side capture",
 	(() => {
 		let count = 0;

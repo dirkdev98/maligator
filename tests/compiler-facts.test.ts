@@ -16,12 +16,14 @@ import {
 	worldFactsFromConfig,
 } from "../src/compiler-facts.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
+import { analyzeExactFreshArrayUse } from "../src/compiler-local-facts.ts";
 import { ensureCompilerSiteFacts } from "../src/compiler-site-facts.ts";
 import {
 	compilerSummaryCacheIdentity,
 	ensureCompilerSummaries,
 } from "../src/compiler-summaries.ts";
 import { annotateDirectArrayPushSites } from "../src/inline.ts";
+import { findHofInlineSites } from "../src/inline.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
@@ -78,6 +80,38 @@ describe("compiler fact contracts", () => {
 		expect(sourceSiteId("src/a b.ts", 3, 7, "call")).not.toBe(
 			sourceSiteId("src/a b.ts", 3, 7, "property"),
 		);
+	});
+
+	it("publishes exact fresh-Array length and indexed coverage as a local fact", () => {
+		const analyze = (source: string) => {
+			const ir = compileSemanticProgramToIr(
+				analyzeSourceAndRunSemanticAnalysis(source, "fresh-array-fact.js"),
+			);
+			const [caller, site] = [...findHofInlineSites(ir).byCaller].flatMap(
+				([functionIndex, sites]) =>
+					sites.map((candidate) => [functionIndex, candidate] as const),
+			)[0]!;
+			const fn = ir.functions.find((candidate) => candidate.functionIndex === caller)!;
+			return analyzeExactFreshArrayUse(fn, {
+				receiver: site.receiverRegister,
+				callee: site.call.registers[1],
+				property: site.property,
+				call: site.call,
+			}).fact;
+		};
+		expect(
+			analyze(`let total = 0; [1, 2, 3].forEach(value => { total += value; });`),
+		).toMatchObject({
+			kind: "known",
+			value: { length: 3, indexedCoverage: "complete" },
+			proof: { dependencies: [], origin: "exact-fresh-array-use-analysis" },
+		});
+		expect(
+			analyze(`let total = 0; [1, , 3].forEach(value => { total += value; });`),
+		).toMatchObject({
+			kind: "known",
+			value: { length: 3, indexedCoverage: "partial" },
+		});
 	});
 
 	it("represents locked invariants separately from mutable epoch facts", () => {

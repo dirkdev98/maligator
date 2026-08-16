@@ -1011,7 +1011,7 @@ test("locked exact fresh Array loops erase the method Get, guard, and generic tw
 		instructions.some(
 			(instruction) =>
 				instruction.type === "call" &&
-				instruction.knownBuiltinCall?.operation === "Array.prototype.reduce",
+				instruction.knownBuiltinCall?.operation === "Array.prototype.forEach",
 		),
 	).toBe(false);
 	const methodNameIndex = locked.stringConstants.findIndex(
@@ -1025,6 +1025,21 @@ test("locked exact fresh Array loops erase the method Get, guard, and generic tw
 				instruction.stringIndex === methodNameIndex,
 		),
 	).toBe(false);
+	expect(
+		instructions.some(
+			(instruction) => instruction.type === "binary" && instruction.operator === "in",
+		),
+	).toBe(false);
+	const lengthNameIndex = locked.stringConstants.findIndex(
+		(_value, stringIndex) => decodeStringConstant(locked, stringIndex) === "length",
+	);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "loadPropertyStatic" &&
+				instruction.stringIndex === lengthNameIndex,
+		),
+	).toBe(false);
 
 	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
@@ -1034,6 +1049,51 @@ test("locked exact fresh Array loops erase the method Get, guard, and generic tw
 			(instruction) =>
 				instruction.type === "loadIntrinsic" &&
 				instruction.intrinsic === "__arrayIterationEligible",
+		),
+	).toBe(true);
+});
+
+test("locked sparse fresh Arrays keep hole semantics while using their exact length", () => {
+	const locked = optimizedLockedProgram(`(function (){
+		let total = 0;
+		[1, , 3].forEach((value) => { total += value; });
+		return total;
+	})();`);
+	const instructions = locked.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		instructions.some(
+			(instruction) => instruction.type === "binary" && instruction.operator === "in",
+		),
+	).toBe(true);
+	const lengthNameIndex = locked.stringConstants.findIndex(
+		(_value, stringIndex) => decodeStringConstant(locked, stringIndex) === "length",
+	);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "loadPropertyStatic" &&
+				instruction.stringIndex === lengthNameIndex,
+		),
+	).toBe(false);
+});
+
+test("locked complete fresh Arrays keep hole checks when the callback observes them", () => {
+	const locked = optimizedLockedProgram(`(function (){
+		let visits = 0;
+		[1, 2, 3].forEach((_value, index, array) => {
+			if (index === 0) delete array[2];
+			visits++;
+		});
+		return visits;
+	})();`);
+	const instructions = locked.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		instructions.some(
+			(instruction) => instruction.type === "binary" && instruction.operator === "in",
 		),
 	).toBe(true);
 });

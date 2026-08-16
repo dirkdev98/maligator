@@ -327,6 +327,12 @@ is general rather than a registry-shaped collection of special cases.
         Get, eligibility helper, callback fallback allocation, and generic call twin
         directly in IR; mutable, dynamic, aliased, and argument-exposed receivers
         retain the loaded-callee guard and ordinary fallback.
+    - [x] Publish exact fresh-Array length and indexed coverage as a reusable
+          function-scoped fact instead of a callback-inliner boolean. Closed loops
+          use the snapshotted exact length without a property Get and omit hole
+          checks only for complete coverage when the callback cannot observe the
+          receiver; sparse arrays and receiver-observing callbacks retain the
+          semantic check.
   - [x] License capture-free numeric `reduce` regions with the canonical reduce,
         unary-Math, primitive-method, and array-element facts through IR, MALW, and
         native emission. Mutable builds admit the combined epochs once; locked builds
