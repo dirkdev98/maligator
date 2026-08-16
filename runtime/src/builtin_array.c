@@ -1669,22 +1669,16 @@ void mal_builtin_array_private_aggregate_memo_fill(
     MAL_PERF_COUNT(private_aggregate_memo_fills);
 }
 
-bool mal_builtin_array_numeric_fold_admit(
+bool mal_builtin_array_numeric_fold_local_admit(
     MalVm *vm,
     MalValue receiver,
-    u32 math_unary_mask,
     const MalValue **elements_out,
     u32 *length_out
 ) {
     MAL_PERF_COUNT(numeric_fold_candidates);
     MalArrayObject *array;
-    if (mal_gc_preempt_hook != nullptr || !mal_primitive_method_protector ||
-        !mal_array_elements_protector ||
-        !mal_array_method_is_default_builtin(
-            vm, receiver, (const byte *) "reduce", mal_builtin_array_reduce) ||
-        !mal_array_exact_ordinary_dense(vm, receiver, &array) ||
-        (math_unary_mask != 0 &&
-         !mal_builtin_math_unary_defaults_intact(vm, math_unary_mask))) {
+    if (mal_gc_preempt_hook != nullptr ||
+        !mal_array_exact_ordinary_dense(vm, receiver, &array)) {
         MAL_PERF_COUNT(numeric_fold_guard_fallbacks);
         return false;
     }

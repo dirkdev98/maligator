@@ -111,7 +111,8 @@ export const primordialGlobalBindings: ReadonlyArray<PrimordialGlobalBinding> = 
 	feature,
 })) as ReadonlyArray<PrimordialGlobalBinding>;
 
-const mathOperationKeys = [
+/** Canonical unary numeric Math surface shared by direct calls and region plans. */
+export const mathUnaryOperationKeys = [
 	["Math.abs", "abs"],
 	["Math.floor", "floor"],
 	["Math.ceil", "ceil"],
@@ -141,8 +142,10 @@ const mathOperationKeys = [
 	["Math.fround", "fround"],
 ] as const;
 
-const mathOperations: ReadonlyArray<BuiltinOperationDescriptor> = mathOperationKeys.map(
-	([id, key]) => ({
+export type MathUnaryOperationKey = (typeof mathUnaryOperationKeys)[number][1];
+
+const mathOperations: ReadonlyArray<BuiltinOperationDescriptor> =
+	mathUnaryOperationKeys.map(([id, key]) => ({
 		id,
 		owner: "Math",
 		key,
@@ -155,8 +158,7 @@ const mathOperations: ReadonlyArray<BuiltinOperationDescriptor> = mathOperationK
 		realm: "semantic-identity",
 		lowerings: ["generic", "native-number"],
 		nativeNumberArity: 1,
-	}),
-);
+	}));
 
 const mathBinaryOperationKeys = [
 	["Math.min", "min"],

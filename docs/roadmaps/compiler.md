@@ -327,6 +327,12 @@ is general rather than a registry-shaped collection of special cases.
         Get, eligibility helper, callback fallback allocation, and generic call twin
         directly in IR; mutable, dynamic, aliased, and argument-exposed receivers
         retain the loaded-callee guard and ordinary fallback.
+  - [x] License capture-free numeric `reduce` regions with the canonical reduce,
+        unary-Math, primitive-method, and array-element facts through IR, MALW, and
+        native emission. Mutable builds admit the combined epochs once; locked builds
+        erase that semantic guard, retain only local dense/type fallback, and accept
+        the complete registered unary numeric Math surface without a runtime identity
+        table or helper body.
 
 #### Allocation and representation consumers
 

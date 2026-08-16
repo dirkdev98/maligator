@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { mathUnaryOperationKeys } from "../src/builtin-registry.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
 import { emitCompiledFunction } from "../src/emit-c.ts";
@@ -1368,9 +1369,11 @@ describe("native update-expression representation", () => {
 		);
 		const emitted = emitVmDefinition(decoded, { compiled: true });
 		const region = regions[0]!;
-		expect(emitted).toContain(
-			`mal_builtin_array_numeric_fold_admit(vm, r${region.receiver}, MAL_MATH_UNARY_BIT(SQRT) | MAL_MATH_UNARY_BIT(SIN) | MAL_MATH_UNARY_BIT(ABS)`,
-		);
+		const mutableAdmission = emitted
+			.split("\n")
+			.find((line) => line.includes("mal_builtin_array_numeric_fold_local_admit"));
+		expect(mutableAdmission).toContain("mal_vm_semantic_dependencies_admit(vm,");
+		expect(mutableAdmission).toContain(`r${region.receiver}`);
 		// The whole callback becomes straight-line f64 arithmetic, and a completed
 		// fold rejoins the untouched region at its accumulator read.
 		expect(emitted).toContain(`sqrt(__fold_${region.guardCallIp}_element)`);
@@ -1380,6 +1383,15 @@ describe("native update-expression representation", () => {
 		expect(emitted).toContain(
 			`mal_perf_numeric_fold_region(__fold_${region.guardCallIp}_index, __fold_${region.guardCallIp}_length, 3)`,
 		);
+		const lockedDefinition = compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
+		const lockedEmission = emitVmDefinition(lockedDefinition, { compiled: true });
+		const lockedAdmission = lockedEmission
+			.split("\n")
+			.find((line) => line.includes("mal_builtin_array_numeric_fold_local_admit"));
+		expect(lockedAdmission).toBeDefined();
+		expect(lockedAdmission).not.toContain("mal_vm_semantic_dependencies_admit");
 		const forgedRegion = decoded.functions.flatMap(
 			(fn) => fn.nativeNumericHofRegions ?? [],
 		)[0]!;
@@ -1388,6 +1400,34 @@ describe("native update-expression representation", () => {
 		] as unknown as typeof forgedRegion.operations;
 		forgedRegion.resultOperand = 0;
 		expect(() => serializeVmDefinition(decoded)).toThrow(/numeric-HOF expression plan/);
+	});
+
+	it("admits every registered unary Math operation to numeric reduce plans", () => {
+		const admitted = mathUnaryOperationKeys.flatMap(([, operation], index) => {
+			const source = `
+				function run() {
+					const values = [];
+					for (let i = 0; i < 20; i++) values.push(i / 20);
+					let result = 0;
+					for (let round = 0; round < 4; round++) {
+						result += values.reduce((sum, value) => sum + Math.${operation}(value), 0);
+					}
+					return result;
+				}
+				globalThis.result = run();
+			`;
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				source,
+				`numeric-hof-complete-math-${index}.js`,
+				parseScript(source, { strict: false }),
+			);
+			return compileSemanticProgramToVmDefinition(semantic)
+				.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? [])
+				.flatMap((region) => region.operations)
+				.filter((candidate) => candidate.type === "math")
+				.map((candidate) => candidate.operation);
+		});
+		expect(admitted).toEqual(mathUnaryOperationKeys.map(([, operation]) => operation));
 	});
 
 	it("rejects stale numeric reduce certificates and unsupported empty plans", () => {

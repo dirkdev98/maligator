@@ -442,6 +442,15 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
 				nativeNumericHofRegions: fn.nativeNumericHofRegions?.map((region) => ({
 					...region,
+					license: {
+						...region.license,
+						guard: {
+							dependencies: region.license.guard.dependencies.map((dependency) => ({
+								...dependency,
+							})),
+							obligations: [...region.license.guard.obligations],
+						},
+					},
 					callbackFunctionIndex: region.callbackFunctionIndex + base.function,
 					operations: region.operations.map((operation) => ({ ...operation })),
 				})),

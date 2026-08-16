@@ -47,6 +47,37 @@ function arithmeticReference(values, initial) {
 	return sum;
 }
 
+function extendedMath(values, initial) {
+	return values.reduce(
+		(sum, value) =>
+			sum +
+			Math.floor(value * 10) +
+			Math.ceil(value) +
+			Math.round(value - 0.5) +
+			Math.cos(value) +
+			Math.log1p(value) +
+			Math.fround(value),
+		initial,
+	);
+}
+
+function extendedMathReference(values, initial) {
+	let sum = initial;
+	for (let index = 0; index < values.length; index++) {
+		if (!(index in values)) continue;
+		const value = values[index];
+		sum =
+			sum +
+			Math.floor(value * 10) +
+			Math.ceil(value) +
+			Math.round(value - 0.5) +
+			Math.cos(value) +
+			Math.log1p(value) +
+			Math.fround(value);
+	}
+	return sum;
+}
+
 function concatenation(values, initial) {
 	return values.reduce((sum, value) => sum + value, initial);
 }
@@ -76,6 +107,7 @@ equivalent("repeated", repeated, repeatedReference);
 equivalent("empty", transcendental([], 7.5), 7.5);
 equivalent("single", transcendental([0.25], 1), transcendentalReference([0.25], 1));
 equivalent("arithmetic", arithmetic(dense, 11), arithmeticReference(dense, 11));
+equivalent("extendedMath", extendedMath(dense, 3), extendedMathReference(dense, 3));
 
 // Number edge cases must survive the unboxed fold exactly as the ordinary loop
 // leaves them: -0 is a distinct Number and NaN poisons every later operation.

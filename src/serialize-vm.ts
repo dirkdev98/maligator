@@ -1,3 +1,5 @@
+import { mathUnaryOperationKeys } from "./builtin-registry.ts";
+import type { MathUnaryOperationKey } from "./builtin-registry.ts";
 import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
@@ -32,13 +34,23 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 42 for semantic facts, direct calls, and closed-global table guards.
-export const WIRE_VERSION = 42;
+// Bumped to 43 for complete unary-Math numeric HOF plans.
+export const WIRE_VERSION = 43;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
 const NUMERIC_HOF_BINOPS = ["+", "-", "*", "/", "%"] as const;
-const NUMERIC_HOF_MATH_OPS = ["abs", "sqrt", "sin"] as const;
+// Preserve the original three wire tags; append the rest of the registry surface.
+const NUMERIC_HOF_MATH_OPS: ReadonlyArray<MathUnaryOperationKey> = [
+	"abs",
+	"sqrt",
+	"sin",
+	...mathUnaryOperationKeys
+		.map(([, operation]) => operation)
+		.filter(
+			(operation) => operation !== "abs" && operation !== "sqrt" && operation !== "sin",
+		),
+];
 
 const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"Map.prototype.get",
@@ -583,6 +595,32 @@ function cardinalityGuardMasks(guard: VmGuardPlan): {
 	return { dependencyMask, obligationMask };
 }
 
+function numericHofGuardMasks(
+	license: NonNullable<VmFunction["nativeNumericHofRegions"]>[number]["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world") dependencyMask |= 1;
+		else if (dependency.family === "primitive-methods") dependencyMask |= 2;
+		else if (dependency.family === "watched-methods") dependencyMask |= 4;
+		else if (dependency.family === "array-elements") dependencyMask |= 8;
+		else throw new RangeError("serialize-vm: unsupported numeric-HOF dependency");
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "none" ||
+		(dependencyMask !== 1 && dependencyMask !== 14) ||
+		obligationMask !== 1
+	) {
+		throw new RangeError("serialize-vm: invalid numeric-HOF guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1017,6 +1055,7 @@ export function serializeVmDefinition(
 		w.u32(fn.nativeNumericHofRegions?.length ?? 0);
 		for (const region of fn.nativeNumericHofRegions ?? []) {
 			validateNumericHofRegion(fn, region, def.functions.length);
+			const { dependencyMask, obligationMask } = numericHofGuardMasks(region.license);
 			w.i32(region.guardCallIp);
 			w.i32(region.initialValueIp);
 			w.i32(region.initialMoveIp);
@@ -1027,6 +1066,8 @@ export function serializeVmDefinition(
 			w.i32(region.receiver);
 			w.i32(region.initial);
 			w.i32(region.result);
+			w.u8(dependencyMask);
+			w.u8(obligationMask);
 			w.u8(1); // end-only-no-preempt
 			w.i32(region.resultOperand);
 			w.u32(region.operations.length);
@@ -1172,6 +1213,7 @@ function validateNumericHofRegion(
 	region: NonNullable<VmFunction["nativeNumericHofRegions"]>[number],
 	functionCount: number,
 ): void {
+	numericHofGuardMasks(region.license);
 	const registerValid = (value: number) =>
 		Number.isInteger(value) && value >= 0 && value < fn.registerCount;
 	const operandValid = (value: number, before: number) =>
@@ -2260,6 +2302,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				const receiver = r.i32();
 				const initial = r.i32();
 				const result = r.i32();
+				const dependencyMask = r.u8();
+				const obligationMask = r.u8();
 				const pollPolicy = r.u8();
 				const resultOperand = r.i32();
 				const operationCount = r.count(2);
@@ -2296,6 +2340,21 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				}
 				const region = {
 					method: "reduce" as const,
+					license: {
+						guard: {
+							dependencies:
+								dependencyMask === 1
+									? [{ kind: "world" as const, fact: "primordials.locked" as const }]
+									: [
+											{ kind: "epoch" as const, family: "array-elements" as const },
+											{ kind: "epoch" as const, family: "primitive-methods" as const },
+											{ kind: "epoch" as const, family: "watched-methods" as const },
+										],
+							obligations: obligationMask === 1 ? (["fallback"] as const) : [],
+						},
+						genericTwin: "retained" as const,
+						materialization: "none" as const,
+					},
 					guardCallIp,
 					initialValueIp,
 					initialMoveIp,

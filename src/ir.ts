@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import type { MathUnaryOperationKey } from "./builtin-registry.ts";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
 import type {
 	CompilerOptimizationDecision,
@@ -541,7 +542,7 @@ export type IRNumericHofPlanOperation =
 	  }
 	| {
 			type: "math";
-			operation: "abs" | "sqrt" | "sin";
+			operation: MathUnaryOperationKey;
 			value: number;
 	  };
 
@@ -553,6 +554,11 @@ export type IRNumericHofPlanOperation =
  */
 export interface IRNumericHofRegion {
 	method: "reduce";
+	readonly license: {
+		readonly guard: CompilerGuardPlan;
+		readonly genericTwin: "retained";
+		readonly materialization: "none";
+	};
 	callbackFunctionIndex: number;
 	operations: ReadonlyArray<IRNumericHofPlanOperation>;
 	resultOperand: number;

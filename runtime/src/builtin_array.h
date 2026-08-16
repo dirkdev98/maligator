@@ -94,11 +94,10 @@ void mal_builtin_array_private_aggregate_memo_fill(
 bool mal_builtin_array_push_virtual_guard(MalVm *vm);
 
 /**
- * Admit one compiler-proven numeric `Array.prototype.reduce` region to run as
- * straight-line native f64 arithmetic over the receiver's own dense storage.
- * `math_unary_mask` names every Math operation the proven callback resolves
- * through the Math intrinsic (see MAL_MATH_UNARY_BIT).
- *
+ * Admit the local representation and scheduling conditions for one fact-licensed
+ * numeric `Array.prototype.reduce` region. Builtin identity and protector
+ * dependencies are admitted by generated code through the shared semantic bridge;
+ * this helper only exposes exact dense storage when the loop cannot be preempted.
  * On success `*elements_out` may be read directly for `[0, *length_out)`: the
  * admitted region allocates nothing, calls no JavaScript, and takes no
  * safepoint, so neither the dense storage nor the element values can change
@@ -110,10 +109,9 @@ bool mal_builtin_array_push_virtual_guard(MalVm *vm);
  * that is not one, which is free precisely because nothing it did was
  * observable.
  */
-bool mal_builtin_array_numeric_fold_admit(
+bool mal_builtin_array_numeric_fold_local_admit(
     MalVm *vm,
     MalValue receiver,
-    u32 math_unary_mask,
     const MalValue **elements_out,
     u32 *length_out
 );

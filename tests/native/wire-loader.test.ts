@@ -344,8 +344,8 @@ describe("wire loader side-data validation", () => {
 				for (let index = 0; index < 20; index++) values.push(index / 20);
 				let result = 0;
 				for (let round = 0; round < 4; round++) {
-					result += values.reduce(
-						(sum, value) => sum + Math.sqrt(value) * Math.sin(value) + Math.abs(value - 0.5),
+						result += values.reduce(
+							(sum, value) => sum + Math.sqrt(value) * Math.sin(value) + Math.abs(value - 0.5) + Math.cos(value),
 						0,
 					);
 				}

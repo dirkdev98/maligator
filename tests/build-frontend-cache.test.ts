@@ -183,7 +183,7 @@ describe("normal build frontend cache", () => {
 		expect(warm.cache).toBe("hit");
 		expect(coldRegions).toHaveLength(1);
 		expect(warmRegions).toEqual(coldRegions);
-		expect(coldC).toContain("mal_builtin_array_numeric_fold_admit(");
+		expect(coldC).toContain("mal_builtin_array_numeric_fold_local_admit(");
 		expect(warmC).toBe(coldC);
 	});
 

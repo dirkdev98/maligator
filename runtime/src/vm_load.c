@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 42u        // semantic facts, direct calls, and closed-global guards
+#define WIRE_VERSION 43u        // complete unary-Math numeric HOF plans
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1819,6 +1819,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             i32 receiver = rd_i32(&r);
             i32 initial = rd_i32(&r);
             i32 result = rd_i32(&r);
+            u8 dependency_mask = rd_u8(&r);
+            u8 obligation_mask = rd_u8(&r);
             u8 poll_policy = rd_u8(&r);
             i32 result_operand = rd_i32(&r);
             u32 operation_count = rd_count(&r, 2);
@@ -1841,7 +1843,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 callback_function < 0 || callback_function >= function_count ||
                 receiver < 0 || receiver >= fn->register_count ||
                 initial < 0 || initial >= fn->register_count ||
-                result < 0 || result >= fn->register_count || poll_policy != 1 ||
+                result < 0 || result >= fn->register_count ||
+                (dependency_mask != 1 && dependency_mask != 14) ||
+                obligation_mask != 1 || poll_policy != 1 ||
                 operation_count == 0 || operation_count > 32 ||
                 fn->instructions[initial_ip].as.move.src != initial_value_dst ||
                 fn->instructions[initial_ip].as.move.src != initial ||
@@ -1871,7 +1875,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     i32 value = rd_i32(&r);
                     bool value_ok = value == -1 || value == -2 ||
                         (value >= 0 && (u32) value < operation);
-                    if (math >= 3 || !value_ok) r.ok = false;
+                    if (math >= 27 || !value_ok) r.ok = false;
                 } else {
                     r.ok = false;
                 }

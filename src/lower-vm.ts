@@ -704,6 +704,7 @@ export interface VmFunction {
 	 */
 	nativeNumericHofRegions?: ReadonlyArray<{
 		method: "reduce";
+		license: VmRegionLicense;
 		guardCallIp: number;
 		initialValueIp: number;
 		initialMoveIp: number;
@@ -2097,6 +2098,7 @@ function lowerFunctionToVmFunction(
 		NonNullable<VmFunction["nativeNumericHofRegions"]>[number]
 	> = [];
 	for (const pending of pendingNumericHofRegions) {
+		const licenseGuard = lowerGuardPlan(pending.region.license.guard);
 		const guardCallIp = instructionIndexByIrInstruction.get(pending.guard);
 		const initialValueIp = instructionIndexByIrInstruction.get(
 			pending.region.initialValue,
@@ -2106,6 +2108,9 @@ function lowerFunctionToVmFunction(
 		const fastExitIp = instructionIndexByIrInstruction.get(pending.region.fastExit);
 		const slowCallIp = instructionIndexByIrInstruction.get(pending.region.slowCall);
 		if (
+			licenseGuard === undefined ||
+			pending.region.license.genericTwin !== "retained" ||
+			pending.region.license.materialization !== "none" ||
 			guardCallIp === undefined ||
 			initialValueIp === undefined ||
 			initialMoveIp === undefined ||
@@ -2141,6 +2146,11 @@ function lowerFunctionToVmFunction(
 		}
 		nativeNumericHofRegions.push({
 			method: pending.region.method,
+			license: {
+				guard: licenseGuard,
+				genericTwin: "retained",
+				materialization: "none",
+			},
 			guardCallIp,
 			initialValueIp,
 			initialMoveIp,

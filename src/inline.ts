@@ -22,12 +22,18 @@
  * a non-spread call site supplies their exact raw argument values during substitution.
  */
 
-import { builtinOperationDescriptor, builtinOperations } from "./builtin-registry.ts";
+import {
+	builtinOperationDescriptor,
+	builtinOperations,
+	mathUnaryOperationKeys,
+} from "./builtin-registry.ts";
+import type { MathUnaryOperationKey } from "./builtin-registry.ts";
 import type {
 	CompilerOptimizationDecision,
 	OptimizationDecisionReason,
 } from "./compiler-diagnostics.ts";
 import {
+	compilerGuardPlan,
 	compilerFactIsWorldInvariant,
 	knownBuiltinCallProves,
 	knownFact,
@@ -50,6 +56,10 @@ import type {
 } from "./ir.ts";
 import { definedRegister } from "./register-alloc.ts";
 import { log } from "./utils.ts";
+
+const MATH_UNARY_OPERATION_ID_BY_KEY = new Map(
+	mathUnaryOperationKeys.map(([id, key]) => [key, id] as const),
+);
 
 /** Max body size (real, non-marker instructions) of an inline target. */
 const MAX_INLINE_INSTRUCTIONS = 40;
@@ -2859,7 +2869,7 @@ function compileNumericReducePlan(
 		| { kind: "number"; operand: number }
 		| { kind: "math" }
 		| { kind: "string"; value: string }
-		| { kind: "mathFunction"; operation: "abs" | "sqrt" | "sin" };
+		| { kind: "mathFunction"; operation: MathUnaryOperationKey };
 	const values = new Map<number, Value>([
 		[0, { kind: "number", operand: NUMERIC_HOF_INPUT_ACCUMULATOR }],
 		[1, { kind: "number", operand: NUMERIC_HOF_INPUT_ELEMENT }],
@@ -2930,15 +2940,21 @@ function compileNumericReducePlan(
 				case "loadProperty": {
 					const object = values.get(instruction.registers[1]);
 					const key = values.get(instruction.registers[2]);
-					if (
-						object?.kind !== "math" ||
-						key?.kind !== "string" ||
-						(key.value !== "abs" && key.value !== "sqrt" && key.value !== "sin")
-					)
-						return undefined;
+					if (object?.kind !== "math" || key?.kind !== "string") return undefined;
+					const operationId = MATH_UNARY_OPERATION_ID_BY_KEY.get(
+						key.value as MathUnaryOperationKey,
+					);
+					const operation = mathUnaryOperationKeys.find(
+						([, name]) => name === key.value,
+					)?.[1];
+					const identity =
+						operationId === undefined
+							? undefined
+							: program.facts.builtinIdentities.get(operationId);
+					if (operation === undefined || identity?.kind !== "known") return undefined;
 					values.set(instruction.registers[0], {
 						kind: "mathFunction",
-						operation: key.value,
+						operation,
 					});
 					break;
 				}
@@ -3128,12 +3144,39 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			const callbackTarget = program.functions.find(
 				(candidate) => candidate.functionIndex === site.callbackTarget,
 			);
-			const numericReducePlan =
+			const numericReduceCandidate =
 				spec.accumulator === true &&
 				spec.backward !== true &&
 				callbackTarget !== undefined
 					? compileNumericReducePlan(program, callbackTarget)
 					: undefined;
+			const numericReduceGuard =
+				numericReduceCandidate === undefined
+					? undefined
+					: compilerGuardPlan(
+							[
+								site.call.knownBuiltinCall?.identity,
+								program.facts.protectors.get("primitive-methods"),
+								program.facts.protectors.get("array-elements"),
+								...numericReduceCandidate.operations
+									.filter((candidate) => candidate.type === "math")
+									.map((candidate) =>
+										program.facts.builtinIdentities.get(
+											MATH_UNARY_OPERATION_ID_BY_KEY.get(candidate.operation)!,
+										),
+									),
+							],
+							[
+								{
+									kind: "fallback",
+									id: `numeric-reduce:${fn.functionIndex}:${positionId ?? builtinGuardOrdinal}`,
+								},
+							],
+						);
+			const numericReducePlan =
+				numericReduceGuard === undefined || numericReduceCandidate === undefined
+					? undefined
+					: { ...numericReduceCandidate, guard: numericReduceGuard };
 			const registerIndex = buildIRRegisterIndex(fn, { locations: true });
 			const receiverDefinition = registerIndex.uniqueDefinitions.get(receiver);
 			const receiverUses = registerIndex.uses.get(receiver) ?? [];
@@ -3638,6 +3681,11 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			) {
 				eligibilityCall.numericHofRegion = {
 					method: "reduce",
+					license: {
+						guard: numericReducePlan.guard,
+						genericTwin: "retained",
+						materialization: "none",
+					},
 					callbackFunctionIndex: site.callbackTarget,
 					operations: numericReducePlan.operations,
 					resultOperand: numericReducePlan.resultOperand,

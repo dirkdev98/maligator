@@ -1,4 +1,5 @@
 import { builtinOperationDescriptor } from "./builtin-registry.ts";
+import type { MathUnaryOperationKey } from "./builtin-registry.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
@@ -2727,11 +2728,50 @@ type NumericHofRegionSite = NonNullable<VmFunction["nativeNumericHofRegions"]>[n
  * the corresponding builtin is still installed. Every expression must stay
  * identical to that builtin's own (MAL_BUILTIN_MATH_UNARY in builtin_math.c);
  * the fold's whole claim is that it computes what the call would have. */
-const NUMERIC_FOLD_MATH_OPS = {
-	abs: { call: "fabs", bit: "ABS" },
-	sqrt: { call: "sqrt", bit: "SQRT" },
-	sin: { call: "sin", bit: "SIN" },
-} as const;
+const NUMERIC_FOLD_MATH_OPS: ReadonlyMap<
+	MathUnaryOperationKey,
+	{ expression: (value: string) => string }
+> = new Map([
+	["abs", { expression: (value) => `fabs(${value})` }],
+	["floor", { expression: (value) => `floor(${value})` }],
+	["ceil", { expression: (value) => `ceil(${value})` }],
+	[
+		"round",
+		{
+			expression: (value) =>
+				`mal_builtin_math_unary_number_known(MAL_MATH_UNARY_ROUND, ${value})`,
+		},
+	],
+	["trunc", { expression: (value) => `trunc(${value})` }],
+	["sqrt", { expression: (value) => `sqrt(${value})` }],
+	["cbrt", { expression: (value) => `cbrt(${value})` }],
+	[
+		"sign",
+		{
+			expression: (value) =>
+				`(isnan(${value}) ? NAN : (${value} > 0 ? 1 : (${value} < 0 ? -1 : ${value})))`,
+		},
+	],
+	["log", { expression: (value) => `log(${value})` }],
+	["log2", { expression: (value) => `log2(${value})` }],
+	["log10", { expression: (value) => `log10(${value})` }],
+	["exp", { expression: (value) => `exp(${value})` }],
+	["sin", { expression: (value) => `sin(${value})` }],
+	["cos", { expression: (value) => `cos(${value})` }],
+	["tan", { expression: (value) => `tan(${value})` }],
+	["asin", { expression: (value) => `asin(${value})` }],
+	["acos", { expression: (value) => `acos(${value})` }],
+	["atan", { expression: (value) => `atan(${value})` }],
+	["sinh", { expression: (value) => `sinh(${value})` }],
+	["cosh", { expression: (value) => `cosh(${value})` }],
+	["tanh", { expression: (value) => `tanh(${value})` }],
+	["asinh", { expression: (value) => `asinh(${value})` }],
+	["acosh", { expression: (value) => `acosh(${value})` }],
+	["atanh", { expression: (value) => `atanh(${value})` }],
+	["log1p", { expression: (value) => `log1p(${value})` }],
+	["expm1", { expression: (value) => `expm1(${value})` }],
+	["fround", { expression: (value) => `(f64) (float) (${value})` }],
+]);
 
 /**
  * Straight-line native arithmetic for one proven numeric `reduce` region. The
@@ -2770,7 +2810,6 @@ function emitNumericFoldRegion(
 			: value === NUMERIC_HOF_INPUT_ELEMENT
 				? element
 				: `${prefix}_op${value}`;
-	const mathBits = new Set<string>();
 	const plan: Array<string> = [];
 	for (const [index, operation] of region.operations.entries()) {
 		const name = `${prefix}_op${index}`;
@@ -2785,18 +2824,14 @@ function emitNumericFoldRegion(
 			if (expression === null) return null;
 			plan.push(`f64 ${name} = ${expression};`);
 		} else {
-			const math = NUMERIC_FOLD_MATH_OPS[operation.operation];
-			mathBits.add(math.bit);
-			plan.push(`f64 ${name} = ${math.call}(${operand(operation.value)});`);
+			const math = NUMERIC_FOLD_MATH_OPS.get(operation.operation);
+			if (math === undefined) return null;
+			plan.push(`f64 ${name} = ${math.expression(operand(operation.value))};`);
 		}
 	}
 	const mathCalls = region.operations.filter(
 		(operation) => operation.type === "math",
 	).length;
-	const mask =
-		mathBits.size === 0
-			? "0"
-			: [...mathBits].map((bit) => `MAL_MATH_UNARY_BIT(${bit})`).join(" | ");
 	// A number-rep register always holds a Number; a boxed initial value is only a
 	// Number by the region's proof, so it is still checked here.
 	const initialIsNumber =
@@ -2813,7 +2848,7 @@ function emitNumericFoldRegion(
 		`{`,
 		`  const MalValue *${prefix}_elements;`,
 		`  u32 ${prefix}_length;`,
-		`  if (${initialIsNumber}mal_builtin_array_numeric_fold_admit(vm, r${region.receiver}, ${mask}, &${prefix}_elements, &${prefix}_length)) {`,
+		`  if (${initialIsNumber}${regionAdmissionGuard(region.license)} && mal_builtin_array_numeric_fold_local_admit(vm, r${region.receiver}, &${prefix}_elements, &${prefix}_length)) {`,
 		`    f64 ${accumulator} = ${initialValue};`,
 		`    u32 ${prefix}_index = 0;`,
 		`    for (; ${prefix}_index < ${prefix}_length; ${prefix}_index++) {`,
