@@ -335,6 +335,41 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("indexed-fill-reserve-zero", wire);
 	});
 
+	it("loads and validates exact fresh-Array access metadata", () => {
+		const accessDefinition: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					registerCount: 3,
+					instructions: [
+						{ opcode: "CREATE_ARRAY", dst: 0, length: 1 },
+						{ opcode: "CREATE_NUMBER", dst: 1, value: 0 },
+						{
+							opcode: "LOAD_PROPERTY",
+							dst: 2,
+							object: 0,
+							key: 1,
+							icIndex: 0,
+							nativeExactFreshArrayAccess: { allocationInstructionIndex: 0 },
+						},
+						{ opcode: "RETURN", value: 2 },
+					],
+				},
+			],
+		};
+		const wire = serializeVmDefinition(accessDefinition, { debugInfo: false });
+		const wirePath = path.join(directory, "exact-fresh-array-access.malw");
+		writeFileSync(wirePath, wire);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+
+		expect(wire.at(-3)).toBe(13);
+		expect(wire.at(-1)).toBe(0); // empty numeric-HOF region table
+		wire[wire.length - 2] = 2; // ZigZag(1): CREATE_NUMBER, not CREATE_ARRAY
+		rejectsWire("exact-fresh-array-access-allocation", wire);
+	});
+
 	it("loads a nonempty numeric HOF proof region payload", () => {
 		const entrypoint = path.join(directory, "numeric-hof-region.mjs");
 		writeFileSync(

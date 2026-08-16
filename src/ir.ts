@@ -1191,6 +1191,13 @@ export type IRInstruction =
 			nativeFiniteRecordAccess?: {
 				allocation: Extract<IRInstruction, { type: "createObject" }>;
 			};
+			/** COMPILE-ONLY: indexed read from a complete, exact fresh Array whose
+			 * receiver cannot be observed or mutated by the surrounding closed loop.
+			 * Native code may use the dense vector directly, but must retain the
+			 * ordinary property operation when dense allocation fell back to a table. */
+			nativeExactFreshArrayAccess?: {
+				allocation: Extract<IRInstruction, { type: "createArray" }>;
+			};
 			/** COMPILE-ONLY: a non-escaping global `{}` is represented by a bounded
 			 * synthetic-global value table. Unknown selectors deopt/materialize it. */
 			nativeClosedGlobalTable?: {

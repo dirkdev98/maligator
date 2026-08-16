@@ -1802,6 +1802,17 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     reserve_length < 1 || reserve_length > 65536) {
                     r.ok = false;
                 }
+            } else if (tag == 13) { // LOAD_PROPERTY exact fresh-Array element
+                i32 allocation_ip = rd_i32(&r);
+                const MalFunction *fn = &functions[i];
+                if (instruction_index >= (u32) fn->instruction_count ||
+                    fn->instructions[instruction_index].opcode != MAL_OP_LOAD_PROPERTY ||
+                    allocation_ip < 0 || allocation_ip >= (i32) instruction_index ||
+                    fn->instructions[allocation_ip].opcode != MAL_OP_CREATE_ARRAY ||
+                    fn->instructions[allocation_ip].as.create_array.dst !=
+                        fn->instructions[instruction_index].as.load_property.object) {
+                    r.ok = false;
+                }
             } else {
                 r.ok = false;
             }

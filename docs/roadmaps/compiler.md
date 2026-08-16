@@ -333,6 +333,11 @@ is general rather than a registry-shaped collection of special cases.
           checks only for complete coverage when the callback cannot observe the
           receiver; sparse arrays and receiver-observing callbacks retain the
           semantic check.
+    - [x] Carry stable complete indexed-access certificates through IR, VM lowering,
+          MALW, and native emission. Closed loops read the dense vector without
+          repeating Array-brand, index, bounds, or hole checks; a failed dense
+          allocation retains the ordinary property operation as its table-backed
+          representation fallback.
   - [x] License capture-free numeric `reduce` regions with the canonical reduce,
         unary-Math, primitive-method, and array-element facts through IR, MALW, and
         native emission. Mutable builds admit the combined epochs once; locked builds

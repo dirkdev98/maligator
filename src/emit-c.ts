@@ -4907,6 +4907,22 @@ function emitInstruction(
 					`}`,
 				];
 			}
+			if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				instruction.nativeExactFreshArrayAccess !== undefined
+			) {
+				if (reps[instruction.key] !== "number") return null;
+				const array = `__exact_fresh_array_${ip}`;
+				return [
+					`MalArrayObject *${array} = mal_value_to_array_object(${boxed(instruction.object)});`,
+					`if (${array}->elements != nullptr) {`,
+					`  r${instruction.dst} = ${array}->elements[(u32) ${num(instruction.key)}];`,
+					`} else {`,
+					`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
 			if (cardinalityAccess !== undefined) {
 				const target = cardinalityAccess.region;
 				const fallback = emitInstruction(

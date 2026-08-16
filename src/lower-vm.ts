@@ -1196,6 +1196,9 @@ export type VmInstruction =
 			nativeFiniteRecordAccess?: {
 				allocationInstructionIndex: number;
 			};
+			nativeExactFreshArrayAccess?: {
+				allocationInstructionIndex: number;
+			};
 			nativeClosedGlobalTable?: {
 				baseIndex: number;
 				stateIndex: number;
@@ -1815,6 +1818,10 @@ function lowerFunctionToVmFunction(
 		instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
 		allocation: Extract<IRInstruction, { type: "createObject" }>;
 	}> = [];
+	const pendingExactFreshArrayAccesses: Array<{
+		instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
+		allocation: Extract<IRInstruction, { type: "createArray" }>;
+	}> = [];
 	const pendingCardinalityPushes: Array<{
 		instruction: Extract<VmInstruction, { opcode: "CALL" }>;
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
@@ -1910,6 +1917,16 @@ function lowerFunctionToVmFunction(
 				pendingFiniteRecordAccesses.push({
 					instruction: vmInstruction,
 					allocation: instruction.nativeFiniteRecordAccess.allocation,
+				});
+			}
+			if (
+				instruction.type === "loadProperty" &&
+				instruction.nativeExactFreshArrayAccess !== undefined &&
+				vmInstruction.opcode === "LOAD_PROPERTY"
+			) {
+				pendingExactFreshArrayAccesses.push({
+					instruction: vmInstruction,
+					allocation: instruction.nativeExactFreshArrayAccess.allocation,
 				});
 			}
 			if (
@@ -2082,6 +2099,15 @@ function lowerFunctionToVmFunction(
 			throw new Error("Unknown virtual finite-record allocation");
 		}
 		pending.instruction.nativeFiniteRecordAccess = { allocationInstructionIndex };
+	}
+	for (const pending of pendingExactFreshArrayAccesses) {
+		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
+			pending.allocation,
+		);
+		if (allocationInstructionIndex === undefined) {
+			throw new Error("Unknown exact fresh-Array allocation");
+		}
+		pending.instruction.nativeExactFreshArrayAccess = { allocationInstructionIndex };
 	}
 	for (const pending of pendingCardinalityPushes) {
 		const allocationInstructionIndex = instructionIndexByIrInstruction.get(

@@ -1030,6 +1030,13 @@ test("locked exact fresh Array loops erase the method Get, guard, and generic tw
 			(instruction) => instruction.type === "binary" && instruction.operator === "in",
 		),
 	).toBe(false);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "loadProperty" &&
+				instruction.nativeExactFreshArrayAccess !== undefined,
+		),
+	).toBe(true);
 	const lengthNameIndex = locked.stringConstants.findIndex(
 		(_value, stringIndex) => decodeStringConstant(locked, stringIndex) === "length",
 	);
@@ -1067,6 +1074,13 @@ test("locked sparse fresh Arrays keep hole semantics while using their exact len
 			(instruction) => instruction.type === "binary" && instruction.operator === "in",
 		),
 	).toBe(true);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "loadProperty" &&
+				instruction.nativeExactFreshArrayAccess !== undefined,
+		),
+	).toBe(false);
 	const lengthNameIndex = locked.stringConstants.findIndex(
 		(_value, stringIndex) => decodeStringConstant(locked, stringIndex) === "length",
 	);
@@ -1096,6 +1110,13 @@ test("locked complete fresh Arrays keep hole checks when the callback observes t
 			(instruction) => instruction.type === "binary" && instruction.operator === "in",
 		),
 	).toBe(true);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "loadProperty" &&
+				instruction.nativeExactFreshArrayAccess !== undefined,
+		),
+	).toBe(false);
 });
 
 test("locked exact numeric reduce nests a closed native fold inside the inlined loop", () => {

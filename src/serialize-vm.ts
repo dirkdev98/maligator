@@ -867,6 +867,8 @@ export function serializeVmDefinition(
 						((instruction.opcode === "LOAD_PROPERTY" ||
 							instruction.opcode === "LOAD_PROPERTY_STATIC") &&
 							instruction.nativeCardinalityAccess !== undefined) ||
+						(instruction.opcode === "LOAD_PROPERTY" &&
+							instruction.nativeExactFreshArrayAccess !== undefined) ||
 						(instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 							instruction.nativePrimitiveStringLength === true)
 					);
@@ -983,6 +985,26 @@ export function serializeVmDefinition(
 				w.i32Array(instruction.nativeFiniteConstruction.numberGuards);
 				w.i32Array(instruction.nativeFiniteConstruction.keyStringIndices);
 				w.u8(instruction.nativeFiniteConstruction.virtualRecord === true ? 1 : 0);
+			} else if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				instruction.nativeExactFreshArrayAccess !== undefined
+			) {
+				const allocationInstructionIndex =
+					instruction.nativeExactFreshArrayAccess.allocationInstructionIndex;
+				const allocation = fn.instructions[allocationInstructionIndex];
+				if (
+					allocationInstructionIndex >= instructionIndex ||
+					allocation?.opcode !== "CREATE_ARRAY" ||
+					allocation.dst !== instruction.object ||
+					instruction.nativeFiniteKey !== undefined ||
+					instruction.nativeFiniteRecordAccess !== undefined ||
+					instruction.nativeClosedGlobalTable !== undefined ||
+					instruction.nativeCardinalityAccess !== undefined
+				) {
+					throw new RangeError("serialize-vm: invalid exact fresh-Array access metadata");
+				}
+				w.u8(13);
+				w.i32(allocationInstructionIndex);
 			} else if (
 				(instruction.opcode === "LOAD_PROPERTY" ||
 					instruction.opcode === "LOAD_PROPERTY_STATIC") &&
@@ -2238,6 +2260,17 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
 				}
 				instruction.nativeFreshDenseReserveLength = reserveLength;
+			} else if (tag === 13 && instruction.opcode === "LOAD_PROPERTY") {
+				const allocationInstructionIndex = r.i32();
+				const allocation = fn.instructions[allocationInstructionIndex];
+				if (
+					allocationInstructionIndex >= instructionIndex ||
+					allocation?.opcode !== "CREATE_ARRAY" ||
+					allocation.dst !== instruction.object
+				) {
+					throw new RangeError("serialize-vm: invalid exact fresh-Array access metadata");
+				}
+				instruction.nativeExactFreshArrayAccess = { allocationInstructionIndex };
 			} else if (
 				tag === 9 &&
 				(instruction.opcode === "LOAD_PROPERTY" ||

@@ -3491,10 +3491,20 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			if (captureOverrides.size > 0) {
 				hofCaptureOverrides.set(fastCallbackCall, captureOverrides);
 			}
-			const callTail: Array<IRInstruction> = [
-				{ type: "loadProperty", registers: [elementReg, receiver, indexReg] },
-				fastCallbackCall,
-			];
+			const elementLoad: Extract<IRInstruction, { type: "loadProperty" }> = {
+				type: "loadProperty",
+				registers: [elementReg, receiver, indexReg],
+			};
+			if (
+				closedFreshArray?.indexedCoverage === "complete" &&
+				callbackCannotObserveReceiver &&
+				exactFreshReceiver.allocation !== undefined
+			) {
+				elementLoad.nativeExactFreshArrayAccess = {
+					allocation: exactFreshReceiver.allocation,
+				};
+			}
+			const callTail: Array<IRInstruction> = [elementLoad, fastCallbackCall];
 			if (spec.buildsResult === "map") {
 				// result[i] = cb(elem, i, arr) (index < preset length → fills in place).
 				callTail.push({

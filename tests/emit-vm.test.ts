@@ -536,6 +536,16 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("MAL_UNARY_INCREMENT");
 	});
 
+	it("reads stable complete fresh-Array loops from dense storage with a table fallback", () => {
+		const source = `let total = 0; [1, 2, 3].forEach((value) => { total += value; }); globalThis.total = total;`;
+		const lockedOutput = emitLocked(source);
+		expect(lockedOutput).toMatch(
+			/if \(__exact_fresh_array_\d+->elements != nullptr\) \{\n\s+r\d+ = __exact_fresh_array_\d+->elements\[\(u32\) r\d+\];/,
+		);
+		expect(lockedOutput).toMatch(/else \{\n\s+r\d+ = mal_vm_array_fast_load_index\(vm,/);
+		expect(emit(source)).not.toContain("__exact_fresh_array_");
+	});
+
 	it("pre-reserves a pristine canonical indexed fill without replacing its stores", () => {
 		const output = emit(
 			`"use strict"; function fill() { const array = []; for (let i = 0; i < 1000; i++) array[i] = i; return array; } globalThis.fill = fill;`,
