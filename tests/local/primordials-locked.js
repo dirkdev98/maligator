@@ -161,6 +161,26 @@ try {
 }
 check("locked fresh RegExp exec preserves coercion exceptions", literalExecCaught);
 
+function lockedFreshArrayReduce() {
+	return [1, 2, 3, 4].reduce((sum, value) => sum + value, 0);
+}
+check("locked fresh Array reduce loop", lockedFreshArrayReduce() === 10);
+
+function lockedFreshArrayForEachMutation() {
+	let total = 0;
+	let observedLength = 0;
+	[1, 2, 3].forEach((value, index, array) => {
+		total += value;
+		if (index === 0) array.push(4);
+		observedLength = array.length;
+	});
+	return total * 10 + observedLength;
+}
+check(
+	"locked fresh Array forEach keeps length snapshot and callback receiver",
+	lockedFreshArrayForEachMutation() === 64,
+);
+
 for (const [name, value] of [
 	["Object", Object],
 	["String", String],

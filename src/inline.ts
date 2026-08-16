@@ -27,7 +27,12 @@ import type {
 	CompilerOptimizationDecision,
 	OptimizationDecisionReason,
 } from "./compiler-diagnostics.ts";
-import { knownBuiltinCallProves, knownFact, sourceSiteId } from "./compiler-facts.ts";
+import {
+	compilerFactIsWorldInvariant,
+	knownBuiltinCallProves,
+	knownFact,
+	sourceSiteId,
+} from "./compiler-facts.ts";
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
 import type { IRRegisterIndex } from "./ir-register-index.ts";
 import {
@@ -1648,6 +1653,8 @@ const HOF_CALLBACK_METHODS = new Set([
 export interface HofInlineSite {
 	/** The `call` instruction (`[dst, callee, recv, callback, ...]`). */
 	call: Extract<IRInstruction, { type: "call" }>;
+	/** Ordinary property Get that captured the method before argument evaluation. */
+	property: Extract<IRInstruction, { type: "loadProperty" }>;
 	/** The method name (e.g. "forEach"). */
 	method: string;
 	/** Register holding the receiver (also the call's `this`). */
@@ -1773,7 +1780,13 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 					continue;
 				}
 
-				sites.push({ call: instruction, method, receiverRegister, callbackTarget });
+				sites.push({
+					call: instruction,
+					property: calleeDef,
+					method,
+					receiverRegister,
+					callbackTarget,
+				});
 			}
 		}
 		if (sites.length > 0) {
@@ -3121,6 +3134,67 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				callbackTarget !== undefined
 					? compileNumericReducePlan(program, callbackTarget)
 					: undefined;
+			const registerIndex = buildIRRegisterIndex(fn, { locations: true });
+			const receiverDefinition = registerIndex.uniqueDefinitions.get(receiver);
+			const receiverUses = registerIndex.uses.get(receiver) ?? [];
+			const calleeUses = registerIndex.uses.get(callRegisters[1]!) ?? [];
+			const allocationLocation =
+				receiverDefinition === undefined
+					? undefined
+					: registerIndex.locations?.get(receiverDefinition);
+			const propertyLocation = registerIndex.locations?.get(site.property);
+			const callLocation = registerIndex.locations?.get(site.call);
+			const hostBlockIndex = fn.blocks.indexOf(host);
+			const numericElementInitialization = (use: (typeof receiverUses)[number]) => {
+				if (use.position !== 0 || use.instruction.type !== "defineProperty") {
+					return false;
+				}
+				const location = registerIndex.locations?.get(use.instruction);
+				if (
+					location?.blockIndex !== hostBlockIndex ||
+					allocationLocation === undefined ||
+					propertyLocation === undefined ||
+					location.instructionIndex <= allocationLocation.instructionIndex ||
+					location.instructionIndex >= propertyLocation.instructionIndex
+				) {
+					return false;
+				}
+				const keyDefinition = registerIndex.uniqueDefinitions.get(
+					use.instruction.registers[1],
+				);
+				return (
+					keyDefinition?.type === "createNumber" &&
+					Number.isInteger(keyDefinition.value) &&
+					keyDefinition.value >= 0 &&
+					keyDefinition.value < 0xffff_ffff
+				);
+			};
+			const deadMoveAlias = (use: (typeof receiverUses)[number]) =>
+				use.position === 1 &&
+				use.instruction.type === "move" &&
+				(registerIndex.uses.get(use.instruction.registers[0]) ?? []).length === 0;
+			const lockedExactReceiver =
+				compilerFactIsWorldInvariant(site.call.knownBuiltinCall?.identity) &&
+				receiverDefinition?.type === "createArray" &&
+				allocationLocation?.blockIndex === hostBlockIndex &&
+				propertyLocation?.blockIndex === hostBlockIndex &&
+				callLocation?.blockIndex === hostBlockIndex &&
+				allocationLocation.instructionIndex < propertyLocation.instructionIndex &&
+				propertyLocation.instructionIndex < callLocation.instructionIndex &&
+				calleeUses.length === 1 &&
+				calleeUses[0]?.instruction === site.call &&
+				calleeUses[0]?.position === 1 &&
+				receiverUses.some(
+					(use) => use.instruction === site.property && use.position === 1,
+				) &&
+				receiverUses.some((use) => use.instruction === site.call && use.position === 2) &&
+				receiverUses.every(
+					(use) =>
+						(use.instruction === site.property && use.position === 1) ||
+						(use.instruction === site.call && use.position === 2) ||
+						numericElementInitialization(use) ||
+						deadMoveAlias(use),
+				);
 
 			const post = host.instructions.slice(index + 1);
 			if (post.length === 0 || containsTryMarker(post)) {
@@ -3199,7 +3273,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			const loopIncr = next++;
 			const exitBlock = spec.earlyExit ? next++ : -1;
 			const afterLoop = next++;
-			const slowPath = next++;
+			const slowPath = lockedExactReceiver ? -1 : next++;
 			const join = next++;
 
 			const lengthString = getOrCreateStringConstant(program, "length");
@@ -3236,20 +3310,32 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				],
 			};
 
-			// Host: pre + the guard (compute eligibility, branch to fast or slow).
-			host.instructions = [
-				...host.instructions.slice(0, index),
-				{
-					type: "loadIntrinsic",
-					registers: [eligibleFn],
-					intrinsic: "__arrayIterationEligible",
-				},
-				{ type: "createNumber", registers: [methodIdReg], value: spec.methodId },
-				{ type: "createUndefined", registers: [undefinedReg] },
-				eligibilityCall,
-				{ type: "jumpIf", registers: [eligible], blocks: [fastInit] },
-				{ type: "jump", blocks: [slowPath] },
-			];
+			// Host: a locked exact fresh Array has no alias that can install an own
+			// method/constructor or observe its prototype before this call, so its
+			// canonical identity fact discharges the guard and generic fallback. Other
+			// receivers validate the already-loaded callee before entering the fast loop.
+			const hostPrefix = host.instructions
+				.slice(0, index)
+				.filter((instruction) => !lockedExactReceiver || instruction !== site.property);
+			host.instructions = lockedExactReceiver
+				? [
+						...hostPrefix,
+						{ type: "createUndefined", registers: [undefinedReg] },
+						{ type: "jump", blocks: [fastInit] },
+					]
+				: [
+						...hostPrefix,
+						{
+							type: "loadIntrinsic",
+							registers: [eligibleFn],
+							intrinsic: "__arrayIterationEligible",
+						},
+						{ type: "createNumber", registers: [methodIdReg], value: spec.methodId },
+						{ type: "createUndefined", registers: [undefinedReg] },
+						eligibilityCall,
+						{ type: "jumpIf", registers: [eligible], blocks: [fastInit] },
+						{ type: "jump", blocks: [slowPath] },
+					];
 
 			// fastInit: len = arr.length; one = 1; i = 0 (forward) or len-1 (backward,
 			// with a zero bound for the `i >= 0` test); plus result-array setup.
@@ -3504,7 +3590,10 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			// createFunction, re-create it here so the fast path's closure becomes dead
 			// (DCE'd → no allocation on the common path); else use the original call.
 			let slowCallAnchor: Extract<IRInstruction, { type: "call" }> | undefined;
-			if (callbackDefinition !== undefined) {
+			if (lockedExactReceiver) {
+				// The canonical identity and complete receiver-use proof discharge the
+				// fallback obligation. The callback is now fast-path-only and folds away.
+			} else if (callbackDefinition !== undefined) {
 				const freshCallback = fn.nextRegisterDestination;
 				fn.nextRegisterDestination += 1;
 				const slowCall: Extract<IRInstruction, { type: "call" }> = {

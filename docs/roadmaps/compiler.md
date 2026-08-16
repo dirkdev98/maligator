@@ -276,6 +276,11 @@ is general rather than a registry-shaped collection of special cases.
         through the frontend wire format. Make the region guard validate the method
         value captured by the original property Get, not re-read the property after
         argument effects; retain exact receiver, Realm, and species checks.
+  - [x] In locked builds, prove an exact fresh Array from its allocation, numeric
+        element initialization, dominance, and complete use set. Erase its method
+        Get, eligibility helper, callback fallback allocation, and generic call twin
+        directly in IR; mutable, dynamic, aliased, and argument-exposed receivers
+        retain the loaded-callee guard and ordinary fallback.
 
 #### Allocation and representation consumers
 

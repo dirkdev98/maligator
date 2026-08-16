@@ -1,5 +1,8 @@
 import { expect, test } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
 import {
+	decodeStringConstant,
 	findHofInlineSites,
 	findInlinableCalls,
 	findMethodInlineSites,
@@ -53,6 +56,20 @@ function optimizedProgram(source: string) {
 		parseScript(source, { strict: true }),
 	);
 	const ir = compileSemanticProgramToIr(semantic);
+	executeIROptimizations(ir);
+	return ir;
+}
+
+/** The production-default closed world, where primordial identities are invariants. */
+function optimizedLockedProgram(source: string) {
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		source,
+		"test.js",
+		parseScript(source, { strict: true }),
+	);
+	const ir = compileSemanticProgramToIr(semantic, {
+		facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+	});
 	executeIROptimizations(ir);
 	return ir;
 }
@@ -739,6 +756,79 @@ test("arr.forEach(arrow) is replaced by a guarded inlined loop", () => {
 				(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 		),
 	).toBeGreaterThan(0);
+});
+
+test("locked exact fresh Array loops erase the method Get, guard, and generic twin", () => {
+	const source = `(function (){
+		const values = [1, 2, 3];
+		return values.reduce((sum, value) => sum + value, 0);
+	})();`;
+	const locked = optimizedLockedProgram(source);
+	const instructions = locked.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "loadIntrinsic" &&
+				instruction.intrinsic === "__arrayIterationEligible",
+		),
+	).toBe(false);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Array.prototype.reduce",
+		),
+	).toBe(false);
+	const methodNameIndex = locked.stringConstants.findIndex(
+		(_value, stringIndex) => decodeStringConstant(locked, stringIndex) === "reduce",
+	);
+	expect(methodNameIndex).toBeGreaterThanOrEqual(0);
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "loadPropertyStatic" &&
+				instruction.stringIndex === methodNameIndex,
+		),
+	).toBe(false);
+
+	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		mutableInstructions.some(
+			(instruction) =>
+				instruction.type === "loadIntrinsic" &&
+				instruction.intrinsic === "__arrayIterationEligible",
+		),
+	).toBe(true);
+});
+
+test("locked Array loop erasure requires a complete fresh-receiver use proof", () => {
+	for (const source of [
+		`function dynamic(values) { return values.map(value => value * 2); }`,
+		`(function () {
+			const values = [1, 2, 3];
+			values.forEach = function (callback) { callback(7); };
+			values.forEach(value => value);
+		})();`,
+		`(function () {
+			const values = [1, 2, 3];
+			values.forEach(value => value, values);
+		})();`,
+	]) {
+		const instructions = optimizedLockedProgram(source).functions.flatMap((fn) =>
+			fn.blocks.flatMap((block) => block.instructions),
+		);
+		expect(
+			instructions.some(
+				(instruction) =>
+					instruction.type === "loadIntrinsic" &&
+					instruction.intrinsic === "__arrayIterationEligible",
+			),
+		).toBe(true);
+	}
 });
 
 test("inlined Array iteration regions retain canonical builtin semantics", () => {
