@@ -115,6 +115,13 @@ export interface VmGuardPlan {
 	readonly obligations: ReadonlyArray<VmGuardObligation>;
 }
 
+export function vmGuardIsWorldInvariant(guard: VmGuardPlan): boolean {
+	return (
+		guard.dependencies.length > 0 &&
+		guard.dependencies.every((dependency) => dependency.kind === "world")
+	);
+}
+
 export interface VmGuardedBuiltinCall {
 	readonly operation: VmGuardedBuiltinOperation;
 	/** The shared semantic facts and fallback contract for this specialization. */

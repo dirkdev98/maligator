@@ -9,6 +9,7 @@ import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
+	vmGuardIsWorldInvariant,
 } from "./lower-vm.ts";
 import type {
 	VmExceptionHandler,
@@ -6054,9 +6055,15 @@ function emitInstruction(
 						? `(usize) (${firstNumber})`
 						: null;
 				const callee = `r${fusion.load.dst}`;
+				const lockedIdentity =
+					instruction.guardedBuiltinCall !== undefined &&
+					vmGuardIsWorldInvariant(instruction.guardedBuiltinCall.guard);
+				const identityGuard = lockedIdentity
+					? ""
+					: `mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${fusion.load.icIndex}], &${callee}) && `;
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`if (mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${fusion.load.icIndex}], &${callee}) && mal_value_is_string(${receiver}) && ${numberGuard}) {`,
+					`if (${identityGuard}mal_value_is_string(${receiver}) && ${numberGuard}) {`,
 					boundedPosition === null
 						? `  r${instruction.dst} = mal_builtin_string_char_code_at_number(${receiver}, ${position});`
 						: `  r${instruction.dst} = mal_builtin_string_char_code_at_in_bounds(${receiver}, ${boundedPosition});`,

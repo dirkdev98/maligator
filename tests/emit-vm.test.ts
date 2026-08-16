@@ -1,6 +1,8 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
 import { emitCompiledFunction } from "../src/emit-c.ts";
 import { emitBatch, emitVmDefinition, emitVmTranslationUnits } from "../src/emit-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
@@ -1060,12 +1062,13 @@ describe("native update-expression representation", () => {
 	});
 
 	it("emits guarded primitive String charCodeAt dispatch from call metadata", () => {
-		const output = emit(`
+		const code = `
 			function codeUnit(value, index) {
 				return value.charCodeAt(index);
 			}
 			globalThis.codeUnit = codeUnit;
-		`);
+		`;
+		const output = emit(code);
 		expect(output).toContain(
 			"mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING",
 		);
@@ -1075,6 +1078,25 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
 		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
 		expect(output).toContain(", 1);");
+
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			code,
+			"locked-string-char-code-at.js",
+			parseScript(code, { strict: false }),
+		);
+		const lockedOutput = emitVmDefinition(
+			compileSemanticProgramToVmDefinition(semantic, {
+				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			}),
+			{ compiled: true },
+		);
+		expect(lockedOutput).not.toContain(
+			"mal_vm_local_watched_primitive_value_try_load_static",
+		);
+		expect(lockedOutput).toContain("if (mal_value_is_string(");
+		// Non-String receivers and coercible positions retain the exact Get+Call twin.
+		expect(lockedOutput).toContain("mal_vm_op_load_property_ic(vm,");
+		expect(lockedOutput).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
 	});
 
 	it("emits an activation-local memo for a private dense Number reducer", () => {

@@ -18,6 +18,37 @@ globalThis.applicationValue = 1;
 check("ordinary globals stay mutable", globalThis.applicationValue === 1);
 delete globalThis.applicationValue;
 
+function lockedCodeUnit(value, position) {
+	return value.charCodeAt(position);
+}
+let lockedCodeUnitChecksum = 0;
+for (let index = 0; index < 1000; index++) {
+	lockedCodeUnitChecksum += lockedCodeUnit("Maligator", index & 7);
+}
+check("locked charCodeAt static identity", lockedCodeUnitChecksum === 101750);
+let positionCoercions = 0;
+check(
+	"locked charCodeAt coercion fallback",
+	lockedCodeUnit("ABC", {
+		valueOf() {
+			positionCoercions++;
+			return 2;
+		},
+	}) === 67 && positionCoercions === 1,
+);
+check(
+	"locked charCodeAt own-method fallback",
+	lockedCodeUnit(
+		{
+			marker: 40,
+			charCodeAt(value) {
+				return this.marker + value;
+			},
+		},
+		2,
+	) === 42,
+);
+
 for (const [name, value] of [
 	["Object", Object],
 	["String", String],

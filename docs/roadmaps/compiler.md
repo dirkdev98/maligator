@@ -200,6 +200,8 @@ the same facts unconditionally.
         materialization obligations.
   - [x] Make inherited stack-object loads consume the primitive-method fact and
         retain heap materialization as their generic twin.
+  - [x] Let locked primitive-String `charCodeAt` fusions remove the watched-method
+        property probe while retaining the ordinary Get+Call twin for local misses.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.
