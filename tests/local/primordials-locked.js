@@ -49,6 +49,51 @@ check(
 	) === 42,
 );
 
+function lockedSplitProjection(value) {
+	const fields = value.split("::");
+	return fields[0].length * 100 + Number(fields[1].slice(1)) + fields.length;
+}
+check(
+	"locked split projection static identity",
+	lockedSplitProjection("ab::x42::") === 245,
+);
+let splitGetterCalls = 0;
+let splitMethodCalls = 0;
+check(
+	"locked split projection own-method fallback",
+	lockedSplitProjection({
+		get split() {
+			splitGetterCalls++;
+			return function (separator) {
+				splitMethodCalls++;
+				return separator === "::" ? ["ab", "x42", ""] : [];
+			};
+		},
+	}) === 245 &&
+		splitGetterCalls === 1 &&
+		splitMethodCalls === 1,
+);
+
+function lockedSplitCursor(value, separator) {
+	const parts = value.split(separator);
+	let total = 0;
+	for (let index = 0; index < parts.length; index++) {
+		total += parts[index].trim().length;
+	}
+	return total;
+}
+check("locked split cursor static identity", lockedSplitCursor(" a |b| c ", "|") === 3);
+let splitCoercions = 0;
+check(
+	"locked split cursor separator fallback",
+	lockedSplitCursor("ignored", {
+		[Symbol.split](subject) {
+			splitCoercions++;
+			return subject === "ignored" ? [" a ", "b"] : [];
+		},
+	}) === 2 && splitCoercions === 1,
+);
+
 for (const [name, value] of [
 	["Object", Object],
 	["String", String],

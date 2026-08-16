@@ -1833,7 +1833,7 @@ split_done:
     return roots[2];
 }
 
-bool mal_builtin_string_split_projection(
+static bool mal_builtin_string_split_projection_impl(
     MalVm *vm,
     MalValue callee,
     MalValue receiver,
@@ -1841,13 +1841,15 @@ bool mal_builtin_string_split_projection(
     const u32 *indices,
     MalValue **outputs,
     u32 output_count,
-    u32 *length_out
+    u32 *length_out,
+    bool identity_locked
 ) {
     if (output_count == 0 || output_count > MAL_STRING_SPLIT_PROJECTION_MAX_OUTPUTS ||
         !mal_value_is_string(receiver) || !mal_value_is_string(separator_value) ||
-        !mal_value_is_native_function_object(callee) ||
-        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
-            mal_builtin_string_prototype_split) {
+        (!identity_locked &&
+         (!mal_value_is_native_function_object(callee) ||
+          mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+              mal_builtin_string_prototype_split))) {
         return false;
     }
     for (u32 i = 1; i < output_count; i++) {
@@ -1895,6 +1897,34 @@ bool mal_builtin_string_split_projection(
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&root_span);
     return true;
+}
+
+bool mal_builtin_string_split_projection(
+    MalVm *vm,
+    MalValue callee,
+    MalValue receiver,
+    MalValue separator_value,
+    const u32 *indices,
+    MalValue **outputs,
+    u32 output_count,
+    u32 *length_out
+) {
+    return mal_builtin_string_split_projection_impl(
+        vm, callee, receiver, separator_value, indices, outputs, output_count, length_out, false);
+}
+
+bool mal_builtin_string_split_projection_locked(
+    MalVm *vm,
+    MalValue receiver,
+    MalValue separator_value,
+    const u32 *indices,
+    MalValue **outputs,
+    u32 output_count,
+    u32 *length_out
+) {
+    return mal_builtin_string_split_projection_impl(
+        vm, MAL_VALUE_UNDEFINED, receiver, separator_value, indices, outputs, output_count,
+        length_out, true);
 }
 
 typedef MalU16Buffer StrBuf;
@@ -2209,6 +2239,39 @@ static MalValue mal_builtin_string_prototype_iterator(MalVm *vm, MalValue this_v
     return mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_STRING_VALUES, string_value);
 }
 
+static bool mal_builtin_string_split_cursor_init_impl(
+    MalVm *vm,
+    MalValue callee,
+    MalValue receiver,
+    MalValue separator,
+    MalValue *subject_out,
+    MalValue *separator_out,
+    MalStringSplitCursor *cursor_out,
+    bool identity_locked
+) {
+    *subject_out = MAL_VALUE_UNDEFINED;
+    *separator_out = MAL_VALUE_UNDEFINED;
+    cursor_out->position = 0;
+    cursor_out->done = false;
+    if (!mal_value_is_string(receiver) || !mal_value_is_string(separator) ||
+        (!identity_locked &&
+         (!mal_value_is_native_function_object(callee) ||
+          mal_native_function_object_callback(
+              mal_value_to_native_function_object(callee)) !=
+              mal_builtin_string_prototype_split)) ||
+        mal_string_length(mal_value_to_string(separator)) == 0) {
+        return false;
+    }
+#if MAL_REALMS
+    if (!identity_locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#else
+    (void) vm;
+#endif
+    *subject_out = receiver;
+    *separator_out = separator;
+    return true;
+}
+
 bool mal_builtin_string_split_cursor_init(
     MalVm *vm,
     MalValue callee,
@@ -2218,26 +2281,21 @@ bool mal_builtin_string_split_cursor_init(
     MalValue *separator_out,
     MalStringSplitCursor *cursor_out
 ) {
-    *subject_out = MAL_VALUE_UNDEFINED;
-    *separator_out = MAL_VALUE_UNDEFINED;
-    cursor_out->position = 0;
-    cursor_out->done = false;
-    if (!mal_value_is_string(receiver) || !mal_value_is_string(separator) ||
-        !mal_value_is_native_function_object(callee) ||
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(callee)) !=
-            mal_builtin_string_prototype_split ||
-        mal_string_length(mal_value_to_string(separator)) == 0) {
-        return false;
-    }
-#if MAL_REALMS
-    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
-#else
-    (void) vm;
-#endif
-    *subject_out = receiver;
-    *separator_out = separator;
-    return true;
+    return mal_builtin_string_split_cursor_init_impl(
+        vm, callee, receiver, separator, subject_out, separator_out, cursor_out, false);
+}
+
+bool mal_builtin_string_split_cursor_init_locked(
+    MalVm *vm,
+    MalValue receiver,
+    MalValue separator,
+    MalValue *subject_out,
+    MalValue *separator_out,
+    MalStringSplitCursor *cursor_out
+) {
+    return mal_builtin_string_split_cursor_init_impl(
+        vm, MAL_VALUE_UNDEFINED, receiver, separator, subject_out, separator_out, cursor_out,
+        true);
 }
 
 bool mal_builtin_string_split_cursor_next(

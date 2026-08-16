@@ -312,6 +312,7 @@ export interface VmFunction {
 
 	/** EMITTER-ONLY: selected element/length projections of an exact String split. */
 	nativeStringSplitProjections?: ReadonlyArray<{
+		propertyIp: number;
 		callIp: number;
 		callee: number;
 		receiver: number;
@@ -327,6 +328,7 @@ export interface VmFunction {
 
 	/** EMITTER-ONLY: one closed indexed split loop streamed as trimmed spans. */
 	nativeStringSplitCursors?: ReadonlyArray<{
+		propertyIp: number;
 		callIp: number;
 		callee: number;
 		receiver: number;

@@ -2323,6 +2323,7 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 				continue;
 			}
 			projections.push({
+				propertyIp: callIp - 1,
 				callIp,
 				callee: call.callee,
 				receiver: call.thisValue,
@@ -2629,6 +2630,7 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
 			}
 			if (!closed) continue;
 			cursors.push({
+				propertyIp: calleeDefinition.ip,
 				callIp,
 				callee: call.callee,
 				receiver: call.thisValue,

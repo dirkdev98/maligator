@@ -444,6 +444,20 @@ describe("native update-expression representation", () => {
 		});
 	}
 
+	function emitLocked(source: string): string {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"locked-native-representation.js",
+			parseScript(source, { strict: false }),
+		);
+		return emitVmDefinition(
+			compileSemanticProgramToVmDefinition(semantic, {
+				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			}),
+			{ compiled: true },
+		);
+	}
+
 	it("keeps proven numeric loop updates on dense array paths", () => {
 		const output = emit(
 			`"use strict"; function sum(array) { let total = 0; for (let i = 0; i < array.length; i++) total += array[i]; return total; } globalThis.sum = sum;`,
@@ -1415,19 +1429,29 @@ describe("native update-expression representation", () => {
 	});
 
 	it("projects closed String split results and fuses slice into Number", () => {
-		const output = emit(`
+		const code = `
 			function parse(value) {
 				const fields = value.split(";");
 				return Number(fields[1].slice(2)) + fields[0].length + fields.length;
 			}
 			globalThis.parse = parse;
-		`);
+		`;
+		const output = emit(code);
 		expect(output).toContain("mal_builtin_string_split_projection(vm,");
 		expect(output).toContain("mal_builtin_string_slice_to_number_direct(vm,");
+
+		const lockedOutput = emitLocked(code);
+		expect(lockedOutput).toContain("mal_builtin_string_split_projection_locked(vm,");
+		expect(lockedOutput).not.toContain("mal_builtin_string_split_projection(vm,");
+		// The adjacent property Get is absent from the hot attempt and reconstructed
+		// inside the local-guard fallback before the ordinary call.
+		expect(lockedOutput).toMatch(
+			/mal_builtin_string_split_projection_locked\([^\n]+\);[\s\S]*?else \{\n\s+r\d+ = mal_vm_op_load_property_ic\(/,
+		);
 	});
 
 	it("streams a closed indexed String split loop directly into trim", () => {
-		const output = emit(`
+		const code = `
 			function sum(value, separator) {
 				const parts = value.split(separator);
 				let total = 0;
@@ -1438,11 +1462,22 @@ describe("native update-expression representation", () => {
 				return total;
 			}
 			globalThis.sum = sum;
-		`);
+		`;
+		const output = emit(code);
 		expect(output).toContain("mal_builtin_string_split_cursor_init(vm,");
 		expect(output).toContain("mal_builtin_string_split_cursor_next(");
 		expect(output).toContain("mal_builtin_string_trim_span_direct(vm,");
 		expect(output).toContain("mal_builtin_string_split_cursor_materialize(vm,");
+
+		const lockedOutput = emitLocked(code);
+		expect(lockedOutput).toContain("mal_builtin_string_split_cursor_init_locked(vm,");
+		expect(lockedOutput).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+		expect(lockedOutput).not.toContain(
+			"mal_primitive_method_protector && __watched_methods_epoch",
+		);
+		expect(lockedOutput).toMatch(
+			/mal_builtin_string_split_cursor_init_locked\([^\n]+\);[\s\S]*?else \{\n\s+r\d+ = mal_vm_op_load_property_ic\(/,
+		);
 	});
 
 	it("keeps an indexed split loop generic when its Array escapes", () => {

@@ -204,6 +204,9 @@ the same facts unconditionally.
         property probe while retaining the ordinary Get+Call twin for local misses.
   - [x] Make String split projections and cursors consume the canonical
         `String.prototype.split` identity fact instead of matching only syntax.
+  - [x] Let locked String split projections and cursors fuse the adjacent property
+        Get into their generic twin and call identity-free runtime helpers; keep
+        receiver, separator, coercion, and materialization guards local.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.

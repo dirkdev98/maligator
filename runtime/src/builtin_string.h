@@ -121,6 +121,21 @@ bool mal_builtin_string_split_projection(
     u32 *length_out
 );
 
+/**
+ * Locked-world variant of the split projection. The compiler has proved the
+ * builtin identity and retained the ordinary Get+Call as the local-guard
+ * fallback, so this entry point validates only the receiver and arguments.
+ */
+bool mal_builtin_string_split_projection_locked(
+    MalVm *vm,
+    MalValue receiver,
+    MalValue separator,
+    const u32 *indices,
+    MalValue **outputs,
+    u32 output_count,
+    u32 *length_out
+);
+
 /** Loop-carried state for a compiler-proven closed String#split result. */
 typedef struct {
     usize position;
@@ -134,6 +149,16 @@ typedef struct {
 bool mal_builtin_string_split_cursor_init(
     MalVm *vm,
     MalValue callee,
+    MalValue receiver,
+    MalValue separator,
+    MalValue *subject_out,
+    MalValue *separator_out,
+    MalStringSplitCursor *cursor_out
+);
+
+/** Locked-world cursor initialization with the builtin identity proved by C emission. */
+bool mal_builtin_string_split_cursor_init_locked(
+    MalVm *vm,
     MalValue receiver,
     MalValue separator,
     MalValue *subject_out,

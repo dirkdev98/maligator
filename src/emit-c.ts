@@ -941,6 +941,7 @@ export function emitCompiledFunction(
 	}
 	const stringSplitProjectionSites = new Map<number, NativeStringSplitProjectionSite>();
 	for (const projection of fn.nativeStringSplitProjections ?? []) {
+		const call = fn.instructions[projection.callIp];
 		const elementLoads = projection.loads
 			.filter(
 				(
@@ -962,16 +963,25 @@ export function emitCompiledFunction(
 			projection,
 			slotsOffset: nextStackSlot,
 			elementLoads,
+			lockedIdentity:
+				call?.opcode === "CALL" &&
+				call.guardedBuiltinCall !== undefined &&
+				vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard),
 		});
 		nextStackSlot += elementLoads.length;
 	}
 	const stringSplitCursorSites = new Map<number, NativeStringSplitCursorSite>();
 	for (const cursor of fn.nativeStringSplitCursors ?? []) {
 		if (stringSplitCursorSites.has(cursor.callIp)) continue;
+		const call = fn.instructions[cursor.callIp];
 		stringSplitCursorSites.set(cursor.callIp, {
 			cursor,
 			subjectSlot: nextStackSlot,
 			separatorSlot: nextStackSlot + 1,
+			lockedIdentity:
+				call?.opcode === "CALL" &&
+				call.guardedBuiltinCall !== undefined &&
+				vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard),
 		});
 		nextStackSlot += 2;
 	}
@@ -2006,6 +2016,7 @@ type NativeStringSplitProjection = NonNullable<
 interface NativeStringSplitProjectionSite {
 	projection: NativeStringSplitProjection;
 	slotsOffset: number;
+	lockedIdentity: boolean;
 	elementLoads: Array<
 		NativeStringSplitProjection["loads"][number] & { kind: "element"; index: number }
 	>;
@@ -2013,8 +2024,9 @@ interface NativeStringSplitProjectionSite {
 
 interface NativeStringSplitProjectionAction {
 	site: NativeStringSplitProjectionSite;
-	role: "call" | "element" | "length";
+	role: "property" | "call" | "element" | "length";
 	load?: NativeStringSplitProjection["loads"][number];
+	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
 type NativeStringSplitCursor = NonNullable<
@@ -2025,11 +2037,13 @@ interface NativeStringSplitCursorSite {
 	cursor: NativeStringSplitCursor;
 	subjectSlot: number;
 	separatorSlot: number;
+	lockedIdentity: boolean;
 }
 
 interface NativeStringSplitCursorAction {
 	site: NativeStringSplitCursorSite;
-	role: "call" | "length" | "element" | "trimProperty" | "trimCall";
+	role: "property" | "call" | "length" | "element" | "trimProperty" | "trimCall";
+	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
 type NativeRegExpExecProjection = NonNullable<
@@ -3156,10 +3170,27 @@ function emitBody(
 		NativeStringSplitProjectionAction
 	>();
 	for (const site of stringSplitProjectionSites.values()) {
+		const propertyInstruction = fn.instructions[site.projection.propertyIp];
+		const propertyLoad =
+			site.lockedIdentity &&
+			site.projection.propertyIp + 1 === site.projection.callIp &&
+			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
+			handlerTargets[site.projection.propertyIp] ===
+				handlerTargets[site.projection.callIp]
+				? propertyInstruction
+				: undefined;
 		nativeStringSplitProjectionActionByIp.set(site.projection.callIp, {
 			site,
 			role: "call",
+			propertyLoad,
 		});
+		if (propertyLoad !== undefined) {
+			nativeStringSplitProjectionActionByIp.set(site.projection.propertyIp, {
+				site,
+				role: "property",
+				propertyLoad,
+			});
+		}
 		for (const load of site.projection.loads) {
 			nativeStringSplitProjectionActionByIp.set(load.ip, {
 				site,
@@ -3174,7 +3205,26 @@ function emitBody(
 	>();
 	for (const site of stringSplitCursorSites.values()) {
 		const cursor = site.cursor;
-		nativeStringSplitCursorActionByIp.set(cursor.callIp, { site, role: "call" });
+		const propertyInstruction = fn.instructions[cursor.propertyIp];
+		const propertyLoad =
+			site.lockedIdentity &&
+			cursor.propertyIp + 1 === cursor.callIp &&
+			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
+			handlerTargets[cursor.propertyIp] === handlerTargets[cursor.callIp]
+				? propertyInstruction
+				: undefined;
+		nativeStringSplitCursorActionByIp.set(cursor.callIp, {
+			site,
+			role: "call",
+			propertyLoad,
+		});
+		if (propertyLoad !== undefined) {
+			nativeStringSplitCursorActionByIp.set(cursor.propertyIp, {
+				site,
+				role: "property",
+				propertyLoad,
+			});
+		}
 		nativeStringSplitCursorActionByIp.set(cursor.lengthIp, { site, role: "length" });
 		nativeStringSplitCursorActionByIp.set(cursor.elementIp, { site, role: "element" });
 		nativeStringSplitCursorActionByIp.set(cursor.trimPropertyIp, {
@@ -4365,6 +4415,13 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				(nativeStringSplitProjectionAction?.role === "property" ||
+					nativeStringSplitCursorAction?.role === "property")
+			) {
+				return [];
+			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				nativeRegExpExecProjectionAction?.role === "caseUpperProperty"
@@ -5793,14 +5850,23 @@ function emitInstruction(
 				];
 			}
 			if (nativeStringSplitCursorAction?.role === "call") {
-				const { site } = nativeStringSplitCursorAction;
+				const { site, propertyLoad } = nativeStringSplitCursorAction;
 				const id = site.cursor.callIp;
+				const initialize = site.lockedIdentity
+					? `mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`
+					: `mal_primitive_method_protector && __watched_methods_epoch != 0 && __watched_methods_epoch == vm->semantic_epochs.watched_methods && mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state)`;
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`__string_split_cursor_${id}_active = mal_primitive_method_protector && __watched_methods_epoch != 0 && __watched_methods_epoch == vm->semantic_epochs.watched_methods && mal_builtin_string_split_cursor_init(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state);`,
+					`__string_split_cursor_${id}_active = ${initialize};`,
 					`if (__string_split_cursor_${id}_active) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
+					...(propertyLoad === undefined
+						? []
+						: [
+								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${propertyLoad.stringIndex}]), &__property_ic[${propertyLoad.icIndex}]);`,
+								`  ${throwCheck}`,
+							]),
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
@@ -6020,20 +6086,29 @@ function emitInstruction(
 				];
 			}
 			if (nativeStringSplitProjectionAction?.role === "call") {
-				const site = nativeStringSplitProjectionAction.site;
+				const { site, propertyLoad } = nativeStringSplitProjectionAction;
 				const projection = site.projection;
 				const fast = `__string_split_${projection.callIp}_fast`;
 				const indices = site.elementLoads.map((load) => load.index).join(", ");
 				const outputs = site.elementLoads
 					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
 					.join(", ");
+				const project = site.lockedIdentity
+					? `mal_builtin_string_split_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`
+					: `mal_builtin_string_split_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length)`;
 				return [
 					`static MalCallCache __cc_${ip};`,
-					`${fast} = mal_builtin_string_split_projection(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.elementLoads.length}, &__string_split_${projection.callIp}_length);`,
+					`${fast} = ${project};`,
 					`if (${fast}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`  ${poll}`,
 					`} else {`,
+					...(propertyLoad === undefined
+						? []
+						: [
+								`  r${propertyLoad.dst} = mal_vm_op_load_property_ic(vm, ${boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${propertyLoad.stringIndex}]), &__property_ic[${propertyLoad.icIndex}]);`,
+								`  ${throwCheck}`,
+							]),
 					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
