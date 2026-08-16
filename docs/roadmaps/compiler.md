@@ -298,6 +298,10 @@ is general rather than a registry-shaped collection of special cases.
         intrinsic-producer proof. Erase the namespace/property/callback seam while
         retaining ordinary ToObject, own-key order, Proxy traps, descriptor checks,
         allocation, exceptions, and Realm-local result arrays in the builtin.
+  - [x] Admit exact locked `Object.values` through the same descriptor-driven
+        namespace proof and direct ABI. Keep enumerable-key ordering, Proxy traps,
+        getter re-entry, rooted allocation, abrupt completion, and Realm-local
+        result identity inside the unchanged semantic collector.
   - [x] Select closed constant-index split projections in IR from the canonical call
         facts and the result's complete move/use set. Carry the representation,
         region license, retained twin, materialization contract, and exact consumer

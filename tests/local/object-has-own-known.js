@@ -61,5 +61,29 @@ const keysProxy = new Proxy(
 );
 ok("keys proxy trap", knownKeys(keysProxy)[0] === "visible" && ownKeysCalls === 1);
 
-ok("check count", checks === 9);
+function knownValues(value) {
+	return Object.values(value);
+}
+let getterCalls = 0;
+const getterValue = {
+	get visible() {
+		getterCalls++;
+		return 17;
+	},
+};
+Object.defineProperty(getterValue, "hidden", { value: 99, enumerable: false });
+ok("values getter", knownValues(getterValue)[0] === 17 && getterCalls === 1);
+let proxyGets = 0;
+const valuesProxy = new Proxy(
+	{ visible: 23 },
+	{
+		get(target, key, receiver) {
+			proxyGets++;
+			return Reflect.get(target, key, receiver);
+		},
+	},
+);
+ok("values proxy get", knownValues(valuesProxy)[0] === 23 && proxyGets === 1);
+
+ok("check count", checks === 11);
 console.log("object-has-own-known PASS");
