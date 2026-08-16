@@ -14,6 +14,7 @@
 #include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
 #include "builtin_promise.h"
+#include "builtin_string.h"
 #include "function_object.h"
 #include "gc.h"
 #include "generator_object.h"
@@ -2156,6 +2157,25 @@ void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
     }
     mal_vm_call_dispatch(vm, callee, this_value, base, argument_count, dst);
     mal_vm_fill_interp_call_cache(vm, caller_function_index, call_ip, callee);
+}
+
+void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.call_builtin.data_offset);
+    i32 argument_count = data[0] < 2 ? data[0] : 2;
+    MalValue arguments[2];
+    for (i32 i = 0; i < argument_count; i++) {
+        arguments[i] = mal_op_value_operand(callable, data[i + 1]);
+    }
+    MalValue receiver = mal_op_value_operand(
+        callable, instruction->as.call_builtin.this_value);
+    switch ((MalDirectBuiltinOp) instruction->as.call_builtin.operation) {
+        case MAL_DIRECT_BUILTIN_STRING_SPLIT:
+            callable->registers[instruction->as.call_builtin.dst] =
+                mal_builtin_string_split_direct(
+                    callable->vm, receiver, arguments, argument_count);
+            return;
+    }
 }
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction) {

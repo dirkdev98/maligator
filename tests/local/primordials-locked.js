@@ -92,6 +92,27 @@ check(
 		sliceMethodCalls === 1,
 );
 
+let directSplitExtraEvaluations = 0;
+function lockedDirectSplit(separator, limit) {
+	return "left,right".split(separator, limit, directSplitExtraEvaluations++);
+}
+const lockedDirectLimited = lockedDirectSplit(",", 1);
+const lockedDirectDispatched = lockedDirectSplit(
+	{
+		[Symbol.split](subject, limit) {
+			return subject === "left,right" && limit === 7 ? 73 : -1;
+		},
+	},
+	7,
+);
+check(
+	"locked exact primitive split direct call",
+	lockedDirectLimited.length === 1 &&
+		lockedDirectLimited[0] === "left" &&
+		lockedDirectDispatched === 73 &&
+		directSplitExtraEvaluations === 2,
+);
+
 function lockedSplitCursor(value, separator) {
 	const parts = value.split(separator);
 	let total = 0;

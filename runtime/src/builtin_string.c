@@ -1858,6 +1858,13 @@ split_done:
     return roots[2];
 }
 
+MalValue mal_builtin_string_split_direct(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 arg_count
+) {
+    return mal_builtin_string_prototype_split(
+        vm, receiver, args, arg_count, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED);
+}
+
 static bool mal_builtin_string_split_projection_impl(
     MalVm *vm,
     MalValue callee,

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 39u        // canonical calls and no-fallback numeric Math
+#define WIRE_VERSION 40u        // canonical, numeric Math, and direct builtin calls
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -124,6 +124,7 @@ typedef enum WireOp {
     WIRE_CALL_SPREAD_ITERABLE,
     WIRE_MATH_UNARY_NUMBER,
     WIRE_MATH_BINARY_NUMBER,
+    WIRE_CALL_BUILTIN,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -175,6 +176,10 @@ static const MalMathUnaryOp wire_math_unary_number_ops[] = {
 static const MalMathBinaryOp wire_math_binary_number_ops[] = {
     MAL_MATH_BINARY_MIN,
     MAL_MATH_BINARY_MAX,
+};
+
+static const MalDirectBuiltinOp wire_direct_builtin_ops[] = {
+    MAL_DIRECT_BUILTIN_STRING_SPLIT,
 };
 
 /* Wire tag -> MalTypeofResult. MUST match WIRE_TYPEOF_RESULTS in serialize-vm.ts. */
@@ -673,6 +678,20 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.call.this_value = rd_i32(r);
             i32 count = rd_i32(r);
             o->as.call.data_offset = rd_side_single(r, side_data, count);
+            return;
+        }
+        case WIRE_CALL_BUILTIN: {
+            o->opcode = MAL_OP_CALL_BUILTIN;
+            o->as.call_builtin.dst = rd_i32(r);
+            o->as.call_builtin.this_value = rd_i32(r);
+            i32 count = rd_i32(r);
+            o->as.call_builtin.data_offset = rd_side_single(r, side_data, count);
+            u8 idx = rd_u8(r);
+            if (r->ok && idx < countof(wire_direct_builtin_ops)) {
+                o->as.call_builtin.operation = wire_direct_builtin_ops[idx];
+            } else {
+                r->ok = false;
+            }
             return;
         }
         case WIRE_CONSTRUCT: {

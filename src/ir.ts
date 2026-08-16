@@ -1005,6 +1005,18 @@ export type IRInstruction =
 			operation: string;
 	  }
 	| {
+			/**
+			 * Exact locked builtin invocation after property resolution and callback
+			 * identity have both been proved. Argument evaluation remains in ordinary IR;
+			 * this operation may still allocate, call user code, or throw according to its
+			 * registry effects, but it has no dynamic property/call fallback edge.
+			 */
+			type: "callBuiltin";
+			// [destination, this, ...arguments]
+			registers: [number, number, ...Array<number>];
+			operation: "String.prototype.split";
+	  }
+	| {
 			type: "construct";
 
 			// [destination, callee, ...arguments]

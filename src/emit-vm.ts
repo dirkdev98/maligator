@@ -10,6 +10,7 @@ import {
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
 	vmRegionLicense,
+	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
@@ -265,6 +266,7 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 				paired(index, instruction.cookedIndices, instruction.rawIndices);
 				break;
 			case "CALL":
+			case "CALL_BUILTIN":
 				single(index, instruction.arguments, instruction.argumentCount);
 				break;
 			case "CONSTRUCT":
@@ -650,6 +652,7 @@ function privateAggregateDefinedRegisters(instruction: VmInstruction): Array<num
 		case "BINARY":
 		case "UNARY":
 		case "CALL":
+		case "CALL_BUILTIN":
 		case "MATH_UNARY_NUMBER":
 		case "MATH_BINARY_NUMBER":
 		case "CATCH":
@@ -1145,6 +1148,11 @@ function privateAggregateUsedRegisters(instruction: VmInstruction): Array<number
 		case "CALL":
 			return [
 				...operand(instruction.callee),
+				...operand(instruction.thisValue),
+				...instruction.arguments.flatMap(operand),
+			];
+		case "CALL_BUILTIN":
+			return [
 				...operand(instruction.thisValue),
 				...instruction.arguments.flatMap(operand),
 			];
@@ -5069,6 +5077,19 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_LOAD_CALLEE, .as.load_callee = { .dst = ${instruction.dst} } }`;
 		case "CALL":
 			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
+		case "CALL_BUILTIN": {
+			const operationIndex = (
+				VM_DIRECT_BUILTIN_OPERATIONS as ReadonlyArray<string>
+			).indexOf(instruction.operation);
+			if (operationIndex < 0) {
+				throw new Error(`Unknown direct builtin operation ${instruction.operation}`);
+			}
+			const operation = ["MAL_DIRECT_BUILTIN_STRING_SPLIT"][operationIndex];
+			if (operation === undefined) {
+				throw new Error(`Missing C direct builtin operation ${instruction.operation}`);
+			}
+			return `{ .opcode = MAL_OP_CALL_BUILTIN, .as.call_builtin = { .dst = ${instruction.dst}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()}, .operation = ${operation} } }`;
+		}
 		case "MATH_UNARY_NUMBER": {
 			if (
 				!(VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(

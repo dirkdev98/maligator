@@ -144,6 +144,11 @@ bool mal_builtin_string_split_projection_locked(
     u32 *length_out
 );
 
+/** Exact locked String.prototype.split call after property/callback resolution. */
+MalValue mal_builtin_string_split_direct(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 arg_count
+);
+
 /** Loop-carried state for a compiler-proven closed String#split result. */
 typedef struct {
     usize position;

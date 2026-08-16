@@ -1505,6 +1505,21 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("emits exact locked primitive String split calls without dynamic dispatch", () => {
+		const code = `
+			function make(separator, limit) {
+				return "alpha,beta".split(separator, limit);
+			}
+			globalThis.make = make;
+		`;
+		const mutableOutput = emit(code);
+		expect(mutableOutput).not.toContain("mal_builtin_string_split_direct(vm,");
+
+		const lockedOutput = emitLocked(code);
+		expect(lockedOutput).toContain("mal_builtin_string_split_direct(vm,");
+		expect(lockedOutput).not.toContain("mal_vm_call_cached(vm,");
+	});
+
 	it("streams a closed indexed String split loop directly into trim", () => {
 		const code = `
 			function sum(value, separator) {

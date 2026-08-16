@@ -154,6 +154,108 @@ function optLowerLockedMathNumberCalls(program: IntermediateProgram): boolean {
 	return changed;
 }
 
+/**
+ * Remove the dynamic property/call seam for a locked builtin only when the
+ * receiver itself makes property resolution exact. A primitive String literal
+ * cannot carry an own `split` property, and the locked world fixes the inherited
+ * callback, so invoking the builtin directly preserves all remaining split
+ * semantics (including @@split dispatch, coercion, allocation, and throws).
+ *
+ * Projection/cursor consumers stay in their retained-twin form for now: their
+ * result property accesses license a more specialized representation downstream,
+ * and replacing that call here would otherwise hide the existing native region.
+ */
+function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const registerIndex = buildIRRegisterIndex(fn);
+		const definitions = registerIndex.uniqueDefinitions;
+		const moveRoot = (initial: number): number => {
+			let register = initial;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+		const resultFeedsPropertyAccess = (initial: number): boolean => {
+			const pending = [initial];
+			const aliases = new Set<number>();
+			while (pending.length > 0) {
+				const register = pending.pop()!;
+				if (aliases.has(register)) continue;
+				aliases.add(register);
+				for (const use of registerIndex.uses.get(register) ?? []) {
+					if (
+						(use.instruction.type === "loadProperty" ||
+							use.instruction.type === "loadPropertyStatic") &&
+						use.position === 1
+					) {
+						return true;
+					}
+					if (use.instruction.type === "move" && use.position === 1) {
+						pending.push(use.instruction.registers[0]);
+					}
+				}
+			}
+			return false;
+		};
+		const removedProperties = new Set<IRInstruction>();
+		for (const block of fn.blocks) {
+			for (let index = 0; index < block.instructions.length; index++) {
+				const instruction = block.instructions[index]!;
+				if (instruction.type !== "call") continue;
+				const call = instruction.knownBuiltinCall;
+				if (
+					call === undefined ||
+					call.operation !== "String.prototype.split" ||
+					!knownBuiltinCallProves(call, "String.prototype.split") ||
+					!compilerFactIsWorldInvariant(call.identity) ||
+					resultFeedsPropertyAccess(instruction.registers[0])
+				) {
+					continue;
+				}
+				const callee = definitions.get(instruction.registers[1]);
+				const receiverRoot = moveRoot(instruction.registers[2]);
+				const receiver = definitions.get(receiverRoot);
+				const calleeUses = registerIndex.uses.get(instruction.registers[1]) ?? [];
+				if (
+					callee?.type !== "loadPropertyStatic" ||
+					moveRoot(callee.registers[1]) !== receiverRoot ||
+					receiver?.type !== "createString" ||
+					calleeUses.length !== 1 ||
+					calleeUses[0]?.instruction !== instruction ||
+					calleeUses[0]?.position !== 1
+				) {
+					continue;
+				}
+				block.instructions[index] = {
+					type: "callBuiltin",
+					registers: [
+						instruction.registers[0],
+						instruction.registers[2],
+						...instruction.registers.slice(3, 5),
+					],
+					operation: "String.prototype.split",
+				};
+				removedProperties.add(callee);
+				changed = true;
+			}
+		}
+		if (removedProperties.size > 0) {
+			for (const block of fn.blocks) {
+				block.instructions = block.instructions.filter(
+					(instruction) => !removedProperties.has(instruction),
+				);
+			}
+		}
+	}
+	return changed;
+}
+
 export interface IROptimizationOptions {
 	/** Named, correctness-preserving pass groups disabled for attribution builds. */
 	ablations?: ReadonlySet<OptimizationAblation>;
@@ -549,6 +651,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringSplitSites(program);
 		if (residualFeatures.call && residualFeatures.property)
+			optLowerLockedExactBuiltinCalls(program);
+		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringTrimSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateBoundedStringCharCodeAtPositions(program);
@@ -650,6 +754,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-direct-string-split",
 			annotateDirectStringSplitSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"lower-locked-exact-builtins",
+			optLowerLockedExactBuiltinCalls,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

@@ -129,7 +129,13 @@ typedef enum MalOpcode {
     MAL_OP_CALL_SPREAD_ITERABLE,
     MAL_OP_MATH_UNARY_NUMBER,
     MAL_OP_MATH_BINARY_NUMBER,
+    MAL_OP_CALL_BUILTIN,
 } MalOpcode;
+
+/** Exact builtin dispatch order mirrored by VM_DIRECT_BUILTIN_OPERATIONS. */
+typedef enum MalDirectBuiltinOp {
+    MAL_DIRECT_BUILTIN_STRING_SPLIT,
+} MalDirectBuiltinOp;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
 typedef enum MalLiteralTemplateTag {
@@ -681,6 +687,11 @@ typedef struct MalInstruction {
         struct {
             i32 dst, left, right, operation;
         } math_binary_number;
+
+        struct {
+            // this_value and side-data arguments are tagged value operands.
+            i32 dst, this_value, data_offset, operation;
+        } call_builtin;
 
         struct {
             // callee and side data use the same tagged value operands as call.

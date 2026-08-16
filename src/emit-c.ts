@@ -468,6 +468,10 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				disqualifying.push(instruction.callee, instruction.thisValue);
 				// arguments are neutral boundary reads
 				break;
+			case "CALL_BUILTIN":
+				disqualifying.push(instruction.thisValue);
+				// arguments are neutral boxed boundary reads
+				break;
 			case "MATH_UNARY_NUMBER":
 				numeric.push(instruction.src);
 				break;
@@ -5963,6 +5967,18 @@ function emitInstruction(
 			}
 			return [
 				`r${instruction.dst} = mal_builtin_math_binary_number_known(${operation}, ${num(instruction.left)}, ${num(instruction.right)});`,
+			];
+		}
+		case "CALL_BUILTIN": {
+			if (instruction.operation !== "String.prototype.split") return null;
+			const argsExpr =
+				instruction.arguments.length === 0
+					? "nullptr"
+					: `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`;
+			return [
+				`r${instruction.dst} = mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+				throwCheck,
+				poll,
 			];
 		}
 		case "CALL": {

@@ -176,8 +176,12 @@ export const VM_MATH_UNARY_NUMBER_OPERATIONS = [
 
 export const VM_MATH_BINARY_NUMBER_OPERATIONS = ["Math.min", "Math.max"] as const;
 
+/** Exact builtin calls whose dynamic property/callback seam was erased in IR. */
+export const VM_DIRECT_BUILTIN_OPERATIONS = ["String.prototype.split"] as const;
+
 type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];
 type VmMathBinaryNumberOperation = (typeof VM_MATH_BINARY_NUMBER_OPERATIONS)[number];
+type VmDirectBuiltinOperation = (typeof VM_DIRECT_BUILTIN_OPERATIONS)[number];
 
 function vmMathUnaryNumberOperation(operation: string): VmMathUnaryNumberOperation {
 	if ((VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(operation)) {
@@ -191,6 +195,13 @@ function vmMathBinaryNumberOperation(operation: string): VmMathBinaryNumberOpera
 		return operation as VmMathBinaryNumberOperation;
 	}
 	throw new Error(`Unknown binary numeric Math operation ${operation}`);
+}
+
+function vmDirectBuiltinOperation(operation: string): VmDirectBuiltinOperation {
+	if ((VM_DIRECT_BUILTIN_OPERATIONS as ReadonlyArray<string>).includes(operation)) {
+		return operation as VmDirectBuiltinOperation;
+	}
+	throw new Error(`Unknown direct builtin operation ${operation}`);
 }
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];
@@ -1006,6 +1017,14 @@ export type VmInstruction =
 			left: number;
 			right: number;
 			operation: VmMathBinaryNumberOperation;
+	  }
+	| {
+			opcode: "CALL_BUILTIN";
+			dst: number;
+			thisValue: number;
+			argumentCount: number;
+			arguments: Array<number>;
+			operation: VmDirectBuiltinOperation;
 	  }
 	| {
 			opcode: "CONSTRUCT";
@@ -2009,7 +2028,7 @@ function lowerFunctionToVmFunction(
 		const fastExit = instructions[fastExitIp];
 		const slowCall = instructions[slowCallIp];
 		const receiverOperand =
-			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[0]!) : undefined;
+			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[1]!) : undefined;
 		const slowReceiverOperand =
 			slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.thisValue) : undefined;
 		if (
@@ -2422,6 +2441,15 @@ function lowerInstructionToVmInstruction(
 				left: instruction.registers[1],
 				right: instruction.registers[2],
 				operation: vmMathBinaryNumberOperation(instruction.operation),
+			};
+		case "callBuiltin":
+			return {
+				opcode: "CALL_BUILTIN",
+				dst: instruction.registers[0],
+				thisValue: instruction.registers[1],
+				argumentCount: instruction.registers.length - 2,
+				arguments: instruction.registers.slice(2),
+				operation: vmDirectBuiltinOperation(instruction.operation),
 			};
 		case "construct":
 			return {

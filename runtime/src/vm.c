@@ -1075,6 +1075,15 @@ static void mal_vm_rebase_instruction(
             }
             break;
         }
+        case MAL_OP_CALL_BUILTIN: {
+            in->as.call_builtin.this_value = mal_vm_rebase_value_operand(
+                in->as.call_builtin.this_value, string_base);
+            i32 *data = instruction_data + in->as.call_builtin.data_offset;
+            for (i32 i = 0; i < data[0]; i++) {
+                data[i + 1] = mal_vm_rebase_value_operand(data[i + 1], string_base);
+            }
+            break;
+        }
         case MAL_OP_CONSTRUCT: {
             in->as.construct.callee = mal_vm_rebase_value_operand(in->as.construct.callee, string_base);
             i32 *data = instruction_data + in->as.construct.data_offset;
@@ -2512,6 +2521,11 @@ static void mal_vm_run_until_frame_count(
 
             case MAL_OP_CALL: {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call(frame, instruction));
+                break;
+            }
+            case MAL_OP_CALL_BUILTIN: {
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
+                    mal_op_call_builtin(frame, instruction));
                 break;
             }
             case MAL_OP_CONSTRUCT: {

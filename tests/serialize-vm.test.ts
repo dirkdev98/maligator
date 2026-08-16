@@ -42,6 +42,14 @@ const instructions: Array<VmInstruction> = [
 		right: 1,
 		operation: "Math.max",
 	},
+	{
+		opcode: "CALL_BUILTIN",
+		dst: 9,
+		thisValue: 0,
+		argumentCount: 2,
+		arguments: [1, 2],
+		operation: "String.prototype.split",
+	},
 	{ opcode: "TYPEOF_COMPARE", dst: 9, src: 8, expected: "number", negated: true },
 	{ opcode: "TRY_BEGIN", handlerIp: 0 },
 	{
@@ -212,7 +220,7 @@ describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-11)).toEqual([
+		expect(WIRE_OPCODES.slice(-12)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -224,6 +232,7 @@ describe("serialize-vm", () => {
 			"CALL_SPREAD_ITERABLE",
 			"MATH_UNARY_NUMBER",
 			"MATH_BINARY_NUMBER",
+			"CALL_BUILTIN",
 		]);
 	});
 

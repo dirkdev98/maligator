@@ -351,7 +351,8 @@ test("locked exact numeric Math calls erase their generic twins in IR", () => {
 			return Math.floor(left) + Math.max(left, right);
 		};
 	`;
-	const lockedInstructions = optimizedLockedProgram(source).functions.flatMap((fn) =>
+	const lockedProgram = optimizedLockedProgram(source);
+	const lockedInstructions = lockedProgram.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
 	);
 	expect(
@@ -393,6 +394,65 @@ test("locked exact numeric Math calls erase their generic twins in IR", () => {
 			(instruction) =>
 				instruction.type === "call" &&
 				instruction.knownBuiltinCall?.operation === "Math.floor",
+		),
+	).toBe(true);
+});
+
+test("locked exact primitive String split calls erase dynamic dispatch in IR", () => {
+	const source = `
+		globalThis.splitKnown = function splitKnown(separator, limit, ignored) {
+			return "alpha,beta".split(separator, limit, ignored);
+		};
+	`;
+	const lockedProgram = optimizedLockedProgram(source);
+	const lockedInstructions = lockedProgram.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	const direct = lockedInstructions.filter(
+		(instruction) => instruction.type === "callBuiltin",
+	);
+	expect(direct).toHaveLength(1);
+	expect(direct[0]).toMatchObject({
+		type: "callBuiltin",
+		operation: "String.prototype.split",
+	});
+	expect("registers" in direct[0]!).toBe(true);
+	if (direct[0]?.type === "callBuiltin") expect(direct[0].registers).toHaveLength(4);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "String.prototype.split",
+		),
+	).toBe(false);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "loadPropertyStatic" &&
+				decodeStringConstant(lockedProgram, instruction.stringIndex) === "split",
+		),
+	).toBe(false);
+
+	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		mutableInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "String.prototype.split",
+		),
+	).toBe(true);
+
+	const projected = optimizedLockedProgram(
+		`globalThis.first = function first() { return "a,b".split(",")[0]; };`,
+	).functions.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions));
+	expect(projected.some((instruction) => instruction.type === "callBuiltin")).toBe(false);
+	expect(
+		projected.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "String.prototype.split",
 		),
 	).toBe(true);
 });
@@ -815,7 +875,9 @@ test("arr.forEach(arrow) is replaced by a guarded inlined loop", () => {
 test("locked exact fresh Array loops erase the method Get, guard, and generic twin", () => {
 	const source = `(function (){
 		const values = [1, 2, 3];
-		return values.reduce((sum, value) => sum + value, 0);
+		let total = 0;
+		values.forEach((value) => { total += value; });
+		return total;
 	})();`;
 	const locked = optimizedLockedProgram(source);
 	const instructions = locked.functions.flatMap((fn) =>
@@ -836,7 +898,7 @@ test("locked exact fresh Array loops erase the method Get, guard, and generic tw
 		),
 	).toBe(false);
 	const methodNameIndex = locked.stringConstants.findIndex(
-		(_value, stringIndex) => decodeStringConstant(locked, stringIndex) === "reduce",
+		(_value, stringIndex) => decodeStringConstant(locked, stringIndex) === "forEach",
 	);
 	expect(methodNameIndex).toBeGreaterThanOrEqual(0);
 	expect(

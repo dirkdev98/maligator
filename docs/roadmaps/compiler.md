@@ -240,6 +240,11 @@ is general rather than a registry-shaped collection of special cases.
         consumers to license `projected-elements` or `split-cursor-spans`
         representations from those facts and retain their whole-region/on-demand
         generic twin contracts.
+  - [x] Add a backend-neutral no-dynamic-dispatch builtin-call operation. Use an
+        exact primitive String receiver plus the locked split identity to remove
+        the property Get and generic call in IR, preserve full split semantics in
+        native code and MALW v40, and leave projection/cursor-shaped result uses for
+        their stronger retained-twin representation pass.
 - [x] Lower statically known Math calls through builtin-call IR. Preserve argument
       evaluation, coercion, exceptions, and Realm identity; use native numeric
       arguments/results when representation facts allow it.

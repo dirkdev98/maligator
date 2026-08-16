@@ -3,6 +3,7 @@ import {
 	compressPositions,
 	countPropertyIcSites,
 	decodeVmValueOperand,
+	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_GUARDED_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
@@ -25,8 +26,8 @@ import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./low
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 39 for canonical call metadata and no-fallback numeric Math instructions.
-export const WIRE_VERSION = 39;
+// Bumped to 40 for canonical metadata, numeric Math, and exact direct-builtin calls.
+export const WIRE_VERSION = 40;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -171,6 +172,7 @@ export const WIRE_OPCODES = [
 	"CALL_SPREAD_ITERABLE",
 	"MATH_UNARY_NUMBER",
 	"MATH_BINARY_NUMBER",
+	"CALL_BUILTIN",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -188,6 +190,13 @@ function mathBinaryNumberTag(operation: string): number {
 		operation,
 	);
 	if (tag < 0) throw new RangeError(`serialize-vm: unsupported Math op ${operation}`);
+	return tag;
+}
+
+function directBuiltinTag(operation: string): number {
+	const tag = (VM_DIRECT_BUILTIN_OPERATIONS as ReadonlyArray<string>).indexOf(operation);
+	if (tag < 0)
+		throw new RangeError(`serialize-vm: unsupported direct builtin ${operation}`);
 	return tag;
 }
 
@@ -1102,14 +1111,18 @@ function validateNumericHofRegion(
 	const callbackCreate = fn.instructions[region.slowCallIp - 1];
 	const slowCall = fn.instructions[region.slowCallIp];
 	const slowExit = fn.instructions[region.slowCallIp + 1];
-	const guardReceiver =
+	const guardCallee =
 		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[0]!) : undefined;
-	const guardMethod =
+	const guardReceiver =
 		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[1]!) : undefined;
+	const guardMethod =
+		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[2]!) : undefined;
 	const guardThis =
 		guard?.opcode === "CALL" ? decodeVmValueOperand(guard.thisValue) : undefined;
 	const slowThis =
 		slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.thisValue) : undefined;
+	const slowCallee =
+		slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.callee) : undefined;
 	const slowCallback =
 		slowCall?.opcode === "CALL"
 			? decodeVmValueOperand(slowCall.arguments[0]!)
@@ -1130,7 +1143,10 @@ function validateNumericHofRegion(
 		intrinsic.intrinsic !== "__arrayIterationEligible" ||
 		guard.callee !== intrinsic.dst ||
 		guardThis?.kind !== "undefined" ||
-		guard.argumentCount !== 2 ||
+		guard.argumentCount !== 3 ||
+		guardCallee?.kind !== "register" ||
+		slowCallee?.kind !== "register" ||
+		guardCallee.register !== slowCallee.register ||
 		guardReceiver?.kind !== "register" ||
 		guardReceiver.register !== region.receiver ||
 		guardMethod?.kind !== "number" ||
@@ -1337,6 +1353,13 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.left);
 			w.i32(i.right);
 			w.u8(mathBinaryNumberTag(i.operation));
+			return;
+		case "CALL_BUILTIN":
+			w.i32(i.dst);
+			w.i32(i.thisValue);
+			w.i32(i.argumentCount);
+			w.i32Array(i.arguments);
+			w.u8(directBuiltinTag(i.operation));
 			return;
 		case "CONSTRUCT":
 			w.i32(i.dst);
@@ -2420,6 +2443,24 @@ function readInstruction(r: Reader): VmInstruction {
 				dst,
 				left,
 				right,
+				operation,
+			};
+		}
+		case "CALL_BUILTIN": {
+			const dst = r.i32();
+			const thisValue = r.i32();
+			const argumentCount = r.i32();
+			const arguments_ = r.i32Array();
+			const operation = VM_DIRECT_BUILTIN_OPERATIONS[r.u8()];
+			if (operation === undefined || argumentCount !== arguments_.length) {
+				throw new RangeError("serialize-vm: invalid direct builtin call");
+			}
+			return {
+				opcode,
+				dst,
+				thisValue,
+				argumentCount,
+				arguments: arguments_,
 				operation,
 			};
 		}

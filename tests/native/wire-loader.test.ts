@@ -180,6 +180,42 @@ describe("wire loader side-data validation", () => {
 		}
 	});
 
+	it("loads and executes an exact direct builtin call", () => {
+		const directDefinition: VmDefinition = {
+			...definition,
+			stringConstants: [
+				[..."alpha,beta"].map((unit) => unit.charCodeAt(0)),
+				[",".charCodeAt(0)],
+			],
+			functions: [
+				{
+					...fn,
+					registerCount: 3,
+					instructions: [
+						{ opcode: "CREATE_STRING", dst: 1, stringIndex: 0 },
+						{ opcode: "CREATE_STRING", dst: 2, stringIndex: 1 },
+						{
+							opcode: "CALL_BUILTIN",
+							dst: 0,
+							thisValue: 1,
+							argumentCount: 1,
+							arguments: [2],
+							operation: "String.prototype.split",
+						},
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+			],
+		};
+		const wirePath = path.join(directory, "direct-builtin.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(directDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("rejects malformed varints and trailing data", () => {
 		const wire = serializeVmDefinition(definition, { debugInfo: false });
 		const replaceFlags = (bytes: Array<number>): Uint8Array =>

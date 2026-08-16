@@ -119,6 +119,14 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 					rebaseVmValueOperand(operand, base.string),
 				),
 			};
+		case "CALL_BUILTIN":
+			return {
+				...instruction,
+				thisValue: rebaseVmValueOperand(instruction.thisValue, base.string),
+				arguments: instruction.arguments.map((operand) =>
+					rebaseVmValueOperand(operand, base.string),
+				),
+			};
 		case "CONSTRUCT":
 			return {
 				...instruction,

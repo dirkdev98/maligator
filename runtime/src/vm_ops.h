@@ -238,6 +238,7 @@ void mal_op_load_new_target(MalCallable *callable, const MalInstruction *instruc
 void mal_op_load_callee(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_call(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction);
 

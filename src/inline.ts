@@ -3174,6 +3174,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				use.instruction.type === "move" &&
 				(registerIndex.uses.get(use.instruction.registers[0]) ?? []).length === 0;
 			const lockedExactReceiver =
+				numericReducePlan === undefined &&
 				compilerFactIsWorldInvariant(site.call.knownBuiltinCall?.identity) &&
 				receiverDefinition?.type === "createArray" &&
 				allocationLocation?.blockIndex === hostBlockIndex &&
