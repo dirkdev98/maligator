@@ -318,6 +318,26 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(existsSync(path.join(directory, "timeline.json"))).toBe(true);
 	expect(existsSync(path.join(directory, "phases.json"))).toBe(true);
 	expect(existsSync(path.join(directory, "manifest.json"))).toBe(true);
+	expect(
+		readFileSync(path.join(directory, "compiler.json"), "utf-8").split("\n"),
+	).toHaveLength(2);
+	expect(
+		readFileSync(path.join(directory, "summary.json"), "utf-8").split("\n"),
+	).toHaveLength(2);
+	const compilerReport = JSON.parse(
+		readFileSync(path.join(directory, "compiler.json"), "utf-8"),
+	) as {
+		schema: number;
+		reportedSiteCount: number;
+		omittedZeroEventSiteCount: number;
+		sites: Array<unknown>;
+	};
+	expect(compilerReport).toMatchObject({
+		schema: 4,
+		reportedSiteCount: 1,
+		omittedZeroEventSiteCount: 1,
+	});
+	expect(compilerReport.sites).toHaveLength(1);
 	expect(existsSync(path.join(directory, "compiler.json"))).toBe(true);
 	const profile = JSON.parse(
 		readFileSync(path.join(directory, "cpu.cpuprofile"), "utf-8"),
@@ -390,6 +410,8 @@ test("profile finalization publishes standard views and joins remarks by source 
 		expect.objectContaining({ name: "graph", cat: "maligator.phase", ph: "E" }),
 	]);
 	expect(result.manifest.compiler).toMatchObject({
+		reportedSiteCount: 1,
+		omittedZeroEventSiteCount: 1,
 		allocationCount: 5,
 		requestedBytes: 128,
 		chargedBytes: 160,
@@ -404,6 +426,9 @@ test("profile finalization publishes standard views and joins remarks by source 
 	expect(report).toContain("estimated charged allocation traffic");
 	expect(report).toContain("Exact allocation families array/raw-payload 160 B");
 	expect(report).toContain("Compiler coverage 2/2 sites (100.0%)");
+	expect(report).toContain(
+		"Compiler rows 1 evidence-bearing · 1 zero-event sites omitted",
+	);
 	expect(report).toContain(
 		"Runtime 7 native dispatches · 4 string · 2 regexp · 1 host entries",
 	);

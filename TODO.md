@@ -224,6 +224,11 @@ profiler improvement; collecting more samples alone will not repair the explanat
       slowdown; do not force memory wins to manufacture a CPU headline. An expert
       `--max-pairs` override now permits a longer exact comparison when the
       default 15-pair ceiling cannot resolve a small change; progress reporting remains.
+- [x] Keep exact report finalization linear in profile sites, remarks, and allocation
+      rows. Indexed joins replaced repeated full-table filters, reducing the 142,604-site
+      self-host finalization from 11.17 s to 1.64 s with byte-identical compiler and
+      summary payloads. Large machine-facing JSON tables are compact, while tracked,
+      reported, and omitted-zero counts make sparse publication explicit.
 - [x] Recheck profiler overhead on language, allocation-heavy, GC, and HTTP workloads.
       Keep ordinary images free of profiling instrumentation, target less than 3%
       median CPU overhead for profiled images, and reject regressions in output, GC

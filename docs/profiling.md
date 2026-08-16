@@ -32,8 +32,10 @@ Use `--profile=compiler` when sparse samples identify a phase but cannot explain
 which optimized operation executed. This mode builds with `MAL_PERF_STATS`, stores
 its dense counter table separately, and is intentionally more intrusive than the
 sampling image. It is the machine-readable choice for agents: `compiler.json`
-contains stable identities, final-backend decisions and reason codes, and exact
-event counts for every emitted source site. Do not use its wall time as a production
+contains stable identities, final-backend decisions and reason codes, and exact event
+counts for every evidence-bearing source site. Its tracked, reported, and omitted
+counts make the remaining dense zero-event sites explicit; their identities and
+decisions remain in `metadata.json`. Do not use its wall time as a production
 performance measurement.
 
 `dev --profile` preserves one capture per generation. Successful restarts,
@@ -142,9 +144,13 @@ to carry the same identity. Legacy v1-v3 captures remain readable but are marked
 | `phases.json`          | Nested phase spans with inclusive, self, and maximum wall time       |
 | `allocations.json`     | Source-ranked sampled allocation evidence                            |
 | `remarks.jsonl`        | Structured optimizer decisions for profile sites                     |
-| `compiler.json`        | Source-ranked exact counters and final decisions (compiler mode)     |
+| `compiler.json`        | Source-ranked nonzero exact counters and final decisions             |
 | `summary.json`         | Joined hot evidence, source locations, decisions, and confidence     |
 | `manifest.json`        | Capture totals, delay/drop quality, build identity, and completeness |
+
+The potentially large `metadata.json`, `compiler.json`, and `summary.json` tables use
+compact JSON to avoid spending profile time and disk space on indentation; all other
+artifacts remain human-formatted, and every JSON file is directly parseable.
 
 The joined findings keep CPU and allocation confidence separate and use all CPU
 records as the percentage denominator. `manifest.json` reports attributed and

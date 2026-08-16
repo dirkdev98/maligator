@@ -258,7 +258,7 @@ export function prepareProfile(
 		remarks: definition.profileRemarks ?? [],
 	};
 	prepared.captureIdentity = profileCaptureIdentity(prepared);
-	atomicJson(`${binaryPath}.profile.json`, prepared);
+	atomicJson(`${binaryPath}.profile.json`, prepared, true);
 	return prepared;
 }
 
@@ -295,7 +295,7 @@ export function createProfileCapture(
 				: override,
 	);
 	mkdirSync(directory, { recursive: true });
-	atomicJson(path.join(directory, "metadata.json"), prepared);
+	atomicJson(path.join(directory, "metadata.json"), prepared, true);
 	const capturePath = path.join(directory, "capture.bin");
 	return {
 		directory,
@@ -703,6 +703,21 @@ function findings(
 		>;
 	}
 	const bySite = new Map<number, FindingAggregate>();
+	const decisionsBySite = new Map<number, Array<CompilerRemark>>();
+	for (const decision of prepared.remarks) {
+		const decisions = decisionsBySite.get(decision.siteId);
+		if (decisions === undefined) decisionsBySite.set(decision.siteId, [decision]);
+		else decisions.push(decision);
+	}
+	const compilerAllocationsBySite = new Map<number, Array<CompilerAllocationCounter>>();
+	for (const allocation of compiler?.allocations ?? []) {
+		const allocations = compilerAllocationsBySite.get(allocation.siteId);
+		if (allocations === undefined) {
+			compilerAllocationsBySite.set(allocation.siteId, [allocation]);
+		} else {
+			allocations.push(allocation);
+		}
+	}
 	const cpuTotal = capture.records.filter((record) => record.kind === 1).length;
 	for (const record of capture.records) {
 		const leaf = record.frames.at(-1);
@@ -776,18 +791,16 @@ function findings(
 			const site = prepared.sites[value.siteId]!;
 			const cpuConfidence = evidenceConfidence(value.cpuSamples, quality);
 			const allocationConfidence = evidenceConfidence(value.allocationSamples, quality);
-			const decisions = prepared.remarks
-				.filter((remark) => remark.siteId === site.id)
-				.sort((left, right) => {
-					const rank: Record<CompilerRemark["outcome"], number> = {
-						applied: 0,
-						elided: 0,
-						guarded: 1,
-						retained: 2,
-						fallback: 3,
-					};
-					return rank[left.outcome] - rank[right.outcome];
-				});
+			const decisions = [...(decisionsBySite.get(site.id) ?? [])].sort((left, right) => {
+				const rank: Record<CompilerRemark["outcome"], number> = {
+					applied: 0,
+					elided: 0,
+					guarded: 1,
+					retained: 2,
+					fallback: 3,
+				};
+				return rank[left.outcome] - rank[right.outcome];
+			});
 			const rawCompiler = compiler?.bySite[value.siteId];
 			const compilerEvents =
 				rawCompiler === undefined
@@ -834,9 +847,7 @@ function findings(
 				...(compiler === undefined
 					? {}
 					: {
-							compilerAllocations: compiler.allocations.filter(
-								(allocation) => allocation.siteId === site.id,
-							),
+							compilerAllocations: compilerAllocationsBySite.get(site.id) ?? [],
 						}),
 				cpuConfidence,
 				allocationConfidence,
@@ -850,9 +861,12 @@ function findings(
 		);
 }
 
-function atomicJson(file: string, value: unknown): void {
+function atomicJson(file: string, value: unknown, compact = false): void {
 	const temporary = `${file}.tmp-${process.pid}`;
-	writeFileSync(temporary, `${JSON.stringify(value, undefined, 2)}\n`);
+	writeFileSync(
+		temporary,
+		`${JSON.stringify(value, undefined, compact ? undefined : 2)}\n`,
+	);
 	renameSync(temporary, file);
 }
 
@@ -969,6 +983,8 @@ export interface ProfileManifest {
 	compiler?: {
 		trackedSiteCount: number;
 		totalSiteCount: number;
+		reportedSiteCount: number;
+		omittedZeroEventSiteCount: number;
 		unattributed: CompilerEvents;
 		allocationEntries: number;
 		executions: number;
@@ -1346,20 +1362,23 @@ export function finalizeProfileCapture(
 		path.join(directory, "allocations.json"),
 		ranked.filter((finding) => finding.allocationSamples > 0),
 	);
+	const compilerFindings = ranked.filter((finding) => finding.compiler !== undefined);
 	if (compiler !== undefined) {
-		atomicJson(path.join(directory, "compiler.json"), {
-			schema: 3,
-			trackedSiteCount: compiler.trackedSiteCount,
-			totalSiteCount: compiler.totalSiteCount,
-			unattributed: compiler.unattributed,
-			allocations: compiler.allocations.map((allocation) => ({
-				...allocation,
-				storageName: allocationStorageName(allocation.storage),
-				familyName: allocationFamilyName(allocation.family),
-			})),
-			sites: ranked
-				.filter((finding) => finding.compiler !== undefined)
-				.map((finding) => ({
+		atomicJson(
+			path.join(directory, "compiler.json"),
+			{
+				schema: 4,
+				trackedSiteCount: compiler.trackedSiteCount,
+				totalSiteCount: compiler.totalSiteCount,
+				reportedSiteCount: compilerFindings.length,
+				omittedZeroEventSiteCount: compiler.trackedSiteCount - compilerFindings.length,
+				unattributed: compiler.unattributed,
+				allocations: compiler.allocations.map((allocation) => ({
+					...allocation,
+					storageName: allocationStorageName(allocation.storage),
+					familyName: allocationFamilyName(allocation.family),
+				})),
+				sites: compilerFindings.map((finding) => ({
 					siteId: finding.siteId,
 					logicalId: finding.logicalId,
 					originId: finding.originId,
@@ -1379,17 +1398,23 @@ export function finalizeProfileCapture(
 						familyName: allocationFamilyName(allocation.family),
 					})),
 				})),
-		});
+			},
+			true,
+		);
 	}
 	writeFileSync(
 		path.join(directory, "remarks.jsonl"),
 		prepared.remarks.map((remark) => JSON.stringify(remark)).join("\n") +
 			(prepared.remarks.length === 0 ? "" : "\n"),
 	);
-	atomicJson(path.join(directory, "summary.json"), {
-		schema: 3,
-		findings: ranked,
-	});
+	atomicJson(
+		path.join(directory, "summary.json"),
+		{
+			schema: 3,
+			findings: ranked,
+		},
+		true,
+	);
 	const truncatedRecords = capture.records.filter((record) => record.omittedFrames > 0);
 	const compilerOverflow =
 		compiler?.allocations.find((entry) => entry.siteId === -2) ?? null;
@@ -1444,6 +1469,9 @@ export function finalizeProfileCapture(
 				: {
 						trackedSiteCount: compiler.trackedSiteCount,
 						totalSiteCount: compiler.totalSiteCount,
+						reportedSiteCount: compilerFindings.length,
+						omittedZeroEventSiteCount:
+							compiler.trackedSiteCount - compilerFindings.length,
 						unattributed: compiler.unattributed,
 						allocationEntries: compiler.allocations.length,
 						executions: compilerEventTotal(compiler, "executions"),
@@ -1838,6 +1866,13 @@ export function formatProfileReport(
 			).toFixed(1)}% executions attributed (${formatCount(
 				manifest.compiler.unattributed.executions,
 			)} unattributed)`,
+		);
+		lines.push(
+			`  Compiler rows ${formatCount(
+				manifest.compiler.reportedSiteCount,
+			)} evidence-bearing · ${formatCount(
+				manifest.compiler.omittedZeroEventSiteCount,
+			)} zero-event sites omitted`,
 		);
 		const compilerFamilies = manifest.compiler.families
 			.slice(0, 4)
