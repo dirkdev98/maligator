@@ -258,6 +258,10 @@ is general rather than a registry-shaped collection of special cases.
 - [ ] Add closed `RegExp.prototype.exec` capture projection as the first stateful and
       effect-sensitive projection. Preserve `lastIndex`, capture, coercion, and
       unmatched-value semantics with materialization on unsupported consumers.
+  - [x] Publish canonical `RegExp.prototype.exec` identity, effect, result, and
+        capture-projection facts through IR and the frontend wire format. License
+        the existing whole-region projection from those facts while retaining the
+        ordinary call and result materialization as its mutable/guard-miss twin.
 - [ ] Specialize higher-order intrinsics when callback identity and iteration
       semantics are stable, prioritizing measured `reduce`, `forEach`, `map`, and
       `sort` boundaries. Use these to validate user-callback effect summaries and

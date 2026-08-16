@@ -326,6 +326,35 @@ test("direct Math calls carry canonical numeric semantics", () => {
 	).toHaveLength(2);
 });
 
+test("direct RegExp exec calls carry canonical capture-projection semantics", () => {
+	const ir = optimizedProgram(`
+		function parse(regexp, value) {
+			return regexp.exec(value) || regexp["exec"](value);
+		}
+		function detached(regexp, value) {
+			const exec = regexp.exec;
+			return exec(value);
+		}
+	`);
+	const calls = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) =>
+			block.instructions.filter((instruction) => instruction.type === "call"),
+		),
+	);
+	const execCalls = calls.filter(
+		(call) => call.knownBuiltinCall?.operation === "RegExp.prototype.exec",
+	);
+	expect(execCalls).toHaveLength(2);
+	expect(execCalls[0]?.knownBuiltinCall?.semantics).toMatchObject({
+		kind: "known",
+		value: {
+			effects: ["coerce", "property-access", "allocate", "throw", "safepoint"],
+			result: "regexp-match-or-null",
+			lowerings: ["generic", "capture-projection"],
+		},
+	});
+});
+
 test("direct collection methods carry guarded Map and Set dispatch metadata", () => {
 	const ir = optimizedProgram(`
 		function update(map, set, key, value) {

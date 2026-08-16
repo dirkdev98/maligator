@@ -128,6 +128,7 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Math.fround",
 	"Math.min",
 	"Math.max",
+	"RegExp.prototype.exec",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];
@@ -465,6 +466,8 @@ export interface VmFunction {
 
 	/** EMITTER-ONLY: selected capture projections of an exact RegExp exec result. */
 	nativeRegExpExecProjections?: ReadonlyArray<{
+		license: VmRegionLicense;
+		resultRepresentation: "regexp-capture-projection";
 		callIp: number;
 		callee: number;
 		receiver: number;

@@ -2720,6 +2720,13 @@ function annotateNativeStringSplitCursors(definition: VmDefinition): void {
  * guarded hit exposes only a null/non-null marker plus constant capture loads.
  */
 function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
+	const execEffects = [
+		"coerce",
+		"property-access",
+		"allocate",
+		"throw",
+		"safepoint",
+	] as const;
 	for (const fn of definition.functions) {
 		const projections: Array<
 			NonNullable<VmFunction["nativeRegExpExecProjections"]>[number]
@@ -2784,6 +2791,11 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 			const load = fn.instructions[callIp - 1]!;
 			if (
 				call.opcode !== "CALL" ||
+				!vmCallProvesBuiltin(call, "RegExp.prototype.exec", {
+					lowering: "capture-projection",
+					result: "regexp-match-or-null",
+					effects: execEffects,
+				}) ||
 				call.arguments.length !== 1 ||
 				load.opcode !== "LOAD_PROPERTY_STATIC" ||
 				load.dst !== call.callee ||
@@ -3097,7 +3109,11 @@ function annotateNativeRegExpExecProjections(definition: VmDefinition): void {
 			) {
 				continue;
 			}
+			const license = vmRegionLicense([call.guardedBuiltinCall?.guard], "whole-region");
+			if (license === undefined) continue;
 			projections.push({
+				license,
+				resultRepresentation: "regexp-capture-projection",
 				callIp,
 				callee: call.callee,
 				receiver: call.thisValue,

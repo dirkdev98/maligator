@@ -937,6 +937,76 @@ export function annotateDirectMathSites(program: IntermediateProgram): number {
 }
 
 /**
+ * Attach canonical registry facts to direct `receiver.exec(value)` calls. The
+ * receiver remains speculative: capture projection still validates the concrete
+ * RegExp brand, own-property absence, callback identity, Realm, input coercion,
+ * and lastIndex behavior before bypassing the ordinary call.
+ */
+export function annotateDirectRegExpExecSites(program: IntermediateProgram): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		let guardOrdinal = 0;
+		let positionId: number | undefined;
+		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const moveRoot = (initial: number): number => {
+			let register = initial;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+
+		for (const block of fn.blocks) {
+			positionId = undefined;
+			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") {
+					positionId = instruction.pos;
+					continue;
+				}
+				if (instruction.type !== "call") continue;
+				const callee = definitions.get(instruction.registers[1]);
+				if (callee === undefined) continue;
+
+				let receiver: number;
+				let nameStringIndex: number;
+				if (callee.type === "loadPropertyStatic") {
+					receiver = callee.registers[1];
+					nameStringIndex = callee.stringIndex;
+				} else if (callee.type === "loadProperty") {
+					receiver = callee.registers[1];
+					const key = definitions.get(callee.registers[2]);
+					if (key?.type !== "createString") continue;
+					nameStringIndex = key.stringIndex;
+				} else {
+					continue;
+				}
+
+				if (
+					moveRoot(receiver) !== moveRoot(instruction.registers[2]) ||
+					decodeStringConstant(program, nameStringIndex) !== "exec"
+				) {
+					continue;
+				}
+				recordGuardedBuiltinCall(
+					program,
+					fn,
+					instruction,
+					"RegExp.prototype.exec",
+					guardOrdinal++,
+					positionId,
+				);
+				count++;
+			}
+		}
+	}
+	return count;
+}
+
+/**
  * Mark direct `receiver.get/set/add(...)` calls for guarded native collection
  * dispatch. Property lookup and argument evaluation stay in their original
  * order; unknown receivers remain candidates because the runtime validates both

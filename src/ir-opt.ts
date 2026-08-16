@@ -12,6 +12,7 @@ import {
 	annotateDirectCallTargets,
 	annotateDirectCollectionSites,
 	annotateDirectMathSites,
+	annotateDirectRegExpExecSites,
 	annotateDirectStringCharCodeAtSites,
 	annotateDirectStringSliceSites,
 	annotateDirectStringSplitSites,
@@ -484,6 +485,8 @@ export function executeIROptimizations(
 			annotateDirectCollectionSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectMathSites(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectRegExpExecSites(program);
 		if (residualFeatures.call) annotateDirectCallTargets(program);
 		if (residualFeatures.call) optImmediateCallOperands(program);
 		optDeadInstructionElimination(program);
@@ -594,6 +597,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-direct-math",
 			annotateDirectMathSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-direct-regexp-exec",
+			annotateDirectRegExpExecSites,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

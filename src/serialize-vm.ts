@@ -23,8 +23,8 @@ import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./low
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 36 for guard plans and canonical String/Math builtin-call metadata.
-export const WIRE_VERSION = 36;
+// Bumped to 37 for guard plans and canonical String/Math/RegExp call metadata.
+export const WIRE_VERSION = 37;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -39,6 +39,7 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"String.prototype.trim",
 	"String.prototype.slice",
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Math.")),
+	"RegExp.prototype.exec",
 ] as const;
 
 function taggedGuardedBuiltinOperation(operation: string | undefined): number {
