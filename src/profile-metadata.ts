@@ -34,13 +34,7 @@ export interface CompilerRemark {
 		| "bytecode-backend";
 	operation: string;
 	code: string;
-	outcome:
-		| "applied"
-		| "declined"
-		| "elided"
-		| "guarded"
-		| "retained"
-		| "fallback";
+	outcome: "applied" | "declined" | "elided" | "guarded" | "retained" | "fallback";
 	reason?: string;
 	reasonCode?: string;
 	details?: Record<string, string | number | boolean>;
@@ -616,7 +610,9 @@ export function buildProfileMetadata(
 			}
 			const compilerSiteId = fn.compilerSiteIds?.[instructionIndex];
 			const compilerSite =
-				compilerSiteId === undefined ? undefined : program.facts.sites.get(compilerSiteId);
+				compilerSiteId === undefined
+					? undefined
+					: program.facts.sites.get(compilerSiteId);
 			for (const remark of [
 				remarkForInstruction(instruction),
 				...factRemarks(compilerSite, operation),

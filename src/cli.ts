@@ -88,7 +88,7 @@ export type CliCommand =
 export class CliUsageError extends Error {
 	constructor(message: string) {
 		super(message);
-		this.name = "CliUsageError";
+		Object.defineProperty(this, "name", { value: "CliUsageError", configurable: true });
 	}
 }
 

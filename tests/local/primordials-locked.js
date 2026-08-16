@@ -18,6 +18,23 @@ globalThis.applicationValue = 1;
 check("ordinary globals stay mutable", globalThis.applicationValue === 1);
 delete globalThis.applicationValue;
 
+class ApplicationError extends Error {
+	constructor(message) {
+		super(message);
+		Object.defineProperty(this, "name", {
+			value: "ApplicationError",
+			configurable: true,
+		});
+	}
+}
+const applicationError = new ApplicationError("ordinary own property");
+check(
+	"Error subclasses can shadow the locked prototype name",
+	applicationError.name === "ApplicationError" &&
+		applicationError.message === "ordinary own property" &&
+		Object.hasOwn(applicationError, "name"),
+);
+
 function lockedCodeUnit(value, position) {
 	return value.charCodeAt(position);
 }

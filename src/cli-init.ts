@@ -8,7 +8,7 @@ const ENTRY_CANDIDATES = ["src/index.ts", "src/main.ts", "index.ts", "main.ts"];
 export class InitError extends Error {
 	constructor(message: string) {
 		super(message);
-		this.name = "InitError";
+		Object.defineProperty(this, "name", { value: "InitError", configurable: true });
 	}
 }
 

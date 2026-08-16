@@ -563,8 +563,94 @@ function staticStringEquals(
 interface NativeProofCfg {
 	successors: Array<ReadonlyArray<number>>;
 	predecessors: Array<ReadonlyArray<number>>;
-	dominators: Array<ReadonlySet<number>>;
+	dominators: Array<{ has(candidate: number): boolean }>;
 	loops: Array<{ header: number; backedge: number; body: ReadonlySet<number> }>;
+}
+
+function predecessorLists(
+	successors: ReadonlyArray<ReadonlyArray<number>>,
+): Array<Array<number>> {
+	const predecessors: Array<Array<number>> = Array.from(
+		{ length: successors.length },
+		() => [],
+	);
+	for (let node = 0; node < successors.length; node++) {
+		for (const successor of successors[node]!) {
+			if (successor >= 0 && successor < successors.length) {
+				predecessors[successor]!.push(node);
+			}
+		}
+	}
+	return predecessors;
+}
+
+/** Cooper-Harvey-Kennedy immediate dominators in reverse-postorder. The former
+ * dense Set for every instruction retained O(n^2) boxed entries and exhausted
+ * the Node heap while emitting the self-hosted product compiler. */
+export function immediateDominatorParents(
+	successors: ReadonlyArray<ReadonlyArray<number>>,
+): Array<number> {
+	const count = successors.length;
+	if (count === 0) return [];
+	const predecessors = predecessorLists(successors);
+	const visited = new Uint8Array(count);
+	const postorder: Array<number> = [];
+	const stack: Array<{ node: number; next: number }> = [{ node: 0, next: 0 }];
+	visited[0] = 1;
+	while (stack.length > 0) {
+		const frame = stack[stack.length - 1]!;
+		const targets = successors[frame.node]!;
+		if (frame.next < targets.length) {
+			const target = targets[frame.next++]!;
+			if (target >= 0 && target < count && visited[target] === 0) {
+				visited[target] = 1;
+				stack.push({ node: target, next: 0 });
+			}
+			continue;
+		}
+		postorder.push(frame.node);
+		stack.pop();
+	}
+	const reversePostorder = postorder.reverse();
+	const rank = new Int32Array(count);
+	rank.fill(-1);
+	for (const [index, node] of reversePostorder.entries()) rank[node] = index;
+	const parents = new Int32Array(count);
+	parents.fill(-1);
+	parents[0] = 0;
+	const intersect = (leftInitial: number, rightInitial: number): number => {
+		let left = leftInitial;
+		let right = rightInitial;
+		while (left !== right) {
+			while (rank[left]! > rank[right]!) left = parents[left]!;
+			while (rank[right]! > rank[left]!) right = parents[right]!;
+		}
+		return left;
+	};
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let index = 1; index < reversePostorder.length; index++) {
+			const node = reversePostorder[index]!;
+			const incoming = predecessors[node]!.filter(
+				(predecessor) => parents[predecessor]! >= 0,
+			);
+			if (incoming.length === 0) continue;
+			let parent = incoming[0]!;
+			for (
+				let predecessorIndex = 1;
+				predecessorIndex < incoming.length;
+				predecessorIndex++
+			) {
+				parent = intersect(parent, incoming[predecessorIndex]!);
+			}
+			if (parents[node] !== parent) {
+				parents[node] = parent;
+				changed = true;
+			}
+		}
+	}
+	return [...parents];
 }
 
 /** Build the exact ordinary-control CFG used by emitter-only proof annotations. */
@@ -582,40 +668,21 @@ function buildNativeProofCfg(fn: VmFunction): NativeProofCfg {
 		if (instruction.opcode === "THROW") return handlerTargets.slice(0, 1);
 		return ip + 1 < count ? [ip + 1, ...handlerTargets] : handlerTargets;
 	});
-	const predecessors: Array<Array<number>> = Array.from({ length: count }, () => []);
-	for (let ip = 0; ip < count; ip++) {
-		for (const successor of successors[ip]!) {
-			if (successor >= 0 && successor < count) predecessors[successor]!.push(ip);
-		}
-	}
-	const all = new Set(Array.from({ length: count }, (_, ip) => ip));
-	const dominators: Array<Set<number>> = Array.from({ length: count }, (_, ip) =>
-		ip === 0 ? new Set([0]) : new Set(all),
-	);
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (let ip = 1; ip < count; ip++) {
-			const incoming = predecessors[ip]!;
-			const next =
-				incoming.length === 0
-					? new Set<number>()
-					: new Set(
-							[...dominators[incoming[0]!]!].filter((candidate) =>
-								incoming.every((predecessor) => dominators[predecessor]!.has(candidate)),
-							),
-						);
-			next.add(ip);
-			const current = dominators[ip]!;
-			if (
-				current.size !== next.size ||
-				[...current].some((candidate) => !next.has(candidate))
-			) {
-				dominators[ip] = next;
-				changed = true;
+	const predecessors = predecessorLists(successors);
+	const immediateDominators = immediateDominatorParents(successors);
+	const dominators = immediateDominators.map((_parent, node) => ({
+		has(candidate: number): boolean {
+			if (candidate < 0 || candidate >= count) return false;
+			let current = node;
+			for (let steps = 0; steps <= count; steps++) {
+				if (current === candidate) return true;
+				const parent = immediateDominators[current]!;
+				if (parent < 0 || parent === current) return false;
+				current = parent;
 			}
-		}
-	}
+			return false;
+		},
+	}));
 	const loops: Array<{ header: number; backedge: number; body: ReadonlySet<number> }> =
 		[];
 	for (let from = 0; from < count; from++) {
@@ -3638,13 +3705,23 @@ function annotateNativeInvariantJsonParseCaches(definition: VmDefinition): void 
 	}
 }
 
-/** Generic post-wire reaching definitions for emitter-only semantic proofs. */
+interface NativeReachingDefinitions {
+	at(register: number, ip: number): ReadonlySet<number> | undefined;
+}
+
+/** Generic post-wire reaching definitions for emitter-only semantic proofs.
+ * Registers are solved on demand: the invariant JSON-map pass usually needs
+ * only a handful, while the former eager register x instruction lattice could
+ * retain millions of Sets for an unrelated large function. */
 function nativeReachingDefinitions(
 	fn: VmFunction,
 	cfg: NativeProofCfg,
-): Array<Array<ReadonlySet<number>>> {
-	const result: Array<Array<ReadonlySet<number>>> = [];
-	for (let register = 0; register < fn.registerCount; register++) {
+): NativeReachingDefinitions {
+	const result = new Map<number, Array<ReadonlySet<number>>>();
+	const solve = (register: number): Array<ReadonlySet<number>> | undefined => {
+		if (register < 0 || register >= fn.registerCount) return undefined;
+		const known = result.get(register);
+		if (known !== undefined) return known;
 		const incoming = Array.from(
 			{ length: fn.instructions.length },
 			() => new Set<number>(),
@@ -3677,14 +3754,19 @@ function nativeReachingDefinitions(
 				}
 			}
 		}
-		result[register] = incoming;
-	}
-	return result;
+		result.set(register, incoming);
+		return incoming;
+	};
+	return {
+		at(register, ip) {
+			return solve(register)?.[ip];
+		},
+	};
 }
 
 function nativeResolveMoves(
 	fn: VmFunction,
-	reaching: Array<Array<ReadonlySet<number>>>,
+	reaching: NativeReachingDefinitions,
 	register: number,
 	ip: number,
 ): { instruction?: VmInstruction; ip: number } | undefined {
@@ -3695,7 +3777,7 @@ function nativeResolveMoves(
 		const key = `${currentRegister}:${currentIp}`;
 		if (seen.has(key)) return undefined;
 		seen.add(key);
-		const definitions = reaching[currentRegister]?.[currentIp];
+		const definitions = reaching.at(currentRegister, currentIp);
 		if (definitions?.size !== 1) return undefined;
 		const definitionIp = [...definitions][0]!;
 		const instruction = definitionIp >= 0 ? fn.instructions[definitionIp] : undefined;
@@ -3998,7 +4080,7 @@ function proveNativePrimitiveProjection(
 	const primitiveMemo = new Map<string, boolean>();
 	const primitiveVisiting = new Set<string>();
 	const isNullishAt = (register: number, ip: number): boolean => {
-		const definitions = reaching[register]?.[ip];
+		const definitions = reaching.at(register, ip);
 		if (definitions === undefined || definitions.size === 0) return false;
 		return [...definitions].every((definitionIp) => {
 			if (definitionIp < 0) return false;
@@ -4016,7 +4098,7 @@ function proveNativePrimitiveProjection(
 		if (known !== undefined) return known;
 		if (primitiveVisiting.has(key)) return false;
 		primitiveVisiting.add(key);
-		const definitions = reaching[register]?.[ip];
+		const definitions = reaching.at(register, ip);
 		const result =
 			definitions !== undefined &&
 			definitions.size > 0 &&
@@ -4169,12 +4251,34 @@ function annotateNativeInvariantJsonMapTemplates(definition: VmDefinition): void
 	for (const fn of definition.functions) {
 		delete fn.nativeInvariantJsonMapTemplates;
 		if (fn.isGenerator || fn.isAsync) continue;
+		const candidateStarts: Array<number> = [];
+		for (let p = 0; p + 3 < fn.instructions.length; p++) {
+			const parse = fn.instructions[p]!;
+			const mapLoad = fn.instructions[p + 1]!;
+			const mapCall = fn.instructions[p + 2]!;
+			if (
+				parse.opcode === "CALL" &&
+				parse.arguments.length === 1 &&
+				mapLoad.opcode === "LOAD_PROPERTY_STATIC" &&
+				mapLoad.object === parse.dst &&
+				mapLoad.dst !== parse.dst &&
+				staticStringEquals(definition, mapLoad.stringIndex, "map") &&
+				mapCall.opcode === "CALL" &&
+				mapCall.callee === mapLoad.dst &&
+				mapCall.thisValue === parse.dst &&
+				mapCall.dst !== parse.dst &&
+				mapCall.arguments.length === 1
+			) {
+				candidateStarts.push(p);
+			}
+		}
+		if (candidateStarts.length === 0) continue;
 		const cfg = buildNativeProofCfg(fn);
 		const reaching = nativeReachingDefinitions(fn, cfg);
 		const templates: Array<
 			NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number]
 		> = [];
-		for (let p = 0; p + 3 < fn.instructions.length; p++) {
+		for (const p of candidateStarts) {
 			const parse = fn.instructions[p]!;
 			const mapLoad = fn.instructions[p + 1]!;
 			const mapCall = fn.instructions[p + 2]!;

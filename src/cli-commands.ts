@@ -204,7 +204,7 @@ class CommandError extends Error {
 
 	constructor(message: string, exitCode = 1) {
 		super(message);
-		this.name = "CommandError";
+		Object.defineProperty(this, "name", { value: "CommandError", configurable: true });
 		this.exitCode = exitCode;
 	}
 }

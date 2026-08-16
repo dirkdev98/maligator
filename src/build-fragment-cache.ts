@@ -104,7 +104,10 @@ export interface CompiledBuildFragments {
 export class UnsupportedBuildFragmentsError extends Error {
 	constructor(message: string) {
 		super(message);
-		this.name = "UnsupportedBuildFragmentsError";
+		Object.defineProperty(this, "name", {
+			value: "UnsupportedBuildFragmentsError",
+			configurable: true,
+		});
 	}
 }
 

@@ -228,7 +228,7 @@ export class RunError extends Error {
 				? `${message}\n${stdout.trim()}\n${stderr.trim()}`
 				: `${message}\n${stdout.trim()}`,
 		);
-		this.name = "RunError";
+		Object.defineProperty(this, "name", { value: "RunError", configurable: true });
 		this.stdout = stdout;
 		this.stderr = stderr;
 	}

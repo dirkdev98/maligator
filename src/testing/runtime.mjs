@@ -3,7 +3,10 @@ const ASYMMETRIC = "__maligator_asymmetric__";
 class MaligatorAssertionError extends Error {
 	constructor(details, captured) {
 		super(details.message);
-		this.name = "AssertionError";
+		Object.defineProperty(this, "name", {
+			value: "AssertionError",
+			configurable: true,
+		});
 		this.matcher = details.matcher;
 		this.expected = details.expected;
 		this.received = details.received;
@@ -636,7 +639,10 @@ async function callWithTimeout(callback, timeoutMs) {
 			new Promise((_, reject) => {
 				timer = globalThis.setTimeout(() => {
 					const error = new Error(`Timed out after ${timeoutMs}ms`);
-					error.name = "TimeoutError";
+					Object.defineProperty(error, "name", {
+						value: "TimeoutError",
+						configurable: true,
+					});
 					reject(error);
 				}, timeoutMs);
 			}),

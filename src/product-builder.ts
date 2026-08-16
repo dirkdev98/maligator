@@ -92,18 +92,27 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	);
 	const definition = compileSemanticProgramToVmDefinition(semanticProgram, {
 		facts: compilerProgramFactsFromConfig(config),
+		runPhase: (phase, run) => {
+			progress(`product CLI ${phase}`);
+			const result = run();
+			progress(`product CLI ${phase} complete`);
+			return result;
+		},
 	});
+	progress("embedding product CLI assets");
 	const assets = includeConfiguredAssets(config.assets, repositoryRoot);
 	const compilerWire = assets.find((asset) => asset.name === "compilerWire");
 	if (compilerWire?.files.length !== 1) {
 		throw new Error("Product compilerWire asset must contain exactly one file");
 	}
 	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
+	progress("emitting the product CLI translation units");
 	const cSource = emitVmTranslationUnits(definition, {
 		compiled: true,
 		assets,
 		maligatorSurface: config.surface.maligator,
 	});
+	progress("product CLI translation units ready");
 	const derivation = buildDerivationFromConfig(config);
 	progress("selecting the native toolchain");
 	const toolchain = requireToolchain({

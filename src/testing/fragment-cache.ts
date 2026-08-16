@@ -103,7 +103,10 @@ export interface CompiledRelocatableTestImage {
 export class UnsupportedRelocatableTestImageError extends Error {
 	constructor(message: string) {
 		super(message);
-		this.name = "UnsupportedRelocatableTestImageError";
+		Object.defineProperty(this, "name", {
+			value: "UnsupportedRelocatableTestImageError",
+			configurable: true,
+		});
 	}
 }
 

@@ -93,6 +93,7 @@ console.log(`ok   node does not resolve on isolated PATH (${tools})`);
 const cli = buildProductCli({
 	repositoryRoot,
 	outDir: root,
+	onProgress: (message) => console.log(`step ${message}`),
 });
 const distributedCli = path.join(distribution, "maligator");
 copyFileSync(cli, distributedCli);

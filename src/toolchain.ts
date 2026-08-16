@@ -183,7 +183,7 @@ export class ToolchainError extends Error {
 
 	constructor(report: ToolchainReport, platform: NodeJS.Platform = process.platform) {
 		super(formatToolchainReport(report, platform));
-		this.name = "ToolchainError";
+		Object.defineProperty(this, "name", { value: "ToolchainError", configurable: true });
 		this.report = report;
 	}
 }
