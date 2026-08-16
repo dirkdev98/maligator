@@ -188,23 +188,6 @@ export function test262PruneArtifactCache() {
 	}
 }
 
-// The pinned corpus predates tc39/test262@250f204f, which excludes the
-// immutable-buffer harness variant from tests that require mutable element
-// descriptors or writes.
-const STALE_IMMUTABLE_VARIANT_TESTS = new Set([
-	"test/built-ins/TypedArray/prototype/slice/speciesctor-return-same-buffer-with-offset.js",
-	"test/built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/index-prop-desc.js",
-	"test/built-ins/TypedArrayConstructors/internals/GetOwnProperty/index-prop-desc.js",
-	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/null-tobigint.js",
-	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/number-tobigint.js",
-	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/symbol-tobigint.js",
-	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/tonumber-value-throws.js",
-	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/string-nan-tobigint.js",
-	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/undefined-tobigint.js",
-	"test/built-ins/TypedArrayConstructors/internals/Set/bigint-tonumber.js",
-	"test/built-ins/TypedArrayConstructors/internals/Set/tonumber-value-throws.js",
-]);
-
 const HARNESS_CACHE: Record<string, string> = {};
 
 /**
@@ -440,19 +423,7 @@ function isAsyncTest(file: Test262File): boolean {
 	return file.frontmatter.flags?.includes("async") ?? false;
 }
 
-function testContent(file: Test262File): string {
-	let content = file.content;
-	if (STALE_IMMUTABLE_VARIANT_TESTS.has(file.path)) {
-		const patched = content.replace(/\}\);\s*$/, '}, null, null, ["immutable"]);');
-		if (patched === content) {
-			throw new Error(`Could not apply immutable-variant exclusion to '${file.path}'.`);
-		}
-		content = patched;
-	}
-	return content;
-}
-
-function composeSource(file: Test262File, content = testContent(file)) {
+function composeSource(file: Test262File, content = file.content) {
 	if (file.frontmatter.flags?.includes("raw")) {
 		return content;
 	}
@@ -1032,7 +1003,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	};
 
 	// Compose every test once: it feeds both the cache key and the compiler.
-	const contents = files.map((file) => testContent(file));
+	const contents = files.map((file) => file.content);
 	const composed = files.map((file, index) => composeSource(file, contents[index]));
 	const plans: Array<Test262SourcePlan> = files.map(
 		(file, index): Test262SourcePlan =>

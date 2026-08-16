@@ -1,7 +1,7 @@
 export const TEST262_METADATA = {
 	path: ".cache/test262",
 	repository: "tc39/test262",
-	revision: "fc32f3e82cb9ec08885fdd306756b65116e8547a",
+	revision: "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
 	buildPath: ".cache/mal-build/test262",
 	cacheFile: ".cache/test262-cache.json",
 	outputFile: "scripts/test262.json",
@@ -9,9 +9,10 @@ export const TEST262_METADATA = {
 	/**
 	 * Per-test binary run timeout. Loops are compilable now, so runaway tests
 	 * are a real possibility. Keep enough scheduler headroom for Unicode-scale
-	 * string construction while retaining a bounded cost for a hung worker.
+	 * string construction and large dynamic-function stress tests while retaining
+	 * a bounded cost for a hung worker.
 	 */
-	runTimeoutMs: 5_000,
+	runTimeoutMs: 10_000,
 	// Full-suite batches can exceed one minute on the largest generated C units;
 	// timing those out is counterproductive because the single-test fallback then
 	// recompiles hundreds of files while competing with the remaining workers.

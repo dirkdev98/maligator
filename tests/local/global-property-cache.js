@@ -97,8 +97,52 @@ ok(
 	"failed strict assignment does not create a global property",
 	!("runtimeMissingGlobal" in globalThis),
 );
+function strictInitiallyMissingGlobalStore() {
+	"use strict";
+	runtimeInitiallyMissingGlobal = globalThis.runtimeInitiallyMissingGlobal = 3;
+}
+ok(
+	"strict assignment resolves its reference before the RHS",
+	caught(strictInitiallyMissingGlobalStore) instanceof ReferenceError &&
+		globalThis.runtimeInitiallyMissingGlobal === 3,
+);
+delete globalThis.runtimeInitiallyMissingGlobal;
 
-const evalResult = eval(
+function strictDirectEvalDeclarationsStayLocal() {
+	"use strict";
+	eval(
+		"var strictEvalVar = 7;" +
+			"var [strictEvalPattern = 1, ...strictEvalRest] = [];" +
+			"function strictEvalFunction() {}",
+	);
+	return (
+		caught(() => strictEvalVar) instanceof ReferenceError &&
+		caught(() => strictEvalPattern) instanceof ReferenceError &&
+		caught(() => strictEvalRest) instanceof ReferenceError &&
+		caught(() => strictEvalFunction) instanceof ReferenceError
+	);
+}
+ok(
+	"strict direct-eval declarations stay local to the eval",
+	strictDirectEvalDeclarationsStayLocal() &&
+		!("strictEvalVar" in globalThis) &&
+		!("strictEvalPattern" in globalThis) &&
+		!("strictEvalRest" in globalThis) &&
+		!("strictEvalFunction" in globalThis),
+);
+
+(function strictCapturedDirectEvalDeclarationsStayLocal() {
+	"use strict";
+	function defaultValue() {}
+	function evaluate(pattern) {
+		var rest;
+		eval(`var ${pattern} = [];`);
+		return rest;
+	}
+	evaluate("[value=defaultValue(), ...rest]");
+})();
+
+const evalResult = (0, eval)(
 	"var evalAddedGlobal = 1;" +
 		"for (let i = 0; i < 1000; i++) evalAddedGlobal = evalAddedGlobal + 1;" +
 		"evalAddedGlobal",

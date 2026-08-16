@@ -272,7 +272,11 @@ test("sloppy direct eval rejects var declarations that cross caller environments
 		varEnvironmentIsGlobal: false,
 	});
 	const compile = (source: string, callerStrict = false) =>
-		compileSourceToBuffer(source, { direct: true, callerStrict, directEvalContext });
+		compileSourceToBuffer(source, {
+			direct: true,
+			callerStrict,
+			directEvalContext,
+		});
 
 	expect(() => compile("var parameter")).toThrow(SyntaxError);
 	expect(() => compile("function lexical() {}")).toThrow(SyntaxError);
@@ -281,6 +285,34 @@ test("sloppy direct eval rejects var declarations that cross caller environments
 	expect(() => compile("var unrelated")).not.toThrow();
 	expect(() => compile('"use strict"; var parameter')).not.toThrow();
 	expect(() => compile("var parameter", true)).not.toThrow();
+});
+
+test("strict direct eval keeps var and function declarations off the global object", () => {
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		"var value = 1; function declared() {}",
+		"eval",
+		undefined,
+		{
+			eval: { callerStrict: true, direct: true },
+		},
+	);
+	const program = compileSemanticProgramToIr(semantic, { evalDirect: true });
+	const instructions = program.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "storeLocal" || instruction.type === "storeCaptured",
+		),
+	).toBe(true);
+	expect(instructions.some((instruction) => instruction.type === "storeGlobal")).toBe(
+		false,
+	);
+	expect(
+		instructions.some((instruction) => instruction.type === "storeGlobalProperty"),
+	).toBe(false);
 });
 
 test("generated direct eval contexts model parameter and lexical conflicts", () => {

@@ -164,6 +164,22 @@ for (let repeat = 0; repeat < 500; repeat++) {
 }
 check(iteratedSum === 5000, "dense for-of values");
 
+function* denseIteratorAcrossYield() {
+	let sum = 0;
+	for (const value of [1, 2]) {
+		yield value;
+		sum += value;
+	}
+	return sum;
+}
+const suspendedDenseIterator = denseIteratorAcrossYield();
+check(
+	suspendedDenseIterator.next().value === 1 &&
+		suspendedDenseIterator.next().value === 2 &&
+		suspendedDenseIterator.next().value === 3,
+	"compiled generator restores dense for-of after yields",
+);
+
 const growing = [1, 2];
 const grownValues = [];
 for (const value of growing) {

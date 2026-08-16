@@ -511,9 +511,8 @@ static MalValue mal_async_iterator_prototype_async_dispose(
         return promise;
     }
 
-    MalValue undefined = mal_value_new_undefined();
     MalCompletion completion =
-        mal_vm_call_value(vm, roots[4], roots[3], &undefined, 1);
+        mal_vm_call_value(vm, roots[4], roots[3], nullptr, 0);
     if (completion.kind == MAL_COMPLETION_THROW) {
         MalValue promise = mal_async_iterator_dispose_reject(vm, roots[0], roots[2]);
         mal_gc_unroot(&span);

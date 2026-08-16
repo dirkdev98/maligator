@@ -9961,9 +9961,70 @@ function compileIdentifierAssignment(
 	if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
 		// A plain assignment must resolve against the runtime global object in both
 		// modes. Sloppy code creates an absent property; strict code throws only when
-		// the property is actually absent. Compound forms read first below.
+		// the property is actually absent. Resolve the strict reference before the
+		// RHS: a RHS that creates the property must not turn an initially-unresolvable
+		// reference into a resolvable one. Compound forms read first below.
 		if (assignmentExpression.operator === "=") {
+			let initiallyPresent: number | undefined;
+			if (!isSloppyFunction(fn)) {
+				const global = nextRegisterDestination(fn);
+				cursor.block.instructions.push({
+					type: "loadIntrinsic",
+					registers: [global],
+					intrinsic: "globalThis",
+				});
+				const key = compileStaticString(program, fn, cursor, binding.name);
+				initiallyPresent = nextRegisterDestination(fn);
+				cursor.block.instructions.push({
+					type: "binary",
+					registers: [initiallyPresent, key, global],
+					operator: "in",
+				});
+			}
 			const value = compileExpression(program, fn, cursor, assignmentExpression.right);
+			if (initiallyPresent !== undefined) {
+				const storeJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+					type: "jumpIf",
+					registers: [initiallyPresent],
+					blocks: [-1],
+				};
+				const throwJump: Extract<IRInstruction, { type: "jump" }> = {
+					type: "jump",
+					blocks: [-1],
+				};
+				cursor.block.instructions.push(storeJump, throwJump);
+
+				const storeIndex = fn.blocks.push({ instructions: [] }) - 1;
+				cursor.block = fn.blocks[storeIndex]!;
+				emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
+				const storeJoin: Extract<IRInstruction, { type: "jump" }> = {
+					type: "jump",
+					blocks: [-1],
+				};
+				cursor.block.instructions.push(storeJoin);
+
+				const throwIndex = fn.blocks.push({ instructions: [] }) - 1;
+				cursor.block = fn.blocks[throwIndex]!;
+				const undeclared = nextRegisterDestination(fn);
+				cursor.block.instructions.push({
+					type: "loadUndeclared",
+					registers: [undeclared],
+					nameStringIndex: getOrCreateStringConstant(program, binding.name),
+				});
+				const throwJoin: Extract<IRInstruction, { type: "jump" }> = {
+					type: "jump",
+					blocks: [-1],
+				};
+				cursor.block.instructions.push(throwJoin);
+
+				const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+				storeJump.blocks[0] = storeIndex;
+				throwJump.blocks[0] = throwIndex;
+				storeJoin.blocks[0] = joinIndex;
+				throwJoin.blocks[0] = joinIndex;
+				cursor.block = fn.blocks[joinIndex]!;
+				return value;
+			}
 			emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
 			return value;
 		}
@@ -12521,9 +12582,12 @@ function emitDynamicImportCall(
 	const targetFile = targetPath
 		? program.semantic.files.find((file) => file.path === targetPath)
 		: undefined;
+	// The current module is already being evaluated (or has completed) by this
+	// image. Passing its own init function would re-enter it before the status
+	// slot is committed, recursing or chaining an unresolvable async self-import.
 	const targetInitIndex = targetFile?.commonjs
 		? -1
-		: targetFile
+		: targetFile && targetPath !== fn.semanticFile.path
 			? compileFileInit(program, targetFile)
 			: -1;
 	const namespaceExports = targetPath

@@ -2891,7 +2891,10 @@ function emitBody(
 	const denseIteratorCursorActions = new Map<number, DenseIteratorCursorAction>();
 	const denseIteratorCursorResets = new Map<number, Array<DenseIteratorCursor>>();
 	const denseIteratorCursors: Array<DenseIteratorCursor> = [];
-	{
+	// A resumable function re-enters through a label after C-local declarations,
+	// so a raw cursor local cannot survive suspension. Its boxed iterator record
+	// does survive in the coroutine frame; use the regular validated step there.
+	if (coro === null) {
 		const pairKey = (iterator: number, next: number): string => `${iterator}:${next}`;
 		const getPairs = new Set<string>();
 		const stepPairs = new Set<string>();

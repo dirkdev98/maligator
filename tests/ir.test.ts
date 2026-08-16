@@ -1013,7 +1013,10 @@ test("eval var declarations create configurable globals", () => {
 		),
 	).toHaveLength(2);
 	expect(instructions).toContainEqual(
-		expect.objectContaining({ type: "initGlobalVars", declarationConfigurable: true }),
+		expect.objectContaining({
+			type: "initGlobalVars",
+			declarationConfigurable: true,
+		}),
 	);
 });
 
@@ -1402,17 +1405,23 @@ test("declared script-global reads use the dedicated global property opcode", ()
 	);
 });
 
-test("strict undeclared assignments resolve through the runtime global object", () => {
+test("strict undeclared assignments snapshot runtime global resolution before the RHS", () => {
 	const program = compileScript(
-		'"use strict"; function write() { runtimeInstalledGlobal = 2 }',
+		'"use strict"; function write() { runtimeInstalledGlobal = (globalThis.runtimeInstalledGlobal = 2) }',
 	);
 	const instructions = instructionsOf(functionNamed(program, "write"));
 
 	expect(instructions).toContainEqual(
-		expect.objectContaining({ type: "storeGlobalProperty", declaration: false }),
+		expect.objectContaining({
+			type: "storeGlobalProperty",
+			declaration: false,
+		}),
+	);
+	expect(instructions).toContainEqual(
+		expect.objectContaining({ type: "binary", operator: "in" }),
 	);
 	expect(instructions.some((instruction) => instruction.type === "loadUndeclared")).toBe(
-		false,
+		true,
 	);
 });
 

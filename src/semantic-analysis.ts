@@ -1449,7 +1449,13 @@ function calculateBindingScopedTo(file: SemanticFile) {
 		if (
 			declarationScope.node.type === "Program" &&
 			!file.commonjs &&
-			!(file.evalDirect && binding.implicit)
+			// Strict direct eval creates a fresh variable environment. Its top-level
+			// declarations are locals/captures owned by the eval entry, not bindings
+			// in the caller realm's global environment. Sloppy direct eval continues
+			// through the caller variable-environment machinery below the IR seam.
+			// Undeclared references remain global/dynamic so they can resolve through
+			// the caller environment at runtime.
+			!(file.evalDirect && (binding.implicit || (file.strict && !binding.undeclared)))
 		) {
 			return "global";
 		}

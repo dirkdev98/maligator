@@ -2,7 +2,7 @@
 # from baseline or report changes. Keep representative siblings only and keep
 # this selection disjoint from Test262 smoke.
 
-# Core built-in and runtime boundaries (60)
+# Core built-in and runtime boundaries (74)
 test/annexB/built-ins/Date/prototype/getYear/return-value.js
 test/annexB/built-ins/Date/prototype/setYear/date-value-read-before-tonumber-when-date-is-valid.js
 test/annexB/built-ins/Date/prototype/setYear/this-time-nan.js
@@ -27,6 +27,8 @@ test/built-ins/Date/prototype/toTemporalInstant/this-value-invalid-date.js
 test/built-ins/Date/prototype/toTemporalInstant/this-value-valid-date.js
 test/built-ins/Iterator/prototype/Symbol.dispose/invokes-return.js
 test/built-ins/Iterator/prototype/Symbol.dispose/prop-desc.js
+test/built-ins/Iterator/prototype/drop/argument-validation-failure-closes-underlying.js
+test/built-ins/Iterator/prototype/take/limit-rangeerror.js
 test/built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/invokes-return.js
 test/built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/throw-return-getter.js
 test/built-ins/Symbol/asyncDispose/cross-realm.js
@@ -169,7 +171,7 @@ test/built-ins/Array/prototype/unshift/length-near-integer-limit.js
 test/built-ins/Array/prototype/with/length-exceeding-array-length-limit.js
 test/built-ins/Object/defineProperties/15.2.3.7-6-a-179.js
 
-# Async completion and iterator closing (15)
+# Async completion and iterator closing (17)
 test/built-ins/Array/fromAsync/sync-iterable-with-rejecting-thenable-closes.js
 test/built-ins/AsyncFromSyncIteratorPrototype/next/for-await-iterator-next-rejected-promise-close.js
 test/built-ins/AsyncFromSyncIteratorPrototype/next/yield-iterator-next-rejected-promise-close.js
@@ -182,11 +184,13 @@ test/built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-broken-promi
 test/built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js
 test/built-ins/AsyncIteratorPrototype/Symbol.asyncIterator/prop-desc.js
 test/built-ins/Promise/any/ctx-non-object.js
+test/language/expressions/dynamic-import/eval-self-once-module.js
 test/language/statements/for-await-of/iterator-close-non-throw-get-method-abrupt.js
 test/language/statements/for-await-of/iterator-close-non-throw-get-method-non-callable.js
+test/language/statements/for-of/dstr/array-elem-target-yield-expr.js
 test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-err.js
 
-# Binding, coercion, and eval environments (45)
+# Binding, coercion, and eval environments (47)
 test/built-ins/JSON/stringify/replacer-function-object-deleted-property.js
 test/built-ins/Object/create/properties-arg-to-object-bigint.js
 test/built-ins/eval/no-construct.js
@@ -199,6 +203,7 @@ test/language/destructuring/binding/syntax/destructuring-array-parameters-functi
 test/language/eval-code/direct/gen-func-expr-named-a-following-parameter-is-named-arguments-declare-arguments.js
 test/language/eval-code/direct/new.target-fn.js
 test/language/eval-code/direct/super-prop-method.js
+test/language/eval-code/direct/var-env-var-strict-caller-2.js
 test/language/eval-code/direct/var-env-func-init-multi.js
 test/language/export/escaped-default.js
 test/language/expressions/arrow-function/lexical-super-call-from-within-constructor.js
@@ -218,6 +223,7 @@ test/language/future-reserved-words/interface.js
 test/language/global-code/decl-func-dup.js
 test/language/global-code/new.target.js
 test/language/identifier-resolution/S10.2.2_A1_T7.js
+test/language/identifier-resolution/assign-to-global-undefined.js
 test/language/identifiers/unicode-escape-nls-err.js
 test/language/import/import-defer/syntax/invalid-default-and-defer-namespace.js
 test/language/rest-parameters/position-invalid.js

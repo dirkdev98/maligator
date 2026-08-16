@@ -569,6 +569,15 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(": mal_vm_iterator_step_fast(vm,");
 	});
 
+	it("does not retain raw dense iterator cursors across generator suspension", () => {
+		const output = emit(
+			`"use strict"; function* values() { for (const value of [1, 2]) yield value; } globalThis.values = values;`,
+		);
+		expect(output).not.toContain("MalIteratorObject *__dense_iter_");
+		expect(output).not.toContain("mal_vm_iterator_step_dense_array_cursor(vm,");
+		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
+	});
+
 	it("retains the boxed coercion path for unproven Number or BigInt operands", () => {
 		const output = emit(
 			`"use strict"; function increment(value) { return value++; } globalThis.increment = increment;`,

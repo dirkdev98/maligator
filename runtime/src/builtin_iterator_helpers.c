@@ -624,6 +624,10 @@ static bool mal_ih_limit(MalVm *vm, MalValue value, f64 *out) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Iterator limit must not be NaN");
         return false;
     }
+    if (isfinite(number) && number > MAL_NUMBER_MAX_SAFE_INTEGER) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Iterator limit exceeds the maximum safe integer");
+        return false;
+    }
     f64 integer = isinf(number) ? number : trunc(number);
     if (integer < 0.0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Iterator limit must be non-negative");
