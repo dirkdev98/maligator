@@ -553,4 +553,37 @@ describe("normal build frontend cache", () => {
 			"hit",
 		);
 	});
+
+	it("separates optimization ablation artifacts from ordinary production builds", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(
+			entrypoint,
+			`function outer(value) { function addOne(input) { return input + 1; } return addOne(value); } globalThis.keep = outer;\n`,
+		);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripTypesWithTypeScript,
+			stripperIdentity: "build-frontend-cache-test",
+			cacheDirectory,
+			optimization: "full" as const,
+		};
+
+		expect(compileBuildFrontend(options).cache).toBe("miss");
+		expect(compileBuildFrontend(options).cache).toBe("hit");
+		expect(
+			compileBuildFrontend({
+				...options,
+				optimizationAblations: new Set(["inlining"]),
+			}).cache,
+		).toBe("miss");
+		expect(
+			compileBuildFrontend({
+				...options,
+				optimizationAblations: new Set(["inlining"]),
+			}).cache,
+		).toBe("hit");
+	});
 });

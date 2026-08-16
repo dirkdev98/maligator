@@ -1,3 +1,6 @@
+import { OPTIMIZATION_ABLATIONS } from "./compiler-diagnostics.ts";
+import type { OptimizationAblation } from "./compiler-diagnostics.ts";
+
 export { MALIGATOR_VERSION } from "./version.ts";
 
 export interface InternalBuildOptions {
@@ -13,6 +16,7 @@ export interface InternalBuildOptions {
 	dumpMethods: boolean;
 	dumpEscape: boolean;
 	dumpStackAlloc: boolean;
+	optimizationAblations: Array<OptimizationAblation>;
 }
 
 export interface BuildCommand {
@@ -177,6 +181,7 @@ function parseBuild(args: Array<string>): CliCommand {
 			dumpMethods: false,
 			dumpEscape: false,
 			dumpStackAlloc: false,
+			optimizationAblations: [],
 		},
 	};
 
@@ -266,6 +271,18 @@ function parseBuild(args: Array<string>): CliCommand {
 		}
 		if (argument === "--dump-stack-alloc") {
 			command.internal.dumpStackAlloc = true;
+			continue;
+		}
+		if (argument === "--ablate-optimization") {
+			const value = optionValue(args, index, argument);
+			if (!OPTIMIZATION_ABLATIONS.some((candidate) => candidate === value)) {
+				throw new CliUsageError(
+					`unknown optimization ablation '${value}' (allowed: ${OPTIMIZATION_ABLATIONS.join(", ")})`,
+				);
+			}
+			command.internal.optimizationAblations.push(value as OptimizationAblation);
+			command.production = true;
+			index++;
 			continue;
 		}
 		if (argument === "--run") {

@@ -1,3 +1,4 @@
+import type { OptimizationAblation } from "./compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import { ensureCompilerSiteFacts } from "./compiler-site-facts.ts";
@@ -21,6 +22,8 @@ export interface CompileCoreOptions {
 	optimization?: "development" | "full";
 	/** Derive source-site identities and compiler remarks for a profiled image. */
 	profile?: boolean;
+	/** Bounded pass groups disabled only for controlled attribution builds. */
+	optimizationAblations?: ReadonlySet<OptimizationAblation>;
 	ir?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -50,7 +53,9 @@ export function compileSemanticProgramToVmDefinition(
 	runPhase("ir optimizations", () =>
 		options.optimization === "development"
 			? executeIRDevelopmentOptimizations(ir)
-			: executeIROptimizations(ir),
+			: executeIROptimizations(ir, {
+					ablations: options.optimizationAblations,
+				}),
 	);
 	if (options.profile === true) ensureCompilerSiteFacts(ir);
 	options.afterOptimization?.(ir);

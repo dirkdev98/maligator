@@ -126,6 +126,27 @@ runtime work a hot site requested, then use phase timing and paired benchmarks f
 elapsed-time claims. Allocation count/bytes and GC starts remain separate per-site
 events in the same census.
 
+Profile metadata also carries a stable pass trace. Each executed, feature-gated, or
+ablated pass records its stage/fixpoint round and before/after deltas for allocation
+sites, dynamic calls, boxed operations, property helpers, world guards, and
+safepoints. Counter collection is profile-only; ordinary builds do not create a
+trace or scan the IR for these metrics.
+
+Compiler benchmark investigations can produce a production ablation build with a
+repeatable internal option:
+
+```sh
+maligator build bench/case.js --production --profile \
+  --ablate-optimization inlining \
+  --ablate-optimization static-properties
+```
+
+The bounded groups are `constant-folding`, `escape`, `inlining`, and
+`static-properties`. Ablations receive distinct frontend cache identities. Compare
+one group at a time against the same source, build config, workload, and warmed
+measurement protocol; combined ablations are useful for interaction checks but do
+not assign an individual transform's effect.
+
 ## Report layout
 
 The completeness marker, `manifest.json`, is published last. Its absence means the

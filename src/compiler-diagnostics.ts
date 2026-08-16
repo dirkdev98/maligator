@@ -27,6 +27,36 @@ export interface CompilerOptimizationDecision {
 	readonly reason?: OptimizationDecisionReason;
 }
 
+export const OPTIMIZATION_ABLATIONS = [
+	"constant-folding",
+	"escape",
+	"inlining",
+	"static-properties",
+] as const;
+
+export type OptimizationAblation = (typeof OPTIMIZATION_ABLATIONS)[number];
+
+export interface OptimizationMetrics {
+	readonly allocationSites: number;
+	readonly dynamicCalls: number;
+	readonly boxedOperations: number;
+	readonly propertyHelpers: number;
+	readonly worldGuards: number;
+	readonly safepoints: number;
+}
+
+export interface OptimizationPassDelta {
+	readonly pass: string;
+	readonly stage: "normalization" | "fixpoint" | "finalization";
+	readonly round?: number;
+	readonly status: "executed" | "feature-gated" | "ablated";
+	readonly changed: boolean;
+	readonly before: OptimizationMetrics;
+	readonly after: OptimizationMetrics;
+	readonly delta: OptimizationMetrics;
+	readonly ablation?: OptimizationAblation;
+}
+
 export interface CompilerDiagnostic {
 	readonly code: CompilerDiagnosticCode;
 	readonly severity: "warning" | "remark";

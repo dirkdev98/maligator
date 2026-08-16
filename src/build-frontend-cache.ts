@@ -18,7 +18,7 @@ import {
 } from "./build-fragment-cache.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
-import type { CompilerDiagnostic } from "./compiler-diagnostics.ts";
+import type { CompilerDiagnostic, OptimizationAblation } from "./compiler-diagnostics.ts";
 import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
@@ -112,6 +112,7 @@ export interface CompileBuildFrontendOptions {
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	optimization?: "development" | "full";
+	optimizationAblations?: ReadonlySet<OptimizationAblation>;
 	/** Include source-site identities and compiler remarks in the live definition. */
 	profile?: boolean;
 	cacheDirectory?: string;
@@ -156,6 +157,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: options.optimization ?? "full",
+			optimizationAblations: [...(options.optimizationAblations ?? [])].sort(),
 			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
 			modules: options.config.modules,
@@ -623,6 +625,7 @@ function compileDefinition(
 	return compileSemanticProgramToVmDefinition(semantic, {
 		facts,
 		optimization: options.optimization,
+		optimizationAblations: options.optimizationAblations,
 		profile: options.profile,
 		afterOptimization: options.afterOptimization,
 		runPhase(phase, run) {

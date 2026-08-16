@@ -1,6 +1,7 @@
 import { hash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import { profilePhaseName } from "./profile-phases.ts";
@@ -78,6 +79,7 @@ export interface PreparedProfile {
 	functions: Array<{ name: string; file: string }>;
 	sites: Array<ProfileSite>;
 	remarks: Array<CompilerRemark>;
+	optimizationTrace?: Array<OptimizationPassDelta>;
 }
 
 interface RawFrame {
@@ -265,6 +267,7 @@ export function prepareProfile(
 		})),
 		sites: definition.profileSites ?? [],
 		remarks: definition.profileRemarks ?? [],
+		optimizationTrace: definition.optimizationTrace ?? [],
 	};
 	prepared.captureIdentity = profileCaptureIdentity(prepared);
 	atomicJson(`${binaryPath}.profile.json`, prepared, true);

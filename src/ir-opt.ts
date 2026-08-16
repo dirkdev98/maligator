@@ -1,3 +1,11 @@
+import type {
+	OptimizationAblation,
+	OptimizationPassDelta,
+} from "./compiler-diagnostics.ts";
+import {
+	optimizationMetrics,
+	optimizationPassDelta,
+} from "./compiler-optimization-trace.ts";
 import {
 	annotateDirectArrayPushSites,
 	annotateDirectCallTargets,
@@ -67,6 +75,44 @@ interface OptimizationFeatures {
 	property: boolean;
 	typeofComparisonFunctions: ReadonlySet<IRFunction>;
 	capturedSlots: CapturedSlotOptimizationFacts;
+}
+
+export interface IROptimizationOptions {
+	/** Named, correctness-preserving pass groups disabled for attribution builds. */
+	ablations?: ReadonlySet<OptimizationAblation>;
+}
+
+type OptimizationStage = OptimizationPassDelta["stage"];
+
+function runTracedOptimizationPass(
+	program: IntermediateProgram,
+	name: string,
+	stage: OptimizationStage,
+	status: OptimizationPassDelta["status"],
+	run?: (program: IntermediateProgram) => unknown,
+	round?: number,
+	ablation?: OptimizationAblation,
+): boolean {
+	const trace = program.optimizationTrace;
+	if (trace === undefined) return run?.(program) === true;
+	const before = optimizationMetrics(program);
+	const changed = run?.(program) === true;
+	const after = optimizationMetrics(program);
+	trace.push(
+		optimizationPassDelta(
+			{
+				pass: name,
+				stage,
+				...(round === undefined ? {} : { round }),
+				status,
+				changed,
+				...(ablation === undefined ? {} : { ablation }),
+			},
+			before,
+			after,
+		),
+	);
+	return changed;
 }
 
 /** Cheap feature summary used to avoid building irrelevant per-function analyses. */
@@ -169,28 +215,55 @@ const optimizationIndexBuildCounts = {
 };
 
 /** Execute the ordered IR optimization pipeline. */
-export function executeIROptimizations(program: IntermediateProgram) {
+export function executeIROptimizations(
+	program: IntermediateProgram,
+	options: IROptimizationOptions = {},
+) {
+	const ablations = options.ablations;
 	// Eliminate provably-redundant temporal-dead-zone checks before the main
 	// fixpoint. It needs to see the original `loadLocal`/`storeLocal` form
 	// (optLocalsToRegister below rewrites those into `move`s), so it runs once
 	// up front against the pristine IR.
-	optEliminateRedundantTdzChecks(program);
+	if (program.optimizationTrace === undefined && ablations === undefined) {
+		optEliminateRedundantTdzChecks(program);
+	} else {
+		runTracedOptimizationPass(
+			program,
+			"eliminate-redundant-tdz-checks",
+			"normalization",
+			"executed",
+			optEliminateRedundantTdzChecks,
+		);
+	}
 
 	const passes: Array<{
+		name: string;
 		run: (program: IntermediateProgram, features: OptimizationFeatures) => boolean;
 		requires?: "call" | "object" | "property";
 		refreshFeatures?: boolean;
+		ablation?: OptimizationAblation;
 	}> = [
-		{ run: optDropInstructionsAfterJumpsOrReturns },
-		{ run: optDropUnreferencedBlocks },
-		{ run: optLocalsToRegister },
-		{ run: optCopyPropagation },
-		{ run: optEliminateRedundantNumericCoercions },
-		{ run: optForwardSingleUsePrimitiveResults },
-		{ run: optValueNumberIsEmptyChecks },
+		{ name: "drop-after-terminator", run: optDropInstructionsAfterJumpsOrReturns },
+		{ name: "drop-unreferenced-blocks", run: optDropUnreferencedBlocks },
+		{ name: "locals-to-registers", run: optLocalsToRegister },
+		{ name: "copy-propagation", run: optCopyPropagation },
+		{
+			name: "eliminate-redundant-numeric-coercions",
+			run: optEliminateRedundantNumericCoercions,
+		},
+		{
+			name: "forward-single-use-primitive-results",
+			run: optForwardSingleUsePrimitiveResults,
+		},
+		{
+			name: "value-number-empty-checks",
+			run: optValueNumberIsEmptyChecks,
+			ablation: "constant-folding",
+		},
 		// A fused predicate must execute where the original typeof did: moving the
 		// observation to its later comparison could see a reassigned source.
 		{
+			name: "fuse-typeof-comparisons",
 			run: (program, features) => {
 				optimizationIndexBuildCounts.typeofComparisons +=
 					features.typeofComparisonFunctions.size;
@@ -202,30 +275,43 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// canonical typeof result becomes a constant boolean; the existing primitive
 		// folder then removes any newly constant branch in this same round.
 		{
+			name: "fold-static-typeof-comparisons",
 			run: (program, features) =>
 				optFoldStaticTypeofComparisons(program, features.typeofComparisonFunctions),
+			ablation: "constant-folding",
 		},
 		// Refine the tested value on the true/false successors of a canonical
 		// typeof branch. This first path-sensitive slice consumes only stable SSA
 		// values (parameters without writes or unique definitions/move aliases), so
 		// no kill set or effect model is required yet.
 		{
+			name: "refine-static-typeof-branches",
 			run: (program, features) =>
 				optRefineStaticTypeofBranches(program, features.typeofComparisonFunctions),
+			ablation: "constant-folding",
 		},
 		// Fold only primitive operations whose exact JavaScript result can be
 		// computed without coercing an object or running user code. Constant jump
 		// cleanup then exposes dead blocks to the existing CFG passes.
-		{ run: optFoldPrimitiveConstants },
+		{
+			name: "fold-primitive-constants",
+			run: optFoldPrimitiveConstants,
+			ablation: "constant-folding",
+		},
 		// Reuse a fresh object-rest result as a leading object-spread target when its
 		// identity is otherwise unobserved. This removes the redundant empty result
 		// allocation and CopyDataProperties traversal without moving source effects.
-		{ run: optFuseObjectRestLeadingSpread, requires: "object" },
+		{
+			name: "fuse-object-rest-leading-spread",
+			run: optFuseObjectRestLeadingSpread,
+			requires: "object",
+		},
 		// Preserve partial-escape facts for the inliner cost check below. The final
 		// residual annotation is rebuilt after the fixpoint; this early analysis only
 		// prevents a hot-loop inline from replacing rare materialization with one heap
 		// allocation per iteration.
 		{
+			name: "analyze-stack-objects-for-inlining",
 			run: (program) => {
 				annotateStackObjectSites(program);
 				return false;
@@ -235,37 +321,72 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// Rewrite `arr.forEach(cb)` into a guarded inlined loop whose `cb(...)` is a
 		// direct call. Runs before optInlineCalls so that direct call is folded in the
 		// same fixpoint round → the per-call closure + its captured env are eliminated.
-		{ run: optInlineHofCallbacks, requires: "call" },
+		{
+			name: "inline-hof-callbacks",
+			run: optInlineHofCallbacks,
+			requires: "call",
+			ablation: "inlining",
+		},
 		// Runs after copy propagation so a call's callee resolves to its function
 		// value through the move chain; before scalar replacement (inlining exposes
 		// cross-call object flow) and DCE (which drops the now-unused closure's
 		// createFunction → no closure/env allocation).
-		{ run: optInlineCalls, requires: "call" },
+		{
+			name: "inline-known-calls",
+			run: optInlineCalls,
+			requires: "call",
+			ablation: "inlining",
+		},
 		// Speculative (guarded) inlining of reassignable-global direct calls (script-mode
 		// top-level functions). Runs after the static inliner so only genuinely-dynamic
 		// callees reach it; its deopt path is a normal call, folded no further.
-		{ run: optInlineSpeculative, requires: "call" },
+		{
+			name: "inline-speculative-calls",
+			run: optInlineSpeculative,
+			requires: "call",
+			ablation: "inlining",
+		},
 		// Loaded-callee-guarded method inlining: `obj.m()` where m resolves to a small
 		// known target set. The loadProperty callee is already proto-resolved; exact
 		// function-index guards select an inlined body with this = receiver. Deopt = call.
-		{ run: optInlineMethod, requires: "call" },
+		{
+			name: "inline-known-methods",
+			run: optInlineMethod,
+			requires: "call",
+			ablation: "inlining",
+		},
 		// Runs after copy propagation so a record's reads reference its allocation
 		// register directly (not a local copy), and before DCE so the freed key
 		// constants and unread values are cleaned up the same round.
-		{ run: optScalarReplaceObjectLiterals, requires: "object" },
+		{
+			name: "scalar-replace-object-literals",
+			run: optScalarReplaceObjectLiterals,
+			requires: "object",
+			ablation: "escape",
+		},
 		// The mutable generalization: a non-escaping object that IS written
 		// (storeProperty) becomes per-key registers (T7.4). Handled separately from
 		// the immutable pass above, which only fires on never-written records.
-		{ run: optScalarReplaceMutableObjects, requires: "object" },
-		{ run: optValueNumberNumericSubtractions },
+		{
+			name: "scalar-replace-mutable-objects",
+			run: optScalarReplaceMutableObjects,
+			requires: "object",
+			ablation: "escape",
+		},
+		{
+			name: "value-number-numeric-subtractions",
+			run: optValueNumberNumericSubtractions,
+			ablation: "constant-folding",
+		},
 		// Empty functions made unreachable by inlining (their createFunction was
 		// DCE'd) — reclaims dead bodies and unblocks env elimination below.
-		{ run: optEmptyDeadFunctions },
+		{ name: "empty-dead-functions", run: optEmptyDeadFunctions },
 		// After inlining consolidates a closure's captured reads into its definer,
 		// internalize single-store immutable slots to direct register access and drop
 		// the now-unused env — completing closure+env elimination for capturing
 		// closures. Before DCE so the dropped stores / freed closures are cleaned up.
 		{
+			name: "eliminate-captured-slots",
 			// Inlining and dead-function cleanup above can move or remove captured
 			// accesses, so refresh before using sparse candidates from this round.
 			refreshFeatures: true,
@@ -281,9 +402,9 @@ export function executeIROptimizations(program: IntermediateProgram) {
 				return optEliminateCapturedSlots(program, facts);
 			},
 		},
-		{ run: optDeadInstructionElimination },
-		{ run: optCombineLinearBlocks },
-		{ run: optPatchJumpsToDirectJumpBlocks },
+		{ name: "dead-instruction-elimination", run: optDeadInstructionElimination },
+		{ name: "combine-linear-blocks", run: optCombineLinearBlocks },
+		{ name: "patch-direct-jump-blocks", run: optPatchJumpsToDirectJumpBlocks },
 	];
 
 	// Run all passes until a full round no longer changes the program. The cap is a safety net
@@ -294,46 +415,172 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		let features = optimizationFeatures(program);
 		for (const pass of passes) {
 			if (pass.refreshFeatures) features = optimizationFeatures(program);
-			if (pass.requires !== undefined && !features[pass.requires]) continue;
-			changed = pass.run(program, features) || changed;
+			if (program.optimizationTrace === undefined && ablations === undefined) {
+				if (pass.requires !== undefined && !features[pass.requires]) continue;
+				changed = pass.run(program, features) || changed;
+				continue;
+			}
+			const ablated =
+				pass.ablation !== undefined && ablations?.has(pass.ablation) === true;
+			const featureGated = pass.requires !== undefined && !features[pass.requires];
+			const status: OptimizationPassDelta["status"] = ablated
+				? "ablated"
+				: featureGated
+					? "feature-gated"
+					: "executed";
+			const passChanged =
+				program.optimizationTrace === undefined
+					? status === "executed" && pass.run(program, features)
+					: runTracedOptimizationPass(
+							program,
+							pass.name,
+							"fixpoint",
+							status,
+							status === "executed"
+								? (candidate) => pass.run(candidate, features)
+								: undefined,
+							round,
+							pass.ablation,
+						);
+			changed = passChanged || changed;
 		}
 
 		if (!changed) {
 			break;
 		}
 	}
+	if (program.optimizationTrace === undefined && ablations === undefined) {
+		// Preserve the allocation-free orchestration path for ordinary production
+		// compiles. Profiling and explicit ablations alone enter the named-pass wrapper.
+		optCommonPrimitiveConstants(program);
+		optCopyPropagation(program);
+		optDeadInstructionElimination(program);
+		const residualFeatures = optimizationFeatures(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectArrayPushSites(program);
+		if (residualFeatures.property) annotateFreshDenseIndexedReserves(program);
+		if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
+			annotateCardinalityOnlyArrayRegions(program);
+		if (residualFeatures.object) annotateStackObjectSites(program);
+		if (residualFeatures.property) optStaticPropertyKeys(program);
+		if (residualFeatures.object && residualFeatures.property)
+			annotateClosedGlobalFiniteTables(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectStringCharCodeAtSites(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateBoundedStringCharCodeAtPositions(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectCollectionSites(program);
+		if (residualFeatures.call) annotateDirectCallTargets(program);
+		if (residualFeatures.call) optImmediateCallOperands(program);
+		optDeadInstructionElimination(program);
+		annotateFiniteStringConcats(program);
+		annotateNativeNumericFusions(program);
+		annotateTerminalYieldSites(program);
+	} else {
+		const runFinalPass = (
+			name: string,
+			run: (program: IntermediateProgram) => unknown,
+			enabled = true,
+			ablation?: OptimizationAblation,
+		): boolean => {
+			const ablated = ablation !== undefined && ablations?.has(ablation) === true;
+			const status: OptimizationPassDelta["status"] = ablated
+				? "ablated"
+				: !enabled
+					? "feature-gated"
+					: "executed";
+			return runTracedOptimizationPass(
+				program,
+				name,
+				"finalization",
+				status,
+				status === "executed" ? run : undefined,
+				undefined,
+				ablation,
+			);
+		};
 
-	// Generic sharing deliberately runs after the transform fixpoint: canonical
-	// constant producers remain visible to every specialized fusion first.
-	optCommonPrimitiveConstants(program);
-	optCopyPropagation(program);
-	optDeadInstructionElimination(program);
+		// Generic sharing deliberately runs after the transform fixpoint: canonical
+		// constant producers remain visible to every specialized fusion first.
+		runFinalPass("common-primitive-constants", optCommonPrimitiveConstants);
+		runFinalPass("final-copy-propagation", optCopyPropagation);
+		runFinalPass("final-dead-instruction-elimination", optDeadInstructionElimination);
 
-	// This is intentionally outside the transform fixpoint: it classifies the
-	// residual identity-observed objects left after scalar replacement, and keys
-	// the proof to the exact allocation instruction before register reuse.
-	const residualFeatures = optimizationFeatures(program);
-	if (residualFeatures.call && residualFeatures.property)
-		annotateDirectArrayPushSites(program);
-	if (residualFeatures.property) annotateFreshDenseIndexedReserves(program);
-	if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
-		annotateCardinalityOnlyArrayRegions(program);
-	if (residualFeatures.object) annotateStackObjectSites(program);
-	if (residualFeatures.property) optStaticPropertyKeys(program);
-	if (residualFeatures.object && residualFeatures.property)
-		annotateClosedGlobalFiniteTables(program);
-	if (residualFeatures.call && residualFeatures.property)
-		annotateDirectStringCharCodeAtSites(program);
-	if (residualFeatures.call && residualFeatures.property)
-		annotateBoundedStringCharCodeAtPositions(program);
-	if (residualFeatures.call && residualFeatures.property)
-		annotateDirectCollectionSites(program);
-	if (residualFeatures.call) annotateDirectCallTargets(program);
-	if (residualFeatures.call) optImmediateCallOperands(program);
-	optDeadInstructionElimination(program);
-	annotateFiniteStringConcats(program);
-	annotateNativeNumericFusions(program);
-	annotateTerminalYieldSites(program);
+		// This is intentionally outside the transform fixpoint: it classifies the
+		// residual identity-observed objects left after scalar replacement, and keys
+		// the proof to the exact allocation instruction before register reuse.
+		const residualFeatures = optimizationFeatures(program);
+		runFinalPass(
+			"annotate-direct-array-push",
+			annotateDirectArrayPushSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-fresh-dense-indexed-reserves",
+			annotateFreshDenseIndexedReserves,
+			residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-cardinality-array-regions",
+			annotateCardinalityOnlyArrayRegions,
+			residualFeatures.call && residualFeatures.property && residualFeatures.object,
+		);
+		runFinalPass(
+			"clear-stack-object-annotations",
+			clearStackObjectAnnotations,
+			ablations?.has("escape") === true,
+		);
+		runFinalPass(
+			"annotate-stack-objects",
+			annotateStackObjectSites,
+			residualFeatures.object,
+			"escape",
+		);
+		runFinalPass(
+			"static-property-keys",
+			optStaticPropertyKeys,
+			residualFeatures.property,
+			"static-properties",
+		);
+		runFinalPass(
+			"annotate-closed-global-finite-tables",
+			annotateClosedGlobalFiniteTables,
+			residualFeatures.object && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-direct-string-char-code-at",
+			annotateDirectStringCharCodeAtSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-bounded-string-char-code-at-positions",
+			annotateBoundedStringCharCodeAtPositions,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-direct-collections",
+			annotateDirectCollectionSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-direct-call-targets",
+			annotateDirectCallTargets,
+			residualFeatures.call,
+		);
+		runFinalPass(
+			"immediate-call-operands",
+			optImmediateCallOperands,
+			residualFeatures.call,
+		);
+		runFinalPass(
+			"post-annotation-dead-instruction-elimination",
+			optDeadInstructionElimination,
+		);
+		runFinalPass("annotate-finite-string-concats", annotateFiniteStringConcats);
+		runFinalPass("annotate-native-numeric-fusions", annotateNativeNumericFusions);
+		runFinalPass("annotate-terminal-yield-sites", annotateTerminalYieldSites);
+	}
 
 	if (debugEnabled) debugIntermediateProgram(program);
 }
@@ -710,10 +957,42 @@ export function executeIRDevelopmentOptimizations(program: IntermediateProgram):
 	// production passes below reduce output by about 20%, but on representative
 	// dependency graphs their repeated Map/Set scans cost substantially more than
 	// the larger development wire costs to lower, serialize, load, and execute.
-	optDropInstructionsAfterJumpsOrReturns(program);
-	optDropUnreferencedBlocks(program);
-	optLocalsToRegister(program);
-	annotateTerminalYieldSites(program);
+	if (program.optimizationTrace === undefined) {
+		optDropInstructionsAfterJumpsOrReturns(program);
+		optDropUnreferencedBlocks(program);
+		optLocalsToRegister(program);
+		annotateTerminalYieldSites(program);
+		if (debugEnabled) debugIntermediateProgram(program);
+		return;
+	}
+	runTracedOptimizationPass(
+		program,
+		"drop-after-terminator",
+		"normalization",
+		"executed",
+		optDropInstructionsAfterJumpsOrReturns,
+	);
+	runTracedOptimizationPass(
+		program,
+		"drop-unreferenced-blocks",
+		"normalization",
+		"executed",
+		optDropUnreferencedBlocks,
+	);
+	runTracedOptimizationPass(
+		program,
+		"locals-to-registers",
+		"normalization",
+		"executed",
+		optLocalsToRegister,
+	);
+	runTracedOptimizationPass(
+		program,
+		"annotate-terminal-yield-sites",
+		"finalization",
+		"executed",
+		annotateTerminalYieldSites,
+	);
 
 	if (debugEnabled) debugIntermediateProgram(program);
 }
@@ -2780,24 +3059,26 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
  * enumeration, delete, and suspension-related operation. A direct return may be
  * accepted by the partial-escape subset below when another ordinary exit remains.
  */
-export function annotateStackObjectSites(program: IntermediateProgram): void {
+function clearStackObjectAnnotations(program: IntermediateProgram): boolean {
+	let changed = false;
 	for (const fn of program.functions) {
-		// Slots stay rooted for the full activation. Bound their aggregate C-stack
-		// and root-scan cost; later sites simply retain ordinary heap allocation.
-		const maxStackObjectSlots = 256;
-		let stackObjectSlots = 0;
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (instruction.type === "return") {
+					changed ||= instruction.stackObjectMaterializeSiteId !== undefined;
 					delete instruction.stackObjectMaterializeSiteId;
 				}
 				if (instruction.type === "call") {
+					changed ||= instruction.cardinalityPushStackObjectSiteId !== undefined;
 					delete instruction.cardinalityPushStackObjectSiteId;
 				}
 				if (
 					instruction.type === "createObject" ||
 					instruction.type === "createObjectShaped"
 				) {
+					changed ||=
+						instruction.stackObject !== undefined ||
+						instruction.stackObjectSiteId !== undefined;
 					delete instruction.stackObject;
 					delete instruction.stackObjectSiteId;
 				}
@@ -2807,17 +3088,32 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 					instruction.type === "storeProperty" ||
 					instruction.type === "storePropertyStatic"
 				) {
+					changed ||=
+						instruction.stackObjectSiteId !== undefined ||
+						instruction.stackObjectSlot !== undefined;
 					delete instruction.stackObjectSiteId;
 					delete instruction.stackObjectSlot;
 					if (
 						instruction.type === "loadProperty" ||
 						instruction.type === "loadPropertyStatic"
 					) {
+						changed ||= instruction.stackObjectInheritedSiteId !== undefined;
 						delete instruction.stackObjectInheritedSiteId;
 					}
 				}
 			}
 		}
+	}
+	return changed;
+}
+
+export function annotateStackObjectSites(program: IntermediateProgram): void {
+	clearStackObjectAnnotations(program);
+	for (const fn of program.functions) {
+		// Slots stay rooted for the full activation. Bound their aggregate C-stack
+		// and root-scan cost; later sites simply retain ordinary heap allocation.
+		const maxStackObjectSlots = 256;
+		let stackObjectSlots = 0;
 
 		if (
 			fn.isGenerator ||

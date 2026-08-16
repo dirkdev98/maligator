@@ -1,6 +1,9 @@
 import type { ESTree } from "meriyah";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
-import type { CompilerOptimizationDecision } from "./compiler-diagnostics.ts";
+import type {
+	CompilerOptimizationDecision,
+	OptimizationPassDelta,
+} from "./compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
 import type { CompilerProgramFacts, KnownBuiltinCall } from "./compiler-facts.ts";
 import {
@@ -47,6 +50,8 @@ export interface IntermediateProgram {
 	facts: CompilerProgramFacts;
 	/** Profile-only structured decisions recorded while transforms still see candidates. */
 	optimizationDecisions?: Array<CompilerOptimizationDecision>;
+	/** Profile-only stable pass names and selected before/after IR counters. */
+	optimizationTrace?: Array<OptimizationPassDelta>;
 
 	/**
 	 * Eval-completion mode: compile the entry (Script) so it returns its
@@ -1850,6 +1855,7 @@ export function compileSemanticProgramToIr(
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
 		optimizationDecisions:
 			options.collectOptimizationDiagnostics === true ? [] : undefined,
+		optimizationTrace: options.collectOptimizationDiagnostics === true ? [] : undefined,
 
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,

@@ -1,3 +1,4 @@
+import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
 import type {
 	IntermediateProgram,
 	IRFunction,
@@ -122,6 +123,7 @@ export interface VmDefinition {
 	 * builds emit these; ordinary generated code ignores them. */
 	profileSites?: Array<ProfileSite>;
 	profileRemarks?: Array<CompilerRemark>;
+	optimizationTrace?: Array<OptimizationPassDelta>;
 
 	/**
 	 * CommonJS module table: index (module id) -> wrapper function index. Empty
@@ -1323,6 +1325,7 @@ export function lowerIrProgramToVmDefinition(
 		hostInstalls: buildHostInstalls(program, functions),
 		files,
 		sourcePositions: program.sourcePositions,
+		...(profile ? { optimizationTrace: program.optimizationTrace } : {}),
 	};
 	if (profile) buildProfileMetadata(program, definition);
 	return definition;

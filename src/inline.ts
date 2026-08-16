@@ -2373,10 +2373,9 @@ export function optInlineSpeculative(program: IntermediateProgram): boolean {
 	for (const fn of program.functions) {
 		for (const { call, target } of byCaller.get(fn.functionIndex) ?? []) {
 			const targetFn = targetOf.get(target);
-			if (
-				targetFn !== undefined &&
-				inlineGuardedCallSite(program, fn, call, [targetFn], null)
-			) {
+			if (targetFn === undefined) {
+				recordInlineDecision(program, fn, call, "declined", "unavailable-world-fact");
+			} else if (inlineGuardedCallSite(program, fn, call, [targetFn], null)) {
 				changed = true;
 			}
 		}

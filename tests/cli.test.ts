@@ -214,6 +214,28 @@ describe("parseCliArgs", () => {
 		});
 	});
 
+	it("parses repeatable production optimization ablations", () => {
+		expect(
+			parseCliArgs([
+				"build",
+				"fixture.js",
+				"--ablate-optimization",
+				"inlining",
+				"--ablate-optimization",
+				"static-properties",
+			]),
+		).toMatchObject({
+			kind: "build",
+			production: true,
+			internal: {
+				optimizationAblations: ["inlining", "static-properties"],
+			},
+		});
+		expect(() =>
+			parseCliArgs(["build", "fixture.js", "--ablate-optimization", "unknown"]),
+		).toThrow("unknown optimization ablation 'unknown'");
+	});
+
 	it.each([
 		[[], "missing command"],
 		[["compile"], "unknown command 'compile'"],

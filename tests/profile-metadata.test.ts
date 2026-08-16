@@ -30,6 +30,7 @@ test("ordinary compilation skips profile-only metadata", () => {
 
 	expect(definition.profileSites).toBeUndefined();
 	expect(definition.profileRemarks).toBeUndefined();
+	expect(definition.optimizationTrace).toBeUndefined();
 });
 
 test("profile sites keep logical identity across unrelated line insertions", () => {
@@ -59,6 +60,7 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 	const remarks = definition.profileRemarks!;
 
 	expect(sites.length).toBeGreaterThan(0);
+	expect(definition.optimizationTrace?.length).toBeGreaterThan(0);
 	expect(sites.map((site) => site.id)).toEqual(sites.map((_, index) => index));
 	expect(
 		definition.functions
@@ -124,6 +126,9 @@ test("every residual allocation, call, property, and boxing site has a remark", 
 		expect.objectContaining({
 			code: "optimization.applied.partial-escape-materialization",
 		}),
+	);
+	expect(definition.optimizationTrace!.some((event) => event.delta.worldGuards > 0)).toBe(
+		true,
 	);
 });
 

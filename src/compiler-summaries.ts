@@ -1,4 +1,3 @@
-import { hash } from "node:crypto";
 import type {
 	EffectKind,
 	FunctionEffectSummary,
@@ -12,6 +11,27 @@ import { MALIGATOR_VERSION } from "./version.ts";
 
 const SUMMARY_ANALYSIS_VERSION = 2;
 const MAX_CACHED_PROGRAMS = 64;
+
+/** Dependency-free 128-bit cache digest so the compiler remains self-hostable in
+ * products whose Node surface is disabled. This is an in-memory identity, not a
+ * security boundary; four independently seeded FNV-style lanes make accidental
+ * collisions negligible without retaining complete source graphs as Map keys. */
+function summaryDigest(value: string): string {
+	const lanes = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+	const primes = [0x01000193, 0x27d4eb2d, 0x165667b1, 0x9e3779b1];
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		for (let lane = 0; lane < lanes.length; lane++) {
+			lanes[lane] = Math.imul(lanes[lane]! ^ code, primes[lane]!) >>> 0;
+		}
+	}
+	for (let lane = 0; lane < lanes.length; lane++) {
+		lanes[lane] = Math.imul(lanes[lane]! ^ value.length, 0x85ebca6b) >>> 0;
+		const mixed = lanes[lane]!;
+		lanes[lane] = (mixed ^ (mixed >>> 13)) >>> 0;
+	}
+	return lanes.map((lane) => lane.toString(16).padStart(8, "0")).join("");
+}
 
 export interface SharedProgramSummaries {
 	readonly cacheIdentity: string;
@@ -67,8 +87,7 @@ export function compilerSummaryCacheIdentity(program: IntermediateProgram): stri
 						}))
 						.sort((left, right) => left.path.localeCompare(right.path)),
 				};
-	return hash(
-		"sha256",
+	return summaryDigest(
 		JSON.stringify({
 			compiler: MALIGATOR_VERSION,
 			analysis: SUMMARY_ANALYSIS_VERSION,
@@ -89,7 +108,6 @@ export function compilerSummaryCacheIdentity(program: IntermediateProgram): stri
 			moduleGraph,
 			source,
 		}),
-		"hex",
 	);
 }
 

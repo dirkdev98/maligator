@@ -168,20 +168,20 @@ Establish the semantic contract before removing guards or fallbacks.
 Land the shared representation and diagnostics before using it to justify new fast
 paths.
 
-- [ ] Represent current semantic protector/epoch state, known builtin identities,
+- [x] Represent current semantic protector/epoch state, known builtin identities,
       shapes, escape results, and immutable binding targets as shared facts while
       preserving generated behavior.
 - [x] Extend the source-aware residual object and partial-escape inline reports into
       structured optimization remarks for every allocation, call, property, and
       boxing site.
-- [ ] Report substitution-stage reasons for calls that eligibility analysis labels
+- [x] Report substitution-stage reasons for calls that eligibility analysis labels
       inlinable but lowering retains, including inner closures, exception regions,
       relocation, expansion limits, escape-cost barriers, and unavailable world
       facts.
-- [ ] Record pass-by-pass IR deltas for allocation sites, dynamic calls, boxed
+- [x] Record pass-by-pass IR deltas for allocation sites, dynamic calls, boxed
       operations, property helpers, world guards, and safepoints. Add bounded
       optimization ablations so benchmark deltas can be assigned to transforms.
-- [ ] Validate summary caching and invalidation across primordial policy, eval/Realm
+- [x] Validate summary caching and invalidation across primordial policy, eval/Realm
       policy, modules, hosts, and source changes before using cached summaries for
       code removal.
 
