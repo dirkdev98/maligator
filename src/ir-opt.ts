@@ -18,6 +18,7 @@ import {
 	annotateDirectCallTargets,
 	annotateDirectCollectionSites,
 	annotateDirectMathSites,
+	annotateDirectObjectHasOwnSites,
 	annotateDirectRegExpExecSites,
 	annotateDirectStringCharCodeAtSites,
 	annotateDirectStringSliceSites,
@@ -195,7 +196,8 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 				if (
 					call === undefined ||
 					(call.operation !== "String.prototype.split" &&
-						call.operation !== "Array.prototype.push") ||
+						call.operation !== "Array.prototype.push" &&
+						call.operation !== "Object.hasOwn") ||
 					!knownBuiltinCallProves(call, call.operation) ||
 					!compilerFactIsWorldInvariant(call.identity)
 				) {
@@ -216,7 +218,7 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 				}
 				if (call.operation === "String.prototype.split") {
 					if (receiver?.type !== "createString") continue;
-				} else {
+				} else if (call.operation === "Array.prototype.push") {
 					const exact = analyzeExactFreshArrayUse(fn, {
 						receiver: receiverRoot,
 						callee: instruction.registers[1],
@@ -224,6 +226,12 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 						call: instruction,
 					});
 					if (exact.fact.kind !== "known") continue;
+				} else if (
+					receiver?.type !== "loadIntrinsic" ||
+					receiver.intrinsic !== "Object" ||
+					instruction.knownBuiltinCallGenericTwin === undefined
+				) {
+					continue;
 				}
 				block.instructions[index] = {
 					type: "callBuiltin",
@@ -1218,6 +1226,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringSplitSites(program);
 		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectObjectHasOwnSites(program);
+		if (residualFeatures.call && residualFeatures.property)
 			optLowerLockedExactBuiltinCalls(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateStringSplitProjectionRegions(program);
@@ -1325,6 +1335,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-direct-string-split",
 			annotateDirectStringSplitSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-direct-object-has-own",
+			annotateDirectObjectHasOwnSites,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

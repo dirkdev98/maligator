@@ -8,6 +8,7 @@ tests/native/collection-direct.test.ts
 tests/native/gc.test.ts
 tests/native/global-property-cache.test.ts
 tests/native/map-get-set-cache.test.ts
+tests/native/object-has-own-known.test.ts
 tests/native/object-rest-shaped.test.ts
 tests/native/node-scheduling.test.ts
 tests/native/postgres-load.test.ts

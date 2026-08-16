@@ -182,6 +182,7 @@ export const VM_MATH_BINARY_NUMBER_OPERATIONS = ["Math.min", "Math.max"] as cons
 export const VM_DIRECT_BUILTIN_OPERATIONS = [
 	"String.prototype.split",
 	"Array.prototype.push",
+	"Object.hasOwn",
 ] as const;
 
 type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];

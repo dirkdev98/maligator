@@ -119,6 +119,7 @@ const C_HEADER_LINES = [
 	'#include "perf_stats.h"',
 	'#include "profile.h"',
 	'#include "builtin_array.h"',
+	'#include "builtin_object.h"',
 	'#include "builtin_json.h"',
 	'#include "builtin_map.h"',
 	'#include "builtin_string.h"',

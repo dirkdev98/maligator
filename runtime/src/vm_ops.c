@@ -13,6 +13,7 @@
 #include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
+#include "builtin_object.h"
 #include "builtin_promise.h"
 #include "builtin_string.h"
 #include "function_object.h"
@@ -2186,6 +2187,10 @@ void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instructio
         case MAL_DIRECT_BUILTIN_ARRAY_PUSH:
             result = mal_builtin_array_push_known(
                 vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_OBJECT_HAS_OWN:
+            result = mal_builtin_object_has_own_known(
+                vm, &vm->value_stack[base], argument_count);
             break;
     }
     vm->value_stack_size = base;

@@ -1496,6 +1496,14 @@ static MalValue mal_builtin_object_has_own(MalVm *vm, MalValue this_value, const
     return mal_builtin_object_has_own_resolved(vm, target, key);
 }
 
+MalValue mal_builtin_object_has_own_known(
+    MalVm *vm, const MalValue *args, i32 arg_count
+) {
+	return mal_builtin_object_has_own(
+		vm, MAL_VALUE_UNDEFINED, args, arg_count, MAL_VALUE_UNDEFINED,
+		MAL_VALUE_UNDEFINED);
+}
+
 static MalValue mal_builtin_object_prototype_has_own_property(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;

@@ -181,6 +181,7 @@ static const MalMathBinaryOp wire_math_binary_number_ops[] = {
 static const MalDirectBuiltinOp wire_direct_builtin_ops[] = {
     MAL_DIRECT_BUILTIN_STRING_SPLIT,
     MAL_DIRECT_BUILTIN_ARRAY_PUSH,
+    MAL_DIRECT_BUILTIN_OBJECT_HAS_OWN,
 };
 
 /* Wire tag -> MalTypeofResult. MUST match WIRE_TYPEOF_RESULTS in serialize-vm.ts. */

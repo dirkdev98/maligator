@@ -6081,6 +6081,13 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (instruction.operation === "Object.hasOwn") {
+				return [
+					`r${instruction.dst} = mal_builtin_object_has_own_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
 			if (instruction.operation !== "String.prototype.split") return null;
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site } = nativeStringSplitCursorAction;

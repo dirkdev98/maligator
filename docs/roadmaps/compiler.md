@@ -301,6 +301,10 @@ is general rather than a registry-shaped collection of special cases.
           instructions, erase the generic twin before either backend, and preserve
           the direct operation through MALW v39 for interpreted execution. Mutable,
           boxed, and otherwise unsupported calls retain the complete generic twin.
+- [x] Lower locked exact `Object.hasOwn` namespace calls through the same
+      backend-neutral builtin-call IR. Erase the `Object` property Get and callback
+      identity seam while preserving argument evaluation, object/key coercion,
+      Proxy internal methods, exceptions, and the mutable generic call.
 - [x] Add closed `RegExp.prototype.exec` capture projection as the first stateful and
       effect-sensitive projection. Preserve `lastIndex`, capture, coercion, and
       unmatched-value semantics with materialization on unsupported consumers.

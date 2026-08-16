@@ -952,6 +952,81 @@ export function annotateDirectMathSites(program: IntermediateProgram): number {
 	return count;
 }
 
+/** Attach the canonical Object.hasOwn fact to an exact Object namespace call.
+ * The namespace/property producer pair is recorded so a locked-world consumer
+ * can erase it after argument evaluation remains fixed in ordinary IR. */
+export function annotateDirectObjectHasOwnSites(program: IntermediateProgram): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		let guardOrdinal = 0;
+		let positionId: number | undefined;
+		const registerIndex = buildIRRegisterIndex(fn);
+		const definitions = registerIndex.uniqueDefinitions;
+		const moveRoot = (initial: number): number => {
+			let register = initial;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+
+		for (const block of fn.blocks) {
+			positionId = undefined;
+			for (const instruction of block.instructions) {
+				if (instruction.type === "sourcePos") {
+					positionId = instruction.pos;
+					continue;
+				}
+				if (instruction.type !== "call") continue;
+				const callee = definitions.get(instruction.registers[1]);
+				if (callee?.type !== "loadPropertyStatic") continue;
+				const receiverRoot = moveRoot(callee.registers[1]);
+				if (
+					receiverRoot !== moveRoot(instruction.registers[2]) ||
+					decodeStringConstant(program, callee.stringIndex) !== "hasOwn"
+				) {
+					continue;
+				}
+				const origin = definitions.get(receiverRoot);
+				if (origin?.type !== "loadIntrinsic" || origin.intrinsic !== "Object") continue;
+				recordGuardedBuiltinCall(
+					program,
+					fn,
+					instruction,
+					"Object.hasOwn",
+					guardOrdinal++,
+					positionId,
+				);
+				const calleeUses = registerIndex.uses.get(callee.registers[0]) ?? [];
+				const receiverUses = registerIndex.uses.get(receiverRoot) ?? [];
+				if (
+					callee.registers[1] === receiverRoot &&
+					instruction.registers[2] === receiverRoot &&
+					calleeUses.length === 1 &&
+					calleeUses[0]?.instruction === instruction &&
+					calleeUses[0]?.position === 1 &&
+					receiverUses.length === 2 &&
+					receiverUses.some((use) => use.instruction === callee && use.position === 1) &&
+					receiverUses.some(
+						(use) => use.instruction === instruction && use.position === 2,
+					)
+				) {
+					instruction.knownBuiltinCallGenericTwin = {
+						receiver: origin,
+						property: callee,
+					};
+				}
+				count++;
+			}
+		}
+	}
+	return count;
+}
+
 /**
  * Attach canonical registry facts to direct `receiver.exec(value)` calls. The
  * receiver remains speculative: capture projection still validates the concrete

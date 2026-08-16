@@ -9,6 +9,13 @@
  */
 void mal_builtin_object_install(MalVm *vm);
 
+/** Exact Object.hasOwn invocation after the locked namespace/property seam was
+ * erased. The builtin still performs ordinary object/key coercion and Proxy
+ * internal methods. */
+MalValue mal_builtin_object_has_own_known(
+    MalVm *vm, const MalValue *args, i32 arg_count
+);
+
 /**
  * Object.prototype.toString: the "[object Tag]" fallback, also used by
  * builtins that delegate to it for non-array receivers.

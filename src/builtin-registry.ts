@@ -223,6 +223,19 @@ const arrayIterationOperations: ReadonlyArray<BuiltinOperationDescriptor> = (
 
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	{
+		id: "Object.hasOwn",
+		owner: "Object",
+		key: "hasOwn",
+		receiver: "none",
+		arity: { minimum: 0 },
+		evaluationOrder: "arguments-left-to-right",
+		coercionOrder: ["argument-object", "property-key"],
+		effects: ["coerce", "property-access", "call-user-code", "throw", "safepoint"],
+		result: "boolean",
+		realm: "semantic-identity",
+		lowerings: ["generic", "exact-builtin-call"],
+	},
+	{
 		id: "Array.prototype.push",
 		owner: "Array.prototype",
 		key: "push",
