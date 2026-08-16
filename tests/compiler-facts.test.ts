@@ -76,6 +76,37 @@ describe("compiler fact contracts", () => {
 			sourceSiteId("src/a b.ts", 3, 7, "property"),
 		);
 	});
+
+	it("represents locked invariants separately from mutable epoch facts", () => {
+		const locked = compilerProgramFactsFromConfig(resolveBuildConfig({}));
+		const mutable = compilerProgramFactsFromConfig(
+			resolveBuildConfig({ engine: { primordials: "mutable" } }),
+		);
+		expect(locked.protectors.get("watched-methods")).toMatchObject({
+			kind: "known",
+			proof: { dependencies: [{ kind: "world", fact: "primordials.locked" }] },
+		});
+		expect(locked.protectors.get("object-shapes")).toMatchObject({
+			kind: "known",
+			proof: { dependencies: [{ kind: "epoch", family: "object-shapes" }] },
+		});
+		expect(mutable.protectors.get("watched-methods")).toMatchObject({
+			kind: "known",
+			proof: { dependencies: [{ kind: "epoch", family: "watched-methods" }] },
+		});
+		expect(locked.builtinIdentities.get("Math.floor")).toMatchObject({
+			kind: "known",
+			proof: { dependencies: [{ kind: "world", fact: "primordials.locked" }] },
+		});
+		expect(mutable.builtinIdentities.get("Math.floor")).toMatchObject({
+			kind: "known",
+			proof: { dependencies: [{ kind: "epoch", family: "watched-methods" }] },
+		});
+		expect(locked.immutableGlobalBindings.get("Math")?.kind).toBe("known");
+		expect(mutable.immutableGlobalBindings.get("Math")).toEqual(
+			unknownFact("invalidatable-epoch"),
+		);
+	});
 });
 
 describe("builtin and primordial registry", () => {
@@ -95,14 +126,53 @@ describe("builtin and primordial registry", () => {
 });
 
 describe("shared effect and reachability summaries", () => {
-	function program(config = resolveBuildConfig({})) {
+	const defaultSource = `function make(value) { return { value }; }\nmake(1);\n`;
+	function program(config = resolveBuildConfig({}), source = defaultSource) {
 		return compileSemanticProgramToIr(
-			analyzeSourceAndRunSemanticAnalysis(
-				`function make(value) { return { value }; }\nmake(1);\n`,
-				"summary.js",
-			),
+			analyzeSourceAndRunSemanticAnalysis(source, "summary.js"),
 			{ facts: compilerProgramFactsFromConfig(config) },
 		);
+	}
+
+	function attachHostGraph(
+		ir: ReturnType<typeof program>,
+		hostExports: ReadonlyArray<string>,
+	): void {
+		const file = ir.semantic.files[0]!;
+		ir.semantic.graph = {
+			entry: file.path,
+			nodeEnabled: true,
+			modules: new Map([
+				[
+					file.path,
+					{
+						path: file.path,
+						goal: "script" as const,
+						source: file.contents,
+						parsed: file,
+						dependencies: [],
+					},
+				],
+				[
+					"node:fixture",
+					{
+						path: "node:fixture",
+						goal: "module" as const,
+						source: "",
+						parsed: file,
+						dependencies: [],
+						host: {
+							id: "node:fixture",
+							named: hostExports,
+							hasDefault: false,
+							installer: "mal_host_install_node_fixture",
+						},
+					},
+				],
+			]),
+			evaluationOrder: ["node:fixture", file.path],
+			cycles: [],
+		};
 	}
 
 	it("adapts the existing escape fixed point into shared function/module facts", () => {
@@ -145,6 +215,37 @@ describe("shared effect and reachability summaries", () => {
 		expect(compilerSummaryCacheIdentity(mutable)).not.toBe(
 			compilerSummaryCacheIdentity(first),
 		);
+		expect(
+			compilerSummaryCacheIdentity(
+				program(resolveBuildConfig({ engine: { eval: true } })),
+			),
+		).not.toBe(compilerSummaryCacheIdentity(first));
+		expect(
+			compilerSummaryCacheIdentity(
+				program(resolveBuildConfig({ engine: { realms: true } })),
+			),
+		).not.toBe(compilerSummaryCacheIdentity(first));
+		expect(
+			compilerSummaryCacheIdentity(program(undefined, `${defaultSource}\n0;`)),
+		).not.toBe(compilerSummaryCacheIdentity(first));
+	});
+
+	it("invalidates summaries when module or host graph identity changes", () => {
+		const first = program();
+		const changedHost = program();
+		attachHostGraph(first, ["read"]);
+		attachHostGraph(changedHost, ["read", "write"]);
+		expect(compilerSummaryCacheIdentity(changedHost)).not.toBe(
+			compilerSummaryCacheIdentity(first),
+		);
+
+		const additionalModule = program();
+		additionalModule.semantic.files.push(
+			...analyzeSourceAndRunSemanticAnalysis("const value = 1;", "dep.mjs").files,
+		);
+		expect(compilerSummaryCacheIdentity(additionalModule)).not.toBe(
+			compilerSummaryCacheIdentity(program()),
+		);
 	});
 });
 
@@ -169,7 +270,35 @@ describe("canonical builtin-call IR facts", () => {
 		expect(call?.type).toBe("call");
 		if (call?.type !== "call") throw new Error("missing canonical builtin call");
 		expect(call.directArrayPush).toBe(true);
-		expect(call.knownBuiltinCall?.identity.kind).toBe("known");
+		expect(call.knownBuiltinCall?.identity).toMatchObject({
+			kind: "known",
+			proof: { dependencies: [{ kind: "world", fact: "primordials.locked" }] },
+		});
 		expect(call.knownBuiltinCall?.sourceSite).toContain("builtin-call.js");
+	});
+
+	it("keeps existing mutable lowering backed by the watched-method epoch", () => {
+		const ir = compileSemanticProgramToIr(
+			analyzeSourceAndRunSemanticAnalysis(`array.push(1);`, "mutable-call.js"),
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials: "mutable" } }),
+				),
+			},
+		);
+		expect(annotateDirectArrayPushSites(ir)).toBeGreaterThan(0);
+		const call = ir.functions
+			.flatMap(({ blocks }) => blocks)
+			.flatMap(({ instructions }) => instructions)
+			.find(
+				(instruction) =>
+					instruction.type === "call" && instruction.directArrayPush === true,
+			);
+		expect(call?.type).toBe("call");
+		if (call?.type !== "call") throw new Error("missing mutable builtin call");
+		expect(call.knownBuiltinCall?.identity).toMatchObject({
+			kind: "known",
+			proof: { dependencies: [{ kind: "epoch", family: "watched-methods" }] },
+		});
 	});
 });

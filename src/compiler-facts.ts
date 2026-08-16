@@ -1,4 +1,5 @@
 import type { ResolvedBuildConfig } from "./build-config.ts";
+import { builtinOperations, primordialGlobalBindings } from "./builtin-registry.ts";
 
 /** Stable identifiers used by proofs instead of pass-local object identity. */
 export type WorldFactId =
@@ -284,35 +285,114 @@ export interface KnownBuiltinCall {
 export interface CompilerProgramFacts {
 	readonly world: WorldFacts;
 	readonly compilationMode: "development" | "full";
+	/** Current runtime protector state expressed independently of its consumers. */
+	readonly protectors: ReadonlyMap<SemanticEpochFamily, CompilerFact<"valid">>;
+	/** Semantic builtin identities; lowering may still retain guards and fallbacks. */
+	readonly builtinIdentities: ReadonlyMap<string, CompilerFact<string>>;
+	/** Global primordial aliases which the locked-world contract makes immutable. */
+	readonly immutableGlobalBindings: ReadonlyMap<string, CompilerFact<"immutable">>;
 	readonly functionEffects: ReadonlyMap<string, FunctionEffectSummary>;
 	readonly moduleEffects: ReadonlyMap<string, ModuleEffectSummary>;
 }
 
-/** Conservative seed for compiler entry points that do not yet carry a build config. */
-export function conservativeCompilerProgramFacts(): CompilerProgramFacts {
+function worldProof(origin: string): FactProof {
 	return {
-		world: {
-			primordialPolicy: "mutable",
-			authorityClosure: "closed",
-			sourceClosure: unknownFact("open-world-reachability"),
-			eval: "runtime",
-			realms: true,
-			ecmaFeatures: { regexp: true, temporal: true, intl: true },
-			protectedSurface: "ecmascript",
-		},
+		scope: { kind: "world" },
+		dependencies: [{ kind: "world", fact: "primordials.locked" }],
+		obligations: [],
+		origin,
+	};
+}
+
+function epochProof(family: SemanticEpochFamily, origin: string): FactProof {
+	return {
+		scope: { kind: "world" },
+		dependencies: [{ kind: "epoch", family }],
+		obligations: [{ kind: "fallback", id: "generic-operation" }],
+		origin,
+	};
+}
+
+function sharedSemanticFacts(
+	world: WorldFacts,
+): Pick<
+	CompilerProgramFacts,
+	"protectors" | "builtinIdentities" | "immutableGlobalBindings"
+> {
+	const protectors = new Map<SemanticEpochFamily, CompilerFact<"valid">>();
+	for (const family of [
+		"primitive-methods",
+		"watched-methods",
+		"array-elements",
+		"global-bindings",
+		"object-shapes",
+	] as const) {
+		const lockedInvariant =
+			world.primordialPolicy === "locked" &&
+			(family === "primitive-methods" ||
+				family === "watched-methods" ||
+				family === "array-elements");
+		protectors.set(
+			family,
+			knownFact(
+				"valid",
+				lockedInvariant
+					? worldProof("locked-primordial-protector")
+					: epochProof(family, "runtime-semantic-protector"),
+			),
+		);
+	}
+
+	const builtinIdentities = new Map<string, CompilerFact<string>>();
+	for (const operation of builtinOperations) {
+		builtinIdentities.set(
+			operation.id,
+			knownFact(
+				operation.id,
+				world.primordialPolicy === "locked"
+					? worldProof("locked-builtin-registry")
+					: epochProof("watched-methods", "watched-builtin-identity"),
+			),
+		);
+	}
+
+	const immutableGlobalBindings = new Map<string, CompilerFact<"immutable">>();
+	for (const binding of primordialGlobalBindings) {
+		immutableGlobalBindings.set(
+			binding.name,
+			world.primordialPolicy === "locked"
+				? knownFact("immutable", worldProof("locked-primordial-binding"))
+				: unknownFact("invalidatable-epoch"),
+		);
+	}
+	return { protectors, builtinIdentities, immutableGlobalBindings };
+}
+
+function compilerProgramFacts(world: WorldFacts): CompilerProgramFacts {
+	return {
+		world,
 		compilationMode: "full",
+		...sharedSemanticFacts(world),
 		functionEffects: new Map(),
 		moduleEffects: new Map(),
 	};
+}
+
+/** Conservative seed for compiler entry points that do not yet carry a build config. */
+export function conservativeCompilerProgramFacts(): CompilerProgramFacts {
+	return compilerProgramFacts({
+		primordialPolicy: "mutable",
+		authorityClosure: "closed",
+		sourceClosure: unknownFact("open-world-reachability"),
+		eval: "runtime",
+		realms: true,
+		ecmaFeatures: { regexp: true, temporal: true, intl: true },
+		protectedSurface: "ecmascript",
+	});
 }
 
 export function compilerProgramFactsFromConfig(
 	config: ResolvedBuildConfig,
 ): CompilerProgramFacts {
-	return {
-		world: worldFactsFromConfig(config),
-		compilationMode: "full",
-		functionEffects: new Map(),
-		moduleEffects: new Map(),
-	};
+	return compilerProgramFacts(worldFactsFromConfig(config));
 }

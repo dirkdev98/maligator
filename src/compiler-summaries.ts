@@ -4,11 +4,12 @@ import type {
 	FunctionEffectSummary,
 	ModuleEffectSummary,
 } from "./compiler-facts.ts";
+import { encodeDirectEvalContext } from "./direct-eval-context.ts";
 import { analyzeProgramEscape } from "./escape.ts";
 import type { IntermediateProgram, IRFunction } from "./ir.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const SUMMARY_ANALYSIS_VERSION = 1;
+const SUMMARY_ANALYSIS_VERSION = 2;
 const MAX_CACHED_PROGRAMS = 64;
 
 export interface SharedProgramSummaries {
@@ -26,6 +27,34 @@ export function compilerSummaryCacheIdentity(program: IntermediateProgram): stri
 	const source = program.semantic.files
 		.map((file) => ({ path: file.path, contents: file.contents, goal: file.type }))
 		.sort((left, right) => left.path.localeCompare(right.path));
+	const graph = program.semantic.graph;
+	const moduleGraph =
+		graph === undefined
+			? undefined
+			: {
+					nodeEnabled: graph.nodeEnabled,
+					evaluationOrder: graph.evaluationOrder,
+					cycles: graph.cycles,
+					modules: [...graph.modules.values()]
+						.map((module) => ({
+							path: module.path,
+							goal: module.goal,
+							dependencies: module.dependencies.map((dependency) => ({
+								specifier: dependency.specifier,
+								resolvedPath: dependency.resolvedPath,
+							})),
+							host:
+								module.host === undefined
+									? undefined
+									: {
+											id: module.host.id,
+											named: module.host.named,
+											hasDefault: module.host.hasDefault,
+											installer: module.host.installer,
+										},
+						}))
+						.sort((left, right) => left.path.localeCompare(right.path)),
+				};
 	return hash(
 		"sha256",
 		JSON.stringify({
@@ -34,6 +63,7 @@ export function compilerSummaryCacheIdentity(program: IntermediateProgram): stri
 			entrypoint: program.semantic.entrypointPath,
 			evalCompletion: program.evalCompletion,
 			evalDirect: program.evalDirect,
+			directEvalContext: encodeDirectEvalContext(program.directEvalContext),
 			compilationMode: program.facts.compilationMode,
 			world: {
 				primordials: world.primordialPolicy,
@@ -44,6 +74,7 @@ export function compilerSummaryCacheIdentity(program: IntermediateProgram): stri
 						? world.sourceClosure.value
 						: world.sourceClosure.reason,
 			},
+			moduleGraph,
 			source,
 		}),
 		"hex",

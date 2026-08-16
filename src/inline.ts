@@ -72,23 +72,30 @@ function recordGuardedBuiltinCall(
 					position.column,
 					`builtin-call:${operation}`,
 				);
+	const sharedIdentity = program.facts.builtinIdentities.get(operation);
 	instruction.knownBuiltinCall = {
 		operation,
-		identity: knownFact(operation, {
-			scope:
-				site === undefined
-					? { kind: "function", id: fn.functionIndex }
-					: { kind: "site", id: site },
-			dependencies: [
-				{ kind: "epoch", family: "watched-methods" },
-				{
-					kind: "guard",
-					id: site ?? `builtin:${fn.functionIndex}:${guardOrdinal}`,
-				},
-			],
-			obligations: [{ kind: "fallback", id: "generic-call" }],
-			origin: "guarded-builtin-site-analysis",
-		}),
+		identity:
+			sharedIdentity?.kind === "known"
+				? knownFact(sharedIdentity.value, {
+						scope:
+							site === undefined
+								? { kind: "function", id: fn.functionIndex }
+								: { kind: "site", id: site },
+						dependencies: sharedIdentity.proof.dependencies,
+						obligations: [
+							...sharedIdentity.proof.obligations,
+							{
+								kind: "fallback",
+								id: `generic-call:${site ?? `${fn.functionIndex}:${guardOrdinal}`}`,
+							},
+						],
+						origin: `guarded-builtin-site-analysis:${sharedIdentity.proof.origin}`,
+					})
+				: (sharedIdentity ?? {
+						kind: "unknown",
+						reason: "not-analyzed",
+					}),
 		...(site === undefined ? {} : { sourceSite: site }),
 	};
 }
