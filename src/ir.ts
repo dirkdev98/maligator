@@ -1,5 +1,8 @@
 import type { ESTree } from "meriyah";
-import type { MathUnaryOperationKey } from "./builtin-registry.ts";
+import type {
+	DirectBuiltinOperationId,
+	MathUnaryOperationKey,
+} from "./builtin-registry.ts";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
 import type {
 	CompilerOptimizationDecision,
@@ -1010,7 +1013,7 @@ export type IRInstruction =
 			 * interpreted generic twin of a canonical builtin call. Native lowering may
 			 * erase them only when the call proof removes every fallback edge.
 			 */
-			knownBuiltinCallGenericTwin?: {
+			knownBuiltinCallExactProducerTwin?: {
 				receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
 				property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
 			};
@@ -1079,11 +1082,7 @@ export type IRInstruction =
 			type: "callBuiltin";
 			// [destination, this, ...arguments]
 			registers: [number, number, ...Array<number>];
-			operation:
-				| "Array.prototype.push"
-				| "Object.hasOwn"
-				| "String.prototype.charCodeAt"
-				| "String.prototype.split";
+			operation: DirectBuiltinOperationId;
 			/** Canonical facts remain attached after dynamic dispatch is erased. */
 			knownBuiltinCall: KnownBuiltinCall;
 			/** Closed projected-result representation selected from canonical facts. */

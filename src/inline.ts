@@ -852,20 +852,17 @@ export function annotateDirectStringTrimSites(program: IntermediateProgram): num
 }
 
 /**
- * Attach canonical registry facts to direct `Math.name(...)` calls. Property and
- * argument evaluation remain ordinary IR; later lowering chooses a native-number
- * operation only when the call's identity, semantic descriptor, arity, and
- * representation facts all agree.
+ * Shared namespace/property proof for canonical static intrinsic calls. It
+ * records the guarded semantic fact for every recognized method and publishes an
+ * exact producer twin only when the intrinsic and property loads are exclusively
+ * owned by this call. Locked consumers can then erase both producers without
+ * rediscovering the source shape.
  */
-export function annotateDirectMathSites(program: IntermediateProgram): number {
-	const mathOperationByKey = new Map(
-		builtinOperations
-			.filter(
-				(operation) =>
-					operation.owner === "Math" && operation.lowerings.includes("native-number"),
-			)
-			.map((operation) => [operation.key, operation.id] as const),
-	);
+function annotateDirectIntrinsicMethodSites(
+	program: IntermediateProgram,
+	intrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>["intrinsic"],
+	operationByKey: ReadonlyMap<string, string>,
+): number {
 	let count = 0;
 	for (const fn of program.functions) {
 		let guardOrdinal = 0;
@@ -912,8 +909,8 @@ export function annotateDirectMathSites(program: IntermediateProgram): number {
 				const receiverRoot = moveRoot(receiver);
 				if (receiverRoot !== moveRoot(instruction.registers[2])) continue;
 				const origin = definitions.get(receiverRoot);
-				if (origin?.type !== "loadIntrinsic" || origin.intrinsic !== "Math") continue;
-				const operation = mathOperationByKey.get(
+				if (origin?.type !== "loadIntrinsic" || origin.intrinsic !== intrinsic) continue;
+				const operation = operationByKey.get(
 					decodeStringConstant(program, nameStringIndex),
 				);
 				if (operation === undefined) continue;
@@ -940,7 +937,7 @@ export function annotateDirectMathSites(program: IntermediateProgram): number {
 						(use) => use.instruction === instruction && use.position === 2,
 					)
 				) {
-					instruction.knownBuiltinCallGenericTwin = {
+					instruction.knownBuiltinCallExactProducerTwin = {
 						receiver: origin,
 						property: callee,
 					};
@@ -952,79 +949,37 @@ export function annotateDirectMathSites(program: IntermediateProgram): number {
 	return count;
 }
 
-/** Attach the canonical Object.hasOwn fact to an exact Object namespace call.
- * The namespace/property producer pair is recorded so a locked-world consumer
- * can erase it after argument evaluation remains fixed in ordinary IR. */
-export function annotateDirectObjectHasOwnSites(program: IntermediateProgram): number {
-	let count = 0;
-	for (const fn of program.functions) {
-		let guardOrdinal = 0;
-		let positionId: number | undefined;
-		const registerIndex = buildIRRegisterIndex(fn);
-		const definitions = registerIndex.uniqueDefinitions;
-		const moveRoot = (initial: number): number => {
-			let register = initial;
-			const seen = new Set<number>();
-			while (!seen.has(register)) {
-				seen.add(register);
-				const definition = definitions.get(register);
-				if (definition?.type !== "move") break;
-				register = definition.registers[1];
-			}
-			return register;
-		};
+/** Canonical numeric Math facts consumed by locked unboxed lowering. */
+export function annotateDirectMathSites(program: IntermediateProgram): number {
+	return annotateDirectIntrinsicMethodSites(
+		program,
+		"Math",
+		new Map(
+			builtinOperations
+				.filter(
+					(operation) =>
+						operation.owner === "Math" && operation.lowerings.includes("native-number"),
+				)
+				.map((operation) => [operation.key, operation.id] as const),
+		),
+	);
+}
 
-		for (const block of fn.blocks) {
-			positionId = undefined;
-			for (const instruction of block.instructions) {
-				if (instruction.type === "sourcePos") {
-					positionId = instruction.pos;
-					continue;
-				}
-				if (instruction.type !== "call") continue;
-				const callee = definitions.get(instruction.registers[1]);
-				if (callee?.type !== "loadPropertyStatic") continue;
-				const receiverRoot = moveRoot(callee.registers[1]);
-				if (
-					receiverRoot !== moveRoot(instruction.registers[2]) ||
-					decodeStringConstant(program, callee.stringIndex) !== "hasOwn"
-				) {
-					continue;
-				}
-				const origin = definitions.get(receiverRoot);
-				if (origin?.type !== "loadIntrinsic" || origin.intrinsic !== "Object") continue;
-				recordGuardedBuiltinCall(
-					program,
-					fn,
-					instruction,
-					"Object.hasOwn",
-					guardOrdinal++,
-					positionId,
-				);
-				const calleeUses = registerIndex.uses.get(callee.registers[0]) ?? [];
-				const receiverUses = registerIndex.uses.get(receiverRoot) ?? [];
-				if (
-					callee.registers[1] === receiverRoot &&
-					instruction.registers[2] === receiverRoot &&
-					calleeUses.length === 1 &&
-					calleeUses[0]?.instruction === instruction &&
-					calleeUses[0]?.position === 1 &&
-					receiverUses.length === 2 &&
-					receiverUses.some((use) => use.instruction === callee && use.position === 1) &&
-					receiverUses.some(
-						(use) => use.instruction === instruction && use.position === 2,
-					)
-				) {
-					instruction.knownBuiltinCallGenericTwin = {
-						receiver: origin,
-						property: callee,
-					};
-				}
-				count++;
-			}
-		}
-	}
-	return count;
+/** Canonical Object namespace facts consumed by exact locked calls. */
+export function annotateDirectObjectSites(program: IntermediateProgram): number {
+	return annotateDirectIntrinsicMethodSites(
+		program,
+		"Object",
+		new Map(
+			builtinOperations
+				.filter(
+					(operation) =>
+						operation.owner === "Object" &&
+						operation.lowerings.includes("exact-builtin-call"),
+				)
+				.map((operation) => [operation.key, operation.id] as const),
+		),
+	);
 }
 
 /**

@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import {
+	directBuiltinOperationIds,
+	exactBuiltinCallDescriptor,
 	generatePrimordialRegistryInclude,
 	primordialGlobalBindings,
 	primordialObjectPolicy,
@@ -160,6 +162,21 @@ describe("builtin and primordial registry", () => {
 		);
 		expect(generated).toBe(generatePrimordialRegistryInclude());
 	});
+
+	it("publishes one typed admission and wire order for exact builtin calls", () => {
+		expect(directBuiltinOperationIds).toEqual([
+			"String.prototype.split",
+			"Array.prototype.push",
+			"Object.hasOwn",
+			"String.prototype.charCodeAt",
+		]);
+		expect(exactBuiltinCallDescriptor("Object.hasOwn")).toMatchObject({
+			id: "Object.hasOwn",
+			receiverProof: "intrinsic-object",
+			forwardedArgumentLimit: 2,
+		});
+		expect(exactBuiltinCallDescriptor("Object.keys")).toBeUndefined();
+	});
 });
 
 describe("shared effect and reachability summaries", () => {
@@ -314,7 +331,7 @@ describe("canonical builtin-call IR facts", () => {
 			kind: "known",
 			value: {
 				result: "array-length",
-				lowerings: ["generic", "guarded-dense-append"],
+				lowerings: ["generic", "guarded-dense-append", "exact-builtin-call"],
 			},
 		});
 		expect(call.knownBuiltinCall?.sourceSite).toContain("builtin-call.js");

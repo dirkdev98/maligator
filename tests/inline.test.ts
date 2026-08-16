@@ -9,6 +9,7 @@ import {
 } from "../src/inline.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
+import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
@@ -456,8 +457,14 @@ test("direct Math calls carry canonical numeric semantics", () => {
 		value: { effects: ["coerce", "throw"], result: "number" },
 	});
 	expect(
-		mathCalls.filter((call) => call.knownBuiltinCallGenericTwin !== undefined),
+		mathCalls.filter((call) => call.knownBuiltinCallExactProducerTwin !== undefined),
 	).toHaveLength(2);
+});
+
+test("non-Math exact producer twins do not leak into native Math metadata", () => {
+	const ir = optimizedProgram(`Object.hasOwn({ value: 1 }, "value");`);
+	const lowered = lowerIrProgramToVmDefinition(ir);
+	expect(lowered.functions.every((fn) => fn.nativeMathCalls === undefined)).toBe(true);
 });
 
 test("locked exact numeric Math calls erase their generic twins in IR", () => {
@@ -644,7 +651,7 @@ test("locked Object.hasOwn calls erase the namespace dispatch seam", () => {
 			instruction.type === "callBuiltin" && instruction.operation === "Object.hasOwn",
 	);
 	expect(direct).toMatchObject({ type: "callBuiltin", operation: "Object.hasOwn" });
-	if (direct?.type === "callBuiltin") expect(direct.registers).toHaveLength(5);
+	if (direct?.type === "callBuiltin") expect(direct.registers).toHaveLength(4);
 	expect(
 		lockedInstructions.some(
 			(instruction) =>

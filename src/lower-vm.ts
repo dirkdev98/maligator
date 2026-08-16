@@ -1,4 +1,8 @@
-import { builtinOperationDescriptor } from "./builtin-registry.ts";
+import {
+	builtinOperationDescriptor,
+	directBuiltinOperationIds,
+} from "./builtin-registry.ts";
+import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
@@ -179,16 +183,11 @@ export const VM_MATH_UNARY_NUMBER_OPERATIONS = [
 export const VM_MATH_BINARY_NUMBER_OPERATIONS = ["Math.min", "Math.max"] as const;
 
 /** Exact builtin calls whose dynamic property/callback seam was erased in IR. */
-export const VM_DIRECT_BUILTIN_OPERATIONS = [
-	"String.prototype.split",
-	"Array.prototype.push",
-	"Object.hasOwn",
-	"String.prototype.charCodeAt",
-] as const;
+export const VM_DIRECT_BUILTIN_OPERATIONS = directBuiltinOperationIds;
 
 type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];
 type VmMathBinaryNumberOperation = (typeof VM_MATH_BINARY_NUMBER_OPERATIONS)[number];
-type VmDirectBuiltinOperation = (typeof VM_DIRECT_BUILTIN_OPERATIONS)[number];
+type VmDirectBuiltinOperation = DirectBuiltinOperationId;
 
 function vmMathUnaryNumberOperation(operation: string): VmMathUnaryNumberOperation {
 	if ((VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(operation)) {
@@ -1974,10 +1973,11 @@ function lowerFunctionToVmFunction(
 			}
 			if (
 				instruction.type === "call" &&
-				instruction.knownBuiltinCallGenericTwin !== undefined
+				instruction.knownBuiltinCall?.operation.startsWith("Math.") === true &&
+				instruction.knownBuiltinCallExactProducerTwin !== undefined
 			) {
 				pendingNativeMathCalls.push({
-					...instruction.knownBuiltinCallGenericTwin,
+					...instruction.knownBuiltinCallExactProducerTwin,
 					call: instruction,
 				});
 			}

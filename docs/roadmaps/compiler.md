@@ -276,6 +276,13 @@ is general rather than a registry-shaped collection of special cases.
         projection's local materialization fallback as a direct exact builtin call,
         so compiled code never reconstructs the property Get or generic dispatch
         and interpreted code shares the same direct-call operation.
+  - [x] Audit the first three additional Array/Object/String consumers before
+        expanding the surface. Centralize exact-call admission, receiver proof,
+        forwarded arity, TypeScript operation identity, and generated C enum/wire
+        order in the builtin registry; share intrinsic namespace/property producer
+        analysis between Math and Object; and keep non-Math producer twins out of
+        native Math metadata. Backend dispatch remains explicit and exhaustively
+        checked because it owns operation-specific semantic kernels.
   - [x] Select closed constant-index split projections in IR from the canonical call
         facts and the result's complete move/use set. Carry the representation,
         region license, retained twin, materialization contract, and exact consumer

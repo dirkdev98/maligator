@@ -1,4 +1,7 @@
-import { builtinOperationDescriptor } from "./builtin-registry.ts";
+import {
+	builtinOperationDescriptor,
+	exactBuiltinCallDescriptor,
+} from "./builtin-registry.ts";
 import type {
 	OptimizationAblation,
 	OptimizationPassDelta,
@@ -18,7 +21,7 @@ import {
 	annotateDirectCallTargets,
 	annotateDirectCollectionSites,
 	annotateDirectMathSites,
-	annotateDirectObjectHasOwnSites,
+	annotateDirectObjectSites,
 	annotateDirectRegExpExecSites,
 	annotateDirectStringCharCodeAtSites,
 	annotateDirectStringSliceSites,
@@ -111,7 +114,7 @@ function optLowerLockedMathNumberCalls(program: IntermediateProgram): boolean {
 				const instruction = block.instructions[index]!;
 				if (
 					instruction.type !== "call" ||
-					instruction.knownBuiltinCallGenericTwin === undefined
+					instruction.knownBuiltinCallExactProducerTwin === undefined
 				) {
 					continue;
 				}
@@ -143,8 +146,8 @@ function optLowerLockedMathNumberCalls(program: IntermediateProgram): boolean {
 								operation: call.operation,
 							};
 				block.instructions[index] = replacement;
-				removedProducers.add(instruction.knownBuiltinCallGenericTwin.receiver);
-				removedProducers.add(instruction.knownBuiltinCallGenericTwin.property);
+				removedProducers.add(instruction.knownBuiltinCallExactProducerTwin.receiver);
+				removedProducers.add(instruction.knownBuiltinCallExactProducerTwin.property);
 				changed = true;
 			}
 		}
@@ -193,12 +196,11 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 				const instruction = block.instructions[index]!;
 				if (instruction.type !== "call") continue;
 				const call = instruction.knownBuiltinCall;
+				const exact =
+					call === undefined ? undefined : exactBuiltinCallDescriptor(call.operation);
 				if (
 					call === undefined ||
-					(call.operation !== "String.prototype.split" &&
-						call.operation !== "String.prototype.charCodeAt" &&
-						call.operation !== "Array.prototype.push" &&
-						call.operation !== "Object.hasOwn") ||
+					exact === undefined ||
 					!knownBuiltinCallProves(call, call.operation) ||
 					!compilerFactIsWorldInvariant(call.identity)
 				) {
@@ -217,41 +219,42 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 				) {
 					continue;
 				}
-				if (
-					call.operation === "String.prototype.split" ||
-					call.operation === "String.prototype.charCodeAt"
-				) {
-					if (receiver?.type !== "createString") continue;
-				} else if (call.operation === "Array.prototype.push") {
-					const exact = analyzeExactFreshArrayUse(fn, {
-						receiver: receiverRoot,
-						callee: instruction.registers[1],
-						property: callee,
-						call: instruction,
-					});
-					if (exact.fact.kind !== "known") continue;
-				} else if (
-					receiver?.type !== "loadIntrinsic" ||
-					receiver.intrinsic !== "Object" ||
-					instruction.knownBuiltinCallGenericTwin === undefined
-				) {
-					continue;
+				switch (exact.receiverProof) {
+					case "primitive-string":
+						if (receiver?.type !== "createString") continue;
+						break;
+					case "exact-fresh-array": {
+						const array = analyzeExactFreshArrayUse(fn, {
+							receiver: receiverRoot,
+							callee: instruction.registers[1],
+							property: callee,
+							call: instruction,
+						});
+						if (array.fact.kind !== "known") continue;
+						break;
+					}
+					case "intrinsic-object":
+						if (
+							receiver?.type !== "loadIntrinsic" ||
+							receiver.intrinsic !== "Object" ||
+							instruction.knownBuiltinCallExactProducerTwin === undefined
+						) {
+							continue;
+						}
+						break;
 				}
+				const argumentEnd =
+					exact.forwardedArgumentLimit === undefined
+						? undefined
+						: 3 + exact.forwardedArgumentLimit;
 				block.instructions[index] = {
 					type: "callBuiltin",
 					registers: [
 						instruction.registers[0],
 						instruction.registers[2],
-						...instruction.registers.slice(
-							3,
-							call.operation === "String.prototype.split"
-								? 5
-								: call.operation === "String.prototype.charCodeAt"
-									? 4
-									: undefined,
-						),
+						...instruction.registers.slice(3, argumentEnd),
 					],
-					operation: call.operation,
+					operation: exact.id,
 					knownBuiltinCall: call,
 				};
 				removedProperties.add(callee);
@@ -1234,7 +1237,7 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringSplitSites(program);
 		if (residualFeatures.call && residualFeatures.property)
-			annotateDirectObjectHasOwnSites(program);
+			annotateDirectObjectSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			optLowerLockedExactBuiltinCalls(program);
 		if (residualFeatures.call && residualFeatures.property)
@@ -1346,8 +1349,8 @@ export function executeIROptimizations(
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(
-			"annotate-direct-object-has-own",
-			annotateDirectObjectHasOwnSites,
+			"annotate-direct-object",
+			annotateDirectObjectSites,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

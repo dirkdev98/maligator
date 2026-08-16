@@ -30,6 +30,61 @@ export interface BuiltinOperationDescriptor {
 	readonly nativeNumberArity?: number;
 }
 
+export type ExactBuiltinReceiverProof =
+	| "exact-fresh-array"
+	| "intrinsic-object"
+	| "primitive-string";
+
+export interface ExactBuiltinCallDescriptor {
+	readonly receiverProof: ExactBuiltinReceiverProof;
+	/** Extra arguments are still evaluated in IR, then omitted from the builtin ABI. */
+	readonly forwardedArgumentLimit?: number;
+	/** Stable C enum member emitted into the shared generated registry include. */
+	readonly cOperation: string;
+}
+
+/**
+ * Canonical admission and wire order for calls whose property/callback seam can
+ * disappear in a locked world. New operations register their receiver proof and
+ * backend identity here; IR, VM serialization, and generated C enum order derive
+ * from this one declaration.
+ */
+export const exactBuiltinCallDescriptors = {
+	"String.prototype.split": {
+		receiverProof: "primitive-string",
+		forwardedArgumentLimit: 2,
+		cOperation: "MAL_DIRECT_BUILTIN_STRING_SPLIT",
+	},
+	"Array.prototype.push": {
+		receiverProof: "exact-fresh-array",
+		cOperation: "MAL_DIRECT_BUILTIN_ARRAY_PUSH",
+	},
+	"Object.hasOwn": {
+		receiverProof: "intrinsic-object",
+		forwardedArgumentLimit: 2,
+		cOperation: "MAL_DIRECT_BUILTIN_OBJECT_HAS_OWN",
+	},
+	"String.prototype.charCodeAt": {
+		receiverProof: "primitive-string",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_STRING_CHAR_CODE_AT",
+	},
+} as const satisfies Record<string, ExactBuiltinCallDescriptor>;
+
+export type DirectBuiltinOperationId = keyof typeof exactBuiltinCallDescriptors;
+
+export const directBuiltinOperationIds = Object.keys(
+	exactBuiltinCallDescriptors,
+) as Array<DirectBuiltinOperationId>;
+
+export function exactBuiltinCallDescriptor(
+	id: string,
+): (ExactBuiltinCallDescriptor & { readonly id: DirectBuiltinOperationId }) | undefined {
+	if (!Object.hasOwn(exactBuiltinCallDescriptors, id)) return undefined;
+	const operation = id as DirectBuiltinOperationId;
+	return { id: operation, ...exactBuiltinCallDescriptors[operation] };
+}
+
 /**
  * The Phase 1 object policy deliberately covers every object-valued intrinsic
  * initialized by a Realm. Host objects are installed later and remain mutable.
@@ -252,7 +307,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		],
 		result: "array-length",
 		realm: "semantic-identity",
-		lowerings: ["generic", "guarded-dense-append"],
+		lowerings: ["generic", "guarded-dense-append", "exact-builtin-call"],
 	},
 	{
 		id: "String.prototype.charCodeAt",
@@ -265,7 +320,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		effects: ["coerce", "throw"],
 		result: "number",
 		realm: "semantic-identity",
-		lowerings: ["generic", "guarded-primitive-string"],
+		lowerings: ["generic", "guarded-primitive-string", "exact-builtin-call"],
 	},
 	...(["get", "set"] as const).map(
 		(key): BuiltinOperationDescriptor => ({
@@ -344,7 +399,12 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		],
 		result: "array-of-strings",
 		realm: "semantic-identity",
-		lowerings: ["generic", "closed-string-split", "projected-string-split"],
+		lowerings: [
+			"generic",
+			"closed-string-split",
+			"projected-string-split",
+			"exact-builtin-call",
+		],
 	},
 	{
 		id: "RegExp.prototype.exec",
@@ -408,6 +468,13 @@ export function generatePrimordialRegistryInclude(): string {
 		lines.push(`MAL_PRIMORDIAL_EXCLUDED_INTRINSIC(${intrinsic})`);
 	}
 	lines.push("#undef MAL_PRIMORDIAL_EXCLUDED_INTRINSIC", "#endif", "");
+	lines.push("#ifdef MAL_DIRECT_BUILTIN_OP");
+	for (const operation of directBuiltinOperationIds) {
+		lines.push(
+			`MAL_DIRECT_BUILTIN_OP(${exactBuiltinCallDescriptors[operation].cOperation})`,
+		);
+	}
+	lines.push("#undef MAL_DIRECT_BUILTIN_OP", "#endif", "");
 	return lines.join("\n");
 }
 
@@ -423,5 +490,12 @@ export function validateBuiltinRegistry(): void {
 		if (operationIds.has(operation.id))
 			throw new Error(`duplicate builtin operation: ${operation.id}`);
 		operationIds.add(operation.id);
+	}
+	for (const operation of directBuiltinOperationIds) {
+		const descriptor = builtinOperationDescriptor(operation);
+		if (descriptor === undefined)
+			throw new Error(`direct builtin operation lacks semantics: ${operation}`);
+		if (!descriptor.lowerings.includes("exact-builtin-call"))
+			throw new Error(`direct builtin operation lacks exact lowering: ${operation}`);
 	}
 }
