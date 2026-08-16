@@ -468,6 +468,12 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				disqualifying.push(instruction.callee, instruction.thisValue);
 				// arguments are neutral boundary reads
 				break;
+			case "MATH_UNARY_NUMBER":
+				numeric.push(instruction.src);
+				break;
+			case "MATH_BINARY_NUMBER":
+				numeric.push(instruction.left, instruction.right);
+				break;
 			case "BINARY":
 				if (instruction.operator === "in" || instruction.operator === "instanceof") {
 					disqualifying.push(instruction.left, instruction.right);
@@ -1926,6 +1932,8 @@ function nativeInstructionMayCaptureStack(
 		case "LOAD_INTRINSIC":
 		case "IS_EMPTY":
 		case "TYPEOF_COMPARE":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
 		case "JUMP":
 		case "JUMP_IF":
 		case "CATCH":
@@ -1957,6 +1965,8 @@ function nativeInstructionMayInvalidateSemanticEpoch(
 		case "CREATE_OBJECT":
 		case "CREATE_OBJECT_SHAPED":
 		case "CREATE_ARRAY":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
 			return false;
 		case "LOAD_PROPERTY":
 		case "STORE_PROPERTY":
@@ -1991,6 +2001,8 @@ function producedRep(
 	switch (instruction.opcode) {
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
 			return "number";
 		case "CREATE_BOOLEAN":
 			return "boolean";
@@ -5932,6 +5944,26 @@ function emitInstruction(
 				lowered.push(throwCheck);
 			}
 			return lowered;
+		}
+		case "MATH_UNARY_NUMBER": {
+			const operation = MATH_UNARY_NATIVE_OP.get(instruction.operation);
+			if (operation === undefined || reps[instruction.src] !== "number") return null;
+			return [
+				`r${instruction.dst} = mal_builtin_math_unary_number_known(${operation}, ${num(instruction.src)});`,
+			];
+		}
+		case "MATH_BINARY_NUMBER": {
+			const operation = MATH_BINARY_NATIVE_OP.get(instruction.operation);
+			if (
+				operation === undefined ||
+				reps[instruction.left] !== "number" ||
+				reps[instruction.right] !== "number"
+			) {
+				return null;
+			}
+			return [
+				`r${instruction.dst} = mal_builtin_math_binary_number_known(${operation}, ${num(instruction.left)}, ${num(instruction.right)});`,
+			];
 		}
 		case "CALL": {
 			// Marshal argument registers into a temporary array (boxing numbers),

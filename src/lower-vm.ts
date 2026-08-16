@@ -143,6 +143,56 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Array.prototype.flatMap",
 ] as const;
 
+/** No-fallback numeric Math operation order used by VM instructions and MALW. */
+export const VM_MATH_UNARY_NUMBER_OPERATIONS = [
+	"Math.abs",
+	"Math.floor",
+	"Math.ceil",
+	"Math.round",
+	"Math.trunc",
+	"Math.sqrt",
+	"Math.cbrt",
+	"Math.sign",
+	"Math.log",
+	"Math.log2",
+	"Math.log10",
+	"Math.exp",
+	"Math.sin",
+	"Math.cos",
+	"Math.tan",
+	"Math.asin",
+	"Math.acos",
+	"Math.atan",
+	"Math.sinh",
+	"Math.cosh",
+	"Math.tanh",
+	"Math.asinh",
+	"Math.acosh",
+	"Math.atanh",
+	"Math.log1p",
+	"Math.expm1",
+	"Math.fround",
+] as const;
+
+export const VM_MATH_BINARY_NUMBER_OPERATIONS = ["Math.min", "Math.max"] as const;
+
+type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];
+type VmMathBinaryNumberOperation = (typeof VM_MATH_BINARY_NUMBER_OPERATIONS)[number];
+
+function vmMathUnaryNumberOperation(operation: string): VmMathUnaryNumberOperation {
+	if ((VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(operation)) {
+		return operation as VmMathUnaryNumberOperation;
+	}
+	throw new Error(`Unknown unary numeric Math operation ${operation}`);
+}
+
+function vmMathBinaryNumberOperation(operation: string): VmMathBinaryNumberOperation {
+	if ((VM_MATH_BINARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(operation)) {
+		return operation as VmMathBinaryNumberOperation;
+	}
+	throw new Error(`Unknown binary numeric Math operation ${operation}`);
+}
+
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];
 
 function isVmGuardedBuiltinOperation(
@@ -943,6 +993,19 @@ export type VmInstruction =
 			directStringSearchRegExp?: true;
 			/** COMPILE-ONLY: consume an elided fixed RegExp literal search result. */
 			directStringSearchLiteralConstructIp?: number;
+	  }
+	| {
+			opcode: "MATH_UNARY_NUMBER";
+			dst: number;
+			src: number;
+			operation: VmMathUnaryNumberOperation;
+	  }
+	| {
+			opcode: "MATH_BINARY_NUMBER";
+			dst: number;
+			left: number;
+			right: number;
+			operation: VmMathBinaryNumberOperation;
 	  }
 	| {
 			opcode: "CONSTRUCT";
@@ -2344,6 +2407,21 @@ function lowerInstructionToVmInstruction(
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
 				guardedBuiltinCall: lowerGuardedBuiltinCall(instruction),
 				directStringCharCodeAtPosition: instruction.directStringCharCodeAtPosition,
+			};
+		case "mathUnaryNumber":
+			return {
+				opcode: "MATH_UNARY_NUMBER",
+				dst: instruction.registers[0],
+				src: instruction.registers[1],
+				operation: vmMathUnaryNumberOperation(instruction.operation),
+			};
+		case "mathBinaryNumber":
+			return {
+				opcode: "MATH_BINARY_NUMBER",
+				dst: instruction.registers[0],
+				left: instruction.registers[1],
+				right: instruction.registers[2],
+				operation: vmMathBinaryNumberOperation(instruction.operation),
 			};
 		case "construct":
 			return {

@@ -202,6 +202,8 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CREATE_REST_ARGUMENTS":
 		case "ARRAY_REST":
 		case "UNARY":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
 		case "TYPEOF_COMPARE":
 			return { ...instruction };
 		case "LOAD_PROPERTY":

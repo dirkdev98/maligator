@@ -10,6 +10,7 @@
 
 #include "async_function.h"
 #include "builtin_async_generator.h"
+#include "builtin_math.h"
 #include "bound_function_object.h"
 #include "builtin_object.h"
 #include "fiber.h"
@@ -2047,6 +2048,26 @@ static void mal_vm_run_until_frame_count(
                 }
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_unary(frame, instruction));
                 break;
+            }
+            case MAL_OP_MATH_UNARY_NUMBER: {
+                MalValue value = registers[instruction->as.math_unary_number.src];
+                registers[instruction->as.math_unary_number.dst] = mal_ops_number_value(
+                    mal_builtin_math_unary_number_known(
+                        (MalMathUnaryOp) instruction->as.math_unary_number.operation,
+                        mal_ops_number_as_f64(value)));
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
+            case MAL_OP_MATH_BINARY_NUMBER: {
+                MalValue left = registers[instruction->as.math_binary_number.left];
+                MalValue right = registers[instruction->as.math_binary_number.right];
+                registers[instruction->as.math_binary_number.dst] = mal_ops_number_value(
+                    mal_builtin_math_binary_number_known(
+                        (MalMathBinaryOp) instruction->as.math_binary_number.operation,
+                        mal_ops_number_as_f64(left),
+                        mal_ops_number_as_f64(right)));
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             }
             case MAL_OP_TYPEOF_COMPARE: {
                 bool result = mal_vm_typeof_compare(

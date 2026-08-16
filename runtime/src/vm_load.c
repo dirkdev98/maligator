@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "bigint128.h"
+#include "builtin_math.h"
 #include "endian.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
@@ -16,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 38u        // guard plans and canonical builtin-call metadata
+#define WIRE_VERSION 39u        // canonical calls and no-fallback numeric Math
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -121,6 +122,8 @@ typedef enum WireOp {
     WIRE_SET_THIS,
     WIRE_LOAD_STATIC_ARGUMENT,
     WIRE_CALL_SPREAD_ITERABLE,
+    WIRE_MATH_UNARY_NUMBER,
+    WIRE_MATH_BINARY_NUMBER,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -136,6 +139,42 @@ static const MalBinaryOp wire_binops[] = {
 static const MalUnaryOp wire_unops[] = {
     MAL_UNARY_NOT, MAL_UNARY_NEGATE, MAL_UNARY_PLUS, MAL_UNARY_BIT_NOT, MAL_UNARY_TYPEOF,
     MAL_UNARY_TO_NUMERIC, MAL_UNARY_INCREMENT, MAL_UNARY_DECREMENT,
+};
+
+/* Wire tags mirror VM_MATH_*_NUMBER_OPERATIONS in lower-vm.ts. */
+static const MalMathUnaryOp wire_math_unary_number_ops[] = {
+    MAL_MATH_UNARY_ABS,
+    MAL_MATH_UNARY_FLOOR,
+    MAL_MATH_UNARY_CEIL,
+    MAL_MATH_UNARY_ROUND,
+    MAL_MATH_UNARY_TRUNC,
+    MAL_MATH_UNARY_SQRT,
+    MAL_MATH_UNARY_CBRT,
+    MAL_MATH_UNARY_SIGN,
+    MAL_MATH_UNARY_LOG,
+    MAL_MATH_UNARY_LOG2,
+    MAL_MATH_UNARY_LOG10,
+    MAL_MATH_UNARY_EXP,
+    MAL_MATH_UNARY_SIN,
+    MAL_MATH_UNARY_COS,
+    MAL_MATH_UNARY_TAN,
+    MAL_MATH_UNARY_ASIN,
+    MAL_MATH_UNARY_ACOS,
+    MAL_MATH_UNARY_ATAN,
+    MAL_MATH_UNARY_SINH,
+    MAL_MATH_UNARY_COSH,
+    MAL_MATH_UNARY_TANH,
+    MAL_MATH_UNARY_ASINH,
+    MAL_MATH_UNARY_ACOSH,
+    MAL_MATH_UNARY_ATANH,
+    MAL_MATH_UNARY_LOG1P,
+    MAL_MATH_UNARY_EXPM1,
+    MAL_MATH_UNARY_FROUND,
+};
+
+static const MalMathBinaryOp wire_math_binary_number_ops[] = {
+    MAL_MATH_BINARY_MIN,
+    MAL_MATH_BINARY_MAX,
 };
 
 /* Wire tag -> MalTypeofResult. MUST match WIRE_TYPEOF_RESULTS in serialize-vm.ts. */
@@ -1048,6 +1087,31 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             u8 idx = rd_u8(r);
             if (r->ok && idx < countof(wire_unops)) {
                 o->as.unary.op = wire_unops[idx];
+            } else {
+                r->ok = false;
+            }
+            return;
+        }
+        case WIRE_MATH_UNARY_NUMBER: {
+            o->opcode = MAL_OP_MATH_UNARY_NUMBER;
+            o->as.math_unary_number.dst = rd_i32(r);
+            o->as.math_unary_number.src = rd_i32(r);
+            u8 idx = rd_u8(r);
+            if (r->ok && idx < countof(wire_math_unary_number_ops)) {
+                o->as.math_unary_number.operation = wire_math_unary_number_ops[idx];
+            } else {
+                r->ok = false;
+            }
+            return;
+        }
+        case WIRE_MATH_BINARY_NUMBER: {
+            o->opcode = MAL_OP_MATH_BINARY_NUMBER;
+            o->as.math_binary_number.dst = rd_i32(r);
+            o->as.math_binary_number.left = rd_i32(r);
+            o->as.math_binary_number.right = rd_i32(r);
+            u8 idx = rd_u8(r);
+            if (r->ok && idx < countof(wire_math_binary_number_ops)) {
+                o->as.math_binary_number.operation = wire_math_binary_number_ops[idx];
             } else {
                 r->ok = false;
             }

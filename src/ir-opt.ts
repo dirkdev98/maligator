@@ -1,8 +1,13 @@
+import { builtinOperationDescriptor } from "./builtin-registry.ts";
 import type {
 	OptimizationAblation,
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
-import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
+import {
+	compilerFactIsWorldInvariant,
+	compilerGuardPlan,
+	knownBuiltinCallProves,
+} from "./compiler-facts.ts";
 import {
 	optimizationMetrics,
 	optimizationPassDelta,
@@ -65,6 +70,8 @@ const SIDE_EFFECT_FREE_OPS = new Set<IRInstruction["type"]>([
 	// this is what lets inlining eliminate the closure allocation. Capturing
 	// declarations keep it alive through their storeCaptured (a non-listed effect).
 	"createFunction",
+	"mathUnaryNumber",
+	"mathBinaryNumber",
 	"move",
 	"loadLocal",
 	"loadGlobal",
@@ -81,6 +88,70 @@ interface OptimizationFeatures {
 	property: boolean;
 	typeofComparisonFunctions: ReadonlySet<IRFunction>;
 	capturedSlots: CapturedSlotOptimizationFacts;
+}
+
+/**
+ * Consume the locked-world Math fact only after ordinary optimization has proven
+ * every argument to be a Number. The exact producer-use twin recorded by the
+ * canonical call analysis lets this pass erase the namespace and property Get in
+ * IR, so both native and bytecode backends receive one no-fallback operation.
+ */
+function optLowerLockedMathNumberCalls(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const reps = inferVirtualReps(fn);
+		const removedProducers = new Set<IRInstruction>();
+		for (const block of fn.blocks) {
+			for (let index = 0; index < block.instructions.length; index++) {
+				const instruction = block.instructions[index]!;
+				if (
+					instruction.type !== "call" ||
+					instruction.knownBuiltinCallGenericTwin === undefined
+				) {
+					continue;
+				}
+				const call = instruction.knownBuiltinCall;
+				const descriptor =
+					call === undefined ? undefined : builtinOperationDescriptor(call.operation);
+				const arguments_ = instruction.registers.slice(3);
+				if (
+					call === undefined ||
+					!call.operation.startsWith("Math.") ||
+					!knownBuiltinCallProves(call, call.operation) ||
+					!compilerFactIsWorldInvariant(call.identity) ||
+					descriptor?.nativeNumberArity !== arguments_.length ||
+					reps.get(instruction.registers[0]) !== "number" ||
+					arguments_.some((argument) => reps.get(argument) !== "number")
+				) {
+					continue;
+				}
+				const replacement: IRInstruction =
+					arguments_.length === 1
+						? {
+								type: "mathUnaryNumber",
+								registers: [instruction.registers[0], arguments_[0]!],
+								operation: call.operation,
+							}
+						: {
+								type: "mathBinaryNumber",
+								registers: [instruction.registers[0], arguments_[0]!, arguments_[1]!],
+								operation: call.operation,
+							};
+				block.instructions[index] = replacement;
+				removedProducers.add(instruction.knownBuiltinCallGenericTwin.receiver);
+				removedProducers.add(instruction.knownBuiltinCallGenericTwin.property);
+				changed = true;
+			}
+		}
+		if (removedProducers.size > 0) {
+			for (const block of fn.blocks) {
+				block.instructions = block.instructions.filter(
+					(instruction) => !removedProducers.has(instruction),
+				);
+			}
+		}
+	}
+	return changed;
 }
 
 export interface IROptimizationOptions {
@@ -486,6 +557,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectMathSites(program);
 		if (residualFeatures.call && residualFeatures.property)
+			optLowerLockedMathNumberCalls(program);
+		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectRegExpExecSites(program);
 		if (residualFeatures.call) annotateDirectCallTargets(program);
 		if (residualFeatures.call) optImmediateCallOperands(program);
@@ -597,6 +670,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-direct-math",
 			annotateDirectMathSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"lower-locked-math-numbers",
+			optLowerLockedMathNumberCalls,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

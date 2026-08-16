@@ -986,6 +986,25 @@ export type IRInstruction =
 			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }
 	| {
+			/**
+			 * A locked canonical unary Math call after its identity, exact arity, and
+			 * Number representation obligations have all been discharged. The ordinary
+			 * namespace/property/call twin has been removed; this operation cannot invoke
+			 * user code or coerce its operand.
+			 */
+			type: "mathUnaryNumber";
+			// [destination, operand]
+			registers: [number, number];
+			operation: string;
+	  }
+	| {
+			/** Locked two-Number Math.min/Math.max with no remaining fallback edge. */
+			type: "mathBinaryNumber";
+			// [destination, left, right]
+			registers: [number, number, number];
+			operation: string;
+	  }
+	| {
 			type: "construct";
 
 			// [destination, callee, ...arguments]

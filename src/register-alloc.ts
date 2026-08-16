@@ -182,6 +182,8 @@ function producedRep(
 	switch (instruction.type) {
 		case "createNumber":
 		case "createF64":
+		case "mathUnaryNumber":
+		case "mathBinaryNumber":
 			return "number";
 		case "createBoolean":
 		case "typeofCompare":

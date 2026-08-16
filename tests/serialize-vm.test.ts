@@ -15,7 +15,8 @@ import {
 // A definition exercising the tricky encodings: variable-length operand arrays
 // (CALL / CREATE_OBJECT_SHAPED / CREATE_MODULE_NAMESPACE / CREATE_TEMPLATE_OBJECT /
 // COPY_DATA_PROPERTIES / INIT_GLOBAL_VARS / CREATE_PRIVATE_NAMES /
-// INIT_PRIVATE_FIELDS), the f64 / boolean / enum / u16-intrinsic operands,
+// INIT_PRIVATE_FIELDS), no-fallback numeric Math, the f64 / boolean / enum /
+// u16-intrinsic operands,
 // strings (incl. astral code units), bigints (incl. > 64 bits), handlers, the
 // vestigial TRY_BEGIN (handlerIp dropped → 0), and debug tables.
 const instructions: Array<VmInstruction> = [
@@ -33,6 +34,14 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "STORE_PROPERTY_STATIC", object: 10, value: 7, stringIndex: 1, icIndex: 1 },
 	{ opcode: "BINARY", dst: 8, left: 0, right: 1, operator: ">>>" },
 	{ opcode: "UNARY", dst: 9, src: 8, operator: "typeof" },
+	{ opcode: "MATH_UNARY_NUMBER", dst: 9, src: 1, operation: "Math.floor" },
+	{
+		opcode: "MATH_BINARY_NUMBER",
+		dst: 9,
+		left: 0,
+		right: 1,
+		operation: "Math.max",
+	},
 	{ opcode: "TYPEOF_COMPARE", dst: 9, src: 8, expected: "number", negated: true },
 	{ opcode: "TRY_BEGIN", handlerIp: 0 },
 	{
@@ -203,7 +212,7 @@ describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-9)).toEqual([
+		expect(WIRE_OPCODES.slice(-11)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -213,6 +222,8 @@ describe("serialize-vm", () => {
 			"SET_THIS",
 			"LOAD_STATIC_ARGUMENT",
 			"CALL_SPREAD_ITERABLE",
+			"MATH_UNARY_NUMBER",
+			"MATH_BINARY_NUMBER",
 		]);
 	});
 

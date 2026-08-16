@@ -343,6 +343,60 @@ test("direct Math calls carry canonical numeric semantics", () => {
 	).toHaveLength(2);
 });
 
+test("locked exact numeric Math calls erase their generic twins in IR", () => {
+	const source = `
+		globalThis.calculate = function calculate() {
+			const left = 1.25;
+			const right = -0;
+			return Math.floor(left) + Math.max(left, right);
+		};
+	`;
+	const lockedInstructions = optimizedLockedProgram(source).functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		lockedInstructions.filter((instruction) => instruction.type === "mathUnaryNumber"),
+	).toHaveLength(1);
+	expect(
+		lockedInstructions.filter((instruction) => instruction.type === "mathBinaryNumber"),
+	).toHaveLength(1);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "loadIntrinsic" && instruction.intrinsic === "Math",
+		),
+	).toBe(false);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation.startsWith("Math."),
+		),
+	).toBe(false);
+
+	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		mutableInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation.startsWith("Math."),
+		),
+	).toBe(true);
+
+	const dynamicLocked = optimizedLockedProgram(
+		`globalThis.dynamic = function dynamic(value) { return Math.floor(value); };`,
+	).functions.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions));
+	expect(
+		dynamicLocked.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Math.floor",
+		),
+	).toBe(true);
+});
+
 test("direct RegExp exec calls carry canonical capture-projection semantics", () => {
 	const ir = optimizedProgram(`
 		function parse(regexp, value) {

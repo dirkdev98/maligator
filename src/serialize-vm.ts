@@ -4,6 +4,8 @@ import {
 	countPropertyIcSites,
 	decodeVmValueOperand,
 	VM_GUARDED_BUILTIN_OPERATIONS,
+	VM_MATH_BINARY_NUMBER_OPERATIONS,
+	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./lower-vm.ts";
 
@@ -23,8 +25,8 @@ import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./low
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 38 for guard plans and canonical String/Math/RegExp/Array metadata.
-export const WIRE_VERSION = 38;
+// Bumped to 39 for canonical call metadata and no-fallback numeric Math instructions.
+export const WIRE_VERSION = 39;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -167,9 +169,27 @@ export const WIRE_OPCODES = [
 	"SET_THIS",
 	"LOAD_STATIC_ARGUMENT",
 	"CALL_SPREAD_ITERABLE",
+	"MATH_UNARY_NUMBER",
+	"MATH_BINARY_NUMBER",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
+
+function mathUnaryNumberTag(operation: string): number {
+	const tag = (VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).indexOf(
+		operation,
+	);
+	if (tag < 0) throw new RangeError(`serialize-vm: unsupported Math op ${operation}`);
+	return tag;
+}
+
+function mathBinaryNumberTag(operation: string): number {
+	const tag = (VM_MATH_BINARY_NUMBER_OPERATIONS as ReadonlyArray<string>).indexOf(
+		operation,
+	);
+	if (tag < 0) throw new RangeError(`serialize-vm: unsupported Math op ${operation}`);
+	return tag;
+}
 
 /** Binary-operator wire order; mirrored by the C `wire_binops[]` table. */
 export const WIRE_BINOPS = [
@@ -1307,6 +1327,17 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.argumentCount);
 			w.i32Array(i.arguments);
 			return;
+		case "MATH_UNARY_NUMBER":
+			w.i32(i.dst);
+			w.i32(i.src);
+			w.u8(mathUnaryNumberTag(i.operation));
+			return;
+		case "MATH_BINARY_NUMBER":
+			w.i32(i.dst);
+			w.i32(i.left);
+			w.i32(i.right);
+			w.u8(mathBinaryNumberTag(i.operation));
+			return;
 		case "CONSTRUCT":
 			w.i32(i.dst);
 			w.i32(i.callee);
@@ -2367,6 +2398,31 @@ function readInstruction(r: Reader): VmInstruction {
 				argumentCount: r.i32(),
 				arguments: r.i32Array(),
 			};
+		case "MATH_UNARY_NUMBER": {
+			const dst = r.i32();
+			const src = r.i32();
+			const operation = VM_MATH_UNARY_NUMBER_OPERATIONS[r.u8()];
+			if (operation === undefined) {
+				throw new RangeError("serialize-vm: invalid unary numeric Math operation");
+			}
+			return { opcode, dst, src, operation };
+		}
+		case "MATH_BINARY_NUMBER": {
+			const dst = r.i32();
+			const left = r.i32();
+			const right = r.i32();
+			const operation = VM_MATH_BINARY_NUMBER_OPERATIONS[r.u8()];
+			if (operation === undefined) {
+				throw new RangeError("serialize-vm: invalid binary numeric Math operation");
+			}
+			return {
+				opcode,
+				dst,
+				left,
+				right,
+				operation,
+			};
+		}
 		case "CONSTRUCT":
 			return {
 				opcode,

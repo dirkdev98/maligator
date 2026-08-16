@@ -10,6 +10,8 @@ import {
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
 	vmRegionLicense,
+	VM_MATH_BINARY_NUMBER_OPERATIONS,
+	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
@@ -648,6 +650,8 @@ function privateAggregateDefinedRegisters(instruction: VmInstruction): Array<num
 		case "BINARY":
 		case "UNARY":
 		case "CALL":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
 		case "CATCH":
 			return [instruction.dst];
 		default:
@@ -1134,6 +1138,10 @@ function privateAggregateUsedRegisters(instruction: VmInstruction): Array<number
 			return [instruction.left, instruction.right];
 		case "UNARY":
 			return [instruction.src];
+		case "MATH_UNARY_NUMBER":
+			return [instruction.src];
+		case "MATH_BINARY_NUMBER":
+			return [instruction.left, instruction.right];
 		case "CALL":
 			return [
 				...operand(instruction.callee),
@@ -5061,6 +5069,28 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_LOAD_CALLEE, .as.load_callee = { .dst = ${instruction.dst} } }`;
 		case "CALL":
 			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
+		case "MATH_UNARY_NUMBER": {
+			if (
+				!(VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(
+					instruction.operation,
+				)
+			) {
+				throw new Error(`Unknown unary numeric Math operation ${instruction.operation}`);
+			}
+			const operation = instruction.operation.slice("Math.".length).toUpperCase();
+			return `{ .opcode = MAL_OP_MATH_UNARY_NUMBER, .as.math_unary_number = { .dst = ${instruction.dst}, .src = ${instruction.src}, .operation = MAL_MATH_UNARY_${operation} } }`;
+		}
+		case "MATH_BINARY_NUMBER": {
+			if (
+				!(VM_MATH_BINARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(
+					instruction.operation,
+				)
+			) {
+				throw new Error(`Unknown binary numeric Math operation ${instruction.operation}`);
+			}
+			const operation = instruction.operation.slice("Math.".length).toUpperCase();
+			return `{ .opcode = MAL_OP_MATH_BINARY_NUMBER, .as.math_binary_number = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .operation = MAL_MATH_BINARY_${operation} } }`;
+		}
 		case "CONSTRUCT":
 			return `{ .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .data_offset = ${sideDataOffset()} } }`;
 		case "THROW":

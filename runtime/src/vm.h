@@ -127,6 +127,8 @@ typedef enum MalOpcode {
     MAL_OP_SET_THIS,
     MAL_OP_LOAD_STATIC_ARGUMENT,
     MAL_OP_CALL_SPREAD_ITERABLE,
+    MAL_OP_MATH_UNARY_NUMBER,
+    MAL_OP_MATH_BINARY_NUMBER,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -670,6 +672,15 @@ typedef struct MalInstruction {
             // non-negative registers or negative primitive/string immediates.
             i32 dst, callee, this_value, data_offset;
         } call;
+
+        /** Locked canonical Math calls after exact Number proof and twin erasure. */
+        struct {
+            i32 dst, src, operation;
+        } math_unary_number;
+
+        struct {
+            i32 dst, left, right, operation;
+        } math_binary_number;
 
         struct {
             // callee and side data use the same tagged value operands as call.

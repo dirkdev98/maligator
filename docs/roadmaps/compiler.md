@@ -240,7 +240,7 @@ is general rather than a registry-shaped collection of special cases.
         consumers to license `projected-elements` or `split-cursor-spans`
         representations from those facts and retain their whole-region/on-demand
         generic twin contracts.
-- [ ] Lower statically known Math calls through builtin-call IR. Preserve argument
+- [x] Lower statically known Math calls through builtin-call IR. Preserve argument
       evaluation, coercion, exceptions, and Realm identity; use native numeric
       arguments/results when representation facts allow it.
   - [x] Publish canonical facts for the currently supported unary Math operations
@@ -248,13 +248,16 @@ is general rather than a registry-shaped collection of special cases.
         and make locked exact-arity numeric calls native in both register allocation
         and C emission. Mutable calls retain exact-callback guards and generic
         fallback.
-  - [ ] Remove the now-dead Math namespace load, property Get, and generic call twin
+  - [x] Remove the now-dead Math namespace load, property Get, and generic call twin
         in IR when the locked identity and numeric lowering proofs make them
         unreachable.
     - [x] Carry exclusive namespace/property producer identities from canonical IR
-          analysis through lowering. Native emission erases both only when its
-          representation proof selects the no-fallback numeric call; bytecode keeps
-          the complete generic twin for interpreted execution.
+          analysis through lowering so the native backend can first prove and erase
+          an exact no-fallback numeric call without changing the generic path.
+    - [x] Promote the proven operation to unary/binary numeric Math IR and VM
+          instructions, erase the generic twin before either backend, and preserve
+          the direct operation through MALW v39 for interpreted execution. Mutable,
+          boxed, and otherwise unsupported calls retain the complete generic twin.
 - [x] Add closed `RegExp.prototype.exec` capture projection as the first stateful and
       effect-sensitive projection. Preserve `lastIndex`, capture, coercion, and
       unmatched-value semantics with materialization on unsupported consumers.
