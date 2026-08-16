@@ -2852,6 +2852,7 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 								stackObjectSiteId: instruction.stackObjectSiteId,
 								stackObjectSlot: instruction.stackObjectSlot,
 								stackObjectInheritedSiteId: instruction.stackObjectInheritedSiteId,
+								stackObjectInheritedGuard: instruction.stackObjectInheritedGuard,
 								nativeCardinalityAccess: instruction.nativeCardinalityAccess,
 							}
 						: {
@@ -3117,6 +3118,7 @@ function clearStackObjectAnnotations(program: IntermediateProgram): boolean {
 					) {
 						changed ||= instruction.stackObjectInheritedSiteId !== undefined;
 						delete instruction.stackObjectInheritedSiteId;
+						delete instruction.stackObjectInheritedGuard;
 					}
 				}
 			}
@@ -3493,6 +3495,24 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 
 				// Pure load/store records belong to scalar replacement. Requiring a real
 				// identity/type/prototype observation keeps this as the residual class.
+				let inheritedGuard;
+				if (safe && inheritedLoad !== undefined) {
+					inheritedGuard = compilerGuardPlan(
+						[program.facts.protectors.get("primitive-methods")],
+						[
+							{
+								kind: "fallback",
+								id: `heap-stack-object:${nextStackObjectSiteId}`,
+							},
+							{
+								kind: "materialize",
+								id: `stack-object-inherited:${nextStackObjectSiteId}`,
+							},
+						],
+					);
+					if (inheritedGuard === undefined) safe = false;
+				}
+
 				if (
 					safe &&
 					(observed || partialEscape) &&
@@ -3514,7 +3534,11 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 						instruction.cardinalityPushStackObjectSiteId = siteId;
 					}
 					if (inheritedLoad !== undefined) {
+						if (inheritedGuard === undefined) {
+							throw new Error("Inherited stack-object load lacks a guard plan");
+						}
 						inheritedLoad.stackObjectInheritedSiteId = siteId;
+						inheritedLoad.stackObjectInheritedGuard = inheritedGuard;
 					}
 					stackObjectSlots += keyStringIndices.length;
 				}

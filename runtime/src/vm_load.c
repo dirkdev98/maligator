@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 31u        // builtin, numeric-HOF, and cardinality guard plans
+#define WIRE_VERSION 32u        // builtin, numeric-HOF, cardinality, and stack guards
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1558,10 +1558,16 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             (void) rd_i32(&r);
         }
 
-        u32 inherited_stack_access_count = rd_count(&r, 2);
+        u32 inherited_stack_access_count = rd_count(&r, 4);
         for (u32 access = 0; r.ok && access < inherited_stack_access_count; access++) {
             (void) rd_i32(&r);
             (void) rd_i32(&r);
+            u8 dependency_mask = rd_u8(&r);
+            u8 obligation_mask = rd_u8(&r);
+            if ((dependency_mask != 1 && dependency_mask != 2) ||
+                obligation_mask != 3) {
+                r.ok = false;
+            }
         }
 
         u32 materialization_count = rd_count(&r, 2);

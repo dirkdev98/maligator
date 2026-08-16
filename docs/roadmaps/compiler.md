@@ -196,8 +196,10 @@ the same facts unconditionally.
   - [x] Make guarded Array/String/Map/Set calls consume one canonical builtin-identity
         fact through lowering, frontend-cache serialization, and C emission.
   - [x] Make the bounded cardinality-array region combine builtin identity,
-        primitive-method, and array-element facts with explicit generic-call and
+        primitive-method, and array-element facts with explicit fallback and
         materialization obligations.
+  - [x] Make inherited stack-object loads consume the primitive-method fact and
+        retain heap materialization as their generic twin.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.

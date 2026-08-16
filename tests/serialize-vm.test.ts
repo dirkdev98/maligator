@@ -248,7 +248,7 @@ describe("serialize-vm", () => {
 									operation,
 									guard: {
 										dependencies: [dependency],
-										obligations: ["generic-call"],
+										obligations: ["fallback"],
 									},
 								},
 							};
@@ -279,7 +279,7 @@ describe("serialize-vm", () => {
 							operation: "String.prototype.charCodeAt",
 							guard: {
 								dependencies: [{ kind: "world", fact: "primordials.locked" }],
-								obligations: ["generic-call"],
+								obligations: ["fallback"],
 							},
 						},
 						directStringCharCodeAtPosition: "inBounds",

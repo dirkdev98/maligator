@@ -1067,6 +1067,7 @@ export type IRInstruction =
 			stackObjectSlot?: number;
 			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
 			stackObjectInheritedSiteId?: number;
+			stackObjectInheritedGuard?: CompilerGuardPlan;
 			/** Native-only finite selector domain. The ordinary key remains available
 			 * for the exact generic fallback; the source's right operand selects a string.
 			 */
@@ -1106,6 +1107,7 @@ export type IRInstruction =
 			stackObjectSlot?: number;
 			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
 			stackObjectInheritedSiteId?: number;
+			stackObjectInheritedGuard?: CompilerGuardPlan;
 			nativeCardinalityAccess?: {
 				role: "push" | "length" | "element" | "field";
 				allocation: Extract<IRInstruction, { type: "createArray" }>;

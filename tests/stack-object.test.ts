@@ -390,15 +390,16 @@ describe("closed fixed-shape stack-object proof", () => {
 
 describe("stack-object native metadata and C emission", () => {
 	it("emits an inline dependency guard with stack and heap representations", () => {
-		const definition = compileSemanticProgramToVmDefinition(
-			semantic(
-				`function f(value) { const o = { x: value }; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`,
-			),
-		);
+		const inheritedSource = `function f(value) { const o = { x: value }; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`;
+		const definition = compileSemanticProgramToVmDefinition(semantic(inheritedSource));
 		const fn = definition.functions.find(
 			(candidate) => (candidate.stackObjectInheritedAccesses?.length ?? 0) > 0,
 		)!;
 		expect(fn.stackObjectInheritedAccesses).toHaveLength(1);
+		expect(fn.stackObjectInheritedAccesses?.[0]?.guard).toEqual({
+			dependencies: [{ kind: "epoch", family: "primitive-methods" }],
+			obligations: ["fallback", "materialize"],
+		});
 		const source = emitVmDefinition(definition, { compiled: true });
 		expect(source).toContain("MAL_IC_MODE_INHERITED_VALUE");
 		expect(source).toContain("->poly_count > 0");
@@ -410,6 +411,20 @@ describe("stack-object native metadata and C emission", () => {
 		expect(source).toContain("= mal_vm_create_object_shaped(vm");
 		expect(source).toContain("mal_perf_ic_load_inherited_hit();");
 		expect(source).not.toContain("mal_vm_local_inherited_value_try_load_static");
+
+		const locked = compileSemanticProgramToVmDefinition(semantic(inheritedSource), {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
+		expect(
+			locked.functions.find(
+				(candidate) => (candidate.stackObjectInheritedAccesses?.length ?? 0) > 0,
+			)?.stackObjectInheritedAccesses?.[0]?.guard.dependencies,
+		).toEqual([{ kind: "world", fact: "primordials.locked" }]);
+		const lockedSource = emitVmDefinition(locked, { compiled: true });
+		expect(lockedSource).toMatch(/->poly_count == 0 && true &&/);
+		expect(lockedSource).not.toMatch(
+			/->poly_count == 0 && mal_primitive_method_protector/,
+		);
 	});
 
 	it("emits an immortal stack MalObject backed by activation root slots", () => {
@@ -517,6 +532,13 @@ describe("stack-object native metadata and C emission", () => {
 				(fn) => (fn.stackObjectInheritedAccesses?.length ?? 0) === 1,
 			),
 		).toBe(true);
+		expect(
+			decoded.functions.find((fn) => (fn.stackObjectInheritedAccesses?.length ?? 0) === 1)
+				?.stackObjectInheritedAccesses?.[0]?.guard,
+		).toEqual({
+			dependencies: [{ kind: "epoch", family: "primitive-methods" }],
+			obligations: ["fallback", "materialize"],
+		});
 		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
 			"MAL_IC_MODE_INHERITED_VALUE",
 		);

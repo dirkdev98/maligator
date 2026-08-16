@@ -22,8 +22,8 @@ import type { VmDefinition, VmFunction, VmGuardPlan, VmInstruction } from "./low
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 31 for builtin, numeric-HOF, and cardinality-region guard plans.
-export const WIRE_VERSION = 31;
+// Bumped to 32 for builtin, numeric-HOF, cardinality, and inherited-stack guards.
+export const WIRE_VERSION = 32;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -509,10 +509,30 @@ function cardinalityGuardMasks(guard: VmGuardPlan): {
 	}
 	let obligationMask = 0;
 	for (const obligation of guard.obligations) {
-		obligationMask |= obligation === "generic-call" ? 1 : 2;
+		obligationMask |= obligation === "fallback" ? 1 : 2;
 	}
 	if ((dependencyMask !== 1 && dependencyMask !== 14) || obligationMask !== 3) {
 		throw new RangeError("serialize-vm: invalid cardinality guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
+function inheritedStackGuardMasks(guard: VmGuardPlan): {
+	dependencyMask: number;
+	obligationMask: number;
+} {
+	let dependencyMask = 0;
+	for (const dependency of guard.dependencies) {
+		if (dependency.kind === "world") dependencyMask |= 1;
+		else if (dependency.family === "primitive-methods") dependencyMask |= 2;
+		else throw new RangeError("serialize-vm: unsupported inherited-stack dependency");
+	}
+	let obligationMask = 0;
+	for (const obligation of guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if ((dependencyMask !== 1 && dependencyMask !== 2) || obligationMask !== 3) {
+		throw new RangeError("serialize-vm: invalid inherited-stack guard plan");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -635,6 +655,9 @@ export function serializeVmDefinition(
 		for (const access of fn.stackObjectInheritedAccesses ?? []) {
 			w.i32(access.instructionIndex);
 			w.i32(access.allocationInstructionIndex);
+			const { dependencyMask, obligationMask } = inheritedStackGuardMasks(access.guard);
+			w.u8(dependencyMask);
+			w.u8(obligationMask);
 		}
 
 		w.u32(fn.stackObjectMaterializations?.length ?? 0);
@@ -720,7 +743,7 @@ export function serializeVmDefinition(
 					guardedBuiltin !== undefined &&
 					(guardedBuiltin.guard.dependencies.length !== 1 ||
 						guardedBuiltin.guard.obligations.length !== 1 ||
-						guardedBuiltin.guard.obligations[0] !== "generic-call" ||
+						guardedBuiltin.guard.obligations[0] !== "fallback" ||
 						guardedDependency === undefined ||
 						(guardedDependency.kind === "world"
 							? guardedDependency.fact !== "primordials.locked"
@@ -1702,14 +1725,31 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			}));
 		}
 
-		const stackObjectInheritedAccessCount = r.count(2);
+		const stackObjectInheritedAccessCount = r.count(4);
 		if (stackObjectInheritedAccessCount > 0) {
 			fn.stackObjectInheritedAccesses = Array.from(
 				{ length: stackObjectInheritedAccessCount },
-				() => ({
-					instructionIndex: r.i32(),
-					allocationInstructionIndex: r.i32(),
-				}),
+				() => {
+					const instructionIndex = r.i32();
+					const allocationInstructionIndex = r.i32();
+					const dependencyMask = r.u8();
+					const obligationMask = r.u8();
+					if ((dependencyMask !== 1 && dependencyMask !== 2) || obligationMask !== 3) {
+						throw new RangeError("serialize-vm: invalid inherited-stack guard plan");
+					}
+					return {
+						instructionIndex,
+						allocationInstructionIndex,
+						guard: {
+							dependencies: [
+								dependencyMask === 1
+									? { kind: "world", fact: "primordials.locked" }
+									: { kind: "epoch", family: "primitive-methods" },
+							],
+							obligations: ["fallback", "materialize"],
+						},
+					};
+				},
 			);
 		}
 
@@ -1805,7 +1845,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 									? { kind: "world", fact: "primordials.locked" }
 									: { kind: "epoch", family: "watched-methods" },
 							],
-							obligations: ["generic-call"],
+							obligations: ["fallback"],
 						},
 					};
 				}
@@ -1931,7 +1971,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 										{ kind: "epoch", family: "primitive-methods" },
 										{ kind: "epoch", family: "watched-methods" },
 									],
-						obligations: ["generic-call", "materialize"],
+						obligations: ["fallback", "materialize"],
 					},
 				};
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {

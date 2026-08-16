@@ -291,7 +291,7 @@ describe("canonical builtin-call IR facts", () => {
 				operation: "Array.prototype.push",
 				guard: {
 					dependencies: [{ kind: "world", fact: "primordials.locked" }],
-					obligations: ["generic-call"],
+					obligations: ["fallback"],
 				},
 			},
 		});
@@ -334,7 +334,7 @@ describe("canonical builtin-call IR facts", () => {
 			guardedBuiltinCall: {
 				guard: {
 					dependencies: [{ kind: "epoch", family: "watched-methods" }],
-					obligations: ["generic-call"],
+					obligations: ["fallback"],
 				},
 			},
 		});

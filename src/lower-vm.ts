@@ -107,7 +107,7 @@ export type VmSemanticDependency =
 				| "object-shapes";
 	  };
 
-export type VmGuardObligation = "generic-call" | "materialize";
+export type VmGuardObligation = "fallback" | "materialize";
 
 /** Backend-neutral proof contract retained across frontend-cache serialization. */
 export interface VmGuardPlan {
@@ -472,6 +472,7 @@ export interface VmFunction {
 	stackObjectInheritedAccesses?: ReadonlyArray<{
 		instructionIndex: number;
 		allocationInstructionIndex: number;
+		guard: VmGuardPlan;
 	}>;
 
 	/**
@@ -1493,6 +1494,7 @@ function lowerFunctionToVmFunction(
 	const pendingStackObjectInheritedAccesses: Array<{
 		instructionIndex: number;
 		siteId: number;
+		guard: CompilerGuardPlan;
 	}> = [];
 	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
 	const pendingCardinalityAccesses: Array<{
@@ -1664,9 +1666,13 @@ function lowerFunctionToVmFunction(
 					instruction.type === "loadPropertyStatic") &&
 				instruction.stackObjectInheritedSiteId !== undefined
 			) {
+				if (instruction.stackObjectInheritedGuard === undefined) {
+					throw new Error("Inherited stack-object access lacks a guard plan");
+				}
 				pendingStackObjectInheritedAccesses.push({
 					instructionIndex,
 					siteId: instruction.stackObjectInheritedSiteId,
+					guard: instruction.stackObjectInheritedGuard,
 				});
 			}
 			positions.push(currentPos);
@@ -1694,12 +1700,20 @@ function lowerFunctionToVmFunction(
 		},
 	);
 	const stackObjectInheritedAccesses = pendingStackObjectInheritedAccesses.map(
-		({ instructionIndex, siteId }) => {
+		({ instructionIndex, siteId, guard: compilerGuard }) => {
 			const allocationInstructionIndex = stackObjectSiteInstructionById.get(siteId);
 			if (allocationInstructionIndex === undefined) {
 				throw new Error(`Unknown inherited stack-object site id ${siteId}`);
 			}
-			return { instructionIndex, allocationInstructionIndex };
+			const guard = lowerGuardPlan(compilerGuard);
+			if (
+				guard === undefined ||
+				!guard.obligations.includes("fallback") ||
+				!guard.obligations.includes("materialize")
+			) {
+				throw new Error("Inherited stack-object access has an invalid guard plan");
+			}
+			return { instructionIndex, allocationInstructionIndex, guard };
 		},
 	);
 	for (const pending of pendingCardinalityAccesses) {
@@ -1895,7 +1909,7 @@ function lowerGuardPlan(plan: CompilerGuardPlan): VmGuardPlan | undefined {
 		...new Set(
 			plan.obligations.map(
 				(obligation): VmGuardObligation =>
-					obligation.kind === "fallback" ? "generic-call" : "materialize",
+					obligation.kind === "fallback" ? "fallback" : "materialize",
 			),
 		),
 	];
@@ -1920,7 +1934,7 @@ function lowerGuardedBuiltinCall(
 		return undefined;
 	}
 	const guard = lowerGuardPlan(call.identity.proof);
-	if (guard === undefined || !guard.obligations.includes("generic-call")) {
+	if (guard === undefined || !guard.obligations.includes("fallback")) {
 		return undefined;
 	}
 	return {

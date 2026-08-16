@@ -742,6 +742,7 @@ export function emitCompiledFunction(
 		site.inheritedIcIndex = instruction.icIndex;
 		site.inheritedFastName = `${site.objectName}_inherited_fast`;
 		site.inheritedValueName = `${site.objectName}_inherited_value`;
+		site.inheritedGuard = access.guard;
 		stackObjectInheritedAccesses.set(access.instructionIndex, site);
 	}
 	const finiteRecordRegions = new Map<number, FiniteRecordRegion>();
@@ -2471,7 +2472,27 @@ interface StackObjectSite {
 	inheritedIcIndex?: number;
 	inheritedFastName?: string;
 	inheritedValueName?: string;
+	inheritedGuard?: VmGuardPlan;
 	cardinalityRegion?: CardinalityRegion;
+}
+
+function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
+	const guard = site.inheritedGuard;
+	if (
+		guard === undefined ||
+		!guard.obligations.includes("fallback") ||
+		!guard.obligations.includes("materialize")
+	) {
+		throw new Error("Inherited stack-object site lacks its fallback contract");
+	}
+	const conditions = guard.dependencies.map((dependency) => {
+		if (dependency.kind === "world") return "true";
+		if (dependency.family === "primitive-methods") {
+			return "mal_primitive_method_protector";
+		}
+		throw new Error(`Unsupported inherited-stack dependency ${dependency.family}`);
+	});
+	return conditions.length === 0 ? "false" : conditions.join(" && ");
 }
 
 interface FiniteRecordRegion {
@@ -4152,7 +4173,7 @@ function emitInstruction(
 					...cardinalityReset,
 					`MalInlineCache *${icName} = &__property_ic[${stackObjectSite.inheritedIcIndex}];`,
 					`MalObject *${prototypeName} = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);`,
-					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape == __oshape_${ip} && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && mal_primitive_method_protector && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
+					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape == __oshape_${ip} && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && ${inheritedStackObjectProtectorGuard(stackObjectSite)} && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
 					`if (${fastName}) {`,
 					`  ${inheritedValue} = ${icName}->value;`,
 					`  mal_perf_stack_object_init();`,
