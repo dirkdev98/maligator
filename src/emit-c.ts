@@ -2691,6 +2691,16 @@ function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
 	return semanticDependencyAdmissionGuard(guard);
 }
 
+function closedGlobalTableAdmissionGuard(guard: VmGuardPlan): string {
+	if (
+		!guard.obligations.includes("fallback") ||
+		!guard.obligations.includes("materialize")
+	) {
+		throw new Error("Closed-global table lacks its fallback contract");
+	}
+	return semanticDependencyAdmissionGuard(guard);
+}
+
 interface FiniteRecordRegion {
 	allocationInstructionIndex: number;
 	slotsOffset: number;
@@ -4843,9 +4853,10 @@ function emitInstruction(
 					return [deopt, throwCheck, ...fallback];
 				}
 				const value = `__closed_global_value_${ip}`;
+				const semanticAdmission = closedGlobalTableAdmissionGuard(table.guard);
 				return [
-					`if (mal_value_is_undefined(${state}) && mal_array_elements_protector) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
-					`if (${state} == MAL_VALUE_FALSE && mal_array_elements_protector) {`,
+					`if (mal_value_is_undefined(${state}) && ${semanticAdmission}) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
+					`if (${state} == MAL_VALUE_FALSE && ${semanticAdmission}) {`,
 					`  MalValue ${value} = vm->globals[${table.baseIndex} + (i32) ${num(instruction.key)}];`,
 					`  r${instruction.dst} = mal_value_is_empty(${value}) ? MAL_VALUE_UNDEFINED : ${value};`,
 					`} else {`,
@@ -5387,9 +5398,10 @@ function emitInstruction(
 				if (!table.direct) {
 					return [deopt, throwCheck, ...fallback];
 				}
+				const semanticAdmission = closedGlobalTableAdmissionGuard(table.guard);
 				return [
-					`if (mal_value_is_undefined(${state}) && mal_array_elements_protector) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
-					`if (${state} == MAL_VALUE_FALSE && mal_array_elements_protector) {`,
+					`if (mal_value_is_undefined(${state}) && ${semanticAdmission}) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
+					`if (${state} == MAL_VALUE_FALSE && ${semanticAdmission}) {`,
 					`  vm->globals[${table.baseIndex} + (i32) ${num(instruction.key)}] = ${boxed(instruction.value)};`,
 					`} else {`,
 					`  ${deopt}`,

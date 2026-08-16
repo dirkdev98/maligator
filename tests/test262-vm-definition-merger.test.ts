@@ -192,6 +192,10 @@ describe("Test262 VM definition merger", () => {
 					stateIndex: 4,
 					mask: 3,
 					direct: true,
+					guard: {
+						dependencies: [{ kind: "epoch", family: "array-elements" }],
+						obligations: ["fallback", "materialize"],
+					},
 				},
 			},
 		];

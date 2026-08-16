@@ -933,11 +933,29 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.update = update;
 		`);
-		expect(output).toContain("mal_array_elements_protector");
+		expect(output).toContain(
+			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS, nullptr)",
+		);
+		expect(output).not.toContain("mal_array_elements_protector");
 		expect(output).toContain("MAL_VALUE_EMPTY");
 		expect(output).toContain("mal_vm_closed_global_table_deopt");
 		expect(output).toMatch(/vm->globals\[\d+ \+ \(i32\) /);
 		expect(output).toContain("mal_vm_op_store_property_ic");
+
+		const lockedOutput = emitLocked(`
+			"use strict";
+			const table = {};
+			function update(seed) {
+				const key = seed & 7;
+				const previous = table[key];
+				table[key] = seed;
+				return previous;
+			}
+			globalThis.update = update;
+		`);
+		expect(lockedOutput).toContain("mal_vm_closed_global_table_deopt");
+		expect(lockedOutput).not.toContain("mal_vm_semantic_dependencies_admit(vm,");
+		expect(lockedOutput).not.toContain("mal_array_elements_protector");
 	});
 
 	it("keeps initialized numeric locals native across exception edges", () => {

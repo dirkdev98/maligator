@@ -3845,6 +3845,14 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 		if (syntheticGlobals + width + 1 > 4096) continue;
 		const baseIndex = program.nextGlobalIndex;
 		const stateIndex = baseIndex + width;
+		const guard = compilerGuardPlan(
+			[program.facts.protectors.get("array-elements")],
+			[
+				{ kind: "fallback", id: `closed-global-table:${globalIndex}` },
+				{ kind: "materialize", id: `closed-global-table:${globalIndex}` },
+			],
+		);
+		if (guard === undefined) continue;
 		program.nextGlobalIndex += width + 1;
 		syntheticGlobals += width + 1;
 		for (const access of accesses) {
@@ -3853,6 +3861,7 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 				stateIndex,
 				mask,
 				direct: access.mask === mask,
+				guard,
 			};
 			annotated++;
 		}

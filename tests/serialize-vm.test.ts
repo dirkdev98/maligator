@@ -420,6 +420,10 @@ describe("serialize-vm", () => {
 				stateIndex: 4,
 				mask: 3,
 				direct: true,
+				guard: {
+					dependencies: [{ kind: "epoch", family: "array-elements" }],
+					obligations: ["fallback", "materialize"],
+				},
 			},
 		});
 		metadataInstructions.push({
@@ -433,6 +437,10 @@ describe("serialize-vm", () => {
 				stateIndex: 4,
 				mask: 3,
 				direct: false,
+				guard: {
+					dependencies: [{ kind: "world", fact: "primordials.locked" }],
+					obligations: ["fallback", "materialize"],
+				},
 			},
 		});
 		metadataInstructions.push({

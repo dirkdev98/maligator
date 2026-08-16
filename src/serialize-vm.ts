@@ -32,8 +32,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 41 for semantic facts and exact direct-builtin call metadata.
-export const WIRE_VERSION = 41;
+// Bumped to 42 for semantic facts, direct calls, and closed-global table guards.
+export const WIRE_VERSION = 42;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -603,6 +603,26 @@ function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	return { dependencyMask, obligationMask };
 }
 
+function closedGlobalTableGuardMasks(guard: VmGuardPlan): {
+	dependencyMask: number;
+	obligationMask: number;
+} {
+	let dependencyMask = 0;
+	for (const dependency of guard.dependencies) {
+		if (dependency.kind === "world") dependencyMask |= 1;
+		else if (dependency.family === "array-elements") dependencyMask |= 8;
+		else throw new RangeError("serialize-vm: unsupported closed-global dependency");
+	}
+	let obligationMask = 0;
+	for (const obligation of guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if ((dependencyMask !== 1 && dependencyMask !== 8) || obligationMask !== 3) {
+		throw new RangeError("serialize-vm: invalid closed-global guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 const SEMANTIC_PROTECTOR_TAGS = {
 	"primitive-methods": 1,
 	"watched-methods": 2,
@@ -843,11 +863,16 @@ export function serializeVmDefinition(
 					instruction.opcode === "STORE_PROPERTY") &&
 				instruction.nativeClosedGlobalTable !== undefined
 			) {
+				const { dependencyMask, obligationMask } = closedGlobalTableGuardMasks(
+					instruction.nativeClosedGlobalTable.guard,
+				);
 				w.u8(10);
 				w.i32(instruction.nativeClosedGlobalTable.baseIndex);
 				w.i32(instruction.nativeClosedGlobalTable.stateIndex);
 				w.i32(instruction.nativeClosedGlobalTable.mask);
 				w.u8(instruction.nativeClosedGlobalTable.direct ? 1 : 0);
+				w.u8(dependencyMask);
+				w.u8(obligationMask);
 			} else if (instruction.opcode === "CALL") {
 				const guardedBuiltin = instruction.guardedBuiltinCall;
 				const guardedOperation = guardedBuiltin?.operation;
@@ -2183,6 +2208,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				const stateIndex = r.i32();
 				const mask = r.i32();
 				const direct = r.u8();
+				const dependencyMask = r.u8();
+				const obligationMask = r.u8();
 				if (
 					baseIndex < 0 ||
 					stateIndex !== baseIndex + mask + 1 ||
@@ -2190,7 +2217,9 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					mask < 0 ||
 					mask > 1023 ||
 					(mask & (mask + 1)) !== 0 ||
-					direct > 1
+					direct > 1 ||
+					(dependencyMask !== 1 && dependencyMask !== 8) ||
+					obligationMask !== 3
 				) {
 					throw new RangeError("serialize-vm: invalid closed-global table metadata");
 				}
@@ -2199,6 +2228,13 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					stateIndex,
 					mask,
 					direct: direct === 1,
+					guard: {
+						dependencies:
+							dependencyMask === 1
+								? [{ kind: "world", fact: "primordials.locked" }]
+								: [{ kind: "epoch", family: "array-elements" }],
+						obligations: ["fallback", "materialize"],
+					},
 				};
 			} else if (tag === 11 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
 				instruction.nativePrimitiveStringLength = true;

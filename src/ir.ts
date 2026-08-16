@@ -1184,6 +1184,8 @@ export type IRInstruction =
 				stateIndex: number;
 				mask: number;
 				direct: boolean;
+				/** Array-indexed prototype semantics plus fallback/materialization. */
+				guard: CompilerGuardPlan;
 			};
 			nativeCardinalityAccess?: {
 				role: "push" | "length" | "element" | "field";
@@ -1233,6 +1235,7 @@ export type IRInstruction =
 				stateIndex: number;
 				mask: number;
 				direct: boolean;
+				guard: CompilerGuardPlan;
 			};
 
 			// [object, key, value]

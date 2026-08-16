@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 41u        // semantic facts and direct builtin call metadata
+#define WIRE_VERSION 42u        // semantic facts, direct calls, and closed-global guards
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1784,9 +1784,13 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 i32 state = rd_i32(&r);
                 i32 mask = rd_i32(&r);
                 u8 direct = rd_u8(&r);
+                u8 dependency_mask = rd_u8(&r);
+                u8 obligation_mask = rd_u8(&r);
                 if (base < 0 || state != base + mask + 1 ||
                     state >= def->global_count || mask < 0 || mask > 1023 ||
-                    (mask & (mask + 1)) != 0 || direct > 1) {
+                    (mask & (mask + 1)) != 0 || direct > 1 ||
+                    (dependency_mask != 1 && dependency_mask != 8) ||
+                    obligation_mask != 3) {
                     r.ok = false;
                 }
             } else if (tag == 11) { // guarded primitive-String length load

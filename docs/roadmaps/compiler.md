@@ -217,9 +217,13 @@ the same facts unconditionally.
         locked-world dependencies collapse before emission, while mutable regions
         retain the generic twin and one combined semantic-activity snapshot.
   - [x] Retain the three runtime-backed protector facts as program metadata through
-        MALW v41 so analyses that intentionally rebuild after frontend-cache loading
+        MALW v42 so analyses that intentionally rebuild after frontend-cache loading
         consume the same world/epoch proof. Migrate affine-range virtualization to
         the Array-elements fact and erase its semantic guard in locked builds.
+  - [x] License closed finite global tables with the Array-elements fact and explicit
+        generic-operation/materialization obligations through IR, lowering, and
+        MALW. Mutable builds use the shared admission bridge; locked builds erase
+        the raw protector condition while retaining local deopt materialization.
 - [ ] Version hot regions once and replace repeated protector checks, epoch reads,
       cache probes, and static-key comparisons with unchecked operations inside the
       region.

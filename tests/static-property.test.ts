@@ -73,6 +73,12 @@ describe("closed global finite tables", () => {
 		expect(new Set(accesses.map((access) => access.baseIndex))).toHaveLength(1);
 		expect(accesses[0]).toMatchObject({ mask: 7 });
 		expect(accesses[0]!.stateIndex).toBe(accesses[0]!.baseIndex + 8);
+		for (const access of accesses) {
+			expect(access.guard).toEqual({
+				dependencies: [{ kind: "epoch", family: "array-elements" }],
+				obligations: ["fallback", "materialize"],
+			});
+		}
 	});
 
 	it("rejects escaping and cross-function table identities", () => {

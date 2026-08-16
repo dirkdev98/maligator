@@ -1158,6 +1158,7 @@ export type VmInstruction =
 				stateIndex: number;
 				mask: number;
 				direct: boolean;
+				guard: VmGuardPlan;
 			};
 			nativeCardinalityAccess?: {
 				role: "push" | "length" | "element" | "field";
@@ -1207,6 +1208,7 @@ export type VmInstruction =
 				stateIndex: number;
 				mask: number;
 				direct: boolean;
+				guard: VmGuardPlan;
 			};
 			/** EMITTER-ONLY: producer store for a private identity virtual range. */
 			nativeAffineRangeVirtualization?: {
@@ -2738,7 +2740,17 @@ function lowerInstructionToVmInstruction(
 				src: instruction.registers[0],
 				index: instruction.index,
 			};
-		case "loadProperty":
+		case "loadProperty": {
+			const loadClosedGlobalGuard =
+				instruction.nativeClosedGlobalTable === undefined
+					? undefined
+					: lowerGuardPlan(instruction.nativeClosedGlobalTable.guard);
+			if (
+				instruction.nativeClosedGlobalTable !== undefined &&
+				loadClosedGlobalGuard === undefined
+			) {
+				throw new Error("Closed-global table lost its semantic guard");
+			}
 			return {
 				opcode: "LOAD_PROPERTY",
 				dst: instruction.registers[0],
@@ -2748,7 +2760,10 @@ function lowerInstructionToVmInstruction(
 				nativeClosedGlobalTable:
 					instruction.nativeClosedGlobalTable === undefined
 						? undefined
-						: { ...instruction.nativeClosedGlobalTable },
+						: {
+								...instruction.nativeClosedGlobalTable,
+								guard: loadClosedGlobalGuard!,
+							},
 				...(instruction.nativeFiniteKey === undefined
 					? {}
 					: {
@@ -2759,6 +2774,7 @@ function lowerInstructionToVmInstruction(
 							},
 						}),
 			};
+		}
 		case "loadPropertyStatic":
 			return {
 				opcode: "LOAD_PROPERTY_STATIC",
@@ -2776,7 +2792,17 @@ function lowerInstructionToVmInstruction(
 				key: instruction.registers[2],
 				receiver: instruction.registers[3],
 			};
-		case "storeProperty":
+		case "storeProperty": {
+			const storeClosedGlobalGuard =
+				instruction.nativeClosedGlobalTable === undefined
+					? undefined
+					: lowerGuardPlan(instruction.nativeClosedGlobalTable.guard);
+			if (
+				instruction.nativeClosedGlobalTable !== undefined &&
+				storeClosedGlobalGuard === undefined
+			) {
+				throw new Error("Closed-global table lost its semantic guard");
+			}
 			return {
 				opcode: "STORE_PROPERTY",
 				object: instruction.registers[0],
@@ -2786,7 +2812,10 @@ function lowerInstructionToVmInstruction(
 				nativeClosedGlobalTable:
 					instruction.nativeClosedGlobalTable === undefined
 						? undefined
-						: { ...instruction.nativeClosedGlobalTable },
+						: {
+								...instruction.nativeClosedGlobalTable,
+								guard: storeClosedGlobalGuard!,
+							},
 				...(instruction.nativeFiniteKey === undefined
 					? {}
 					: {
@@ -2797,6 +2826,7 @@ function lowerInstructionToVmInstruction(
 							},
 						}),
 			};
+		}
 		case "storePropertyStatic":
 			return {
 				opcode: "STORE_PROPERTY_STATIC",
