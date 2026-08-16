@@ -283,6 +283,12 @@ is general rather than a registry-shaped collection of special cases.
         analysis between Math and Object; and keep non-Math producer twins out of
         native Math metadata. Backend dispatch remains explicit and exhaustively
         checked because it owns operation-specific semantic kernels.
+  - [x] Prove a zero-argument intrinsic Map remains private when its complete use
+        set consists only of exact get/set property-call pairs. Use the shared
+        registry admission to erase locked `Map.prototype.get` property and
+        callback dispatch across multiple calls and loops; reject iterable
+        construction, escaping identity, own-method writes, extracted callbacks,
+        and observed `set` return values as one whole-value fact.
   - [x] Select closed constant-index split projections in IR from the canonical call
         facts and the result's complete move/use set. Carry the representation,
         region license, retained twin, materialization contract, and exact consumer

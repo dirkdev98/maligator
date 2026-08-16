@@ -18,6 +18,13 @@ for (let i = 0; i < 3000; i++) {
 }
 ok("direct collection values", sum > 0 && map.size === 128 && set.size === 128);
 
+function privateFreshMapGet(key) {
+	const values = new Map();
+	values.set("answer", 42);
+	return values.get(key);
+}
+ok("locked private Map.get", privateFreshMapGet("answer") === 42);
+
 const iteratedMutationMap = new Map();
 for (let i = 0; i < 64; i++) iteratedMutationMap.set(i, i);
 const mutationIterator = iteratedMutationMap.keys();

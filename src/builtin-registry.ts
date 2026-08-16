@@ -32,6 +32,7 @@ export interface BuiltinOperationDescriptor {
 
 export type ExactBuiltinReceiverProof =
 	| "exact-fresh-array"
+	| "exact-fresh-map"
 	| "intrinsic-object"
 	| "primitive-string";
 
@@ -68,6 +69,11 @@ export const exactBuiltinCallDescriptors = {
 		receiverProof: "primitive-string",
 		forwardedArgumentLimit: 1,
 		cOperation: "MAL_DIRECT_BUILTIN_STRING_CHAR_CODE_AT",
+	},
+	"Map.prototype.get": {
+		receiverProof: "exact-fresh-map",
+		forwardedArgumentLimit: 1,
+		cOperation: "MAL_DIRECT_BUILTIN_MAP_GET",
 	},
 } as const satisfies Record<string, ExactBuiltinCallDescriptor>;
 
@@ -334,7 +340,11 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 			effects: ["throw", "safepoint"],
 			result: key === "get" ? "any" : "receiver",
 			realm: "semantic-identity",
-			lowerings: ["generic", "guarded-native-collection"],
+			lowerings: [
+				"generic",
+				"guarded-native-collection",
+				...(key === "get" ? (["exact-builtin-call"] as const) : []),
+			],
 		}),
 	),
 	{

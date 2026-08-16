@@ -255,6 +255,21 @@ static MalValue mal_builtin_map_prototype_get(MalVm *vm, MalValue this_value, co
         arg_count >= 1 ? args[0] : mal_value_new_undefined());
 }
 
+MalValue mal_builtin_map_get_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    return mal_builtin_map_prototype_get(
+        vm,
+        this_value,
+        args,
+        arg_count,
+        mal_value_new_undefined(),
+        mal_value_new_undefined());
+}
+
 static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
     if (map == nullptr) {

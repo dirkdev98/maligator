@@ -13,6 +13,7 @@
 #include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
+#include "builtin_map.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
 #include "builtin_string.h"
@@ -2194,6 +2195,10 @@ void mal_op_call_builtin(MalCallable *callable, const MalInstruction *instructio
             break;
         case MAL_DIRECT_BUILTIN_STRING_CHAR_CODE_AT:
             result = mal_builtin_string_char_code_at_known(
+                vm, receiver, &vm->value_stack[base], argument_count);
+            break;
+        case MAL_DIRECT_BUILTIN_MAP_GET:
+            result = mal_builtin_map_get_known(
                 vm, receiver, &vm->value_stack[base], argument_count);
             break;
     }

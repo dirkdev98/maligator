@@ -11,7 +11,10 @@ import {
 	compilerGuardPlan,
 	knownBuiltinCallProves,
 } from "./compiler-facts.ts";
-import { analyzeExactFreshArrayUse } from "./compiler-local-facts.ts";
+import {
+	analyzeExactFreshArrayUse,
+	analyzeExactFreshMapUse,
+} from "./compiler-local-facts.ts";
 import {
 	optimizationMetrics,
 	optimizationPassDelta,
@@ -191,6 +194,7 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 			return register;
 		};
 		const removedProperties = new Set<IRInstruction>();
+		const exactFreshMaps = new Map<number, ReturnType<typeof analyzeExactFreshMapUse>>();
 		for (const block of fn.blocks) {
 			for (let index = 0; index < block.instructions.length; index++) {
 				const instruction = block.instructions[index]!;
@@ -231,6 +235,15 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 							call: instruction,
 						});
 						if (array.fact.kind !== "known") continue;
+						break;
+					}
+					case "exact-fresh-map": {
+						let map = exactFreshMaps.get(receiverRoot);
+						if (map === undefined) {
+							map = analyzeExactFreshMapUse(fn, receiverRoot);
+							exactFreshMaps.set(receiverRoot, map);
+						}
+						if (map.fact.kind !== "known" || !map.calls?.has(instruction)) continue;
 						break;
 					}
 					case "intrinsic-object":
@@ -1237,6 +1250,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringSplitSites(program);
 		if (residualFeatures.call && residualFeatures.property)
+			annotateDirectCollectionSites(program);
+		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectObjectSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			optLowerLockedExactBuiltinCalls(program);
@@ -1246,8 +1261,6 @@ export function executeIROptimizations(
 			annotateDirectStringTrimSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateBoundedStringCharCodeAtPositions(program);
-		if (residualFeatures.call && residualFeatures.property)
-			annotateDirectCollectionSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectMathSites(program);
 		if (residualFeatures.call && residualFeatures.property)
@@ -1349,6 +1362,11 @@ export function executeIROptimizations(
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(
+			"annotate-direct-collections",
+			annotateDirectCollectionSites,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
 			"annotate-direct-object",
 			annotateDirectObjectSites,
 			residualFeatures.call && residualFeatures.property,
@@ -1371,11 +1389,6 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-bounded-string-char-code-at-positions",
 			annotateBoundedStringCharCodeAtPositions,
-			residualFeatures.call && residualFeatures.property,
-		);
-		runFinalPass(
-			"annotate-direct-collections",
-			annotateDirectCollectionSites,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

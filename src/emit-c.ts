@@ -6095,6 +6095,13 @@ function emitInstruction(
 					poll,
 				];
 			}
+			if (instruction.operation === "Map.prototype.get") {
+				return [
+					`r${instruction.dst} = mal_builtin_map_get_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+					throwCheck,
+					poll,
+				];
+			}
 			if (instruction.operation !== "String.prototype.split") return null;
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site } = nativeStringSplitCursorAction;

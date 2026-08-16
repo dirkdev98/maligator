@@ -672,6 +672,53 @@ test("locked Object.hasOwn calls erase the namespace dispatch seam", () => {
 	).toBe(true);
 });
 
+test("locked private fresh Map.get erases dynamic dispatch", () => {
+	const source = `
+		globalThis.readPrivateMap = function readPrivateMap(key) {
+			const values = new Map();
+			values.set("answer", 42);
+			return values.get(key);
+		};
+	`;
+	const locked = optimizedLockedProgram(source);
+	const lockedInstructions = locked.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		lockedInstructions.some(
+			(instruction) =>
+				instruction.type === "callBuiltin" &&
+				instruction.operation === "Map.prototype.get",
+		),
+	).toBe(true);
+
+	const mutableInstructions = optimizedProgram(source).functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		mutableInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Map.prototype.get",
+		),
+	).toBe(true);
+
+	const exposedInstructions = optimizedLockedProgram(`
+		globalThis.readExposedMap = function readExposedMap(key) {
+			const values = new Map();
+			globalThis.exposedMap = values;
+			return values.get(key);
+		};
+	`).functions.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions));
+	expect(
+		exposedInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.knownBuiltinCall?.operation === "Map.prototype.get",
+		),
+	).toBe(true);
+});
+
 test("locked exact primitive String charCodeAt erases dynamic dispatch", () => {
 	const source = `
 		globalThis.charKnown = function charKnown(position, ignored) {

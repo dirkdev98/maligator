@@ -15,6 +15,14 @@ typedef enum MalBuiltinCollectionDirectOp {
  */
 void mal_builtin_map_install(MalVm *vm);
 
+/** Exact locked Map.prototype.get after private-fresh receiver proof. */
+MalValue mal_builtin_map_get_known(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
 /**
  * Guarded native-backend dispatch for direct Map.get/Map.set/Set.add sites.
  * Exact intrinsic-callee and receiver-brand hits execute the collection body
