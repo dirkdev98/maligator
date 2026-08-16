@@ -2229,9 +2229,9 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 }
 
 /**
- * Replace an exact builtin String split Array with a rooted projection when all
- * uses are constant element reads and/or `length`. The complete call and loads
- * remain as the guard-miss path.
+ * Compatibility fallback for cached/legacy VM definitions that do not carry the
+ * IR-selected split projection. Fresh compilations arrive with the same retained
+ * call/load twin already licensed by the shared fact system.
  */
 function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 	const splitEffects = [
@@ -2245,7 +2245,8 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 	for (const fn of definition.functions) {
 		const projections: Array<
 			NonNullable<VmFunction["nativeStringSplitProjections"]>[number]
-		> = [];
+		> = [...(fn.nativeStringSplitProjections ?? [])];
+		const selectedCallIps = new Set(projections.map((projection) => projection.callIp));
 		const jumpTargets = new Set<number>();
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
@@ -2261,6 +2262,7 @@ function annotateNativeStringSplitProjections(definition: VmDefinition): void {
 			return undefined;
 		};
 		for (let callIp = 1; callIp < fn.instructions.length; callIp++) {
+			if (selectedCallIps.has(callIp)) continue;
 			const call = fn.instructions[callIp]!;
 			const load = fn.instructions[callIp - 1]!;
 			const direct =

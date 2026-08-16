@@ -654,6 +654,30 @@ export type IRTypeofResult =
 	| "bigint"
 	| "function";
 
+/** Backend-neutral contract for a closed String#split projected-result region. */
+export interface IRStringSplitProjection {
+	readonly license: {
+		readonly guard: CompilerGuardPlan;
+		readonly genericTwin: "retained";
+		readonly materialization: "whole-region";
+	};
+	readonly resultRepresentation: "projected-elements";
+	/** Ordinary property producer retained by a dynamic-call twin. */
+	readonly property?: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+	readonly separatorStringIndex: number;
+	readonly loads: ReadonlyArray<
+		| {
+				readonly instruction: Extract<IRInstruction, { type: "loadProperty" }>;
+				readonly kind: "element";
+				readonly index: number;
+		  }
+		| {
+				readonly instruction: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+				readonly kind: "length";
+		  }
+	>;
+}
+
 export type IRInstruction =
 	| {
 			/**
@@ -938,6 +962,8 @@ export type IRInstruction =
 			 * proof and preserve its fallback obligation before specializing the call.
 			 */
 			knownBuiltinCall?: KnownBuiltinCall;
+			/** Closed projected-result representation selected from canonical facts. */
+			stringSplitProjection?: IRStringSplitProjection;
 			/**
 			 * COMPILE-ONLY: ordinary receiver/property producers retained as the
 			 * interpreted generic twin of a canonical builtin call. Native lowering may
@@ -1015,6 +1041,10 @@ export type IRInstruction =
 			// [destination, this, ...arguments]
 			registers: [number, number, ...Array<number>];
 			operation: "String.prototype.split";
+			/** Canonical facts remain attached after dynamic dispatch is erased. */
+			knownBuiltinCall: KnownBuiltinCall;
+			/** Closed projected-result representation selected from canonical facts. */
+			stringSplitProjection?: IRStringSplitProjection;
 	  }
 	| {
 			type: "construct";

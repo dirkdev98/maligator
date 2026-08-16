@@ -1505,6 +1505,49 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("carries IR-selected split projection licenses through lowering", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`globalThis.project = function project(value) {
+				const fields = value.split(";");
+				return fields[1] + fields[0] + fields.length;
+			};`,
+			"split-projection-lowering.js",
+			parseScript(
+				`globalThis.project = function project(value) {
+					const fields = value.split(";");
+					return fields[1] + fields[0] + fields.length;
+				};`,
+				{ strict: false },
+			),
+		);
+		const lowered = compileSemanticProgramToVmDefinition(semantic);
+		const projections = lowered.functions.flatMap(
+			(fn) => fn.nativeStringSplitProjections ?? [],
+		);
+		expect(projections).toHaveLength(1);
+		expect(projections[0]).toMatchObject({
+			resultRepresentation: "projected-elements",
+			license: {
+				genericTwin: "retained",
+				materialization: "whole-region",
+				guard: {
+					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					obligations: ["fallback", "materialize"],
+				},
+			},
+		});
+
+		const cached = deserializeVmDefinition(
+			serializeVmDefinition(lowered, { debugInfo: false }),
+		);
+		expect(
+			cached.functions.flatMap((fn) => fn.nativeStringSplitProjections ?? []),
+		).toHaveLength(0);
+		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+			"mal_builtin_string_split_projection(vm,",
+		);
+	});
+
 	it("emits exact locked primitive String split calls without dynamic dispatch", () => {
 		const code = `
 			function make(separator, limit) {

@@ -42,6 +42,7 @@ import type {
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
+	IRStringSplitProjection,
 	IRTypeofResult,
 } from "./ir.ts";
 import { findBackEdges, isSafepoint } from "./liveness.ts";
@@ -218,6 +219,7 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 						...instruction.registers.slice(3, 5),
 					],
 					operation: "String.prototype.split",
+					knownBuiltinCall: call,
 				};
 				removedProperties.add(callee);
 				changed = true;
@@ -232,6 +234,168 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 		}
 	}
 	return changed;
+}
+
+/**
+ * Select the projected-elements representation while virtual registers and
+ * canonical call facts are still available. The retained call and property
+ * loads remain the complete generic twin; lower-vm only translates this proof
+ * into instruction-pointer metadata for native emission.
+ */
+function annotateStringSplitProjectionRegions(program: IntermediateProgram): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type === "call" || instruction.type === "callBuiltin") {
+					delete instruction.stringSplitProjection;
+				}
+			}
+		}
+		const registerIndex = buildIRRegisterIndex(fn);
+		const definitions = registerIndex.uniqueDefinitions;
+		const moveRoot = (initial: number): number => {
+			let register = initial;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+		const stringIndex = (register: number): number | undefined => {
+			const definition = definitions.get(moveRoot(register));
+			return definition?.type === "createString" ? definition.stringIndex : undefined;
+		};
+		const numberValue = (register: number): number | undefined => {
+			const definition = definitions.get(moveRoot(register));
+			return definition?.type === "createNumber" ? definition.value : undefined;
+		};
+
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call" && instruction.type !== "callBuiltin") continue;
+				const call = instruction.knownBuiltinCall;
+				const argumentStart = instruction.type === "call" ? 3 : 2;
+				if (
+					!knownBuiltinCallProves(call, "String.prototype.split") ||
+					instruction.registers.length !== argumentStart + 1 ||
+					(registerIndex.definitions.get(instruction.registers[0])?.length ?? 0) !== 1
+				) {
+					continue;
+				}
+				const separatorStringIndex = stringIndex(instruction.registers[argumentStart]!);
+				if (
+					separatorStringIndex === undefined ||
+					decodeStringConstant(program, separatorStringIndex).length === 0
+				) {
+					continue;
+				}
+
+				let property: Extract<IRInstruction, { type: "loadPropertyStatic" }> | undefined;
+				if (instruction.type === "call") {
+					const callee = definitions.get(instruction.registers[1]);
+					const calleeUses = registerIndex.uses.get(instruction.registers[1]) ?? [];
+					if (
+						callee?.type !== "loadPropertyStatic" ||
+						decodeStringConstant(program, callee.stringIndex) !== "split" ||
+						moveRoot(callee.registers[1]) !== moveRoot(instruction.registers[2]) ||
+						calleeUses.length !== 1 ||
+						calleeUses[0]?.instruction !== instruction ||
+						calleeUses[0]?.position !== 1
+					) {
+						continue;
+					}
+					property = callee;
+				}
+
+				const aliases = new Set<number>([instruction.registers[0]]);
+				const pending = [instruction.registers[0]];
+				const loads: Array<IRStringSplitProjection["loads"][number]> = [];
+				const indices = new Set<number>();
+				let lengthSeen = false;
+				let safe = true;
+				while (safe && pending.length > 0) {
+					const alias = pending.pop()!;
+					for (const use of registerIndex.uses.get(alias) ?? []) {
+						const consumer = use.instruction;
+						if (consumer.type === "move" && use.position === 1) {
+							const target = consumer.registers[0];
+							if ((registerIndex.definitions.get(target)?.length ?? 0) !== 1) {
+								safe = false;
+								break;
+							}
+							if (!aliases.has(target)) {
+								aliases.add(target);
+								pending.push(target);
+							}
+							continue;
+						}
+						if (
+							consumer.type === "loadPropertyStatic" &&
+							use.position === 1 &&
+							decodeStringConstant(program, consumer.stringIndex) === "length" &&
+							!lengthSeen
+						) {
+							loads.push({ instruction: consumer, kind: "length" });
+							lengthSeen = true;
+							continue;
+						}
+						if (consumer.type === "loadProperty" && use.position === 1) {
+							const index = numberValue(consumer.registers[2]);
+							if (
+								index !== undefined &&
+								Number.isInteger(index) &&
+								index >= 0 &&
+								index <= 0xffff &&
+								!indices.has(index)
+							) {
+								loads.push({ instruction: consumer, kind: "element", index });
+								indices.add(index);
+								continue;
+							}
+						}
+						safe = false;
+						break;
+					}
+				}
+				const elementCount = loads.filter((load) => load.kind === "element").length;
+				const guard = compilerGuardPlan(
+					[call?.identity],
+					[
+						{
+							kind: "materialize",
+							id: `string-split-projection:${call?.sourceSite ?? fn.functionIndex}`,
+						},
+					],
+				);
+				if (
+					!safe ||
+					elementCount === 0 ||
+					elementCount > 8 ||
+					guard === undefined ||
+					!guard.obligations.some((obligation) => obligation.kind === "fallback")
+				) {
+					continue;
+				}
+				instruction.stringSplitProjection = {
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "whole-region",
+					},
+					resultRepresentation: "projected-elements",
+					...(property === undefined ? {} : { property }),
+					separatorStringIndex,
+					loads,
+				};
+				count++;
+			}
+		}
+	}
+	return count;
 }
 
 export interface IROptimizationOptions {
@@ -631,6 +795,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			optLowerLockedExactBuiltinCalls(program);
 		if (residualFeatures.call && residualFeatures.property)
+			annotateStringSplitProjectionRegions(program);
+		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringTrimSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateBoundedStringCharCodeAtPositions(program);
@@ -737,6 +903,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"lower-locked-exact-builtins",
 			optLowerLockedExactBuiltinCalls,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-string-split-projections",
+			annotateStringSplitProjectionRegions,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

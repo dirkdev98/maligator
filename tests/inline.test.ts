@@ -270,6 +270,63 @@ test("direct split sites carry canonical primitive String identity metadata", ()
 	).toHaveLength(2);
 });
 
+test("closed split projections are selected and licensed in IR", () => {
+	const mutable = optimizedProgram(`
+		globalThis.project = function project(value) {
+			const fields = value.split(";");
+			return fields[1] + fields[0] + fields.length;
+		};
+	`);
+	const mutableCall = mutable.functions
+		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
+		.find(
+			(instruction) =>
+				instruction.type === "call" && instruction.stringSplitProjection !== undefined,
+		);
+	expect(mutableCall?.type).toBe("call");
+	if (mutableCall?.type !== "call") throw new Error("missing mutable split projection");
+	expect(mutableCall.stringSplitProjection).toMatchObject({
+		resultRepresentation: "projected-elements",
+		license: {
+			genericTwin: "retained",
+			materialization: "whole-region",
+			guard: {
+				dependencies: [{ kind: "epoch", family: "watched-methods" }],
+			},
+		},
+	});
+	expect(
+		new Set(
+			mutableCall.stringSplitProjection?.license.guard.obligations.map(
+				(obligation) => obligation.kind,
+			),
+		),
+	).toEqual(new Set(["fallback", "materialize"]));
+	expect(
+		mutableCall.stringSplitProjection?.loads.map((load) =>
+			load.kind === "element" ? `${load.kind}:${load.index}` : load.kind,
+		),
+	).toEqual(["element:1", "element:0", "length"]);
+
+	const locked = optimizedLockedProgram(
+		`globalThis.first = function first() { return "a,b".split(",")[0]; };`,
+	);
+	const direct = locked.functions
+		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
+		.find(
+			(instruction) =>
+				instruction.type === "callBuiltin" &&
+				instruction.stringSplitProjection !== undefined,
+		);
+	expect(direct?.type).toBe("callBuiltin");
+	if (direct?.type !== "callBuiltin") throw new Error("missing locked split projection");
+	expect(direct.knownBuiltinCall.operation).toBe("String.prototype.split");
+	expect(direct.stringSplitProjection?.license.guard.dependencies).toEqual([
+		{ kind: "world", fact: "primordials.locked" },
+	]);
+	expect(direct.stringSplitProjection?.property).toBeUndefined();
+});
+
 test("direct slice sites carry canonical primitive String identity metadata", () => {
 	const ir = optimizedProgram(`
 		function tail(value) {

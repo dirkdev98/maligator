@@ -8,6 +8,7 @@ import type {
 	IRImmediateValue,
 	IRInstruction,
 	IRNumericHofPlanOperation,
+	IRStringSplitProjection,
 } from "./ir.ts";
 import { computeSafepointRoots } from "./liveness.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
@@ -1754,6 +1755,10 @@ function lowerFunctionToVmFunction(
 		property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
 		call: Extract<IRInstruction, { type: "call" }>;
 	}> = [];
+	const pendingStringSplitProjections: Array<{
+		call: Extract<IRInstruction, { type: "call" | "callBuiltin" }>;
+		projection: IRStringSplitProjection;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1847,6 +1852,15 @@ function lowerFunctionToVmFunction(
 				pendingNumericHofRegions.push({
 					guard: instruction,
 					region: instruction.numericHofRegion,
+				});
+			}
+			if (
+				(instruction.type === "call" || instruction.type === "callBuiltin") &&
+				instruction.stringSplitProjection !== undefined
+			) {
+				pendingStringSplitProjections.push({
+					call: instruction,
+					projection: instruction.stringSplitProjection,
 				});
 			}
 			if (
@@ -2071,6 +2085,52 @@ function lowerFunctionToVmFunction(
 		}
 		return { receiverIp, propertyIp, callIp };
 	});
+	const nativeStringSplitProjections = pendingStringSplitProjections.map(
+		({ call, projection }) => {
+			const callIp = instructionIndexByIrInstruction.get(call);
+			const propertyIp =
+				projection.property === undefined
+					? -1
+					: instructionIndexByIrInstruction.get(projection.property);
+			const guard = lowerGuardPlan(projection.license.guard);
+			if (
+				callIp === undefined ||
+				propertyIp === undefined ||
+				guard === undefined ||
+				!guard.obligations.includes("fallback") ||
+				!guard.obligations.includes("materialize")
+			) {
+				throw new Error("String split projection lost its retained-twin contract");
+			}
+			const loads = projection.loads.map((load) => {
+				const ip = instructionIndexByIrInstruction.get(load.instruction);
+				if (ip === undefined) {
+					throw new Error("String split projection load was removed before lowering");
+				}
+				return {
+					ip,
+					kind: load.kind,
+					...(load.kind === "element" ? { index: load.index } : {}),
+					dst: load.instruction.registers[0],
+				};
+			});
+			return {
+				license: {
+					guard,
+					genericTwin: projection.license.genericTwin,
+					materialization: projection.license.materialization,
+				},
+				resultRepresentation: projection.resultRepresentation,
+				propertyIp,
+				callIp,
+				callee: call.type === "call" ? call.registers[1] : -1,
+				receiver: call.type === "call" ? call.registers[2] : call.registers[1],
+				separatorStringIndex: projection.separatorStringIndex,
+				result: call.registers[0],
+				loads,
+			};
+		},
+	);
 
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation
@@ -2132,6 +2192,8 @@ function lowerFunctionToVmFunction(
 			: undefined,
 		gcRootRegisters,
 		nativeMathCalls: nativeMathCalls.length > 0 ? nativeMathCalls : undefined,
+		nativeStringSplitProjections:
+			nativeStringSplitProjections.length > 0 ? nativeStringSplitProjections : undefined,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
 		stackObjectInheritedAccesses:

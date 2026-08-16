@@ -210,7 +210,8 @@ export function ensureCompilerSiteFacts(
 					...(shape === undefined ? {} : { shape }),
 					...(escapeFact === undefined ? {} : { escape: escapeFact }),
 					...(representation === undefined ? {} : { representation }),
-					...(instruction.type === "call" && instruction.knownBuiltinCall !== undefined
+					...((instruction.type === "call" || instruction.type === "callBuiltin") &&
+					instruction.knownBuiltinCall !== undefined
 						? {
 								builtinIdentity: instruction.knownBuiltinCall.identity,
 								builtinSemantics: instruction.knownBuiltinCall.semantics,
