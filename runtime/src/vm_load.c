@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 54u        // String.slice-to-Number joins the tagged region table
+#define WIRE_VERSION 55u        // closed String scans join the tagged region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -2024,11 +2024,15 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 			bool string_slice_number_contract = kind == 7 && representation == 7 &&
 				materialization == 0 && (dependency_mask == 1 || dependency_mask == 4) &&
 				obligation_mask == 1;
+			bool string_scan_contract = kind == 8 && representation == 8 &&
+				materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
+				obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
-				 !regexp_iterator_projection_contract && !string_slice_number_contract)) {
+				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
+				 !string_scan_contract)) {
                 r.ok = false;
             }
 
@@ -3025,6 +3029,66 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 MAL_REGION_PAYLOAD_REFERENCE(slice_call_ip);
                 MAL_REGION_PAYLOAD_REFERENCE(number_intrinsic_ip);
                 MAL_REGION_PAYLOAD_REFERENCE(number_call_ip);
+            } else if (r.ok && kind == 8) {
+                i32 entry_ip = rd_i32(&r);
+                i32 exit_ip = rd_i32(&r);
+                i32 input = rd_i32(&r);
+                i32 length_load_ip = rd_i32(&r);
+                i32 length_result = rd_i32(&r);
+                i32 match_result = rd_i32(&r);
+                i32 match_code_unit = rd_i32(&r);
+                bool header_ok = anchor_count == 2 && anchors[0] == entry_ip &&
+                    anchors[1] == length_load_ip && entry_ip >= 0 &&
+                    exit_ip > entry_ip && exit_ip <= fn->instruction_count &&
+                    length_load_ip >= exit_ip && length_load_ip < fn->instruction_count &&
+                    input >= 0 && input < fn->register_count && length_result >= 0 &&
+                    length_result < fn->register_count && match_result >= 0 &&
+                    match_result < fn->register_count && match_code_unit >= 0 &&
+                    match_code_unit <= 65535 &&
+                    fn->instructions[entry_ip].opcode == MAL_OP_CREATE_ARRAY &&
+                    fn->instructions[entry_ip].as.create_array.length == 0 &&
+                    fn->instructions[length_load_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                    fn->instructions[length_load_ip].as.load_property_static.dst ==
+                        length_result && exceptional_handler_count == 0;
+                bool entry_is_block = false;
+                for (u32 block = 0; block < ordinary_block_count; block++) {
+                    if (ordinary_block_ips[block] == entry_ip) entry_is_block = true;
+                }
+                if (!entry_is_block) header_ok = false;
+                if (header_ok) {
+                    i32 name_index =
+                        fn->instructions[length_load_ip].as.load_property_static.string_index;
+                    bool length_name = name_index >= 0 && name_index < (i32) string_count;
+                    if (length_name) {
+                        const MalString *name = &strings[name_index];
+                        length_name = name->length == 6 && name->code_units[0] == 'l' &&
+                            name->code_units[1] == 'e' && name->code_units[2] == 'n' &&
+                            name->code_units[3] == 'g' && name->code_units[4] == 't' &&
+                            name->code_units[5] == 'h';
+                    }
+                    if (!length_name) header_ok = false;
+                }
+                bool exit_jump = false;
+                for (i32 ip = entry_ip; header_ok && ip < exit_ip; ip++) {
+                    MalOpcode opcode = fn->instructions[ip].opcode;
+                    bool allowed = opcode == MAL_OP_CREATE_ARRAY || opcode == MAL_OP_MOVE ||
+                        opcode == MAL_OP_CREATE_NUMBER || opcode == MAL_OP_JUMP ||
+                        opcode == MAL_OP_LOAD_PROPERTY_STATIC || opcode == MAL_OP_BINARY ||
+                        opcode == MAL_OP_JUMP_IF || opcode == MAL_OP_CALL ||
+                        opcode == MAL_OP_CREATE_STRING ||
+                        opcode == MAL_OP_CREATE_OBJECT_SHAPED || opcode == MAL_OP_UNARY;
+                    if (!allowed) header_ok = false;
+                    if (opcode == MAL_OP_JUMP &&
+                        fn->instructions[ip].as.jump.target_ip == exit_ip) exit_jump = true;
+                }
+                i32 span_count = exit_ip - entry_ip;
+                if (!header_ok || !exit_jump || span_count <= 0 ||
+                    claim_count != (u32) span_count + 1 ||
+                    metadata_operations != claim_count) r.ok = false;
+                for (i32 ip = entry_ip; r.ok && ip < exit_ip; ip++) {
+                    MAL_REGION_PAYLOAD_REFERENCE(ip);
+                }
+                MAL_REGION_PAYLOAD_REFERENCE(length_load_ip);
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

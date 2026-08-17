@@ -8,6 +8,7 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../../src/compile-program.ts";
+import { emitVmDefinition } from "../../src/emit-vm.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 import type { VmDefinition, VmFunction } from "../../src/lower-vm.ts";
 import { serializeVmDefinition } from "../../src/serialize-vm.ts";
@@ -597,6 +598,24 @@ describe("wire loader side-data validation", () => {
 			wirePath,
 			serializeVmDefinition(regionDefinition, { debugInfo: false }),
 		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
+	it("loads and executes persisted closed String scan regions", () => {
+		const scanDefinition = compileEntrypoint(path.resolve("bench/gc/cli.js"), {
+			stripTypes: stripTypesWithTypeScript,
+			buildConfig: resolveBuildConfig({}),
+		});
+		emitVmDefinition(scanDefinition, { compiled: true });
+		expect(
+			scanDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "string-scan-summary") ?? [],
+			),
+		).not.toHaveLength(0);
+		const wirePath = path.join(directory, "string-scan-region.malw");
+		writeFileSync(wirePath, serializeVmDefinition(scanDefinition, { debugInfo: false }));
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});

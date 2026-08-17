@@ -2150,7 +2150,7 @@ interface StringCharCodeAtFusion {
 	call: Extract<VmInstruction, { opcode: "CALL" }>;
 }
 
-type NativeStringScanRegion = NonNullable<VmFunction["nativeStringScanRegions"]>[number];
+type NativeStringScanRegion = Extract<VmRegion, { kind: "string-scan-summary" }>;
 
 interface NativeStringScanRegionAction {
 	region: NativeStringScanRegion;
@@ -3455,7 +3455,10 @@ function emitBody(
 		number,
 		NativeStringScanRegionAction
 	>();
-	for (const region of fn.nativeStringScanRegions ?? []) {
+	const stringScanRegions = (fn.regions ?? []).filter(
+		(region): region is NativeStringScanRegion => region.kind === "string-scan-summary",
+	);
+	for (const region of stringScanRegions) {
 		nativeStringScanRegionActionByIp.set(region.entryIp, { region, role: "entry" });
 		nativeStringScanRegionActionByIp.set(region.lengthLoadIp, { region, role: "length" });
 	}
@@ -3669,7 +3672,7 @@ function emitBody(
 			lines.push(`bool ${twin.loadedName} = false;`);
 		}
 	}
-	for (const region of fn.nativeStringScanRegions ?? []) {
+	for (const region of stringScanRegions) {
 		lines.push(
 			`bool __string_scan_${region.entryIp}_fast = false;`,
 			`u32 __string_scan_${region.entryIp}_length = 0;`,

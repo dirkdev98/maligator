@@ -9,12 +9,13 @@ import {
 	countPropertyIcSites,
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
+	vmRegionLicense,
 	vmSemanticProtectorGuard,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
-import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
+import type { VmDefinition, VmFunction, VmInstruction, VmRegion } from "./lower-vm.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
@@ -1800,11 +1801,21 @@ function annotateNativePrivateAggregateMemos(definition: VmDefinition): void {
  * code unit value, and return `{array, count}`. Then recognize an exact caller
  * that observes only `array.length` and `count`.
  *
- * This runs after wire loading and annotates only native emission. The original
- * call and property instructions remain complete fallbacks, so no wire/runtime
- * semantics depend on the summary.
+ * This runs after wire loading and appends a backend-neutral region certificate.
+ * The original instructions remain the complete fallback and interpreter twin;
+ * the region owns every instruction skipped by the allocation-free native path.
  */
-function annotateNativeStringScanSummaries(definition: VmDefinition): void {
+function annotateNativeStringScanRegions(definition: VmDefinition): void {
+	const license = vmRegionLicense(
+		[
+			vmSemanticProtectorGuard(definition.semanticProtectors, "primitive-methods"),
+			vmSemanticProtectorGuard(definition.semanticProtectors, "watched-methods"),
+			vmSemanticProtectorGuard(definition.semanticProtectors, "array-elements"),
+		],
+		"none",
+	);
+	if (license === undefined || license.materialization !== "none") return;
+	const regionLicense = { ...license, materialization: "none" as const };
 	const targets = new Map<number, NativeStringScanTarget>();
 	for (
 		let functionIndex = 0;
@@ -2084,8 +2095,13 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 
 	if (targets.size === 0) return;
 	for (const fn of definition.functions) {
-		const regions: Array<NonNullable<VmFunction["nativeStringScanRegions"]>[number]> = [];
+		const existingRegions = fn.regions ?? [];
+		const claimedByExistingRegions = new Set(
+			existingRegions.flatMap((region) => region.claimedIps),
+		);
+		const regions: Array<Extract<VmRegion, { kind: "string-scan-summary" }>> = [];
 		for (let entryIp = 0; entryIp < fn.instructions.length; entryIp++) {
+			if (existingRegions.length + regions.length >= 8) break;
 			const entry = fn.instructions[entryIp]!;
 			if (entry.opcode !== "CREATE_ARRAY" || entry.length !== 0) continue;
 			const position = definition.sourcePositions[fn.positions[entryIp] ?? -1];
@@ -2288,7 +2304,48 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 			}
 			if (!liveOutIsClosed) continue;
 
+			const claimedIps = Array.from(
+				{ length: inlineEnd - entryIp + 1 },
+				(_unused, offset) => entryIp + offset,
+			);
+			if (!claimedIps.includes(lengthLoadIp)) claimedIps.push(lengthLoadIp);
+			if (
+				claimedIps.length > 96 ||
+				claimedIps.some((ip) => claimedByExistingRegions.has(ip)) ||
+				claimedIps.some((ip) =>
+					fn.handlers.some((handler) => ip >= handler.startIp && ip < handler.endIp),
+				)
+			) {
+				continue;
+			}
+			const ordinaryBlockIps = new Set<number>([entryIp, lengthLoadIp]);
+			for (let ip = entryIp; ip <= inlineEnd; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (
+					(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+					claimedIps.includes(instruction.targetIp)
+				) {
+					ordinaryBlockIps.add(instruction.targetIp);
+				}
+				if (instruction.opcode === "JUMP_IF" && ip + 1 <= inlineEnd) {
+					ordinaryBlockIps.add(ip + 1);
+				}
+			}
+
 			regions.push({
+				kind: "string-scan-summary",
+				license: regionLicense,
+				representation: "primitive-string-scan-summary",
+				anchors: [entryIp, lengthLoadIp],
+				claimedIps,
+				controlFlow: {
+					ordinaryBlockIps: [...ordinaryBlockIps].sort((left, right) => left - right),
+					exceptionalHandlerIps: [],
+				},
+				cost: {
+					score: Math.max(1, claimedIps.length - 2),
+					metadataOperations: claimedIps.length,
+				},
 				entryIp,
 				exitIp: inlineEnd + 1,
 				input: bounded.thisValue,
@@ -2297,10 +2354,10 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 				matchResult: matchIncrement.instruction.dst,
 				matchCodeUnit: target.matchCodeUnit,
 			});
+			for (const ip of claimedIps) claimedByExistingRegions.add(ip);
 			entryIp = inlineEnd;
 		}
-		if (regions.length > 0) fn.nativeStringScanRegions = regions;
-		else delete fn.nativeStringScanRegions;
+		if (regions.length > 0) fn.regions = [...existingRegions, ...regions];
 	}
 }
 
@@ -3169,7 +3226,7 @@ function emitVmDefinitionSource(
 	const debug = options.debugInfo !== false;
 	const useCompiled = options.compiled !== false;
 	if (useCompiled) {
-		annotateNativeStringScanSummaries(definition);
+		annotateNativeStringScanRegions(definition);
 		annotateNativeStringSearchRegExpCalls(definition);
 		annotateNativePrivateAggregateMemos(definition);
 		annotateNativeAffineRangeVirtualizations(definition);

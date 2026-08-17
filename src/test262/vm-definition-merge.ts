@@ -105,6 +105,11 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
 			};
+		case "string-scan-summary":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

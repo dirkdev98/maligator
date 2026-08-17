@@ -1944,12 +1944,61 @@ describe("native update-expression representation", () => {
 
 	it("summarizes a closed inlined String scan allocation region", () => {
 		const program = loadEntrypointAndRunSemanticAnalysis(path.resolve("bench/gc/cli.js"));
-		const output = emitVmDefinition(compileSemanticProgramToVmDefinition(program), {
+		const definition = compileSemanticProgramToVmDefinition(program);
+		const output = emitVmDefinition(definition, {
 			compiled: true,
 		});
+		const owner = definition.functions.find((fn) =>
+			fn.regions?.some((region) => region.kind === "string-scan-summary"),
+		);
+		expect(owner).toBeDefined();
+		const region = owner!.regions!.find(
+			(candidate) => candidate.kind === "string-scan-summary",
+		)!;
+		if (region.kind !== "string-scan-summary")
+			throw new Error("missing String scan region");
+		expect(region.claimedIps).toEqual([
+			...Array.from(
+				{ length: region.exitIp - region.entryIp },
+				(_unused, offset) => region.entryIp + offset,
+			),
+			region.lengthLoadIp,
+		]);
+		expect(region.controlFlow.exceptionalHandlerIps).toEqual([]);
+		expect(region.license.guard.dependencies).toEqual([
+			{ kind: "epoch", family: "array-elements" },
+			{ kind: "epoch", family: "primitive-methods" },
+			{ kind: "epoch", family: "watched-methods" },
+		]);
+		const restored = deserializeVmDefinition(
+			serializeVmDefinition(definition, { debugInfo: false }),
+		);
+		expect(
+			restored.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((candidate) => candidate.kind === "string-scan-summary") ??
+					[],
+			),
+		).toEqual([region]);
 		expect(output).toContain("mal_vm_try_string_scan_summary(vm,");
 		expect(output).toMatch(/if \(__string_scan_\d+_fast\) \{/);
 		expect(output).toMatch(/goto L\d+;/);
+
+		const regionIndex = owner!.regions!.indexOf(region);
+		const functionIndex = definition.functions.indexOf(owner!);
+		const malformed: VmDefinition = {
+			...definition,
+			functions: definition.functions.with(functionIndex, {
+				...owner!,
+				regions: owner!.regions!.with(regionIndex, {
+					...region,
+					claimedIps: region.claimedIps.slice(1),
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid region envelope|invalid String scan region/,
+		);
 	});
 
 	it("keeps an inlined String scan generic when an aggregate record escapes", () => {

@@ -5,6 +5,7 @@ import {
 	compressPositions,
 	countPropertyIcSites,
 	decodeVmValueOperand,
+	vmCallProvesBuiltin,
 	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_GUARDED_BUILTIN_OPERATIONS,
@@ -36,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 54 to move String.slice-to-Number fusion into the tagged region table.
-export const WIRE_VERSION = 54;
+// Bumped to 55 to move closed String-scan summaries into the tagged region table.
+export const WIRE_VERSION = 55;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -800,6 +801,38 @@ function stringSliceNumberGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function stringScanGuardMasks(
+	license: Extract<VmRegion, { kind: "string-scan-summary" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "primitive-methods") {
+			dependencyMask |= 2;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else if (dependency.kind === "epoch" && dependency.family === "array-elements") {
+			dependencyMask |= 8;
+		} else {
+			throw new RangeError("serialize-vm: unsupported String scan dependency");
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "none" ||
+		(dependencyMask !== 1 && dependencyMask !== 14) ||
+		obligationMask !== 1
+	) {
+		throw new RangeError("serialize-vm: invalid String scan guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1280,7 +1313,9 @@ export function serializeVmDefinition(
 									? 5
 									: region.kind === "regexp-iterator-projection"
 										? 6
-										: 7;
+										: region.kind === "string-slice-number"
+											? 7
+											: 8;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1301,7 +1336,9 @@ export function serializeVmDefinition(
 									? regexpExecProjectionGuardMasks(region.license)
 									: region.kind === "regexp-iterator-projection"
 										? regexpIteratorProjectionGuardMasks(region.license)
-										: stringSliceNumberGuardMasks(region.license);
+										: region.kind === "string-slice-number"
+											? stringSliceNumberGuardMasks(region.license)
+											: stringScanGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1470,6 +1507,15 @@ export function serializeVmDefinition(
 					w.i32(region.receiver);
 					w.f64(region.sliceStart);
 					w.i32(region.result);
+					break;
+				case "string-scan-summary":
+					w.i32(region.entryIp);
+					w.i32(region.exitIp);
+					w.i32(region.input);
+					w.i32(region.lengthLoadIp);
+					w.i32(region.lengthResult);
+					w.i32(region.matchResult);
+					w.i32(region.matchCodeUnit);
 					break;
 			}
 		}
@@ -1835,11 +1881,109 @@ function validateRegion(
 		case "string-slice-number":
 			validateStringSliceNumberRegion(fn, region, stringConstants);
 			break;
+		case "string-scan-summary":
+			validateStringScanRegion(fn, region, stringConstants);
+			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
 			break;
 	}
 	for (const ip of region.claimedIps) claimed.add(ip);
+}
+
+function validateStringScanRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "string-scan-summary" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	stringScanGuardMasks(region.license);
+	const registerValid = (register: number) =>
+		Number.isInteger(register) && register >= 0 && register < fn.registerCount;
+	const entry = fn.instructions[region.entryIp];
+	const lengthLoad = fn.instructions[region.lengthLoadIp];
+	const span = fn.instructions.slice(region.entryIp, region.exitIp);
+	const allowedOpcodes = new Set<VmInstruction["opcode"]>([
+		"CREATE_ARRAY",
+		"MOVE",
+		"CREATE_NUMBER",
+		"JUMP",
+		"LOAD_PROPERTY_STATIC",
+		"BINARY",
+		"JUMP_IF",
+		"CALL",
+		"CREATE_STRING",
+		"CREATE_OBJECT_SHAPED",
+		"UNARY",
+	]);
+	const boundedCalls = span.filter(
+		(instruction): instruction is Extract<VmInstruction, { opcode: "CALL" }> =>
+			instruction.opcode === "CALL" &&
+			instruction.directStringCharCodeAtPosition === "inBounds",
+	);
+	const pushes = span.filter(
+		(instruction): instruction is Extract<VmInstruction, { opcode: "CALL" }> =>
+			instruction.opcode === "CALL" &&
+			vmCallProvesBuiltin(instruction, "Array.prototype.push"),
+	);
+	const matchUpdates = span.filter(
+		(instruction): instruction is Extract<VmInstruction, { opcode: "UNARY" }> =>
+			instruction.opcode === "UNARY" &&
+			instruction.operator === "increment" &&
+			instruction.src === region.matchResult &&
+			instruction.dst === region.matchResult,
+	);
+	const arrayAliases = new Set<number>([
+		entry?.opcode === "CREATE_ARRAY" ? entry.dst : -1,
+	]);
+	for (const instruction of span) {
+		if (instruction.opcode === "MOVE" && arrayAliases.has(instruction.src)) {
+			arrayAliases.add(instruction.dst);
+		}
+	}
+	const expectedClaims = new Set<number>();
+	for (let ip = region.entryIp; ip < region.exitIp; ip++) expectedClaims.add(ip);
+	expectedClaims.add(region.lengthLoadIp);
+	if (
+		region.representation !== "primitive-string-scan-summary" ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.entryIp ||
+		region.anchors[1] !== region.lengthLoadIp ||
+		region.entryIp < 0 ||
+		region.exitIp <= region.entryIp ||
+		region.exitIp > fn.instructions.length ||
+		region.lengthLoadIp < region.exitIp ||
+		entry?.opcode !== "CREATE_ARRAY" ||
+		entry.length !== 0 ||
+		lengthLoad?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		String.fromCharCode(...(stringConstants[lengthLoad.stringIndex] ?? [])) !==
+			"length" ||
+		!arrayAliases.has(lengthLoad.object) ||
+		lengthLoad.dst !== region.lengthResult ||
+		!registerValid(region.input) ||
+		!registerValid(region.lengthResult) ||
+		!registerValid(region.matchResult) ||
+		!Number.isInteger(region.matchCodeUnit) ||
+		region.matchCodeUnit < 0 ||
+		region.matchCodeUnit > 0xffff ||
+		span.some((instruction) => !allowedOpcodes.has(instruction.opcode)) ||
+		boundedCalls.length !== 1 ||
+		boundedCalls[0]!.thisValue !== region.input ||
+		boundedCalls[0]!.arguments.length !== 1 ||
+		pushes.length !== 2 ||
+		span.filter((instruction) => instruction.opcode === "CALL").length !== 3 ||
+		matchUpdates.length !== 1 ||
+		!span.some(
+			(instruction) =>
+				instruction.opcode === "JUMP" && instruction.targetIp === region.exitIp,
+		) ||
+		region.controlFlow.exceptionalHandlerIps.length !== 0 ||
+		!region.controlFlow.ordinaryBlockIps.includes(region.entryIp) ||
+		region.cost.metadataOperations !== expectedClaims.size ||
+		expectedClaims.size !== region.claimedIps.length ||
+		region.claimedIps.some((ip) => !expectedClaims.has(ip))
+	) {
+		throw new RangeError("serialize-vm: invalid String scan region");
+	}
 }
 
 function validateStringSliceNumberRegion(
@@ -3556,6 +3700,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 1;
+				const stringScanContract =
+					kindTag === 8 &&
+					representationTag === 8 &&
+					materializationTag === 0 &&
+					(dependencyMask === 1 || dependencyMask === 14) &&
+					obligationMask === 1;
 				if (
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
@@ -3564,7 +3714,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!stringSplitProjectionContract &&
 						!regexpExecProjectionContract &&
 						!regexpIteratorProjectionContract &&
-						!stringSliceNumberContract)
+						!stringSliceNumberContract &&
+						!stringScanContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -4015,7 +4166,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						runtimeGuard: "exact-brand-next-realm-regexp",
 						loads,
 					};
-				} else {
+				} else if (kindTag === 7) {
 					const propertyIp = r.i32();
 					const sliceCallIp = r.i32();
 					const numberIntrinsicIp = r.i32();
@@ -4050,6 +4201,44 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						receiver,
 						sliceStart,
 						result,
+					};
+				} else {
+					const entryIp = r.i32();
+					const exitIp = r.i32();
+					const input = r.i32();
+					const lengthLoadIp = r.i32();
+					const lengthResult = r.i32();
+					const matchResult = r.i32();
+					const matchCodeUnit = r.i32();
+					region = {
+						kind: "string-scan-summary",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [
+												{ kind: "epoch", family: "array-elements" },
+												{ kind: "epoch", family: "primitive-methods" },
+												{ kind: "epoch", family: "watched-methods" },
+											],
+								obligations: ["fallback"],
+							},
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "primitive-string-scan-summary",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						entryIp,
+						exitIp,
+						input,
+						lengthLoadIp,
+						lengthResult,
+						matchResult,
+						matchCodeUnit,
 					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);

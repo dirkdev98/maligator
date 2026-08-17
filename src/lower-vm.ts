@@ -503,6 +503,20 @@ export type VmStringSliceNumberRegion = VmRegionEnvelope<
 	readonly result: number;
 };
 
+export type VmStringScanRegion = VmRegionEnvelope<
+	"string-scan-summary",
+	"primitive-string-scan-summary",
+	"none"
+> & {
+	readonly entryIp: number;
+	readonly exitIp: number;
+	readonly input: number;
+	readonly lengthLoadIp: number;
+	readonly lengthResult: number;
+	readonly matchResult: number;
+	readonly matchCodeUnit: number;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -529,6 +543,7 @@ export type VmRegion =
 	| VmRegExpExecProjectionRegion
 	| VmRegExpIteratorProjectionRegion
 	| VmStringSliceNumberRegion
+	| VmStringScanRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
@@ -723,20 +738,6 @@ export interface VmFunction {
 	 * boxed register.
 	 */
 	gcRootRegisters?: ReadonlyArray<number>;
-
-	/**
-	 * EMITTER-ONLY: allocation-free summaries of fully inlined String scan regions.
-	 * These are never serialized; the ordinary VM instructions remain complete.
-	 */
-	nativeStringScanRegions?: ReadonlyArray<{
-		entryIp: number;
-		exitIp: number;
-		input: number;
-		lengthLoadIp: number;
-		lengthResult: number;
-		matchResult: number;
-		matchCodeUnit: number;
-	}>;
 
 	/** EMITTER-ONLY: activation-local exact no-reviver JSON.parse templates. */
 	nativeInvariantJsonParseCaches?: ReadonlyArray<{

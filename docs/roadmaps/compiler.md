@@ -506,6 +506,14 @@ is general rather than a registry-shaped collection of special cases.
         shared region table for multi-operation ownership while letting the one
         consuming call discharge locked identity and Number representation before
         erasing its own generic producers.
+  - [x] Move closed inlined String-scan summaries out of their emitter-only side
+        table and into the shared region table. Claim the complete skipped
+        allocation/loop corridor plus the projected length load, merge primitive,
+        watched-method and Array-element protectors into one retained-twin license,
+        reject handler or cross-region overlap, and validate the persisted payload
+        independently in TypeScript and the C MALW v55 loader. Keep selection as a
+        post-wire whole-definition pass until cross-function summaries are selected
+        directly on final IR.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish
