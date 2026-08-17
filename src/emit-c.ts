@@ -3217,11 +3217,6 @@ function emitBody(
 	const closedRecordRegions = (fn.regions ?? []).filter(
 		(region) => region.kind === "closed-record-array",
 	);
-	for (const instruction of fn.instructions) {
-		if (instruction.opcode === "LOAD_PROPERTY") {
-			delete instruction.nativeClosedRecordArrayAccess;
-		}
-	}
 	for (const [regionId, region] of closedRecordRegions.entries()) {
 		const allocationIp = region.anchors[0]!;
 		const producerObjectIp = region.anchors[1]!;
@@ -3242,10 +3237,6 @@ function emitBody(
 				throw new Error(`Overlapping closed record-Array element load at ${ip}`);
 			}
 			closedRecordElementLoadIps.add(ip);
-			const load = fn.instructions[ip];
-			if (load.opcode === "LOAD_PROPERTY") {
-				load.nativeClosedRecordArrayAccess = { allocationIp };
-			}
 		}
 		for (const access of region.accesses) {
 			if (closedRecordAccessByIp.has(access.ip)) {
@@ -4027,7 +4018,7 @@ function emitBody(
 					invariantJsonMapActions.get(ip),
 					privateAggregateMemos.get(ip),
 					privateAggregatePushByIp.get(ip),
-					exactFreshArrayAccessIps.has(ip),
+					exactFreshArrayAccessIps.has(ip) || closedRecordElementLoadIps.has(ip),
 					numericFusionActionByIp.get(ip),
 					finiteConstructionRegions.get(ip),
 					finitePropertySelectors.get(ip),
@@ -4428,7 +4419,7 @@ function emitInstruction(
 	},
 	privateAggregateMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
 	privateAggregatePushMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
-	exactFreshArrayAccess?: boolean,
+	exactArrayElementAccess?: boolean,
 	numericFusionAction?: NativeNumericFusionAction,
 	finiteConstruction?: VmFiniteObjectConstructionRegion,
 	finitePropertySelector?: VmFinitePropertySelectorRegion["selectors"][number],
@@ -5072,11 +5063,7 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			if (
-				instruction.opcode === "LOAD_PROPERTY" &&
-				(exactFreshArrayAccess === true ||
-					instruction.nativeClosedRecordArrayAccess !== undefined)
-			) {
+			if (instruction.opcode === "LOAD_PROPERTY" && exactArrayElementAccess === true) {
 				if (reps[instruction.key] !== "number") return null;
 				const array = `__exact_fresh_array_${ip}`;
 				return [

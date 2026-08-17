@@ -1324,10 +1324,6 @@ export type VmInstruction =
 			object: number;
 			key: number;
 			icIndex: number;
-			/** EMITTER-DERIVED LOOKUP: materialized only from the central region table. */
-			nativeClosedRecordArrayAccess?: {
-				allocationIp: number;
-			};
 			nativeClosedGlobalTable?: {
 				baseIndex: number;
 				stateIndex: number;
