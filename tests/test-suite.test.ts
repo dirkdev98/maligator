@@ -31,6 +31,8 @@ describe("test suite planner", () => {
 		expect(full).toContain("smoke: Test262 cross-section");
 		expect(full).toContain("check: native complement");
 		expect(full).toContain("full: self-hosted frontend");
+		expect(full).toContain("npm run test:unit:full-only");
+		expect(full).toContain("tests/toolchain.test.ts");
 		expect(full).toContain("full: Test262 compiled normal corpus");
 		expect(full).toContain("full: Test262 curated GC verification");
 		expect(full).toContain("full: WPT compiled normal");

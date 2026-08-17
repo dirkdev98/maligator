@@ -349,7 +349,7 @@ const selfHostedCommands: Array<Command> = [
 	node("full: self-hosted CLI", selfHostedScripts[2]!),
 ];
 
-const fullOnlyUnitCommand = npm("full: full-only unit suite", "test:unit", [
+const fullOnlyUnitCommand = npm("full: full-only unit suite", "test:unit:full-only", [
 	"--run",
 	...vitestPolicy,
 	"--sequence.seed=1",

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as os from "node:os";
 import { defineConfig } from "vitest/config";
 
@@ -8,6 +9,14 @@ import { defineConfig } from "vitest/config";
 // fixed-startup tests and child-process deadlines under the full sanitizer lane.
 const sanitizerBuild = process.env.MAL_ASAN === "1" || process.env.MAL_UBSAN === "1";
 const nativeForks = sanitizerBuild ? 1 : Math.max(2, Math.floor(os.cpus().length / 2));
+const fullOnlyUnitTests = readFileSync(
+	new URL("./tests/test-suite-unit-full-only.txt", import.meta.url),
+	"utf8",
+)
+	.split("\n")
+	.map((line) => line.trim())
+	.filter((line) => line.length > 0 && !line.startsWith("#"));
+const runningFullOnlyUnitTests = process.env.MAL_TEST_UNIT_FULL_ONLY === "1";
 
 export default defineConfig({
 	test: {
@@ -24,8 +33,12 @@ export default defineConfig({
 				// Pure-TS compiler tests: no C build, instant, the watch loop.
 				test: {
 					name: "unit",
-					include: ["tests/**/*.test.ts"],
-					exclude: ["tests/native/**"],
+					include: runningFullOnlyUnitTests ? fullOnlyUnitTests : ["tests/**/*.test.ts"],
+					exclude: [
+						"tests/native/**",
+						"tests/fixtures/**",
+						...(runningFullOnlyUnitTests ? [] : fullOnlyUnitTests),
+					],
 					pool: "threads",
 					isolate: false,
 					sequence: {

@@ -13,6 +13,7 @@
 - `npm test` - Vitest watch mode across unit and native projects, not every repository test lane
 - `npm test run` - Run both Vitest projects once, not standards/self-host/sanitizer lanes
 - `npm run test:unit` - Fast lane: pure-TS compiler tests only (no C build; the watch loop)
+- `npm run test:unit:full-only -- <filename>` - Run a slow unit/integration test from the full-only manifest
 - `npm run test:native` - Native lane: build each fixture into an isolate binary/server and drive it
 - `npm run test:rust` - Full-only Rust runtime unit lane, including `node-zlib`
 - `npm run test:sanitize -- <filename>` - Platform-safe native sanitizer lane (UBSan on macOS, ASan+UBSan elsewhere)

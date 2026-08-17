@@ -2,7 +2,11 @@ import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { CommandProgress } from "../src/command-progress.ts";
 
-const userArguments = process.argv.slice(2);
+const FULL_ONLY_ARGUMENT = "--maligator-unit-full-only";
+const userArguments = process.argv
+	.slice(2)
+	.filter((argument) => argument !== FULL_ONLY_ARGUMENT);
+const runFullOnlyUnitTests = process.argv.includes(FULL_ONLY_ARGUMENT);
 const arguments_ = userArguments.some(
 	(argument) => argument === "--configLoader" || argument.startsWith("--configLoader="),
 )
@@ -12,9 +16,12 @@ const progress = new CommandProgress("vitest");
 progress.start(arguments_.length === 0 ? "watch all projects" : arguments_.join(" "));
 progress.stage(1, 1, "run tests");
 
+const environment = { ...process.env };
+if (runFullOnlyUnitTests) environment.MAL_TEST_UNIT_FULL_ONLY = "1";
+else delete environment.MAL_TEST_UNIT_FULL_ONLY;
 const result = spawnSync(path.resolve("node_modules/.bin/vitest"), arguments_, {
 	stdio: "inherit",
-	env: process.env,
+	env: environment,
 });
 if (result.error !== undefined) throw result.error;
 if (result.status === 0) {

@@ -55,6 +55,7 @@
 		"test:sanitize": "node ./scripts/test-sanitize.ts",
 		"test:smoke": "node ./scripts/test-suite.ts smoke",
 		"test:unit": "node ./scripts/vitest.ts --project unit",
+		"test:unit:full-only": "node ./scripts/vitest.ts --maligator-unit-full-only --project unit --testTimeout=60000",
 		"test:wpt": "node ./scripts/wpt.ts",
 		"test:wpt:matrix-report": "node ./scripts/wpt.ts --canonical --mode normal --mode gc-stress --backend compiled --backend interpreted --policy complete",
 		"test:wpt:report": "node ./scripts/wpt.ts --canonical --mode normal --backend compiled --policy complete",
