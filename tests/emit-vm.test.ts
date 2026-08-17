@@ -634,7 +634,7 @@ describe("native update-expression representation", () => {
 		).toBeGreaterThanOrEqual(2);
 	});
 
-	it("shares one region table across disjoint record, split, and numeric proofs", () => {
+	it("shares one region table across disjoint record, split, projection, and numeric proofs", () => {
 		const source = `
 			function summarize(value, separator) {
 				const rows = [];
@@ -653,6 +653,8 @@ describe("native update-expression representation", () => {
 				const values = [];
 				for (let index = 0; index < 8; index++) values.push(index - 4);
 				total += values.reduce((sum, value) => sum + Math.abs(value), 0);
+				const projected = value.split("|");
+				total += projected[0].length;
 				return total;
 			}
 			globalThis.summarize = summarize;
@@ -670,6 +672,7 @@ describe("native update-expression representation", () => {
 			"closed-record-array",
 			"numeric-hof",
 			"string-split-cursor",
+			"string-split-projection",
 		]);
 		const claimedIps = fn!.regions!.flatMap((region) => region.claimedIps);
 		expect(new Set(claimedIps).size).toBe(claimedIps.length);
@@ -681,6 +684,7 @@ describe("native update-expression representation", () => {
 		const output = emitVmDefinition(restored, { compiled: true });
 		expect(output).toContain("__closed_record_");
 		expect(output).toContain("mal_builtin_string_split_cursor_init_locked(vm,");
+		expect(output).toContain("mal_builtin_string_split_projection_locked(vm,");
 		expect(output).toContain("mal_builtin_array_numeric_fold_local_admit(");
 
 		const cursorIndex = fn!.regions!.findIndex(
@@ -2020,11 +2024,13 @@ describe("native update-expression representation", () => {
 		);
 		const lowered = compileSemanticProgramToVmDefinition(semantic);
 		const projections = lowered.functions.flatMap(
-			(fn) => fn.nativeStringSplitProjections ?? [],
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "string-split-projection") ?? [],
 		);
 		expect(projections).toHaveLength(1);
 		expect(projections[0]).toMatchObject({
-			resultRepresentation: "projected-elements",
+			kind: "string-split-projection",
+			representation: "projected-elements",
 			license: {
 				genericTwin: "retained",
 				materialization: "whole-region",
@@ -2039,10 +2045,38 @@ describe("native update-expression representation", () => {
 			serializeVmDefinition(lowered, { debugInfo: false }),
 		);
 		expect(
-			cached.functions.flatMap((fn) => fn.nativeStringSplitProjections ?? []),
-		).toHaveLength(0);
+			cached.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "string-split-projection") ?? [],
+			),
+		).toEqual(projections);
 		expect(emitVmDefinition(cached, { compiled: true })).toContain(
 			"mal_builtin_string_split_projection(vm,",
+		);
+
+		const functionIndex = lowered.functions.findIndex((fn) =>
+			fn.regions?.some((region) => region.kind === "string-split-projection"),
+		);
+		const owner = lowered.functions[functionIndex]!;
+		const regionIndex = owner.regions!.findIndex(
+			(region) => region.kind === "string-split-projection",
+		);
+		const region = owner.regions![regionIndex]!;
+		if (region.kind !== "string-split-projection") {
+			throw new Error("missing split projection region");
+		}
+		const malformed: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, {
+					...region,
+					loads: region.loads.with(0, { ...region.loads[0]!, dst: -1 }),
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid String\.split projection region metadata/,
 		);
 	});
 

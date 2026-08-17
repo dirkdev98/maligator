@@ -62,6 +62,14 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				kind: region.kind,
 				primitiveStringLengthIps: [...region.primitiveStringLengthIps],
 			};
+		case "string-split-projection":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				separatorStringIndex: region.separatorStringIndex + base.string,
+				aliasMoveIps: [...region.aliasMoveIps],
+				loads: region.loads.map((load) => ({ ...load })),
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

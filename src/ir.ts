@@ -647,30 +647,6 @@ export type IRTypeofResult =
 	| "bigint"
 	| "function";
 
-/** Backend-neutral contract for a closed String#split projected-result region. */
-export interface IRStringSplitProjection {
-	readonly license: {
-		readonly guard: CompilerGuardPlan;
-		readonly genericTwin: "retained";
-		readonly materialization: "whole-region";
-	};
-	readonly resultRepresentation: "projected-elements";
-	/** Ordinary property producer retained by a dynamic-call twin. */
-	readonly property?: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-	readonly separatorStringIndex: number;
-	readonly loads: ReadonlyArray<
-		| {
-				readonly instruction: Extract<IRInstruction, { type: "loadProperty" }>;
-				readonly kind: "element";
-				readonly index: number;
-		  }
-		| {
-				readonly instruction: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-				readonly kind: "length";
-		  }
-	>;
-}
-
 export interface IRRegionEnvelope<
 	Kind extends string,
 	Representation extends string,
@@ -694,6 +670,37 @@ export interface IRRegionEnvelope<
 		readonly score: number;
 		readonly metadataOperations: number;
 	};
+}
+
+/**
+ * Backend-neutral certificate for a closed String#split projected result. The
+ * call and first projected load are stable anchors; every retained property
+ * twin, result-alias move, and projected load is claimed by the envelope.
+ */
+export interface IRStringSplitProjectionRegion extends IRRegionEnvelope<
+	"string-split-projection",
+	"projected-elements",
+	"whole-region",
+	readonly [
+		Extract<IRInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<IRInstruction, { type: "loadProperty" | "loadPropertyStatic" }>,
+	]
+> {
+	/** Ordinary property producer retained by a dynamic-call twin. */
+	readonly property?: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+	readonly separatorStringIndex: number;
+	readonly aliasMoves: ReadonlyArray<Extract<IRInstruction, { type: "move" }>>;
+	readonly loads: ReadonlyArray<
+		| {
+				readonly instruction: Extract<IRInstruction, { type: "loadProperty" }>;
+				readonly kind: "element";
+				readonly index: number;
+		  }
+		| {
+				readonly instruction: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+				readonly kind: "length";
+		  }
+	>;
 }
 
 /** Backend-neutral contract for one closed indexed String#split consumer loop. */
@@ -786,6 +793,7 @@ export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type IRRegion =
 	| IRClosedRecordArrayRegion
+	| IRStringSplitProjectionRegion
 	| IRStringSplitCursor
 	| IRNumericHofRegion;
 
@@ -1072,8 +1080,6 @@ export type IRInstruction =
 			 * proof and preserve its fallback obligation before specializing the call.
 			 */
 			knownBuiltinCall?: KnownBuiltinCall;
-			/** Closed projected-result representation selected from canonical facts. */
-			stringSplitProjection?: IRStringSplitProjection;
 			/**
 			 * COMPILE-ONLY: ordinary receiver/property producers retained as the
 			 * interpreted generic twin of a canonical builtin call. Native lowering may
@@ -1151,8 +1157,6 @@ export type IRInstruction =
 			operation: DirectBuiltinOperationId;
 			/** Canonical facts remain attached after dynamic dispatch is erased. */
 			knownBuiltinCall: KnownBuiltinCall;
-			/** Closed projected-result representation selected from canonical facts. */
-			stringSplitProjection?: IRStringSplitProjection;
 	  }
 	| {
 			type: "construct";

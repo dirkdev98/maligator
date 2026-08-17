@@ -5,6 +5,7 @@ import {
 	compressPositions,
 	countPropertyIcSites,
 	decodeVmValueOperand,
+	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_GUARDED_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
@@ -35,8 +36,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 50 to move numeric HOF proofs into the common tagged region table.
-export const WIRE_VERSION = 50;
+// Bumped to 51 to move String.split projections into the common tagged region table.
+export const WIRE_VERSION = 51;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -683,6 +684,36 @@ function stringSplitCursorGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function stringSplitProjectionGuardMasks(
+	license: Extract<VmRegion, { kind: "string-split-projection" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else {
+			throw new RangeError(
+				"serialize-vm: unsupported String.split projection dependency",
+			);
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "whole-region" ||
+		(dependencyMask !== 1 && dependencyMask !== 4) ||
+		obligationMask !== 3
+	) {
+		throw new RangeError("serialize-vm: invalid String.split projection guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1143,21 +1174,36 @@ export function serializeVmDefinition(
 		w.u32(regions.length);
 		const claimedRegionInstructions = new Set<number>();
 		for (const region of regions) {
-			validateRegion(fn, region, claimedRegionInstructions, def.functions.length);
+			validateRegion(
+				fn,
+				region,
+				claimedRegionInstructions,
+				def.functions.length,
+				def.stringConstants,
+			);
 			const kindTag =
 				region.kind === "closed-record-array"
 					? 1
 					: region.kind === "string-split-cursor"
 						? 2
-						: 3;
+						: region.kind === "numeric-hof"
+							? 3
+							: 4;
 			const representationTag = kindTag;
-			const materializationTag = region.license.materialization === "none" ? 0 : 1;
+			const materializationTag =
+				region.license.materialization === "none"
+					? 0
+					: region.license.materialization === "on-demand"
+						? 1
+						: 2;
 			const { dependencyMask, obligationMask } =
 				region.kind === "closed-record-array"
 					? closedRecordArrayGuardMasks(region.license)
 					: region.kind === "string-split-cursor"
 						? stringSplitCursorGuardMasks(region.license)
-						: numericHofGuardMasks(region.license);
+						: region.kind === "numeric-hof"
+							? numericHofGuardMasks(region.license)
+							: stringSplitProjectionGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1194,6 +1240,22 @@ export function serializeVmDefinition(
 					w.i32(region.trimCallIp);
 					w.i32Array([...region.primitiveStringLengthIps]);
 					w.i32(region.exitIp);
+					break;
+				case "string-split-projection":
+					w.i32(region.propertyIp);
+					w.i32(region.callIp);
+					w.i32(region.callee);
+					w.i32(region.receiver);
+					w.i32(region.separatorStringIndex);
+					w.i32(region.result);
+					w.i32Array([...region.aliasMoveIps]);
+					w.u32(region.loads.length);
+					for (const load of region.loads) {
+						w.i32(load.ip);
+						w.u8(load.kind === "element" ? 1 : 2);
+						w.i32(load.kind === "element" ? load.index! : -1);
+						w.i32(load.dst);
+					}
 					break;
 				case "numeric-hof":
 					w.u8(region.dispatch.kind === "guarded" ? 1 : 2);
@@ -1556,6 +1618,7 @@ function validateRegion(
 	region: VmRegion,
 	claimed: Set<number>,
 	functionCount: number,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
@@ -1564,6 +1627,9 @@ function validateRegion(
 			break;
 		case "string-split-cursor":
 			validateStringSplitCursorRegion(fn, region);
+			break;
+		case "string-split-projection":
+			validateStringSplitProjectionRegion(fn, region, stringConstants);
 			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
@@ -1626,6 +1692,184 @@ function validateClosedRecordArrayRegion(
 		})
 	) {
 		throw new RangeError("serialize-vm: invalid closed record-Array region metadata");
+	}
+}
+
+function validateStringSplitProjectionRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "string-split-projection" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	const { dependencyMask } = stringSplitProjectionGuardMasks(region.license);
+	const stringConstantEquals = (index: number, value: string): boolean => {
+		const constant = stringConstants[index];
+		return (
+			constant?.length === value.length &&
+			constant.every((codeUnit, offset) => codeUnit === value.charCodeAt(offset))
+		);
+	};
+	const callIp = region.anchors[0]!;
+	const firstLoadIp = region.anchors[1]!;
+	const call = fn.instructions[callIp];
+	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
+	const registerValid = (register: number) =>
+		Number.isInteger(register) && register >= 0 && register < fn.registerCount;
+	const latestDefinition = (
+		register: number,
+		beforeIp: number,
+	): VmInstruction | undefined => {
+		for (let ip = beforeIp - 1; ip >= 0; ip--) {
+			const instruction = fn.instructions[ip]!;
+			if (vmInstructionWriteRegisters(instruction).includes(register)) return instruction;
+		}
+		return undefined;
+	};
+	const callMatches =
+		call?.opcode === "CALL"
+			? (dependencyMask === 1 || dependencyMask === 4) &&
+				region.propertyIp >= 0 &&
+				property?.opcode === "LOAD_PROPERTY_STATIC" &&
+				property.dst === region.callee &&
+				property.object === region.receiver &&
+				stringConstantEquals(property.stringIndex, "split") &&
+				call.callee === region.callee &&
+				call.thisValue === region.receiver &&
+				call.guardedBuiltinCall?.operation === "String.prototype.split" &&
+				call.guardedBuiltinCall.guard.dependencies.length === 1 &&
+				(dependencyMask === 1
+					? call.guardedBuiltinCall.guard.dependencies[0]?.kind === "world"
+					: call.guardedBuiltinCall.guard.dependencies[0]?.kind === "epoch" &&
+						call.guardedBuiltinCall.guard.dependencies[0]?.family ===
+							"watched-methods") &&
+				call.guardedBuiltinCall.guard.obligations.length === 1 &&
+				call.guardedBuiltinCall.guard.obligations[0] === "fallback"
+			: call?.opcode === "CALL_BUILTIN" &&
+				dependencyMask === 1 &&
+				region.propertyIp === -1 &&
+				region.callee === -1 &&
+				call.operation === "String.prototype.split" &&
+				call.thisValue === region.receiver;
+	const separator =
+		(call?.opcode === "CALL" || call?.opcode === "CALL_BUILTIN") &&
+		call.arguments.length === 1
+			? decodeVmValueOperand(call.arguments[0]!)
+			: undefined;
+	const separatorMatches =
+		separator?.kind === "string"
+			? separator.index === region.separatorStringIndex
+			: separator?.kind === "register"
+				? (() => {
+						const definition = latestDefinition(separator.register, callIp);
+						return (
+							definition?.opcode === "CREATE_STRING" &&
+							definition.stringIndex === region.separatorStringIndex
+						);
+					})()
+				: false;
+	const aliases = new Map<number, VmInstruction>();
+	if (call !== undefined) aliases.set(region.result, call);
+	const operations = [
+		...region.aliasMoveIps.map((ip) => ({ ip, kind: "alias" as const })),
+		...region.loads.map((load) => ({ ip: load.ip, kind: "load" as const, load })),
+	].sort((left, right) => left.ip - right.ip);
+	let operationsValid = true;
+	for (const operation of operations) {
+		const instruction = fn.instructions[operation.ip];
+		if (operation.kind === "alias") {
+			if (
+				instruction?.opcode !== "MOVE" ||
+				!aliases.has(instruction.src) ||
+				latestDefinition(instruction.src, operation.ip) !== aliases.get(instruction.src)
+			) {
+				operationsValid = false;
+				break;
+			}
+			aliases.set(instruction.dst, instruction);
+			continue;
+		}
+		const load = operation.load;
+		if (
+			(instruction?.opcode !== "LOAD_PROPERTY" &&
+				instruction?.opcode !== "LOAD_PROPERTY_STATIC") ||
+			!aliases.has(instruction.object) ||
+			latestDefinition(instruction.object, operation.ip) !==
+				aliases.get(instruction.object) ||
+			instruction.dst !== load.dst
+		) {
+			operationsValid = false;
+			break;
+		}
+		if (load.kind === "length") {
+			if (
+				instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
+				load.index !== undefined ||
+				!stringConstantEquals(instruction.stringIndex, "length")
+			) {
+				operationsValid = false;
+				break;
+			}
+		} else {
+			const key =
+				instruction.opcode === "LOAD_PROPERTY"
+					? latestDefinition(instruction.key, load.ip)
+					: undefined;
+			if (
+				instruction.opcode !== "LOAD_PROPERTY" ||
+				!Number.isInteger(load.index) ||
+				load.index! < 0 ||
+				load.index! > 0xffff ||
+				key?.opcode !== "CREATE_NUMBER" ||
+				key.value !== load.index
+			) {
+				operationsValid = false;
+				break;
+			}
+		}
+	}
+	const elementLoads = region.loads.filter((load) => load.kind === "element");
+	const lengthLoads = region.loads.filter((load) => load.kind === "length");
+	const operationIps = [
+		...(region.propertyIp < 0 ? [] : [region.propertyIp]),
+		region.callIp,
+		...region.aliasMoveIps,
+		...region.loads.map((load) => load.ip),
+	];
+	if (
+		region.representation !== "projected-elements" ||
+		region.license.materialization !== "whole-region" ||
+		region.anchors.length !== 2 ||
+		region.callIp !== callIp ||
+		firstLoadIp !== region.loads[0]?.ip ||
+		!callMatches ||
+		(call?.opcode !== "CALL" && call?.opcode !== "CALL_BUILTIN") ||
+		call.arguments.length !== 1 ||
+		call.dst !== region.result ||
+		!registerValid(region.receiver) ||
+		!registerValid(region.result) ||
+		region.separatorStringIndex < 0 ||
+		region.separatorStringIndex >= stringConstants.length ||
+		stringConstants[region.separatorStringIndex]?.length === 0 ||
+		!separatorMatches ||
+		elementLoads.length === 0 ||
+		elementLoads.length > 8 ||
+		lengthLoads.length > 1 ||
+		new Set(elementLoads.map((load) => load.index)).size !== elementLoads.length ||
+		new Set(region.aliasMoveIps).size !== region.aliasMoveIps.length ||
+		new Set(region.loads.map((load) => load.ip)).size !== region.loads.length ||
+		region.aliasMoveIps.some(
+			(ip, index) => ip <= callIp || (index > 0 && region.aliasMoveIps[index - 1]! >= ip),
+		) ||
+		region.loads.some(
+			(load, index) =>
+				load.ip <= callIp || (index > 0 && region.loads[index - 1]!.ip >= load.ip),
+		) ||
+		!operationsValid ||
+		region.cost.metadataOperations !== operationIps.length ||
+		new Set(operationIps).size !== operationIps.length ||
+		operationIps.length !== region.claimedIps.length ||
+		operationIps.some((ip) => !region.claimedIps.includes(ip))
+	) {
+		throw new RangeError("serialize-vm: invalid String.split projection region metadata");
 	}
 }
 
@@ -2759,9 +3003,18 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					(dependencyMask === 1 || dependencyMask === 14) &&
 					obligationMask === 1;
+				const stringSplitProjectionContract =
+					kindTag === 4 &&
+					representationTag === 4 &&
+					materializationTag === 2 &&
+					(dependencyMask === 1 || dependencyMask === 4) &&
+					obligationMask === 3;
 				if (
 					genericTwinTag !== 1 ||
-					(!closedRecordContract && !stringSplitCursorContract && !numericHofContract)
+					(!closedRecordContract &&
+						!stringSplitCursorContract &&
+						!numericHofContract &&
+						!stringSplitProjectionContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -2868,7 +3121,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						primitiveStringLengthIps,
 						exitIp,
 					};
-				} else {
+				} else if (kindTag === 3) {
 					const dispatchTag = r.u8();
 					const dispatchPrimaryIp = r.i32();
 					const dispatchSecondaryIp = r.i32();
@@ -2971,8 +3224,75 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						operations,
 						resultOperand,
 					};
+				} else {
+					const propertyIp = r.i32();
+					const callIp = r.i32();
+					const callee = r.i32();
+					const receiver = r.i32();
+					const separatorStringIndex = r.i32();
+					const result = r.i32();
+					const aliasMoveIps = r.i32Array();
+					const loadCount = r.count(4);
+					const loads: Array<
+						Extract<VmRegion, { kind: "string-split-projection" }>["loads"][number]
+					> = [];
+					for (let loadIndex = 0; loadIndex < loadCount; loadIndex++) {
+						const ip = r.i32();
+						const loadKindTag = r.u8();
+						const index = r.i32();
+						const dst = r.i32();
+						if (
+							(loadKindTag !== 1 && loadKindTag !== 2) ||
+							(loadKindTag === 2 && index !== -1)
+						) {
+							throw new RangeError("serialize-vm: invalid String.split projection load");
+						}
+						loads.push({
+							ip,
+							kind: loadKindTag === 1 ? "element" : "length",
+							...(loadKindTag === 1 ? { index } : {}),
+							dst,
+						});
+					}
+					region = {
+						kind: "string-split-projection",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [
+												{
+													kind: "world" as const,
+													fact: "primordials.locked" as const,
+												},
+											]
+										: [
+												{
+													kind: "epoch" as const,
+													family: "watched-methods" as const,
+												},
+											],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "whole-region",
+						},
+						representation: "projected-elements",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						propertyIp,
+						callIp,
+						callee,
+						receiver,
+						separatorStringIndex,
+						result,
+						aliasMoveIps,
+						loads,
+					};
 				}
-				validateRegion(fn, region, claimed, functions.length);
+				validateRegion(fn, region, claimed, functions.length, stringConstants);
 				regions.push(region);
 			}
 			fn.regions = regions;

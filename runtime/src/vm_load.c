@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 50u        // numeric HOF proofs join the tagged region table
+#define WIRE_VERSION 51u        // String.split projections join the tagged region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1157,6 +1157,108 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
     }
 }
 
+static bool mal_loaded_instruction_writes_register(
+    const MalInstruction *instruction, i32 target_register
+) {
+#define MAL_WRITES_DST(opcode, member) \
+    case opcode: return instruction->as.member.dst == target_register
+    switch (instruction->opcode) {
+        MAL_WRITES_DST(MAL_OP_MOVE, move);
+        MAL_WRITES_DST(MAL_OP_CREATE_NUMBER, create_number);
+        MAL_WRITES_DST(MAL_OP_CREATE_F64, create_f64);
+        MAL_WRITES_DST(MAL_OP_CREATE_BOOLEAN, create_boolean);
+        MAL_WRITES_DST(MAL_OP_CREATE_STRING, create_string);
+        MAL_WRITES_DST(MAL_OP_CREATE_BIGINT, create_bigint);
+        MAL_WRITES_DST(MAL_OP_CREATE_OBJECT, create_object);
+        MAL_WRITES_DST(MAL_OP_CREATE_OBJECT_SHAPED, create_object_shaped);
+        MAL_WRITES_DST(MAL_OP_CREATE_ARRAY, create_array);
+        MAL_WRITES_DST(MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, instantiate_literal_template);
+        MAL_WRITES_DST(MAL_OP_CREATE_MODULE_NAMESPACE, create_module_namespace);
+        MAL_WRITES_DST(MAL_OP_CREATE_TEMPLATE_OBJECT, create_template_object);
+        MAL_WRITES_DST(MAL_OP_CREATE_UNDEFINED, create_undefined);
+        MAL_WRITES_DST(MAL_OP_CREATE_EMPTY, create_empty);
+        MAL_WRITES_DST(MAL_OP_CREATE_NULL, create_null);
+        MAL_WRITES_DST(MAL_OP_CREATE_FUNCTION, create_function);
+        MAL_WRITES_DST(MAL_OP_CREATE_ARGUMENTS_OBJECT, create_arguments_object);
+        MAL_WRITES_DST(MAL_OP_LOAD_ARGUMENT_COUNT, load_argument_count);
+        MAL_WRITES_DST(MAL_OP_LOAD_ARGUMENT, load_argument);
+        MAL_WRITES_DST(MAL_OP_LOAD_STATIC_ARGUMENT, load_static_argument);
+        MAL_WRITES_DST(MAL_OP_LOAD_THIS, load_this);
+        MAL_WRITES_DST(MAL_OP_LOAD_NEW_TARGET, load_new_target);
+        MAL_WRITES_DST(MAL_OP_LOAD_CALLEE, load_callee);
+        MAL_WRITES_DST(MAL_OP_CALL, call);
+        MAL_WRITES_DST(MAL_OP_CALL_BUILTIN, call_builtin);
+        MAL_WRITES_DST(MAL_OP_CONSTRUCT, construct);
+        MAL_WRITES_DST(MAL_OP_CATCH, caught);
+        MAL_WRITES_DST(MAL_OP_LOAD_INTRINSIC, load_intrinsic);
+        MAL_WRITES_DST(MAL_OP_LOAD_CAPTURED, load_captured);
+        MAL_WRITES_DST(MAL_OP_GUARD_FUNCTION_INDEX, guard_function_index);
+        MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL, load_global);
+        MAL_WRITES_DST(MAL_OP_LOAD_PROPERTY, load_property);
+        MAL_WRITES_DST(MAL_OP_LOAD_PROPERTY_STATIC, load_property_static);
+        MAL_WRITES_DST(MAL_OP_DELETE_PROPERTY, delete_property);
+        MAL_WRITES_DST(MAL_OP_TO_PROPERTY_KEY, to_property_key);
+        MAL_WRITES_DST(MAL_OP_LOAD_PRIVATE, load_private);
+        MAL_WRITES_DST(MAL_OP_HAS_PRIVATE, has_private);
+        MAL_WRITES_DST(MAL_OP_LOAD_SUPER_PROPERTY, load_super_property);
+        MAL_WRITES_DST(MAL_OP_LOAD_PROTOTYPE, load_prototype);
+        MAL_WRITES_DST(MAL_OP_FOR_IN_KEYS, for_in_keys);
+        MAL_WRITES_DST(MAL_OP_CALL_SPREAD, call_spread);
+        MAL_WRITES_DST(MAL_OP_CALL_SPREAD_ITERABLE, call_spread_iterable);
+        MAL_WRITES_DST(MAL_OP_CONSTRUCT_SPREAD, construct_spread);
+        MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER, construct_super);
+        MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_EXPLICIT, construct_super_explicit);
+        MAL_WRITES_DST(MAL_OP_CREATE_PRIVATE_NAME, create_private_name);
+        MAL_WRITES_DST(MAL_OP_LOAD_UNDECLARED, load_undeclared);
+        MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL_PROPERTY, load_global_property);
+        MAL_WRITES_DST(MAL_OP_WITH_GET, with_get);
+        MAL_WRITES_DST(MAL_OP_WITH_RESOLVE_BASE, with_resolve_base);
+        MAL_WRITES_DST(MAL_OP_IS_EMPTY, is_empty);
+        MAL_WRITES_DST(MAL_OP_CREATE_REST_ARGUMENTS, create_rest_arguments);
+        MAL_WRITES_DST(MAL_OP_ARRAY_REST, array_rest);
+        MAL_WRITES_DST(MAL_OP_COPY_DATA_PROPERTIES, copy_data_properties);
+        MAL_WRITES_DST(MAL_OP_BINARY, binary);
+        MAL_WRITES_DST(MAL_OP_UNARY, unary);
+        MAL_WRITES_DST(MAL_OP_MATH_UNARY_NUMBER, math_unary_number);
+        MAL_WRITES_DST(MAL_OP_MATH_BINARY_NUMBER, math_binary_number);
+        MAL_WRITES_DST(MAL_OP_TYPEOF_COMPARE, typeof_compare);
+        case MAL_OP_YIELD:
+            return instruction->as.yield.value_dst == target_register ||
+                instruction->as.yield.mode_dst == target_register;
+        case MAL_OP_AWAIT:
+            return instruction->as.await.value_dst == target_register ||
+                instruction->as.await.mode_dst == target_register;
+        case MAL_OP_GET_ITERATOR:
+            return instruction->as.get_iterator.iterator_dst == target_register ||
+                instruction->as.get_iterator.next_dst == target_register;
+        case MAL_OP_GET_ASYNC_ITERATOR:
+            return instruction->as.get_async_iterator.iterator_dst == target_register ||
+                instruction->as.get_async_iterator.next_dst == target_register;
+        case MAL_OP_ITERATOR_NEXT:
+            return instruction->as.iterator_next.result_dst == target_register;
+        case MAL_OP_ITERATOR_STEP:
+            return instruction->as.iterator_step.value_dst == target_register ||
+                instruction->as.iterator_step.done_dst == target_register;
+        case MAL_OP_WITH_SET:
+            return instruction->as.with_set.found == target_register;
+        default:
+            return false;
+    }
+#undef MAL_WRITES_DST
+}
+
+static const MalInstruction *mal_loaded_latest_definition(
+    const MalFunction *fn, i32 target_register, i32 before_ip
+) {
+    for (i32 ip = before_ip - 1; ip >= 0; ip--) {
+        const MalInstruction *instruction = &fn->instructions[ip];
+        if (mal_loaded_instruction_writes_register(instruction, target_register)) {
+            return instruction;
+        }
+    }
+    return nullptr;
+}
+
 static i32 argument_retention_limit(const MalFunction *fn) {
     i32 limit = -1;
     for (i32 i = fn->argument_snapshot_count; i < fn->instruction_count; i++) {
@@ -1894,9 +1996,13 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             bool numeric_hof_contract = kind == 3 && representation == 3 &&
                 materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
                 obligation_mask == 1;
+            bool split_projection_contract = kind == 4 && representation == 4 &&
+                materialization == 2 && (dependency_mask == 1 || dependency_mask == 4) &&
+                obligation_mask == 3;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
-                (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract)) {
+                (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
+                 !split_projection_contract)) {
                 r.ok = false;
             }
 
@@ -2171,6 +2277,208 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     // only payload-bearing anchors. Bounds/uniqueness were checked by
                     // the common envelope above; known payload anchors were checked here.
                     payload_count = claim_count;
+                }
+            } else if (r.ok && kind == 4) {
+                i32 property_ip = rd_i32(&r);
+                i32 call_ip = rd_i32(&r);
+                i32 callee = rd_i32(&r);
+                i32 receiver = rd_i32(&r);
+                i32 separator_string_index = rd_i32(&r);
+                i32 result = rd_i32(&r);
+                u32 alias_count = rd_count(&r, 1);
+                if (alias_count > 94) r.ok = false;
+                i32 alias_ips[94];
+                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
+                    alias_ips[alias] = rd_i32(&r);
+                }
+                u32 load_count = rd_count(&r, 4);
+                if (load_count == 0 || load_count > 9) r.ok = false;
+                i32 load_ips[9];
+                u8 load_kinds[9];
+                i32 load_indices[9];
+                i32 load_dsts[9];
+                for (u32 load = 0; r.ok && load < load_count; load++) {
+                    load_ips[load] = rd_i32(&r);
+                    load_kinds[load] = rd_u8(&r);
+                    load_indices[load] = rd_i32(&r);
+                    load_dsts[load] = rd_i32(&r);
+                }
+                bool call_ip_ok = call_ip >= 0 && call_ip < fn->instruction_count;
+                bool generic = call_ip_ok && fn->instructions[call_ip].opcode == MAL_OP_CALL;
+                bool direct = call_ip_ok &&
+                    fn->instructions[call_ip].opcode == MAL_OP_CALL_BUILTIN;
+                bool property_ok = property_ip >= 0 && property_ip < fn->instruction_count &&
+                    fn->instructions[property_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC;
+                bool header_ok = anchor_count == 2 && anchors[0] == call_ip &&
+                    load_count > 0 && anchors[1] == load_ips[0] &&
+                    (generic || direct) &&
+                    separator_string_index >= 0 &&
+                    separator_string_index < (i32) string_count &&
+                    strings[separator_string_index].length > 0 &&
+                    receiver >= 0 && receiver < fn->register_count &&
+                    result >= 0 && result < fn->register_count;
+                if (header_ok && generic) {
+                    const MalInstruction *call = &fn->instructions[call_ip];
+                    const MalInstruction *property = property_ok
+                        ? &fn->instructions[property_ip]
+                        : nullptr;
+                    header_ok = property != nullptr && property_ip < call_ip &&
+                        property->as.load_property_static.dst == callee &&
+                        property->as.load_property_static.object == receiver &&
+                        property->as.load_property_static.string_index >= 0 &&
+                        property->as.load_property_static.string_index < (i32) string_count &&
+                        strings[property->as.load_property_static.string_index].length == 5 &&
+                        strings[property->as.load_property_static.string_index].code_units[0] == 's' &&
+                        strings[property->as.load_property_static.string_index].code_units[1] == 'p' &&
+                        strings[property->as.load_property_static.string_index].code_units[2] == 'l' &&
+                        strings[property->as.load_property_static.string_index].code_units[3] == 'i' &&
+                        strings[property->as.load_property_static.string_index].code_units[4] == 't' &&
+                        call->as.call.dst == result && call->as.call.callee == callee &&
+                        call->as.call.this_value == receiver;
+                } else if (header_ok && direct) {
+                    const MalInstruction *call = &fn->instructions[call_ip];
+                    header_ok = dependency_mask == 1 && property_ip == -1 && callee == -1 &&
+                        call->as.call_builtin.dst == result &&
+                        call->as.call_builtin.this_value == receiver &&
+                        call->as.call_builtin.operation == MAL_DIRECT_BUILTIN_STRING_SPLIT;
+                }
+                if (header_ok) {
+                    const MalInstruction *call = &fn->instructions[call_ip];
+                    i32 data_offset = generic
+                        ? call->as.call.data_offset
+                        : call->as.call_builtin.data_offset;
+                    i32 separator_operand = data_offset >= 0 &&
+                        data_offset + 1 < fn->instruction_data_count
+                        ? fn->instruction_data[data_offset + 1]
+                        : -1;
+                    const MalInstruction *separator_definition = separator_operand >= 0 &&
+                        separator_operand < fn->register_count
+                        ? mal_loaded_latest_definition(fn, separator_operand, call_ip)
+                        : nullptr;
+                    bool separator_matches =
+                        separator_operand ==
+                            MAL_VALUE_OPERAND_STRING_BASE - separator_string_index ||
+                        (separator_definition != nullptr &&
+                         separator_definition->opcode == MAL_OP_CREATE_STRING &&
+                         separator_definition->as.create_string.string_index ==
+                            separator_string_index);
+                    header_ok = data_offset >= 0 &&
+                        data_offset + 1 < fn->instruction_data_count &&
+                        fn->instruction_data[data_offset] == 1 && separator_matches;
+                }
+                if (!header_ok) r.ok = false;
+
+                i32 aliases[95];
+                u32 aliases_seen = 1;
+                aliases[0] = result;
+                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
+                    i32 ip = alias_ips[alias];
+                    if (ip <= call_ip || ip >= fn->instruction_count ||
+                        (alias > 0 && alias_ips[alias - 1] >= ip) ||
+                        fn->instructions[ip].opcode != MAL_OP_MOVE) {
+                        r.ok = false;
+                        break;
+                    }
+                    const MalInstruction *move = &fn->instructions[ip];
+                    bool source_found = false;
+                    for (u32 previous = 0; previous < aliases_seen; previous++) {
+                        i32 definition_ip = previous == 0
+                            ? call_ip
+                            : alias_ips[previous - 1];
+                        if (aliases[previous] == move->as.move.src &&
+                            mal_loaded_latest_definition(fn, move->as.move.src, ip) ==
+                                &fn->instructions[definition_ip]) {
+                            source_found = true;
+                        }
+                    }
+                    if (!source_found) {
+                        r.ok = false;
+                        break;
+                    }
+                    aliases[aliases_seen++] = move->as.move.dst;
+                }
+                u32 element_count = 0;
+                u32 length_count = 0;
+                for (u32 load = 0; r.ok && load < load_count; load++) {
+                    i32 ip = load_ips[load];
+                    bool object_found = false;
+                    if (ip <= call_ip || ip >= fn->instruction_count ||
+                        (load > 0 && load_ips[load - 1] >= ip) ||
+                        load_dsts[load] < 0 || load_dsts[load] >= fn->register_count) {
+                        r.ok = false;
+                        break;
+                    }
+                    const MalInstruction *instruction = &fn->instructions[ip];
+                    i32 object = instruction->opcode == MAL_OP_LOAD_PROPERTY
+                        ? instruction->as.load_property.object
+                        : instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC
+                            ? instruction->as.load_property_static.object
+                            : -1;
+                    for (u32 alias = 0; alias < aliases_seen; alias++) {
+                        i32 definition_ip = alias == 0 ? call_ip : alias_ips[alias - 1];
+                        const MalInstruction *latest = object >= 0
+                            ? mal_loaded_latest_definition(fn, object, ip)
+                            : nullptr;
+                        if (aliases[alias] == object && definition_ip < ip &&
+                            latest == &fn->instructions[definition_ip]) {
+                            object_found = true;
+                        }
+                    }
+                    if (load_kinds[load] == 1) {
+                        element_count++;
+                        const MalInstruction *key_definition =
+                            instruction->opcode == MAL_OP_LOAD_PROPERTY
+                            ? mal_loaded_latest_definition(
+                                fn, instruction->as.load_property.key, ip)
+                            : nullptr;
+                        bool duplicate_index = false;
+                        for (u32 previous = 0; previous < load; previous++) {
+                            if (load_kinds[previous] == 1 &&
+                                load_indices[previous] == load_indices[load]) {
+                                duplicate_index = true;
+                            }
+                        }
+                        if (instruction->opcode != MAL_OP_LOAD_PROPERTY || !object_found ||
+                            instruction->as.load_property.dst != load_dsts[load] ||
+                            load_indices[load] < 0 || load_indices[load] > 65535 ||
+                            duplicate_index || key_definition == nullptr ||
+                            key_definition->opcode != MAL_OP_CREATE_NUMBER ||
+                            key_definition->as.create_number.value != load_indices[load]) {
+                            r.ok = false;
+                        }
+                    } else if (load_kinds[load] == 2) {
+                        length_count++;
+                        i32 string_index = instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC
+                            ? instruction->as.load_property_static.string_index
+                            : -1;
+                        if (instruction->opcode != MAL_OP_LOAD_PROPERTY_STATIC || !object_found ||
+                            instruction->as.load_property_static.dst != load_dsts[load] ||
+                            load_indices[load] != -1 || string_index < 0 ||
+                            string_index >= (i32) string_count || strings[string_index].length != 6 ||
+                            strings[string_index].code_units[0] != 'l' ||
+                            strings[string_index].code_units[1] != 'e' ||
+                            strings[string_index].code_units[2] != 'n' ||
+                            strings[string_index].code_units[3] != 'g' ||
+                            strings[string_index].code_units[4] != 't' ||
+                            strings[string_index].code_units[5] != 'h') {
+                            r.ok = false;
+                        }
+                    } else {
+                        r.ok = false;
+                    }
+                }
+                if (element_count == 0 || element_count > 8 || length_count > 1 ||
+                    metadata_operations != 1 + (property_ip >= 0 ? 1 : 0) +
+                        alias_count + load_count) {
+                    r.ok = false;
+                }
+                if (property_ip >= 0) MAL_REGION_PAYLOAD_CLAIM(property_ip);
+                MAL_REGION_PAYLOAD_CLAIM(call_ip);
+                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
+                    MAL_REGION_PAYLOAD_CLAIM(alias_ips[alias]);
+                }
+                for (u32 load = 0; r.ok && load < load_count; load++) {
+                    MAL_REGION_PAYLOAD_CLAIM(load_ips[load]);
                 }
             }
             if (payload_count != claim_count) r.ok = false;

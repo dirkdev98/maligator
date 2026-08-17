@@ -61,7 +61,7 @@ import type {
 	IRInstruction,
 	IRNumericHofRegion,
 	IRStringSplitCursor,
-	IRStringSplitProjection,
+	IRStringSplitProjectionRegion,
 	IRTypeofResult,
 } from "./ir.ts";
 import { findBackEdges, isSafepoint } from "./liveness.ts";
@@ -299,20 +299,37 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 /**
  * Select the projected-elements representation while virtual registers and
  * canonical call facts are still available. The retained call and property
- * loads remain the complete generic twin; lower-vm only translates this proof
- * into instruction-pointer metadata for native emission.
+ * loads remain the complete generic twin; common lowering resolves every
+ * claimed instruction atomically into the backend-neutral VM region table.
  */
-function annotateStringSplitProjectionRegions(program: IntermediateProgram): number {
+export function annotateStringSplitProjectionRegions(
+	program: IntermediateProgram,
+): number {
 	let count = 0;
 	for (const fn of program.functions) {
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (instruction.type === "call" || instruction.type === "callBuiltin") {
-					delete instruction.stringSplitProjection;
-				}
-			}
-		}
-		const registerIndex = buildIRRegisterIndex(fn);
+		const retainedRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "string-split-projection",
+		);
+		fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
+		if (retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION) continue;
+		const occupiedInstructions = new Set(
+			retainedRegions.flatMap((region) => [...region.claimedInstructions]),
+		);
+		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
+		const locations = registerIndex.locations!;
+		const cfg = buildIROrdinaryControlFlow(fn);
+		const exceptionHandlers = buildIRExceptionHandlers(fn);
+		const handlerTargets = new Set(
+			exceptionHandlers.flatMap((handlers) =>
+				handlers.filter((handler): handler is number => handler !== null),
+			),
+		);
+		const activeHandler = (instruction: IRInstruction): number | null => {
+			const location = locations.get(instruction);
+			return location === undefined
+				? null
+				: (exceptionHandlers[location.blockIndex]?.[location.instructionIndex] ?? null);
+		};
 		const definitions = registerIndex.uniqueDefinitions;
 		const moveRoot = (initial: number): number => {
 			let register = initial;
@@ -325,17 +342,22 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 			}
 			return register;
 		};
-		const stringIndex = (register: number): number | undefined => {
+		const stringDefinition = (
+			register: number,
+		): Extract<IRInstruction, { type: "createString" }> | undefined => {
 			const definition = definitions.get(moveRoot(register));
-			return definition?.type === "createString" ? definition.stringIndex : undefined;
+			return definition?.type === "createString" ? definition : undefined;
 		};
-		const numberValue = (register: number): number | undefined => {
+		const numberDefinition = (
+			register: number,
+		): Extract<IRInstruction, { type: "createNumber" }> | undefined => {
 			const definition = definitions.get(moveRoot(register));
-			return definition?.type === "createNumber" ? definition.value : undefined;
+			return definition?.type === "createNumber" ? definition : undefined;
 		};
 
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
+				if ((fn.regions?.length ?? 0) >= MAX_IR_REGIONS_PER_FUNCTION) break;
 				if (instruction.type !== "call" && instruction.type !== "callBuiltin") continue;
 				const call = instruction.knownBuiltinCall;
 				const argumentStart = instruction.type === "call" ? 3 : 2;
@@ -348,10 +370,21 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 				) {
 					continue;
 				}
-				const separatorStringIndex = stringIndex(instruction.registers[argumentStart]!);
+				const immediateSeparator =
+					instruction.type === "call"
+						? instruction.immediateValues?.[argumentStart]
+						: undefined;
+				const separator = stringDefinition(instruction.registers[argumentStart]!);
+				const separatorStringIndex =
+					immediateSeparator?.kind === "string"
+						? immediateSeparator.index
+						: separator?.stringIndex;
 				if (
 					separatorStringIndex === undefined ||
-					decodeStringConstant(program, separatorStringIndex).length === 0
+					decodeStringConstant(program, separatorStringIndex).length === 0 ||
+					(immediateSeparator?.kind !== "string" &&
+						(separator === undefined ||
+							!irInstructionDominates(cfg, locations, separator, instruction)))
 				) {
 					continue;
 				}
@@ -375,7 +408,8 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 
 				const aliases = new Set<number>([instruction.registers[0]]);
 				const pending = [instruction.registers[0]];
-				const loads: Array<IRStringSplitProjection["loads"][number]> = [];
+				const aliasMoves: Array<Extract<IRInstruction, { type: "move" }>> = [];
+				const loads: Array<IRStringSplitProjectionRegion["loads"][number]> = [];
 				const indices = new Set<number>();
 				let lengthSeen = false;
 				let safe = true;
@@ -392,6 +426,7 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 							if (!aliases.has(target)) {
 								aliases.add(target);
 								pending.push(target);
+								aliasMoves.push(consumer);
 							}
 							continue;
 						}
@@ -406,13 +441,16 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 							continue;
 						}
 						if (consumer.type === "loadProperty" && use.position === 1) {
-							const index = numberValue(consumer.registers[2]);
+							const indexDefinition = numberDefinition(consumer.registers[2]);
+							const index = indexDefinition?.value;
 							if (
+								indexDefinition !== undefined &&
 								index !== undefined &&
 								Number.isInteger(index) &&
 								index >= 0 &&
 								index <= 0xffff &&
-								!indices.has(index)
+								!indices.has(index) &&
+								irInstructionDominates(cfg, locations, indexDefinition, consumer)
 							) {
 								loads.push({ instruction: consumer, kind: "element", index });
 								indices.add(index);
@@ -423,6 +461,21 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 						break;
 					}
 				}
+				const compareInstructionOrder = (
+					left: IRInstruction,
+					right: IRInstruction,
+				): number => {
+					const leftLocation = locations.get(left)!;
+					const rightLocation = locations.get(right)!;
+					return (
+						leftLocation.blockIndex - rightLocation.blockIndex ||
+						leftLocation.instructionIndex - rightLocation.instructionIndex
+					);
+				};
+				aliasMoves.sort(compareInstructionOrder);
+				loads.sort((left, right) =>
+					compareInstructionOrder(left.instruction, right.instruction),
+				);
 				const elementCount = loads.filter((load) => load.kind === "element").length;
 				const guard = compilerGuardPlan(
 					[call?.identity, call?.semantics],
@@ -442,17 +495,57 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 				) {
 					continue;
 				}
-				instruction.stringSplitProjection = {
+				const claimedInstructions = [
+					...(property === undefined ? [] : [property]),
+					instruction,
+					...aliasMoves,
+					...loads.map((load) => load.instruction),
+				];
+				const claimedLocations = claimedInstructions.map((claimed) =>
+					locations.get(claimed),
+				);
+				if (
+					new Set(claimedInstructions).size !== claimedInstructions.length ||
+					claimedLocations.some((location) => location === undefined) ||
+					claimedInstructions.some(
+						(claimed) =>
+							occupiedInstructions.has(claimed) ||
+							activeHandler(claimed) !== null ||
+							(claimed !== instruction &&
+								claimed !== property &&
+								!irInstructionDominates(cfg, locations, instruction, claimed)),
+					) ||
+					(property !== undefined &&
+						!irInstructionDominates(cfg, locations, property, instruction))
+				) {
+					continue;
+				}
+				const ordinaryBlocks = [
+					...new Set(claimedLocations.map((location) => location!.blockIndex)),
+				].sort((left, right) => left - right);
+				if (ordinaryBlocks.some((blockIndex) => handlerTargets.has(blockIndex))) continue;
+				const region: IRStringSplitProjectionRegion = {
+					kind: "string-split-projection",
 					license: {
 						guard,
 						genericTwin: "retained",
 						materialization: "whole-region",
 					},
-					resultRepresentation: "projected-elements",
+					representation: "projected-elements",
+					anchors: [instruction, loads[0]!.instruction],
+					claimedInstructions,
+					controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+					cost: {
+						score: elementCount * 8 + loads.length,
+						metadataOperations: claimedInstructions.length,
+					},
 					...(property === undefined ? {} : { property }),
 					separatorStringIndex,
+					aliasMoves,
 					loads,
 				};
+				fn.regions = [...(fn.regions ?? []), region];
+				for (const claimed of claimedInstructions) occupiedInstructions.add(claimed);
 				count++;
 			}
 		}
@@ -1526,8 +1619,6 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			optLowerLockedExactBuiltinCalls(program);
 		if (residualFeatures.call && residualFeatures.property)
-			annotateStringSplitProjectionRegions(program);
-		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringTrimSites(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateBoundedStringCharCodeAtPositions(program);
@@ -1540,6 +1631,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call) annotateDirectCallTargets(program);
 		if (residualFeatures.call) optImmediateCallOperands(program);
 		optDeadInstructionElimination(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateStringSplitProjectionRegions(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateNumericHofRegions(program);
 		if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
@@ -1651,11 +1744,6 @@ export function executeIROptimizations(
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(
-			"annotate-string-split-projections",
-			annotateStringSplitProjectionRegions,
-			residualFeatures.call && residualFeatures.property,
-		);
-		runFinalPass(
 			"annotate-direct-string-trim",
 			annotateDirectStringTrimSites,
 			residualFeatures.call && residualFeatures.property,
@@ -1693,6 +1781,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"post-annotation-dead-instruction-elimination",
 			optDeadInstructionElimination,
+		);
+		runFinalPass(
+			"annotate-string-split-projections",
+			annotateStringSplitProjectionRegions,
+			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(
 			"annotate-numeric-hof-regions",

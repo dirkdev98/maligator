@@ -12,7 +12,6 @@ import type {
 	IRImmediateValue,
 	IRInstruction,
 	IRNumericHofPlanOperation,
-	IRStringSplitProjection,
 } from "./ir.ts";
 import { computeSafepointRoots } from "./liveness.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
@@ -391,6 +390,26 @@ export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	readonly exitIp: number;
 };
 
+export type VmStringSplitProjectionRegion = VmRegionEnvelope<
+	"string-split-projection",
+	"projected-elements",
+	"whole-region"
+> & {
+	readonly propertyIp: number;
+	readonly callIp: number;
+	readonly callee: number;
+	readonly receiver: number;
+	readonly separatorStringIndex: number;
+	readonly result: number;
+	readonly aliasMoveIps: ReadonlyArray<number>;
+	readonly loads: ReadonlyArray<{
+		readonly ip: number;
+		readonly kind: "element" | "length";
+		readonly index?: number;
+		readonly dst: number;
+	}>;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -414,6 +433,7 @@ export type VmNumericHofRegion = VmRegionEnvelope<
 
 export type VmRegion =
 	| VmClosedRecordArrayRegion
+	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
 
@@ -631,24 +651,6 @@ export interface VmFunction {
 		receiverIp: number;
 		propertyIp: number;
 		callIp: number;
-	}>;
-
-	/** EMITTER-ONLY: selected element/length projections of an exact String split. */
-	nativeStringSplitProjections?: ReadonlyArray<{
-		license: VmRegionLicense;
-		resultRepresentation: "projected-elements";
-		propertyIp: number;
-		callIp: number;
-		callee: number;
-		receiver: number;
-		separatorStringIndex: number;
-		result: number;
-		loads: ReadonlyArray<{
-			ip: number;
-			kind: "element" | "length";
-			index?: number;
-			dst: number;
-		}>;
 	}>;
 
 	/** EMITTER-ONLY: selected capture projections of an exact RegExp exec result. */
@@ -1593,6 +1595,30 @@ export type VmInstruction =
 			negated: boolean;
 	  };
 
+/** Every physical register defined by an instruction, including multi-result ops. */
+export function vmInstructionWriteRegisters(
+	instruction: VmInstruction,
+): ReadonlyArray<number> {
+	switch (instruction.opcode) {
+		case "YIELD":
+		case "AWAIT":
+			return [instruction.valueDst, instruction.modeDst];
+		case "GET_ITERATOR":
+		case "GET_ASYNC_ITERATOR":
+			return [instruction.iteratorDst, instruction.nextDst];
+		case "ITERATOR_NEXT":
+			return [instruction.resultDst];
+		case "ITERATOR_STEP":
+			return [instruction.valueDst, instruction.doneDst];
+		case "WITH_SET":
+			return [instruction.found];
+		default: {
+			const dst = (instruction as { readonly dst?: number }).dst;
+			return dst === undefined ? [] : [dst];
+		}
+	}
+}
+
 export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>): number {
 	let count = 0;
 	for (const instruction of instructions) {
@@ -1679,6 +1705,7 @@ export function lowerIrProgramToVmDefinition(
 		lowerFunctionToVmFunction(
 			fn,
 			fileIndexFor(fn.semanticFile.path),
+			program.stringConstants,
 			profile ? program.facts.instructionSites : undefined,
 		),
 	);
@@ -1785,6 +1812,7 @@ function buildHostInstalls(
 function lowerFunctionToVmFunction(
 	fn: IRFunction,
 	fileIndex: number,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	instructionSites?: WeakMap<object, { id: string }>,
 ): VmFunction {
 	// Source-position and exception-range markers carry no executable opcode, so
@@ -1868,10 +1896,6 @@ function lowerFunctionToVmFunction(
 		receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
 		property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
 		call: Extract<IRInstruction, { type: "call" }>;
-	}> = [];
-	const pendingStringSplitProjections: Array<{
-		call: Extract<IRInstruction, { type: "call" | "callBuiltin" }>;
-		projection: IRStringSplitProjection;
 	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
@@ -1970,15 +1994,6 @@ function lowerFunctionToVmFunction(
 					instruction: vmInstruction,
 					allocation: instruction.nativeCardinalityPush.allocation,
 					stackObjectSiteId: instruction.cardinalityPushStackObjectSiteId,
-				});
-			}
-			if (
-				(instruction.type === "call" || instruction.type === "callBuiltin") &&
-				instruction.stringSplitProjection !== undefined
-			) {
-				pendingStringSplitProjections.push({
-					call: instruction,
-					projection: instruction.stringSplitProjection,
 				});
 			}
 			if (
@@ -2275,6 +2290,231 @@ function lowerFunctionToVmFunction(
 				});
 				break;
 			}
+			case "string-split-projection": {
+				const callIp = resolvedAnchors[0];
+				const firstLoadIp = resolvedAnchors[1];
+				const propertyIp =
+					region.property === undefined
+						? -1
+						: instructionIndexByIrInstruction.get(region.property);
+				const aliasMoveIps = region.aliasMoves.map((instruction) =>
+					instructionIndexByIrInstruction.get(instruction),
+				);
+				const loads = region.loads.map((load) => ({
+					ip: instructionIndexByIrInstruction.get(load.instruction),
+					kind: load.kind,
+					...(load.kind === "element" ? { index: load.index } : {}),
+					dst: load.instruction.registers[0],
+				}));
+				if (
+					region.representation !== "projected-elements" ||
+					region.license.materialization !== "whole-region" ||
+					!guard.obligations.includes("fallback") ||
+					!guard.obligations.includes("materialize") ||
+					resolvedAnchors.length !== 2 ||
+					propertyIp === undefined ||
+					aliasMoveIps.some((ip) => ip === undefined) ||
+					loads.some((load) => load.ip === undefined)
+				) {
+					continue;
+				}
+				const loweredCall = instructions[callIp!];
+				const loweredProperty = propertyIp < 0 ? undefined : instructions[propertyIp];
+				const resolvedAliasMoveIps = (aliasMoveIps as Array<number>).sort(
+					(left, right) => left - right,
+				);
+				const resolvedLoads = loads as Array<{
+					ip: number;
+					kind: "element" | "length";
+					index?: number;
+					dst: number;
+				}>;
+				resolvedLoads.sort((left, right) => left.ip - right.ip);
+				const stringConstantEquals = (index: number, value: string): boolean => {
+					const constant = stringConstants[index];
+					return (
+						constant?.length === value.length &&
+						constant.every((codeUnit, offset) => codeUnit === value.charCodeAt(offset))
+					);
+				};
+				const latestDefinition = (
+					register: number,
+					beforeIp: number,
+				): VmInstruction | undefined => {
+					for (let ip = beforeIp - 1; ip >= 0; ip--) {
+						const candidate = instructions[ip]!;
+						if (vmInstructionWriteRegisters(candidate).includes(register))
+							return candidate;
+					}
+					return undefined;
+				};
+				const guardMatchesCall = (callGuard: VmGuardPlan | undefined): boolean => {
+					const regionDependency = guard.dependencies[0];
+					const callDependency = callGuard?.dependencies[0];
+					return (
+						guard.dependencies.length === 1 &&
+						callGuard?.dependencies.length === 1 &&
+						callGuard.obligations.length === 1 &&
+						callGuard.obligations[0] === "fallback" &&
+						regionDependency?.kind === callDependency?.kind &&
+						(regionDependency?.kind === "world"
+							? callDependency?.kind === "world" &&
+								regionDependency.fact === callDependency.fact
+							: regionDependency?.kind === "epoch" &&
+								callDependency?.kind === "epoch" &&
+								regionDependency.family === callDependency.family)
+					);
+				};
+				const callMatches =
+					loweredCall?.opcode === "CALL"
+						? guardMatchesCall(loweredCall.guardedBuiltinCall?.guard) &&
+							(guard.dependencies[0]?.kind === "world" ||
+								(guard.dependencies[0]?.kind === "epoch" &&
+									guard.dependencies[0]?.family === "watched-methods")) &&
+							propertyIp >= 0 &&
+							loweredProperty?.opcode === "LOAD_PROPERTY_STATIC" &&
+							loweredProperty.dst === loweredCall.callee &&
+							loweredProperty.object === loweredCall.thisValue &&
+							stringConstantEquals(loweredProperty.stringIndex, "split") &&
+							loweredCall.guardedBuiltinCall?.operation === "String.prototype.split"
+						: loweredCall?.opcode === "CALL_BUILTIN" &&
+							guard.dependencies.length === 1 &&
+							guard.dependencies[0]?.kind === "world" &&
+							propertyIp === -1 &&
+							loweredCall.operation === "String.prototype.split";
+				const separator =
+					(loweredCall?.opcode === "CALL" || loweredCall?.opcode === "CALL_BUILTIN") &&
+					loweredCall.arguments.length === 1
+						? decodeVmValueOperand(loweredCall.arguments[0]!)
+						: undefined;
+				const separatorMatches =
+					separator?.kind === "string"
+						? separator.index === region.separatorStringIndex
+						: separator?.kind === "register"
+							? (() => {
+									const definition = latestDefinition(separator.register, callIp!);
+									return (
+										definition?.opcode === "CREATE_STRING" &&
+										definition.stringIndex === region.separatorStringIndex
+									);
+								})()
+							: false;
+				const elementLoads = resolvedLoads.filter((load) => load.kind === "element");
+				const lengthLoads = resolvedLoads.filter((load) => load.kind === "length");
+				const aliases = new Map<number, VmInstruction>();
+				if (loweredCall?.opcode === "CALL" || loweredCall?.opcode === "CALL_BUILTIN") {
+					aliases.set(loweredCall.dst, loweredCall);
+				}
+				const projectionOperations = [
+					...resolvedAliasMoveIps.map((ip) => ({ ip, kind: "alias" as const })),
+					...resolvedLoads.map((load) => ({ ip: load.ip, kind: "load" as const, load })),
+				].sort((left, right) => left.ip - right.ip);
+				let operationsValid = true;
+				for (const operation of projectionOperations) {
+					const lowered = instructions[operation.ip];
+					if (operation.kind === "alias") {
+						if (
+							lowered?.opcode !== "MOVE" ||
+							!aliases.has(lowered.src) ||
+							latestDefinition(lowered.src, operation.ip) !== aliases.get(lowered.src)
+						) {
+							operationsValid = false;
+							break;
+						}
+						aliases.set(lowered.dst, lowered);
+					} else {
+						const load = operation.load;
+						if (
+							(lowered?.opcode !== "LOAD_PROPERTY" &&
+								lowered?.opcode !== "LOAD_PROPERTY_STATIC") ||
+							!aliases.has(lowered.object) ||
+							latestDefinition(lowered.object, operation.ip) !==
+								aliases.get(lowered.object) ||
+							lowered.dst !== load.dst
+						) {
+							operationsValid = false;
+							break;
+						}
+						if (load.kind === "element") {
+							const key =
+								lowered.opcode === "LOAD_PROPERTY"
+									? latestDefinition(lowered.key, operation.ip)
+									: undefined;
+							if (
+								lowered.opcode !== "LOAD_PROPERTY" ||
+								!Number.isInteger(load.index) ||
+								load.index! < 0 ||
+								load.index! > 0xffff ||
+								key?.opcode !== "CREATE_NUMBER" ||
+								key.value !== load.index
+							) {
+								operationsValid = false;
+								break;
+							}
+						} else if (
+							lowered.opcode !== "LOAD_PROPERTY_STATIC" ||
+							load.index !== undefined ||
+							!stringConstantEquals(lowered.stringIndex, "length")
+						) {
+							operationsValid = false;
+							break;
+						}
+					}
+				}
+				const payloadIps = [
+					...(propertyIp < 0 ? [] : [propertyIp]),
+					callIp!,
+					...resolvedAliasMoveIps,
+					...resolvedLoads.map((load) => load.ip),
+				];
+				if (
+					!callMatches ||
+					loweredCall === undefined ||
+					(loweredCall.opcode !== "CALL" && loweredCall.opcode !== "CALL_BUILTIN") ||
+					loweredCall.arguments.length !== 1 ||
+					!separatorMatches ||
+					region.separatorStringIndex < 0 ||
+					(stringConstants[region.separatorStringIndex]?.length ?? 0) === 0 ||
+					firstLoadIp !== resolvedLoads[0]?.ip ||
+					elementLoads.length === 0 ||
+					elementLoads.length > 8 ||
+					lengthLoads.length > 1 ||
+					new Set(elementLoads.map((load) => load.index)).size !== elementLoads.length ||
+					!operationsValid ||
+					region.cost.metadataOperations !== payloadIps.length ||
+					new Set(payloadIps).size !== payloadIps.length ||
+					payloadIps.length !== resolvedClaimedIps.length ||
+					payloadIps.some((ip) => !resolvedClaimedIps.includes(ip))
+				) {
+					continue;
+				}
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "string-split-projection",
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "whole-region",
+					},
+					representation: "projected-elements",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: resolvedOrdinaryBlockIps,
+						exceptionalHandlerIps: [],
+					},
+					cost: region.cost,
+					propertyIp,
+					callIp: callIp!,
+					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
+					receiver: loweredCall.thisValue,
+					separatorStringIndex: region.separatorStringIndex,
+					result: loweredCall.dst,
+					aliasMoveIps: resolvedAliasMoveIps,
+					loads: resolvedLoads,
+				});
+				break;
+			}
 			case "string-split-cursor": {
 				const callIp = resolvedAnchors[0];
 				const resultAliasIp = resolvedAnchors[1];
@@ -2510,52 +2750,6 @@ function lowerFunctionToVmFunction(
 		}
 		return { receiverIp, propertyIp, callIp };
 	});
-	const nativeStringSplitProjections = pendingStringSplitProjections.map(
-		({ call, projection }) => {
-			const callIp = instructionIndexByIrInstruction.get(call);
-			const propertyIp =
-				projection.property === undefined
-					? -1
-					: instructionIndexByIrInstruction.get(projection.property);
-			const guard = lowerGuardPlan(projection.license.guard);
-			if (
-				callIp === undefined ||
-				propertyIp === undefined ||
-				guard === undefined ||
-				!guard.obligations.includes("fallback") ||
-				!guard.obligations.includes("materialize")
-			) {
-				throw new Error("String split projection lost its retained-twin contract");
-			}
-			const loads = projection.loads.map((load) => {
-				const ip = instructionIndexByIrInstruction.get(load.instruction);
-				if (ip === undefined) {
-					throw new Error("String split projection load was removed before lowering");
-				}
-				return {
-					ip,
-					kind: load.kind,
-					...(load.kind === "element" ? { index: load.index } : {}),
-					dst: load.instruction.registers[0],
-				};
-			});
-			return {
-				license: {
-					guard,
-					genericTwin: projection.license.genericTwin,
-					materialization: projection.license.materialization,
-				},
-				resultRepresentation: projection.resultRepresentation,
-				propertyIp,
-				callIp,
-				callee: call.type === "call" ? call.registers[1] : -1,
-				receiver: call.type === "call" ? call.registers[2] : call.registers[1],
-				separatorStringIndex: projection.separatorStringIndex,
-				result: call.registers[0],
-				loads,
-			};
-		},
-	);
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation
 	// after it. Fused static reads retain arguments for their lazy missing-index path.
@@ -2616,8 +2810,6 @@ function lowerFunctionToVmFunction(
 			: undefined,
 		gcRootRegisters,
 		nativeMathCalls: nativeMathCalls.length > 0 ? nativeMathCalls : undefined,
-		nativeStringSplitProjections:
-			nativeStringSplitProjections.length > 0 ? nativeStringSplitProjections : undefined,
 		regions: regions.length > 0 ? regions : undefined,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,

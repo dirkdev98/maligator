@@ -12,6 +12,7 @@ import {
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
 	vmGuardIsWorldInvariant,
+	vmInstructionWriteRegisters,
 	vmRegionLicense,
 	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
@@ -619,7 +620,9 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 		const outgoing = new Map(state);
 		const moveMask =
 			instruction.opcode === "MOVE" ? (state.get(instruction.src) ?? 0n) : 0n;
-		for (const register of writeRegisters(instruction)) outgoing.delete(register);
+		for (const register of vmInstructionWriteRegisters(instruction)) {
+			outgoing.delete(register);
+		}
 		if (instruction.opcode === "MOVE" && moveMask !== 0n) {
 			outgoing.set(instruction.dst, moveMask);
 		}
@@ -999,7 +1002,10 @@ export function emitCompiledFunction(
 		region.semanticEpochStable = stable;
 	}
 	const stringSplitProjectionSites = new Map<number, NativeStringSplitProjectionSite>();
-	for (const projection of fn.nativeStringSplitProjections ?? []) {
+	for (const projection of (fn.regions ?? []).filter(
+		(region): region is NativeStringSplitProjection =>
+			region.kind === "string-split-projection",
+	)) {
 		const call = fn.instructions[projection.callIp];
 		const elementLoads = projection.loads
 			.filter(
@@ -1915,7 +1921,7 @@ function inferReps(fn: VmFunction, promotableParams: Set<number>): Array<Registe
 			if (produced === null) {
 				continue;
 			}
-			for (const dst of writeRegisters(instruction)) {
+			for (const dst of vmInstructionWriteRegisters(instruction)) {
 				if (dst < 0) {
 					continue;
 				}
@@ -1931,26 +1937,6 @@ function inferReps(fn: VmFunction, promotableParams: Set<number>): Array<Registe
 	// A register never written (so never read in well-formed IR) resolves to a
 	// boxed undefined.
 	return reps.map((rep) => rep ?? "boxed");
-}
-
-/**
- * Every register an instruction writes. Most ops write a single `dst`; the
- * iterator ops write two (the GET_ITERATOR iterator/next pair, the ITERATOR_STEP
- * value/done pair), both boxed. Reporting all of them keeps inferReps from
- * mis-typing a register that the allocator also reused for a numeric value.
- */
-function writeRegisters(instruction: VmInstruction): Array<number> {
-	switch (instruction.opcode) {
-		case "GET_ITERATOR":
-		case "GET_ASYNC_ITERATOR":
-			return [instruction.iteratorDst, instruction.nextDst];
-		case "ITERATOR_STEP":
-			return [instruction.valueDst, instruction.doneDst];
-		default: {
-			const dst = (instruction as { dst?: number }).dst;
-			return typeof dst === "number" ? [dst] : [];
-		}
-	}
 }
 
 /** Whether this instruction can synchronously capture the current JS stack,
@@ -2165,9 +2151,10 @@ interface NativeStringScanRegionAction {
 	role: "entry" | "length";
 }
 
-type NativeStringSplitProjection = NonNullable<
-	VmFunction["nativeStringSplitProjections"]
->[number];
+type NativeStringSplitProjection = Extract<
+	NonNullable<VmFunction["regions"]>[number],
+	{ kind: "string-split-projection" }
+>;
 
 interface NativeStringSplitProjectionSite {
 	projection: NativeStringSplitProjection;
@@ -2392,7 +2379,9 @@ function deferredInheritedMoveChain(
 		if (loopTwinReadRegisters(instruction).some((register) => registers.has(register))) {
 			return null;
 		}
-		if (writeRegisters(instruction).some((register) => registers.has(register))) {
+		if (
+			vmInstructionWriteRegisters(instruction).some((register) => registers.has(register))
+		) {
 			return null;
 		}
 	}
@@ -2475,7 +2464,9 @@ function inheritedLoadLoopSummary(
 	if (
 		fn.instructions
 			.slice(headerIp, backedgeIp + 1)
-			.some((instruction) => writeRegisters(instruction).includes(compare.right))
+			.some((instruction) =>
+				vmInstructionWriteRegisters(instruction).includes(compare.right),
+			)
 	) {
 		return undefined;
 	}
@@ -2586,7 +2577,7 @@ function findInheritedLoadLoopTwins(
 			fn.instructions
 				.slice(headerIp, backedgeIp + 1)
 				.some((instruction) =>
-					writeRegisters(instruction).includes(load.instruction.object),
+					vmInstructionWriteRegisters(instruction).includes(load.instruction.object),
 				)
 		) {
 			continue;
@@ -3278,7 +3269,7 @@ function emitBody(
 
 		for (let ip = 0; ip < fn.instructions.length; ip++) {
 			const instruction = fn.instructions[ip]!;
-			const writes = new Set(writeRegisters(instruction));
+			const writes = new Set(vmInstructionWriteRegisters(instruction));
 			let action: DenseIteratorCursorAction | undefined;
 			if (instruction.opcode === "GET_ITERATOR") {
 				const cursor = cursorsByPair.get(
@@ -3371,7 +3362,7 @@ function emitBody(
 			}
 			// The current access (if any) already read the live guard above; a redefinition
 			// of the accessed register now ends the run so later accesses re-guard.
-			if (cur !== null && writeRegisters(instr).includes(cur.reg)) {
+			if (cur !== null && vmInstructionWriteRegisters(instr).includes(cur.reg)) {
 				flush();
 			}
 			if (

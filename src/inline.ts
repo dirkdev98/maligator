@@ -2277,6 +2277,32 @@ function cloneInlinedRegion(
 				accesses: accesses as typeof region.accesses,
 			} as unknown as Extract<IRRegion, { kind: "closed-record-array" }>;
 		}
+		case "string-split-projection": {
+			const property =
+				region.property === undefined ? undefined : mapInstruction(region.property);
+			const aliasMoves = region.aliasMoves.map((instruction) =>
+				mapInstruction(instruction),
+			);
+			const loads = region.loads.map((load) => ({
+				...load,
+				instruction: mapInstruction(load.instruction),
+			}));
+			if (
+				(region.property !== undefined && property === undefined) ||
+				aliasMoves.some((instruction) => instruction === undefined) ||
+				loads.some((load) => load.instruction === undefined)
+			) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				...(property === undefined ? {} : { property }),
+				aliasMoves: aliasMoves as typeof region.aliasMoves,
+				loads: loads as typeof region.loads,
+			} as unknown as Extract<IRRegion, { kind: "string-split-projection" }>;
+		}
 		case "string-split-cursor": {
 			const property =
 				region.property === undefined ? undefined : mapInstruction(region.property);

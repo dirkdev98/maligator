@@ -15,12 +15,7 @@ import {
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "./lower-vm.ts";
-import type {
-	VmDefinition,
-	VmFunction,
-	VmInstruction,
-	VmRegionLicense,
-} from "./lower-vm.ts";
+import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
@@ -2311,182 +2306,6 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 }
 
 /**
- * Compatibility fallback for cached/legacy VM definitions that do not carry the
- * IR-selected split projection. Fresh compilations arrive with the same retained
- * call/load twin already licensed by the shared fact system.
- */
-function annotateNativeStringSplitProjections(definition: VmDefinition): void {
-	const splitEffects = [
-		"coerce",
-		"property-access",
-		"call-user-code",
-		"allocate",
-		"throw",
-		"safepoint",
-	] as const;
-	for (const fn of definition.functions) {
-		const projections: Array<
-			NonNullable<VmFunction["nativeStringSplitProjections"]>[number]
-		> = [...(fn.nativeStringSplitProjections ?? [])];
-		const selectedCallIps = new Set(projections.map((projection) => projection.callIp));
-		const jumpTargets = new Set<number>();
-		for (const instruction of fn.instructions) {
-			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
-				jumpTargets.add(instruction.targetIp);
-			}
-		}
-		const latestDefinition = (register: number, beforeIp: number) => {
-			for (let ip = beforeIp - 1; ip >= 0; ip--) {
-				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
-					return { instruction: fn.instructions[ip]!, ip };
-				}
-			}
-			return undefined;
-		};
-		for (let callIp = 1; callIp < fn.instructions.length; callIp++) {
-			if (selectedCallIps.has(callIp)) continue;
-			const call = fn.instructions[callIp]!;
-			const load = fn.instructions[callIp - 1]!;
-			const direct =
-				call.opcode === "CALL_BUILTIN" && call.operation === "String.prototype.split";
-			const guarded =
-				call.opcode === "CALL" &&
-				vmCallProvesBuiltin(call, "String.prototype.split", {
-					lowering: "projected-string-split",
-					result: "array-of-strings",
-					effects: splitEffects,
-				});
-			if (
-				(!direct && !guarded) ||
-				call.arguments.length !== 1 ||
-				(guarded &&
-					(load.opcode !== "LOAD_PROPERTY_STATIC" ||
-						load.dst !== call.callee ||
-						load.object !== call.thisValue ||
-						!staticStringEquals(definition, load.stringIndex, "split"))) ||
-				jumpTargets.has(callIp)
-			) {
-				continue;
-			}
-			const separator = decodeVmValueOperand(call.arguments[0]!);
-			const separatorStringIndex =
-				separator.kind === "string"
-					? separator.index
-					: separator.kind === "register"
-						? (() => {
-								const producer = latestDefinition(separator.register, callIp);
-								return producer?.instruction.opcode === "CREATE_STRING"
-									? producer.instruction.stringIndex
-									: undefined;
-							})()
-						: undefined;
-			if (
-				separatorStringIndex === undefined ||
-				(definition.stringConstants[separatorStringIndex]?.length ?? 0) === 0
-			) {
-				continue;
-			}
-
-			const aliases = new Set<number>([call.dst]);
-			const loads: Array<
-				NonNullable<VmFunction["nativeStringSplitProjections"]>[number]["loads"][number]
-			> = [];
-			const indices = new Set<number>();
-			let lengthSeen = false;
-			let safe = true;
-			for (let ip = callIp + 1; ip < fn.instructions.length && aliases.size > 0; ip++) {
-				const instruction = fn.instructions[ip]!;
-				const usedAliases = [...aliases].filter((alias) =>
-					vmInstructionUsesRegister(instruction, alias),
-				);
-				let accepted = usedAliases.length === 0;
-				if (
-					instruction.opcode === "MOVE" &&
-					usedAliases.length === 1 &&
-					usedAliases[0] === instruction.src
-				) {
-					accepted = true;
-				} else if (
-					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-					aliases.has(instruction.object) &&
-					staticStringEquals(definition, instruction.stringIndex, "length") &&
-					!lengthSeen
-				) {
-					loads.push({ ip, kind: "length", dst: instruction.dst });
-					lengthSeen = true;
-					accepted = true;
-				} else if (
-					instruction.opcode === "LOAD_PROPERTY" &&
-					aliases.has(instruction.object)
-				) {
-					const key = latestDefinition(instruction.key, ip);
-					if (
-						key?.instruction.opcode === "CREATE_NUMBER" &&
-						Number.isInteger(key.instruction.value) &&
-						key.instruction.value >= 0 &&
-						key.instruction.value <= 0xffff &&
-						![...jumpTargets, ...fn.handlers.map((handler) => handler.handlerIp)].some(
-							(targetIp) => targetIp > key.ip && targetIp <= ip,
-						) &&
-						!indices.has(key.instruction.value)
-					) {
-						loads.push({
-							ip,
-							kind: "element",
-							index: key.instruction.value,
-							dst: instruction.dst,
-						});
-						indices.add(key.instruction.value);
-						accepted = true;
-					}
-				}
-				if (!accepted) {
-					safe = false;
-					break;
-				}
-
-				for (const alias of [...aliases]) {
-					if (vmInstructionDefinesRegister(instruction, alias)) aliases.delete(alias);
-				}
-				if (instruction.opcode === "MOVE" && usedAliases.includes(instruction.src)) {
-					aliases.add(instruction.dst);
-				}
-			}
-			const elementLoads = loads.filter((entry) => entry.kind === "element");
-			if (!safe || elementLoads.length === 0 || elementLoads.length > 8) {
-				continue;
-			}
-			const license: VmRegionLicense | undefined = direct
-				? {
-						guard: {
-							dependencies: [{ kind: "world", fact: "primordials.locked" }],
-							obligations: ["fallback", "materialize"],
-						},
-						genericTwin: "retained",
-						materialization: "whole-region",
-					}
-				: call.opcode === "CALL"
-					? vmRegionLicense([call.guardedBuiltinCall?.guard], "whole-region")
-					: undefined;
-			if (license === undefined) continue;
-			projections.push({
-				license,
-				resultRepresentation: "projected-elements",
-				propertyIp: direct ? -1 : callIp - 1,
-				callIp,
-				callee: call.opcode === "CALL" ? call.callee : -1,
-				receiver: call.thisValue,
-				separatorStringIndex,
-				result: call.dst,
-				loads,
-			});
-		}
-		if (projections.length > 0) fn.nativeStringSplitProjections = projections;
-		else delete fn.nativeStringSplitProjections;
-	}
-}
-
-/**
  * Replace a closed exact RegExp.prototype.exec result with selected capture
  * values. The ordinary result Array remains the complete guard-miss path; a
  * guarded hit exposes only a null/non-null marker plus constant capture loads.
@@ -4035,7 +3854,6 @@ function emitVmDefinitionSource(
 	const useCompiled = options.compiled !== false;
 	if (useCompiled) {
 		annotateNativeStringScanSummaries(definition);
-		annotateNativeStringSplitProjections(definition);
 		annotateNativeRegExpExecProjections(definition);
 		annotateNativeRegExpIteratorProjections(definition);
 		annotateNativeStringSliceNumberFusions(definition);

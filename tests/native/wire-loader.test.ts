@@ -474,6 +474,40 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads a nonempty String.split projection proof region payload", () => {
+		const entrypoint = path.join(directory, "string-split-projection-region.mjs");
+		writeFileSync(
+			entrypoint,
+			`function project(value) {
+				const fields = value.split(";");
+				return fields[1] + fields[0] + fields.length;
+			}
+			globalThis.result = project("alpha;beta");\n`,
+		);
+		const projectionDefinition = compileEntrypoint(entrypoint, {
+			stripTypes: stripTypesWithTypeScript,
+			buildConfig: resolveBuildConfig({}),
+		});
+		const projectionSites = projectionDefinition.functions.flatMap((fn) =>
+			(fn.regions ?? [])
+				.filter((region) => region.kind === "string-split-projection")
+				.map((region) => ({ fn, region })),
+		);
+		expect(projectionSites.length).toBeGreaterThan(0);
+		expect(
+			projectionSites.some(
+				({ fn, region }) => fn.instructions[region.callIp]?.opcode === "CALL_BUILTIN",
+			),
+		).toBe(true);
+		const wirePath = path.join(directory, "string-split-projection-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(projectionDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

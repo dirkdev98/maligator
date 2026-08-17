@@ -467,6 +467,14 @@ is general rather than a registry-shaped collection of special cases.
         payload in both TypeScript and the C wire loader.
   - [ ] Migrate the remaining projection regions into the table, then delete their
         instruction-owned anchors and dedicated wire tails.
+    - [x] Move closed `String.prototype.split` projections into the shared table
+          and delete their call-owned certificate plus emitter-only VM side table.
+          Select the whole certificate after the optimization fixpoint: anchor the
+          split call and first projected load; claim the retained property twin,
+          every result-alias move and every projected element/length load; require
+          final dominance, complete result-use closure, an empty exception scope and
+          disjoint ownership. Preserve the same authority through MALW v51 and
+          delete the post-wire VM rediscovery pass.
     - [x] Move numeric HOF regions into the shared tagged table and delete the
           accumulator-move-owned certificate and dedicated wire tail. Anchor the
           initial accumulator, element access, natural backedge and explicit loop
@@ -482,6 +490,9 @@ is general rather than a registry-shaped collection of special cases.
           loop, register definition/use and exception-scope analyses. Make the
           split-result alias an explicit claimed anchor through MALW v50 so a stale
           or redirected move invalidates the complete certificate.
+    - [ ] Move RegExp exec and iterator capture projections into the common table;
+          make their stateful `lastIndex`, capture-consumer and null-result proofs
+          explicit before removing the remaining emitter-only projection tables.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

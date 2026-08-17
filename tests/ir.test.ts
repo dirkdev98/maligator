@@ -138,6 +138,62 @@ test("drops stale split cursor certificates from the shared function region tabl
 	).toHaveLength(0);
 });
 
+test("stores split projections in the shared region table and drops stale anchors", () => {
+	const program = compileScript(`
+		function project(value) {
+			const fields = value.split(";");
+			return fields[1] + fields[0] + fields.length;
+		}
+		globalThis.project = project;
+	`);
+	executeIROptimizations(program);
+	const project = functionNamed(program, "project");
+	const region = project.regions?.find(
+		(candidate) => candidate.kind === "string-split-projection",
+	);
+	expect(region).toBeDefined();
+	expect(region!.anchors).toHaveLength(2);
+	expect(region!.controlFlow.exceptionalBlocks).toEqual([]);
+	expect(
+		region!.anchors.every((instruction) =>
+			region!.claimedInstructions.includes(instruction),
+		),
+	).toBe(true);
+
+	const staleAnchor = region!.anchors[1];
+	const owner = project.blocks.find((block) => block.instructions.includes(staleAnchor));
+	expect(owner).toBeDefined();
+	owner!.instructions[owner!.instructions.indexOf(staleAnchor)] = { ...staleAnchor };
+	allocateRegisters(program);
+	const lowered = lowerIrProgramToVmDefinition(program).functions[project.functionIndex]!;
+	expect(
+		lowered.regions?.filter(
+			(candidate) => candidate.kind === "string-split-projection",
+		) ?? [],
+	).toHaveLength(0);
+});
+
+test("rejects split projection regions protected by an exception handler", () => {
+	const program = compileScript(`
+		function project(value) {
+			try {
+				const fields = value.split(";");
+				return fields[0];
+			} catch {
+				return "fallback";
+			}
+		}
+		globalThis.project = project;
+	`);
+	executeIROptimizations(program);
+	const project = functionNamed(program, "project");
+	expect(
+		project.regions?.filter(
+			(candidate) => candidate.kind === "string-split-projection",
+		) ?? [],
+	).toHaveLength(0);
+});
+
 test("stores numeric HOF proofs in the shared region table and drops stale anchors", () => {
 	const program = compileScript(`
 		function summarize(values) {

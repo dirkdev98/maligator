@@ -278,16 +278,16 @@ test("closed split projections are selected and licensed in IR", () => {
 			return fields[1] + fields[0] + fields.length;
 		};
 	`);
-	const mutableCall = mutable.functions
-		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
-		.find(
-			(instruction) =>
-				instruction.type === "call" && instruction.stringSplitProjection !== undefined,
-		);
-	expect(mutableCall?.type).toBe("call");
-	if (mutableCall?.type !== "call") throw new Error("missing mutable split projection");
-	expect(mutableCall.stringSplitProjection).toMatchObject({
-		resultRepresentation: "projected-elements",
+	const mutableProjection = mutable.functions
+		.flatMap((fn) => fn.regions ?? [])
+		.find((region) => region.kind === "string-split-projection");
+	expect(mutableProjection?.anchors[0]?.type).toBe("call");
+	if (mutableProjection?.kind !== "string-split-projection") {
+		throw new Error("missing mutable split projection");
+	}
+	expect(mutableProjection).toMatchObject({
+		kind: "string-split-projection",
+		representation: "projected-elements",
 		license: {
 			genericTwin: "retained",
 			materialization: "whole-region",
@@ -298,13 +298,11 @@ test("closed split projections are selected and licensed in IR", () => {
 	});
 	expect(
 		new Set(
-			mutableCall.stringSplitProjection?.license.guard.obligations.map(
-				(obligation) => obligation.kind,
-			),
+			mutableProjection.license.guard.obligations.map((obligation) => obligation.kind),
 		),
 	).toEqual(new Set(["fallback", "materialize"]));
 	expect(
-		mutableCall.stringSplitProjection?.loads.map((load) =>
+		mutableProjection.loads.map((load) =>
 			load.kind === "element" ? `${load.kind}:${load.index}` : load.kind,
 		),
 	).toEqual(["element:1", "element:0", "length"]);
@@ -312,20 +310,48 @@ test("closed split projections are selected and licensed in IR", () => {
 	const locked = optimizedLockedProgram(
 		`globalThis.first = function first() { return "a,b".split(",")[0]; };`,
 	);
-	const direct = locked.functions
-		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
-		.find(
-			(instruction) =>
-				instruction.type === "callBuiltin" &&
-				instruction.stringSplitProjection !== undefined,
-		);
+	const lockedProjection = locked.functions
+		.flatMap((fn) => fn.regions ?? [])
+		.find((region) => region.kind === "string-split-projection");
+	const direct = lockedProjection?.anchors[0];
 	expect(direct?.type).toBe("callBuiltin");
-	if (direct?.type !== "callBuiltin") throw new Error("missing locked split projection");
+	if (
+		lockedProjection?.kind !== "string-split-projection" ||
+		direct?.type !== "callBuiltin"
+	) {
+		throw new Error("missing locked split projection");
+	}
 	expect(direct.knownBuiltinCall.operation).toBe("String.prototype.split");
-	expect(direct.stringSplitProjection?.license.guard.dependencies).toEqual([
+	expect(lockedProjection.license.guard.dependencies).toEqual([
 		{ kind: "world", fact: "primordials.locked" },
 	]);
-	expect(direct.stringSplitProjection?.property).toBeUndefined();
+	expect(lockedProjection.property).toBeUndefined();
+});
+
+test("selects split projections after multi-block consumer inlining", () => {
+	const ir = optimizedProgram(`
+		function project(value) {
+			function select(input) {
+				const fields = input.split(";");
+				if (fields.length > 2) return fields[1];
+				return fields[0];
+			}
+			return select(value);
+		}
+		globalThis.project = project;
+	`);
+	const owner = ir.functions.find((fn) =>
+		fn.regions?.some((region) => region.kind === "string-split-projection"),
+	);
+	expect(owner).toBeDefined();
+	const region = owner!.regions!.find(
+		(candidate) => candidate.kind === "string-split-projection",
+	)!;
+	const live = new Set(owner!.blocks.flatMap((block) => block.instructions));
+	expect(region.claimedInstructions.every((instruction) => live.has(instruction))).toBe(
+		true,
+	);
+	expect(region.loads.map((load) => load.kind)).toEqual(["length", "element", "element"]);
 });
 
 test("closed split cursors are selected and jointly licensed in IR", () => {
