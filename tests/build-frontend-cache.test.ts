@@ -171,10 +171,10 @@ describe("normal build frontend cache", () => {
 		const cold = compile(entrypoint, cacheDirectory);
 		const warm = compile(entrypoint, cacheDirectory);
 		const coldRegions = cold.definition.functions.flatMap(
-			(fn) => fn.nativeNumericHofRegions ?? [],
+			(fn) => fn.regions?.filter((region) => region.kind === "numeric-hof") ?? [],
 		);
 		const warmRegions = warm.definition.functions.flatMap(
-			(fn) => fn.nativeNumericHofRegions ?? [],
+			(fn) => fn.regions?.filter((region) => region.kind === "numeric-hof") ?? [],
 		);
 		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
 		const warmC = emitVmTranslationUnits(warm.definition).join("\n");

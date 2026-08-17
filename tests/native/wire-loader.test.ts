@@ -330,10 +330,9 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		expect(wire.at(-4)).toBe(12);
-		expect(wire.at(-2)).toBe(0); // empty numeric-HOF region table
+		expect(wire.at(-3)).toBe(12);
 		expect(wire.at(-1)).toBe(0); // empty tagged function-region table
-		wire[wire.length - 3] = 0;
+		wire[wire.length - 2] = 0;
 		rejectsWire("indexed-fill-reserve-zero", wire);
 	});
 
@@ -366,10 +365,9 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		expect(wire.at(-4)).toBe(13);
-		expect(wire.at(-2)).toBe(0); // empty numeric-HOF region table
+		expect(wire.at(-3)).toBe(13);
 		expect(wire.at(-1)).toBe(0); // empty tagged function-region table
-		wire[wire.length - 3] = 2; // ZigZag(1): CREATE_NUMBER, not CREATE_ARRAY
+		wire[wire.length - 2] = 2; // ZigZag(1): CREATE_NUMBER, not CREATE_ARRAY
 		rejectsWire("exact-fresh-array-access-allocation", wire);
 	});
 
@@ -395,7 +393,9 @@ describe("wire loader side-data validation", () => {
 			stripTypes: stripTypesWithTypeScript,
 		});
 		expect(
-			numericDefinition.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? []),
+			numericDefinition.functions.flatMap(
+				(fn) => fn.regions?.filter((region) => region.kind === "numeric-hof") ?? [],
+			),
 		).toHaveLength(1);
 		const wirePath = path.join(directory, "numeric-hof-region.malw");
 		writeFileSync(

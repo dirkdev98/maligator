@@ -53,7 +53,9 @@ import type {
 	IRBlock,
 	IRFunction,
 	IRInstruction,
+	IRNumericHofRegion,
 	IRNumericHofPlanOperation,
+	IRRegion,
 } from "./ir.ts";
 import { definedRegister } from "./register-alloc.ts";
 import { log } from "./utils.ts";
@@ -2137,6 +2139,7 @@ function buildInlinedBlocks(
 	blockBase: number,
 	joinIndex: number,
 	captureOverrides?: ReadonlyMap<string, number>,
+	instructionMap?: Map<IRInstruction, IRInstruction>,
 ): Array<IRBlock> {
 	const rewrap = (
 		instruction: Extract<IRInstruction, { type: "sourcePos" }>,
@@ -2156,15 +2159,19 @@ function buildInlinedBlocks(
 	const out: Array<IRBlock> = [];
 	targetBlocks.forEach((tblock, blockIdx) => {
 		const instructions: Array<IRInstruction> = blockIdx === 0 ? [...setup] : [];
+		const append = (source: IRInstruction, cloned: IRInstruction) => {
+			instructions.push(cloned);
+			instructionMap?.set(source, cloned);
+		};
 		for (const instruction of tblock.instructions) {
 			if (instruction.type === "sourcePos") {
-				instructions.push(rewrap(instruction));
+				append(instruction, rewrap(instruction));
 				continue;
 			}
 			if (instruction.type === "return") {
 				const returnRegister = instruction.registers[0];
 				if (destination >= 0) {
-					instructions.push({
+					append(instruction, {
 						type: "move",
 						registers: [
 							destination,
@@ -2172,20 +2179,25 @@ function buildInlinedBlocks(
 						],
 					});
 				}
-				instructions.push({ type: "jump", blocks: [joinIndex] });
+				const exit = { type: "jump" as const, blocks: [joinIndex] as [number] };
+				instructions.push(exit);
+				if (!instructionMap?.has(instruction)) instructionMap?.set(instruction, exit);
 				break; // terminator: the rest of this block is dead
 			}
 			if (instruction.type === "throw") {
-				instructions.push(withRegisterOffset(instruction, offset));
+				append(instruction, withRegisterOffset(instruction, offset));
 				break;
 			}
 			if (instruction.type === "jump") {
-				instructions.push({ type: "jump", blocks: [instruction.blocks[0] + blockBase] });
+				append(instruction, {
+					type: "jump",
+					blocks: [instruction.blocks[0] + blockBase],
+				});
 				break;
 			}
 			if (instruction.type === "jumpIf") {
 				const condition = instruction.registers[0];
-				instructions.push({
+				append(instruction, {
 					type: "jumpIf",
 					registers: [condition >= 0 ? condition + offset : condition],
 					blocks: [instruction.blocks[0] + blockBase],
@@ -2196,18 +2208,136 @@ function buildInlinedBlocks(
 				// `this` in the callee resolves to the receiver at the call site (undefined
 				// for a plain call) — read `thisSource` instead of the callee's activation.
 				const dst = offset + instruction.registers[0];
-				instructions.push(
+				append(
+					instruction,
 					thisSource === null
 						? { type: "createUndefined", registers: [dst] }
 						: { type: "move", registers: [dst, thisSource] },
 				);
 				continue;
 			}
-			instructions.push(inlineInstruction(instruction, offset, args, captureOverrides));
+			append(instruction, inlineInstruction(instruction, offset, args, captureOverrides));
 		}
 		out.push({ instructions });
 	});
 	return out;
+}
+
+/** Clone one target-owned proof region alongside a multi-block inline. Region
+ * instruction identity is part of the certificate, so cloning code without
+ * rebasing this table would silently strand every anchor in the emptied callee. */
+function cloneInlinedRegion(
+	region: IRRegion,
+	instructionMap: ReadonlyMap<IRInstruction, IRInstruction>,
+	blockBase: number,
+): IRRegion | undefined {
+	const mapInstruction = <T extends IRInstruction>(instruction: T): T | undefined =>
+		instructionMap.get(instruction) as T | undefined;
+	const anchors = region.anchors.map((instruction) => mapInstruction(instruction));
+	const claimedInstructions = region.claimedInstructions.map((instruction) =>
+		mapInstruction(instruction),
+	);
+	if (
+		anchors.some((instruction) => instruction === undefined) ||
+		claimedInstructions.some((instruction) => instruction === undefined)
+	) {
+		return undefined;
+	}
+	const common = {
+		...region,
+		anchors: anchors as ReadonlyArray<IRInstruction>,
+		claimedInstructions: claimedInstructions as ReadonlyArray<IRInstruction>,
+		controlFlow: {
+			ordinaryBlocks: region.controlFlow.ordinaryBlocks.map((block) => block + blockBase),
+			exceptionalBlocks: region.controlFlow.exceptionalBlocks.map(
+				(block) => block + blockBase,
+			),
+		},
+	};
+	switch (region.kind) {
+		case "closed-record-array": {
+			const elementLoads = region.elementLoads.map((instruction) =>
+				mapInstruction(instruction),
+			);
+			const accesses = region.accesses.map((access) => ({
+				...access,
+				instruction: mapInstruction(access.instruction),
+			}));
+			if (
+				elementLoads.some((instruction) => instruction === undefined) ||
+				accesses.some((access) => access.instruction === undefined)
+			) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				elementLoads: elementLoads as typeof region.elementLoads,
+				accesses: accesses as typeof region.accesses,
+			} as unknown as Extract<IRRegion, { kind: "closed-record-array" }>;
+		}
+		case "string-split-cursor": {
+			const property =
+				region.property === undefined ? undefined : mapInstruction(region.property);
+			const compare = mapInstruction(region.compare);
+			const element = mapInstruction(region.element);
+			const trimProperty = mapInstruction(region.trimProperty);
+			const trimCall = mapInstruction(region.trimCall);
+			const primitiveStringLengths = region.primitiveStringLengths.map((instruction) =>
+				mapInstruction(instruction),
+			);
+			if (
+				(region.property !== undefined && property === undefined) ||
+				compare === undefined ||
+				element === undefined ||
+				trimProperty === undefined ||
+				trimCall === undefined ||
+				primitiveStringLengths.some((instruction) => instruction === undefined)
+			) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				...(property === undefined ? {} : { property }),
+				compare,
+				element,
+				trimProperty,
+				trimCall,
+				primitiveStringLengths:
+					primitiveStringLengths as typeof region.primitiveStringLengths,
+				exitBlock: region.exitBlock + blockBase,
+			} as unknown as Extract<IRRegion, { kind: "string-split-cursor" }>;
+		}
+		case "numeric-hof": {
+			const dispatch =
+				region.dispatch.kind === "guarded"
+					? {
+							kind: "guarded" as const,
+							eligibility: mapInstruction(region.dispatch.eligibility),
+							slowCall: mapInstruction(region.dispatch.slowCall),
+						}
+					: {
+							kind: "closed" as const,
+							receiverAllocation: mapInstruction(region.dispatch.receiverAllocation),
+						};
+			if (
+				(dispatch.kind === "guarded" &&
+					(dispatch.eligibility === undefined || dispatch.slowCall === undefined)) ||
+				(dispatch.kind === "closed" && dispatch.receiverAllocation === undefined)
+			) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				dispatch: dispatch as typeof region.dispatch,
+			} as unknown as Extract<IRRegion, { kind: "numeric-hof" }>;
+		}
+	}
 }
 
 /** Total real (non-marker) instruction count of a function. */
@@ -2453,6 +2583,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 				{ type: "jump", blocks: [base] },
 			];
 			// Plain call → no receiver (thisSource null); the target is `this`-free anyway.
+			const instructionMap = new Map<IRInstruction, IRInstruction>();
 			for (const inlinedBlock of buildInlinedBlocks(
 				program,
 				targetFn,
@@ -2465,8 +2596,16 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 				base,
 				joinIndex,
 				captureOverrides,
+				instructionMap,
 			)) {
 				fn.blocks.push(inlinedBlock);
+			}
+			const clonedRegions = (targetFn.regions ?? []).flatMap((region) => {
+				const cloned = cloneInlinedRegion(region, instructionMap, base);
+				return cloned === undefined ? [] : [cloned];
+			});
+			if (clonedRegions.length > 0) {
+				fn.regions = [...(fn.regions ?? []), ...clonedRegions];
 			}
 			// Join: the host's tail after the call (already ends in the host's terminator).
 			fn.blocks.push({ instructions: post });
@@ -2615,6 +2754,7 @@ function inlineGuardedCallSite(
 		{ type: "jump", blocks: [deoptIndex] },
 	];
 	for (const { targetFn, blocks, offset, entryIndex } of layouts) {
+		const instructionMap = new Map<IRInstruction, IRInstruction>();
 		for (const inlinedBlock of buildInlinedBlocks(
 			program,
 			targetFn,
@@ -2626,6 +2766,8 @@ function inlineGuardedCallSite(
 			callSitePos,
 			entryIndex,
 			joinIndex,
+			undefined,
+			instructionMap,
 		)) {
 			for (const instruction of inlinedBlock.instructions) {
 				if (instruction.type === "call") {
@@ -2636,6 +2778,13 @@ function inlineGuardedCallSite(
 				}
 			}
 			fn.blocks.push(inlinedBlock);
+		}
+		const clonedRegions = (targetFn.regions ?? []).flatMap((region) => {
+			const cloned = cloneInlinedRegion(region, instructionMap, entryIndex);
+			return cloned === undefined ? [] : [cloned];
+		});
+		if (clonedRegions.length > 0) {
+			fn.regions = [...(fn.regions ?? []), ...clonedRegions];
 		}
 	}
 	// Deopt block: the original call verbatim, then jump to the join.
@@ -3465,6 +3614,10 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			fn.blocks.push({ instructions: fastInitInstructions });
 			// loopCond: forward `i < len` / backward `i >= 0` → (hole check | call
 			// block), else afterLoop.
+			const loopExit: Extract<IRInstruction, { type: "jump" }> = {
+				type: "jump",
+				blocks: [afterLoop],
+			};
 			fn.blocks.push({
 				instructions: [
 					spec.backward
@@ -3479,7 +3632,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 						registers: [condReg],
 						blocks: [requiresHoleCheck ? holeCheck : callBlock],
 					},
-					{ type: "jump", blocks: [afterLoop] },
+					loopExit,
 				],
 			});
 			// holeCheck (hole-skipping methods): if (i in arr) call, else skip.
@@ -3597,6 +3750,10 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				});
 			}
 			// loopIncr: forward i++ / backward i--.
+			const loopBackedge: Extract<IRInstruction, { type: "jump" }> = {
+				type: "jump",
+				blocks: [loopCond],
+			};
 			fn.blocks.push({
 				instructions: [
 					{
@@ -3604,7 +3761,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 						operator: spec.backward ? "-" : "+",
 						registers: [indexReg, indexReg, oneReg],
 					},
-					{ type: "jump", blocks: [loopCond] },
+					loopBackedge,
 				],
 			});
 			// exitBlock (early-exit methods): dst = exit value; jump join.
@@ -3712,19 +3869,44 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				afterLoopValue.type === "move" &&
 				numericDispatch !== undefined
 			) {
-				accumulatorInitialMove.numericHofRegion = {
+				const dispatchClaims =
+					numericDispatch.kind === "guarded"
+						? [numericDispatch.eligibility, numericDispatch.slowCall]
+						: [numericDispatch.receiverAllocation];
+				const claimedInstructions = [
+					accumulatorInitialMove,
+					elementLoad,
+					loopBackedge,
+					loopExit,
+					...dispatchClaims,
+				];
+				const numericRegion: IRNumericHofRegion = {
+					kind: "numeric-hof",
 					method: "reduce",
 					license: {
 						guard: numericReducePlan.guard,
 						genericTwin: "retained",
 						materialization: "none",
 					},
+					representation: "numeric-reduce-f64",
+					anchors: [accumulatorInitialMove, elementLoad, loopBackedge, loopExit],
+					claimedInstructions,
+					controlFlow: {
+						ordinaryBlocks: [fastInit, loopCond, callBlock, loopIncr, afterLoop],
+						exceptionalBlocks: [],
+					},
+					cost: {
+						score: 4 + numericReducePlan.operations.length,
+						metadataOperations: claimedInstructions.length,
+					},
 					callbackFunctionIndex: site.callbackTarget,
 					operations: numericReducePlan.operations,
 					resultOperand: numericReducePlan.resultOperand,
 					initialValue: initialValueDefinition.value,
+					pollPolicy: "end-only-no-preempt",
 					dispatch: numericDispatch,
 				};
+				fn.regions = [...(fn.regions ?? []), numericRegion];
 			}
 			// join: the host's tail after the call.
 			fn.blocks.push({ instructions: post });

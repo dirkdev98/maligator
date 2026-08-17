@@ -1412,10 +1412,8 @@ test("locked exact numeric reduce nests a closed native fold inside the inlined 
 	const lockedInstructions = locked.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
 	);
-	const lockedRegions = lockedInstructions.flatMap((instruction) =>
-		instruction.type === "move" && instruction.numericHofRegion !== undefined
-			? [instruction.numericHofRegion]
-			: [],
+	const lockedRegions = locked.functions.flatMap(
+		(fn) => fn.regions?.filter((region) => region.kind === "numeric-hof") ?? [],
 	);
 	expect(lockedRegions).toHaveLength(1);
 	expect(lockedRegions[0]?.dispatch.kind).toBe("closed");
@@ -1434,14 +1432,8 @@ test("locked exact numeric reduce nests a closed native fold inside the inlined 
 		),
 	).toBe(false);
 
-	const mutableRegions = optimizedProgram(source).functions.flatMap((fn) =>
-		fn.blocks.flatMap((block) =>
-			block.instructions.flatMap((instruction) =>
-				instruction.type === "move" && instruction.numericHofRegion !== undefined
-					? [instruction.numericHofRegion]
-					: [],
-			),
-		),
+	const mutableRegions = optimizedProgram(source).functions.flatMap(
+		(fn) => fn.regions?.filter((region) => region.kind === "numeric-hof") ?? [],
 	);
 	expect(mutableRegions).toHaveLength(1);
 	expect(mutableRegions[0]?.dispatch.kind).toBe("guarded");

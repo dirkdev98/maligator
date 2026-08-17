@@ -20,6 +20,7 @@ import type {
 	VmFunction,
 	VmGuardPlan,
 	VmInstruction,
+	VmRegion,
 	VmRegionLicense,
 	VmSemanticDependency,
 	VmSemanticProtectorFact,
@@ -1230,20 +1231,43 @@ export function emitCompiledFunction(
 		nextStackSlot += 2;
 	}
 	const numericHofRegions = new Map<number, NumericHofRegionSite>();
-	for (const region of fn.nativeNumericHofRegions ?? []) {
-		const initialMove = fn.instructions[region.initialMoveIp];
-		const entry = fn.instructions[region.entryIp];
+	for (const region of (fn.regions ?? []).filter(
+		(region): region is Extract<VmRegion, { kind: "numeric-hof" }> =>
+			region.kind === "numeric-hof",
+	)) {
+		const initialMoveIp = region.anchors[0]!;
+		const loopExitIp = region.anchors[3]!;
+		const entryIp =
+			region.dispatch.kind === "guarded" ? region.dispatch.guardCallIp : initialMoveIp;
+		const initialMove = fn.instructions[initialMoveIp];
+		const loopExit = fn.instructions[loopExitIp];
+		const completionIp = loopExit?.opcode === "JUMP" ? loopExit.targetIp : -1;
+		const completion = fn.instructions[completionIp];
+		const entry = fn.instructions[entryIp];
 		if (
 			initialMove?.opcode !== "MOVE" ||
-			initialMove.dst !== region.accumulator ||
+			loopExit?.opcode !== "JUMP" ||
+			completion === undefined ||
+			(completion.opcode === "MOVE" && completion.src !== initialMove.dst) ||
 			(region.dispatch.kind === "guarded"
 				? entry?.opcode !== "CALL"
-				: region.entryIp !== region.initialMoveIp || entry?.opcode !== "MOVE") ||
-			numericHofRegions.has(region.entryIp)
+				: entry?.opcode !== "MOVE") ||
+			numericHofRegions.has(entryIp)
 		) {
-			throw new Error(`Invalid numeric HOF region at instruction ${region.entryIp}`);
+			throw new Error(`Invalid numeric HOF region at instruction ${entryIp}`);
 		}
-		numericHofRegions.set(region.entryIp, region);
+		numericHofRegions.set(entryIp, {
+			...region,
+			entryIp,
+			initialMoveIp,
+			completionIp,
+			initial: initialMove.src,
+			accumulator: initialMove.dst,
+			result:
+				completion.opcode === "MOVE" && completion.src === initialMove.dst
+					? completion.dst
+					: initialMove.dst,
+		});
 	}
 	const affineRangeAllocations = fn.instructions
 		.map((instruction, ip) => ({ instruction, ip }))
@@ -2734,7 +2758,14 @@ interface FiniteRecordRegion {
 
 /** A serialized numeric reduce plan anchored where its ordinary loop initializes
  * the accumulator. A local miss emits that move and continues unchanged. */
-type NumericHofRegionSite = NonNullable<VmFunction["nativeNumericHofRegions"]>[number];
+type NumericHofRegionSite = Extract<VmRegion, { kind: "numeric-hof" }> & {
+	readonly entryIp: number;
+	readonly initialMoveIp: number;
+	readonly completionIp: number;
+	readonly initial: number;
+	readonly accumulator: number;
+	readonly result: number;
+};
 
 /** The C expression each proven Math operation lowers to, and the bit that proves
  * the corresponding builtin is still installed. Every expression must stay

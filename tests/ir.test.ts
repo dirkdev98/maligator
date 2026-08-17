@@ -138,6 +138,43 @@ test("drops stale split cursor certificates from the shared function region tabl
 	).toHaveLength(0);
 });
 
+test("stores numeric HOF proofs in the shared region table and drops stale anchors", () => {
+	const program = compileScript(`
+		function summarize(values) {
+			let total = 0;
+			for (let round = 0; round < 4; round++) {
+				total += values.reduce((sum, value) => sum + Math.abs(value), 0);
+			}
+			return total;
+		}
+		globalThis.summarize = summarize;
+	`);
+	executeIROptimizations(program);
+	const summarize = functionNamed(program, "summarize");
+	const region = summarize.regions?.find((candidate) => candidate.kind === "numeric-hof");
+	expect(region).toBeDefined();
+	expect(region!.anchors).toHaveLength(4);
+	expect(region!.controlFlow.exceptionalBlocks).toEqual([]);
+	expect(
+		region!.anchors.every((instruction) =>
+			region!.claimedInstructions.includes(instruction),
+		),
+	).toBe(true);
+
+	const staleAnchor = region!.anchors[1];
+	const owner = summarize.blocks.find((block) =>
+		block.instructions.includes(staleAnchor),
+	);
+	expect(owner).toBeDefined();
+	owner!.instructions[owner!.instructions.indexOf(staleAnchor)] = { ...staleAnchor };
+	allocateRegisters(program);
+	const lowered =
+		lowerIrProgramToVmDefinition(program).functions[summarize.functionIndex]!;
+	expect(
+		lowered.regions?.filter((candidate) => candidate.kind === "numeric-hof") ?? [],
+	).toHaveLength(0);
+});
+
 test("accepts non-index numeric-looking names in static shapes", () => {
 	const program = compileScript(`globalThis.value = { "01": 1, "1e3": 2, "-1": 3 };`);
 	executeIROptimizations(program);

@@ -240,7 +240,7 @@ the same facts unconditionally.
         stable regions, and revalidate the combined named dependencies through one
         semantic-activity snapshot after a potentially invalidating loop operation.
   - [x] Preserve the IR-selected split-cursor certificate as a tagged function
-        region through MALW v49. Validate its common anchors, disjoint claims, CFG
+        region through MALW v50. Validate its common anchors, disjoint claims, CFG
         scope, cost and kind-specific payload in both loaders, so fresh, cached and
         deserialized builds consume the same region authority and overlap domain.
 - [x] Retain a generic twin when invalidation or a local guard can fail. Define the
@@ -388,12 +388,11 @@ is general rather than a registry-shaped collection of special cases.
         the complete registered unary numeric Math surface without a runtime identity
         table or helper body.
     - [x] Compose the locked fresh-Array proof with numeric fusion instead of making
-          the two specializations exclusive. Mark the inlined accumulator
-          initialization as the durable region certificate: guarded builds attempt
-          fusion at their existing entry guard and retain the ordinary call twin;
-          closed builds enter on that post-construction marker, erase method dispatch,
-          and identify the proven allocation explicitly. Either form retains the
-          inlined loop as the numeric layout/type fallback.
+          the two specializations exclusive. Guarded builds attempt fusion at their
+          existing entry guard and retain the ordinary call twin; closed builds enter
+          after construction, erase method dispatch, and identify the proven
+          allocation explicitly. Either form retains the inlined loop as the numeric
+          layout/type fallback.
 
 #### Allocation and representation consumers
 
@@ -466,15 +465,22 @@ is general rather than a registry-shaped collection of special cases.
         closed record-Array regions end to end. Validate common bounds, instruction
         ownership, disjoint claims, CFG scope and cost independently of the tagged
         payload in both TypeScript and the C wire loader.
-  - [ ] Migrate the remaining numeric HOF and projection regions into the table,
-        then delete their instruction-owned anchors and dedicated wire tails.
+  - [ ] Migrate the remaining projection regions into the table, then delete their
+        instruction-owned anchors and dedicated wire tails.
+    - [x] Move numeric HOF regions into the shared tagged table and delete the
+          accumulator-move-owned certificate and dedicated wire tail. Anchor the
+          initial accumulator, element access, natural backedge and explicit loop
+          exit; refresh the complete CFG, def/use, exception and overlap proof after
+          the optimization fixpoint; and rebase function-owned regions when
+          multi-block inlining clones their instructions. MALW v50 carries mixed
+          record, split-cursor and numeric-HOF claims through one validation path.
     - [x] Move split cursors into the shared tagged table and delete their call-owned
           anchor and dedicated wire tail. Resolve the complete certificate
           atomically during lowering, reject stale or overlapping claims across
-          region kinds, and preserve mixed record/cursor tables through MALW v49.
+          region kinds, and preserve mixed record/cursor tables through MALW v50.
     - [x] Rebase split-cursor admission on the canonical final-IR dominator, natural
           loop, register definition/use and exception-scope analyses. Make the
-          split-result alias an explicit claimed anchor through MALW v49 so a stale
+          split-result alias an explicit claimed anchor through MALW v50 so a stale
           or redirected move invalidates the complete certificate.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot

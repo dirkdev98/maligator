@@ -1,5 +1,5 @@
 import { rebaseVmValueOperand } from "../lower-vm.ts";
-import type { VmDefinition, VmInstruction } from "../lower-vm.ts";
+import type { VmDefinition, VmInstruction, VmRegion } from "../lower-vm.ts";
 
 export interface MergedVmDefinition {
 	definition: VmDefinition;
@@ -24,6 +24,53 @@ function assertNever(value: never): never {
 
 function shifted(index: number, base: number): number {
 	return index < 0 ? index : index + base;
+}
+
+function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
+	return {
+		...region,
+		license: {
+			...region.license,
+			guard: {
+				dependencies: region.license.guard.dependencies.map((dependency) => ({
+					...dependency,
+				})),
+				obligations: [...region.license.guard.obligations],
+			},
+		},
+		anchors: [...region.anchors],
+		claimedIps: [...region.claimedIps],
+		controlFlow: {
+			ordinaryBlockIps: [...region.controlFlow.ordinaryBlockIps],
+			exceptionalHandlerIps: [...region.controlFlow.exceptionalHandlerIps],
+		},
+	};
+}
+
+function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
+	switch (region.kind) {
+		case "closed-record-array":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				elementLoadIps: [...region.elementLoadIps],
+				accesses: region.accesses.map((access) => ({ ...access })),
+			};
+		case "string-split-cursor":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				primitiveStringLengthIps: [...region.primitiveStringLengthIps],
+			};
+		case "numeric-hof":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				dispatch: { ...region.dispatch },
+				callbackFunctionIndex: region.callbackFunctionIndex + base.function,
+				operations: region.operations.map((operation) => ({ ...operation })),
+			};
+	}
 }
 
 function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInstruction {
@@ -440,21 +487,7 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 				gcRootRegisters:
 					fn.gcRootRegisters === undefined ? undefined : [...fn.gcRootRegisters],
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
-				nativeNumericHofRegions: fn.nativeNumericHofRegions?.map((region) => ({
-					...region,
-					dispatch: { ...region.dispatch },
-					license: {
-						...region.license,
-						guard: {
-							dependencies: region.license.guard.dependencies.map((dependency) => ({
-								...dependency,
-							})),
-							obligations: [...region.license.guard.obligations],
-						},
-					},
-					callbackFunctionIndex: region.callbackFunctionIndex + base.function,
-					operations: region.operations.map((operation) => ({ ...operation })),
-				})),
+				regions: fn.regions?.map((region) => cloneRegion(region, base)),
 			})),
 		);
 	}

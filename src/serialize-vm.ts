@@ -35,8 +35,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 49 to make the split-result alias an explicit cursor-region anchor.
-export const WIRE_VERSION = 49;
+// Bumped to 50 to move numeric HOF proofs into the common tagged region table.
+export const WIRE_VERSION = 50;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -604,7 +604,7 @@ function cardinalityGuardMasks(guard: VmGuardPlan): {
 }
 
 function numericHofGuardMasks(
-	license: NonNullable<VmFunction["nativeNumericHofRegions"]>[number]["license"],
+	license: Extract<VmRegion, { kind: "numeric-hof" }>["license"],
 ): { dependencyMask: number; obligationMask: number } {
 	let dependencyMask = 0;
 	for (const dependency of license.guard.dependencies) {
@@ -1136,48 +1136,6 @@ export function serializeVmDefinition(
 			}
 		}
 
-		w.u32(fn.nativeNumericHofRegions?.length ?? 0);
-		for (const region of fn.nativeNumericHofRegions ?? []) {
-			validateNumericHofRegion(fn, region, def.functions.length);
-			const { dependencyMask, obligationMask } = numericHofGuardMasks(region.license);
-			w.u8(region.dispatch.kind === "guarded" ? 1 : 2);
-			w.i32(
-				region.dispatch.kind === "guarded"
-					? region.dispatch.guardCallIp
-					: region.dispatch.receiverAllocationIp,
-			);
-			w.i32(region.dispatch.kind === "guarded" ? region.dispatch.slowCallIp : -1);
-			w.i32(region.entryIp);
-			w.f64(region.initialValue);
-			w.i32(region.initialMoveIp);
-			w.i32(region.completionIp);
-			w.i32(region.callbackFunctionIndex);
-			w.i32(region.receiver);
-			w.i32(region.initial);
-			w.i32(region.accumulator);
-			w.i32(region.result);
-			w.u8(dependencyMask);
-			w.u8(obligationMask);
-			w.u8(1); // end-only-no-preempt
-			w.i32(region.resultOperand);
-			w.u32(region.operations.length);
-			for (const operation of region.operations) {
-				if (operation.type === "constant") {
-					w.u8(1);
-					w.f64(operation.value);
-				} else if (operation.type === "binary") {
-					w.u8(2);
-					w.u8(NUMERIC_HOF_BINOPS.indexOf(operation.operator));
-					w.i32(operation.left);
-					w.i32(operation.right);
-				} else {
-					w.u8(3);
-					w.u8(NUMERIC_HOF_MATH_OPS.indexOf(operation.operation));
-					w.i32(operation.value);
-				}
-			}
-		}
-
 		const regions = [...(fn.regions ?? [])];
 		if (regions.length > MAX_REGIONS) {
 			throw new RangeError("serialize-vm: too many function regions");
@@ -1185,14 +1143,21 @@ export function serializeVmDefinition(
 		w.u32(regions.length);
 		const claimedRegionInstructions = new Set<number>();
 		for (const region of regions) {
-			validateRegion(fn, region, claimedRegionInstructions);
-			const kindTag = region.kind === "closed-record-array" ? 1 : 2;
-			const representationTag = region.kind === "closed-record-array" ? 1 : 2;
+			validateRegion(fn, region, claimedRegionInstructions, def.functions.length);
+			const kindTag =
+				region.kind === "closed-record-array"
+					? 1
+					: region.kind === "string-split-cursor"
+						? 2
+						: 3;
+			const representationTag = kindTag;
 			const materializationTag = region.license.materialization === "none" ? 0 : 1;
 			const { dependencyMask, obligationMask } =
 				region.kind === "closed-record-array"
 					? closedRecordArrayGuardMasks(region.license)
-					: stringSplitCursorGuardMasks(region.license);
+					: region.kind === "string-split-cursor"
+						? stringSplitCursorGuardMasks(region.license)
+						: numericHofGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1229,6 +1194,36 @@ export function serializeVmDefinition(
 					w.i32(region.trimCallIp);
 					w.i32Array([...region.primitiveStringLengthIps]);
 					w.i32(region.exitIp);
+					break;
+				case "numeric-hof":
+					w.u8(region.dispatch.kind === "guarded" ? 1 : 2);
+					w.i32(
+						region.dispatch.kind === "guarded"
+							? region.dispatch.guardCallIp
+							: region.dispatch.receiverAllocationIp,
+					);
+					w.i32(region.dispatch.kind === "guarded" ? region.dispatch.slowCallIp : -1);
+					w.i32(region.callbackFunctionIndex);
+					w.i32(region.receiver);
+					w.f64(region.initialValue);
+					w.u8(1); // end-only-no-preempt
+					w.i32(region.resultOperand);
+					w.u32(region.operations.length);
+					for (const operation of region.operations) {
+						if (operation.type === "constant") {
+							w.u8(1);
+							w.f64(operation.value);
+						} else if (operation.type === "binary") {
+							w.u8(2);
+							w.u8(NUMERIC_HOF_BINOPS.indexOf(operation.operator));
+							w.i32(operation.left);
+							w.i32(operation.right);
+						} else {
+							w.u8(3);
+							w.u8(NUMERIC_HOF_MATH_OPS.indexOf(operation.operation));
+							w.i32(operation.value);
+						}
+					}
 					break;
 			}
 		}
@@ -1355,7 +1350,7 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 
 function validateNumericHofRegion(
 	fn: VmFunction,
-	region: NonNullable<VmFunction["nativeNumericHofRegions"]>[number],
+	region: Extract<VmRegion, { kind: "numeric-hof" }>,
 	functionCount: number,
 ): void {
 	const { dependencyMask } = numericHofGuardMasks(region.license);
@@ -1365,34 +1360,47 @@ function validateNumericHofRegion(
 		value === -1 ||
 		value === -2 ||
 		(Number.isInteger(value) && value >= 0 && value < before);
-	const initialMove = fn.instructions[region.initialMoveIp];
-	const entry = fn.instructions[region.entryIp];
-	const completion = fn.instructions[region.completionIp];
+	const initialMoveIp = region.anchors[0]!;
+	const elementIp = region.anchors[1]!;
+	const backedgeIp = region.anchors[2]!;
+	const loopExitIp = region.anchors[3]!;
+	const initialMove = fn.instructions[initialMoveIp];
+	const element = fn.instructions[elementIp];
+	const backedge = fn.instructions[backedgeIp];
+	const loopExit = fn.instructions[loopExitIp];
+	const completionIp = loopExit?.opcode === "JUMP" ? loopExit.targetIp : -1;
+	const completion = fn.instructions[completionIp];
+	const initial = initialMove?.opcode === "MOVE" ? initialMove.src : -1;
+	const accumulator = initialMove?.opcode === "MOVE" ? initialMove.dst : -1;
 	const completionMove =
-		completion?.opcode === "MOVE" && completion.src === region.accumulator
+		completion?.opcode === "MOVE" && completion.src === accumulator
 			? completion
 			: undefined;
 	const completionExit =
-		completionMove === undefined ? undefined : fn.instructions[region.completionIp + 1];
+		completionMove === undefined ? undefined : fn.instructions[completionIp + 1];
+	const result = completionMove?.dst ?? accumulator;
 	if (
+		region.representation !== "numeric-reduce-f64" ||
+		region.anchors.length !== 4 ||
 		region.method !== "reduce" ||
 		region.pollPolicy !== "end-only-no-preempt" ||
 		typeof region.initialValue !== "number" ||
-		entry === undefined ||
 		initialMove?.opcode !== "MOVE" ||
-		initialMove.src !== region.initial ||
-		initialMove.dst !== region.accumulator ||
+		element?.opcode !== "LOAD_PROPERTY" ||
+		element.object !== region.receiver ||
+		backedge?.opcode !== "JUMP" ||
+		loopExit?.opcode !== "JUMP" ||
 		completion === undefined ||
-		region.result !== (completionMove?.dst ?? region.accumulator) ||
 		region.callbackFunctionIndex < 0 ||
 		region.callbackFunctionIndex >= functionCount ||
 		!registerValid(region.receiver) ||
-		!registerValid(region.initial) ||
-		!registerValid(region.accumulator) ||
-		!registerValid(region.result) ||
+		!registerValid(initial) ||
+		!registerValid(accumulator) ||
+		!registerValid(result) ||
 		region.operations.length === 0 ||
 		region.operations.length > 32 ||
-		!operandValid(region.resultOperand, region.operations.length)
+		!operandValid(region.resultOperand, region.operations.length) ||
+		region.cost.metadataOperations !== region.claimedIps.length
 	) {
 		throw new RangeError("serialize-vm: invalid numeric-HOF region metadata");
 	}
@@ -1446,7 +1454,7 @@ function validateNumericHofRegion(
 			callbackCreate.functionIndex !== region.callbackFunctionIndex ||
 			slowBranch.targetIp !== slowCallIp - 1 ||
 			slowCall?.opcode !== "CALL" ||
-			slowCall.dst !== region.result ||
+			slowCall.dst !== result ||
 			slowThis?.kind !== "register" ||
 			slowThis.register !== region.receiver ||
 			slowCall.argumentCount !== 2 ||
@@ -1455,15 +1463,16 @@ function validateNumericHofRegion(
 			!(
 				(slowInitial?.kind === "number" &&
 					Object.is(slowInitial.value, region.initialValue)) ||
-				(slowInitial?.kind === "register" && slowInitial.register === region.initial)
+				(slowInitial?.kind === "register" && slowInitial.register === initial)
 			) ||
 			slowExit?.opcode !== "JUMP" ||
 			(completionMove === undefined
-				? slowExit.targetIp !== region.completionIp
+				? slowExit.targetIp !== completionIp
 				: completionExit?.opcode !== "JUMP" ||
 					completionExit.targetIp !== slowExit.targetIp) ||
-			region.entryIp !== guardCallIp ||
-			guardCallIp >= region.initialMoveIp
+			guardCallIp >= initialMoveIp ||
+			!region.claimedIps.includes(guardCallIp) ||
+			!region.claimedIps.includes(slowCallIp)
 		) {
 			throw new RangeError("serialize-vm: invalid guarded numeric-HOF dispatch");
 		}
@@ -1473,8 +1482,8 @@ function validateNumericHofRegion(
 			dependencyMask !== 1 ||
 			allocation?.opcode !== "CREATE_ARRAY" ||
 			allocation.dst !== region.receiver ||
-			region.entryIp !== region.initialMoveIp ||
-			region.dispatch.receiverAllocationIp >= region.entryIp
+			region.dispatch.receiverAllocationIp >= initialMoveIp ||
+			!region.claimedIps.includes(region.dispatch.receiverAllocationIp)
 		) {
 			throw new RangeError("serialize-vm: invalid closed numeric-HOF dispatch");
 		}
@@ -1542,7 +1551,12 @@ function validateRegionEnvelope(
 	}
 }
 
-function validateRegion(fn: VmFunction, region: VmRegion, claimed: Set<number>): void {
+function validateRegion(
+	fn: VmFunction,
+	region: VmRegion,
+	claimed: Set<number>,
+	functionCount: number,
+): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
 		case "closed-record-array":
@@ -1550,6 +1564,9 @@ function validateRegion(fn: VmFunction, region: VmRegion, claimed: Set<number>):
 			break;
 		case "string-split-cursor":
 			validateStringSplitCursorRegion(fn, region);
+			break;
+		case "numeric-hof":
+			validateNumericHofRegion(fn, region, functionCount);
 			break;
 	}
 	for (const ip of region.claimedIps) claimed.add(ip);
@@ -2704,112 +2721,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			}
 		}
 
-		const numericHofRegionCount = r.count(13);
-		if (numericHofRegionCount > 0) {
-			const regions: Array<NonNullable<VmFunction["nativeNumericHofRegions"]>[number]> =
-				[];
-			for (let regionIndex = 0; regionIndex < numericHofRegionCount; regionIndex++) {
-				const dispatchTag = r.u8();
-				const dispatchPrimaryIp = r.i32();
-				const dispatchSecondaryIp = r.i32();
-				const entryIp = r.i32();
-				const initialValue = r.f64();
-				const initialMoveIp = r.i32();
-				const completionIp = r.i32();
-				const callbackFunctionIndex = r.i32();
-				const receiver = r.i32();
-				const initial = r.i32();
-				const accumulator = r.i32();
-				const result = r.i32();
-				const dependencyMask = r.u8();
-				const obligationMask = r.u8();
-				const pollPolicy = r.u8();
-				const resultOperand = r.i32();
-				const operationCount = r.count(2);
-				if (
-					(dispatchTag !== 1 && dispatchTag !== 2) ||
-					(dispatchTag === 2 && dispatchSecondaryIp !== -1) ||
-					pollPolicy !== 1 ||
-					operationCount === 0 ||
-					operationCount > 32
-				) {
-					throw new RangeError("serialize-vm: invalid numeric-HOF plan header");
-				}
-				const operations: Array<
-					NonNullable<VmFunction["nativeNumericHofRegions"]>[number]["operations"][number]
-				> = [];
-				for (let operationIndex = 0; operationIndex < operationCount; operationIndex++) {
-					const tag = r.u8();
-					if (tag === 1) {
-						operations.push({ type: "constant", value: r.f64() });
-					} else if (tag === 2) {
-						const operator = NUMERIC_HOF_BINOPS[r.u8()];
-						if (operator === undefined) {
-							throw new RangeError("serialize-vm: invalid numeric-HOF binary opcode");
-						}
-						operations.push({
-							type: "binary",
-							operator,
-							left: r.i32(),
-							right: r.i32(),
-						});
-					} else if (tag === 3) {
-						const operation = NUMERIC_HOF_MATH_OPS[r.u8()];
-						if (operation === undefined) {
-							throw new RangeError("serialize-vm: invalid numeric-HOF Math opcode");
-						}
-						operations.push({ type: "math", operation, value: r.i32() });
-					} else {
-						throw new RangeError("serialize-vm: invalid numeric-HOF plan opcode");
-					}
-				}
-				const region = {
-					method: "reduce" as const,
-					license: {
-						guard: {
-							dependencies:
-								dependencyMask === 1
-									? [{ kind: "world" as const, fact: "primordials.locked" as const }]
-									: [
-											{ kind: "epoch" as const, family: "array-elements" as const },
-											{ kind: "epoch" as const, family: "primitive-methods" as const },
-											{ kind: "epoch" as const, family: "watched-methods" as const },
-										],
-							obligations: obligationMask === 1 ? (["fallback"] as const) : [],
-						},
-						genericTwin: "retained" as const,
-						materialization: "none" as const,
-					},
-					dispatch:
-						dispatchTag === 1
-							? {
-									kind: "guarded" as const,
-									guardCallIp: dispatchPrimaryIp,
-									slowCallIp: dispatchSecondaryIp,
-								}
-							: {
-									kind: "closed" as const,
-									receiverAllocationIp: dispatchPrimaryIp,
-								},
-					entryIp,
-					initialValue,
-					initialMoveIp,
-					completionIp,
-					callbackFunctionIndex,
-					receiver,
-					initial,
-					accumulator,
-					result,
-					pollPolicy: "end-only-no-preempt" as const,
-					operations,
-					resultOperand,
-				};
-				validateNumericHofRegion(fn, region, functions.length);
-				regions.push(region);
-			}
-			fn.nativeNumericHofRegions = regions;
-		}
-
 		const regionCount = r.count(17);
 		if (regionCount > MAX_REGIONS) {
 			throw new RangeError("serialize-vm: too many function regions");
@@ -2842,9 +2753,15 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 1 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 3;
+				const numericHofContract =
+					kindTag === 3 &&
+					representationTag === 3 &&
+					materializationTag === 0 &&
+					(dependencyMask === 1 || dependencyMask === 14) &&
+					obligationMask === 1;
 				if (
 					genericTwinTag !== 1 ||
-					(!closedRecordContract && !stringSplitCursorContract)
+					(!closedRecordContract && !stringSplitCursorContract && !numericHofContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -2894,7 +2811,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						elementLoadIps,
 						accesses,
 					};
-				} else {
+				} else if (kindTag === 2) {
 					const propertyIp = r.i32();
 					const callee = r.i32();
 					const receiver = r.i32();
@@ -2951,8 +2868,111 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						primitiveStringLengthIps,
 						exitIp,
 					};
+				} else {
+					const dispatchTag = r.u8();
+					const dispatchPrimaryIp = r.i32();
+					const dispatchSecondaryIp = r.i32();
+					const callbackFunctionIndex = r.i32();
+					const receiver = r.i32();
+					const initialValue = r.f64();
+					const pollPolicy = r.u8();
+					const resultOperand = r.i32();
+					const operationCount = r.count(2);
+					if (
+						(dispatchTag !== 1 && dispatchTag !== 2) ||
+						(dispatchTag === 2 && dispatchSecondaryIp !== -1) ||
+						pollPolicy !== 1 ||
+						operationCount === 0 ||
+						operationCount > 32
+					) {
+						throw new RangeError("serialize-vm: invalid numeric-HOF plan header");
+					}
+					const operations: Array<
+						Extract<VmRegion, { kind: "numeric-hof" }>["operations"][number]
+					> = [];
+					for (
+						let operationIndex = 0;
+						operationIndex < operationCount;
+						operationIndex++
+					) {
+						const tag = r.u8();
+						if (tag === 1) {
+							operations.push({ type: "constant", value: r.f64() });
+						} else if (tag === 2) {
+							const operator = NUMERIC_HOF_BINOPS[r.u8()];
+							if (operator === undefined) {
+								throw new RangeError("serialize-vm: invalid numeric-HOF binary opcode");
+							}
+							operations.push({
+								type: "binary",
+								operator,
+								left: r.i32(),
+								right: r.i32(),
+							});
+						} else if (tag === 3) {
+							const operation = NUMERIC_HOF_MATH_OPS[r.u8()];
+							if (operation === undefined) {
+								throw new RangeError("serialize-vm: invalid numeric-HOF Math opcode");
+							}
+							operations.push({ type: "math", operation, value: r.i32() });
+						} else {
+							throw new RangeError("serialize-vm: invalid numeric-HOF plan opcode");
+						}
+					}
+					region = {
+						kind: "numeric-hof",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [
+												{
+													kind: "world" as const,
+													fact: "primordials.locked" as const,
+												},
+											]
+										: [
+												{ kind: "epoch" as const, family: "array-elements" as const },
+												{
+													kind: "epoch" as const,
+													family: "primitive-methods" as const,
+												},
+												{
+													kind: "epoch" as const,
+													family: "watched-methods" as const,
+												},
+											],
+								obligations: ["fallback" as const],
+							},
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "numeric-reduce-f64",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						method: "reduce",
+						dispatch:
+							dispatchTag === 1
+								? {
+										kind: "guarded",
+										guardCallIp: dispatchPrimaryIp,
+										slowCallIp: dispatchSecondaryIp,
+									}
+								: {
+										kind: "closed",
+										receiverAllocationIp: dispatchPrimaryIp,
+									},
+						callbackFunctionIndex,
+						receiver,
+						initialValue,
+						pollPolicy: "end-only-no-preempt",
+						operations,
+						resultOperand,
+					};
 				}
-				validateRegion(fn, region, claimed);
+				validateRegion(fn, region, claimed, functions.length);
 				regions.push(region);
 			}
 			fn.regions = regions;

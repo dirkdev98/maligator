@@ -97,6 +97,11 @@ const definition: VmDefinition = {
 	hostInstalls: [],
 };
 
+const numericHofRegions = (definition: VmDefinition) =>
+	definition.functions.flatMap(
+		(fn) => fn.regions?.filter((region) => region.kind === "numeric-hof") ?? [],
+	);
+
 describe("emit-vm instruction packing", () => {
 	it("combines semantic dependencies with one retained region twin", () => {
 		const license = vmRegionLicense(
@@ -629,7 +634,7 @@ describe("native update-expression representation", () => {
 		).toBeGreaterThanOrEqual(2);
 	});
 
-	it("shares one region table across disjoint record and split cursor proofs", () => {
+	it("shares one region table across disjoint record, split, and numeric proofs", () => {
 		const source = `
 			function summarize(value, separator) {
 				const rows = [];
@@ -645,6 +650,9 @@ describe("native update-expression representation", () => {
 				for (let index = 0; index < parts.length; index++) {
 					total += parts[index].trim().length;
 				}
+				const values = [];
+				for (let index = 0; index < 8; index++) values.push(index - 4);
+				total += values.reduce((sum, value) => sum + Math.abs(value), 0);
 				return total;
 			}
 			globalThis.summarize = summarize;
@@ -660,6 +668,7 @@ describe("native update-expression representation", () => {
 		expect(functionIndex).toBeGreaterThanOrEqual(0);
 		expect(fn!.regions?.map((region) => region.kind).sort()).toEqual([
 			"closed-record-array",
+			"numeric-hof",
 			"string-split-cursor",
 		]);
 		const claimedIps = fn!.regions!.flatMap((region) => region.claimedIps);
@@ -672,6 +681,7 @@ describe("native update-expression representation", () => {
 		const output = emitVmDefinition(restored, { compiled: true });
 		expect(output).toContain("__closed_record_");
 		expect(output).toContain("mal_builtin_string_split_cursor_init_locked(vm,");
+		expect(output).toContain("mal_builtin_array_numeric_fold_local_admit(");
 
 		const cursorIndex = fn!.regions!.findIndex(
 			(region) => region.kind === "string-split-cursor",
@@ -1632,9 +1642,7 @@ describe("native update-expression representation", () => {
 			parseScript(source, { strict: false }),
 		);
 		const definition = compileSemanticProgramToVmDefinition(semantic);
-		const regions = definition.functions.flatMap(
-			(fn) => fn.nativeNumericHofRegions ?? [],
-		);
+		const regions = numericHofRegions(definition);
 		expect(regions).toHaveLength(1);
 		expect(regions[0]?.operations.map((operation) => operation.type)).toEqual([
 			"math",
@@ -1647,12 +1655,17 @@ describe("native update-expression representation", () => {
 			"binary",
 		]);
 		const decoded = deserializeVmDefinition(serializeVmDefinition(definition));
-		expect(decoded.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? [])).toEqual(
-			regions,
-		);
+		expect(numericHofRegions(decoded)).toEqual(regions);
 		const emitted = emitVmDefinition(decoded, { compiled: true });
 		const region = regions[0]!;
-		const regionEntryIp = region.entryIp;
+		const regionOwner = definition.functions.find((fn) => fn.regions?.includes(region))!;
+		const loopExit = regionOwner.instructions[region.anchors[3]!]!;
+		expect(loopExit.opcode).toBe("JUMP");
+		const completionIp = loopExit.opcode === "JUMP" ? loopExit.targetIp : -1;
+		const regionEntryIp =
+			region.dispatch.kind === "guarded"
+				? region.dispatch.guardCallIp
+				: region.anchors[0]!;
 		const mutableAdmission = emitted
 			.split("\n")
 			.find((line) => line.includes("mal_builtin_array_numeric_fold_local_admit"));
@@ -1663,7 +1676,7 @@ describe("native update-expression representation", () => {
 		expect(emitted).toContain(`sqrt(__fold_${regionEntryIp}_element)`);
 		expect(emitted).toContain(`sin(__fold_${regionEntryIp}_element)`);
 		expect(emitted).toContain(`fabs(__fold_${regionEntryIp}_op5)`);
-		expect(emitted).toContain(`goto L${region.completionIp};`);
+		expect(emitted).toContain(`goto L${completionIp};`);
 		expect(emitted).toContain(
 			`mal_perf_numeric_fold_region(__fold_${regionEntryIp}_index, __fold_${regionEntryIp}_length, 3)`,
 		);
@@ -1676,13 +1689,11 @@ describe("native update-expression representation", () => {
 			.find((line) => line.includes("mal_builtin_array_numeric_fold_local_admit"));
 		expect(lockedAdmission).toBeDefined();
 		expect(lockedAdmission).not.toContain("mal_vm_semantic_dependencies_admit");
-		const forgedRegion = decoded.functions.flatMap(
-			(fn) => fn.nativeNumericHofRegions ?? [],
-		)[0]!;
-		forgedRegion.operations = [
+		const forgedRegion = numericHofRegions(decoded)[0]!;
+		(forgedRegion as unknown as { operations: Array<{ type: string }> }).operations = [
 			{ type: "bogus" },
-		] as unknown as typeof forgedRegion.operations;
-		forgedRegion.resultOperand = 0;
+		];
+		(forgedRegion as unknown as { resultOperand: number }).resultOperand = 0;
 		expect(() => serializeVmDefinition(decoded)).toThrow(/numeric-HOF expression plan/);
 	});
 
@@ -1705,8 +1716,7 @@ describe("native update-expression representation", () => {
 				`numeric-hof-complete-math-${index}.js`,
 				parseScript(source, { strict: false }),
 			);
-			return compileSemanticProgramToVmDefinition(semantic)
-				.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? [])
+			return numericHofRegions(compileSemanticProgramToVmDefinition(semantic))
 				.flatMap((region) => region.operations)
 				.filter((candidate) => candidate.type === "math")
 				.map((candidate) => candidate.operation);
@@ -1729,12 +1739,10 @@ describe("native update-expression representation", () => {
 		const definition = compileSemanticProgramToVmDefinition(semantic, {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		});
-		const regions = definition.functions.flatMap(
-			(fn) => fn.nativeNumericHofRegions ?? [],
-		);
+		const regions = numericHofRegions(definition);
 		expect(regions).toHaveLength(1);
 		expect(regions[0]?.dispatch.kind).toBe("closed");
-		expect(regions[0]?.entryIp).toBe(regions[0]?.initialMoveIp);
+		expect(regions[0]?.anchors).toHaveLength(4);
 		expect(
 			definition.functions.some((fn) =>
 				fn.instructions.some(
@@ -1745,9 +1753,7 @@ describe("native update-expression representation", () => {
 			),
 		).toBe(false);
 		const decoded = deserializeVmDefinition(serializeVmDefinition(definition));
-		expect(decoded.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? [])).toEqual(
-			regions,
-		);
+		expect(numericHofRegions(decoded)).toEqual(regions);
 		const emitted = emitVmDefinition(decoded, { compiled: true });
 		const admission = emitted
 			.split("\n")
@@ -1775,14 +1781,10 @@ describe("native update-expression representation", () => {
 			parseScript(source, { strict: false }),
 		);
 		const definition = compileSemanticProgramToVmDefinition(semantic);
-		const region = definition.functions.flatMap(
-			(fn) => fn.nativeNumericHofRegions ?? [],
-		)[0];
+		const region = numericHofRegions(definition)[0];
 		expect(region).toBeDefined();
-		(region as { completionIp: number }).completionIp = -1;
-		expect(() => serializeVmDefinition(definition)).toThrow(
-			/numeric-HOF region metadata/,
-		);
+		(region as unknown as { anchors: Array<number> }).anchors[3] = -1;
+		expect(() => serializeVmDefinition(definition)).toThrow(/invalid region envelope/);
 
 		const zeroSource = `
 			function run() {
@@ -1802,9 +1804,7 @@ describe("native update-expression representation", () => {
 			parseScript(zeroSource, { strict: false }),
 		);
 		const zeroDefinition = compileSemanticProgramToVmDefinition(zeroSemantic);
-		expect(
-			zeroDefinition.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? []),
-		).toHaveLength(0);
+		expect(numericHofRegions(zeroDefinition)).toHaveLength(0);
 	});
 
 	it("serializes a numeric reduce proof with a non-immediate initial value", () => {
@@ -1826,9 +1826,7 @@ describe("native update-expression representation", () => {
 			parseScript(source, { strict: false }),
 		);
 		const definition = compileSemanticProgramToVmDefinition(semantic);
-		expect(
-			definition.functions.flatMap((fn) => fn.nativeNumericHofRegions ?? []),
-		).toHaveLength(1);
+		expect(numericHofRegions(definition)).toHaveLength(1);
 		expect(() => serializeVmDefinition(definition)).not.toThrow();
 	});
 

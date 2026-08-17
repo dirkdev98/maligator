@@ -556,36 +556,6 @@ export type IRNumericHofPlanOperation =
 			value: number;
 	  };
 
-/**
- * Compile-only provenance for one guarded HOF expansion. Instruction references
- * are deliberately retained from the semantic transform: lowering either resolves
- * every anchor after register allocation or drops the plan. Native emission must
- * never rediscover this contract from an opcode pattern.
- */
-export interface IRNumericHofRegion {
-	method: "reduce";
-	readonly license: {
-		readonly guard: CompilerGuardPlan;
-		readonly genericTwin: "retained";
-		readonly materialization: "none";
-	};
-	callbackFunctionIndex: number;
-	operations: ReadonlyArray<IRNumericHofPlanOperation>;
-	resultOperand: number;
-	/** Exact numeric initial accumulator proven before the loop transform. */
-	initialValue: number;
-	readonly dispatch:
-		| {
-				readonly kind: "guarded";
-				readonly eligibility: Extract<IRInstruction, { type: "call" }>;
-				readonly slowCall: Extract<IRInstruction, { type: "call" }>;
-		  }
-		| {
-				readonly kind: "closed";
-				readonly receiverAllocation: Extract<IRInstruction, { type: "createArray" }>;
-		  };
-}
-
 interface IRLoopContext {
 	/**
 	 * break targets the innermost breakable (loop/switch) or, when labeled, the
@@ -751,6 +721,42 @@ export interface IRStringSplitCursor extends IRRegionEnvelope<
 }
 
 /**
+ * Backend-neutral certificate for one inlined numeric `Array.prototype.reduce`
+ * loop. The four anchors retain the accumulator entry, element read, natural
+ * backedge, and explicit loop exit. A final canonical CFG/def-use audit refreshes
+ * the envelope after the optimization fixpoint or drops the entire certificate.
+ */
+export interface IRNumericHofRegion extends IRRegionEnvelope<
+	"numeric-hof",
+	"numeric-reduce-f64",
+	"none",
+	readonly [
+		Extract<IRInstruction, { type: "move" }>,
+		Extract<IRInstruction, { type: "loadProperty" }>,
+		Extract<IRInstruction, { type: "jump" }>,
+		Extract<IRInstruction, { type: "jump" }>,
+	]
+> {
+	readonly method: "reduce";
+	readonly callbackFunctionIndex: number;
+	readonly operations: ReadonlyArray<IRNumericHofPlanOperation>;
+	readonly resultOperand: number;
+	/** Exact numeric initial accumulator proven before the loop transform. */
+	readonly initialValue: number;
+	readonly pollPolicy: "end-only-no-preempt";
+	readonly dispatch:
+		| {
+				readonly kind: "guarded";
+				readonly eligibility: Extract<IRInstruction, { type: "call" }>;
+				readonly slowCall: Extract<IRInstruction, { type: "call" }>;
+		  }
+		| {
+				readonly kind: "closed";
+				readonly receiverAllocation: Extract<IRInstruction, { type: "createArray" }>;
+		  };
+}
+
+/**
  * Backend-neutral certificate for a private, fixed-length Array of same-shape
  * records. The proof is selected while block identity and virtual-register
  * provenance are intact; lowering must resolve every instruction anchor or
@@ -778,7 +784,10 @@ export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
 }
 
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
-export type IRRegion = IRClosedRecordArrayRegion | IRStringSplitCursor;
+export type IRRegion =
+	| IRClosedRecordArrayRegion
+	| IRStringSplitCursor
+	| IRNumericHofRegion;
 
 export type IRInstruction =
 	| {
@@ -800,9 +809,6 @@ export type IRInstruction =
 
 			// [dest, source]
 			registers: [number, number];
-			/** First-class proof plan for a native numeric reduce nested inside the
-			 * ordinary inlined loop. A failed local admission continues at this move. */
-			numericHofRegion?: IRNumericHofRegion;
 	  }
 	| {
 			type: "return";

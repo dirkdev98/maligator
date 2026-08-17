@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 49u        // split-result aliases become explicit cursor anchors
+#define WIRE_VERSION 50u        // numeric HOF proofs join the tagged region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1819,92 +1819,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             }
         }
 
-        u32 numeric_hof_count = rd_count(&r, 13);
-        for (u32 region = 0; r.ok && region < numeric_hof_count; region++) {
-            u8 dispatch_tag = rd_u8(&r);
-            i32 dispatch_primary_ip = rd_i32(&r);
-            i32 dispatch_secondary_ip = rd_i32(&r);
-            i32 entry_ip = rd_i32(&r);
-            (void) rd_u64(&r); // exact numeric initial accumulator
-            i32 initial_ip = rd_i32(&r);
-            i32 completion_ip = rd_i32(&r);
-            i32 callback_function = rd_i32(&r);
-            i32 receiver = rd_i32(&r);
-            i32 initial = rd_i32(&r);
-            i32 accumulator = rd_i32(&r);
-            i32 result = rd_i32(&r);
-            u8 dependency_mask = rd_u8(&r);
-            u8 obligation_mask = rd_u8(&r);
-            u8 poll_policy = rd_u8(&r);
-            i32 result_operand = rd_i32(&r);
-            u32 operation_count = rd_count(&r, 2);
-            const MalFunction *fn = &functions[i];
-#define MAL_HOF_IP_OPCODE(ip, op) \
-            ((ip) >= 0 && (ip) < fn->instruction_count && \
-             fn->instructions[(ip)].opcode == (op))
-            bool dispatch_ok =
-                (dispatch_tag == 1 &&
-                 entry_ip == dispatch_primary_ip &&
-                 MAL_HOF_IP_OPCODE(dispatch_primary_ip, MAL_OP_CALL) &&
-                 MAL_HOF_IP_OPCODE(dispatch_secondary_ip, MAL_OP_CALL)) ||
-                (dispatch_tag == 2 && dispatch_secondary_ip == -1 &&
-                 dependency_mask == 1 &&
-                 MAL_HOF_IP_OPCODE(dispatch_primary_ip, MAL_OP_CREATE_ARRAY) &&
-                 fn->instructions[dispatch_primary_ip].as.create_array.dst == receiver &&
-                 dispatch_primary_ip < entry_ip && entry_ip == initial_ip &&
-                 MAL_HOF_IP_OPCODE(entry_ip, MAL_OP_MOVE));
-            bool completion_ok = completion_ip >= 0 && completion_ip < fn->instruction_count;
-            if (completion_ok && fn->instructions[completion_ip].opcode == MAL_OP_MOVE &&
-                fn->instructions[completion_ip].as.move.src == accumulator) {
-                completion_ok = fn->instructions[completion_ip].as.move.dst == result;
-            } else {
-                completion_ok = result == accumulator;
-            }
-            if (!dispatch_ok ||
-                !MAL_HOF_IP_OPCODE(initial_ip, MAL_OP_MOVE) ||
-                !completion_ok ||
-                callback_function < 0 || callback_function >= function_count ||
-                receiver < 0 || receiver >= fn->register_count ||
-                initial < 0 || initial >= fn->register_count ||
-                accumulator < 0 || accumulator >= fn->register_count ||
-                result < 0 || result >= fn->register_count ||
-                (dependency_mask != 1 && dependency_mask != 14) ||
-                obligation_mask != 1 || poll_policy != 1 ||
-                operation_count == 0 || operation_count > 32 ||
-                fn->instructions[initial_ip].as.move.src != initial ||
-                fn->instructions[initial_ip].as.move.dst != accumulator) {
-                r.ok = false;
-            }
-#undef MAL_HOF_IP_OPCODE
-            if (!(result_operand == -1 || result_operand == -2 ||
-                  (result_operand >= 0 && (u32) result_operand < operation_count))) {
-                r.ok = false;
-            }
-            for (u32 operation = 0; r.ok && operation < operation_count; operation++) {
-                u8 tag = rd_u8(&r);
-                if (tag == 1) {
-                    (void) rd_u64(&r);
-                } else if (tag == 2) {
-                    u8 binary = rd_u8(&r);
-                    i32 left = rd_i32(&r);
-                    i32 right = rd_i32(&r);
-                    bool left_ok = left == -1 || left == -2 ||
-                        (left >= 0 && (u32) left < operation);
-                    bool right_ok = right == -1 || right == -2 ||
-                        (right >= 0 && (u32) right < operation);
-                    if (binary >= 5 || !left_ok || !right_ok) r.ok = false;
-                } else if (tag == 3) {
-                    u8 math = rd_u8(&r);
-                    i32 value = rd_i32(&r);
-                    bool value_ok = value == -1 || value == -2 ||
-                        (value >= 0 && (u32) value < operation);
-                    if (math >= 27 || !value_ok) r.ok = false;
-                } else {
-                    r.ok = false;
-                }
-            }
-        }
-
         u32 compiler_region_count = rd_count(&r, 17);
         if (compiler_region_count > 8) r.ok = false;
         i32 claimed_region_ips[768];
@@ -1977,8 +1891,12 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             bool split_cursor_contract = kind == 2 && representation == 2 &&
                 materialization == 1 && (dependency_mask == 1 || dependency_mask == 4) &&
                 obligation_mask == 3;
+            bool numeric_hof_contract = kind == 3 && representation == 3 &&
+                materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
+                obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
-                metadata_operations > 96 || (!closed_record_contract && !split_cursor_contract)) {
+                metadata_operations > 96 ||
+                (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract)) {
                 r.ok = false;
             }
 
@@ -2170,6 +2088,90 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 MAL_REGION_PAYLOAD_CLAIM(backedge_ip - 1);
                 MAL_REGION_PAYLOAD_CLAIM(backedge_ip);
                 if (metadata_operations != payload_count) r.ok = false;
+            } else if (r.ok && kind == 3) {
+                u8 dispatch_tag = rd_u8(&r);
+                i32 dispatch_primary_ip = rd_i32(&r);
+                i32 dispatch_secondary_ip = rd_i32(&r);
+                i32 callback_function = rd_i32(&r);
+                i32 receiver = rd_i32(&r);
+                (void) rd_u64(&r); // exact numeric initial accumulator
+                u8 poll_policy = rd_u8(&r);
+                i32 result_operand = rd_i32(&r);
+                u32 operation_count = rd_count(&r, 2);
+                i32 initial_ip = anchor_count > 0 ? anchors[0] : -1;
+                i32 element_ip = anchor_count > 1 ? anchors[1] : -1;
+                i32 backedge_ip = anchor_count > 2 ? anchors[2] : -1;
+                i32 loop_exit_ip = anchor_count > 3 ? anchors[3] : -1;
+#define MAL_HOF_IP_OPCODE(ip, op) \
+                ((ip) >= 0 && (ip) < fn->instruction_count && \
+                 fn->instructions[(ip)].opcode == (op))
+                bool anchors_ok = anchor_count == 4 &&
+                    MAL_HOF_IP_OPCODE(initial_ip, MAL_OP_MOVE) &&
+                    MAL_HOF_IP_OPCODE(element_ip, MAL_OP_LOAD_PROPERTY) &&
+                    MAL_HOF_IP_OPCODE(backedge_ip, MAL_OP_JUMP) &&
+                    MAL_HOF_IP_OPCODE(loop_exit_ip, MAL_OP_JUMP);
+                i32 completion_ip = anchors_ok
+                    ? fn->instructions[loop_exit_ip].as.jump.target_ip
+                    : -1;
+                bool completion_ok = completion_ip >= 0 &&
+                    completion_ip < fn->instruction_count;
+                bool dispatch_ok =
+                    (dispatch_tag == 1 &&
+                     MAL_HOF_IP_OPCODE(dispatch_primary_ip, MAL_OP_CALL) &&
+                     MAL_HOF_IP_OPCODE(dispatch_secondary_ip, MAL_OP_CALL)) ||
+                    (dispatch_tag == 2 && dispatch_secondary_ip == -1 &&
+                     dependency_mask == 1 &&
+                     MAL_HOF_IP_OPCODE(dispatch_primary_ip, MAL_OP_CREATE_ARRAY) &&
+                     fn->instructions[dispatch_primary_ip].as.create_array.dst == receiver &&
+                     dispatch_primary_ip < initial_ip);
+                if (!anchors_ok || !completion_ok || !dispatch_ok ||
+                    callback_function < 0 || callback_function >= function_count ||
+                    receiver < 0 || receiver >= fn->register_count ||
+                    fn->instructions[element_ip].as.load_property.object != receiver ||
+                    poll_policy != 1 || operation_count == 0 || operation_count > 32 ||
+                    metadata_operations != claim_count) {
+                    r.ok = false;
+                }
+#undef MAL_HOF_IP_OPCODE
+                if (!(result_operand == -1 || result_operand == -2 ||
+                      (result_operand >= 0 && (u32) result_operand < operation_count))) {
+                    r.ok = false;
+                }
+                for (u32 operation = 0; r.ok && operation < operation_count; operation++) {
+                    u8 tag = rd_u8(&r);
+                    if (tag == 1) {
+                        (void) rd_u64(&r);
+                    } else if (tag == 2) {
+                        u8 binary = rd_u8(&r);
+                        i32 left = rd_i32(&r);
+                        i32 right = rd_i32(&r);
+                        bool left_ok = left == -1 || left == -2 ||
+                            (left >= 0 && (u32) left < operation);
+                        bool right_ok = right == -1 || right == -2 ||
+                            (right >= 0 && (u32) right < operation);
+                        if (binary >= 5 || !left_ok || !right_ok) r.ok = false;
+                    } else if (tag == 3) {
+                        u8 math = rd_u8(&r);
+                        i32 value = rd_i32(&r);
+                        bool value_ok = value == -1 || value == -2 ||
+                            (value >= 0 && (u32) value < operation);
+                        if (math >= 27 || !value_ok) r.ok = false;
+                    } else {
+                        r.ok = false;
+                    }
+                }
+                if (r.ok) {
+                    MAL_REGION_PAYLOAD_CLAIM(initial_ip);
+                    MAL_REGION_PAYLOAD_CLAIM(element_ip);
+                    MAL_REGION_PAYLOAD_CLAIM(backedge_ip);
+                    MAL_REGION_PAYLOAD_CLAIM(loop_exit_ip);
+                    MAL_REGION_PAYLOAD_CLAIM(dispatch_primary_ip);
+                    if (dispatch_tag == 1) MAL_REGION_PAYLOAD_CLAIM(dispatch_secondary_ip);
+                    // Numeric regions claim the complete canonical loop corridor, not
+                    // only payload-bearing anchors. Bounds/uniqueness were checked by
+                    // the common envelope above; known payload anchors were checked here.
+                    payload_count = claim_count;
+                }
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

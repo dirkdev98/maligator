@@ -59,6 +59,7 @@ import type {
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
+	IRNumericHofRegion,
 	IRStringSplitCursor,
 	IRStringSplitProjection,
 	IRTypeofResult,
@@ -865,6 +866,265 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 	return count;
 }
 
+/**
+ * Revalidate numeric HOF certificates after the optimization fixpoint. The HOF
+ * transform records durable instruction identities while callback provenance is
+ * available; this pass supplies the final canonical CFG, natural-loop, def-use,
+ * exception, and overlap proof. Any stale anchor drops the whole certificate.
+ */
+export function annotateNumericHofRegions(program: IntermediateProgram): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		const candidates = (fn.regions ?? []).filter(
+			(region): region is IRNumericHofRegion => region.kind === "numeric-hof",
+		);
+		const retained = (fn.regions ?? []).filter((region) => region.kind !== "numeric-hof");
+		fn.regions = retained.length > 0 ? retained : undefined;
+		if (candidates.length === 0 || retained.length >= MAX_IR_REGIONS_PER_FUNCTION) {
+			continue;
+		}
+
+		const occupied = new Set(
+			retained.flatMap((region) => [...region.claimedInstructions]),
+		);
+		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
+		const locations = registerIndex.locations!;
+		const cfg = buildIROrdinaryControlFlow(fn);
+		const exceptionHandlers = buildIRExceptionHandlers(fn);
+		const handlerTargets = new Set(
+			exceptionHandlers.flatMap((handlers) =>
+				handlers.filter((handler): handler is number => handler !== null),
+			),
+		);
+		const executable = (blockIndex: number) =>
+			(fn.blocks[blockIndex]?.instructions ?? []).filter(
+				(instruction) =>
+					instruction.type !== "sourcePos" &&
+					instruction.type !== "tryBegin" &&
+					instruction.type !== "tryEnd",
+			);
+		const activeHandler = (instruction: IRInstruction): number | null => {
+			const location = locations.get(instruction);
+			return location === undefined
+				? null
+				: (exceptionHandlers[location.blockIndex]?.[location.instructionIndex] ?? null);
+		};
+
+		for (const candidate of candidates) {
+			if ((fn.regions?.length ?? 0) >= MAX_IR_REGIONS_PER_FUNCTION) break;
+			const [initialMove, elementLoad, backedge, loopExit] = candidate.anchors;
+			const initialLocation = locations.get(initialMove);
+			const elementLocation = locations.get(elementLoad);
+			const backedgeLocation = locations.get(backedge);
+			const loopExitLocation = locations.get(loopExit);
+			if (
+				initialLocation === undefined ||
+				elementLocation === undefined ||
+				backedgeLocation === undefined ||
+				loopExitLocation === undefined ||
+				candidate.method !== "reduce" ||
+				candidate.representation !== "numeric-reduce-f64" ||
+				candidate.license.genericTwin !== "retained" ||
+				candidate.license.materialization !== "none" ||
+				candidate.pollPolicy !== "end-only-no-preempt" ||
+				candidate.operations.length === 0 ||
+				candidate.operations.length > 32 ||
+				!Number.isInteger(candidate.callbackFunctionIndex) ||
+				!program.functions.some(
+					(fn) => fn.functionIndex === candidate.callbackFunctionIndex,
+				)
+			) {
+				continue;
+			}
+
+			const matchingLoops = cfg.loops.filter(
+				(loop) =>
+					loop.header === backedge.blocks[0] &&
+					loop.backedge === backedgeLocation.blockIndex,
+			);
+			if (matchingLoops.length !== 1) continue;
+			const loop = matchingLoops[0]!;
+			const completionBlock = loopExit.blocks[0];
+			const completionInstructions = executable(completionBlock);
+			const headerInstructions = executable(loop.header);
+			const backedgeInstructions = executable(loop.backedge);
+			const compare = headerInstructions.at(-3);
+			const bodyBranch = headerInstructions.at(-2);
+			const exitJump = headerInstructions.at(-1);
+			const increment = backedgeInstructions.at(-2);
+			const index = elementLoad.registers[2];
+			const accumulator = initialMove.registers[0];
+			const containedLoops = cfg.loops.filter(
+				(other) => loop.blocks.has(other.header) && loop.blocks.has(other.backedge),
+			);
+			const inLoopHeaderPredecessors = cfg.predecessors[loop.header]!.filter((block) =>
+				loop.blocks.has(block),
+			);
+			const outsideHeaderPredecessors = cfg.predecessors[loop.header]!.filter(
+				(block) => !loop.blocks.has(block),
+			);
+			let exactLoopControl =
+				containedLoops.length === 1 &&
+				containedLoops[0] === loop &&
+				loop.blocks.has(elementLocation.blockIndex) &&
+				!loop.blocks.has(initialLocation.blockIndex) &&
+				!loop.blocks.has(completionBlock) &&
+				inLoopHeaderPredecessors.length === 1 &&
+				inLoopHeaderPredecessors[0] === loop.backedge &&
+				outsideHeaderPredecessors.length === 1 &&
+				outsideHeaderPredecessors[0] === initialLocation.blockIndex;
+			for (const block of loop.blocks) {
+				for (const predecessor of cfg.predecessors[block]!) {
+					if (!loop.blocks.has(predecessor) && block !== loop.header) {
+						exactLoopControl = false;
+					}
+				}
+				for (const successor of cfg.successors[block]!) {
+					if (
+						!loop.blocks.has(successor) &&
+						(successor !== completionBlock || block !== loop.header)
+					) {
+						exactLoopControl = false;
+					}
+				}
+			}
+
+			let receiver: number | undefined;
+			const dispatchInstructions: Array<IRInstruction> = [];
+			if (candidate.dispatch.kind === "guarded") {
+				const eligibilityLocation = locations.get(candidate.dispatch.eligibility);
+				const slowCallLocation = locations.get(candidate.dispatch.slowCall);
+				if (
+					eligibilityLocation === undefined ||
+					slowCallLocation === undefined ||
+					candidate.dispatch.eligibility.registers.length !== 6 ||
+					candidate.dispatch.slowCall.registers.length !== 5 ||
+					candidate.dispatch.eligibility.registers[4] !==
+						candidate.dispatch.slowCall.registers[2] ||
+					!irInstructionDominates(
+						cfg,
+						locations,
+						candidate.dispatch.eligibility,
+						initialMove,
+					)
+				) {
+					continue;
+				}
+				receiver = candidate.dispatch.eligibility.registers[4];
+				dispatchInstructions.push(
+					candidate.dispatch.eligibility,
+					candidate.dispatch.slowCall,
+				);
+			} else {
+				const allocationLocation = locations.get(candidate.dispatch.receiverAllocation);
+				if (
+					allocationLocation === undefined ||
+					!candidate.license.guard.dependencies.every(
+						(dependency) => dependency.kind === "world",
+					) ||
+					!irInstructionDominates(
+						cfg,
+						locations,
+						candidate.dispatch.receiverAllocation,
+						initialMove,
+					)
+				) {
+					continue;
+				}
+				receiver = candidate.dispatch.receiverAllocation.registers[0];
+				dispatchInstructions.push(candidate.dispatch.receiverAllocation);
+			}
+
+			const accumulatorDefinitions = registerIndex.definitions.get(accumulator) ?? [];
+			if (
+				receiver === undefined ||
+				elementLoad.registers[1] !== receiver ||
+				compare?.type !== "binary" ||
+				compare.operator !== "<" ||
+				compare.registers[1] !== index ||
+				bodyBranch?.type !== "jumpIf" ||
+				bodyBranch.registers[0] !== compare.registers[0] ||
+				!loop.blocks.has(bodyBranch.blocks[0]) ||
+				exitJump !== loopExit ||
+				loopExitLocation.blockIndex !== loop.header ||
+				increment?.type !== "binary" ||
+				increment.operator !== "+" ||
+				increment.registers[0] !== index ||
+				increment.registers[1] !== index ||
+				backedgeInstructions.at(-1) !== backedge ||
+				accumulatorDefinitions.length < 2 ||
+				!accumulatorDefinitions.some(({ instruction }) => instruction === initialMove) ||
+				!accumulatorDefinitions.some(({ instruction }) => {
+					const location = locations.get(instruction);
+					return location !== undefined && loop.blocks.has(location.blockIndex);
+				}) ||
+				!irInstructionDominates(cfg, locations, initialMove, elementLoad) ||
+				!irInstructionDominates(cfg, locations, initialMove, loopExit) ||
+				!exactLoopControl ||
+				irBlockCanReach(
+					cfg,
+					completionBlock,
+					loop.header,
+					new Set([initialLocation.blockIndex]),
+				)
+			) {
+				continue;
+			}
+
+			const claimed = new Set<IRInstruction>([initialMove, ...dispatchInstructions]);
+			for (const block of loop.blocks) {
+				for (const instruction of executable(block)) claimed.add(instruction);
+			}
+			const initialInstructions = executable(initialLocation.blockIndex);
+			for (
+				let index = initialInstructions.indexOf(initialMove);
+				index >= 0 && index < initialInstructions.length;
+				index++
+			) {
+				claimed.add(initialInstructions[index]!);
+			}
+			const completionObservation = completionInstructions.find((instruction) =>
+				usedRegisters(instruction).includes(accumulator),
+			);
+			if (completionObservation !== undefined) claimed.add(completionObservation);
+			const claimedInstructions = [...claimed];
+			const ordinaryBlocks = new Set<number>();
+			for (const instruction of claimedInstructions) {
+				const location = locations.get(instruction);
+				if (location !== undefined) ordinaryBlocks.add(location.blockIndex);
+			}
+			ordinaryBlocks.add(completionBlock);
+			if (
+				claimedInstructions.length > 96 ||
+				claimedInstructions.some(
+					(instruction) =>
+						occupied.has(instruction) || activeHandler(instruction) !== null,
+				) ||
+				[...ordinaryBlocks].some((block) => handlerTargets.has(block))
+			) {
+				continue;
+			}
+
+			const region: IRNumericHofRegion = {
+				...candidate,
+				claimedInstructions,
+				controlFlow: {
+					ordinaryBlocks: [...ordinaryBlocks].sort((left, right) => left - right),
+					exceptionalBlocks: [],
+				},
+				cost: {
+					score: 4 + candidate.operations.length,
+					metadataOperations: claimedInstructions.length,
+				},
+			};
+			fn.regions = [...(fn.regions ?? []), region];
+			for (const instruction of claimedInstructions) occupied.add(instruction);
+			count++;
+		}
+	}
+	return count;
+}
+
 export interface IROptimizationOptions {
 	/** Named, correctness-preserving pass groups disabled for attribution builds. */
 	ablations?: ReadonlySet<OptimizationAblation>;
@@ -1280,6 +1540,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call) annotateDirectCallTargets(program);
 		if (residualFeatures.call) optImmediateCallOperands(program);
 		optDeadInstructionElimination(program);
+		if (residualFeatures.call && residualFeatures.property)
+			annotateNumericHofRegions(program);
 		if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
 			annotateClosedRecordArrayRegions(program);
 		if (residualFeatures.call && residualFeatures.property)
@@ -1431,6 +1693,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"post-annotation-dead-instruction-elimination",
 			optDeadInstructionElimination,
+		);
+		runFinalPass(
+			"annotate-numeric-hof-regions",
+			annotateNumericHofRegions,
+			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(
 			"annotate-closed-record-array-regions",
