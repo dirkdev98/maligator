@@ -682,11 +682,12 @@ async function run() {
 	check(
 		"Fetch byte streams support offset BYOB reads",
 		byobReader instanceof ReadableStreamBYOBReader &&
-			byobFirst.value.buffer === byobBuffer &&
+			byobFirst.value.buffer !== byobBuffer &&
+			byobBuffer.byteLength === 0 &&
 			byobFirst.value.byteOffset === 2 &&
 			byobFirst.value.byteLength === 3 &&
-			new Uint8Array(byobBuffer)[2] === 97 &&
-			new Uint8Array(byobBuffer)[4] === 99 &&
+			byobFirst.value[0] === 97 &&
+			byobFirst.value[2] === 99 &&
 			byobSecond.value.byteLength === 3 &&
 			byobSecond.value[0] === 100 &&
 			byobSecond.value[2] === 102 &&

@@ -712,7 +712,7 @@ static usize date_render_tz_string(byte *buf, usize cap, f64 tv) {
     f64 abs_offset = fabs(offset);
     i32 oh = (i32) floor(abs_offset / MS_PER_HOUR);
     i32 om = (i32) floor(abs_offset / MS_PER_MINUTE) % 60;
-    byte name[64];
+    u8 name[64];
     i32 name_len = mal_i18n_local_tz_name(name, (i32) sizeof(name));
     if (name_len < 0) {
         name_len = 0;

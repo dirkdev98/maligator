@@ -1331,7 +1331,7 @@ bool mal_node_crypto_drain(MalVm *vm) {
     return true;
 }
 
-void mal_node_crypto_free(MalVm *vm) {
+static void mal_node_crypto_free(MalVm *vm) {
     MalNodeCryptoAsync **link = &crypto_async_states;
     while (*link != nullptr) {
         MalNodeCryptoAsync *state = *link;
@@ -2197,6 +2197,12 @@ void mal_host_install_node_crypto(
         // Math.random remains non-cryptographic; see builtin_math.h.
         mal_builtin_math_set_seed_source(mal_host_entropy);
         crypto_roots_installed = true;
+    }
+    if (!mal_host_register_runtime_cleanup(vm, mal_node_crypto_free)) {
+        mal_gc_unroot(&root);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Could not register node:crypto runtime cleanup");
+        return;
     }
     vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE] = roots[6];
     mal_node_module_publish(vm, slots, count, roots[6]);

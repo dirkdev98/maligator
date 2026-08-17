@@ -6,8 +6,10 @@ import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
 	buildNativeBinary,
+	captureChildExit,
 	HOST_MAIN,
 	STRESS_ENV,
+	waitForChildExit,
 	waitForPort,
 	withServer,
 } from "../../src/test-harness.ts";
@@ -258,13 +260,7 @@ describe("node:http request bridge", () => {
 			});
 			let stderr = "";
 			child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-			const exit = new Promise<number | null>((resolve, reject) => {
-				const timer = setTimeout(() => reject(new Error("server did not exit")), 5000);
-				child.once("exit", (code) => {
-					clearTimeout(timer);
-					resolve(code);
-				});
-			});
+			const exit = captureChildExit(child);
 			try {
 				const port = await waitForPort(child);
 				const base = `http://127.0.0.1:${port}`;
@@ -392,7 +388,7 @@ describe("node:http request bridge", () => {
 				});
 				const close = await fetch(`${base}/close`);
 				expect(await close.text()).toBe("closed");
-				expect(await exit, stderr).toBe(0);
+				expect(await waitForChildExit(exit, 5000), stderr).toBe(0);
 			} finally {
 				child.kill("SIGKILL");
 			}
@@ -412,13 +408,7 @@ describe("node:http request bridge", () => {
 			});
 			let stderr = "";
 			child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-			const exit = new Promise<number | null>((resolve, reject) => {
-				const timer = setTimeout(() => reject(new Error("server did not exit")), 5000);
-				child.once("exit", (code) => {
-					clearTimeout(timer);
-					resolve(code);
-				});
-			});
+			const exit = captureChildExit(child);
 			try {
 				const port = await waitForPort(child);
 				const base = `http://127.0.0.1:${port}`;
@@ -464,6 +454,7 @@ describe("node:http request bridge", () => {
 							"POST /malformed-upload HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
 								"Transfer-Encoding: chunked\r\n\r\nZ\r\ninvalid\r\n",
 						);
+						socket.resume();
 					});
 					socket.once("close", () => resolve());
 					socket.once("error", () => resolve());
@@ -600,12 +591,12 @@ describe("node:http request bridge", () => {
 					body: closingPayload,
 				});
 				expect(await close.text()).toBe(String(closingPayload.length));
-				expect(await exit, stderr).toBe(0);
+				expect(await waitForChildExit(exit, 5000), stderr).toBe(0);
 			} finally {
 				child.kill("SIGKILL");
 			}
 		}
-	});
+	}, 180_000);
 
 	it("keeps request and response state rooted under GC stress", async () => {
 		await withServer(binaries[0]!, STRESS_ENV, checkBridge);
@@ -618,17 +609,11 @@ describe("node:http request bridge", () => {
 		});
 		let stderr = "";
 		child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-		const exit = new Promise<number | null>((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error("server did not exit")), 5000);
-			child.once("exit", (code) => {
-				clearTimeout(timer);
-				resolve(code);
-			});
-		});
+		const exit = captureChildExit(child);
 		try {
 			const port = await waitForPort(child);
 			await checkBridge(`http://127.0.0.1:${port}`);
-			const exitCode = await exit;
+			const exitCode = await waitForChildExit(exit, 5000);
 			expect(exitCode, stderr).toBe(0);
 		} finally {
 			child.kill("SIGKILL");

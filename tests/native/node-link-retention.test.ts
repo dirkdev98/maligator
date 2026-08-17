@@ -68,9 +68,10 @@ describe("node host installer link retention", () => {
 		]);
 	});
 
-	it("retains only the process installer for a process-only program", () => {
+	it("retains process and its EventEmitter dependency for a process-only program", () => {
 		expect(retainedHostInstallers(processOnly)).toEqual([
 			"mal_host_install_maligator",
+			"mal_host_install_node_events",
 			"mal_host_install_process",
 		]);
 	});

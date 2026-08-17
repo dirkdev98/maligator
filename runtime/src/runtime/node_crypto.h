@@ -55,6 +55,3 @@ void mal_host_install_node_crypto(
  * net/http from being starved.
  */
 bool mal_node_crypto_drain(MalVm *vm);
-
-/** Release pending asynchronous crypto state for an isolate (teardown). */
-void mal_node_crypto_free(MalVm *vm);

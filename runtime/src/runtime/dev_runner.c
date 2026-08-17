@@ -13,7 +13,6 @@
 #include "host.h"
 #include "host_registry.h"
 #include "mal_assets.h"
-#include "node_crypto.h"
 #include "node_immediate.h"
 #include "web_host_timer.h"
 #include "web_readable_stream_object.h"
@@ -171,7 +170,6 @@ int mal_dev_run_wires(
 #if MAL_NODE
         if (node) {
             mal_node_immediates_free(&vm);
-            mal_node_crypto_free(&vm);
         }
 #endif
 #if MAL_WEB_PLATFORM || MAL_NODE

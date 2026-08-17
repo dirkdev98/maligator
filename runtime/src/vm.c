@@ -4158,6 +4158,10 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env, resolution.callee, nullptr);
                     mal_gc_callee_roots_end(&ncr);
                     mal_vm_leave_compiled(vm);
+                    // Direct eval may splice a definition and reallocate the function table
+                    // while the compiled constructor runs. The stable index survives; the
+                    // pre-call pointer does not.
+                    function = &vm->definition->functions[function_index];
 #if MAL_REALMS
                     mal_vm_realm_switch_to(vm, saved_realm);
 #endif

@@ -4320,6 +4320,36 @@ static MalValue http_server_close(
     return receiver;
 }
 
+static MalValue http_server_close_all_connections(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpServerState *state = http_server_state(receiver);
+    if (state != nullptr && state->native != nullptr) {
+        mal_http_server_close_connections(state->native, false);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue http_server_close_idle_connections(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpServerState *state = http_server_state(receiver);
+    if (state != nullptr && state->native != nullptr) {
+        mal_http_server_close_connections(state->native, true);
+    }
+    return mal_value_new_undefined();
+}
+
 static MalValue http_construct(
     MalVm *vm, MalValue receiver, MalValue new_target, MalValue callee,
     MalIntrinsic parent_slot) {
@@ -4954,6 +4984,12 @@ void mal_host_install_node_http(
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[5]), (const byte *) "close", 1,
         http_server_close);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[5]), (const byte *) "closeAllConnections", 0,
+        http_server_close_all_connections);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[5]), (const byte *) "closeIdleConnections", 0,
+        http_server_close_idle_connections);
     roots[6] = http_constructor(vm, "Server", 2,
                                 http_server_constructor, roots[5]);
     mal_object_set_prototype(mal_value_to_object(roots[6]), mal_value_to_object(

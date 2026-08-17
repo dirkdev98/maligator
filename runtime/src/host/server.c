@@ -549,6 +549,11 @@ static void conn_consume_read(MalHttpConn *c, usize consumed) {
  * status line would desynchronize the peer, so the only safe move left is to close. */
 static void conn_stream_error(MalHttpConn *c) {
     if (!c->response_started && !c->response_ended && !c->response_finished) {
+        MalHttpResponseCompleteCallback response_callback = c->response_callback;
+        void *response_data = c->response_data;
+        c->response_callback = nullptr;
+        c->response_data = nullptr;
+        if (response_callback != nullptr) response_callback(response_data, false);
         conn_send_error(c, 400, "Bad Request");
     } else {
         conn_close(c);
@@ -1071,6 +1076,23 @@ void mal_http_server_close(
     }
     if (server->connection_count == 0) {
         server_finish_close(server);
+    }
+}
+
+void mal_http_server_close_connections(MalHttpServer *server, bool idle_only) {
+    if (server == nullptr) return;
+    MalHttpConn *conn = server->connections;
+    while (conn != nullptr) {
+        MalHttpConn *next = conn->next;
+        bool idle = !conn->awaiting_response && conn->write_head == nullptr
+            && !conn->response_started && !conn->request_stream_open
+            && !(conn->request_message_complete && !conn->request_released);
+        if (!idle_only || idle) {
+            bool finishes_server = server->closing && server->connection_count == 1;
+            conn_close(conn);
+            if (finishes_server) return;
+        }
+        conn = next;
     }
 }
 

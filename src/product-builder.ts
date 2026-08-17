@@ -126,7 +126,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		toolchain,
 		plan,
 		runtimeDirectory,
-		features: derivation.features,
+		features: { ...derivation.features, developmentApiEnabled: true },
 		compilerBake: { kind: "prebuilt", path: compilerWirePath },
 		onCacheEvent: (event) =>
 			progress(`${event.artifact} cache ${event.hit ? "hit" : "miss"}: ${event.path}`),

@@ -19,6 +19,7 @@
  * AGENTS.md: interfaces may change.)
  */
 typedef struct MalHost {
+    MalVm *vm;
     MalReactor reactor;
     MalHostTasks tasks;
     MalHostPostedTasks posted_tasks;
@@ -38,6 +39,10 @@ typedef struct MalHost {
     /** Runtime-owned external assets installed for in-process development tests. */
     void *development_assets;
     void (*development_assets_free)(void *assets);
+
+    /** Runtime modules reached by this program register isolate-local teardown here. */
+    void (*runtime_cleanups[8])(MalVm *vm);
+    usize runtime_cleanup_count;
 } MalHost;
 
 /* Standalone lifecycle for embedders and host-only tests. */
@@ -71,3 +76,6 @@ bool mal_host_has_pending_work(MalHost *host);
 static inline MalHost *mal_host(MalVm *vm) {
     return (MalHost *) vm->host;
 }
+
+/** Register one idempotent runtime-module teardown without rooting that module globally. */
+bool mal_host_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm));

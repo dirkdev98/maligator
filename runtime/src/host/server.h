@@ -69,6 +69,11 @@ u16 mal_http_server_port(const MalHttpServer *server);
 void mal_http_server_close(
     MalHttpServer *server, MalHttpServerCloseCallback callback, void *data);
 
+/* Close accepted connections without changing the listening state. The all-
+ * connections form is the forceful companion to close(); the idle-only form
+ * preserves requests or responses that are still in flight. */
+void mal_http_server_close_connections(MalHttpServer *server, bool idle_only);
+
 /* Host-only convenience wrapper when no close completion is needed. */
 void mal_http_server_stop(MalHttpServer *server);
 

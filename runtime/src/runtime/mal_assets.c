@@ -31,6 +31,10 @@
 #include "vm_load.h"
 #include "vm_ops.h"
 
+#ifndef MAL_DEVELOPMENT_API
+#define MAL_DEVELOPMENT_API 0
+#endif
+
 #define MAL_ASSET_COMPLETION_MARKER ".maligator-asset-complete"
 
 static const MalPropertyFlags MAL_ASSET_VISIBLE =
@@ -90,6 +94,7 @@ static void mal_host_throw_errno(
     free(message);
 }
 
+#if MAL_DEVELOPMENT_API
 static MalValue mal_test_run_wire_bytes(MalVm *vm, const u8 *bytes, usize length) {
     const char *error = "invalid VM wire";
     MalLoadedDefinition *loaded = mal_vm_load_definition_with_host_resolver(
@@ -384,6 +389,7 @@ static MalValue mal_dev_wait_change(
 #endif
     return mal_value_new_undefined();
 }
+#endif
 
 static char *mal_asset_join(const char *left, const char *right) {
     usize left_length = strlen(left);
@@ -703,6 +709,26 @@ static MalValue mal_profile_phase_end(
 }
 #endif
 
+#if MAL_DEVELOPMENT_API
+static void mal_install_development_api(MalVm *vm, MalObject *mal) {
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_runWire", 1, mal_test_run_wire);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_runWirePath", 1, mal_test_run_wire_path);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_setDevelopmentAssets", 1,
+        mal_test_set_development_assets);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_spawnDevelopmentProcess", 2, mal_dev_spawn);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_killDevelopmentProcess", 2, mal_dev_kill);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_developmentProcessStatus", 1, mal_dev_process_status);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_waitDevelopmentChange", 2, mal_dev_wait_change);
+}
+#endif
+
 void mal_host_install_maligator(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) slots;
@@ -721,26 +747,14 @@ void mal_host_install_maligator(
         vm, assets, (const byte *) "materialize", 1, mal_assets_materialize);
     mal_intrinsic_define_data(
         vm, mal, (const byte *) "assets", roots[1], MAL_ASSET_VISIBLE);
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_runWire", 1, mal_test_run_wire);
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_runWirePath", 1, mal_test_run_wire_path);
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_setDevelopmentAssets", 1,
-        mal_test_set_development_assets);
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_spawnDevelopmentProcess", 2, mal_dev_spawn);
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_killDevelopmentProcess", 2, mal_dev_kill);
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_developmentProcessStatus", 1, mal_dev_process_status);
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_waitDevelopmentChange", 2, mal_dev_wait_change);
 #if MAL_PROFILE
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_profilePhaseBegin", 1, mal_profile_phase_begin);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_profilePhaseEnd", 1, mal_profile_phase_end);
+#endif
+#if MAL_DEVELOPMENT_API
+    mal_install_development_api(vm, mal);
 #endif
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_intrinsic_define_data(

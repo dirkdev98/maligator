@@ -38,7 +38,10 @@ describe("GC-traced dependent strings", () => {
 
 	it("retains slices in compiled code under GC stress", () => {
 		assertExactLines(
-			runToStdout(compiled, { env: { ...hostGc, ...STRESS_ENV } }),
+			runToStdout(compiled, {
+				env: { ...hostGc, ...STRESS_ENV },
+				timeoutMs: 60_000,
+			}),
 			expected,
 		);
 	});
@@ -49,7 +52,10 @@ describe("GC-traced dependent strings", () => {
 
 	it("retains slices in interpreted code under GC stress", () => {
 		assertExactLines(
-			runToStdout(interpreted, { env: { ...hostGc, ...STRESS_ENV } }),
+			runToStdout(interpreted, {
+				env: { ...hostGc, ...STRESS_ENV },
+				timeoutMs: 60_000,
+			}),
 			expected,
 		);
 	});

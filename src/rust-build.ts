@@ -62,7 +62,7 @@ export interface RustArtifactKeyInputs {
 }
 
 export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
-	return hash("sha256", JSON.stringify({ schema: 6, ...inputs }), "hex").slice(0, 24);
+	return hash("sha256", JSON.stringify({ schema: 1, ...inputs }), "hex").slice(0, 24);
 }
 
 export interface RustArtifacts {

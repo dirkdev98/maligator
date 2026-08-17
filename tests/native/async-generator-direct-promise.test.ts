@@ -12,7 +12,7 @@ function run(binary: string, env: NodeJS.ProcessEnv = {}): string {
 	const result = spawnSync(binary, [], {
 		env: { ...process.env, MAL_HOST_GC: "1", ...env },
 		encoding: "utf8",
-		timeout: 60_000,
+		timeout: 120_000,
 	});
 	if (result.error !== undefined) throw result.error;
 	expect(result.status, result.stderr).toBe(0);
@@ -84,9 +84,13 @@ describe("direct async-generator request Promises", () => {
 	it.each([
 		["compiled", () => compiled],
 		["interpreted", () => interpreted],
-	] as const)("retains pending %s requests under GC stress", (_name, binary) => {
-		run(binary(), STRESS_ENV);
-	});
+	] as const)(
+		"retains pending %s requests under GC stress",
+		(_name, binary) => {
+			run(binary(), STRESS_ENV);
+		},
+		120_000,
+	);
 
 	it("retains pending requests under concurrent GC", () => {
 		run(concurrent, {

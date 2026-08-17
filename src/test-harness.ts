@@ -330,6 +330,32 @@ export function waitForPort(child: ChildProcess, timeoutMs = 15000): Promise<num
 	});
 }
 
+/** Capture exit immediately so a later bounded wait cannot miss a fast child. */
+export function captureChildExit(child: ChildProcess): Promise<number | null> {
+	return new Promise((resolve, reject) => {
+		child.once("error", reject);
+		child.once("exit", resolve);
+	});
+}
+
+/** Start the timeout only when the caller expects the captured child to exit. */
+export async function waitForChildExit(
+	exit: Promise<number | null>,
+	timeoutMs = 15000,
+): Promise<number | null> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			exit,
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => reject(new Error("server did not exit")), timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
 /**
  * Spawn a server binary, wait for its port, run `body(baseUrl)`, and always kill
  * the child. Captures stderr and attaches it to a failure from `body`.

@@ -118,7 +118,7 @@ static MalLoadedDefinition *compile_source(MalVm *vm, MalValue source, bool dire
     }
     MalTypedArrayObject *buffer = mal_value_to_typed_array_object(roots[6]);
     usize len = mal_typed_array_object_byte_length(buffer);
-    const u8 *data = buffer->buffer->data + buffer->byte_offset;
+    const u8 *data = (const u8 *) buffer->buffer->data + buffer->byte_offset;
     const char *err = "ok";
     // A parse error surfaces as a compiler throw above; a load failure here means
     // the wire buffer itself is malformed, which is an internal error.

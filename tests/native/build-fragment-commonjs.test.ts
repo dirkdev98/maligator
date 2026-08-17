@@ -73,7 +73,12 @@ describe("relocatable build CommonJS boundary", () => {
 		).binaryPath;
 		const result = spawnSync(
 			runner,
-			["--maligator-internal-run-wires", String(wirePaths.length), ...wirePaths],
+			[
+				"--maligator-internal-run-wires",
+				String(wirePaths.length),
+				entrypoint,
+				...wirePaths,
+			],
 			{ encoding: "utf-8" },
 		);
 

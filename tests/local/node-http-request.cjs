@@ -728,7 +728,10 @@ const server = http.createServer(function (request, response) {
 	}
 
 	if (request.url === "/close") {
-		response.on("finish", () => server.close());
+		response.on("finish", () => {
+			server.close();
+			server.closeAllConnections();
+		});
 		response.end("closed");
 		return;
 	}

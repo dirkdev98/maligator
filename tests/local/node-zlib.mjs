@@ -1,5 +1,12 @@
 import { Transform } from "node:stream";
-import zlib, { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
+import zlib, {
+	constants,
+	createBrotliDecompress,
+	createGunzip,
+	createGzip,
+	createInflate,
+	deflate,
+} from "node:zlib";
 import bareZlib from "zlib";
 
 let passed = 0;
@@ -32,19 +39,39 @@ async function decode(factory, encoded, splits) {
 async function main() {
 	check(
 		bareZlib === zlib &&
+			zlib.constants === constants &&
 			zlib.createInflate === createInflate &&
 			zlib.createGunzip === createGunzip &&
-			zlib.createBrotliDecompress === createBrotliDecompress,
+			zlib.createBrotliDecompress === createBrotliDecompress &&
+			zlib.createGzip === createGzip &&
+			zlib.deflate === deflate,
 		"canonical bare/node identity",
 	);
 	check(
 		Object.keys(zlib).sort().join(",") ===
-			"createBrotliDecompress,createGunzip,createInflate",
-		"decompression-only exports",
+			"constants,createBrotliDecompress,createGunzip,createGzip,createInflate,deflate",
+		"declared compatibility exports",
 	);
+	check(
+		constants.Z_SYNC_FLUSH === 2 &&
+			constants.BROTLI_OPERATION_FLUSH === 1 &&
+			constants.ZSTD_e_flush === 1,
+		"portable flush constants",
+	);
+	let compressionFailures = 0;
+	for (const operation of [createGzip, deflate]) {
+		try {
+			operation();
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("not supported")) {
+				compressionFailures++;
+			}
+		}
+	}
+	check(compressionFailures === 2, "unsupported compression fails explicitly");
 
 	const text = "bounded streaming output; split input; portable codecs";
-	const deflate = [
+	const deflateBytes = [
 		120, 156, 75, 202, 47, 205, 75, 73, 77, 81, 40, 46, 41, 74, 77, 204, 205, 204, 75, 87,
 		200, 47, 45, 41, 40, 45, 177, 86, 40, 46, 200, 201, 44, 81, 200, 204, 3, 115, 10, 242,
 		139, 74, 18, 147, 114, 82, 21, 146, 243, 83, 82, 147, 139, 1, 62, 238, 20, 185,
@@ -60,7 +87,7 @@ async function main() {
 		0, 0,
 	];
 
-	const inflated = await decode(createInflate, deflate, [1, 2, 5, 7]);
+	const inflated = await decode(createInflate, deflateBytes, [1, 2, 5, 7]);
 	check(
 		inflated.stream instanceof Transform && !inflated.error && inflated.output === text,
 		"split zlib stream",

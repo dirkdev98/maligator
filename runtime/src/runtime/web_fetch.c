@@ -927,7 +927,7 @@ static MalValue mal_response_constructor(
         }
         if (blob->length > 0) memcpy(body, blob->bytes, blob->length);
         body_len = blob->length;
-        content_type = blob->type_length > 0 ? blob->type : nullptr;
+        content_type = blob->type_length > 0 ? (const char *) blob->type : nullptr;
     } else if (arg_count >= 1 && mal_value_is_string(args[0])) {
         MalString *str = mal_value_to_string(args[0]);
         body = mal_fetch_utf8_encode(vm, str, &body_len);
@@ -2740,7 +2740,7 @@ static MalValue mal_request_constructor(
         }
         if (blob->length > 0) memcpy(r->body, blob->bytes, blob->length);
         r->body_len = blob->length;
-        content_type = blob->type_length > 0 ? blob->type : nullptr;
+        content_type = blob->type_length > 0 ? (const char *) blob->type : nullptr;
     } else if (mal_value_is_string(slots[4])) {
         MalString *bs = mal_value_to_string(slots[4]);
         free(r->body);

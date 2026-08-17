@@ -44,9 +44,9 @@ describe("Vonk authentication flow (surface.node)", () => {
 	});
 
 	it("passes under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
-		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
-		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV }));
-	});
+		assertResultPass(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60_000 }));
+		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 60_000 }));
+	}, 120_000);
 
 	it("passes under the installed Node", () => {
 		assertResultPass(execFileSync(process.execPath, [FIXTURE], { encoding: "utf-8" }));

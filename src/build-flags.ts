@@ -97,6 +97,7 @@ export interface NativeFeatureSpec {
 	temporalEnabled: boolean;
 	nodeEnabled: boolean;
 	profileEnabled: boolean;
+	developmentApiEnabled: boolean;
 	intlFeatures: Array<string>;
 	cDefines: Array<string>;
 	cargoFeatures: Array<string>;
@@ -119,6 +120,7 @@ export function normalizeNativeFeatures(
 	const temporalEnabled = input.temporalEnabled ?? true;
 	const nodeEnabled = input.nodeEnabled ?? false;
 	const profileEnabled = input.profileEnabled ?? false;
+	const developmentApiEnabled = input.developmentApiEnabled ?? false;
 	const services = Object.values(INTL_SERVICE_FEATURES);
 	const knownCargoFeatures = new Set(services.map(({ cargo }) => cargo));
 	const knownDisableDefines = new Set(services.map(({ define }) => `-D${define}=0`));
@@ -170,6 +172,7 @@ export function normalizeNativeFeatures(
 		...(temporalEnabled ? [] : ["-DMAL_TEMPORAL=0"]),
 		...(nodeEnabled ? ["-DMAL_NODE=1"] : []),
 		...(profileEnabled ? ["-DMAL_PROFILE=1"] : []),
+		...(developmentApiEnabled ? ["-DMAL_DEVELOPMENT_API=1"] : []),
 	];
 	const cargoFeatures = sortedUnique([
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
@@ -188,6 +191,7 @@ export function normalizeNativeFeatures(
 		temporalEnabled,
 		nodeEnabled,
 		profileEnabled,
+		developmentApiEnabled,
 		intlFeatures,
 		cDefines,
 		cargoFeatures,
@@ -390,6 +394,8 @@ export interface FeatureDefineOpts {
 	nodeEnabled?: boolean;
 	/** `-DMAL_PROFILE=1` for the production-faithful profiling runtime. */
 	profileEnabled?: boolean;
+	/** Compile the private self-hosted CLI development and test API. */
+	developmentApiEnabled?: boolean;
 }
 
 /**
@@ -416,6 +422,8 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	// node defaults OFF (C default MAL_NODE=0), so only the ON case emits a flag.
 	const nodeFlag = opts.nodeEnabled === true ? ["-DMAL_NODE=1"] : [];
 	const profileFlag = opts.profileEnabled === true ? ["-DMAL_PROFILE=1"] : [];
+	const developmentApiFlag =
+		opts.developmentApiEnabled === true ? ["-DMAL_DEVELOPMENT_API=1"] : [];
 	return [
 		...primordialFlag,
 		...evalFlag,
@@ -426,6 +434,7 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 		...temporalFlag,
 		...nodeFlag,
 		...profileFlag,
+		...developmentApiFlag,
 	];
 }
 

@@ -1,7 +1,12 @@
 #include "vm.h"
 #include "perf_stats.h"
 #include "profile.h"
+#ifndef MAL_DEVELOPMENT_API
+#define MAL_DEVELOPMENT_API 0
+#endif
+#if MAL_DEVELOPMENT_API
 #include "dev_runner.h"
+#endif
 
 #include <stdio.h>  // setvbuf
 #include <stdlib.h> // getenv
@@ -10,7 +15,6 @@
 #include "web_events_object.h"
 #include "web_fetch.h"
 #include "host.h"
-#include "node_crypto.h"
 #include "node_immediate.h"
 #include "web_host_timer.h"
 #include "web_readable_stream_object.h"
@@ -23,6 +27,7 @@
 // uses, as opposed to test262_main which only runs the synchronous body.
 extern const MalVmDefinition mal_vm_definition;
 
+#if MAL_DEVELOPMENT_API
 static const char development_wire_command[] = "--maligator-internal-run-wire";
 static const char development_wire_assets_command[] = "--maligator-internal-run-wire-assets";
 
@@ -58,14 +63,17 @@ static int run_development_wire(int argc, char **argv, bool has_assets) {
     free(program_argv);
     return code;
 }
+#endif
 
 int main(int argc, char **argv) {
+#if MAL_DEVELOPMENT_API
     if (argc >= 2 && strcmp(argv[1], development_wire_command) == 0) {
         return run_development_wire(argc, argv, false);
     }
     if (argc >= 2 && strcmp(argv[1], development_wire_assets_command) == 0) {
         return run_development_wire(argc, argv, true);
     }
+#endif
     // Line-buffer stdout: a server logs then blocks in the event loop indefinitely,
     // so fully-buffered output (the default when stdout is a pipe) would never be
     // seen. Line buffering flushes each console.log promptly.
@@ -123,7 +131,6 @@ int main(int argc, char **argv) {
         mal_vm_free_callable(callable);
 #if MAL_NODE
         mal_node_immediates_free(&vm);
-        mal_node_crypto_free(&vm);
 #endif
         mal_host_timers_free(&vm); // runtime cleanup (before the host reactor goes)
         mal_host_detach(&vm);

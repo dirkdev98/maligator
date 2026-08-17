@@ -2885,6 +2885,10 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
             }
             return mal_value_from_string(mal_string_new_ascii(&vm->heap, tag, length));
         }
+        case MAL_UNARY_TO_NUMERIC:
+        case MAL_UNARY_INCREMENT:
+        case MAL_UNARY_DECREMENT:
+            break;
     }
 
     return mal_value_new_undefined();
@@ -4868,7 +4872,7 @@ void mal_vm_op_store_property_ic(
                 mal_shape_can_add_property(object->shape, key) &&
                 mal_ic_key_is_stable_string(key_value) &&
                 mal_ic_can_apply_transition_store(object, key)) {
-                const MalShape *source = object->shape;
+                MalShape *source = object->shape;
                 MalShape *child = mal_shape_add_property(
                     object->shape, key,
                     (u8) (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |

@@ -7,8 +7,10 @@ import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
 	buildNativeBinary,
+	captureChildExit,
 	HOST_MAIN,
 	STRESS_ENV,
+	waitForChildExit,
 	waitForPort,
 } from "../../src/test-harness.ts";
 
@@ -91,13 +93,7 @@ describe("node:http ready request queues", () => {
 		let stderr = "";
 		child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
 		child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-		const exit = new Promise<number | null>((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error("server did not exit")), 15000);
-			child.once("exit", (code) => {
-				clearTimeout(timer);
-				resolve(code);
-			});
-		});
+		const exit = captureChildExit(child);
 
 		try {
 			const port = await waitForPort(child);
@@ -144,7 +140,7 @@ describe("node:http ready request queues", () => {
 			expect(closing).toEqual(
 				Array.from({ length: CLOSE_COUNT }, (_, index) => `${index}`),
 			);
-			expect(await exit, stderr).toBe(0);
+			expect(await waitForChildExit(exit), stderr).toBe(0);
 			const order = stdout.match(/ORDER ([^\n]+)/)?.[1]?.split(",") ?? [];
 			expect(order).toHaveLength(CLOSE_COUNT + 1);
 			expect(order.at(-1)).toBe("close");
