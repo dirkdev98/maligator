@@ -2303,6 +2303,95 @@ function cloneInlinedRegion(
 				loads: loads as typeof region.loads,
 			} as unknown as Extract<IRRegion, { kind: "string-split-projection" }>;
 		}
+		case "regexp-exec-projection": {
+			const property = mapInstruction(region.property);
+			const aliasMoves = region.aliasMoves.map((instruction) =>
+				mapInstruction(instruction),
+			);
+			const nullChecks = region.nullChecks.map((check) => ({
+				comparison: mapInstruction(check.comparison),
+				nullValue: mapInstruction(check.nullValue),
+			}));
+			const lockedLiteral =
+				region.lockedLiteral === undefined
+					? undefined
+					: {
+							constructorIntrinsic: mapInstruction(
+								region.lockedLiteral.constructorIntrinsic,
+							),
+							construct: mapInstruction(region.lockedLiteral.construct),
+						};
+			const loads = region.loads.map((load) => {
+				const consumer = load.consumer;
+				return {
+					...load,
+					instruction: mapInstruction(load.instruction),
+					key: mapInstruction(load.key),
+					consumer:
+						consumer === undefined
+							? undefined
+							: consumer.kind === "length"
+								? { ...consumer, property: mapInstruction(consumer.property) }
+								: consumer.kind === "charCodeAtZero"
+									? {
+											...consumer,
+											property: mapInstruction(consumer.property),
+											call: mapInstruction(consumer.call),
+											...(consumer.zero === undefined
+												? {}
+												: { zero: mapInstruction(consumer.zero) }),
+										}
+									: consumer.kind === "number"
+										? {
+												...consumer,
+												intrinsic: mapInstruction(consumer.intrinsic),
+												call: mapInstruction(consumer.call),
+											}
+										: {
+												...consumer,
+												upperProperty: mapInstruction(consumer.upperProperty),
+												upperCall: mapInstruction(consumer.upperCall),
+												lowerProperty: mapInstruction(consumer.lowerProperty),
+												lowerCall: mapInstruction(consumer.lowerCall),
+												resultMoves: consumer.resultMoves.map((move) =>
+													mapInstruction(move),
+												),
+												lengthProperty: mapInstruction(consumer.lengthProperty),
+											},
+				};
+			});
+			if (
+				property === undefined ||
+				aliasMoves.some((instruction) => instruction === undefined) ||
+				nullChecks.some(
+					(check) => check.comparison === undefined || check.nullValue === undefined,
+				) ||
+				(lockedLiteral !== undefined &&
+					(lockedLiteral.constructorIntrinsic === undefined ||
+						lockedLiteral.construct === undefined)) ||
+				loads.some(
+					(load) =>
+						load.instruction === undefined ||
+						load.key === undefined ||
+						(load.consumer !== undefined &&
+							Object.values(load.consumer).some((value) => value === undefined)) ||
+						(load.consumer?.kind === "asciiCaseLength" &&
+							load.consumer.resultMoves.some((move) => move === undefined)),
+				)
+			) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				property,
+				aliasMoves,
+				nullChecks,
+				...(lockedLiteral === undefined ? {} : { lockedLiteral }),
+				loads,
+			} as unknown as Extract<IRRegion, { kind: "regexp-exec-projection" }>;
+		}
 		case "string-split-cursor": {
 			const property =
 				region.property === undefined ? undefined : mapInstruction(region.property);

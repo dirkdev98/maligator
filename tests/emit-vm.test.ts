@@ -2080,6 +2080,78 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("carries IR-selected RegExp.exec projections through lowering and wire", () => {
+		const source = `globalThis.parse = function parse(regexp, value) {
+			const match = regexp.exec(value);
+			if (match === null) return -1;
+			return Number(match[1]);
+		};`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"regexp-exec-projection-lowering.js",
+			parseScript(source, { strict: false }),
+		);
+		const lowered = compileSemanticProgramToVmDefinition(semantic);
+		const projections = lowered.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+		);
+		expect(projections).toHaveLength(1);
+		expect(projections[0]).toMatchObject({
+			kind: "regexp-exec-projection",
+			representation: "regexp-capture-spans",
+			lastIndexEffect: "retained-call-twin",
+			license: {
+				genericTwin: "retained",
+				materialization: "whole-region",
+				guard: {
+					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					obligations: ["fallback", "materialize"],
+				},
+			},
+		});
+		expect(projections[0]!.nullChecks).toHaveLength(1);
+		expect(projections[0]!.loads[0]?.consumer?.kind).toBe("number");
+
+		const cached = deserializeVmDefinition(
+			serializeVmDefinition(lowered, { debugInfo: false }),
+		);
+		expect(
+			cached.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+			),
+		).toEqual(projections);
+		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+			"mal_regexp_exec_capture_projection(vm,",
+		);
+
+		const functionIndex = lowered.functions.findIndex((fn) =>
+			fn.regions?.some((region) => region.kind === "regexp-exec-projection"),
+		);
+		const owner = lowered.functions[functionIndex]!;
+		const regionIndex = owner.regions!.findIndex(
+			(region) => region.kind === "regexp-exec-projection",
+		);
+		const region = owner.regions![regionIndex]!;
+		if (region.kind !== "regexp-exec-projection") {
+			throw new Error("missing RegExp.exec projection region");
+		}
+		const malformed: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, {
+					...region,
+					lastIndexEffect: "broken" as never,
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid RegExp\.exec projection region/,
+		);
+	});
+
 	it("carries IR-selected split cursor licenses through lowering", () => {
 		const source = `globalThis.sum = function sum(value, separator) {
 			const parts = value.split(separator);

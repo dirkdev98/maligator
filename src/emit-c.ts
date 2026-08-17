@@ -1085,7 +1085,10 @@ export function emitCompiledFunction(
 		nextStackSlot += hoistTrimIdentity ? 3 : 2;
 	}
 	const regexpExecProjectionSites = new Map<number, NativeRegExpExecProjectionSite>();
-	for (const projection of fn.nativeRegExpExecProjections ?? []) {
+	for (const projection of (fn.regions ?? []).filter(
+		(region): region is Extract<VmRegion, { kind: "regexp-exec-projection" }> =>
+			region.kind === "regexp-exec-projection",
+	)) {
 		const loads = [...projection.loads].sort(
 			(left, right) => left.captureIndex - right.captureIndex,
 		);
@@ -2197,9 +2200,7 @@ interface NativeStringSplitCursorAction {
 	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
-type NativeRegExpExecProjection = NonNullable<
-	VmFunction["nativeRegExpExecProjections"]
->[number];
+type NativeRegExpExecProjection = Extract<VmRegion, { kind: "regexp-exec-projection" }>;
 
 interface NativeRegExpExecProjectionSite {
 	projection: NativeRegExpExecProjection;

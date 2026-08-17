@@ -222,6 +222,42 @@ describe("normal build frontend cache", () => {
 		expect(warmC).toBe(coldC);
 	});
 
+	it("retains RegExp.exec projection regions across a frontend cache hit", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			entrypoint,
+			`function parse(regexp, value) {
+				const match = regexp.exec(value);
+				if (match === null) return -1;
+				return Number(match[1]);
+			}
+			globalThis.result = parse(/([0-9]+)/, "42");\n`,
+		);
+
+		const cold = compile(entrypoint, cacheDirectory);
+		const warm = compile(entrypoint, cacheDirectory);
+		const coldRegions = cold.definition.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+		);
+		const warmRegions = warm.definition.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "regexp-exec-projection") ?? [],
+		);
+		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
+		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+
+		expect(cold.cache).toBe("miss");
+		expect(warm.cache).toBe("hit");
+		expect(coldRegions).not.toHaveLength(0);
+		expect(warmRegions).toEqual(coldRegions);
+		expect(coldC).toContain("mal_regexp_exec_capture_projection");
+		expect(warmC).toBe(coldC);
+	});
+
 	it("retains fresh dense indexed-fill reserves across a frontend cache hit", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

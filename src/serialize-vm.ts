@@ -36,8 +36,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 51 to move String.split projections into the common tagged region table.
-export const WIRE_VERSION = 51;
+// Bumped to 52 to move RegExp.exec capture projections into the tagged region table.
+export const WIRE_VERSION = 52;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -714,6 +714,34 @@ function stringSplitProjectionGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function regexpExecProjectionGuardMasks(
+	license: Extract<VmRegion, { kind: "regexp-exec-projection" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else {
+			throw new RangeError("serialize-vm: unsupported RegExp.exec projection dependency");
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "whole-region" ||
+		(dependencyMask !== 1 && dependencyMask !== 4) ||
+		obligationMask !== 3
+	) {
+		throw new RangeError("serialize-vm: invalid RegExp.exec projection guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1188,7 +1216,9 @@ export function serializeVmDefinition(
 						? 2
 						: region.kind === "numeric-hof"
 							? 3
-							: 4;
+							: region.kind === "string-split-projection"
+								? 4
+								: 5;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1203,7 +1233,9 @@ export function serializeVmDefinition(
 						? stringSplitCursorGuardMasks(region.license)
 						: region.kind === "numeric-hof"
 							? numericHofGuardMasks(region.license)
-							: stringSplitProjectionGuardMasks(region.license);
+							: region.kind === "string-split-projection"
+								? stringSplitProjectionGuardMasks(region.license)
+								: regexpExecProjectionGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1284,6 +1316,61 @@ export function serializeVmDefinition(
 							w.u8(3);
 							w.u8(NUMERIC_HOF_MATH_OPS.indexOf(operation.operation));
 							w.i32(operation.value);
+						}
+					}
+					break;
+				case "regexp-exec-projection":
+					w.i32(region.propertyIp);
+					w.i32(region.callIp);
+					w.u8(region.lockedFreshLiteral ? 1 : 0);
+					w.i32(region.lockedLiteral?.constructorIntrinsicIp ?? -1);
+					w.i32(region.lockedLiteral?.constructIp ?? -1);
+					w.i32(region.callee);
+					w.i32(region.receiver);
+					w.i32(region.input);
+					w.i32(region.result);
+					w.i32Array([...region.aliasMoveIps]);
+					w.u32(region.nullChecks.length);
+					for (const check of region.nullChecks) {
+						w.i32(check.comparisonIp);
+						w.i32(check.nullIp);
+					}
+					w.u8(region.lastIndexEffect === "retained-call-twin" ? 1 : 0);
+					w.u32(region.loads.length);
+					for (const load of region.loads) {
+						w.i32(load.ip);
+						w.i32(load.keyIp);
+						w.i32(load.captureIndex);
+						w.i32(load.dst);
+						const consumer = load.consumer;
+						w.u8(
+							consumer === undefined
+								? 0
+								: consumer.kind === "length"
+									? 1
+									: consumer.kind === "charCodeAtZero"
+										? 2
+										: consumer.kind === "number"
+											? 3
+											: 4,
+						);
+						if (consumer?.kind === "length") {
+							w.i32(consumer.propertyIp);
+						} else if (consumer?.kind === "charCodeAtZero") {
+							w.i32(consumer.propertyIp);
+							w.i32(consumer.callIp);
+							w.i32(consumer.zeroIp ?? -1);
+						} else if (consumer?.kind === "number") {
+							w.i32(consumer.intrinsicIp);
+							w.i32(consumer.callIp);
+						} else if (consumer?.kind === "asciiCaseLength") {
+							w.i32(consumer.upperPropertyIp);
+							w.i32(consumer.upperCallIp);
+							w.i32(consumer.lowerPropertyIp);
+							w.i32(consumer.lowerIcIndex);
+							w.i32(consumer.lowerCallIp);
+							w.i32Array([...consumer.resultMoveIps]);
+							w.i32(consumer.lengthPropertyIp);
 						}
 					}
 					break;
@@ -1631,11 +1718,176 @@ function validateRegion(
 		case "string-split-projection":
 			validateStringSplitProjectionRegion(fn, region, stringConstants);
 			break;
+		case "regexp-exec-projection":
+			validateRegExpExecProjectionRegion(fn, region, stringConstants);
+			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
 			break;
 	}
 	for (const ip of region.claimedIps) claimed.add(ip);
+}
+
+function validateRegExpExecProjectionRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "regexp-exec-projection" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	regexpExecProjectionGuardMasks(region.license);
+	const property = fn.instructions[region.propertyIp];
+	const call = fn.instructions[region.callIp];
+	const aliases = new Set<number>([call?.opcode === "CALL" ? call.dst : -1]);
+	let valid =
+		region.representation === "regexp-capture-spans" &&
+		region.lastIndexEffect === "retained-call-twin" &&
+		region.anchors.length === 3 &&
+		region.anchors[0] === region.callIp &&
+		region.anchors[1] === region.aliasMoveIps[0] &&
+		region.anchors[2] === region.loads[0]?.ip &&
+		property?.opcode === "LOAD_PROPERTY_STATIC" &&
+		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) === "exec" &&
+		call?.opcode === "CALL" &&
+		call.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
+		call.arguments.length === 1 &&
+		property.dst === call.callee &&
+		property.object === call.thisValue &&
+		region.propertyIp + 1 === region.callIp &&
+		region.callee === call.callee &&
+		region.receiver === call.thisValue &&
+		region.input === call.arguments[0] &&
+		region.result === call.dst &&
+		region.aliasMoveIps.length > 0 &&
+		region.loads.length > 0 &&
+		region.loads.length <= 8;
+	for (const ip of region.aliasMoveIps) {
+		const move = fn.instructions[ip];
+		if (move?.opcode !== "MOVE" || !aliases.has(move.src)) valid = false;
+		else aliases.add(move.dst);
+	}
+	for (const check of region.nullChecks) {
+		const comparison = fn.instructions[check.comparisonIp];
+		const nullValue = fn.instructions[check.nullIp];
+		if (
+			comparison?.opcode !== "BINARY" ||
+			(comparison.operator !== "===" && comparison.operator !== "!==") ||
+			nullValue?.opcode !== "CREATE_NULL" ||
+			(!aliases.has(comparison.left) && !aliases.has(comparison.right)) ||
+			(comparison.left !== nullValue.dst && comparison.right !== nullValue.dst)
+		) {
+			valid = false;
+		}
+	}
+	if (region.lockedFreshLiteral !== (region.lockedLiteral !== undefined)) valid = false;
+	if (region.lockedLiteral !== undefined) {
+		const intrinsic = fn.instructions[region.lockedLiteral.constructorIntrinsicIp];
+		const construct = fn.instructions[region.lockedLiteral.constructIp];
+		if (
+			!region.license.guard.dependencies.every(
+				(dependency) => dependency.kind === "world",
+			) ||
+			intrinsic?.opcode !== "LOAD_INTRINSIC" ||
+			intrinsic.intrinsic !== "RegExp" ||
+			construct?.opcode !== "CONSTRUCT" ||
+			construct.callee !== intrinsic.dst ||
+			construct.dst !== region.receiver
+		) {
+			valid = false;
+		}
+	}
+	const payload = new Set<number>([region.propertyIp, region.callIp]);
+	for (const ip of region.aliasMoveIps) payload.add(ip);
+	for (const check of region.nullChecks) {
+		payload.add(check.comparisonIp);
+		payload.add(check.nullIp);
+	}
+	if (region.lockedLiteral !== undefined) {
+		payload.add(region.lockedLiteral.constructorIntrinsicIp);
+		payload.add(region.lockedLiteral.constructIp);
+	}
+	const indices = new Set<number>();
+	for (const load of region.loads) {
+		const capture = fn.instructions[load.ip];
+		const key = fn.instructions[load.keyIp];
+		payload.add(load.ip);
+		payload.add(load.keyIp);
+		if (
+			capture?.opcode !== "LOAD_PROPERTY" ||
+			!aliases.has(capture.object) ||
+			capture.dst !== load.dst ||
+			key?.opcode !== "CREATE_NUMBER" ||
+			key.dst !== capture.key ||
+			key.value !== load.captureIndex ||
+			!Number.isInteger(load.captureIndex) ||
+			load.captureIndex <= 0 ||
+			load.captureIndex > 0xffff ||
+			indices.has(load.captureIndex)
+		) {
+			valid = false;
+		}
+		indices.add(load.captureIndex);
+		const consumer = load.consumer;
+		if (consumer?.kind === "length") {
+			payload.add(consumer.propertyIp);
+			const length = fn.instructions[consumer.propertyIp];
+			valid &&=
+				length?.opcode === "LOAD_PROPERTY_STATIC" &&
+				length.object === load.dst &&
+				String.fromCharCode(...(stringConstants[length.stringIndex] ?? [])) === "length";
+		} else if (consumer?.kind === "charCodeAtZero") {
+			payload.add(consumer.propertyIp);
+			payload.add(consumer.callIp);
+			if (consumer.zeroIp !== undefined) payload.add(consumer.zeroIp);
+			const propertyInstruction = fn.instructions[consumer.propertyIp];
+			const callInstruction = fn.instructions[consumer.callIp];
+			valid &&=
+				propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
+				propertyInstruction.object === load.dst &&
+				String.fromCharCode(
+					...(stringConstants[propertyInstruction.stringIndex] ?? []),
+				) === "charCodeAt" &&
+				callInstruction?.opcode === "CALL" &&
+				callInstruction.callee === propertyInstruction.dst &&
+				callInstruction.thisValue === load.dst &&
+				callInstruction.arguments.length === 1;
+		} else if (consumer?.kind === "number") {
+			payload.add(consumer.intrinsicIp);
+			payload.add(consumer.callIp);
+			const intrinsic = fn.instructions[consumer.intrinsicIp];
+			const numberCall = fn.instructions[consumer.callIp];
+			valid &&=
+				intrinsic?.opcode === "LOAD_INTRINSIC" &&
+				intrinsic.intrinsic === "Number" &&
+				numberCall?.opcode === "CALL" &&
+				numberCall.callee === intrinsic.dst &&
+				numberCall.arguments.length === 1;
+		} else if (consumer?.kind === "asciiCaseLength") {
+			for (const ip of [
+				consumer.upperPropertyIp,
+				consumer.upperCallIp,
+				consumer.lowerPropertyIp,
+				consumer.lowerCallIp,
+				...consumer.resultMoveIps,
+				consumer.lengthPropertyIp,
+			]) {
+				payload.add(ip);
+			}
+			valid &&=
+				fn.instructions[consumer.upperPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
+				fn.instructions[consumer.upperCallIp]?.opcode === "CALL" &&
+				fn.instructions[consumer.lowerPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
+				fn.instructions[consumer.lowerCallIp]?.opcode === "CALL" &&
+				fn.instructions[consumer.lengthPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
+				consumer.resultMoveIps.every((ip) => fn.instructions[ip]?.opcode === "MOVE");
+		}
+	}
+	if (
+		!valid ||
+		region.cost.metadataOperations !== payload.size ||
+		payload.size !== region.claimedIps.length ||
+		region.claimedIps.some((ip) => !payload.has(ip))
+	) {
+		throw new RangeError("serialize-vm: invalid RegExp.exec projection region");
+	}
 }
 
 function validateClosedRecordArrayRegion(
@@ -3009,12 +3261,19 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 2 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 3;
+				const regexpExecProjectionContract =
+					kindTag === 5 &&
+					representationTag === 5 &&
+					materializationTag === 2 &&
+					(dependencyMask === 1 || dependencyMask === 4) &&
+					obligationMask === 3;
 				if (
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
 						!numericHofContract &&
-						!stringSplitProjectionContract)
+						!stringSplitProjectionContract &&
+						!regexpExecProjectionContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -3224,7 +3483,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						operations,
 						resultOperand,
 					};
-				} else {
+				} else if (kindTag === 4) {
 					const propertyIp = r.i32();
 					const callIp = r.i32();
 					const callee = r.i32();
@@ -3289,6 +3548,120 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						separatorStringIndex,
 						result,
 						aliasMoveIps,
+						loads,
+					};
+				} else {
+					const propertyIp = r.i32();
+					const callIp = r.i32();
+					const lockedFreshLiteral = r.u8();
+					const constructorIntrinsicIp = r.i32();
+					const constructIp = r.i32();
+					const callee = r.i32();
+					const receiver = r.i32();
+					const input = r.i32();
+					const result = r.i32();
+					const aliasMoveIps = r.i32Array();
+					const nullCheckCount = r.count(5);
+					const nullChecks: Array<{
+						comparisonIp: number;
+						nullIp: number;
+					}> = [];
+					for (let check = 0; check < nullCheckCount; check++) {
+						nullChecks.push({ comparisonIp: r.i32(), nullIp: r.i32() });
+					}
+					const lastIndexEffect = r.u8();
+					const loadCount = r.count(4);
+					const loads: Array<
+						Extract<VmRegion, { kind: "regexp-exec-projection" }>["loads"][number]
+					> = [];
+					for (let loadIndex = 0; loadIndex < loadCount; loadIndex++) {
+						const ip = r.i32();
+						const keyIp = r.i32();
+						const captureIndex = r.i32();
+						const dst = r.i32();
+						const consumerTag = r.u8();
+						let consumer:
+							| Extract<
+									VmRegion,
+									{ kind: "regexp-exec-projection" }
+							  >["loads"][number]["consumer"]
+							| undefined;
+						if (consumerTag === 1) {
+							consumer = { kind: "length", propertyIp: r.i32() };
+						} else if (consumerTag === 2) {
+							const propertyIp = r.i32();
+							const callIp = r.i32();
+							const zeroIp = r.i32();
+							consumer = {
+								kind: "charCodeAtZero",
+								propertyIp,
+								callIp,
+								...(zeroIp < 0 ? {} : { zeroIp }),
+							};
+						} else if (consumerTag === 3) {
+							consumer = { kind: "number", intrinsicIp: r.i32(), callIp: r.i32() };
+						} else if (consumerTag === 4) {
+							consumer = {
+								kind: "asciiCaseLength",
+								upperPropertyIp: r.i32(),
+								upperCallIp: r.i32(),
+								lowerPropertyIp: r.i32(),
+								lowerIcIndex: r.i32(),
+								lowerCallIp: r.i32(),
+								resultMoveIps: r.i32Array(),
+								lengthPropertyIp: r.i32(),
+							};
+						} else if (consumerTag !== 0) {
+							throw new RangeError("serialize-vm: invalid RegExp.exec consumer tag");
+						}
+						loads.push({
+							ip,
+							keyIp,
+							captureIndex,
+							dst,
+							...(consumer ? { consumer } : {}),
+						});
+					}
+					if (
+						lockedFreshLiteral > 1 ||
+						lastIndexEffect !== 1 ||
+						(lockedFreshLiteral === 0
+							? constructorIntrinsicIp !== -1 || constructIp !== -1
+							: constructorIntrinsicIp < 0 || constructIp < 0)
+					) {
+						throw new RangeError("serialize-vm: invalid RegExp.exec projection header");
+					}
+					region = {
+						kind: "regexp-exec-projection",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [{ kind: "epoch", family: "watched-methods" }],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "whole-region",
+						},
+						representation: "regexp-capture-spans",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						propertyIp,
+						callIp,
+						lockedFreshLiteral: lockedFreshLiteral === 1,
+						...(lockedFreshLiteral === 0
+							? {}
+							: { lockedLiteral: { constructorIntrinsicIp, constructIp } }),
+						callee,
+						receiver,
+						input,
+						result,
+						aliasMoveIps,
+						nullChecks,
+						lastIndexEffect: "retained-call-twin",
 						loads,
 					};
 				}

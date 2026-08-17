@@ -410,6 +410,59 @@ export type VmStringSplitProjectionRegion = VmRegionEnvelope<
 	}>;
 };
 
+export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
+	"regexp-exec-projection",
+	"regexp-capture-spans",
+	"whole-region"
+> & {
+	readonly propertyIp: number;
+	readonly callIp: number;
+	readonly lockedFreshLiteral: boolean;
+	readonly lockedLiteral?: {
+		readonly constructorIntrinsicIp: number;
+		readonly constructIp: number;
+	};
+	readonly callee: number;
+	readonly receiver: number;
+	readonly input: number;
+	readonly result: number;
+	readonly aliasMoveIps: ReadonlyArray<number>;
+	readonly nullChecks: ReadonlyArray<{
+		readonly comparisonIp: number;
+		readonly nullIp: number;
+	}>;
+	readonly lastIndexEffect: "retained-call-twin";
+	readonly loads: ReadonlyArray<{
+		readonly ip: number;
+		readonly keyIp: number;
+		readonly captureIndex: number;
+		readonly dst: number;
+		readonly consumer?:
+			| { readonly kind: "length"; readonly propertyIp: number }
+			| {
+					readonly kind: "charCodeAtZero";
+					readonly propertyIp: number;
+					readonly callIp: number;
+					readonly zeroIp?: number;
+			  }
+			| {
+					readonly kind: "number";
+					readonly intrinsicIp: number;
+					readonly callIp: number;
+			  }
+			| {
+					readonly kind: "asciiCaseLength";
+					readonly upperPropertyIp: number;
+					readonly upperCallIp: number;
+					readonly lowerPropertyIp: number;
+					readonly lowerIcIndex: number;
+					readonly lowerCallIp: number;
+					readonly resultMoveIps: ReadonlyArray<number>;
+					readonly lengthPropertyIp: number;
+			  };
+	}>;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -433,6 +486,7 @@ export type VmNumericHofRegion = VmRegionEnvelope<
 
 export type VmRegion =
 	| VmClosedRecordArrayRegion
+	| VmRegExpExecProjectionRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
@@ -651,38 +705,6 @@ export interface VmFunction {
 		receiverIp: number;
 		propertyIp: number;
 		callIp: number;
-	}>;
-
-	/** EMITTER-ONLY: selected capture projections of an exact RegExp exec result. */
-	nativeRegExpExecProjections?: ReadonlyArray<{
-		license: VmRegionLicense;
-		resultRepresentation: "regexp-capture-projection";
-		propertyIp: number;
-		callIp: number;
-		/** Locked exact literal: property/callback/Realm identity is not observable. */
-		lockedFreshLiteral: boolean;
-		callee: number;
-		receiver: number;
-		input: number;
-		result: number;
-		loads: ReadonlyArray<{
-			ip: number;
-			captureIndex: number;
-			dst: number;
-			consumer?:
-				| { kind: "length"; propertyIp: number }
-				| { kind: "charCodeAtZero"; propertyIp: number; callIp: number }
-				| { kind: "number"; callIp: number }
-				| {
-						kind: "asciiCaseLength";
-						upperPropertyIp: number;
-						upperCallIp: number;
-						lowerPropertyIp: number;
-						lowerIcIndex: number;
-						lowerCallIp: number;
-						lengthPropertyIp: number;
-				  };
-		}>;
 	}>;
 
 	/** EMITTER-ONLY: closed exact RegExp iterator capture spans. */
@@ -2287,6 +2309,303 @@ function lowerFunctionToVmFunction(
 					length: region.length,
 					elementLoadIps: resolvedElementLoadIps,
 					accesses: resolvedAccesses,
+				});
+				break;
+			}
+			case "regexp-exec-projection": {
+				const callIp = resolvedAnchors[0];
+				const firstAliasIp = resolvedAnchors[1];
+				const firstLoadIp = resolvedAnchors[2];
+				const propertyIp = instructionIndexByIrInstruction.get(region.property);
+				const aliasMoveIps = region.aliasMoves.map((candidate) =>
+					instructionIndexByIrInstruction.get(candidate),
+				);
+				const nullChecks = region.nullChecks.map((check) => ({
+					comparisonIp: instructionIndexByIrInstruction.get(check.comparison),
+					nullIp: instructionIndexByIrInstruction.get(check.nullValue),
+				}));
+				const lockedLiteral =
+					region.lockedLiteral === undefined
+						? undefined
+						: {
+								constructorIntrinsicIp: instructionIndexByIrInstruction.get(
+									region.lockedLiteral.constructorIntrinsic,
+								),
+								constructIp: instructionIndexByIrInstruction.get(
+									region.lockedLiteral.construct,
+								),
+							};
+				const loads = region.loads.map((load) => {
+					const consumer = load.consumer;
+					return {
+						ip: instructionIndexByIrInstruction.get(load.instruction),
+						keyIp: instructionIndexByIrInstruction.get(load.key),
+						captureIndex: load.captureIndex,
+						dst: load.instruction.registers[0],
+						consumer:
+							consumer === undefined
+								? undefined
+								: consumer.kind === "length"
+									? {
+											kind: consumer.kind,
+											propertyIp: instructionIndexByIrInstruction.get(consumer.property),
+										}
+									: consumer.kind === "charCodeAtZero"
+										? {
+												kind: consumer.kind,
+												propertyIp: instructionIndexByIrInstruction.get(
+													consumer.property,
+												),
+												callIp: instructionIndexByIrInstruction.get(consumer.call),
+												...(consumer.zero === undefined
+													? {}
+													: {
+															zeroIp: instructionIndexByIrInstruction.get(consumer.zero),
+														}),
+											}
+										: consumer.kind === "number"
+											? {
+													kind: consumer.kind,
+													intrinsicIp: instructionIndexByIrInstruction.get(
+														consumer.intrinsic,
+													),
+													callIp: instructionIndexByIrInstruction.get(consumer.call),
+												}
+											: {
+													kind: consumer.kind,
+													upperPropertyIp: instructionIndexByIrInstruction.get(
+														consumer.upperProperty,
+													),
+													upperCallIp: instructionIndexByIrInstruction.get(
+														consumer.upperCall,
+													),
+													lowerPropertyIp: instructionIndexByIrInstruction.get(
+														consumer.lowerProperty,
+													),
+													lowerIcIndex: propertyIcIndexByInstruction.get(
+														consumer.lowerProperty,
+													),
+													lowerCallIp: instructionIndexByIrInstruction.get(
+														consumer.lowerCall,
+													),
+													resultMoveIps: consumer.resultMoves.map((move) =>
+														instructionIndexByIrInstruction.get(move),
+													),
+													lengthPropertyIp: instructionIndexByIrInstruction.get(
+														consumer.lengthProperty,
+													),
+												},
+					};
+				});
+				const unresolved =
+					propertyIp === undefined ||
+					aliasMoveIps.some((ip) => ip === undefined) ||
+					nullChecks.some(
+						(check) => check.comparisonIp === undefined || check.nullIp === undefined,
+					) ||
+					(lockedLiteral !== undefined &&
+						(lockedLiteral.constructorIntrinsicIp === undefined ||
+							lockedLiteral.constructIp === undefined)) ||
+					loads.some(
+						(load) =>
+							load.ip === undefined ||
+							load.keyIp === undefined ||
+							(load.consumer !== undefined &&
+								Object.values(load.consumer).some((value) => value === undefined)) ||
+							(load.consumer?.kind === "asciiCaseLength" &&
+								load.consumer.resultMoveIps.some((ip) => ip === undefined)),
+					);
+				if (
+					unresolved ||
+					region.representation !== "regexp-capture-spans" ||
+					region.license.materialization !== "whole-region" ||
+					!guard.obligations.includes("fallback") ||
+					!guard.obligations.includes("materialize") ||
+					region.lastIndexEffect !== "retained-call-twin" ||
+					resolvedAnchors.length !== 3
+				) {
+					continue;
+				}
+				const resolvedPropertyIp = propertyIp;
+				const resolvedAliasMoveIps = aliasMoveIps as Array<number>;
+				const resolvedNullChecks = nullChecks as Array<{
+					comparisonIp: number;
+					nullIp: number;
+				}>;
+				const resolvedLockedLiteral = lockedLiteral as
+					| { constructorIntrinsicIp: number; constructIp: number }
+					| undefined;
+				const resolvedLoads = loads as Array<
+					VmRegExpExecProjectionRegion["loads"][number]
+				>;
+				const loweredCall = instructions[callIp!];
+				const loweredProperty = instructions[resolvedPropertyIp];
+				const loweredFirstAlias = instructions[firstAliasIp!];
+				const aliases = new Set<number>([
+					loweredCall?.opcode === "CALL" ? loweredCall.dst : -1,
+				]);
+				let operationsValid =
+					loweredCall?.opcode === "CALL" &&
+					loweredCall.arguments.length === 1 &&
+					loweredCall.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
+					loweredProperty?.opcode === "LOAD_PROPERTY_STATIC" &&
+					loweredProperty.dst === loweredCall.callee &&
+					loweredProperty.object === loweredCall.thisValue &&
+					resolvedPropertyIp + 1 === callIp &&
+					loweredFirstAlias?.opcode === "MOVE" &&
+					loweredFirstAlias.src === loweredCall.dst;
+				for (const aliasIp of resolvedAliasMoveIps) {
+					const move = instructions[aliasIp];
+					if (move?.opcode !== "MOVE" || !aliases.has(move.src)) {
+						operationsValid = false;
+						break;
+					}
+					aliases.add(move.dst);
+				}
+				for (const check of resolvedNullChecks) {
+					const comparison = instructions[check.comparisonIp];
+					const nullValue = instructions[check.nullIp];
+					if (
+						comparison?.opcode !== "BINARY" ||
+						(comparison.operator !== "===" && comparison.operator !== "!==") ||
+						nullValue?.opcode !== "CREATE_NULL" ||
+						(!aliases.has(comparison.left) && !aliases.has(comparison.right)) ||
+						(comparison.left !== nullValue.dst && comparison.right !== nullValue.dst)
+					) {
+						operationsValid = false;
+					}
+				}
+				for (const load of resolvedLoads) {
+					const capture = instructions[load.ip];
+					const key = instructions[load.keyIp];
+					if (
+						capture?.opcode !== "LOAD_PROPERTY" ||
+						!aliases.has(capture.object) ||
+						capture.dst !== load.dst ||
+						key?.opcode !== "CREATE_NUMBER" ||
+						key.dst !== capture.key ||
+						key.value !== load.captureIndex ||
+						!Number.isInteger(load.captureIndex) ||
+						load.captureIndex <= 0 ||
+						load.captureIndex > 0xffff
+					) {
+						operationsValid = false;
+						continue;
+					}
+					const consumer = load.consumer;
+					if (consumer?.kind === "length") {
+						const property = instructions[consumer.propertyIp];
+						operationsValid &&=
+							property?.opcode === "LOAD_PROPERTY_STATIC" && property.object === load.dst;
+					} else if (consumer?.kind === "charCodeAtZero") {
+						const property = instructions[consumer.propertyIp];
+						const call = instructions[consumer.callIp];
+						operationsValid &&=
+							property?.opcode === "LOAD_PROPERTY_STATIC" &&
+							property.object === load.dst &&
+							call?.opcode === "CALL" &&
+							call.callee === property.dst &&
+							call.thisValue === load.dst &&
+							call.arguments.length === 1;
+					} else if (consumer?.kind === "number") {
+						const intrinsic = instructions[consumer.intrinsicIp];
+						const call = instructions[consumer.callIp];
+						operationsValid &&=
+							intrinsic?.opcode === "LOAD_INTRINSIC" &&
+							intrinsic.intrinsic === "Number" &&
+							call?.opcode === "CALL" &&
+							call.callee === intrinsic.dst &&
+							call.arguments.length === 1;
+					} else if (consumer?.kind === "asciiCaseLength") {
+						operationsValid &&=
+							instructions[consumer.upperPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
+							instructions[consumer.upperCallIp]?.opcode === "CALL" &&
+							instructions[consumer.lowerPropertyIp]?.opcode === "LOAD_PROPERTY_STATIC" &&
+							instructions[consumer.lowerCallIp]?.opcode === "CALL" &&
+							instructions[consumer.lengthPropertyIp]?.opcode ===
+								"LOAD_PROPERTY_STATIC" &&
+							consumer.resultMoveIps.every((ip) => instructions[ip]?.opcode === "MOVE");
+					}
+				}
+				if (resolvedLockedLiteral !== undefined) {
+					operationsValid &&=
+						guard.dependencies.every((dependency) => dependency.kind === "world") &&
+						instructions[resolvedLockedLiteral.constructorIntrinsicIp]?.opcode ===
+							"LOAD_INTRINSIC" &&
+						instructions[resolvedLockedLiteral.constructIp]?.opcode === "CONSTRUCT";
+				}
+				const payloadIps = new Set<number>([resolvedPropertyIp, callIp!]);
+				for (const ip of resolvedAliasMoveIps) payloadIps.add(ip);
+				for (const check of resolvedNullChecks) {
+					payloadIps.add(check.comparisonIp);
+					payloadIps.add(check.nullIp);
+				}
+				if (resolvedLockedLiteral !== undefined) {
+					payloadIps.add(resolvedLockedLiteral.constructorIntrinsicIp);
+					payloadIps.add(resolvedLockedLiteral.constructIp);
+				}
+				for (const load of resolvedLoads) {
+					payloadIps.add(load.ip);
+					payloadIps.add(load.keyIp);
+					const consumer = load.consumer;
+					if (consumer?.kind === "length") payloadIps.add(consumer.propertyIp);
+					else if (consumer?.kind === "charCodeAtZero") {
+						payloadIps.add(consumer.propertyIp);
+						payloadIps.add(consumer.callIp);
+						if (consumer.zeroIp !== undefined) payloadIps.add(consumer.zeroIp);
+					} else if (consumer?.kind === "number") {
+						payloadIps.add(consumer.intrinsicIp);
+						payloadIps.add(consumer.callIp);
+					} else if (consumer?.kind === "asciiCaseLength") {
+						payloadIps.add(consumer.upperPropertyIp);
+						payloadIps.add(consumer.upperCallIp);
+						payloadIps.add(consumer.lowerPropertyIp);
+						payloadIps.add(consumer.lowerCallIp);
+						for (const ip of consumer.resultMoveIps) payloadIps.add(ip);
+						payloadIps.add(consumer.lengthPropertyIp);
+					}
+				}
+				if (
+					!operationsValid ||
+					loweredCall?.opcode !== "CALL" ||
+					firstAliasIp !== resolvedAliasMoveIps[0] ||
+					firstLoadIp !== resolvedLoads[0]?.ip ||
+					resolvedLoads.length === 0 ||
+					resolvedLoads.length > 8 ||
+					new Set(resolvedLoads.map((load) => load.captureIndex)).size !==
+						resolvedLoads.length ||
+					region.cost.metadataOperations !== payloadIps.size ||
+					payloadIps.size !== resolvedClaimedIps.length ||
+					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
+				) {
+					continue;
+				}
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "regexp-exec-projection",
+					license: { guard, genericTwin: "retained", materialization: "whole-region" },
+					representation: "regexp-capture-spans",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: resolvedOrdinaryBlockIps,
+						exceptionalHandlerIps: [],
+					},
+					cost: region.cost,
+					propertyIp: resolvedPropertyIp,
+					callIp: callIp!,
+					lockedFreshLiteral: resolvedLockedLiteral !== undefined,
+					...(resolvedLockedLiteral === undefined
+						? {}
+						: { lockedLiteral: resolvedLockedLiteral }),
+					callee: loweredCall.callee,
+					receiver: loweredCall.thisValue,
+					input: loweredCall.arguments[0]!,
+					result: loweredCall.dst,
+					aliasMoveIps: resolvedAliasMoveIps,
+					nullChecks: resolvedNullChecks,
+					lastIndexEffect: "retained-call-twin",
+					loads: resolvedLoads,
 				});
 				break;
 			}

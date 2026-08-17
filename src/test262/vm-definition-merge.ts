@@ -70,6 +70,29 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				aliasMoveIps: [...region.aliasMoveIps],
 				loads: region.loads.map((load) => ({ ...load })),
 			};
+		case "regexp-exec-projection":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				...(region.lockedLiteral === undefined
+					? {}
+					: { lockedLiteral: { ...region.lockedLiteral } }),
+				aliasMoveIps: [...region.aliasMoveIps],
+				nullChecks: region.nullChecks.map((check) => ({ ...check })),
+				loads: region.loads.map((load) => ({
+					...load,
+					...(load.consumer === undefined
+						? {}
+						: {
+								consumer: {
+									...load.consumer,
+									...(load.consumer.kind === "asciiCaseLength"
+										? { resultMoveIps: [...load.consumer.resultMoveIps] }
+										: {}),
+								},
+							}),
+				})),
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

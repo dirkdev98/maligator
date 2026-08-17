@@ -703,6 +703,65 @@ export interface IRStringSplitProjectionRegion extends IRRegionEnvelope<
 	>;
 }
 
+/**
+ * Backend-neutral certificate for selected captures of one exact
+ * `RegExp.prototype.exec` call. The stateful call remains the ordinary twin, so
+ * `lastIndex`, input coercion, null results, and every guard miss keep their
+ * original JavaScript semantics.
+ */
+export interface IRRegExpExecProjectionRegion extends IRRegionEnvelope<
+	"regexp-exec-projection",
+	"regexp-capture-spans",
+	"whole-region",
+	readonly [
+		Extract<IRInstruction, { type: "call" }>,
+		Extract<IRInstruction, { type: "move" }>,
+		Extract<IRInstruction, { type: "loadProperty" }>,
+	]
+> {
+	readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+	readonly aliasMoves: ReadonlyArray<Extract<IRInstruction, { type: "move" }>>;
+	readonly nullChecks: ReadonlyArray<{
+		readonly comparison: Extract<IRInstruction, { type: "binary" }>;
+		readonly nullValue: Extract<IRInstruction, { type: "createNull" }>;
+	}>;
+	readonly lockedLiteral?: {
+		readonly constructorIntrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>;
+		readonly construct: Extract<IRInstruction, { type: "construct" }>;
+	};
+	readonly lastIndexEffect: "retained-call-twin";
+	readonly loads: ReadonlyArray<{
+		readonly instruction: Extract<IRInstruction, { type: "loadProperty" }>;
+		readonly key: Extract<IRInstruction, { type: "createNumber" }>;
+		readonly captureIndex: number;
+		readonly consumer?:
+			| {
+					readonly kind: "length";
+					readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+			  }
+			| {
+					readonly kind: "charCodeAtZero";
+					readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+					readonly call: Extract<IRInstruction, { type: "call" }>;
+					readonly zero?: Extract<IRInstruction, { type: "createNumber" }>;
+			  }
+			| {
+					readonly kind: "number";
+					readonly intrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>;
+					readonly call: Extract<IRInstruction, { type: "call" }>;
+			  }
+			| {
+					readonly kind: "asciiCaseLength";
+					readonly upperProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+					readonly upperCall: Extract<IRInstruction, { type: "call" }>;
+					readonly lowerProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+					readonly lowerCall: Extract<IRInstruction, { type: "call" }>;
+					readonly resultMoves: ReadonlyArray<Extract<IRInstruction, { type: "move" }>>;
+					readonly lengthProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+			  };
+	}>;
+}
+
 /** Backend-neutral contract for one closed indexed String#split consumer loop. */
 export interface IRStringSplitCursor extends IRRegionEnvelope<
 	"string-split-cursor",
@@ -793,6 +852,7 @@ export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type IRRegion =
 	| IRClosedRecordArrayRegion
+	| IRRegExpExecProjectionRegion
 	| IRStringSplitProjectionRegion
 	| IRStringSplitCursor
 	| IRNumericHofRegion;

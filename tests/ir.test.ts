@@ -173,6 +173,47 @@ test("stores split projections in the shared region table and drops stale anchor
 	).toHaveLength(0);
 });
 
+test("stores stateful RegExp.exec capture proofs in IR and drops stale anchors", () => {
+	const program = compileScript(`
+		function parse(regexp, value) {
+			const match = regexp.exec(value);
+			if (match === null) return -1;
+			return Number(match[1]);
+		}
+		globalThis.parse = parse;
+	`);
+	executeIROptimizations(program);
+	const parse = functionNamed(program, "parse");
+	const region = parse.regions?.find(
+		(candidate) => candidate.kind === "regexp-exec-projection",
+	);
+	expect(region).toBeDefined();
+	if (region?.kind !== "regexp-exec-projection") {
+		throw new Error("missing RegExp.exec projection region");
+	}
+	expect(region.lastIndexEffect).toBe("retained-call-twin");
+	expect(region.nullChecks).toHaveLength(1);
+	expect(region.loads).toHaveLength(1);
+	expect(region.loads[0]?.consumer?.kind).toBe("number");
+	expect(region.controlFlow.exceptionalBlocks).toEqual([]);
+	expect(
+		region.anchors.every((instruction) =>
+			region.claimedInstructions.includes(instruction),
+		),
+	).toBe(true);
+
+	const staleAnchor = region.anchors[2];
+	const owner = parse.blocks.find((block) => block.instructions.includes(staleAnchor));
+	expect(owner).toBeDefined();
+	owner!.instructions[owner!.instructions.indexOf(staleAnchor)] = { ...staleAnchor };
+	allocateRegisters(program);
+	const lowered = lowerIrProgramToVmDefinition(program).functions[parse.functionIndex]!;
+	expect(
+		lowered.regions?.filter((candidate) => candidate.kind === "regexp-exec-projection") ??
+			[],
+	).toHaveLength(0);
+});
+
 test("rejects split projection regions protected by an exception handler", () => {
 	const program = compileScript(`
 		function project(value) {
