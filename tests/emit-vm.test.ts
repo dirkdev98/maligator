@@ -634,7 +634,7 @@ describe("native update-expression representation", () => {
 		).toBeGreaterThanOrEqual(2);
 	});
 
-	it("shares one region table across disjoint record, split, projection, and numeric proofs", () => {
+	it("shares one region table across disjoint record, split, builtin, and numeric proofs", () => {
 		const source = `
 			function summarize(value, separator) {
 				const rows = [];
@@ -670,6 +670,7 @@ describe("native update-expression representation", () => {
 		expect(functionIndex).toBeGreaterThanOrEqual(0);
 		expect(fn!.regions?.map((region) => region.kind).sort()).toEqual([
 			"closed-record-array",
+			"known-builtin-producers",
 			"numeric-fusion",
 			"numeric-hof",
 			"string-split-cursor",

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 65u        // closed-global access proofs moved into regions
+#define WIRE_VERSION 66u        // known-builtin producer graphs moved into regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1928,11 +1928,14 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 			bool closed_global_table_contract = kind == 17 && representation == 17 &&
 				materialization == 1 && (dependency_mask == 1 || dependency_mask == 8) &&
 				obligation_mask == 3;
+			bool known_builtin_producer_contract = kind == 18 && representation == 18 &&
+				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
 				(composition == 1) !=
 					(exact_fresh_array_contract || numeric_fusion_contract ||
-					 finite_property_selector_contract || closed_global_table_contract) ||
+					 finite_property_selector_contract || closed_global_table_contract ||
+					 known_builtin_producer_contract) ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
@@ -1940,8 +1943,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				 !invariant_json_map_template_contract && !stack_object_plan_contract &&
 				 !cardinality_array_contract && !exact_fresh_array_contract &&
 				 !numeric_fusion_contract && !finite_object_construction_contract &&
-				 !finite_property_selector_contract && !closed_global_table_contract)) {
+				 !finite_property_selector_contract && !closed_global_table_contract &&
+				 !known_builtin_producer_contract)) {
                 r.ok = false;
+				if (kind == 18) err = "invalid known-builtin producer region contract";
             }
 
             i32 payload_ips[96];
@@ -3471,6 +3476,54 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				}
 				if (score != (u32) (mask + 1) + access_count ||
 					metadata_operations != payload_count) r.ok = false;
+			} else if (r.ok && kind == 18) {
+				u32 site_count = rd_count(&r, 3);
+				i32 first_call_ip = -1;
+				if (anchor_count != 1) {
+					r.ok = false;
+					err = "invalid known-builtin producer anchor count";
+				} else if (site_count == 0) {
+					r.ok = false;
+					err = "empty known-builtin producer region";
+				} else if (site_count > 32) {
+					r.ok = false;
+					err = "oversized known-builtin producer region";
+				}
+				for (u32 site = 0; r.ok && site < site_count; site++) {
+					i32 receiver_ip = rd_i32(&r);
+					i32 property_ip = rd_i32(&r);
+					i32 call_ip = rd_i32(&r);
+					bool ips_ok = receiver_ip >= 0 && receiver_ip < fn->instruction_count &&
+						property_ip >= 0 && property_ip < fn->instruction_count &&
+						call_ip >= 0 && call_ip < fn->instruction_count;
+					if (ips_ok) {
+						const MalInstruction *receiver = &fn->instructions[receiver_ip];
+						const MalInstruction *property = &fn->instructions[property_ip];
+						const MalInstruction *call = &fn->instructions[call_ip];
+						ips_ok = receiver->opcode == MAL_OP_LOAD_INTRINSIC &&
+							property->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+							call->opcode == MAL_OP_CALL &&
+							property->as.load_property_static.object == receiver->as.load_intrinsic.dst &&
+							call->as.call.callee == property->as.load_property_static.dst &&
+							call->as.call.this_value == receiver->as.load_intrinsic.dst;
+					}
+					if (!ips_ok) {
+						r.ok = false;
+						err = "invalid known-builtin producer instruction graph";
+					}
+					if (site == 0) first_call_ip = call_ip;
+					MAL_REGION_PAYLOAD_CLAIM(receiver_ip);
+					if (!r.ok) err = "invalid known-builtin receiver claim";
+					MAL_REGION_PAYLOAD_CLAIM(property_ip);
+					if (!r.ok) err = "invalid known-builtin property claim";
+					MAL_REGION_PAYLOAD_CLAIM(call_ip);
+					if (!r.ok) err = "invalid known-builtin call claim";
+				}
+				if (r.ok && (anchors[0] != first_call_ip || score != site_count ||
+					metadata_operations != payload_count)) {
+					r.ok = false;
+					err = "invalid known-builtin producer region metadata";
+				}
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM
@@ -3479,7 +3532,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
     }
 
     if (!r.ok || r.pos != r.len) {
-        err = "truncated or corrupt buffer";
+		if (err[0] == 'o' && err[1] == 'k' && err[2] == '\0') {
+			err = "truncated or corrupt buffer";
+		}
         goto fail;
     }
 

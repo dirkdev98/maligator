@@ -480,18 +480,28 @@ test("direct Math calls carry canonical numeric semantics", () => {
 		value: { effects: ["coerce", "throw"], result: "number" },
 	});
 	expect(
-		mathCalls.filter((call) => call.knownBuiltinCallExactProducerTwin !== undefined),
+		ir.functions.flatMap((fn) =>
+			(fn.regions ?? [])
+				.filter((region) => region.kind === "known-builtin-producers")
+				.flatMap((region) =>
+					region.sites.filter((site) => mathCalls.includes(site.call)),
+				),
+		),
 	).toHaveLength(2);
-	const loweredMathCalls = lowerIrProgramToVmDefinition(ir).functions.flatMap((fn) =>
+	const lowered = lowerIrProgramToVmDefinition(ir);
+	const loweredMathCalls = lowered.functions.flatMap((fn) =>
 		fn.instructions.filter(
 			(instruction) =>
 				instruction.opcode === "CALL" &&
 				instruction.guardedBuiltinCall?.operation.startsWith("Math."),
 		),
 	);
+	expect(loweredMathCalls).toHaveLength(2);
 	expect(
-		loweredMathCalls.filter(
-			(call) => call.opcode === "CALL" && call.nativeMathExactProducerTwin !== undefined,
+		lowered.functions.flatMap((fn) =>
+			(fn.regions ?? [])
+				.filter((region) => region.kind === "known-builtin-producers")
+				.flatMap((region) => region.sites),
 		),
 	).toHaveLength(2);
 });
@@ -501,11 +511,7 @@ test("non-Math exact producer twins do not leak into native Math metadata", () =
 	const lowered = lowerIrProgramToVmDefinition(ir);
 	expect(
 		lowered.functions.every((fn) =>
-			fn.instructions.every(
-				(instruction) =>
-					instruction.opcode !== "CALL" ||
-					instruction.nativeMathExactProducerTwin === undefined,
-			),
+			(fn.regions ?? []).every((region) => region.kind !== "known-builtin-producers"),
 		),
 	).toBe(true);
 });

@@ -924,6 +924,22 @@ export interface IRClosedGlobalTableRegion extends IRRegionEnvelope<
 	}>;
 }
 
+/** Aggregate producer-consumer graph for canonical intrinsic method calls. */
+export interface IRKnownBuiltinProducerRegion extends IRRegionEnvelope<
+	"known-builtin-producers",
+	"exact-intrinsic-property-call-twins",
+	"none",
+	readonly [Extract<IRInstruction, { type: "call" }>],
+	"structural"
+> {
+	readonly composition: "overlay";
+	readonly sites: ReadonlyArray<{
+		readonly receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
+		readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+		readonly call: Extract<IRInstruction, { type: "call" }>;
+	}>;
+}
+
 /**
  * Backend-neutral certificate for one bounded push-only Array of same-shape
  * records. The ordinary Array, push, and property instructions remain the
@@ -1090,6 +1106,7 @@ export type IRRegion =
 	| IRExactFreshArrayRegion
 	| IRFiniteObjectConstructionRegion
 	| IRFinitePropertySelectorRegion
+	| IRKnownBuiltinProducerRegion
 	| IRNumericFusionRegion
 	| IRRegExpExecProjectionRegion
 	| IRRegExpIteratorProjectionRegion
@@ -1340,15 +1357,6 @@ export type IRInstruction =
 			 * proof and preserve its fallback obligation before specializing the call.
 			 */
 			knownBuiltinCall?: KnownBuiltinCall;
-			/**
-			 * COMPILE-ONLY: ordinary receiver/property producers retained as the
-			 * interpreted generic twin of a canonical builtin call. Native lowering may
-			 * erase them only when the call proof removes every fallback edge.
-			 */
-			knownBuiltinCallExactProducerTwin?: {
-				receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
-				property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-			};
 			/**
 			 * COMPILE-ONLY: the exact ordinary script-function index held by the callee.
 			 * Native lowering guards the live callee before entering this target and

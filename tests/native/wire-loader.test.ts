@@ -14,7 +14,10 @@ import { buildLoadDriver } from "../../src/local-build.ts";
 import type { VmDefinition, VmFunction } from "../../src/lower-vm.ts";
 import { parseScript } from "../../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../../src/semantic-analysis.ts";
-import { serializeVmDefinition } from "../../src/serialize-vm.ts";
+import {
+	deserializeVmDefinition,
+	serializeVmDefinition,
+} from "../../src/serialize-vm.ts";
 import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
 const fn: VmFunction = {
@@ -456,6 +459,39 @@ describe("wire loader side-data validation", () => {
 			wirePath,
 			serializeVmDefinition(closedDefinition, { debugInfo: false }),
 		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
+	it("loads a nonempty known-builtin producer region payload", () => {
+		const entrypoint = path.join(directory, "known-builtin-producer-region.js");
+		const source = `function calculate(value) {
+			return Math.floor(value);
+		}
+		globalThis.result = calculate(3.75);\n`;
+		writeFileSync(entrypoint, source);
+		const producerDefinition = compileSemanticProgramToVmDefinition(
+			analyzeSourceAndRunSemanticAnalysis(
+				source,
+				entrypoint,
+				parseScript(source, { strict: false }),
+			),
+		);
+		expect(
+			producerDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "known-builtin-producers") ?? [],
+			),
+		).toHaveLength(1);
+		const wirePath = path.join(directory, "known-builtin-producer-region.malw");
+		const wire = serializeVmDefinition(producerDefinition, { debugInfo: false });
+		expect(
+			deserializeVmDefinition(wire).functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "known-builtin-producers") ?? [],
+			),
+		).toHaveLength(1);
+		writeFileSync(wirePath, wire);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});

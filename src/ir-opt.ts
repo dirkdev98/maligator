@@ -68,8 +68,10 @@ import type {
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
+	IRKnownBuiltinProducerRegion,
 	IRNumericFusionRegion,
 	IRNumericHofRegion,
+	IRRegion,
 	IRStackObjectPlanRegion,
 	IRStringSplitCursor,
 	IRStringSplitProjectionRegion,
@@ -123,6 +125,56 @@ interface OptimizationFeatures {
 	capturedSlots: CapturedSlotOptimizationFacts;
 }
 
+function knownBuiltinProducerSite(
+	fn: IRFunction,
+	call: Extract<IRInstruction, { type: "call" }>,
+): IRKnownBuiltinProducerRegion["sites"][number] | undefined {
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "known-builtin-producers") continue;
+		const site = region.sites.find((candidate) => candidate.call === call);
+		if (site !== undefined) return site;
+	}
+	return undefined;
+}
+
+function pruneKnownBuiltinProducerRegions(program: IntermediateProgram): void {
+	for (const fn of program.functions) {
+		const live = new Set(fn.blocks.flatMap((block) => block.instructions));
+		const next: Array<IRRegion> = [];
+		for (const region of fn.regions ?? []) {
+			if (region.kind !== "known-builtin-producers") {
+				next.push(region);
+				continue;
+			}
+			const sites = region.sites.filter(
+				(site) =>
+					live.has(site.receiver) && live.has(site.property) && live.has(site.call),
+			);
+			if (sites.length === 0) continue;
+			const claimedInstructions = [
+				...new Set(sites.flatMap((site) => [site.receiver, site.property, site.call])),
+			];
+			const locations = buildIRRegisterIndex(fn, { locations: true }).locations!;
+			const ordinaryBlocks = [
+				...new Set(
+					claimedInstructions.map(
+						(instruction) => locations.get(instruction)!.blockIndex,
+					),
+				),
+			].sort((left, right) => left - right);
+			next.push({
+				...region,
+				anchors: [sites[0]!.call],
+				claimedInstructions,
+				controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+				cost: { score: sites.length, metadataOperations: claimedInstructions.length },
+				sites,
+			});
+		}
+		fn.regions = next.length > 0 ? next : undefined;
+	}
+}
+
 /**
  * Consume the locked-world Math fact only after ordinary optimization has proven
  * every argument to be a Number. The exact producer-use twin recorded by the
@@ -137,12 +189,9 @@ function optLowerLockedMathNumberCalls(program: IntermediateProgram): boolean {
 		for (const block of fn.blocks) {
 			for (let index = 0; index < block.instructions.length; index++) {
 				const instruction = block.instructions[index]!;
-				if (
-					instruction.type !== "call" ||
-					instruction.knownBuiltinCallExactProducerTwin === undefined
-				) {
-					continue;
-				}
+				if (instruction.type !== "call") continue;
+				const producerSite = knownBuiltinProducerSite(fn, instruction);
+				if (producerSite === undefined) continue;
 				const call = instruction.knownBuiltinCall;
 				const descriptor =
 					call === undefined ? undefined : builtinOperationDescriptor(call.operation);
@@ -171,8 +220,8 @@ function optLowerLockedMathNumberCalls(program: IntermediateProgram): boolean {
 								operation: call.operation,
 							};
 				block.instructions[index] = replacement;
-				removedProducers.add(instruction.knownBuiltinCallExactProducerTwin.receiver);
-				removedProducers.add(instruction.knownBuiltinCallExactProducerTwin.property);
+				removedProducers.add(producerSite.receiver);
+				removedProducers.add(producerSite.property);
 				changed = true;
 			}
 		}
@@ -184,6 +233,7 @@ function optLowerLockedMathNumberCalls(program: IntermediateProgram): boolean {
 			}
 		}
 	}
+	pruneKnownBuiltinProducerRegions(program);
 	return changed;
 }
 
@@ -272,7 +322,7 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 						if (
 							receiver?.type !== "loadIntrinsic" ||
 							receiver.intrinsic !== "Object" ||
-							instruction.knownBuiltinCallExactProducerTwin === undefined
+							knownBuiltinProducerSite(fn, instruction) === undefined
 						) {
 							continue;
 						}
@@ -304,6 +354,7 @@ function optLowerLockedExactBuiltinCalls(program: IntermediateProgram): boolean 
 			}
 		}
 	}
+	pruneKnownBuiltinProducerRegions(program);
 	return changed;
 }
 

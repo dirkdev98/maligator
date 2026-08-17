@@ -49,6 +49,12 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "known-builtin-producers":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				sites: region.sites.map((site) => ({ ...site })),
+			};
 		case "closed-global-table":
 			return {
 				...cloneRegionEnvelope(region),

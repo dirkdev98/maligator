@@ -391,6 +391,19 @@ export type VmClosedGlobalTableRegion = VmRegionEnvelope<
 	}>;
 };
 
+export type VmKnownBuiltinProducerRegion = VmRegionEnvelope<
+	"known-builtin-producers",
+	"exact-intrinsic-property-call-twins",
+	"none"
+> & {
+	readonly composition: "overlay";
+	readonly sites: ReadonlyArray<{
+		readonly receiverIp: number;
+		readonly propertyIp: number;
+		readonly callIp: number;
+	}>;
+};
+
 export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	"string-split-cursor",
 	"split-cursor-spans",
@@ -713,6 +726,7 @@ export type VmRegion =
 	| VmNumericFusionRegion
 	| VmFiniteObjectConstructionRegion
 	| VmFinitePropertySelectorRegion
+	| VmKnownBuiltinProducerRegion
 	| VmStackObjectPlanRegion
 	| VmCardinalityArrayRegion
 	| VmStringSplitProjectionRegion
@@ -1203,15 +1217,6 @@ export type VmInstruction =
 			guardedBuiltinCall?: VmGuardedBuiltinCall;
 			/** COMPILE-ONLY: this exact loop-invariant JSON.parse owns a private clone cache. */
 			nativeInvariantJsonParseCache?: true;
-			/**
-			 * COMPILE-ONLY: exact Math namespace/property producers owned by this call.
-			 * Native emission may erase them only after discharging this call's locked
-			 * identity and Number-representation obligations.
-			 */
-			nativeMathExactProducerTwin?: {
-				receiverIp: number;
-				propertyIp: number;
-			};
 			/** COMPILE-ONLY: statically proven Number-position strength. */
 			directStringCharCodeAtPosition?: "integer" | "inBounds";
 			/** COMPILE-ONLY: closed String.prototype.search over a fresh RegExp literal. */
@@ -1917,11 +1922,6 @@ function lowerFunctionToVmFunction(
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
 	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
-	const pendingNativeMathCalls: Array<{
-		receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
-		property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-		call: Extract<VmInstruction, { opcode: "CALL" }>;
-	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1961,17 +1961,6 @@ function lowerFunctionToVmFunction(
 			}
 			instructions.push(vmInstruction);
 			compilerSiteIds.push(instructionSites?.get(instruction)?.id);
-			if (
-				instruction.type === "call" &&
-				vmInstruction.opcode === "CALL" &&
-				instruction.knownBuiltinCall?.operation.startsWith("Math.") === true &&
-				instruction.knownBuiltinCallExactProducerTwin !== undefined
-			) {
-				pendingNativeMathCalls.push({
-					...instruction.knownBuiltinCallExactProducerTwin,
-					call: vmInstruction,
-				});
-			}
 			positions.push(currentPos);
 		}
 	}
@@ -1995,6 +1984,98 @@ function lowerFunctionToVmFunction(
 	// Eight specialized regions plus one aggregate stack-object proof table.
 	const irRegions = (fn.regions?.length ?? 0) <= 9 ? (fn.regions ?? []) : [];
 	for (const region of irRegions) {
+		if (region.kind === "known-builtin-producers") {
+			const anchors = region.anchors.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
+			const sites = region.sites.map((site) => ({
+				receiverIp: instructionIndexByIrInstruction.get(site.receiver),
+				propertyIp: instructionIndexByIrInstruction.get(site.property),
+				callIp: instructionIndexByIrInstruction.get(site.call),
+			}));
+			if (
+				region.license.guard !== "structural" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "none" ||
+				region.representation !== "exact-intrinsic-property-call-twins" ||
+				region.composition !== "overlay" ||
+				anchors.length !== 1 ||
+				anchors[0] === undefined ||
+				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
+				region.controlFlow.exceptionalBlocks.length !== 0 ||
+				sites.some(
+					(site) =>
+						site.receiverIp === undefined ||
+						site.propertyIp === undefined ||
+						site.callIp === undefined,
+				)
+			) {
+				continue;
+			}
+			const resolvedSites = sites as Array<{
+				receiverIp: number;
+				propertyIp: number;
+				callIp: number;
+			}>;
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const payloadIps = resolvedSites.flatMap((site) => [
+				site.receiverIp,
+				site.propertyIp,
+				site.callIp,
+			]);
+			if (
+				resolvedSites.length === 0 ||
+				resolvedSites.length > 32 ||
+				resolvedSites.some((site) => {
+					const receiver = instructions[site.receiverIp];
+					const property = instructions[site.propertyIp];
+					const call = instructions[site.callIp];
+					return (
+						receiver?.opcode !== "LOAD_INTRINSIC" ||
+						property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+						call?.opcode !== "CALL" ||
+						call.guardedBuiltinCall === undefined ||
+						property.object !== receiver.dst ||
+						call.callee !== property.dst ||
+						call.thisValue !== receiver.dst
+					);
+				}) ||
+				new Set(payloadIps).size !== payloadIps.length ||
+				payloadIps.length !== resolvedClaimedIps.length ||
+				payloadIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
+				anchors[0] !== resolvedSites[0]!.callIp ||
+				region.cost.score !== resolvedSites.length ||
+				region.cost.metadataOperations !== payloadIps.length
+			) {
+				continue;
+			}
+			regions.push({
+				kind: "known-builtin-producers",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback"] },
+					genericTwin: "retained",
+					materialization: "none",
+				},
+				representation: "exact-intrinsic-property-call-twins",
+				composition: "overlay",
+				anchors: [anchors[0]],
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: [],
+				},
+				cost: { ...region.cost },
+				sites: resolvedSites,
+			});
+			continue;
+		}
 		if (region.kind === "closed-global-table") {
 			const guard = lowerGuardPlan(region.license.guard);
 			const anchors = region.anchors.map((instruction) =>
@@ -3894,18 +3975,6 @@ function lowerFunctionToVmFunction(
 				break;
 			}
 		}
-	}
-	for (const pending of pendingNativeMathCalls) {
-		const receiverIp = instructionIndexByIrInstruction.get(pending.receiver);
-		const propertyIp = instructionIndexByIrInstruction.get(pending.property);
-		if (
-			receiverIp === undefined ||
-			propertyIp === undefined ||
-			!instructions.includes(pending.call)
-		) {
-			throw new Error("Known builtin generic twin was removed before lowering");
-		}
-		pending.call.nativeMathExactProducerTwin = { receiverIp, propertyIp };
 	}
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation

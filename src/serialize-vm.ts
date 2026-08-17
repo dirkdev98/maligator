@@ -31,14 +31,14 @@ import type {
  * The codec is sequential: the reader walks sections in the exact order the
  * writer wrote them, so no in-buffer offsets are needed. The opcode / operator /
  * intrinsic tag orderings below are the cross-language contract — the C loader
- * mirrors them. Existing tags and operand layouts are immutable; new opcodes are
- * appended so older inputs remain readable. WIRE_VERSION is bumped only for
- * an incompatible layout change, which deliberately rejects stale buffers.
+ * mirrors them. Before 1.0, tags and operand layouts may change freely when the
+ * representation improves; every incompatible change bumps WIRE_VERSION so stale
+ * cached buffers are rejected and rebuilt instead of being misread.
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped for IR-owned stack-object plans and their wider bounded VM sharding table.
-export const WIRE_VERSION = 65;
+// Bumped for aggregate known-builtin producer graphs.
+export const WIRE_VERSION = 66;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1241,7 +1241,9 @@ export function serializeVmDefinition(
 																			? 15
 																			: region.kind === "finite-property-selector"
 																				? 16
-																				: 17;
+																				: region.kind === "closed-global-table"
+																					? 17
+																					: 18;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1293,6 +1295,14 @@ export function serializeVmDefinition(
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
 			switch (region.kind) {
+				case "known-builtin-producers":
+					w.u32(region.sites.length);
+					for (const site of region.sites) {
+						w.i32(site.receiverIp);
+						w.i32(site.propertyIp);
+						w.i32(site.callIp);
+					}
+					break;
 				case "closed-global-table":
 					w.i32(region.sourceGlobalIndex);
 					w.i32(region.baseIndex);
@@ -1928,6 +1938,9 @@ function validateRegion(
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
+		case "known-builtin-producers":
+			validateKnownBuiltinProducerRegion(fn, region);
+			break;
 		case "closed-global-table":
 			validateClosedGlobalTableRegion(fn, region, globalCount);
 			break;
@@ -3078,6 +3091,51 @@ function validateClosedGlobalTableRegion(
 	}
 }
 
+function validateKnownBuiltinProducerRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "known-builtin-producers" }>,
+): void {
+	const payloadIps = region.sites.flatMap((site) => [
+		site.receiverIp,
+		site.propertyIp,
+		site.callIp,
+	]);
+	if (
+		region.representation !== "exact-intrinsic-property-call-twins" ||
+		region.composition !== "overlay" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "none" ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== 1 ||
+		region.license.guard.obligations[0] !== "fallback" ||
+		region.anchors.length !== 1 ||
+		region.anchors[0] !== region.sites[0]?.callIp ||
+		region.sites.length === 0 ||
+		region.sites.length > 32 ||
+		new Set(payloadIps).size !== payloadIps.length ||
+		payloadIps.length !== region.claimedIps.length ||
+		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		region.sites.some((site) => {
+			const receiver = fn.instructions[site.receiverIp];
+			const property = fn.instructions[site.propertyIp];
+			const call = fn.instructions[site.callIp];
+			return (
+				receiver?.opcode !== "LOAD_INTRINSIC" ||
+				property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				call?.opcode !== "CALL" ||
+				call.guardedBuiltinCall === undefined ||
+				property.object !== receiver.dst ||
+				call.callee !== property.dst ||
+				call.thisValue !== receiver.dst
+			);
+		}) ||
+		region.cost.score !== region.sites.length ||
+		region.cost.metadataOperations !== payloadIps.length
+	) {
+		throw new RangeError("serialize-vm: invalid known-builtin producer region");
+	}
+}
+
 function validateStringSplitProjectionRegion(
 	fn: VmFunction,
 	region: Extract<VmRegion, { kind: "string-split-projection" }>,
@@ -4211,13 +4269,20 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 1 &&
 					(dependencyMask === 1 || dependencyMask === 8) &&
 					obligationMask === 3;
+				const knownBuiltinProducerContract =
+					kindTag === 18 &&
+					representationTag === 18 &&
+					materializationTag === 0 &&
+					dependencyMask === 0 &&
+					obligationMask === 1;
 				if (
 					compositionTag > 1 ||
 					(compositionTag === 1) !==
 						(exactFreshArrayContract ||
 							numericFusionContract ||
 							finitePropertySelectorContract ||
-							closedGlobalTableContract) ||
+							closedGlobalTableContract ||
+							knownBuiltinProducerContract) ||
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
@@ -4235,7 +4300,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!numericFusionContract &&
 						!finiteObjectConstructionContract &&
 						!finitePropertySelectorContract &&
-						!closedGlobalTableContract)
+						!closedGlobalTableContract &&
+						!knownBuiltinProducerContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -5128,7 +5194,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						runtimeGuard: "integer-domain-and-shape-or-generic-access",
 						selectors,
 					};
-				} else {
+				} else if (kindTag === 17) {
 					const sourceGlobalIndex = r.i32();
 					const baseIndex = r.i32();
 					const stateIndex = r.i32();
@@ -5174,6 +5240,33 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						stateIndex,
 						mask,
 						accesses,
+					};
+				} else {
+					const siteCount = r.count(3);
+					const sites: Array<
+						Extract<VmRegion, { kind: "known-builtin-producers" }>["sites"][number]
+					> = [];
+					for (let siteIndex = 0; siteIndex < siteCount; siteIndex++) {
+						sites.push({
+							receiverIp: r.i32(),
+							propertyIp: r.i32(),
+							callIp: r.i32(),
+						});
+					}
+					region = {
+						kind: "known-builtin-producers",
+						license: {
+							guard: { dependencies: [], obligations: ["fallback"] },
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "exact-intrinsic-property-call-twins",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						sites,
 					};
 				}
 				validateRegion(

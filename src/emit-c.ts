@@ -3309,10 +3309,23 @@ function emitBody(
 			mathBinaryCalls.add(ip);
 		}
 	}
+	const knownBuiltinProducerByCallIp = new Map<
+		number,
+		Extract<VmRegion, { kind: "known-builtin-producers" }>["sites"][number]
+	>();
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "known-builtin-producers") continue;
+		for (const site of region.sites) {
+			if (knownBuiltinProducerByCallIp.has(site.callIp)) {
+				throw new Error(`Overlapping known-builtin producer site at ${site.callIp}`);
+			}
+			knownBuiltinProducerByCallIp.set(site.callIp, site);
+		}
+	}
 	const elidedLockedMathGenericTwinIps = new Set<number>();
 	for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
 		const call = fn.instructions[callIp];
-		const site = call?.opcode === "CALL" ? call.nativeMathExactProducerTwin : undefined;
+		const site = knownBuiltinProducerByCallIp.get(callIp);
 		if (site === undefined) continue;
 		const property = fn.instructions[site.propertyIp];
 		if (

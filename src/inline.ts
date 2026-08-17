@@ -54,6 +54,7 @@ import type {
 	IRExactFreshArrayRegion,
 	IRFunction,
 	IRInstruction,
+	IRKnownBuiltinProducerRegion,
 	IRNumericHofRegion,
 	IRNumericHofPlanOperation,
 	IRRegion,
@@ -873,8 +874,9 @@ function annotateDirectIntrinsicMethodSites(
 	for (const fn of program.functions) {
 		let guardOrdinal = 0;
 		let positionId: number | undefined;
-		const registerIndex = buildIRRegisterIndex(fn);
+		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
 		const definitions = registerIndex.uniqueDefinitions;
+		const producerSites: Array<IRKnownBuiltinProducerRegion["sites"][number]> = [];
 		const moveRoot = (initial: number): number => {
 			let register = initial;
 			const seen = new Set<number>();
@@ -943,12 +945,54 @@ function annotateDirectIntrinsicMethodSites(
 						(use) => use.instruction === instruction && use.position === 2,
 					)
 				) {
-					instruction.knownBuiltinCallExactProducerTwin = {
+					producerSites.push({
 						receiver: origin,
 						property: callee,
-					};
+						call: instruction,
+					});
 				}
 				count++;
+			}
+		}
+		if (producerSites.length > 0) {
+			const regions = [...(fn.regions ?? [])];
+			const existingIndex = regions.findIndex(
+				(region) => region.kind === "known-builtin-producers",
+			);
+			if (existingIndex >= 0 || regions.length < MAX_INLINE_REGIONS) {
+				const existing =
+					existingIndex < 0
+						? undefined
+						: (regions[existingIndex] as IRKnownBuiltinProducerRegion);
+				const sites = [...(existing?.sites ?? []), ...producerSites].slice(0, 32);
+				const claimedInstructions = [
+					...new Set(sites.flatMap((site) => [site.receiver, site.property, site.call])),
+				];
+				const ordinaryBlocks = [
+					...new Set(
+						claimedInstructions.map(
+							(instruction) => registerIndex.locations!.get(instruction)!.blockIndex,
+						),
+					),
+				].sort((left, right) => left - right);
+				const region: IRKnownBuiltinProducerRegion = {
+					kind: "known-builtin-producers",
+					license: {
+						guard: "structural",
+						genericTwin: "retained",
+						materialization: "none",
+					},
+					representation: "exact-intrinsic-property-call-twins",
+					composition: "overlay",
+					anchors: [sites[0]!.call],
+					claimedInstructions,
+					controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+					cost: { score: sites.length, metadataOperations: claimedInstructions.length },
+					sites,
+				};
+				if (existingIndex < 0) regions.push(region);
+				else regions[existingIndex] = region;
+				fn.regions = regions;
 			}
 		}
 	}

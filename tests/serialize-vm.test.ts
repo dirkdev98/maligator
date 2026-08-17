@@ -492,6 +492,39 @@ describe("serialize-vm", () => {
 			).length,
 		});
 		const exactArrayAccessInstructionIndex = metadataInstructions.length - 1;
+		metadataInstructions.push({ opcode: "LOAD_INTRINSIC", dst: 10, intrinsic: "Math" });
+		const knownBuiltinReceiverInstructionIndex = metadataInstructions.length - 1;
+		metadataInstructions.push({
+			opcode: "LOAD_PROPERTY_STATIC",
+			dst: 7,
+			object: 10,
+			stringIndex: 0,
+			icIndex: metadataInstructions.filter((instruction) =>
+				[
+					"LOAD_PROPERTY",
+					"LOAD_PROPERTY_STATIC",
+					"STORE_PROPERTY",
+					"STORE_PROPERTY_STATIC",
+				].includes(instruction.opcode),
+			).length,
+		});
+		const knownBuiltinPropertyInstructionIndex = metadataInstructions.length - 1;
+		metadataInstructions.push({
+			opcode: "CALL",
+			dst: 9,
+			callee: 7,
+			thisValue: 10,
+			argumentCount: 1,
+			arguments: [1],
+			guardedBuiltinCall: {
+				operation: "Math.floor",
+				guard: {
+					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					obligations: ["fallback"],
+				},
+			},
+		});
+		const knownBuiltinCallInstructionIndex = metadataInstructions.length - 1;
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
@@ -508,6 +541,31 @@ describe("serialize-vm", () => {
 					],
 					gcRootRegisters: [0, 3, 7],
 					regions: [
+						{
+							kind: "known-builtin-producers",
+							license: {
+								guard: { dependencies: [], obligations: ["fallback"] },
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: "exact-intrinsic-property-call-twins",
+							composition: "overlay",
+							anchors: [knownBuiltinCallInstructionIndex],
+							claimedIps: [
+								knownBuiltinReceiverInstructionIndex,
+								knownBuiltinPropertyInstructionIndex,
+								knownBuiltinCallInstructionIndex,
+							],
+							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+							cost: { score: 1, metadataOperations: 3 },
+							sites: [
+								{
+									receiverIp: knownBuiltinReceiverInstructionIndex,
+									propertyIp: knownBuiltinPropertyInstructionIndex,
+									callIp: knownBuiltinCallInstructionIndex,
+								},
+							],
+						},
 						{
 							kind: "closed-global-table",
 							license: {
