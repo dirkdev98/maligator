@@ -195,6 +195,10 @@ linked-binary caches. Compiled/interpreted variants of the same ordinary fixture
 therefore reuse the module graph through lowering; script-goal, profiled, and
 custom-type-stripper fixtures keep their explicit uncached frontend path.
 
+Native tests in `tests/test-suite-native-loopback.txt` require permission to bind
+an ephemeral loopback port. The Vitest wrapper probes `127.0.0.1:0` before those
+selections and reports a sandbox error early when `listen(0)` is denied.
+
 Use `npm run test:help` for tier policy and
 `npm run test:check -- --list` (or another tier) to inspect exact stage commands
 without executing them. `-h`/`--help` is also side-effect-free on the Test262 and

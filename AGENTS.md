@@ -27,6 +27,11 @@
 - `npm run bench` - Consolidated benchmark runner (size / language-vs-V8 / gc / http); `--update` merges selected lanes into the saved snapshot
 - `node ./src/index.ts cache status|prune` - Inspect or conservatively prune Maligator-owned rebuildable caches; use `prune --dry-run` to preview
 
+Native tests listed in `tests/test-suite-native-loopback.txt` bind `listen(0)`.
+Run them in a sandbox with loopback/network permission from the outset. If the
+runner reports `EPERM`/`EACCES`, rerun the exact command with an elevated sandbox;
+do not diagnose or change Maligator code for that environment failure.
+
 ### Manual milestone scripts (not part of `npm test`)
 
 - `node scripts/eval-phase2-check.ts` - wire-format loader differential

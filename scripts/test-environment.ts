@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:net";
+import * as path from "node:path";
 
 const ambientRuntimeVariables = new Set([
 	"ASAN_OPTIONS",
@@ -26,6 +28,61 @@ export function cleanTestEnvironment(
 		),
 	);
 	return { ...environment, ...overrides };
+}
+
+function normalizedTestPath(file: string): string {
+	return path.relative(process.cwd(), path.resolve(file)).split(path.sep).join("/");
+}
+
+/** Whether a Vitest selection can execute a native test that binds loopback. */
+export function testSelectionRequiresLoopback(
+	arguments_: ReadonlyArray<string>,
+	loopbackTests: ReadonlySet<string>,
+): boolean {
+	if (
+		arguments_.includes("--help") ||
+		arguments_.includes("-h") ||
+		arguments_.includes("list")
+	) {
+		return false;
+	}
+	const projects: Array<string> = [];
+	for (const [index, argument] of arguments_.entries()) {
+		if (argument === "--project" && arguments_[index + 1] !== undefined) {
+			projects.push(arguments_[index + 1]!);
+		} else if (argument.startsWith("--project=")) {
+			projects.push(argument.slice("--project=".length));
+		}
+	}
+	if (projects.length > 0 && !projects.includes("native")) return false;
+
+	const selectedTests = arguments_.filter((argument) =>
+		/\.test\.[cm]?[jt]s$/.test(argument),
+	);
+	if (selectedTests.length === 0) return true;
+	return selectedTests.some((file) => loopbackTests.has(normalizedTestPath(file)));
+}
+
+/** Fail early with an actionable error when the execution sandbox denies listen(0). */
+export function assertLoopbackAvailable(): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const server = createServer();
+		server.unref();
+		server.once("error", (error: NodeJS.ErrnoException) => {
+			if (error.code === "EPERM" || error.code === "EACCES") {
+				reject(
+					new Error(
+						"loopback listen(0) is blocked by the execution sandbox; rerun the exact test command with loopback/network permission (Codex: elevated sandbox). This is an environment failure, not a Maligator regression.",
+					),
+				);
+				return;
+			}
+			reject(error);
+		});
+		server.listen(0, "127.0.0.1", () => {
+			server.close((error) => (error === undefined ? resolve() : reject(error)));
+		});
+	});
 }
 
 function sameEnvironment(left: NodeJS.ProcessEnv, right: NodeJS.ProcessEnv): boolean {

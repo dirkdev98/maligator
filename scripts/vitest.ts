@@ -1,12 +1,31 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { CommandProgress } from "../src/command-progress.ts";
+import {
+	assertLoopbackAvailable,
+	testSelectionRequiresLoopback,
+} from "./test-environment.ts";
 
 const FULL_ONLY_ARGUMENT = "--maligator-unit-full-only";
 const userArguments = process.argv
 	.slice(2)
 	.filter((argument) => argument !== FULL_ONLY_ARGUMENT);
 const runFullOnlyUnitTests = process.argv.includes(FULL_ONLY_ARGUMENT);
+const loopbackTests = new Set(
+	readFileSync("tests/test-suite-native-loopback.txt", "utf8")
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0 && !line.startsWith("#")),
+);
+if (testSelectionRequiresLoopback(userArguments, loopbackTests)) {
+	try {
+		await assertLoopbackAvailable();
+	} catch (error) {
+		console.error(`[vitest] ${error instanceof Error ? error.message : String(error)}`);
+		process.exit(2);
+	}
+}
 const arguments_ = userArguments.some(
 	(argument) => argument === "--configLoader" || argument.startsWith("--configLoader="),
 )

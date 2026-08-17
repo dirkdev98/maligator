@@ -1,0 +1,19 @@
+# Native tests that bind an ephemeral loopback port and need a network-capable sandbox.
+tests/native/express-http-server.test.ts
+tests/native/express-test-fetch-loopback.test.ts
+tests/native/fetch-hardening.test.ts
+tests/native/fetch.test.ts
+tests/native/node-async-hooks.test.ts
+tests/native/node-crypto-async.test.ts
+tests/native/node-http-client-lifecycle.test.ts
+tests/native/node-http-client.test.ts
+tests/native/node-http-limits.test.ts
+tests/native/node-http-listen.test.ts
+tests/native/node-http-ready-queues.test.ts
+tests/native/node-http-request.test.ts
+tests/native/node-http.test.ts
+tests/native/node-net.test.ts
+tests/native/node-process-events.test.ts
+tests/native/node-tls.test.ts
+tests/native/postgres-auth.test.ts
+tests/native/server.test.ts
