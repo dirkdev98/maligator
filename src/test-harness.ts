@@ -5,9 +5,9 @@
  * the tests stay declarative.
  *
  * Two responsibilities beyond deduplication:
- *   - the expensive C and Rust archives are atomically cached under
- *     `.cache/mal-cache`; only the per-test emitted `.c` + final link land in the
- *     caller-chosen `outDir`, so parallel vitest workers never clobber each other.
+ *   - ordinary fixture frontends, generated objects, linked binaries, and the
+ *     expensive C/Rust archives are atomically cached under `.cache/mal-cache`;
+ *     only the emitted `.c` and restored binary land in the caller's `outDir`.
  *   - the plain + MAL_GC_STRESS+MAL_GC_VERIFY re-run that every runner used to
  *     copy-paste is one constant ({@link STRESS_ENV}) plus small assert helpers.
  */
@@ -20,6 +20,7 @@ import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts
 import type { BuildConfigTypeStripper } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
+import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
@@ -121,6 +122,8 @@ export interface BuildOptions {
 	environment?: NodeJS.ProcessEnv;
 	/** Override application type erasure, primarily for compact product-stripper tests. */
 	stripTypes?: BuildConfigTypeStripper;
+	/** Observe persistent frontend-cache reuse in focused harness tests. */
+	onFrontendCacheEvent?: (event: { cache: "hit" | "miss"; entrypoint: string }) => void;
 }
 
 export type BuildNativeBinaryResult = LocalBuildResult;
@@ -156,20 +159,40 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 				node: options.nodeEnabled ?? false,
 			},
 		});
-	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
-		path.resolve(options.fixture),
-		{
-			buildConfig: config,
-			stripTypes: options.stripTypes ?? stripTypesWithTypeScript,
-			entryGoal: options.entryGoal,
-		},
-	);
-	// Tests intentionally bypass build policy so disabled-feature fixtures can
-	// compile and assert the runtime behavior of the reduced engine.
-	const definition = compileSemanticProgramToVmDefinition(semanticProgram, {
-		facts: compilerProgramFactsFromConfig(config),
-		profile: options.profileEnabled,
-	});
+	const entrypoint = path.resolve(options.fixture);
+	const stripTypes = options.stripTypes ?? stripTypesWithTypeScript;
+	const canReuseFrontend =
+		options.entryGoal === undefined &&
+		options.profileEnabled !== true &&
+		stripTypes === stripTypesWithTypeScript;
+	const definition = canReuseFrontend
+		? (() => {
+				const frontend = compileBuildFrontend({
+					entrypoint,
+					config,
+					stripTypes,
+					stripperIdentity: "typescript-strip-v1",
+					enforcePolicies: false,
+				});
+				options.onFrontendCacheEvent?.({
+					cache: frontend.cache,
+					entrypoint,
+				});
+				return frontend.definition;
+			})()
+		: (() => {
+				const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypoint, {
+					buildConfig: config,
+					stripTypes,
+					entryGoal: options.entryGoal,
+				});
+				// Tests intentionally bypass build policy so disabled-feature fixtures can
+				// compile and assert the runtime behavior of the reduced engine.
+				return compileSemanticProgramToVmDefinition(semanticProgram, {
+					facts: compilerProgramFactsFromConfig(config),
+					profile: options.profileEnabled,
+				});
+			})();
 	const cSource = emitVmDefinition(definition, {
 		compiled: options.compiled ?? true,
 		assets: includeConfiguredAssets(config.assets),

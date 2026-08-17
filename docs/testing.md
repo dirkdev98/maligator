@@ -190,6 +190,11 @@ corpus. All execution commands consume that cached checkout read-only and name
 this recovery command when it is absent or stale. The full Test262 corpus
 requires explicit approval; targeted filters and manifests do not.
 
+The native harness shares persistent frontend, generated-object, runtime, and
+linked-binary caches. Compiled/interpreted variants of the same ordinary fixture
+therefore reuse the module graph through lowering; script-goal, profiled, and
+custom-type-stripper fixtures keep their explicit uncached frontend path.
+
 Use `npm run test:help` for tier policy and
 `npm run test:check -- --list` (or another tier) to inspect exact stage commands
 without executing them. `-h`/`--help` is also side-effect-free on the Test262 and

@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	assertExactLines,
 	buildNativeBinary,
@@ -15,6 +15,7 @@ const expected = ["direct-known-call PASS"];
 describe("structural direct script-function calls", () => {
 	let compiled: string;
 	let interpreted: string;
+	const frontendCacheEvents: Array<"hit" | "miss"> = [];
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -23,6 +24,7 @@ describe("structural direct script-function calls", () => {
 			compiled: true,
 			mainFile: "runtime/direct_call_test_main.c",
 			outDir,
+			onFrontendCacheEvent: ({ cache }) => frontendCacheEvents.push(cache),
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/direct-known-call.js",
@@ -30,6 +32,7 @@ describe("structural direct script-function calls", () => {
 			compiled: false,
 			mainFile: "runtime/direct_call_test_main.c",
 			outDir,
+			onFrontendCacheEvent: ({ cache }) => frontendCacheEvents.push(cache),
 		});
 	}, 600_000);
 
@@ -40,5 +43,10 @@ describe("structural direct script-function calls", () => {
 
 	it("enters interpreted targets directly and falls back on guard failure", () => {
 		assertExactLines(runToStdout(interpreted), expected);
+	});
+
+	it("reuses the shared frontend definition across backend variants", () => {
+		expect(frontendCacheEvents).toHaveLength(2);
+		expect(frontendCacheEvents[1]).toBe("hit");
 	});
 });
