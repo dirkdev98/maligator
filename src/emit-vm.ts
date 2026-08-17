@@ -9,6 +9,8 @@ import {
 	countPropertyIcSites,
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
+	vmInstructionDefinesRegister,
+	vmInstructionUsesRegister,
 	vmRegionLicense,
 	vmSemanticProtectorGuard,
 	VM_DIRECT_BUILTIN_OPERATIONS,
@@ -450,98 +452,6 @@ interface NativeStringScanTarget {
 	arrayKeyStringIndex: number;
 	matchKeyStringIndex: number;
 	matchCodeUnit: number;
-}
-
-const VM_REGISTER_USE_FIELDS = [
-	"src",
-	"value",
-	"cond",
-	"callee",
-	"thisValue",
-	"object",
-	"key",
-	"left",
-	"right",
-	"receiver",
-	"source",
-	"target",
-	"direct",
-	"fallback",
-	"iterator",
-	"next",
-	"accessor",
-	"func",
-	"parent",
-	"newTarget",
-	"found",
-	"awaitedSrc",
-	"yieldedSrc",
-	"iterable",
-	"argumentsArray",
-] as const;
-
-const VM_REGISTER_USE_ARRAY_FIELDS = [
-	"arguments",
-	"valueRegisters",
-	"keyRegisters",
-	"excluded",
-] as const;
-
-function vmInstructionUsesRegister(
-	instruction: VmInstruction,
-	register: number,
-): boolean {
-	const row = instruction as unknown as Record<string, unknown>;
-	if (VM_REGISTER_USE_FIELDS.some((field) => row[field] === register)) return true;
-	if (
-		VM_REGISTER_USE_ARRAY_FIELDS.some(
-			(field) => Array.isArray(row[field]) && row[field].includes(register),
-		)
-	) {
-		return true;
-	}
-	switch (instruction.opcode) {
-		case "RETURN":
-		case "THROW":
-		case "SET_THIS":
-			return instruction.value === register;
-		case "STORE_PROPERTY":
-		case "STORE_PROPERTY_STATIC":
-		case "STORE_SUPER_PROPERTY":
-		case "DEFINE_PROPERTY":
-		case "DEFINE_PRIVATE":
-		case "STORE_PRIVATE":
-			return instruction.value === register;
-		default:
-			return false;
-	}
-}
-
-/** The generic scanner's `value` key is a register for stores/returns but a
- * literal payload for CREATE_NUMBER/F64/BOOLEAN. Semantic identity proofs must
- * not confuse equal literal bits with a physical-register use. */
-function nativeInstructionUsesRegister(
-	instruction: VmInstruction,
-	register: number,
-): boolean {
-	if (
-		instruction.opcode === "CREATE_NUMBER" ||
-		instruction.opcode === "CREATE_F64" ||
-		instruction.opcode === "CREATE_BOOLEAN"
-	)
-		return false;
-	return vmInstructionUsesRegister(instruction, register);
-}
-
-function vmInstructionDefinesRegister(
-	instruction: VmInstruction,
-	register: number,
-): boolean {
-	const row = instruction as unknown as Record<string, unknown>;
-	if (row.dst === register) return true;
-	return ["iteratorDst", "nextDst", "resultDst", "valueDst", "doneDst", "modeDst"].some(
-		(field) => row[field] === register,
-	);
 }
 
 function staticStringEquals(
@@ -2409,6 +2319,12 @@ function annotateNativeStringScanRegions(definition: VmDefinition): void {
 /** Mark the exact lowered shape of `primitiveString.search(/literal/flags)`. */
 function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
 	for (const fn of definition.functions) {
+		const existingRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "string-search-regexp",
+		);
+		fn.regions = existingRegions.length > 0 ? existingRegions : undefined;
+		if (existingRegions.length >= 8) continue;
+		const regions: Array<Extract<VmRegion, { kind: "string-search-regexp" }>> = [];
 		const entryTargets = new Set<number>(fn.handlers.map((handler) => handler.handlerIp));
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
@@ -2475,17 +2391,47 @@ function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
 					if (vmInstructionDefinesRegister(instruction, construct.dst)) break;
 				}
 			}
-			if (fixedLiteral && !literalHasOtherUse) {
-				construct.directStringSearchLiteral = {
-					callIp,
-					searchCallee: call.callee,
-					receiver: call.thisValue,
-					patternStringIndex: pattern.index,
-				};
-				call.directStringSearchLiteralConstructIp = callIp - 1;
-			}
-			call.directStringSearchRegExp = true;
+			if (existingRegions.length + regions.length >= 8) break;
+			const literalPatternStringIndex =
+				fixedLiteral && !literalHasOtherUse ? pattern.index : undefined;
+			const claimedIps = [callIp - 3, callIp - 2, callIp - 1, callIp];
+			regions.push({
+				kind: "string-search-regexp",
+				license: {
+					guard: {
+						dependencies: [],
+						obligations:
+							literalPatternStringIndex === undefined
+								? ["fallback"]
+								: ["fallback", "materialize"],
+					},
+					genericTwin: "retained",
+					materialization: literalPatternStringIndex === undefined ? "none" : "on-demand",
+				},
+				representation: "fresh-regexp-string-search",
+				composition: "overlay",
+				anchors: [callIp - 1, callIp],
+				claimedIps,
+				controlFlow: {
+					ordinaryBlockIps: [callIp - 3],
+					exceptionalHandlerIps: [],
+				},
+				cost: {
+					score: literalPatternStringIndex === undefined ? 1 : 2,
+					metadataOperations: claimedIps.length,
+				},
+				propertyIp: callIp - 3,
+				regexpIntrinsicIp: callIp - 2,
+				regexpConstructIp: callIp - 1,
+				searchCallIp: callIp,
+				searchCallee: call.callee,
+				receiver: call.thisValue,
+				regexp: construct.dst,
+				result: call.dst,
+				...(literalPatternStringIndex === undefined ? {} : { literalPatternStringIndex }),
+			});
 		}
+		if (regions.length > 0) fn.regions = [...existingRegions, ...regions];
 	}
 }
 
@@ -3099,7 +3045,7 @@ function proveNativePrimitiveProjection(
 		for (let register = 0; register < fn.registerCount; register++) {
 			if (
 				nativeResolveMoves(fn, reaching, register, ip)?.ip !== copyIp ||
-				!nativeInstructionUsesRegister(fn.instructions[ip]!, register)
+				!vmInstructionUsesRegister(fn.instructions[ip]!, register)
 			)
 				continue;
 			const instruction = fn.instructions[ip]!;
@@ -3127,7 +3073,7 @@ function proveNativePrimitiveProjection(
 		if (load.opcode !== "LOAD_CALLEE") continue;
 		for (let ip = loadIp + 1; ip < fn.instructions.length; ip++) {
 			if (
-				nativeInstructionUsesRegister(fn.instructions[ip]!, load.dst) &&
+				vmInstructionUsesRegister(fn.instructions[ip]!, load.dst) &&
 				nativeResolveMoves(fn, reaching, load.dst, ip)?.ip === loadIp
 			)
 				return undefined;
@@ -3281,7 +3227,7 @@ function annotateNativeInvariantJsonMapTemplates(definition: VmDefinition): void
 				for (let register = 0; register < fn.registerCount; register++) {
 					if (
 						nativeResolveMoves(fn, reaching, register, ip)?.ip !== p ||
-						!nativeInstructionUsesRegister(instruction, register)
+						!vmInstructionUsesRegister(instruction, register)
 					)
 						continue;
 					if (

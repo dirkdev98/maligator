@@ -585,6 +585,10 @@ is general rather than a registry-shaped collection of special cases.
         region that owns the JSON/property/call producer graph. Static and dynamic
         `parse` loads retain their generic call twin and cross MALW v68 as one
         structurally validated certificate.
+  - [x] Replace the fresh-RegExp construct/call annotation pair with one String
+        search overlay region. The region owns the property/intrinsic/construct/call
+        chain, licenses optional literal allocation elision with on-demand fallback
+        materialization, and crosses MALW v69 as one cache-validated proof.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

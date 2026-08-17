@@ -2712,16 +2712,46 @@ describe("native update-expression representation", () => {
 	});
 
 	it("fuses a closed String search over a fresh RegExp literal", () => {
-		const output = emit(`
+		const source = `
 			function locate(value) {
 				return value.search(/needle=/);
 			}
 			globalThis.locate = locate;
-		`);
+		`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"string-search-regexp-region.js",
+			parseScript(source, { strict: false }),
+		);
+		const definition = compileSemanticProgramToVmDefinition(semantic);
+		const output = emitVmDefinition(definition, { compiled: true });
 		expect(output).toContain("mal_builtin_string_search_literal_direct(vm,");
 		expect(output).toContain("mal_builtin_string_search_regexp_direct(vm,");
 		expect(output).toContain("mal_vm_construct_value(vm,");
 		expect(output).toContain("mal_vm_call_cached(vm,");
+		const regions = definition.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "string-search-regexp") ?? [],
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			representation: "fresh-regexp-string-search",
+			composition: "overlay",
+			license: {
+				guard: { dependencies: [], obligations: ["fallback", "materialize"] },
+				genericTwin: "retained",
+				materialization: "on-demand",
+			},
+		});
+		const restored = deserializeVmDefinition(
+			serializeVmDefinition(definition, { debugInfo: false }),
+		);
+		expect(
+			restored.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "string-search-regexp") ?? [],
+			),
+		).toEqual(regions);
 	});
 
 	it("keeps RegExp literals materialized when fixed search proof does not apply", () => {

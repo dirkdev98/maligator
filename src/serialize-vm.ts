@@ -6,6 +6,8 @@ import {
 	countPropertyIcSites,
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
+	vmInstructionDefinesRegister,
+	vmInstructionUsesRegister,
 	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_GUARDED_BUILTIN_OPERATIONS,
@@ -37,8 +39,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped for activation-local invariant JSON.parse cache regions.
-export const WIRE_VERSION = 68;
+// Bumped for structural fresh-RegExp String search regions.
+export const WIRE_VERSION = 69;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1269,7 +1271,10 @@ export function serializeVmDefinition(
 																						: region.kind ===
 																							  "affine-range-virtualization"
 																							? 19
-																							: 20;
+																							: region.kind ===
+																								  "invariant-json-parse-cache"
+																								? 20
+																								: 21;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1306,9 +1311,17 @@ export function serializeVmDefinition(
 																	? stackObjectPlanGuardMasks(region.license)
 																	: region.kind === "cardinality-array"
 																		? cardinalityGuardMasks(region.license.guard)
-																		: region.kind === "finite-object-construction"
-																			? { dependencyMask: 0, obligationMask: 3 }
-																			: { dependencyMask: 0, obligationMask: 1 };
+																		: region.kind === "string-search-regexp"
+																			? {
+																					dependencyMask: 0,
+																					obligationMask:
+																						region.literalPatternStringIndex === undefined
+																							? 1
+																							: 3,
+																				}
+																			: region.kind === "finite-object-construction"
+																				? { dependencyMask: 0, obligationMask: 3 }
+																				: { dependencyMask: 0, obligationMask: 1 };
 			w.u8(kindTag);
 			w.u8(region.composition === "overlay" ? 1 : 0);
 			w.i32Array([...region.anchors]);
@@ -1323,6 +1336,17 @@ export function serializeVmDefinition(
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
 			switch (region.kind) {
+				case "string-search-regexp":
+					w.i32(region.propertyIp);
+					w.i32(region.regexpIntrinsicIp);
+					w.i32(region.regexpConstructIp);
+					w.i32(region.searchCallIp);
+					w.i32(region.searchCallee);
+					w.i32(region.receiver);
+					w.i32(region.regexp);
+					w.i32(region.result);
+					w.i32(region.literalPatternStringIndex ?? -1);
+					break;
 				case "invariant-json-parse-cache":
 					w.i32(region.jsonIntrinsicIp);
 					w.i32(region.parsePropertyIp);
@@ -1982,6 +2006,9 @@ function validateRegion(
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
+		case "string-search-regexp":
+			validateStringSearchRegExpRegion(fn, region, stringConstants);
+			break;
 		case "invariant-json-parse-cache":
 			validateInvariantJsonParseCacheRegion(fn, region, stringConstants);
 			break;
@@ -3095,6 +3122,118 @@ function validateClosedRecordArrayRegion(
 		})
 	) {
 		throw new RangeError("serialize-vm: invalid closed record-Array region metadata");
+	}
+}
+
+function validateStringSearchRegExpRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "string-search-regexp" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	const stringEquals = (index: number, value: string): boolean => {
+		const constant = stringConstants[index];
+		return (
+			constant?.length === value.length &&
+			constant.every((unit, offset) => unit === value.charCodeAt(offset))
+		);
+	};
+	const property = fn.instructions[region.propertyIp];
+	const intrinsic = fn.instructions[region.regexpIntrinsicIp];
+	const construct = fn.instructions[region.regexpConstructIp];
+	const call = fn.instructions[region.searchCallIp];
+	const pattern =
+		construct?.opcode === "CONSTRUCT" && construct.arguments.length === 2
+			? decodeVmValueOperand(construct.arguments[0]!)
+			: undefined;
+	const flags =
+		construct?.opcode === "CONSTRUCT" && construct.arguments.length === 2
+			? decodeVmValueOperand(construct.arguments[1]!)
+			: undefined;
+	const regexp =
+		call?.opcode === "CALL" && call.arguments.length === 1
+			? decodeVmValueOperand(call.arguments[0]!)
+			: undefined;
+	const flagUnits = flags?.kind === "string" ? stringConstants[flags.index] : undefined;
+	const payloadIps = [
+		region.propertyIp,
+		region.regexpIntrinsicIp,
+		region.regexpConstructIp,
+		region.searchCallIp,
+	];
+	const literal = region.literalPatternStringIndex;
+	const literalUnits = literal === undefined ? undefined : stringConstants[literal];
+	let literalHasOtherUse = false;
+	if (literal !== undefined) {
+		for (let ip = region.searchCallIp; ip < fn.instructions.length; ip++) {
+			const instruction = fn.instructions[ip]!;
+			if (
+				vmInstructionUsesRegister(instruction, region.regexp) &&
+				ip !== region.searchCallIp
+			) {
+				literalHasOtherUse = true;
+				break;
+			}
+			if (vmInstructionDefinesRegister(instruction, region.regexp)) break;
+		}
+	}
+	const expectedMaterialization = literal === undefined ? "none" : "on-demand";
+	const expectedObligations =
+		literal === undefined ? ["fallback"] : ["fallback", "materialize"];
+	if (
+		region.representation !== "fresh-regexp-string-search" ||
+		region.composition !== "overlay" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== expectedMaterialization ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== expectedObligations.length ||
+		region.license.guard.obligations.some(
+			(obligation, index) => obligation !== expectedObligations[index],
+		) ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.regexpConstructIp ||
+		region.anchors[1] !== region.searchCallIp ||
+		region.controlFlow.ordinaryBlockIps.length !== 1 ||
+		region.controlFlow.ordinaryBlockIps[0] !== region.propertyIp ||
+		region.controlFlow.exceptionalHandlerIps.length !== 0 ||
+		region.regexpIntrinsicIp !== region.propertyIp + 1 ||
+		region.regexpConstructIp !== region.propertyIp + 2 ||
+		region.searchCallIp !== region.propertyIp + 3 ||
+		new Set(payloadIps).size !== payloadIps.length ||
+		payloadIps.length !== region.claimedIps.length ||
+		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		property.dst !== region.searchCallee ||
+		property.object !== region.receiver ||
+		!stringEquals(property.stringIndex, "search") ||
+		intrinsic?.opcode !== "LOAD_INTRINSIC" ||
+		intrinsic.intrinsic !== "RegExp" ||
+		construct?.opcode !== "CONSTRUCT" ||
+		construct.callee !== intrinsic.dst ||
+		construct.dst !== region.regexp ||
+		pattern?.kind !== "string" ||
+		flags?.kind !== "string" ||
+		flagUnits === undefined ||
+		flagUnits.some((unit) => unit === "g".charCodeAt(0) || unit === "y".charCodeAt(0)) ||
+		call?.opcode !== "CALL" ||
+		call.callee !== region.searchCallee ||
+		call.thisValue !== region.receiver ||
+		call.dst !== region.result ||
+		regexp?.kind !== "register" ||
+		regexp.register !== region.regexp ||
+		(literal !== undefined &&
+			(pattern.index !== literal ||
+				literalUnits === undefined ||
+				literalUnits.length === 0 ||
+				literalUnits.some(
+					(unit) =>
+						unit > 0x7f || "\\\\^$.*+?{}[]()|".includes(String.fromCharCode(unit)),
+				) ||
+				flagUnits.length !== 0 ||
+				literalHasOtherUse)) ||
+		region.cost.score !== (literal === undefined ? 1 : 2) ||
+		region.cost.metadataOperations !== payloadIps.length
+	) {
+		throw new RangeError("serialize-vm: invalid fresh-RegExp String search region");
 	}
 }
 
@@ -4443,6 +4582,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
+				const stringSearchRegExpContract =
+					kindTag === 21 &&
+					representationTag === 21 &&
+					dependencyMask === 0 &&
+					((materializationTag === 0 && obligationMask === 1) ||
+						(materializationTag === 1 && obligationMask === 3));
 				if (
 					compositionTag > 1 ||
 					(compositionTag === 1) !==
@@ -4452,7 +4597,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							closedGlobalTableContract ||
 							knownBuiltinProducerContract ||
 							affineRangeContract ||
-							invariantJsonParseCacheContract) ||
+							invariantJsonParseCacheContract ||
+							stringSearchRegExpContract) ||
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
@@ -4473,7 +4619,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!closedGlobalTableContract &&
 						!knownBuiltinProducerContract &&
 						!affineRangeContract &&
-						!invariantJsonParseCacheContract)
+						!invariantJsonParseCacheContract &&
+						!stringSearchRegExpContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -5469,7 +5616,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						length,
 						loadIps,
 					};
-				} else {
+				} else if (kindTag === 20) {
 					const jsonIntrinsicIp = r.i32();
 					const parsePropertyIp = r.i32();
 					const parseKeyIp = r.i32();
@@ -5499,6 +5646,43 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						parseCallee,
 						text,
 						result,
+					};
+				} else {
+					const propertyIp = r.i32();
+					const regexpIntrinsicIp = r.i32();
+					const regexpConstructIp = r.i32();
+					const searchCallIp = r.i32();
+					const searchCallee = r.i32();
+					const receiver = r.i32();
+					const regexp = r.i32();
+					const result = r.i32();
+					const literalPatternStringIndex = r.i32();
+					const literal = literalPatternStringIndex >= 0;
+					region = {
+						kind: "string-search-regexp",
+						license: {
+							guard: {
+								dependencies: [],
+								obligations: literal ? ["fallback", "materialize"] : ["fallback"],
+							},
+							genericTwin: "retained",
+							materialization: literal ? "on-demand" : "none",
+						},
+						representation: "fresh-regexp-string-search",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						propertyIp,
+						regexpIntrinsicIp,
+						regexpConstructIp,
+						searchCallIp,
+						searchCallee,
+						receiver,
+						regexp,
+						result,
+						...(literal ? { literalPatternStringIndex } : {}),
 					};
 				}
 				validateRegion(

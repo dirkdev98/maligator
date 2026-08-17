@@ -561,6 +561,34 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads a nonempty fresh-RegExp String search region payload", () => {
+		const entrypoint = path.join(directory, "string-search-regexp-region.js");
+		const source = `function locate(value) { return value.search(/needle=/); }
+		globalThis.locate = locate;\n`;
+		writeFileSync(entrypoint, source);
+		const searchDefinition = compileSemanticProgramToVmDefinition(
+			analyzeSourceAndRunSemanticAnalysis(
+				source,
+				entrypoint,
+				parseScript(source, { strict: false }),
+			),
+		);
+		emitVmDefinition(searchDefinition, { compiled: true });
+		expect(
+			searchDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "string-search-regexp") ?? [],
+			),
+		).toHaveLength(1);
+		const wirePath = path.join(directory, "string-search-regexp-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(searchDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads a nonempty closed record-Array proof region payload", () => {
 		const entrypoint = path.join(directory, "closed-record-array-region.mjs");
 		writeFileSync(

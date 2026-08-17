@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 68u        // invariant JSON.parse caches moved into regions
+#define WIRE_VERSION 69u        // fresh-RegExp String search moved into regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1935,13 +1935,17 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				obligation_mask == 1;
 			bool invariant_json_parse_cache_contract = kind == 20 && representation == 20 &&
 				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
+			bool string_search_regexp_contract = kind == 21 && representation == 21 &&
+				dependency_mask == 0 &&
+				((materialization == 0 && obligation_mask == 1) ||
+				 (materialization == 1 && obligation_mask == 3));
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
 				(composition == 1) !=
 					(exact_fresh_array_contract || numeric_fusion_contract ||
 					 finite_property_selector_contract || closed_global_table_contract ||
 					 known_builtin_producer_contract || affine_range_contract ||
-					 invariant_json_parse_cache_contract) ||
+					 invariant_json_parse_cache_contract || string_search_regexp_contract) ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
@@ -1950,8 +1954,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				 !cardinality_array_contract && !exact_fresh_array_contract &&
 				 !numeric_fusion_contract && !finite_object_construction_contract &&
 				 !finite_property_selector_contract && !closed_global_table_contract &&
-				 !known_builtin_producer_contract && !affine_range_contract &&
-				 !invariant_json_parse_cache_contract)) {
+					 !known_builtin_producer_contract && !affine_range_contract &&
+					 !invariant_json_parse_cache_contract && !string_search_regexp_contract)) {
                 r.ok = false;
 				if (kind == 18) err = "invalid known-builtin producer region contract";
             }
@@ -3617,6 +3621,107 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				if (parse_key_ip >= 0) MAL_REGION_PAYLOAD_CLAIM(parse_key_ip);
 				MAL_REGION_PAYLOAD_CLAIM(parse_property_ip);
 				MAL_REGION_PAYLOAD_CLAIM(parse_call_ip);
+				if (metadata_operations != payload_count) r.ok = false;
+			} else if (r.ok && kind == 21) {
+				i32 property_ip = rd_i32(&r);
+				i32 regexp_intrinsic_ip = rd_i32(&r);
+				i32 regexp_construct_ip = rd_i32(&r);
+				i32 search_call_ip = rd_i32(&r);
+				i32 search_callee = rd_i32(&r);
+				i32 receiver = rd_i32(&r);
+				i32 regexp = rd_i32(&r);
+				i32 result = rd_i32(&r);
+				i32 literal_pattern_index = rd_i32(&r);
+				bool literal = literal_pattern_index >= 0;
+				bool header_ok = anchor_count == 2 && anchors[0] == regexp_construct_ip &&
+					anchors[1] == search_call_ip && ordinary_block_count == 1 &&
+					ordinary_block_ips[0] == property_ip && exceptional_handler_count == 0 &&
+					property_ip >= 0 && search_call_ip < fn->instruction_count &&
+					regexp_intrinsic_ip == property_ip + 1 &&
+					regexp_construct_ip == property_ip + 2 && search_call_ip == property_ip + 3 &&
+					search_callee >= 0 && search_callee < fn->register_count && receiver >= 0 &&
+					receiver < fn->register_count && regexp >= 0 && regexp < fn->register_count &&
+					result >= 0 && result < fn->register_count &&
+					(literal_pattern_index == -1 ||
+					 (literal_pattern_index >= 0 && literal_pattern_index < (i32) string_count)) &&
+					literal == (materialization == 1);
+				if (header_ok) {
+					const MalInstruction *property = &fn->instructions[property_ip];
+					const MalInstruction *intrinsic = &fn->instructions[regexp_intrinsic_ip];
+					const MalInstruction *construct = &fn->instructions[regexp_construct_ip];
+					const MalInstruction *call = &fn->instructions[search_call_ip];
+					i32 property_name_index = property->opcode == MAL_OP_LOAD_PROPERTY_STATIC
+						? property->as.load_property_static.string_index : -1;
+					bool search_name = property_name_index >= 0 &&
+						property_name_index < (i32) string_count;
+					if (search_name) {
+						const MalString *name = &strings[property_name_index];
+						search_name = name->length == 6 && name->code_units[0] == 's' &&
+							name->code_units[1] == 'e' && name->code_units[2] == 'a' &&
+							name->code_units[3] == 'r' && name->code_units[4] == 'c' &&
+							name->code_units[5] == 'h';
+					}
+					i32 construct_data = construct->opcode == MAL_OP_CONSTRUCT
+						? construct->as.construct.data_offset : -1;
+					i32 call_data = call->opcode == MAL_OP_CALL ? call->as.call.data_offset : -1;
+					bool side_data_ok = construct_data >= 0 &&
+						construct_data + 2 < fn->instruction_data_count &&
+						fn->instruction_data[construct_data] == 2 && call_data >= 0 &&
+						call_data + 1 < fn->instruction_data_count &&
+						fn->instruction_data[call_data] == 1;
+					i32 pattern_operand = side_data_ok
+						? fn->instruction_data[construct_data + 1] : 0;
+					i32 flags_operand = side_data_ok
+						? fn->instruction_data[construct_data + 2] : 0;
+					i32 pattern_index = pattern_operand <= MAL_VALUE_OPERAND_STRING_BASE &&
+						pattern_operand >= MAL_VALUE_OPERAND_STRING_MIN
+						? MAL_VALUE_OPERAND_STRING_BASE - pattern_operand : -1;
+					i32 flags_index = flags_operand <= MAL_VALUE_OPERAND_STRING_BASE &&
+						flags_operand >= MAL_VALUE_OPERAND_STRING_MIN
+						? MAL_VALUE_OPERAND_STRING_BASE - flags_operand : -1;
+					bool flags_ok = flags_index >= 0 && flags_index < (i32) string_count;
+					if (flags_ok) {
+						const MalString *flags = &strings[flags_index];
+						for (u32 unit = 0; flags_ok && unit < flags->length; unit++) {
+							if (flags->code_units[unit] == 'g' || flags->code_units[unit] == 'y') {
+								flags_ok = false;
+							}
+						}
+					}
+					bool literal_ok = true;
+					if (literal) {
+						literal_ok = pattern_index == literal_pattern_index && flags_index >= 0 &&
+							strings[flags_index].length == 0;
+						if (literal_ok) {
+							const MalString *pattern = &strings[literal_pattern_index];
+							literal_ok = pattern->length > 0;
+							for (u32 unit = 0; literal_ok && unit < pattern->length; unit++) {
+								c16 ch = pattern->code_units[unit];
+								if (ch > 0x7f || ch == '\\' || ch == '^' || ch == '$' || ch == '.' ||
+									ch == '*' || ch == '+' || ch == '?' || ch == '{' || ch == '}' ||
+									ch == '[' || ch == ']' || ch == '(' || ch == ')' || ch == '|') {
+									literal_ok = false;
+								}
+							}
+						}
+					}
+					header_ok = search_name && side_data_ok && pattern_index >= 0 &&
+						pattern_index < (i32) string_count && flags_ok && literal_ok &&
+						property->as.load_property_static.dst == search_callee &&
+						property->as.load_property_static.object == receiver &&
+						intrinsic->opcode == MAL_OP_LOAD_INTRINSIC &&
+						intrinsic->as.load_intrinsic.intrinsic == MAL_INTRINSIC_REGEXP_CONSTRUCTOR &&
+						construct->opcode == MAL_OP_CONSTRUCT &&
+						construct->as.construct.callee == intrinsic->as.load_intrinsic.dst &&
+						construct->as.construct.dst == regexp && call->opcode == MAL_OP_CALL &&
+						call->as.call.callee == search_callee && call->as.call.this_value == receiver &&
+						call->as.call.dst == result && fn->instruction_data[call_data + 1] == regexp;
+				}
+				if (!header_ok || score != (literal ? 2u : 1u)) r.ok = false;
+				MAL_REGION_PAYLOAD_CLAIM(property_ip);
+				MAL_REGION_PAYLOAD_CLAIM(regexp_intrinsic_ip);
+				MAL_REGION_PAYLOAD_CLAIM(regexp_construct_ip);
+				MAL_REGION_PAYLOAD_CLAIM(search_call_ip);
 				if (metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;

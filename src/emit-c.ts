@@ -2239,6 +2239,13 @@ interface NativeStringScanRegionAction {
 	role: "entry" | "length";
 }
 
+type NativeStringSearchRegExpRegion = Extract<VmRegion, { kind: "string-search-regexp" }>;
+
+interface NativeStringSearchRegExpAction {
+	region: NativeStringSearchRegExpRegion;
+	role: "construct" | "call";
+}
+
 interface NativeInvariantJsonParseCacheSite {
 	callIp: number;
 	rootsOffset: number;
@@ -3649,6 +3656,30 @@ function emitBody(
 		nativeStringScanRegionActionByIp.set(region.entryIp, { region, role: "entry" });
 		nativeStringScanRegionActionByIp.set(region.lengthLoadIp, { region, role: "length" });
 	}
+	const nativeStringSearchRegExpActionByIp = new Map<
+		number,
+		NativeStringSearchRegExpAction
+	>();
+	const stringSearchRegExpRegions = (fn.regions ?? []).filter(
+		(region): region is NativeStringSearchRegExpRegion =>
+			region.kind === "string-search-regexp",
+	);
+	for (const region of stringSearchRegExpRegions) {
+		if (
+			nativeStringSearchRegExpActionByIp.has(region.regexpConstructIp) ||
+			nativeStringSearchRegExpActionByIp.has(region.searchCallIp)
+		) {
+			throw new Error(`Overlapping String search region at ${region.searchCallIp}`);
+		}
+		nativeStringSearchRegExpActionByIp.set(region.regexpConstructIp, {
+			region,
+			role: "construct",
+		});
+		nativeStringSearchRegExpActionByIp.set(region.searchCallIp, {
+			region,
+			role: "call",
+		});
+	}
 	const nativeStringSplitProjectionActionByIp = new Map<
 		number,
 		NativeStringSplitProjectionAction
@@ -3866,16 +3897,11 @@ function emitBody(
 			`u32 __string_scan_${region.entryIp}_matches = 0;`,
 		);
 	}
-	for (const instruction of fn.instructions) {
-		if (
-			instruction.opcode !== "CONSTRUCT" ||
-			instruction.directStringSearchLiteral === undefined
-		) {
-			continue;
-		}
+	for (const region of stringSearchRegExpRegions) {
+		if (region.literalPatternStringIndex === undefined) continue;
 		lines.push(
-			`bool __string_search_literal_${instruction.directStringSearchLiteral.callIp}_fast = false;`,
-			`MalValue __string_search_literal_${instruction.directStringSearchLiteral.callIp}_result = MAL_VALUE_UNDEFINED;`,
+			`bool __string_search_literal_${region.searchCallIp}_fast = false;`,
+			`MalValue __string_search_literal_${region.searchCallIp}_result = MAL_VALUE_UNDEFINED;`,
 		);
 	}
 	for (const site of stringSplitProjectionSites.values()) {
@@ -4071,6 +4097,8 @@ function emitBody(
 									publishPosition: debug,
 								},
 								closedGlobalTableAccess: closedGlobalTableAccessByIp.get(fastIp),
+								nativeStringSearchRegExpAction:
+									nativeStringSearchRegExpActionByIp.get(fastIp),
 								affineRangeAction: affineRangeAction(fastIp),
 							},
 						);
@@ -4134,6 +4162,7 @@ function emitBody(
 						closedGlobalTableAccess: closedGlobalTableAccessByIp.get(ip),
 						stringCharCodeAtFusion: stringCharCodeAtFusionByIp.get(ip),
 						nativeStringScanRegionAction: nativeStringScanRegionActionByIp.get(ip),
+						nativeStringSearchRegExpAction: nativeStringSearchRegExpActionByIp.get(ip),
 						nativeStringSplitProjectionAction:
 							nativeStringSplitProjectionActionByIp.get(ip),
 						nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
@@ -4529,6 +4558,7 @@ interface NativeInstructionContext {
 	readonly closedGlobalTableAccess?: ClosedGlobalTableAccess;
 	readonly stringCharCodeAtFusion?: StringCharCodeAtFusion;
 	readonly nativeStringScanRegionAction?: NativeStringScanRegionAction;
+	readonly nativeStringSearchRegExpAction?: NativeStringSearchRegExpAction;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
@@ -4588,6 +4618,7 @@ function emitInstruction(
 		closedGlobalTableAccess,
 		stringCharCodeAtFusion,
 		nativeStringScanRegionAction,
+		nativeStringSearchRegExpAction,
 		nativeStringSplitProjectionAction,
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
@@ -6624,8 +6655,8 @@ function emitInstruction(
 				];
 			}
 			if (
-				instruction.directStringSearchRegExp === true &&
-				instruction.directStringSearchLiteralConstructIp !== undefined
+				nativeStringSearchRegExpAction?.role === "call" &&
+				nativeStringSearchRegExpAction.region.literalPatternStringIndex !== undefined
 			) {
 				const fast = `__string_search_literal_${ip}_fast`;
 				const direct = `__string_search_literal_${ip}_result`;
@@ -6648,7 +6679,7 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (instruction.directStringSearchRegExp === true) {
+			if (nativeStringSearchRegExpAction?.role === "call") {
 				const direct = `__string_search_${ip}_result`;
 				return [
 					`static MalCallCache __cc_${ip};`,
@@ -6990,12 +7021,15 @@ function emitInstruction(
 				instruction.directFunctionIndex === undefined
 					? `mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`
 					: `mal_vm_construct_direct(vm, ${instruction.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
-			if (instruction.directStringSearchLiteral !== undefined) {
-				const site = instruction.directStringSearchLiteral;
-				const fast = `__string_search_literal_${site.callIp}_fast`;
-				const direct = `__string_search_literal_${site.callIp}_result`;
+			if (
+				nativeStringSearchRegExpAction?.role === "construct" &&
+				nativeStringSearchRegExpAction.region.literalPatternStringIndex !== undefined
+			) {
+				const site = nativeStringSearchRegExpAction.region;
+				const fast = `__string_search_literal_${site.searchCallIp}_fast`;
+				const direct = `__string_search_literal_${site.searchCallIp}_result`;
 				return [
-					`${fast} = mal_builtin_string_search_literal_direct(vm, ${boxedOperand(site.searchCallee)}, ${boxedOperand(site.receiver)}, &mal_strings${suffix}[${site.patternStringIndex}], &${direct});`,
+					`${fast} = mal_builtin_string_search_literal_direct(vm, ${boxedOperand(site.searchCallee)}, ${boxedOperand(site.receiver)}, &mal_strings${suffix}[${site.literalPatternStringIndex}], &${direct});`,
 					`if (${fast}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,

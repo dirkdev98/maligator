@@ -49,6 +49,16 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "string-search-regexp":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				...(region.literalPatternStringIndex === undefined
+					? {}
+					: {
+							literalPatternStringIndex: region.literalPatternStringIndex + base.string,
+						}),
+			};
 		case "invariant-json-parse-cache":
 			return {
 				...cloneRegionEnvelope(region),

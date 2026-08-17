@@ -434,6 +434,25 @@ export type VmInvariantJsonParseCacheRegion = VmRegionEnvelope<
 	readonly result: number;
 };
 
+/** Exact fresh RegExp construction and its immediately consuming String search. */
+export type VmStringSearchRegExpRegion = VmRegionEnvelope<
+	"string-search-regexp",
+	"fresh-regexp-string-search",
+	"none" | "on-demand"
+> & {
+	readonly composition: "overlay";
+	readonly propertyIp: number;
+	readonly regexpIntrinsicIp: number;
+	readonly regexpConstructIp: number;
+	readonly searchCallIp: number;
+	readonly searchCallee: number;
+	readonly receiver: number;
+	readonly regexp: number;
+	readonly result: number;
+	/** Present when the RegExp allocation can stay virtual on the literal fast path. */
+	readonly literalPatternStringIndex?: number;
+};
+
 export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	"string-split-cursor",
 	"split-cursor-spans",
@@ -759,6 +778,7 @@ export type VmRegion =
 	| VmFinitePropertySelectorRegion
 	| VmKnownBuiltinProducerRegion
 	| VmInvariantJsonParseCacheRegion
+	| VmStringSearchRegExpRegion
 	| VmStackObjectPlanRegion
 	| VmCardinalityArrayRegion
 	| VmStringSplitProjectionRegion
@@ -1243,10 +1263,6 @@ export type VmInstruction =
 			guardedBuiltinCall?: VmGuardedBuiltinCall;
 			/** COMPILE-ONLY: statically proven Number-position strength. */
 			directStringCharCodeAtPosition?: "integer" | "inBounds";
-			/** COMPILE-ONLY: closed String.prototype.search over a fresh RegExp literal. */
-			directStringSearchRegExp?: true;
-			/** COMPILE-ONLY: consume an elided fixed RegExp literal search result. */
-			directStringSearchLiteralConstructIp?: number;
 	  }
 	| {
 			opcode: "MATH_UNARY_NUMBER";
@@ -1277,13 +1293,6 @@ export type VmInstruction =
 			arguments: Array<number>;
 			/** COMPILE-ONLY: guarded direct script-constructor target for native emission. */
 			directFunctionIndex?: number;
-			/** COMPILE-ONLY: fixed literal search attempted at this construction site. */
-			directStringSearchLiteral?: {
-				callIp: number;
-				searchCallee: number;
-				receiver: number;
-				patternStringIndex: number;
-			};
 	  }
 	| {
 			opcode: "THROW";
@@ -1699,6 +1708,70 @@ export function vmInstructionWriteRegisters(
 			return dst === undefined ? [] : [dst];
 		}
 	}
+}
+
+const VM_REGISTER_USE_FIELDS = [
+	"src",
+	"value",
+	"cond",
+	"callee",
+	"thisValue",
+	"object",
+	"key",
+	"left",
+	"right",
+	"receiver",
+	"source",
+	"target",
+	"direct",
+	"fallback",
+	"iterator",
+	"next",
+	"accessor",
+	"func",
+	"parent",
+	"newTarget",
+	"found",
+	"awaitedSrc",
+	"yieldedSrc",
+	"iterable",
+	"argumentsArray",
+] as const;
+
+const VM_REGISTER_USE_ARRAY_FIELDS = [
+	"arguments",
+	"valueRegisters",
+	"keyRegisters",
+	"excluded",
+] as const;
+
+/** Whether an instruction reads a physical register. Literal-bearing CREATE
+ * instructions are excluded so equal numeric payloads cannot masquerade as a
+ * register use. */
+export function vmInstructionUsesRegister(
+	instruction: VmInstruction,
+	register: number,
+): boolean {
+	if (
+		instruction.opcode === "CREATE_NUMBER" ||
+		instruction.opcode === "CREATE_F64" ||
+		instruction.opcode === "CREATE_BOOLEAN"
+	) {
+		return false;
+	}
+	const row = instruction as unknown as Record<string, unknown>;
+	if (VM_REGISTER_USE_FIELDS.some((field) => row[field] === register)) return true;
+	return VM_REGISTER_USE_ARRAY_FIELDS.some(
+		(field) => Array.isArray(row[field]) && row[field].includes(register),
+	);
+}
+
+/** Whether an instruction defines a physical register, including multi-result opcodes. */
+export function vmInstructionDefinesRegister(
+	instruction: VmInstruction,
+	register: number,
+): boolean {
+	return vmInstructionWriteRegisters(instruction).includes(register);
 }
 
 export function countPropertyIcSites(instructions: ReadonlyArray<VmInstruction>): number {
