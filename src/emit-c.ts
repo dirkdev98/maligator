@@ -3107,18 +3107,23 @@ function emitBody(
 	);
 	const closedRecordAccessByIp = new Map<number, { regionId: number; slot: number }>();
 	const closedRecordElementLoadIps = new Set<number>();
+	const closedRecordRegions = (fn.regions ?? []).filter(
+		(region) => region.kind === "closed-record-array",
+	);
 	for (const instruction of fn.instructions) {
 		if (instruction.opcode === "LOAD_PROPERTY") {
 			delete instruction.nativeClosedRecordArrayAccess;
 		}
 	}
-	for (const [regionId, region] of (fn.nativeClosedRecordArrayRegions ?? []).entries()) {
+	for (const [regionId, region] of closedRecordRegions.entries()) {
+		const allocationIp = region.anchors[0]!;
+		const producerObjectIp = region.anchors[1]!;
 		if (!vmGuardIsWorldInvariant(region.license.guard)) {
 			throw new Error("Closed record-Array region lacks a world-invariant license");
 		}
 		if (
-			fn.instructions[region.allocationIp]?.opcode !== "CREATE_ARRAY" ||
-			fn.instructions[region.producerObjectIp]?.opcode !== "CREATE_OBJECT_SHAPED"
+			fn.instructions[allocationIp]?.opcode !== "CREATE_ARRAY" ||
+			fn.instructions[producerObjectIp]?.opcode !== "CREATE_OBJECT_SHAPED"
 		) {
 			throw new Error(`Invalid closed record-Array region ${regionId}`);
 		}
@@ -3132,7 +3137,7 @@ function emitBody(
 			closedRecordElementLoadIps.add(ip);
 			const load = fn.instructions[ip];
 			if (load.opcode === "LOAD_PROPERTY") {
-				load.nativeClosedRecordArrayAccess = { allocationIp: region.allocationIp };
+				load.nativeClosedRecordArrayAccess = { allocationIp };
 			}
 		}
 		for (const access of region.accesses) {

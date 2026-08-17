@@ -1,4 +1,7 @@
 import { expect, test } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
+import type { CompilerProgramFacts } from "../src/compiler-facts.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.ts";
@@ -10,13 +13,17 @@ import { parseScript } from "../src/parser.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
-function compileScript(source: string, evalCompletion = false) {
+function compileScript(
+	source: string,
+	evalCompletion = false,
+	facts?: CompilerProgramFacts,
+) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
 		source,
 		"test.js",
 		parseScript(source, { strict: false }),
 	);
-	return compileSemanticProgramToIr(semantic, { evalCompletion });
+	return compileSemanticProgramToIr(semantic, { evalCompletion, facts });
 }
 
 function functionNamed(program: IntermediateProgram, name: string): IRFunction {
@@ -49,6 +56,48 @@ test("bulk-constructs wide static-key object literals", () => {
 			instruction.keyStringIndices.length === 48,
 	);
 	expect(shaped).toBeDefined();
+});
+
+test("stores closed loop proofs in the function region table and drops stale certificates", () => {
+	const program = compileScript(
+		`function summarize() {
+			const rows = [];
+			for (let index = 0; index < 8; index++) rows.push({ x: index, y: index + 1 });
+			let total = 0;
+			for (let index = 0; index < 8; index++) {
+				const row = rows[index];
+				total += row.x + row.y;
+			}
+			return total;
+		}
+		globalThis.summarize = summarize;`,
+		false,
+		compilerProgramFactsFromConfig(
+			resolveBuildConfig({ engine: { primordials: "locked" } }),
+		),
+	);
+	executeIROptimizations(program);
+	const summarize = functionNamed(program, "summarize");
+	const region = summarize.regions?.find(
+		(candidate) => candidate.kind === "closed-record-array",
+	);
+	expect(region).toBeDefined();
+	expect(
+		region!.anchors.every((instruction) =>
+			instructionsOf(summarize).includes(instruction),
+		),
+	).toBe(true);
+	expect(region!.controlFlow.ordinaryBlocks.length).toBeGreaterThan(0);
+	expect(region!.controlFlow.exceptionalBlocks).toEqual([]);
+
+	const staleClaim = region!.claimedInstructions.at(-1)!;
+	const owner = summarize.blocks.find((block) => block.instructions.includes(staleClaim));
+	expect(owner).toBeDefined();
+	owner!.instructions[owner!.instructions.indexOf(staleClaim)] = { ...staleClaim };
+	allocateRegisters(program);
+	const lowered =
+		lowerIrProgramToVmDefinition(program).functions[summarize.functionIndex]!;
+	expect(lowered.regions).toBeUndefined();
 });
 
 test("accepts non-index numeric-looking names in static shapes", () => {

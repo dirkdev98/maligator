@@ -3767,7 +3767,6 @@ export function annotateClosedRecordArrayRegions(program: IntermediateProgram): 
 		{ type: "loadPropertyStatic" | "storePropertyStatic" }
 	>;
 	interface Candidate {
-		allocation: ArrayAllocation;
 		region: IRClosedRecordArrayRegion;
 		claimed: ReadonlySet<IRInstruction>;
 		benefit: number;
@@ -3776,13 +3775,16 @@ export function annotateClosedRecordArrayRegions(program: IntermediateProgram): 
 
 	let annotated = 0;
 	for (const fn of program.functions) {
+		const retainedRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "closed-record-array",
+		);
+		fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
 		const allocations = fn.blocks
 			.flatMap((block) => block.instructions)
 			.filter(
 				(instruction): instruction is ArrayAllocation =>
 					instruction.type === "createArray" && instruction.length === 0,
 			);
-		for (const allocation of allocations) delete allocation.nativeClosedRecordArrayRegion;
 		if (
 			allocations.length === 0 ||
 			allocations.length > MAX_CLOSED_RECORD_ARRAY_CANDIDATES ||
@@ -4221,15 +4223,32 @@ export function annotateClosedRecordArrayRegions(program: IntermediateProgram): 
 			]);
 			addLoopInstructions(claimed, producerLoop);
 			for (const loop of consumerLoops) addLoopInstructions(claimed, loop);
-			candidates.push({
+			const ordinaryBlocks = new Set<number>(producerLoop.blocks);
+			for (const loop of consumerLoops) {
+				for (const block of loop.blocks) ordinaryBlocks.add(block);
+			}
+			const claimedInstructions = [
 				allocation,
+				producerObject,
+				...elementLoads,
+				...accesses.keys(),
+			];
+			candidates.push({
 				region: {
+					kind: "closed-record-array",
 					license: {
 						guard: push.guard,
 						genericTwin: "retained",
 						materialization: "none",
 					},
-					producerObject,
+					representation: "dense-record-elements-known-slots",
+					anchors: [allocation, producerObject],
+					claimedInstructions,
+					controlFlow: {
+						ordinaryBlocks: [...ordinaryBlocks].sort((left, right) => left - right),
+						exceptionalBlocks: [],
+					},
+					cost: { score: benefit, metadataOperations: operationCount },
 					length: producerCounter.bound,
 					elementLoads: [...elementLoads],
 					accesses: [...accesses.values()],
@@ -4256,7 +4275,7 @@ export function annotateClosedRecordArrayRegions(program: IntermediateProgram): 
 			) {
 				continue;
 			}
-			candidate.allocation.nativeClosedRecordArrayRegion = candidate.region;
+			fn.regions = [...(fn.regions ?? []), candidate.region];
 			for (const instruction of candidate.claimed) occupied.add(instruction);
 			metadataOperations += operations;
 			selected++;

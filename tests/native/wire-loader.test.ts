@@ -430,7 +430,10 @@ describe("wire loader side-data validation", () => {
 			stripTypes: stripTypesWithTypeScript,
 		});
 		expect(
-			closedDefinition.functions.flatMap((fn) => fn.nativeClosedRecordArrayRegions ?? []),
+			closedDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "closed-record-array") ?? [],
+			),
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "closed-record-array-region.malw");
 		writeFileSync(

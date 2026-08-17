@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 46u        // durable IR-proven String.split cursor regions
+#define WIRE_VERSION 47u        // first tagged function-level compiler region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1905,14 +1905,73 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             }
         }
 
-        u32 closed_record_region_count = rd_count(&r, 7);
-        if (closed_record_region_count > 8) r.ok = false;
-        i32 claimed_closed_record_ips[528];
-        u32 claimed_closed_record_count = 0;
-        for (u32 region = 0; r.ok && region < closed_record_region_count; region++) {
+        u32 compiler_region_count = rd_count(&r, 17);
+        if (compiler_region_count > 8) r.ok = false;
+        i32 claimed_region_ips[528];
+        u32 claimed_region_count = 0;
+        for (u32 region = 0; r.ok && region < compiler_region_count; region++) {
             const MalFunction *fn = &functions[i];
-            i32 allocation_ip = rd_i32(&r);
-            i32 producer_object_ip = rd_i32(&r);
+            u8 kind = rd_u8(&r);
+            u32 anchor_count = rd_count(&r, sizeof(i32));
+            if (anchor_count == 0 || anchor_count > 8) r.ok = false;
+            i32 anchors[8];
+            for (u32 anchor = 0; r.ok && anchor < anchor_count; anchor++) {
+                anchors[anchor] = rd_i32(&r);
+                if (anchors[anchor] < 0 || anchors[anchor] >= fn->instruction_count) r.ok = false;
+                for (u32 previous = 0; r.ok && previous < anchor; previous++) {
+                    if (anchors[previous] == anchors[anchor]) r.ok = false;
+                }
+            }
+            u32 claim_count = rd_count(&r, sizeof(i32));
+            if (claim_count == 0 || claim_count > 66) r.ok = false;
+            i32 claims[66];
+            for (u32 claim = 0; r.ok && claim < claim_count; claim++) {
+                claims[claim] = rd_i32(&r);
+                if (claims[claim] < 0 || claims[claim] >= fn->instruction_count) r.ok = false;
+                for (u32 previous = 0; r.ok && previous < claim; previous++) {
+                    if (claims[previous] == claims[claim]) r.ok = false;
+                }
+                for (u32 previous = 0; r.ok && previous < claimed_region_count; previous++) {
+                    if (claimed_region_ips[previous] == claims[claim]) r.ok = false;
+                }
+                if (r.ok && claimed_region_count < countof(claimed_region_ips)) {
+                    claimed_region_ips[claimed_region_count++] = claims[claim];
+                } else if (r.ok) {
+                    r.ok = false;
+                }
+            }
+            for (u32 anchor = 0; r.ok && anchor < anchor_count; anchor++) {
+                bool found = false;
+                for (u32 claim = 0; claim < claim_count; claim++) {
+                    if (anchors[anchor] == claims[claim]) found = true;
+                }
+                if (!found) r.ok = false;
+            }
+            u32 ordinary_block_count = rd_count(&r, sizeof(i32));
+            if (ordinary_block_count == 0 || ordinary_block_count > 64) r.ok = false;
+            i32 ordinary_block_ips[64];
+            for (u32 block = 0; r.ok && block < ordinary_block_count; block++) {
+                ordinary_block_ips[block] = rd_i32(&r);
+                if (ordinary_block_ips[block] < 0 ||
+                    ordinary_block_ips[block] >= fn->instruction_count) {
+                    r.ok = false;
+                }
+                for (u32 previous = 0; r.ok && previous < block; previous++) {
+                    if (ordinary_block_ips[previous] == ordinary_block_ips[block]) r.ok = false;
+                }
+            }
+            u32 exceptional_handler_count = rd_count(&r, sizeof(i32));
+            if (exceptional_handler_count != 0) r.ok = false;
+            for (u32 handler = 0; r.ok && handler < exceptional_handler_count; handler++) {
+                (void) rd_i32(&r);
+            }
+            u32 score = rd_u32(&r);
+            u32 metadata_operations = rd_u32(&r);
+            u8 representation = rd_u8(&r);
+            u8 generic_twin = rd_u8(&r);
+            u8 materialization = rd_u8(&r);
+            u8 dependency_mask = rd_u8(&r);
+            u8 obligation_mask = rd_u8(&r);
             i32 length = rd_i32(&r);
             u32 element_count = rd_count(&r, sizeof(i32));
             if (element_count == 0 || element_count > 64) r.ok = false;
@@ -1933,38 +1992,37 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 access_kinds[access] = rd_u8(&r);
                 access_slots[access] = rd_i32(&r);
             }
-            u8 dependency_mask = rd_u8(&r);
-            u8 obligation_mask = rd_u8(&r);
-            bool header_ok = allocation_ip >= 0 &&
-                allocation_ip < fn->instruction_count &&
+            i32 allocation_ip = anchor_count > 0 ? anchors[0] : -1;
+            i32 producer_object_ip = anchor_count > 1 ? anchors[1] : -1;
+            bool header_ok = r.ok && kind == 1 && anchor_count == 2 &&
                 fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_ARRAY &&
                 fn->instructions[allocation_ip].as.create_array.length == 0 &&
-                producer_object_ip >= 0 &&
-                producer_object_ip < fn->instruction_count &&
                 fn->instructions[producer_object_ip].opcode == MAL_OP_CREATE_OBJECT_SHAPED &&
                 length > 0 && length <= 65536 &&
+                score > 0 && metadata_operations == element_count + access_count &&
+                representation == 1 && generic_twin == 1 && materialization == 0 &&
                 dependency_mask == 1 && obligation_mask == 1;
             if (!header_ok) {
                 r.ok = false;
                 continue;
             }
-#define MAL_CLOSED_RECORD_CLAIM(ip) do { \
-                i32 claim_ip = (ip); \
-                if (claim_ip < 0 || claim_ip >= fn->instruction_count) { \
-                    r.ok = false; \
-                } else { \
-                    for (u32 claim = 0; claim < claimed_closed_record_count; claim++) { \
-                        if (claimed_closed_record_ips[claim] == claim_ip) r.ok = false; \
-                    } \
-                    if (r.ok && claimed_closed_record_count < countof(claimed_closed_record_ips)) { \
-                        claimed_closed_record_ips[claimed_closed_record_count++] = claim_ip; \
-                    } else if (r.ok) { \
-                        r.ok = false; \
-                    } \
+#define MAL_REGION_PAYLOAD_CLAIM(ip) do { \
+                i32 payload_ip = (ip); \
+                bool found = false; \
+                for (u32 claim = 0; claim < claim_count; claim++) { \
+                    if (claims[claim] == payload_ip) found = true; \
                 } \
+                if (!found) r.ok = false; \
+                for (u32 previous = 0; r.ok && previous < payload_count; previous++) { \
+                    if (payload_ips[previous] == payload_ip) r.ok = false; \
+                } \
+                if (r.ok) payload_ips[payload_count++] = payload_ip; \
             } while (0)
-            MAL_CLOSED_RECORD_CLAIM(allocation_ip);
-            MAL_CLOSED_RECORD_CLAIM(producer_object_ip);
+            i32 payload_ips[66];
+            u32 payload_count = 0;
+            if (claim_count != 2 + element_count + access_count) r.ok = false;
+            MAL_REGION_PAYLOAD_CLAIM(allocation_ip);
+            MAL_REGION_PAYLOAD_CLAIM(producer_object_ip);
             for (u32 element = 0; r.ok && element < element_count; element++) {
                 i32 ip = element_ips[element];
                 if (ip < 0 || ip >= fn->instruction_count ||
@@ -1972,7 +2030,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     r.ok = false;
                     break;
                 }
-                MAL_CLOSED_RECORD_CLAIM(ip);
+                MAL_REGION_PAYLOAD_CLAIM(ip);
             }
             for (u32 access = 0; r.ok && access < access_count; access++) {
                 i32 ip = access_ips[access];
@@ -1985,9 +2043,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     r.ok = false;
                     break;
                 }
-                MAL_CLOSED_RECORD_CLAIM(ip);
+                MAL_REGION_PAYLOAD_CLAIM(ip);
             }
-#undef MAL_CLOSED_RECORD_CLAIM
+            if (payload_count != claim_count) r.ok = false;
+#undef MAL_REGION_PAYLOAD_CLAIM
         }
 
         u32 split_cursor_region_count = rd_count(&r, 17);

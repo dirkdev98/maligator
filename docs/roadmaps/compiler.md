@@ -434,6 +434,12 @@ is general rather than a registry-shaped collection of special cases.
           regions with bounded metadata/cost caps, resolve every instruction anchor
           atomically during lowering, retain them through MALW v45, and remove the
           duplicate VM-emitter proof.
+    - [x] Migrate that proof off its `createArray` instruction field into the first
+          tagged function-level region table. Carry stable anchors, exact claimed
+          operations, ordinary/exceptional CFG scope, license, representation and
+          materialization contract, plus the selection score through generic
+          lowering and MALW v47 validation; keep the closed-record payload as the
+          first kind-specific tail.
 - [ ] Infer and bulk-construct the result shape of object rest/spread normalization
       when source shapes and excluded keys are bounded. Avoid building every
       normalized application record through the empty-object path while retaining a
@@ -456,6 +462,12 @@ is general rather than a registry-shaped collection of special cases.
       claimed operations, license, representation/materialization contract, and a
       cost score; one generic lowering/serialization path should drop the whole
       certificate if any anchor or invariant no longer resolves.
+  - [x] Establish the common IR/VM envelope and tagged wire table by migrating
+        closed record-Array regions end to end. Validate common bounds, instruction
+        ownership, disjoint claims, CFG scope and cost independently of the tagged
+        payload in both TypeScript and the C wire loader.
+  - [ ] Migrate split cursors, numeric HOFs and projection regions into the table,
+        then delete their instruction-owned anchors and dedicated wire tails.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

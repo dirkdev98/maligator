@@ -602,21 +602,69 @@ describe("native update-expression representation", () => {
 		`;
 		const lowered = lockedDefinition(source);
 		const loweredRegions = lowered.functions.flatMap(
-			(fn) => fn.nativeClosedRecordArrayRegions ?? [],
+			(fn) => fn.regions?.filter((region) => region.kind === "closed-record-array") ?? [],
 		);
 		expect(loweredRegions.map((region) => region.length).sort((a, b) => a - b)).toEqual([
 			4, 8,
 		]);
+		for (const region of loweredRegions) {
+			expect(region.anchors).toHaveLength(2);
+			expect(region.anchors.every((ip) => region.claimedIps.includes(ip))).toBe(true);
+			expect(region.controlFlow.ordinaryBlockIps.length).toBeGreaterThan(0);
+			expect(region.controlFlow.exceptionalHandlerIps).toEqual([]);
+			expect(region.cost.score).toBeGreaterThan(0);
+			expect(region.cost.metadataOperations).toBe(
+				region.elementLoadIps.length + region.accesses.length,
+			);
+		}
 
 		const restored = deserializeVmDefinition(serializeVmDefinition(lowered));
 		const restoredRegions = restored.functions.flatMap(
-			(fn) => fn.nativeClosedRecordArrayRegions ?? [],
+			(fn) => fn.regions?.filter((region) => region.kind === "closed-record-array") ?? [],
 		);
 		expect(restoredRegions).toEqual(loweredRegions);
 		const output = emitVmDefinition(restored, { compiled: true });
 		expect(
 			output.match(/MalObject \*__closed_record_\d+_o/g)?.length,
 		).toBeGreaterThanOrEqual(2);
+	});
+
+	it("rejects a tagged region when its common control-flow envelope is incomplete", () => {
+		const definition = lockedDefinition(`
+			function summarize() {
+				const rows = [];
+				for (let index = 0; index < 8; index++) rows.push({ x: index, y: index + 1 });
+				let total = 0;
+				for (let index = 0; index < 8; index++) {
+					const row = rows[index];
+					total += row.x + row.y;
+				}
+				return total;
+			}
+			globalThis.summarize = summarize;
+		`);
+		const functionIndex = definition.functions.findIndex(
+			(fn) => (fn.regions?.length ?? 0) > 0,
+		);
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		const fn = definition.functions[functionIndex]!;
+		const region = fn.regions![0]!;
+		const malformed: VmDefinition = {
+			...definition,
+			functions: definition.functions.with(functionIndex, {
+				...fn,
+				regions: [
+					{
+						...region,
+						controlFlow: {
+							...region.controlFlow,
+							ordinaryBlockIps: [],
+						},
+					},
+				],
+			}),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(/invalid region envelope/);
 	});
 
 	it("admits only one certificate when two candidates share a consumer loop", () => {
@@ -637,7 +685,10 @@ describe("native update-expression representation", () => {
 			globalThis.summarize = summarize;
 		`);
 		expect(
-			definition.functions.flatMap((fn) => fn.nativeClosedRecordArrayRegions ?? []),
+			definition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "closed-record-array") ?? [],
+			),
 		).toHaveLength(1);
 	});
 

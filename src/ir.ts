@@ -420,6 +420,13 @@ export interface IRFunction {
 	nameStringIndex: number;
 
 	blocks: Array<IRBlock>;
+	/**
+	 * Function-level speculative-region certificates selected after the ordinary
+	 * IR has reached its optimization fixpoint. Instructions remain the complete
+	 * semantic twin; lowering drops an entire certificate when any common anchor,
+	 * claim, scope, license, representation, or cost invariant no longer resolves.
+	 */
+	regions?: ReadonlyArray<IRRegion>;
 	argumentsObjectRegister?: number;
 	/** Prologue snapshots for statically classified direct arguments reads. */
 	staticArgumentsRegisters?: Map<ESTree.Node, number>;
@@ -724,12 +731,30 @@ export interface IRStringSplitCursor {
  * discard the whole region.
  */
 export interface IRClosedRecordArrayRegion {
+	readonly kind: "closed-record-array";
 	readonly license: {
 		readonly guard: CompilerGuardPlan;
 		readonly genericTwin: "retained";
 		readonly materialization: "none";
 	};
-	readonly producerObject: Extract<IRInstruction, { type: "createObjectShaped" }>;
+	readonly representation: "dense-record-elements-known-slots";
+	/** Stable semantic entry points; their order is part of the region contract. */
+	readonly anchors: readonly [
+		Extract<IRInstruction, { type: "createArray" }>,
+		Extract<IRInstruction, { type: "createObjectShaped" }>,
+	];
+	/** Exact runtime operations whose lowering this certificate may specialize. */
+	readonly claimedInstructions: ReadonlyArray<IRInstruction>;
+	readonly controlFlow: {
+		/** Final-IR block identities containing the producer and consumer loops. */
+		readonly ordinaryBlocks: ReadonlyArray<number>;
+		/** Empty until an exception-aware region kind is introduced. */
+		readonly exceptionalBlocks: readonly [];
+	};
+	readonly cost: {
+		readonly score: number;
+		readonly metadataOperations: number;
+	};
 	readonly length: number;
 	readonly elementLoads: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
 	readonly accesses: ReadonlyArray<{
@@ -741,6 +766,9 @@ export interface IRClosedRecordArrayRegion {
 		readonly slot: number;
 	}>;
 }
+
+/** Tagged function-level proof table; add region kinds only with common-envelope validation. */
+export type IRRegion = IRClosedRecordArrayRegion;
 
 export type IRInstruction =
 	| {
@@ -894,9 +922,6 @@ export type IRInstruction =
 			 * exact canonical `[0, length)` indexed fill. Native code may reserve the
 			 * final dense capacity before executing the otherwise-unchanged loop. */
 			nativeFreshDenseReserveLength?: number;
-			/** Final IR region proof; the allocation is the region's stable anchor. */
-			nativeClosedRecordArrayRegion?: IRClosedRecordArrayRegion;
-
 			// [destination]
 			registers: [number];
 
