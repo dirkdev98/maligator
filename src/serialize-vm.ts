@@ -37,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 55 to move closed String-scan summaries into the tagged region table.
-export const WIRE_VERSION = 55;
+// Bumped to 56 to move private aggregate memoization into the tagged region table.
+export const WIRE_VERSION = 56;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -833,6 +833,38 @@ function stringScanGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function privateAggregateMemoGuardMasks(
+	license: Extract<VmRegion, { kind: "private-aggregate-memo" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "primitive-methods") {
+			dependencyMask |= 2;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else if (dependency.kind === "epoch" && dependency.family === "array-elements") {
+			dependencyMask |= 8;
+		} else {
+			throw new RangeError("serialize-vm: unsupported private aggregate dependency");
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "none" ||
+		(dependencyMask !== 1 && dependencyMask !== 14) ||
+		obligationMask !== 1
+	) {
+		throw new RangeError("serialize-vm: invalid private aggregate guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1315,7 +1347,9 @@ export function serializeVmDefinition(
 										? 6
 										: region.kind === "string-slice-number"
 											? 7
-											: 8;
+											: region.kind === "string-scan-summary"
+												? 8
+												: 9;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1338,7 +1372,9 @@ export function serializeVmDefinition(
 										? regexpIteratorProjectionGuardMasks(region.license)
 										: region.kind === "string-slice-number"
 											? stringSliceNumberGuardMasks(region.license)
-											: stringScanGuardMasks(region.license);
+											: region.kind === "string-scan-summary"
+												? stringScanGuardMasks(region.license)
+												: privateAggregateMemoGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1516,6 +1552,15 @@ export function serializeVmDefinition(
 					w.i32(region.lengthResult);
 					w.i32(region.matchResult);
 					w.i32(region.matchCodeUnit);
+					break;
+				case "private-aggregate-memo":
+					w.i32(region.allocationIp);
+					w.i32Array([...region.constructionPushIps]);
+					w.i32(region.callIp);
+					w.i32(region.targetFunctionIndex);
+					w.i32(region.callee);
+					w.i32(region.input);
+					w.i32(region.result);
 					break;
 			}
 		}
@@ -1884,11 +1929,91 @@ function validateRegion(
 		case "string-scan-summary":
 			validateStringScanRegion(fn, region, stringConstants);
 			break;
+		case "private-aggregate-memo":
+			validatePrivateAggregateMemoRegion(fn, region, functionCount);
+			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
 			break;
 	}
 	for (const ip of region.claimedIps) claimed.add(ip);
+}
+
+function validatePrivateAggregateMemoRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "private-aggregate-memo" }>,
+	functionCount: number,
+): void {
+	privateAggregateMemoGuardMasks(region.license);
+	const allocation = fn.instructions[region.allocationIp];
+	const call = fn.instructions[region.callIp];
+	const callee = call?.opcode === "CALL" ? decodeVmValueOperand(call.callee) : undefined;
+	const thisValue =
+		call?.opcode === "CALL" ? decodeVmValueOperand(call.thisValue) : undefined;
+	const input =
+		call?.opcode === "CALL" && call.arguments.length === 1
+			? decodeVmValueOperand(call.arguments[0]!)
+			: undefined;
+	const aliases = new Set<number>([
+		allocation?.opcode === "CREATE_ARRAY" ? allocation.dst : -1,
+	]);
+	for (let ip = region.allocationIp + 1; ip < region.callIp; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "MOVE" && aliases.has(instruction.src)) {
+			aliases.add(instruction.dst);
+		}
+	}
+	const payload = new Set<number>([
+		region.allocationIp,
+		...region.constructionPushIps,
+		region.callIp,
+	]);
+	let valid =
+		region.representation === "private-dense-number-array-result-memo" &&
+		region.anchors.length === 2 &&
+		region.anchors[0] === region.allocationIp &&
+		region.anchors[1] === region.callIp &&
+		allocation?.opcode === "CREATE_ARRAY" &&
+		allocation.length === 0 &&
+		call?.opcode === "CALL" &&
+		call.directFunctionIndex === region.targetFunctionIndex &&
+		region.targetFunctionIndex >= 0 &&
+		region.targetFunctionIndex < functionCount &&
+		callee?.kind === "register" &&
+		callee.register === region.callee &&
+		thisValue?.kind === "undefined" &&
+		input?.kind === "register" &&
+		input.register === region.input &&
+		aliases.has(region.input) &&
+		call.dst === region.result &&
+		region.constructionPushIps.length > 0 &&
+		region.controlFlow.exceptionalHandlerIps.length === 0 &&
+		region.controlFlow.ordinaryBlockIps.includes(region.allocationIp) &&
+		region.controlFlow.ordinaryBlockIps.includes(region.callIp);
+	for (const ip of region.constructionPushIps) {
+		const push = fn.instructions[ip];
+		const receiver =
+			push?.opcode === "CALL" ? decodeVmValueOperand(push.thisValue) : undefined;
+		if (
+			ip <= region.allocationIp ||
+			ip >= region.callIp ||
+			push?.opcode !== "CALL" ||
+			!vmCallProvesBuiltin(push, "Array.prototype.push") ||
+			push.arguments.length !== 1 ||
+			receiver?.kind !== "register" ||
+			!aliases.has(receiver.register)
+		) {
+			valid = false;
+		}
+	}
+	if (
+		!valid ||
+		region.cost.metadataOperations !== payload.size ||
+		payload.size !== region.claimedIps.length ||
+		region.claimedIps.some((ip) => !payload.has(ip))
+	) {
+		throw new RangeError("serialize-vm: invalid private aggregate memo region");
+	}
 }
 
 function validateStringScanRegion(
@@ -3706,6 +3831,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					(dependencyMask === 1 || dependencyMask === 14) &&
 					obligationMask === 1;
+				const privateAggregateMemoContract =
+					kindTag === 9 &&
+					representationTag === 9 &&
+					materializationTag === 0 &&
+					(dependencyMask === 1 || dependencyMask === 14) &&
+					obligationMask === 1;
 				if (
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
@@ -3715,7 +3846,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!regexpExecProjectionContract &&
 						!regexpIteratorProjectionContract &&
 						!stringSliceNumberContract &&
-						!stringScanContract)
+						!stringScanContract &&
+						!privateAggregateMemoContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -4202,7 +4334,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						sliceStart,
 						result,
 					};
-				} else {
+				} else if (kindTag === 8) {
 					const entryIp = r.i32();
 					const exitIp = r.i32();
 					const input = r.i32();
@@ -4239,6 +4371,44 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						lengthResult,
 						matchResult,
 						matchCodeUnit,
+					};
+				} else {
+					const allocationIp = r.i32();
+					const constructionPushIps = r.i32Array();
+					const callIp = r.i32();
+					const targetFunctionIndex = r.i32();
+					const callee = r.i32();
+					const input = r.i32();
+					const result = r.i32();
+					region = {
+						kind: "private-aggregate-memo",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [
+												{ kind: "epoch", family: "array-elements" },
+												{ kind: "epoch", family: "primitive-methods" },
+												{ kind: "epoch", family: "watched-methods" },
+											],
+								obligations: ["fallback"],
+							},
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "private-dense-number-array-result-memo",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						allocationIp,
+						constructionPushIps,
+						callIp,
+						targetFunctionIndex,
+						callee,
+						input,
+						result,
 					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);

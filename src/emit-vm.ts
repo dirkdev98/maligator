@@ -1579,13 +1579,23 @@ function isPrivateDenseNumberReducer(fn: VmFunction): boolean {
  * construction, then one exact reducer call in a side-effect-free natural loop.
  */
 function annotateNativePrivateAggregateMemos(definition: VmDefinition): void {
+	const license = vmRegionLicense(
+		[
+			vmSemanticProtectorGuard(definition.semanticProtectors, "primitive-methods"),
+			vmSemanticProtectorGuard(definition.semanticProtectors, "watched-methods"),
+			vmSemanticProtectorGuard(definition.semanticProtectors, "array-elements"),
+		],
+		"none",
+	);
+	if (license === undefined || license.materialization !== "none") return;
+	const regionLicense = { ...license, materialization: "none" as const };
 	const reducerTargets = new Set<number>();
 	for (let index = 0; index < definition.functions.length; index++) {
 		if (isPrivateDenseNumberReducer(definition.functions[index]!))
 			reducerTargets.add(index);
 	}
 	for (const fn of definition.functions) {
-		delete fn.nativePrivateAggregateMemos;
+		const existingRegions = fn.regions ?? [];
 		if (
 			fn.isGenerator ||
 			fn.isAsync ||
@@ -1781,8 +1791,32 @@ function annotateNativePrivateAggregateMemos(definition: VmDefinition): void {
 		) {
 			continue;
 		}
-		fn.nativePrivateAggregateMemos = [
+		const claimedIps = [allocation.ip, ...pushes, candidate.ip];
+		if (
+			existingRegions.length >= 8 ||
+			claimedIps.length > 96 ||
+			claimedIps.some((ip) =>
+				existingRegions.some((region) => region.claimedIps.includes(ip)),
+			)
+		) {
+			continue;
+		}
+		fn.regions = [
+			...existingRegions,
 			{
+				kind: "private-aggregate-memo",
+				license: regionLicense,
+				representation: "private-dense-number-array-result-memo",
+				anchors: [allocation.ip, candidate.ip],
+				claimedIps,
+				controlFlow: {
+					ordinaryBlockIps: [...claimedIps].sort((left, right) => left - right),
+					exceptionalHandlerIps: [],
+				},
+				cost: {
+					score: pushes.length + 1,
+					metadataOperations: claimedIps.length,
+				},
 				allocationIp: allocation.ip,
 				constructionPushIps: pushes,
 				callIp: candidate.ip,

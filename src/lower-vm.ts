@@ -517,6 +517,20 @@ export type VmStringScanRegion = VmRegionEnvelope<
 	readonly matchCodeUnit: number;
 };
 
+export type VmPrivateAggregateMemoRegion = VmRegionEnvelope<
+	"private-aggregate-memo",
+	"private-dense-number-array-result-memo",
+	"none"
+> & {
+	readonly allocationIp: number;
+	readonly constructionPushIps: ReadonlyArray<number>;
+	readonly callIp: number;
+	readonly targetFunctionIndex: number;
+	readonly callee: number;
+	readonly input: number;
+	readonly result: number;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -544,6 +558,7 @@ export type VmRegion =
 	| VmRegExpIteratorProjectionRegion
 	| VmStringSliceNumberRegion
 	| VmStringScanRegion
+	| VmPrivateAggregateMemoRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
@@ -763,21 +778,6 @@ export interface VmFunction {
 		nestedBaseStringIndex: number;
 		nestedValueStringIndex: number;
 		excludedStringIndices: ReadonlyArray<number>;
-	}>;
-
-	/**
-	 * EMITTER-ONLY: activation-local result memo for an exact script call whose
-	 * sole aggregate argument is a private, push-constructed dense Number Array.
-	 * Recomputed from the lowered CFG after wire loading; never serialized.
-	 */
-	nativePrivateAggregateMemos?: ReadonlyArray<{
-		allocationIp: number;
-		constructionPushIps: ReadonlyArray<number>;
-		callIp: number;
-		targetFunctionIndex: number;
-		callee: number;
-		input: number;
-		result: number;
 	}>;
 
 	/**

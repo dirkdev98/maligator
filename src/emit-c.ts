@@ -1196,11 +1196,14 @@ export function emitCompiledFunction(
 	}
 	const privateAggregateMemos = new Map<
 		number,
-		NonNullable<VmFunction["nativePrivateAggregateMemos"]>[number] & {
+		NativePrivateAggregateMemoRegion & {
 			rootsOffset: number;
 		}
 	>();
-	for (const memo of fn.nativePrivateAggregateMemos ?? []) {
+	for (const memo of (fn.regions ?? []).filter(
+		(region): region is NativePrivateAggregateMemoRegion =>
+			region.kind === "private-aggregate-memo",
+	)) {
 		const instruction = fn.instructions[memo.callIp];
 		const allocation = fn.instructions[memo.allocationIp];
 		const callee =
@@ -2151,6 +2154,11 @@ interface NativeInvariantJsonParseCacheSite {
 	rootsOffset: number;
 }
 
+type NativePrivateAggregateMemoRegion = Extract<
+	VmRegion,
+	{ kind: "private-aggregate-memo" }
+>;
+
 type NativeStringSplitProjection = Extract<
 	NonNullable<VmFunction["regions"]>[number],
 	{ kind: "string-split-projection" }
@@ -3042,7 +3050,7 @@ function emitBody(
 	>,
 	privateAggregateMemos: ReadonlyMap<
 		number,
-		NonNullable<VmFunction["nativePrivateAggregateMemos"]>[number] & {
+		NativePrivateAggregateMemoRegion & {
 			rootsOffset: number;
 		}
 	>,
@@ -4342,12 +4350,8 @@ function emitInstruction(
 		};
 		role: "parse" | "mapLoad" | "mapCall";
 	},
-	privateAggregateMemo?: NonNullable<
-		VmFunction["nativePrivateAggregateMemos"]
-	>[number] & { rootsOffset: number },
-	privateAggregatePushMemo?: NonNullable<
-		VmFunction["nativePrivateAggregateMemos"]
-	>[number] & { rootsOffset: number },
+	privateAggregateMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
+	privateAggregatePushMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).

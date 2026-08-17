@@ -110,6 +110,13 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
 			};
+		case "private-aggregate-memo":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				constructionPushIps: [...region.constructionPushIps],
+				targetFunctionIndex: region.targetFunctionIndex + base.function,
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

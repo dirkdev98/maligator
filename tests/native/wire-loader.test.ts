@@ -620,6 +620,27 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads and executes persisted private aggregate memo regions", () => {
+		const memoDefinition = compileEntrypoint(
+			path.resolve("tests/local/private-aggregate-memo-small.js"),
+			{
+				stripTypes: stripTypesWithTypeScript,
+				buildConfig: resolveBuildConfig({}),
+			},
+		);
+		emitVmDefinition(memoDefinition, { compiled: true });
+		expect(
+			memoDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "private-aggregate-memo") ?? [],
+			),
+		).not.toHaveLength(0);
+		const wirePath = path.join(directory, "private-aggregate-memo-region.malw");
+		writeFileSync(wirePath, serializeVmDefinition(memoDefinition, { debugInfo: false }));
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

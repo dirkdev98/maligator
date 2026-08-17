@@ -518,6 +518,11 @@ is general rather than a registry-shaped collection of special cases.
         independently in TypeScript and the C MALW v55 loader. Keep selection as a
         post-wire whole-definition pass until cross-function summaries are selected
         directly on final IR.
+  - [x] Move activation-local private aggregate result memos into the common
+        region table. Claim the fresh allocation, every construction push and the
+        repeated exact call; merge primitive, watched-method and Array-element
+        protectors; retain the ordinary construction/call corridor; and preserve
+        the cross-function reducer target through MALW v56.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

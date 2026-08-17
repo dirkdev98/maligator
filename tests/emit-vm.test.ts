@@ -1834,7 +1834,7 @@ describe("native update-expression representation", () => {
 		expect(() => serializeVmDefinition(definition)).not.toThrow();
 	});
 
-	it("recomputes private aggregate metadata after a wire round trip", () => {
+	it("recomputes and persists private aggregate regions after a wire round trip", () => {
 		const source = `
 			function control() {
 				function classify(values) {
@@ -1862,6 +1862,36 @@ describe("native update-expression representation", () => {
 		const decoded = deserializeVmDefinition(serializeVmDefinition(definition));
 		const output = emitVmDefinition(decoded, { compiled: true });
 		expect(output).toContain("MalPrivateAggregateMemo __private_aggregate_memo_");
+		const regions = decoded.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "private-aggregate-memo") ?? [],
+		);
+		expect(regions).toHaveLength(1);
+		const region = regions[0]!;
+		expect(region.claimedIps).toEqual([
+			region.allocationIp,
+			...region.constructionPushIps,
+			region.callIp,
+		]);
+		expect(region.license.guard.dependencies).toEqual([
+			{ kind: "epoch", family: "array-elements" },
+			{ kind: "epoch", family: "primitive-methods" },
+			{ kind: "epoch", family: "watched-methods" },
+		]);
+		const persisted = deserializeVmDefinition(
+			serializeVmDefinition(decoded, { debugInfo: false }),
+		);
+		expect(
+			persisted.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter(
+						(candidate) => candidate.kind === "private-aggregate-memo",
+					) ?? [],
+			),
+		).toEqual([region]);
+		expect(emitVmDefinition(persisted, { compiled: true })).toContain(
+			"MalPrivateAggregateMemo __private_aggregate_memo_",
+		);
 	});
 
 	it("rejects observable reducers and aggregate aliases", () => {

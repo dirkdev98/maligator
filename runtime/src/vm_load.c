@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 55u        // closed String scans join the tagged region table
+#define WIRE_VERSION 56u        // private aggregate memos join the tagged region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -2027,12 +2027,15 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 			bool string_scan_contract = kind == 8 && representation == 8 &&
 				materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
 				obligation_mask == 1;
+			bool private_aggregate_memo_contract = kind == 9 && representation == 9 &&
+				materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
+				obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
-				 !string_scan_contract)) {
+				 !string_scan_contract && !private_aggregate_memo_contract)) {
                 r.ok = false;
             }
 
@@ -3089,6 +3092,59 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     MAL_REGION_PAYLOAD_REFERENCE(ip);
                 }
                 MAL_REGION_PAYLOAD_REFERENCE(length_load_ip);
+            } else if (r.ok && kind == 9) {
+                i32 allocation_ip = rd_i32(&r);
+                u32 push_count = rd_count(&r, 1);
+                if (push_count == 0 || push_count > 94) r.ok = false;
+                i32 push_ips[94];
+                for (u32 push = 0; r.ok && push < push_count; push++) {
+                    push_ips[push] = rd_i32(&r);
+                }
+                i32 call_ip = rd_i32(&r);
+                i32 target_function_index = rd_i32(&r);
+                i32 callee = rd_i32(&r);
+                i32 input = rd_i32(&r);
+                i32 result = rd_i32(&r);
+                bool header_ok = anchor_count == 2 && anchors[0] == allocation_ip &&
+                    anchors[1] == call_ip && allocation_ip >= 0 &&
+                    allocation_ip < call_ip && call_ip < fn->instruction_count &&
+                    target_function_index >= 0 &&
+                    target_function_index < (i32) function_count && callee >= 0 &&
+                    callee < fn->register_count && input >= 0 &&
+                    input < fn->register_count && result >= 0 &&
+                    result < fn->register_count &&
+                    fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_ARRAY &&
+                    fn->instructions[allocation_ip].as.create_array.length == 0 &&
+                    fn->instructions[call_ip].opcode == MAL_OP_CALL &&
+                    fn->instructions[call_ip].as.call.dst == result &&
+                    fn->instructions[call_ip].as.call.callee == callee &&
+                    fn->instructions[call_ip].as.call.this_value ==
+                        MAL_VALUE_OPERAND_UNDEFINED && exceptional_handler_count == 0;
+                if (header_ok) {
+                    i32 data = fn->instructions[call_ip].as.call.data_offset;
+                    header_ok = data >= 0 && data + 1 < fn->instruction_data_count &&
+                        fn->instruction_data[data] == 1 &&
+                        fn->instruction_data[data + 1] == input;
+                }
+                bool allocation_block = false;
+                bool call_block = false;
+                for (u32 block = 0; block < ordinary_block_count; block++) {
+                    if (ordinary_block_ips[block] == allocation_ip) allocation_block = true;
+                    if (ordinary_block_ips[block] == call_ip) call_block = true;
+                }
+                if (!allocation_block || !call_block) header_ok = false;
+                for (u32 push = 0; header_ok && push < push_count; push++) {
+                    i32 ip = push_ips[push];
+                    if (ip <= allocation_ip || ip >= call_ip ||
+                        fn->instructions[ip].opcode != MAL_OP_CALL) header_ok = false;
+                }
+                if (!header_ok || metadata_operations != push_count + 2 ||
+                    claim_count != push_count + 2) r.ok = false;
+                MAL_REGION_PAYLOAD_REFERENCE(allocation_ip);
+                for (u32 push = 0; r.ok && push < push_count; push++) {
+                    MAL_REGION_PAYLOAD_REFERENCE(push_ips[push]);
+                }
+                MAL_REGION_PAYLOAD_REFERENCE(call_ip);
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM
