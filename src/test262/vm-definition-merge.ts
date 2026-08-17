@@ -135,6 +135,18 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 					(index) => index + base.string,
 				),
 			};
+		case "stack-object-plan":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				sites: region.sites.map((site) => ({
+					...site,
+					accesses: site.accesses.map((access) => ({ ...access })),
+					materializations: site.materializations.map((materialization) => ({
+						...materialization,
+					})),
+				})),
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

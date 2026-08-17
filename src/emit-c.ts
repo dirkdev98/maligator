@@ -26,6 +26,7 @@ import type {
 	VmRegionLicense,
 	VmSemanticDependency,
 	VmSemanticProtectorFact,
+	VmStackObjectPlanRegion,
 } from "./lower-vm.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
 
@@ -729,80 +730,92 @@ export function emitCompiledFunction(
 	const stackSlotsBase = slotCount + (fn.isDerivedConstructor ? 1 : 0);
 	const stackObjectSites = new Map<number, StackObjectSite>();
 	let nextStackSlot = stackSlotsBase;
-	for (const site of fn.stackObjectSites ?? []) {
-		const instruction = fn.instructions[site.instructionIndex];
-		if (
-			(instruction?.opcode !== "CREATE_OBJECT" &&
-				instruction?.opcode !== "CREATE_OBJECT_SHAPED") ||
-			(instruction.opcode === "CREATE_OBJECT"
-				? site.slotCount !== 0
-				: instruction.count !== site.slotCount) ||
-			stackObjectSites.has(site.instructionIndex)
-		) {
-			throw new Error(
-				`Invalid stack-object metadata at instruction ${site.instructionIndex}`,
-			);
+	const stackObjectPlanRegions = (fn.regions ?? []).filter(
+		(region): region is VmStackObjectPlanRegion => region.kind === "stack-object-plan",
+	);
+	for (const region of stackObjectPlanRegions) {
+		for (const site of region.sites) {
+			const instruction = fn.instructions[site.allocationIp];
+			if (
+				(instruction?.opcode !== "CREATE_OBJECT" &&
+					instruction?.opcode !== "CREATE_OBJECT_SHAPED") ||
+				(instruction.opcode === "CREATE_OBJECT"
+					? site.slotCount !== 0
+					: instruction.count !== site.slotCount) ||
+				stackObjectSites.has(site.allocationIp)
+			) {
+				throw new Error(
+					`Invalid stack-object metadata at instruction ${site.allocationIp}`,
+				);
+			}
+			stackObjectSites.set(site.allocationIp, {
+				objectName: `__stack_object_${site.allocationIp}`,
+				slotsOffset: nextStackSlot,
+				slotCount: site.slotCount,
+			});
+			nextStackSlot += site.slotCount;
 		}
-		stackObjectSites.set(site.instructionIndex, {
-			objectName: `__stack_object_${site.instructionIndex}`,
-			slotsOffset: nextStackSlot,
-			slotCount: site.slotCount,
-		});
-		nextStackSlot += site.slotCount;
 	}
 	const stackObjectMaterializations = new Map<number, StackObjectSite>();
-	for (const materialization of fn.stackObjectMaterializations ?? []) {
-		const returnInstruction = fn.instructions[materialization.returnInstructionIndex];
-		const site = stackObjectSites.get(materialization.allocationInstructionIndex);
-		if (
-			returnInstruction?.opcode !== "RETURN" ||
-			site === undefined ||
-			stackObjectMaterializations.has(materialization.returnInstructionIndex)
-		) {
-			throw new Error(
-				`Invalid stack-object materialization metadata at instruction ${materialization.returnInstructionIndex}`,
-			);
-		}
-		stackObjectMaterializations.set(materialization.returnInstructionIndex, site);
-	}
 	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
-	for (const access of fn.stackObjectAccesses ?? []) {
-		const instruction = fn.instructions[access.instructionIndex];
-		const site = stackObjectSites.get(access.allocationInstructionIndex);
-		if (
-			(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
-				instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
-			site === undefined ||
-			access.slot < 0 ||
-			access.slot >= site.slotCount ||
-			stackObjectAccesses.has(access.instructionIndex)
-		) {
-			throw new Error(
-				`Invalid stack-object access metadata at instruction ${access.instructionIndex}`,
-			);
-		}
-		stackObjectAccesses.set(access.instructionIndex, { site, slot: access.slot });
-	}
 	const stackObjectInheritedAccesses = new Map<number, StackObjectSite>();
-	for (const access of fn.stackObjectInheritedAccesses ?? []) {
-		const instruction = fn.instructions[access.instructionIndex];
-		const site = stackObjectSites.get(access.allocationInstructionIndex);
-		if (
-			instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
-			site === undefined ||
-			site.inheritedLoadInstructionIndex !== undefined ||
-			stackObjectInheritedAccesses.has(access.instructionIndex)
-		) {
-			throw new Error(
-				`Invalid inherited stack-object access metadata at instruction ${access.instructionIndex}`,
-			);
+	for (const region of stackObjectPlanRegions) {
+		for (const planSite of region.sites) {
+			const site = stackObjectSites.get(planSite.allocationIp)!;
+			for (const materialization of planSite.materializations) {
+				const instruction = fn.instructions[materialization.ip];
+				if (
+					(materialization.kind === "return"
+						? instruction?.opcode !== "RETURN"
+						: instruction?.opcode !== "CALL" ||
+							instruction.nativeCardinalityPush
+								?.pushedStackObjectAllocationInstructionIndex !==
+								planSite.allocationIp) ||
+					(materialization.kind === "return" &&
+						stackObjectMaterializations.has(materialization.ip))
+				) {
+					throw new Error(
+						`Invalid stack-object materialization metadata at instruction ${materialization.ip}`,
+					);
+				}
+				if (materialization.kind === "return") {
+					stackObjectMaterializations.set(materialization.ip, site);
+				}
+			}
+			for (const access of planSite.accesses) {
+				const instruction = fn.instructions[access.ip];
+				if (
+					(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+						instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+					access.slot < 0 ||
+					access.slot >= site.slotCount ||
+					stackObjectAccesses.has(access.ip)
+				) {
+					throw new Error(
+						`Invalid stack-object access metadata at instruction ${access.ip}`,
+					);
+				}
+				stackObjectAccesses.set(access.ip, { site, slot: access.slot });
+			}
+			if (planSite.inheritedAccessIp === undefined) continue;
+			const instruction = fn.instructions[planSite.inheritedAccessIp];
+			if (
+				instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				region.license.guard.dependencies.length === 0 ||
+				site.inheritedLoadInstructionIndex !== undefined ||
+				stackObjectInheritedAccesses.has(planSite.inheritedAccessIp)
+			) {
+				throw new Error(
+					`Invalid inherited stack-object access metadata at instruction ${planSite.inheritedAccessIp}`,
+				);
+			}
+			site.inheritedLoadInstructionIndex = planSite.inheritedAccessIp;
+			site.inheritedIcIndex = instruction.icIndex;
+			site.inheritedFastName = `${site.objectName}_inherited_fast`;
+			site.inheritedValueName = `${site.objectName}_inherited_value`;
+			site.inheritedGuard = region.license.guard;
+			stackObjectInheritedAccesses.set(planSite.inheritedAccessIp, site);
 		}
-		site.inheritedLoadInstructionIndex = access.instructionIndex;
-		site.inheritedIcIndex = instruction.icIndex;
-		site.inheritedFastName = `${site.objectName}_inherited_fast`;
-		site.inheritedValueName = `${site.objectName}_inherited_value`;
-		site.inheritedGuard = access.guard;
-		stackObjectInheritedAccesses.set(access.instructionIndex, site);
 	}
 	const finiteRecordRegions = new Map<number, FiniteRecordRegion>();
 	const finiteRecordStores = new Map<number, FiniteRecordRegion>();
@@ -2570,11 +2583,14 @@ function findInheritedLoadLoopTwins(
 		const load = loads[0]!;
 		if (
 			load.instruction.nativeCardinalityAccess !== undefined ||
-			(fn.stackObjectAccesses ?? []).some(
-				(access) => access.instructionIndex === load.ip,
-			) ||
-			(fn.stackObjectInheritedAccesses ?? []).some(
-				(access) => access.instructionIndex === load.ip,
+			(fn.regions ?? []).some(
+				(region) =>
+					region.kind === "stack-object-plan" &&
+					region.sites.some(
+						(site) =>
+							site.inheritedAccessIp === load.ip ||
+							site.accesses.some((access) => access.ip === load.ip),
+					),
 			)
 		) {
 			continue;

@@ -529,6 +529,12 @@ is general rather than a registry-shaped collection of special cases.
         callback target, captured-number guards and projection string constants
         through MALW v57 and multi-definition rebasing; retain the ordinary calls
         as the complete miss/fill twin.
+  - [x] Replace the four parallel stack-object site/access/inherited/materialize
+        tables with bounded stack-object plan regions. Shard large functions by
+        allocation and claim budget; make every direct slot operation and rare
+        escape edge belong to its allocation plan; carry the inherited-property
+        protector as the region license; and validate the complete MALW v58 plan
+        in TypeScript and the C loader before native stack emission.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

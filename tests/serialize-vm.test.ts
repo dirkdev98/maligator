@@ -538,13 +538,6 @@ describe("serialize-vm", () => {
 						),
 					],
 					gcRootRegisters: [0, 3, 7],
-					stackObjectSites: [{ instructionIndex: 4, slotCount: 2 }],
-					stackObjectAccesses: [
-						{ instructionIndex: 8, allocationInstructionIndex: 4, slot: 1 },
-					],
-					stackObjectMaterializations: [
-						{ returnInstructionIndex: 10, allocationInstructionIndex: 4 },
-					],
 				},
 			],
 		};

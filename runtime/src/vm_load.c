@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 57u        // linked JSON.parse/map templates join the region table
+#define WIRE_VERSION 58u        // stack-object plans join the tagged region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1751,38 +1751,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             (void) rd_i32(&r);
         }
 
-        u32 stack_site_count = rd_count(&r, 2);
-        for (u32 site = 0; r.ok && site < stack_site_count; site++) {
-            (void) rd_i32(&r);
-            (void) rd_i32(&r);
-        }
-
-        u32 stack_access_count = rd_count(&r, 3);
-        for (u32 access = 0; r.ok && access < stack_access_count; access++) {
-            (void) rd_i32(&r);
-            (void) rd_i32(&r);
-            (void) rd_i32(&r);
-        }
-
-        u32 inherited_stack_access_count = rd_count(&r, 4);
-        for (u32 access = 0; r.ok && access < inherited_stack_access_count; access++) {
-            (void) rd_i32(&r);
-            (void) rd_i32(&r);
-            u8 dependency_mask = rd_u8(&r);
-            u8 obligation_mask = rd_u8(&r);
-            if ((dependency_mask != 1 && dependency_mask != 2) ||
-                obligation_mask != 3) {
-                r.ok = false;
-            }
-        }
-
-        u32 materialization_count = rd_count(&r, 2);
-        for (u32 materialization = 0; r.ok && materialization < materialization_count;
-             materialization++) {
-            (void) rd_i32(&r);
-            (void) rd_i32(&r);
-        }
-
         u32 instruction_metadata_count = rd_count(&r, 2);
         for (u32 metadata = 0; r.ok && metadata < instruction_metadata_count; metadata++) {
             u32 instruction_index = rd_u32(&r);
@@ -2033,13 +2001,17 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 			bool invariant_json_map_template_contract = kind == 10 && representation == 10 &&
 				materialization == 2 && (dependency_mask == 1 || dependency_mask == 14) &&
 				obligation_mask == 3;
+			bool stack_object_plan_contract = kind == 11 && representation == 11 &&
+				materialization == 1 &&
+				(dependency_mask == 0 || dependency_mask == 1 || dependency_mask == 2) &&
+				obligation_mask == 3;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
 				 !string_scan_contract && !private_aggregate_memo_contract &&
-				 !invariant_json_map_template_contract)) {
+				 !invariant_json_map_template_contract && !stack_object_plan_contract)) {
                 r.ok = false;
             }
 
@@ -3253,6 +3225,81 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				MAL_REGION_PAYLOAD_REFERENCE(parse_call_ip);
 				MAL_REGION_PAYLOAD_REFERENCE(map_load_ip);
 				MAL_REGION_PAYLOAD_REFERENCE(map_call_ip);
+			} else if (r.ok && kind == 11) {
+				u32 site_count = rd_count(&r, 5);
+				if (site_count == 0 || site_count > 8 || anchor_count != site_count ||
+					exceptional_handler_count != 0) r.ok = false;
+				u32 inherited_count = 0;
+				u32 total_slots = 0;
+				for (u32 site = 0; r.ok && site < site_count; site++) {
+					i32 allocation_ip = rd_i32(&r);
+					i32 slot_count = rd_i32(&r);
+					bool allocation_ok = allocation_ip >= 0 &&
+						allocation_ip < fn->instruction_count && anchors[site] == allocation_ip &&
+						slot_count >= 0 && slot_count <= 256;
+					if (allocation_ok) {
+						const MalInstruction *allocation = &fn->instructions[allocation_ip];
+						if (allocation->opcode == MAL_OP_CREATE_OBJECT) {
+							allocation_ok = slot_count == 0;
+						} else if (allocation->opcode == MAL_OP_CREATE_OBJECT_SHAPED) {
+							i32 offset = allocation->as.create_object_shaped.data_offset;
+							allocation_ok = offset >= 0 && offset < fn->instruction_data_count &&
+								fn->instruction_data[offset] == slot_count;
+						} else {
+							allocation_ok = false;
+						}
+					}
+					if (!allocation_ok) {
+						r.ok = false;
+					} else if (total_slots + (u32) slot_count > 256) {
+						r.ok = false;
+					} else {
+						total_slots += (u32) slot_count;
+					}
+					MAL_REGION_PAYLOAD_REFERENCE(allocation_ip);
+
+					u32 access_count = rd_count(&r, 2);
+					for (u32 access = 0; r.ok && access < access_count; access++) {
+						i32 ip = rd_i32(&r);
+						i32 slot = rd_i32(&r);
+						if (ip < 0 || ip >= fn->instruction_count || slot < 0 ||
+							slot >= slot_count ||
+							(fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY_STATIC &&
+							 fn->instructions[ip].opcode != MAL_OP_STORE_PROPERTY_STATIC)) {
+							r.ok = false;
+						}
+						MAL_REGION_PAYLOAD_REFERENCE(ip);
+					}
+
+					i32 inherited_ip = rd_i32(&r);
+					if (inherited_ip >= 0) {
+						inherited_count++;
+						if (inherited_ip >= fn->instruction_count ||
+							fn->instructions[inherited_ip].opcode != MAL_OP_LOAD_PROPERTY_STATIC) {
+							r.ok = false;
+						}
+						MAL_REGION_PAYLOAD_REFERENCE(inherited_ip);
+					} else if (inherited_ip != -1) {
+						r.ok = false;
+					}
+
+					u32 materialization_count = rd_count(&r, 2);
+					for (u32 materialization = 0; r.ok &&
+						 materialization < materialization_count; materialization++) {
+						i32 ip = rd_i32(&r);
+						u8 tag = rd_u8(&r);
+						if (ip < 0 || ip >= fn->instruction_count ||
+							(tag == 1 && fn->instructions[ip].opcode != MAL_OP_RETURN) ||
+							(tag == 2 && fn->instructions[ip].opcode != MAL_OP_CALL) ||
+							(tag != 1 && tag != 2)) {
+							r.ok = false;
+						}
+						MAL_REGION_PAYLOAD_REFERENCE(ip);
+					}
+				}
+				if ((inherited_count == 0 && dependency_mask != 0) ||
+					(inherited_count != 0 && dependency_mask == 0) ||
+					metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

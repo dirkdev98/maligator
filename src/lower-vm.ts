@@ -555,6 +555,23 @@ export type VmInvariantJsonMapTemplateRegion = VmRegionEnvelope<
 	readonly excludedStringIndices: ReadonlyArray<number>;
 };
 
+export type VmStackObjectPlanRegion = VmRegionEnvelope<
+	"stack-object-plan",
+	"activation-local-fixed-shape-objects",
+	"on-demand"
+> & {
+	readonly sites: ReadonlyArray<{
+		readonly allocationIp: number;
+		readonly slotCount: number;
+		readonly accesses: ReadonlyArray<{ readonly ip: number; readonly slot: number }>;
+		readonly inheritedAccessIp?: number;
+		readonly materializations: ReadonlyArray<{
+			readonly ip: number;
+			readonly kind: "return" | "cardinality-push";
+		}>;
+	}>;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -584,6 +601,7 @@ export type VmRegion =
 	| VmStringScanRegion
 	| VmPrivateAggregateMemoRegion
 	| VmInvariantJsonMapTemplateRegion
+	| VmStackObjectPlanRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
@@ -778,34 +796,6 @@ export interface VmFunction {
 	 * boxed register.
 	 */
 	gcRootRegisters?: ReadonlyArray<number>;
-
-	/**
-	 * COMPILE-ONLY: exact CREATE_OBJECT/CREATE_OBJECT_SHAPED sites proven safe for
-	 * native stack emission. Omitted by the wire codec, so deserialized/interpreted
-	 * functions retain ordinary heap allocation semantics.
-	 */
-	stackObjectSites?: ReadonlyArray<{ instructionIndex: number; slotCount: number }>;
-	stackObjectAccesses?: ReadonlyArray<{
-		instructionIndex: number;
-		allocationInstructionIndex: number;
-		slot: number;
-	}>;
-	stackObjectInheritedAccesses?: ReadonlyArray<{
-		instructionIndex: number;
-		allocationInstructionIndex: number;
-		guard: VmGuardPlan;
-	}>;
-
-	/**
-	 * COMPILE-ONLY: partial-escape materializations keyed to RETURN instruction
-	 * indices. The allocation index resolves the stack storage to clone. Omitted by
-	 * the wire codec so interpreter behavior and the serialized opcode set are
-	 * unchanged.
-	 */
-	stackObjectMaterializations?: ReadonlyArray<{
-		returnInstructionIndex: number;
-		allocationInstructionIndex: number;
-	}>;
 }
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
@@ -3328,6 +3318,121 @@ function lowerFunctionToVmFunction(
 			}
 		}
 	}
+	const stackPlanCandidates = stackObjectSites.map((site) => {
+		const accesses = stackObjectAccesses
+			.filter((access) => access.allocationInstructionIndex === site.instructionIndex)
+			.map((access) => ({ ip: access.instructionIndex, slot: access.slot }));
+		const inherited = stackObjectInheritedAccesses.filter(
+			(access) => access.allocationInstructionIndex === site.instructionIndex,
+		);
+		if (inherited.length > 1) {
+			throw new Error(
+				`Stack-object site ${site.instructionIndex} has multiple inherited loads`,
+			);
+		}
+		const materializations: Array<{
+			ip: number;
+			kind: "return" | "cardinality-push";
+		}> = stackObjectMaterializations
+			.filter(
+				(materialization) =>
+					materialization.allocationInstructionIndex === site.instructionIndex,
+			)
+			.map((materialization) => ({
+				ip: materialization.returnInstructionIndex,
+				kind: "return" as const,
+			}));
+		for (let ip = 0; ip < instructions.length; ip++) {
+			const instruction = instructions[ip]!;
+			if (
+				instruction.opcode === "CALL" &&
+				instruction.nativeCardinalityPush?.pushedStackObjectAllocationInstructionIndex ===
+					site.instructionIndex
+			) {
+				materializations.push({ ip, kind: "cardinality-push" });
+			}
+		}
+		const claimedIps = [
+			site.instructionIndex,
+			...accesses.map((access) => access.ip),
+			...(inherited[0] === undefined ? [] : [inherited[0].instructionIndex]),
+			...materializations.map((materialization) => materialization.ip),
+		];
+		return {
+			site: {
+				allocationIp: site.instructionIndex,
+				slotCount: site.slotCount,
+				accesses,
+				...(inherited[0] === undefined
+					? {}
+					: { inheritedAccessIp: inherited[0].instructionIndex }),
+				materializations,
+			},
+			guard: inherited[0]?.guard,
+			claimedIps,
+		};
+	});
+	let pendingStackPlanSites: Array<(typeof stackPlanCandidates)[number]["site"]> = [];
+	let pendingStackPlanGuards: Array<VmGuardPlan> = [];
+	let pendingStackPlanClaims: Array<number> = [];
+	const flushStackPlan = (): void => {
+		if (pendingStackPlanSites.length === 0 || regions.length >= 8) return;
+		const license =
+			pendingStackPlanGuards.length === 0
+				? {
+						guard: {
+							dependencies: [],
+							obligations: ["fallback", "materialize"] as const,
+						},
+						genericTwin: "retained" as const,
+						materialization: "on-demand" as const,
+					}
+				: vmRegionLicense(pendingStackPlanGuards, "on-demand");
+		if (license !== undefined && license.materialization === "on-demand") {
+			const claimedIps = [...new Set(pendingStackPlanClaims)].sort(
+				(left, right) => left - right,
+			);
+			for (const ip of claimedIps) claimedRegionInstructions.add(ip);
+			regions.push({
+				kind: "stack-object-plan",
+				license: { ...license, materialization: "on-demand" },
+				representation: "activation-local-fixed-shape-objects",
+				anchors: pendingStackPlanSites.map((site) => site.allocationIp),
+				claimedIps,
+				controlFlow: { ordinaryBlockIps: claimedIps, exceptionalHandlerIps: [] },
+				cost: {
+					score: pendingStackPlanSites.reduce(
+						(total, site) => total + Math.max(1, site.slotCount),
+						0,
+					),
+					metadataOperations: claimedIps.length,
+				},
+				sites: pendingStackPlanSites,
+			});
+		}
+		pendingStackPlanSites = [];
+		pendingStackPlanGuards = [];
+		pendingStackPlanClaims = [];
+	};
+	for (const candidate of stackPlanCandidates) {
+		const uniqueClaims = [...new Set(candidate.claimedIps)];
+		if (
+			uniqueClaims.length === 0 ||
+			uniqueClaims.length > 64 ||
+			uniqueClaims.some((ip) => claimedRegionInstructions.has(ip))
+		) {
+			continue;
+		}
+		const combinedClaims = new Set([...pendingStackPlanClaims, ...uniqueClaims]);
+		if (pendingStackPlanSites.length >= 8 || combinedClaims.size > 64) {
+			flushStackPlan();
+		}
+		if (regions.length >= 8) break;
+		pendingStackPlanSites.push(candidate.site);
+		if (candidate.guard !== undefined) pendingStackPlanGuards.push(candidate.guard);
+		pendingStackPlanClaims.push(...uniqueClaims);
+	}
+	flushStackPlan();
 	for (const pending of pendingNativeMathCalls) {
 		const receiverIp = instructionIndexByIrInstruction.get(pending.receiver);
 		const propertyIp = instructionIndexByIrInstruction.get(pending.property);
@@ -3400,12 +3505,6 @@ function lowerFunctionToVmFunction(
 			: undefined,
 		gcRootRegisters,
 		regions: regions.length > 0 ? regions : undefined,
-		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
-		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
-		stackObjectInheritedAccesses:
-			stackObjectInheritedAccesses.length > 0 ? stackObjectInheritedAccesses : undefined,
-		stackObjectMaterializations:
-			stackObjectMaterializations.length > 0 ? stackObjectMaterializations : undefined,
 	};
 }
 

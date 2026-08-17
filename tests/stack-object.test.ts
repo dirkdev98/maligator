@@ -10,6 +10,7 @@ import { annotateStackObjectSites, executeIROptimizations } from "../src/ir-opt.
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { IntermediateProgram, IRInstruction } from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
+import type { VmDefinition, VmRegion } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -32,6 +33,17 @@ function optimized(source: string): IntermediateProgram {
 function instructions(program: IntermediateProgram): Array<IRInstruction> {
 	return program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
+	);
+}
+
+type StackObjectPlanRegion = Extract<VmRegion, { kind: "stack-object-plan" }>;
+
+function stackObjectPlans(definition: VmDefinition): Array<StackObjectPlanRegion> {
+	return definition.functions.flatMap(
+		(fn) =>
+			fn.regions?.filter(
+				(region): region is StackObjectPlanRegion => region.kind === "stack-object-plan",
+			) ?? [],
 	);
 }
 
@@ -389,14 +401,40 @@ describe("closed fixed-shape stack-object proof", () => {
 });
 
 describe("stack-object native metadata and C emission", () => {
+	it("shards more than eight proven allocations across bounded plan regions", () => {
+		const declarations = Array.from(
+			{ length: 9 },
+			(_, index) => `const value${index} = { x: ${index} };`,
+		).join("\n");
+		const escapes = Array.from(
+			{ length: 9 },
+			(_, index) => `if (escape === ${index}) return value${index};`,
+		).join("\n");
+		const reads = Array.from({ length: 9 }, (_, index) => `value${index}.x`).join(" + ");
+		const definition = compileSemanticProgramToVmDefinition(
+			semantic(
+				`function f(escape) { ${declarations} ${escapes} return ${reads}; } globalThis.keep = f;`,
+			),
+		);
+		const plans = stackObjectPlans(definition);
+		expect(plans.map((plan) => plan.sites.length)).toEqual([8, 1]);
+		expect(plans.flatMap((plan) => plan.sites)).toHaveLength(9);
+		expect(plans.every((plan) => plan.claimedIps.length <= 64)).toBe(true);
+		expect(plans.every((plan) => plan.license.guard.dependencies.length === 0)).toBe(
+			true,
+		);
+	});
+
 	it("emits an inline dependency guard with stack and heap representations", () => {
 		const inheritedSource = `function f(value) { const o = { x: value }; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`;
 		const definition = compileSemanticProgramToVmDefinition(semantic(inheritedSource));
-		const fn = definition.functions.find(
-			(candidate) => (candidate.stackObjectInheritedAccesses?.length ?? 0) > 0,
+		const plan = stackObjectPlans(definition).find((region) =>
+			region.sites.some((site) => site.inheritedAccessIp !== undefined),
 		)!;
-		expect(fn.stackObjectInheritedAccesses).toHaveLength(1);
-		expect(fn.stackObjectInheritedAccesses?.[0]?.guard).toEqual({
+		expect(
+			plan.sites.filter((site) => site.inheritedAccessIp !== undefined),
+		).toHaveLength(1);
+		expect(plan.license.guard).toEqual({
 			dependencies: [{ kind: "epoch", family: "primitive-methods" }],
 			obligations: ["fallback", "materialize"],
 		});
@@ -418,9 +456,9 @@ describe("stack-object native metadata and C emission", () => {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		});
 		expect(
-			locked.functions.find(
-				(candidate) => (candidate.stackObjectInheritedAccesses?.length ?? 0) > 0,
-			)?.stackObjectInheritedAccesses?.[0]?.guard.dependencies,
+			stackObjectPlans(locked).find((region) =>
+				region.sites.some((site) => site.inheritedAccessIp !== undefined),
+			)?.license.guard.dependencies,
 		).toEqual([{ kind: "world", fact: "primordials.locked" }]);
 		const lockedSource = emitVmDefinition(locked, { compiled: true });
 		expect(lockedSource).toMatch(/->poly_count == 0 && true &&/);
@@ -435,12 +473,12 @@ describe("stack-object native metadata and C emission", () => {
 				`function f(escape) { const o = { x: "heap:" + 1 }; if (escape) return o; return typeof o === "object" && o === o ? o.x : ""; } globalThis.keep = f;`,
 			),
 		);
-		const fn = definition.functions.find(
-			(candidate) => (candidate.stackObjectAccesses?.length ?? 0) > 0,
+		const plan = stackObjectPlans(definition).find((region) =>
+			region.sites.some((site) => site.accesses.length > 0),
 		)!;
-		expect(fn.stackObjectAccesses).toHaveLength(1);
-		const access = fn.stackObjectAccesses![0]!;
-		expect(fn.instructions[access.instructionIndex]?.opcode).toBe("LOAD_PROPERTY_STATIC");
+		const access = plan.sites.flatMap((site) => site.accesses)[0]!;
+		const owner = definition.functions.find((fn) => fn.regions?.includes(plan))!;
+		expect(owner.instructions[access.ip]?.opcode).toBe("LOAD_PROPERTY_STATIC");
 		const source = emitVmDefinition(definition, { compiled: true });
 		expect(source).toContain("MalObject __stack_object_");
 		expect(source).toContain("MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT)");
@@ -480,19 +518,21 @@ describe("stack-object native metadata and C emission", () => {
 				`function f(escape, value) { const o = { x: value, tag: "current" }; const alias = o; alias.x = value + 1; if (escape === 1) return alias; if (escape === 2) return o; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
 			),
 		);
-		const fn = definition.functions.find(
-			(candidate) => (candidate.stackObjectMaterializations?.length ?? 0) > 0,
+		const fn = definition.functions.find((candidate) =>
+			candidate.regions?.some(
+				(region) =>
+					region.kind === "stack-object-plan" &&
+					region.sites.some((site) => site.materializations.length > 0),
+			),
 		)!;
-		expect(fn.stackObjectMaterializations).toHaveLength(2);
-		for (const materialization of fn.stackObjectMaterializations!) {
-			expect(fn.instructions[materialization.returnInstructionIndex]?.opcode).toBe(
-				"RETURN",
-			);
-			expect(
-				fn.stackObjectSites?.some(
-					(site) => site.instructionIndex === materialization.allocationInstructionIndex,
-				),
-			).toBe(true);
+		const plan = fn.regions!.find(
+			(region): region is StackObjectPlanRegion => region.kind === "stack-object-plan",
+		)!;
+		const materializations = plan.sites.flatMap((site) => site.materializations);
+		expect(materializations).toHaveLength(2);
+		for (const materialization of materializations) {
+			expect(materialization.kind).toBe("return");
+			expect(fn.instructions[materialization.ip]?.opcode).toBe("RETURN");
 		}
 
 		const source = emitVmDefinition(definition, { compiled: true });
@@ -509,14 +549,13 @@ describe("stack-object native metadata and C emission", () => {
 				`function f(escape) { const o = { x: 1 }; if (escape) return o; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
 			),
 		);
-		expect(decoded.functions.some((fn) => (fn.stackObjectSites?.length ?? 0) > 0)).toBe(
-			true,
-		);
+		const plans = stackObjectPlans(decoded);
+		expect(plans.length).toBeGreaterThan(0);
 		expect(
-			decoded.functions.some((fn) => (fn.stackObjectAccesses?.length ?? 0) > 0),
+			plans.some((plan) => plan.sites.some((site) => site.accesses.length > 0)),
 		).toBe(true);
 		expect(
-			decoded.functions.some((fn) => (fn.stackObjectMaterializations?.length ?? 0) > 0),
+			plans.some((plan) => plan.sites.some((site) => site.materializations.length > 0)),
 		).toBe(true);
 		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
 			"MalObject __stack_object_",
@@ -529,15 +568,11 @@ describe("stack-object native metadata and C emission", () => {
 				`function f(value) { const o = { x: value }; const inherited = o.toString; return typeof inherited === "function" ? o.x : 0; } globalThis.keep = f;`,
 			),
 		);
-		expect(
-			decoded.functions.some(
-				(fn) => (fn.stackObjectInheritedAccesses?.length ?? 0) === 1,
-			),
-		).toBe(true);
-		expect(
-			decoded.functions.find((fn) => (fn.stackObjectInheritedAccesses?.length ?? 0) === 1)
-				?.stackObjectInheritedAccesses?.[0]?.guard,
-		).toEqual({
+		const plan = stackObjectPlans(decoded).find((region) =>
+			region.sites.some((site) => site.inheritedAccessIp !== undefined),
+		);
+		expect(plan).toBeDefined();
+		expect(plan?.license.guard).toEqual({
 			dependencies: [{ kind: "epoch", family: "primitive-methods" }],
 			obligations: ["fallback", "materialize"],
 		});

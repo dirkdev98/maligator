@@ -663,6 +663,32 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads and executes persisted stack-object plan regions", () => {
+		const entrypoint = path.join(directory, "stack-object-plan-region.mjs");
+		writeFileSync(
+			entrypoint,
+			`function read(escape) {
+				const value = { x: 41, tag: "stack" };
+				if (escape) return value;
+				return typeof value === "object" ? value.x + 1 : 0;
+			}
+			if (read(false) !== 42 || read(true).tag !== "stack") throw new Error("bad stack plan");\n`,
+		);
+		const stackDefinition = compileEntrypoint(entrypoint, {
+			stripTypes: stripTypesWithTypeScript,
+			buildConfig: resolveBuildConfig({}),
+		});
+		expect(
+			stackDefinition.functions.flatMap(
+				(fn) => fn.regions?.filter((region) => region.kind === "stack-object-plan") ?? [],
+			),
+		).not.toHaveLength(0);
+		const wirePath = path.join(directory, "stack-object-plan-region.malw");
+		writeFileSync(wirePath, serializeVmDefinition(stackDefinition, { debugInfo: false }));
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

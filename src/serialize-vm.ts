@@ -37,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 57 to move linked JSON.parse/map templates into the tagged region table.
-export const WIRE_VERSION = 57;
+// Bumped to 58 to move stack-object plans into the tagged region table.
+export const WIRE_VERSION = 58;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -897,22 +897,30 @@ function invariantJsonMapTemplateGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
-function inheritedStackGuardMasks(guard: VmGuardPlan): {
-	dependencyMask: number;
-	obligationMask: number;
-} {
+function stackObjectPlanGuardMasks(
+	license: Extract<VmRegion, { kind: "stack-object-plan" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
 	let dependencyMask = 0;
-	for (const dependency of guard.dependencies) {
-		if (dependency.kind === "world") dependencyMask |= 1;
-		else if (dependency.family === "primitive-methods") dependencyMask |= 2;
-		else throw new RangeError("serialize-vm: unsupported inherited-stack dependency");
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "primitive-methods") {
+			dependencyMask |= 2;
+		} else {
+			throw new RangeError("serialize-vm: unsupported stack-object dependency");
+		}
 	}
 	let obligationMask = 0;
-	for (const obligation of guard.obligations) {
+	for (const obligation of license.guard.obligations) {
 		obligationMask |= obligation === "fallback" ? 1 : 2;
 	}
-	if ((dependencyMask !== 1 && dependencyMask !== 2) || obligationMask !== 3) {
-		throw new RangeError("serialize-vm: invalid inherited-stack guard plan");
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "on-demand" ||
+		![0, 1, 2].includes(dependencyMask) ||
+		obligationMask !== 3
+	) {
+		throw new RangeError("serialize-vm: invalid stack-object guard plan");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -1084,34 +1092,6 @@ export function serializeVmDefinition(
 	for (const fn of def.functions) {
 		w.u8(fn.gcRootRegisters === undefined ? 0 : 1);
 		w.i32Array([...(fn.gcRootRegisters ?? [])]);
-
-		w.u32(fn.stackObjectSites?.length ?? 0);
-		for (const site of fn.stackObjectSites ?? []) {
-			w.i32(site.instructionIndex);
-			w.i32(site.slotCount);
-		}
-
-		w.u32(fn.stackObjectAccesses?.length ?? 0);
-		for (const access of fn.stackObjectAccesses ?? []) {
-			w.i32(access.instructionIndex);
-			w.i32(access.allocationInstructionIndex);
-			w.i32(access.slot);
-		}
-
-		w.u32(fn.stackObjectInheritedAccesses?.length ?? 0);
-		for (const access of fn.stackObjectInheritedAccesses ?? []) {
-			w.i32(access.instructionIndex);
-			w.i32(access.allocationInstructionIndex);
-			const { dependencyMask, obligationMask } = inheritedStackGuardMasks(access.guard);
-			w.u8(dependencyMask);
-			w.u8(obligationMask);
-		}
-
-		w.u32(fn.stackObjectMaterializations?.length ?? 0);
-		for (const materialization of fn.stackObjectMaterializations ?? []) {
-			w.i32(materialization.returnInstructionIndex);
-			w.i32(materialization.allocationInstructionIndex);
-		}
 
 		const instructionMetadata = fn.instructions
 			.map((instruction, instructionIndex) => ({ instruction, instructionIndex }))
@@ -1383,7 +1363,9 @@ export function serializeVmDefinition(
 												? 8
 												: region.kind === "private-aggregate-memo"
 													? 9
-													: 10;
+													: region.kind === "invariant-json-map-template"
+														? 10
+														: 11;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1410,7 +1392,9 @@ export function serializeVmDefinition(
 												? stringScanGuardMasks(region.license)
 												: region.kind === "private-aggregate-memo"
 													? privateAggregateMemoGuardMasks(region.license)
-													: invariantJsonMapTemplateGuardMasks(region.license);
+													: region.kind === "invariant-json-map-template"
+														? invariantJsonMapTemplateGuardMasks(region.license)
+														: stackObjectPlanGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1620,6 +1604,24 @@ export function serializeVmDefinition(
 					w.i32(region.nestedBaseStringIndex);
 					w.i32(region.nestedValueStringIndex);
 					w.i32Array([...region.excludedStringIndices]);
+					break;
+				case "stack-object-plan":
+					w.u32(region.sites.length);
+					for (const site of region.sites) {
+						w.i32(site.allocationIp);
+						w.i32(site.slotCount);
+						w.u32(site.accesses.length);
+						for (const access of site.accesses) {
+							w.i32(access.ip);
+							w.i32(access.slot);
+						}
+						w.i32(site.inheritedAccessIp ?? -1);
+						w.u32(site.materializations.length);
+						for (const materialization of site.materializations) {
+							w.i32(materialization.ip);
+							w.u8(materialization.kind === "return" ? 1 : 2);
+						}
+					}
 					break;
 			}
 		}
@@ -1994,11 +1996,99 @@ function validateRegion(
 		case "invariant-json-map-template":
 			validateInvariantJsonMapTemplateRegion(fn, region, functionCount, stringConstants);
 			break;
+		case "stack-object-plan":
+			validateStackObjectPlanRegion(fn, region);
+			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
 			break;
 	}
 	for (const ip of region.claimedIps) claimed.add(ip);
+}
+
+function validateStackObjectPlanRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "stack-object-plan" }>,
+): void {
+	const { dependencyMask } = stackObjectPlanGuardMasks(region.license);
+	const payload = new Set<number>();
+	const allocationIps = new Set<number>();
+	let inheritedAccessCount = 0;
+	let totalSlots = 0;
+	let valid =
+		region.representation === "activation-local-fixed-shape-objects" &&
+		region.sites.length > 0 &&
+		region.sites.length <= 8 &&
+		region.anchors.length === region.sites.length &&
+		region.controlFlow.exceptionalHandlerIps.length === 0;
+	for (let siteIndex = 0; siteIndex < region.sites.length; siteIndex++) {
+		const site = region.sites[siteIndex]!;
+		const allocation = fn.instructions[site.allocationIp];
+		if (
+			allocationIps.has(site.allocationIp) ||
+			region.anchors[siteIndex] !== site.allocationIp ||
+			(allocation?.opcode !== "CREATE_OBJECT" &&
+				allocation?.opcode !== "CREATE_OBJECT_SHAPED") ||
+			(allocation.opcode === "CREATE_OBJECT"
+				? site.slotCount !== 0
+				: allocation.count !== site.slotCount) ||
+			site.slotCount < 0 ||
+			site.slotCount > 256
+		) {
+			valid = false;
+		}
+		allocationIps.add(site.allocationIp);
+		totalSlots += site.slotCount;
+		payload.add(site.allocationIp);
+		for (const access of site.accesses) {
+			const instruction = fn.instructions[access.ip];
+			if (
+				(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+				access.slot < 0 ||
+				access.slot >= site.slotCount ||
+				payload.has(access.ip)
+			) {
+				valid = false;
+			}
+			payload.add(access.ip);
+		}
+		if (site.inheritedAccessIp !== undefined) {
+			inheritedAccessCount++;
+			if (
+				fn.instructions[site.inheritedAccessIp]?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				payload.has(site.inheritedAccessIp)
+			) {
+				valid = false;
+			}
+			payload.add(site.inheritedAccessIp);
+		}
+		for (const materialization of site.materializations) {
+			const instruction = fn.instructions[materialization.ip];
+			if (
+				(materialization.kind === "return"
+					? instruction?.opcode !== "RETURN"
+					: instruction?.opcode !== "CALL" ||
+						instruction.nativeCardinalityPush
+							?.pushedStackObjectAllocationInstructionIndex !== site.allocationIp) ||
+				payload.has(materialization.ip)
+			) {
+				valid = false;
+			}
+			payload.add(materialization.ip);
+		}
+	}
+	if (
+		totalSlots > 256 ||
+		(inheritedAccessCount === 0 ? dependencyMask !== 0 : dependencyMask === 0) ||
+		region.cost.metadataOperations !== payload.size ||
+		payload.size !== region.claimedIps.length ||
+		region.claimedIps.some((ip) => !payload.has(ip)) ||
+		region.claimedIps.some((ip) => !region.controlFlow.ordinaryBlockIps.includes(ip))
+	) {
+		valid = false;
+	}
+	if (!valid) throw new RangeError("serialize-vm: invalid stack-object plan region");
 }
 
 function validateInvariantJsonMapTemplateRegion(
@@ -3557,62 +3647,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		}
 		if (hasGcRootRegisters === 1) fn.gcRootRegisters = gcRootRegisters;
 
-		const stackObjectSiteCount = r.count(2);
-		if (stackObjectSiteCount > 0) {
-			fn.stackObjectSites = Array.from({ length: stackObjectSiteCount }, () => ({
-				instructionIndex: r.i32(),
-				slotCount: r.i32(),
-			}));
-		}
-
-		const stackObjectAccessCount = r.count(3);
-		if (stackObjectAccessCount > 0) {
-			fn.stackObjectAccesses = Array.from({ length: stackObjectAccessCount }, () => ({
-				instructionIndex: r.i32(),
-				allocationInstructionIndex: r.i32(),
-				slot: r.i32(),
-			}));
-		}
-
-		const stackObjectInheritedAccessCount = r.count(4);
-		if (stackObjectInheritedAccessCount > 0) {
-			fn.stackObjectInheritedAccesses = Array.from(
-				{ length: stackObjectInheritedAccessCount },
-				() => {
-					const instructionIndex = r.i32();
-					const allocationInstructionIndex = r.i32();
-					const dependencyMask = r.u8();
-					const obligationMask = r.u8();
-					if ((dependencyMask !== 1 && dependencyMask !== 2) || obligationMask !== 3) {
-						throw new RangeError("serialize-vm: invalid inherited-stack guard plan");
-					}
-					return {
-						instructionIndex,
-						allocationInstructionIndex,
-						guard: {
-							dependencies: [
-								dependencyMask === 1
-									? { kind: "world", fact: "primordials.locked" }
-									: { kind: "epoch", family: "primitive-methods" },
-							],
-							obligations: ["fallback", "materialize"],
-						},
-					};
-				},
-			);
-		}
-
-		const stackObjectMaterializationCount = r.count(2);
-		if (stackObjectMaterializationCount > 0) {
-			fn.stackObjectMaterializations = Array.from(
-				{ length: stackObjectMaterializationCount },
-				() => ({
-					returnInstructionIndex: r.i32(),
-					allocationInstructionIndex: r.i32(),
-				}),
-			);
-		}
-
 		const instructionMetadataCount = r.count(2);
 		for (
 			let metadataIndex = 0;
@@ -3992,6 +4026,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 2 &&
 					(dependencyMask === 1 || dependencyMask === 14) &&
 					obligationMask === 3;
+				const stackObjectPlanContract =
+					kindTag === 11 &&
+					representationTag === 11 &&
+					materializationTag === 1 &&
+					[0, 1, 2].includes(dependencyMask) &&
+					obligationMask === 3;
 				if (
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
@@ -4003,7 +4043,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!stringSliceNumberContract &&
 						!stringScanContract &&
 						!privateAggregateMemoContract &&
-						!invariantJsonMapTemplateContract)
+						!invariantJsonMapTemplateContract &&
+						!stackObjectPlanContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -4566,7 +4607,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						input,
 						result,
 					};
-				} else {
+				} else if (kindTag === 10) {
 					const parseCallIp = r.i32();
 					const mapLoadIp = r.i32();
 					const mapCallIp = r.i32();
@@ -4630,6 +4671,75 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						nestedBaseStringIndex,
 						nestedValueStringIndex,
 						excludedStringIndices,
+					};
+				} else {
+					const siteCount = r.count(5);
+					if (siteCount === 0 || siteCount > 8) {
+						throw new RangeError("serialize-vm: invalid stack-object site count");
+					}
+					const sites: Array<
+						Extract<VmRegion, { kind: "stack-object-plan" }>["sites"][number]
+					> = [];
+					for (let siteIndex = 0; siteIndex < siteCount; siteIndex++) {
+						const allocationIp = r.i32();
+						const slotCount = r.i32();
+						const accessCount = r.count(2);
+						const accesses: Array<{ ip: number; slot: number }> = [];
+						for (let access = 0; access < accessCount; access++) {
+							accesses.push({ ip: r.i32(), slot: r.i32() });
+						}
+						const inheritedAccessIp = r.i32();
+						const materializationCount = r.count(2);
+						const materializations: Array<{
+							ip: number;
+							kind: "return" | "cardinality-push";
+						}> = [];
+						for (
+							let materialization = 0;
+							materialization < materializationCount;
+							materialization++
+						) {
+							const ip = r.i32();
+							const tag = r.u8();
+							if (tag !== 1 && tag !== 2) {
+								throw new RangeError(
+									"serialize-vm: invalid stack-object materialization",
+								);
+							}
+							materializations.push({
+								ip,
+								kind: tag === 1 ? "return" : "cardinality-push",
+							});
+						}
+						sites.push({
+							allocationIp,
+							slotCount,
+							accesses,
+							...(inheritedAccessIp < 0 ? {} : { inheritedAccessIp }),
+							materializations,
+						});
+					}
+					region = {
+						kind: "stack-object-plan",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 0
+										? []
+										: dependencyMask === 1
+											? [{ kind: "world", fact: "primordials.locked" }]
+											: [{ kind: "epoch", family: "primitive-methods" }],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "on-demand",
+						},
+						representation: "activation-local-fixed-shape-objects",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						sites,
 					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);
