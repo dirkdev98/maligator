@@ -407,7 +407,6 @@ describe("serialize-vm", () => {
 			left: 0,
 			right: 1,
 			operator: "+",
-			nativeFiniteString: { minimum: 0, stringIndices: [0, 1, 2] },
 		});
 		const finiteSelectorProducerInstructionIndex = metadataInstructions.length - 1;
 		metadataInstructions.push({
@@ -525,6 +524,14 @@ describe("serialize-vm", () => {
 			},
 		});
 		const knownBuiltinCallInstructionIndex = metadataInstructions.length - 1;
+		metadataInstructions.push({
+			opcode: "BINARY",
+			dst: 10,
+			left: 0,
+			right: 1,
+			operator: "+",
+		});
+		const finiteTableOnlyProducerInstructionIndex = metadataInstructions.length - 1;
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
@@ -603,18 +610,16 @@ describe("serialize-vm", () => {
 							},
 							representation: "finite-property-domain",
 							composition: "overlay",
-							anchors: [
-								finiteSelectorProducerInstructionIndex,
-								standaloneFiniteAccessInstructionIndex,
-							],
+							anchors: [finiteSelectorProducerInstructionIndex],
 							claimedIps: [
 								finiteSelectorProducerInstructionIndex,
 								standaloneFiniteAccessInstructionIndex,
 								finiteStoreInstructionIndex,
 								finiteAccessInstructionIndex,
+								finiteTableOnlyProducerInstructionIndex,
 							],
 							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
-							cost: { score: 6, metadataOperations: 4 },
+							cost: { score: 9, metadataOperations: 5 },
 							runtimeGuard: "integer-domain-and-shape-or-generic-access",
 							selectors: [
 								{
@@ -627,6 +632,13 @@ describe("serialize-vm", () => {
 										{ ip: finiteStoreInstructionIndex, kind: "store" },
 										{ ip: finiteAccessInstructionIndex, kind: "load" },
 									],
+								},
+								{
+									producerIp: finiteTableOnlyProducerInstructionIndex,
+									ordinal: 1,
+									minimum: 0,
+									stringIndices: [0, 1, 2],
+									accesses: [],
 								},
 							],
 						},

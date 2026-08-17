@@ -846,6 +846,7 @@ export function emitCompiledFunction(
 	const finiteRecordAccesses = new Map<number, FiniteRecordRegion>();
 	type FinitePropertySelector = VmFinitePropertySelectorRegion["selectors"][number];
 	const finitePropertySelectors = new Map<number, FinitePropertySelector>();
+	const finiteStringProducers = new Map<number, FinitePropertySelector>();
 	for (const region of (fn.regions ?? []).filter(
 		(candidate): candidate is VmFinitePropertySelectorRegion =>
 			candidate.kind === "finite-property-selector",
@@ -856,19 +857,15 @@ export function emitCompiledFunction(
 				producer?.opcode !== "BINARY" ||
 				producer.operator !== "+" ||
 				producer.right !== selector.ordinal ||
-				producer.nativeFiniteString?.minimum !== selector.minimum ||
-				producer.nativeFiniteString.stringIndices.length !==
-					selector.stringIndices.length ||
-				producer.nativeFiniteString.stringIndices.some(
-					(index, ordinal) => index !== selector.stringIndices[ordinal],
-				) ||
 				selector.stringIndices.length === 0 ||
-				selector.stringIndices.length > 8
+				selector.stringIndices.length > 32 ||
+				finiteStringProducers.has(selector.producerIp)
 			) {
 				throw new Error(
 					`Invalid finite-property selector at instruction ${selector.producerIp}`,
 				);
 			}
+			finiteStringProducers.set(selector.producerIp, selector);
 			for (const access of selector.accesses) {
 				const instruction = fn.instructions[access.ip];
 				if (
@@ -1032,6 +1029,7 @@ export function emitCompiledFunction(
 					fn.instructions[ip]!,
 					reps,
 					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
+					finiteStringProducers.get(ip),
 				)
 			) {
 				stable = false;
@@ -1116,6 +1114,7 @@ export function emitCompiledFunction(
 					fn.instructions[ip]!,
 					reps,
 					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
+					finiteStringProducers.get(ip),
 				)
 			) {
 				semanticEpochStable = false;
@@ -1402,6 +1401,7 @@ export function emitCompiledFunction(
 		finiteRecordAccesses,
 		finiteConstructionRegions,
 		finitePropertySelectors,
+		finiteStringProducers,
 		cardinalityRegions,
 		cardinalityAccesses,
 		cardinalityPushes,
@@ -1807,6 +1807,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
+		new Map(),
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 	);
@@ -2084,6 +2085,7 @@ function nativeInstructionMayInvalidateSemanticEpoch(
 	instruction: VmInstruction,
 	reps: Array<RegisterRep>,
 	directClosedGlobalAccess = false,
+	finiteStringProducer?: VmFinitePropertySelectorRegion["selectors"][number],
 ): boolean {
 	switch (instruction.opcode) {
 		case "CREATE_OBJECT":
@@ -2101,7 +2103,7 @@ function nativeInstructionMayInvalidateSemanticEpoch(
 		case "BINARY":
 			if (
 				instruction.operator === "+" &&
-				instruction.nativeFiniteString !== undefined &&
+				finiteStringProducer !== undefined &&
 				reps[instruction.right] === "number"
 			) {
 				return false;
@@ -2592,6 +2594,10 @@ function findInheritedLoadLoopTwins(
 	reps: Array<RegisterRep>,
 	coro: CoroutineContext | null,
 	closedGlobalTableAccessByIp: ReadonlyMap<number, ClosedGlobalTableAccess>,
+	finiteStringProducers: ReadonlyMap<
+		number,
+		VmFinitePropertySelectorRegion["selectors"][number]
+	>,
 ): Array<InheritedLoadLoopTwin> {
 	if (coro !== null) return [];
 
@@ -2660,6 +2666,7 @@ function findInheritedLoadLoopTwins(
 					instruction,
 					reps,
 					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
+					finiteStringProducers.get(ip),
 				)
 			) {
 				scalarOnly = false;
@@ -3152,6 +3159,10 @@ function emitBody(
 		number,
 		VmFinitePropertySelectorRegion["selectors"][number]
 	>,
+	finiteStringProducers: ReadonlyMap<
+		number,
+		VmFinitePropertySelectorRegion["selectors"][number]
+	>,
 	cardinalityRegions: ReadonlyMap<number, CardinalityRegion>,
 	cardinalityAccesses: ReadonlyMap<
 		number,
@@ -3328,6 +3339,7 @@ function emitBody(
 		reps,
 		coro,
 		closedGlobalTableAccessByIp,
+		finiteStringProducers,
 	);
 	const inheritedLoadLoopTwinByHeader = new Map(
 		inheritedLoadLoopTwins.map((twin) => [twin.headerIp, twin] as const),
@@ -4099,6 +4111,7 @@ function emitBody(
 								closedGlobalTableAccess: closedGlobalTableAccessByIp.get(fastIp),
 								nativeStringSearchRegExpAction:
 									nativeStringSearchRegExpActionByIp.get(fastIp),
+								finiteStringProducer: finiteStringProducers.get(fastIp),
 								affineRangeAction: affineRangeAction(fastIp),
 							},
 						);
@@ -4181,6 +4194,7 @@ function emitBody(
 						numericFusionAction: numericFusionActionByIp.get(ip),
 						finiteConstruction: finiteConstructionRegions.get(ip),
 						finitePropertySelector: finitePropertySelectors.get(ip),
+						finiteStringProducer: finiteStringProducers.get(ip),
 						affineRangeAction: affineRangeAction(ip),
 					},
 				);
@@ -4579,6 +4593,7 @@ interface NativeInstructionContext {
 	readonly numericFusionAction?: NativeNumericFusionAction;
 	readonly finiteConstruction?: VmFiniteObjectConstructionRegion;
 	readonly finitePropertySelector?: VmFinitePropertySelectorRegion["selectors"][number];
+	readonly finiteStringProducer?: VmFinitePropertySelectorRegion["selectors"][number];
 	readonly affineRangeAction?: NativeAffineRangeAction;
 }
 
@@ -4632,6 +4647,7 @@ function emitInstruction(
 		numericFusionAction,
 		finiteConstruction,
 		finitePropertySelector,
+		finiteStringProducer,
 		affineRangeAction,
 	} = context;
 	const genericContext: NativeInstructionContext = {
@@ -5925,7 +5941,7 @@ function emitInstruction(
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			const fusion = numericFusionAction;
-			const finiteString = instruction.nativeFiniteString;
+			const finiteString = finiteStringProducer;
 			if (
 				operator === "+" &&
 				finiteString !== undefined &&

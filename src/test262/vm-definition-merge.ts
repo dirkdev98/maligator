@@ -421,20 +421,8 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 			return { ...instruction };
 		case "LOAD_PROPERTY":
 		case "STORE_PROPERTY":
-			return { ...instruction };
 		case "BINARY":
-			return {
-				...instruction,
-				nativeFiniteString:
-					instruction.nativeFiniteString === undefined
-						? undefined
-						: {
-								minimum: instruction.nativeFiniteString.minimum,
-								stringIndices: instruction.nativeFiniteString.stringIndices.map(
-									(index) => index + base.string,
-								),
-							},
-			};
+			return { ...instruction };
 	}
 	return assertNever(instruction);
 }

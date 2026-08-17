@@ -708,6 +708,7 @@ export type VmFinitePropertySelectorRegion = VmRegionEnvelope<
 > & {
 	readonly composition: "overlay";
 	readonly runtimeGuard: "integer-domain-and-shape-or-generic-access";
+	/** Complete finite-string producers; property consumers are optional. */
 	readonly selectors: ReadonlyArray<{
 		readonly producerIp: number;
 		readonly ordinal: number;
@@ -1667,10 +1668,6 @@ export type VmInstruction =
 			left: number;
 			right: number;
 			operator: IRBinaryOperator;
-			nativeFiniteString?: {
-				minimum: number;
-				stringIndices: Array<number>;
-			};
 	  }
 	| {
 			opcode: "UNARY";
@@ -2060,9 +2057,11 @@ function lowerFunctionToVmFunction(
 		IRInstruction,
 		Extract<IRRegion, { kind: "finite-property-selector" }>["selectors"][number]
 	>();
+	const finiteStringProducers = new Set<IRInstruction>();
 	for (const region of fn.regions ?? []) {
 		if (region.kind === "finite-property-selector") {
 			for (const selector of region.selectors) {
+				finiteStringProducers.add(selector.source);
 				for (const access of selector.accesses)
 					finiteSelectorByAccess.set(access, selector);
 			}
@@ -2317,15 +2316,8 @@ function lowerFunctionToVmFunction(
 						producer?.opcode !== "BINARY" ||
 						producer.operator !== "+" ||
 						producer.right !== selector.ordinal ||
-						producer.nativeFiniteString?.minimum !== selector.minimum ||
-						producer.nativeFiniteString.stringIndices.length !==
-							selector.stringIndices.length ||
-						producer.nativeFiniteString.stringIndices.some(
-							(index, ordinal) => index !== selector.stringIndices[ordinal],
-						) ||
 						selector.stringIndices.length === 0 ||
-						selector.stringIndices.length > 8 ||
-						selector.accesses.length === 0 ||
+						selector.stringIndices.length > 32 ||
 						selector.accesses.some((access) => {
 							const instruction = instructions[access.ip];
 							return access.kind === "load"
@@ -2337,6 +2329,8 @@ function lowerFunctionToVmFunction(
 				new Set(payloadIps).size !== payloadIps.length ||
 				payloadIps.length !== claimedIps.length ||
 				payloadIps.some((ip) => !claimedIps.includes(ip)) ||
+				anchors.length !== 1 ||
+				anchors[0] !== resolvedSelectors[0]!.producerIp ||
 				region.cost.score !==
 					resolvedSelectors.reduce(
 						(total, selector) =>
@@ -2356,7 +2350,7 @@ function lowerFunctionToVmFunction(
 				},
 				representation: "finite-property-domain",
 				composition: "overlay",
-				anchors: anchors as [number, number],
+				anchors: anchors as [number],
 				claimedIps: claimedIps as Array<number>,
 				controlFlow: {
 					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
@@ -2612,7 +2606,7 @@ function lowerFunctionToVmFunction(
 					finish?.opcode !== "BINARY" ||
 					!startOperators.has(first.operator) ||
 					!finishOperators.has(finish.operator) ||
-					finish.nativeFiniteString !== undefined ||
+					finiteStringProducers.has(pair.finish) ||
 					(pair.firstUsePosition !== 1 && pair.firstUsePosition !== 2) ||
 					(pair.firstUsePosition === 1 ? finish.left : finish.right) !== first.dst ||
 					pair.firstIp >= pair.finishIp
@@ -4854,14 +4848,6 @@ function lowerInstructionToVmInstruction(
 				left: instruction.registers[1],
 				right: instruction.registers[2],
 				operator: instruction.operator,
-				...(instruction.nativeFiniteString === undefined
-					? {}
-					: {
-							nativeFiniteString: {
-								minimum: instruction.nativeFiniteString.minimum,
-								stringIndices: [...instruction.nativeFiniteString.stringIndices],
-							},
-						}),
 			};
 		}
 		case "unary":

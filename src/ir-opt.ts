@@ -2629,6 +2629,11 @@ export function annotateNativeNumericFusions(program: IntermediateProgram): void
 		if (retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION) continue;
 		if (fn.isGenerator || fn.isAsync) continue;
 		const index = buildIRRegisterIndex(fn, { locations: true });
+		const finiteStringProducers = new Set(
+			retainedRegions
+				.filter((region) => region.kind === "finite-property-selector")
+				.flatMap((region) => region.selectors.map((selector) => selector.source)),
+		);
 		const participating = new Set<IRInstruction>();
 		const pairs: Array<IRNumericFusionRegion["pairs"][number]> = [];
 		for (const block of fn.blocks) {
@@ -2648,7 +2653,7 @@ export function annotateNativeNumericFusions(program: IntermediateProgram): void
 				const finish = use.instruction;
 				if (
 					finish.type !== "binary" ||
-					finish.nativeFiniteString !== undefined ||
+					finiteStringProducers.has(finish) ||
 					(use.position !== 1 && use.position !== 2) ||
 					!NATIVE_NUMERIC_FUSION_FINISH_OPERATORS.has(finish.operator) ||
 					participating.has(finish)
@@ -3587,40 +3592,35 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 									getOrCreateStringConstant(program, value),
 								),
 							};
-							instruction.nativeFiniteString = finite;
-							if (finite.stringIndices.length <= 8) {
-								const accesses: Array<
-									Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>
-								> = [];
-								for (const use of index.uses.get(instruction.registers[0]) ?? []) {
-									const sourceLocation = index.locations?.get(instruction);
-									const useLocation = index.locations?.get(use.instruction);
-									const ordinalUnchanged =
-										sourceLocation !== undefined &&
-										useLocation !== undefined &&
-										sourceLocation.blockIndex === useLocation.blockIndex &&
-										sourceLocation.instructionIndex < useLocation.instructionIndex &&
-										!fn.blocks[sourceLocation.blockIndex]!.instructions.slice(
-											sourceLocation.instructionIndex + 1,
-											useLocation.instructionIndex,
-										).some((between) => definedRegisters(between).includes(right));
-									if (
-										ordinalUnchanged &&
-										((use.position === 2 && use.instruction.type === "loadProperty") ||
-											(use.position === 1 && use.instruction.type === "storeProperty"))
-									) {
-										accesses.push(use.instruction);
-									}
-								}
-								if (accesses.length > 0) {
-									selectorPlans.push({
-										source: instruction,
-										minimum: finite.minimum,
-										stringIndices: [...finite.stringIndices],
-										accesses,
-									});
+							const accesses: Array<
+								Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>
+							> = [];
+							for (const use of index.uses.get(instruction.registers[0]) ?? []) {
+								const sourceLocation = index.locations?.get(instruction);
+								const useLocation = index.locations?.get(use.instruction);
+								const ordinalUnchanged =
+									sourceLocation !== undefined &&
+									useLocation !== undefined &&
+									sourceLocation.blockIndex === useLocation.blockIndex &&
+									sourceLocation.instructionIndex < useLocation.instructionIndex &&
+									!fn.blocks[sourceLocation.blockIndex]!.instructions.slice(
+										sourceLocation.instructionIndex + 1,
+										useLocation.instructionIndex,
+									).some((between) => definedRegisters(between).includes(right));
+								if (
+									ordinalUnchanged &&
+									((use.position === 2 && use.instruction.type === "loadProperty") ||
+										(use.position === 1 && use.instruction.type === "storeProperty"))
+								) {
+									accesses.push(use.instruction);
 								}
 							}
+							selectorPlans.push({
+								source: instruction,
+								minimum: finite.minimum,
+								stringIndices: [...finite.stringIndices],
+								accesses,
+							});
 						}
 					}
 				}
@@ -3709,8 +3709,7 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 				for (const instruction of additions) claimedInstructions.add(instruction);
 			}
 			const first = selectors[0];
-			const firstAccess = first?.accesses[0];
-			if (first !== undefined && firstAccess !== undefined) {
+			if (first !== undefined) {
 				const claimed = [...claimedInstructions];
 				const ordinaryBlocks = [
 					...new Set(
@@ -3726,7 +3725,7 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 					},
 					representation: "finite-property-domain",
 					composition: "overlay",
-					anchors: [first.source, firstAccess],
+					anchors: [first.source],
 					claimedInstructions: claimed,
 					controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
 					cost: {

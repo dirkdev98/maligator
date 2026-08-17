@@ -39,8 +39,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped for structural fresh-RegExp String search regions.
-export const WIRE_VERSION = 69;
+// Bumped when finite-string tables became region-owned exclusively.
+export const WIRE_VERSION = 70;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1143,9 +1143,7 @@ export function serializeVmDefinition(
 				if (instruction.opcode === "CREATE_ARRAY") {
 					return instruction.nativeFreshDenseReserveLength !== undefined;
 				}
-				return (
-					instruction.opcode === "BINARY" && instruction.nativeFiniteString !== undefined
-				);
+				return false;
 			});
 		w.u32(instructionMetadata.length);
 		for (const { instruction, instructionIndex } of instructionMetadata) {
@@ -1205,13 +1203,6 @@ export function serializeVmDefinition(
 				instruction.nativePrimitiveStringLength === true
 			) {
 				w.u8(11);
-			} else if (
-				instruction.opcode === "BINARY" &&
-				instruction.nativeFiniteString !== undefined
-			) {
-				w.u8(4);
-				w.i32(instruction.nativeFiniteString.minimum);
-				w.i32Array(instruction.nativeFiniteString.stringIndices);
 			}
 		}
 
@@ -2095,9 +2086,8 @@ function validateFinitePropertySelectorRegion(
 		region.runtimeGuard !== "integer-domain-and-shape-or-generic-access" ||
 		region.selectors.length === 0 ||
 		region.selectors.length > 32 ||
-		region.anchors.length !== 2 ||
+		region.anchors.length !== 1 ||
 		region.anchors[0] !== region.selectors[0]!.producerIp ||
-		region.anchors[1] !== region.selectors[0]!.accesses[0]?.ip ||
 		region.selectors.some((selector) => {
 			const producer = fn.instructions[selector.producerIp];
 			return (
@@ -2106,18 +2096,11 @@ function validateFinitePropertySelectorRegion(
 				producer.right !== selector.ordinal ||
 				selector.ordinal < 0 ||
 				selector.ordinal >= fn.registerCount ||
-				producer.nativeFiniteString?.minimum !== selector.minimum ||
-				producer.nativeFiniteString.stringIndices.length !==
-					selector.stringIndices.length ||
-				producer.nativeFiniteString.stringIndices.some(
-					(index, ordinal) => index !== selector.stringIndices[ordinal],
-				) ||
 				selector.stringIndices.length === 0 ||
-				selector.stringIndices.length > 8 ||
+				selector.stringIndices.length > 32 ||
 				selector.stringIndices.some(
 					(index) => index < 0 || index >= stringConstants.length,
 				) ||
-				selector.accesses.length === 0 ||
 				selector.accesses.some((access) => {
 					const instruction = fn.instructions[access.ip];
 					return access.kind === "load"
@@ -2229,6 +2212,11 @@ function validateNumericFusionRegion(
 	region: Extract<VmRegion, { kind: "numeric-fusion" }>,
 ): void {
 	const payloadIps = region.pairs.flatMap((pair) => [pair.firstIp, pair.finishIp]);
+	const finiteStringProducerIps = new Set(
+		(fn.regions ?? [])
+			.filter((candidate) => candidate.kind === "finite-property-selector")
+			.flatMap((candidate) => candidate.selectors.map((selector) => selector.producerIp)),
+	);
 	const startOperators = new Set([
 		"+",
 		"-",
@@ -2280,7 +2268,7 @@ function validateNumericFusionRegion(
 				finish?.opcode !== "BINARY" ||
 				!startOperators.has(first.operator) ||
 				!finishOperators.has(finish.operator) ||
-				finish.nativeFiniteString !== undefined ||
+				finiteStringProducerIps.has(pair.finishIp) ||
 				(pair.firstUsePosition !== 1 && pair.firstUsePosition !== 2) ||
 				(pair.firstUsePosition === 1 ? finish.left : finish.right) !== first.dst ||
 				pair.firstIp >= pair.finishIp
@@ -4415,17 +4403,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid CONSTRUCT compiler metadata");
 				}
 				instruction.directFunctionIndex = directFunctionIndex;
-			} else if (tag === 4 && instruction.opcode === "BINARY") {
-				const minimum = r.i32();
-				const stringIndices = r.i32Array();
-				if (
-					stringIndices.length === 0 ||
-					stringIndices.length > 32 ||
-					stringIndices.some((index) => index < 0 || index >= stringConstants.length)
-				) {
-					throw new RangeError("serialize-vm: invalid finite-string metadata");
-				}
-				instruction.nativeFiniteString = { minimum, stringIndices };
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
 				const reserveLength = r.i32();
 				if (reserveLength < 1 || reserveLength > 65_536) {

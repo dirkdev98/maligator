@@ -589,6 +589,11 @@ is general rather than a registry-shaped collection of special cases.
         search overlay region. The region owns the property/intrinsic/construct/call
         chain, licenses optional literal allocation elision with on-demand fallback
         materialization, and crosses MALW v69 as one cache-validated proof.
+  - [x] Make finite-property selector regions the sole owners of bounded
+        concatenation tables. Producers without computed-property consumers remain
+        eligible for native table lookup, while attached loads/stores still carry
+        the unchanged-ordinal proof; MALW v70 removes the duplicated binary
+        instruction metadata and rejects every older cached layout.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

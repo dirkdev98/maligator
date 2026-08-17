@@ -1108,7 +1108,6 @@ describe("native update-expression representation", () => {
 					left: 5,
 					right: 2,
 					operator: "+",
-					nativeFiniteString: { minimum: 3, stringIndices: [1] },
 				},
 				{ opcode: "CREATE_OBJECT", dst: 4 },
 				{
@@ -1138,7 +1137,7 @@ describe("native update-expression representation", () => {
 					},
 					representation: "finite-property-domain",
 					composition: "overlay",
-					anchors: [4, 6],
+					anchors: [4],
 					claimedIps: [4, 6],
 					controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
 					cost: { score: 2, metadataOperations: 2 },

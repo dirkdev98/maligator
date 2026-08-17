@@ -420,12 +420,12 @@ test("proves finite strings from bounded integer loops", () => {
 		globalThis.keys = keys;
 	`);
 	executeIROptimizations(program);
-	const finite = instructionsOf(functionNamed(program, "keys")).flatMap((instruction) =>
-		instruction.type === "binary" && instruction.nativeFiniteString !== undefined
-			? [instruction.nativeFiniteString]
-			: [],
-	);
+	const finite =
+		functionNamed(program, "keys").regions?.flatMap((region) =>
+			region.kind === "finite-property-selector" ? [...region.selectors] : [],
+		) ?? [];
 	expect(finite).toHaveLength(2);
+	expect(finite.every((selector) => selector.accesses.length === 0)).toBe(true);
 	expect(
 		finite.map((table) =>
 			table.stringIndices.map((index) =>
@@ -456,10 +456,9 @@ test("leaves unbounded and non-integer string concatenation generic", () => {
 	executeIROptimizations(program);
 	for (const name of ["dynamic", "fractional", "beyondI32"]) {
 		expect(
-			instructionsOf(functionNamed(program, name)).some(
-				(instruction) =>
-					instruction.type === "binary" && instruction.nativeFiniteString !== undefined,
-			),
+			functionNamed(program, name).regions?.some(
+				(region) => region.kind === "finite-property-selector",
+			) ?? false,
 		).toBe(false);
 	}
 });
@@ -580,11 +579,14 @@ test("does not reuse a finite selector ordinal after it changes", () => {
 		globalThis.sum = sum;
 	`);
 	executeIROptimizations(program);
-	expect(
-		functionNamed(program, "sum").regions?.some(
-			(region) => region.kind === "finite-property-selector",
-		) ?? false,
-	).toBe(false);
+	const selectorRegion = functionNamed(program, "sum").regions?.find(
+		(region) => region.kind === "finite-property-selector",
+	);
+	if (selectorRegion?.kind !== "finite-property-selector") {
+		throw new Error("expected standalone finite-string producer");
+	}
+	expect(selectorRegion.selectors).toHaveLength(1);
+	expect(selectorRegion.selectors[0]?.accesses).toHaveLength(0);
 });
 
 test("reuses an otherwise-unobserved object rest value for a leading spread", () => {

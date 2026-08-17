@@ -992,18 +992,15 @@ export interface IRNumericFusionRegion extends IRRegionEnvelope<
 }
 
 /**
- * Structural producer-consumer graph for bounded computed property names. The
- * binary producer keeps its operation-local string table; this overlay owns all
- * dynamic property accesses whose ordinal was proven unchanged since it ran.
+ * Structural proof table for bounded string concatenations and their computed
+ * property consumers. The region is the sole owner of each finite string domain;
+ * a producer may have no property consumers and still use its precomputed table.
  */
 export interface IRFinitePropertySelectorRegion extends IRRegionEnvelope<
 	"finite-property-selector",
 	"finite-property-domain",
 	"none",
-	readonly [
-		Extract<IRInstruction, { type: "binary" }>,
-		Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>,
-	],
+	readonly [Extract<IRInstruction, { type: "binary" }>],
 	"structural"
 > {
 	readonly composition: "overlay";
@@ -1970,15 +1967,6 @@ export type IRInstruction =
 				| "!=="
 				| "in"
 				| "instanceof";
-
-			/** Native-only proof for `literal + integer` in a bounded loop region.
-			 * `stringIndices[value - minimum]` is the exact concatenation result.
-			 * The interpreter deliberately ignores this metadata and executes `+`.
-			 */
-			nativeFiniteString?: {
-				minimum: number;
-				stringIndices: Array<number>;
-			};
 	  }
 	| {
 			type: "unary";

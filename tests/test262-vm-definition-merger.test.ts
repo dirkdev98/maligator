@@ -154,7 +154,6 @@ describe("Test262 VM definition merger", () => {
 				left: 1,
 				right: 2,
 				operator: "+",
-				nativeFiniteString: { minimum: 0, stringIndices: [0] },
 			},
 			{
 				opcode: "LOAD_PROPERTY",
@@ -215,7 +214,7 @@ describe("Test262 VM definition merger", () => {
 				},
 				representation: "finite-property-domain",
 				composition: "overlay",
-				anchors: [18, 19],
+				anchors: [18],
 				claimedIps: [18, 19, 21],
 				controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
 				cost: { score: 3, metadataOperations: 3 },
@@ -317,9 +316,7 @@ describe("Test262 VM definition merger", () => {
 			directCallTargetFunctionIndex: 2,
 		});
 		expect(rebased[17]).toMatchObject({ directFunctionIndex: 2 });
-		expect(rebased[18]).toMatchObject({
-			nativeFiniteString: { minimum: 0, stringIndices: [2] },
-		});
+		expect(rebased[18]).toMatchObject({ opcode: "BINARY", operator: "+" });
 		expect(merged.functions[2]!.regions?.[1]).toMatchObject({
 			kind: "finite-property-selector",
 			selectors: [

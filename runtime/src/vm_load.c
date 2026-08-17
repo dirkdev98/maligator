@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 69u        // fresh-RegExp String search moved into regions
+#define WIRE_VERSION 70u        // finite-string tables moved exclusively into regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1771,15 +1771,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
             } else if (tag == 2) { // CONSTRUCT
                 (void) rd_i32(&r);
-            } else if (tag == 4) { // BINARY finite-string table
-                (void) rd_i32(&r); // minimum
-                u32 string_index_count = rd_count(&r, sizeof(i32));
-                if (string_index_count == 0 || string_index_count > 32) {
-                    r.ok = false;
-                }
-                for (u32 index = 0; r.ok && index < string_index_count; index++) {
-                    (void) rd_i32(&r);
-                }
             } else if (tag == 11) { // guarded primitive-String length load
                 // No payload: generated native code alone consumes this hint.
             } else if (tag == 12) { // CREATE_ARRAY exact indexed-fill reserve
@@ -3415,22 +3406,21 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				u32 selector_count = rd_count(&r, 2);
 				u32 selector_score = 0;
 				i32 first_producer_ip = -1;
-				i32 first_access_ip = -1;
 				if (runtime_guard != 1 || selector_count == 0 || selector_count > 32 ||
-					anchor_count != 2) r.ok = false;
+					anchor_count != 1) r.ok = false;
 				for (u32 selector = 0; r.ok && selector < selector_count; selector++) {
 					i32 producer_ip = rd_i32(&r);
 					i32 ordinal = rd_i32(&r);
 					(void) rd_i32(&r); // minimum
 					u32 key_count = rd_count(&r, sizeof(i32));
-					if (key_count == 0 || key_count > 8) r.ok = false;
+					if (key_count == 0 || key_count > 32) r.ok = false;
 					for (u32 key = 0; r.ok && key < key_count; key++) {
 						i32 string_index = rd_i32(&r);
 						if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
 					}
 					u32 access_count = rd_count(&r, 2);
 					bool producer_ok = producer_ip >= 0 && producer_ip < fn->instruction_count &&
-						ordinal >= 0 && ordinal < fn->register_count && access_count > 0 &&
+						ordinal >= 0 && ordinal < fn->register_count &&
 						fn->instructions[producer_ip].opcode == MAL_OP_BINARY &&
 						fn->instructions[producer_ip].as.binary.op == MAL_BIN_ADD &&
 						fn->instructions[producer_ip].as.binary.right == ordinal;
@@ -3452,12 +3442,11 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 									fn->instructions[producer_ip].as.binary.dst;
 						}
 						if (!access_ok) r.ok = false;
-						if (selector == 0 && access == 0) first_access_ip = access_ip;
 						MAL_REGION_PAYLOAD_REFERENCE(access_ip);
 					}
 					selector_score += key_count + access_count;
 				}
-				if (anchors[0] != first_producer_ip || anchors[1] != first_access_ip ||
+				if (anchors[0] != first_producer_ip ||
 					score != selector_score || metadata_operations != payload_count) r.ok = false;
 			} else if (r.ok && kind == 17) {
 				i32 source_global = rd_i32(&r);
