@@ -35,8 +35,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 48 for String.split cursors in the tagged function-level region table.
-export const WIRE_VERSION = 48;
+// Bumped to 49 to make the split-result alias an explicit cursor-region anchor.
+export const WIRE_VERSION = 49;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1618,9 +1618,11 @@ function validateStringSplitCursorRegion(
 ): void {
 	stringSplitCursorGuardMasks(region.license);
 	const callIp = region.anchors[0]!;
-	const lengthIp = region.anchors[1]!;
-	const backedgeIp = region.anchors[2]!;
+	const resultAliasIp = region.anchors[1]!;
+	const lengthIp = region.anchors[2]!;
+	const backedgeIp = region.anchors[3]!;
 	const call = fn.instructions[callIp];
+	const resultAlias = fn.instructions[resultAliasIp];
 	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
 	const length = fn.instructions[lengthIp];
 	const compare = fn.instructions[lengthIp + 1];
@@ -1634,6 +1636,7 @@ function validateStringSplitCursorRegion(
 	const operationIps = [
 		...(region.propertyIp < 0 ? [] : [region.propertyIp]),
 		callIp,
+		resultAliasIp,
 		lengthIp,
 		lengthIp + 1,
 		lengthIp + 2,
@@ -1683,7 +1686,7 @@ function validateStringSplitCursorRegion(
 	if (
 		region.representation !== "split-cursor-spans" ||
 		region.license.materialization !== "on-demand" ||
-		region.anchors.length !== 3 ||
+		region.anchors.length !== 4 ||
 		!callMatches ||
 		call === undefined ||
 		(call.opcode !== "CALL" && call.opcode !== "CALL_BUILTIN") ||
@@ -1691,9 +1694,12 @@ function validateStringSplitCursorRegion(
 		call.argumentCount !== 1 ||
 		call.arguments[0] !== region.separator ||
 		call.dst !== region.result ||
+		resultAlias?.opcode !== "MOVE" ||
+		resultAlias.src !== call.dst ||
 		!registerValid(region.result) ||
 		!registerValid(region.index) ||
 		length?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		length.object !== resultAlias.dst ||
 		compare?.opcode !== "BINARY" ||
 		compare.operator !== "<" ||
 		compare.right !== length.dst ||
@@ -1705,6 +1711,7 @@ function validateStringSplitCursorRegion(
 		exitJump.targetIp !== region.exitIp ||
 		region.elementIp !== lengthIp + 4 ||
 		element?.opcode !== "LOAD_PROPERTY" ||
+		element.object !== resultAlias.dst ||
 		element.key !== region.index ||
 		region.trimPropertyIp !== region.elementIp + 1 ||
 		trimProperty?.opcode !== "LOAD_PROPERTY_STATIC" ||

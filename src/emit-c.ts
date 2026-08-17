@@ -1033,8 +1033,8 @@ export function emitCompiledFunction(
 	);
 	for (const cursor of stringSplitCursorRegions) {
 		const callIp = cursor.anchors[0]!;
-		const lengthIp = cursor.anchors[1]!;
-		const backedgeIp = cursor.anchors[2]!;
+		const lengthIp = cursor.anchors[2]!;
+		const backedgeIp = cursor.anchors[3]!;
 		if (stringSplitCursorSites.has(callIp)) continue;
 		const call = fn.instructions[callIp];
 		const trimCall = fn.instructions[cursor.trimCallIp];

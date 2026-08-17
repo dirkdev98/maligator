@@ -40,7 +40,12 @@ import {
 	optInlineSpeculative,
 } from "./inline.ts";
 import type { CapturedSlotOptimizationFacts } from "./inline.ts";
-import { buildIROrdinaryControlFlow, irInstructionDominates } from "./ir-control-flow.ts";
+import {
+	buildIRExceptionHandlers,
+	buildIROrdinaryControlFlow,
+	irBlockCanReach,
+	irInstructionDominates,
+} from "./ir-control-flow.ts";
 import {
 	buildIRRegisterIndex,
 	definedRegisters,
@@ -469,123 +474,57 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 		const occupiedInstructions = new Set(
 			(fn.regions ?? []).flatMap((region) => [...region.claimedInstructions]),
 		);
-
-		const blockStartIps = new Map<number, number>();
-		const blockIndexByInstruction = new Map<IRInstruction, number>();
-		let nextIp = 0;
-		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
-			blockStartIps.set(blockIndex, nextIp);
-			for (const instruction of fn.blocks[blockIndex]!.instructions) {
-				blockIndexByInstruction.set(instruction, blockIndex);
-				if (
-					instruction.type !== "sourcePos" &&
-					instruction.type !== "tryBegin" &&
-					instruction.type !== "tryEnd"
-				) {
-					nextIp++;
-				}
-			}
+		const hasSplitCandidate = fn.blocks.some((block) =>
+			block.instructions.some(
+				(instruction) =>
+					(instruction.type === "call" || instruction.type === "callBuiltin") &&
+					knownBuiltinCallProves(instruction.knownBuiltinCall, "String.prototype.split"),
+			),
+		);
+		if (!hasSplitCandidate || retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION) {
+			continue;
 		}
+
+		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
+		const locations = registerIndex.locations!;
+		const cfg = buildIROrdinaryControlFlow(fn);
+		const exceptionHandlers = buildIRExceptionHandlers(fn);
+		const blockStartIps = new Map<number, number>();
 		const instructions: Array<IRInstruction> = [];
-		const handlers: Array<{ startIp: number; endIp: number; handlerIp: number }> = [];
-		const openHandlers: Array<{ startIp: number; handlerIp: number }> = [];
-		let validHandlers = true;
-		for (const block of fn.blocks) {
+		const instructionIps = new Map<IRInstruction, number>();
+		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
+			blockStartIps.set(blockIndex, instructions.length);
+			const block = fn.blocks[blockIndex]!;
 			for (const instruction of block.instructions) {
-				if (instruction.type === "sourcePos") continue;
-				if (instruction.type === "tryBegin") {
-					const handlerIp = blockStartIps.get(instruction.blocks[0]);
-					if (handlerIp === undefined) {
-						validHandlers = false;
-						continue;
-					}
-					openHandlers.push({ startIp: instructions.length, handlerIp });
+				if (
+					instruction.type === "sourcePos" ||
+					instruction.type === "tryBegin" ||
+					instruction.type === "tryEnd"
+				)
 					continue;
-				}
-				if (instruction.type === "tryEnd") {
-					const handler = openHandlers.pop();
-					if (handler === undefined) validHandlers = false;
-					else handlers.push({ ...handler, endIp: instructions.length });
-					continue;
-				}
+				instructionIps.set(instruction, instructions.length);
 				instructions.push(instruction);
 			}
 		}
-		if (!validHandlers || openHandlers.length > 0) continue;
 
 		const usesRegister = (instruction: IRInstruction, register: number): boolean =>
 			usedRegisters(instruction).includes(register);
 		const definesRegister = (instruction: IRInstruction, register: number): boolean =>
 			definedRegisters(instruction).includes(register);
-		const latestDefinition = (register: number, beforeIp: number) => {
-			for (let ip = beforeIp - 1; ip >= 0; ip--) {
-				const instruction = instructions[ip]!;
-				if (definesRegister(instruction, register)) return { instruction, ip };
-			}
-			return undefined;
-		};
 		const jumpTarget = (
 			instruction: Extract<IRInstruction, { type: "jump" | "jumpIf" }>,
 		) => blockStartIps.get(instruction.blocks[0]);
-		const successors = (ip: number): Array<number> => {
-			const instruction = instructions[ip];
-			if (instruction === undefined) return [];
-			let result: Array<number>;
-			if (instruction.type === "jump") {
-				const target = jumpTarget(instruction);
-				result = target === undefined ? [] : [target];
-			} else if (instruction.type === "jumpIf") {
-				const target = jumpTarget(instruction);
-				result = [target, ip + 1].filter(
-					(candidate): candidate is number =>
-						candidate !== undefined && candidate < instructions.length,
-				);
-			} else if (instruction.type === "return" || instruction.type === "throw") {
-				result = [];
-			} else {
-				result = ip + 1 < instructions.length ? [ip + 1] : [];
-			}
-			for (const handler of handlers) {
-				if (ip >= handler.startIp && ip < handler.endIp) result.push(handler.handlerIp);
-			}
-			return [...new Set(result)];
-		};
-		const instructionDominates = (dominatorIp: number, targetIp: number): boolean => {
-			const pending = [0];
-			const visited = new Set<number>();
-			while (pending.length > 0) {
-				const ip = pending.pop()!;
-				if (ip < 0 || ip >= instructions.length || visited.has(ip)) continue;
-				visited.add(ip);
-				if (ip === dominatorIp) continue;
-				if (ip === targetIp) return false;
-				pending.push(...successors(ip));
-			}
-			return true;
-		};
-		const isReachableAvoiding = (
-			startIp: number,
-			targetIp: number,
-			blockedIp: number,
-		): boolean => {
-			const pending = [startIp];
-			const visited = new Set<number>();
-			while (pending.length > 0) {
-				const ip = pending.pop()!;
-				if (ip < 0 || ip >= instructions.length || ip === blockedIp || visited.has(ip)) {
-					continue;
-				}
-				if (ip === targetIp) return true;
-				visited.add(ip);
-				pending.push(...successors(ip));
-			}
-			return false;
-		};
-		const jumpEdges = instructions.flatMap((instruction, sourceIp) => {
+		const branchEdges = instructions.flatMap((instruction, sourceIp) => {
 			if (instruction.type !== "jump" && instruction.type !== "jumpIf") return [];
 			const targetIp = jumpTarget(instruction);
 			return targetIp === undefined ? [] : [{ sourceIp, targetIp }];
 		});
+		const activeExceptionHandler = (instruction: IRInstruction): number | null => {
+			const location = locations.get(instruction);
+			return location === undefined
+				? null
+				: (exceptionHandlers[location.blockIndex]?.[location.instructionIndex] ?? null);
+		};
 
 		for (let callIp = 0; callIp < instructions.length; callIp++) {
 			const call = instructions[callIp]!;
@@ -605,19 +544,24 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 			const receiver = call.type === "call" ? call.registers[2] : call.registers[1];
 			let property: Extract<IRInstruction, { type: "loadPropertyStatic" }> | undefined;
 			if (call.type === "call") {
-				const calleeDefinition = latestDefinition(call.registers[1], callIp);
+				const calleeDefinition = registerIndex.uniqueDefinitions.get(call.registers[1]);
+				const propertyIp =
+					calleeDefinition === undefined
+						? undefined
+						: instructionIps.get(calleeDefinition);
 				if (
-					calleeDefinition?.instruction.type !== "loadPropertyStatic" ||
-					calleeDefinition.instruction.registers[1] !== receiver ||
-					decodeStringConstant(program, calleeDefinition.instruction.stringIndex) !==
-						"split" ||
+					calleeDefinition?.type !== "loadPropertyStatic" ||
+					calleeDefinition.registers[1] !== receiver ||
+					decodeStringConstant(program, calleeDefinition.stringIndex) !== "split" ||
+					propertyIp === undefined ||
+					!irInstructionDominates(cfg, locations, calleeDefinition, call) ||
 					instructions
-						.slice(calleeDefinition.ip + 1, callIp)
+						.slice(propertyIp + 1, callIp)
 						.some((instruction) => definesRegister(instruction, receiver))
 				) {
 					continue;
 				}
-				property = calleeDefinition.instruction;
+				property = calleeDefinition;
 			}
 
 			const resultAlias = instructions[callIp + 1];
@@ -680,15 +624,93 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 			}
 
 			const index = compare.registers[1];
-			const backedges = jumpEdges.filter((edge) => edge.targetIp === lengthIp);
+			const backedges = branchEdges.filter((edge) => edge.targetIp === lengthIp);
 			if (backedges.length !== 2) continue;
 			const preheader = backedges.find((edge) => edge.sourceIp === lengthIp - 1);
 			const backedge = backedges.find((edge) => edge.sourceIp > elementIp + 2);
 			if (preheader === undefined || backedge === undefined) continue;
 			const increment = instructions[backedge.sourceIp - 1];
 			const backedgeInstruction = instructions[backedge.sourceIp];
-			const indexDefinition = latestDefinition(index, lengthIp);
 			const exitIp = jumpTarget(exitJump);
+			const callLocation = locations.get(call);
+			const preheaderLocation = locations.get(instructions[preheader.sourceIp]!);
+			const lengthLocation = locations.get(length);
+			const elementLocation = locations.get(element);
+			const backedgeLocation = locations.get(backedgeInstruction!);
+			if (
+				callLocation === undefined ||
+				preheaderLocation === undefined ||
+				lengthLocation === undefined ||
+				elementLocation === undefined ||
+				backedgeLocation === undefined
+			) {
+				continue;
+			}
+			const matchingLoops = cfg.loops.filter(
+				(loop) =>
+					loop.header === lengthLocation.blockIndex &&
+					loop.backedge === backedgeLocation.blockIndex,
+			);
+			if (matchingLoops.length !== 1) continue;
+			const loop = matchingLoops[0]!;
+			const indexDefinitions = registerIndex.definitions.get(index) ?? [];
+			const indexInitializer = indexDefinitions.find(({ instruction }) => {
+				const location = locations.get(instruction);
+				return (
+					instruction.type === "createNumber" &&
+					Object.is(instruction.value, 0) &&
+					location !== undefined &&
+					!loop.blocks.has(location.blockIndex)
+				);
+			})?.instruction;
+			const containedLoops = cfg.loops.filter(
+				(candidate) =>
+					loop.blocks.has(candidate.header) && loop.blocks.has(candidate.backedge),
+			);
+			const inLoopHeaderPredecessors = cfg.predecessors[loop.header]!.filter((block) =>
+				loop.blocks.has(block),
+			);
+			const outsideHeaderPredecessors = cfg.predecessors[loop.header]!.filter(
+				(block) => !loop.blocks.has(block),
+			);
+			let exactLoopControl =
+				containedLoops.length === 1 &&
+				containedLoops[0] === loop &&
+				loop.blocks.has(elementLocation.blockIndex) &&
+				!loop.blocks.has(preheaderLocation.blockIndex) &&
+				inLoopHeaderPredecessors.length === 1 &&
+				inLoopHeaderPredecessors[0] === loop.backedge &&
+				outsideHeaderPredecessors.length === 1 &&
+				outsideHeaderPredecessors[0] === preheaderLocation.blockIndex;
+			for (const block of loop.blocks) {
+				for (const predecessor of cfg.predecessors[block]!) {
+					if (!loop.blocks.has(predecessor) && block !== loop.header) {
+						exactLoopControl = false;
+					}
+				}
+				for (const successor of cfg.successors[block]!) {
+					if (
+						!loop.blocks.has(successor) &&
+						(successor !== exitJump.blocks[0] || block !== loop.header)
+					) {
+						exactLoopControl = false;
+					}
+				}
+			}
+			const regionInstructions = [
+				...(property === undefined ? [] : [property]),
+				...instructions.slice(callIp, backedge.sourceIp + 1),
+			];
+			const regionBlocks = new Set(
+				regionInstructions
+					.map((instruction) => locations.get(instruction)?.blockIndex)
+					.filter((block): block is number => block !== undefined),
+			);
+			const handlerTargets = new Set(
+				exceptionHandlers.flatMap((handlers) =>
+					handlers.filter((handler): handler is number => handler !== null),
+				),
+			);
 			if (
 				increment?.type !== "unary" ||
 				increment.operator !== "increment" ||
@@ -696,107 +718,46 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 				increment.registers[0] !== index ||
 				backedgeInstruction?.type !== "jump" ||
 				exitIp !== backedge.sourceIp + 1 ||
-				indexDefinition?.instruction.type !== "createNumber" ||
-				!Object.is(indexDefinition.instruction.value, 0) ||
-				!instructionDominates(indexDefinition.ip, lengthIp) ||
-				!instructionDominates(callIp, lengthIp) ||
-				isReachableAvoiding(exitIp, lengthIp, callIp) ||
-				handlers.some(
-					(handler) =>
-						handler.handlerIp >= lengthIp && handler.handlerIp <= elementIp + 2,
-				)
+				indexDefinitions.length !== 2 ||
+				!indexDefinitions.some(({ instruction }) => instruction === increment) ||
+				indexInitializer === undefined ||
+				!irInstructionDominates(cfg, locations, indexInitializer, length) ||
+				!irInstructionDominates(cfg, locations, call, length) ||
+				!exactLoopControl ||
+				irBlockCanReach(
+					cfg,
+					exitJump.blocks[0],
+					loop.header,
+					new Set([callLocation.blockIndex]),
+				) ||
+				regionInstructions.some(
+					(instruction) => activeExceptionHandler(instruction) !== null,
+				) ||
+				[...regionBlocks].some((block) => handlerTargets.has(block))
 			) {
 				continue;
 			}
-			const unexpectedEntry = jumpEdges.some((edge) => {
-				if (edge.targetIp < lengthIp || edge.targetIp > backedge.sourceIp) return false;
-				if (edge.targetIp === lengthIp) {
-					return edge.sourceIp !== lengthIp - 1 && edge.sourceIp !== backedge.sourceIp;
-				}
-				if (edge.targetIp >= elementIp && edge.targetIp <= elementIp + 2) {
-					return edge.sourceIp !== lengthIp + 2 || edge.targetIp !== elementIp;
-				}
-				return edge.sourceIp <= callIp || edge.sourceIp > backedge.sourceIp;
-			});
+			const exactUses = (register: number, expected: ReadonlyArray<IRInstruction>) => {
+				const uses = registerIndex.uses.get(register) ?? [];
+				return (
+					uses.length === expected.length &&
+					uses.every(({ instruction }) => expected.includes(instruction)) &&
+					expected.every((instruction) =>
+						uses.some((use) => use.instruction === instruction),
+					)
+				);
+			};
 			if (
-				unexpectedEntry ||
-				instructions.some((instruction, sourceIp) => {
-					if (sourceIp < elementIp || sourceIp > backedge.sourceIp) return false;
-					return successors(sourceIp).some(
-						(targetIp) =>
-							!(sourceIp === backedge.sourceIp && targetIp === lengthIp) &&
-							(targetIp < elementIp || targetIp > backedge.sourceIp) &&
-							isReachableAvoiding(targetIp, lengthIp, callIp),
-					);
-				}) ||
-				handlers.some(
-					(handler) =>
-						(handler.handlerIp >= lengthIp && handler.handlerIp <= backedge.sourceIp) ||
-						(handler.startIp <= backedge.sourceIp && handler.endIp > elementIp),
-				)
+				registerIndex.uniqueDefinitions.get(call.registers[0]) !== call ||
+				registerIndex.uniqueDefinitions.get(resultAlias.registers[0]) !== resultAlias ||
+				registerIndex.uniqueDefinitions.get(element.registers[0]) !== element ||
+				!exactUses(call.registers[0], [resultAlias]) ||
+				!exactUses(resultAlias.registers[0], [length, element]) ||
+				!exactUses(index, [compare, element, increment]) ||
+				!exactUses(element.registers[0], [trimProperty, trimCall])
 			) {
 				continue;
 			}
-
-			let closed = true;
-			let callResultLive = true;
-			let aliasLive = true;
-			for (let ip = callIp + 1; ip < instructions.length; ip++) {
-				const instruction = instructions[ip]!;
-				if (
-					callResultLive &&
-					usesRegister(instruction, call.registers[0]) &&
-					!(ip === callIp + 1 && instruction === resultAlias)
-				) {
-					closed = false;
-					break;
-				}
-				if (
-					aliasLive &&
-					usesRegister(instruction, resultAlias.registers[0]) &&
-					ip !== lengthIp &&
-					ip !== elementIp
-				) {
-					closed = false;
-					break;
-				}
-				if (ip > callIp + 1 && definesRegister(instruction, call.registers[0])) {
-					callResultLive = false;
-				}
-				if (ip > callIp + 1 && definesRegister(instruction, resultAlias.registers[0])) {
-					aliasLive = false;
-				}
-				if (!callResultLive && !aliasLive) break;
-			}
-			for (let ip = lengthIp; closed && ip <= backedge.sourceIp; ip++) {
-				const instruction = instructions[ip]!;
-				if (
-					usesRegister(instruction, index) &&
-					ip !== lengthIp + 1 &&
-					ip !== elementIp &&
-					ip !== backedge.sourceIp - 1
-				) {
-					closed = false;
-				}
-			}
-			let elementLive = true;
-			for (
-				let ip = elementIp + 1;
-				closed && elementLive && ip < instructions.length;
-				ip++
-			) {
-				const instruction = instructions[ip]!;
-				if (
-					usesRegister(instruction, element.registers[0]) &&
-					ip !== elementIp + 1 &&
-					ip !== elementIp + 2
-				) {
-					closed = false;
-					break;
-				}
-				if (definesRegister(instruction, element.registers[0])) elementLive = false;
-			}
-			if (!closed) continue;
 
 			const trimFact = trimCall.knownBuiltinCall;
 			const guard = compilerGuardPlan(
@@ -845,6 +806,7 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 			const claimedInstructions = [
 				...(property === undefined ? [] : [property]),
 				call,
+				resultAlias,
 				length,
 				compare,
 				bodyBranch,
@@ -865,18 +827,18 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 			}
 			const ordinaryBlocks = new Set<number>();
 			for (let ip = callIp; ip <= backedge.sourceIp; ip++) {
-				const blockIndex = blockIndexByInstruction.get(instructions[ip]!);
+				const blockIndex = locations.get(instructions[ip]!)?.blockIndex;
 				if (blockIndex !== undefined) ordinaryBlocks.add(blockIndex);
 			}
 			if (property !== undefined) {
-				const blockIndex = blockIndexByInstruction.get(property);
+				const blockIndex = locations.get(property)?.blockIndex;
 				if (blockIndex !== undefined) ordinaryBlocks.add(blockIndex);
 			}
 			const region: IRStringSplitCursor = {
 				kind: "string-split-cursor",
 				license: { guard, genericTwin: "retained", materialization: "on-demand" },
 				representation: "split-cursor-spans",
-				anchors: [call, length, backedgeInstruction],
+				anchors: [call, resultAlias, length, backedgeInstruction],
 				claimedInstructions,
 				controlFlow: {
 					ordinaryBlocks: [...ordinaryBlocks].sort((left, right) => left - right),
@@ -887,14 +849,11 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 					metadataOperations: claimedInstructions.length,
 				},
 				...(property === undefined ? {} : { property }),
-				resultAlias,
-				length,
 				compare,
 				element,
 				trimProperty,
 				trimCall,
 				primitiveStringLengths,
-				backedge: backedgeInstruction,
 				exitBlock: exitJump.blocks[0],
 			};
 			fn.regions = [...(fn.regions ?? []), region];

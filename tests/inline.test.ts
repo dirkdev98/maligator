@@ -358,13 +358,16 @@ test("closed split cursors are selected and jointly licensed in IR", () => {
 				dependencies: [{ kind: "epoch", family: "watched-methods" }],
 			},
 		},
-		resultAlias: { type: "move" },
-		length: { type: "loadPropertyStatic" },
 		element: { type: "loadProperty" },
 		trimCall: { type: "call" },
 		primitiveStringLengths: [{ type: "loadPropertyStatic" }],
-		backedge: { type: "jump" },
 	});
+	expect(mutableCursor.anchors.map((instruction) => instruction.type)).toEqual([
+		"call",
+		"move",
+		"loadPropertyStatic",
+		"jump",
+	]);
 	expect(
 		new Set(mutableCursor.license.guard.obligations.map((obligation) => obligation.kind)),
 	).toEqual(new Set(["fallback", "materialize"]));

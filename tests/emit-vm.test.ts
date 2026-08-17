@@ -672,6 +672,25 @@ describe("native update-expression representation", () => {
 		const output = emitVmDefinition(restored, { compiled: true });
 		expect(output).toContain("__closed_record_");
 		expect(output).toContain("mal_builtin_string_split_cursor_init_locked(vm,");
+
+		const cursorIndex = fn!.regions!.findIndex(
+			(region) => region.kind === "string-split-cursor",
+		);
+		const cursor = fn!.regions![cursorIndex]!;
+		if (cursor.kind !== "string-split-cursor") throw new Error("missing cursor region");
+		const malformed: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...fn!,
+				regions: fn!.regions!.with(cursorIndex, {
+					...cursor,
+					anchors: cursor.anchors.with(1, cursor.anchors[2]! + 1),
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid String\.split cursor region metadata/,
+		);
 	});
 
 	it("rejects a tagged region when its common control-flow envelope is incomplete", () => {
@@ -2240,6 +2259,23 @@ describe("native update-expression representation", () => {
 					}
 					return total;
 				}
+				return total;
+			}
+			globalThis.sum = sum;
+		`);
+		expect(output).not.toContain("mal_builtin_string_split_cursor_init(vm,");
+	});
+
+	it("rejects split cursor regions protected by an exception handler", () => {
+		const output = emit(`
+			function sum(value, separator) {
+				const parts = value.split(separator);
+				let total = 0;
+				try {
+					for (let index = 0; index < parts.length; index++) {
+						total += parts[index].trim().length;
+					}
+				} catch {}
 				return total;
 			}
 			globalThis.sum = sum;

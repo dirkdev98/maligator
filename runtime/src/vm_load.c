@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 48u        // String.split cursors join the tagged compiler region table
+#define WIRE_VERSION 49u        // split-result aliases become explicit cursor anchors
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -2076,8 +2076,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
                 i32 exit_ip = rd_i32(&r);
                 i32 call_ip = anchor_count > 0 ? anchors[0] : -1;
-                i32 length_ip = anchor_count > 1 ? anchors[1] : -1;
-                i32 backedge_ip = anchor_count > 2 ? anchors[2] : -1;
+                i32 result_alias_ip = anchor_count > 1 ? anchors[1] : -1;
+                i32 length_ip = anchor_count > 2 ? anchors[2] : -1;
+                i32 backedge_ip = anchor_count > 3 ? anchors[3] : -1;
                 bool call_ip_ok = call_ip >= 0 && call_ip < fn->instruction_count;
                 bool call_is_generic = call_ip_ok &&
                     fn->instructions[call_ip].opcode == MAL_OP_CALL;
@@ -2090,7 +2091,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     trim_call_ip == trim_property_ip + 1 && trim_call_ip < backedge_ip &&
                     exit_ip == backedge_ip + 1 && exit_ip <= fn->instruction_count &&
                     backedge_ip < fn->instruction_count;
-                if (anchor_count != 3 || !call_ip_ok ||
+                if (anchor_count != 4 || !call_ip_ok ||
                     (!call_is_generic && !call_is_builtin) ||
                     (call_is_generic && !property_ok) ||
                     (call_is_builtin && (property_ip != -1 || callee != -1)) ||
@@ -2100,6 +2101,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
                 if (r.ok) {
                     const MalInstruction *call = &fn->instructions[call_ip];
+                    const MalInstruction *result_alias = &fn->instructions[result_alias_ip];
                     const MalInstruction *length = &fn->instructions[length_ip];
                     const MalInstruction *compare = &fn->instructions[length_ip + 1];
                     const MalInstruction *body_branch = &fn->instructions[length_ip + 2];
@@ -2109,7 +2111,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     const MalInstruction *trim_call = &fn->instructions[trim_call_ip];
                     const MalInstruction *increment = &fn->instructions[backedge_ip - 1];
                     const MalInstruction *backedge = &fn->instructions[backedge_ip];
-                    bool structure_ok = length->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                    bool structure_ok = result_alias->opcode == MAL_OP_MOVE &&
+                        result_alias->as.move.src == result &&
+                        length->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                        length->as.load_property_static.object == result_alias->as.move.dst &&
                         compare->opcode == MAL_OP_BINARY && compare->as.binary.op == MAL_BIN_LT &&
                         compare->as.binary.left == index &&
                         compare->as.binary.right == length->as.load_property_static.dst &&
@@ -2119,6 +2124,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         exit_jump->opcode == MAL_OP_JUMP &&
                         exit_jump->as.jump.target_ip == exit_ip &&
                         element->opcode == MAL_OP_LOAD_PROPERTY &&
+                        element->as.load_property.object == result_alias->as.move.dst &&
                         element->as.load_property.key == index &&
                         trim_property->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
                         trim_property->as.load_property_static.object ==
@@ -2148,6 +2154,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
                 if (property_ip >= 0) MAL_REGION_PAYLOAD_CLAIM(property_ip);
                 MAL_REGION_PAYLOAD_CLAIM(call_ip);
+                MAL_REGION_PAYLOAD_CLAIM(result_alias_ip);
                 for (i32 ip = length_ip; r.ok && ip <= trim_call_ip; ip++) {
                     MAL_REGION_PAYLOAD_CLAIM(ip);
                 }

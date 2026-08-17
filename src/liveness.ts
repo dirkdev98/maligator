@@ -21,6 +21,7 @@
  * would drop a live root, so we never risk it.
  */
 
+import { buildIRExceptionHandlers } from "./ir-control-flow.ts";
 import { definedRegisters, usedRegisters } from "./ir-register-index.ts";
 import type { IRFunction, IRInstruction, IntermediateProgram } from "./ir.ts";
 import { log } from "./utils.ts";
@@ -243,55 +244,28 @@ interface ExceptionalControlFlow {
 	handlerDependencies: Array<Set<number>>;
 }
 
-/**
- * Interpret try markers in the same flattened block/instruction order used by
- * VM lowering. A begin takes effect after its marker and an end stops protecting
- * instructions after its marker. Only blocks[0] is an exception destination;
- * blocks[1] merely keeps the end-marker block reachable through IR cleanup.
- */
+/** Narrow the canonical exception scopes to instructions that can actually throw. */
 function deriveExceptionalControlFlow(fn: IRFunction): ExceptionalControlFlow {
-	const handlerByInstruction: Array<Array<number | null>> = [];
+	const handlerByInstruction = buildIRExceptionHandlers(fn).map((handlers) => [
+		...handlers,
+	]);
 	const handlerDependencies = fn.blocks.map(() => new Set<number>());
-	const activeHandlers: Array<number> = [];
-
-	for (let blockIndex = 0; blockIndex < fn.blocks.length; ++blockIndex) {
+	for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
 		const instructions = fn.blocks[blockIndex]!.instructions;
-		const handlers = new Array<number | null>(instructions.length).fill(null);
-		handlerByInstruction.push(handlers);
-
 		for (
 			let instructionIndex = 0;
 			instructionIndex < instructions.length;
-			++instructionIndex
+			instructionIndex++
 		) {
 			const instruction = instructions[instructionIndex]!;
-			if (instruction.type === "tryBegin") {
-				const handler = instruction.blocks[0];
-				if (handler < 0 || handler >= fn.blocks.length) {
-					throw new Error(`Unknown handler target block ${handler}`);
-				}
-				activeHandlers.push(handler);
-				continue;
-			}
-			if (instruction.type === "tryEnd") {
-				if (activeHandlers.pop() === undefined) {
-					throw new Error("Unbalanced tryEnd marker in liveness analysis");
-				}
-				continue;
-			}
-
-			const handler = activeHandlers[activeHandlers.length - 1];
-			if (handler !== undefined && canThrow(instruction)) {
-				handlers[instructionIndex] = handler;
+			const handler = handlerByInstruction[blockIndex]![instructionIndex];
+			if (handler !== null && handler !== undefined && canThrow(instruction)) {
 				handlerDependencies[blockIndex]!.add(handler);
+			} else {
+				handlerByInstruction[blockIndex]![instructionIndex] = null;
 			}
 		}
 	}
-
-	if (activeHandlers.length > 0) {
-		throw new Error("Unbalanced tryBegin marker in liveness analysis");
-	}
-
 	return { handlerByInstruction, handlerDependencies };
 }
 

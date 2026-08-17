@@ -2292,8 +2292,9 @@ function lowerFunctionToVmFunction(
 			}
 			case "string-split-cursor": {
 				const callIp = resolvedAnchors[0];
-				const lengthIp = resolvedAnchors[1];
-				const backedgeIp = resolvedAnchors[2];
+				const resultAliasIp = resolvedAnchors[1];
+				const lengthIp = resolvedAnchors[2];
+				const backedgeIp = resolvedAnchors[3];
 				const propertyIp =
 					region.property === undefined
 						? -1
@@ -2311,7 +2312,7 @@ function lowerFunctionToVmFunction(
 					region.license.materialization !== "on-demand" ||
 					!guard.obligations.includes("fallback") ||
 					!guard.obligations.includes("materialize") ||
-					resolvedAnchors.length !== 3 ||
+					resolvedAnchors.length !== 4 ||
 					propertyIp === undefined ||
 					elementIp === undefined ||
 					trimPropertyIp === undefined ||
@@ -2323,9 +2324,18 @@ function lowerFunctionToVmFunction(
 					continue;
 				}
 				const loweredCall = instructions[callIp!];
+				const loweredResultAlias = instructions[resultAliasIp!];
+				const loweredLength = instructions[lengthIp!];
+				const loweredElement = instructions[elementIp];
 				if (
 					(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_BUILTIN") ||
-					loweredCall.arguments.length !== 1
+					loweredCall.arguments.length !== 1 ||
+					loweredResultAlias?.opcode !== "MOVE" ||
+					loweredResultAlias.src !== loweredCall.dst ||
+					loweredLength?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					loweredLength.object !== loweredResultAlias.dst ||
+					loweredElement?.opcode !== "LOAD_PROPERTY" ||
+					loweredElement.object !== loweredResultAlias.dst
 				) {
 					continue;
 				}
@@ -2334,6 +2344,7 @@ function lowerFunctionToVmFunction(
 				const payloadIps = [
 					...(propertyIp < 0 ? [] : [propertyIp]),
 					callIp!,
+					resultAliasIp!,
 					lengthIp!,
 					lengthIp! + 1,
 					lengthIp! + 2,

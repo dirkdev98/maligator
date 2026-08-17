@@ -733,14 +733,13 @@ export interface IRStringSplitCursor extends IRRegionEnvelope<
 	"on-demand",
 	readonly [
 		Extract<IRInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<IRInstruction, { type: "move" }>,
 		Extract<IRInstruction, { type: "loadPropertyStatic" }>,
 		Extract<IRInstruction, { type: "jump" }>,
 	]
 > {
 	/** Ordinary property producer retained by a dynamic-call twin. */
 	readonly property?: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-	readonly resultAlias: Extract<IRInstruction, { type: "move" }>;
-	readonly length: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
 	readonly compare: Extract<IRInstruction, { type: "binary" }>;
 	readonly element: Extract<IRInstruction, { type: "loadProperty" }>;
 	readonly trimProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
@@ -748,7 +747,6 @@ export interface IRStringSplitCursor extends IRRegionEnvelope<
 	readonly primitiveStringLengths: ReadonlyArray<
 		Extract<IRInstruction, { type: "loadPropertyStatic" }>
 	>;
-	readonly backedge: Extract<IRInstruction, { type: "jump" }>;
 	readonly exitBlock: number;
 }
 

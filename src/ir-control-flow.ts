@@ -22,6 +22,48 @@ export interface IROrdinaryControlFlow {
 	dominates(dominator: number, block: number): boolean;
 }
 
+/**
+ * Innermost active exception handler at every final-IR instruction. Structural
+ * markers themselves have no handler; a tryBegin takes effect after its marker
+ * and a tryEnd stops protecting instructions after its marker.
+ */
+export type IRExceptionHandlers = ReadonlyArray<ReadonlyArray<number | null>>;
+
+/**
+ * Interpret exception markers once in the same block/instruction order used by
+ * VM lowering. Consumers decide which protected instructions can actually throw.
+ */
+export function buildIRExceptionHandlers(fn: IRFunction): IRExceptionHandlers {
+	const result: Array<Array<number | null>> = [];
+	const activeHandlers: Array<number> = [];
+	for (const block of fn.blocks) {
+		const handlers = new Array<number | null>(block.instructions.length).fill(null);
+		result.push(handlers);
+		for (let index = 0; index < block.instructions.length; index++) {
+			const instruction = block.instructions[index]!;
+			if (instruction.type === "tryBegin") {
+				const handler = instruction.blocks[0];
+				if (handler < 0 || handler >= fn.blocks.length) {
+					throw new Error(`Unknown handler target block ${handler}`);
+				}
+				activeHandlers.push(handler);
+				continue;
+			}
+			if (instruction.type === "tryEnd") {
+				if (activeHandlers.pop() === undefined) {
+					throw new Error("Unbalanced tryEnd marker in IR control-flow analysis");
+				}
+				continue;
+			}
+			handlers[index] = activeHandlers.at(-1) ?? null;
+		}
+	}
+	if (activeHandlers.length > 0) {
+		throw new Error("Unbalanced tryBegin marker in IR control-flow analysis");
+	}
+	return result;
+}
+
 function predecessorLists(
 	successors: ReadonlyArray<ReadonlyArray<number>>,
 ): Array<Array<number>> {
@@ -159,6 +201,25 @@ export function buildIROrdinaryControlFlow(fn: IRFunction): IROrdinaryControlFlo
 		}
 	}
 	return { successors, predecessors, reachable, loops, dominates };
+}
+
+/** Whether one reachable ordinary block can reach another without blocked blocks. */
+export function irBlockCanReach(
+	cfg: IROrdinaryControlFlow,
+	start: number,
+	target: number,
+	blocked: ReadonlySet<number> = new Set(),
+): boolean {
+	const pending = [start];
+	const visited = new Set<number>();
+	while (pending.length > 0) {
+		const block = pending.pop()!;
+		if (blocked.has(block) || visited.has(block) || !cfg.reachable.has(block)) continue;
+		if (block === target) return true;
+		visited.add(block);
+		pending.push(...(cfg.successors[block] ?? []));
+	}
+	return false;
 }
 
 /** Instruction dominance using block dominance plus in-block source order. */

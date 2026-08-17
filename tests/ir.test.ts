@@ -118,14 +118,14 @@ test("drops stale split cursor certificates from the shared function region tabl
 		(candidate) => candidate.kind === "string-split-cursor",
 	);
 	expect(region).toBeDefined();
-	expect(region!.anchors).toHaveLength(3);
+	expect(region!.anchors).toHaveLength(4);
 	expect(
 		region!.anchors.every((instruction) =>
 			region!.claimedInstructions.includes(instruction),
 		),
 	).toBe(true);
 
-	const staleClaim = region!.claimedInstructions.at(-1)!;
+	const staleClaim = region!.anchors[1];
 	const owner = summarize.blocks.find((block) => block.instructions.includes(staleClaim));
 	expect(owner).toBeDefined();
 	owner!.instructions[owner!.instructions.indexOf(staleClaim)] = { ...staleClaim };
