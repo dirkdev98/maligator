@@ -629,6 +629,51 @@ describe("native update-expression representation", () => {
 		).toBeGreaterThanOrEqual(2);
 	});
 
+	it("shares one region table across disjoint record and split cursor proofs", () => {
+		const source = `
+			function summarize(value, separator) {
+				const rows = [];
+				for (let index = 0; index < 4; index++) {
+					rows.push({ x: index, y: index + 1 });
+				}
+				let total = 0;
+				for (let index = 0; index < 4; index++) {
+					const row = rows[index];
+					total += row.x + row.y;
+				}
+				const parts = value.split(separator);
+				for (let index = 0; index < parts.length; index++) {
+					total += parts[index].trim().length;
+				}
+				return total;
+			}
+			globalThis.summarize = summarize;
+		`;
+		const lowered = lockedDefinition(source);
+		const fn = lowered.functions.find(
+			(candidate) =>
+				candidate.regions?.some((region) => region.kind === "closed-record-array") ===
+				true,
+		);
+		expect(fn).toBeDefined();
+		const functionIndex = lowered.functions.indexOf(fn!);
+		expect(functionIndex).toBeGreaterThanOrEqual(0);
+		expect(fn!.regions?.map((region) => region.kind).sort()).toEqual([
+			"closed-record-array",
+			"string-split-cursor",
+		]);
+		const claimedIps = fn!.regions!.flatMap((region) => region.claimedIps);
+		expect(new Set(claimedIps).size).toBe(claimedIps.length);
+
+		const restored = deserializeVmDefinition(
+			serializeVmDefinition(lowered, { debugInfo: false }),
+		);
+		expect(restored.functions[functionIndex]?.regions).toEqual(fn!.regions);
+		const output = emitVmDefinition(restored, { compiled: true });
+		expect(output).toContain("__closed_record_");
+		expect(output).toContain("mal_builtin_string_split_cursor_init_locked(vm,");
+	});
+
 	it("rejects a tagged region when its common control-flow envelope is incomplete", () => {
 		const definition = lockedDefinition(`
 			function summarize() {
@@ -2000,10 +2045,13 @@ describe("native update-expression representation", () => {
 			parseScript(source, { strict: false }),
 		);
 		const lowered = compileSemanticProgramToVmDefinition(semantic);
-		const cursors = lowered.functions.flatMap((fn) => fn.nativeStringSplitCursors ?? []);
+		const cursors = lowered.functions.flatMap(
+			(fn) => fn.regions?.filter((region) => region.kind === "string-split-cursor") ?? [],
+		);
 		expect(cursors).toHaveLength(1);
 		expect(cursors[0]).toMatchObject({
-			resultRepresentation: "split-cursor-spans",
+			kind: "string-split-cursor",
+			representation: "split-cursor-spans",
 			license: {
 				genericTwin: "retained",
 				materialization: "on-demand",
@@ -2018,9 +2066,12 @@ describe("native update-expression representation", () => {
 		const cached = deserializeVmDefinition(
 			serializeVmDefinition(lowered, { debugInfo: false }),
 		);
-		expect(cached.functions.flatMap((fn) => fn.nativeStringSplitCursors ?? [])).toEqual(
-			cursors,
-		);
+		expect(
+			cached.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "string-split-cursor") ?? [],
+			),
+		).toEqual(cursors);
 		expect(emitVmDefinition(cached, { compiled: true })).toContain(
 			"mal_builtin_string_split_cursor_init(vm,",
 		);

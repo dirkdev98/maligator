@@ -239,10 +239,10 @@ the same facts unconditionally.
         validate the trim cache and callback once, use unchecked span trimming in
         stable regions, and revalidate the combined named dependencies through one
         semantic-activity snapshot after a potentially invalidating loop operation.
-  - [x] Preserve the IR-selected split-cursor certificate through MALW v46 and
-        validate its bounded instruction anchors in both loaders. Remove the
-        post-wire VM-opcode proof reconstruction so fresh, cached, and deserialized
-        builds consume the same region authority.
+  - [x] Preserve the IR-selected split-cursor certificate as a tagged function
+        region through MALW v48. Validate its common anchors, disjoint claims, CFG
+        scope, cost and kind-specific payload in both loaders, so fresh, cached and
+        deserialized builds consume the same region authority and overlap domain.
 - [x] Retain a generic twin when invalidation or a local guard can fail. Define the
       shared fallback/materialization contract before adding loaded-field numeric
       layouts or more speculative object representations.
@@ -466,8 +466,12 @@ is general rather than a registry-shaped collection of special cases.
         closed record-Array regions end to end. Validate common bounds, instruction
         ownership, disjoint claims, CFG scope and cost independently of the tagged
         payload in both TypeScript and the C wire loader.
-  - [ ] Migrate split cursors, numeric HOFs and projection regions into the table,
+  - [ ] Migrate the remaining numeric HOF and projection regions into the table,
         then delete their instruction-owned anchors and dedicated wire tails.
+    - [x] Move split cursors into the shared tagged table and delete their call-owned
+          anchor and dedicated wire tail. Resolve the complete certificate
+          atomically during lowering, reject stale or overlapping claims across
+          region kinds, and preserve mixed record/cursor tables through MALW v48.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

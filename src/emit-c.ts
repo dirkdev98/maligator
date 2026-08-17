@@ -1028,20 +1028,26 @@ export function emitCompiledFunction(
 		nextStackSlot += elementLoads.length;
 	}
 	const stringSplitCursorSites = new Map<number, NativeStringSplitCursorSite>();
-	for (const cursor of fn.nativeStringSplitCursors ?? []) {
-		if (stringSplitCursorSites.has(cursor.callIp)) continue;
-		const call = fn.instructions[cursor.callIp];
+	const stringSplitCursorRegions = (fn.regions ?? []).filter(
+		(region): region is NativeStringSplitCursor => region.kind === "string-split-cursor",
+	);
+	for (const cursor of stringSplitCursorRegions) {
+		const callIp = cursor.anchors[0]!;
+		const lengthIp = cursor.anchors[1]!;
+		const backedgeIp = cursor.anchors[2]!;
+		if (stringSplitCursorSites.has(callIp)) continue;
+		const call = fn.instructions[callIp];
 		const trimCall = fn.instructions[cursor.trimCallIp];
 		const lockedLicense = vmGuardIsWorldInvariant(cursor.license.guard);
 		const cursorOperations = new Set([
-			cursor.lengthIp,
+			lengthIp,
 			cursor.elementIp,
 			cursor.trimPropertyIp,
 			cursor.trimCallIp,
 			...cursor.primitiveStringLengthIps,
 		]);
 		let semanticEpochStable = true;
-		for (let ip = cursor.callIp + 1; ip <= cursor.backedgeIp; ip++) {
+		for (let ip = callIp + 1; ip <= backedgeIp; ip++) {
 			if (cursorOperations.has(ip)) continue;
 			if (nativeInstructionMayInvalidateSemanticEpoch(fn.instructions[ip]!, reps)) {
 				semanticEpochStable = false;
@@ -1049,13 +1055,16 @@ export function emitCompiledFunction(
 			}
 		}
 		const hoistTrimIdentity = !lockedLicense;
-		stringSplitCursorSites.set(cursor.callIp, {
+		stringSplitCursorSites.set(callIp, {
 			cursor,
+			callIp,
+			lengthIp,
+			backedgeIp,
 			subjectSlot: nextStackSlot,
 			separatorSlot: nextStackSlot + 1,
 			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
 			semanticEpochStable,
-			epochName: `__string_split_cursor_${cursor.callIp}_semantic_epoch`,
+			epochName: `__string_split_cursor_${callIp}_semantic_epoch`,
 			lockedIdentity:
 				call?.opcode === "CALL_BUILTIN" ||
 				(call?.opcode === "CALL" &&
@@ -2152,12 +2161,16 @@ interface NativeStringSplitProjectionAction {
 	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
-type NativeStringSplitCursor = NonNullable<
-	VmFunction["nativeStringSplitCursors"]
->[number];
+type NativeStringSplitCursor = Extract<
+	NonNullable<VmFunction["regions"]>[number],
+	{ kind: "string-split-cursor" }
+>;
 
 interface NativeStringSplitCursorSite {
 	cursor: NativeStringSplitCursor;
+	callIp: number;
+	lengthIp: number;
+	backedgeIp: number;
 	subjectSlot: number;
 	separatorSlot: number;
 	trimCalleeSlot?: number;
@@ -3462,12 +3475,12 @@ function emitBody(
 		const propertyInstruction = fn.instructions[cursor.propertyIp];
 		const propertyLoad =
 			site.lockedIdentity &&
-			cursor.propertyIp + 1 === cursor.callIp &&
+			cursor.propertyIp + 1 === site.callIp &&
 			propertyInstruction?.opcode === "LOAD_PROPERTY_STATIC" &&
-			handlerTargets[cursor.propertyIp] === handlerTargets[cursor.callIp]
+			handlerTargets[cursor.propertyIp] === handlerTargets[site.callIp]
 				? propertyInstruction
 				: undefined;
-		nativeStringSplitCursorActionByIp.set(cursor.callIp, {
+		nativeStringSplitCursorActionByIp.set(site.callIp, {
 			site,
 			role: "call",
 			propertyLoad,
@@ -3479,7 +3492,7 @@ function emitBody(
 				propertyLoad,
 			});
 		}
-		nativeStringSplitCursorActionByIp.set(cursor.lengthIp, { site, role: "length" });
+		nativeStringSplitCursorActionByIp.set(site.lengthIp, { site, role: "length" });
 		nativeStringSplitCursorActionByIp.set(cursor.elementIp, { site, role: "element" });
 		nativeStringSplitCursorActionByIp.set(cursor.trimPropertyIp, {
 			site,
@@ -3655,7 +3668,7 @@ function emitBody(
 		);
 	}
 	for (const site of stringSplitCursorSites.values()) {
-		const id = site.cursor.callIp;
+		const id = site.callIp;
 		lines.push(
 			`bool __string_split_cursor_${id}_active = false;`,
 			`bool __string_split_cursor_${id}_has = false;`,
@@ -5300,7 +5313,7 @@ function emitInstruction(
 				];
 				if (nativeStringSplitCursorAction?.role === "element") {
 					const { site } = nativeStringSplitCursorAction;
-					const id = site.cursor.callIp;
+					const id = site.callIp;
 					const semanticValidation = site.semanticEpochStable
 						? ""
 						: `${semanticDependencyValidationGuard(site.cursor.license.guard, site.epochName)} && `;
@@ -5380,7 +5393,7 @@ function emitInstruction(
 				];
 				if (nativeStringSplitCursorAction?.role === "length") {
 					const { site } = nativeStringSplitCursorAction;
-					const id = site.cursor.callIp;
+					const id = site.callIp;
 					const index =
 						reps[site.cursor.index] === "number"
 							? `r${site.cursor.index}`
@@ -5397,7 +5410,7 @@ function emitInstruction(
 					];
 				}
 				if (nativeStringSplitCursorAction?.role === "trimProperty") {
-					const id = nativeStringSplitCursorAction.site.cursor.callIp;
+					const id = nativeStringSplitCursorAction.site.callIp;
 					return [
 						`if (__string_split_cursor_${id}_active && __string_split_cursor_${id}_trim_fast) {`,
 						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
@@ -6203,7 +6216,7 @@ function emitInstruction(
 			if (instruction.operation !== "String.prototype.split") return null;
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site } = nativeStringSplitCursorAction;
-				const id = site.cursor.callIp;
+				const id = site.callIp;
 				return [
 					`__string_split_cursor_${id}_active = mal_builtin_string_split_cursor_init_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &__gc_slots[${site.subjectSlot}], &__gc_slots[${site.separatorSlot}], &__string_split_cursor_${id}_state);`,
 					`if (__string_split_cursor_${id}_active) {`,
@@ -6340,7 +6353,7 @@ function emitInstruction(
 			}
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitCursorAction;
-				const id = site.cursor.callIp;
+				const id = site.callIp;
 				const admission = regionAdmissionGuard(
 					site.cursor.license,
 					site.semanticEpochStable ? undefined : site.epochName,
@@ -6372,7 +6385,7 @@ function emitInstruction(
 				];
 			}
 			if (nativeStringSplitCursorAction?.role === "trimCall") {
-				const id = nativeStringSplitCursorAction.site.cursor.callIp;
+				const id = nativeStringSplitCursorAction.site.callIp;
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`if (__string_split_cursor_${id}_active && __string_split_cursor_${id}_trim_fast) {`,

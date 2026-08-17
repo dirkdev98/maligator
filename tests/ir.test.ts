@@ -100,6 +100,44 @@ test("stores closed loop proofs in the function region table and drops stale cer
 	expect(lowered.regions).toBeUndefined();
 });
 
+test("drops stale split cursor certificates from the shared function region table", () => {
+	const program = compileScript(`
+		function summarize(value, separator) {
+			const parts = value.split(separator);
+			let total = 0;
+			for (let index = 0; index < parts.length; index++) {
+				total += parts[index].trim().length;
+			}
+			return total;
+		}
+		globalThis.summarize = summarize;
+	`);
+	executeIROptimizations(program);
+	const summarize = functionNamed(program, "summarize");
+	const region = summarize.regions?.find(
+		(candidate) => candidate.kind === "string-split-cursor",
+	);
+	expect(region).toBeDefined();
+	expect(region!.anchors).toHaveLength(3);
+	expect(
+		region!.anchors.every((instruction) =>
+			region!.claimedInstructions.includes(instruction),
+		),
+	).toBe(true);
+
+	const staleClaim = region!.claimedInstructions.at(-1)!;
+	const owner = summarize.blocks.find((block) => block.instructions.includes(staleClaim));
+	expect(owner).toBeDefined();
+	owner!.instructions[owner!.instructions.indexOf(staleClaim)] = { ...staleClaim };
+	allocateRegisters(program);
+	const lowered =
+		lowerIrProgramToVmDefinition(program).functions[summarize.functionIndex]!;
+	expect(
+		lowered.regions?.filter((candidate) => candidate.kind === "string-split-cursor") ??
+			[],
+	).toHaveLength(0);
+});
+
 test("accepts non-index numeric-looking names in static shapes", () => {
 	const program = compileScript(`globalThis.value = { "01": 1, "1e3": 2, "-1": 3 };`);
 	executeIROptimizations(program);

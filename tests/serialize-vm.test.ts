@@ -586,9 +586,9 @@ describe("serialize-vm", () => {
 			debugInfo: false,
 		});
 		// The instruction metadata ends in tag 12 + ZigZag i32(1), followed by
-		// the empty numeric-HOF, closed record-Array, and split-cursor tables.
-		expect(malformed.at(-5)).toBe(12);
-		malformed[malformed.length - 4] = 0;
+		// the empty numeric-HOF and tagged function-region tables.
+		expect(malformed.at(-4)).toBe(12);
+		malformed[malformed.length - 3] = 0;
 		expect(() => deserializeVmDefinition(malformed)).toThrow(
 			/invalid indexed-fill reserve metadata/,
 		);

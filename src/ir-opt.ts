@@ -96,6 +96,8 @@ const SIDE_EFFECT_FREE_OPS = new Set<IRInstruction["type"]>([
 	"typeofCompare",
 ]);
 
+const MAX_IR_REGIONS_PER_FUNCTION = 8;
+
 interface OptimizationFeatures {
 	call: boolean;
 	object: boolean;
@@ -460,19 +462,21 @@ function annotateStringSplitProjectionRegions(program: IntermediateProgram): num
 function annotateStringSplitCursorRegions(program: IntermediateProgram): number {
 	let count = 0;
 	for (const fn of program.functions) {
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (instruction.type === "call" || instruction.type === "callBuiltin") {
-					delete instruction.stringSplitCursor;
-				}
-			}
-		}
+		const retainedRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "string-split-cursor",
+		);
+		fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
+		const occupiedInstructions = new Set(
+			(fn.regions ?? []).flatMap((region) => [...region.claimedInstructions]),
+		);
 
 		const blockStartIps = new Map<number, number>();
+		const blockIndexByInstruction = new Map<IRInstruction, number>();
 		let nextIp = 0;
 		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
 			blockStartIps.set(blockIndex, nextIp);
 			for (const instruction of fn.blocks[blockIndex]!.instructions) {
+				blockIndexByInstruction.set(instruction, blockIndex);
 				if (
 					instruction.type !== "sourcePos" &&
 					instruction.type !== "tryBegin" &&
@@ -838,9 +842,50 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 					trimResultAliases.add(instruction.registers[0]);
 				}
 			}
-			call.stringSplitCursor = {
+			const claimedInstructions = [
+				...(property === undefined ? [] : [property]),
+				call,
+				length,
+				compare,
+				bodyBranch,
+				exitJump,
+				element,
+				trimProperty,
+				trimCall,
+				...primitiveStringLengths,
+				increment,
+				backedgeInstruction,
+			];
+			if (
+				(fn.regions?.length ?? 0) >= MAX_IR_REGIONS_PER_FUNCTION ||
+				new Set(claimedInstructions).size !== claimedInstructions.length ||
+				claimedInstructions.some((instruction) => occupiedInstructions.has(instruction))
+			) {
+				continue;
+			}
+			const ordinaryBlocks = new Set<number>();
+			for (let ip = callIp; ip <= backedge.sourceIp; ip++) {
+				const blockIndex = blockIndexByInstruction.get(instructions[ip]!);
+				if (blockIndex !== undefined) ordinaryBlocks.add(blockIndex);
+			}
+			if (property !== undefined) {
+				const blockIndex = blockIndexByInstruction.get(property);
+				if (blockIndex !== undefined) ordinaryBlocks.add(blockIndex);
+			}
+			const region: IRStringSplitCursor = {
+				kind: "string-split-cursor",
 				license: { guard, genericTwin: "retained", materialization: "on-demand" },
-				resultRepresentation: "split-cursor-spans",
+				representation: "split-cursor-spans",
+				anchors: [call, length, backedgeInstruction],
+				claimedInstructions,
+				controlFlow: {
+					ordinaryBlocks: [...ordinaryBlocks].sort((left, right) => left - right),
+					exceptionalBlocks: [],
+				},
+				cost: {
+					score: 4 + primitiveStringLengths.length,
+					metadataOperations: claimedInstructions.length,
+				},
 				...(property === undefined ? {} : { property }),
 				resultAlias,
 				length,
@@ -852,6 +897,9 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 				backedge: backedgeInstruction,
 				exitBlock: exitJump.blocks[0],
 			};
+			fn.regions = [...(fn.regions ?? []), region];
+			for (const instruction of claimedInstructions)
+				occupiedInstructions.add(instruction);
 			count++;
 		}
 	}
@@ -3741,7 +3789,6 @@ interface IRClosedRecordCanonicalCounter {
 
 const MAX_CLOSED_RECORD_ARRAY_LENGTH = 65_536;
 const MAX_CLOSED_RECORD_ARRAY_CANDIDATES = 32;
-const MAX_CLOSED_RECORD_ARRAY_REGIONS = 8;
 const MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS = 64;
 const MAX_CLOSED_RECORD_SHAPE_SLOTS = 64;
 
@@ -4269,7 +4316,7 @@ export function annotateClosedRecordArrayRegions(program: IntermediateProgram): 
 			const operations =
 				candidate.region.elementLoads.length + candidate.region.accesses.length;
 			if (
-				selected >= MAX_CLOSED_RECORD_ARRAY_REGIONS ||
+				selected + retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION ||
 				metadataOperations + operations > MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS ||
 				[...candidate.claimed].some((instruction) => occupied.has(instruction))
 			) {
@@ -4280,7 +4327,7 @@ export function annotateClosedRecordArrayRegions(program: IntermediateProgram): 
 			metadataOperations += operations;
 			selected++;
 			annotated++;
-			if (selected >= MAX_CLOSED_RECORD_ARRAY_REGIONS) break;
+			if (selected + retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION) break;
 		}
 	}
 	return annotated;

@@ -12,7 +12,6 @@ import type {
 	IRImmediateValue,
 	IRInstruction,
 	IRNumericHofPlanOperation,
-	IRStringSplitCursor,
 	IRStringSplitProjection,
 } from "./ir.ts";
 import { computeSafepointRoots } from "./liveness.ts";
@@ -339,8 +338,14 @@ export function vmGuardIsWorldInvariant(guard: VmGuardPlan): boolean {
 	);
 }
 
-interface VmRegionEnvelope {
-	readonly license: VmRegionLicense;
+interface VmRegionEnvelope<
+	Kind extends string,
+	Representation extends string,
+	Materialization extends VmRegionLicense["materialization"],
+> {
+	readonly kind: Kind;
+	readonly license: VmRegionLicense & { readonly materialization: Materialization };
+	readonly representation: Representation;
 	readonly anchors: ReadonlyArray<number>;
 	readonly claimedIps: ReadonlyArray<number>;
 	readonly controlFlow: {
@@ -353,9 +358,11 @@ interface VmRegionEnvelope {
 	};
 }
 
-export type VmRegion = VmRegionEnvelope & {
-	readonly kind: "closed-record-array";
-	readonly representation: "dense-record-elements-known-slots";
+export type VmClosedRecordArrayRegion = VmRegionEnvelope<
+	"closed-record-array",
+	"dense-record-elements-known-slots",
+	"none"
+> & {
 	readonly length: number;
 	readonly elementLoadIps: ReadonlyArray<number>;
 	readonly accesses: ReadonlyArray<{
@@ -364,6 +371,27 @@ export type VmRegion = VmRegionEnvelope & {
 		readonly slot: number;
 	}>;
 };
+
+export type VmStringSplitCursorRegion = VmRegionEnvelope<
+	"string-split-cursor",
+	"split-cursor-spans",
+	"on-demand"
+> & {
+	readonly propertyIp: number;
+	readonly callee: number;
+	readonly receiver: number;
+	readonly separator: number;
+	readonly result: number;
+	readonly index: number;
+	readonly elementIp: number;
+	readonly trimPropertyIp: number;
+	readonly trimIcIndex: number;
+	readonly trimCallIp: number;
+	readonly primitiveStringLengthIps: ReadonlyArray<number>;
+	readonly exitIp: number;
+};
+
+export type VmRegion = VmClosedRecordArrayRegion | VmStringSplitCursorRegion;
 
 export interface VmGuardedBuiltinCall {
 	readonly operation: VmGuardedBuiltinOperation;
@@ -597,28 +625,6 @@ export interface VmFunction {
 			index?: number;
 			dst: number;
 		}>;
-	}>;
-
-	/** SERIALIZED COMPILER METADATA: one closed indexed split loop streamed as trimmed spans. */
-	nativeStringSplitCursors?: ReadonlyArray<{
-		license: VmRegionLicense;
-		resultRepresentation: "split-cursor-spans";
-		propertyIp: number;
-		callIp: number;
-		callee: number;
-		receiver: number;
-		separator: number;
-		result: number;
-		index: number;
-		lengthIp: number;
-		elementIp: number;
-		trimPropertyIp: number;
-		trimIcIndex: number;
-		trimCallIp: number;
-		/** Primitive String length reads licensed by the exact trim result. */
-		primitiveStringLengthIps: ReadonlyArray<number>;
-		backedgeIp: number;
-		exitIp: number;
 	}>;
 
 	/** EMITTER-ONLY: selected capture projections of an exact RegExp exec result. */
@@ -1876,10 +1882,6 @@ function lowerFunctionToVmFunction(
 		call: Extract<IRInstruction, { type: "call" | "callBuiltin" }>;
 		projection: IRStringSplitProjection;
 	}> = [];
-	const pendingStringSplitCursors: Array<{
-		call: Extract<IRInstruction, { type: "call" | "callBuiltin" }>;
-		cursor: IRStringSplitCursor;
-	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1992,15 +1994,6 @@ function lowerFunctionToVmFunction(
 				pendingStringSplitProjections.push({
 					call: instruction,
 					projection: instruction.stringSplitProjection,
-				});
-			}
-			if (
-				(instruction.type === "call" || instruction.type === "callBuiltin") &&
-				instruction.stringSplitCursor !== undefined
-			) {
-				pendingStringSplitCursors.push({
-					call: instruction,
-					cursor: instruction.stringSplitCursor,
 				});
 			}
 			if (
@@ -2192,9 +2185,9 @@ function lowerFunctionToVmFunction(
 			region.cost.score > 0xffff_ffff ||
 			!Number.isSafeInteger(region.cost.metadataOperations) ||
 			region.cost.metadataOperations <= 0 ||
-			region.cost.metadataOperations > 64 ||
+			region.cost.metadataOperations > 96 ||
 			region.claimedInstructions.length === 0 ||
-			region.claimedInstructions.length > 66 ||
+			region.claimedInstructions.length > 96 ||
 			region.controlFlow.ordinaryBlocks.length > 64
 		) {
 			continue;
@@ -2294,6 +2287,100 @@ function lowerFunctionToVmFunction(
 					length: region.length,
 					elementLoadIps: resolvedElementLoadIps,
 					accesses: resolvedAccesses,
+				});
+				break;
+			}
+			case "string-split-cursor": {
+				const callIp = resolvedAnchors[0];
+				const lengthIp = resolvedAnchors[1];
+				const backedgeIp = resolvedAnchors[2];
+				const propertyIp =
+					region.property === undefined
+						? -1
+						: instructionIndexByIrInstruction.get(region.property);
+				const elementIp = instructionIndexByIrInstruction.get(region.element);
+				const trimPropertyIp = instructionIndexByIrInstruction.get(region.trimProperty);
+				const trimCallIp = instructionIndexByIrInstruction.get(region.trimCall);
+				const exitIp = blockStartIps.get(region.exitBlock);
+				const trimIcIndex = propertyIcIndexByInstruction.get(region.trimProperty);
+				const primitiveStringLengthIps = region.primitiveStringLengths.map((load) =>
+					instructionIndexByIrInstruction.get(load),
+				);
+				if (
+					region.representation !== "split-cursor-spans" ||
+					region.license.materialization !== "on-demand" ||
+					!guard.obligations.includes("fallback") ||
+					!guard.obligations.includes("materialize") ||
+					resolvedAnchors.length !== 3 ||
+					propertyIp === undefined ||
+					elementIp === undefined ||
+					trimPropertyIp === undefined ||
+					trimCallIp === undefined ||
+					exitIp === undefined ||
+					trimIcIndex === undefined ||
+					primitiveStringLengthIps.some((ip) => ip === undefined)
+				) {
+					continue;
+				}
+				const loweredCall = instructions[callIp!];
+				if (
+					(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_BUILTIN") ||
+					loweredCall.arguments.length !== 1
+				) {
+					continue;
+				}
+				const resolvedPrimitiveStringLengthIps =
+					primitiveStringLengthIps as Array<number>;
+				const payloadIps = [
+					...(propertyIp < 0 ? [] : [propertyIp]),
+					callIp!,
+					lengthIp!,
+					lengthIp! + 1,
+					lengthIp! + 2,
+					lengthIp! + 3,
+					elementIp,
+					trimPropertyIp,
+					trimCallIp,
+					...resolvedPrimitiveStringLengthIps,
+					backedgeIp! - 1,
+					backedgeIp!,
+				];
+				if (
+					region.cost.metadataOperations !== payloadIps.length ||
+					new Set(payloadIps).size !== payloadIps.length ||
+					payloadIps.length !== resolvedClaimedIps.length ||
+					payloadIps.some((ip) => !resolvedClaimedIps.includes(ip))
+				) {
+					continue;
+				}
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "string-split-cursor",
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "on-demand",
+					},
+					representation: "split-cursor-spans",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: resolvedOrdinaryBlockIps,
+						exceptionalHandlerIps: [],
+					},
+					cost: region.cost,
+					propertyIp,
+					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
+					receiver: loweredCall.thisValue,
+					separator: loweredCall.arguments[0]!,
+					result: loweredCall.dst,
+					index: region.compare.registers[1],
+					elementIp,
+					trimPropertyIp,
+					trimIcIndex,
+					trimCallIp,
+					primitiveStringLengthIps: resolvedPrimitiveStringLengthIps,
+					exitIp,
 				});
 				break;
 			}
@@ -2477,77 +2564,6 @@ function lowerFunctionToVmFunction(
 			};
 		},
 	);
-	const nativeStringSplitCursors = pendingStringSplitCursors.map(({ call, cursor }) => {
-		const callIp = instructionIndexByIrInstruction.get(call);
-		const propertyIp =
-			cursor.property === undefined
-				? -1
-				: instructionIndexByIrInstruction.get(cursor.property);
-		const lengthIp = instructionIndexByIrInstruction.get(cursor.length);
-		const elementIp = instructionIndexByIrInstruction.get(cursor.element);
-		const trimPropertyIp = instructionIndexByIrInstruction.get(cursor.trimProperty);
-		const trimCallIp = instructionIndexByIrInstruction.get(cursor.trimCall);
-		const backedgeIp = instructionIndexByIrInstruction.get(cursor.backedge);
-		const exitIp = blockStartIps.get(cursor.exitBlock);
-		const trimIcIndex = propertyIcIndexByInstruction.get(cursor.trimProperty);
-		const guard = lowerGuardPlan(cursor.license.guard);
-		if (
-			callIp === undefined ||
-			propertyIp === undefined ||
-			lengthIp === undefined ||
-			elementIp === undefined ||
-			trimPropertyIp === undefined ||
-			trimCallIp === undefined ||
-			backedgeIp === undefined ||
-			exitIp === undefined ||
-			trimIcIndex === undefined ||
-			guard === undefined ||
-			!guard.obligations.includes("fallback") ||
-			!guard.obligations.includes("materialize")
-		) {
-			throw new Error("String split cursor lost its retained-twin contract");
-		}
-		const loweredCall = instructions[callIp];
-		if (
-			(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_BUILTIN") ||
-			loweredCall.arguments.length !== 1
-		) {
-			throw new Error("String split cursor call changed before lowering");
-		}
-		const primitiveStringLengthIps = cursor.primitiveStringLengths.map((load) => {
-			const ip = instructionIndexByIrInstruction.get(load);
-			if (ip === undefined) {
-				throw new Error(
-					"String split cursor primitive length was removed before lowering",
-				);
-			}
-			return ip;
-		});
-		return {
-			license: {
-				guard,
-				genericTwin: cursor.license.genericTwin,
-				materialization: cursor.license.materialization,
-			},
-			resultRepresentation: cursor.resultRepresentation,
-			propertyIp,
-			callIp,
-			callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
-			receiver: loweredCall.thisValue,
-			separator: loweredCall.arguments[0]!,
-			result: loweredCall.dst,
-			index: cursor.compare.registers[1],
-			lengthIp,
-			elementIp,
-			trimPropertyIp,
-			trimIcIndex,
-			trimCallIp,
-			primitiveStringLengthIps,
-			backedgeIp,
-			exitIp,
-		};
-	});
-
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation
 	// after it. Fused static reads retain arguments for their lazy missing-index path.
@@ -2610,8 +2626,6 @@ function lowerFunctionToVmFunction(
 		nativeMathCalls: nativeMathCalls.length > 0 ? nativeMathCalls : undefined,
 		nativeStringSplitProjections:
 			nativeStringSplitProjections.length > 0 ? nativeStringSplitProjections : undefined,
-		nativeStringSplitCursors:
-			nativeStringSplitCursors.length > 0 ? nativeStringSplitCursors : undefined,
 		regions: regions.length > 0 ? regions : undefined,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,

@@ -701,14 +701,42 @@ export interface IRStringSplitProjection {
 	>;
 }
 
-/** Backend-neutral contract for one closed indexed String#split consumer loop. */
-export interface IRStringSplitCursor {
+export interface IRRegionEnvelope<
+	Kind extends string,
+	Representation extends string,
+	Materialization extends "none" | "on-demand" | "whole-region",
+	Anchors extends ReadonlyArray<IRInstruction>,
+> {
+	readonly kind: Kind;
 	readonly license: {
 		readonly guard: CompilerGuardPlan;
 		readonly genericTwin: "retained";
-		readonly materialization: "on-demand";
+		readonly materialization: Materialization;
 	};
-	readonly resultRepresentation: "split-cursor-spans";
+	readonly representation: Representation;
+	readonly anchors: Anchors;
+	readonly claimedInstructions: ReadonlyArray<IRInstruction>;
+	readonly controlFlow: {
+		readonly ordinaryBlocks: ReadonlyArray<number>;
+		readonly exceptionalBlocks: ReadonlyArray<number>;
+	};
+	readonly cost: {
+		readonly score: number;
+		readonly metadataOperations: number;
+	};
+}
+
+/** Backend-neutral contract for one closed indexed String#split consumer loop. */
+export interface IRStringSplitCursor extends IRRegionEnvelope<
+	"string-split-cursor",
+	"split-cursor-spans",
+	"on-demand",
+	readonly [
+		Extract<IRInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<IRInstruction, { type: "loadPropertyStatic" }>,
+		Extract<IRInstruction, { type: "jump" }>,
+	]
+> {
 	/** Ordinary property producer retained by a dynamic-call twin. */
 	readonly property?: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
 	readonly resultAlias: Extract<IRInstruction, { type: "move" }>;
@@ -730,31 +758,15 @@ export interface IRStringSplitCursor {
  * provenance are intact; lowering must resolve every instruction anchor or
  * discard the whole region.
  */
-export interface IRClosedRecordArrayRegion {
-	readonly kind: "closed-record-array";
-	readonly license: {
-		readonly guard: CompilerGuardPlan;
-		readonly genericTwin: "retained";
-		readonly materialization: "none";
-	};
-	readonly representation: "dense-record-elements-known-slots";
-	/** Stable semantic entry points; their order is part of the region contract. */
-	readonly anchors: readonly [
+export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
+	"closed-record-array",
+	"dense-record-elements-known-slots",
+	"none",
+	readonly [
 		Extract<IRInstruction, { type: "createArray" }>,
 		Extract<IRInstruction, { type: "createObjectShaped" }>,
-	];
-	/** Exact runtime operations whose lowering this certificate may specialize. */
-	readonly claimedInstructions: ReadonlyArray<IRInstruction>;
-	readonly controlFlow: {
-		/** Final-IR block identities containing the producer and consumer loops. */
-		readonly ordinaryBlocks: ReadonlyArray<number>;
-		/** Empty until an exception-aware region kind is introduced. */
-		readonly exceptionalBlocks: readonly [];
-	};
-	readonly cost: {
-		readonly score: number;
-		readonly metadataOperations: number;
-	};
+	]
+> {
 	readonly length: number;
 	readonly elementLoads: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
 	readonly accesses: ReadonlyArray<{
@@ -768,7 +780,7 @@ export interface IRClosedRecordArrayRegion {
 }
 
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
-export type IRRegion = IRClosedRecordArrayRegion;
+export type IRRegion = IRClosedRecordArrayRegion | IRStringSplitCursor;
 
 export type IRInstruction =
 	| {
@@ -1058,8 +1070,6 @@ export type IRInstruction =
 			knownBuiltinCall?: KnownBuiltinCall;
 			/** Closed projected-result representation selected from canonical facts. */
 			stringSplitProjection?: IRStringSplitProjection;
-			/** Closed indexed consumer loop selected from canonical facts. */
-			stringSplitCursor?: IRStringSplitCursor;
 			/**
 			 * COMPILE-ONLY: ordinary receiver/property producers retained as the
 			 * interpreted generic twin of a canonical builtin call. Native lowering may
@@ -1139,8 +1149,6 @@ export type IRInstruction =
 			knownBuiltinCall: KnownBuiltinCall;
 			/** Closed projected-result representation selected from canonical facts. */
 			stringSplitProjection?: IRStringSplitProjection;
-			/** Closed indexed consumer loop selected from canonical facts. */
-			stringSplitCursor?: IRStringSplitCursor;
 	  }
 	| {
 			type: "construct";

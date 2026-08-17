@@ -341,16 +341,16 @@ test("closed split cursors are selected and jointly licensed in IR", () => {
 		};
 	`;
 	const mutable = optimizedProgram(source('globalThis["cursor-input"]'));
-	const mutableCall = mutable.functions
-		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
-		.find(
-			(instruction) =>
-				instruction.type === "call" && instruction.stringSplitCursor !== undefined,
-		);
-	expect(mutableCall?.type).toBe("call");
-	if (mutableCall?.type !== "call") throw new Error("missing mutable split cursor");
-	expect(mutableCall.stringSplitCursor).toMatchObject({
-		resultRepresentation: "split-cursor-spans",
+	const mutableCursor = mutable.functions
+		.flatMap((fn) => fn.regions ?? [])
+		.find((region) => region.kind === "string-split-cursor");
+	expect(mutableCursor?.anchors[0].type).toBe("call");
+	if (mutableCursor?.kind !== "string-split-cursor") {
+		throw new Error("missing mutable split cursor");
+	}
+	expect(mutableCursor).toMatchObject({
+		kind: "string-split-cursor",
+		representation: "split-cursor-spans",
 		license: {
 			genericTwin: "retained",
 			materialization: "on-demand",
@@ -366,26 +366,20 @@ test("closed split cursors are selected and jointly licensed in IR", () => {
 		backedge: { type: "jump" },
 	});
 	expect(
-		new Set(
-			mutableCall.stringSplitCursor?.license.guard.obligations.map(
-				(obligation) => obligation.kind,
-			),
-		),
+		new Set(mutableCursor.license.guard.obligations.map((obligation) => obligation.kind)),
 	).toEqual(new Set(["fallback", "materialize"]));
 
 	const locked = optimizedLockedProgram(source('" alpha ; beta "'));
 	const direct = locked.functions
-		.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
-		.find(
-			(instruction) =>
-				instruction.type === "callBuiltin" && instruction.stringSplitCursor !== undefined,
-		);
-	expect(direct?.type).toBe("callBuiltin");
-	if (direct?.type !== "callBuiltin") throw new Error("missing locked split cursor");
-	expect(direct.stringSplitCursor?.license.guard.dependencies).toEqual([
+		.flatMap((fn) => fn.regions ?? [])
+		.find((region) => region.kind === "string-split-cursor");
+	expect(direct?.anchors[0].type).toBe("callBuiltin");
+	if (direct?.kind !== "string-split-cursor")
+		throw new Error("missing locked split cursor");
+	expect(direct.license.guard.dependencies).toEqual([
 		{ kind: "world", fact: "primordials.locked" },
 	]);
-	expect(direct.stringSplitCursor?.property).toBeUndefined();
+	expect(direct.property).toBeUndefined();
 });
 
 test("direct slice sites carry canonical primitive String identity metadata", () => {

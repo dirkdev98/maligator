@@ -35,8 +35,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 47 for the first tagged function-level region table.
-export const WIRE_VERSION = 47;
+// Bumped to 48 for String.split cursors in the tagged function-level region table.
+export const WIRE_VERSION = 48;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -45,9 +45,8 @@ const MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS = 64;
 const MAX_CLOSED_RECORD_SHAPE_SLOTS = 64;
 const MAX_REGIONS = 8;
 const MAX_REGION_ANCHORS = 8;
-const MAX_REGION_CLAIMS = 66;
+const MAX_REGION_CLAIMS = 96;
 const MAX_REGION_ORDINARY_BLOCKS = 64;
-const MAX_STRING_SPLIT_CURSOR_REGIONS = 8;
 const MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS = 64;
 // Preserve the original three wire tags; append the rest of the registry surface.
 const NUMERIC_HOF_MATH_OPS: ReadonlyArray<MathUnaryOperationKey> = [
@@ -657,7 +656,7 @@ function closedRecordArrayGuardMasks(
 }
 
 function stringSplitCursorGuardMasks(
-	license: NonNullable<VmFunction["nativeStringSplitCursors"]>[number]["license"],
+	license: Extract<VmRegion, { kind: "string-split-cursor" }>["license"],
 ): { dependencyMask: number; obligationMask: number } {
 	let dependencyMask = 0;
 	for (const dependency of license.guard.dependencies) {
@@ -1187,59 +1186,51 @@ export function serializeVmDefinition(
 		const claimedRegionInstructions = new Set<number>();
 		for (const region of regions) {
 			validateRegion(fn, region, claimedRegionInstructions);
-			w.u8(region.kind === "closed-record-array" ? 1 : 0);
+			const kindTag = region.kind === "closed-record-array" ? 1 : 2;
+			const representationTag = region.kind === "closed-record-array" ? 1 : 2;
+			const materializationTag = region.license.materialization === "none" ? 0 : 1;
+			const { dependencyMask, obligationMask } =
+				region.kind === "closed-record-array"
+					? closedRecordArrayGuardMasks(region.license)
+					: stringSplitCursorGuardMasks(region.license);
+			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
 			w.i32Array([...region.controlFlow.ordinaryBlockIps]);
 			w.i32Array([...region.controlFlow.exceptionalHandlerIps]);
 			w.u32(region.cost.score);
 			w.u32(region.cost.metadataOperations);
-			w.u8(region.representation === "dense-record-elements-known-slots" ? 1 : 0);
+			w.u8(representationTag);
 			w.u8(region.license.genericTwin === "retained" ? 1 : 0);
-			w.u8(region.license.materialization === "none" ? 0 : 255);
-			const { dependencyMask, obligationMask } = closedRecordArrayGuardMasks(
-				region.license,
-			);
+			w.u8(materializationTag);
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
-			w.i32(region.length);
-			w.i32Array([...region.elementLoadIps]);
-			w.u32(region.accesses.length);
-			for (const access of region.accesses) {
-				w.i32(access.ip);
-				w.u8(access.kind === "load" ? 1 : 2);
-				w.i32(access.slot);
+			switch (region.kind) {
+				case "closed-record-array":
+					w.i32(region.length);
+					w.i32Array([...region.elementLoadIps]);
+					w.u32(region.accesses.length);
+					for (const access of region.accesses) {
+						w.i32(access.ip);
+						w.u8(access.kind === "load" ? 1 : 2);
+						w.i32(access.slot);
+					}
+					break;
+				case "string-split-cursor":
+					w.i32(region.propertyIp);
+					w.i32(region.callee);
+					w.i32(region.receiver);
+					w.i32(region.separator);
+					w.i32(region.result);
+					w.i32(region.index);
+					w.i32(region.elementIp);
+					w.i32(region.trimPropertyIp);
+					w.i32(region.trimIcIndex);
+					w.i32(region.trimCallIp);
+					w.i32Array([...region.primitiveStringLengthIps]);
+					w.i32(region.exitIp);
+					break;
 			}
-		}
-
-		const stringSplitCursorRegions = [...(fn.nativeStringSplitCursors ?? [])];
-		if (stringSplitCursorRegions.length > MAX_STRING_SPLIT_CURSOR_REGIONS) {
-			throw new RangeError("serialize-vm: too many String.split cursor regions");
-		}
-		w.u32(stringSplitCursorRegions.length);
-		const claimedStringSplitCursorInstructions = new Set<number>();
-		for (const region of stringSplitCursorRegions) {
-			validateStringSplitCursorRegion(fn, region, claimedStringSplitCursorInstructions);
-			const { dependencyMask, obligationMask } = stringSplitCursorGuardMasks(
-				region.license,
-			);
-			w.i32(region.propertyIp);
-			w.i32(region.callIp);
-			w.i32(region.callee);
-			w.i32(region.receiver);
-			w.i32(region.separator);
-			w.i32(region.result);
-			w.i32(region.index);
-			w.i32(region.lengthIp);
-			w.i32(region.elementIp);
-			w.i32(region.trimPropertyIp);
-			w.i32(region.trimIcIndex);
-			w.i32(region.trimCallIp);
-			w.i32Array([...region.primitiveStringLengthIps]);
-			w.i32(region.backedgeIp);
-			w.i32(region.exitIp);
-			w.u8(dependencyMask);
-			w.u8(obligationMask);
 		}
 	}
 
@@ -1545,7 +1536,7 @@ function validateRegionEnvelope(
 		region.cost.score > 0xffff_ffff ||
 		!Number.isSafeInteger(region.cost.metadataOperations) ||
 		region.cost.metadataOperations <= 0 ||
-		region.cost.metadataOperations > MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS
+		region.cost.metadataOperations > MAX_REGION_CLAIMS
 	) {
 		throw new RangeError("serialize-vm: invalid region envelope");
 	}
@@ -1556,6 +1547,9 @@ function validateRegion(fn: VmFunction, region: VmRegion, claimed: Set<number>):
 	switch (region.kind) {
 		case "closed-record-array":
 			validateClosedRecordArrayRegion(fn, region);
+			break;
+		case "string-split-cursor":
+			validateStringSplitCursorRegion(fn, region);
 			break;
 	}
 	for (const ip of region.claimedIps) claimed.add(ip);
@@ -1620,34 +1614,36 @@ function validateClosedRecordArrayRegion(
 
 function validateStringSplitCursorRegion(
 	fn: VmFunction,
-	region: NonNullable<VmFunction["nativeStringSplitCursors"]>[number],
-	claimed: Set<number>,
+	region: Extract<VmRegion, { kind: "string-split-cursor" }>,
 ): void {
 	stringSplitCursorGuardMasks(region.license);
-	const call = fn.instructions[region.callIp];
+	const callIp = region.anchors[0]!;
+	const lengthIp = region.anchors[1]!;
+	const backedgeIp = region.anchors[2]!;
+	const call = fn.instructions[callIp];
 	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
-	const length = fn.instructions[region.lengthIp];
-	const compare = fn.instructions[region.lengthIp + 1];
-	const bodyBranch = fn.instructions[region.lengthIp + 2];
-	const exitJump = fn.instructions[region.lengthIp + 3];
+	const length = fn.instructions[lengthIp];
+	const compare = fn.instructions[lengthIp + 1];
+	const bodyBranch = fn.instructions[lengthIp + 2];
+	const exitJump = fn.instructions[lengthIp + 3];
 	const element = fn.instructions[region.elementIp];
 	const trimProperty = fn.instructions[region.trimPropertyIp];
 	const trimCall = fn.instructions[region.trimCallIp];
-	const increment = fn.instructions[region.backedgeIp - 1];
-	const backedge = fn.instructions[region.backedgeIp];
+	const increment = fn.instructions[backedgeIp - 1];
+	const backedge = fn.instructions[backedgeIp];
 	const operationIps = [
 		...(region.propertyIp < 0 ? [] : [region.propertyIp]),
-		region.callIp,
-		region.lengthIp,
-		region.lengthIp + 1,
-		region.lengthIp + 2,
-		region.lengthIp + 3,
+		callIp,
+		lengthIp,
+		lengthIp + 1,
+		lengthIp + 2,
+		lengthIp + 3,
 		region.elementIp,
 		region.trimPropertyIp,
 		region.trimCallIp,
 		...region.primitiveStringLengthIps,
-		region.backedgeIp - 1,
-		region.backedgeIp,
+		backedgeIp - 1,
+		backedgeIp,
 	];
 	const registerValid = (value: number) =>
 		Number.isInteger(value) && value >= 0 && value < fn.registerCount;
@@ -1667,11 +1663,7 @@ function validateStringSplitCursorRegion(
 	let primitiveLengthsValid =
 		primitiveLengthIps.size === region.primitiveStringLengthIps.length;
 	const trimAliases = new Set<number>(trimCall?.opcode === "CALL" ? [trimCall.dst] : []);
-	for (
-		let ip = region.trimCallIp + 1;
-		primitiveLengthsValid && ip <= region.backedgeIp;
-		ip++
-	) {
+	for (let ip = region.trimCallIp + 1; primitiveLengthsValid && ip <= backedgeIp; ip++) {
 		const instruction = fn.instructions[ip];
 		if (instruction === undefined) {
 			primitiveLengthsValid = false;
@@ -1689,7 +1681,9 @@ function validateStringSplitCursorRegion(
 		if (moveAlias && instruction.opcode === "MOVE") trimAliases.add(instruction.dst);
 	}
 	if (
-		region.resultRepresentation !== "split-cursor-spans" ||
+		region.representation !== "split-cursor-spans" ||
+		region.license.materialization !== "on-demand" ||
+		region.anchors.length !== 3 ||
 		!callMatches ||
 		call === undefined ||
 		(call.opcode !== "CALL" && call.opcode !== "CALL_BUILTIN") ||
@@ -1709,7 +1703,7 @@ function validateStringSplitCursorRegion(
 		bodyBranch.targetIp !== region.elementIp ||
 		exitJump?.opcode !== "JUMP" ||
 		exitJump.targetIp !== region.exitIp ||
-		region.elementIp !== region.lengthIp + 4 ||
+		region.elementIp !== lengthIp + 4 ||
 		element?.opcode !== "LOAD_PROPERTY" ||
 		element.key !== region.index ||
 		region.trimPropertyIp !== region.elementIp + 1 ||
@@ -1727,19 +1721,22 @@ function validateStringSplitCursorRegion(
 		increment.src !== region.index ||
 		increment.dst !== region.index ||
 		backedge?.opcode !== "JUMP" ||
-		backedge.targetIp !== region.lengthIp ||
-		region.backedgeIp <= region.trimCallIp ||
-		region.exitIp !== region.backedgeIp + 1 ||
+		backedge.targetIp !== lengthIp ||
+		backedgeIp <= region.trimCallIp ||
+		region.exitIp !== backedgeIp + 1 ||
 		region.exitIp < 0 ||
 		region.exitIp > fn.instructions.length ||
 		region.primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS ||
 		!primitiveLengthsValid ||
 		new Set(operationIps).size !== operationIps.length ||
-		operationIps.some((ip) => ip < 0 || ip >= fn.instructions.length || claimed.has(ip))
+		operationIps.length !== region.claimedIps.length ||
+		operationIps.some(
+			(ip) => ip < 0 || ip >= fn.instructions.length || !region.claimedIps.includes(ip),
+		) ||
+		region.cost.metadataOperations !== operationIps.length
 	) {
 		throw new RangeError("serialize-vm: invalid String.split cursor region metadata");
 	}
-	for (const ip of operationIps) claimed.add(ip);
 }
 
 function opcodeTag(opcode: string): number {
@@ -2826,140 +2823,132 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				const materializationTag = r.u8();
 				const dependencyMask = r.u8();
 				const obligationMask = r.u8();
+				const closedRecordContract =
+					kindTag === 1 &&
+					representationTag === 1 &&
+					materializationTag === 0 &&
+					dependencyMask === 1 &&
+					obligationMask === 1;
+				const stringSplitCursorContract =
+					kindTag === 2 &&
+					representationTag === 2 &&
+					materializationTag === 1 &&
+					(dependencyMask === 1 || dependencyMask === 4) &&
+					obligationMask === 3;
 				if (
-					kindTag !== 1 ||
-					representationTag !== 1 ||
 					genericTwinTag !== 1 ||
-					materializationTag !== 0 ||
-					dependencyMask !== 1 ||
-					obligationMask !== 1
+					(!closedRecordContract && !stringSplitCursorContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
-				const length = r.i32();
-				const elementLoadIps = r.i32Array();
-				const accessCount = r.count(3);
-				const accesses: Array<{
-					ip: number;
-					kind: "load" | "store";
-					slot: number;
-				}> = [];
-				for (let accessIndex = 0; accessIndex < accessCount; accessIndex++) {
-					const ip = r.i32();
-					const accessKindTag = r.u8();
-					const slot = r.i32();
-					if (accessKindTag !== 1 && accessKindTag !== 2) {
-						throw new RangeError("serialize-vm: invalid closed record-Array access kind");
+				let region: VmRegion;
+				if (kindTag === 1) {
+					const length = r.i32();
+					const elementLoadIps = r.i32Array();
+					const accessCount = r.count(3);
+					const accesses: Array<{
+						ip: number;
+						kind: "load" | "store";
+						slot: number;
+					}> = [];
+					for (let accessIndex = 0; accessIndex < accessCount; accessIndex++) {
+						const ip = r.i32();
+						const accessKindTag = r.u8();
+						const slot = r.i32();
+						if (accessKindTag !== 1 && accessKindTag !== 2) {
+							throw new RangeError(
+								"serialize-vm: invalid closed record-Array access kind",
+							);
+						}
+						accesses.push({
+							ip,
+							kind: accessKindTag === 1 ? "load" : "store",
+							slot,
+						});
 					}
-					accesses.push({ ip, kind: accessKindTag === 1 ? "load" : "store", slot });
-				}
-				const region: VmRegion = {
-					kind: "closed-record-array",
-					license: {
-						guard: {
-							dependencies: [
-								{ kind: "world" as const, fact: "primordials.locked" as const },
-							],
-							obligations: ["fallback" as const],
+					region = {
+						kind: "closed-record-array",
+						license: {
+							guard: {
+								dependencies: [
+									{ kind: "world" as const, fact: "primordials.locked" as const },
+								],
+								obligations: ["fallback" as const],
+							},
+							genericTwin: "retained" as const,
+							materialization: "none" as const,
 						},
-						genericTwin: "retained" as const,
-						materialization: "none" as const,
-					},
-					representation: "dense-record-elements-known-slots",
-					anchors,
-					claimedIps,
-					controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-					cost: { score, metadataOperations },
-					length,
-					elementLoadIps,
-					accesses,
-				};
+						representation: "dense-record-elements-known-slots",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						length,
+						elementLoadIps,
+						accesses,
+					};
+				} else {
+					const propertyIp = r.i32();
+					const callee = r.i32();
+					const receiver = r.i32();
+					const separator = r.i32();
+					const result = r.i32();
+					const index = r.i32();
+					const elementIp = r.i32();
+					const trimPropertyIp = r.i32();
+					const trimIcIndex = r.i32();
+					const trimCallIp = r.i32();
+					const primitiveStringLengthIps = r.i32Array();
+					const exitIp = r.i32();
+					if (primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS) {
+						throw new RangeError("serialize-vm: invalid String.split cursor header");
+					}
+					region = {
+						kind: "string-split-cursor",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [
+												{
+													kind: "world" as const,
+													fact: "primordials.locked" as const,
+												},
+											]
+										: [
+												{
+													kind: "epoch" as const,
+													family: "watched-methods" as const,
+												},
+											],
+								obligations: ["fallback" as const, "materialize" as const],
+							},
+							genericTwin: "retained",
+							materialization: "on-demand",
+						},
+						representation: "split-cursor-spans",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						propertyIp,
+						callee,
+						receiver,
+						separator,
+						result,
+						index,
+						elementIp,
+						trimPropertyIp,
+						trimIcIndex,
+						trimCallIp,
+						primitiveStringLengthIps,
+						exitIp,
+					};
+				}
 				validateRegion(fn, region, claimed);
 				regions.push(region);
 			}
 			fn.regions = regions;
-		}
-
-		const stringSplitCursorRegionCount = r.count(17);
-		if (stringSplitCursorRegionCount > MAX_STRING_SPLIT_CURSOR_REGIONS) {
-			throw new RangeError("serialize-vm: too many String.split cursor regions");
-		}
-		if (stringSplitCursorRegionCount > 0) {
-			const regions: Array<NonNullable<VmFunction["nativeStringSplitCursors"]>[number]> =
-				[];
-			const claimed = new Set<number>();
-			for (
-				let regionIndex = 0;
-				regionIndex < stringSplitCursorRegionCount;
-				regionIndex++
-			) {
-				const propertyIp = r.i32();
-				const callIp = r.i32();
-				const callee = r.i32();
-				const receiver = r.i32();
-				const separator = r.i32();
-				const result = r.i32();
-				const index = r.i32();
-				const lengthIp = r.i32();
-				const elementIp = r.i32();
-				const trimPropertyIp = r.i32();
-				const trimIcIndex = r.i32();
-				const trimCallIp = r.i32();
-				const primitiveStringLengthIps = r.i32Array();
-				const backedgeIp = r.i32();
-				const exitIp = r.i32();
-				const dependencyMask = r.u8();
-				const obligationMask = r.u8();
-				if (
-					primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS ||
-					(dependencyMask !== 1 && dependencyMask !== 4) ||
-					obligationMask !== 3
-				) {
-					throw new RangeError("serialize-vm: invalid String.split cursor header");
-				}
-				const region = {
-					license: {
-						guard: {
-							dependencies:
-								dependencyMask === 1
-									? [
-											{
-												kind: "world" as const,
-												fact: "primordials.locked" as const,
-											},
-										]
-									: [
-											{
-												kind: "epoch" as const,
-												family: "watched-methods" as const,
-											},
-										],
-							obligations: ["fallback" as const, "materialize" as const],
-						},
-						genericTwin: "retained" as const,
-						materialization: "on-demand" as const,
-					},
-					resultRepresentation: "split-cursor-spans" as const,
-					propertyIp,
-					callIp,
-					callee,
-					receiver,
-					separator,
-					result,
-					index,
-					lengthIp,
-					elementIp,
-					trimPropertyIp,
-					trimIcIndex,
-					trimCallIp,
-					primitiveStringLengthIps,
-					backedgeIp,
-					exitIp,
-				};
-				validateStringSplitCursorRegion(fn, region, claimed);
-				regions.push(region);
-			}
-			fn.nativeStringSplitCursors = regions;
 		}
 	}
 	if (r.remaining() !== 0) {
