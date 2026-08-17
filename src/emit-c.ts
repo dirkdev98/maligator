@@ -2099,7 +2099,10 @@ function nativeInstructionMayInvalidateSemanticEpoch(
 			if (directClosedGlobalAccess) return false;
 			return true;
 		case "LOAD_PROPERTY_STATIC":
-			return instruction.nativePrimitiveStringLength !== true;
+			// The local String-brand fast path retains a generic property fallback. A
+			// non-String receiver may therefore run JavaScript even when this operation
+			// carries the hint; only a region-wide admission proof could suppress it.
+			return true;
 		case "BINARY":
 			if (
 				instruction.operator === "+" &&
@@ -4967,10 +4970,10 @@ function emitInstruction(
 					// This first slice instead admits only activations that cannot preempt.
 					const ordinary = [
 						`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
-						...(instruction.nativeFreshDenseReserveLength === undefined
+						...(instruction.freshDenseReserveLength === undefined
 							? []
 							: [
-									`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.nativeFreshDenseReserveLength});`,
+									`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.freshDenseReserveLength});`,
 								]),
 					];
 					return [
@@ -4987,10 +4990,10 @@ function emitInstruction(
 					];
 				}
 			}
-			if (instruction.nativeFreshDenseReserveLength !== undefined) {
+			if (instruction.freshDenseReserveLength !== undefined) {
 				return [
 					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
-					`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.nativeFreshDenseReserveLength});`,
+					`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.freshDenseReserveLength});`,
 				];
 			}
 			return [`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`];
@@ -5651,7 +5654,7 @@ function emitInstruction(
 				}
 				if (
 					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-					instruction.nativePrimitiveStringLength === true
+					instruction.primitiveStringLength === true
 				) {
 					return [
 						`if (mal_value_is_string(${boxed(instruction.object)})) {`,

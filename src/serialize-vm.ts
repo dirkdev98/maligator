@@ -39,8 +39,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped when finite-string tables became region-owned exclusively.
-export const WIRE_VERSION = 70;
+// Bumped when operation-local specialization metadata was narrowed and renamed.
+export const WIRE_VERSION = 71;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1137,11 +1137,11 @@ export function serializeVmDefinition(
 				) {
 					return (
 						instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-						instruction.nativePrimitiveStringLength === true
+						instruction.primitiveStringLength === true
 					);
 				}
 				if (instruction.opcode === "CREATE_ARRAY") {
-					return instruction.nativeFreshDenseReserveLength !== undefined;
+					return instruction.freshDenseReserveLength !== undefined;
 				}
 				return false;
 			});
@@ -1153,16 +1153,25 @@ export function serializeVmDefinition(
 				const guardedOperation = guardedBuiltin?.operation;
 				const guardedDependency = guardedBuiltin?.guard.dependencies[0];
 				if (
-					guardedBuiltin !== undefined &&
-					(guardedBuiltin.guard.dependencies.length !== 1 ||
-						guardedBuiltin.guard.obligations.length !== 1 ||
-						guardedBuiltin.guard.obligations[0] !== "fallback" ||
-						guardedDependency === undefined ||
-						(guardedDependency.kind === "world"
-							? guardedDependency.fact !== "primordials.locked"
-							: guardedDependency.family !== "watched-methods"))
+					(instruction.directFunctionIndex !== undefined &&
+						(!Number.isInteger(instruction.directFunctionIndex) ||
+							instruction.directFunctionIndex < 0 ||
+							instruction.directFunctionIndex >= def.functions.length)) ||
+					(instruction.directCallTargetFunctionIndex !== undefined &&
+						(!Number.isInteger(instruction.directCallTargetFunctionIndex) ||
+							instruction.directCallTargetFunctionIndex < 0 ||
+							instruction.directCallTargetFunctionIndex >= def.functions.length ||
+							instruction.directFunctionCall !== true)) ||
+					(guardedBuiltin !== undefined &&
+						(guardedBuiltin.guard.dependencies.length !== 1 ||
+							guardedBuiltin.guard.obligations.length !== 1 ||
+							guardedBuiltin.guard.obligations[0] !== "fallback" ||
+							guardedDependency === undefined ||
+							(guardedDependency.kind === "world"
+								? guardedDependency.fact !== "primordials.locked"
+								: guardedDependency.family !== "watched-methods")))
 				) {
-					throw new RangeError("serialize-vm: invalid guarded builtin fact");
+					throw new RangeError("serialize-vm: invalid CALL specialization metadata");
 				}
 				if (
 					instruction.directStringCharCodeAtPosition !== undefined &&
@@ -1177,31 +1186,43 @@ export function serializeVmDefinition(
 					(instruction.directFunctionCall === true ? 1 : 0) |
 						(guardedOperation === "Array.prototype.push" ? 2 : 0) |
 						(guardedOperation === "String.prototype.charCodeAt" ? 4 : 0) |
-						(instruction.directStringCharCodeAtPosition === "integer" ? 16 : 0) |
 						(instruction.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
 						(guardedDependency?.kind === "world" ? 64 : 0),
 				);
 				w.u8(taggedGuardedBuiltinOperation(guardedOperation));
 			} else if (instruction.opcode === "CONSTRUCT") {
+				if (
+					!Number.isInteger(instruction.directFunctionIndex) ||
+					instruction.directFunctionIndex! < 0 ||
+					instruction.directFunctionIndex! >= def.functions.length
+				) {
+					throw new RangeError("serialize-vm: invalid direct CONSTRUCT target");
+				}
 				w.u8(2);
 				w.i32(instruction.directFunctionIndex!);
 			} else if (
 				instruction.opcode === "CREATE_ARRAY" &&
-				instruction.nativeFreshDenseReserveLength !== undefined
+				instruction.freshDenseReserveLength !== undefined
 			) {
 				if (
-					!Number.isInteger(instruction.nativeFreshDenseReserveLength) ||
-					instruction.nativeFreshDenseReserveLength < 1 ||
-					instruction.nativeFreshDenseReserveLength > 65_536
+					!Number.isInteger(instruction.freshDenseReserveLength) ||
+					instruction.freshDenseReserveLength < 1 ||
+					instruction.freshDenseReserveLength > 65_536
 				) {
 					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
 				}
 				w.u8(12);
-				w.i32(instruction.nativeFreshDenseReserveLength);
+				w.i32(instruction.freshDenseReserveLength);
 			} else if (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-				instruction.nativePrimitiveStringLength === true
+				instruction.primitiveStringLength === true
 			) {
+				if (
+					String.fromCharCode(...(def.stringConstants[instruction.stringIndex] ?? [])) !==
+					"length"
+				) {
+					throw new RangeError("serialize-vm: invalid primitive-String length hint");
+				}
 				w.u8(11);
 			}
 		}
@@ -4335,12 +4356,17 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		if (hasGcRootRegisters === 1) fn.gcRootRegisters = gcRootRegisters;
 
 		const instructionMetadataCount = r.count(2);
+		let previousInstructionMetadataIndex = -1;
 		for (
 			let metadataIndex = 0;
 			metadataIndex < instructionMetadataCount;
 			metadataIndex++
 		) {
 			const instructionIndex = r.u32();
+			if (instructionIndex <= previousInstructionMetadataIndex) {
+				throw new RangeError("serialize-vm: unordered compiler instruction metadata");
+			}
+			previousInstructionMetadataIndex = instructionIndex;
 			const instruction = fn.instructions[instructionIndex];
 			if (instruction === undefined) {
 				throw new RangeError(
@@ -4359,11 +4385,13 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					(collectionTag !== 0 ? 1 : 0);
 				if (
 					directFunctionIndex < -1 ||
+					directFunctionIndex >= functions.length ||
 					directCallTargetFunctionIndex < -1 ||
+					directCallTargetFunctionIndex >= functions.length ||
 					flags > 127 ||
-					(flags & 8) !== 0 ||
-					((flags & 48) !== 0 && (flags & 4) === 0) ||
-					(flags & 48) === 48 ||
+					(flags & 24) !== 0 ||
+					((flags & 32) !== 0 && (flags & 4) === 0) ||
+					(directCallTargetFunctionIndex >= 0 && (flags & 1) === 0) ||
 					collectionTag > TAGGED_GUARDED_BUILTIN_OPERATIONS.length ||
 					guardedBuiltinCount > 1 ||
 					((flags & 64) !== 0 && guardedBuiltinCount !== 1)
@@ -4376,7 +4404,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					instruction.directCallTargetFunctionIndex = directCallTargetFunctionIndex;
 				}
 				if ((flags & 1) !== 0) instruction.directFunctionCall = true;
-				if ((flags & 16) !== 0) instruction.directStringCharCodeAtPosition = "integer";
 				if ((flags & 32) !== 0) instruction.directStringCharCodeAtPosition = "inBounds";
 				if (guardedBuiltinCount === 1) {
 					const operation =
@@ -4399,7 +4426,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				}
 			} else if (tag === 2 && instruction.opcode === "CONSTRUCT") {
 				const directFunctionIndex = r.i32();
-				if (directFunctionIndex < 0) {
+				if (directFunctionIndex < 0 || directFunctionIndex >= functions.length) {
 					throw new RangeError("serialize-vm: invalid CONSTRUCT compiler metadata");
 				}
 				instruction.directFunctionIndex = directFunctionIndex;
@@ -4408,9 +4435,15 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				if (reserveLength < 1 || reserveLength > 65_536) {
 					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
 				}
-				instruction.nativeFreshDenseReserveLength = reserveLength;
+				instruction.freshDenseReserveLength = reserveLength;
 			} else if (tag === 11 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
-				instruction.nativePrimitiveStringLength = true;
+				if (
+					String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) !==
+					"length"
+				) {
+					throw new RangeError("serialize-vm: invalid primitive-String length hint");
+				}
+				instruction.primitiveStringLength = true;
 			} else {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",

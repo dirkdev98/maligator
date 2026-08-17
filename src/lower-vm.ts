@@ -1178,7 +1178,7 @@ export type VmInstruction =
 			dst: number;
 			length: number;
 			/** COMPILE-ONLY: exact capacity for a proven pristine indexed fill. */
-			nativeFreshDenseReserveLength?: number;
+			freshDenseReserveLength?: number;
 	  }
 	| {
 			opcode: "INSTANTIATE_LITERAL_TEMPLATE";
@@ -1263,7 +1263,7 @@ export type VmInstruction =
 			/** COMPILE-ONLY: canonical guarded intrinsic identity and fallback plan. */
 			guardedBuiltinCall?: VmGuardedBuiltinCall;
 			/** COMPILE-ONLY: statically proven Number-position strength. */
-			directStringCharCodeAtPosition?: "integer" | "inBounds";
+			directStringCharCodeAtPosition?: "inBounds";
 	  }
 	| {
 			opcode: "MATH_UNARY_NUMBER";
@@ -1389,7 +1389,7 @@ export type VmInstruction =
 			stringIndex: number;
 			icIndex: number;
 			/** COMPILE-ONLY: guarded primitive-String `length` fast read. */
-			nativePrimitiveStringLength?: true;
+			primitiveStringLength?: true;
 	  }
 	| {
 			opcode: "LOAD_SUPER_PROPERTY";
@@ -4261,7 +4261,7 @@ function lowerInstructionToVmInstruction(
 				opcode: "CREATE_ARRAY",
 				dst: instruction.registers[0],
 				length: instruction.length,
-				nativeFreshDenseReserveLength: instruction.nativeFreshDenseReserveLength,
+				freshDenseReserveLength: instruction.freshDenseReserveLength,
 			};
 		}
 		case "instantiateLiteralTemplate":
@@ -4526,7 +4526,7 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[1],
 				stringIndex: instruction.stringIndex,
 				icIndex: -1,
-				nativePrimitiveStringLength: instruction.nativePrimitiveStringLength,
+				primitiveStringLength: instruction.primitiveStringLength,
 			};
 		case "loadSuperProperty":
 			return {

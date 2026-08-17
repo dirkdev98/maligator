@@ -594,6 +594,14 @@ is general rather than a registry-shaped collection of special cases.
         eligible for native table lookup, while attached loads/stores still carry
         the unchanged-ordinal proof; MALW v70 removes the duplicated binary
         instruction metadata and rejects every older cached layout.
+  - [x] Audit the residual instruction metadata boundary. Keep only facts whose
+        meaning and fallback are local to the annotated operation (guarded call
+        identity/dispatch, an in-bounds call operand, Array reserve capacity, and a
+        guarded String-length probe); require every multi-instruction ownership or
+        representation proof to live in a region. MALW v71 rejects dead position
+        encodings, mismatched opcodes/keys/targets, duplicates and unordered facts;
+        local fallback-capable property hints remain conservatively effectful to
+        region epoch analysis.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

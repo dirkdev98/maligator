@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 70u        // finite-string tables moved exclusively into regions
+#define WIRE_VERSION 71u        // operation-local specialization metadata narrowed
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1752,31 +1752,57 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
         }
 
         u32 instruction_metadata_count = rd_count(&r, 2);
+        i32 previous_instruction_metadata_index = -1;
         for (u32 metadata = 0; r.ok && metadata < instruction_metadata_count; metadata++) {
             u32 instruction_index = rd_u32(&r);
+			if (instruction_index >= (u32) functions[i].instruction_count ||
+				(i32) instruction_index <= previous_instruction_metadata_index) {
+				r.ok = false;
+				break;
+			}
+			previous_instruction_metadata_index = (i32) instruction_index;
+			const MalInstruction *metadata_instruction =
+				&functions[i].instructions[instruction_index];
             u8 tag = rd_u8(&r);
             if (tag == 1) { // CALL
-                (void) rd_i32(&r);
-                (void) rd_i32(&r);
+				i32 direct_function_index = rd_i32(&r);
+				i32 direct_call_target_function_index = rd_i32(&r);
                 u8 flags = rd_u8(&r);
                 u8 collection_tag = rd_u8(&r);
                 u8 guarded_builtin_count = ((flags & 2) != 0 ? 1 : 0) +
                     ((flags & 4) != 0 ? 1 : 0) + (collection_tag != 0 ? 1 : 0);
-                if (flags > 127 || (flags & 8) != 0 || collection_tag > 48 ||
+				if (metadata_instruction->opcode != MAL_OP_CALL ||
+					direct_function_index < -1 || direct_function_index >= (i32) function_count ||
+					direct_call_target_function_index < -1 ||
+					direct_call_target_function_index >= (i32) function_count ||
+					flags > 127 || (flags & 24) != 0 || collection_tag > 48 ||
 					guarded_builtin_count > 1 ||
-                    ((flags & 48) != 0 && (flags & 4) == 0) ||
-                    (flags & 48) == 48 ||
+					((flags & 32) != 0 && (flags & 4) == 0) ||
+					(direct_call_target_function_index >= 0 && (flags & 1) == 0) ||
                     ((flags & 64) != 0 && guarded_builtin_count != 1)) {
                     r.ok = false;
                 }
             } else if (tag == 2) { // CONSTRUCT
-                (void) rd_i32(&r);
+				i32 direct_function_index = rd_i32(&r);
+				if (metadata_instruction->opcode != MAL_OP_CONSTRUCT ||
+					direct_function_index < 0 || direct_function_index >= (i32) function_count) {
+					r.ok = false;
+				}
             } else if (tag == 11) { // guarded primitive-String length load
-                // No payload: generated native code alone consumes this hint.
+				i32 name_index = metadata_instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC
+					? metadata_instruction->as.load_property_static.string_index : -1;
+				bool length_name = name_index >= 0 && name_index < (i32) string_count;
+				if (length_name) {
+					const MalString *name = &strings[name_index];
+					length_name = name->length == 6 && name->code_units[0] == 'l' &&
+						name->code_units[1] == 'e' && name->code_units[2] == 'n' &&
+						name->code_units[3] == 'g' && name->code_units[4] == 't' &&
+						name->code_units[5] == 'h';
+				}
+				if (!length_name) r.ok = false;
             } else if (tag == 12) { // CREATE_ARRAY exact indexed-fill reserve
                 i32 reserve_length = rd_i32(&r);
-                if (instruction_index >= (u32) functions[i].instruction_count ||
-                    functions[i].instructions[instruction_index].opcode != MAL_OP_CREATE_ARRAY ||
+				if (metadata_instruction->opcode != MAL_OP_CREATE_ARRAY ||
                     reserve_length < 1 || reserve_length > 65536) {
                     r.ok = false;
                 }

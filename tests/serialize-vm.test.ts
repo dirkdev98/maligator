@@ -372,14 +372,14 @@ describe("serialize-vm", () => {
 		const metadataInstructions: Array<VmInstruction> = mainFn.instructions.map(
 			(instruction) => {
 				if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
-					return { ...instruction, nativePrimitiveStringLength: true };
+					return { ...instruction, stringIndex: 3, primitiveStringLength: true };
 				}
 				if (instruction.opcode === "CALL") {
 					return {
 						...instruction,
-						directFunctionIndex: 1,
+						directFunctionIndex: 0,
 						directFunctionCall: true,
-						directCallTargetFunctionIndex: 1,
+						directCallTargetFunctionIndex: 0,
 						guardedBuiltinCall: {
 							operation: "String.prototype.charCodeAt",
 							guard: {
@@ -399,7 +399,7 @@ describe("serialize-vm", () => {
 			callee: 2,
 			argumentCount: 1,
 			arguments: [3],
-			directFunctionIndex: 1,
+			directFunctionIndex: 0,
 		});
 		metadataInstructions.push({
 			opcode: "BINARY",
@@ -473,7 +473,7 @@ describe("serialize-vm", () => {
 			opcode: "CREATE_ARRAY",
 			dst: 6,
 			length: 0,
-			nativeFreshDenseReserveLength: 65_536,
+			freshDenseReserveLength: 65_536,
 		});
 		const exactArrayAllocationInstructionIndex = metadataInstructions.length - 1;
 		metadataInstructions.push({
@@ -534,6 +534,10 @@ describe("serialize-vm", () => {
 		const finiteTableOnlyProducerInstructionIndex = metadataInstructions.length - 1;
 		const cachedDefinition: VmDefinition = {
 			...definition,
+			stringConstants: [
+				...definition.stringConstants,
+				[..."length"].map((c) => c.charCodeAt(0)),
+			],
 			functionCount: 1,
 			functions: [
 				{
@@ -716,7 +720,7 @@ describe("serialize-vm", () => {
 							opcode: "CREATE_ARRAY",
 							dst: 0,
 							length: 0,
-							nativeFreshDenseReserveLength: reserveLength,
+							freshDenseReserveLength: reserveLength,
 						},
 					],
 					positions: [0],
@@ -741,6 +745,60 @@ describe("serialize-vm", () => {
 		expect(() => deserializeVmDefinition(malformed)).toThrow(
 			/invalid indexed-fill reserve metadata/,
 		);
+	});
+
+	it("rejects malformed operation-local specialization facts", () => {
+		const withInstruction = (instruction: VmInstruction): VmDefinition => ({
+			...definition,
+			functionCount: 1,
+			functions: [
+				{
+					...mainFn,
+					registerCount: 4,
+					instructions: [instruction],
+					positions: [0],
+					handlers: [],
+				},
+			],
+		});
+
+		expect(() =>
+			serializeVmDefinition(
+				withInstruction({
+					opcode: "LOAD_PROPERTY_STATIC",
+					dst: 0,
+					object: 1,
+					stringIndex: 1,
+					icIndex: 0,
+					primitiveStringLength: true,
+				}),
+			),
+		).toThrow(/invalid primitive-String length hint/);
+		expect(() =>
+			serializeVmDefinition(
+				withInstruction({
+					opcode: "CALL",
+					dst: 0,
+					callee: 1,
+					thisValue: 2,
+					argumentCount: 0,
+					arguments: [],
+					directCallTargetFunctionIndex: 0,
+				}),
+			),
+		).toThrow(/invalid CALL specialization metadata/);
+		expect(() =>
+			serializeVmDefinition(
+				withInstruction({
+					opcode: "CONSTRUCT",
+					dst: 0,
+					callee: 1,
+					argumentCount: 0,
+					arguments: [],
+					directFunctionIndex: 1,
+				}),
+			),
+		).toThrow(/invalid direct CONSTRUCT target/);
 	});
 
 	it("requires dense property IC ordinals while keeping them implicit on the wire", () => {

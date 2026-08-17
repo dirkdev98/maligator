@@ -2272,7 +2272,7 @@ function annotateFreshDenseIndexedReserves(program: IntermediateProgram): void {
 				}
 				if (!usesAreOrdered) continue;
 
-				allocation.nativeFreshDenseReserveLength = bound;
+				allocation.freshDenseReserveLength = bound;
 			}
 		}
 	}
@@ -2960,7 +2960,7 @@ function annotateBoundedStringCharCodeAtPositions(program: IntermediateProgram):
 					);
 					if (receiverChanged) continue;
 					instruction.directStringCharCodeAtPosition = "inBounds";
-					lengthLoad.nativePrimitiveStringLength = true;
+					lengthLoad.primitiveStringLength = true;
 				}
 			}
 		}

@@ -324,7 +324,7 @@ describe("wire loader side-data validation", () => {
 							opcode: "CREATE_ARRAY",
 							dst: 0,
 							length: 0,
-							nativeFreshDenseReserveLength: 1,
+							freshDenseReserveLength: 1,
 						},
 						{ opcode: "RETURN", value: 0 },
 					],

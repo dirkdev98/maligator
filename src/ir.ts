@@ -1219,7 +1219,7 @@ export type IRInstruction =
 			/** COMPILE-ONLY: a pristine empty Array is immediately followed by an
 			 * exact canonical `[0, length)` indexed fill. Native code may reserve the
 			 * final dense capacity before executing the otherwise-unchanged loop. */
-			nativeFreshDenseReserveLength?: number;
+			freshDenseReserveLength?: number;
 			// [destination]
 			registers: [number];
 
@@ -1373,13 +1373,7 @@ export type IRInstruction =
 			 * non-negative integer and, for `inBounds`, below this primitive String
 			 * receiver's length on every path reaching the call.
 			 */
-			directStringCharCodeAtPosition?: "integer" | "inBounds";
-			/**
-			 * COMPILE-ONLY: a direct Map.get/Map.set/Set.add method site eligible for
-			 * guarded intrinsic collection dispatch in native code. The loaded callee
-			 * and receiver brand are still validated at runtime.
-			 */
-			directCollectionOp?: "mapGet" | "mapSet" | "setAdd";
+			directStringCharCodeAtPosition?: "inBounds";
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
 			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }
@@ -1512,7 +1506,7 @@ export type IRInstruction =
 			stringIndex: number;
 			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
 			 * primitive-String consumer, so native code may try the String brand first. */
-			nativePrimitiveStringLength?: true;
+			primitiveStringLength?: true;
 	  }
 	| {
 			type: "loadSuperProperty";
