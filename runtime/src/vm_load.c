@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 56u        // private aggregate memos join the tagged region table
+#define WIRE_VERSION 57u        // linked JSON.parse/map templates join the region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -2030,12 +2030,16 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 			bool private_aggregate_memo_contract = kind == 9 && representation == 9 &&
 				materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
 				obligation_mask == 1;
+			bool invariant_json_map_template_contract = kind == 10 && representation == 10 &&
+				materialization == 2 && (dependency_mask == 1 || dependency_mask == 14) &&
+				obligation_mask == 3;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
-				 !string_scan_contract && !private_aggregate_memo_contract)) {
+				 !string_scan_contract && !private_aggregate_memo_contract &&
+				 !invariant_json_map_template_contract)) {
                 r.ok = false;
             }
 
@@ -3145,6 +3149,110 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     MAL_REGION_PAYLOAD_REFERENCE(push_ips[push]);
                 }
                 MAL_REGION_PAYLOAD_REFERENCE(call_ip);
+			} else if (r.ok && kind == 10) {
+				i32 parse_call_ip = rd_i32(&r);
+				i32 map_load_ip = rd_i32(&r);
+				i32 map_call_ip = rd_i32(&r);
+				i32 json_object = rd_i32(&r);
+				i32 parse_callee = rd_i32(&r);
+				i32 text = rd_i32(&r);
+				i32 parse_result = rd_i32(&r);
+				i32 map_callee = rd_i32(&r);
+				i32 callback = rd_i32(&r);
+				i32 map_result = rd_i32(&r);
+				i32 target_function_index = rd_i32(&r);
+				u32 capture_count = rd_count(&r, 2);
+				if (capture_count == 0 || capture_count > 8) r.ok = false;
+				i32 capture_owners[8];
+				i32 capture_indices[8];
+				for (u32 capture = 0; r.ok && capture < capture_count; capture++) {
+					capture_owners[capture] = rd_i32(&r);
+					capture_indices[capture] = rd_i32(&r);
+					if (capture_owners[capture] < 0 ||
+						capture_owners[capture] >= (i32) function_count ||
+						capture_indices[capture] < 0) r.ok = false;
+					for (u32 previous = 0; r.ok && previous < capture; previous++) {
+						if (capture_owners[previous] == capture_owners[capture] &&
+							capture_indices[previous] == capture_indices[capture]) r.ok = false;
+					}
+				}
+				i32 row_property_loads = rd_i32(&r);
+				u32 primitive_key_count = rd_count(&r, 1);
+				if (primitive_key_count == 0 || primitive_key_count > 64) r.ok = false;
+				for (u32 key = 0; r.ok && key < primitive_key_count; key++) {
+					i32 string_index = rd_i32(&r);
+					if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
+				}
+				i32 nested_base_string_index = rd_i32(&r);
+				i32 nested_value_string_index = rd_i32(&r);
+				u32 excluded_key_count = rd_count(&r, 1);
+				if (excluded_key_count == 0 || excluded_key_count > 64) r.ok = false;
+				for (u32 key = 0; r.ok && key < excluded_key_count; key++) {
+					i32 string_index = rd_i32(&r);
+					if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
+				}
+
+				bool header_ok = anchor_count == 2 && anchors[0] == parse_call_ip &&
+					anchors[1] == map_call_ip && map_load_ip == parse_call_ip + 1 &&
+					map_call_ip == parse_call_ip + 2 && parse_call_ip >= 0 &&
+					map_call_ip < fn->instruction_count && json_object >= 0 &&
+					json_object < fn->register_count && parse_callee >= 0 &&
+					parse_callee < fn->register_count && text >= 0 &&
+					text < fn->register_count && parse_result >= 0 &&
+					parse_result < fn->register_count && map_callee >= 0 &&
+					map_callee < fn->register_count && callback >= 0 &&
+					callback < fn->register_count && map_result >= 0 &&
+					map_result < fn->register_count && target_function_index >= 0 &&
+					target_function_index < (i32) function_count && row_property_loads > 0 &&
+					row_property_loads <= 65535 && nested_base_string_index >= 0 &&
+					nested_base_string_index < (i32) string_count &&
+					nested_value_string_index >= 0 &&
+					nested_value_string_index < (i32) string_count &&
+					fn->instructions[parse_call_ip].opcode == MAL_OP_CALL &&
+					fn->instructions[map_load_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+					fn->instructions[map_call_ip].opcode == MAL_OP_CALL &&
+					exceptional_handler_count == 0;
+				if (header_ok) {
+					const MalInstruction *parse = &fn->instructions[parse_call_ip];
+					const MalInstruction *map_load = &fn->instructions[map_load_ip];
+					const MalInstruction *map_call = &fn->instructions[map_call_ip];
+					i32 parse_data = parse->as.call.data_offset;
+					i32 map_data = map_call->as.call.data_offset;
+					i32 name_index = map_load->as.load_property_static.string_index;
+					bool map_name = name_index >= 0 && name_index < (i32) string_count;
+					if (map_name) {
+						const MalString *name = &strings[name_index];
+						map_name = name->length == 3 && name->code_units[0] == 'm' &&
+							name->code_units[1] == 'a' && name->code_units[2] == 'p';
+					}
+					header_ok = map_name && parse->as.call.callee == parse_callee &&
+						parse->as.call.this_value == json_object &&
+						parse->as.call.dst == parse_result && parse_data >= 0 &&
+						parse_data + 1 < fn->instruction_data_count &&
+						fn->instruction_data[parse_data] == 1 &&
+						fn->instruction_data[parse_data + 1] == text &&
+						map_load->as.load_property_static.object == parse_result &&
+						map_load->as.load_property_static.dst == map_callee &&
+						map_call->as.call.callee == map_callee &&
+						map_call->as.call.this_value == parse_result &&
+						map_call->as.call.dst == map_result && map_data >= 0 &&
+						map_data + 1 < fn->instruction_data_count &&
+						fn->instruction_data[map_data] == 1 &&
+						fn->instruction_data[map_data + 1] == callback;
+				}
+				bool parse_block = false;
+				bool load_block = false;
+				bool map_block = false;
+				for (u32 block = 0; block < ordinary_block_count; block++) {
+					if (ordinary_block_ips[block] == parse_call_ip) parse_block = true;
+					if (ordinary_block_ips[block] == map_load_ip) load_block = true;
+					if (ordinary_block_ips[block] == map_call_ip) map_block = true;
+				}
+				if (!parse_block || !load_block || !map_block) header_ok = false;
+				if (!header_ok || metadata_operations != 3 || claim_count != 3) r.ok = false;
+				MAL_REGION_PAYLOAD_REFERENCE(parse_call_ip);
+				MAL_REGION_PAYLOAD_REFERENCE(map_load_ip);
+				MAL_REGION_PAYLOAD_REFERENCE(map_call_ip);
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

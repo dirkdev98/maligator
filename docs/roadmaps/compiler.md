@@ -523,6 +523,12 @@ is general rather than a registry-shaped collection of special cases.
         repeated exact call; merge primitive, watched-method and Array-element
         protectors; retain the ordinary construction/call corridor; and preserve
         the cross-function reducer target through MALW v56.
+  - [x] Move linked invariant `JSON.parse(...).map(...)` templates out of their
+        emitter-only function side table. Claim the adjacent parse, map-property
+        load and map call as one whole-result-materializing region; preserve the
+        callback target, captured-number guards and projection string constants
+        through MALW v57 and multi-definition rebasing; retain the ordinary calls
+        as the complete miss/fill twin.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

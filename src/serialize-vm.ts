@@ -37,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 56 to move private aggregate memoization into the tagged region table.
-export const WIRE_VERSION = 56;
+// Bumped to 57 to move linked JSON.parse/map templates into the tagged region table.
+export const WIRE_VERSION = 57;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -865,6 +865,38 @@ function privateAggregateMemoGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function invariantJsonMapTemplateGuardMasks(
+	license: Extract<VmRegion, { kind: "invariant-json-map-template" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "primitive-methods") {
+			dependencyMask |= 2;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else if (dependency.kind === "epoch" && dependency.family === "array-elements") {
+			dependencyMask |= 8;
+		} else {
+			throw new RangeError("serialize-vm: unsupported invariant JSON map dependency");
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "whole-region" ||
+		(dependencyMask !== 1 && dependencyMask !== 14) ||
+		obligationMask !== 3
+	) {
+		throw new RangeError("serialize-vm: invalid invariant JSON map guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1349,7 +1381,9 @@ export function serializeVmDefinition(
 											? 7
 											: region.kind === "string-scan-summary"
 												? 8
-												: 9;
+												: region.kind === "private-aggregate-memo"
+													? 9
+													: 10;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1374,7 +1408,9 @@ export function serializeVmDefinition(
 											? stringSliceNumberGuardMasks(region.license)
 											: region.kind === "string-scan-summary"
 												? stringScanGuardMasks(region.license)
-												: privateAggregateMemoGuardMasks(region.license);
+												: region.kind === "private-aggregate-memo"
+													? privateAggregateMemoGuardMasks(region.license)
+													: invariantJsonMapTemplateGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1561,6 +1597,29 @@ export function serializeVmDefinition(
 					w.i32(region.callee);
 					w.i32(region.input);
 					w.i32(region.result);
+					break;
+				case "invariant-json-map-template":
+					w.i32(region.parseCallIp);
+					w.i32(region.mapLoadIp);
+					w.i32(region.mapCallIp);
+					w.i32(region.jsonObject);
+					w.i32(region.parseCallee);
+					w.i32(region.text);
+					w.i32(region.parseResult);
+					w.i32(region.mapCallee);
+					w.i32(region.callback);
+					w.i32(region.mapResult);
+					w.i32(region.targetFunctionIndex);
+					w.u32(region.captures.length);
+					for (const capture of region.captures) {
+						w.i32(capture.ownerFunctionIndex);
+						w.i32(capture.index);
+					}
+					w.i32(region.rowPropertyLoads);
+					w.i32Array([...region.primitiveRowStringIndices]);
+					w.i32(region.nestedBaseStringIndex);
+					w.i32(region.nestedValueStringIndex);
+					w.i32Array([...region.excludedStringIndices]);
 					break;
 			}
 		}
@@ -1932,11 +1991,101 @@ function validateRegion(
 		case "private-aggregate-memo":
 			validatePrivateAggregateMemoRegion(fn, region, functionCount);
 			break;
+		case "invariant-json-map-template":
+			validateInvariantJsonMapTemplateRegion(fn, region, functionCount, stringConstants);
+			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
 			break;
 	}
 	for (const ip of region.claimedIps) claimed.add(ip);
+}
+
+function validateInvariantJsonMapTemplateRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "invariant-json-map-template" }>,
+	functionCount: number,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	invariantJsonMapTemplateGuardMasks(region.license);
+	const parse = fn.instructions[region.parseCallIp];
+	const mapLoad = fn.instructions[region.mapLoadIp];
+	const mapCall = fn.instructions[region.mapCallIp];
+	const text =
+		parse?.opcode === "CALL" && parse.arguments.length === 1
+			? decodeVmValueOperand(parse.arguments[0]!)
+			: undefined;
+	const callback =
+		mapCall?.opcode === "CALL" && mapCall.arguments.length === 1
+			? decodeVmValueOperand(mapCall.arguments[0]!)
+			: undefined;
+	const stringIndexValid = (index: number) =>
+		Number.isInteger(index) && index >= 0 && index < stringConstants.length;
+	const stringConstantEquals = (index: number, value: string): boolean => {
+		const codeUnits = stringConstants[index];
+		return (
+			codeUnits?.length === value.length &&
+			codeUnits.every((codeUnit, offset) => codeUnit === value.charCodeAt(offset))
+		);
+	};
+	const payload = new Set([region.parseCallIp, region.mapLoadIp, region.mapCallIp]);
+	const captures = new Set(
+		region.captures.map((capture) => `${capture.ownerFunctionIndex}:${capture.index}`),
+	);
+	const valid =
+		region.representation === "activation-local-json-map-template" &&
+		region.anchors.length === 2 &&
+		region.anchors[0] === region.parseCallIp &&
+		region.anchors[1] === region.mapCallIp &&
+		region.mapLoadIp === region.parseCallIp + 1 &&
+		region.mapCallIp === region.parseCallIp + 2 &&
+		parse?.opcode === "CALL" &&
+		parse.callee === region.parseCallee &&
+		parse.thisValue === region.jsonObject &&
+		parse.dst === region.parseResult &&
+		text?.kind === "register" &&
+		text.register === region.text &&
+		mapLoad?.opcode === "LOAD_PROPERTY_STATIC" &&
+		mapLoad.object === region.parseResult &&
+		mapLoad.dst === region.mapCallee &&
+		stringConstantEquals(mapLoad.stringIndex, "map") &&
+		mapCall?.opcode === "CALL" &&
+		mapCall.callee === region.mapCallee &&
+		mapCall.thisValue === region.parseResult &&
+		mapCall.dst === region.mapResult &&
+		callback?.kind === "register" &&
+		callback.register === region.callback &&
+		region.targetFunctionIndex >= 0 &&
+		region.targetFunctionIndex < functionCount &&
+		region.captures.length > 0 &&
+		region.captures.length <= 8 &&
+		captures.size === region.captures.length &&
+		region.captures.every(
+			(capture) =>
+				capture.ownerFunctionIndex >= 0 &&
+				capture.ownerFunctionIndex < functionCount &&
+				capture.index >= 0,
+		) &&
+		region.rowPropertyLoads > 0 &&
+		region.rowPropertyLoads <= 0xffff &&
+		region.primitiveRowStringIndices.length > 0 &&
+		region.primitiveRowStringIndices.length <= 64 &&
+		region.primitiveRowStringIndices.every(stringIndexValid) &&
+		stringIndexValid(region.nestedBaseStringIndex) &&
+		stringIndexValid(region.nestedValueStringIndex) &&
+		region.excludedStringIndices.length > 0 &&
+		region.excludedStringIndices.length <= 64 &&
+		region.excludedStringIndices.every(stringIndexValid) &&
+		region.controlFlow.exceptionalHandlerIps.length === 0 &&
+		region.controlFlow.ordinaryBlockIps.includes(region.parseCallIp) &&
+		region.controlFlow.ordinaryBlockIps.includes(region.mapLoadIp) &&
+		region.controlFlow.ordinaryBlockIps.includes(region.mapCallIp) &&
+		region.cost.metadataOperations === payload.size &&
+		payload.size === region.claimedIps.length &&
+		region.claimedIps.every((ip) => payload.has(ip));
+	if (!valid) {
+		throw new RangeError("serialize-vm: invalid invariant JSON map template region");
+	}
 }
 
 function validatePrivateAggregateMemoRegion(
@@ -3837,6 +3986,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					(dependencyMask === 1 || dependencyMask === 14) &&
 					obligationMask === 1;
+				const invariantJsonMapTemplateContract =
+					kindTag === 10 &&
+					representationTag === 10 &&
+					materializationTag === 2 &&
+					(dependencyMask === 1 || dependencyMask === 14) &&
+					obligationMask === 3;
 				if (
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
@@ -3847,7 +4002,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!regexpIteratorProjectionContract &&
 						!stringSliceNumberContract &&
 						!stringScanContract &&
-						!privateAggregateMemoContract)
+						!privateAggregateMemoContract &&
+						!invariantJsonMapTemplateContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -4372,7 +4528,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						matchResult,
 						matchCodeUnit,
 					};
-				} else {
+				} else if (kindTag === 9) {
 					const allocationIp = r.i32();
 					const constructionPushIps = r.i32Array();
 					const callIp = r.i32();
@@ -4409,6 +4565,71 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						callee,
 						input,
 						result,
+					};
+				} else {
+					const parseCallIp = r.i32();
+					const mapLoadIp = r.i32();
+					const mapCallIp = r.i32();
+					const jsonObject = r.i32();
+					const parseCallee = r.i32();
+					const text = r.i32();
+					const parseResult = r.i32();
+					const mapCallee = r.i32();
+					const callback = r.i32();
+					const mapResult = r.i32();
+					const targetFunctionIndex = r.i32();
+					const captureCount = r.count(2);
+					if (captureCount > 8) {
+						throw new RangeError("serialize-vm: too many invariant JSON map captures");
+					}
+					const captures: Array<{ ownerFunctionIndex: number; index: number }> = [];
+					for (let capture = 0; capture < captureCount; capture++) {
+						captures.push({ ownerFunctionIndex: r.i32(), index: r.i32() });
+					}
+					const rowPropertyLoads = r.i32();
+					const primitiveRowStringIndices = r.i32Array();
+					const nestedBaseStringIndex = r.i32();
+					const nestedValueStringIndex = r.i32();
+					const excludedStringIndices = r.i32Array();
+					region = {
+						kind: "invariant-json-map-template",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [
+												{ kind: "epoch", family: "array-elements" },
+												{ kind: "epoch", family: "primitive-methods" },
+												{ kind: "epoch", family: "watched-methods" },
+											],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "whole-region",
+						},
+						representation: "activation-local-json-map-template",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						parseCallIp,
+						mapLoadIp,
+						mapCallIp,
+						jsonObject,
+						parseCallee,
+						text,
+						parseResult,
+						mapCallee,
+						callback,
+						mapResult,
+						targetFunctionIndex,
+						captures,
+						rowPropertyLoads,
+						primitiveRowStringIndices,
+						nestedBaseStringIndex,
+						nestedValueStringIndex,
+						excludedStringIndices,
 					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);

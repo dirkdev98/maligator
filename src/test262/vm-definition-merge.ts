@@ -117,6 +117,24 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				constructionPushIps: [...region.constructionPushIps],
 				targetFunctionIndex: region.targetFunctionIndex + base.function,
 			};
+		case "invariant-json-map-template":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				targetFunctionIndex: region.targetFunctionIndex + base.function,
+				captures: region.captures.map((capture) => ({
+					ownerFunctionIndex: shifted(capture.ownerFunctionIndex, base.function),
+					index: capture.index,
+				})),
+				primitiveRowStringIndices: region.primitiveRowStringIndices.map(
+					(index) => index + base.string,
+				),
+				nestedBaseStringIndex: region.nestedBaseStringIndex + base.string,
+				nestedValueStringIndex: region.nestedValueStringIndex + base.string,
+				excludedStringIndices: region.excludedStringIndices.map(
+					(index) => index + base.string,
+				),
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

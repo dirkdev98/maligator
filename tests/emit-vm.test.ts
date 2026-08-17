@@ -2973,16 +2973,19 @@ describe("linked invariant JSON.parse map templates", () => {
 		const compiled = compileSemanticProgramToVmDefinition(semantic);
 		const postWire = deserializeVmDefinition(serializeVmDefinition(compiled));
 		emitVmDefinition(postWire, { compiled: true });
-		return postWire;
+		return deserializeVmDefinition(serializeVmDefinition(postWire));
 	}
 
 	const templateCount = (definition: VmDefinition) =>
 		definition.functions.reduce(
-			(count, fn) => count + (fn.nativeInvariantJsonMapTemplates?.length ?? 0),
+			(count, fn) =>
+				count +
+				(fn.regions?.filter((region) => region.kind === "invariant-json-map-template")
+					.length ?? 0),
 			0,
 		);
 
-	it("recomputes one exact post-wire primitive projection candidate", () => {
+	it("recomputes and persists one exact post-wire primitive projection region", () => {
 		const definition = annotated(`${projection}
 			function repeated(text) {
 				const normalize = factory(0.1);
@@ -2996,9 +2999,21 @@ describe("linked invariant JSON.parse map templates", () => {
 			globalThis.repeated = repeated;
 		`);
 		expect(templateCount(definition)).toBe(1);
-		const template = definition.functions.flatMap((fn) => [
-			...(fn.nativeInvariantJsonMapTemplates ?? []),
-		])[0]!;
+		const template = definition.functions
+			.flatMap((fn) => fn.regions ?? [])
+			.find((region) => region.kind === "invariant-json-map-template");
+		if (template?.kind !== "invariant-json-map-template") {
+			throw new Error("missing invariant JSON map template region");
+		}
+		expect(template.representation).toBe("activation-local-json-map-template");
+		expect(template.license.materialization).toBe("whole-region");
+		expect(template.license.guard.obligations).toEqual(["fallback", "materialize"]);
+		expect(template.anchors).toEqual([template.parseCallIp, template.mapCallIp]);
+		expect(template.claimedIps).toEqual([
+			template.parseCallIp,
+			template.mapLoadIp,
+			template.mapCallIp,
+		]);
 		expect(template.captures).toHaveLength(1);
 		expect(template.primitiveRowStringIndices).toHaveLength(5);
 		expect(template.excludedStringIndices).toHaveLength(6);

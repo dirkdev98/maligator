@@ -20,6 +20,7 @@ import type {
 	VmExceptionHandler,
 	VmFunction,
 	VmGuardPlan,
+	VmInvariantJsonMapTemplateRegion,
 	VmInstruction,
 	VmRegion,
 	VmRegionLicense,
@@ -1146,11 +1147,12 @@ export function emitCompiledFunction(
 	const invariantJsonParseCaches = new Map<number, NativeInvariantJsonParseCacheSite>();
 	const invariantJsonMapTemplates = new Map<
 		number,
-		NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
-			rootsOffset: number;
-		}
+		VmInvariantJsonMapTemplateRegion & { rootsOffset: number }
 	>();
-	for (const template of fn.nativeInvariantJsonMapTemplates ?? []) {
+	for (const template of (fn.regions ?? []).filter(
+		(region): region is VmInvariantJsonMapTemplateRegion =>
+			region.kind === "invariant-json-map-template",
+	)) {
 		const parse = fn.instructions[template.parseCallIp];
 		const load = fn.instructions[template.mapLoadIp];
 		const call = fn.instructions[template.mapCallIp];
@@ -3044,9 +3046,7 @@ function emitBody(
 	invariantJsonParseCaches: ReadonlyMap<number, NativeInvariantJsonParseCacheSite>,
 	invariantJsonMapTemplates: ReadonlyMap<
 		number,
-		NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
-			rootsOffset: number;
-		}
+		VmInvariantJsonMapTemplateRegion & { rootsOffset: number }
 	>,
 	privateAggregateMemos: ReadonlyMap<
 		number,
@@ -4345,9 +4345,7 @@ function emitInstruction(
 	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
 	invariantJsonParseCache?: NativeInvariantJsonParseCacheSite,
 	invariantJsonMapAction?: {
-		site: NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
-			rootsOffset: number;
-		};
+		site: VmInvariantJsonMapTemplateRegion & { rootsOffset: number };
 		role: "parse" | "mapLoad" | "mapCall";
 	},
 	privateAggregateMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },

@@ -641,6 +641,28 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads and executes persisted invariant JSON map template regions", () => {
+		const mapDefinition = compileEntrypoint(
+			path.resolve("tests/local/invariant-json-map-template.js"),
+			{
+				stripTypes: stripTypesWithTypeScript,
+				buildConfig: resolveBuildConfig({}),
+			},
+		);
+		emitVmDefinition(mapDefinition, { compiled: true });
+		expect(
+			mapDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "invariant-json-map-template") ??
+					[],
+			),
+		).not.toHaveLength(0);
+		const wirePath = path.join(directory, "invariant-json-map-template-region.malw");
+		writeFileSync(wirePath, serializeVmDefinition(mapDefinition, { debugInfo: false }));
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

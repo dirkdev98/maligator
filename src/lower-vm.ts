@@ -531,6 +531,30 @@ export type VmPrivateAggregateMemoRegion = VmRegionEnvelope<
 	readonly result: number;
 };
 
+export type VmInvariantJsonMapTemplateRegion = VmRegionEnvelope<
+	"invariant-json-map-template",
+	"activation-local-json-map-template",
+	"whole-region"
+> & {
+	readonly parseCallIp: number;
+	readonly mapLoadIp: number;
+	readonly mapCallIp: number;
+	readonly jsonObject: number;
+	readonly parseCallee: number;
+	readonly text: number;
+	readonly parseResult: number;
+	readonly mapCallee: number;
+	readonly callback: number;
+	readonly mapResult: number;
+	readonly targetFunctionIndex: number;
+	readonly captures: ReadonlyArray<{ ownerFunctionIndex: number; index: number }>;
+	readonly rowPropertyLoads: number;
+	readonly primitiveRowStringIndices: ReadonlyArray<number>;
+	readonly nestedBaseStringIndex: number;
+	readonly nestedValueStringIndex: number;
+	readonly excludedStringIndices: ReadonlyArray<number>;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -559,6 +583,7 @@ export type VmRegion =
 	| VmStringSliceNumberRegion
 	| VmStringScanRegion
 	| VmPrivateAggregateMemoRegion
+	| VmInvariantJsonMapTemplateRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
@@ -753,32 +778,6 @@ export interface VmFunction {
 	 * boxed register.
 	 */
 	gcRootRegisters?: ReadonlyArray<number>;
-
-	/**
-	 * EMITTER-ONLY: activation-local final primitive-record templates for one
-	 * exact adjacent JSON.parse(text).map(pureProjection) chain. The complete
-	 * proof is recomputed after wire loading; the ordinary parse/map instructions
-	 * remain the fallback and interpreter semantics.
-	 */
-	nativeInvariantJsonMapTemplates?: ReadonlyArray<{
-		parseCallIp: number;
-		mapLoadIp: number;
-		mapCallIp: number;
-		jsonObject: number;
-		parseCallee: number;
-		text: number;
-		parseResult: number;
-		mapCallee: number;
-		callback: number;
-		mapResult: number;
-		targetFunctionIndex: number;
-		captures: ReadonlyArray<{ ownerFunctionIndex: number; index: number }>;
-		rowPropertyLoads: number;
-		primitiveRowStringIndices: ReadonlyArray<number>;
-		nestedBaseStringIndex: number;
-		nestedValueStringIndex: number;
-		excludedStringIndices: ReadonlyArray<number>;
-	}>;
 
 	/**
 	 * COMPILE-ONLY: exact CREATE_OBJECT/CREATE_OBJECT_SHAPED sites proven safe for

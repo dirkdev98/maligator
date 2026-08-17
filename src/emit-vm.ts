@@ -3087,6 +3087,22 @@ function proveNativePrimitiveProjection(
 
 /** Link one exact adjacent parse/map chain to a private final-row template. */
 function annotateNativeInvariantJsonMapTemplates(definition: VmDefinition): void {
+	for (const fn of definition.functions) {
+		const retained = (fn.regions ?? []).filter(
+			(region) => region.kind !== "invariant-json-map-template",
+		);
+		fn.regions = retained.length > 0 ? retained : undefined;
+	}
+	const license = vmRegionLicense(
+		[
+			vmSemanticProtectorGuard(definition.semanticProtectors, "primitive-methods"),
+			vmSemanticProtectorGuard(definition.semanticProtectors, "watched-methods"),
+			vmSemanticProtectorGuard(definition.semanticProtectors, "array-elements"),
+		],
+		"whole-region",
+	);
+	if (license === undefined || license.materialization !== "whole-region") return;
+	const regionLicense = { ...license, materialization: "whole-region" as const };
 	const projections = new Map<number, NativePrimitiveProjectionProof>();
 	for (let index = 0; index < definition.functions.length; index++) {
 		const proof = proveNativePrimitiveProjection(definition, index);
@@ -3100,8 +3116,8 @@ function annotateNativeInvariantJsonMapTemplates(definition: VmDefinition): void
 		}
 	}
 	for (const fn of definition.functions) {
-		delete fn.nativeInvariantJsonMapTemplates;
 		if (fn.isGenerator || fn.isAsync) continue;
+		const existingRegions = fn.regions ?? [];
 		const candidateStarts: Array<number> = [];
 		for (let p = 0; p + 3 < fn.instructions.length; p++) {
 			const parse = fn.instructions[p]!;
@@ -3126,9 +3142,8 @@ function annotateNativeInvariantJsonMapTemplates(definition: VmDefinition): void
 		if (candidateStarts.length === 0) continue;
 		const cfg = buildNativeProofCfg(fn);
 		const reaching = nativeReachingDefinitions(fn, cfg);
-		const templates: Array<
-			NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number]
-		> = [];
+		const templates: Array<Extract<VmRegion, { kind: "invariant-json-map-template" }>> =
+			[];
 		for (const p of candidateStarts) {
 			const parse = fn.instructions[p]!;
 			const mapLoad = fn.instructions[p + 1]!;
@@ -3225,7 +3240,31 @@ function annotateNativeInvariantJsonMapTemplates(definition: VmDefinition): void
 				}
 			}
 			if (!privateParseResult) continue;
+			const claimedIps = [p, p + 1, p + 2];
+			if (
+				existingRegions.length + templates.length >= 8 ||
+				claimedIps.some(
+					(ip) =>
+						existingRegions.some((region) => region.claimedIps.includes(ip)) ||
+						templates.some((region) => region.claimedIps.includes(ip)),
+				)
+			) {
+				continue;
+			}
 			templates.push({
+				kind: "invariant-json-map-template",
+				license: regionLicense,
+				representation: "activation-local-json-map-template",
+				anchors: [p, p + 2],
+				claimedIps,
+				controlFlow: {
+					ordinaryBlockIps: claimedIps,
+					exceptionalHandlerIps: [],
+				},
+				cost: {
+					score: projection.rowPropertyLoads + 2,
+					metadataOperations: claimedIps.length,
+				},
 				parseCallIp: p,
 				mapLoadIp: p + 1,
 				mapCallIp: p + 2,
@@ -3240,7 +3279,7 @@ function annotateNativeInvariantJsonMapTemplates(definition: VmDefinition): void
 				...projection,
 			});
 		}
-		if (templates.length > 0) fn.nativeInvariantJsonMapTemplates = templates;
+		if (templates.length > 0) fn.regions = [...existingRegions, ...templates];
 	}
 }
 
