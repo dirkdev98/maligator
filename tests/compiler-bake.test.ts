@@ -10,7 +10,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ensureCompilerWire } from "../src/compiler-bake.ts";
+import {
+	compilerEntrypointSourceFiles,
+	ensureCompilerWire,
+} from "../src/compiler-bake.ts";
+import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 function compilerFixture(meriyah = "7.1.0"): {
 	root: string;
@@ -121,6 +125,42 @@ describe("compiler wire provisioning", () => {
 		});
 		expect(entrypointChanged).not.toBe(primaryWithAlternatePresent);
 		expect(bakeCount).toBe(7);
+	});
+
+	it("can key source bakes to the imported compiler cone", () => {
+		const fixture = compilerFixture();
+		const cacheRoot = path.join(fixture.root, "wire-cache");
+		const helper = path.join(fixture.sourceDirectory, "cone-helper.mts");
+		const unrelated = path.join(fixture.sourceDirectory, "unrelated.ts");
+		writeFileSync(
+			fixture.entrypoint,
+			'import { helper } from "./cone-helper.mts";\nexport const compiler = helper;\n',
+		);
+		writeFileSync(helper, "export const helper = 1;\n");
+		writeFileSync(unrelated, "export const unrelated = 1;\n");
+		const sourceFiles = compilerEntrypointSourceFiles(
+			fixture.sourceDirectory,
+			fixture.entrypoint,
+			stripTypesWithTypeScript,
+		);
+		let bakeCount = 0;
+		const sourceInput = () => ({
+			kind: "source" as const,
+			sourceDirectory: fixture.sourceDirectory,
+			entrypoint: fixture.entrypoint,
+			sourceFiles,
+			cacheRoot,
+			bake: () => new Uint8Array([++bakeCount]),
+		});
+
+		const first = ensureCompilerWire(sourceInput());
+		writeFileSync(unrelated, "export const unrelated = 2;\n");
+		expect(ensureCompilerWire(sourceInput())).toBe(first);
+		expect(bakeCount).toBe(1);
+
+		writeFileSync(helper, "export const helper = 2;\n");
+		expect(ensureCompilerWire(sourceInput())).not.toBe(first);
+		expect(bakeCount).toBe(2);
 	});
 
 	it("deduplicates equivalent bytes and prebuilt content", () => {

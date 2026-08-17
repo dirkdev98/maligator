@@ -9,7 +9,9 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import type { BuildConfigTypeStripper } from "./build-config.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
+import { buildModuleGraph } from "./module-graph.ts";
 
 const COMPILER_WIRE_CACHE = ".cache/mal-cache/compiler-wire";
 const SOURCE_MANIFEST = "artifact.json";
@@ -26,6 +28,8 @@ export type CompilerBakeInput =
 			sourceDirectory: string;
 			/** Absolute source entrypoint compiled by bake. */
 			entrypoint: string;
+			/** Exact compiler-owned source cone; omitted for conservative tree hashing. */
+			sourceFiles?: ReadonlyArray<string>;
 			/** Called only when this source identity has no valid cached wire. */
 			bake: () => Uint8Array;
 	  })
@@ -78,7 +82,69 @@ function compilerDependencyIdentity(sourceDirectory: string): string {
 	return parts.join("");
 }
 
-function compilerSourceHash(sourceDirectory: string, entrypoint: string): string {
+function isWithin(directory: string, target: string): boolean {
+	const relative = path.relative(directory, target);
+	return (
+		relative === "" ||
+		(!relative.startsWith(`..${path.sep}`) &&
+			relative !== ".." &&
+			!path.isAbsolute(relative))
+	);
+}
+
+/** Resolve the compiler-owned static dependency cone for a source bake. */
+export function compilerEntrypointSourceFiles(
+	sourceDirectory: string,
+	entrypoint: string,
+	stripTypes: BuildConfigTypeStripper,
+): Array<string> {
+	const root = requireAbsolute("compiler source directory", sourceDirectory);
+	const entry = requireAbsolute("compiler source entrypoint", entrypoint);
+	return [...buildModuleGraph(entry, { stripTypes }).modules.values()]
+		.filter((module) => !module.host && !module.virtual && isWithin(root, module.path))
+		.map((module) => module.path)
+		.sort(compareNames);
+}
+
+function compilerSourceHash(
+	sourceDirectory: string,
+	entrypoint: string,
+	sourceFiles?: ReadonlyArray<string>,
+): string {
+	if (sourceFiles !== undefined) {
+		const files = [
+			...new Set([...sourceFiles, entrypoint].map((file) => path.resolve(file))),
+		]
+			.map((file) => {
+				if (!isWithin(sourceDirectory, file)) {
+					throw new Error(`compiler source file is outside source directory: ${file}`);
+				}
+				return file;
+			})
+			.sort((left, right) =>
+				compareNames(
+					path.relative(sourceDirectory, left),
+					path.relative(sourceDirectory, right),
+				),
+			);
+		return hash(
+			"sha256",
+			[
+				"compiler-source-files-v1\0",
+				compilerDependencyIdentity(sourceDirectory),
+				"entrypoint\0",
+				path.relative(sourceDirectory, entrypoint),
+				"\0",
+				...files.flatMap((file) => [
+					path.relative(sourceDirectory, file),
+					"\0",
+					hash("sha256", readFileSync(file), "hex"),
+					"\0",
+				]),
+			].join(""),
+			"hex",
+		);
+	}
 	return hashDirectoryTrees({
 		root: sourceDirectory,
 		directories: [sourceDirectory],
@@ -210,7 +276,7 @@ export function ensureCompilerWire(input: CompilerBakeInput): string {
 	const entrypoint = requireAbsolute("compiler source entrypoint", input.entrypoint);
 	return ensureSourceWire(
 		root,
-		compilerSourceHash(sourceDirectory, entrypoint),
+		compilerSourceHash(sourceDirectory, entrypoint, input.sourceFiles),
 		input.bake,
 	);
 }

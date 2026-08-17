@@ -40,6 +40,7 @@ import type {
 } from "./cli.ts";
 import { CommandProgress } from "./command-progress.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
+import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
@@ -605,6 +606,11 @@ function compileAndBuild(
 					kind: "source" as const,
 					sourceDirectory: evalCompiler.sourceDirectory,
 					entrypoint: evalCompiler.entrypoint,
+					sourceFiles: compilerEntrypointSourceFiles(
+						evalCompiler.sourceDirectory,
+						evalCompiler.entrypoint,
+						context.stripTypes,
+					),
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
 							stripTypes: context.stripTypes,
@@ -1263,6 +1269,11 @@ function executeProfiledTests(
 					kind: "source" as const,
 					sourceDirectory: evalCompiler.sourceDirectory,
 					entrypoint: evalCompiler.entrypoint,
+					sourceFiles: compilerEntrypointSourceFiles(
+						evalCompiler.sourceDirectory,
+						evalCompiler.entrypoint,
+						context.stripTypes,
+					),
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
 							stripTypes: context.stripTypes,

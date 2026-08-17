@@ -6,16 +6,24 @@
 import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import { compileEntrypointToBuffer } from "../../src/compile-program.ts";
+import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
 import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
+const compilerSourceDirectory = path.resolve("src");
+const compilerEntrypoint = path.resolve("src/eval-compiler-entry.mts");
 const compilerBake = {
 	kind: "source" as const,
-	sourceDirectory: path.resolve("src"),
-	entrypoint: path.resolve("src/eval-compiler-entry.mts"),
+	sourceDirectory: compilerSourceDirectory,
+	entrypoint: compilerEntrypoint,
+	sourceFiles: compilerEntrypointSourceFiles(
+		compilerSourceDirectory,
+		compilerEntrypoint,
+		stripTypesWithTypeScript,
+	),
 	bake: () =>
-		compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+		compileEntrypointToBuffer(compilerEntrypoint, {
 			stripTypes: stripTypesWithTypeScript,
 		}),
 };

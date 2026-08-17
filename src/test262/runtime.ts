@@ -23,6 +23,7 @@ import {
 } from "../build-flags.ts";
 import { touchCacheEntry } from "../cache-management.ts";
 import { compileEntrypointToBuffer } from "../compile-program.ts";
+import { compilerEntrypointSourceFiles } from "../compiler-bake.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
@@ -311,15 +312,22 @@ export function test262PrepareBuild() {
 		},
 		surface: { webPlatform: true, node: false },
 	});
+	const compilerSourceDirectory = path.resolve("src");
+	const compilerEntrypoint = path.resolve("src/eval-compiler-entry.mts");
 	const nativeContext = resolveNativeBuildContext({
 		toolchain,
 		features: buildDerivationFromConfig(config).features,
 		compilerBake: {
 			kind: "source",
-			sourceDirectory: path.resolve("src"),
-			entrypoint: path.resolve("src/eval-compiler-entry.mts"),
+			sourceDirectory: compilerSourceDirectory,
+			entrypoint: compilerEntrypoint,
+			sourceFiles: compilerEntrypointSourceFiles(
+				compilerSourceDirectory,
+				compilerEntrypoint,
+				stripTypesWithTypeScript,
+			),
 			bake: () =>
-				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+				compileEntrypointToBuffer(compilerEntrypoint, {
 					stripTypes: stripTypesWithTypeScript,
 				}),
 		},

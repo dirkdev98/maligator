@@ -23,6 +23,7 @@ import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
+import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
@@ -46,6 +47,29 @@ export const ENTROPY_MAIN = "runtime/entropy_test_main.c";
 export const SECRET_BUFFER_MAIN = "runtime/secret_buffer_test_main.c";
 /** Host entry with a one-worker, one-slot, deliberately-slow Argon2 pool. */
 export const CRYPTO_START_FAILURE_MAIN = "runtime/crypto_start_failure_test_main.c";
+
+const compilerSourceDirectory = path.resolve("src");
+const compilerEntrypoint = path.resolve("src/eval-compiler-entry.mts");
+let compilerSourceFiles: Array<string> | undefined;
+
+function defaultCompilerBake(): CompilerBakeInput {
+	// Harness-only edits must not rebake the eval compiler; key its actual import cone.
+	compilerSourceFiles ??= compilerEntrypointSourceFiles(
+		compilerSourceDirectory,
+		compilerEntrypoint,
+		stripTypesWithTypeScript,
+	);
+	return {
+		kind: "source",
+		sourceDirectory: compilerSourceDirectory,
+		entrypoint: compilerEntrypoint,
+		sourceFiles: compilerSourceFiles,
+		bake: () =>
+			compileEntrypointToBuffer(compilerEntrypoint, {
+				stripTypes: stripTypesWithTypeScript,
+			}),
+	};
+}
 
 /**
  * Collect at every safepoint + poison freed cells: GCs land while callbacks,
@@ -214,15 +238,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 	const context = resolveNativeBuildContext({
 		features: derivation.features,
 		environment: options.environment,
-		compilerBake: options.compilerBake ?? {
-			kind: "source",
-			sourceDirectory: path.resolve("src"),
-			entrypoint: path.resolve("src/eval-compiler-entry.mts"),
-			bake: () =>
-				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-					stripTypes: stripTypesWithTypeScript,
-				}),
-		},
+		compilerBake: options.compilerBake ?? defaultCompilerBake(),
 	});
 	return buildLocalBinary({
 		context,
