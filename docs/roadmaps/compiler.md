@@ -417,6 +417,14 @@ is general rather than a registry-shaped collection of special cases.
       joins, and bounded call results. Use it to version hot loops once and replace
       repeated region guards, static-key comparisons, and cache probes with direct
       known-slot access.
+  - [x] Land the first function-local record-Array region. Under locked primordial
+        authority, prove one fresh empty Array is filled by one single-entry,
+        single-backedge, canonical-exit counted loop whose exact `push` argument is
+        one shaped-record allocation, then consumed only by same-bound indexed
+        loops. Reject captures, escapes, conditional or early-exit fills, mixed
+        shapes, and dynamic or new-field uses. Carry emitter-only dense-element and
+        known-slot certificates into native code while retaining ordinary VM
+        instructions for mutable, interpreted, and rejected-proof execution.
 - [ ] Infer and bulk-construct the result shape of object rest/spread normalization
       when source shapes and excluded keys are bounded. Avoid building every
       normalized application record through the empty-object path while retaining a

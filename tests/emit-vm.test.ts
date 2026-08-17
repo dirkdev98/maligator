@@ -546,6 +546,101 @@ describe("native update-expression representation", () => {
 		expect(emit(source)).not.toContain("__exact_fresh_array_");
 	});
 
+	it("uses closed dense and own-slot proofs across record-Array loop regions", () => {
+		const source = `
+			function summarize() {
+				const rows = [];
+				for (let index = 0; index < 4; index++) {
+					rows.push({ x: index, y: index + 1 });
+				}
+				let total = 0;
+				for (let round = 0; round < 3; round++) {
+					for (let index = 0; index < 4; index++) {
+						const row = rows[index];
+						row.y = row.x + row.y;
+						total += row.y;
+					}
+				}
+				return total;
+			}
+			globalThis.summarize = summarize;
+		`;
+		const lockedOutput = emitLocked(source);
+		expect(lockedOutput).toMatch(
+			/MalArrayObject \*__exact_fresh_array_\d+ = mal_value_to_array_object/,
+		);
+		expect(lockedOutput).toMatch(
+			/MalObject \*__closed_record_\d+_o = mal_value_to_object\(r\d+\);/,
+		);
+		expect(lockedOutput).toMatch(/__closed_record_\d+_o->slots\[0\]/);
+		expect(lockedOutput).toMatch(/__closed_record_\d+_o->slots\[1\]/);
+		expect(lockedOutput).toMatch(/mal_vm_object_slot_store\(__closed_record_\d+_o, 1,/);
+		expect(emit(source)).not.toContain("__closed_record_");
+	});
+
+	it("keeps incomplete record-Array loop proofs on ordinary property paths", () => {
+		const escaped = emitLocked(`
+			let escaped;
+			function build() {
+				const rows = [];
+				for (let index = 0; index < 4; index++) rows.push({ x: index, y: index });
+				for (let index = 0; index < 4; index++) {
+					const row = rows[index];
+					escaped = row;
+					row.x = row.y;
+				}
+			}
+			globalThis.build = build;
+		`);
+		expect(escaped).not.toContain("__closed_record_");
+
+		const conditionalFill = emitLocked(`
+			function build() {
+				const rows = [];
+				for (let index = 0; index < 4; index++) {
+					if ((index & 1) === 0) rows.push({ x: index, y: index });
+				}
+				let total = 0;
+				for (let index = 0; index < 4; index++) total += rows[index].x;
+				return total;
+			}
+			globalThis.build = build;
+		`);
+		expect(conditionalFill).not.toContain("__closed_record_");
+
+		const earlyExit = emitLocked(`
+			function build() {
+				const rows = [];
+				for (let index = 0; index < 4; index++) {
+					rows.push({ x: index, y: index + 1 });
+					if (index === 2) break;
+				}
+				let total = 0;
+				for (let index = 0; index < 4; index++) {
+					total += rows[index].x;
+					total += rows[index].y;
+				}
+				return total;
+			}
+			globalThis.build = build;
+		`);
+		expect(earlyExit).not.toContain("__closed_record_");
+
+		const shapeMutation = emitLocked(`
+			function build() {
+				const rows = [];
+				for (let index = 0; index < 4; index++) rows.push({ x: index, y: index });
+				for (let index = 0; index < 4; index++) {
+					const row = rows[index];
+					row.extra = index;
+					row.x = row.y;
+				}
+			}
+			globalThis.build = build;
+		`);
+		expect(shapeMutation).not.toContain("__closed_record_");
+	});
+
 	it("pre-reserves a pristine canonical indexed fill without replacing its stores", () => {
 		const output = emit(
 			`"use strict"; function fill() { const array = []; for (let i = 0; i < 1000; i++) array[i] = i; return array; } globalThis.fill = fill;`,

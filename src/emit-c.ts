@@ -2108,6 +2108,8 @@ interface RegionAccess {
 	leadingIcIndex: number;
 	icIndices: Array<number>;
 	commit: boolean;
+	/** Exact own data slot licensed by a closed record-Array region. */
+	closedSlot?: number;
 }
 
 /**
@@ -3103,6 +3105,18 @@ function emitBody(
 	const inheritedLoadLoopTwinByBackedge = new Map(
 		inheritedLoadLoopTwins.map((twin) => [twin.backedgeIp, twin] as const),
 	);
+	const closedRecordAccessByIp = new Map<number, { regionId: number; slot: number }>();
+	for (const [regionId, region] of (fn.nativeClosedRecordArrayRegions ?? []).entries()) {
+		if (!vmGuardIsWorldInvariant(region.license.guard)) {
+			throw new Error("Closed record-Array region lacks a world-invariant license");
+		}
+		for (const access of region.accesses) {
+			if (closedRecordAccessByIp.has(access.ip)) {
+				throw new Error(`Overlapping closed record-Array access at ${access.ip}`);
+			}
+			closedRecordAccessByIp.set(access.ip, { regionId, slot: access.slot });
+		}
+	}
 
 	// Canonical Math calls arrive through the shared builtin-call fact path. The
 	// property Get and argument evaluation remain ordinary instructions; this only
@@ -3239,6 +3253,7 @@ function emitBody(
 			reg: number;
 			kind: "array" | "object";
 			ips: Array<number>;
+			closedRegionId?: number;
 		}
 		const runs: Array<Run> = [];
 		let cur: Run | null = null;
@@ -3267,11 +3282,17 @@ function emitBody(
 						? "array"
 						: "object";
 				const obj = instr.object;
-				if (cur !== null && cur.reg === obj && cur.kind === kind) {
+				const closedRegionId = closedRecordAccessByIp.get(ip)?.regionId;
+				if (
+					cur !== null &&
+					cur.reg === obj &&
+					cur.kind === kind &&
+					cur.closedRegionId === closedRegionId
+				) {
 					cur.ips.push(ip);
 				} else {
 					flush();
-					cur = { reg: obj, kind, ips: [ip] };
+					cur = { reg: obj, kind, ips: [ip], closedRegionId };
 				}
 			}
 			// The current access (if any) already read the live guard above; a redefinition
@@ -3292,10 +3313,11 @@ function emitBody(
 
 		let guardId = 0;
 		for (const run of runs) {
-			const name = `__rg${guardId++}`;
+			const name = `${run.closedRegionId === undefined ? "__rg" : "__closed_record_"}${guardId++}`;
 			// A ≥2-access object run consolidates onto ONE shape guard + a cached-slot array;
 			// arrays and single object accesses keep the per-access guarded form.
-			const consolidated = run.kind === "object" && run.ips.length >= 2;
+			const consolidated =
+				run.closedRegionId === undefined && run.kind === "object" && run.ips.length >= 2;
 			const icIndices = run.ips.map((ip) => {
 				const instruction = fn.instructions[ip]!;
 				if (
@@ -3309,6 +3331,7 @@ function emitBody(
 				return instruction.icIndex;
 			});
 			run.ips.forEach((ip, i) => {
+				const closed = closedRecordAccessByIp.get(ip);
 				const previousIp = run.ips[i - 1];
 				const revalidate =
 					consolidated &&
@@ -3327,6 +3350,7 @@ function emitBody(
 					leadingIcIndex: icIndices[0]!,
 					icIndices,
 					commit: consolidated && i === run.ips.length - 1,
+					closedSlot: closed?.slot,
 				});
 			});
 		}
@@ -4909,7 +4933,8 @@ function emitInstruction(
 			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
-				instruction.nativeExactFreshArrayAccess !== undefined
+				(instruction.nativeExactFreshArrayAccess !== undefined ||
+					instruction.nativeClosedRecordArrayAccess !== undefined)
 			) {
 				if (reps[instruction.key] !== "number") return null;
 				const array = `__exact_fresh_array_${ip}`;
@@ -5217,6 +5242,17 @@ function emitInstruction(
 				icIndices: [instruction.icIndex],
 				commit: false,
 			};
+			if (reg.closedSlot !== undefined) {
+				if (instruction.opcode !== "LOAD_PROPERTY_STATIC") return null;
+				return [
+					...(reg.declare
+						? [
+								`MalObject *${reg.name}_o = mal_value_to_object(${boxed(instruction.object)});`,
+							]
+						: []),
+					`r${instruction.dst} = ${reg.name}_o->slots[${reg.closedSlot}];`,
+				];
+			}
 			if (reg.kind === "array" && instruction.opcode === "LOAD_PROPERTY") {
 				const ordinary = [
 					...(reg.declare
@@ -5573,6 +5609,17 @@ function emitInstruction(
 				icIndices: [instruction.icIndex],
 				commit: false,
 			};
+			if (reg.closedSlot !== undefined) {
+				if (instruction.opcode !== "STORE_PROPERTY_STATIC") return null;
+				return [
+					...(reg.declare
+						? [
+								`MalObject *${reg.name}_o = mal_value_to_object(${boxed(instruction.object)});`,
+							]
+						: []),
+					`mal_vm_object_slot_store(${reg.name}_o, ${reg.closedSlot}, ${boxed(instruction.value)});`,
+				];
+			}
 			if (reg.kind === "array" && instruction.opcode === "STORE_PROPERTY") {
 				const ordinary = [
 					...(reg.declare

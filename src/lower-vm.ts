@@ -702,6 +702,25 @@ export interface VmFunction {
 	}>;
 
 	/**
+	 * EMITTER-ONLY: one private fresh Array filled by a canonical loop with exact
+	 * same-shape records, then read only by bounded indexed consumer loops. The
+	 * ordinary Array/property instructions remain the interpreter and rejected-
+	 * proof twin; native emission may use the complete dense/slot certificates.
+	 */
+	nativeClosedRecordArrayRegions?: ReadonlyArray<{
+		license: VmRegionLicense;
+		allocationIp: number;
+		producerObjectIp: number;
+		length: number;
+		elementLoadIps: ReadonlyArray<number>;
+		accesses: ReadonlyArray<{
+			ip: number;
+			kind: "load" | "store";
+			slot: number;
+		}>;
+	}>;
+
+	/**
 	 * SERIALIZED COMPILER METADATA: bounded numeric callback plans captured before
 	 * HOF lowering erases callback identity. The interpreter ignores this table;
 	 * native emission may consume only plans that pass wire validation.
@@ -1202,6 +1221,10 @@ export type VmInstruction =
 			};
 			nativeExactFreshArrayAccess?: {
 				allocationInstructionIndex: number;
+			};
+			/** EMITTER-ONLY: complete dense access in a closed record-Array region. */
+			nativeClosedRecordArrayAccess?: {
+				allocationIp: number;
 			};
 			nativeClosedGlobalTable?: {
 				baseIndex: number;
