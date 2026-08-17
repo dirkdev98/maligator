@@ -482,12 +482,32 @@ test("direct Math calls carry canonical numeric semantics", () => {
 	expect(
 		mathCalls.filter((call) => call.knownBuiltinCallExactProducerTwin !== undefined),
 	).toHaveLength(2);
+	const loweredMathCalls = lowerIrProgramToVmDefinition(ir).functions.flatMap((fn) =>
+		fn.instructions.filter(
+			(instruction) =>
+				instruction.opcode === "CALL" &&
+				instruction.guardedBuiltinCall?.operation.startsWith("Math."),
+		),
+	);
+	expect(
+		loweredMathCalls.filter(
+			(call) => call.opcode === "CALL" && call.nativeMathExactProducerTwin !== undefined,
+		),
+	).toHaveLength(2);
 });
 
 test("non-Math exact producer twins do not leak into native Math metadata", () => {
 	const ir = optimizedProgram(`Object.hasOwn({ value: 1 }, "value");`);
 	const lowered = lowerIrProgramToVmDefinition(ir);
-	expect(lowered.functions.every((fn) => fn.nativeMathCalls === undefined)).toBe(true);
+	expect(
+		lowered.functions.every((fn) =>
+			fn.instructions.every(
+				(instruction) =>
+					instruction.opcode !== "CALL" ||
+					instruction.nativeMathExactProducerTwin === undefined,
+			),
+		),
+	).toBe(true);
 });
 
 test("locked exact numeric Math calls erase their generic twins in IR", () => {

@@ -3203,8 +3203,10 @@ function emitBody(
 		}
 	}
 	const elidedLockedMathGenericTwinIps = new Set<number>();
-	for (const site of fn.nativeMathCalls ?? []) {
-		const call = fn.instructions[site.callIp];
+	for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
+		const call = fn.instructions[callIp];
+		const site = call?.opcode === "CALL" ? call.nativeMathExactProducerTwin : undefined;
+		if (site === undefined) continue;
 		const property = fn.instructions[site.propertyIp];
 		if (
 			call?.opcode !== "CALL" ||

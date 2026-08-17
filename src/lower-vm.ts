@@ -738,17 +738,6 @@ export interface VmFunction {
 		matchCodeUnit: number;
 	}>;
 
-	/**
-	 * EMITTER-ONLY: Math namespace/property producers retained as the interpreted
-	 * generic twin of a canonical numeric call. Native emission may erase them only
-	 * when locked identity and representation proofs select the no-fallback call.
-	 */
-	nativeMathCalls?: ReadonlyArray<{
-		receiverIp: number;
-		propertyIp: number;
-		callIp: number;
-	}>;
-
 	/** EMITTER-ONLY: activation-local exact no-reviver JSON.parse templates. */
 	nativeInvariantJsonParseCaches?: ReadonlyArray<{
 		callIp: number;
@@ -1126,6 +1115,15 @@ export type VmInstruction =
 			directCallTargetFunctionIndex?: number;
 			/** COMPILE-ONLY: canonical guarded intrinsic identity and fallback plan. */
 			guardedBuiltinCall?: VmGuardedBuiltinCall;
+			/**
+			 * COMPILE-ONLY: exact Math namespace/property producers owned by this call.
+			 * Native emission may erase them only after discharging this call's locked
+			 * identity and Number-representation obligations.
+			 */
+			nativeMathExactProducerTwin?: {
+				receiverIp: number;
+				propertyIp: number;
+			};
 			/** COMPILE-ONLY: append a proven stack record to virtual history. */
 			nativeCardinalityPush?: {
 				allocationInstructionIndex: number;
@@ -1933,7 +1931,7 @@ function lowerFunctionToVmFunction(
 	const pendingNativeMathCalls: Array<{
 		receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
 		property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-		call: Extract<IRInstruction, { type: "call" }>;
+		call: Extract<VmInstruction, { opcode: "CALL" }>;
 	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
@@ -2036,12 +2034,13 @@ function lowerFunctionToVmFunction(
 			}
 			if (
 				instruction.type === "call" &&
+				vmInstruction.opcode === "CALL" &&
 				instruction.knownBuiltinCall?.operation.startsWith("Math.") === true &&
 				instruction.knownBuiltinCallExactProducerTwin !== undefined
 			) {
 				pendingNativeMathCalls.push({
 					...instruction.knownBuiltinCallExactProducerTwin,
-					call: instruction,
+					call: vmInstruction,
 				});
 			}
 			if (
@@ -3336,15 +3335,18 @@ function lowerFunctionToVmFunction(
 			}
 		}
 	}
-	const nativeMathCalls = pendingNativeMathCalls.map((pending) => {
+	for (const pending of pendingNativeMathCalls) {
 		const receiverIp = instructionIndexByIrInstruction.get(pending.receiver);
 		const propertyIp = instructionIndexByIrInstruction.get(pending.property);
-		const callIp = instructionIndexByIrInstruction.get(pending.call);
-		if (receiverIp === undefined || propertyIp === undefined || callIp === undefined) {
+		if (
+			receiverIp === undefined ||
+			propertyIp === undefined ||
+			!instructions.includes(pending.call)
+		) {
 			throw new Error("Known builtin generic twin was removed before lowering");
 		}
-		return { receiverIp, propertyIp, callIp };
-	});
+		pending.call.nativeMathExactProducerTwin = { receiverIp, propertyIp };
+	}
 	// Classified length/legacy index reads form an entry prefix. Frame creation
 	// snapshots that prefix before parameter initialization and starts interpretation
 	// after it. Fused static reads retain arguments for their lazy missing-index path.
@@ -3404,7 +3406,6 @@ function lowerFunctionToVmFunction(
 			? compilerSiteIds
 			: undefined,
 		gcRootRegisters,
-		nativeMathCalls: nativeMathCalls.length > 0 ? nativeMathCalls : undefined,
 		regions: regions.length > 0 ? regions : undefined,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,

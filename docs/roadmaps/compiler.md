@@ -501,6 +501,11 @@ is general rather than a registry-shaped collection of special cases.
           the property/slice/Number corridor in final IR with complete def/use,
           canonical identity, disjoint ownership and ordinary/exceptional scope;
           preserve the retained calls as the fallback twin through MALW v54.
+  - [x] Reclassify exact Math namespace/property producer ownership as a local
+        lowered-call fact instead of a function-side certificate table. Keep the
+        shared region table for multi-operation ownership while letting the one
+        consuming call discharge locked identity and Number representation before
+        erasing its own generic producers.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish
