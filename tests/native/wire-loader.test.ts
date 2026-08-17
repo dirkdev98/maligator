@@ -538,6 +538,37 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads a nonempty RegExp iterator projection proof region payload", () => {
+		const entrypoint = path.join(directory, "regexp-iterator-projection-region.mjs");
+		writeFileSync(
+			entrypoint,
+			`function total(value, regexp) {
+				let sum = 0;
+				for (const match of value.matchAll(regexp)) sum += Number(match[1]);
+				return sum;
+			}
+			globalThis.result = total("1 2 3", /([0-9]+)/g);\n`,
+		);
+		const projectionDefinition = compileEntrypoint(entrypoint, {
+			stripTypes: stripTypesWithTypeScript,
+			buildConfig: resolveBuildConfig({}),
+		});
+		expect(
+			projectionDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
+					[],
+			),
+		).not.toHaveLength(0);
+		const wirePath = path.join(directory, "regexp-iterator-projection-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(projectionDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

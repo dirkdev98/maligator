@@ -2392,6 +2392,41 @@ function cloneInlinedRegion(
 				loads,
 			} as unknown as Extract<IRRegion, { kind: "regexp-exec-projection" }>;
 		}
+		case "regexp-iterator-projection": {
+			const doneBranch = mapInstruction(region.doneBranch);
+			const aliasMoves = region.aliasMoves.map((instruction) =>
+				mapInstruction(instruction),
+			);
+			const loads = region.loads.map((load) => ({
+				...load,
+				instruction: mapInstruction(load.instruction),
+				key: mapInstruction(load.key),
+				numberIntrinsic: mapInstruction(load.numberIntrinsic),
+				numberCall: mapInstruction(load.numberCall),
+			}));
+			if (
+				doneBranch === undefined ||
+				aliasMoves.some((instruction) => instruction === undefined) ||
+				loads.some(
+					(load) =>
+						load.instruction === undefined ||
+						load.key === undefined ||
+						load.numberIntrinsic === undefined ||
+						load.numberCall === undefined,
+				)
+			) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				doneBranch,
+				exitBlock: region.exitBlock + blockBase,
+				aliasMoves,
+				loads,
+			} as unknown as Extract<IRRegion, { kind: "regexp-iterator-projection" }>;
+		}
 		case "string-split-cursor": {
 			const property =
 				region.property === undefined ? undefined : mapInstruction(region.property);

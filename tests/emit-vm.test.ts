@@ -2152,6 +2152,80 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("carries IR-selected RegExp iterator projections through lowering and wire", () => {
+		const source = `globalThis.total = function total(value, regexp) {
+			let sum = 0;
+			for (const match of value.matchAll(regexp)) sum += Number(match[1]);
+			return sum;
+		};`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"regexp-iterator-projection-lowering.js",
+			parseScript(source, { strict: false }),
+		);
+		const lowered = compileSemanticProgramToVmDefinition(semantic);
+		const projections = lowered.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
+				[],
+		);
+		expect(projections).toHaveLength(1);
+		expect(projections[0]).toMatchObject({
+			kind: "regexp-iterator-projection",
+			representation: "regexp-iterator-capture-spans",
+			statefulEffect: "iterator-last-index-retained-step",
+			runtimeGuard: "exact-brand-next-realm-regexp",
+			license: {
+				genericTwin: "retained",
+				materialization: "on-demand",
+				guard: {
+					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					obligations: ["fallback", "materialize"],
+				},
+			},
+		});
+		expect(projections[0]!.controlFlow.exceptionalHandlerIps).not.toHaveLength(0);
+
+		const cached = deserializeVmDefinition(
+			serializeVmDefinition(lowered, { debugInfo: false }),
+		);
+		expect(
+			cached.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
+					[],
+			),
+		).toEqual(projections);
+		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+			"mal_regexp_try_exact_iterator_capture_projection(vm,",
+		);
+
+		const functionIndex = lowered.functions.findIndex((fn) =>
+			fn.regions?.some((region) => region.kind === "regexp-iterator-projection"),
+		);
+		const owner = lowered.functions[functionIndex]!;
+		const regionIndex = owner.regions!.findIndex(
+			(region) => region.kind === "regexp-iterator-projection",
+		);
+		const region = owner.regions![regionIndex]!;
+		if (region.kind !== "regexp-iterator-projection") {
+			throw new Error("missing RegExp iterator projection region");
+		}
+		const malformed: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, {
+					...region,
+					runtimeGuard: "broken" as never,
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid RegExp iterator projection region/,
+		);
+	});
+
 	it("carries IR-selected split cursor licenses through lowering", () => {
 		const source = `globalThis.sum = function sum(value, separator) {
 			const parts = value.split(separator);

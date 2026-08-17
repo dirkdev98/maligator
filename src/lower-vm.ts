@@ -463,6 +463,31 @@ export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
 	}>;
 };
 
+export type VmRegExpIteratorProjectionRegion = VmRegionEnvelope<
+	"regexp-iterator-projection",
+	"regexp-iterator-capture-spans",
+	"on-demand"
+> & {
+	readonly stepIp: number;
+	readonly doneBranchIp: number;
+	readonly exitIp: number;
+	readonly iterator: number;
+	readonly next: number;
+	readonly value: number;
+	readonly done: number;
+	readonly aliasMoveIps: ReadonlyArray<number>;
+	readonly statefulEffect: "iterator-last-index-retained-step";
+	readonly runtimeGuard: "exact-brand-next-realm-regexp";
+	readonly loads: ReadonlyArray<{
+		readonly ip: number;
+		readonly keyIp: number;
+		readonly captureIndex: number;
+		readonly dst: number;
+		readonly numberIntrinsicIp: number;
+		readonly numberCallIp: number;
+	}>;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -487,6 +512,7 @@ export type VmNumericHofRegion = VmRegionEnvelope<
 export type VmRegion =
 	| VmClosedRecordArrayRegion
 	| VmRegExpExecProjectionRegion
+	| VmRegExpIteratorProjectionRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
@@ -705,21 +731,6 @@ export interface VmFunction {
 		receiverIp: number;
 		propertyIp: number;
 		callIp: number;
-	}>;
-
-	/** EMITTER-ONLY: closed exact RegExp iterator capture spans. */
-	nativeRegExpIteratorProjections?: ReadonlyArray<{
-		stepIp: number;
-		iterator: number;
-		next: number;
-		value: number;
-		done: number;
-		loads: ReadonlyArray<{
-			ip: number;
-			captureIndex: number;
-			dst: number;
-			numberCallIp: number;
-		}>;
 	}>;
 
 	/** EMITTER-ONLY: exact builtin String slice immediately consumed by Number. */
@@ -2192,6 +2203,9 @@ function lowerFunctionToVmFunction(
 		const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((block) =>
 			blockStartIps.get(block),
 		);
+		const exceptionalHandlerIps = region.controlFlow.exceptionalBlocks.map((block) =>
+			blockStartIps.get(block),
+		);
 		if (
 			guard === undefined ||
 			region.license.genericTwin !== "retained" ||
@@ -2201,7 +2215,9 @@ function lowerFunctionToVmFunction(
 			region.controlFlow.ordinaryBlocks.length === 0 ||
 			new Set(region.controlFlow.ordinaryBlocks).size !==
 				region.controlFlow.ordinaryBlocks.length ||
-			region.controlFlow.exceptionalBlocks.length !== 0 ||
+			exceptionalHandlerIps.some((ip) => ip === undefined) ||
+			(region.kind !== "regexp-iterator-projection" &&
+				region.controlFlow.exceptionalBlocks.length !== 0) ||
 			!Number.isSafeInteger(region.cost.score) ||
 			region.cost.score <= 0 ||
 			region.cost.score > 0xffff_ffff ||
@@ -2210,18 +2226,48 @@ function lowerFunctionToVmFunction(
 			region.cost.metadataOperations > 96 ||
 			region.claimedInstructions.length === 0 ||
 			region.claimedInstructions.length > 96 ||
-			region.controlFlow.ordinaryBlocks.length > 64
+			region.controlFlow.ordinaryBlocks.length > 64 ||
+			region.controlFlow.exceptionalBlocks.length > 64
 		) {
 			continue;
 		}
 		const resolvedAnchors = anchors as Array<number>;
 		const resolvedClaimedIps = claimedIps as Array<number>;
 		const resolvedOrdinaryBlockIps = ordinaryBlockIps as Array<number>;
+		const resolvedExceptionalHandlerIps = exceptionalHandlerIps as Array<number>;
 		if (
 			new Set(resolvedAnchors).size !== resolvedAnchors.length ||
 			new Set(resolvedClaimedIps).size !== resolvedClaimedIps.length ||
 			new Set(resolvedOrdinaryBlockIps).size !== resolvedOrdinaryBlockIps.length ||
+			new Set(resolvedExceptionalHandlerIps).size !==
+				resolvedExceptionalHandlerIps.length ||
 			resolvedOrdinaryBlockIps.some((ip) => ip < 0 || ip >= instructions.length) ||
+			resolvedExceptionalHandlerIps.some(
+				(ip) =>
+					ip < 0 ||
+					ip >= instructions.length ||
+					resolvedOrdinaryBlockIps.includes(ip) ||
+					!handlers.some((handler) => handler.handlerIp === ip),
+			) ||
+			resolvedClaimedIps.some((ip) => {
+				const active = handlers
+					.filter((handler) => ip >= handler.startIp && ip < handler.endIp)
+					.map((handler) => handler.handlerIp);
+				return active.some(
+					(handlerIp) => !resolvedExceptionalHandlerIps.includes(handlerIp),
+				);
+			}) ||
+			resolvedExceptionalHandlerIps.some((handlerIp) =>
+				resolvedClaimedIps.every(
+					(ip) =>
+						!handlers.some(
+							(handler) =>
+								handler.handlerIp === handlerIp &&
+								ip >= handler.startIp &&
+								ip < handler.endIp,
+						),
+				),
+			) ||
 			resolvedClaimedIps.some((ip) => claimedRegionInstructions.has(ip))
 		) {
 			continue;
@@ -2605,6 +2651,140 @@ function lowerFunctionToVmFunction(
 					aliasMoveIps: resolvedAliasMoveIps,
 					nullChecks: resolvedNullChecks,
 					lastIndexEffect: "retained-call-twin",
+					loads: resolvedLoads,
+				});
+				break;
+			}
+			case "regexp-iterator-projection": {
+				const stepIp = resolvedAnchors[0];
+				const doneBranchIp = resolvedAnchors[1];
+				const firstLoadIp = resolvedAnchors[2];
+				const exitIp = blockStartIps.get(region.exitBlock);
+				const aliasMoveIps = region.aliasMoves.map((move) =>
+					instructionIndexByIrInstruction.get(move),
+				);
+				const loads = region.loads.map((load) => ({
+					ip: instructionIndexByIrInstruction.get(load.instruction),
+					keyIp: instructionIndexByIrInstruction.get(load.key),
+					captureIndex: load.captureIndex,
+					dst: load.instruction.registers[0],
+					numberIntrinsicIp: instructionIndexByIrInstruction.get(load.numberIntrinsic),
+					numberCallIp: instructionIndexByIrInstruction.get(load.numberCall),
+				}));
+				if (
+					region.representation !== "regexp-iterator-capture-spans" ||
+					region.license.materialization !== "on-demand" ||
+					!guard.obligations.includes("fallback") ||
+					!guard.obligations.includes("materialize") ||
+					region.statefulEffect !== "iterator-last-index-retained-step" ||
+					region.runtimeGuard !== "exact-brand-next-realm-regexp" ||
+					resolvedAnchors.length !== 3 ||
+					exitIp === undefined ||
+					aliasMoveIps.some((ip) => ip === undefined) ||
+					loads.some(
+						(load) =>
+							load.ip === undefined ||
+							load.keyIp === undefined ||
+							load.numberIntrinsicIp === undefined ||
+							load.numberCallIp === undefined,
+					)
+				) {
+					continue;
+				}
+				const resolvedAliasMoveIps = aliasMoveIps as Array<number>;
+				const resolvedLoads = loads as Array<
+					VmRegExpIteratorProjectionRegion["loads"][number]
+				>;
+				const step = instructions[stepIp!];
+				const doneBranch = instructions[doneBranchIp!];
+				const aliases = new Set<number>([
+					step?.opcode === "ITERATOR_STEP" ? step.valueDst : -1,
+				]);
+				let operationsValid =
+					step?.opcode === "ITERATOR_STEP" &&
+					doneBranch?.opcode === "JUMP_IF" &&
+					doneBranchIp === stepIp! + 1 &&
+					doneBranch.cond === step.doneDst &&
+					doneBranch.targetIp === exitIp;
+				for (const aliasIp of resolvedAliasMoveIps) {
+					const move = instructions[aliasIp];
+					if (move?.opcode !== "MOVE" || !aliases.has(move.src)) {
+						operationsValid = false;
+						break;
+					}
+					aliases.add(move.dst);
+				}
+				for (const load of resolvedLoads) {
+					const capture = instructions[load.ip];
+					const key = instructions[load.keyIp];
+					const intrinsic = instructions[load.numberIntrinsicIp];
+					const numberCall = instructions[load.numberCallIp];
+					const argument =
+						numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+							? decodeVmValueOperand(numberCall.arguments[0])
+							: undefined;
+					operationsValid &&=
+						capture?.opcode === "LOAD_PROPERTY" &&
+						aliases.has(capture.object) &&
+						capture.dst === load.dst &&
+						key?.opcode === "CREATE_NUMBER" &&
+						key.dst === capture.key &&
+						key.value === load.captureIndex &&
+						Number.isInteger(load.captureIndex) &&
+						load.captureIndex > 0 &&
+						load.captureIndex <= 0xffff &&
+						intrinsic?.opcode === "LOAD_INTRINSIC" &&
+						intrinsic.intrinsic === "Number" &&
+						numberCall?.opcode === "CALL" &&
+						numberCall.callee === intrinsic.dst &&
+						numberCall.arguments.length === 1 &&
+						argument?.kind === "register" &&
+						argument.register === load.dst;
+				}
+				const payloadIps = new Set<number>([stepIp!, doneBranchIp!]);
+				for (const ip of resolvedAliasMoveIps) payloadIps.add(ip);
+				for (const load of resolvedLoads) {
+					payloadIps.add(load.ip);
+					payloadIps.add(load.keyIp);
+					payloadIps.add(load.numberIntrinsicIp);
+					payloadIps.add(load.numberCallIp);
+				}
+				if (
+					!operationsValid ||
+					step?.opcode !== "ITERATOR_STEP" ||
+					firstLoadIp !== resolvedLoads[0]?.ip ||
+					resolvedLoads.length === 0 ||
+					resolvedLoads.length > 8 ||
+					new Set(resolvedLoads.map((load) => load.captureIndex)).size !==
+						resolvedLoads.length ||
+					region.cost.metadataOperations !== payloadIps.size ||
+					payloadIps.size !== resolvedClaimedIps.length ||
+					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
+				) {
+					continue;
+				}
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "regexp-iterator-projection",
+					license: { guard, genericTwin: "retained", materialization: "on-demand" },
+					representation: "regexp-iterator-capture-spans",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: resolvedOrdinaryBlockIps,
+						exceptionalHandlerIps: resolvedExceptionalHandlerIps,
+					},
+					cost: region.cost,
+					stepIp: stepIp!,
+					doneBranchIp: doneBranchIp!,
+					exitIp,
+					iterator: step.iterator,
+					next: step.next,
+					value: step.valueDst,
+					done: step.doneDst,
+					aliasMoveIps: resolvedAliasMoveIps,
+					statefulEffect: "iterator-last-index-retained-step",
+					runtimeGuard: "exact-brand-next-realm-regexp",
 					loads: resolvedLoads,
 				});
 				break;

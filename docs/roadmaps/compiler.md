@@ -490,9 +490,12 @@ is general rather than a registry-shaped collection of special cases.
           loop, register definition/use and exception-scope analyses. Make the
           split-result alias an explicit claimed anchor through MALW v50 so a stale
           or redirected move invalidates the complete certificate.
-    - [ ] Move RegExp exec and iterator capture projections into the common table;
+    - [x] Move RegExp exec and iterator capture projections into the common table;
           make their stateful `lastIndex`, capture-consumer and null-result proofs
           explicit before removing the remaining emitter-only projection tables.
+          MALW v52 persists exec capture consumers and the retained stateful call;
+          v53 adds iterator brand/next/Realm guard obligations plus explicit handler
+          scope for the retained iterator-step/materialization twin.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

@@ -11,6 +11,7 @@ import type {
 	IntermediateProgram,
 	IRInstruction,
 	IRRegExpExecProjectionRegion,
+	IRRegExpIteratorProjectionRegion,
 } from "./ir.ts";
 
 const MAX_REGIONS = 8;
@@ -423,6 +424,207 @@ export function annotateRegExpExecProjectionRegions(
 					nullChecks,
 					...(lockedLiteral === undefined ? {} : { lockedLiteral }),
 					lastIndexEffect: "retained-call-twin",
+					loads,
+				};
+				fn.regions = [...(fn.regions ?? []), region];
+				for (const candidate of claimedInstructions) occupied.add(candidate);
+				count++;
+			}
+		}
+	}
+	return count;
+}
+
+/**
+ * Keep disposable RegExp String Iterator matches virtual when every value use is
+ * a constant capture passed directly to Number. The exact runtime helper owns
+ * brand/next/Realm/RegExp validation and the ordinary iterator step remains the
+ * on-demand materialization path.
+ */
+export function annotateRegExpIteratorProjectionRegions(
+	program: IntermediateProgram,
+): number {
+	let count = 0;
+	for (const fn of program.functions) {
+		const retained = (fn.regions ?? []).filter(
+			(region) => region.kind !== "regexp-iterator-projection",
+		);
+		fn.regions = retained.length > 0 ? retained : undefined;
+		if (retained.length >= MAX_REGIONS) continue;
+		const occupied = new Set(
+			retained.flatMap((region) => [...region.claimedInstructions]),
+		);
+		const index = buildIRRegisterIndex(fn, { locations: true });
+		const definitions = index.uniqueDefinitions;
+		const locations = index.locations!;
+		const cfg = buildIROrdinaryControlFlow(fn);
+		const exceptionHandlers = buildIRExceptionHandlers(fn);
+		const uses = (register: number) => index.uses.get(register) ?? [];
+
+		for (const block of fn.blocks) {
+			for (
+				let instructionIndex = 0;
+				instructionIndex < block.instructions.length;
+				instructionIndex++
+			) {
+				if ((fn.regions?.length ?? 0) >= MAX_REGIONS) break;
+				const step = block.instructions[instructionIndex]!;
+				const doneBranch = block.instructions[instructionIndex + 1];
+				if (
+					step.type !== "iteratorStep" ||
+					doneBranch?.type !== "jumpIf" ||
+					doneBranch.registers[0] !== step.registers[1] ||
+					doneBranch.blocks.length !== 1
+				) {
+					continue;
+				}
+				const exitBlock = doneBranch.blocks[0];
+				if (
+					exitBlock < 0 ||
+					exitBlock >= fn.blocks.length ||
+					exitBlock === locations.get(step)?.blockIndex ||
+					!cfg.reachable.has(exitBlock)
+				) {
+					continue;
+				}
+
+				const aliases = new Set<number>([step.registers[0]]);
+				const pendingAliases = [step.registers[0]];
+				const aliasMoves: Array<Extract<IRInstruction, { type: "move" }>> = [];
+				const loads: Array<IRRegExpIteratorProjectionRegion["loads"][number]> = [];
+				const captureIndices = new Set<number>();
+				let safe = true;
+				while (pendingAliases.length > 0 && safe) {
+					const alias = pendingAliases.pop()!;
+					for (const use of uses(alias)) {
+						const consumer = use.instruction;
+						if (
+							consumer.type === "move" &&
+							use.position === 1 &&
+							definitions.get(consumer.registers[0]) === consumer
+						) {
+							if (!aliases.has(consumer.registers[0])) {
+								aliases.add(consumer.registers[0]);
+								pendingAliases.push(consumer.registers[0]);
+								aliasMoves.push(consumer);
+							}
+							continue;
+						}
+						if (consumer.type !== "loadProperty" || use.position !== 1) {
+							safe = false;
+							break;
+						}
+						const key = definitions.get(consumer.registers[2]);
+						const captureUses = index.uses.get(consumer.registers[0]) ?? [];
+						const numberUse = captureUses[0];
+						const numberCall = numberUse?.instruction;
+						const numberIntrinsic =
+							numberCall?.type === "call"
+								? definitions.get(numberCall.registers[1])
+								: undefined;
+						if (
+							key?.type !== "createNumber" ||
+							!Number.isInteger(key.value) ||
+							key.value <= 0 ||
+							key.value > 0xffff ||
+							captureIndices.has(key.value) ||
+							captureUses.length !== 1 ||
+							numberUse?.position !== 3 ||
+							numberCall?.type !== "call" ||
+							numberCall.registers.length !== 4 ||
+							numberCall.registers[3] !== consumer.registers[0] ||
+							numberIntrinsic?.type !== "loadIntrinsic" ||
+							numberIntrinsic.intrinsic !== "Number" ||
+							!irInstructionDominates(cfg, locations, step, consumer) ||
+							!irInstructionDominates(cfg, locations, key, consumer) ||
+							!irInstructionDominates(cfg, locations, numberIntrinsic, numberCall)
+						) {
+							safe = false;
+							break;
+						}
+						captureIndices.add(key.value);
+						loads.push({
+							instruction: consumer,
+							key,
+							captureIndex: key.value,
+							numberIntrinsic,
+							numberCall,
+						});
+					}
+				}
+				if (!safe || loads.length === 0 || loads.length > 8) continue;
+
+				const guard = compilerGuardPlan(
+					[program.facts.protectors.get("watched-methods")],
+					[
+						{
+							kind: "fallback",
+							id: `regexp-iterator-projection:${fn.functionIndex}:${instructionIndex}`,
+						},
+						{
+							kind: "materialize",
+							id: `regexp-iterator-projection:${fn.functionIndex}:${instructionIndex}`,
+						},
+					],
+				);
+				if (
+					guard === undefined ||
+					!guard.obligations.some((obligation) => obligation.kind === "fallback")
+				) {
+					continue;
+				}
+				const claimed = new Set<IRInstruction>([step, doneBranch]);
+				for (const move of aliasMoves) claimed.add(move);
+				for (const load of loads) {
+					claimed.add(load.key);
+					claimed.add(load.instruction);
+					claimed.add(load.numberIntrinsic);
+					claimed.add(load.numberCall);
+				}
+				const claimedInstructions = [...claimed];
+				if (
+					claimedInstructions.length > 96 ||
+					claimedInstructions.some(
+						(candidate) =>
+							occupied.has(candidate) || locations.get(candidate) === undefined,
+					)
+				) {
+					continue;
+				}
+				const ordinaryBlocks = [
+					...new Set(
+						claimedInstructions.map((candidate) => locations.get(candidate)!.blockIndex),
+					),
+				].sort((left, right) => left - right);
+				const exceptionalBlocks = [
+					...new Set(
+						claimedInstructions.flatMap((candidate) => {
+							const location = locations.get(candidate)!;
+							const handler =
+								exceptionHandlers[location.blockIndex]?.[location.instructionIndex] ??
+								null;
+							return handler === null ? [] : [handler];
+						}),
+					),
+				].sort((left, right) => left - right);
+				if (exceptionalBlocks.some((handler) => ordinaryBlocks.includes(handler)))
+					continue;
+				const region: IRRegExpIteratorProjectionRegion = {
+					kind: "regexp-iterator-projection",
+					license: { guard, genericTwin: "retained", materialization: "on-demand" },
+					representation: "regexp-iterator-capture-spans",
+					anchors: [step, doneBranch, loads[0]!.instruction],
+					claimedInstructions,
+					controlFlow: { ordinaryBlocks, exceptionalBlocks },
+					cost: {
+						score: loads.length * 16,
+						metadataOperations: claimedInstructions.length,
+					},
+					doneBranch,
+					exitBlock,
+					aliasMoves,
+					statefulEffect: "iterator-last-index-retained-step",
+					runtimeGuard: "exact-brand-next-realm-regexp",
 					loads,
 				};
 				fn.regions = [...(fn.regions ?? []), region];

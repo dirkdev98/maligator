@@ -46,7 +46,10 @@ import {
 	irBlockCanReach,
 	irInstructionDominates,
 } from "./ir-control-flow.ts";
-import { annotateRegExpExecProjectionRegions } from "./ir-regexp-regions.ts";
+import {
+	annotateRegExpExecProjectionRegions,
+	annotateRegExpIteratorProjectionRegions,
+} from "./ir-regexp-regions.ts";
 import {
 	buildIRRegisterIndex,
 	definedRegisters,
@@ -1637,6 +1640,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateRegExpExecProjectionRegions(program);
 		if (residualFeatures.call && residualFeatures.property)
+			annotateRegExpIteratorProjectionRegions(program);
+		if (residualFeatures.call && residualFeatures.property)
 			annotateNumericHofRegions(program);
 		if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
 			annotateClosedRecordArrayRegions(program);
@@ -1793,6 +1798,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-regexp-exec-projections",
 			annotateRegExpExecProjectionRegions,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-regexp-iterator-projections",
+			annotateRegExpIteratorProjectionRegions,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

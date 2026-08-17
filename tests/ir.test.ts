@@ -214,6 +214,47 @@ test("stores stateful RegExp.exec capture proofs in IR and drops stale anchors",
 	).toHaveLength(0);
 });
 
+test("stores RegExp iterator capture proofs with explicit exceptional scope", () => {
+	const program = compileScript(`
+		function total(value, regexp) {
+			let sum = 0;
+			for (const match of value.matchAll(regexp)) sum += Number(match[1]);
+			return sum;
+		}
+		globalThis.total = total;
+	`);
+	executeIROptimizations(program);
+	const total = functionNamed(program, "total");
+	const region = total.regions?.find(
+		(candidate) => candidate.kind === "regexp-iterator-projection",
+	);
+	expect(region).toBeDefined();
+	if (region?.kind !== "regexp-iterator-projection") {
+		throw new Error("missing RegExp iterator projection region");
+	}
+	expect(region.statefulEffect).toBe("iterator-last-index-retained-step");
+	expect(region.runtimeGuard).toBe("exact-brand-next-realm-regexp");
+	expect(region.loads).toHaveLength(1);
+	expect(region.controlFlow.exceptionalBlocks).not.toHaveLength(0);
+	expect(
+		region.controlFlow.exceptionalBlocks.some((block) =>
+			region.controlFlow.ordinaryBlocks.includes(block),
+		),
+	).toBe(false);
+
+	const staleAnchor = region.anchors[2];
+	const owner = total.blocks.find((block) => block.instructions.includes(staleAnchor));
+	expect(owner).toBeDefined();
+	owner!.instructions[owner!.instructions.indexOf(staleAnchor)] = { ...staleAnchor };
+	allocateRegisters(program);
+	const lowered = lowerIrProgramToVmDefinition(program).functions[total.functionIndex]!;
+	expect(
+		lowered.regions?.filter(
+			(candidate) => candidate.kind === "regexp-iterator-projection",
+		) ?? [],
+	).toHaveLength(0);
+});
+
 test("rejects split projection regions protected by an exception handler", () => {
 	const program = compileScript(`
 		function project(value) {

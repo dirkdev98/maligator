@@ -36,8 +36,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 52 to move RegExp.exec capture projections into the tagged region table.
-export const WIRE_VERSION = 52;
+// Bumped to 53 to move RegExp iterator projections into the tagged region table.
+export const WIRE_VERSION = 53;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -742,6 +742,36 @@ function regexpExecProjectionGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function regexpIteratorProjectionGuardMasks(
+	license: Extract<VmRegion, { kind: "regexp-iterator-projection" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else {
+			throw new RangeError(
+				"serialize-vm: unsupported RegExp iterator projection dependency",
+			);
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "on-demand" ||
+		(dependencyMask !== 1 && dependencyMask !== 4) ||
+		obligationMask !== 3
+	) {
+		throw new RangeError("serialize-vm: invalid RegExp iterator projection guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1218,7 +1248,9 @@ export function serializeVmDefinition(
 							? 3
 							: region.kind === "string-split-projection"
 								? 4
-								: 5;
+								: region.kind === "regexp-exec-projection"
+									? 5
+									: 6;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1235,7 +1267,9 @@ export function serializeVmDefinition(
 							? numericHofGuardMasks(region.license)
 							: region.kind === "string-split-projection"
 								? stringSplitProjectionGuardMasks(region.license)
-								: regexpExecProjectionGuardMasks(region.license);
+								: region.kind === "regexp-exec-projection"
+									? regexpExecProjectionGuardMasks(region.license)
+									: regexpIteratorProjectionGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1372,6 +1406,27 @@ export function serializeVmDefinition(
 							w.i32Array([...consumer.resultMoveIps]);
 							w.i32(consumer.lengthPropertyIp);
 						}
+					}
+					break;
+				case "regexp-iterator-projection":
+					w.i32(region.stepIp);
+					w.i32(region.doneBranchIp);
+					w.i32(region.exitIp);
+					w.i32(region.iterator);
+					w.i32(region.next);
+					w.i32(region.value);
+					w.i32(region.done);
+					w.i32Array([...region.aliasMoveIps]);
+					w.u8(region.statefulEffect === "iterator-last-index-retained-step" ? 1 : 0);
+					w.u8(region.runtimeGuard === "exact-brand-next-realm-regexp" ? 1 : 0);
+					w.u32(region.loads.length);
+					for (const load of region.loads) {
+						w.i32(load.ip);
+						w.i32(load.keyIp);
+						w.i32(load.captureIndex);
+						w.i32(load.dst);
+						w.i32(load.numberIntrinsicIp);
+						w.i32(load.numberCallIp);
 					}
 					break;
 			}
@@ -1688,7 +1743,17 @@ function validateRegionEnvelope(
 		new Set(region.controlFlow.ordinaryBlockIps).size !==
 			region.controlFlow.ordinaryBlockIps.length ||
 		region.controlFlow.ordinaryBlockIps.some((ip) => !instructionIpValid(ip)) ||
-		region.controlFlow.exceptionalHandlerIps.length !== 0 ||
+		region.controlFlow.exceptionalHandlerIps.length > MAX_REGION_ORDINARY_BLOCKS ||
+		new Set(region.controlFlow.exceptionalHandlerIps).size !==
+			region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some(
+			(ip) =>
+				!instructionIpValid(ip) ||
+				region.controlFlow.ordinaryBlockIps.includes(ip) ||
+				!fn.handlers.some((handler) => handler.handlerIp === ip),
+		) ||
+		(region.kind !== "regexp-iterator-projection" &&
+			region.controlFlow.exceptionalHandlerIps.length !== 0) ||
 		!Number.isSafeInteger(region.cost.score) ||
 		region.cost.score <= 0 ||
 		region.cost.score > 0xffff_ffff ||
@@ -1720,6 +1785,9 @@ function validateRegion(
 			break;
 		case "regexp-exec-projection":
 			validateRegExpExecProjectionRegion(fn, region, stringConstants);
+			break;
+		case "regexp-iterator-projection":
+			validateRegExpIteratorProjectionRegion(fn, region);
 			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
@@ -1887,6 +1955,100 @@ function validateRegExpExecProjectionRegion(
 		region.claimedIps.some((ip) => !payload.has(ip))
 	) {
 		throw new RangeError("serialize-vm: invalid RegExp.exec projection region");
+	}
+}
+
+function validateRegExpIteratorProjectionRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "regexp-iterator-projection" }>,
+): void {
+	regexpIteratorProjectionGuardMasks(region.license);
+	const step = fn.instructions[region.stepIp];
+	const doneBranch = fn.instructions[region.doneBranchIp];
+	const aliases = new Set<number>([
+		step?.opcode === "ITERATOR_STEP" ? step.valueDst : -1,
+	]);
+	let valid =
+		region.representation === "regexp-iterator-capture-spans" &&
+		region.statefulEffect === "iterator-last-index-retained-step" &&
+		region.runtimeGuard === "exact-brand-next-realm-regexp" &&
+		region.anchors.length === 3 &&
+		region.anchors[0] === region.stepIp &&
+		region.anchors[1] === region.doneBranchIp &&
+		region.anchors[2] === region.loads[0]?.ip &&
+		step?.opcode === "ITERATOR_STEP" &&
+		doneBranch?.opcode === "JUMP_IF" &&
+		region.doneBranchIp === region.stepIp + 1 &&
+		doneBranch.cond === step.doneDst &&
+		doneBranch.targetIp === region.exitIp &&
+		region.iterator === step.iterator &&
+		region.next === step.next &&
+		region.value === step.valueDst &&
+		region.done === step.doneDst &&
+		region.loads.length > 0 &&
+		region.loads.length <= 8 &&
+		region.controlFlow.exceptionalHandlerIps.length > 0;
+	for (const ip of region.aliasMoveIps) {
+		const move = fn.instructions[ip];
+		if (move?.opcode !== "MOVE" || !aliases.has(move.src)) valid = false;
+		else aliases.add(move.dst);
+	}
+	const payload = new Set<number>([region.stepIp, region.doneBranchIp]);
+	for (const ip of region.aliasMoveIps) payload.add(ip);
+	const indices = new Set<number>();
+	for (const load of region.loads) {
+		const capture = fn.instructions[load.ip];
+		const key = fn.instructions[load.keyIp];
+		const intrinsic = fn.instructions[load.numberIntrinsicIp];
+		const call = fn.instructions[load.numberCallIp];
+		const argument =
+			call?.opcode === "CALL" && call.arguments[0] !== undefined
+				? decodeVmValueOperand(call.arguments[0])
+				: undefined;
+		if (
+			capture?.opcode !== "LOAD_PROPERTY" ||
+			!aliases.has(capture.object) ||
+			capture.dst !== load.dst ||
+			key?.opcode !== "CREATE_NUMBER" ||
+			key.dst !== capture.key ||
+			key.value !== load.captureIndex ||
+			!Number.isInteger(load.captureIndex) ||
+			load.captureIndex <= 0 ||
+			load.captureIndex > 0xffff ||
+			indices.has(load.captureIndex) ||
+			intrinsic?.opcode !== "LOAD_INTRINSIC" ||
+			intrinsic.intrinsic !== "Number" ||
+			call?.opcode !== "CALL" ||
+			call.callee !== intrinsic.dst ||
+			call.arguments.length !== 1 ||
+			argument?.kind !== "register" ||
+			argument.register !== load.dst
+		) {
+			valid = false;
+		}
+		indices.add(load.captureIndex);
+		payload.add(load.ip);
+		payload.add(load.keyIp);
+		payload.add(load.numberIntrinsicIp);
+		payload.add(load.numberCallIp);
+	}
+	const activeHandlers = new Set<number>();
+	for (const ip of region.claimedIps) {
+		for (const handler of fn.handlers) {
+			if (ip >= handler.startIp && ip < handler.endIp) {
+				activeHandlers.add(handler.handlerIp);
+			}
+		}
+	}
+	if (
+		!valid ||
+		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip)) ||
+		region.cost.metadataOperations !== payload.size ||
+		payload.size !== region.claimedIps.length ||
+		region.claimedIps.some((ip) => !payload.has(ip))
+	) {
+		throw new RangeError("serialize-vm: invalid RegExp iterator projection region");
 	}
 }
 
@@ -3267,13 +3429,20 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 2 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 3;
+				const regexpIteratorProjectionContract =
+					kindTag === 6 &&
+					representationTag === 6 &&
+					materializationTag === 1 &&
+					(dependencyMask === 1 || dependencyMask === 4) &&
+					obligationMask === 3;
 				if (
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
 						!numericHofContract &&
 						!stringSplitProjectionContract &&
-						!regexpExecProjectionContract)
+						!regexpExecProjectionContract &&
+						!regexpIteratorProjectionContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -3550,7 +3719,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						aliasMoveIps,
 						loads,
 					};
-				} else {
+				} else if (kindTag === 5) {
 					const propertyIp = r.i32();
 					const callIp = r.i32();
 					const lockedFreshLiteral = r.u8();
@@ -3662,6 +3831,66 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						aliasMoveIps,
 						nullChecks,
 						lastIndexEffect: "retained-call-twin",
+						loads,
+					};
+				} else {
+					const stepIp = r.i32();
+					const doneBranchIp = r.i32();
+					const exitIp = r.i32();
+					const iterator = r.i32();
+					const next = r.i32();
+					const value = r.i32();
+					const done = r.i32();
+					const aliasMoveIps = r.i32Array();
+					const statefulEffect = r.u8();
+					const runtimeGuard = r.u8();
+					const loadCount = r.count(4);
+					const loads: Array<
+						Extract<VmRegion, { kind: "regexp-iterator-projection" }>["loads"][number]
+					> = [];
+					for (let load = 0; load < loadCount; load++) {
+						loads.push({
+							ip: r.i32(),
+							keyIp: r.i32(),
+							captureIndex: r.i32(),
+							dst: r.i32(),
+							numberIntrinsicIp: r.i32(),
+							numberCallIp: r.i32(),
+						});
+					}
+					if (statefulEffect !== 1 || runtimeGuard !== 1) {
+						throw new RangeError(
+							"serialize-vm: invalid RegExp iterator projection header",
+						);
+					}
+					region = {
+						kind: "regexp-iterator-projection",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [{ kind: "epoch", family: "watched-methods" }],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "on-demand",
+						},
+						representation: "regexp-iterator-capture-spans",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						stepIp,
+						doneBranchIp,
+						exitIp,
+						iterator,
+						next,
+						value,
+						done,
+						aliasMoveIps,
+						statefulEffect: "iterator-last-index-retained-step",
+						runtimeGuard: "exact-brand-next-realm-regexp",
 						loads,
 					};
 				}

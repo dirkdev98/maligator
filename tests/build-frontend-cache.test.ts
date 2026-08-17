@@ -258,6 +258,44 @@ describe("normal build frontend cache", () => {
 		expect(warmC).toBe(coldC);
 	});
 
+	it("retains RegExp iterator projection regions across a frontend cache hit", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			entrypoint,
+			`function total(value, regexp) {
+				let sum = 0;
+				for (const match of value.matchAll(regexp)) sum += Number(match[1]);
+				return sum;
+			}
+			globalThis.result = total("1 2 3", /([0-9]+)/g);\n`,
+		);
+
+		const cold = compile(entrypoint, cacheDirectory);
+		const warm = compile(entrypoint, cacheDirectory);
+		const coldRegions = cold.definition.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
+				[],
+		);
+		const warmRegions = warm.definition.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "regexp-iterator-projection") ??
+				[],
+		);
+		const coldC = emitVmTranslationUnits(cold.definition).join("\n");
+		const warmC = emitVmTranslationUnits(warm.definition).join("\n");
+
+		expect(cold.cache).toBe("miss");
+		expect(warm.cache).toBe("hit");
+		expect(coldRegions).not.toHaveLength(0);
+		expect(warmRegions).toEqual(coldRegions);
+		expect(coldC).toContain("mal_regexp_try_exact_iterator_capture_projection");
+		expect(warmC).toBe(coldC);
+	});
+
 	it("retains fresh dense indexed-fill reserves across a frontend cache hit", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

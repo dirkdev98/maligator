@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 52u        // RegExp.exec projections join the tagged region table
+#define WIRE_VERSION 53u        // RegExp iterator projections join the tagged region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1977,9 +1977,25 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
             }
             u32 exceptional_handler_count = rd_count(&r, 1);
-            if (exceptional_handler_count != 0) r.ok = false;
+            if (exceptional_handler_count > 64 ||
+                (kind != 6 && exceptional_handler_count != 0)) r.ok = false;
+            i32 exceptional_handler_ips[64];
             for (u32 handler = 0; r.ok && handler < exceptional_handler_count; handler++) {
-                (void) rd_i32(&r);
+                exceptional_handler_ips[handler] = rd_i32(&r);
+                bool known_handler = false;
+                if (exceptional_handler_ips[handler] < 0 ||
+                    exceptional_handler_ips[handler] >= fn->instruction_count) r.ok = false;
+                for (u32 previous = 0; r.ok && previous < handler; previous++) {
+                    if (exceptional_handler_ips[previous] == exceptional_handler_ips[handler]) {
+                        r.ok = false;
+                    }
+                }
+                for (i32 candidate = 0; r.ok && candidate < fn->handler_count; candidate++) {
+                    if (fn->handlers[candidate].handler_ip == exceptional_handler_ips[handler]) {
+                        known_handler = true;
+                    }
+                }
+                if (!known_handler) r.ok = false;
             }
             u32 score = rd_u32(&r);
             u32 metadata_operations = rd_u32(&r);
@@ -2002,10 +2018,14 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             bool regexp_exec_projection_contract = kind == 5 && representation == 5 &&
                 materialization == 2 && (dependency_mask == 1 || dependency_mask == 4) &&
                 obligation_mask == 3;
+            bool regexp_iterator_projection_contract = kind == 6 && representation == 6 &&
+                materialization == 1 && (dependency_mask == 1 || dependency_mask == 4) &&
+                obligation_mask == 3;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
-                 !split_projection_contract && !regexp_exec_projection_contract)) {
+                 !split_projection_contract && !regexp_exec_projection_contract &&
+                 !regexp_iterator_projection_contract)) {
                 r.ok = false;
             }
 
@@ -2756,6 +2776,162 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         }
                         MAL_REGION_PAYLOAD_REFERENCE(consumer_ips[load][5]);
                     }
+                }
+                if (metadata_operations != payload_count) r.ok = false;
+            } else if (r.ok && kind == 6) {
+                i32 step_ip = rd_i32(&r);
+                i32 done_branch_ip = rd_i32(&r);
+                i32 exit_ip = rd_i32(&r);
+                i32 iterator = rd_i32(&r);
+                i32 next = rd_i32(&r);
+                i32 value = rd_i32(&r);
+                i32 done = rd_i32(&r);
+                u32 alias_count = rd_count(&r, 1);
+                if (alias_count > 94) r.ok = false;
+                i32 alias_ips[94];
+                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
+                    alias_ips[alias] = rd_i32(&r);
+                }
+                u8 stateful_effect = rd_u8(&r);
+                u8 runtime_guard = rd_u8(&r);
+                u32 load_count = rd_count(&r, 4);
+                if (load_count == 0 || load_count > 8) r.ok = false;
+                i32 load_ips[8];
+                i32 key_ips[8];
+                i32 capture_indices[8];
+                i32 load_dsts[8];
+                i32 intrinsic_ips[8];
+                i32 number_call_ips[8];
+                for (u32 load = 0; r.ok && load < load_count; load++) {
+                    load_ips[load] = rd_i32(&r);
+                    key_ips[load] = rd_i32(&r);
+                    capture_indices[load] = rd_i32(&r);
+                    load_dsts[load] = rd_i32(&r);
+                    intrinsic_ips[load] = rd_i32(&r);
+                    number_call_ips[load] = rd_i32(&r);
+                }
+                bool header_ok = anchor_count == 3 && anchors[0] == step_ip &&
+                    anchors[1] == done_branch_ip &&
+                    anchors[2] == (load_count > 0 ? load_ips[0] : -1) &&
+                    step_ip >= 0 && step_ip < fn->instruction_count &&
+                    done_branch_ip == step_ip + 1 &&
+                    done_branch_ip < fn->instruction_count && exit_ip >= 0 &&
+                    exit_ip < fn->instruction_count &&
+                    fn->instructions[step_ip].opcode == MAL_OP_ITERATOR_STEP &&
+                    fn->instructions[done_branch_ip].opcode == MAL_OP_JUMP_IF &&
+                    fn->instructions[step_ip].as.iterator_step.iterator == iterator &&
+                    fn->instructions[step_ip].as.iterator_step.next == next &&
+                    fn->instructions[step_ip].as.iterator_step.value_dst == value &&
+                    fn->instructions[step_ip].as.iterator_step.done_dst == done &&
+                    fn->instructions[done_branch_ip].as.jump_if.cond == done &&
+                    fn->instructions[done_branch_ip].as.jump_if.target_ip == exit_ip &&
+                    stateful_effect == 1 && runtime_guard == 1 &&
+                    exceptional_handler_count > 0;
+                if (!header_ok) r.ok = false;
+
+                i32 aliases[95];
+                u32 aliases_seen = 1;
+                aliases[0] = value;
+                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
+                    i32 ip = alias_ips[alias];
+                    if (ip < 0 || ip >= fn->instruction_count ||
+                        fn->instructions[ip].opcode != MAL_OP_MOVE) {
+                        r.ok = false;
+                        break;
+                    }
+                    bool source_found = false;
+                    for (u32 previous = 0; previous < aliases_seen; previous++) {
+                        if (aliases[previous] == fn->instructions[ip].as.move.src) {
+                            source_found = true;
+                        }
+                    }
+                    if (!source_found) {
+                        r.ok = false;
+                        break;
+                    }
+                    aliases[aliases_seen++] = fn->instructions[ip].as.move.dst;
+                }
+                for (u32 load = 0; r.ok && load < load_count; load++) {
+                    i32 ip = load_ips[load];
+                    i32 key_ip = key_ips[load];
+                    i32 intrinsic_ip = intrinsic_ips[load];
+                    i32 number_call_ip = number_call_ips[load];
+                    if (ip < 0 || ip >= fn->instruction_count || key_ip < 0 ||
+                        key_ip >= fn->instruction_count || intrinsic_ip < 0 ||
+                        intrinsic_ip >= fn->instruction_count || number_call_ip < 0 ||
+                        number_call_ip >= fn->instruction_count ||
+                        fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY ||
+                        fn->instructions[key_ip].opcode != MAL_OP_CREATE_NUMBER ||
+                        fn->instructions[intrinsic_ip].opcode != MAL_OP_LOAD_INTRINSIC ||
+                        fn->instructions[number_call_ip].opcode != MAL_OP_CALL) {
+                        r.ok = false;
+                        break;
+                    }
+                    const MalInstruction *capture = &fn->instructions[ip];
+                    const MalInstruction *key = &fn->instructions[key_ip];
+                    const MalInstruction *intrinsic = &fn->instructions[intrinsic_ip];
+                    const MalInstruction *number_call = &fn->instructions[number_call_ip];
+                    bool object_found = false;
+                    for (u32 alias = 0; alias < aliases_seen; alias++) {
+                        if (aliases[alias] == capture->as.load_property.object) object_found = true;
+                    }
+                    bool duplicate = false;
+                    for (u32 previous = 0; previous < load; previous++) {
+                        if (capture_indices[previous] == capture_indices[load]) duplicate = true;
+                    }
+                    i32 data_offset = number_call->as.call.data_offset;
+                    if (!object_found || capture->as.load_property.dst != load_dsts[load] ||
+                        capture->as.load_property.key != key->as.create_number.dst ||
+                        key->as.create_number.value != capture_indices[load] ||
+                        capture_indices[load] <= 0 || capture_indices[load] > 65535 || duplicate ||
+                        number_call->as.call.callee != intrinsic->as.load_intrinsic.dst ||
+                        data_offset < 0 || data_offset + 1 >= fn->instruction_data_count ||
+                        fn->instruction_data[data_offset] != 1 ||
+                        fn->instruction_data[data_offset + 1] != load_dsts[load]) {
+                        r.ok = false;
+                    }
+                }
+                for (u32 claim = 0; r.ok && claim < claim_count; claim++) {
+                    for (i32 handler = 0; handler < fn->handler_count; handler++) {
+                        const MalExceptionHandler *candidate = &fn->handlers[handler];
+                        if (claims[claim] >= candidate->start_ip &&
+                            claims[claim] < candidate->end_ip) {
+                            bool declared = false;
+                            for (u32 declared_handler = 0;
+                                 declared_handler < exceptional_handler_count;
+                                 declared_handler++) {
+                                if (exceptional_handler_ips[declared_handler] ==
+                                    candidate->handler_ip) declared = true;
+                            }
+                            if (!declared) r.ok = false;
+                        }
+                    }
+                }
+                for (u32 declared_handler = 0; r.ok &&
+                     declared_handler < exceptional_handler_count; declared_handler++) {
+                    bool covers_claim = false;
+                    for (i32 handler = 0; handler < fn->handler_count; handler++) {
+                        const MalExceptionHandler *candidate = &fn->handlers[handler];
+                        if (candidate->handler_ip !=
+                            exceptional_handler_ips[declared_handler]) continue;
+                        for (u32 claim = 0; claim < claim_count; claim++) {
+                            if (claims[claim] >= candidate->start_ip &&
+                                claims[claim] < candidate->end_ip) covers_claim = true;
+                        }
+                    }
+                    if (!covers_claim) r.ok = false;
+                }
+
+                MAL_REGION_PAYLOAD_REFERENCE(step_ip);
+                MAL_REGION_PAYLOAD_REFERENCE(done_branch_ip);
+                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
+                    MAL_REGION_PAYLOAD_REFERENCE(alias_ips[alias]);
+                }
+                for (u32 load = 0; r.ok && load < load_count; load++) {
+                    MAL_REGION_PAYLOAD_REFERENCE(load_ips[load]);
+                    MAL_REGION_PAYLOAD_REFERENCE(key_ips[load]);
+                    MAL_REGION_PAYLOAD_REFERENCE(intrinsic_ips[load]);
+                    MAL_REGION_PAYLOAD_REFERENCE(number_call_ips[load]);
                 }
                 if (metadata_operations != payload_count) r.ok = false;
             }

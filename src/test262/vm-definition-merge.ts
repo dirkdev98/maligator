@@ -93,6 +93,13 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 							}),
 				})),
 			};
+		case "regexp-iterator-projection":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				aliasMoveIps: [...region.aliasMoveIps],
+				loads: region.loads.map((load) => ({ ...load })),
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

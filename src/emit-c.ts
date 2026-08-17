@@ -1116,7 +1116,10 @@ export function emitCompiledFunction(
 		number,
 		NativeRegExpIteratorProjectionSite
 	>();
-	for (const projection of fn.nativeRegExpIteratorProjections ?? []) {
+	for (const projection of (fn.regions ?? []).filter(
+		(region): region is Extract<VmRegion, { kind: "regexp-iterator-projection" }> =>
+			region.kind === "regexp-iterator-projection",
+	)) {
 		const loads = [...projection.loads].sort(
 			(left, right) => left.captureIndex - right.captureIndex,
 		);
@@ -2228,9 +2231,10 @@ interface NativeRegExpExecProjectionAction {
 	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 }
 
-type NativeRegExpIteratorProjection = NonNullable<
-	VmFunction["nativeRegExpIteratorProjections"]
->[number];
+type NativeRegExpIteratorProjection = Extract<
+	VmRegion,
+	{ kind: "regexp-iterator-projection" }
+>;
 
 interface NativeRegExpIteratorProjectionSite {
 	projection: NativeRegExpIteratorProjection;
@@ -7007,6 +7011,7 @@ function emitInstruction(
 					: `mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`;
 			if (nativeRegExpIteratorProjectionAction?.role === "step") {
 				const site = nativeRegExpIteratorProjectionAction.site;
+				const admission = regionAdmissionGuard(site.projection.license);
 				const indices = site.loads.map((load) => load.captureIndex).join(", ");
 				const outputs = site.loads
 					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
@@ -7016,7 +7021,7 @@ function emitInstruction(
 					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 					`MalValue ${val}; bool ${done};`,
 					`__regexp_iter_${site.projection.stepIp}_projected = false;`,
-					`int ${status} = mal_regexp_try_exact_iterator_capture_projection(vm, ${boxed(instruction.iterator)}, ${boxed(instruction.next)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, __regexp_iter_${site.projection.stepIp}_starts, __regexp_iter_${site.projection.stepIp}_ends, &__gc_slots[${site.subjectSlot}], &${val}, &${done});`,
+					`int ${status} = ${admission} ? mal_regexp_try_exact_iterator_capture_projection(vm, ${boxed(instruction.iterator)}, ${boxed(instruction.next)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, __regexp_iter_${site.projection.stepIp}_starts, __regexp_iter_${site.projection.stepIp}_ends, &__gc_slots[${site.subjectSlot}], &${val}, &${done}) : 0;`,
 					`if (${status} < 0) ${onThrow}`,
 					`if (${status} == 0 && !(${step})) ${onThrow}`,
 					`__regexp_iter_${site.projection.stepIp}_projected = ${status} > 0 && mal_value_is_boolean(${val});`,

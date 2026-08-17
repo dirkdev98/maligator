@@ -762,6 +762,31 @@ export interface IRRegExpExecProjectionRegion extends IRRegionEnvelope<
 	}>;
 }
 
+/** Closed capture-span view of one exact RegExp String Iterator step. */
+export interface IRRegExpIteratorProjectionRegion extends IRRegionEnvelope<
+	"regexp-iterator-projection",
+	"regexp-iterator-capture-spans",
+	"on-demand",
+	readonly [
+		Extract<IRInstruction, { type: "iteratorStep" }>,
+		Extract<IRInstruction, { type: "jumpIf" }>,
+		Extract<IRInstruction, { type: "loadProperty" }>,
+	]
+> {
+	readonly doneBranch: Extract<IRInstruction, { type: "jumpIf" }>;
+	readonly exitBlock: number;
+	readonly aliasMoves: ReadonlyArray<Extract<IRInstruction, { type: "move" }>>;
+	readonly statefulEffect: "iterator-last-index-retained-step";
+	readonly runtimeGuard: "exact-brand-next-realm-regexp";
+	readonly loads: ReadonlyArray<{
+		readonly instruction: Extract<IRInstruction, { type: "loadProperty" }>;
+		readonly key: Extract<IRInstruction, { type: "createNumber" }>;
+		readonly captureIndex: number;
+		readonly numberIntrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>;
+		readonly numberCall: Extract<IRInstruction, { type: "call" }>;
+	}>;
+}
+
 /** Backend-neutral contract for one closed indexed String#split consumer loop. */
 export interface IRStringSplitCursor extends IRRegionEnvelope<
 	"string-split-cursor",
@@ -853,6 +878,7 @@ export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
 export type IRRegion =
 	| IRClosedRecordArrayRegion
 	| IRRegExpExecProjectionRegion
+	| IRRegExpIteratorProjectionRegion
 	| IRStringSplitProjectionRegion
 	| IRStringSplitCursor
 	| IRNumericHofRegion;
