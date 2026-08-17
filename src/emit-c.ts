@@ -4057,43 +4057,22 @@ function emitBody(
 							gcUnlink,
 							thisSlot,
 							coro,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							directCompiledTargets,
-							false,
-							false,
-							true,
-							fn.mappedArguments,
-							fn.mappedArgumentSlots,
-							fn.hasPrototype,
-							{ twin: loopTwin, kind: "fast", publishPosition: debug },
-							closedGlobalTableAccessByIp.get(fastIp),
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							undefined,
-							affineRangeAction(fastIp),
+							{
+								directCompiledTargets,
+								mathUnaryCall: false,
+								mathBinaryCall: false,
+								loopStaticPropertyFastPath: true,
+								mappedArguments: fn.mappedArguments,
+								mappedArgumentSlots: fn.mappedArgumentSlots,
+								hasPrototype: fn.hasPrototype,
+								loopTwinEmission: {
+									twin: loopTwin,
+									kind: "fast",
+									publishPosition: debug,
+								},
+								closedGlobalTableAccess: closedGlobalTableAccessByIp.get(fastIp),
+								affineRangeAction: affineRangeAction(fastIp),
+							},
 						);
 				if (fast === null) return null;
 				for (const line of fast) lines.push(`    ${line}`);
@@ -4125,49 +4104,56 @@ function emitBody(
 					gcUnlink,
 					thisSlot,
 					coro,
-					denseIteratorCursorActions.get(ip),
-					regionGuard.get(ip),
-					stackObjectSites.get(ip),
-					stackObjectAccesses.get(ip),
-					stackObjectMaterializations.get(ip),
-					stackObjectInheritedAccesses.get(ip),
-					finiteRecordRegions.get(ip),
-					finiteRecordStores.get(ip),
-					finiteRecordAccesses.get(ip),
-					cardinalityRegions.get(ip),
-					cardinalityAccesses.get(ip),
-					cardinalityPushes.get(ip),
-					directCompiledTargets,
-					mathUnaryCalls.has(ip),
-					mathBinaryCalls.has(ip),
-					loopBody.has(ip),
-					fn.mappedArguments,
-					fn.mappedArgumentSlots,
-					fn.hasPrototype,
-					inheritedLoadLoopTwinByBackedge.has(ip)
-						? {
-								twin: inheritedLoadLoopTwinByBackedge.get(ip)!,
-								kind: "generic",
-								publishPosition: debug,
-							}
-						: undefined,
-					closedGlobalTableAccessByIp.get(ip),
-					stringCharCodeAtFusionByIp.get(ip),
-					nativeStringScanRegionActionByIp.get(ip),
-					nativeStringSplitProjectionActionByIp.get(ip),
-					nativeStringSplitCursorActionByIp.get(ip),
-					nativeRegExpExecProjectionActionByIp.get(ip),
-					nativeRegExpIteratorProjectionActionByIp.get(ip),
-					nativeStringSliceNumberFusionActionByIp.get(ip),
-					invariantJsonParseCaches.get(ip),
-					invariantJsonMapActions.get(ip),
-					privateAggregateMemos.get(ip),
-					privateAggregatePushByIp.get(ip),
-					exactFreshArrayAccessIps.has(ip) || closedRecordElementLoadIps.has(ip),
-					numericFusionActionByIp.get(ip),
-					finiteConstructionRegions.get(ip),
-					finitePropertySelectors.get(ip),
-					affineRangeAction(ip),
+					{
+						denseIteratorCursor: denseIteratorCursorActions.get(ip),
+						region: regionGuard.get(ip),
+						stackObjectSite: stackObjectSites.get(ip),
+						stackObjectAccess: stackObjectAccesses.get(ip),
+						stackObjectMaterialization: stackObjectMaterializations.get(ip),
+						stackObjectInheritedAccess: stackObjectInheritedAccesses.get(ip),
+						finiteRecordRegion: finiteRecordRegions.get(ip),
+						finiteRecordStore: finiteRecordStores.get(ip),
+						finiteRecordAccess: finiteRecordAccesses.get(ip),
+						cardinalityRegion: cardinalityRegions.get(ip),
+						cardinalityAccess: cardinalityAccesses.get(ip),
+						cardinalityPush: cardinalityPushes.get(ip),
+						directCompiledTargets,
+						mathUnaryCall: mathUnaryCalls.has(ip),
+						mathBinaryCall: mathBinaryCalls.has(ip),
+						loopStaticPropertyFastPath: loopBody.has(ip),
+						mappedArguments: fn.mappedArguments,
+						mappedArgumentSlots: fn.mappedArgumentSlots,
+						hasPrototype: fn.hasPrototype,
+						loopTwinEmission: inheritedLoadLoopTwinByBackedge.has(ip)
+							? {
+									twin: inheritedLoadLoopTwinByBackedge.get(ip)!,
+									kind: "generic",
+									publishPosition: debug,
+								}
+							: undefined,
+						closedGlobalTableAccess: closedGlobalTableAccessByIp.get(ip),
+						stringCharCodeAtFusion: stringCharCodeAtFusionByIp.get(ip),
+						nativeStringScanRegionAction: nativeStringScanRegionActionByIp.get(ip),
+						nativeStringSplitProjectionAction:
+							nativeStringSplitProjectionActionByIp.get(ip),
+						nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
+						nativeRegExpExecProjectionAction:
+							nativeRegExpExecProjectionActionByIp.get(ip),
+						nativeRegExpIteratorProjectionAction:
+							nativeRegExpIteratorProjectionActionByIp.get(ip),
+						nativeStringSliceNumberFusionAction:
+							nativeStringSliceNumberFusionActionByIp.get(ip),
+						invariantJsonParseCache: invariantJsonParseCaches.get(ip),
+						invariantJsonMapAction: invariantJsonMapActions.get(ip),
+						privateAggregateMemo: privateAggregateMemos.get(ip),
+						privateAggregatePushMemo: privateAggregatePushByIp.get(ip),
+						exactArrayElementAccess:
+							exactFreshArrayAccessIps.has(ip) || closedRecordElementLoadIps.has(ip),
+						numericFusionAction: numericFusionActionByIp.get(ip),
+						finiteConstruction: finiteConstructionRegions.get(ip),
+						finitePropertySelector: finitePropertySelectors.get(ip),
+						affineRangeAction: affineRangeAction(ip),
+					},
 				);
 		if (emitted === null) {
 			return null;
@@ -4515,6 +4501,57 @@ function instrumentProfileExpressions(
  * box it through mal_ops_number_value. Adding an opcode here (and its unboxed
  * forms) is the main way this backend grows.
  */
+interface NativeInstructionContext {
+	readonly denseIteratorCursor?: DenseIteratorCursorAction;
+	readonly region?: RegionAccess;
+	readonly stackObjectSite?: StackObjectSite;
+	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
+	readonly stackObjectMaterialization?: StackObjectSite;
+	readonly stackObjectInheritedAccess?: StackObjectSite;
+	readonly finiteRecordRegion?: FiniteRecordRegion;
+	readonly finiteRecordStore?: FiniteRecordRegion;
+	readonly finiteRecordAccess?: FiniteRecordRegion;
+	readonly cardinalityRegion?: CardinalityRegion;
+	readonly cardinalityAccess?: {
+		readonly region: CardinalityRegion;
+		readonly role: "push" | "length" | "element" | "field";
+		readonly fieldSlot?: number;
+	};
+	readonly cardinalityPush?: CardinalityRegion;
+	readonly directCompiledTargets: ReadonlyMap<number, number>;
+	readonly mathUnaryCall: boolean;
+	readonly mathBinaryCall: boolean;
+	readonly loopStaticPropertyFastPath: boolean;
+	readonly mappedArguments: boolean;
+	readonly mappedArgumentSlots: ReadonlyArray<number>;
+	readonly hasPrototype: boolean;
+	readonly loopTwinEmission?: LoopTwinEmission;
+	readonly closedGlobalTableAccess?: ClosedGlobalTableAccess;
+	readonly stringCharCodeAtFusion?: StringCharCodeAtFusion;
+	readonly nativeStringScanRegionAction?: NativeStringScanRegionAction;
+	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
+	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
+	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
+	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
+	readonly nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction;
+	readonly invariantJsonParseCache?: NativeInvariantJsonParseCacheSite;
+	readonly invariantJsonMapAction?: {
+		readonly site: VmInvariantJsonMapTemplateRegion & { rootsOffset: number };
+		readonly role: "parse" | "mapLoad" | "mapCall";
+	};
+	readonly privateAggregateMemo?: NativePrivateAggregateMemoRegion & {
+		rootsOffset: number;
+	};
+	readonly privateAggregatePushMemo?: NativePrivateAggregateMemoRegion & {
+		rootsOffset: number;
+	};
+	readonly exactArrayElementAccess?: boolean;
+	readonly numericFusionAction?: NativeNumericFusionAction;
+	readonly finiteConstruction?: VmFiniteObjectConstructionRegion;
+	readonly finitePropertySelector?: VmFinitePropertySelectorRegion["selectors"][number];
+	readonly affineRangeAction?: NativeAffineRangeAction;
+}
+
 function emitInstruction(
 	instruction: VmInstruction,
 	ip: number,
@@ -4525,53 +4562,69 @@ function emitInstruction(
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
-	denseIteratorCursor: DenseIteratorCursorAction | undefined,
-	region: RegionAccess | undefined,
-	stackObjectSite: StackObjectSite | undefined,
-	stackObjectAccess: { site: StackObjectSite; slot: number } | undefined,
-	stackObjectMaterialization: StackObjectSite | undefined,
-	stackObjectInheritedAccess: StackObjectSite | undefined,
-	finiteRecordRegion: FiniteRecordRegion | undefined,
-	finiteRecordStore: FiniteRecordRegion | undefined,
-	finiteRecordAccess: FiniteRecordRegion | undefined,
-	cardinalityRegion: CardinalityRegion | undefined,
-	cardinalityAccess:
-		| {
-				region: CardinalityRegion;
-				role: "push" | "length" | "element" | "field";
-				fieldSlot?: number;
-		  }
-		| undefined,
-	cardinalityPush: CardinalityRegion | undefined,
-	directCompiledTargets: ReadonlyMap<number, number>,
-	mathUnaryCall: boolean,
-	mathBinaryCall: boolean,
-	loopStaticPropertyFastPath: boolean,
-	mappedArguments: boolean,
-	mappedArgumentSlots: Array<number>,
-	hasPrototype: boolean,
-	loopTwinEmission?: LoopTwinEmission,
-	closedGlobalTableAccess?: ClosedGlobalTableAccess,
-	stringCharCodeAtFusion?: StringCharCodeAtFusion,
-	nativeStringScanRegionAction?: NativeStringScanRegionAction,
-	nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction,
-	nativeStringSplitCursorAction?: NativeStringSplitCursorAction,
-	nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction,
-	nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction,
-	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
-	invariantJsonParseCache?: NativeInvariantJsonParseCacheSite,
-	invariantJsonMapAction?: {
-		site: VmInvariantJsonMapTemplateRegion & { rootsOffset: number };
-		role: "parse" | "mapLoad" | "mapCall";
-	},
-	privateAggregateMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
-	privateAggregatePushMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
-	exactArrayElementAccess?: boolean,
-	numericFusionAction?: NativeNumericFusionAction,
-	finiteConstruction?: VmFiniteObjectConstructionRegion,
-	finitePropertySelector?: VmFinitePropertySelectorRegion["selectors"][number],
-	affineRangeAction?: NativeAffineRangeAction,
+	context: NativeInstructionContext,
 ): Array<string> | null {
+	const {
+		denseIteratorCursor,
+		region,
+		stackObjectSite,
+		stackObjectAccess,
+		stackObjectMaterialization,
+		stackObjectInheritedAccess,
+		finiteRecordRegion,
+		finiteRecordStore,
+		finiteRecordAccess,
+		cardinalityRegion,
+		cardinalityAccess,
+		cardinalityPush,
+		directCompiledTargets,
+		mathUnaryCall,
+		mathBinaryCall,
+		loopStaticPropertyFastPath,
+		mappedArguments,
+		mappedArgumentSlots,
+		hasPrototype,
+		loopTwinEmission,
+		closedGlobalTableAccess,
+		stringCharCodeAtFusion,
+		nativeStringScanRegionAction,
+		nativeStringSplitProjectionAction,
+		nativeStringSplitCursorAction,
+		nativeRegExpExecProjectionAction,
+		nativeRegExpIteratorProjectionAction,
+		nativeStringSliceNumberFusionAction,
+		invariantJsonParseCache,
+		invariantJsonMapAction,
+		privateAggregateMemo,
+		privateAggregatePushMemo,
+		exactArrayElementAccess,
+		numericFusionAction,
+		finiteConstruction,
+		finitePropertySelector,
+		affineRangeAction,
+	} = context;
+	const genericContext: NativeInstructionContext = {
+		directCompiledTargets,
+		mathUnaryCall,
+		mathBinaryCall,
+		loopStaticPropertyFastPath,
+		mappedArguments,
+		mappedArgumentSlots,
+		hasPrototype,
+	};
+	const emitGenericInstruction = (): Array<string> | null =>
+		emitInstruction(
+			instruction,
+			ip,
+			suffix,
+			reps,
+			strict,
+			handlerIp,
+			gcUnlink,
+			thisSlot,
+			coro,
+			genericContext,
+		);
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
 	const boxed = (r: number): string =>
@@ -5165,36 +5218,7 @@ function emitInstruction(
 				closedGlobalTableAccess !== undefined
 			) {
 				const { region: table, access } = closedGlobalTableAccess;
-				const fallback = emitInstruction(
-					instruction,
-					ip,
-					suffix,
-					reps,
-					strict,
-					handlerIp,
-					gcUnlink,
-					thisSlot,
-					coro,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					directCompiledTargets,
-					mathUnaryCall,
-					mathBinaryCall,
-					loopStaticPropertyFastPath,
-					mappedArguments,
-					mappedArgumentSlots,
-					hasPrototype,
-				);
+				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				const state = `vm->globals[${table.stateIndex}]`;
 				const deopt = `mal_vm_closed_global_table_deopt(vm, ${boxed(instruction.object)}, ${table.baseIndex}, ${table.mask + 1}, ${table.stateIndex});`;
@@ -5230,36 +5254,7 @@ function emitInstruction(
 			}
 			if (cardinalityAccess !== undefined) {
 				const target = cardinalityAccess.region;
-				const fallback = emitInstruction(
-					instruction,
-					ip,
-					suffix,
-					reps,
-					strict,
-					handlerIp,
-					gcUnlink,
-					thisSlot,
-					coro,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					directCompiledTargets,
-					mathUnaryCall,
-					mathBinaryCall,
-					loopStaticPropertyFastPath,
-					mappedArguments,
-					mappedArgumentSlots,
-					hasPrototype,
-				);
+				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				if (cardinalityAccess.role === "length") {
 					const countValue =
@@ -5325,36 +5320,7 @@ function emitInstruction(
 				];
 			}
 			if (stackObjectInheritedAccess !== undefined) {
-				const fallback = emitInstruction(
-					instruction,
-					ip,
-					suffix,
-					reps,
-					strict,
-					handlerIp,
-					gcUnlink,
-					thisSlot,
-					coro,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					directCompiledTargets,
-					mathUnaryCall,
-					mathBinaryCall,
-					loopStaticPropertyFastPath,
-					mappedArguments,
-					mappedArgumentSlots,
-					hasPrototype,
-				);
+				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				return [
 					`if (${stackObjectInheritedAccess.inheritedFastName}) {`,
@@ -5369,36 +5335,7 @@ function emitInstruction(
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				if (site.cardinalityRegion !== undefined) {
-					const fallback = emitInstruction(
-						instruction,
-						ip,
-						suffix,
-						reps,
-						strict,
-						handlerIp,
-						gcUnlink,
-						thisSlot,
-						coro,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						directCompiledTargets,
-						mathUnaryCall,
-						mathBinaryCall,
-						loopStaticPropertyFastPath,
-						mappedArguments,
-						mappedArgumentSlots,
-						hasPrototype,
-					);
+					const fallback = emitGenericInstruction();
 					if (fallback === null) return null;
 					return [
 						`if (!${site.cardinalityRegion.currentMaterializedName}) {`,
@@ -5411,36 +5348,7 @@ function emitInstruction(
 				if (site.inheritedLoadInstructionIndex === undefined) {
 					return [`r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`];
 				}
-				const fallback = emitInstruction(
-					instruction,
-					ip,
-					suffix,
-					reps,
-					strict,
-					handlerIp,
-					gcUnlink,
-					thisSlot,
-					coro,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					directCompiledTargets,
-					mathUnaryCall,
-					mathBinaryCall,
-					loopStaticPropertyFastPath,
-					mappedArguments,
-					mappedArgumentSlots,
-					hasPrototype,
-				);
+				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				return [
 					`if (${site.inheritedFastName}) {`,
@@ -5740,36 +5648,7 @@ function emitInstruction(
 				closedGlobalTableAccess !== undefined
 			) {
 				const { region: table, access } = closedGlobalTableAccess;
-				const fallback = emitInstruction(
-					instruction,
-					ip,
-					suffix,
-					reps,
-					strict,
-					handlerIp,
-					gcUnlink,
-					thisSlot,
-					coro,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					directCompiledTargets,
-					mathUnaryCall,
-					mathBinaryCall,
-					loopStaticPropertyFastPath,
-					mappedArguments,
-					mappedArgumentSlots,
-					hasPrototype,
-				);
+				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
 				const state = `vm->globals[${table.stateIndex}]`;
 				const deopt = `mal_vm_closed_global_table_deopt(vm, ${boxed(instruction.object)}, ${table.baseIndex}, ${table.mask + 1}, ${table.stateIndex});`;
@@ -5791,36 +5670,7 @@ function emitInstruction(
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
 				if (site.cardinalityRegion !== undefined) {
-					const fallback = emitInstruction(
-						instruction,
-						ip,
-						suffix,
-						reps,
-						strict,
-						handlerIp,
-						gcUnlink,
-						thisSlot,
-						coro,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						directCompiledTargets,
-						mathUnaryCall,
-						mathBinaryCall,
-						loopStaticPropertyFastPath,
-						mappedArguments,
-						mappedArgumentSlots,
-						hasPrototype,
-					);
+					const fallback = emitGenericInstruction();
 					if (fallback === null) return null;
 					return [
 						`if (!${site.cardinalityRegion.currentMaterializedName}) {`,
