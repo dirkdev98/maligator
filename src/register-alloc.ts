@@ -554,27 +554,21 @@ function allocateWithInterference(
 function finiteConstructionNumberParameters(fn: IRFunction): Set<number> {
 	const parameters = new Set<number>();
 	const index = buildIRRegisterIndex(fn);
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			if (
-				instruction.type !== "createObject" ||
-				instruction.nativeFiniteConstruction === undefined
-			) {
-				continue;
-			}
-			for (const guard of instruction.registers.slice(1)) {
-				let register = guard;
-				const seen = new Set<number>();
-				while (!seen.has(register)) {
-					seen.add(register);
-					if (register < fn.parameterCount) {
-						parameters.add(register);
-						break;
-					}
-					const definition = index.uniqueDefinitions.get(register);
-					if (definition?.type !== "move") break;
-					register = definition.registers[1];
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "finite-object-construction") continue;
+		const allocation = region.anchors[0];
+		for (const guard of allocation.registers.slice(1)) {
+			let register = guard;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				if (register < fn.parameterCount) {
+					parameters.add(register);
+					break;
 				}
+				const definition = index.uniqueDefinitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
 			}
 		}
 	}

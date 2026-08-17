@@ -485,23 +485,19 @@ test("proves a guarded fresh-object finite construction region", () => {
 		globalThis.build = build;
 	`);
 	executeIROptimizations(program);
-	const instructions = instructionsOf(functionNamed(program, "build"));
-	const allocation = instructions.find(
-		(instruction) =>
-			instruction.type === "createObject" &&
-			instruction.nativeFiniteConstruction !== undefined,
+	const build = functionNamed(program, "build");
+	const region = build.regions?.find(
+		(candidate) => candidate.kind === "finite-object-construction",
 	);
-	const store = instructions.find(
-		(instruction) =>
-			instruction.type === "storeProperty" && instruction.nativeFiniteKey !== undefined,
-	);
-	if (allocation?.type !== "createObject")
-		throw new Error("expected finite construction");
-	if (store?.type !== "storeProperty") throw new Error("expected finite store");
-	expect(allocation.nativeFiniteConstruction?.keyStringIndices).toHaveLength(8);
+	if (region?.kind !== "finite-object-construction") {
+		throw new Error("expected finite construction region");
+	}
+	const [allocation, store] = region.anchors;
+	expect(region.keyStringIndices).toHaveLength(8);
+	expect(region.runtimeGuard).toBe("number-leaves-and-prototype-shape");
+	expect(region.virtualRecord).toBe(false);
 	expect(allocation.registers).toHaveLength(2); // destination + guarded seed
-	expect(allocation.nativeFiniteConstruction?.source).toBe(store);
-	expect(allocation.nativeFiniteConstruction?.virtualRecord).toBeUndefined();
+	expect(region.numberGuardCount).toBe(1);
 	expect(store.nativeFiniteKey?.stringIndices).toHaveLength(8);
 });
 
@@ -517,20 +513,16 @@ test("virtualizes a finite construction observed only through its selector domai
 		globalThis.consume = consume;
 	`);
 	executeIROptimizations(program);
-	const instructions = instructionsOf(functionNamed(program, "consume"));
-	const allocation = instructions.find(
-		(instruction) =>
-			instruction.type === "createObject" &&
-			instruction.nativeFiniteConstruction?.virtualRecord === true,
+	const consume = functionNamed(program, "consume");
+	const region = consume.regions?.find(
+		(candidate) => candidate.kind === "finite-object-construction",
 	);
-	if (allocation?.type !== "createObject") throw new Error("expected virtual record");
-	const access = instructions.find(
-		(instruction) =>
-			instruction.type === "loadProperty" &&
-			instruction.nativeFiniteRecordAccess !== undefined,
-	);
-	if (access?.type !== "loadProperty") throw new Error("expected virtual record access");
-	expect(access.nativeFiniteRecordAccess?.allocation).toBe(allocation);
+	if (region?.kind !== "finite-object-construction") {
+		throw new Error("expected virtual record region");
+	}
+	expect(region.virtualRecord).toBe(true);
+	expect(region.accesses).toHaveLength(1);
+	expect(region.claimedInstructions).toContain(region.accesses[0]);
 });
 
 test.each([
@@ -550,11 +542,9 @@ test.each([
 	`);
 	executeIROptimizations(program);
 	expect(
-		instructionsOf(functionNamed(program, "build")).some(
-			(instruction) =>
-				instruction.type === "createObject" &&
-				instruction.nativeFiniteConstruction !== undefined,
-		),
+		functionNamed(program, "build").regions?.some(
+			(region) => region.kind === "finite-object-construction",
+		) ?? false,
 	).toBe(false);
 });
 

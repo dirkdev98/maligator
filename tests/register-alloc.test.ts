@@ -10,12 +10,17 @@ import {
 
 function allocate(
 	blocks: Array<Array<IRInstruction>>,
-	options: { parameterCount?: number; registerCount?: number } = {},
+	options: {
+		parameterCount?: number;
+		registerCount?: number;
+		regions?: IRFunction["regions"];
+	} = {},
 ): IRFunction {
 	const fn = {
 		parameterCount: options.parameterCount ?? 0,
 		nextRegisterDestination: options.registerCount ?? 0,
 		blocks: blocks.map((instructions) => ({ instructions })),
+		regions: options.regions,
 	} as unknown as IRFunction;
 	allocateRegisters({ functions: [fn] } as unknown as IntermediateProgram);
 	return fn;
@@ -192,22 +197,38 @@ test("partitions guarded numeric parameter values from later boxed reuse", () =>
 	const store = {
 		type: "storeProperty",
 		registers: [2, 3, 1],
-	} as IRInstruction;
+	} as Extract<IRInstruction, { type: "storeProperty" }>;
 	const parameterCopy: IRInstruction = { type: "move", registers: [1, 0] };
 	const finiteAllocation = {
 		type: "createObject",
 		registers: [2, 1],
-		nativeFiniteConstruction: {
-			source: store,
-			keyStringIndices: [0],
-		},
-	} as IRInstruction;
+	} as Extract<IRInstruction, { type: "createObject" }>;
 	const laterBoxed: IRInstruction = { type: "createObject", registers: [4] };
 	allocate(
 		[[parameterCopy, finiteAllocation, laterBoxed, { type: "return", registers: [4] }]],
 		{
 			parameterCount: 1,
 			registerCount: 5,
+			regions: [
+				{
+					kind: "finite-object-construction",
+					license: {
+						guard: "structural",
+						genericTwin: "retained",
+						materialization: "on-demand",
+					},
+					representation: "finite-key-object-slots",
+					anchors: [finiteAllocation, store],
+					claimedInstructions: [finiteAllocation, store],
+					controlFlow: { ordinaryBlocks: [0], exceptionalBlocks: [] },
+					cost: { score: 1, metadataOperations: 2 },
+					runtimeGuard: "number-leaves-and-prototype-shape",
+					keyStringIndices: [0],
+					numberGuardCount: 1,
+					virtualRecord: false,
+					accesses: [],
+				},
+			],
 		},
 	);
 

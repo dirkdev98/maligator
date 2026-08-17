@@ -947,10 +947,29 @@ export interface IRNumericFusionRegion extends IRRegionEnvelope<
 	}>;
 }
 
+/** Structural proof for a canonical finite-key object construction loop. */
+export interface IRFiniteObjectConstructionRegion extends IRRegionEnvelope<
+	"finite-object-construction",
+	"finite-key-object-slots",
+	"on-demand",
+	readonly [
+		Extract<IRInstruction, { type: "createObject" }>,
+		Extract<IRInstruction, { type: "storeProperty" }>,
+	],
+	"structural"
+> {
+	readonly runtimeGuard: "number-leaves-and-prototype-shape";
+	readonly keyStringIndices: ReadonlyArray<number>;
+	readonly numberGuardCount: number;
+	readonly virtualRecord: boolean;
+	readonly accesses: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
+}
+
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type IRRegion =
 	| IRCardinalityArrayRegion
 	| IRClosedRecordArrayRegion
+	| IRFiniteObjectConstructionRegion
 	| IRNumericFusionRegion
 	| IRRegExpExecProjectionRegion
 	| IRRegExpIteratorProjectionRegion
@@ -1052,26 +1071,12 @@ export type IRInstruction =
 	| {
 			type: "createObject";
 
-			/**
-			 * COMPILE-ONLY: a canonical finite-key loop is the only observer until
-			 * this fresh object has received every key. Registers after the
-			 * destination are stable values that must be Numbers before native
-			 * code may allocate the object directly in its final shape.
-			 */
-			nativeFiniteConstruction?: {
-				source: Extract<IRInstruction, { type: "storeProperty" }>;
-				keyStringIndices: Array<number>;
-				/** Every residual observer is a matching finite-key load, so native
-				 * code may keep the completed record in compiler-owned slots. */
-				virtualRecord?: true;
-			};
-
 			/** COMPILE-ONLY: this allocation passed the stack-object proof. */
 			stackObject?: true;
 			/** COMPILE-ONLY: function-local id for conditional-return materialization. */
 			stackObjectSiteId?: number;
 
-			// [destination, ...nativeNumberGuards]
+			// [destination, ...finite-region Number guards]
 			registers: [number, ...Array<number>];
 	  }
 	| {
@@ -1406,10 +1411,6 @@ export type IRInstruction =
 				minimum: number;
 				source: Extract<IRInstruction, { type: "binary" }>;
 				stringIndices: Array<number>;
-			};
-			/** Native-only direct read from a virtual finite construction. */
-			nativeFiniteRecordAccess?: {
-				allocation: Extract<IRInstruction, { type: "createObject" }>;
 			};
 			/** COMPILE-ONLY: indexed read from a complete, exact fresh Array whose
 			 * receiver cannot be observed or mutated by the surrounding closed loop.

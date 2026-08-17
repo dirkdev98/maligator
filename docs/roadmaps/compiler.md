@@ -550,6 +550,11 @@ is general rather than a registry-shaped collection of special cases.
         function certificate, allow the local Number-operand proof to compose with
         exclusive loop/object regions, and validate the exact producer-consumer
         edge before translating it to the existing VM execution metadata.
+  - [x] Replace finite-object construction and virtual-record access instruction
+        links with one structural IR region. Make the region own the allocation,
+        canonical finite-key store, guarded Number leaves and every direct slot
+        read; register allocation and lowering now consume the same certificate,
+        while the existing VM metadata remains the cached execution form.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

@@ -1895,10 +1895,6 @@ function lowerFunctionToVmFunction(
 		guard: CompilerGuardPlan;
 	}> = [];
 	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
-	const pendingFiniteRecordAccesses: Array<{
-		instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
-		allocation: Extract<IRInstruction, { type: "createObject" }>;
-	}> = [];
 	const pendingExactFreshArrayAccesses: Array<{
 		instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
@@ -1941,34 +1937,12 @@ function lowerFunctionToVmFunction(
 				case "STORE_PROPERTY_STATIC":
 					vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
 					break;
-				case "CREATE_OBJECT":
-					if (
-						vmInstruction.nativeFiniteConstruction !== undefined &&
-						instruction.type === "createObject" &&
-						instruction.nativeFiniteConstruction !== undefined
-					) {
-						vmInstruction.nativeFiniteConstruction.icIndex =
-							propertyIcIndexByInstruction.get(
-								instruction.nativeFiniteConstruction.source,
-							) ?? -1;
-					}
-					break;
 				case "CREATE_OBJECT_SHAPED":
 					vmInstruction.shapeCacheIndex = literalShapeCount++;
 					break;
 			}
 			instructions.push(vmInstruction);
 			compilerSiteIds.push(instructionSites?.get(instruction)?.id);
-			if (
-				instruction.type === "loadProperty" &&
-				instruction.nativeFiniteRecordAccess !== undefined &&
-				vmInstruction.opcode === "LOAD_PROPERTY"
-			) {
-				pendingFiniteRecordAccesses.push({
-					instruction: vmInstruction,
-					allocation: instruction.nativeFiniteRecordAccess.allocation,
-				});
-			}
 			if (
 				instruction.type === "loadProperty" &&
 				instruction.nativeExactFreshArrayAccess !== undefined &&
@@ -2092,15 +2066,6 @@ function lowerFunctionToVmFunction(
 			return { instructionIndex, allocationInstructionIndex, guard };
 		},
 	);
-	for (const pending of pendingFiniteRecordAccesses) {
-		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
-			pending.allocation,
-		);
-		if (allocationInstructionIndex === undefined) {
-			throw new Error("Unknown virtual finite-record allocation");
-		}
-		pending.instruction.nativeFiniteRecordAccess = { allocationInstructionIndex };
-	}
 	for (const pending of pendingExactFreshArrayAccesses) {
 		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
 			pending.allocation,
@@ -2123,6 +2088,86 @@ function lowerFunctionToVmFunction(
 	}
 	const irRegions = (fn.regions?.length ?? 0) <= 8 ? (fn.regions ?? []) : [];
 	for (const region of irRegions) {
+		if (region.kind === "finite-object-construction") {
+			const allocationIp = instructionIndexByIrInstruction.get(region.anchors[0]);
+			const storeIp = instructionIndexByIrInstruction.get(region.anchors[1]);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const accessIps = region.accesses.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			if (
+				region.license.guard !== "structural" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "on-demand" ||
+				region.representation !== "finite-key-object-slots" ||
+				region.runtimeGuard !== "number-leaves-and-prototype-shape" ||
+				region.controlFlow.ordinaryBlocks.length === 0 ||
+				region.controlFlow.exceptionalBlocks.length !== 0 ||
+				allocationIp === undefined ||
+				storeIp === undefined ||
+				claimedIps.some((ip) => ip === undefined) ||
+				accessIps.some((ip) => ip === undefined)
+			) {
+				continue;
+			}
+			const allocation = instructions[allocationIp];
+			const store = instructions[storeIp];
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const resolvedAccessIps = accessIps as Array<number>;
+			const payloadIps = [allocationIp, storeIp, ...resolvedAccessIps];
+			const numberGuards = region.anchors[0].registers.slice(1);
+			const finiteKeysMatch = (
+				instruction: VmInstruction | undefined,
+			): instruction is Extract<
+				VmInstruction,
+				{ opcode: "LOAD_PROPERTY" | "STORE_PROPERTY" }
+			> =>
+				(instruction?.opcode === "LOAD_PROPERTY" ||
+					instruction?.opcode === "STORE_PROPERTY") &&
+				instruction.nativeFiniteKey !== undefined &&
+				instruction.nativeFiniteKey.stringIndices.length ===
+					region.keyStringIndices.length &&
+				instruction.nativeFiniteKey.stringIndices.every(
+					(index, ordinal) => index === region.keyStringIndices[ordinal],
+				);
+			if (
+				allocation?.opcode !== "CREATE_OBJECT" ||
+				store?.opcode !== "STORE_PROPERTY" ||
+				!finiteKeysMatch(store) ||
+				region.keyStringIndices.length === 0 ||
+				region.keyStringIndices.length > 32 ||
+				region.numberGuardCount !== numberGuards.length ||
+				region.numberGuardCount < 0 ||
+				region.numberGuardCount > 4 ||
+				region.virtualRecord !== resolvedAccessIps.length > 0 ||
+				resolvedAccessIps.some((ip) => {
+					const access = instructions[ip];
+					return access?.opcode !== "LOAD_PROPERTY" || !finiteKeysMatch(access);
+				}) ||
+				new Set(payloadIps).size !== payloadIps.length ||
+				payloadIps.length !== resolvedClaimedIps.length ||
+				payloadIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
+				region.cost.score !== region.keyStringIndices.length + resolvedAccessIps.length ||
+				region.cost.metadataOperations !== payloadIps.length
+			) {
+				continue;
+			}
+			allocation.nativeFiniteConstruction = {
+				icIndex: store.icIndex,
+				numberGuards,
+				keyStringIndices: [...region.keyStringIndices],
+				...(region.virtualRecord ? { virtualRecord: true } : {}),
+			};
+			for (const ip of resolvedAccessIps) {
+				const access = instructions[ip];
+				if (access?.opcode === "LOAD_PROPERTY") {
+					access.nativeFiniteRecordAccess = { allocationInstructionIndex: allocationIp };
+				}
+			}
+			continue;
+		}
 		if (region.kind === "numeric-fusion") {
 			const anchors = region.anchors.map((instruction) =>
 				instructionIndexByIrInstruction.get(instruction),
@@ -3783,20 +3828,6 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "CREATE_OBJECT",
 				dst: instruction.registers[0],
-				...(instruction.nativeFiniteConstruction === undefined
-					? {}
-					: {
-							nativeFiniteConstruction: {
-								icIndex: -1,
-								numberGuards: instruction.registers.slice(1),
-								keyStringIndices: [
-									...instruction.nativeFiniteConstruction.keyStringIndices,
-								],
-								...(instruction.nativeFiniteConstruction.virtualRecord === true
-									? { virtualRecord: true as const }
-									: {}),
-							},
-						}),
 			};
 		case "createObjectShaped":
 			return {

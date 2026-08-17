@@ -2255,6 +2255,16 @@ function cloneInlinedRegion(
 		},
 	};
 	switch (region.kind) {
+		case "finite-object-construction": {
+			const accesses = region.accesses.map((instruction) => mapInstruction(instruction));
+			if (accesses.some((instruction) => instruction === undefined)) return undefined;
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				accesses: accesses as typeof region.accesses,
+			} as unknown as Extract<IRRegion, { kind: "finite-object-construction" }>;
+		}
 		case "numeric-fusion": {
 			const pairs = region.pairs.map((pair) => ({
 				...pair,

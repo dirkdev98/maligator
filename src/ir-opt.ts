@@ -62,6 +62,7 @@ import type {
 	IntermediateProgram,
 	IRCardinalityArrayRegion,
 	IRClosedRecordArrayRegion,
+	IRFiniteObjectConstructionRegion,
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
@@ -2923,7 +2924,12 @@ const FINITE_CONSTRUCTION_NUMERIC_OPERATORS = new Set([
  * The interpreter and every rejected guard keep the original empty-object loop.
  */
 function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
+	const retainedRegions = (fn.regions ?? []).filter(
+		(region) => region.kind !== "finite-object-construction",
+	);
+	fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
 	if (
+		retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION ||
 		fn.isGenerator ||
 		fn.isAsync ||
 		functionUsesWith(fn) ||
@@ -2942,6 +2948,12 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 
 	const index = buildIRRegisterIndex(fn, { locations: true });
 	const locations = index.locations!;
+	const occupiedInstructions = new Set(
+		retainedRegions
+			.filter((region) => region.composition !== "overlay")
+			.flatMap((region) => [...region.claimedInstructions]),
+	);
+	const selectedAllocations = new Set<IRInstruction>();
 	const incoming = fn.blocks.map(() => new Set<number>());
 	const successors = fn.blocks.map((block, blockIndex) => {
 		const result = new Set<number>();
@@ -3106,7 +3118,7 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 			if (
 				allocation?.type !== "createObject" ||
 				allocation.stackObject ||
-				allocation.nativeFiniteConstruction !== undefined
+				selectedAllocations.has(allocation)
 			) {
 				continue;
 			}
@@ -3242,12 +3254,6 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 				continue;
 			}
 
-			allocation.registers.push(...[...guards].sort((a, b) => a - b));
-			allocation.nativeFiniteConstruction = {
-				source: store,
-				keyStringIndices: [...finite.stringIndices],
-			};
-
 			// Stronger structural proof: if every residual observer is a finite-key
 			// load over this exact selector universe, the native backend never needs
 			// the object's identity. It can preserve the ordinary construction path as
@@ -3275,12 +3281,50 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 				}
 				if (!virtualRecord) break;
 			}
-			if (virtualRecord && virtualAccesses.size > 0) {
-				allocation.nativeFiniteConstruction.virtualRecord = true;
-				for (const access of virtualAccesses) {
-					access.nativeFiniteRecordAccess = { allocation };
-				}
+			const accesses = virtualRecord ? [...virtualAccesses] : [];
+			const claimedInstructions = [allocation, store, ...accesses];
+			if (
+				claimedInstructions.length > 64 ||
+				new Set(claimedInstructions).size !== claimedInstructions.length ||
+				claimedInstructions.some((instruction) => occupiedInstructions.has(instruction))
+			) {
+				continue;
 			}
+			const numberGuards = [...guards].sort((a, b) => a - b);
+			allocation.registers.push(...numberGuards);
+			const ordinaryBlocks = [
+				...new Set(
+					claimedInstructions.map(
+						(instruction) => locations.get(instruction)!.blockIndex,
+					),
+				),
+			].sort((left, right) => left - right);
+			const region: IRFiniteObjectConstructionRegion = {
+				kind: "finite-object-construction",
+				license: {
+					guard: "structural",
+					genericTwin: "retained",
+					materialization: "on-demand",
+				},
+				representation: "finite-key-object-slots",
+				anchors: [allocation, store],
+				claimedInstructions,
+				controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+				cost: {
+					score: finite.stringIndices.length + accesses.length,
+					metadataOperations: claimedInstructions.length,
+				},
+				runtimeGuard: "number-leaves-and-prototype-shape",
+				keyStringIndices: [...finite.stringIndices],
+				numberGuardCount: numberGuards.length,
+				virtualRecord: accesses.length > 0,
+				accesses,
+			};
+			fn.regions = [...(fn.regions ?? []), region];
+			selectedAllocations.add(allocation);
+			for (const instruction of claimedInstructions)
+				occupiedInstructions.add(instruction);
+			if ((fn.regions?.length ?? 0) >= MAX_IR_REGIONS_PER_FUNCTION) return;
 		}
 	}
 }
@@ -4847,6 +4891,14 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 	const stores = new Map<number, Array<CandidateStore>>();
 	const invalidGlobals = new Set<number>();
 	for (const fn of program.functions) {
+		const finiteConstructionAllocations = new Set(
+			(fn.regions ?? [])
+				.filter(
+					(region): region is IRFiniteObjectConstructionRegion =>
+						region.kind === "finite-object-construction",
+				)
+				.map((region) => region.anchors[0]),
+		);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (instruction.type !== "storeGlobal") continue;
@@ -4855,7 +4907,7 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 				if (
 					root?.type !== "createObject" ||
 					root.stackObject ||
-					root.nativeFiniteConstruction !== undefined
+					finiteConstructionAllocations.has(root)
 				) {
 					invalidGlobals.add(instruction.index);
 					continue;
