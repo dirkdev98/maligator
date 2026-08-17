@@ -1967,9 +1967,9 @@ describe("native update-expression representation", () => {
 		const cached = deserializeVmDefinition(
 			serializeVmDefinition(lowered, { debugInfo: false }),
 		);
-		expect(
-			cached.functions.flatMap((fn) => fn.nativeStringSplitCursors ?? []),
-		).toHaveLength(0);
+		expect(cached.functions.flatMap((fn) => fn.nativeStringSplitCursors ?? [])).toEqual(
+			cursors,
+		);
 		expect(emitVmDefinition(cached, { compiled: true })).toContain(
 			"mal_builtin_string_split_cursor_init(vm,",
 		);

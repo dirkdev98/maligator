@@ -571,7 +571,7 @@ export interface VmFunction {
 		}>;
 	}>;
 
-	/** EMITTER-ONLY: one closed indexed split loop streamed as trimmed spans. */
+	/** SERIALIZED COMPILER METADATA: one closed indexed split loop streamed as trimmed spans. */
 	nativeStringSplitCursors?: ReadonlyArray<{
 		license: VmRegionLicense;
 		resultRepresentation: "split-cursor-spans";

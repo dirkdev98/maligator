@@ -34,8 +34,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 45 for IR-proven closed record-Array region certificates.
-export const WIRE_VERSION = 45;
+// Bumped to 46 for durable IR-proven String.split cursor regions.
+export const WIRE_VERSION = 46;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -43,6 +43,8 @@ const NUMERIC_HOF_BINOPS = ["+", "-", "*", "/", "%"] as const;
 const MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS = 64;
 const MAX_CLOSED_RECORD_ARRAY_REGIONS = 8;
 const MAX_CLOSED_RECORD_SHAPE_SLOTS = 64;
+const MAX_STRING_SPLIT_CURSOR_REGIONS = 8;
+const MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS = 64;
 // Preserve the original three wire tags; append the rest of the registry surface.
 const NUMERIC_HOF_MATH_OPS: ReadonlyArray<MathUnaryOperationKey> = [
 	"abs",
@@ -650,6 +652,34 @@ function closedRecordArrayGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function stringSplitCursorGuardMasks(
+	license: NonNullable<VmFunction["nativeStringSplitCursors"]>[number]["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else {
+			throw new RangeError("serialize-vm: unsupported String.split cursor dependency");
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "on-demand" ||
+		(dependencyMask !== 1 && dependencyMask !== 4) ||
+		obligationMask !== 3
+	) {
+		throw new RangeError("serialize-vm: invalid String.split cursor guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1169,6 +1199,36 @@ export function serializeVmDefinition(
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
 		}
+
+		const stringSplitCursorRegions = [...(fn.nativeStringSplitCursors ?? [])];
+		if (stringSplitCursorRegions.length > MAX_STRING_SPLIT_CURSOR_REGIONS) {
+			throw new RangeError("serialize-vm: too many String.split cursor regions");
+		}
+		w.u32(stringSplitCursorRegions.length);
+		const claimedStringSplitCursorInstructions = new Set<number>();
+		for (const region of stringSplitCursorRegions) {
+			validateStringSplitCursorRegion(fn, region, claimedStringSplitCursorInstructions);
+			const { dependencyMask, obligationMask } = stringSplitCursorGuardMasks(
+				region.license,
+			);
+			w.i32(region.propertyIp);
+			w.i32(region.callIp);
+			w.i32(region.callee);
+			w.i32(region.receiver);
+			w.i32(region.separator);
+			w.i32(region.result);
+			w.i32(region.index);
+			w.i32(region.lengthIp);
+			w.i32(region.elementIp);
+			w.i32(region.trimPropertyIp);
+			w.i32(region.trimIcIndex);
+			w.i32(region.trimCallIp);
+			w.i32Array([...region.primitiveStringLengthIps]);
+			w.i32(region.backedgeIp);
+			w.i32(region.exitIp);
+			w.u8(dependencyMask);
+			w.u8(obligationMask);
+		}
 	}
 
 	return w.finish();
@@ -1491,6 +1551,130 @@ function validateClosedRecordArrayRegion(
 		})
 	) {
 		throw new RangeError("serialize-vm: invalid closed record-Array region metadata");
+	}
+	for (const ip of operationIps) claimed.add(ip);
+}
+
+function validateStringSplitCursorRegion(
+	fn: VmFunction,
+	region: NonNullable<VmFunction["nativeStringSplitCursors"]>[number],
+	claimed: Set<number>,
+): void {
+	stringSplitCursorGuardMasks(region.license);
+	const call = fn.instructions[region.callIp];
+	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
+	const length = fn.instructions[region.lengthIp];
+	const compare = fn.instructions[region.lengthIp + 1];
+	const bodyBranch = fn.instructions[region.lengthIp + 2];
+	const exitJump = fn.instructions[region.lengthIp + 3];
+	const element = fn.instructions[region.elementIp];
+	const trimProperty = fn.instructions[region.trimPropertyIp];
+	const trimCall = fn.instructions[region.trimCallIp];
+	const increment = fn.instructions[region.backedgeIp - 1];
+	const backedge = fn.instructions[region.backedgeIp];
+	const operationIps = [
+		...(region.propertyIp < 0 ? [] : [region.propertyIp]),
+		region.callIp,
+		region.lengthIp,
+		region.lengthIp + 1,
+		region.lengthIp + 2,
+		region.lengthIp + 3,
+		region.elementIp,
+		region.trimPropertyIp,
+		region.trimCallIp,
+		...region.primitiveStringLengthIps,
+		region.backedgeIp - 1,
+		region.backedgeIp,
+	];
+	const registerValid = (value: number) =>
+		Number.isInteger(value) && value >= 0 && value < fn.registerCount;
+	const callMatches =
+		call?.opcode === "CALL"
+			? region.propertyIp >= 0 &&
+				property?.opcode === "LOAD_PROPERTY_STATIC" &&
+				property.dst === region.callee &&
+				property.object === region.receiver &&
+				call.callee === region.callee &&
+				call.guardedBuiltinCall?.operation === "String.prototype.split"
+			: call?.opcode === "CALL_BUILTIN" &&
+				region.propertyIp === -1 &&
+				region.callee === -1 &&
+				call.operation === "String.prototype.split";
+	const primitiveLengthIps = new Set(region.primitiveStringLengthIps);
+	let primitiveLengthsValid =
+		primitiveLengthIps.size === region.primitiveStringLengthIps.length;
+	const trimAliases = new Set<number>(trimCall?.opcode === "CALL" ? [trimCall.dst] : []);
+	for (
+		let ip = region.trimCallIp + 1;
+		primitiveLengthsValid && ip <= region.backedgeIp;
+		ip++
+	) {
+		const instruction = fn.instructions[ip];
+		if (instruction === undefined) {
+			primitiveLengthsValid = false;
+			break;
+		}
+		if (primitiveLengthIps.has(ip)) {
+			primitiveLengthsValid =
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				trimAliases.has(instruction.object);
+		}
+		const moveAlias = instruction.opcode === "MOVE" && trimAliases.has(instruction.src);
+		if ("dst" in instruction && trimAliases.has(instruction.dst)) {
+			trimAliases.delete(instruction.dst);
+		}
+		if (moveAlias && instruction.opcode === "MOVE") trimAliases.add(instruction.dst);
+	}
+	if (
+		region.resultRepresentation !== "split-cursor-spans" ||
+		!callMatches ||
+		call === undefined ||
+		(call.opcode !== "CALL" && call.opcode !== "CALL_BUILTIN") ||
+		call.thisValue !== region.receiver ||
+		call.argumentCount !== 1 ||
+		call.arguments[0] !== region.separator ||
+		call.dst !== region.result ||
+		!registerValid(region.result) ||
+		!registerValid(region.index) ||
+		length?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		compare?.opcode !== "BINARY" ||
+		compare.operator !== "<" ||
+		compare.right !== length.dst ||
+		compare.left !== region.index ||
+		bodyBranch?.opcode !== "JUMP_IF" ||
+		bodyBranch.cond !== compare.dst ||
+		bodyBranch.targetIp !== region.elementIp ||
+		exitJump?.opcode !== "JUMP" ||
+		exitJump.targetIp !== region.exitIp ||
+		region.elementIp !== region.lengthIp + 4 ||
+		element?.opcode !== "LOAD_PROPERTY" ||
+		element.key !== region.index ||
+		region.trimPropertyIp !== region.elementIp + 1 ||
+		trimProperty?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		trimProperty.object !== element.dst ||
+		trimProperty.icIndex !== region.trimIcIndex ||
+		region.trimCallIp !== region.trimPropertyIp + 1 ||
+		trimCall?.opcode !== "CALL" ||
+		trimCall.callee !== trimProperty.dst ||
+		trimCall.thisValue !== element.dst ||
+		trimCall.argumentCount !== 0 ||
+		trimCall.guardedBuiltinCall?.operation !== "String.prototype.trim" ||
+		increment?.opcode !== "UNARY" ||
+		increment.operator !== "increment" ||
+		increment.src !== region.index ||
+		increment.dst !== region.index ||
+		backedge?.opcode !== "JUMP" ||
+		backedge.targetIp !== region.lengthIp ||
+		region.backedgeIp <= region.trimCallIp ||
+		region.exitIp !== region.backedgeIp + 1 ||
+		region.exitIp < 0 ||
+		region.exitIp > fn.instructions.length ||
+		region.primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS ||
+		!primitiveLengthsValid ||
+		new Set(operationIps).size !== operationIps.length ||
+		operationIps.some((ip) => ip < 0 || ip >= fn.instructions.length || claimed.has(ip))
+	) {
+		throw new RangeError("serialize-vm: invalid String.split cursor region metadata");
 	}
 	for (const ip of operationIps) claimed.add(ip);
 }
@@ -2618,6 +2802,88 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				regions.push(region);
 			}
 			fn.nativeClosedRecordArrayRegions = regions;
+		}
+
+		const stringSplitCursorRegionCount = r.count(17);
+		if (stringSplitCursorRegionCount > MAX_STRING_SPLIT_CURSOR_REGIONS) {
+			throw new RangeError("serialize-vm: too many String.split cursor regions");
+		}
+		if (stringSplitCursorRegionCount > 0) {
+			const regions: Array<NonNullable<VmFunction["nativeStringSplitCursors"]>[number]> =
+				[];
+			const claimed = new Set<number>();
+			for (
+				let regionIndex = 0;
+				regionIndex < stringSplitCursorRegionCount;
+				regionIndex++
+			) {
+				const propertyIp = r.i32();
+				const callIp = r.i32();
+				const callee = r.i32();
+				const receiver = r.i32();
+				const separator = r.i32();
+				const result = r.i32();
+				const index = r.i32();
+				const lengthIp = r.i32();
+				const elementIp = r.i32();
+				const trimPropertyIp = r.i32();
+				const trimIcIndex = r.i32();
+				const trimCallIp = r.i32();
+				const primitiveStringLengthIps = r.i32Array();
+				const backedgeIp = r.i32();
+				const exitIp = r.i32();
+				const dependencyMask = r.u8();
+				const obligationMask = r.u8();
+				if (
+					primitiveStringLengthIps.length > MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS ||
+					(dependencyMask !== 1 && dependencyMask !== 4) ||
+					obligationMask !== 3
+				) {
+					throw new RangeError("serialize-vm: invalid String.split cursor header");
+				}
+				const region = {
+					license: {
+						guard: {
+							dependencies:
+								dependencyMask === 1
+									? [
+											{
+												kind: "world" as const,
+												fact: "primordials.locked" as const,
+											},
+										]
+									: [
+											{
+												kind: "epoch" as const,
+												family: "watched-methods" as const,
+											},
+										],
+							obligations: ["fallback" as const, "materialize" as const],
+						},
+						genericTwin: "retained" as const,
+						materialization: "on-demand" as const,
+					},
+					resultRepresentation: "split-cursor-spans" as const,
+					propertyIp,
+					callIp,
+					callee,
+					receiver,
+					separator,
+					result,
+					index,
+					lengthIp,
+					elementIp,
+					trimPropertyIp,
+					trimIcIndex,
+					trimCallIp,
+					primitiveStringLengthIps,
+					backedgeIp,
+					exitIp,
+				};
+				validateStringSplitCursorRegion(fn, region, claimed);
+				regions.push(region);
+			}
+			fn.nativeStringSplitCursors = regions;
 		}
 	}
 	if (r.remaining() !== 0) {

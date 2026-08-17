@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 45u        // IR-proven closed record-Array regions
+#define WIRE_VERSION 46u        // durable IR-proven String.split cursor regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1988,6 +1988,128 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 MAL_CLOSED_RECORD_CLAIM(ip);
             }
 #undef MAL_CLOSED_RECORD_CLAIM
+        }
+
+        u32 split_cursor_region_count = rd_count(&r, 17);
+        if (split_cursor_region_count > 8) r.ok = false;
+        i32 claimed_split_cursor_ips[608];
+        u32 claimed_split_cursor_count = 0;
+        for (u32 region = 0; r.ok && region < split_cursor_region_count; region++) {
+            const MalFunction *fn = &functions[i];
+            i32 property_ip = rd_i32(&r);
+            i32 call_ip = rd_i32(&r);
+            i32 callee = rd_i32(&r);
+            i32 receiver = rd_i32(&r);
+            i32 separator = rd_i32(&r);
+            i32 result = rd_i32(&r);
+            i32 index = rd_i32(&r);
+            i32 length_ip = rd_i32(&r);
+            i32 element_ip = rd_i32(&r);
+            i32 trim_property_ip = rd_i32(&r);
+            i32 trim_ic_index = rd_i32(&r);
+            i32 trim_call_ip = rd_i32(&r);
+            u32 primitive_length_count = rd_count(&r, sizeof(i32));
+            if (primitive_length_count > 64) r.ok = false;
+            i32 primitive_length_ips[64];
+            for (u32 load = 0; r.ok && load < primitive_length_count; load++) {
+                primitive_length_ips[load] = rd_i32(&r);
+            }
+            i32 backedge_ip = rd_i32(&r);
+            i32 exit_ip = rd_i32(&r);
+            u8 dependency_mask = rd_u8(&r);
+            u8 obligation_mask = rd_u8(&r);
+            bool call_ip_ok = call_ip >= 0 && call_ip < fn->instruction_count;
+            bool call_is_generic = call_ip_ok && fn->instructions[call_ip].opcode == MAL_OP_CALL;
+            bool call_is_builtin = call_ip_ok && fn->instructions[call_ip].opcode == MAL_OP_CALL_BUILTIN;
+            bool property_ok = property_ip >= 0 && property_ip < fn->instruction_count &&
+                fn->instructions[property_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC;
+            bool fixed_ips_ok = length_ip >= 0 && length_ip + 4 == element_ip &&
+                trim_property_ip == element_ip + 1 && trim_call_ip == trim_property_ip + 1 &&
+                trim_call_ip < backedge_ip && exit_ip == backedge_ip + 1 &&
+                exit_ip <= fn->instruction_count && backedge_ip < fn->instruction_count;
+            if (!call_ip_ok || (!call_is_generic && !call_is_builtin) ||
+                (call_is_generic && !property_ok) ||
+                (call_is_builtin && (property_ip != -1 || callee != -1)) ||
+                result < 0 || result >= fn->register_count ||
+                index < 0 || index >= fn->register_count || !fixed_ips_ok ||
+                (dependency_mask != 1 && dependency_mask != 4) || obligation_mask != 3) {
+                r.ok = false;
+                continue;
+            }
+            const MalInstruction *call = &fn->instructions[call_ip];
+            const MalInstruction *length = &fn->instructions[length_ip];
+            const MalInstruction *compare = &fn->instructions[length_ip + 1];
+            const MalInstruction *body_branch = &fn->instructions[length_ip + 2];
+            const MalInstruction *exit_jump = &fn->instructions[length_ip + 3];
+            const MalInstruction *element = &fn->instructions[element_ip];
+            const MalInstruction *trim_property = &fn->instructions[trim_property_ip];
+            const MalInstruction *trim_call = &fn->instructions[trim_call_ip];
+            const MalInstruction *increment = &fn->instructions[backedge_ip - 1];
+            const MalInstruction *backedge = &fn->instructions[backedge_ip];
+            bool structure_ok = length->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                compare->opcode == MAL_OP_BINARY && compare->as.binary.op == MAL_BIN_LT &&
+                compare->as.binary.left == index &&
+                compare->as.binary.right == length->as.load_property_static.dst &&
+                body_branch->opcode == MAL_OP_JUMP_IF &&
+                body_branch->as.jump_if.cond == compare->as.binary.dst &&
+                body_branch->as.jump_if.target_ip == element_ip &&
+                exit_jump->opcode == MAL_OP_JUMP && exit_jump->as.jump.target_ip == exit_ip &&
+                element->opcode == MAL_OP_LOAD_PROPERTY && element->as.load_property.key == index &&
+                trim_property->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                trim_property->as.load_property_static.object == element->as.load_property.dst &&
+                trim_property->as.load_property_static.ic_index == trim_ic_index &&
+                trim_call->opcode == MAL_OP_CALL &&
+                trim_call->as.call.callee == trim_property->as.load_property_static.dst &&
+                trim_call->as.call.this_value == element->as.load_property.dst &&
+                increment->opcode == MAL_OP_UNARY && increment->as.unary.op == MAL_UNARY_INCREMENT &&
+                increment->as.unary.src == index && increment->as.unary.dst == index &&
+                backedge->opcode == MAL_OP_JUMP && backedge->as.jump.target_ip == length_ip;
+            if (call_is_generic) {
+                structure_ok = structure_ok && call->as.call.dst == result &&
+                    call->as.call.callee == callee && call->as.call.this_value == receiver &&
+                    fn->instructions[property_ip].as.load_property_static.dst == callee &&
+                    fn->instructions[property_ip].as.load_property_static.object == receiver;
+            } else {
+                structure_ok = structure_ok && call->as.call_builtin.dst == result &&
+                    call->as.call_builtin.this_value == receiver;
+            }
+            (void) separator;
+            if (!structure_ok) {
+                r.ok = false;
+                continue;
+            }
+#define MAL_SPLIT_CURSOR_CLAIM(ip) do { \
+                i32 claim_ip = (ip); \
+                if (claim_ip < 0 || claim_ip >= fn->instruction_count) { \
+                    r.ok = false; \
+                } else { \
+                    for (u32 claim = 0; claim < claimed_split_cursor_count; claim++) { \
+                        if (claimed_split_cursor_ips[claim] == claim_ip) r.ok = false; \
+                    } \
+                    if (r.ok && claimed_split_cursor_count < countof(claimed_split_cursor_ips)) { \
+                        claimed_split_cursor_ips[claimed_split_cursor_count++] = claim_ip; \
+                    } else if (r.ok) { \
+                        r.ok = false; \
+                    } \
+                } \
+            } while (0)
+            if (property_ip >= 0) MAL_SPLIT_CURSOR_CLAIM(property_ip);
+            MAL_SPLIT_CURSOR_CLAIM(call_ip);
+            for (i32 ip = length_ip; r.ok && ip <= trim_call_ip; ip++) {
+                MAL_SPLIT_CURSOR_CLAIM(ip);
+            }
+            for (u32 load = 0; r.ok && load < primitive_length_count; load++) {
+                i32 ip = primitive_length_ips[load];
+                if (ip < 0 || ip >= fn->instruction_count ||
+                    fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY_STATIC) {
+                    r.ok = false;
+                    break;
+                }
+                MAL_SPLIT_CURSOR_CLAIM(ip);
+            }
+            MAL_SPLIT_CURSOR_CLAIM(backedge_ip - 1);
+            MAL_SPLIT_CURSOR_CLAIM(backedge_ip);
+#undef MAL_SPLIT_CURSOR_CLAIM
         }
     }
 

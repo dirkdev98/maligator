@@ -239,6 +239,10 @@ the same facts unconditionally.
         validate the trim cache and callback once, use unchecked span trimming in
         stable regions, and revalidate the combined named dependencies through one
         semantic-activity snapshot after a potentially invalidating loop operation.
+  - [x] Preserve the IR-selected split-cursor certificate through MALW v46 and
+        validate its bounded instruction anchors in both loaders. Remove the
+        post-wire VM-opcode proof reconstruction so fresh, cached, and deserialized
+        builds consume the same region authority.
 - [x] Retain a generic twin when invalidation or a local guard can fail. Define the
       shared fallback/materialization contract before adding loaded-field numeric
       layouts or more speculative object representations.
@@ -422,9 +426,14 @@ is general rather than a registry-shaped collection of special cases.
         single-backedge, canonical-exit counted loop whose exact `push` argument is
         one shaped-record allocation, then consumed only by same-bound indexed
         loops. Reject captures, escapes, conditional or early-exit fills, mixed
-        shapes, and dynamic or new-field uses. Carry emitter-only dense-element and
-        known-slot certificates into native code while retaining ordinary VM
+        shapes, and dynamic or new-field uses. Carry dense-element and known-slot
+        certificates into native code while retaining ordinary VM
         instructions for mutable, interpreted, and rejected-proof execution.
+    - [x] Move the complete record-Array proof to final IR while virtual-register
+          provenance and block identity remain available. Select multiple disjoint
+          regions with bounded metadata/cost caps, resolve every instruction anchor
+          atomically during lowering, retain them through MALW v45, and remove the
+          duplicate VM-emitter proof.
 - [ ] Infer and bulk-construct the result shape of object rest/spread normalization
       when source shapes and excluded keys are bounded. Avoid building every
       normalized application record through the empty-object path while retaining a
@@ -441,6 +450,12 @@ is general rather than a registry-shaped collection of special cases.
 - [ ] Build the closed-program call/effect/reachability graph from modules, host entry
       points, exports, reflection, eval capabilities, and Realm creation. Explain each
       retained open edge in optimization remarks.
+- [ ] Replace instruction-owned optional region anchors and per-optimization wire
+      tails with a tagged function-level IR region table. Each certificate should
+      carry stable instruction anchors, an ordinary/exceptional control-flow scope,
+      claimed operations, license, representation/materialization contract, and a
+      cost score; one generic lowering/serialization path should drop the whole
+      certificate if any anchor or invariant no longer resolves.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

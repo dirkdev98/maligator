@@ -330,10 +330,11 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		expect(wire.at(-4)).toBe(12);
-		expect(wire.at(-2)).toBe(0); // empty numeric-HOF region table
-		expect(wire.at(-1)).toBe(0); // empty closed record-Array region table
-		wire[wire.length - 3] = 0;
+		expect(wire.at(-5)).toBe(12);
+		expect(wire.at(-3)).toBe(0); // empty numeric-HOF region table
+		expect(wire.at(-2)).toBe(0); // empty closed record-Array region table
+		expect(wire.at(-1)).toBe(0); // empty String.split cursor region table
+		wire[wire.length - 4] = 0;
 		rejectsWire("indexed-fill-reserve-zero", wire);
 	});
 
@@ -366,10 +367,11 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		expect(wire.at(-4)).toBe(13);
-		expect(wire.at(-2)).toBe(0); // empty numeric-HOF region table
-		expect(wire.at(-1)).toBe(0); // empty closed record-Array region table
-		wire[wire.length - 3] = 2; // ZigZag(1): CREATE_NUMBER, not CREATE_ARRAY
+		expect(wire.at(-5)).toBe(13);
+		expect(wire.at(-3)).toBe(0); // empty numeric-HOF region table
+		expect(wire.at(-2)).toBe(0); // empty closed record-Array region table
+		expect(wire.at(-1)).toBe(0); // empty String.split cursor region table
+		wire[wire.length - 4] = 2; // ZigZag(1): CREATE_NUMBER, not CREATE_ARRAY
 		rejectsWire("exact-fresh-array-access-allocation", wire);
 	});
 
@@ -434,6 +436,35 @@ describe("wire loader side-data validation", () => {
 		writeFileSync(
 			wirePath,
 			serializeVmDefinition(closedDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
+	it("loads a nonempty String.split cursor proof region payload", () => {
+		const entrypoint = path.join(directory, "string-split-cursor-region.mjs");
+		writeFileSync(
+			entrypoint,
+			`function run(value, separator) {
+				const parts = value.split(separator);
+				let total = 0;
+				for (let index = 0; index < parts.length; index++) {
+					total += parts[index].trim().length;
+				}
+				return total;
+			}
+			globalThis.result = run(" alpha, beta ", ",");\n`,
+		);
+		const cursorDefinition = compileEntrypoint(entrypoint, {
+			stripTypes: stripTypesWithTypeScript,
+		});
+		expect(
+			cursorDefinition.functions.flatMap((fn) => fn.nativeStringSplitCursors ?? []),
+		).toHaveLength(1);
+		const wirePath = path.join(directory, "string-split-cursor-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(cursorDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
