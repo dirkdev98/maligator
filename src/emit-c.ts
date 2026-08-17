@@ -18,6 +18,7 @@ import {
 import type {
 	VmCardinalityArrayRegion,
 	VmExceptionHandler,
+	VmFiniteObjectConstructionRegion,
 	VmFunction,
 	VmGuardPlan,
 	VmInvariantJsonMapTemplateRegion,
@@ -576,6 +577,14 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 	let numericMask = 0n;
 	let disqualifyingMask = 0n;
 	let finiteConstructionMask = 0n;
+	const finiteConstructionNumberGuards = new Map<number, ReadonlyArray<number>>(
+		(fn.regions ?? [])
+			.filter(
+				(region): region is VmFiniteObjectConstructionRegion =>
+					region.kind === "finite-object-construction",
+			)
+			.map((region) => [region.allocationIp, region.numberGuards]),
+	);
 
 	const enqueueMerge = (target: number, incoming: ParamState): void => {
 		if (target < 0 || target >= fn.instructions.length) return;
@@ -614,10 +623,8 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 		}
 
 		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode === "CREATE_OBJECT") {
-			for (const register of instruction.nativeFiniteConstruction?.numberGuards ?? []) {
-				finiteConstructionMask |= state.get(register) ?? 0n;
-			}
+		for (const register of finiteConstructionNumberGuards.get(ip) ?? []) {
+			finiteConstructionMask |= state.get(register) ?? 0n;
 		}
 		const outgoing = new Map(state);
 		const moveMask =
@@ -813,57 +820,47 @@ export function emitCompiledFunction(
 	const finiteRecordRegions = new Map<number, FiniteRecordRegion>();
 	const finiteRecordStores = new Map<number, FiniteRecordRegion>();
 	const finiteRecordAccesses = new Map<number, FiniteRecordRegion>();
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
-		const finite =
-			instruction.opcode === "CREATE_OBJECT"
-				? instruction.nativeFiniteConstruction
-				: undefined;
-		if (finite?.virtualRecord !== true) continue;
-		if (finite.keyStringIndices.length === 0 || finite.keyStringIndices.length > 8) {
-			throw new Error(`Invalid virtual finite-record width at instruction ${ip}`);
-		}
-		const stores = fn.instructions
-			.map((candidate, candidateIp) => ({ candidate, candidateIp }))
-			.filter(
-				(
-					entry,
-				): entry is {
-					candidate: Extract<VmInstruction, { opcode: "STORE_PROPERTY" }>;
-					candidateIp: number;
-				} =>
-					entry.candidate.opcode === "STORE_PROPERTY" &&
-					entry.candidate.icIndex === finite.icIndex &&
-					entry.candidate.nativeFiniteKey !== undefined,
+	const finiteConstructionRegions = new Map<number, VmFiniteObjectConstructionRegion>();
+	for (const finite of (fn.regions ?? []).filter(
+		(region): region is VmFiniteObjectConstructionRegion =>
+			region.kind === "finite-object-construction",
+	)) {
+		const allocation = fn.instructions[finite.allocationIp];
+		const store = fn.instructions[finite.storeIp];
+		if (
+			allocation?.opcode !== "CREATE_OBJECT" ||
+			store?.opcode !== "STORE_PROPERTY" ||
+			store.icIndex !== finite.icIndex ||
+			store.nativeFiniteKey === undefined ||
+			finite.keyStringIndices.length === 0 ||
+			finite.keyStringIndices.length > 8 ||
+			finite.numberGuards.some(
+				(register) => register < 0 || register >= fn.registerCount,
+			) ||
+			finite.accessIps.some((ip) => {
+				const access = fn.instructions[ip];
+				return access?.opcode !== "LOAD_PROPERTY" || access.nativeFiniteKey === undefined;
+			}) ||
+			finiteConstructionRegions.has(finite.allocationIp)
+		) {
+			throw new Error(
+				`Invalid finite-object construction region at instruction ${finite.allocationIp}`,
 			);
-		if (stores.length !== 1) {
-			throw new Error(`Invalid virtual finite-record store at instruction ${ip}`);
 		}
+		finiteConstructionRegions.set(finite.allocationIp, finite);
+		if (!finite.virtualRecord) continue;
 		const region: FiniteRecordRegion = {
-			allocationInstructionIndex: ip,
+			allocationInstructionIndex: finite.allocationIp,
 			slotsOffset: nextStackSlot,
 			slotCount: finite.keyStringIndices.length,
-			fastName: `__finite_record_${ip}_fast`,
+			fastName: `__finite_record_${finite.allocationIp}_fast`,
 		};
 		nextStackSlot += region.slotCount;
-		finiteRecordRegions.set(ip, region);
-		finiteRecordStores.set(stores[0]!.candidateIp, region);
-	}
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
-		if (
-			instruction.opcode !== "LOAD_PROPERTY" ||
-			instruction.nativeFiniteRecordAccess === undefined
-		) {
-			continue;
+		finiteRecordRegions.set(finite.allocationIp, region);
+		finiteRecordStores.set(finite.storeIp, region);
+		for (const ip of finite.accessIps) {
+			finiteRecordAccesses.set(ip, region);
 		}
-		const region = finiteRecordRegions.get(
-			instruction.nativeFiniteRecordAccess.allocationInstructionIndex,
-		);
-		if (region === undefined || instruction.nativeFiniteKey === undefined) {
-			throw new Error(`Invalid virtual finite-record access at instruction ${ip}`);
-		}
-		finiteRecordAccesses.set(ip, region);
 	}
 	const cardinalityRegions = new Map<number, CardinalityRegion>();
 	const cardinalityAccesses = new Map<
@@ -1292,6 +1289,7 @@ export function emitCompiledFunction(
 		finiteRecordRegions,
 		finiteRecordStores,
 		finiteRecordAccesses,
+		finiteConstructionRegions,
 		cardinalityRegions,
 		cardinalityAccesses,
 		cardinalityPushes,
@@ -1676,6 +1674,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -3017,6 +3016,7 @@ function emitBody(
 	finiteRecordRegions: ReadonlyMap<number, FiniteRecordRegion>,
 	finiteRecordStores: ReadonlyMap<number, FiniteRecordRegion>,
 	finiteRecordAccesses: ReadonlyMap<number, FiniteRecordRegion>,
+	finiteConstructionRegions: ReadonlyMap<number, VmFiniteObjectConstructionRegion>,
 	cardinalityRegions: ReadonlyMap<number, CardinalityRegion>,
 	cardinalityAccesses: ReadonlyMap<
 		number,
@@ -3970,6 +3970,7 @@ function emitBody(
 					privateAggregatePushByIp.get(ip),
 					exactFreshArrayAccessIps.has(ip),
 					numericFusionActionByIp.get(ip),
+					finiteConstructionRegions.get(ip),
 				);
 		if (emitted === null) {
 			return null;
@@ -4369,6 +4370,7 @@ function emitInstruction(
 	privateAggregatePushMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
 	exactFreshArrayAccess?: boolean,
 	numericFusionAction?: NativeNumericFusionAction,
+	finiteConstruction?: VmFiniteObjectConstructionRegion,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -4524,11 +4526,8 @@ function emitInstruction(
 				`r${instruction.dst} = mal_value_from_bigint(&mal_bigints${suffix}[${instruction.bigintIndex}]);`,
 			];
 		case "CREATE_OBJECT":
-			if (
-				stackObjectSite === undefined &&
-				instruction.nativeFiniteConstruction !== undefined
-			) {
-				const finite = instruction.nativeFiniteConstruction;
+			if (stackObjectSite === undefined && finiteConstruction !== undefined) {
+				const finite = finiteConstruction;
 				const table = `__finite_construction_keys_${ip}`;
 				const guards = finite.numberGuards.map((register) =>
 					reps[register] === "number" ? "true" : `mal_ops_is_number(${boxed(register)})`,

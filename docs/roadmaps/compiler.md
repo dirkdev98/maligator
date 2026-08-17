@@ -554,7 +554,9 @@ is general rather than a registry-shaped collection of special cases.
         links with one structural IR region. Make the region own the allocation,
         canonical finite-key store, guarded Number leaves and every direct slot
         read; register allocation and lowering now consume the same certificate,
-        while the existing VM metadata remains the cached execution form.
+        then preserve that certificate as a validated VM region through MALW v62.
+        Native emission derives construction and virtual-slot actions solely from
+        the region; the old allocation/access side channels no longer exist.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

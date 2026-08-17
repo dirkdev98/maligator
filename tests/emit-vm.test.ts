@@ -1074,11 +1074,14 @@ describe("native update-expression representation", () => {
 				{
 					opcode: "CREATE_OBJECT",
 					dst: 4,
-					nativeFiniteConstruction: {
-						icIndex: 0,
-						numberGuards: [1],
-						keyStringIndices: [1],
-					},
+				},
+				{
+					opcode: "STORE_PROPERTY",
+					object: 4,
+					key: 2,
+					value: 3,
+					icIndex: 0,
+					nativeFiniteKey: { minimum: 3, ordinal: 2, stringIndices: [1] },
 				},
 				{ opcode: "CREATE_OBJECT", dst: 1 },
 				{
@@ -1089,6 +1092,29 @@ describe("native update-expression representation", () => {
 					icIndex: 1,
 				},
 				{ opcode: "RETURN", value: 3 },
+			],
+			regions: [
+				{
+					kind: "finite-object-construction",
+					license: {
+						guard: { dependencies: [], obligations: ["fallback", "materialize"] },
+						genericTwin: "retained",
+						materialization: "on-demand",
+					},
+					representation: "finite-key-object-slots",
+					anchors: [3, 4],
+					claimedIps: [3, 4],
+					controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+					cost: { score: 1, metadataOperations: 2 },
+					allocationIp: 3,
+					storeIp: 4,
+					icIndex: 0,
+					numberGuards: [1],
+					keyStringIndices: [1],
+					virtualRecord: false,
+					accessIps: [],
+					runtimeGuard: "number-leaves-and-prototype-shape",
+				},
 			],
 		};
 		const output = emitVmDefinition({

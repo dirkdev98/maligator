@@ -167,11 +167,6 @@ describe("Test262 VM definition merger", () => {
 			{
 				opcode: "CREATE_OBJECT",
 				dst: 3,
-				nativeFiniteConstruction: {
-					icIndex: 1,
-					numberGuards: [2],
-					keyStringIndices: [0],
-				},
 			},
 			{
 				opcode: "STORE_PROPERTY",
@@ -199,8 +194,32 @@ describe("Test262 VM definition merger", () => {
 				},
 			},
 		];
+		const secondFunction = vmFunction(indexed);
+		secondFunction.regions = [
+			{
+				kind: "finite-object-construction",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback", "materialize"] },
+					genericTwin: "retained",
+					materialization: "on-demand",
+				},
+				representation: "finite-key-object-slots",
+				anchors: [20, 21],
+				claimedIps: [20, 21],
+				controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+				cost: { score: 1, metadataOperations: 2 },
+				allocationIp: 20,
+				storeIp: 21,
+				icIndex: 1,
+				numberGuards: [2],
+				keyStringIndices: [0],
+				virtualRecord: false,
+				accessIps: [],
+				runtimeGuard: "number-leaves-and-prototype-shape",
+			},
+		];
 		const second = definition({
-			functions: [vmFunction(indexed)],
+			functions: [secondFunction],
 			globalCount: 5,
 			literalTemplateData: [8, 2, 5, 0, 6, 0, 9, 1, 10, 0, 5, 0],
 			sourcePositions: [{ line: 2, column: 1, inlinedFunctionIndex: 0, callerPosId: 0 }],
@@ -267,12 +286,11 @@ describe("Test262 VM definition merger", () => {
 		expect(rebased[19]).toMatchObject({
 			nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [2] },
 		});
-		expect(rebased[20]).toMatchObject({
-			nativeFiniteConstruction: {
-				icIndex: 1,
-				numberGuards: [2],
-				keyStringIndices: [2],
-			},
+		expect(merged.functions[2]!.regions?.[0]).toMatchObject({
+			kind: "finite-object-construction",
+			icIndex: 1,
+			numberGuards: [2],
+			keyStringIndices: [2],
 		});
 		expect(rebased[21]).toMatchObject({
 			nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [2] },

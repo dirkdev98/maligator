@@ -621,6 +621,27 @@ export type VmNumericFusionRegion = VmRegionEnvelope<
 	}>;
 };
 
+/**
+ * Complete finite-key construction contract. The allocation, canonical store,
+ * optional virtual reads, Number leaves, key table, and shared property IC are
+ * one cacheable unit; no instruction-local construction/access backlinks are
+ * needed after lowering.
+ */
+export type VmFiniteObjectConstructionRegion = VmRegionEnvelope<
+	"finite-object-construction",
+	"finite-key-object-slots",
+	"on-demand"
+> & {
+	readonly allocationIp: number;
+	readonly storeIp: number;
+	readonly icIndex: number;
+	readonly numberGuards: ReadonlyArray<number>;
+	readonly keyStringIndices: ReadonlyArray<number>;
+	readonly virtualRecord: boolean;
+	readonly accessIps: ReadonlyArray<number>;
+	readonly runtimeGuard: "number-leaves-and-prototype-shape";
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -652,6 +673,7 @@ export type VmRegion =
 	| VmPrivateAggregateMemoRegion
 	| VmInvariantJsonMapTemplateRegion
 	| VmNumericFusionRegion
+	| VmFiniteObjectConstructionRegion
 	| VmStackObjectPlanRegion
 	| VmCardinalityArrayRegion
 	| VmStringSplitProjectionRegion
@@ -1036,12 +1058,6 @@ export type VmInstruction =
 	| {
 			opcode: "CREATE_OBJECT";
 			dst: number;
-			nativeFiniteConstruction?: {
-				icIndex: number;
-				numberGuards: Array<number>;
-				keyStringIndices: Array<number>;
-				virtualRecord?: true;
-			};
 	  }
 	| {
 			opcode: "CREATE_OBJECT_SHAPED";
@@ -1291,9 +1307,6 @@ export type VmInstruction =
 				minimum: number;
 				ordinal: number;
 				stringIndices: Array<number>;
-			};
-			nativeFiniteRecordAccess?: {
-				allocationInstructionIndex: number;
 			};
 			/** EMITTER-DERIVED LOOKUP: materialized only from the central region table. */
 			nativeClosedRecordArrayAccess?: {
@@ -2159,6 +2172,9 @@ function lowerFunctionToVmFunction(
 			const accessIps = region.accesses.map((instruction) =>
 				instructionIndexByIrInstruction.get(instruction),
 			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
 			if (
 				region.license.guard !== "structural" ||
 				region.license.genericTwin !== "retained" ||
@@ -2170,7 +2186,8 @@ function lowerFunctionToVmFunction(
 				allocationIp === undefined ||
 				storeIp === undefined ||
 				claimedIps.some((ip) => ip === undefined) ||
-				accessIps.some((ip) => ip === undefined)
+				accessIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined)
 			) {
 				continue;
 			}
@@ -2216,18 +2233,30 @@ function lowerFunctionToVmFunction(
 			) {
 				continue;
 			}
-			allocation.nativeFiniteConstruction = {
+			regions.push({
+				kind: "finite-object-construction",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback", "materialize"] },
+					genericTwin: "retained",
+					materialization: "on-demand",
+				},
+				representation: "finite-key-object-slots",
+				anchors: [allocationIp, storeIp],
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: [],
+				},
+				cost: { ...region.cost },
+				allocationIp,
+				storeIp,
 				icIndex: store.icIndex,
 				numberGuards,
 				keyStringIndices: [...region.keyStringIndices],
-				...(region.virtualRecord ? { virtualRecord: true } : {}),
-			};
-			for (const ip of resolvedAccessIps) {
-				const access = instructions[ip];
-				if (access?.opcode === "LOAD_PROPERTY") {
-					access.nativeFiniteRecordAccess = { allocationInstructionIndex: allocationIp };
-				}
-			}
+				virtualRecord: region.virtualRecord,
+				accessIps: resolvedAccessIps,
+				runtimeGuard: "number-leaves-and-prototype-shape",
+			});
 			continue;
 		}
 		if (region.kind === "numeric-fusion") {

@@ -49,6 +49,14 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "finite-object-construction":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				numberGuards: [...region.numberGuards],
+				keyStringIndices: region.keyStringIndices.map((index) => index + base.string),
+				accessIps: [...region.accessIps],
+			};
 		case "numeric-fusion":
 			return {
 				...cloneRegionEnvelope(region),
@@ -301,6 +309,7 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
 		case "CREATE_BOOLEAN":
+		case "CREATE_OBJECT":
 		case "CREATE_ARRAY":
 		case "CREATE_UNDEFINED":
 		case "CREATE_EMPTY":
@@ -385,10 +394,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 									(index) => index + base.string,
 								),
 							},
-				nativeFiniteRecordAccess:
-					instruction.nativeFiniteRecordAccess === undefined
-						? undefined
-						: { ...instruction.nativeFiniteRecordAccess },
 			};
 		case "STORE_PROPERTY":
 			return {
@@ -410,24 +415,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 								stringIndices: instruction.nativeFiniteKey.stringIndices.map(
 									(index) => index + base.string,
 								),
-							},
-			};
-		case "CREATE_OBJECT":
-			return {
-				...instruction,
-				nativeFiniteConstruction:
-					instruction.nativeFiniteConstruction === undefined
-						? undefined
-						: {
-								icIndex: instruction.nativeFiniteConstruction.icIndex,
-								numberGuards: [...instruction.nativeFiniteConstruction.numberGuards],
-								keyStringIndices:
-									instruction.nativeFiniteConstruction.keyStringIndices.map(
-										(index) => index + base.string,
-									),
-								...(instruction.nativeFiniteConstruction.virtualRecord === true
-									? { virtualRecord: true as const }
-									: {}),
 							},
 			};
 		case "BINARY":

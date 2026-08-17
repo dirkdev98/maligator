@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 61u        // numeric-fusion overlay regions
+#define WIRE_VERSION 62u        // finite-object construction regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1790,31 +1790,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 for (u32 index = 0; r.ok && index < string_index_count; index++) {
                     (void) rd_i32(&r);
                 }
-                u8 has_finite_record_access = rd_u8(&r);
-                if (has_finite_record_access > 1) {
-                    r.ok = false;
-                } else if (has_finite_record_access != 0) {
-                    (void) rd_i32(&r); // virtual record allocation instruction
-                }
-            } else if (tag == 7) { // CREATE_OBJECT finite construction region
-                (void) rd_i32(&r); // shared property IC index
-                u32 guard_count = rd_count(&r, sizeof(i32));
-                if (guard_count > 4) {
-                    r.ok = false;
-                }
-                for (u32 guard = 0; r.ok && guard < guard_count; guard++) {
-                    (void) rd_i32(&r);
-                }
-                u32 string_index_count = rd_count(&r, sizeof(i32));
-                if (string_index_count == 0 || string_index_count > 8) {
-                    r.ok = false;
-                }
-                for (u32 index = 0; r.ok && index < string_index_count; index++) {
-                    (void) rd_i32(&r);
-                }
-                if (rd_u8(&r) > 1) { // virtual-record flag
-                    r.ok = false;
-                }
 			} else if (tag == 10) { // closed-global finite table
                 i32 base = rd_i32(&r);
                 i32 state = rd_i32(&r);
@@ -1970,9 +1945,11 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
 			bool numeric_fusion_contract = kind == 14 && representation == 14 &&
 				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
+			bool finite_object_construction_contract = kind == 15 && representation == 15 &&
+				materialization == 1 && dependency_mask == 0 && obligation_mask == 3;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
-				(composition == 1) !=
+				 (composition == 1) !=
 					(exact_fresh_array_contract || numeric_fusion_contract) ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
@@ -1980,7 +1957,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				 !string_scan_contract && !private_aggregate_memo_contract &&
 				 !invariant_json_map_template_contract && !stack_object_plan_contract &&
 				 !cardinality_array_contract && !exact_fresh_array_contract &&
-				 !numeric_fusion_contract)) {
+				 !numeric_fusion_contract && !finite_object_construction_contract)) {
                 r.ok = false;
             }
 
@@ -3375,6 +3352,47 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 					MAL_REGION_PAYLOAD_REFERENCE(finish_ip);
 				}
 				if (score != pair_count || metadata_operations != payload_count) r.ok = false;
+			} else if (r.ok && kind == 15) {
+				i32 allocation_ip = rd_i32(&r);
+				i32 store_ip = rd_i32(&r);
+				i32 ic_index = rd_i32(&r);
+				u32 guard_count = rd_count(&r, sizeof(i32));
+				if (guard_count > 4) r.ok = false;
+				for (u32 guard = 0; r.ok && guard < guard_count; guard++) {
+					i32 guard_register = rd_i32(&r);
+					if (guard_register < 0 || guard_register >= fn->register_count) r.ok = false;
+				}
+				u32 key_count = rd_count(&r, sizeof(i32));
+				if (key_count == 0 || key_count > 8) r.ok = false;
+				for (u32 key = 0; r.ok && key < key_count; key++) {
+					i32 string_index = rd_i32(&r);
+					if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
+				}
+				u8 virtual_record = rd_u8(&r);
+				u32 access_count = rd_count(&r, sizeof(i32));
+				bool header_ok = anchor_count == 2 && anchors[0] == allocation_ip &&
+					anchors[1] == store_ip && allocation_ip >= 0 &&
+					allocation_ip < fn->instruction_count && store_ip >= 0 &&
+					store_ip < fn->instruction_count &&
+					fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_OBJECT &&
+					fn->instructions[store_ip].opcode == MAL_OP_STORE_PROPERTY &&
+					ic_index == fn->instructions[store_ip].as.store_property.ic_index &&
+					virtual_record <= 1 && access_count <= 32 &&
+					(virtual_record != 0) == (access_count > 0);
+				if (!header_ok) r.ok = false;
+				MAL_REGION_PAYLOAD_REFERENCE(allocation_ip);
+				MAL_REGION_PAYLOAD_REFERENCE(store_ip);
+				for (u32 access = 0; r.ok && access < access_count; access++) {
+					i32 access_ip = rd_i32(&r);
+					if (access_ip < 0 || access_ip >= fn->instruction_count ||
+						fn->instructions[access_ip].opcode != MAL_OP_LOAD_PROPERTY) {
+						r.ok = false;
+					}
+					MAL_REGION_PAYLOAD_REFERENCE(access_ip);
+				}
+				u8 runtime_guard = rd_u8(&r);
+				if (runtime_guard != 1 || score != key_count + access_count ||
+					metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

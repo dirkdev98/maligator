@@ -436,12 +436,6 @@ describe("serialize-vm", () => {
 		metadataInstructions.push({
 			opcode: "CREATE_OBJECT",
 			dst: 7,
-			nativeFiniteConstruction: {
-				icIndex: finiteStoreIc,
-				numberGuards: [1],
-				keyStringIndices: [0, 1],
-				virtualRecord: true,
-			},
 		});
 		metadataInstructions.push({
 			opcode: "STORE_PROPERTY",
@@ -458,10 +452,9 @@ describe("serialize-vm", () => {
 			key: 1,
 			icIndex: finiteStoreIc + 1,
 			nativeFiniteKey: { minimum: 0, ordinal: 1, stringIndices: [0, 1] },
-			nativeFiniteRecordAccess: {
-				allocationInstructionIndex: finiteAllocationInstructionIndex,
-			},
 		});
+		const finiteAccessInstructionIndex = metadataInstructions.length - 1;
+		const finiteStoreInstructionIndex = finiteAllocationInstructionIndex + 1;
 		metadataInstructions.push({
 			opcode: "LOAD_PROPERTY",
 			dst: 9,
@@ -534,6 +527,34 @@ describe("serialize-vm", () => {
 					],
 					gcRootRegisters: [0, 3, 7],
 					regions: [
+						{
+							kind: "finite-object-construction",
+							license: {
+								guard: {
+									dependencies: [],
+									obligations: ["fallback", "materialize"],
+								},
+								genericTwin: "retained",
+								materialization: "on-demand",
+							},
+							representation: "finite-key-object-slots",
+							anchors: [finiteAllocationInstructionIndex, finiteStoreInstructionIndex],
+							claimedIps: [
+								finiteAllocationInstructionIndex,
+								finiteStoreInstructionIndex,
+								finiteAccessInstructionIndex,
+							],
+							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+							cost: { score: 3, metadataOperations: 3 },
+							allocationIp: finiteAllocationInstructionIndex,
+							storeIp: finiteStoreInstructionIndex,
+							icIndex: finiteStoreIc,
+							numberGuards: [1],
+							keyStringIndices: [0, 1],
+							virtualRecord: true,
+							accessIps: [finiteAccessInstructionIndex],
+							runtimeGuard: "number-leaves-and-prototype-shape",
+						},
 						{
 							kind: "exact-fresh-array",
 							license: {
