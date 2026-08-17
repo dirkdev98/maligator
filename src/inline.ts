@@ -51,6 +51,7 @@ import {
 import type {
 	IntermediateProgram,
 	IRBlock,
+	IRExactFreshArrayRegion,
 	IRFunction,
 	IRInstruction,
 	IRNumericHofRegion,
@@ -69,6 +70,9 @@ const MAX_INLINE_INSTRUCTIONS = 40;
 
 /** Maximum exact loaded-callee alternatives emitted at one method call site. */
 const MAX_METHOD_INLINE_TARGETS = 3;
+
+/** Portable VM regions are deliberately bounded per function. */
+const MAX_INLINE_REGIONS = 8;
 
 function recordGuardedBuiltinCall(
 	program: IntermediateProgram,
@@ -2255,6 +2259,16 @@ function cloneInlinedRegion(
 		},
 	};
 	switch (region.kind) {
+		case "exact-fresh-array": {
+			const accesses = region.accesses.map((instruction) => mapInstruction(instruction));
+			if (accesses.some((instruction) => instruction === undefined)) return undefined;
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				accesses: accesses as typeof region.accesses,
+			} as unknown as Extract<IRRegion, { kind: "exact-fresh-array" }>;
+		}
 		case "finite-object-construction": {
 			const accesses = region.accesses.map((instruction) => mapInstruction(instruction));
 			if (accesses.some((instruction) => instruction === undefined)) return undefined;
@@ -3892,11 +3906,36 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			if (
 				closedFreshArray?.indexedCoverage === "complete" &&
 				callbackCannotObserveReceiver &&
-				exactFreshReceiver.allocation !== undefined
+				exactFreshReceiver.allocation !== undefined &&
+				(fn.regions?.length ?? 0) < MAX_INLINE_REGIONS
 			) {
-				elementLoad.nativeExactFreshArrayAccess = {
-					allocation: exactFreshReceiver.allocation,
+				const allocation = exactFreshReceiver.allocation;
+				const allocationBlock = fn.blocks.findIndex((block) =>
+					block.instructions.includes(allocation),
+				);
+				const claimedInstructions = [allocation, elementLoad] as const;
+				const exactFreshRegion: IRExactFreshArrayRegion = {
+					kind: "exact-fresh-array",
+					license: {
+						guard: "structural",
+						genericTwin: "retained",
+						materialization: "none",
+					},
+					representation: "exact-fresh-dense-elements",
+					composition: "overlay",
+					anchors: [allocation, elementLoad],
+					claimedInstructions,
+					controlFlow: {
+						ordinaryBlocks: [...new Set([allocationBlock, callBlock])]
+							.filter((block) => block >= 0)
+							.sort((left, right) => left - right),
+						exceptionalBlocks: [],
+					},
+					cost: { score: 1, metadataOperations: claimedInstructions.length },
+					runtimeGuard: "dense-storage-or-generic-load",
+					accesses: [elementLoad],
 				};
+				fn.regions = [...(fn.regions ?? []), exactFreshRegion];
 			}
 			const callTail: Array<IRInstruction> = [elementLoad, fastCallbackCall];
 			if (spec.buildsResult === "map") {

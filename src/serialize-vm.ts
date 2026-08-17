@@ -37,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 58 to move stack-object plans into the tagged region table.
-export const WIRE_VERSION = 59;
+// Bumped for overlay composition and exact-fresh Array regions.
+export const WIRE_VERSION = 60;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1119,8 +1119,6 @@ export function serializeVmDefinition(
 						((instruction.opcode === "LOAD_PROPERTY" ||
 							instruction.opcode === "STORE_PROPERTY") &&
 							instruction.nativeFiniteKey !== undefined) ||
-						(instruction.opcode === "LOAD_PROPERTY" &&
-							instruction.nativeExactFreshArrayAccess !== undefined) ||
 						(instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 							instruction.nativePrimitiveStringLength === true)
 					);
@@ -1219,25 +1217,6 @@ export function serializeVmDefinition(
 				w.i32Array(instruction.nativeFiniteConstruction.keyStringIndices);
 				w.u8(instruction.nativeFiniteConstruction.virtualRecord === true ? 1 : 0);
 			} else if (
-				instruction.opcode === "LOAD_PROPERTY" &&
-				instruction.nativeExactFreshArrayAccess !== undefined
-			) {
-				const allocationInstructionIndex =
-					instruction.nativeExactFreshArrayAccess.allocationInstructionIndex;
-				const allocation = fn.instructions[allocationInstructionIndex];
-				if (
-					allocationInstructionIndex >= instructionIndex ||
-					allocation?.opcode !== "CREATE_ARRAY" ||
-					allocation.dst !== instruction.object ||
-					instruction.nativeFiniteKey !== undefined ||
-					instruction.nativeFiniteRecordAccess !== undefined ||
-					instruction.nativeClosedGlobalTable !== undefined
-				) {
-					throw new RangeError("serialize-vm: invalid exact fresh-Array access metadata");
-				}
-				w.u8(13);
-				w.i32(allocationInstructionIndex);
-			} else if (
 				instruction.opcode === "CREATE_ARRAY" &&
 				instruction.nativeFreshDenseReserveLength !== undefined
 			) {
@@ -1313,7 +1292,9 @@ export function serializeVmDefinition(
 														? 10
 														: region.kind === "stack-object-plan"
 															? 11
-															: 12;
+															: region.kind === "cardinality-array"
+																? 12
+																: 13;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1344,8 +1325,11 @@ export function serializeVmDefinition(
 														? invariantJsonMapTemplateGuardMasks(region.license)
 														: region.kind === "stack-object-plan"
 															? stackObjectPlanGuardMasks(region.license)
-															: cardinalityGuardMasks(region.license.guard);
+															: region.kind === "cardinality-array"
+																? cardinalityGuardMasks(region.license.guard)
+																: { dependencyMask: 0, obligationMask: 1 };
 			w.u8(kindTag);
+			w.u8(region.composition === "overlay" ? 1 : 0);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
 			w.i32Array([...region.controlFlow.ordinaryBlockIps]);
@@ -1427,6 +1411,11 @@ export function serializeVmDefinition(
 							w.i32(operation.value);
 						}
 					}
+					break;
+				case "exact-fresh-array":
+					w.i32(region.allocationIp);
+					w.u8(region.runtimeGuard === "dense-storage-or-generic-load" ? 1 : 0);
+					w.i32Array([...region.accessIps]);
 					break;
 				case "regexp-exec-projection":
 					w.i32(region.propertyIp);
@@ -1900,7 +1889,10 @@ function validateRegionEnvelope(
 		region.claimedIps.length === 0 ||
 		region.claimedIps.length > MAX_REGION_CLAIMS ||
 		new Set(region.claimedIps).size !== region.claimedIps.length ||
-		region.claimedIps.some((ip) => !instructionIpValid(ip) || claimed.has(ip)) ||
+		region.claimedIps.some(
+			(ip) =>
+				!instructionIpValid(ip) || (region.composition !== "overlay" && claimed.has(ip)),
+		) ||
 		region.anchors.some((ip) => !region.claimedIps.includes(ip)) ||
 		region.controlFlow.ordinaryBlockIps.length === 0 ||
 		region.controlFlow.ordinaryBlockIps.length > MAX_REGION_ORDINARY_BLOCKS ||
@@ -1975,8 +1967,48 @@ function validateRegion(
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
 			break;
+		case "exact-fresh-array":
+			validateExactFreshArrayRegion(fn, region);
+			break;
 	}
-	for (const ip of region.claimedIps) claimed.add(ip);
+	if (region.composition !== "overlay") {
+		for (const ip of region.claimedIps) claimed.add(ip);
+	}
+}
+
+function validateExactFreshArrayRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "exact-fresh-array" }>,
+): void {
+	const allocation = fn.instructions[region.allocationIp];
+	const payloadIps = [region.allocationIp, ...region.accessIps];
+	if (
+		region.composition !== "overlay" ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== 1 ||
+		region.license.guard.obligations[0] !== "fallback" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "none" ||
+		region.representation !== "exact-fresh-dense-elements" ||
+		region.runtimeGuard !== "dense-storage-or-generic-load" ||
+		allocation?.opcode !== "CREATE_ARRAY" ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.allocationIp ||
+		region.anchors[1] !== region.accessIps[0] ||
+		region.accessIps.length === 0 ||
+		region.accessIps.length > 64 ||
+		region.accessIps.some((ip) => {
+			const access = fn.instructions[ip];
+			return access?.opcode !== "LOAD_PROPERTY" || access.object !== allocation.dst;
+		}) ||
+		new Set(payloadIps).size !== payloadIps.length ||
+		payloadIps.length !== region.claimedIps.length ||
+		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		region.cost.score !== region.accessIps.length ||
+		region.cost.metadataOperations !== payloadIps.length
+	) {
+		throw new RangeError("serialize-vm: invalid exact fresh-Array region");
+	}
 }
 
 function validateStackObjectPlanRegion(
@@ -3853,17 +3885,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
 				}
 				instruction.nativeFreshDenseReserveLength = reserveLength;
-			} else if (tag === 13 && instruction.opcode === "LOAD_PROPERTY") {
-				const allocationInstructionIndex = r.i32();
-				const allocation = fn.instructions[allocationInstructionIndex];
-				if (
-					allocationInstructionIndex >= instructionIndex ||
-					allocation?.opcode !== "CREATE_ARRAY" ||
-					allocation.dst !== instruction.object
-				) {
-					throw new RangeError("serialize-vm: invalid exact fresh-Array access metadata");
-				}
-				instruction.nativeExactFreshArrayAccess = { allocationInstructionIndex };
 			} else if (
 				tag === 10 &&
 				(instruction.opcode === "LOAD_PROPERTY" ||
@@ -3919,6 +3940,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			const claimed = new Set<number>();
 			for (let regionIndex = 0; regionIndex < regionCount; regionIndex++) {
 				const kindTag = r.u8();
+				const compositionTag = r.u8();
 				const anchors = r.i32Array();
 				const claimedIps = r.i32Array();
 				const ordinaryBlockIps = r.i32Array();
@@ -4002,7 +4024,15 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 2 &&
 					(dependencyMask === 1 || dependencyMask === 14) &&
 					obligationMask === 3;
+				const exactFreshArrayContract =
+					kindTag === 13 &&
+					representationTag === 13 &&
+					materializationTag === 0 &&
+					dependencyMask === 0 &&
+					obligationMask === 1;
 				if (
+					compositionTag > 1 ||
+					(compositionTag === 1) !== exactFreshArrayContract ||
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
@@ -4015,7 +4045,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!privateAggregateMemoContract &&
 						!invariantJsonMapTemplateContract &&
 						!stackObjectPlanContract &&
-						!cardinalityArrayContract)
+						!cardinalityArrayContract &&
+						!exactFreshArrayContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -4709,7 +4740,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						cost: { score, metadataOperations },
 						sites,
 					};
-				} else {
+				} else if (kindTag === 12) {
 					const allocationIp = r.i32();
 					const pushCallIp = r.i32();
 					const itemAllocationIp = r.i32();
@@ -4765,6 +4796,30 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						itemAllocationIp,
 						maximumLength,
 						accesses,
+					};
+				} else {
+					const allocationIp = r.i32();
+					const runtimeGuardTag = r.u8();
+					const accessIps = r.i32Array();
+					if (runtimeGuardTag !== 1) {
+						throw new RangeError("serialize-vm: invalid exact fresh-Array guard");
+					}
+					region = {
+						kind: "exact-fresh-array",
+						license: {
+							guard: { dependencies: [], obligations: ["fallback"] },
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "exact-fresh-dense-elements",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						allocationIp,
+						runtimeGuard: "dense-storage-or-generic-load",
+						accessIps,
 					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);

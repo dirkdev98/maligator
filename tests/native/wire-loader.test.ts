@@ -353,9 +353,27 @@ describe("wire loader side-data validation", () => {
 							object: 0,
 							key: 1,
 							icIndex: 0,
-							nativeExactFreshArrayAccess: { allocationInstructionIndex: 0 },
 						},
 						{ opcode: "RETURN", value: 2 },
+					],
+					regions: [
+						{
+							kind: "exact-fresh-array",
+							license: {
+								guard: { dependencies: [], obligations: ["fallback"] },
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: "exact-fresh-dense-elements",
+							composition: "overlay",
+							anchors: [0, 2],
+							claimedIps: [0, 2],
+							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+							cost: { score: 1, metadataOperations: 2 },
+							allocationIp: 0,
+							runtimeGuard: "dense-storage-or-generic-load",
+							accessIps: [2],
+						},
 					],
 				},
 			],
@@ -366,10 +384,8 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		expect(wire.at(-3)).toBe(13);
-		expect(wire.at(-1)).toBe(0); // empty tagged function-region table
-		wire[wire.length - 2] = 2; // ZigZag(1): CREATE_NUMBER, not CREATE_ARRAY
-		rejectsWire("exact-fresh-array-access-allocation", wire);
+		wire[wire.length - 1] = 2; // ZigZag(1): CREATE_NUMBER, not the certified load
+		rejectsWire("exact-fresh-array-access-ip", wire);
 	});
 
 	it("loads a nonempty numeric HOF proof region payload", () => {

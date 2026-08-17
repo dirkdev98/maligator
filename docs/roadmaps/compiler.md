@@ -555,6 +555,10 @@ is general rather than a registry-shaped collection of special cases.
         canonical finite-key store, guarded Number leaves and every direct slot
         read; register allocation and lowering now consume the same certificate,
         while the existing VM metadata remains the cached execution form.
+  - [x] Replace exact-fresh Array producer/access links with a structural overlay
+        region. Carry overlay composition through VM lowering and the versioned
+        wire/cache contract so dense indexed loads compose with enclosing numeric
+        loop regions without duplicating instruction-owned proof metadata.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

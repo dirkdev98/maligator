@@ -519,10 +519,8 @@ describe("serialize-vm", () => {
 					"STORE_PROPERTY_STATIC",
 				].includes(instruction.opcode),
 			).length,
-			nativeExactFreshArrayAccess: {
-				allocationInstructionIndex: exactArrayAllocationInstructionIndex,
-			},
 		});
+		const exactArrayAccessInstructionIndex = metadataInstructions.length - 1;
 		const cachedDefinition: VmDefinition = {
 			...definition,
 			functionCount: 1,
@@ -538,6 +536,31 @@ describe("serialize-vm", () => {
 						),
 					],
 					gcRootRegisters: [0, 3, 7],
+					regions: [
+						{
+							kind: "exact-fresh-array",
+							license: {
+								guard: { dependencies: [], obligations: ["fallback"] },
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: "exact-fresh-dense-elements",
+							composition: "overlay",
+							anchors: [
+								exactArrayAllocationInstructionIndex,
+								exactArrayAccessInstructionIndex,
+							],
+							claimedIps: [
+								exactArrayAllocationInstructionIndex,
+								exactArrayAccessInstructionIndex,
+							],
+							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+							cost: { score: 1, metadataOperations: 2 },
+							allocationIp: exactArrayAllocationInstructionIndex,
+							runtimeGuard: "dense-storage-or-generic-load",
+							accessIps: [exactArrayAccessInstructionIndex],
+						},
+					],
 				},
 			],
 		};

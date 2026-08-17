@@ -37,7 +37,9 @@ export function annotateStringSliceNumberRegions(program: IntermediateProgram): 
 		fn.regions = retained.length > 0 ? retained : undefined;
 		if (retained.length >= MAX_REGIONS) continue;
 		const occupied = new Set(
-			retained.flatMap((region) => [...region.claimedInstructions]),
+			retained
+				.filter((region) => region.composition !== "overlay")
+				.flatMap((region) => [...region.claimedInstructions]),
 		);
 		const index = buildIRRegisterIndex(fn, { locations: true });
 		const definitions = index.uniqueDefinitions;

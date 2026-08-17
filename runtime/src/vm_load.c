@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 59u        // cardinality arrays join the tagged region table
+#define WIRE_VERSION 60u        // overlay composition and exact-fresh Array regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1849,17 +1849,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     reserve_length < 1 || reserve_length > 65536) {
                     r.ok = false;
                 }
-            } else if (tag == 13) { // LOAD_PROPERTY exact fresh-Array element
-                i32 allocation_ip = rd_i32(&r);
-                const MalFunction *fn = &functions[i];
-                if (instruction_index >= (u32) fn->instruction_count ||
-                    fn->instructions[instruction_index].opcode != MAL_OP_LOAD_PROPERTY ||
-                    allocation_ip < 0 || allocation_ip >= (i32) instruction_index ||
-                    fn->instructions[allocation_ip].opcode != MAL_OP_CREATE_ARRAY ||
-                    fn->instructions[allocation_ip].as.create_array.dst !=
-                        fn->instructions[instruction_index].as.load_property.object) {
-                    r.ok = false;
-                }
             } else {
                 r.ok = false;
             }
@@ -1872,6 +1861,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
         for (u32 region = 0; r.ok && region < compiler_region_count; region++) {
             const MalFunction *fn = &functions[i];
             u8 kind = rd_u8(&r);
+			u8 composition = rd_u8(&r);
+			if (composition > 1) r.ok = false;
             u32 anchor_count = rd_count(&r, 1);
             if (anchor_count == 0 || anchor_count > 8) r.ok = false;
             i32 anchors[8];
@@ -1891,14 +1882,16 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 for (u32 previous = 0; r.ok && previous < claim; previous++) {
                     if (claims[previous] == claims[claim]) r.ok = false;
                 }
-                for (u32 previous = 0; r.ok && previous < claimed_region_count; previous++) {
-                    if (claimed_region_ips[previous] == claims[claim]) r.ok = false;
-                }
-                if (r.ok && claimed_region_count < countof(claimed_region_ips)) {
-                    claimed_region_ips[claimed_region_count++] = claims[claim];
-                } else if (r.ok) {
-                    r.ok = false;
-                }
+				if (composition == 0) {
+					for (u32 previous = 0; r.ok && previous < claimed_region_count; previous++) {
+						if (claimed_region_ips[previous] == claims[claim]) r.ok = false;
+					}
+					if (r.ok && claimed_region_count < countof(claimed_region_ips)) {
+						claimed_region_ips[claimed_region_count++] = claims[claim];
+					} else if (r.ok) {
+						r.ok = false;
+					}
+				}
             }
             for (u32 anchor = 0; r.ok && anchor < anchor_count; anchor++) {
                 bool found = false;
@@ -1984,14 +1977,17 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 			bool cardinality_array_contract = kind == 12 && representation == 12 &&
 				materialization == 2 && (dependency_mask == 1 || dependency_mask == 14) &&
 				obligation_mask == 3;
+			bool exact_fresh_array_contract = kind == 13 && representation == 13 &&
+				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
+				(composition == 1) != exact_fresh_array_contract ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
 				 !string_scan_contract && !private_aggregate_memo_contract &&
 				 !invariant_json_map_template_contract && !stack_object_plan_contract &&
-				 !cardinality_array_contract)) {
+				 !cardinality_array_contract && !exact_fresh_array_contract)) {
                 r.ok = false;
             }
 
@@ -3328,6 +3324,28 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 					MAL_REGION_PAYLOAD_REFERENCE(ip);
 				}
 				if (push_access_count != 1 || metadata_operations != payload_count) r.ok = false;
+			} else if (r.ok && kind == 13) {
+				i32 allocation_ip = rd_i32(&r);
+				u8 runtime_guard = rd_u8(&r);
+				u32 access_count = rd_count(&r, 1);
+				bool header_ok = anchor_count == 2 && anchors[0] == allocation_ip &&
+					access_count > 0 && access_count <= 64 && runtime_guard == 1 &&
+					allocation_ip >= 0 && allocation_ip < fn->instruction_count &&
+					fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_ARRAY;
+				if (!header_ok) r.ok = false;
+				MAL_REGION_PAYLOAD_REFERENCE(allocation_ip);
+				for (u32 access = 0; r.ok && access < access_count; access++) {
+					i32 ip = rd_i32(&r);
+					if (access == 0 && anchors[1] != ip) r.ok = false;
+					if (ip < 0 || ip >= fn->instruction_count ||
+						fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY ||
+						fn->instructions[ip].as.load_property.object !=
+							fn->instructions[allocation_ip].as.create_array.dst) {
+						r.ok = false;
+					}
+					MAL_REGION_PAYLOAD_REFERENCE(ip);
+				}
+				if (score != access_count || metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

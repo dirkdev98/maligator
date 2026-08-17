@@ -3041,6 +3041,11 @@ function emitBody(
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
 ): Array<string> | null {
+	const exactFreshArrayAccessIps = new Set(
+		(fn.regions ?? [])
+			.filter((region) => region.kind === "exact-fresh-array")
+			.flatMap((region) => [...region.accessIps]),
+	);
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
@@ -3935,6 +3940,7 @@ function emitBody(
 					invariantJsonMapActions.get(ip),
 					privateAggregateMemos.get(ip),
 					privateAggregatePushByIp.get(ip),
+					exactFreshArrayAccessIps.has(ip),
 				);
 		if (emitted === null) {
 			return null;
@@ -4332,6 +4338,7 @@ function emitInstruction(
 	},
 	privateAggregateMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
 	privateAggregatePushMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
+	exactFreshArrayAccess?: boolean,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -4977,7 +4984,7 @@ function emitInstruction(
 			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
-				(instruction.nativeExactFreshArrayAccess !== undefined ||
+				(exactFreshArrayAccess === true ||
 					instruction.nativeClosedRecordArrayAccess !== undefined)
 			) {
 				if (reps[instruction.key] !== "number") return null;

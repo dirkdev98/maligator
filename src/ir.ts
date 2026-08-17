@@ -965,10 +965,31 @@ export interface IRFiniteObjectConstructionRegion extends IRRegionEnvelope<
 	readonly accesses: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
 }
 
+/**
+ * Structural certificate for a dense indexed read from a complete exact fresh
+ * Array. This overlays the surrounding inlined loop (and, for numeric reduce,
+ * its numeric region) because it changes only the selected load representation.
+ */
+export interface IRExactFreshArrayRegion extends IRRegionEnvelope<
+	"exact-fresh-array",
+	"exact-fresh-dense-elements",
+	"none",
+	readonly [
+		Extract<IRInstruction, { type: "createArray" }>,
+		Extract<IRInstruction, { type: "loadProperty" }>,
+	],
+	"structural"
+> {
+	readonly composition: "overlay";
+	readonly runtimeGuard: "dense-storage-or-generic-load";
+	readonly accesses: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
+}
+
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type IRRegion =
 	| IRCardinalityArrayRegion
 	| IRClosedRecordArrayRegion
+	| IRExactFreshArrayRegion
 	| IRFiniteObjectConstructionRegion
 	| IRNumericFusionRegion
 	| IRRegExpExecProjectionRegion
@@ -1411,13 +1432,6 @@ export type IRInstruction =
 				minimum: number;
 				source: Extract<IRInstruction, { type: "binary" }>;
 				stringIndices: Array<number>;
-			};
-			/** COMPILE-ONLY: indexed read from a complete, exact fresh Array whose
-			 * receiver cannot be observed or mutated by the surrounding closed loop.
-			 * Native code may use the dense vector directly, but must retain the
-			 * ordinary property operation when dense allocation fell back to a table. */
-			nativeExactFreshArrayAccess?: {
-				allocation: Extract<IRInstruction, { type: "createArray" }>;
 			};
 			/** COMPILE-ONLY: a non-escaping global `{}` is represented by a bounded
 			 * synthetic-global value table. Unknown selectors deopt/materialize it. */

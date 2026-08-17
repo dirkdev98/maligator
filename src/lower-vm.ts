@@ -345,6 +345,8 @@ interface VmRegionEnvelope<
 	readonly kind: Kind;
 	readonly license: VmRegionLicense & { readonly materialization: Materialization };
 	readonly representation: Representation;
+	/** Overlay regions may share instruction IPs with an exclusive representation. */
+	readonly composition?: "overlay";
 	readonly anchors: ReadonlyArray<number>;
 	readonly claimedIps: ReadonlyArray<number>;
 	readonly controlFlow: {
@@ -594,6 +596,17 @@ export type VmCardinalityArrayRegion = VmRegionEnvelope<
 	}>;
 };
 
+export type VmExactFreshArrayRegion = VmRegionEnvelope<
+	"exact-fresh-array",
+	"exact-fresh-dense-elements",
+	"none"
+> & {
+	readonly composition: "overlay";
+	readonly allocationIp: number;
+	readonly runtimeGuard: "dense-storage-or-generic-load";
+	readonly accessIps: ReadonlyArray<number>;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -617,6 +630,7 @@ export type VmNumericHofRegion = VmRegionEnvelope<
 
 export type VmRegion =
 	| VmClosedRecordArrayRegion
+	| VmExactFreshArrayRegion
 	| VmRegExpExecProjectionRegion
 	| VmRegExpIteratorProjectionRegion
 	| VmStringSliceNumberRegion
@@ -1266,9 +1280,6 @@ export type VmInstruction =
 			nativeFiniteRecordAccess?: {
 				allocationInstructionIndex: number;
 			};
-			nativeExactFreshArrayAccess?: {
-				allocationInstructionIndex: number;
-			};
 			/** EMITTER-DERIVED LOOKUP: materialized only from the central region table. */
 			nativeClosedRecordArrayAccess?: {
 				allocationIp: number;
@@ -1895,10 +1906,6 @@ function lowerFunctionToVmFunction(
 		guard: CompilerGuardPlan;
 	}> = [];
 	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
-	const pendingExactFreshArrayAccesses: Array<{
-		instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
-		allocation: Extract<IRInstruction, { type: "createArray" }>;
-	}> = [];
 	const pendingNativeMathCalls: Array<{
 		receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
 		property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
@@ -1943,16 +1950,6 @@ function lowerFunctionToVmFunction(
 			}
 			instructions.push(vmInstruction);
 			compilerSiteIds.push(instructionSites?.get(instruction)?.id);
-			if (
-				instruction.type === "loadProperty" &&
-				instruction.nativeExactFreshArrayAccess !== undefined &&
-				vmInstruction.opcode === "LOAD_PROPERTY"
-			) {
-				pendingExactFreshArrayAccesses.push({
-					instruction: vmInstruction,
-					allocation: instruction.nativeExactFreshArrayAccess.allocation,
-				});
-			}
 			if (
 				instruction.type === "call" &&
 				vmInstruction.opcode === "CALL" &&
@@ -2066,15 +2063,6 @@ function lowerFunctionToVmFunction(
 			return { instructionIndex, allocationInstructionIndex, guard };
 		},
 	);
-	for (const pending of pendingExactFreshArrayAccesses) {
-		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
-			pending.allocation,
-		);
-		if (allocationInstructionIndex === undefined) {
-			throw new Error("Unknown exact fresh-Array allocation");
-		}
-		pending.instruction.nativeExactFreshArrayAccess = { allocationInstructionIndex };
-	}
 	const regions: Array<VmRegion> = [];
 	const claimedRegionInstructions = new Set<number>();
 	// A failed composite certificate must leave its record argument on the heap.
@@ -2088,6 +2076,77 @@ function lowerFunctionToVmFunction(
 	}
 	const irRegions = (fn.regions?.length ?? 0) <= 8 ? (fn.regions ?? []) : [];
 	for (const region of irRegions) {
+		if (region.kind === "exact-fresh-array") {
+			const allocationIp = instructionIndexByIrInstruction.get(region.anchors[0]);
+			const anchorAccessIp = instructionIndexByIrInstruction.get(region.anchors[1]);
+			const accessIps = region.accesses.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
+			if (
+				region.license.guard !== "structural" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "none" ||
+				region.representation !== "exact-fresh-dense-elements" ||
+				region.composition !== "overlay" ||
+				region.runtimeGuard !== "dense-storage-or-generic-load" ||
+				allocationIp === undefined ||
+				anchorAccessIp === undefined ||
+				accessIps.some((ip) => ip === undefined) ||
+				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
+				region.controlFlow.exceptionalBlocks.length !== 0
+			) {
+				continue;
+			}
+			const allocation = instructions[allocationIp];
+			const resolvedAccessIps = accessIps as Array<number>;
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const payloadIps = [allocationIp, ...resolvedAccessIps];
+			if (
+				allocation?.opcode !== "CREATE_ARRAY" ||
+				resolvedAccessIps.length === 0 ||
+				resolvedAccessIps.length > 64 ||
+				anchorAccessIp !== resolvedAccessIps[0] ||
+				resolvedAccessIps.some((ip) => {
+					const access = instructions[ip];
+					return access?.opcode !== "LOAD_PROPERTY" || access.object !== allocation.dst;
+				}) ||
+				new Set(payloadIps).size !== payloadIps.length ||
+				payloadIps.length !== resolvedClaimedIps.length ||
+				payloadIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
+				region.cost.score !== resolvedAccessIps.length ||
+				region.cost.metadataOperations !== payloadIps.length
+			) {
+				continue;
+			}
+			regions.push({
+				kind: "exact-fresh-array",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback"] },
+					genericTwin: "retained",
+					materialization: "none",
+				},
+				representation: "exact-fresh-dense-elements",
+				composition: "overlay",
+				anchors: [allocationIp, anchorAccessIp],
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: [],
+				},
+				cost: { ...region.cost },
+				allocationIp,
+				runtimeGuard: "dense-storage-or-generic-load",
+				accessIps: resolvedAccessIps,
+			});
+			continue;
+		}
 		if (region.kind === "finite-object-construction") {
 			const allocationIp = instructionIndexByIrInstruction.get(region.anchors[0]);
 			const storeIp = instructionIndexByIrInstruction.get(region.anchors[1]);

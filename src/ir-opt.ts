@@ -321,7 +321,9 @@ export function annotateStringSplitProjectionRegions(
 		fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
 		if (retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION) continue;
 		const occupiedInstructions = new Set(
-			retainedRegions.flatMap((region) => [...region.claimedInstructions]),
+			retainedRegions
+				.filter((region) => region.composition !== "overlay")
+				.flatMap((region) => [...region.claimedInstructions]),
 		);
 		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
 		const locations = registerIndex.locations!;
@@ -574,7 +576,9 @@ function annotateStringSplitCursorRegions(program: IntermediateProgram): number 
 		);
 		fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
 		const occupiedInstructions = new Set(
-			(fn.regions ?? []).flatMap((region) => [...region.claimedInstructions]),
+			(fn.regions ?? [])
+				.filter((region) => region.composition !== "overlay")
+				.flatMap((region) => [...region.claimedInstructions]),
 		);
 		const hasSplitCandidate = fn.blocks.some((block) =>
 			block.instructions.some(
@@ -986,7 +990,9 @@ export function annotateNumericHofRegions(program: IntermediateProgram): number 
 		}
 
 		const occupied = new Set(
-			retained.flatMap((region) => [...region.claimedInstructions]),
+			retained
+				.filter((region) => region.composition !== "overlay")
+				.flatMap((region) => [...region.claimedInstructions]),
 		);
 		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
 		const locations = registerIndex.locations!;
@@ -3795,7 +3801,9 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 		const usesOf = registerIndex.uses;
 		const exceptionHandlers = buildIRExceptionHandlers(fn);
 		const occupiedInstructions = new Set(
-			retainedRegions.flatMap((region) => [...region.claimedInstructions]),
+			retainedRegions
+				.filter((region) => region.composition !== "overlay")
+				.flatMap((region) => [...region.claimedInstructions]),
 		);
 		type PropertyLoad = Extract<
 			IRInstruction,

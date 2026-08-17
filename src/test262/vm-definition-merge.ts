@@ -49,6 +49,12 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "exact-fresh-array":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				accessIps: [...region.accessIps],
+			};
 		case "closed-record-array":
 			return {
 				...cloneRegionEnvelope(region),

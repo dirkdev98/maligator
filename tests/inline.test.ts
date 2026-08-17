@@ -1359,10 +1359,8 @@ test("locked exact fresh Array loops erase the method Get, guard, and generic tw
 		),
 	).toBe(false);
 	expect(
-		instructions.some(
-			(instruction) =>
-				instruction.type === "loadProperty" &&
-				instruction.nativeExactFreshArrayAccess !== undefined,
+		locked.functions.some((fn) =>
+			(fn.regions ?? []).some((region) => region.kind === "exact-fresh-array"),
 		),
 	).toBe(true);
 	const lengthNameIndex = locked.stringConstants.findIndex(
@@ -1403,10 +1401,8 @@ test("locked sparse fresh Arrays keep hole semantics while using their exact len
 		),
 	).toBe(true);
 	expect(
-		instructions.some(
-			(instruction) =>
-				instruction.type === "loadProperty" &&
-				instruction.nativeExactFreshArrayAccess !== undefined,
+		locked.functions.some((fn) =>
+			(fn.regions ?? []).some((region) => region.kind === "exact-fresh-array"),
 		),
 	).toBe(false);
 	const lengthNameIndex = locked.stringConstants.findIndex(
@@ -1439,10 +1435,8 @@ test("locked complete fresh Arrays keep hole checks when the callback observes t
 		),
 	).toBe(true);
 	expect(
-		instructions.some(
-			(instruction) =>
-				instruction.type === "loadProperty" &&
-				instruction.nativeExactFreshArrayAccess !== undefined,
+		locked.functions.some((fn) =>
+			(fn.regions ?? []).some((region) => region.kind === "exact-fresh-array"),
 		),
 	).toBe(false);
 });
