@@ -37,12 +37,22 @@ function instructions(program: IntermediateProgram): Array<IRInstruction> {
 }
 
 type StackObjectPlanRegion = Extract<VmRegion, { kind: "stack-object-plan" }>;
+type CardinalityArrayRegion = Extract<VmRegion, { kind: "cardinality-array" }>;
 
 function stackObjectPlans(definition: VmDefinition): Array<StackObjectPlanRegion> {
 	return definition.functions.flatMap(
 		(fn) =>
 			fn.regions?.filter(
 				(region): region is StackObjectPlanRegion => region.kind === "stack-object-plan",
+			) ?? [],
+	);
+}
+
+function cardinalityPlans(definition: VmDefinition): Array<CardinalityArrayRegion> {
+	return definition.functions.flatMap(
+		(fn) =>
+			fn.regions?.filter(
+				(region): region is CardinalityArrayRegion => region.kind === "cardinality-array",
 			) ?? [],
 	);
 }
@@ -634,21 +644,20 @@ describe("cardinality-only array and transitive record regions", () => {
 
 	it("lowers, emits, and serializes rooted virtual history plus exact deopt", () => {
 		const definition = compileSemanticProgramToVmDefinition(semantic(source));
-		const regionFunction = definition.functions.find((fn) =>
-			fn.instructions.some(
-				(instruction) =>
-					instruction.opcode === "CREATE_ARRAY" &&
-					instruction.nativeCardinalityRegion !== undefined,
-			),
-		);
+		const plan = cardinalityPlans(definition)[0];
+		expect(plan).toBeDefined();
+		const regionFunction = definition.functions.find((fn) => fn.regions?.includes(plan!));
 		expect(regionFunction).toBeDefined();
+		expect(regionFunction?.instructions[plan!.allocationIp]?.opcode).toBe("CREATE_ARRAY");
+		expect(regionFunction?.instructions[plan!.pushCallIp]?.opcode).toBe("CALL");
+		expect(regionFunction?.instructions[plan!.itemAllocationIp]?.opcode).toBe(
+			"CREATE_OBJECT_SHAPED",
+		);
 		expect(
-			regionFunction?.instructions.some(
-				(instruction) =>
-					instruction.opcode === "CALL" &&
-					instruction.nativeCardinalityPush !== undefined,
+			stackObjectPlans(definition).some((stackPlan) =>
+				stackPlan.sites.some((site) => site.allocationIp === plan!.itemAllocationIp),
 			),
-		).toBe(true);
+		).toBe(false);
 
 		const emitted = emitVmDefinition(definition, { compiled: true });
 		expect(emitted).toContain("mal_builtin_array_push_virtual_guard(vm)");
@@ -660,15 +669,7 @@ describe("cardinality-only array and transitive record regions", () => {
 		expect(emitted).toMatch(/__gc_slots\[\d+ \+ __cardinality_\d+_count \* 2/);
 
 		const decoded = deserializeVmDefinition(compileSourceToBuffer(source));
-		expect(
-			decoded.functions.some((fn) =>
-				fn.instructions.some(
-					(instruction) =>
-						instruction.opcode === "CREATE_ARRAY" &&
-						instruction.nativeCardinalityRegion !== undefined,
-				),
-			),
-		).toBe(true);
+		expect(cardinalityPlans(decoded)).toHaveLength(1);
 		expect(emitVmDefinition(decoded, { compiled: true })).toContain(
 			"mal_vm_materialize_virtual_record_array",
 		);
@@ -676,18 +677,10 @@ describe("cardinality-only array and transitive record regions", () => {
 		const lockedDefinition = compileSemanticProgramToVmDefinition(semantic(source), {
 			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
 		});
-		const lockedRegion = lockedDefinition.functions
-			.flatMap(({ instructions }) => instructions)
-			.find(
-				(instruction) =>
-					instruction.opcode === "CREATE_ARRAY" &&
-					instruction.nativeCardinalityRegion !== undefined,
-			);
-		expect(
-			lockedRegion?.opcode === "CREATE_ARRAY"
-				? lockedRegion.nativeCardinalityRegion?.guard.dependencies
-				: undefined,
-		).toEqual([{ kind: "world", fact: "primordials.locked" }]);
+		const lockedRegion = cardinalityPlans(lockedDefinition)[0];
+		expect(lockedRegion?.license.guard.dependencies).toEqual([
+			{ kind: "world", fact: "primordials.locked" },
+		]);
 		const lockedEmitted = emitVmDefinition(lockedDefinition, { compiled: true });
 		expect(lockedEmitted).toMatch(/__cardinality_\d+_fast = true;/);
 		expect(lockedEmitted).not.toMatch(
@@ -760,14 +753,8 @@ describe("cardinality-only array and transitive record regions", () => {
 		expect(emitted).toMatch(/__cardinality_\d+_element_index \* 2 \+ 1/);
 
 		const decoded = deserializeVmDefinition(compileSourceToBuffer(indexedSource));
-		const decodedRoles = decoded.functions.flatMap((fn) =>
-			fn.instructions.flatMap((instruction) =>
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "LOAD_PROPERTY_STATIC") &&
-				instruction.nativeCardinalityAccess !== undefined
-					? [instruction.nativeCardinalityAccess.role]
-					: [],
-			),
+		const decodedRoles = cardinalityPlans(decoded).flatMap((region) =>
+			region.accesses.map((access) => access.role),
 		);
 		expect(decodedRoles).toContain("element");
 		expect(decodedRoles).toContain("field");

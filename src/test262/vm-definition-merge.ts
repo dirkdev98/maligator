@@ -147,6 +147,12 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 					})),
 				})),
 			};
+		case "cardinality-array":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				accesses: region.accesses.map((access) => ({ ...access })),
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

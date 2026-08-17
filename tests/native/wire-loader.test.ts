@@ -689,6 +689,35 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads and executes persisted cardinality-array regions", () => {
+		const entrypoint = path.join(directory, "cardinality-array-region.mjs");
+		writeFileSync(
+			entrypoint,
+			`function collect(seed) {
+				const rows = [];
+				for (let i = 0; i < 4; i++) rows.push({ idx: i, value: seed + i });
+				return rows[seed % 4].value + rows.length;
+			}
+			if (collect(2) !== 8) throw new Error("bad cardinality region");\n`,
+		);
+		const cardinalityDefinition = compileEntrypoint(entrypoint, {
+			stripTypes: stripTypesWithTypeScript,
+			buildConfig: resolveBuildConfig({}),
+		});
+		expect(
+			cardinalityDefinition.functions.flatMap(
+				(fn) => fn.regions?.filter((region) => region.kind === "cardinality-array") ?? [],
+			),
+		).not.toHaveLength(0);
+		const wirePath = path.join(directory, "cardinality-array-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(cardinalityDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

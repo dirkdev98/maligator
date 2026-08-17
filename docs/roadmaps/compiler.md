@@ -535,6 +535,11 @@ is general rather than a registry-shaped collection of special cases.
         escape edge belong to its allocation plan; carry the inherited-property
         protector as the region license; and validate the complete MALW v58 plan
         in TypeScript and the C loader before native stack emission.
+  - [x] Replace bounded cardinality Array allocation/access/push instruction
+        annotations with one composite region. Give the MALW v59 certificate
+        exclusive ownership of its pushed shaped record, Array operations and
+        materialization boundary, so a rejected history-slot plan leaves an
+        ordinary heap record instead of a partially selected stack object.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

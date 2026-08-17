@@ -567,8 +567,30 @@ export type VmStackObjectPlanRegion = VmRegionEnvelope<
 		readonly inheritedAccessIp?: number;
 		readonly materializations: ReadonlyArray<{
 			readonly ip: number;
-			readonly kind: "return" | "cardinality-push";
+			readonly kind: "return";
 		}>;
+	}>;
+};
+
+/**
+ * Composite bounded-history representation for one closed Array push/consume
+ * corridor. The pushed shaped record belongs to this certificate rather than a
+ * second stack-object region, so allocation and materialization ownership stay
+ * disjoint across the function-level region table.
+ */
+export type VmCardinalityArrayRegion = VmRegionEnvelope<
+	"cardinality-array",
+	"bounded-record-history",
+	"whole-region"
+> & {
+	readonly allocationIp: number;
+	readonly pushCallIp: number;
+	readonly itemAllocationIp: number;
+	readonly maximumLength: number;
+	readonly accesses: ReadonlyArray<{
+		readonly ip: number;
+		readonly role: "push" | "length" | "element" | "field";
+		readonly fieldSlot?: number;
 	}>;
 };
 
@@ -602,6 +624,7 @@ export type VmRegion =
 	| VmPrivateAggregateMemoRegion
 	| VmInvariantJsonMapTemplateRegion
 	| VmStackObjectPlanRegion
+	| VmCardinalityArrayRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
@@ -1003,8 +1026,6 @@ export type VmInstruction =
 			opcode: "CREATE_ARRAY";
 			dst: number;
 			length: number;
-			/** COMPILE-ONLY: native bounded push-only virtual array state. */
-			nativeCardinalityRegion?: { maximumLength: number; guard: VmGuardPlan };
 			/** COMPILE-ONLY: exact capacity for a proven pristine indexed fill. */
 			nativeFreshDenseReserveLength?: number;
 			/** EMITTER-ONLY: private identity-range Array virtualization action. */
@@ -1106,11 +1127,6 @@ export type VmInstruction =
 			nativeMathExactProducerTwin?: {
 				receiverIp: number;
 				propertyIp: number;
-			};
-			/** COMPILE-ONLY: append a proven stack record to virtual history. */
-			nativeCardinalityPush?: {
-				allocationInstructionIndex: number;
-				pushedStackObjectAllocationInstructionIndex: number;
 			};
 			/** COMPILE-ONLY: statically proven Number-position strength. */
 			directStringCharCodeAtPosition?: "integer" | "inBounds";
@@ -1264,11 +1280,6 @@ export type VmInstruction =
 				direct: boolean;
 				guard: VmGuardPlan;
 			};
-			nativeCardinalityAccess?: {
-				role: "push" | "length" | "element" | "field";
-				allocationInstructionIndex: number;
-				fieldSlot?: number;
-			};
 			/** EMITTER-ONLY: load from a private `array[i] = i` virtual range. */
 			nativeAffineRangeVirtualization?: {
 				allocationIp: number;
@@ -1283,11 +1294,6 @@ export type VmInstruction =
 			icIndex: number;
 			/** COMPILE-ONLY: guarded primitive-String `length` fast read. */
 			nativePrimitiveStringLength?: true;
-			nativeCardinalityAccess?: {
-				role: "push" | "length" | "element" | "field";
-				allocationInstructionIndex: number;
-				fieldSlot?: number;
-			};
 	  }
 	| {
 			opcode: "LOAD_SUPER_PROPERTY";
@@ -1889,11 +1895,13 @@ function lowerFunctionToVmFunction(
 		guard: CompilerGuardPlan;
 	}> = [];
 	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
+	const pendingCardinalityAllocations: Array<{
+		allocation: Extract<IRInstruction, { type: "createArray" }>;
+		maximumLength: number;
+		guard: VmGuardPlan;
+	}> = [];
 	const pendingCardinalityAccesses: Array<{
-		instruction: Extract<
-			VmInstruction,
-			{ opcode: "LOAD_PROPERTY" | "LOAD_PROPERTY_STATIC" }
-		>;
+		instruction: Extract<IRInstruction, { type: "loadProperty" | "loadPropertyStatic" }>;
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
 		role: "push" | "length" | "element" | "field";
 		fieldSlot?: number;
@@ -1907,7 +1915,7 @@ function lowerFunctionToVmFunction(
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
 	}> = [];
 	const pendingCardinalityPushes: Array<{
-		instruction: Extract<VmInstruction, { opcode: "CALL" }>;
+		instruction: Extract<IRInstruction, { type: "call" }>;
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
 		stackObjectSiteId: number;
 	}> = [];
@@ -1942,6 +1950,20 @@ function lowerFunctionToVmFunction(
 			const instructionIndex = instructions.length;
 			instructionIndexByIrInstruction.set(instruction, instructionIndex);
 			const vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
+			if (
+				instruction.type === "createArray" &&
+				instruction.nativeCardinalityRegion !== undefined
+			) {
+				const guard = lowerGuardPlan(instruction.nativeCardinalityRegion.guard);
+				if (guard === undefined || !guard.obligations.includes("materialize")) {
+					throw new Error("Cardinality region lacks a materialization guard plan");
+				}
+				pendingCardinalityAllocations.push({
+					allocation: instruction,
+					maximumLength: instruction.nativeCardinalityRegion.maximumLength,
+					guard,
+				});
+			}
 			switch (vmInstruction.opcode) {
 				case "LOAD_PROPERTY":
 				case "LOAD_PROPERTY_STATIC":
@@ -1975,7 +1997,7 @@ function lowerFunctionToVmFunction(
 					vmInstruction.opcode === "LOAD_PROPERTY_STATIC")
 			) {
 				pendingCardinalityAccesses.push({
-					instruction: vmInstruction,
+					instruction,
 					allocation: instruction.nativeCardinalityAccess.allocation,
 					role: instruction.nativeCardinalityAccess.role,
 					fieldSlot: instruction.nativeCardinalityAccess.fieldSlot,
@@ -2010,7 +2032,7 @@ function lowerFunctionToVmFunction(
 					throw new Error("Cardinality push lacks a proven stack-object argument");
 				}
 				pendingCardinalityPushes.push({
-					instruction: vmInstruction,
+					instruction,
 					allocation: instruction.nativeCardinalityPush.allocation,
 					stackObjectSiteId: instruction.cardinalityPushStackObjectSiteId,
 				});
@@ -2128,19 +2150,6 @@ function lowerFunctionToVmFunction(
 			return { instructionIndex, allocationInstructionIndex, guard };
 		},
 	);
-	for (const pending of pendingCardinalityAccesses) {
-		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
-			pending.allocation,
-		);
-		if (allocationInstructionIndex === undefined) {
-			throw new Error("Unknown cardinality-region array allocation");
-		}
-		pending.instruction.nativeCardinalityAccess = {
-			role: pending.role,
-			allocationInstructionIndex,
-			fieldSlot: pending.fieldSlot,
-		};
-	}
 	for (const pending of pendingFiniteRecordAccesses) {
 		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
 			pending.allocation,
@@ -2158,23 +2167,6 @@ function lowerFunctionToVmFunction(
 			throw new Error("Unknown exact fresh-Array allocation");
 		}
 		pending.instruction.nativeExactFreshArrayAccess = { allocationInstructionIndex };
-	}
-	for (const pending of pendingCardinalityPushes) {
-		const allocationInstructionIndex = instructionIndexByIrInstruction.get(
-			pending.allocation,
-		);
-		const pushedStackObjectAllocationInstructionIndex =
-			stackObjectSiteInstructionById.get(pending.stackObjectSiteId);
-		if (
-			allocationInstructionIndex === undefined ||
-			pushedStackObjectAllocationInstructionIndex === undefined
-		) {
-			throw new Error("Unknown cardinality-region allocation dependency");
-		}
-		pending.instruction.nativeCardinalityPush = {
-			allocationInstructionIndex,
-			pushedStackObjectAllocationInstructionIndex,
-		};
 	}
 	const regions: Array<VmRegion> = [];
 	const claimedRegionInstructions = new Set<number>();
@@ -3318,60 +3310,151 @@ function lowerFunctionToVmFunction(
 			}
 		}
 	}
-	const stackPlanCandidates = stackObjectSites.map((site) => {
-		const accesses = stackObjectAccesses
-			.filter((access) => access.allocationInstructionIndex === site.instructionIndex)
-			.map((access) => ({ ip: access.instructionIndex, slot: access.slot }));
-		const inherited = stackObjectInheritedAccesses.filter(
-			(access) => access.allocationInstructionIndex === site.instructionIndex,
+	const cardinalityItemAllocationIps = new Set<number>();
+	for (const pending of pendingCardinalityPushes) {
+		const itemAllocationIp = stackObjectSiteInstructionById.get(
+			pending.stackObjectSiteId,
 		);
-		if (inherited.length > 1) {
-			throw new Error(
-				`Stack-object site ${site.instructionIndex} has multiple inherited loads`,
-			);
+		if (itemAllocationIp === undefined) {
+			throw new Error("Unknown cardinality-region record allocation");
 		}
-		const materializations: Array<{
-			ip: number;
-			kind: "return" | "cardinality-push";
-		}> = stackObjectMaterializations
-			.filter(
-				(materialization) =>
-					materialization.allocationInstructionIndex === site.instructionIndex,
-			)
-			.map((materialization) => ({
-				ip: materialization.returnInstructionIndex,
-				kind: "return" as const,
+		cardinalityItemAllocationIps.add(itemAllocationIp);
+	}
+	for (const pending of pendingCardinalityAllocations) {
+		if (regions.length >= 8) break;
+		const allocationIp = instructionIndexByIrInstruction.get(pending.allocation);
+		const pushes = pendingCardinalityPushes.filter(
+			(candidate) => candidate.allocation === pending.allocation,
+		);
+		const accesses = pendingCardinalityAccesses
+			.filter((candidate) => candidate.allocation === pending.allocation)
+			.map((candidate) => ({
+				ip: instructionIndexByIrInstruction.get(candidate.instruction),
+				role: candidate.role,
+				fieldSlot: candidate.fieldSlot,
 			}));
-		for (let ip = 0; ip < instructions.length; ip++) {
-			const instruction = instructions[ip]!;
-			if (
-				instruction.opcode === "CALL" &&
-				instruction.nativeCardinalityPush?.pushedStackObjectAllocationInstructionIndex ===
-					site.instructionIndex
-			) {
-				materializations.push({ ip, kind: "cardinality-push" });
-			}
+		const pushCallIp =
+			pushes.length === 1
+				? instructionIndexByIrInstruction.get(pushes[0]!.instruction)
+				: undefined;
+		const itemAllocationIp =
+			pushes.length === 1
+				? stackObjectSiteInstructionById.get(pushes[0]!.stackObjectSiteId)
+				: undefined;
+		if (
+			allocationIp === undefined ||
+			pushCallIp === undefined ||
+			itemAllocationIp === undefined ||
+			accesses.length === 0 ||
+			accesses.some((access) => access.ip === undefined)
+		) {
+			continue;
 		}
+		const resolvedAccesses = accesses as Array<{
+			ip: number;
+			role: "push" | "length" | "element" | "field";
+			fieldSlot?: number;
+		}>;
+		const allocation = instructions[allocationIp];
+		const push = instructions[pushCallIp];
+		const item = instructions[itemAllocationIp];
 		const claimedIps = [
-			site.instructionIndex,
-			...accesses.map((access) => access.ip),
-			...(inherited[0] === undefined ? [] : [inherited[0].instructionIndex]),
-			...materializations.map((materialization) => materialization.ip),
+			allocationIp,
+			itemAllocationIp,
+			pushCallIp,
+			...resolvedAccesses.map((access) => access.ip),
 		];
-		return {
-			site: {
-				allocationIp: site.instructionIndex,
-				slotCount: site.slotCount,
-				accesses,
-				...(inherited[0] === undefined
-					? {}
-					: { inheritedAccessIp: inherited[0].instructionIndex }),
-				materializations,
+		const uniqueClaims = [...new Set(claimedIps)].sort((left, right) => left - right);
+		if (
+			allocation?.opcode !== "CREATE_ARRAY" ||
+			allocation.length !== 0 ||
+			push?.opcode !== "CALL" ||
+			push.arguments.length !== 1 ||
+			item?.opcode !== "CREATE_OBJECT_SHAPED" ||
+			item.count <= 0 ||
+			item.count > 8 ||
+			pending.maximumLength <= 0 ||
+			pending.maximumLength > 32 ||
+			uniqueClaims.length !== claimedIps.length ||
+			uniqueClaims.length > 64 ||
+			uniqueClaims.some((ip) => claimedRegionInstructions.has(ip)) ||
+			uniqueClaims.some((ip) =>
+				handlers.some((handler) => ip >= handler.startIp && ip < handler.endIp),
+			) ||
+			!pending.guard.obligations.includes("fallback") ||
+			!pending.guard.obligations.includes("materialize")
+		) {
+			continue;
+		}
+		for (const ip of uniqueClaims) claimedRegionInstructions.add(ip);
+		regions.push({
+			kind: "cardinality-array",
+			license: {
+				guard: pending.guard,
+				genericTwin: "retained",
+				materialization: "whole-region",
 			},
-			guard: inherited[0]?.guard,
-			claimedIps,
-		};
-	});
+			representation: "bounded-record-history",
+			anchors: [allocationIp, pushCallIp, itemAllocationIp],
+			claimedIps: uniqueClaims,
+			controlFlow: { ordinaryBlockIps: uniqueClaims, exceptionalHandlerIps: [] },
+			cost: {
+				score: pending.maximumLength * item.count,
+				metadataOperations: uniqueClaims.length,
+			},
+			allocationIp,
+			pushCallIp,
+			itemAllocationIp,
+			maximumLength: pending.maximumLength,
+			accesses: resolvedAccesses,
+		});
+	}
+	const stackPlanCandidates = stackObjectSites
+		.filter((site) => !cardinalityItemAllocationIps.has(site.instructionIndex))
+		.map((site) => {
+			const accesses = stackObjectAccesses
+				.filter((access) => access.allocationInstructionIndex === site.instructionIndex)
+				.map((access) => ({ ip: access.instructionIndex, slot: access.slot }));
+			const inherited = stackObjectInheritedAccesses.filter(
+				(access) => access.allocationInstructionIndex === site.instructionIndex,
+			);
+			if (inherited.length > 1) {
+				throw new Error(
+					`Stack-object site ${site.instructionIndex} has multiple inherited loads`,
+				);
+			}
+			const materializations: Array<{
+				ip: number;
+				kind: "return";
+			}> = stackObjectMaterializations
+				.filter(
+					(materialization) =>
+						materialization.allocationInstructionIndex === site.instructionIndex,
+				)
+				.map((materialization) => ({
+					ip: materialization.returnInstructionIndex,
+					kind: "return" as const,
+				}));
+			const claimedIps = [
+				site.instructionIndex,
+				...accesses.map((access) => access.ip),
+				...(inherited[0] === undefined ? [] : [inherited[0].instructionIndex]),
+				...materializations.map((materialization) => materialization.ip),
+			];
+			return {
+				site: {
+					allocationIp: site.instructionIndex,
+					slotCount: site.slotCount,
+					accesses,
+					...(inherited[0] === undefined
+						? {}
+						: { inheritedAccessIp: inherited[0].instructionIndex }),
+					materializations,
+				},
+				guard: inherited[0]?.guard,
+				claimedIps,
+			};
+		});
 	let pendingStackPlanSites: Array<(typeof stackPlanCandidates)[number]["site"]> = [];
 	let pendingStackPlanGuards: Array<VmGuardPlan> = [];
 	let pendingStackPlanClaims: Array<number> = [];
@@ -3659,25 +3742,11 @@ function lowerInstructionToVmInstruction(
 				shapeCacheIndex: -1,
 			};
 		case "createArray": {
-			let nativeCardinalityRegion:
-				| { maximumLength: number; guard: VmGuardPlan }
-				| undefined;
-			if (instruction.nativeCardinalityRegion !== undefined) {
-				const guard = lowerGuardPlan(instruction.nativeCardinalityRegion.guard);
-				if (guard === undefined || !guard.obligations.includes("materialize")) {
-					throw new Error("Cardinality region lacks a materialization guard plan");
-				}
-				nativeCardinalityRegion = {
-					maximumLength: instruction.nativeCardinalityRegion.maximumLength,
-					guard,
-				};
-			}
 			return {
 				opcode: "CREATE_ARRAY",
 				dst: instruction.registers[0],
 				length: instruction.length,
 				nativeFreshDenseReserveLength: instruction.nativeFreshDenseReserveLength,
-				nativeCardinalityRegion,
 			};
 		}
 		case "instantiateLiteralTemplate":

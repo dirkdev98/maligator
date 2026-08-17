@@ -38,7 +38,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Bumped to 58 to move stack-object plans into the tagged region table.
-export const WIRE_VERSION = 58;
+export const WIRE_VERSION = 59;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1101,8 +1101,7 @@ export function serializeVmDefinition(
 						instruction.directFunctionIndex !== undefined ||
 						instruction.directFunctionCall === true ||
 						instruction.directCallTargetFunctionIndex !== undefined ||
-						instruction.guardedBuiltinCall !== undefined ||
-						instruction.nativeCardinalityPush !== undefined
+						instruction.guardedBuiltinCall !== undefined
 					);
 				}
 				if (instruction.opcode === "CONSTRUCT") {
@@ -1120,9 +1119,6 @@ export function serializeVmDefinition(
 						((instruction.opcode === "LOAD_PROPERTY" ||
 							instruction.opcode === "STORE_PROPERTY") &&
 							instruction.nativeFiniteKey !== undefined) ||
-						((instruction.opcode === "LOAD_PROPERTY" ||
-							instruction.opcode === "LOAD_PROPERTY_STATIC") &&
-							instruction.nativeCardinalityAccess !== undefined) ||
 						(instruction.opcode === "LOAD_PROPERTY" &&
 							instruction.nativeExactFreshArrayAccess !== undefined) ||
 						(instruction.opcode === "LOAD_PROPERTY_STATIC" &&
@@ -1133,10 +1129,7 @@ export function serializeVmDefinition(
 					return instruction.nativeFiniteConstruction !== undefined;
 				}
 				if (instruction.opcode === "CREATE_ARRAY") {
-					return (
-						instruction.nativeCardinalityRegion !== undefined ||
-						instruction.nativeFreshDenseReserveLength !== undefined
-					);
+					return instruction.nativeFreshDenseReserveLength !== undefined;
 				}
 				return (
 					instruction.opcode === "BINARY" &&
@@ -1147,13 +1140,6 @@ export function serializeVmDefinition(
 		w.u32(instructionMetadata.length);
 		for (const { instruction, instructionIndex } of instructionMetadata) {
 			w.u32(instructionIndex);
-			if (
-				instruction.opcode === "CREATE_ARRAY" &&
-				instruction.nativeCardinalityRegion !== undefined &&
-				instruction.nativeFreshDenseReserveLength !== undefined
-			) {
-				throw new RangeError("serialize-vm: conflicting CREATE_ARRAY compiler metadata");
-			}
 			if (
 				(instruction.opcode === "LOAD_PROPERTY" ||
 					instruction.opcode === "STORE_PROPERTY") &&
@@ -1186,10 +1172,8 @@ export function serializeVmDefinition(
 					throw new RangeError("serialize-vm: invalid guarded builtin fact");
 				}
 				if (
-					(instruction.directStringCharCodeAtPosition !== undefined &&
-						guardedOperation !== "String.prototype.charCodeAt") ||
-					(instruction.nativeCardinalityPush !== undefined &&
-						guardedOperation !== "Array.prototype.push")
+					instruction.directStringCharCodeAtPosition !== undefined &&
+					guardedOperation !== "String.prototype.charCodeAt"
 				) {
 					throw new RangeError("serialize-vm: mismatched guarded builtin metadata");
 				}
@@ -1200,18 +1184,11 @@ export function serializeVmDefinition(
 					(instruction.directFunctionCall === true ? 1 : 0) |
 						(guardedOperation === "Array.prototype.push" ? 2 : 0) |
 						(guardedOperation === "String.prototype.charCodeAt" ? 4 : 0) |
-						(instruction.nativeCardinalityPush !== undefined ? 8 : 0) |
 						(instruction.directStringCharCodeAtPosition === "integer" ? 16 : 0) |
 						(instruction.directStringCharCodeAtPosition === "inBounds" ? 32 : 0) |
 						(guardedDependency?.kind === "world" ? 64 : 0),
 				);
 				w.u8(taggedGuardedBuiltinOperation(guardedOperation));
-				if (instruction.nativeCardinalityPush !== undefined) {
-					w.i32(instruction.nativeCardinalityPush.allocationInstructionIndex);
-					w.i32(
-						instruction.nativeCardinalityPush.pushedStackObjectAllocationInstructionIndex,
-					);
-				}
 			} else if (instruction.opcode === "CONSTRUCT") {
 				w.u8(2);
 				w.i32(instruction.directFunctionIndex!);
@@ -1254,43 +1231,12 @@ export function serializeVmDefinition(
 					allocation.dst !== instruction.object ||
 					instruction.nativeFiniteKey !== undefined ||
 					instruction.nativeFiniteRecordAccess !== undefined ||
-					instruction.nativeClosedGlobalTable !== undefined ||
-					instruction.nativeCardinalityAccess !== undefined
+					instruction.nativeClosedGlobalTable !== undefined
 				) {
 					throw new RangeError("serialize-vm: invalid exact fresh-Array access metadata");
 				}
 				w.u8(13);
 				w.i32(allocationInstructionIndex);
-			} else if (
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "LOAD_PROPERTY_STATIC") &&
-				instruction.nativeCardinalityAccess !== undefined
-			) {
-				w.u8(9);
-				w.u8(
-					instruction.nativeCardinalityAccess.role === "push"
-						? 1
-						: instruction.nativeCardinalityAccess.role === "length"
-							? 2
-							: instruction.nativeCardinalityAccess.role === "element"
-								? 3
-								: 4,
-				);
-				w.i32(instruction.nativeCardinalityAccess.allocationInstructionIndex);
-				if (instruction.nativeCardinalityAccess.role === "field") {
-					w.i32(instruction.nativeCardinalityAccess.fieldSlot ?? -1);
-				}
-			} else if (
-				instruction.opcode === "CREATE_ARRAY" &&
-				instruction.nativeCardinalityRegion !== undefined
-			) {
-				w.u8(8);
-				w.i32(instruction.nativeCardinalityRegion.maximumLength);
-				const { dependencyMask, obligationMask } = cardinalityGuardMasks(
-					instruction.nativeCardinalityRegion.guard,
-				);
-				w.u8(dependencyMask);
-				w.u8(obligationMask);
 			} else if (
 				instruction.opcode === "CREATE_ARRAY" &&
 				instruction.nativeFreshDenseReserveLength !== undefined
@@ -1365,7 +1311,9 @@ export function serializeVmDefinition(
 													? 9
 													: region.kind === "invariant-json-map-template"
 														? 10
-														: 11;
+														: region.kind === "stack-object-plan"
+															? 11
+															: 12;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1394,7 +1342,9 @@ export function serializeVmDefinition(
 													? privateAggregateMemoGuardMasks(region.license)
 													: region.kind === "invariant-json-map-template"
 														? invariantJsonMapTemplateGuardMasks(region.license)
-														: stackObjectPlanGuardMasks(region.license);
+														: region.kind === "stack-object-plan"
+															? stackObjectPlanGuardMasks(region.license)
+															: cardinalityGuardMasks(region.license.guard);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1619,8 +1569,28 @@ export function serializeVmDefinition(
 						w.u32(site.materializations.length);
 						for (const materialization of site.materializations) {
 							w.i32(materialization.ip);
-							w.u8(materialization.kind === "return" ? 1 : 2);
+							w.u8(1);
 						}
+					}
+					break;
+				case "cardinality-array":
+					w.i32(region.allocationIp);
+					w.i32(region.pushCallIp);
+					w.i32(region.itemAllocationIp);
+					w.i32(region.maximumLength);
+					w.u32(region.accesses.length);
+					for (const access of region.accesses) {
+						w.i32(access.ip);
+						w.u8(
+							access.role === "push"
+								? 1
+								: access.role === "length"
+									? 2
+									: access.role === "element"
+										? 3
+										: 4,
+						);
+						w.i32(access.fieldSlot ?? -1);
 					}
 					break;
 			}
@@ -1999,6 +1969,9 @@ function validateRegion(
 		case "stack-object-plan":
 			validateStackObjectPlanRegion(fn, region);
 			break;
+		case "cardinality-array":
+			validateCardinalityArrayRegion(fn, region);
+			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
 			break;
@@ -2066,11 +2039,8 @@ function validateStackObjectPlanRegion(
 		for (const materialization of site.materializations) {
 			const instruction = fn.instructions[materialization.ip];
 			if (
-				(materialization.kind === "return"
-					? instruction?.opcode !== "RETURN"
-					: instruction?.opcode !== "CALL" ||
-						instruction.nativeCardinalityPush
-							?.pushedStackObjectAllocationInstructionIndex !== site.allocationIp) ||
+				materialization.kind !== "return" ||
+				instruction?.opcode !== "RETURN" ||
 				payload.has(materialization.ip)
 			) {
 				valid = false;
@@ -2089,6 +2059,75 @@ function validateStackObjectPlanRegion(
 		valid = false;
 	}
 	if (!valid) throw new RangeError("serialize-vm: invalid stack-object plan region");
+}
+
+function validateCardinalityArrayRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "cardinality-array" }>,
+): void {
+	cardinalityGuardMasks(region.license.guard);
+	const allocation = fn.instructions[region.allocationIp];
+	const push = fn.instructions[region.pushCallIp];
+	const item = fn.instructions[region.itemAllocationIp];
+	const itemSlotCount = item?.opcode === "CREATE_OBJECT_SHAPED" ? item.count : -1;
+	const pushedValue =
+		push?.opcode === "CALL" && push.arguments.length === 1
+			? decodeVmValueOperand(push.arguments[0]!)
+			: undefined;
+	const payload = new Set<number>([
+		region.allocationIp,
+		region.pushCallIp,
+		region.itemAllocationIp,
+	]);
+	let pushAccesses = 0;
+	let valid =
+		region.license.genericTwin === "retained" &&
+		region.license.materialization === "whole-region" &&
+		region.representation === "bounded-record-history" &&
+		region.anchors.length === 3 &&
+		region.anchors[0] === region.allocationIp &&
+		region.anchors[1] === region.pushCallIp &&
+		region.anchors[2] === region.itemAllocationIp &&
+		region.controlFlow.exceptionalHandlerIps.length === 0 &&
+		allocation?.opcode === "CREATE_ARRAY" &&
+		allocation.length === 0 &&
+		push?.opcode === "CALL" &&
+		push.arguments.length === 1 &&
+		itemSlotCount > 0 &&
+		pushedValue?.kind === "register" &&
+		pushedValue.register === (item?.opcode === "CREATE_OBJECT_SHAPED" ? item.dst : -1) &&
+		itemSlotCount <= 8 &&
+		region.maximumLength > 0 &&
+		region.maximumLength <= 32 &&
+		region.accesses.length > 0 &&
+		region.accesses.length <= 32;
+	for (const access of region.accesses) {
+		const instruction = fn.instructions[access.ip];
+		if (
+			(instruction?.opcode !== "LOAD_PROPERTY" &&
+				instruction?.opcode !== "LOAD_PROPERTY_STATIC") ||
+			payload.has(access.ip) ||
+			(access.role === "field"
+				? access.fieldSlot === undefined ||
+					access.fieldSlot < 0 ||
+					access.fieldSlot >= itemSlotCount
+				: access.fieldSlot !== undefined)
+		) {
+			valid = false;
+		}
+		if (access.role === "push") pushAccesses++;
+		payload.add(access.ip);
+	}
+	if (
+		pushAccesses !== 1 ||
+		region.cost.metadataOperations !== payload.size ||
+		payload.size !== region.claimedIps.length ||
+		region.claimedIps.some((ip) => !payload.has(ip)) ||
+		region.claimedIps.some((ip) => !region.controlFlow.ordinaryBlockIps.includes(ip))
+	) {
+		valid = false;
+	}
+	if (!valid) throw new RangeError("serialize-vm: invalid cardinality-array region");
 }
 
 function validateInvariantJsonMapTemplateRegion(
@@ -3674,6 +3713,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					directFunctionIndex < -1 ||
 					directCallTargetFunctionIndex < -1 ||
 					flags > 127 ||
+					(flags & 8) !== 0 ||
 					((flags & 48) !== 0 && (flags & 4) === 0) ||
 					(flags & 48) === 48 ||
 					collectionTag > TAGGED_GUARDED_BUILTIN_OPERATIONS.length ||
@@ -3690,23 +3730,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				if ((flags & 1) !== 0) instruction.directFunctionCall = true;
 				if ((flags & 16) !== 0) instruction.directStringCharCodeAtPosition = "integer";
 				if ((flags & 32) !== 0) instruction.directStringCharCodeAtPosition = "inBounds";
-				if ((flags & 8) !== 0) {
-					const allocationInstructionIndex = r.i32();
-					const pushedStackObjectAllocationInstructionIndex = r.i32();
-					if (
-						fn.instructions[allocationInstructionIndex]?.opcode !== "CREATE_ARRAY" ||
-						(fn.instructions[pushedStackObjectAllocationInstructionIndex]?.opcode !==
-							"CREATE_OBJECT" &&
-							fn.instructions[pushedStackObjectAllocationInstructionIndex]?.opcode !==
-								"CREATE_OBJECT_SHAPED")
-					) {
-						throw new RangeError("serialize-vm: invalid cardinality-push metadata");
-					}
-					instruction.nativeCardinalityPush = {
-						allocationInstructionIndex,
-						pushedStackObjectAllocationInstructionIndex,
-					};
-				}
 				if (guardedBuiltinCount === 1) {
 					const operation =
 						(flags & 2) !== 0
@@ -3825,32 +3848,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					keyStringIndices,
 					...(virtualRecord === 1 ? { virtualRecord: true as const } : {}),
 				};
-			} else if (tag === 8 && instruction.opcode === "CREATE_ARRAY") {
-				const maximumLength = r.i32();
-				const dependencyMask = r.u8();
-				const obligationMask = r.u8();
-				if (
-					maximumLength <= 0 ||
-					maximumLength > 32 ||
-					(dependencyMask !== 1 && dependencyMask !== 14) ||
-					obligationMask !== 3
-				) {
-					throw new RangeError("serialize-vm: invalid cardinality-region metadata");
-				}
-				instruction.nativeCardinalityRegion = {
-					maximumLength,
-					guard: {
-						dependencies:
-							dependencyMask === 1
-								? [{ kind: "world", fact: "primordials.locked" }]
-								: [
-										{ kind: "epoch", family: "array-elements" },
-										{ kind: "epoch", family: "primitive-methods" },
-										{ kind: "epoch", family: "watched-methods" },
-									],
-						obligations: ["fallback", "materialize"],
-					},
-				};
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
 				const reserveLength = r.i32();
 				if (reserveLength < 1 || reserveLength > 65_536) {
@@ -3868,38 +3865,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid exact fresh-Array access metadata");
 				}
 				instruction.nativeExactFreshArrayAccess = { allocationInstructionIndex };
-			} else if (
-				tag === 9 &&
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "LOAD_PROPERTY_STATIC")
-			) {
-				const role = r.u8();
-				const allocationInstructionIndex = r.i32();
-				if (
-					role < 1 ||
-					role > 4 ||
-					fn.instructions[allocationInstructionIndex]?.opcode !== "CREATE_ARRAY"
-				) {
-					throw new RangeError("serialize-vm: invalid cardinality-access metadata");
-				}
-				instruction.nativeCardinalityAccess = {
-					role:
-						role === 1
-							? "push"
-							: role === 2
-								? "length"
-								: role === 3
-									? "element"
-									: "field",
-					allocationInstructionIndex,
-				};
-				if (role === 4) {
-					const fieldSlot = r.i32();
-					if (fieldSlot < 0 || fieldSlot >= 8) {
-						throw new RangeError("serialize-vm: invalid cardinality-field metadata");
-					}
-					instruction.nativeCardinalityAccess.fieldSlot = fieldSlot;
-				}
 			} else if (
 				tag === 10 &&
 				(instruction.opcode === "LOAD_PROPERTY" ||
@@ -4032,6 +3997,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 1 &&
 					[0, 1, 2].includes(dependencyMask) &&
 					obligationMask === 3;
+				const cardinalityArrayContract =
+					kindTag === 12 &&
+					representationTag === 12 &&
+					materializationTag === 2 &&
+					(dependencyMask === 1 || dependencyMask === 14) &&
+					obligationMask === 3;
 				if (
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
@@ -4044,7 +4015,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!stringScanContract &&
 						!privateAggregateMemoContract &&
 						!invariantJsonMapTemplateContract &&
-						!stackObjectPlanContract)
+						!stackObjectPlanContract &&
+						!cardinalityArrayContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -4672,7 +4644,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						nestedValueStringIndex,
 						excludedStringIndices,
 					};
-				} else {
+				} else if (kindTag === 11) {
 					const siteCount = r.count(5);
 					if (siteCount === 0 || siteCount > 8) {
 						throw new RangeError("serialize-vm: invalid stack-object site count");
@@ -4690,10 +4662,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						}
 						const inheritedAccessIp = r.i32();
 						const materializationCount = r.count(2);
-						const materializations: Array<{
-							ip: number;
-							kind: "return" | "cardinality-push";
-						}> = [];
+						const materializations: Array<{ ip: number; kind: "return" }> = [];
 						for (
 							let materialization = 0;
 							materialization < materializationCount;
@@ -4701,14 +4670,14 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						) {
 							const ip = r.i32();
 							const tag = r.u8();
-							if (tag !== 1 && tag !== 2) {
+							if (tag !== 1) {
 								throw new RangeError(
 									"serialize-vm: invalid stack-object materialization",
 								);
 							}
 							materializations.push({
 								ip,
-								kind: tag === 1 ? "return" : "cardinality-push",
+								kind: "return",
 							});
 						}
 						sites.push({
@@ -4740,6 +4709,63 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
 						sites,
+					};
+				} else {
+					const allocationIp = r.i32();
+					const pushCallIp = r.i32();
+					const itemAllocationIp = r.i32();
+					const maximumLength = r.i32();
+					const accessCount = r.count(2);
+					const accesses: Array<
+						Extract<VmRegion, { kind: "cardinality-array" }>["accesses"][number]
+					> = [];
+					for (let access = 0; access < accessCount; access++) {
+						const ip = r.i32();
+						const roleTag = r.u8();
+						const fieldSlot = r.i32();
+						if (roleTag < 1 || roleTag > 4 || (roleTag !== 4 && fieldSlot !== -1)) {
+							throw new RangeError("serialize-vm: invalid cardinality access");
+						}
+						accesses.push({
+							ip,
+							role:
+								roleTag === 1
+									? "push"
+									: roleTag === 2
+										? "length"
+										: roleTag === 3
+											? "element"
+											: "field",
+							...(fieldSlot < 0 ? {} : { fieldSlot }),
+						});
+					}
+					region = {
+						kind: "cardinality-array",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [
+												{ kind: "epoch", family: "array-elements" },
+												{ kind: "epoch", family: "primitive-methods" },
+												{ kind: "epoch", family: "watched-methods" },
+											],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "whole-region",
+						},
+						representation: "bounded-record-history",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						allocationIp,
+						pushCallIp,
+						itemAllocationIp,
+						maximumLength,
+						accesses,
 					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);

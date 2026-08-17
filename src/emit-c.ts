@@ -13,10 +13,10 @@ import {
 	vmCallProvesBuiltin,
 	vmGuardIsWorldInvariant,
 	vmInstructionWriteRegisters,
-	vmRegionLicense,
 	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
 import type {
+	VmCardinalityArrayRegion,
 	VmExceptionHandler,
 	VmFunction,
 	VmGuardPlan,
@@ -765,22 +765,15 @@ export function emitCompiledFunction(
 			for (const materialization of planSite.materializations) {
 				const instruction = fn.instructions[materialization.ip];
 				if (
-					(materialization.kind === "return"
-						? instruction?.opcode !== "RETURN"
-						: instruction?.opcode !== "CALL" ||
-							instruction.nativeCardinalityPush
-								?.pushedStackObjectAllocationInstructionIndex !==
-								planSite.allocationIp) ||
-					(materialization.kind === "return" &&
-						stackObjectMaterializations.has(materialization.ip))
+					materialization.kind !== "return" ||
+					instruction?.opcode !== "RETURN" ||
+					stackObjectMaterializations.has(materialization.ip)
 				) {
 					throw new Error(
 						`Invalid stack-object materialization metadata at instruction ${materialization.ip}`,
 					);
 				}
-				if (materialization.kind === "return") {
-					stackObjectMaterializations.set(materialization.ip, site);
-				}
+				stackObjectMaterializations.set(materialization.ip, site);
 			}
 			for (const access of planSite.accesses) {
 				const instruction = fn.instructions[access.ip];
@@ -883,100 +876,69 @@ export function emitCompiledFunction(
 	>();
 	const cardinalityPushes = new Map<number, CardinalityRegion>();
 	const cardinalityHistorySlotLimit = stackSlotsBase + 512;
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
+	const cardinalityPlanRegions = (fn.regions ?? []).filter(
+		(region): region is VmCardinalityArrayRegion => region.kind === "cardinality-array",
+	);
+	for (const plan of cardinalityPlanRegions) {
+		const instruction = fn.instructions[plan.allocationIp];
+		const push = fn.instructions[plan.pushCallIp];
+		const pushedInstruction = fn.instructions[plan.itemAllocationIp];
 		if (
-			instruction.opcode !== "CREATE_ARRAY" ||
-			instruction.nativeCardinalityRegion === undefined
-		) {
-			continue;
-		}
-		const pushes = fn.instructions
-			.map((candidate, candidateIp) => ({ candidate, candidateIp }))
-			.filter(
-				(
-					entry,
-				): entry is {
-					candidate: Extract<VmInstruction, { opcode: "CALL" }>;
-					candidateIp: number;
-				} =>
-					entry.candidate.opcode === "CALL" &&
-					entry.candidate.nativeCardinalityPush?.allocationInstructionIndex === ip,
-			);
-		if (pushes.length !== 1) continue;
-		if (pushes[0]!.candidate.arguments.length !== 1) continue;
-		const receiver = decodeVmValueOperand(pushes[0]!.candidate.thisValue);
-		const pushedValue = decodeVmValueOperand(pushes[0]!.candidate.arguments[0]!);
-		if (receiver.kind !== "register" || pushedValue.kind !== "register") continue;
-		const pushedSite = stackObjectSites.get(
-			pushes[0]!.candidate.nativeCardinalityPush!
-				.pushedStackObjectAllocationInstructionIndex,
-		);
-		const pushedInstruction =
-			fn.instructions[
-				pushes[0]!.candidate.nativeCardinalityPush!
-					.pushedStackObjectAllocationInstructionIndex
-			];
-		if (
-			pushedSite === undefined ||
-			pushedSite.slotCount === 0 ||
+			instruction?.opcode !== "CREATE_ARRAY" ||
+			push?.opcode !== "CALL" ||
+			push.arguments.length !== 1 ||
 			pushedInstruction?.opcode !== "CREATE_OBJECT_SHAPED"
 		) {
 			continue;
 		}
-		const historySlotCount =
-			instruction.nativeCardinalityRegion.maximumLength * pushedSite.slotCount;
+		const receiver = decodeVmValueOperand(push.thisValue);
+		const pushedValue = decodeVmValueOperand(push.arguments[0]!);
+		if (receiver.kind !== "register" || pushedValue.kind !== "register") continue;
+		if (pushedInstruction.count === 0 || stackObjectSites.has(plan.itemAllocationIp)) {
+			continue;
+		}
+		const historySlotCount = plan.maximumLength * pushedInstruction.count;
 		if (
-			instruction.nativeCardinalityRegion.maximumLength <= 0 ||
-			nextStackSlot + historySlotCount > cardinalityHistorySlotLimit
+			plan.maximumLength <= 0 ||
+			nextStackSlot + pushedInstruction.count + historySlotCount >
+				cardinalityHistorySlotLimit
 		) {
 			continue;
 		}
-		const license = vmRegionLicense(
-			[instruction.nativeCardinalityRegion.guard],
-			"whole-region",
-		);
-		if (license === undefined) continue;
+		const pushedSite: StackObjectSite = {
+			objectName: `__stack_object_${plan.itemAllocationIp}`,
+			slotsOffset: nextStackSlot,
+			slotCount: pushedInstruction.count,
+		};
+		stackObjectSites.set(plan.itemAllocationIp, pushedSite);
+		nextStackSlot += pushedInstruction.count;
 		const region: CardinalityRegion = {
-			allocationInstructionIndex: ip,
+			allocationInstructionIndex: plan.allocationIp,
 			arrayRegister: receiver.register,
-			maximumLength: instruction.nativeCardinalityRegion.maximumLength,
-			license,
+			maximumLength: plan.maximumLength,
+			license: plan.license,
 			semanticEpochStable: false,
-			epochName: `__cardinality_${ip}_semantic_epoch`,
+			epochName: `__cardinality_${plan.allocationIp}_semantic_epoch`,
 			itemSite: pushedSite,
 			itemRegister: pushedValue.register,
 			itemShapeCacheIndex: pushedInstruction.shapeCacheIndex,
 			itemKeyStringIndices: [...pushedInstruction.keyStringIndices],
 			historySlotsOffset: nextStackSlot,
-			fastName: `__cardinality_${ip}_fast`,
-			countName: `__cardinality_${ip}_count`,
-			shapeName: `__cardinality_${ip}_shape`,
-			currentMaterializedName: `__cardinality_${ip}_current_materialized`,
-			elementIndexName: `__cardinality_${ip}_element_index`,
+			fastName: `__cardinality_${plan.allocationIp}_fast`,
+			countName: `__cardinality_${plan.allocationIp}_count`,
+			shapeName: `__cardinality_${plan.allocationIp}_shape`,
+			currentMaterializedName: `__cardinality_${plan.allocationIp}_current_materialized`,
+			elementIndexName: `__cardinality_${plan.allocationIp}_element_index`,
 		};
 		pushedSite.cardinalityRegion = region;
 		nextStackSlot += historySlotCount;
-		cardinalityRegions.set(ip, region);
-		cardinalityPushes.set(pushes[0]!.candidateIp, region);
-	}
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
-		if (
-			(instruction.opcode !== "LOAD_PROPERTY" &&
-				instruction.opcode !== "LOAD_PROPERTY_STATIC") ||
-			instruction.nativeCardinalityAccess === undefined
-		) {
-			continue;
-		}
-		const region = cardinalityRegions.get(
-			instruction.nativeCardinalityAccess.allocationInstructionIndex,
-		);
-		if (region !== undefined) {
-			cardinalityAccesses.set(ip, {
+		cardinalityRegions.set(plan.allocationIp, region);
+		cardinalityPushes.set(plan.pushCallIp, region);
+		for (const access of plan.accesses) {
+			cardinalityAccesses.set(access.ip, {
 				region,
-				role: instruction.nativeCardinalityAccess.role,
-				fieldSlot: instruction.nativeCardinalityAccess.fieldSlot,
+				role: access.role,
+				fieldSlot: access.fieldSlot,
 			});
 		}
 	}
@@ -2582,7 +2544,11 @@ function findInheritedLoadLoopTwins(
 		if (!scalarOnly || loads.length !== 1) continue;
 		const load = loads[0]!;
 		if (
-			load.instruction.nativeCardinalityAccess !== undefined ||
+			(fn.regions ?? []).some(
+				(region) =>
+					region.kind === "cardinality-array" &&
+					region.accesses.some((access) => access.ip === load.ip),
+			) ||
 			(fn.regions ?? []).some(
 				(region) =>
 					region.kind === "stack-object-plan" &&
