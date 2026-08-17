@@ -60,6 +60,7 @@ import { annotateStringSliceNumberRegions } from "./ir-string-regions.ts";
 import { debugIntermediateProgram, getOrCreateStringConstant } from "./ir.ts";
 import type {
 	IntermediateProgram,
+	IRCardinalityArrayRegion,
 	IRClosedRecordArrayRegion,
 	IRFunction,
 	IRImmediateValue,
@@ -1605,10 +1606,10 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectArrayPushSites(program);
 		if (residualFeatures.property) annotateFreshDenseIndexedReserves(program);
+		if (residualFeatures.property) optStaticPropertyKeys(program);
 		if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
 			annotateCardinalityOnlyArrayRegions(program);
 		if (residualFeatures.object) annotateStackObjectSites(program);
-		if (residualFeatures.property) optStaticPropertyKeys(program);
 		if (residualFeatures.object && residualFeatures.property)
 			annotateClosedGlobalFiniteTables(program);
 		if (residualFeatures.call && residualFeatures.property)
@@ -1698,6 +1699,12 @@ export function executeIROptimizations(
 			residualFeatures.property,
 		);
 		runFinalPass(
+			"static-property-keys",
+			optStaticPropertyKeys,
+			residualFeatures.property,
+			"static-properties",
+		);
+		runFinalPass(
 			"annotate-cardinality-array-regions",
 			annotateCardinalityOnlyArrayRegions,
 			residualFeatures.call && residualFeatures.property && residualFeatures.object,
@@ -1712,12 +1719,6 @@ export function executeIROptimizations(
 			annotateStackObjectSites,
 			residualFeatures.object,
 			"escape",
-		);
-		runFinalPass(
-			"static-property-keys",
-			optStaticPropertyKeys,
-			residualFeatures.property,
-			"static-properties",
 		);
 		runFinalPass(
 			"annotate-closed-global-finite-tables",
@@ -3694,7 +3695,12 @@ function optImmediateCallOperands(program: IntermediateProgram): boolean {
  */
 function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void {
 	for (const fn of program.functions) {
+		const retainedRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "cardinality-array",
+		);
+		fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
 		if (
+			retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION ||
 			fn.isGenerator ||
 			fn.isAsync ||
 			functionUsesWith(fn) ||
@@ -3706,6 +3712,23 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 		const locations = registerIndex.locations!;
 		const definitions = registerIndex.uniqueDefinitions;
 		const usesOf = registerIndex.uses;
+		const exceptionHandlers = buildIRExceptionHandlers(fn);
+		const occupiedInstructions = new Set(
+			retainedRegions.flatMap((region) => [...region.claimedInstructions]),
+		);
+		type PropertyLoad = Extract<
+			IRInstruction,
+			{ type: "loadProperty" | "loadPropertyStatic" }
+		>;
+		const staticPropertyName = (instruction: PropertyLoad): string | undefined => {
+			if (instruction.type === "loadPropertyStatic") {
+				return decodeStringConstant(program, instruction.stringIndex);
+			}
+			const key = definitions.get(instruction.registers[2]);
+			return key?.type === "createString"
+				? decodeStringConstant(program, key.stringIndex)
+				: undefined;
+		};
 		const incoming = fn.blocks.map(() => new Set<number>());
 		const successors = fn.blocks.map((block, blockIndex) => {
 			const result = new Set<number>();
@@ -3730,7 +3753,7 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 			}
 			return result;
 		});
-		let nextRegionId = 0;
+		let nextRegionId = retainedRegions.length;
 
 		for (const block of fn.blocks) {
 			for (const allocation of block.instructions) {
@@ -3744,11 +3767,11 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 
 				const aliases = new Set<number>([allocation.registers[0]]);
 				const worklist = [allocation.registers[0]];
-				const pushLoads: Array<Extract<IRInstruction, { type: "loadProperty" }>> = [];
-				const lengthLoads: Array<Extract<IRInstruction, { type: "loadProperty" }>> = [];
+				const pushLoads: Array<PropertyLoad> = [];
+				const lengthLoads: Array<PropertyLoad> = [];
 				const indexedLoads: Array<{
 					element: Extract<IRInstruction, { type: "loadProperty" }>;
-					field: Extract<IRInstruction, { type: "loadProperty" }>;
+					field: PropertyLoad;
 					fieldName: string;
 				}> = [];
 				const pushCalls = new Set<Extract<IRInstruction, { type: "call" }>>();
@@ -3780,27 +3803,36 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 							pushCalls.add(use.instruction);
 							continue;
 						}
-						if (use.instruction.type !== "loadProperty" || use.position !== 1) {
+						if (
+							(use.instruction.type !== "loadProperty" &&
+								use.instruction.type !== "loadPropertyStatic") ||
+							use.position !== 1
+						) {
 							safe = false;
 							break;
 						}
-						const key = definitions.get(use.instruction.registers[2]);
-						if (key?.type !== "createString") {
+						const name = staticPropertyName(use.instruction);
+						if (name === undefined) {
+							if (use.instruction.type !== "loadProperty") {
+								safe = false;
+								break;
+							}
 							const resultUses = usesOf.get(use.instruction.registers[0]) ?? [];
 							if (
 								resultUses.length !== 1 ||
 								resultUses[0]!.position !== 1 ||
-								resultUses[0]!.instruction.type !== "loadProperty"
+								(resultUses[0]!.instruction.type !== "loadProperty" &&
+									resultUses[0]!.instruction.type !== "loadPropertyStatic")
 							) {
 								safe = false;
 								break;
 							}
 							const field = resultUses[0]!.instruction;
-							const fieldKey = definitions.get(field.registers[2]);
+							const fieldName = staticPropertyName(field);
 							const elementLocation = locations.get(use.instruction);
 							const fieldLocation = locations.get(field);
 							if (
-								fieldKey?.type !== "createString" ||
+								fieldName === undefined ||
 								elementLocation === undefined ||
 								fieldLocation === undefined ||
 								elementLocation.blockIndex !== fieldLocation.blockIndex ||
@@ -3828,11 +3860,10 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 							indexedLoads.push({
 								element: use.instruction,
 								field,
-								fieldName: decodeStringConstant(program, fieldKey.stringIndex),
+								fieldName,
 							});
 							continue;
 						}
-						const name = decodeStringConstant(program, key.stringIndex);
 						if (name === "length") {
 							lengthLoads.push(use.instruction);
 							continue;
@@ -4010,15 +4041,17 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 					elementRegister = definition.registers[1];
 				}
 				const element = definitions.get(elementRegister);
+				if (element?.type !== "createObjectShaped") continue;
 				if (
-					element?.type !== "createObjectShaped" ||
 					pushCall.registers[3] !== element.registers[0] ||
 					element.keyStringIndices.length === 0 ||
 					element.keyStringIndices.length > 8 ||
 					locations.get(element)?.blockIndex !== bodyIndex ||
 					(usesOf.get(element.registers[0]) ?? []).some(
 						({ instruction }) =>
-							instruction.type === "move" || instruction.type === "storeProperty",
+							instruction.type === "move" ||
+							instruction.type === "storeProperty" ||
+							instruction.type === "storePropertyStatic",
 					)
 				) {
 					continue;
@@ -4039,31 +4072,73 @@ function annotateCardinalityOnlyArrayRegions(program: IntermediateProgram): void
 					[{ kind: "materialize", id: `cardinality-array:${nextRegionId}` }],
 				);
 				if (guard === undefined) continue;
-
-				allocation.nativeCardinalityRegion = {
-					id: nextRegionId++,
+				const accesses: IRCardinalityArrayRegion["accesses"] = [
+					...pushLoads.map((instruction) => ({ instruction, role: "push" as const })),
+					...lengthLoads.map((instruction) => ({
+						instruction,
+						role: "length" as const,
+					})),
+					...indexedLoads.flatMap(({ element: elementLoad, field }, index) => [
+						{ instruction: elementLoad, role: "element" as const },
+						{
+							instruction: field,
+							role: "field" as const,
+							fieldSlot: indexedFieldSlots[index]!,
+						},
+					]),
+				];
+				const claimedInstructions = [
+					allocation,
+					pushCall,
+					element,
+					...accesses.map((access) => access.instruction),
+				];
+				const claimedLocations = claimedInstructions.map((instruction) =>
+					locations.get(instruction),
+				);
+				if (
+					claimedInstructions.length > 64 ||
+					new Set(claimedInstructions).size !== claimedInstructions.length ||
+					claimedInstructions.some((instruction) =>
+						occupiedInstructions.has(instruction),
+					) ||
+					claimedLocations.some(
+						(location) =>
+							location === undefined ||
+							exceptionHandlers[location.blockIndex]?.[location.instructionIndex] !==
+								null,
+					)
+				) {
+					continue;
+				}
+				const ordinaryBlocks = [
+					...new Set(claimedLocations.map((location) => location!.blockIndex)),
+				].sort((left, right) => left - right);
+				const region: IRCardinalityArrayRegion = {
+					kind: "cardinality-array",
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "whole-region",
+					},
+					representation: "bounded-record-history",
+					anchors: [allocation, pushCall, element],
+					claimedInstructions,
+					controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+					cost: {
+						score: (bound - start) * element.keyStringIndices.length,
+						metadataOperations: claimedInstructions.length,
+					},
 					maximumLength: bound - start,
-					guard,
+					accesses,
 				};
-				for (const load of pushLoads) {
-					load.nativeCardinalityAccess = { role: "push", allocation };
-				}
-				for (const load of lengthLoads) {
-					load.nativeCardinalityAccess = { role: "length", allocation };
-				}
-				for (let index = 0; index < indexedLoads.length; index++) {
-					indexedLoads[index]!.element.nativeCardinalityAccess = {
-						role: "element",
-						allocation,
-					};
-					indexedLoads[index]!.field.nativeCardinalityAccess = {
-						role: "field",
-						allocation,
-						fieldSlot: indexedFieldSlots[index],
-					};
-				}
-				pushCall.nativeCardinalityPush = { allocation };
+				fn.regions = [...(fn.regions ?? []), region];
+				for (const instruction of claimedInstructions)
+					occupiedInstructions.add(instruction);
+				nextRegionId++;
+				if ((fn.regions?.length ?? 0) >= MAX_IR_REGIONS_PER_FUNCTION) break;
 			}
+			if ((fn.regions?.length ?? 0) >= MAX_IR_REGIONS_PER_FUNCTION) break;
 		}
 	}
 }
@@ -4103,7 +4178,6 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 								stackObjectSlot: instruction.stackObjectSlot,
 								stackObjectInheritedSiteId: instruction.stackObjectInheritedSiteId,
 								stackObjectInheritedGuard: instruction.stackObjectInheritedGuard,
-								nativeCardinalityAccess: instruction.nativeCardinalityAccess,
 							}
 						: {
 								type: "storePropertyStatic",
@@ -4371,8 +4445,16 @@ export function annotateClosedRecordArrayRegions(program: IntermediateProgram): 
 		};
 
 		const candidates: Array<Candidate> = [];
+		const cardinalityAllocations = new Set(
+			(fn.regions ?? [])
+				.filter(
+					(region): region is IRCardinalityArrayRegion =>
+						region.kind === "cardinality-array",
+				)
+				.map((region) => region.anchors[0]),
+		);
 		for (const allocation of allocations) {
-			if (allocation.nativeCardinalityRegion !== undefined) continue;
+			if (cardinalityAllocations.has(allocation)) continue;
 			const allocationLocation = locations.get(allocation);
 			const arrayAliases = moveAliases([
 				{ instruction: allocation, register: allocation.registers[0] },
@@ -4901,10 +4983,6 @@ function clearStackObjectAnnotations(program: IntermediateProgram): boolean {
 					changed ||= instruction.stackObjectMaterializeSiteId !== undefined;
 					delete instruction.stackObjectMaterializeSiteId;
 				}
-				if (instruction.type === "call") {
-					changed ||= instruction.cardinalityPushStackObjectSiteId !== undefined;
-					delete instruction.cardinalityPushStackObjectSiteId;
-				}
 				if (
 					instruction.type === "createObject" ||
 					instruction.type === "createObjectShaped"
@@ -5060,6 +5138,14 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 		}
 		const singleDef = registerIndex.uniqueDefinitions;
 		const usesOf = registerIndex.uses;
+		const cardinalityItemByPush = new Map<IRInstruction, IRInstruction>(
+			(fn.regions ?? [])
+				.filter(
+					(region): region is IRCardinalityArrayRegion =>
+						region.kind === "cardinality-array",
+				)
+				.map((region) => [region.anchors[1], region.anchors[2]]),
+		);
 
 		const constantString = (register: number): number | undefined => {
 			const definition = singleDef.get(register);
@@ -5089,14 +5175,25 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				const aliases = new Set<number>([objectRegister]);
 				const worklist = [objectRegister];
 				const stackAccesses = new Map<
-					Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>,
+					Extract<
+						IRInstruction,
+						{
+							type:
+								| "loadProperty"
+								| "loadPropertyStatic"
+								| "storeProperty"
+								| "storePropertyStatic";
+						}
+					>,
 					number
 				>();
 				const materializingReturns = new Set<
 					Extract<IRInstruction, { type: "return" }>
 				>();
 				const materializingCalls = new Set<Extract<IRInstruction, { type: "call" }>>();
-				let inheritedLoad: Extract<IRInstruction, { type: "loadProperty" }> | undefined;
+				let inheritedLoad:
+					| Extract<IRInstruction, { type: "loadProperty" | "loadPropertyStatic" }>
+					| undefined;
 				let hasOwnStore = false;
 				let observed = false;
 				let safe = true;
@@ -5137,12 +5234,38 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 								}
 								break;
 							}
+							case "loadPropertyStatic": {
+								const key = use.stringIndex;
+								if (position !== 1) {
+									safe = false;
+								} else if (ownKeys.has(key)) {
+									stackAccesses.set(use, slotByKey.get(key)!);
+								} else if (
+									allocation.type === "createObjectShaped" &&
+									inheritedLoad === undefined
+								) {
+									inheritedLoad = use;
+									observed = true;
+								} else {
+									safe = false;
+								}
+								break;
+							}
 							case "storeProperty": {
 								const key = constantString(use.registers[1]);
 								if (position !== 0 || key === undefined || !ownKeys.has(key)) {
 									safe = false;
 								} else {
 									stackAccesses.set(use, slotByKey.get(key)!);
+									hasOwnStore = true;
+								}
+								break;
+							}
+							case "storePropertyStatic": {
+								if (position !== 0 || !ownKeys.has(use.stringIndex)) {
+									safe = false;
+								} else {
+									stackAccesses.set(use, slotByKey.get(use.stringIndex)!);
 									hasOwnStore = true;
 								}
 								break;
@@ -5177,7 +5300,7 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 								if (
 									position !== 3 ||
 									use.registers.length !== 4 ||
-									use.nativeCardinalityPush === undefined
+									cardinalityItemByPush.get(use) !== allocation
 								) {
 									safe = false;
 								} else {
@@ -5259,7 +5382,9 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 							for (let index = start; index < end; index++) {
 								const instruction = instructions[index]!;
 								const directOwnLoad =
-									instruction.type === "loadProperty" && stackAccesses.has(instruction);
+									(instruction.type === "loadProperty" ||
+										instruction.type === "loadPropertyStatic") &&
+									stackAccesses.has(instruction);
 								const strictIdentity =
 									instruction.type === "binary" &&
 									(instruction.operator === "===" || instruction.operator === "!==");
@@ -5343,9 +5468,6 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 						for (const instruction of materializingReturns) {
 							instruction.stackObjectMaterializeSiteId = siteId;
 						}
-					}
-					for (const instruction of materializingCalls) {
-						instruction.cardinalityPushStackObjectSiteId = siteId;
 					}
 					if (inheritedLoad !== undefined) {
 						if (inheritedGuard === undefined) {

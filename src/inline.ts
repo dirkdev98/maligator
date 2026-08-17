@@ -2255,6 +2255,21 @@ function cloneInlinedRegion(
 		},
 	};
 	switch (region.kind) {
+		case "cardinality-array": {
+			const accesses = region.accesses.map((access) => ({
+				...access,
+				instruction: mapInstruction(access.instruction),
+			}));
+			if (accesses.some((access) => access.instruction === undefined)) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				accesses: accesses as typeof region.accesses,
+			} as unknown as Extract<IRRegion, { kind: "cardinality-array" }>;
+		}
 		case "closed-record-array": {
 			const elementLoads = region.elementLoads.map((instruction) =>
 				mapInstruction(instruction),

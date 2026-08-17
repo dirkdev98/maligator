@@ -895,8 +895,35 @@ export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
 	}>;
 }
 
+/**
+ * Backend-neutral certificate for one bounded push-only Array of same-shape
+ * records. The ordinary Array, push, and property instructions remain the
+ * semantic twin; native lowering may replace the whole region or none of it.
+ */
+export interface IRCardinalityArrayRegion extends IRRegionEnvelope<
+	"cardinality-array",
+	"bounded-record-history",
+	"whole-region",
+	readonly [
+		Extract<IRInstruction, { type: "createArray" }>,
+		Extract<IRInstruction, { type: "call" }>,
+		Extract<IRInstruction, { type: "createObjectShaped" }>,
+	]
+> {
+	readonly maximumLength: number;
+	readonly accesses: ReadonlyArray<{
+		readonly instruction: Extract<
+			IRInstruction,
+			{ type: "loadProperty" | "loadPropertyStatic" }
+		>;
+		readonly role: "push" | "length" | "element" | "field";
+		readonly fieldSlot?: number;
+	}>;
+}
+
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type IRRegion =
+	| IRCardinalityArrayRegion
 	| IRClosedRecordArrayRegion
 	| IRRegExpExecProjectionRegion
 	| IRRegExpIteratorProjectionRegion
@@ -1044,12 +1071,6 @@ export type IRInstruction =
 	  }
 	| {
 			type: "createArray";
-			/** COMPILE-ONLY: bounded push-only array virtualized by native code. */
-			nativeCardinalityRegion?: {
-				id: number;
-				maximumLength: number;
-				guard: CompilerGuardPlan;
-			};
 			/** COMPILE-ONLY: a pristine empty Array is immediately followed by an
 			 * exact canonical `[0, length)` indexed fill. Native code may reserve the
 			 * final dense capacity before executing the otherwise-unchanged loop. */
@@ -1211,13 +1232,6 @@ export type IRInstruction =
 			directFunctionCall?: true;
 			/** Exact ordinary script target used by directFunctionCall, when known. */
 			directCallTargetFunctionIndex?: number;
-			/** COMPILE-ONLY: this direct push is the sole mutator of a bounded
-			 * cardinality-only array. The referenced allocation owns region state. */
-			nativeCardinalityPush?: {
-				allocation: Extract<IRInstruction, { type: "createArray" }>;
-			};
-			/** COMPILE-ONLY: stack-object argument materialized only on region deopt. */
-			cardinalityPushStackObjectSiteId?: number;
 			/**
 			 * COMPILE-ONLY: the Number position is statically known to be an exact
 			 * non-negative integer and, for `inBounds`, below this primitive String
@@ -1387,11 +1401,6 @@ export type IRInstruction =
 				/** Array-indexed prototype semantics plus fallback/materialization. */
 				guard: CompilerGuardPlan;
 			};
-			nativeCardinalityAccess?: {
-				role: "push" | "length" | "element" | "field";
-				allocation: Extract<IRInstruction, { type: "createArray" }>;
-				fieldSlot?: number;
-			};
 	  }
 	| {
 			type: "loadPropertyStatic";
@@ -1407,11 +1416,6 @@ export type IRInstruction =
 			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
 			stackObjectInheritedSiteId?: number;
 			stackObjectInheritedGuard?: CompilerGuardPlan;
-			nativeCardinalityAccess?: {
-				role: "push" | "length" | "element" | "field";
-				allocation: Extract<IRInstruction, { type: "createArray" }>;
-				fieldSlot?: number;
-			};
 	  }
 	| {
 			type: "loadSuperProperty";

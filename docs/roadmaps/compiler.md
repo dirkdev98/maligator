@@ -540,6 +540,11 @@ is general rather than a registry-shaped collection of special cases.
         exclusive ownership of its pushed shaped record, Array operations and
         materialization boundary, so a rejected history-slot plan leaves an
         ordinary heap record instead of a partially selected stack object.
+    - [x] Select the same composite certificate directly in final IR after static
+          property canonicalization. Keep allocation, push, shaped-record and
+          access instruction identities in one backend-neutral envelope; lowering
+          now validates and translates that proof instead of reconstructing it
+          from scattered compile-only instruction fields.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

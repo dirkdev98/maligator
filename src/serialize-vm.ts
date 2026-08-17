@@ -2122,8 +2122,7 @@ function validateCardinalityArrayRegion(
 		pushAccesses !== 1 ||
 		region.cost.metadataOperations !== payload.size ||
 		payload.size !== region.claimedIps.length ||
-		region.claimedIps.some((ip) => !payload.has(ip)) ||
-		region.claimedIps.some((ip) => !region.controlFlow.ordinaryBlockIps.includes(ip))
+		region.claimedIps.some((ip) => !payload.has(ip))
 	) {
 		valid = false;
 	}

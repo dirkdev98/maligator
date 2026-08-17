@@ -1895,17 +1895,6 @@ function lowerFunctionToVmFunction(
 		guard: CompilerGuardPlan;
 	}> = [];
 	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
-	const pendingCardinalityAllocations: Array<{
-		allocation: Extract<IRInstruction, { type: "createArray" }>;
-		maximumLength: number;
-		guard: VmGuardPlan;
-	}> = [];
-	const pendingCardinalityAccesses: Array<{
-		instruction: Extract<IRInstruction, { type: "loadProperty" | "loadPropertyStatic" }>;
-		allocation: Extract<IRInstruction, { type: "createArray" }>;
-		role: "push" | "length" | "element" | "field";
-		fieldSlot?: number;
-	}> = [];
 	const pendingFiniteRecordAccesses: Array<{
 		instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
 		allocation: Extract<IRInstruction, { type: "createObject" }>;
@@ -1913,11 +1902,6 @@ function lowerFunctionToVmFunction(
 	const pendingExactFreshArrayAccesses: Array<{
 		instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY" }>;
 		allocation: Extract<IRInstruction, { type: "createArray" }>;
-	}> = [];
-	const pendingCardinalityPushes: Array<{
-		instruction: Extract<IRInstruction, { type: "call" }>;
-		allocation: Extract<IRInstruction, { type: "createArray" }>;
-		stackObjectSiteId: number;
 	}> = [];
 	const pendingNativeMathCalls: Array<{
 		receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
@@ -1950,20 +1934,6 @@ function lowerFunctionToVmFunction(
 			const instructionIndex = instructions.length;
 			instructionIndexByIrInstruction.set(instruction, instructionIndex);
 			const vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
-			if (
-				instruction.type === "createArray" &&
-				instruction.nativeCardinalityRegion !== undefined
-			) {
-				const guard = lowerGuardPlan(instruction.nativeCardinalityRegion.guard);
-				if (guard === undefined || !guard.obligations.includes("materialize")) {
-					throw new Error("Cardinality region lacks a materialization guard plan");
-				}
-				pendingCardinalityAllocations.push({
-					allocation: instruction,
-					maximumLength: instruction.nativeCardinalityRegion.maximumLength,
-					guard,
-				});
-			}
 			switch (vmInstruction.opcode) {
 				case "LOAD_PROPERTY":
 				case "LOAD_PROPERTY_STATIC":
@@ -1990,20 +1960,6 @@ function lowerFunctionToVmFunction(
 			instructions.push(vmInstruction);
 			compilerSiteIds.push(instructionSites?.get(instruction)?.id);
 			if (
-				(instruction.type === "loadProperty" ||
-					instruction.type === "loadPropertyStatic") &&
-				instruction.nativeCardinalityAccess !== undefined &&
-				(vmInstruction.opcode === "LOAD_PROPERTY" ||
-					vmInstruction.opcode === "LOAD_PROPERTY_STATIC")
-			) {
-				pendingCardinalityAccesses.push({
-					instruction,
-					allocation: instruction.nativeCardinalityAccess.allocation,
-					role: instruction.nativeCardinalityAccess.role,
-					fieldSlot: instruction.nativeCardinalityAccess.fieldSlot,
-				});
-			}
-			if (
 				instruction.type === "loadProperty" &&
 				instruction.nativeFiniteRecordAccess !== undefined &&
 				vmInstruction.opcode === "LOAD_PROPERTY"
@@ -2021,20 +1977,6 @@ function lowerFunctionToVmFunction(
 				pendingExactFreshArrayAccesses.push({
 					instruction: vmInstruction,
 					allocation: instruction.nativeExactFreshArrayAccess.allocation,
-				});
-			}
-			if (
-				instruction.type === "call" &&
-				instruction.nativeCardinalityPush !== undefined &&
-				vmInstruction.opcode === "CALL"
-			) {
-				if (instruction.cardinalityPushStackObjectSiteId === undefined) {
-					throw new Error("Cardinality push lacks a proven stack-object argument");
-				}
-				pendingCardinalityPushes.push({
-					instruction,
-					allocation: instruction.nativeCardinalityPush.allocation,
-					stackObjectSiteId: instruction.cardinalityPushStackObjectSiteId,
 				});
 			}
 			if (
@@ -2170,6 +2112,15 @@ function lowerFunctionToVmFunction(
 	}
 	const regions: Array<VmRegion> = [];
 	const claimedRegionInstructions = new Set<number>();
+	// A failed composite certificate must leave its record argument on the heap.
+	// Exclude every IR cardinality candidate from independent stack planning even
+	// when the region table or its payload is rejected below.
+	const cardinalityItemAllocationIps = new Set<number>();
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "cardinality-array") continue;
+		const itemIp = instructionIndexByIrInstruction.get(region.anchors[2]);
+		if (itemIp !== undefined) cardinalityItemAllocationIps.add(itemIp);
+	}
 	const irRegions = (fn.regions?.length ?? 0) <= 8 ? (fn.regions ?? []) : [];
 	for (const region of irRegions) {
 		const guard = lowerGuardPlan(region.license.guard);
@@ -2254,6 +2205,114 @@ function lowerFunctionToVmFunction(
 		}
 
 		switch (region.kind) {
+			case "cardinality-array": {
+				const allocationIp = resolvedAnchors[0];
+				const pushCallIp = resolvedAnchors[1];
+				const itemAllocationIp = resolvedAnchors[2];
+				const accesses = region.accesses.map((access) => ({
+					ip: instructionIndexByIrInstruction.get(access.instruction),
+					role: access.role,
+					...(access.fieldSlot === undefined ? {} : { fieldSlot: access.fieldSlot }),
+				}));
+				if (
+					region.representation !== "bounded-record-history" ||
+					region.license.materialization !== "whole-region" ||
+					!guard.obligations.includes("fallback") ||
+					!guard.obligations.includes("materialize") ||
+					resolvedAnchors.length !== 3 ||
+					accesses.length === 0 ||
+					accesses.some((access) => access.ip === undefined)
+				) {
+					continue;
+				}
+				const resolvedAccesses = accesses as Array<{
+					ip: number;
+					role: "push" | "length" | "element" | "field";
+					fieldSlot?: number;
+				}>;
+				const allocation = instructions[allocationIp!];
+				const push = instructions[pushCallIp!];
+				const item = instructions[itemAllocationIp!];
+				const argument =
+					push?.opcode === "CALL" && push.arguments[0] !== undefined
+						? decodeVmValueOperand(push.arguments[0])
+						: undefined;
+				const payloadIps = [
+					allocationIp!,
+					pushCallIp!,
+					itemAllocationIp!,
+					...resolvedAccesses.map((access) => access.ip),
+				];
+				if (
+					allocation?.opcode !== "CREATE_ARRAY" ||
+					allocation.length !== 0 ||
+					push?.opcode !== "CALL" ||
+					push.arguments.length !== 1 ||
+					argument?.kind !== "register" ||
+					item?.opcode !== "CREATE_OBJECT_SHAPED" ||
+					argument.register !== item.dst ||
+					region.anchors[2].stackObject !== true ||
+					item.count <= 0 ||
+					item.count > 8 ||
+					!Number.isSafeInteger(region.maximumLength) ||
+					region.maximumLength <= 0 ||
+					region.maximumLength > 32 ||
+					!resolvedAccesses.some((access) => access.role === "push") ||
+					!resolvedAccesses.some(
+						(access) => access.role === "length" || access.role === "element",
+					) ||
+					resolvedAccesses.some((access) => {
+						const instruction = instructions[access.ip];
+						if (
+							instruction?.opcode !== "LOAD_PROPERTY" &&
+							instruction?.opcode !== "LOAD_PROPERTY_STATIC"
+						) {
+							return true;
+						}
+						if (access.role === "element") {
+							return instruction.opcode !== "LOAD_PROPERTY";
+						}
+						if (access.role === "field") {
+							return (
+								access.fieldSlot === undefined ||
+								access.fieldSlot < 0 ||
+								access.fieldSlot >= item.count
+							);
+						}
+						return access.fieldSlot !== undefined;
+					}) ||
+					new Set(payloadIps).size !== payloadIps.length ||
+					payloadIps.length !== resolvedClaimedIps.length ||
+					payloadIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
+					region.cost.score !== region.maximumLength * item.count ||
+					region.cost.metadataOperations !== payloadIps.length
+				) {
+					continue;
+				}
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "cardinality-array",
+					license: {
+						guard,
+						genericTwin: "retained",
+						materialization: "whole-region",
+					},
+					representation: "bounded-record-history",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: resolvedOrdinaryBlockIps,
+						exceptionalHandlerIps: [],
+					},
+					cost: region.cost,
+					allocationIp: allocationIp!,
+					pushCallIp: pushCallIp!,
+					itemAllocationIp: itemAllocationIp!,
+					maximumLength: region.maximumLength,
+					accesses: resolvedAccesses,
+				});
+				break;
+			}
 			case "closed-record-array": {
 				const allocationIp = resolvedAnchors[0];
 				const producerObjectIp = resolvedAnchors[1];
@@ -3309,105 +3368,6 @@ function lowerFunctionToVmFunction(
 				break;
 			}
 		}
-	}
-	const cardinalityItemAllocationIps = new Set<number>();
-	for (const pending of pendingCardinalityPushes) {
-		const itemAllocationIp = stackObjectSiteInstructionById.get(
-			pending.stackObjectSiteId,
-		);
-		if (itemAllocationIp === undefined) {
-			throw new Error("Unknown cardinality-region record allocation");
-		}
-		cardinalityItemAllocationIps.add(itemAllocationIp);
-	}
-	for (const pending of pendingCardinalityAllocations) {
-		if (regions.length >= 8) break;
-		const allocationIp = instructionIndexByIrInstruction.get(pending.allocation);
-		const pushes = pendingCardinalityPushes.filter(
-			(candidate) => candidate.allocation === pending.allocation,
-		);
-		const accesses = pendingCardinalityAccesses
-			.filter((candidate) => candidate.allocation === pending.allocation)
-			.map((candidate) => ({
-				ip: instructionIndexByIrInstruction.get(candidate.instruction),
-				role: candidate.role,
-				fieldSlot: candidate.fieldSlot,
-			}));
-		const pushCallIp =
-			pushes.length === 1
-				? instructionIndexByIrInstruction.get(pushes[0]!.instruction)
-				: undefined;
-		const itemAllocationIp =
-			pushes.length === 1
-				? stackObjectSiteInstructionById.get(pushes[0]!.stackObjectSiteId)
-				: undefined;
-		if (
-			allocationIp === undefined ||
-			pushCallIp === undefined ||
-			itemAllocationIp === undefined ||
-			accesses.length === 0 ||
-			accesses.some((access) => access.ip === undefined)
-		) {
-			continue;
-		}
-		const resolvedAccesses = accesses as Array<{
-			ip: number;
-			role: "push" | "length" | "element" | "field";
-			fieldSlot?: number;
-		}>;
-		const allocation = instructions[allocationIp];
-		const push = instructions[pushCallIp];
-		const item = instructions[itemAllocationIp];
-		const claimedIps = [
-			allocationIp,
-			itemAllocationIp,
-			pushCallIp,
-			...resolvedAccesses.map((access) => access.ip),
-		];
-		const uniqueClaims = [...new Set(claimedIps)].sort((left, right) => left - right);
-		if (
-			allocation?.opcode !== "CREATE_ARRAY" ||
-			allocation.length !== 0 ||
-			push?.opcode !== "CALL" ||
-			push.arguments.length !== 1 ||
-			item?.opcode !== "CREATE_OBJECT_SHAPED" ||
-			item.count <= 0 ||
-			item.count > 8 ||
-			pending.maximumLength <= 0 ||
-			pending.maximumLength > 32 ||
-			uniqueClaims.length !== claimedIps.length ||
-			uniqueClaims.length > 64 ||
-			uniqueClaims.some((ip) => claimedRegionInstructions.has(ip)) ||
-			uniqueClaims.some((ip) =>
-				handlers.some((handler) => ip >= handler.startIp && ip < handler.endIp),
-			) ||
-			!pending.guard.obligations.includes("fallback") ||
-			!pending.guard.obligations.includes("materialize")
-		) {
-			continue;
-		}
-		for (const ip of uniqueClaims) claimedRegionInstructions.add(ip);
-		regions.push({
-			kind: "cardinality-array",
-			license: {
-				guard: pending.guard,
-				genericTwin: "retained",
-				materialization: "whole-region",
-			},
-			representation: "bounded-record-history",
-			anchors: [allocationIp, pushCallIp, itemAllocationIp],
-			claimedIps: uniqueClaims,
-			controlFlow: { ordinaryBlockIps: uniqueClaims, exceptionalHandlerIps: [] },
-			cost: {
-				score: pending.maximumLength * item.count,
-				metadataOperations: uniqueClaims.length,
-			},
-			allocationIp,
-			pushCallIp,
-			itemAllocationIp,
-			maximumLength: pending.maximumLength,
-			accesses: resolvedAccesses,
-		});
 	}
 	const stackPlanCandidates = stackObjectSites
 		.filter((site) => !cardinalityItemAllocationIps.has(site.instructionIndex))

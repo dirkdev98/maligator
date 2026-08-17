@@ -8,7 +8,11 @@ import { debugStackAlloc } from "../src/escape.ts";
 import { debugInlinableCalls } from "../src/inline.ts";
 import { annotateStackObjectSites, executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
-import type { IntermediateProgram, IRInstruction } from "../src/ir.ts";
+import type {
+	IntermediateProgram,
+	IRCardinalityArrayRegion,
+	IRInstruction,
+} from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import type { VmDefinition, VmRegion } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
@@ -53,6 +57,18 @@ function cardinalityPlans(definition: VmDefinition): Array<CardinalityArrayRegio
 		(fn) =>
 			fn.regions?.filter(
 				(region): region is CardinalityArrayRegion => region.kind === "cardinality-array",
+			) ?? [],
+	);
+}
+
+function irCardinalityPlans(
+	program: IntermediateProgram,
+): Array<IRCardinalityArrayRegion> {
+	return program.functions.flatMap(
+		(fn) =>
+			fn.regions?.filter(
+				(region): region is IRCardinalityArrayRegion =>
+					region.kind === "cardinality-array",
 			) ?? [],
 	);
 }
@@ -609,36 +625,24 @@ describe("cardinality-only array and transitive record regions", () => {
 
 	it("proves the bounded push/length contract and the transitive stack record", () => {
 		const program = optimized(source);
-		const region = instructions(program).find(
-			(instruction): instruction is Extract<IRInstruction, { type: "createArray" }> =>
-				instruction.type === "createArray" &&
-				instruction.nativeCardinalityRegion !== undefined,
-		);
-		expect(region?.nativeCardinalityRegion?.maximumLength).toBe(6);
-		expect(region?.nativeCardinalityRegion?.guard).toMatchObject({
+		const region = irCardinalityPlans(program)[0];
+		expect(region?.maximumLength).toBe(6);
+		expect(region?.license.guard).toMatchObject({
 			dependencies: [
 				{ kind: "epoch", family: "array-elements" },
 				{ kind: "epoch", family: "primitive-methods" },
 				{ kind: "epoch", family: "watched-methods" },
 			],
 		});
-		expect(
-			region?.nativeCardinalityRegion?.guard.obligations.map(({ kind }) => kind),
-		).toContain("materialize");
-		expect(
-			instructions(program).filter(
-				(instruction) =>
-					instruction.type === "call" && instruction.nativeCardinalityPush !== undefined,
-			),
-		).toHaveLength(1);
-		expect(
-			instructions(program).filter(
-				(instruction) =>
-					(instruction.type === "loadProperty" ||
-						instruction.type === "loadPropertyStatic") &&
-					instruction.nativeCardinalityAccess !== undefined,
-			),
-		).toHaveLength(2);
+		expect(region?.license.guard.obligations.map(({ kind }) => kind)).toContain(
+			"materialize",
+		);
+		expect(region?.anchors.map((instruction) => instruction.type)).toEqual([
+			"createArray",
+			"call",
+			"createObjectShaped",
+		]);
+		expect(region?.accesses).toHaveLength(2);
 		expect(stackSiteCount(program)).toBe(1);
 	});
 
@@ -738,12 +742,8 @@ describe("cardinality-only array and transitive record regions", () => {
 			globalThis.keep = collect;
 		`;
 		const program = optimized(indexedSource);
-		const roles = instructions(program).flatMap((instruction) =>
-			(instruction.type === "loadProperty" ||
-				instruction.type === "loadPropertyStatic") &&
-			instruction.nativeCardinalityAccess !== undefined
-				? [instruction.nativeCardinalityAccess.role]
-				: [],
+		const roles = irCardinalityPlans(program).flatMap((region) =>
+			region.accesses.map((access) => access.role),
 		);
 		expect(roles).toContain("element");
 		expect(roles).toContain("field");
@@ -786,12 +786,6 @@ describe("cardinality-only array and transitive record regions", () => {
 			`function f() { const rows = []; for (let i = 0; i < 4; i++) { const row = { x: i }; rows.push(row); row.x++; } return rows.length; } globalThis.keep = f;`,
 		],
 	])("rejects %s", (_name, rejectedSource) => {
-		expect(
-			instructions(optimized(rejectedSource)).some(
-				(instruction) =>
-					instruction.type === "createArray" &&
-					instruction.nativeCardinalityRegion !== undefined,
-			),
-		).toBe(false);
+		expect(irCardinalityPlans(optimized(rejectedSource))).toHaveLength(0);
 	});
 });
