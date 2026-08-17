@@ -23,7 +23,7 @@ import { runSemanticAnalysisForGraph } from "../semantic-program.ts";
 import { serializeVmDefinition, WIRE_VERSION } from "../serialize-vm.ts";
 import { MALIGATOR_VERSION } from "../version.ts";
 
-const TEST_CACHE_SCHEMA = 4;
+const TEST_CACHE_SCHEMA = 1;
 const TEST_CACHE_DIRECTORY = ".cache/mal-cache/test";
 const TEST_MODULE_ID = "maligator:test";
 const TEST_IMAGE_TRANSFORM = 1;
@@ -31,7 +31,7 @@ const TEST_IMAGE_TRANSFORM = 1;
 export type DependencyIdentity = FrontendDependencyIdentity;
 
 interface TestCacheManifest {
-	schema: 4;
+	schema: 1;
 	identity: string;
 	contentKey: string;
 	wireDigest: string;

@@ -175,8 +175,8 @@ function interpreterOnly(): boolean {
 // cannot change behaviour. Folded into the cache key.
 function emitMode(): string {
 	return interpreterOnly()
-		? "merged-helper-plans-nocompiled-v2"
-		: "merged-helper-plans-v2";
+		? "merged-helper-plans-nocompiled-v1"
+		: "merged-helper-plans-v1";
 }
 
 /** Keys touched this run, so stale cache entries can be pruned at the end. */
@@ -1181,7 +1181,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	);
 
 	const manifest: BatchManifest = {
-		schemaVersion: 3,
+		schemaVersion: 1,
 		hasBinary: entries.length > 0,
 		generatedCBytes: null,
 		entries: entries.map((entry) => ({

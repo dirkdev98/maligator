@@ -74,7 +74,7 @@ export function runtimeArtifactKey(inputs: {
 	return hash(
 		"sha256",
 		JSON.stringify({
-			schema: 6,
+			schema: 1,
 			compilerWireDigest: inputs.compilerWireDigest,
 			compileArguments: inputs.compileArguments,
 			environmentFingerprint: inputs.environmentFingerprint,
@@ -240,7 +240,7 @@ function validRuntimeCache(buildDirectory: string, cacheKey: string): boolean {
 			readFileSync(path.join(buildDirectory, RUNTIME_MANIFEST), "utf-8"),
 		) as { schema?: unknown; cacheKey?: unknown; archives?: unknown };
 		return (
-			manifest.schema === 2 &&
+			manifest.schema === 1 &&
 			manifest.cacheKey === cacheKey &&
 			JSON.stringify(manifest.archives) ===
 				JSON.stringify(archiveManifest(buildDirectory))
@@ -397,7 +397,7 @@ function buildRuntimeCache(
 		writeFileSync(
 			path.join(temporaryDirectory, RUNTIME_MANIFEST),
 			JSON.stringify({
-				schema: 2,
+				schema: 1,
 				cacheKey: layout.cacheKey,
 				archives: archiveManifest(temporaryDirectory),
 			}),

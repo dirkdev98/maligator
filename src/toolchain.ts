@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 
-const CACHE_SCHEMA = 8;
+const CACHE_SCHEMA = 1;
 const C2X_FLAGS = ["-std=c2x"];
 const LTO_FLAG_CANDIDATES = [["-flto=thin"], ["-flto"]];
 

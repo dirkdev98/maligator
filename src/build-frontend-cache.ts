@@ -48,14 +48,14 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 4;
-const BUILD_FRONTEND_PIPELINE_VERSION = 6;
+const BUILD_FRONTEND_CACHE_SCHEMA = 1;
+const BUILD_FRONTEND_PIPELINE_VERSION = 1;
 const BUILD_FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/build-frontend";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 4;
+	schema: 1;
 	identity: string;
 	contentKey: string;
 	artifacts: Array<BuildFrontendArtifactIdentity>;

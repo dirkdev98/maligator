@@ -50,7 +50,7 @@ import {
 } from "./serialize-vm.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const FRAGMENT_SCHEMA = 5;
+const FRAGMENT_SCHEMA = 1;
 const CACHE_DIRECTORY = ".cache/mal-cache/build-fragments";
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 

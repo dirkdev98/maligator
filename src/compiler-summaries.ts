@@ -9,7 +9,7 @@ import type { ProgramEscape } from "./escape.ts";
 import type { IntermediateProgram, IRFunction } from "./ir.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-const SUMMARY_ANALYSIS_VERSION = 2;
+const SUMMARY_ANALYSIS_VERSION = 1;
 const MAX_CACHED_PROGRAMS = 64;
 
 /** Dependency-free 128-bit cache digest so the compiler remains self-hostable in

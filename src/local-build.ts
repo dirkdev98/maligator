@@ -239,7 +239,7 @@ function ensureGeneratedObjects(
 		const key = hash(
 			"sha256",
 			JSON.stringify({
-				schema: 2,
+				schema: 1,
 				sourcePath: input.sourcePath,
 				source: hash("sha256", input.source, "hex"),
 				compileArguments,

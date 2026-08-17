@@ -37,7 +37,7 @@ import type {
 } from "./cache.ts";
 import { TestCompilationSession } from "./cache.ts";
 
-const FRAGMENT_SCHEMA = 5;
+const FRAGMENT_SCHEMA = 1;
 const TEST_MODULE_ID = "maligator:test";
 const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
 const CACHE_DIRECTORY = ".cache/mal-cache/test";
@@ -52,7 +52,7 @@ interface FragmentReference extends ArtifactReference {
 }
 
 interface FragmentManifest {
-	schema: 5;
+	schema: 1;
 	identity: string;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
