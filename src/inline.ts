@@ -2255,6 +2255,22 @@ function cloneInlinedRegion(
 		},
 	};
 	switch (region.kind) {
+		case "numeric-fusion": {
+			const pairs = region.pairs.map((pair) => ({
+				...pair,
+				first: mapInstruction(pair.first),
+				finish: mapInstruction(pair.finish),
+			}));
+			if (pairs.some((pair) => pair.first === undefined || pair.finish === undefined)) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				pairs: pairs as typeof region.pairs,
+			} as unknown as Extract<IRRegion, { kind: "numeric-fusion" }>;
+		}
 		case "cardinality-array": {
 			const accesses = region.accesses.map((access) => ({
 				...access,

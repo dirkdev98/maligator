@@ -545,6 +545,11 @@ is general rather than a registry-shaped collection of special cases.
           access instruction identities in one backend-neutral envelope; lowering
           now validates and translates that proof instead of reconstructing it
           from scattered compile-only instruction fields.
+  - [x] Replace paired numeric-fusion IDs and IR back-references with a bounded
+        structural overlay region. Keep up to 32 independent binary pairs in one
+        function certificate, allow the local Number-operand proof to compose with
+        exclusive loop/object regions, and validate the exact producer-consumer
+        edge before translating it to the existing VM execution metadata.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish

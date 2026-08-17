@@ -652,14 +652,17 @@ export interface IRRegionEnvelope<
 	Representation extends string,
 	Materialization extends "none" | "on-demand" | "whole-region",
 	Anchors extends ReadonlyArray<IRInstruction>,
+	Guard = CompilerGuardPlan,
 > {
 	readonly kind: Kind;
 	readonly license: {
-		readonly guard: CompilerGuardPlan;
+		readonly guard: Guard;
 		readonly genericTwin: "retained";
 		readonly materialization: Materialization;
 	};
 	readonly representation: Representation;
+	/** Overlay regions may share instructions with an exclusive representation. */
+	readonly composition?: "overlay";
 	readonly anchors: Anchors;
 	readonly claimedInstructions: ReadonlyArray<IRInstruction>;
 	readonly controlFlow: {
@@ -921,10 +924,34 @@ export interface IRCardinalityArrayRegion extends IRRegionEnvelope<
 	}>;
 }
 
+/**
+ * Structural certificate for a one-use binary pair. Its runtime license is the
+ * ordinary per-operand Number check, so it needs no mutable-world dependency.
+ */
+export interface IRNumericFusionRegion extends IRRegionEnvelope<
+	"numeric-fusion",
+	"binary-pairs-f64",
+	"none",
+	readonly [
+		Extract<IRInstruction, { type: "binary" }>,
+		Extract<IRInstruction, { type: "binary" }>,
+	],
+	"structural"
+> {
+	readonly composition: "overlay";
+	readonly runtimeGuard: "number-operands";
+	readonly pairs: ReadonlyArray<{
+		readonly first: Extract<IRInstruction, { type: "binary" }>;
+		readonly finish: Extract<IRInstruction, { type: "binary" }>;
+		readonly firstUsePosition: 1 | 2;
+	}>;
+}
+
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type IRRegion =
 	| IRCardinalityArrayRegion
 	| IRClosedRecordArrayRegion
+	| IRNumericFusionRegion
 	| IRRegExpExecProjectionRegion
 	| IRRegExpIteratorProjectionRegion
 	| IRStringSliceNumberRegion
@@ -1889,13 +1916,6 @@ export type IRInstruction =
 				| "!=="
 				| "in"
 				| "instanceof";
-
-			/** Native-only hint for a one-use arithmetic pair. The first operation
-			 * still executes at its original position; its numeric result can remain
-			 * unboxed until the consuming operation. */
-			nativeNumericFusion?:
-				| { role: "start"; id: number }
-				| { role: "finish"; id: number; first: IRInstruction };
 
 			/** Native-only proof for `literal + integer` in a bounded loop region.
 			 * `stringIndices[value - minimum]` is the exact concatenation result.

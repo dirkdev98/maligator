@@ -65,6 +65,7 @@ import type {
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
+	IRNumericFusionRegion,
 	IRNumericHofRegion,
 	IRStringSplitCursor,
 	IRStringSplitProjectionRegion,
@@ -2539,11 +2540,16 @@ const NATIVE_NUMERIC_FUSION_FINISH_OPERATORS = new Set<
  * result as an f64 while still executing both operations at their original
  * observable positions; non-number operands retain the boxed path. */
 export function annotateNativeNumericFusions(program: IntermediateProgram): void {
-	let nextId = 0;
 	for (const fn of program.functions) {
+		const retainedRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "numeric-fusion",
+		);
+		fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
+		if (retainedRegions.length >= MAX_IR_REGIONS_PER_FUNCTION) continue;
 		if (fn.isGenerator || fn.isAsync) continue;
 		const index = buildIRRegisterIndex(fn, { locations: true });
 		const participating = new Set<IRInstruction>();
+		const pairs: Array<IRNumericFusionRegion["pairs"][number]> = [];
 		for (const block of fn.blocks) {
 			for (const first of block.instructions) {
 				if (
@@ -2579,13 +2585,44 @@ export function annotateNativeNumericFusions(program: IntermediateProgram): void
 					continue;
 				}
 
-				const id = nextId++;
-				first.nativeNumericFusion = { role: "start", id };
-				finish.nativeNumericFusion = { role: "finish", id, first };
+				pairs.push({
+					first,
+					finish,
+					firstUsePosition: use.position,
+				});
 				participating.add(first);
 				participating.add(finish);
+				if (pairs.length >= 32) break;
 			}
+			if (pairs.length >= 32) break;
 		}
+		const firstPair = pairs[0];
+		if (firstPair === undefined) continue;
+		const claimedInstructions = pairs.flatMap((pair) => [pair.first, pair.finish]);
+		const ordinaryBlocks = [
+			...new Set(
+				claimedInstructions.map(
+					(instruction) => index.locations!.get(instruction)!.blockIndex,
+				),
+			),
+		].sort((left, right) => left - right);
+		const region: IRNumericFusionRegion = {
+			kind: "numeric-fusion",
+			license: {
+				guard: "structural",
+				genericTwin: "retained",
+				materialization: "none",
+			},
+			representation: "binary-pairs-f64",
+			composition: "overlay",
+			anchors: [firstPair.first, firstPair.finish],
+			claimedInstructions,
+			controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+			cost: { score: pairs.length, metadataOperations: claimedInstructions.length },
+			runtimeGuard: "number-operands",
+			pairs,
+		};
+		fn.regions = [...retainedRegions, region];
 	}
 }
 

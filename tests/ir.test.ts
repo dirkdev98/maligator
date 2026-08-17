@@ -58,6 +58,39 @@ test("bulk-constructs wide static-key object literals", () => {
 	expect(shaped).toBeDefined();
 });
 
+test("stores one-use numeric pairs as a structural overlay region", () => {
+	const program = compileScript(
+		`function sum(object) { return object.a + object.b + object.c; } globalThis.sum = sum;`,
+	);
+	executeIROptimizations(program);
+	const sum = functionNamed(program, "sum");
+	const region = sum.regions?.find((candidate) => candidate.kind === "numeric-fusion");
+	expect(region).toMatchObject({
+		composition: "overlay",
+		representation: "binary-pairs-f64",
+		runtimeGuard: "number-operands",
+		license: {
+			guard: "structural",
+			genericTwin: "retained",
+			materialization: "none",
+		},
+	});
+	if (region?.kind !== "numeric-fusion") throw new Error("missing numeric fusion");
+	expect(region.pairs).toHaveLength(1);
+	const pair = region.pairs[0]!;
+	expect(pair.finish.registers[pair.firstUsePosition]).toBe(pair.first.registers[0]);
+	expect(region.claimedInstructions).toEqual([pair.first, pair.finish]);
+
+	allocateRegisters(program);
+	const definition = lowerIrProgramToVmDefinition(program);
+	const binaries = definition.functions.flatMap((fn) =>
+		fn.instructions.filter((instruction) => instruction.opcode === "BINARY"),
+	);
+	expect(binaries.filter((instruction) => instruction.nativeNumericFusion)).toHaveLength(
+		2,
+	);
+});
+
 test("stores closed loop proofs in the function region table and drops stale certificates", () => {
 	const program = compileScript(
 		`function summarize() {

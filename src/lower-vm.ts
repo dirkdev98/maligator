@@ -2123,6 +2123,112 @@ function lowerFunctionToVmFunction(
 	}
 	const irRegions = (fn.regions?.length ?? 0) <= 8 ? (fn.regions ?? []) : [];
 	for (const region of irRegions) {
+		if (region.kind === "numeric-fusion") {
+			const anchors = region.anchors.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const pairs = region.pairs.map((pair) => ({
+				...pair,
+				firstIp: instructionIndexByIrInstruction.get(pair.first),
+				finishIp: instructionIndexByIrInstruction.get(pair.finish),
+			}));
+			if (
+				region.license.guard !== "structural" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "none" ||
+				region.representation !== "binary-pairs-f64" ||
+				region.composition !== "overlay" ||
+				region.runtimeGuard !== "number-operands" ||
+				region.controlFlow.ordinaryBlocks.length === 0 ||
+				region.controlFlow.exceptionalBlocks.length !== 0 ||
+				anchors.some((ip) => ip === undefined) ||
+				claimedIps.some((ip) => ip === undefined) ||
+				pairs.length === 0 ||
+				pairs.length > 32 ||
+				pairs.some((pair) => pair.firstIp === undefined || pair.finishIp === undefined)
+			) {
+				continue;
+			}
+			const resolvedAnchors = anchors as Array<number>;
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const resolvedPairs = pairs as Array<
+				(typeof pairs)[number] & { firstIp: number; finishIp: number }
+			>;
+			const payloadIps = resolvedPairs.flatMap((pair) => [pair.firstIp, pair.finishIp]);
+			const startOperators = new Set([
+				"+",
+				"-",
+				"*",
+				"/",
+				"%",
+				"&",
+				"|",
+				"^",
+				"<<",
+				">>",
+				">>>",
+			]);
+			const finishOperators = new Set([
+				...startOperators,
+				"<",
+				"<=",
+				">",
+				">=",
+				"==",
+				"!=",
+				"===",
+				"!==",
+			]);
+			let valid =
+				resolvedAnchors.length === 2 &&
+				resolvedAnchors[0] === resolvedPairs[0]!.firstIp &&
+				resolvedAnchors[1] === resolvedPairs[0]!.finishIp &&
+				new Set(payloadIps).size === payloadIps.length &&
+				payloadIps.length === resolvedClaimedIps.length &&
+				payloadIps.every((ip) => resolvedClaimedIps.includes(ip)) &&
+				region.cost.score === resolvedPairs.length &&
+				region.cost.metadataOperations === payloadIps.length;
+			for (const pair of resolvedPairs) {
+				const first = instructions[pair.firstIp];
+				const finish = instructions[pair.finishIp];
+				if (
+					first?.opcode !== "BINARY" ||
+					finish?.opcode !== "BINARY" ||
+					!startOperators.has(first.operator) ||
+					!finishOperators.has(finish.operator) ||
+					finish.nativeFiniteString !== undefined ||
+					(pair.firstUsePosition !== 1 && pair.firstUsePosition !== 2) ||
+					(pair.firstUsePosition === 1 ? finish.left : finish.right) !== first.dst ||
+					pair.firstIp >= pair.finishIp
+				) {
+					valid = false;
+					continue;
+				}
+				first.nativeNumericFusion = { role: "start", id: pair.firstIp };
+				finish.nativeNumericFusion = {
+					role: "finish",
+					id: pair.firstIp,
+					first: {
+						dst: first.dst,
+						left: first.left,
+						right: first.right,
+						operator: first.operator,
+					},
+				};
+			}
+			if (!valid) {
+				for (const pair of resolvedPairs) {
+					const first = instructions[pair.firstIp];
+					const finish = instructions[pair.finishIp];
+					if (first?.opcode === "BINARY") delete first.nativeNumericFusion;
+					if (finish?.opcode === "BINARY") delete finish.nativeNumericFusion;
+				}
+			}
+			continue;
+		}
 		const guard = lowerGuardPlan(region.license.guard);
 		const anchors = region.anchors.map((instruction) =>
 			instructionIndexByIrInstruction.get(instruction),
@@ -4341,29 +4447,12 @@ function lowerInstructionToVmInstruction(
 				excluded: instruction.registers.slice(2),
 			};
 		case "binary": {
-			const fusion = instruction.nativeNumericFusion;
-			const nativeNumericFusion =
-				fusion?.role === "finish" && fusion.first.type === "binary"
-					? {
-							role: "finish" as const,
-							id: fusion.id,
-							first: {
-								dst: fusion.first.registers[0],
-								left: fusion.first.registers[1],
-								right: fusion.first.registers[2],
-								operator: fusion.first.operator,
-							},
-						}
-					: fusion?.role === "start"
-						? fusion
-						: undefined;
 			return {
 				opcode: "BINARY",
 				dst: instruction.registers[0],
 				left: instruction.registers[1],
 				right: instruction.registers[2],
 				operator: instruction.operator,
-				...(nativeNumericFusion === undefined ? {} : { nativeNumericFusion }),
 				...(instruction.nativeFiniteString === undefined
 					? {}
 					: {
