@@ -2992,6 +2992,12 @@ function exceptionHandlerTargets(
 	return targets;
 }
 
+interface NativeNumericFusionAction {
+	readonly role: "start" | "finish";
+	readonly id: number;
+	readonly first: Extract<VmInstruction, { opcode: "BINARY" }>;
+}
+
 /**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
@@ -3046,6 +3052,26 @@ function emitBody(
 			.filter((region) => region.kind === "exact-fresh-array")
 			.flatMap((region) => [...region.accessIps]),
 	);
+	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
+	for (const region of (fn.regions ?? []).filter(
+		(candidate) => candidate.kind === "numeric-fusion",
+	)) {
+		for (const pair of region.pairs) {
+			const first = fn.instructions[pair.firstIp];
+			const finish = fn.instructions[pair.finishIp];
+			if (
+				first?.opcode !== "BINARY" ||
+				finish?.opcode !== "BINARY" ||
+				numericFusionActionByIp.has(pair.firstIp) ||
+				numericFusionActionByIp.has(pair.finishIp)
+			) {
+				throw new Error("Invalid numeric-fusion region");
+			}
+			const common = { id: pair.firstIp, first };
+			numericFusionActionByIp.set(pair.firstIp, { ...common, role: "start" });
+			numericFusionActionByIp.set(pair.finishIp, { ...common, role: "finish" });
+		}
+	}
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
@@ -3758,13 +3784,15 @@ function emitBody(
 	// Pair-fusion temporaries live for the whole C function so intervening property
 	// loads retain their original position and control-flow labels never jump over a
 	// declaration. Only boxed first results benefit from avoiding the box/unbox.
-	for (const instruction of fn.instructions) {
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		const fusion = numericFusionActionByIp.get(ip);
 		if (
 			instruction.opcode === "BINARY" &&
-			instruction.nativeNumericFusion?.role === "start" &&
+			fusion?.role === "start" &&
 			reps[instruction.dst] !== "number"
 		) {
-			const id = instruction.nativeNumericFusion.id;
+			const id = fusion.id;
 			lines.push(`bool __nf_${id}_ok = false;`);
 			lines.push(`f64 __nf_${id}_value = 0.0;`);
 		}
@@ -3941,6 +3969,7 @@ function emitBody(
 					privateAggregateMemos.get(ip),
 					privateAggregatePushByIp.get(ip),
 					exactFreshArrayAccessIps.has(ip),
+					numericFusionActionByIp.get(ip),
 				);
 		if (emitted === null) {
 			return null;
@@ -4339,6 +4368,7 @@ function emitInstruction(
 	privateAggregateMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
 	privateAggregatePushMemo?: NativePrivateAggregateMemoRegion & { rootsOffset: number },
 	exactFreshArrayAccess?: boolean,
+	numericFusionAction?: NativeNumericFusionAction,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -5810,7 +5840,7 @@ function emitInstruction(
 			const rightIsNum = reps[right] === "number";
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
-			const fusion = instruction.nativeNumericFusion;
+			const fusion = numericFusionAction;
 			const finiteString = instruction.nativeFiniteString;
 			if (
 				operator === "+" &&

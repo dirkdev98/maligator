@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 60u        // overlay composition and exact-fresh Array regions
+#define WIRE_VERSION 61u        // numeric-fusion overlay regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1771,17 +1771,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
             } else if (tag == 2) { // CONSTRUCT
                 (void) rd_i32(&r);
-            } else if (tag == 3) { // BINARY numeric fusion
-                u8 role = rd_u8(&r);
-                (void) rd_i32(&r);
-                if (role == 2) {
-                    (void) rd_i32(&r);
-                    (void) rd_i32(&r);
-                    (void) rd_i32(&r);
-                    (void) rd_u8(&r);
-                } else if (role != 1) {
-                    r.ok = false;
-                }
             } else if (tag == 4) { // BINARY finite-string table
                 (void) rd_i32(&r); // minimum
                 u32 string_index_count = rd_count(&r, sizeof(i32));
@@ -1979,15 +1968,19 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				obligation_mask == 3;
 			bool exact_fresh_array_contract = kind == 13 && representation == 13 &&
 				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
+			bool numeric_fusion_contract = kind == 14 && representation == 14 &&
+				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
-				(composition == 1) != exact_fresh_array_contract ||
+				(composition == 1) !=
+					(exact_fresh_array_contract || numeric_fusion_contract) ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
 				 !string_scan_contract && !private_aggregate_memo_contract &&
 				 !invariant_json_map_template_contract && !stack_object_plan_contract &&
-				 !cardinality_array_contract && !exact_fresh_array_contract)) {
+				 !cardinality_array_contract && !exact_fresh_array_contract &&
+				 !numeric_fusion_contract)) {
                 r.ok = false;
             }
 
@@ -3346,6 +3339,42 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 					MAL_REGION_PAYLOAD_REFERENCE(ip);
 				}
 				if (score != access_count || metadata_operations != payload_count) r.ok = false;
+			} else if (r.ok && kind == 14) {
+				u8 runtime_guard = rd_u8(&r);
+				u32 pair_count = rd_count(&r, 2);
+				if (runtime_guard != 1 || pair_count == 0 || pair_count > 32 ||
+					anchor_count != 2) r.ok = false;
+				for (u32 pair = 0; r.ok && pair < pair_count; pair++) {
+					i32 first_ip = rd_i32(&r);
+					i32 finish_ip = rd_i32(&r);
+					u8 first_use_position = rd_u8(&r);
+					bool ips_ok = first_ip >= 0 && first_ip < fn->instruction_count &&
+						finish_ip > first_ip && finish_ip < fn->instruction_count;
+					if (!ips_ok || (pair == 0 &&
+						(anchors[0] != first_ip || anchors[1] != finish_ip)) ||
+						(first_use_position != 1 && first_use_position != 2) ||
+						fn->instructions[first_ip].opcode != MAL_OP_BINARY ||
+						fn->instructions[finish_ip].opcode != MAL_OP_BINARY) {
+						r.ok = false;
+					} else {
+						MalBinaryOp first_op = fn->instructions[first_ip].as.binary.op;
+						MalBinaryOp finish_op = fn->instructions[finish_ip].as.binary.op;
+						i32 first_dst = fn->instructions[first_ip].as.binary.dst;
+						i32 consumed = first_use_position == 1
+							? fn->instructions[finish_ip].as.binary.left
+							: fn->instructions[finish_ip].as.binary.right;
+						bool first_operator_ok = first_op <= MAL_BIN_REM ||
+							(first_op >= MAL_BIN_BIT_AND && first_op <= MAL_BIN_USHR);
+						bool finish_operator_ok = finish_op <= MAL_BIN_REM ||
+							(finish_op >= MAL_BIN_BIT_AND && finish_op <= MAL_BIN_STRICT_NEQ);
+						if (!first_operator_ok || !finish_operator_ok || consumed != first_dst) {
+							r.ok = false;
+						}
+					}
+					MAL_REGION_PAYLOAD_REFERENCE(first_ip);
+					MAL_REGION_PAYLOAD_REFERENCE(finish_ip);
+				}
+				if (score != pair_count || metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

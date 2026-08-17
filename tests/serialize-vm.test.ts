@@ -390,9 +390,6 @@ describe("serialize-vm", () => {
 						directStringCharCodeAtPosition: "inBounds",
 					};
 				}
-				if (instruction.opcode === "BINARY") {
-					return { ...instruction, nativeNumericFusion: { role: "start", id: 4 } };
-				}
 				return instruction;
 			},
 		);

@@ -670,11 +670,14 @@ describe("native update-expression representation", () => {
 		expect(functionIndex).toBeGreaterThanOrEqual(0);
 		expect(fn!.regions?.map((region) => region.kind).sort()).toEqual([
 			"closed-record-array",
+			"numeric-fusion",
 			"numeric-hof",
 			"string-split-cursor",
 			"string-split-projection",
 		]);
-		const claimedIps = fn!.regions!.flatMap((region) => region.claimedIps);
+		const claimedIps = fn!
+			.regions!.filter((region) => region.composition !== "overlay")
+			.flatMap((region) => region.claimedIps);
 		expect(new Set(claimedIps).size).toBe(claimedIps.length);
 
 		const restored = deserializeVmDefinition(

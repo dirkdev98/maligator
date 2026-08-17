@@ -49,6 +49,12 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "numeric-fusion":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				pairs: region.pairs.map((pair) => ({ ...pair })),
+			};
 		case "exact-fresh-array":
 			return {
 				...cloneRegionEnvelope(region),

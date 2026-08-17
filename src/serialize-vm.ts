@@ -37,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped for overlay composition and exact-fresh Array regions.
-export const WIRE_VERSION = 60;
+// Bumped for numeric-fusion overlay regions.
+export const WIRE_VERSION = 61;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1130,9 +1130,7 @@ export function serializeVmDefinition(
 					return instruction.nativeFreshDenseReserveLength !== undefined;
 				}
 				return (
-					instruction.opcode === "BINARY" &&
-					(instruction.nativeNumericFusion !== undefined ||
-						instruction.nativeFiniteString !== undefined)
+					instruction.opcode === "BINARY" && instruction.nativeFiniteString !== undefined
 				);
 			});
 		w.u32(instructionMetadata.length);
@@ -1241,17 +1239,6 @@ export function serializeVmDefinition(
 				w.u8(4);
 				w.i32(instruction.nativeFiniteString.minimum);
 				w.i32Array(instruction.nativeFiniteString.stringIndices);
-			} else if (instruction.opcode === "BINARY") {
-				w.u8(3);
-				const fusion = instruction.nativeNumericFusion!;
-				w.u8(fusion.role === "start" ? 1 : 2);
-				w.i32(fusion.id);
-				if (fusion.role === "finish") {
-					w.i32(fusion.first.dst);
-					w.i32(fusion.first.left);
-					w.i32(fusion.first.right);
-					w.u8(BINOP_TAG.get(fusion.first.operator)!);
-				}
 			}
 		}
 
@@ -1294,7 +1281,9 @@ export function serializeVmDefinition(
 															? 11
 															: region.kind === "cardinality-array"
 																? 12
-																: 13;
+																: region.kind === "exact-fresh-array"
+																	? 13
+																	: 14;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1416,6 +1405,15 @@ export function serializeVmDefinition(
 					w.i32(region.allocationIp);
 					w.u8(region.runtimeGuard === "dense-storage-or-generic-load" ? 1 : 0);
 					w.i32Array([...region.accessIps]);
+					break;
+				case "numeric-fusion":
+					w.u8(region.runtimeGuard === "number-operands" ? 1 : 0);
+					w.u32(region.pairs.length);
+					for (const pair of region.pairs) {
+						w.i32(pair.firstIp);
+						w.i32(pair.finishIp);
+						w.u8(pair.firstUsePosition);
+					}
 					break;
 				case "regexp-exec-projection":
 					w.i32(region.propertyIp);
@@ -1970,9 +1968,79 @@ function validateRegion(
 		case "exact-fresh-array":
 			validateExactFreshArrayRegion(fn, region);
 			break;
+		case "numeric-fusion":
+			validateNumericFusionRegion(fn, region);
+			break;
 	}
 	if (region.composition !== "overlay") {
 		for (const ip of region.claimedIps) claimed.add(ip);
+	}
+}
+
+function validateNumericFusionRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "numeric-fusion" }>,
+): void {
+	const payloadIps = region.pairs.flatMap((pair) => [pair.firstIp, pair.finishIp]);
+	const startOperators = new Set([
+		"+",
+		"-",
+		"*",
+		"/",
+		"%",
+		"&",
+		"|",
+		"^",
+		"<<",
+		">>",
+		">>>",
+	]);
+	const finishOperators = new Set([
+		...startOperators,
+		"<",
+		"<=",
+		">",
+		">=",
+		"==",
+		"!=",
+		"===",
+		"!==",
+	]);
+	if (
+		region.composition !== "overlay" ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== 1 ||
+		region.license.guard.obligations[0] !== "fallback" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "none" ||
+		region.representation !== "binary-pairs-f64" ||
+		region.runtimeGuard !== "number-operands" ||
+		region.pairs.length === 0 ||
+		region.pairs.length > 32 ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.pairs[0]!.firstIp ||
+		region.anchors[1] !== region.pairs[0]!.finishIp ||
+		new Set(payloadIps).size !== payloadIps.length ||
+		payloadIps.length !== region.claimedIps.length ||
+		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		region.cost.score !== region.pairs.length ||
+		region.cost.metadataOperations !== payloadIps.length ||
+		region.pairs.some((pair) => {
+			const first = fn.instructions[pair.firstIp];
+			const finish = fn.instructions[pair.finishIp];
+			return (
+				first?.opcode !== "BINARY" ||
+				finish?.opcode !== "BINARY" ||
+				!startOperators.has(first.operator) ||
+				!finishOperators.has(finish.operator) ||
+				finish.nativeFiniteString !== undefined ||
+				(pair.firstUsePosition !== 1 && pair.firstUsePosition !== 2) ||
+				(pair.firstUsePosition === 1 ? finish.left : finish.right) !== first.dst ||
+				pair.firstIp >= pair.finishIp
+			);
+		})
+	) {
+		throw new RangeError("serialize-vm: invalid numeric-fusion region");
 	}
 }
 
@@ -3786,27 +3854,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid CONSTRUCT compiler metadata");
 				}
 				instruction.directFunctionIndex = directFunctionIndex;
-			} else if (tag === 3 && instruction.opcode === "BINARY") {
-				const role = r.u8();
-				const id = r.i32();
-				if (role === 1) {
-					instruction.nativeNumericFusion = { role: "start", id };
-				} else if (role === 2) {
-					const dst = r.i32();
-					const left = r.i32();
-					const right = r.i32();
-					const operator = WIRE_BINOPS[r.u8()];
-					if (operator === undefined) {
-						throw new RangeError("serialize-vm: invalid numeric-fusion operator");
-					}
-					instruction.nativeNumericFusion = {
-						role: "finish",
-						id,
-						first: { dst, left, right, operator },
-					};
-				} else {
-					throw new RangeError("serialize-vm: invalid numeric-fusion role");
-				}
 			} else if (tag === 4 && instruction.opcode === "BINARY") {
 				const minimum = r.i32();
 				const stringIndices = r.i32Array();
@@ -4030,9 +4077,15 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
+				const numericFusionContract =
+					kindTag === 14 &&
+					representationTag === 14 &&
+					materializationTag === 0 &&
+					dependencyMask === 0 &&
+					obligationMask === 1;
 				if (
 					compositionTag > 1 ||
-					(compositionTag === 1) !== exactFreshArrayContract ||
+					(compositionTag === 1) !== (exactFreshArrayContract || numericFusionContract) ||
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
@@ -4046,7 +4099,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!invariantJsonMapTemplateContract &&
 						!stackObjectPlanContract &&
 						!cardinalityArrayContract &&
-						!exactFreshArrayContract)
+						!exactFreshArrayContract &&
+						!numericFusionContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -4797,7 +4851,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						maximumLength,
 						accesses,
 					};
-				} else {
+				} else if (kindTag === 13) {
 					const allocationIp = r.i32();
 					const runtimeGuardTag = r.u8();
 					const accessIps = r.i32Array();
@@ -4820,6 +4874,40 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						allocationIp,
 						runtimeGuard: "dense-storage-or-generic-load",
 						accessIps,
+					};
+				} else {
+					const runtimeGuardTag = r.u8();
+					const pairCount = r.count(2);
+					const pairs: Array<
+						Extract<VmRegion, { kind: "numeric-fusion" }>["pairs"][number]
+					> = [];
+					for (let pair = 0; pair < pairCount; pair++) {
+						const firstIp = r.i32();
+						const finishIp = r.i32();
+						const firstUsePosition = r.u8();
+						if (firstUsePosition !== 1 && firstUsePosition !== 2) {
+							throw new RangeError("serialize-vm: invalid numeric-fusion use position");
+						}
+						pairs.push({ firstIp, finishIp, firstUsePosition });
+					}
+					if (runtimeGuardTag !== 1) {
+						throw new RangeError("serialize-vm: invalid numeric-fusion guard");
+					}
+					region = {
+						kind: "numeric-fusion",
+						license: {
+							guard: { dependencies: [], obligations: ["fallback"] },
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "binary-pairs-f64",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						runtimeGuard: "number-operands",
+						pairs,
 					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);

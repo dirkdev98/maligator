@@ -607,6 +607,20 @@ export type VmExactFreshArrayRegion = VmRegionEnvelope<
 	readonly accessIps: ReadonlyArray<number>;
 };
 
+export type VmNumericFusionRegion = VmRegionEnvelope<
+	"numeric-fusion",
+	"binary-pairs-f64",
+	"none"
+> & {
+	readonly composition: "overlay";
+	readonly runtimeGuard: "number-operands";
+	readonly pairs: ReadonlyArray<{
+		readonly firstIp: number;
+		readonly finishIp: number;
+		readonly firstUsePosition: 1 | 2;
+	}>;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -637,6 +651,7 @@ export type VmRegion =
 	| VmStringScanRegion
 	| VmPrivateAggregateMemoRegion
 	| VmInvariantJsonMapTemplateRegion
+	| VmNumericFusionRegion
 	| VmStackObjectPlanRegion
 	| VmCardinalityArrayRegion
 	| VmStringSplitProjectionRegion
@@ -1600,18 +1615,6 @@ export type VmInstruction =
 			left: number;
 			right: number;
 			operator: IRBinaryOperator;
-			nativeNumericFusion?:
-				| { role: "start"; id: number }
-				| {
-						role: "finish";
-						id: number;
-						first: {
-							dst: number;
-							left: number;
-							right: number;
-							operator: IRBinaryOperator;
-						};
-				  };
 			nativeFiniteString?: {
 				minimum: number;
 				stringIndices: Array<number>;
@@ -2234,6 +2237,9 @@ function lowerFunctionToVmFunction(
 			const claimedIps = region.claimedInstructions.map((instruction) =>
 				instructionIndexByIrInstruction.get(instruction),
 			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
 			const pairs = region.pairs.map((pair) => ({
 				...pair,
 				firstIp: instructionIndexByIrInstruction.get(pair.first),
@@ -2250,6 +2256,7 @@ function lowerFunctionToVmFunction(
 				region.controlFlow.exceptionalBlocks.length !== 0 ||
 				anchors.some((ip) => ip === undefined) ||
 				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
 				pairs.length === 0 ||
 				pairs.length > 32 ||
 				pairs.some((pair) => pair.firstIp === undefined || pair.finishIp === undefined)
@@ -2309,27 +2316,32 @@ function lowerFunctionToVmFunction(
 					pair.firstIp >= pair.finishIp
 				) {
 					valid = false;
-					continue;
 				}
-				first.nativeNumericFusion = { role: "start", id: pair.firstIp };
-				finish.nativeNumericFusion = {
-					role: "finish",
-					id: pair.firstIp,
-					first: {
-						dst: first.dst,
-						left: first.left,
-						right: first.right,
-						operator: first.operator,
-					},
-				};
 			}
-			if (!valid) {
-				for (const pair of resolvedPairs) {
-					const first = instructions[pair.firstIp];
-					const finish = instructions[pair.finishIp];
-					if (first?.opcode === "BINARY") delete first.nativeNumericFusion;
-					if (finish?.opcode === "BINARY") delete finish.nativeNumericFusion;
-				}
+			if (valid) {
+				regions.push({
+					kind: "numeric-fusion",
+					license: {
+						guard: { dependencies: [], obligations: ["fallback"] },
+						genericTwin: "retained",
+						materialization: "none",
+					},
+					representation: "binary-pairs-f64",
+					composition: "overlay",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+						exceptionalHandlerIps: [],
+					},
+					cost: { ...region.cost },
+					runtimeGuard: "number-operands",
+					pairs: resolvedPairs.map((pair) => ({
+						firstIp: pair.firstIp,
+						finishIp: pair.finishIp,
+						firstUsePosition: pair.firstUsePosition,
+					})),
+				});
 			}
 			continue;
 		}

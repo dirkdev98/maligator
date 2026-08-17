@@ -549,7 +549,7 @@ is general rather than a registry-shaped collection of special cases.
         structural overlay region. Keep up to 32 independent binary pairs in one
         function certificate, allow the local Number-operand proof to compose with
         exclusive loop/object regions, and validate the exact producer-consumer
-        edge before translating it to the existing VM execution metadata.
+        edge through IR, VM serialization, cache restoration, and native emission.
   - [x] Replace finite-object construction and virtual-record access instruction
         links with one structural IR region. Make the region own the allocation,
         canonical finite-key store, guarded Number leaves and every direct slot

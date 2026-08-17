@@ -83,12 +83,14 @@ test("stores one-use numeric pairs as a structural overlay region", () => {
 
 	allocateRegisters(program);
 	const definition = lowerIrProgramToVmDefinition(program);
-	const binaries = definition.functions.flatMap((fn) =>
-		fn.instructions.filter((instruction) => instruction.opcode === "BINARY"),
+	const vmRegions = definition.functions.flatMap((fn) =>
+		(fn.regions ?? []).filter((candidate) => candidate.kind === "numeric-fusion"),
 	);
-	expect(binaries.filter((instruction) => instruction.nativeNumericFusion)).toHaveLength(
-		2,
-	);
+	expect(vmRegions).toHaveLength(1);
+	expect(vmRegions[0]).toMatchObject({
+		composition: "overlay",
+		runtimeGuard: "number-operands",
+	});
 });
 
 test("stores closed loop proofs in the function region table and drops stale certificates", () => {
@@ -130,7 +132,13 @@ test("stores closed loop proofs in the function region table and drops stale cer
 	allocateRegisters(program);
 	const lowered =
 		lowerIrProgramToVmDefinition(program).functions[summarize.functionIndex]!;
-	expect(lowered.regions).toBeUndefined();
+	expect(
+		lowered.regions?.some((candidate) => candidate.kind === "closed-record-array") ??
+			false,
+	).toBe(false);
+	expect(
+		lowered.regions?.some((candidate) => candidate.kind === "numeric-fusion") ?? false,
+	).toBe(true);
 });
 
 test("drops stale split cursor certificates from the shared function region table", () => {
