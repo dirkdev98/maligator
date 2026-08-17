@@ -2,7 +2,12 @@ import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { CommandProgress } from "../src/command-progress.ts";
 
-const arguments_ = process.argv.slice(2);
+const userArguments = process.argv.slice(2);
+const arguments_ = userArguments.some(
+	(argument) => argument === "--configLoader" || argument.startsWith("--configLoader="),
+)
+	? userArguments
+	: ["--configLoader", "runner", ...userArguments];
 const progress = new CommandProgress("vitest");
 progress.start(arguments_.length === 0 ? "watch all projects" : arguments_.join(" "));
 progress.stage(1, 1, "run tests");
