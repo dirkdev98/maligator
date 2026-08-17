@@ -2304,93 +2304,6 @@ function annotateNativeStringScanSummaries(definition: VmDefinition): void {
 	}
 }
 
-/**
- * Fuse an exact builtin `string.slice(constant)` whose only produced value is
- * immediately consumed by the exact Number intrinsic. Both calls remain as the
- * guard-miss path.
- */
-function annotateNativeStringSliceNumberFusions(definition: VmDefinition): void {
-	for (const fn of definition.functions) {
-		const fusions: Array<
-			NonNullable<VmFunction["nativeStringSliceNumberFusions"]>[number]
-		> = [];
-		const jumpTargets = new Set<number>();
-		for (const instruction of fn.instructions) {
-			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
-				jumpTargets.add(instruction.targetIp);
-			}
-		}
-		const latestDefinition = (register: number, beforeIp: number) => {
-			for (let ip = beforeIp - 1; ip >= 0; ip--) {
-				if (vmInstructionDefinesRegister(fn.instructions[ip]!, register)) {
-					return { instruction: fn.instructions[ip]!, ip };
-				}
-			}
-			return undefined;
-		};
-		for (let sliceCallIp = 1; sliceCallIp + 1 < fn.instructions.length; sliceCallIp++) {
-			const sliceCall = fn.instructions[sliceCallIp]!;
-			const load = fn.instructions[sliceCallIp - 1]!;
-			const numberCall = fn.instructions[sliceCallIp + 1]!;
-			const numberArgument =
-				numberCall.opcode === "CALL"
-					? decodeVmValueOperand(numberCall.arguments[0] ?? -1)
-					: undefined;
-			if (
-				sliceCall.opcode !== "CALL" ||
-				!vmCallProvesBuiltin(sliceCall, "String.prototype.slice") ||
-				sliceCall.arguments.length !== 1 ||
-				load.opcode !== "LOAD_PROPERTY_STATIC" ||
-				load.dst !== sliceCall.callee ||
-				load.object !== sliceCall.thisValue ||
-				!staticStringEquals(definition, load.stringIndex, "slice") ||
-				numberCall.opcode !== "CALL" ||
-				numberCall.arguments.length !== 1 ||
-				numberArgument?.kind !== "register" ||
-				numberArgument.register !== sliceCall.dst ||
-				jumpTargets.has(sliceCallIp + 1)
-			) {
-				continue;
-			}
-			const start = decodeVmValueOperand(sliceCall.arguments[0]!);
-			const numberCallee = latestDefinition(numberCall.callee, sliceCallIp + 1);
-			if (
-				start.kind !== "number" ||
-				!Number.isFinite(start.value) ||
-				numberCallee?.instruction.opcode !== "LOAD_INTRINSIC" ||
-				numberCallee.instruction.intrinsic !== "Number" ||
-				![...jumpTargets, ...fn.handlers.map((handler) => handler.handlerIp)].every(
-					(targetIp) => targetIp <= numberCallee.ip || targetIp > sliceCallIp,
-				)
-			) {
-				continue;
-			}
-			let resultEscapes = false;
-			for (let ip = sliceCallIp + 2; ip < fn.instructions.length; ip++) {
-				const instruction = fn.instructions[ip]!;
-				if (vmInstructionUsesRegister(instruction, sliceCall.dst)) {
-					resultEscapes = true;
-					break;
-				}
-				if (vmInstructionDefinesRegister(instruction, sliceCall.dst)) break;
-			}
-			if (resultEscapes) continue;
-			fusions.push({
-				propertyIp: sliceCallIp - 1,
-				sliceCallIp,
-				numberCallIp: sliceCallIp + 1,
-				numberCallee: numberCall.callee,
-				receiver: sliceCall.thisValue,
-				sliceStart: start.value,
-				result: numberCall.dst,
-			});
-			sliceCallIp++;
-		}
-		if (fusions.length > 0) fn.nativeStringSliceNumberFusions = fusions;
-		else delete fn.nativeStringSliceNumberFusions;
-	}
-}
-
 /** Mark the exact lowered shape of `primitiveString.search(/literal/flags)`. */
 function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
 	for (const fn of definition.functions) {
@@ -3257,7 +3170,6 @@ function emitVmDefinitionSource(
 	const useCompiled = options.compiled !== false;
 	if (useCompiled) {
 		annotateNativeStringScanSummaries(definition);
-		annotateNativeStringSliceNumberFusions(definition);
 		annotateNativeStringSearchRegExpCalls(definition);
 		annotateNativePrivateAggregateMemos(definition);
 		annotateNativeAffineRangeVirtualizations(definition);

@@ -36,8 +36,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 53 to move RegExp iterator projections into the tagged region table.
-export const WIRE_VERSION = 53;
+// Bumped to 54 to move String.slice-to-Number fusion into the tagged region table.
+export const WIRE_VERSION = 54;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -772,6 +772,34 @@ function regexpIteratorProjectionGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function stringSliceNumberGuardMasks(
+	license: Extract<VmRegion, { kind: "string-slice-number" }>["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
+			dependencyMask |= 4;
+		} else {
+			throw new RangeError("serialize-vm: unsupported String.slice Number dependency");
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "none" ||
+		(dependencyMask !== 1 && dependencyMask !== 4) ||
+		obligationMask !== 1
+	) {
+		throw new RangeError("serialize-vm: invalid String.slice Number guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1250,7 +1278,9 @@ export function serializeVmDefinition(
 								? 4
 								: region.kind === "regexp-exec-projection"
 									? 5
-									: 6;
+									: region.kind === "regexp-iterator-projection"
+										? 6
+										: 7;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1269,7 +1299,9 @@ export function serializeVmDefinition(
 								? stringSplitProjectionGuardMasks(region.license)
 								: region.kind === "regexp-exec-projection"
 									? regexpExecProjectionGuardMasks(region.license)
-									: regexpIteratorProjectionGuardMasks(region.license);
+									: region.kind === "regexp-iterator-projection"
+										? regexpIteratorProjectionGuardMasks(region.license)
+										: stringSliceNumberGuardMasks(region.license);
 			w.u8(kindTag);
 			w.i32Array([...region.anchors]);
 			w.i32Array([...region.claimedIps]);
@@ -1428,6 +1460,16 @@ export function serializeVmDefinition(
 						w.i32(load.numberIntrinsicIp);
 						w.i32(load.numberCallIp);
 					}
+					break;
+				case "string-slice-number":
+					w.i32(region.propertyIp);
+					w.i32(region.sliceCallIp);
+					w.i32(region.numberIntrinsicIp);
+					w.i32(region.numberCallIp);
+					w.i32(region.numberCallee);
+					w.i32(region.receiver);
+					w.f64(region.sliceStart);
+					w.i32(region.result);
 					break;
 			}
 		}
@@ -1753,6 +1795,7 @@ function validateRegionEnvelope(
 				!fn.handlers.some((handler) => handler.handlerIp === ip),
 		) ||
 		(region.kind !== "regexp-iterator-projection" &&
+			region.kind !== "string-slice-number" &&
 			region.controlFlow.exceptionalHandlerIps.length !== 0) ||
 		!Number.isSafeInteger(region.cost.score) ||
 		region.cost.score <= 0 ||
@@ -1789,11 +1832,83 @@ function validateRegion(
 		case "regexp-iterator-projection":
 			validateRegExpIteratorProjectionRegion(fn, region);
 			break;
+		case "string-slice-number":
+			validateStringSliceNumberRegion(fn, region, stringConstants);
+			break;
 		case "numeric-hof":
 			validateNumericHofRegion(fn, region, functionCount);
 			break;
 	}
 	for (const ip of region.claimedIps) claimed.add(ip);
+}
+
+function validateStringSliceNumberRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "string-slice-number" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	stringSliceNumberGuardMasks(region.license);
+	const property = fn.instructions[region.propertyIp];
+	const sliceCall = fn.instructions[region.sliceCallIp];
+	const numberIntrinsic = fn.instructions[region.numberIntrinsicIp];
+	const numberCall = fn.instructions[region.numberCallIp];
+	const sliceStart =
+		sliceCall?.opcode === "CALL" && sliceCall.arguments[0] !== undefined
+			? decodeVmValueOperand(sliceCall.arguments[0])
+			: undefined;
+	const numberArgument =
+		numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+			? decodeVmValueOperand(numberCall.arguments[0])
+			: undefined;
+	const payload = new Set([
+		region.propertyIp,
+		region.sliceCallIp,
+		region.numberIntrinsicIp,
+		region.numberCallIp,
+	]);
+	const activeHandlers = new Set<number>();
+	for (const ip of region.claimedIps) {
+		for (const handler of fn.handlers) {
+			if (ip >= handler.startIp && ip < handler.endIp) {
+				activeHandlers.add(handler.handlerIp);
+			}
+		}
+	}
+	if (
+		region.representation !== "primitive-string-span-number" ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.sliceCallIp ||
+		region.anchors[1] !== region.numberCallIp ||
+		property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !== "slice" ||
+		sliceCall?.opcode !== "CALL" ||
+		sliceCall.guardedBuiltinCall?.operation !== "String.prototype.slice" ||
+		sliceCall.arguments.length !== 1 ||
+		property.dst !== sliceCall.callee ||
+		property.object !== sliceCall.thisValue ||
+		region.propertyIp + 1 !== region.sliceCallIp ||
+		region.sliceCallIp + 1 !== region.numberCallIp ||
+		sliceStart?.kind !== "number" ||
+		!Object.is(sliceStart.value, region.sliceStart) ||
+		!Number.isFinite(region.sliceStart) ||
+		numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
+		numberIntrinsic.intrinsic !== "Number" ||
+		numberCall?.opcode !== "CALL" ||
+		numberCall.callee !== numberIntrinsic.dst ||
+		numberCall.callee !== region.numberCallee ||
+		numberCall.arguments.length !== 1 ||
+		numberArgument?.kind !== "register" ||
+		numberArgument.register !== sliceCall.dst ||
+		region.receiver !== sliceCall.thisValue ||
+		region.result !== numberCall.dst ||
+		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
+		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip)) ||
+		region.cost.metadataOperations !== payload.size ||
+		payload.size !== region.claimedIps.length ||
+		region.claimedIps.some((ip) => !payload.has(ip))
+	) {
+		throw new RangeError("serialize-vm: invalid String.slice Number region");
+	}
 }
 
 function validateRegExpExecProjectionRegion(
@@ -3435,6 +3550,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 1 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 3;
+				const stringSliceNumberContract =
+					kindTag === 7 &&
+					representationTag === 7 &&
+					materializationTag === 0 &&
+					(dependencyMask === 1 || dependencyMask === 4) &&
+					obligationMask === 1;
 				if (
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
@@ -3442,7 +3563,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!numericHofContract &&
 						!stringSplitProjectionContract &&
 						!regexpExecProjectionContract &&
-						!regexpIteratorProjectionContract)
+						!regexpIteratorProjectionContract &&
+						!stringSliceNumberContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -3833,7 +3955,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						lastIndexEffect: "retained-call-twin",
 						loads,
 					};
-				} else {
+				} else if (kindTag === 6) {
 					const stepIp = r.i32();
 					const doneBranchIp = r.i32();
 					const exitIp = r.i32();
@@ -3892,6 +4014,42 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						statefulEffect: "iterator-last-index-retained-step",
 						runtimeGuard: "exact-brand-next-realm-regexp",
 						loads,
+					};
+				} else {
+					const propertyIp = r.i32();
+					const sliceCallIp = r.i32();
+					const numberIntrinsicIp = r.i32();
+					const numberCallIp = r.i32();
+					const numberCallee = r.i32();
+					const receiver = r.i32();
+					const sliceStart = r.f64();
+					const result = r.i32();
+					region = {
+						kind: "string-slice-number",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [{ kind: "epoch", family: "watched-methods" }],
+								obligations: ["fallback"],
+							},
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "primitive-string-span-number",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						propertyIp,
+						sliceCallIp,
+						numberIntrinsicIp,
+						numberCallIp,
+						numberCallee,
+						receiver,
+						sliceStart,
+						result,
 					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);

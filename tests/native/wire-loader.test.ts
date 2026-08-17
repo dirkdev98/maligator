@@ -569,6 +569,38 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads a nonempty String.slice Number proof region payload", () => {
+		const entrypoint = path.join(directory, "string-slice-number-region.mjs");
+		writeFileSync(
+			entrypoint,
+			`function parse(value) {
+				try {
+					return Number(value.slice(1));
+				} catch {
+					return -1;
+				}
+			}
+			globalThis.result = parse("x42");\n`,
+		);
+		const regionDefinition = compileEntrypoint(entrypoint, {
+			stripTypes: stripTypesWithTypeScript,
+			buildConfig: resolveBuildConfig({}),
+		});
+		expect(
+			regionDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+			),
+		).not.toHaveLength(0);
+		const wirePath = path.join(directory, "string-slice-number-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(regionDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

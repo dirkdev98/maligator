@@ -2427,6 +2427,26 @@ function cloneInlinedRegion(
 				loads,
 			} as unknown as Extract<IRRegion, { kind: "regexp-iterator-projection" }>;
 		}
+		case "string-slice-number": {
+			const property = mapInstruction(region.property);
+			const numberIntrinsic = mapInstruction(region.numberIntrinsic);
+			const numberCall = mapInstruction(region.numberCall);
+			if (
+				property === undefined ||
+				numberIntrinsic === undefined ||
+				numberCall === undefined
+			) {
+				return undefined;
+			}
+			return {
+				...common,
+				kind: region.kind,
+				anchors: common.anchors as typeof region.anchors,
+				property,
+				numberIntrinsic,
+				numberCall,
+			} as unknown as Extract<IRRegion, { kind: "string-slice-number" }>;
+		}
 		case "string-split-cursor": {
 			const property =
 				region.property === undefined ? undefined : mapInstruction(region.property);

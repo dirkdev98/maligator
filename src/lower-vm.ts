@@ -488,6 +488,21 @@ export type VmRegExpIteratorProjectionRegion = VmRegionEnvelope<
 	}>;
 };
 
+export type VmStringSliceNumberRegion = VmRegionEnvelope<
+	"string-slice-number",
+	"primitive-string-span-number",
+	"none"
+> & {
+	readonly propertyIp: number;
+	readonly sliceCallIp: number;
+	readonly numberIntrinsicIp: number;
+	readonly numberCallIp: number;
+	readonly numberCallee: number;
+	readonly receiver: number;
+	readonly sliceStart: number;
+	readonly result: number;
+};
+
 export type VmNumericHofRegion = VmRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
@@ -513,6 +528,7 @@ export type VmRegion =
 	| VmClosedRecordArrayRegion
 	| VmRegExpExecProjectionRegion
 	| VmRegExpIteratorProjectionRegion
+	| VmStringSliceNumberRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
 	| VmNumericHofRegion;
@@ -731,17 +747,6 @@ export interface VmFunction {
 		receiverIp: number;
 		propertyIp: number;
 		callIp: number;
-	}>;
-
-	/** EMITTER-ONLY: exact builtin String slice immediately consumed by Number. */
-	nativeStringSliceNumberFusions?: ReadonlyArray<{
-		propertyIp: number;
-		sliceCallIp: number;
-		numberCallIp: number;
-		numberCallee: number;
-		receiver: number;
-		sliceStart: number;
-		result: number;
 	}>;
 
 	/** EMITTER-ONLY: activation-local exact no-reviver JSON.parse templates. */
@@ -2217,6 +2222,7 @@ function lowerFunctionToVmFunction(
 				region.controlFlow.ordinaryBlocks.length ||
 			exceptionalHandlerIps.some((ip) => ip === undefined) ||
 			(region.kind !== "regexp-iterator-projection" &&
+				region.kind !== "string-slice-number" &&
 				region.controlFlow.exceptionalBlocks.length !== 0) ||
 			!Number.isSafeInteger(region.cost.score) ||
 			region.cost.score <= 0 ||
@@ -2786,6 +2792,96 @@ function lowerFunctionToVmFunction(
 					statefulEffect: "iterator-last-index-retained-step",
 					runtimeGuard: "exact-brand-next-realm-regexp",
 					loads: resolvedLoads,
+				});
+				break;
+			}
+			case "string-slice-number": {
+				const sliceCallIp = resolvedAnchors[0];
+				const numberCallIp = resolvedAnchors[1];
+				const propertyIp = instructionIndexByIrInstruction.get(region.property);
+				const numberIntrinsicIp = instructionIndexByIrInstruction.get(
+					region.numberIntrinsic,
+				);
+				if (
+					region.representation !== "primitive-string-span-number" ||
+					region.license.materialization !== "none" ||
+					!guard.obligations.includes("fallback") ||
+					guard.obligations.includes("materialize") ||
+					resolvedAnchors.length !== 2 ||
+					propertyIp === undefined ||
+					numberIntrinsicIp === undefined
+				) {
+					continue;
+				}
+				const property = instructions[propertyIp];
+				const sliceCall = instructions[sliceCallIp!];
+				const numberIntrinsic = instructions[numberIntrinsicIp];
+				const numberCall = instructions[numberCallIp!];
+				const sliceStart =
+					sliceCall?.opcode === "CALL" && sliceCall.arguments[0] !== undefined
+						? decodeVmValueOperand(sliceCall.arguments[0])
+						: undefined;
+				const numberArgument =
+					numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
+						? decodeVmValueOperand(numberCall.arguments[0])
+						: undefined;
+				const payloadIps = new Set([
+					propertyIp,
+					sliceCallIp!,
+					numberIntrinsicIp,
+					numberCallIp!,
+				]);
+				if (
+					property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
+						"slice" ||
+					sliceCall?.opcode !== "CALL" ||
+					!vmCallProvesBuiltin(sliceCall, "String.prototype.slice", {
+						lowering: "number-consumer-fusion",
+						result: "string",
+						effects: ["coerce", "allocate", "throw", "safepoint"],
+					}) ||
+					sliceCall.arguments.length !== 1 ||
+					property.dst !== sliceCall.callee ||
+					property.object !== sliceCall.thisValue ||
+					propertyIp + 1 !== sliceCallIp ||
+					sliceCallIp + 1 !== numberCallIp ||
+					sliceStart?.kind !== "number" ||
+					!Object.is(sliceStart.value, region.sliceStart) ||
+					!Number.isFinite(region.sliceStart) ||
+					numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
+					numberIntrinsic.intrinsic !== "Number" ||
+					numberCall?.opcode !== "CALL" ||
+					numberCall.callee !== numberIntrinsic.dst ||
+					numberCall.arguments.length !== 1 ||
+					numberArgument?.kind !== "register" ||
+					numberArgument.register !== sliceCall.dst ||
+					region.cost.metadataOperations !== payloadIps.size ||
+					payloadIps.size !== resolvedClaimedIps.length ||
+					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
+				) {
+					continue;
+				}
+				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "string-slice-number",
+					license: { guard, genericTwin: "retained", materialization: "none" },
+					representation: "primitive-string-span-number",
+					anchors: resolvedAnchors,
+					claimedIps: resolvedClaimedIps,
+					controlFlow: {
+						ordinaryBlockIps: resolvedOrdinaryBlockIps,
+						exceptionalHandlerIps: resolvedExceptionalHandlerIps,
+					},
+					cost: region.cost,
+					propertyIp,
+					sliceCallIp: sliceCallIp,
+					numberIntrinsicIp,
+					numberCallIp: numberCallIp,
+					numberCallee: numberCall.callee,
+					receiver: sliceCall.thisValue,
+					sliceStart: region.sliceStart,
+					result: numberCall.dst,
 				});
 				break;
 			}

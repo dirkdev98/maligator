@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 53u        // RegExp iterator projections join the tagged region table
+#define WIRE_VERSION 54u        // String.slice-to-Number joins the tagged region table
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1977,8 +1977,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
             }
             u32 exceptional_handler_count = rd_count(&r, 1);
-            if (exceptional_handler_count > 64 ||
-                (kind != 6 && exceptional_handler_count != 0)) r.ok = false;
+			if (exceptional_handler_count > 64 ||
+				(kind != 6 && kind != 7 && exceptional_handler_count != 0)) r.ok = false;
             i32 exceptional_handler_ips[64];
             for (u32 handler = 0; r.ok && handler < exceptional_handler_count; handler++) {
                 exceptional_handler_ips[handler] = rd_i32(&r);
@@ -2018,14 +2018,17 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             bool regexp_exec_projection_contract = kind == 5 && representation == 5 &&
                 materialization == 2 && (dependency_mask == 1 || dependency_mask == 4) &&
                 obligation_mask == 3;
-            bool regexp_iterator_projection_contract = kind == 6 && representation == 6 &&
-                materialization == 1 && (dependency_mask == 1 || dependency_mask == 4) &&
-                obligation_mask == 3;
+			bool regexp_iterator_projection_contract = kind == 6 && representation == 6 &&
+				materialization == 1 && (dependency_mask == 1 || dependency_mask == 4) &&
+				obligation_mask == 3;
+			bool string_slice_number_contract = kind == 7 && representation == 7 &&
+				materialization == 0 && (dependency_mask == 1 || dependency_mask == 4) &&
+				obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
-                 !split_projection_contract && !regexp_exec_projection_contract &&
-                 !regexp_iterator_projection_contract)) {
+				 !split_projection_contract && !regexp_exec_projection_contract &&
+				 !regexp_iterator_projection_contract && !string_slice_number_contract)) {
                 r.ok = false;
             }
 
@@ -2934,6 +2937,94 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     MAL_REGION_PAYLOAD_REFERENCE(number_call_ips[load]);
                 }
                 if (metadata_operations != payload_count) r.ok = false;
+            } else if (r.ok && kind == 7) {
+                i32 property_ip = rd_i32(&r);
+                i32 slice_call_ip = rd_i32(&r);
+                i32 number_intrinsic_ip = rd_i32(&r);
+                i32 number_call_ip = rd_i32(&r);
+                i32 number_callee = rd_i32(&r);
+                i32 receiver = rd_i32(&r);
+                (void) rd_u64(&r); // exact finite slice start, validated by the TS codec
+                i32 result = rd_i32(&r);
+                bool header_ok = anchor_count == 2 && anchors[0] == slice_call_ip &&
+                    anchors[1] == number_call_ip && property_ip >= 0 &&
+                    property_ip < fn->instruction_count && slice_call_ip == property_ip + 1 &&
+                    number_call_ip == slice_call_ip + 1 &&
+                    number_call_ip < fn->instruction_count && number_intrinsic_ip >= 0 &&
+                    number_intrinsic_ip < fn->instruction_count &&
+                    fn->instructions[property_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                    fn->instructions[slice_call_ip].opcode == MAL_OP_CALL &&
+                    fn->instructions[number_intrinsic_ip].opcode == MAL_OP_LOAD_INTRINSIC &&
+                    fn->instructions[number_intrinsic_ip].as.load_intrinsic.intrinsic ==
+                        MAL_INTRINSIC_NUMBER_CONSTRUCTOR &&
+                    fn->instructions[number_call_ip].opcode == MAL_OP_CALL;
+                if (header_ok) {
+                    const MalInstruction *property = &fn->instructions[property_ip];
+                    const MalInstruction *slice_call = &fn->instructions[slice_call_ip];
+                    const MalInstruction *number_intrinsic =
+                        &fn->instructions[number_intrinsic_ip];
+                    const MalInstruction *number_call = &fn->instructions[number_call_ip];
+                    i32 slice_data = slice_call->as.call.data_offset;
+                    i32 number_data = number_call->as.call.data_offset;
+                    bool slice_name = property->as.load_property_static.string_index >= 0 &&
+                        property->as.load_property_static.string_index < (i32) string_count;
+                    if (slice_name) {
+                        const MalString *name =
+                            &strings[property->as.load_property_static.string_index];
+                        slice_name = name->length == 5 && name->code_units[0] == 's' &&
+                            name->code_units[1] == 'l' && name->code_units[2] == 'i' &&
+                            name->code_units[3] == 'c' && name->code_units[4] == 'e';
+                    }
+                    header_ok = slice_name && property->as.load_property_static.dst ==
+                            slice_call->as.call.callee &&
+                        property->as.load_property_static.object == receiver &&
+                        slice_call->as.call.this_value == receiver && slice_data >= 0 &&
+                        slice_data + 1 < fn->instruction_data_count &&
+                        fn->instruction_data[slice_data] == 1 &&
+                        number_intrinsic->as.load_intrinsic.dst == number_callee &&
+                        number_call->as.call.callee == number_callee && number_data >= 0 &&
+                        number_data + 1 < fn->instruction_data_count &&
+                        fn->instruction_data[number_data] == 1 &&
+                        fn->instruction_data[number_data + 1] == slice_call->as.call.dst &&
+                        number_call->as.call.dst == result;
+                }
+                if (!header_ok || metadata_operations != 4 || claim_count != 4) r.ok = false;
+
+                for (u32 claim = 0; r.ok && claim < claim_count; claim++) {
+                    for (i32 handler = 0; handler < fn->handler_count; handler++) {
+                        const MalExceptionHandler *candidate = &fn->handlers[handler];
+                        if (claims[claim] >= candidate->start_ip &&
+                            claims[claim] < candidate->end_ip) {
+                            bool declared = false;
+                            for (u32 declared_handler = 0;
+                                 declared_handler < exceptional_handler_count;
+                                 declared_handler++) {
+                                if (exceptional_handler_ips[declared_handler] ==
+                                    candidate->handler_ip) declared = true;
+                            }
+                            if (!declared) r.ok = false;
+                        }
+                    }
+                }
+                for (u32 declared_handler = 0; r.ok &&
+                     declared_handler < exceptional_handler_count; declared_handler++) {
+                    bool covers_claim = false;
+                    for (i32 handler = 0; handler < fn->handler_count; handler++) {
+                        const MalExceptionHandler *candidate = &fn->handlers[handler];
+                        if (candidate->handler_ip !=
+                            exceptional_handler_ips[declared_handler]) continue;
+                        for (u32 claim = 0; claim < claim_count; claim++) {
+                            if (claims[claim] >= candidate->start_ip &&
+                                claims[claim] < candidate->end_ip) covers_claim = true;
+                        }
+                    }
+                    if (!covers_claim) r.ok = false;
+                }
+
+                MAL_REGION_PAYLOAD_REFERENCE(property_ip);
+                MAL_REGION_PAYLOAD_REFERENCE(slice_call_ip);
+                MAL_REGION_PAYLOAD_REFERENCE(number_intrinsic_ip);
+                MAL_REGION_PAYLOAD_REFERENCE(number_call_ip);
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

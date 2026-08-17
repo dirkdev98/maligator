@@ -2249,9 +2249,7 @@ interface NativeRegExpIteratorProjectionAction {
 	load?: NativeRegExpIteratorProjection["loads"][number];
 }
 
-type NativeStringSliceNumberFusion = NonNullable<
-	VmFunction["nativeStringSliceNumberFusions"]
->[number];
+type NativeStringSliceNumberFusion = Extract<VmRegion, { kind: "string-slice-number" }>;
 
 interface NativeStringSliceNumberFusionAction {
 	fusion: NativeStringSliceNumberFusion;
@@ -3625,13 +3623,13 @@ function emitBody(
 		number,
 		NativeStringSliceNumberFusionAction
 	>();
-	for (const fusion of fn.nativeStringSliceNumberFusions ?? []) {
-		const sliceCall = fn.instructions[fusion.sliceCallIp];
+	const stringSliceNumberRegions = (fn.regions ?? []).filter(
+		(region): region is NativeStringSliceNumberFusion =>
+			region.kind === "string-slice-number",
+	);
+	for (const fusion of stringSliceNumberRegions) {
 		const propertyInstruction = fn.instructions[fusion.propertyIp];
-		const lockedIdentity =
-			sliceCall?.opcode === "CALL" &&
-			sliceCall.guardedBuiltinCall !== undefined &&
-			vmGuardIsWorldInvariant(sliceCall.guardedBuiltinCall.guard);
+		const lockedIdentity = vmGuardIsWorldInvariant(fusion.license.guard);
 		const propertyLoad =
 			lockedIdentity &&
 			fusion.propertyIp + 1 === fusion.sliceCallIp &&
@@ -3735,7 +3733,7 @@ function emitBody(
 			`i32 __regexp_iter_${site.projection.stepIp}_ends[${site.loads.length}];`,
 		);
 	}
-	for (const fusion of fn.nativeStringSliceNumberFusions ?? []) {
+	for (const fusion of stringSliceNumberRegions) {
 		lines.push(
 			`bool __string_slice_number_${fusion.sliceCallIp}_fast = false;`,
 			`f64 __string_slice_number_${fusion.sliceCallIp}_value = 0;`,

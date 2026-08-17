@@ -787,6 +787,27 @@ export interface IRRegExpIteratorProjectionRegion extends IRRegionEnvelope<
 	}>;
 }
 
+/**
+ * Backend-neutral certificate for one exact `String.prototype.slice(start)`
+ * whose sole result consumer is the exact Number intrinsic. The property,
+ * slice, and Number calls remain the generic twin; native emission may compute
+ * the numeric result directly only while the retained license admits it.
+ */
+export interface IRStringSliceNumberRegion extends IRRegionEnvelope<
+	"string-slice-number",
+	"primitive-string-span-number",
+	"none",
+	readonly [
+		Extract<IRInstruction, { type: "call" }>,
+		Extract<IRInstruction, { type: "call" }>,
+	]
+> {
+	readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+	readonly numberIntrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>;
+	readonly numberCall: Extract<IRInstruction, { type: "call" }>;
+	readonly sliceStart: number;
+}
+
 /** Backend-neutral contract for one closed indexed String#split consumer loop. */
 export interface IRStringSplitCursor extends IRRegionEnvelope<
 	"string-split-cursor",
@@ -879,6 +900,7 @@ export type IRRegion =
 	| IRClosedRecordArrayRegion
 	| IRRegExpExecProjectionRegion
 	| IRRegExpIteratorProjectionRegion
+	| IRStringSliceNumberRegion
 	| IRStringSplitProjectionRegion
 	| IRStringSplitCursor
 	| IRNumericHofRegion;

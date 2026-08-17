@@ -100,6 +100,11 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				aliasMoveIps: [...region.aliasMoveIps],
 				loads: region.loads.map((load) => ({ ...load })),
 			};
+		case "string-slice-number":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+			};
 		case "numeric-hof":
 			return {
 				...cloneRegionEnvelope(region),

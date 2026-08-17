@@ -255,6 +255,47 @@ test("stores RegExp iterator capture proofs with explicit exceptional scope", ()
 	).toHaveLength(0);
 });
 
+test("stores slice-to-Number proofs with explicit exceptional scope and drops stale anchors", () => {
+	const program = compileScript(`
+		function parse(value) {
+			try {
+				return Number(value.slice(1));
+			} catch {
+				return -1;
+			}
+		}
+		globalThis.parse = parse;
+	`);
+	executeIROptimizations(program);
+	const parse = functionNamed(program, "parse");
+	const region = parse.regions?.find(
+		(candidate) => candidate.kind === "string-slice-number",
+	);
+	expect(region).toBeDefined();
+	if (region?.kind !== "string-slice-number") {
+		throw new Error("missing String.slice Number region");
+	}
+	expect(region.representation).toBe("primitive-string-span-number");
+	expect(region.sliceStart).toBe(1);
+	expect(region.controlFlow.exceptionalBlocks).not.toHaveLength(0);
+	expect(
+		region.anchors.every((instruction) =>
+			region.claimedInstructions.includes(instruction),
+		),
+	).toBe(true);
+
+	const staleAnchor = region.anchors[1];
+	const owner = parse.blocks.find((block) => block.instructions.includes(staleAnchor));
+	expect(owner).toBeDefined();
+	owner!.instructions[owner!.instructions.indexOf(staleAnchor)] = { ...staleAnchor };
+	allocateRegisters(program);
+	const lowered = lowerIrProgramToVmDefinition(program).functions[parse.functionIndex]!;
+	expect(
+		lowered.regions?.filter((candidate) => candidate.kind === "string-slice-number") ??
+			[],
+	).toHaveLength(0);
+});
+
 test("rejects split projection regions protected by an exception handler", () => {
 	const program = compileScript(`
 		function project(value) {

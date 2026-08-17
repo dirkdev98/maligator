@@ -2152,6 +2152,78 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("carries IR-selected String.slice Number regions through lowering and wire", () => {
+		const source = `globalThis.parse = function parse(value) {
+			try {
+				return Number(value.slice(1));
+			} catch {
+				return -1;
+			}
+		};`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"string-slice-number-lowering.js",
+			parseScript(source, { strict: false }),
+		);
+		const lowered = compileSemanticProgramToVmDefinition(semantic);
+		const regions = lowered.functions.flatMap(
+			(fn) => fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			kind: "string-slice-number",
+			representation: "primitive-string-span-number",
+			sliceStart: 1,
+			license: {
+				genericTwin: "retained",
+				materialization: "none",
+				guard: {
+					dependencies: [{ kind: "epoch", family: "watched-methods" }],
+					obligations: ["fallback"],
+				},
+			},
+		});
+		expect(regions[0]!.controlFlow.exceptionalHandlerIps).not.toHaveLength(0);
+
+		const cached = deserializeVmDefinition(
+			serializeVmDefinition(lowered, { debugInfo: false }),
+		);
+		expect(
+			cached.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "string-slice-number") ?? [],
+			),
+		).toEqual(regions);
+		expect(emitVmDefinition(cached, { compiled: true })).toContain(
+			"mal_builtin_string_slice_to_number_direct(vm,",
+		);
+
+		const functionIndex = lowered.functions.findIndex((fn) =>
+			fn.regions?.some((region) => region.kind === "string-slice-number"),
+		);
+		const owner = lowered.functions[functionIndex]!;
+		const regionIndex = owner.regions!.findIndex(
+			(region) => region.kind === "string-slice-number",
+		);
+		const region = owner.regions![regionIndex]!;
+		if (region.kind !== "string-slice-number") {
+			throw new Error("missing String.slice Number region");
+		}
+		const malformed: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, {
+					...region,
+					sliceStart: Number.POSITIVE_INFINITY,
+				}),
+			}),
+		};
+		expect(() => serializeVmDefinition(malformed)).toThrow(
+			/invalid String\.slice Number region/,
+		);
+	});
+
 	it("carries IR-selected RegExp iterator projections through lowering and wire", () => {
 		const source = `globalThis.total = function total(value, regexp) {
 			let sum = 0;

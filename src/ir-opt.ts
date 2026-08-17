@@ -56,6 +56,7 @@ import {
 	destinationCount,
 	usedRegisters,
 } from "./ir-register-index.ts";
+import { annotateStringSliceNumberRegions } from "./ir-string-regions.ts";
 import { debugIntermediateProgram, getOrCreateStringConstant } from "./ir.ts";
 import type {
 	IntermediateProgram,
@@ -1642,6 +1643,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call && residualFeatures.property)
 			annotateRegExpIteratorProjectionRegions(program);
 		if (residualFeatures.call && residualFeatures.property)
+			annotateStringSliceNumberRegions(program);
+		if (residualFeatures.call && residualFeatures.property)
 			annotateNumericHofRegions(program);
 		if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
 			annotateClosedRecordArrayRegions(program);
@@ -1803,6 +1806,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"annotate-regexp-iterator-projections",
 			annotateRegExpIteratorProjectionRegions,
+			residualFeatures.call && residualFeatures.property,
+		);
+		runFinalPass(
+			"annotate-string-slice-number-regions",
+			annotateStringSliceNumberRegions,
 			residualFeatures.call && residualFeatures.property,
 		);
 		runFinalPass(

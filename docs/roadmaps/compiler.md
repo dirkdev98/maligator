@@ -465,7 +465,7 @@ is general rather than a registry-shaped collection of special cases.
         closed record-Array regions end to end. Validate common bounds, instruction
         ownership, disjoint claims, CFG scope and cost independently of the tagged
         payload in both TypeScript and the C wire loader.
-  - [ ] Migrate the remaining projection regions into the table, then delete their
+  - [x] Migrate the remaining projection regions into the table, then delete their
         instruction-owned anchors and dedicated wire tails.
     - [x] Move closed `String.prototype.split` projections into the shared table
           and delete their call-owned certificate plus emitter-only VM side table.
@@ -496,6 +496,11 @@ is general rather than a registry-shaped collection of special cases.
           MALW v52 persists exec capture consumers and the retained stateful call;
           v53 adds iterator brand/next/Realm guard obligations plus explicit handler
           scope for the retained iterator-step/materialization twin.
+    - [x] Move the exact String.slice-to-Number fusion into the common table and
+          delete its emitter-only VM side table and post-wire adjacency scan. Select
+          the property/slice/Number corridor in final IR with complete def/use,
+          canonical identity, disjoint ownership and ordinary/exceptional scope;
+          preserve the retained calls as the fallback twin through MALW v54.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
       be observed outside the region. Use the split control-flow phase to establish
