@@ -112,25 +112,22 @@ test("escape ablation preserves inline cost decisions but removes stack annotati
 
 	expect(residual.some((instruction) => instruction.type === "call")).toBe(true);
 	expect(
-		residual.some(
-			(instruction) =>
-				(instruction.type === "createObject" ||
-					instruction.type === "createObjectShaped") &&
-				instruction.stackObject === true,
+		program.functions.some((fn) =>
+			fn.regions?.some((region) => region.kind === "stack-object-plan"),
 		),
 	).toBe(false);
 	expect(
-		residual.some(
-			(instruction) =>
-				instruction.type === "return" &&
-				instruction.stackObjectMaterializeSiteId !== undefined,
+		program.functions.some((fn) =>
+			fn.regions?.some(
+				(region) =>
+					region.kind === "stack-object-plan" &&
+					region.sites.some((site) => site.materializations.length > 0),
+			),
 		),
 	).toBe(false);
 	expect(
-		program.optimizationTrace!.find(
-			(event) => event.pass === "clear-stack-object-annotations",
-		),
-	).toMatchObject({ status: "executed", changed: true });
+		program.optimizationTrace!.find((event) => event.pass === "clear-stack-object-plans"),
+	).toMatchObject({ status: "executed" });
 	expect(
 		program.optimizationTrace!.find((event) => event.pass === "annotate-stack-objects"),
 	).toMatchObject({ status: "ablated", ablation: "escape" });

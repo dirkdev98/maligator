@@ -563,6 +563,12 @@ is general rather than a registry-shaped collection of special cases.
         through IR, VM, MALW v63, cache rebasing and native emission as an explicit
         producer-consumer graph. Finite-object regions now depend on that graph
         instead of reconstructing selector ownership from instruction metadata.
+  - [x] Replace stack-object allocation, slot, inherited-read and return-materialize
+        instruction annotations with one function-level IR proof table. Keep
+        cardinality-owned records inside their owning composite certificate, use the
+        table directly for inlining diagnostics and lowering, and shard independent
+        sites into bounded VM regions through MALW v64. The wider 40-region VM cap
+        preserves the existing 256-site analysis ceiling without stale side links.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

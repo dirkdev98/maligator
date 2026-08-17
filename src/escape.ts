@@ -1014,6 +1014,20 @@ export function debugStackAlloc(program: IntermediateProgram): string {
 	for (const fn of program.functions) {
 		const ctx = analysis.contexts.get(fn.functionIndex)!;
 		const name = functionName(fn);
+		const stackSites = new Map<
+			IRInstruction,
+			{ readonly materializations: ReadonlyArray<unknown> }
+		>();
+		for (const region of fn.regions ?? []) {
+			if (region.kind === "stack-object-plan") {
+				for (const site of region.sites) stackSites.set(site.allocation, site);
+			} else if (
+				region.kind === "cardinality-array" &&
+				region.itemStackObjectProof === "closed-fixed-shape"
+			) {
+				stackSites.set(region.anchors[2], { materializations: [] });
+			}
+		}
 		let wroteFunction = false;
 		for (const block of fn.blocks) {
 			let position = -1;
@@ -1034,18 +1048,9 @@ export function debugStackAlloc(program: IntermediateProgram): string {
 				}
 				const source = sourceLocation(position);
 				const register = instruction.registers[0];
-				if (instruction.stackObject) {
-					const siteId = instruction.stackObjectSiteId;
-					const materializations = fn.blocks.reduce(
-						(sum, candidateBlock) =>
-							sum +
-							candidateBlock.instructions.filter(
-								(candidate) =>
-									candidate.type === "return" &&
-									candidate.stackObjectMaterializeSiteId === siteId,
-							).length,
-						0,
-					);
+				const stackSite = stackSites.get(instruction);
+				if (stackSite !== undefined) {
+					const materializations = stackSite.materializations.length;
 					const slots =
 						instruction.type === "createObjectShaped"
 							? instruction.keyStringIndices.length

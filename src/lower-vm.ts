@@ -1916,22 +1916,6 @@ function lowerFunctionToVmFunction(
 	const handlers: Array<VmExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
-	const stackObjectSites: Array<{ instructionIndex: number; slotCount: number }> = [];
-	const stackObjectSiteInstructionById = new Map<number, number>();
-	const pendingStackObjectMaterializations: Array<{
-		returnInstructionIndex: number;
-		siteId: number;
-	}> = [];
-	const pendingStackObjectAccesses: Array<{
-		instructionIndex: number;
-		siteId: number;
-		slot: number;
-	}> = [];
-	const pendingStackObjectInheritedAccesses: Array<{
-		instructionIndex: number;
-		siteId: number;
-		guard: CompilerGuardPlan;
-	}> = [];
 	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
 	const pendingNativeMathCalls: Array<{
 		receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
@@ -1988,130 +1972,28 @@ function lowerFunctionToVmFunction(
 					call: vmInstruction,
 				});
 			}
-			if (
-				(instruction.type === "createObject" ||
-					instruction.type === "createObjectShaped") &&
-				instruction.stackObject
-			) {
-				stackObjectSites.push({
-					instructionIndex,
-					slotCount:
-						instruction.type === "createObjectShaped"
-							? instruction.keyStringIndices.length
-							: 0,
-				});
-				if (instruction.stackObjectSiteId !== undefined) {
-					if (stackObjectSiteInstructionById.has(instruction.stackObjectSiteId)) {
-						throw new Error(
-							`Duplicate stack-object site id ${instruction.stackObjectSiteId}`,
-						);
-					}
-					stackObjectSiteInstructionById.set(
-						instruction.stackObjectSiteId,
-						instructionIndex,
-					);
-				}
-			}
-			if (
-				instruction.type === "return" &&
-				instruction.stackObjectMaterializeSiteId !== undefined
-			) {
-				pendingStackObjectMaterializations.push({
-					returnInstructionIndex: instructionIndex,
-					siteId: instruction.stackObjectMaterializeSiteId,
-				});
-			}
-			if (
-				(instruction.type === "loadProperty" ||
-					instruction.type === "loadPropertyStatic" ||
-					instruction.type === "storeProperty" ||
-					instruction.type === "storePropertyStatic") &&
-				instruction.stackObjectSiteId !== undefined &&
-				instruction.stackObjectSlot !== undefined
-			) {
-				pendingStackObjectAccesses.push({
-					instructionIndex,
-					siteId: instruction.stackObjectSiteId,
-					slot: instruction.stackObjectSlot,
-				});
-			}
-			if (
-				(instruction.type === "loadProperty" ||
-					instruction.type === "loadPropertyStatic") &&
-				instruction.stackObjectInheritedSiteId !== undefined
-			) {
-				if (instruction.stackObjectInheritedGuard === undefined) {
-					throw new Error("Inherited stack-object access lacks a guard plan");
-				}
-				pendingStackObjectInheritedAccesses.push({
-					instructionIndex,
-					siteId: instruction.stackObjectInheritedSiteId,
-					guard: instruction.stackObjectInheritedGuard,
-				});
-			}
 			positions.push(currentPos);
 		}
 	}
 	if (openExceptionRanges.length > 0) {
 		throw new Error("Unbalanced try marker at end of function");
 	}
-	const stackObjectMaterializations = pendingStackObjectMaterializations.map(
-		({ returnInstructionIndex, siteId }) => {
-			const allocationInstructionIndex = stackObjectSiteInstructionById.get(siteId);
-			if (allocationInstructionIndex === undefined) {
-				throw new Error(`Unknown stack-object materialization site id ${siteId}`);
-			}
-			return { returnInstructionIndex, allocationInstructionIndex };
-		},
-	);
-	const stackObjectAccesses = pendingStackObjectAccesses.map(
-		({ instructionIndex, siteId, slot }) => {
-			const allocationInstructionIndex = stackObjectSiteInstructionById.get(siteId);
-			if (allocationInstructionIndex === undefined) {
-				throw new Error(`Unknown stack-object access site id ${siteId}`);
-			}
-			return { instructionIndex, allocationInstructionIndex, slot };
-		},
-	);
-	const stackObjectInheritedAccesses = pendingStackObjectInheritedAccesses.map(
-		({ instructionIndex, siteId, guard: compilerGuard }) => {
-			const allocationInstructionIndex = stackObjectSiteInstructionById.get(siteId);
-			if (allocationInstructionIndex === undefined) {
-				throw new Error(`Unknown inherited stack-object site id ${siteId}`);
-			}
-			const guard = lowerGuardPlan(compilerGuard);
-			if (
-				guard === undefined ||
-				!guard.obligations.includes("fallback") ||
-				!guard.obligations.includes("materialize")
-			) {
-				throw new Error("Inherited stack-object access has an invalid guard plan");
-			}
-			return { instructionIndex, allocationInstructionIndex, guard };
-		},
-	);
 	const regions: Array<VmRegion> = [];
 	const claimedRegionInstructions = new Set<number>();
-	// A failed composite certificate must leave its record argument on the heap.
-	// Exclude every IR cardinality candidate from independent stack planning even
-	// when the region table or its payload is rejected below.
-	const cardinalityItemAllocationIps = new Set<number>();
 	const finiteSelectorByAccess = new Map<
 		IRInstruction,
 		Extract<IRRegion, { kind: "finite-property-selector" }>["selectors"][number]
 	>();
 	for (const region of fn.regions ?? []) {
-		if (region.kind === "cardinality-array") {
-			const itemIp = instructionIndexByIrInstruction.get(region.anchors[2]);
-			if (itemIp !== undefined) cardinalityItemAllocationIps.add(itemIp);
-		} else if (region.kind === "finite-property-selector") {
+		if (region.kind === "finite-property-selector") {
 			for (const selector of region.selectors) {
 				for (const access of selector.accesses)
 					finiteSelectorByAccess.set(access, selector);
 			}
 		}
 	}
-	const irRegions = (fn.regions?.length ?? 0) <= 8 ? (fn.regions ?? []) : [];
+	// Eight specialized regions plus one aggregate stack-object proof table.
+	const irRegions = (fn.regions?.length ?? 0) <= 9 ? (fn.regions ?? []) : [];
 	for (const region of irRegions) {
 		if (region.kind === "finite-property-selector") {
 			const anchors = region.anchors.map((instruction) =>
@@ -2502,6 +2384,167 @@ function lowerFunctionToVmFunction(
 			}
 			continue;
 		}
+		if (region.kind === "stack-object-plan") {
+			const guard =
+				region.license.guard.dependencies.length === 0
+					? {
+							dependencies: [] as Array<VmSemanticDependency>,
+							obligations: [
+								...new Set(
+									region.license.guard.obligations.map(
+										(obligation): VmGuardObligation => obligation.kind,
+									),
+								),
+							],
+						}
+					: lowerGuardPlan(region.license.guard);
+			const aggregateClaims = region.claimedInstructions.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const resolvedSites: Array<VmStackObjectPlanRegion["sites"][number]> = [];
+			const payloadIps: Array<number> = [];
+			let valid =
+				guard !== undefined &&
+				guard.obligations.includes("fallback") &&
+				guard.obligations.includes("materialize") &&
+				region.license.genericTwin === "retained" &&
+				region.license.materialization === "on-demand" &&
+				region.representation === "activation-local-fixed-shape-objects" &&
+				region.sites.length > 0 &&
+				region.sites.length <= 256 &&
+				region.anchors.length === 1 &&
+				region.anchors[0] === region.sites[0]!.allocation &&
+				region.controlFlow.exceptionalBlocks.length === 0 &&
+				aggregateClaims.every((ip) => ip !== undefined);
+			for (const site of region.sites) {
+				const allocationIp = instructionIndexByIrInstruction.get(site.allocation);
+				const allocation =
+					allocationIp === undefined ? undefined : instructions[allocationIp];
+				const accesses = site.accesses.map((access) => ({
+					ip: instructionIndexByIrInstruction.get(access.instruction),
+					slot: access.slot,
+				}));
+				const inheritedAccessIp =
+					site.inheritedAccess === undefined
+						? undefined
+						: instructionIndexByIrInstruction.get(site.inheritedAccess);
+				const materializations = site.materializations.map((materialization) => ({
+					ip: instructionIndexByIrInstruction.get(materialization.instruction),
+					kind: materialization.kind,
+				}));
+				if (
+					allocationIp === undefined ||
+					(allocation?.opcode !== "CREATE_OBJECT" &&
+						allocation?.opcode !== "CREATE_OBJECT_SHAPED") ||
+					(allocation.opcode === "CREATE_OBJECT"
+						? site.slotCount !== 0
+						: allocation.count !== site.slotCount) ||
+					accesses.some(
+						(access) =>
+							access.ip === undefined ||
+							access.slot < 0 ||
+							access.slot >= site.slotCount ||
+							(instructions[access.ip]?.opcode !== "LOAD_PROPERTY_STATIC" &&
+								instructions[access.ip]?.opcode !== "STORE_PROPERTY_STATIC"),
+					) ||
+					(site.inheritedAccess !== undefined &&
+						(inheritedAccessIp === undefined ||
+							instructions[inheritedAccessIp]?.opcode !== "LOAD_PROPERTY_STATIC")) ||
+					materializations.some(
+						(materialization) =>
+							materialization.ip === undefined ||
+							materialization.kind !== "return" ||
+							instructions[materialization.ip]?.opcode !== "RETURN",
+					)
+				) {
+					valid = false;
+					break;
+				}
+				const resolvedAccesses = accesses as Array<{ ip: number; slot: number }>;
+				const resolvedMaterializations = materializations as Array<{
+					ip: number;
+					kind: "return";
+				}>;
+				const sitePayload = [
+					allocationIp,
+					...resolvedAccesses.map((access) => access.ip),
+					...(inheritedAccessIp === undefined ? [] : [inheritedAccessIp]),
+					...resolvedMaterializations.map((materialization) => materialization.ip),
+				];
+				if (new Set(sitePayload).size !== sitePayload.length || sitePayload.length > 64) {
+					valid = false;
+					break;
+				}
+				payloadIps.push(...sitePayload);
+				resolvedSites.push({
+					allocationIp,
+					slotCount: site.slotCount,
+					accesses: resolvedAccesses,
+					...(inheritedAccessIp === undefined ? {} : { inheritedAccessIp }),
+					materializations: resolvedMaterializations,
+				});
+			}
+			const resolvedAggregateClaims = aggregateClaims as Array<number>;
+			if (
+				!valid ||
+				new Set(payloadIps).size !== payloadIps.length ||
+				new Set(resolvedAggregateClaims).size !== resolvedAggregateClaims.length ||
+				payloadIps.length !== resolvedAggregateClaims.length ||
+				payloadIps.some((ip) => !resolvedAggregateClaims.includes(ip)) ||
+				payloadIps.some((ip) => claimedRegionInstructions.has(ip)) ||
+				region.cost.metadataOperations !== payloadIps.length ||
+				region.cost.score !==
+					region.sites.reduce((total, site) => total + Math.max(1, site.slotCount), 0)
+			) {
+				continue;
+			}
+			const shards: Array<Array<VmStackObjectPlanRegion["sites"][number]>> = [];
+			let shard: Array<VmStackObjectPlanRegion["sites"][number]> = [];
+			let shardClaimCount = 0;
+			for (const site of resolvedSites) {
+				const claimCount =
+					1 +
+					site.accesses.length +
+					(site.inheritedAccessIp === undefined ? 0 : 1) +
+					site.materializations.length;
+				if (shard.length >= 8 || shardClaimCount + claimCount > 64) {
+					shards.push(shard);
+					shard = [];
+					shardClaimCount = 0;
+				}
+				shard.push(site);
+				shardClaimCount += claimCount;
+			}
+			if (shard.length > 0) shards.push(shard);
+			if (shards.length > 32 || regions.length + shards.length > 40) continue;
+			for (const sites of shards) {
+				const claimedIps = sites.flatMap((site) => [
+					site.allocationIp,
+					...site.accesses.map((access) => access.ip),
+					...(site.inheritedAccessIp === undefined ? [] : [site.inheritedAccessIp]),
+					...site.materializations.map((materialization) => materialization.ip),
+				]);
+				for (const ip of claimedIps) claimedRegionInstructions.add(ip);
+				regions.push({
+					kind: "stack-object-plan",
+					license: {
+						guard: guard!,
+						genericTwin: "retained",
+						materialization: "on-demand",
+					},
+					representation: "activation-local-fixed-shape-objects",
+					anchors: sites.map((site) => site.allocationIp),
+					claimedIps,
+					controlFlow: { ordinaryBlockIps: claimedIps, exceptionalHandlerIps: [] },
+					cost: {
+						score: sites.reduce((total, site) => total + Math.max(1, site.slotCount), 0),
+						metadataOperations: claimedIps.length,
+					},
+					sites,
+				});
+			}
+			continue;
+		}
 		const guard = lowerGuardPlan(region.license.guard);
 		const anchors = region.anchors.map((instruction) =>
 			instructionIndexByIrInstruction.get(instruction),
@@ -2622,6 +2665,7 @@ function lowerFunctionToVmFunction(
 					itemAllocationIp!,
 					...resolvedAccesses.map((access) => access.ip),
 				];
+				const itemProofIps = resolvedClaimedIps.filter((ip) => !payloadIps.includes(ip));
 				if (
 					allocation?.opcode !== "CREATE_ARRAY" ||
 					allocation.length !== 0 ||
@@ -2630,7 +2674,7 @@ function lowerFunctionToVmFunction(
 					argument?.kind !== "register" ||
 					item?.opcode !== "CREATE_OBJECT_SHAPED" ||
 					argument.register !== item.dst ||
-					region.anchors[2].stackObject !== true ||
+					region.itemStackObjectProof !== "closed-fixed-shape" ||
 					item.count <= 0 ||
 					item.count > 8 ||
 					!Number.isSafeInteger(region.maximumLength) ||
@@ -2661,10 +2705,18 @@ function lowerFunctionToVmFunction(
 						return access.fieldSlot !== undefined;
 					}) ||
 					new Set(payloadIps).size !== payloadIps.length ||
-					payloadIps.length !== resolvedClaimedIps.length ||
+					new Set(resolvedClaimedIps).size !== resolvedClaimedIps.length ||
 					payloadIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
+					itemProofIps.some((ip) => {
+						const instruction = instructions[ip];
+						return (
+							(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+								instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+							instruction.object !== item.dst
+						);
+					}) ||
 					region.cost.score !== region.maximumLength * item.count ||
-					region.cost.metadataOperations !== payloadIps.length
+					region.cost.metadataOperations !== resolvedClaimedIps.length
 				) {
 					continue;
 				}
@@ -3748,113 +3800,6 @@ function lowerFunctionToVmFunction(
 			}
 		}
 	}
-	const stackPlanCandidates = stackObjectSites
-		.filter((site) => !cardinalityItemAllocationIps.has(site.instructionIndex))
-		.map((site) => {
-			const accesses = stackObjectAccesses
-				.filter((access) => access.allocationInstructionIndex === site.instructionIndex)
-				.map((access) => ({ ip: access.instructionIndex, slot: access.slot }));
-			const inherited = stackObjectInheritedAccesses.filter(
-				(access) => access.allocationInstructionIndex === site.instructionIndex,
-			);
-			if (inherited.length > 1) {
-				throw new Error(
-					`Stack-object site ${site.instructionIndex} has multiple inherited loads`,
-				);
-			}
-			const materializations: Array<{
-				ip: number;
-				kind: "return";
-			}> = stackObjectMaterializations
-				.filter(
-					(materialization) =>
-						materialization.allocationInstructionIndex === site.instructionIndex,
-				)
-				.map((materialization) => ({
-					ip: materialization.returnInstructionIndex,
-					kind: "return" as const,
-				}));
-			const claimedIps = [
-				site.instructionIndex,
-				...accesses.map((access) => access.ip),
-				...(inherited[0] === undefined ? [] : [inherited[0].instructionIndex]),
-				...materializations.map((materialization) => materialization.ip),
-			];
-			return {
-				site: {
-					allocationIp: site.instructionIndex,
-					slotCount: site.slotCount,
-					accesses,
-					...(inherited[0] === undefined
-						? {}
-						: { inheritedAccessIp: inherited[0].instructionIndex }),
-					materializations,
-				},
-				guard: inherited[0]?.guard,
-				claimedIps,
-			};
-		});
-	let pendingStackPlanSites: Array<(typeof stackPlanCandidates)[number]["site"]> = [];
-	let pendingStackPlanGuards: Array<VmGuardPlan> = [];
-	let pendingStackPlanClaims: Array<number> = [];
-	const flushStackPlan = (): void => {
-		if (pendingStackPlanSites.length === 0 || regions.length >= 8) return;
-		const license =
-			pendingStackPlanGuards.length === 0
-				? {
-						guard: {
-							dependencies: [],
-							obligations: ["fallback", "materialize"] as const,
-						},
-						genericTwin: "retained" as const,
-						materialization: "on-demand" as const,
-					}
-				: vmRegionLicense(pendingStackPlanGuards, "on-demand");
-		if (license !== undefined && license.materialization === "on-demand") {
-			const claimedIps = [...new Set(pendingStackPlanClaims)].sort(
-				(left, right) => left - right,
-			);
-			for (const ip of claimedIps) claimedRegionInstructions.add(ip);
-			regions.push({
-				kind: "stack-object-plan",
-				license: { ...license, materialization: "on-demand" },
-				representation: "activation-local-fixed-shape-objects",
-				anchors: pendingStackPlanSites.map((site) => site.allocationIp),
-				claimedIps,
-				controlFlow: { ordinaryBlockIps: claimedIps, exceptionalHandlerIps: [] },
-				cost: {
-					score: pendingStackPlanSites.reduce(
-						(total, site) => total + Math.max(1, site.slotCount),
-						0,
-					),
-					metadataOperations: claimedIps.length,
-				},
-				sites: pendingStackPlanSites,
-			});
-		}
-		pendingStackPlanSites = [];
-		pendingStackPlanGuards = [];
-		pendingStackPlanClaims = [];
-	};
-	for (const candidate of stackPlanCandidates) {
-		const uniqueClaims = [...new Set(candidate.claimedIps)];
-		if (
-			uniqueClaims.length === 0 ||
-			uniqueClaims.length > 64 ||
-			uniqueClaims.some((ip) => claimedRegionInstructions.has(ip))
-		) {
-			continue;
-		}
-		const combinedClaims = new Set([...pendingStackPlanClaims, ...uniqueClaims]);
-		if (pendingStackPlanSites.length >= 8 || combinedClaims.size > 64) {
-			flushStackPlan();
-		}
-		if (regions.length >= 8) break;
-		pendingStackPlanSites.push(candidate.site);
-		if (candidate.guard !== undefined) pendingStackPlanGuards.push(candidate.guard);
-		pendingStackPlanClaims.push(...uniqueClaims);
-	}
-	flushStackPlan();
 	for (const pending of pendingNativeMathCalls) {
 		const receiverIp = instructionIndexByIrInstruction.get(pending.receiver);
 		const propertyIp = instructionIndexByIrInstruction.get(pending.property);

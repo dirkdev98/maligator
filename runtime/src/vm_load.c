@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 63u        // finite-property selector regions
+#define WIRE_VERSION 64u        // IR-owned stack-object plans and bounded sharding
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1809,8 +1809,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
         }
 
         u32 compiler_region_count = rd_count(&r, 17);
-        if (compiler_region_count > 8) r.ok = false;
-        i32 claimed_region_ips[768];
+        if (compiler_region_count > 40) r.ok = false;
+        i32 claimed_region_ips[3840];
         u32 claimed_region_count = 0;
         for (u32 region = 0; r.ok && region < compiler_region_count; region++) {
             const MalFunction *fn = &functions[i];
@@ -3285,6 +3285,24 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 						r.ok = false;
 					}
 					if (role == 1) push_access_count++;
+					MAL_REGION_PAYLOAD_REFERENCE(ip);
+				}
+				for (u32 claim = 0; r.ok && claim < claim_count; claim++) {
+					i32 ip = claims[claim];
+					bool recorded = false;
+					for (u32 payload = 0; payload < payload_count; payload++) {
+						if (payload_ips[payload] == ip) recorded = true;
+					}
+					if (recorded) continue;
+					const MalInstruction *instruction = &fn->instructions[ip];
+					i32 item_dst = fn->instructions[item_allocation_ip]
+						.as.create_object_shaped.dst;
+					if ((instruction->opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
+						 instruction->as.load_property_static.object != item_dst) &&
+						(instruction->opcode != MAL_OP_STORE_PROPERTY_STATIC ||
+						 instruction->as.store_property_static.object != item_dst)) {
+						r.ok = false;
+					}
 					MAL_REGION_PAYLOAD_REFERENCE(ip);
 				}
 				if (push_access_count != 1 || metadata_operations != payload_count) r.ok = false;

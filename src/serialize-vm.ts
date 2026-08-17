@@ -37,15 +37,15 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped for finite-property selector regions.
-export const WIRE_VERSION = 63;
+// Bumped for IR-owned stack-object plans and their wider bounded VM sharding table.
+export const WIRE_VERSION = 64;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
 const NUMERIC_HOF_BINOPS = ["+", "-", "*", "/", "%"] as const;
 const MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS = 64;
 const MAX_CLOSED_RECORD_SHAPE_SLOTS = 64;
-const MAX_REGIONS = 8;
+const MAX_REGIONS = 40;
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
 const MAX_REGION_ORDINARY_BLOCKS = 64;
@@ -2372,11 +2372,19 @@ function validateCardinalityArrayRegion(
 		if (access.role === "push") pushAccesses++;
 		payload.add(access.ip);
 	}
+	const itemProofIps = region.claimedIps.filter((ip) => !payload.has(ip));
 	if (
 		pushAccesses !== 1 ||
-		region.cost.metadataOperations !== payload.size ||
-		payload.size !== region.claimedIps.length ||
-		region.claimedIps.some((ip) => !payload.has(ip))
+		region.cost.metadataOperations !== region.claimedIps.length ||
+		[...payload].some((ip) => !region.claimedIps.includes(ip)) ||
+		itemProofIps.some((ip) => {
+			const instruction = fn.instructions[ip];
+			return (
+				(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+				instruction.object !== (item?.opcode === "CREATE_OBJECT_SHAPED" ? item.dst : -1)
+			);
+		})
 	) {
 		valid = false;
 	}

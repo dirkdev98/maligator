@@ -69,6 +69,7 @@ import type {
 	IRInstruction,
 	IRNumericFusionRegion,
 	IRNumericHofRegion,
+	IRStackObjectPlanRegion,
 	IRStringSplitCursor,
 	IRStringSplitProjectionRegion,
 	IRTypeofResult,
@@ -1511,6 +1512,17 @@ export function executeIROptimizations(
 			requires: "call",
 			ablation: "inlining",
 		},
+		// The table above is an analysis snapshot for inlining only. Drop it before
+		// transformations mutate instruction identity; final selection rebuilds the
+		// stable residual plan after the fixpoint.
+		{
+			name: "clear-stack-object-inline-analysis",
+			run: (program) => {
+				clearStackObjectPlans(program);
+				return false;
+			},
+			requires: "object",
+		},
 		// Runs after copy propagation so a record's reads reference its allocation
 		// register directly (not a local copy), and before DCE so the freed key
 		// constants and unread values are cleaned up the same round.
@@ -1621,6 +1633,7 @@ export function executeIROptimizations(
 		if (residualFeatures.object) annotateStackObjectSites(program);
 		if (residualFeatures.object && residualFeatures.property)
 			annotateClosedGlobalFiniteTables(program);
+		clearStackObjectPlans(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateDirectStringCharCodeAtSites(program);
 		if (residualFeatures.call && residualFeatures.property)
@@ -1662,6 +1675,7 @@ export function executeIROptimizations(
 			annotateStringSplitCursorRegions(program);
 		annotateFiniteStringConcats(program);
 		annotateNativeNumericFusions(program);
+		if (residualFeatures.object) annotateStackObjectSites(program);
 		annotateTerminalYieldSites(program);
 	} else {
 		const runFinalPass = (
@@ -1719,12 +1733,12 @@ export function executeIROptimizations(
 			residualFeatures.call && residualFeatures.property && residualFeatures.object,
 		);
 		runFinalPass(
-			"clear-stack-object-annotations",
-			clearStackObjectAnnotations,
+			"clear-stack-object-plans",
+			clearStackObjectPlans,
 			ablations?.has("escape") === true,
 		);
 		runFinalPass(
-			"annotate-stack-objects",
+			"analyze-stack-objects-for-closed-global",
 			annotateStackObjectSites,
 			residualFeatures.object,
 			"escape",
@@ -1734,6 +1748,7 @@ export function executeIROptimizations(
 			annotateClosedGlobalFiniteTables,
 			residualFeatures.object && residualFeatures.property,
 		);
+		runFinalPass("clear-stack-object-preselection", clearStackObjectPlans);
 		runFinalPass(
 			"annotate-direct-string-char-code-at",
 			annotateDirectStringCharCodeAtSites,
@@ -1840,6 +1855,12 @@ export function executeIROptimizations(
 		);
 		runFinalPass("annotate-finite-string-concats", annotateFiniteStringConcats);
 		runFinalPass("annotate-native-numeric-fusions", annotateNativeNumericFusions);
+		runFinalPass(
+			"annotate-stack-objects",
+			annotateStackObjectSites,
+			residualFeatures.object,
+			"escape",
+		);
 		runFinalPass("annotate-terminal-yield-sites", annotateTerminalYieldSites);
 	}
 
@@ -2971,6 +2992,14 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 			.filter((region) => region.composition !== "overlay")
 			.flatMap((region) => [...region.claimedInstructions]),
 	);
+	const stackObjectAllocations = new Set(
+		retainedRegions
+			.filter(
+				(region): region is IRStackObjectPlanRegion =>
+					region.kind === "stack-object-plan",
+			)
+			.flatMap((region) => region.sites.map((site) => site.allocation)),
+	);
 	const selectedAllocations = new Set<IRInstruction>();
 	const incoming = fn.blocks.map(() => new Set<number>());
 	const successors = fn.blocks.map((block, blockIndex) => {
@@ -3134,7 +3163,7 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 			const allocation = index.uniqueDefinitions.get(rootRegister);
 			if (
 				allocation?.type !== "createObject" ||
-				allocation.stackObject ||
+				stackObjectAllocations.has(allocation) ||
 				selectedAllocations.has(allocation)
 			) {
 				continue;
@@ -4339,17 +4368,11 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 								type: "loadPropertyStatic",
 								registers: [instruction.registers[0], instruction.registers[1]],
 								stringIndex: key.stringIndex,
-								stackObjectSiteId: instruction.stackObjectSiteId,
-								stackObjectSlot: instruction.stackObjectSlot,
-								stackObjectInheritedSiteId: instruction.stackObjectInheritedSiteId,
-								stackObjectInheritedGuard: instruction.stackObjectInheritedGuard,
 							}
 						: {
 								type: "storePropertyStatic",
 								registers: [instruction.registers[0], instruction.registers[2]],
 								stringIndex: key.stringIndex,
-								stackObjectSiteId: instruction.stackObjectSiteId,
-								stackObjectSlot: instruction.stackObjectSlot,
 							};
 				replacements.push({ block, index: i, instruction: replacement });
 			}
@@ -4975,6 +4998,14 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 	const stores = new Map<number, Array<CandidateStore>>();
 	const invalidGlobals = new Set<number>();
 	for (const fn of program.functions) {
+		const stackObjectAllocations = new Set(
+			(fn.regions ?? [])
+				.filter(
+					(region): region is IRStackObjectPlanRegion =>
+						region.kind === "stack-object-plan",
+				)
+				.flatMap((region) => region.sites.map((site) => site.allocation)),
+		);
 		const finiteConstructionAllocations = new Set(
 			(fn.regions ?? [])
 				.filter(
@@ -4990,7 +5021,7 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 				if (root?.type === "createEmpty") continue;
 				if (
 					root?.type !== "createObject" ||
-					root.stackObject ||
+					stackObjectAllocations.has(root) ||
 					finiteConstructionAllocations.has(root)
 				) {
 					invalidGlobals.add(instruction.index);
@@ -5147,58 +5178,80 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
  * enumeration, delete, and suspension-related operation. A direct return may be
  * accepted by the partial-escape subset below when another ordinary exit remains.
  */
-function clearStackObjectAnnotations(program: IntermediateProgram): boolean {
+function clearStackObjectPlans(program: IntermediateProgram): boolean {
 	let changed = false;
 	for (const fn of program.functions) {
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (instruction.type === "return") {
-					changed ||= instruction.stackObjectMaterializeSiteId !== undefined;
-					delete instruction.stackObjectMaterializeSiteId;
-				}
+		const retained = (fn.regions ?? [])
+			.filter((region) => region.kind !== "stack-object-plan")
+			.map((region) => {
 				if (
-					instruction.type === "createObject" ||
-					instruction.type === "createObjectShaped"
+					region.kind !== "cardinality-array" ||
+					region.itemStackObjectProof === undefined
 				) {
-					changed ||=
-						instruction.stackObject !== undefined ||
-						instruction.stackObjectSiteId !== undefined;
-					delete instruction.stackObject;
-					delete instruction.stackObjectSiteId;
+					return region;
 				}
-				if (
-					instruction.type === "loadProperty" ||
-					instruction.type === "loadPropertyStatic" ||
-					instruction.type === "storeProperty" ||
-					instruction.type === "storePropertyStatic"
-				) {
-					changed ||=
-						instruction.stackObjectSiteId !== undefined ||
-						instruction.stackObjectSlot !== undefined;
-					delete instruction.stackObjectSiteId;
-					delete instruction.stackObjectSlot;
-					if (
-						instruction.type === "loadProperty" ||
-						instruction.type === "loadPropertyStatic"
-					) {
-						changed ||= instruction.stackObjectInheritedSiteId !== undefined;
-						delete instruction.stackObjectInheritedSiteId;
-						delete instruction.stackObjectInheritedGuard;
-					}
-				}
-			}
-		}
+				const { itemStackObjectProof: _removed, ...withoutStackProof } = region;
+				return withoutStackProof;
+			});
+		changed ||=
+			retained.length !== (fn.regions?.length ?? 0) ||
+			retained.some((region, index) => region !== fn.regions?.[index]);
+		fn.regions = retained.length > 0 ? retained : undefined;
 	}
 	return changed;
 }
 
 export function annotateStackObjectSites(program: IntermediateProgram): void {
-	clearStackObjectAnnotations(program);
+	clearStackObjectPlans(program);
 	for (const fn of program.functions) {
 		// Slots stay rooted for the full activation. Bound their aggregate C-stack
 		// and root-scan cost; later sites simply retain ordinary heap allocation.
 		const maxStackObjectSlots = 256;
+		const maxStackObjectSites = 256;
+		const maxStackObjectShards = 32;
 		let stackObjectSlots = 0;
+		let stackObjectShards = 0;
+		let pendingShardSites = 0;
+		let pendingShardClaims = 0;
+		const occupiedInstructions = new Set(
+			(fn.regions ?? [])
+				.filter((region) => region.composition !== "overlay")
+				.flatMap((region) => [...region.claimedInstructions]),
+		);
+		const cardinalityByItem = new Map(
+			(fn.regions ?? [])
+				.filter(
+					(region): region is IRCardinalityArrayRegion =>
+						region.kind === "cardinality-array",
+				)
+				.map((region) => [region.anchors[2], region] as const),
+		);
+		const provenCardinalityRegions = new Map<
+			IRCardinalityArrayRegion,
+			ReadonlyArray<IRInstruction>
+		>();
+		const selectedSites: Array<
+			IRStackObjectPlanRegion["sites"][number] & {
+				readonly guard?: CompilerGuardPlan;
+				readonly claims: ReadonlyArray<IRInstruction>;
+			}
+		> = [];
+		const reserveShard = (claimCount: number): boolean => {
+			if (claimCount <= 0 || claimCount > 64) return false;
+			if (
+				pendingShardSites === 0 ||
+				pendingShardSites >= 8 ||
+				pendingShardClaims + claimCount > 64
+			) {
+				if (stackObjectShards >= maxStackObjectShards) return false;
+				stackObjectShards++;
+				pendingShardSites = 0;
+				pendingShardClaims = 0;
+			}
+			pendingShardSites++;
+			pendingShardClaims += claimCount;
+			return true;
+		};
 
 		if (
 			fn.isGenerator ||
@@ -5303,7 +5356,6 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 		}
 		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
 		const instructionLocations = registerIndex.locations!;
-		let nextStackObjectSiteId = 0;
 
 		const defCount = new Map<number, number>();
 		for (const [register, definitions] of registerIndex.definitions) {
@@ -5311,14 +5363,6 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 		}
 		const singleDef = registerIndex.uniqueDefinitions;
 		const usesOf = registerIndex.uses;
-		const cardinalityItemByPush = new Map<IRInstruction, IRInstruction>(
-			(fn.regions ?? [])
-				.filter(
-					(region): region is IRCardinalityArrayRegion =>
-						region.kind === "cardinality-array",
-				)
-				.map((region) => [region.anchors[1], region.anchors[2]]),
-		);
 
 		const constantString = (register: number): number | undefined => {
 			const definition = singleDef.get(register);
@@ -5333,6 +5377,13 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				) {
 					continue;
 				}
+				if (selectedSites.length >= maxStackObjectSites) {
+					continue;
+				}
+				const cardinalityOwner =
+					allocation.type === "createObjectShaped"
+						? cardinalityByItem.get(allocation)
+						: undefined;
 				const objectRegister = allocation.registers[0];
 				if (
 					defCount.get(objectRegister) !== 1 ||
@@ -5363,7 +5414,6 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				const materializingReturns = new Set<
 					Extract<IRInstruction, { type: "return" }>
 				>();
-				const materializingCalls = new Set<Extract<IRInstruction, { type: "call" }>>();
 				let inheritedLoad:
 					| Extract<IRInstruction, { type: "loadProperty" | "loadPropertyStatic" }>
 					| undefined;
@@ -5471,13 +5521,13 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 								break;
 							case "call":
 								if (
+									cardinalityOwner === undefined ||
+									use !== cardinalityOwner.anchors[1] ||
 									position !== 3 ||
-									use.registers.length !== 4 ||
-									cardinalityItemByPush.get(use) !== allocation
+									use.registers.length !== 4
 								) {
 									safe = false;
 								} else {
-									materializingCalls.add(use);
 									observed = true;
 								}
 								break;
@@ -5614,11 +5664,11 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 						[
 							{
 								kind: "fallback",
-								id: `heap-stack-object:${nextStackObjectSiteId}`,
+								id: `heap-stack-object:${selectedSites.length}`,
 							},
 							{
 								kind: "materialize",
-								id: `stack-object-inherited:${nextStackObjectSiteId}`,
+								id: `stack-object-inherited:${selectedSites.length}`,
 							},
 						],
 					);
@@ -5630,28 +5680,138 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 					(observed || partialEscape) &&
 					stackObjectSlots + keyStringIndices.length <= maxStackObjectSlots
 				) {
-					const siteId = nextStackObjectSiteId++;
-					allocation.stackObject = true;
-					allocation.stackObjectSiteId = siteId;
-					for (const [instruction, slot] of stackAccesses) {
-						instruction.stackObjectSiteId = siteId;
-						instruction.stackObjectSlot = slot;
-					}
-					if (partialEscape) {
-						for (const instruction of materializingReturns) {
-							instruction.stackObjectMaterializeSiteId = siteId;
+					const accesses = [...stackAccesses].map(([instruction, slot]) => ({
+						instruction,
+						slot,
+					}));
+					const materializations = partialEscape
+						? [...materializingReturns].map((instruction) => ({
+								instruction,
+								kind: "return" as const,
+							}))
+						: [];
+					const claims: Array<IRInstruction> = [
+						allocation,
+						...accesses.map((access) => access.instruction),
+						...(inheritedLoad === undefined ? [] : [inheritedLoad]),
+						...materializations.map((materialization) => materialization.instruction),
+					];
+					if (cardinalityOwner !== undefined) {
+						if (inheritedLoad === undefined && !partialEscape && claims.length <= 64) {
+							provenCardinalityRegions.set(cardinalityOwner, claims);
 						}
+						continue;
 					}
-					if (inheritedLoad !== undefined) {
-						if (inheritedGuard === undefined) {
-							throw new Error("Inherited stack-object load lacks a guard plan");
-						}
-						inheritedLoad.stackObjectInheritedSiteId = siteId;
-						inheritedLoad.stackObjectInheritedGuard = inheritedGuard;
+					if (
+						new Set(claims).size !== claims.length ||
+						claims.some((instruction) => occupiedInstructions.has(instruction)) ||
+						!reserveShard(claims.length)
+					) {
+						continue;
 					}
+					selectedSites.push({
+						allocation,
+						slotCount: keyStringIndices.length,
+						accesses,
+						...(inheritedLoad === undefined ? {} : { inheritedAccess: inheritedLoad }),
+						materializations,
+						...(inheritedGuard === undefined ? {} : { guard: inheritedGuard }),
+						claims,
+					});
+					for (const instruction of claims) occupiedInstructions.add(instruction);
 					stackObjectSlots += keyStringIndices.length;
 				}
 			}
+		}
+		if (provenCardinalityRegions.size > 0) {
+			fn.regions = fn.regions?.map((region) => {
+				if (region.kind !== "cardinality-array") return region;
+				const proofClaims = provenCardinalityRegions.get(region);
+				if (proofClaims === undefined) return region;
+				const claimedInstructions = [
+					...new Set([...region.claimedInstructions, ...proofClaims]),
+				];
+				const ordinaryBlocks = [
+					...new Set(
+						claimedInstructions.map(
+							(instruction) => instructionLocations.get(instruction)!.blockIndex,
+						),
+					),
+				].sort((left, right) => left - right);
+				return {
+					...region,
+					itemStackObjectProof: "closed-fixed-shape" as const,
+					claimedInstructions,
+					controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+					cost: { ...region.cost, metadataOperations: claimedInstructions.length },
+				};
+			});
+		}
+		if (selectedSites.length > 0) {
+			const dependencies = new Map<string, CompilerGuardPlan["dependencies"][number]>();
+			const obligations = new Map<string, CompilerGuardPlan["obligations"][number]>();
+			for (const site of selectedSites) {
+				for (const dependency of site.guard?.dependencies ?? []) {
+					const key =
+						dependency.kind === "world"
+							? `world:${dependency.fact}`
+							: dependency.kind === "epoch"
+								? `epoch:${dependency.family}`
+								: `${dependency.kind}:${dependency.id}`;
+					dependencies.set(key, dependency);
+				}
+				for (const obligation of site.guard?.obligations ?? []) {
+					obligations.set(`${obligation.kind}:${obligation.id}`, obligation);
+				}
+			}
+			obligations.set("fallback:stack-object-plan", {
+				kind: "fallback",
+				id: "stack-object-plan",
+			});
+			obligations.set("materialize:stack-object-plan", {
+				kind: "materialize",
+				id: "stack-object-plan",
+			});
+			const claimedInstructions = selectedSites.flatMap((site) => [...site.claims]);
+			const ordinaryBlocks = [
+				...new Set(
+					claimedInstructions.map(
+						(instruction) => instructionLocations.get(instruction)!.blockIndex,
+					),
+				),
+			].sort((left, right) => left - right);
+			const region: IRStackObjectPlanRegion = {
+				kind: "stack-object-plan",
+				license: {
+					guard: {
+						dependencies: [...dependencies.values()],
+						obligations: [...obligations.values()],
+					},
+					genericTwin: "retained",
+					materialization: "on-demand",
+				},
+				representation: "activation-local-fixed-shape-objects",
+				anchors: [selectedSites[0]!.allocation],
+				claimedInstructions,
+				controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+				cost: {
+					score: selectedSites.reduce(
+						(total, site) => total + Math.max(1, site.slotCount),
+						0,
+					),
+					metadataOperations: claimedInstructions.length,
+				},
+				sites: selectedSites.map(
+					({ allocation, slotCount, accesses, inheritedAccess, materializations }) => ({
+						allocation,
+						slotCount,
+						accesses,
+						...(inheritedAccess === undefined ? {} : { inheritedAccess }),
+						materializations,
+					}),
+				),
+			};
+			fn.regions = [...(fn.regions ?? []), region];
 		}
 	}
 }

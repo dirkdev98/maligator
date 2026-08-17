@@ -914,6 +914,8 @@ export interface IRCardinalityArrayRegion extends IRRegionEnvelope<
 	]
 > {
 	readonly maximumLength: number;
+	/** The pushed record passed the closed fixed-shape/non-escape proof. */
+	readonly itemStackObjectProof?: "closed-fixed-shape";
 	readonly accesses: ReadonlyArray<{
 		readonly instruction: Extract<
 			IRInstruction,
@@ -1012,6 +1014,48 @@ export interface IRExactFreshArrayRegion extends IRRegionEnvelope<
 	readonly accesses: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
 }
 
+/**
+ * Function-level table of independently materializable fixed-shape objects. Each
+ * site keeps its ordinary heap allocation and property operations as the generic
+ * twin; lowering may shard the table into bounded VM regions without recovering
+ * producer/consumer relationships from instruction-local annotations.
+ */
+export interface IRStackObjectPlanRegion extends IRRegionEnvelope<
+	"stack-object-plan",
+	"activation-local-fixed-shape-objects",
+	"on-demand",
+	readonly [Extract<IRInstruction, { type: "createObject" | "createObjectShaped" }>]
+> {
+	readonly sites: ReadonlyArray<{
+		readonly allocation: Extract<
+			IRInstruction,
+			{ type: "createObject" | "createObjectShaped" }
+		>;
+		readonly slotCount: number;
+		readonly accesses: ReadonlyArray<{
+			readonly instruction: Extract<
+				IRInstruction,
+				{
+					type:
+						| "loadProperty"
+						| "loadPropertyStatic"
+						| "storeProperty"
+						| "storePropertyStatic";
+				}
+			>;
+			readonly slot: number;
+		}>;
+		readonly inheritedAccess?: Extract<
+			IRInstruction,
+			{ type: "loadProperty" | "loadPropertyStatic" }
+		>;
+		readonly materializations: ReadonlyArray<{
+			readonly instruction: Extract<IRInstruction, { type: "return" }>;
+			readonly kind: "return";
+		}>;
+	}>;
+}
+
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type IRRegion =
 	| IRCardinalityArrayRegion
@@ -1022,6 +1066,7 @@ export type IRRegion =
 	| IRNumericFusionRegion
 	| IRRegExpExecProjectionRegion
 	| IRRegExpIteratorProjectionRegion
+	| IRStackObjectPlanRegion
 	| IRStringSliceNumberRegion
 	| IRStringSplitProjectionRegion
 	| IRStringSplitCursor
@@ -1050,13 +1095,6 @@ export type IRInstruction =
 	  }
 	| {
 			type: "return";
-
-			/**
-			 * COMPILE-ONLY: materialize the matching stack-object site immediately
-			 * before this return. Lowering converts the function-local site id into
-			 * return-instruction-indexed VmFunction metadata.
-			 */
-			stackObjectMaterializeSiteId?: number;
 
 			// [return value]
 			registers: [number];
@@ -1120,11 +1158,6 @@ export type IRInstruction =
 	| {
 			type: "createObject";
 
-			/** COMPILE-ONLY: this allocation passed the stack-object proof. */
-			stackObject?: true;
-			/** COMPILE-ONLY: function-local id for conditional-return materialization. */
-			stackObjectSiteId?: number;
-
 			// [destination, ...finite-region Number guards]
 			registers: [number, ...Array<number>];
 	  }
@@ -1133,16 +1166,6 @@ export type IRInstruction =
 			// non-index strings, so the final shape is built once and the slots are
 			// filled directly, skipping per-property defineProperty transitions.
 			type: "createObjectShaped";
-
-			/**
-			 * COMPILE-ONLY: this exact allocation instruction passed the closed or
-			 * conditional-return fixed-shape stack-object proof after the optimization fixpoint. Register
-			 * allocation preserves the instruction object; lower-vm transfers the site
-			 * to VmFunction metadata, while serialized bytecode deliberately ignores it.
-			 */
-			stackObject?: true;
-			/** COMPILE-ONLY: function-local id for conditional-return materialization. */
-			stackObjectSiteId?: number;
 
 			// [destination, ...valueRegisters] — one value register per key, in order
 			registers: [number, ...Array<number>];
@@ -1448,11 +1471,6 @@ export type IRInstruction =
 
 			// [destination, object, key]
 			registers: [number, number, number];
-			stackObjectSiteId?: number;
-			stackObjectSlot?: number;
-			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
-			stackObjectInheritedSiteId?: number;
-			stackObjectInheritedGuard?: CompilerGuardPlan;
 			/** COMPILE-ONLY: a non-escaping global `{}` is represented by a bounded
 			 * synthetic-global value table. Unknown selectors deopt/materialize it. */
 			nativeClosedGlobalTable?: {
@@ -1473,11 +1491,6 @@ export type IRInstruction =
 			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
 			 * primitive-String consumer, so native code may try the String brand first. */
 			nativePrimitiveStringLength?: true;
-			stackObjectSiteId?: number;
-			stackObjectSlot?: number;
-			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
-			stackObjectInheritedSiteId?: number;
-			stackObjectInheritedGuard?: CompilerGuardPlan;
 	  }
 	| {
 			type: "loadSuperProperty";
@@ -1499,8 +1512,6 @@ export type IRInstruction =
 
 			// [object, key, value]
 			registers: [number, number, number];
-			stackObjectSiteId?: number;
-			stackObjectSlot?: number;
 	  }
 	| {
 			type: "storePropertyStatic";
@@ -1508,8 +1519,6 @@ export type IRInstruction =
 			// [object, value]
 			registers: [number, number];
 			stringIndex: number;
-			stackObjectSiteId?: number;
-			stackObjectSlot?: number;
 	  }
 	| {
 			type: "toPropertyKey";

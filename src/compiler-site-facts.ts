@@ -140,15 +140,18 @@ export function ensureCompilerSiteFacts(
 
 	for (const fn of program.functions) {
 		const context = escape.contexts.get(fn.functionIndex);
-		const materializingSiteIds = new Set<number>();
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (
-					instruction.type === "return" &&
-					instruction.stackObjectMaterializeSiteId !== undefined
-				) {
-					materializingSiteIds.add(instruction.stackObjectMaterializeSiteId);
-				}
+		const stackObjectSites = new Map<
+			IRInstruction,
+			{ readonly materializations: ReadonlyArray<unknown> }
+		>();
+		for (const region of fn.regions ?? []) {
+			if (region.kind === "stack-object-plan") {
+				for (const site of region.sites) stackObjectSites.set(site.allocation, site);
+			} else if (
+				region.kind === "cardinality-array" &&
+				region.itemStackObjectProof === "closed-fixed-shape"
+			) {
+				stackObjectSites.set(region.anchors[2], { materializations: [] });
 			}
 		}
 
@@ -180,14 +183,9 @@ export function ensureCompilerSiteFacts(
 									{ kind: "summary", id: functionId(fn) },
 								]),
 							);
-				const stackObject =
-					(instruction.type === "createObject" ||
-						instruction.type === "createObjectShaped") &&
-					instruction.stackObject === true;
-				const materializes =
-					stackObject &&
-					instruction.stackObjectSiteId !== undefined &&
-					materializingSiteIds.has(instruction.stackObjectSiteId);
+				const stackObjectSite = stackObjectSites.get(instruction);
+				const stackObject = stackObjectSite !== undefined;
+				const materializes = (stackObjectSite?.materializations.length ?? 0) > 0;
 				const representation: CompilerFact<RepresentationFact> | undefined = isAllocation
 					? knownFact(
 							stackObject ? "stack" : "heap",

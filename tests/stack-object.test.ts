@@ -12,13 +12,14 @@ import type {
 	IntermediateProgram,
 	IRCardinalityArrayRegion,
 	IRInstruction,
+	IRStackObjectPlanRegion,
 } from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import type { VmDefinition, VmRegion } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
-import { deserializeVmDefinition } from "../src/serialize-vm.ts";
+import { deserializeVmDefinition, serializeVmDefinition } from "../src/serialize-vm.ts";
 
 function semantic(source: string) {
 	return analyzeSourceAndRunSemanticAnalysis(
@@ -73,13 +74,28 @@ function irCardinalityPlans(
 	);
 }
 
+function irStackObjectPlans(
+	program: IntermediateProgram,
+): Array<IRStackObjectPlanRegion> {
+	return program.functions.flatMap(
+		(fn) =>
+			fn.regions?.filter(
+				(region): region is IRStackObjectPlanRegion =>
+					region.kind === "stack-object-plan",
+			) ?? [],
+	);
+}
+
 function stackSiteCount(program: IntermediateProgram): number {
-	return instructions(program).filter(
-		(instruction) =>
-			(instruction.type === "createObject" ||
-				instruction.type === "createObjectShaped") &&
-			instruction.stackObject,
-	).length;
+	return (
+		irStackObjectPlans(program).reduce(
+			(total, region) => total + region.sites.length,
+			0,
+		) +
+		irCardinalityPlans(program).filter(
+			(region) => region.itemStackObjectProof === "closed-fixed-shape",
+		).length
+	);
 }
 
 function objectAllocationCount(program: IntermediateProgram): number {
@@ -148,11 +164,10 @@ describe("closed fixed-shape stack-object proof", () => {
 		);
 		expect(stackSiteCount(program)).toBe(1);
 		expect(
-			instructions(program).filter(
-				(instruction) =>
-					(instruction.type === "loadProperty" ||
-						instruction.type === "loadPropertyStatic") &&
-					instruction.stackObjectInheritedSiteId !== undefined,
+			irStackObjectPlans(program).flatMap((region) =>
+				region.sites.flatMap((site) =>
+					site.inheritedAccess === undefined ? [] : [site.inheritedAccess],
+				),
 			),
 		).toHaveLength(1);
 	});
@@ -163,11 +178,10 @@ describe("closed fixed-shape stack-object proof", () => {
 		);
 		expect(stackSiteCount(program)).toBe(1);
 		expect(
-			instructions(program).filter(
-				(instruction) =>
-					(instruction.type === "loadProperty" ||
-						instruction.type === "loadPropertyStatic") &&
-					instruction.stackObjectInheritedSiteId !== undefined,
+			irStackObjectPlans(program).flatMap((region) =>
+				region.sites.flatMap((site) =>
+					site.inheritedAccess === undefined ? [] : [site.inheritedAccess],
+				),
 			),
 		).toHaveLength(1);
 	});
@@ -341,6 +355,16 @@ describe("closed fixed-shape stack-object proof", () => {
 			`function f(escape) { let total = 0; ${sites} return total; } globalThis.keep = f;`,
 		);
 		expect(stackSiteCount(program)).toBe(256);
+		allocateRegisters(program);
+		const definition = lowerIrProgramToVmDefinition(program);
+		const plans = stackObjectPlans(definition);
+		expect(plans).toHaveLength(32);
+		expect(plans.flatMap((plan) => plan.sites)).toHaveLength(256);
+		expect(
+			stackObjectPlans(
+				deserializeVmDefinition(serializeVmDefinition(definition)),
+			).flatMap((plan) => plan.sites),
+		).toHaveLength(256);
 	});
 
 	it("accepts direct alias returns when a dominated nonescaping return remains", () => {
@@ -352,15 +376,18 @@ describe("closed fixed-shape stack-object proof", () => {
 			(instruction): instruction is Extract<IRInstruction, { type: "return" }> =>
 				instruction.type === "return",
 		);
-		expect(
-			returns.filter(
-				(instruction) => instruction.stackObjectMaterializeSiteId !== undefined,
+		const materializingReturns = new Set(
+			irStackObjectPlans(program).flatMap((region) =>
+				region.sites.flatMap((site) =>
+					site.materializations.map((materialization) => materialization.instruction),
+				),
 			),
+		);
+		expect(
+			returns.filter((instruction) => materializingReturns.has(instruction)),
 		).toHaveLength(1);
 		expect(
-			returns.filter(
-				(instruction) => instruction.stackObjectMaterializeSiteId === undefined,
-			),
+			returns.filter((instruction) => !materializingReturns.has(instruction)),
 		).not.toHaveLength(0);
 	});
 
@@ -396,10 +423,8 @@ describe("closed fixed-shape stack-object proof", () => {
 			instructions(program).filter((instruction) => instruction.type === "call"),
 		).toHaveLength(1);
 		expect(
-			instructions(program).filter(
-				(instruction) =>
-					instruction.type === "return" &&
-					instruction.stackObjectMaterializeSiteId !== undefined,
+			irStackObjectPlans(program).flatMap((region) =>
+				region.sites.flatMap((site) => site.materializations),
 			),
 		).toHaveLength(1);
 		expect(debugInlinableCalls(program)).toContain("kept call: partial escape in cycle");

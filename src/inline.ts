@@ -1968,12 +1968,10 @@ function containsTryMarker(instructions: ReadonlyArray<IRInstruction>): boolean 
 }
 
 function hasStackObjectMaterialization(fn: IRFunction): boolean {
-	return fn.blocks.some((block) =>
-		block.instructions.some(
-			(instruction) =>
-				instruction.type === "return" &&
-				instruction.stackObjectMaterializeSiteId !== undefined,
-		),
+	return (fn.regions ?? []).some(
+		(region) =>
+			region.kind === "stack-object-plan" &&
+			region.sites.some((site) => site.materializations.length > 0),
 	);
 }
 
