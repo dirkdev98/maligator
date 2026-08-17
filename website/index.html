@@ -1715,14 +1715,24 @@ Mal.serve({
 				const mascotFrame = mascotButton?.closest(".mascot-frame");
 				const mascotCaption = document.getElementById("mascot-caption");
 				if (mascotButton && mascotFrame && mascotCaption) {
-					const snacks = [
-						"undefined",
-						"NaN",
-						"TODO",
-						"throw",
-						"null",
-						"while (true)",
-						"🐛",
+					const treats = [
+						["undefined", "Crunch. One runtime bug retired."],
+						["NaN", "NaN calories. Perfect."],
+						["TODO", "TODO: acquire more treats."],
+						["throw", "Throw it. I’ll catch it."],
+						["null", "Null snack. Zero crumbs."],
+						["while (true)", "Infinite loop. Infinite snacks."],
+						["🐛", "A feature? No. Definitely a snack."],
+						["Promise", "Promise resolved: more treats."],
+						["0xB17E", "Finally, a decent byte."],
+						["garbage", "This snack is garbage. Collecting it."],
+						["i++", "Just one more. Classic."],
+						["tailCall()", "Tail call accepted. Tail wag returned."],
+						["TypeError", "Barked type. Strong bite."],
+						["{ shape: 2 }", "Deoptimized: snack shape changed."],
+						["malloc()", "Allocated. Ate. Freed."],
+						["await", "I can await. I cannot stay."],
+						["compiler", "Self-hosting lunch."],
 					];
 					const snackStarts = [
 						["-14rem", "-8rem", "-12deg"],
@@ -1730,21 +1740,13 @@ Mal.serve({
 						["-15rem", "6rem", "8deg"],
 						["14rem", "7rem", "-9deg"],
 					];
-					const reactions = [
-						"Crunch. One runtime bug retired.",
-						"Two bugs down. Still hungry.",
-						"Optimizing the chew loop…",
-						"Deoptimized: snack shape changed.",
-						"GC says that snack is still reachable.",
-						"JIT? Never heard of her.",
-						"AOT: Ahead Of Treats.",
-					];
 					const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 					let eaten = 0;
 					let chompTimer;
 					mascotButton.addEventListener("click", () => {
 						eaten++;
-						mascotCaption.textContent = reactions[(eaten - 1) % reactions.length];
+						const [snackText, reaction] = treats[(eaten - 1) % treats.length];
+						mascotCaption.textContent = reaction;
 						mascotButton.setAttribute(
 							"aria-label",
 							`Feed the Maligator another runtime bug. ${eaten} eaten so far.`,
@@ -1756,7 +1758,7 @@ Mal.serve({
 							const snack = document.createElement("span");
 							const [x, y, rotation] = snackStarts[(eaten - 1) % snackStarts.length];
 							snack.className = "bug-snack";
-							snack.textContent = snacks[(eaten - 1) % snacks.length];
+							snack.textContent = snackText;
 							snack.setAttribute("aria-hidden", "true");
 							snack.style.setProperty("--snack-x", x);
 							snack.style.setProperty("--snack-y", y);
