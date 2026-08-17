@@ -49,6 +49,12 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "affine-range-virtualization":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				loadIps: [...region.loadIps],
+			};
 		case "known-builtin-producers":
 			return {
 				...cloneRegionEnvelope(region),

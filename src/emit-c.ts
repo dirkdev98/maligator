@@ -1335,19 +1335,9 @@ export function emitCompiledFunction(
 					: initialMove.dst,
 		});
 	}
-	const affineRangeAllocations = fn.instructions
-		.map((instruction, ip) => ({ instruction, ip }))
-		.filter(
-			(
-				entry,
-			): entry is {
-				instruction: Extract<VmInstruction, { opcode: "CREATE_ARRAY" }>;
-				ip: number;
-			} =>
-				entry.instruction.opcode === "CREATE_ARRAY" &&
-				entry.instruction.nativeAffineRangeVirtualization?.role === "allocation" &&
-				entry.instruction.nativeAffineRangeVirtualization.allocationIp === entry.ip,
-		);
+	const affineRangeRegions = (fn.regions ?? []).filter(
+		(region) => region.kind === "affine-range-virtualization",
+	);
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -1557,8 +1547,8 @@ export function emitCompiledFunction(
 			`    MalPrivateAggregateMemo __private_aggregate_memo_${memo.callIp} = { .roots = &__gc_slots[${memo.rootsOffset}], .state = MAL_PRIVATE_AGGREGATE_MEMO_EMPTY, .private_ok = false, .admitted = false };`,
 		);
 	}
-	for (const allocation of affineRangeAllocations) {
-		lines.push(`    bool __affine_range_${allocation.ip} = false;`);
+	for (const region of affineRangeRegions) {
+		lines.push(`    bool __affine_range_${region.allocationIp} = false;`);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
@@ -3093,6 +3083,11 @@ interface NativeNumericFusionAction {
 	readonly first: Extract<VmInstruction, { opcode: "BINARY" }>;
 }
 
+interface NativeAffineRangeAction {
+	readonly region: Extract<VmRegion, { kind: "affine-range-virtualization" }>;
+	readonly role: "allocation" | "store" | "load";
+}
+
 /**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
@@ -3147,6 +3142,47 @@ function emitBody(
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
 ): Array<string> | null {
+	const affineRangeAllocationByIp = new Map<
+		number,
+		Extract<VmRegion, { kind: "affine-range-virtualization" }>
+	>();
+	const affineRangeStoreByIp = new Map<
+		number,
+		Extract<VmRegion, { kind: "affine-range-virtualization" }>
+	>();
+	const affineRangeLoadByIp = new Map<
+		number,
+		Extract<VmRegion, { kind: "affine-range-virtualization" }>
+	>();
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "affine-range-virtualization") continue;
+		const allocation = fn.instructions[region.allocationIp];
+		const store = fn.instructions[region.storeIp];
+		if (
+			allocation?.opcode !== "CREATE_ARRAY" ||
+			store?.opcode !== "STORE_PROPERTY" ||
+			affineRangeAllocationByIp.has(region.allocationIp) ||
+			affineRangeStoreByIp.has(region.storeIp) ||
+			region.loadIps.some(
+				(loadIp) =>
+					fn.instructions[loadIp]?.opcode !== "LOAD_PROPERTY" ||
+					affineRangeLoadByIp.has(loadIp),
+			)
+		) {
+			throw new Error("Invalid affine-range virtualization region");
+		}
+		affineRangeAllocationByIp.set(region.allocationIp, region);
+		affineRangeStoreByIp.set(region.storeIp, region);
+		for (const loadIp of region.loadIps) affineRangeLoadByIp.set(loadIp, region);
+	}
+	const affineRangeAction = (ip: number): NativeAffineRangeAction | undefined => {
+		const allocation = affineRangeAllocationByIp.get(ip);
+		if (allocation !== undefined) return { region: allocation, role: "allocation" };
+		const store = affineRangeStoreByIp.get(ip);
+		if (store !== undefined) return { region: store, role: "store" };
+		const load = affineRangeLoadByIp.get(ip);
+		return load === undefined ? undefined : { region: load, role: "load" };
+	};
 	const exactFreshArrayAccessIps = new Set(
 		(fn.regions ?? [])
 			.filter((region) => region.kind === "exact-fresh-array")
@@ -4009,6 +4045,22 @@ function emitBody(
 							fn.hasPrototype,
 							{ twin: loopTwin, kind: "fast", publishPosition: debug },
 							closedGlobalTableAccessByIp.get(fastIp),
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							affineRangeAction(fastIp),
 						);
 				if (fast === null) return null;
 				for (const line of fast) lines.push(`    ${line}`);
@@ -4082,6 +4134,7 @@ function emitBody(
 					numericFusionActionByIp.get(ip),
 					finiteConstructionRegions.get(ip),
 					finitePropertySelectors.get(ip),
+					affineRangeAction(ip),
 				);
 		if (emitted === null) {
 			return null;
@@ -4484,6 +4537,7 @@ function emitInstruction(
 	numericFusionAction?: NativeNumericFusionAction,
 	finiteConstruction?: VmFiniteObjectConstructionRegion,
 	finitePropertySelector?: VmFinitePropertySelectorRegion["selectors"][number],
+	affineRangeAction?: NativeAffineRangeAction,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -4765,36 +4819,40 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			if (instruction.nativeAffineRangeVirtualization?.role === "allocation") {
-				const { allocationIp, guard } = instruction.nativeAffineRangeVirtualization;
-				if (!guard.obligations.includes("fallback")) {
-					throw new Error("Affine range virtualization lacks its generic twin");
+			{
+				const affineRange =
+					affineRangeAction?.role === "allocation" ? affineRangeAction.region : undefined;
+				if (affineRange !== undefined) {
+					const { allocationIp } = affineRange;
+					if (!affineRange.license.guard.obligations.includes("fallback")) {
+						throw new Error("Affine range virtualization lacks its generic twin");
+					}
+					const semanticAdmission = regionAdmissionGuard(affineRange.license);
+					// A future scheduler-enabled version must snapshot array_elements and,
+					// after a taken producer poll invalidates it, materialize dense own
+					// elements [0, index) before resuming the unchanged next [[Set]].
+					// This first slice instead admits only activations that cannot preempt.
+					const ordinary = [
+						`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
+						...(instruction.nativeFreshDenseReserveLength === undefined
+							? []
+							: [
+									`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.nativeFreshDenseReserveLength});`,
+								]),
+					];
+					return [
+						"MAL_PERF_COUNT(array_affine_range_candidates);",
+						`__affine_range_${allocationIp} = mal_gc_preempt_hook == nullptr${semanticAdmission === "true" ? "" : ` && ${semanticAdmission}`};`,
+						`if (__affine_range_${allocationIp}) {`,
+						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						"  MAL_PERF_COUNT(array_affine_range_virtualizations);",
+						"  MAL_PERF_COUNT(array_affine_range_allocations_elided);",
+						`} else {`,
+						"  MAL_PERF_COUNT(array_affine_range_guard_fallbacks);",
+						...ordinary.map((line) => `  ${line}`),
+						`}`,
+					];
 				}
-				const semanticAdmission = semanticDependencyAdmissionGuard(guard);
-				// A future scheduler-enabled version must snapshot array_elements and,
-				// after a taken producer poll invalidates it, materialize dense own
-				// elements [0, index) before resuming the unchanged next [[Set]].
-				// This first slice instead admits only activations that cannot preempt.
-				const ordinary = [
-					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
-					...(instruction.nativeFreshDenseReserveLength === undefined
-						? []
-						: [
-								`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.nativeFreshDenseReserveLength});`,
-							]),
-				];
-				return [
-					"MAL_PERF_COUNT(array_affine_range_candidates);",
-					`__affine_range_${allocationIp} = mal_gc_preempt_hook == nullptr${semanticAdmission === "true" ? "" : ` && ${semanticAdmission}`};`,
-					`if (__affine_range_${allocationIp}) {`,
-					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-					"  MAL_PERF_COUNT(array_affine_range_virtualizations);",
-					"  MAL_PERF_COUNT(array_affine_range_allocations_elided);",
-					`} else {`,
-					"  MAL_PERF_COUNT(array_affine_range_guard_fallbacks);",
-					...ordinary.map((line) => `  ${line}`),
-					`}`,
-				];
 			}
 			if (instruction.nativeFreshDenseReserveLength !== undefined) {
 				return [
@@ -5497,8 +5555,10 @@ function emitInstruction(
 						];
 					}
 				}
-				if (instruction.nativeAffineRangeVirtualization?.role === "load") {
-					const allocationIp = instruction.nativeAffineRangeVirtualization.allocationIp;
+				const affineRange =
+					affineRangeAction?.role === "load" ? affineRangeAction.region : undefined;
+				if (affineRange !== undefined) {
+					const { allocationIp } = affineRange;
 					const direct =
 						reps[instruction.dst] === "number"
 							? reps[instruction.key] === "number"
@@ -5821,8 +5881,10 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
-				if (instruction.nativeAffineRangeVirtualization?.role === "store") {
-					const allocationIp = instruction.nativeAffineRangeVirtualization.allocationIp;
+				const affineRange =
+					affineRangeAction?.role === "store" ? affineRangeAction.region : undefined;
+				if (affineRange !== undefined) {
+					const { allocationIp } = affineRange;
 					return [
 						`if (__affine_range_${allocationIp}) {`,
 						`  MAL_PERF_COUNT(array_affine_range_stores_elided);`,

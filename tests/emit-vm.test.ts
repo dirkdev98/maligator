@@ -943,6 +943,35 @@ describe("native update-expression representation", () => {
 		expect(emitVmDefinition(cached, { compiled: true })).toContain(
 			"array_affine_range_allocations_elided",
 		);
+		const affineRegions = cached.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "affine-range-virtualization") ??
+				[],
+		);
+		expect(affineRegions).toHaveLength(1);
+		expect(affineRegions[0]).toMatchObject({
+			representation: "private-identity-index-range",
+			composition: "overlay",
+			length: 8,
+			license: {
+				guard: {
+					dependencies: [{ kind: "epoch", family: "array-elements" }],
+					obligations: ["fallback"],
+				},
+				genericTwin: "retained",
+				materialization: "none",
+			},
+		});
+		const restored = deserializeVmDefinition(
+			serializeVmDefinition(cached, { debugInfo: false }),
+		);
+		expect(
+			restored.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "affine-range-virtualization") ??
+					[],
+			),
+		).toEqual(affineRegions);
 	});
 
 	it.each([

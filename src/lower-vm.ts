@@ -404,6 +404,19 @@ export type VmKnownBuiltinProducerRegion = VmRegionEnvelope<
 	}>;
 };
 
+/** Post-wire proof for one private `array[i] = i` producer and bounded consumers. */
+export type VmAffineRangeVirtualizationRegion = VmRegionEnvelope<
+	"affine-range-virtualization",
+	"private-identity-index-range",
+	"none"
+> & {
+	readonly composition: "overlay";
+	readonly allocationIp: number;
+	readonly storeIp: number;
+	readonly length: number;
+	readonly loadIps: ReadonlyArray<number>;
+};
+
 export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	"string-split-cursor",
 	"split-cursor-spans",
@@ -714,6 +727,7 @@ export type VmNumericHofRegion = VmRegionEnvelope<
 };
 
 export type VmRegion =
+	| VmAffineRangeVirtualizationRegion
 	| VmClosedGlobalTableRegion
 	| VmClosedRecordArrayRegion
 	| VmExactFreshArrayRegion
@@ -1126,12 +1140,6 @@ export type VmInstruction =
 			length: number;
 			/** COMPILE-ONLY: exact capacity for a proven pristine indexed fill. */
 			nativeFreshDenseReserveLength?: number;
-			/** EMITTER-ONLY: private identity-range Array virtualization action. */
-			nativeAffineRangeVirtualization?: {
-				allocationIp: number;
-				role: "allocation";
-				guard: VmGuardPlan;
-			};
 	  }
 	| {
 			opcode: "INSTANTIATE_LITERAL_TEMPLATE";
@@ -1347,11 +1355,6 @@ export type VmInstruction =
 			object: number;
 			key: number;
 			icIndex: number;
-			/** EMITTER-ONLY: load from a private `array[i] = i` virtual range. */
-			nativeAffineRangeVirtualization?: {
-				allocationIp: number;
-				role: "load";
-			};
 	  }
 	| {
 			opcode: "LOAD_PROPERTY_STATIC";
@@ -1375,11 +1378,6 @@ export type VmInstruction =
 			key: number;
 			value: number;
 			icIndex: number;
-			/** EMITTER-ONLY: producer store for a private identity virtual range. */
-			nativeAffineRangeVirtualization?: {
-				allocationIp: number;
-				role: "store";
-			};
 	  }
 	| {
 			opcode: "STORE_PROPERTY_STATIC";

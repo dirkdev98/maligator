@@ -37,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped for aggregate known-builtin producer graphs.
-export const WIRE_VERSION = 66;
+// Bumped for post-wire affine-range virtualization regions.
+export const WIRE_VERSION = 67;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -945,6 +945,27 @@ function closedGlobalTableGuardMasks(guard: VmGuardPlan): {
 	return { dependencyMask, obligationMask };
 }
 
+function affineRangeGuardMasks(guard: VmGuardPlan): {
+	dependencyMask: number;
+	obligationMask: number;
+} {
+	let dependencyMask = 0;
+	for (const dependency of guard.dependencies) {
+		if (dependency.kind === "world") dependencyMask |= 1;
+		else if (dependency.family === "array-elements") dependencyMask |= 8;
+		else throw new RangeError("serialize-vm: invalid affine-range dependency");
+	}
+	let obligationMask = 0;
+	for (const obligation of guard.obligations) {
+		if (obligation === "fallback") obligationMask |= 1;
+		else throw new RangeError("serialize-vm: invalid affine-range obligation");
+	}
+	if ((dependencyMask !== 1 && dependencyMask !== 8) || obligationMask !== 1) {
+		throw new RangeError("serialize-vm: invalid affine-range guard");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 const SEMANTIC_PROTECTOR_TAGS = {
 	"primitive-methods": 1,
 	"watched-methods": 2,
@@ -1243,7 +1264,9 @@ export function serializeVmDefinition(
 																				? 16
 																				: region.kind === "closed-global-table"
 																					? 17
-																					: 18;
+																					: region.kind === "known-builtin-producers"
+																						? 18
+																						: 19;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1252,35 +1275,37 @@ export function serializeVmDefinition(
 						? 1
 						: 2;
 			const { dependencyMask, obligationMask } =
-				region.kind === "closed-global-table"
-					? closedGlobalTableGuardMasks(region.license.guard)
-					: region.kind === "closed-record-array"
-						? closedRecordArrayGuardMasks(region.license)
-						: region.kind === "string-split-cursor"
-							? stringSplitCursorGuardMasks(region.license)
-							: region.kind === "numeric-hof"
-								? numericHofGuardMasks(region.license)
-								: region.kind === "string-split-projection"
-									? stringSplitProjectionGuardMasks(region.license)
-									: region.kind === "regexp-exec-projection"
-										? regexpExecProjectionGuardMasks(region.license)
-										: region.kind === "regexp-iterator-projection"
-											? regexpIteratorProjectionGuardMasks(region.license)
-											: region.kind === "string-slice-number"
-												? stringSliceNumberGuardMasks(region.license)
-												: region.kind === "string-scan-summary"
-													? stringScanGuardMasks(region.license)
-													: region.kind === "private-aggregate-memo"
-														? privateAggregateMemoGuardMasks(region.license)
-														: region.kind === "invariant-json-map-template"
-															? invariantJsonMapTemplateGuardMasks(region.license)
-															: region.kind === "stack-object-plan"
-																? stackObjectPlanGuardMasks(region.license)
-																: region.kind === "cardinality-array"
-																	? cardinalityGuardMasks(region.license.guard)
-																	: region.kind === "finite-object-construction"
-																		? { dependencyMask: 0, obligationMask: 3 }
-																		: { dependencyMask: 0, obligationMask: 1 };
+				region.kind === "affine-range-virtualization"
+					? affineRangeGuardMasks(region.license.guard)
+					: region.kind === "closed-global-table"
+						? closedGlobalTableGuardMasks(region.license.guard)
+						: region.kind === "closed-record-array"
+							? closedRecordArrayGuardMasks(region.license)
+							: region.kind === "string-split-cursor"
+								? stringSplitCursorGuardMasks(region.license)
+								: region.kind === "numeric-hof"
+									? numericHofGuardMasks(region.license)
+									: region.kind === "string-split-projection"
+										? stringSplitProjectionGuardMasks(region.license)
+										: region.kind === "regexp-exec-projection"
+											? regexpExecProjectionGuardMasks(region.license)
+											: region.kind === "regexp-iterator-projection"
+												? regexpIteratorProjectionGuardMasks(region.license)
+												: region.kind === "string-slice-number"
+													? stringSliceNumberGuardMasks(region.license)
+													: region.kind === "string-scan-summary"
+														? stringScanGuardMasks(region.license)
+														: region.kind === "private-aggregate-memo"
+															? privateAggregateMemoGuardMasks(region.license)
+															: region.kind === "invariant-json-map-template"
+																? invariantJsonMapTemplateGuardMasks(region.license)
+																: region.kind === "stack-object-plan"
+																	? stackObjectPlanGuardMasks(region.license)
+																	: region.kind === "cardinality-array"
+																		? cardinalityGuardMasks(region.license.guard)
+																		: region.kind === "finite-object-construction"
+																			? { dependencyMask: 0, obligationMask: 3 }
+																			: { dependencyMask: 0, obligationMask: 1 };
 			w.u8(kindTag);
 			w.u8(region.composition === "overlay" ? 1 : 0);
 			w.i32Array([...region.anchors]);
@@ -1295,6 +1320,12 @@ export function serializeVmDefinition(
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
 			switch (region.kind) {
+				case "affine-range-virtualization":
+					w.i32(region.allocationIp);
+					w.i32(region.storeIp);
+					w.i32(region.length);
+					w.i32Array([...region.loadIps]);
+					break;
 				case "known-builtin-producers":
 					w.u32(region.sites.length);
 					for (const site of region.sites) {
@@ -1938,6 +1969,9 @@ function validateRegion(
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
+		case "affine-range-virtualization":
+			validateAffineRangeRegion(fn, region);
+			break;
 		case "known-builtin-producers":
 			validateKnownBuiltinProducerRegion(fn, region);
 			break;
@@ -3045,6 +3079,41 @@ function validateClosedRecordArrayRegion(
 		})
 	) {
 		throw new RangeError("serialize-vm: invalid closed record-Array region metadata");
+	}
+}
+
+function validateAffineRangeRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "affine-range-virtualization" }>,
+): void {
+	affineRangeGuardMasks(region.license.guard);
+	const payloadIps = [region.allocationIp, region.storeIp, ...region.loadIps];
+	const allocation = fn.instructions[region.allocationIp];
+	const store = fn.instructions[region.storeIp];
+	if (
+		region.representation !== "private-identity-index-range" ||
+		region.composition !== "overlay" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "none" ||
+		region.anchors.length !== 1 ||
+		region.anchors[0] !== region.allocationIp ||
+		!Number.isSafeInteger(region.length) ||
+		region.length < 1 ||
+		region.length > 65_536 ||
+		region.loadIps.length === 0 ||
+		region.loadIps.length > 8 ||
+		new Set(payloadIps).size !== payloadIps.length ||
+		payloadIps.length !== region.claimedIps.length ||
+		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		allocation?.opcode !== "CREATE_ARRAY" ||
+		allocation.length !== 0 ||
+		store?.opcode !== "STORE_PROPERTY" ||
+		store.key !== store.value ||
+		region.loadIps.some((ip) => fn.instructions[ip]?.opcode !== "LOAD_PROPERTY") ||
+		region.cost.score !== region.length * (region.loadIps.length + 1) ||
+		region.cost.metadataOperations !== payloadIps.length
+	) {
+		throw new RangeError("serialize-vm: invalid affine-range virtualization region");
 	}
 }
 
@@ -4275,6 +4344,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
+				const affineRangeContract =
+					kindTag === 19 &&
+					representationTag === 19 &&
+					materializationTag === 0 &&
+					(dependencyMask === 1 || dependencyMask === 8) &&
+					obligationMask === 1;
 				if (
 					compositionTag > 1 ||
 					(compositionTag === 1) !==
@@ -4282,7 +4357,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							numericFusionContract ||
 							finitePropertySelectorContract ||
 							closedGlobalTableContract ||
-							knownBuiltinProducerContract) ||
+							knownBuiltinProducerContract ||
+							affineRangeContract) ||
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
@@ -4301,7 +4377,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!finiteObjectConstructionContract &&
 						!finitePropertySelectorContract &&
 						!closedGlobalTableContract &&
-						!knownBuiltinProducerContract)
+						!knownBuiltinProducerContract &&
+						!affineRangeContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -5241,7 +5318,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						mask,
 						accesses,
 					};
-				} else {
+				} else if (kindTag === 18) {
 					const siteCount = r.count(3);
 					const sites: Array<
 						Extract<VmRegion, { kind: "known-builtin-producers" }>["sites"][number]
@@ -5267,6 +5344,35 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
 						sites,
+					};
+				} else {
+					const allocationIp = r.i32();
+					const storeIp = r.i32();
+					const length = r.i32();
+					const loadIps = r.i32Array();
+					region = {
+						kind: "affine-range-virtualization",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [{ kind: "epoch", family: "array-elements" }],
+								obligations: ["fallback"],
+							},
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "private-identity-index-range",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						allocationIp,
+						storeIp,
+						length,
+						loadIps,
 					};
 				}
 				validateRegion(

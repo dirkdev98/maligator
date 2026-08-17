@@ -577,6 +577,10 @@ is general rather than a registry-shaped collection of special cases.
         producer-consumer overlay. IR transforms consume and prune the graph as
         locked calls collapse; residual guarded Math twins cross MALW v66 as a
         validated function region for native emission.
+  - [x] Replace affine-range allocation/store/load annotations with one post-wire
+        overlay region. The CFG and range analysis emits a single Array-elements
+        license plus its retained fallback graph; MALW v67 rejects stale cached
+        layouts and validates the region as one unit.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

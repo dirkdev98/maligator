@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 66u        // known-builtin producer graphs moved into regions
+#define WIRE_VERSION 67u        // affine-range virtualization moved into regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1930,12 +1930,15 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				obligation_mask == 3;
 			bool known_builtin_producer_contract = kind == 18 && representation == 18 &&
 				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
+			bool affine_range_contract = kind == 19 && representation == 19 &&
+				materialization == 0 && (dependency_mask == 1 || dependency_mask == 8) &&
+				obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
 				(composition == 1) !=
 					(exact_fresh_array_contract || numeric_fusion_contract ||
 					 finite_property_selector_contract || closed_global_table_contract ||
-					 known_builtin_producer_contract) ||
+					 known_builtin_producer_contract || affine_range_contract) ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
@@ -1944,7 +1947,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				 !cardinality_array_contract && !exact_fresh_array_contract &&
 				 !numeric_fusion_contract && !finite_object_construction_contract &&
 				 !finite_property_selector_contract && !closed_global_table_contract &&
-				 !known_builtin_producer_contract)) {
+				 !known_builtin_producer_contract && !affine_range_contract)) {
                 r.ok = false;
 				if (kind == 18) err = "invalid known-builtin producer region contract";
             }
@@ -3524,6 +3527,34 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 					r.ok = false;
 					err = "invalid known-builtin producer region metadata";
 				}
+			} else if (r.ok && kind == 19) {
+				i32 allocation_ip = rd_i32(&r);
+				i32 store_ip = rd_i32(&r);
+				i32 length = rd_i32(&r);
+				u32 load_count = rd_count(&r, 1);
+				bool header_ok = anchor_count == 1 && anchors[0] == allocation_ip &&
+					allocation_ip >= 0 && allocation_ip < fn->instruction_count &&
+					store_ip >= 0 && store_ip < fn->instruction_count &&
+					length >= 1 && length <= 65536 && load_count >= 1 && load_count <= 8;
+				if (header_ok) {
+					const MalInstruction *allocation = &fn->instructions[allocation_ip];
+					const MalInstruction *store = &fn->instructions[store_ip];
+					header_ok = allocation->opcode == MAL_OP_CREATE_ARRAY &&
+						allocation->as.create_array.length == 0 &&
+						store->opcode == MAL_OP_STORE_PROPERTY &&
+						store->as.store_property.key == store->as.store_property.value;
+				}
+				if (!header_ok) r.ok = false;
+				MAL_REGION_PAYLOAD_CLAIM(allocation_ip);
+				MAL_REGION_PAYLOAD_CLAIM(store_ip);
+				for (u32 load = 0; r.ok && load < load_count; load++) {
+					i32 load_ip = rd_i32(&r);
+					if (load_ip < 0 || load_ip >= fn->instruction_count ||
+						fn->instructions[load_ip].opcode != MAL_OP_LOAD_PROPERTY) r.ok = false;
+					MAL_REGION_PAYLOAD_CLAIM(load_ip);
+				}
+				if (score != (u32) length * (load_count + 1) ||
+					metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

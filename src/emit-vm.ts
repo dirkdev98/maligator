@@ -751,10 +751,12 @@ interface NativeIntegerRange {
  * the complete allocation/store/load fallback from the first instruction.
  */
 function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): void {
-	const arrayElementGuard = vmSemanticProtectorGuard(
-		definition.semanticProtectors,
-		"array-elements",
+	const license = vmRegionLicense(
+		[vmSemanticProtectorGuard(definition.semanticProtectors, "array-elements")],
+		"none",
 	);
+	const regionLicense =
+		license === undefined ? undefined : { ...license, materialization: "none" as const };
 	// With zero parameters/captures and no calls, globals, object/string producers,
 	// handlers, or non-aggregate property operations, every remaining BINARY/UNARY
 	// operand is a locally produced primitive. None can invoke user coercion or
@@ -797,16 +799,11 @@ function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): voi
 	};
 
 	for (const fn of definition.functions) {
-		for (const instruction of fn.instructions) {
-			if (
-				instruction.opcode === "CREATE_ARRAY" ||
-				instruction.opcode === "LOAD_PROPERTY" ||
-				instruction.opcode === "STORE_PROPERTY"
-			) {
-				delete instruction.nativeAffineRangeVirtualization;
-			}
-		}
-		if (arrayElementGuard === undefined) continue;
+		const existingRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "affine-range-virtualization",
+		);
+		fn.regions = existingRegions.length > 0 ? existingRegions : undefined;
+		if (regionLicense === undefined || existingRegions.length >= 8) continue;
 		if (
 			fn.isGenerator ||
 			fn.isAsync ||
@@ -1057,6 +1054,7 @@ function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): voi
 		const length = producerCounter.bound;
 
 		let rangesProven = true;
+		const consumerBlockIps = new Set<number>();
 		for (const load of loads) {
 			const consumerLoop = cfg.loops
 				.filter((loop) => loop.body.has(load.ip) && loop.backedge > producerLoop.backedge)
@@ -1168,24 +1166,37 @@ function annotateNativeAffineRangeVirtualizations(definition: VmDefinition): voi
 				rangesProven = false;
 				break;
 			}
+			consumerBlockIps.add(consumerLoop.header);
 		}
 		if (!rangesProven) continue;
 
-		allocation.instruction.nativeAffineRangeVirtualization = {
-			allocationIp: allocation.ip,
-			role: "allocation",
-			guard: arrayElementGuard,
-		};
-		store.instruction.nativeAffineRangeVirtualization = {
-			allocationIp: allocation.ip,
-			role: "store",
-		};
-		for (const load of loads) {
-			load.instruction.nativeAffineRangeVirtualization = {
+		const loadIps = loads.map((load) => load.ip);
+		const claimedIps = [allocation.ip, store.ip, ...loadIps];
+		fn.regions = [
+			...existingRegions,
+			{
+				kind: "affine-range-virtualization",
+				license: regionLicense,
+				representation: "private-identity-index-range",
+				composition: "overlay",
+				anchors: [allocation.ip],
+				claimedIps,
+				controlFlow: {
+					ordinaryBlockIps: [0, producerLoop.header, ...consumerBlockIps].filter(
+						(ip, index, ips) => ips.indexOf(ip) === index,
+					),
+					exceptionalHandlerIps: [],
+				},
+				cost: {
+					score: length * (loadIps.length + 1),
+					metadataOperations: claimedIps.length,
+				},
 				allocationIp: allocation.ip,
-				role: "load",
-			};
-		}
+				storeIp: store.ip,
+				length,
+				loadIps,
+			},
+		];
 	}
 }
 

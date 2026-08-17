@@ -496,6 +496,41 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads a nonempty affine-range virtualization region payload", () => {
+		const entrypoint = path.join(directory, "affine-range-region.js");
+		const source = `function rangeKernel() {
+			const array = [];
+			for (let index = 0; index < 8; index++) array[index] = index;
+			let total = 0;
+			for (let index = 0; index < 8; index++) total += array[index];
+			return total;
+		}
+		globalThis.rangeKernel = rangeKernel;\n`;
+		writeFileSync(entrypoint, source);
+		const affineDefinition = compileSemanticProgramToVmDefinition(
+			analyzeSourceAndRunSemanticAnalysis(
+				source,
+				entrypoint,
+				parseScript(source, { strict: false }),
+			),
+		);
+		emitVmDefinition(affineDefinition, { compiled: true });
+		expect(
+			affineDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "affine-range-virtualization") ??
+					[],
+			),
+		).toHaveLength(1);
+		const wirePath = path.join(directory, "affine-range-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(affineDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads a nonempty closed record-Array proof region payload", () => {
 		const entrypoint = path.join(directory, "closed-record-array-region.mjs");
 		writeFileSync(
