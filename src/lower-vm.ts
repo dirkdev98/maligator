@@ -739,15 +739,6 @@ export interface VmFunction {
 	 */
 	gcRootRegisters?: ReadonlyArray<number>;
 
-	/** EMITTER-ONLY: activation-local exact no-reviver JSON.parse templates. */
-	nativeInvariantJsonParseCaches?: ReadonlyArray<{
-		callIp: number;
-		jsonObject: number;
-		parseCallee: number;
-		text: number;
-		result: number;
-	}>;
-
 	/**
 	 * EMITTER-ONLY: activation-local final primitive-record templates for one
 	 * exact adjacent JSON.parse(text).map(pureProjection) chain. The complete
@@ -1116,6 +1107,8 @@ export type VmInstruction =
 			directCallTargetFunctionIndex?: number;
 			/** COMPILE-ONLY: canonical guarded intrinsic identity and fallback plan. */
 			guardedBuiltinCall?: VmGuardedBuiltinCall;
+			/** COMPILE-ONLY: this exact loop-invariant JSON.parse owns a private clone cache. */
+			nativeInvariantJsonParseCache?: true;
 			/**
 			 * COMPILE-ONLY: exact Math namespace/property producers owned by this call.
 			 * Native emission may erase them only after discharging this call's locked

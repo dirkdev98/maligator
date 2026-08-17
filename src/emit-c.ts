@@ -1143,12 +1143,7 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += loads.length + 1;
 	}
-	const invariantJsonParseCaches = new Map<
-		number,
-		NonNullable<VmFunction["nativeInvariantJsonParseCaches"]>[number] & {
-			rootsOffset: number;
-		}
-	>();
+	const invariantJsonParseCaches = new Map<number, NativeInvariantJsonParseCacheSite>();
 	const invariantJsonMapTemplates = new Map<
 		number,
 		NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
@@ -1187,22 +1182,16 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += 4 + template.captures.length;
 	}
-	for (const cache of fn.nativeInvariantJsonParseCaches ?? []) {
-		if (invariantJsonMapTemplates.has(cache.callIp)) continue;
-		const instruction = fn.instructions[cache.callIp];
+	for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
+		const instruction = fn.instructions[callIp];
 		if (
 			instruction?.opcode !== "CALL" ||
-			instruction.dst !== cache.result ||
-			invariantJsonParseCaches.has(cache.callIp)
+			instruction.nativeInvariantJsonParseCache !== true ||
+			invariantJsonMapTemplates.has(callIp)
 		) {
-			throw new Error(
-				`Invalid invariant JSON parse cache at instruction ${cache.callIp}`,
-			);
+			continue;
 		}
-		invariantJsonParseCaches.set(cache.callIp, {
-			...cache,
-			rootsOffset: nextStackSlot,
-		});
+		invariantJsonParseCaches.set(callIp, { callIp, rootsOffset: nextStackSlot });
 		nextStackSlot += 2;
 	}
 	const privateAggregateMemos = new Map<
@@ -2157,6 +2146,11 @@ interface NativeStringScanRegionAction {
 	role: "entry" | "length";
 }
 
+interface NativeInvariantJsonParseCacheSite {
+	callIp: number;
+	rootsOffset: number;
+}
+
 type NativeStringSplitProjection = Extract<
 	NonNullable<VmFunction["regions"]>[number],
 	{ kind: "string-split-projection" }
@@ -3039,12 +3033,7 @@ function emitBody(
 	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
-	invariantJsonParseCaches: ReadonlyMap<
-		number,
-		NonNullable<VmFunction["nativeInvariantJsonParseCaches"]>[number] & {
-			rootsOffset: number;
-		}
-	>,
+	invariantJsonParseCaches: ReadonlyMap<number, NativeInvariantJsonParseCacheSite>,
 	invariantJsonMapTemplates: ReadonlyMap<
 		number,
 		NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
@@ -4346,9 +4335,7 @@ function emitInstruction(
 	nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction,
 	nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction,
 	nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction,
-	invariantJsonParseCache?: NonNullable<
-		VmFunction["nativeInvariantJsonParseCaches"]
-	>[number] & { rootsOffset: number },
+	invariantJsonParseCache?: NativeInvariantJsonParseCacheSite,
 	invariantJsonMapAction?: {
 		site: NonNullable<VmFunction["nativeInvariantJsonMapTemplates"]>[number] & {
 			rootsOffset: number;

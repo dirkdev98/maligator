@@ -2859,19 +2859,21 @@ describe("native static typeof facts", () => {
 });
 
 describe("activation-local invariant JSON.parse templates", () => {
-	function emit(source: string): string {
+	function compile(source: string): { definition: VmDefinition; output: string } {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			source,
 			"invariant-json-parse-cache.js",
 			parseScript(source, { strict: false }),
 		);
-		return emitVmDefinition(compileSemanticProgramToVmDefinition(semantic), {
-			compiled: true,
-		});
+		const definition = compileSemanticProgramToVmDefinition(semantic);
+		return {
+			definition,
+			output: emitVmDefinition(definition, { compiled: true }),
+		};
 	}
 
 	it("emits a dedicated rooted template for an exact no-reviver parse loop", () => {
-		const output = emit(`
+		const { definition, output } = compile(`
 			"use strict";
 			function repeated(text) {
 				let total = 0;
@@ -2884,10 +2886,19 @@ describe("activation-local invariant JSON.parse templates", () => {
 		expect(output).toContain("MalInvariantJsonParseCache __invariant_json_parse_");
 		expect(output).toContain("mal_builtin_json_parse_cache_try_clone");
 		expect(output).toContain("mal_builtin_json_parse_cache_fill");
+		expect(
+			definition.functions.flatMap((fn) =>
+				fn.instructions.filter(
+					(instruction) =>
+						instruction.opcode === "CALL" &&
+						instruction.nativeInvariantJsonParseCache === true,
+				),
+			),
+		).toHaveLength(1);
 	});
 
 	it("rejects reviver calls and one-shot parse sites", () => {
-		const output = emit(`
+		const { definition, output } = compile(`
 			"use strict";
 			function revived(text, callback) { return JSON.parse(text, callback); }
 			function once(text) { return JSON.parse(text); }
@@ -2896,6 +2907,15 @@ describe("activation-local invariant JSON.parse templates", () => {
 
 		expect(output).not.toContain("MalInvariantJsonParseCache __invariant_json_parse_");
 		expect(output).not.toContain("mal_builtin_json_parse_cache_try_clone");
+		expect(
+			definition.functions.some((fn) =>
+				fn.instructions.some(
+					(instruction) =>
+						instruction.opcode === "CALL" &&
+						instruction.nativeInvariantJsonParseCache === true,
+				),
+			),
+		).toBe(false);
 	});
 });
 

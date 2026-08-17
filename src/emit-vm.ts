@@ -2451,9 +2451,11 @@ function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
  */
 function annotateNativeInvariantJsonParseCaches(definition: VmDefinition): void {
 	for (const fn of definition.functions) {
-		const caches: Array<
-			NonNullable<VmFunction["nativeInvariantJsonParseCaches"]>[number]
-		> = [];
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "CALL") {
+				delete instruction.nativeInvariantJsonParseCache;
+			}
+		}
 		const entryTargets = new Set<number>(fn.handlers.map((handler) => handler.handlerIp));
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
@@ -2515,16 +2517,8 @@ function annotateNativeInvariantJsonParseCaches(definition: VmDefinition): void 
 					instruction.targetIp <= jsonLoadDef.ip,
 			);
 			if (backedge < 0) continue;
-			caches.push({
-				callIp,
-				jsonObject: jsonLoad.dst,
-				parseCallee: parseLoad.dst,
-				text: text.register,
-				result: parseCall.dst,
-			});
+			parseCall.nativeInvariantJsonParseCache = true;
 		}
-		if (caches.length > 0) fn.nativeInvariantJsonParseCaches = caches;
-		else delete fn.nativeInvariantJsonParseCaches;
 	}
 }
 

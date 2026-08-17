@@ -506,6 +506,10 @@ is general rather than a registry-shaped collection of special cases.
         shared region table for multi-operation ownership while letting the one
         consuming call discharge locked identity and Number representation before
         erasing its own generic producers.
+  - [x] Reclassify activation-local invariant JSON.parse caching as a local CALL
+        fact. The cache changes only that call's lowering and retains the ordinary
+        call as its miss path, so it must not consume function-level region
+        ownership or live in an emitter-only function-side table.
   - [x] Move closed inlined String-scan summaries out of their emitter-only side
         table and into the shared region table. Claim the complete skipped
         allocation/loop corridor plus the projected length load, merge primitive,
