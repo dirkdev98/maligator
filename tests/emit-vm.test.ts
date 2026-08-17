@@ -3004,15 +3004,31 @@ describe("activation-local invariant JSON.parse templates", () => {
 		expect(output).toContain("MalInvariantJsonParseCache __invariant_json_parse_");
 		expect(output).toContain("mal_builtin_json_parse_cache_try_clone");
 		expect(output).toContain("mal_builtin_json_parse_cache_fill");
+		const regions = definition.functions.flatMap(
+			(fn) =>
+				fn.regions?.filter((region) => region.kind === "invariant-json-parse-cache") ??
+				[],
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			representation: "activation-local-json-parse-template",
+			composition: "overlay",
+			license: {
+				guard: { dependencies: [], obligations: ["fallback"] },
+				genericTwin: "retained",
+				materialization: "none",
+			},
+		});
+		const restored = deserializeVmDefinition(
+			serializeVmDefinition(definition, { debugInfo: false }),
+		);
 		expect(
-			definition.functions.flatMap((fn) =>
-				fn.instructions.filter(
-					(instruction) =>
-						instruction.opcode === "CALL" &&
-						instruction.nativeInvariantJsonParseCache === true,
-				),
+			restored.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "invariant-json-parse-cache") ??
+					[],
 			),
-		).toHaveLength(1);
+		).toEqual(regions);
 	});
 
 	it("rejects reviver calls and one-shot parse sites", () => {
@@ -3027,11 +3043,7 @@ describe("activation-local invariant JSON.parse templates", () => {
 		expect(output).not.toContain("mal_builtin_json_parse_cache_try_clone");
 		expect(
 			definition.functions.some((fn) =>
-				fn.instructions.some(
-					(instruction) =>
-						instruction.opcode === "CALL" &&
-						instruction.nativeInvariantJsonParseCache === true,
-				),
+				fn.regions?.some((region) => region.kind === "invariant-json-parse-cache"),
 			),
 		).toBe(false);
 	});

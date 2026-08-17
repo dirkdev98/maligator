@@ -2496,11 +2496,18 @@ function annotateNativeStringSearchRegExpCalls(definition: VmDefinition): void {
  */
 function annotateNativeInvariantJsonParseCaches(definition: VmDefinition): void {
 	for (const fn of definition.functions) {
-		for (const instruction of fn.instructions) {
-			if (instruction.opcode === "CALL") {
-				delete instruction.nativeInvariantJsonParseCache;
-			}
-		}
+		const existingRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "invariant-json-parse-cache",
+		);
+		fn.regions = existingRegions.length > 0 ? existingRegions : undefined;
+		if (existingRegions.length >= 8) continue;
+		const mapTemplateCalls = new Set(
+			existingRegions
+				.filter((region) => region.kind === "invariant-json-map-template")
+				.map((region) => region.parseCallIp),
+		);
+		const cacheRegions: Array<Extract<VmRegion, { kind: "invariant-json-parse-cache" }>> =
+			[];
 		const entryTargets = new Set<number>(fn.handlers.map((handler) => handler.handlerIp));
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
@@ -2522,20 +2529,23 @@ function annotateNativeInvariantJsonParseCaches(definition: VmDefinition): void 
 			const jsonLoadDef = latestDefinition(parseCall.thisValue, callIp);
 			const parseLoad = parseLoadDef?.instruction;
 			const jsonLoad = jsonLoadDef?.instruction;
+			const parseKeyDef =
+				parseLoad?.opcode === "LOAD_PROPERTY"
+					? latestDefinition(parseLoad.key, parseLoadDef?.ip ?? 0)
+					: undefined;
 			const parsePropertyIsExact =
 				parseLoad?.opcode === "LOAD_PROPERTY_STATIC"
 					? staticStringEquals(definition, parseLoad.stringIndex, "parse")
 					: parseLoad?.opcode === "LOAD_PROPERTY"
-						? (() => {
-								const key = latestDefinition(parseLoad.key, parseLoadDef?.ip ?? 0);
-								return (
-									key?.instruction.opcode === "CREATE_STRING" &&
-									staticStringEquals(definition, key.instruction.stringIndex, "parse") &&
-									![...entryTargets].some(
-										(target) => target > key.ip && target <= (parseLoadDef?.ip ?? 0),
-									)
-								);
-							})()
+						? parseKeyDef?.instruction.opcode === "CREATE_STRING" &&
+							staticStringEquals(
+								definition,
+								parseKeyDef.instruction.stringIndex,
+								"parse",
+							) &&
+							![...entryTargets].some(
+								(target) => target > parseKeyDef.ip && target <= (parseLoadDef?.ip ?? 0),
+							)
 						: false;
 			if (
 				jsonLoad?.opcode !== "LOAD_INTRINSIC" ||
@@ -2561,9 +2571,49 @@ function annotateNativeInvariantJsonParseCaches(definition: VmDefinition): void 
 					(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
 					instruction.targetIp <= jsonLoadDef.ip,
 			);
-			if (backedge < 0) continue;
-			parseCall.nativeInvariantJsonParseCache = true;
+			const backedgeInstruction = fn.instructions[backedge];
+			if (
+				backedge < 0 ||
+				(backedgeInstruction?.opcode !== "JUMP" &&
+					backedgeInstruction?.opcode !== "JUMP_IF") ||
+				mapTemplateCalls.has(callIp) ||
+				existingRegions.length + cacheRegions.length >= 8
+			) {
+				continue;
+			}
+			const claimedIps = [
+				jsonLoadDef.ip,
+				...(parseKeyDef === undefined ? [] : [parseKeyDef.ip]),
+				parseLoadDef.ip,
+				callIp,
+			];
+			cacheRegions.push({
+				kind: "invariant-json-parse-cache",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback"] },
+					genericTwin: "retained",
+					materialization: "none",
+				},
+				representation: "activation-local-json-parse-template",
+				composition: "overlay",
+				anchors: [callIp],
+				claimedIps,
+				controlFlow: {
+					ordinaryBlockIps: [backedgeInstruction.targetIp],
+					exceptionalHandlerIps: [],
+				},
+				cost: { score: 1, metadataOperations: claimedIps.length },
+				jsonIntrinsicIp: jsonLoadDef.ip,
+				parsePropertyIp: parseLoadDef.ip,
+				...(parseKeyDef === undefined ? {} : { parseKeyIp: parseKeyDef.ip }),
+				parseCallIp: callIp,
+				jsonObject: jsonLoad.dst,
+				parseCallee: parseLoad.dst,
+				text: text.register,
+				result: parseCall.dst,
+			});
 		}
+		if (cacheRegions.length > 0) fn.regions = [...existingRegions, ...cacheRegions];
 	}
 }
 

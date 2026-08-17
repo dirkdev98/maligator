@@ -581,6 +581,10 @@ is general rather than a registry-shaped collection of special cases.
         overlay region. The CFG and range analysis emits a single Array-elements
         license plus its retained fallback graph; MALW v67 rejects stale cached
         layouts and validates the region as one unit.
+  - [x] Replace the invariant JSON.parse call flag with an activation-local cache
+        region that owns the JSON/property/call producer graph. Static and dynamic
+        `parse` loads retain their generic call twin and cross MALW v68 as one
+        structurally validated certificate.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

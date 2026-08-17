@@ -417,6 +417,23 @@ export type VmAffineRangeVirtualizationRegion = VmRegionEnvelope<
 	readonly loadIps: ReadonlyArray<number>;
 };
 
+/** Exact loop-local JSON.parse producer graph with an activation-local clone cache. */
+export type VmInvariantJsonParseCacheRegion = VmRegionEnvelope<
+	"invariant-json-parse-cache",
+	"activation-local-json-parse-template",
+	"none"
+> & {
+	readonly composition: "overlay";
+	readonly jsonIntrinsicIp: number;
+	readonly parsePropertyIp: number;
+	readonly parseKeyIp?: number;
+	readonly parseCallIp: number;
+	readonly jsonObject: number;
+	readonly parseCallee: number;
+	readonly text: number;
+	readonly result: number;
+};
+
 export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	"string-split-cursor",
 	"split-cursor-spans",
@@ -741,6 +758,7 @@ export type VmRegion =
 	| VmFiniteObjectConstructionRegion
 	| VmFinitePropertySelectorRegion
 	| VmKnownBuiltinProducerRegion
+	| VmInvariantJsonParseCacheRegion
 	| VmStackObjectPlanRegion
 	| VmCardinalityArrayRegion
 	| VmStringSplitProjectionRegion
@@ -1223,8 +1241,6 @@ export type VmInstruction =
 			directCallTargetFunctionIndex?: number;
 			/** COMPILE-ONLY: canonical guarded intrinsic identity and fallback plan. */
 			guardedBuiltinCall?: VmGuardedBuiltinCall;
-			/** COMPILE-ONLY: this exact loop-invariant JSON.parse owns a private clone cache. */
-			nativeInvariantJsonParseCache?: true;
 			/** COMPILE-ONLY: statically proven Number-position strength. */
 			directStringCharCodeAtPosition?: "integer" | "inBounds";
 			/** COMPILE-ONLY: closed String.prototype.search over a fresh RegExp literal. */

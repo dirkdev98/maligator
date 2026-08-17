@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 67u        // affine-range virtualization moved into regions
+#define WIRE_VERSION 68u        // invariant JSON.parse caches moved into regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1933,12 +1933,15 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 			bool affine_range_contract = kind == 19 && representation == 19 &&
 				materialization == 0 && (dependency_mask == 1 || dependency_mask == 8) &&
 				obligation_mask == 1;
+			bool invariant_json_parse_cache_contract = kind == 20 && representation == 20 &&
+				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
 				(composition == 1) !=
 					(exact_fresh_array_contract || numeric_fusion_contract ||
 					 finite_property_selector_contract || closed_global_table_contract ||
-					 known_builtin_producer_contract || affine_range_contract) ||
+					 known_builtin_producer_contract || affine_range_contract ||
+					 invariant_json_parse_cache_contract) ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
@@ -1947,7 +1950,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				 !cardinality_array_contract && !exact_fresh_array_contract &&
 				 !numeric_fusion_contract && !finite_object_construction_contract &&
 				 !finite_property_selector_contract && !closed_global_table_contract &&
-				 !known_builtin_producer_contract && !affine_range_contract)) {
+				 !known_builtin_producer_contract && !affine_range_contract &&
+				 !invariant_json_parse_cache_contract)) {
                 r.ok = false;
 				if (kind == 18) err = "invalid known-builtin producer region contract";
             }
@@ -3555,6 +3559,65 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				}
 				if (score != (u32) length * (load_count + 1) ||
 					metadata_operations != payload_count) r.ok = false;
+			} else if (r.ok && kind == 20) {
+				i32 json_intrinsic_ip = rd_i32(&r);
+				i32 parse_property_ip = rd_i32(&r);
+				i32 parse_key_ip = rd_i32(&r);
+				i32 parse_call_ip = rd_i32(&r);
+				i32 json_object = rd_i32(&r);
+				i32 parse_callee = rd_i32(&r);
+				i32 text = rd_i32(&r);
+				i32 result = rd_i32(&r);
+				bool header_ok = anchor_count == 1 && anchors[0] == parse_call_ip &&
+					json_intrinsic_ip >= 0 && json_intrinsic_ip < fn->instruction_count &&
+					parse_property_ip >= 0 && parse_property_ip < fn->instruction_count &&
+					parse_call_ip >= 0 && parse_call_ip < fn->instruction_count &&
+					json_object >= 0 && json_object < fn->register_count &&
+					parse_callee >= 0 && parse_callee < fn->register_count &&
+					text >= 0 && text < fn->register_count &&
+					result >= 0 && result < fn->register_count;
+				if (header_ok) {
+					const MalInstruction *json = &fn->instructions[json_intrinsic_ip];
+					const MalInstruction *property = &fn->instructions[parse_property_ip];
+					const MalInstruction *call = &fn->instructions[parse_call_ip];
+					i32 name_index = -1;
+					bool property_ok = false;
+					if (property->opcode == MAL_OP_LOAD_PROPERTY_STATIC && parse_key_ip == -1) {
+						name_index = property->as.load_property_static.string_index;
+						property_ok = property->as.load_property_static.object == json_object &&
+							property->as.load_property_static.dst == parse_callee;
+					} else if (property->opcode == MAL_OP_LOAD_PROPERTY && parse_key_ip >= 0 &&
+						parse_key_ip < fn->instruction_count) {
+						const MalInstruction *key = &fn->instructions[parse_key_ip];
+						if (key->opcode == MAL_OP_CREATE_STRING) {
+							name_index = key->as.create_string.string_index;
+							property_ok = property->as.load_property.object == json_object &&
+								property->as.load_property.key == key->as.create_string.dst &&
+								property->as.load_property.dst == parse_callee;
+						}
+					}
+					bool parse_name = name_index >= 0 && name_index < (i32) string_count;
+					if (parse_name) {
+						const MalString *name = &strings[name_index];
+						parse_name = name->length == 5 && name->code_units[0] == 'p' &&
+							name->code_units[1] == 'a' && name->code_units[2] == 'r' &&
+							name->code_units[3] == 's' && name->code_units[4] == 'e';
+					}
+					i32 data = call->opcode == MAL_OP_CALL ? call->as.call.data_offset : -1;
+					header_ok = json->opcode == MAL_OP_LOAD_INTRINSIC &&
+						json->as.load_intrinsic.intrinsic == MAL_INTRINSIC_JSON &&
+						json->as.load_intrinsic.dst == json_object && property_ok && parse_name &&
+						call->opcode == MAL_OP_CALL && call->as.call.callee == parse_callee &&
+						call->as.call.this_value == json_object && call->as.call.dst == result &&
+						data >= 0 && data + 1 < fn->instruction_data_count &&
+						fn->instruction_data[data] == 1 && fn->instruction_data[data + 1] == text;
+				}
+				if (!header_ok || score != 1) r.ok = false;
+				MAL_REGION_PAYLOAD_CLAIM(json_intrinsic_ip);
+				if (parse_key_ip >= 0) MAL_REGION_PAYLOAD_CLAIM(parse_key_ip);
+				MAL_REGION_PAYLOAD_CLAIM(parse_property_ip);
+				MAL_REGION_PAYLOAD_CLAIM(parse_call_ip);
+				if (metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

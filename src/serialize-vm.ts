@@ -37,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped for post-wire affine-range virtualization regions.
-export const WIRE_VERSION = 67;
+// Bumped for activation-local invariant JSON.parse cache regions.
+export const WIRE_VERSION = 68;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1266,7 +1266,10 @@ export function serializeVmDefinition(
 																					? 17
 																					: region.kind === "known-builtin-producers"
 																						? 18
-																						: 19;
+																						: region.kind ===
+																							  "affine-range-virtualization"
+																							? 19
+																							: 20;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1320,6 +1323,16 @@ export function serializeVmDefinition(
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
 			switch (region.kind) {
+				case "invariant-json-parse-cache":
+					w.i32(region.jsonIntrinsicIp);
+					w.i32(region.parsePropertyIp);
+					w.i32(region.parseKeyIp ?? -1);
+					w.i32(region.parseCallIp);
+					w.i32(region.jsonObject);
+					w.i32(region.parseCallee);
+					w.i32(region.text);
+					w.i32(region.result);
+					break;
 				case "affine-range-virtualization":
 					w.i32(region.allocationIp);
 					w.i32(region.storeIp);
@@ -1969,6 +1982,9 @@ function validateRegion(
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
+		case "invariant-json-parse-cache":
+			validateInvariantJsonParseCacheRegion(fn, region, stringConstants);
+			break;
 		case "affine-range-virtualization":
 			validateAffineRangeRegion(fn, region);
 			break;
@@ -3079,6 +3095,77 @@ function validateClosedRecordArrayRegion(
 		})
 	) {
 		throw new RangeError("serialize-vm: invalid closed record-Array region metadata");
+	}
+}
+
+function validateInvariantJsonParseCacheRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "invariant-json-parse-cache" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	const stringEquals = (index: number, value: string): boolean => {
+		const constant = stringConstants[index];
+		return (
+			constant?.length === value.length &&
+			constant.every((unit, offset) => unit === value.charCodeAt(offset))
+		);
+	};
+	const payloadIps = [
+		region.jsonIntrinsicIp,
+		...(region.parseKeyIp === undefined ? [] : [region.parseKeyIp]),
+		region.parsePropertyIp,
+		region.parseCallIp,
+	];
+	const json = fn.instructions[region.jsonIntrinsicIp];
+	const property = fn.instructions[region.parsePropertyIp];
+	const key =
+		region.parseKeyIp === undefined ? undefined : fn.instructions[region.parseKeyIp];
+	const call = fn.instructions[region.parseCallIp];
+	const text =
+		call?.opcode === "CALL" && call.arguments.length === 1
+			? decodeVmValueOperand(call.arguments[0]!)
+			: undefined;
+	const propertyMatches =
+		property?.opcode === "LOAD_PROPERTY_STATIC"
+			? region.parseKeyIp === undefined &&
+				property.object === region.jsonObject &&
+				stringEquals(property.stringIndex, "parse")
+			: property?.opcode === "LOAD_PROPERTY"
+				? key?.opcode === "CREATE_STRING" &&
+					property.object === region.jsonObject &&
+					property.key === key.dst &&
+					stringEquals(key.stringIndex, "parse")
+				: false;
+	if (
+		region.representation !== "activation-local-json-parse-template" ||
+		region.composition !== "overlay" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "none" ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== 1 ||
+		region.license.guard.obligations[0] !== "fallback" ||
+		region.anchors.length !== 1 ||
+		region.anchors[0] !== region.parseCallIp ||
+		new Set(payloadIps).size !== payloadIps.length ||
+		payloadIps.length !== region.claimedIps.length ||
+		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		json?.opcode !== "LOAD_INTRINSIC" ||
+		json.intrinsic !== "JSON" ||
+		json.dst !== region.jsonObject ||
+		!propertyMatches ||
+		(property?.opcode !== "LOAD_PROPERTY_STATIC" &&
+			property?.opcode !== "LOAD_PROPERTY") ||
+		property.dst !== region.parseCallee ||
+		call?.opcode !== "CALL" ||
+		call.callee !== region.parseCallee ||
+		call.thisValue !== region.jsonObject ||
+		call.dst !== region.result ||
+		text?.kind !== "register" ||
+		text.register !== region.text ||
+		region.cost.score !== 1 ||
+		region.cost.metadataOperations !== payloadIps.length
+	) {
+		throw new RangeError("serialize-vm: invalid invariant JSON.parse cache region");
 	}
 }
 
@@ -4350,6 +4437,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					(dependencyMask === 1 || dependencyMask === 8) &&
 					obligationMask === 1;
+				const invariantJsonParseCacheContract =
+					kindTag === 20 &&
+					representationTag === 20 &&
+					materializationTag === 0 &&
+					dependencyMask === 0 &&
+					obligationMask === 1;
 				if (
 					compositionTag > 1 ||
 					(compositionTag === 1) !==
@@ -4358,7 +4451,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 							finitePropertySelectorContract ||
 							closedGlobalTableContract ||
 							knownBuiltinProducerContract ||
-							affineRangeContract) ||
+							affineRangeContract ||
+							invariantJsonParseCacheContract) ||
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
@@ -4378,7 +4472,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!finitePropertySelectorContract &&
 						!closedGlobalTableContract &&
 						!knownBuiltinProducerContract &&
-						!affineRangeContract)
+						!affineRangeContract &&
+						!invariantJsonParseCacheContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -5345,7 +5440,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						cost: { score, metadataOperations },
 						sites,
 					};
-				} else {
+				} else if (kindTag === 19) {
 					const allocationIp = r.i32();
 					const storeIp = r.i32();
 					const length = r.i32();
@@ -5373,6 +5468,37 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						storeIp,
 						length,
 						loadIps,
+					};
+				} else {
+					const jsonIntrinsicIp = r.i32();
+					const parsePropertyIp = r.i32();
+					const parseKeyIp = r.i32();
+					const parseCallIp = r.i32();
+					const jsonObject = r.i32();
+					const parseCallee = r.i32();
+					const text = r.i32();
+					const result = r.i32();
+					region = {
+						kind: "invariant-json-parse-cache",
+						license: {
+							guard: { dependencies: [], obligations: ["fallback"] },
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "activation-local-json-parse-template",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						jsonIntrinsicIp,
+						parsePropertyIp,
+						...(parseKeyIp < 0 ? {} : { parseKeyIp }),
+						parseCallIp,
+						jsonObject,
+						parseCallee,
+						text,
+						result,
 					};
 				}
 				validateRegion(

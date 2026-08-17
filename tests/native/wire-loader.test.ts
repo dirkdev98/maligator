@@ -531,6 +531,36 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads a nonempty invariant JSON.parse cache region payload", () => {
+		const entrypoint = path.join(directory, "invariant-json-parse-cache-region.js");
+		const source = `function repeated(text) {
+			let total = 0;
+			for (let index = 0; index < 4; index++) total += JSON.parse(text)[0].id;
+			return total;
+		}
+		globalThis.repeated = repeated;\n`;
+		writeFileSync(entrypoint, source);
+		const cacheDefinition = compileSemanticProgramToVmDefinition(
+			analyzeSourceAndRunSemanticAnalysis(
+				source,
+				entrypoint,
+				parseScript(source, { strict: false }),
+			),
+		);
+		emitVmDefinition(cacheDefinition, { compiled: true });
+		expect(
+			cacheDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "invariant-json-parse-cache") ??
+					[],
+			),
+		).toHaveLength(1);
+		const wirePath = path.join(directory, "invariant-json-parse-cache-region.malw");
+		writeFileSync(wirePath, serializeVmDefinition(cacheDefinition, { debugInfo: false }));
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads a nonempty closed record-Array proof region payload", () => {
 		const entrypoint = path.join(directory, "closed-record-array-region.mjs");
 		writeFileSync(

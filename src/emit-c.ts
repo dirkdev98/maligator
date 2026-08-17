@@ -1244,16 +1244,49 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += 4 + template.captures.length;
 	}
-	for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
-		const instruction = fn.instructions[callIp];
+	for (const region of (fn.regions ?? []).filter(
+		(candidate) => candidate.kind === "invariant-json-parse-cache",
+	)) {
+		const json = fn.instructions[region.jsonIntrinsicIp];
+		const property = fn.instructions[region.parsePropertyIp];
+		const key =
+			region.parseKeyIp === undefined ? undefined : fn.instructions[region.parseKeyIp];
+		const call = fn.instructions[region.parseCallIp];
+		const text =
+			call?.opcode === "CALL" && call.arguments.length === 1
+				? decodeVmValueOperand(call.arguments[0]!)
+				: undefined;
+		const propertyMatches =
+			property?.opcode === "LOAD_PROPERTY_STATIC"
+				? region.parseKeyIp === undefined && property.object === region.jsonObject
+				: property?.opcode === "LOAD_PROPERTY"
+					? key?.opcode === "CREATE_STRING" &&
+						property.key === key.dst &&
+						property.object === region.jsonObject
+					: false;
 		if (
-			instruction?.opcode !== "CALL" ||
-			instruction.nativeInvariantJsonParseCache !== true ||
-			invariantJsonMapTemplates.has(callIp)
+			json?.opcode !== "LOAD_INTRINSIC" ||
+			json.intrinsic !== "JSON" ||
+			json.dst !== region.jsonObject ||
+			!propertyMatches ||
+			(property?.opcode !== "LOAD_PROPERTY_STATIC" &&
+				property?.opcode !== "LOAD_PROPERTY") ||
+			property.dst !== region.parseCallee ||
+			call?.opcode !== "CALL" ||
+			call.callee !== region.parseCallee ||
+			call.thisValue !== region.jsonObject ||
+			call.dst !== region.result ||
+			text?.kind !== "register" ||
+			text.register !== region.text ||
+			invariantJsonMapTemplates.has(region.parseCallIp) ||
+			invariantJsonParseCaches.has(region.parseCallIp)
 		) {
-			continue;
+			throw new Error(`Invalid invariant JSON parse cache at ${region.parseCallIp}`);
 		}
-		invariantJsonParseCaches.set(callIp, { callIp, rootsOffset: nextStackSlot });
+		invariantJsonParseCaches.set(region.parseCallIp, {
+			callIp: region.parseCallIp,
+			rootsOffset: nextStackSlot,
+		});
 		nextStackSlot += 2;
 	}
 	const privateAggregateMemos = new Map<
