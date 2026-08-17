@@ -557,6 +557,12 @@ is general rather than a registry-shaped collection of special cases.
         then preserve that certificate as a validated VM region through MALW v62.
         Native emission derives construction and virtual-slot actions solely from
         the region; the old allocation/access side channels no longer exist.
+  - [x] Replace finite-property producer back-references on dynamic loads/stores
+        with one structural overlay region. Keep the finite string table on its
+        single binary operation, but carry every proven unchanged-ordinal access
+        through IR, VM, MALW v63, cache rebasing and native emission as an explicit
+        producer-consumer graph. Finite-object regions now depend on that graph
+        instead of reconstructing selector ownership from instruction metadata.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

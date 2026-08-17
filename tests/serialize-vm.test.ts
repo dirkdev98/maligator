@@ -409,11 +409,12 @@ describe("serialize-vm", () => {
 			operator: "+",
 			nativeFiniteString: { minimum: 0, stringIndices: [0, 1, 2] },
 		});
+		const finiteSelectorProducerInstructionIndex = metadataInstructions.length - 1;
 		metadataInstructions.push({
 			opcode: "LOAD_PROPERTY",
 			dst: 9,
 			object: 0,
-			key: 1,
+			key: 8,
 			icIndex: metadataInstructions.filter((instruction) =>
 				[
 					"LOAD_PROPERTY",
@@ -422,8 +423,8 @@ describe("serialize-vm", () => {
 					"STORE_PROPERTY_STATIC",
 				].includes(instruction.opcode),
 			).length,
-			nativeFiniteKey: { minimum: 0, ordinal: 1, stringIndices: [0, 1] },
 		});
+		const standaloneFiniteAccessInstructionIndex = metadataInstructions.length - 1;
 		const finiteStoreIc = metadataInstructions.filter((instruction) =>
 			[
 				"LOAD_PROPERTY",
@@ -440,18 +441,16 @@ describe("serialize-vm", () => {
 		metadataInstructions.push({
 			opcode: "STORE_PROPERTY",
 			object: 7,
-			key: 1,
+			key: 8,
 			value: 2,
 			icIndex: finiteStoreIc,
-			nativeFiniteKey: { minimum: 0, ordinal: 1, stringIndices: [0, 1] },
 		});
 		metadataInstructions.push({
 			opcode: "LOAD_PROPERTY",
 			dst: 9,
 			object: 7,
-			key: 1,
+			key: 8,
 			icIndex: finiteStoreIc + 1,
-			nativeFiniteKey: { minimum: 0, ordinal: 1, stringIndices: [0, 1] },
 		});
 		const finiteAccessInstructionIndex = metadataInstructions.length - 1;
 		const finiteStoreInstructionIndex = finiteAllocationInstructionIndex + 1;
@@ -528,6 +527,42 @@ describe("serialize-vm", () => {
 					gcRootRegisters: [0, 3, 7],
 					regions: [
 						{
+							kind: "finite-property-selector",
+							license: {
+								guard: { dependencies: [], obligations: ["fallback"] },
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: "finite-property-domain",
+							composition: "overlay",
+							anchors: [
+								finiteSelectorProducerInstructionIndex,
+								standaloneFiniteAccessInstructionIndex,
+							],
+							claimedIps: [
+								finiteSelectorProducerInstructionIndex,
+								standaloneFiniteAccessInstructionIndex,
+								finiteStoreInstructionIndex,
+								finiteAccessInstructionIndex,
+							],
+							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+							cost: { score: 6, metadataOperations: 4 },
+							runtimeGuard: "integer-domain-and-shape-or-generic-access",
+							selectors: [
+								{
+									producerIp: finiteSelectorProducerInstructionIndex,
+									ordinal: 1,
+									minimum: 0,
+									stringIndices: [0, 1, 2],
+									accesses: [
+										{ ip: standaloneFiniteAccessInstructionIndex, kind: "load" },
+										{ ip: finiteStoreInstructionIndex, kind: "store" },
+										{ ip: finiteAccessInstructionIndex, kind: "load" },
+									],
+								},
+							],
+						},
+						{
 							kind: "finite-object-construction",
 							license: {
 								guard: {
@@ -545,12 +580,12 @@ describe("serialize-vm", () => {
 								finiteAccessInstructionIndex,
 							],
 							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
-							cost: { score: 3, metadataOperations: 3 },
+							cost: { score: 4, metadataOperations: 3 },
 							allocationIp: finiteAllocationInstructionIndex,
 							storeIp: finiteStoreInstructionIndex,
 							icIndex: finiteStoreIc,
 							numberGuards: [1],
-							keyStringIndices: [0, 1],
+							keyStringIndices: [0, 1, 2],
 							virtualRecord: true,
 							accessIps: [finiteAccessInstructionIndex],
 							runtimeGuard: "number-leaves-and-prototype-shape",

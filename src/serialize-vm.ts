@@ -37,8 +37,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped for finite-object construction regions.
-export const WIRE_VERSION = 62;
+// Bumped for finite-property selector regions.
+export const WIRE_VERSION = 63;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1116,9 +1116,6 @@ export function serializeVmDefinition(
 						((instruction.opcode === "LOAD_PROPERTY" ||
 							instruction.opcode === "STORE_PROPERTY") &&
 							instruction.nativeClosedGlobalTable !== undefined) ||
-						((instruction.opcode === "LOAD_PROPERTY" ||
-							instruction.opcode === "STORE_PROPERTY") &&
-							instruction.nativeFiniteKey !== undefined) ||
 						(instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 							instruction.nativePrimitiveStringLength === true)
 					);
@@ -1186,15 +1183,6 @@ export function serializeVmDefinition(
 				w.u8(2);
 				w.i32(instruction.directFunctionIndex!);
 			} else if (
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "STORE_PROPERTY") &&
-				instruction.nativeFiniteKey !== undefined
-			) {
-				w.u8(6);
-				w.i32(instruction.nativeFiniteKey.minimum);
-				w.i32(instruction.nativeFiniteKey.ordinal);
-				w.i32Array(instruction.nativeFiniteKey.stringIndices);
-			} else if (
 				instruction.opcode === "CREATE_ARRAY" &&
 				instruction.nativeFreshDenseReserveLength !== undefined
 			) {
@@ -1226,6 +1214,7 @@ export function serializeVmDefinition(
 		if (regions.length > MAX_REGIONS) {
 			throw new RangeError("serialize-vm: too many function regions");
 		}
+		validateFiniteObjectSelectorLinks(fn);
 		w.u32(regions.length);
 		const claimedRegionInstructions = new Set<number>();
 		for (const region of regions) {
@@ -1265,7 +1254,9 @@ export function serializeVmDefinition(
 																	? 13
 																	: region.kind === "numeric-fusion"
 																		? 14
-																		: 15;
+																		: region.kind === "finite-object-construction"
+																			? 15
+																			: 16;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1408,6 +1399,23 @@ export function serializeVmDefinition(
 					w.u8(region.virtualRecord ? 1 : 0);
 					w.i32Array([...region.accessIps]);
 					w.u8(region.runtimeGuard === "number-leaves-and-prototype-shape" ? 1 : 0);
+					break;
+				case "finite-property-selector":
+					w.u8(
+						region.runtimeGuard === "integer-domain-and-shape-or-generic-access" ? 1 : 0,
+					);
+					w.u32(region.selectors.length);
+					for (const selector of region.selectors) {
+						w.i32(selector.producerIp);
+						w.i32(selector.ordinal);
+						w.i32(selector.minimum);
+						w.i32Array([...selector.stringIndices]);
+						w.u32(selector.accesses.length);
+						for (const access of selector.accesses) {
+							w.i32(access.ip);
+							w.u8(access.kind === "load" ? 1 : 2);
+						}
+					}
 					break;
 				case "regexp-exec-projection":
 					w.i32(region.propertyIp);
@@ -1965,9 +1973,79 @@ function validateRegion(
 		case "finite-object-construction":
 			validateFiniteObjectConstructionRegion(fn, region, stringConstants);
 			break;
+		case "finite-property-selector":
+			validateFinitePropertySelectorRegion(fn, region, stringConstants);
+			break;
 	}
 	if (region.composition !== "overlay") {
 		for (const ip of region.claimedIps) claimed.add(ip);
+	}
+}
+
+function validateFinitePropertySelectorRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "finite-property-selector" }>,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): void {
+	const payloadIps = region.selectors.flatMap((selector) => [
+		selector.producerIp,
+		...selector.accesses.map((access) => access.ip),
+	]);
+	if (
+		region.composition !== "overlay" ||
+		region.license.guard.dependencies.length !== 0 ||
+		region.license.guard.obligations.length !== 1 ||
+		region.license.guard.obligations[0] !== "fallback" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "none" ||
+		region.representation !== "finite-property-domain" ||
+		region.runtimeGuard !== "integer-domain-and-shape-or-generic-access" ||
+		region.selectors.length === 0 ||
+		region.selectors.length > 32 ||
+		region.anchors.length !== 2 ||
+		region.anchors[0] !== region.selectors[0]!.producerIp ||
+		region.anchors[1] !== region.selectors[0]!.accesses[0]?.ip ||
+		region.selectors.some((selector) => {
+			const producer = fn.instructions[selector.producerIp];
+			return (
+				producer?.opcode !== "BINARY" ||
+				producer.operator !== "+" ||
+				producer.right !== selector.ordinal ||
+				selector.ordinal < 0 ||
+				selector.ordinal >= fn.registerCount ||
+				producer.nativeFiniteString?.minimum !== selector.minimum ||
+				producer.nativeFiniteString.stringIndices.length !==
+					selector.stringIndices.length ||
+				producer.nativeFiniteString.stringIndices.some(
+					(index, ordinal) => index !== selector.stringIndices[ordinal],
+				) ||
+				selector.stringIndices.length === 0 ||
+				selector.stringIndices.length > 8 ||
+				selector.stringIndices.some(
+					(index) => index < 0 || index >= stringConstants.length,
+				) ||
+				selector.accesses.length === 0 ||
+				selector.accesses.some((access) => {
+					const instruction = fn.instructions[access.ip];
+					return access.kind === "load"
+						? instruction?.opcode !== "LOAD_PROPERTY" || instruction.key !== producer.dst
+						: instruction?.opcode !== "STORE_PROPERTY" ||
+								instruction.key !== producer.dst;
+				})
+			);
+		}) ||
+		new Set(payloadIps).size !== payloadIps.length ||
+		payloadIps.length !== region.claimedIps.length ||
+		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		region.cost.score !==
+			region.selectors.reduce(
+				(total, selector) =>
+					total + selector.stringIndices.length + selector.accesses.length,
+				0,
+			) ||
+		region.cost.metadataOperations !== payloadIps.length
+	) {
+		throw new RangeError("serialize-vm: invalid finite-property selector region");
 	}
 }
 
@@ -1979,14 +2057,6 @@ function validateFiniteObjectConstructionRegion(
 	const allocation = fn.instructions[region.allocationIp];
 	const store = fn.instructions[region.storeIp];
 	const payloadIps = [region.allocationIp, region.storeIp, ...region.accessIps];
-	const finiteKeyMatches = (instruction: VmInstruction | undefined): boolean =>
-		(instruction?.opcode === "LOAD_PROPERTY" ||
-			instruction?.opcode === "STORE_PROPERTY") &&
-		instruction.nativeFiniteKey !== undefined &&
-		instruction.nativeFiniteKey.stringIndices.length === region.keyStringIndices.length &&
-		instruction.nativeFiniteKey.stringIndices.every(
-			(index, ordinal) => index === region.keyStringIndices[ordinal],
-		);
 	if (
 		region.composition !== undefined ||
 		region.license.guard.dependencies.length !== 0 ||
@@ -2000,7 +2070,6 @@ function validateFiniteObjectConstructionRegion(
 		allocation?.opcode !== "CREATE_OBJECT" ||
 		store?.opcode !== "STORE_PROPERTY" ||
 		store.icIndex !== region.icIndex ||
-		!finiteKeyMatches(store) ||
 		region.icIndex < 0 ||
 		region.icIndex >= countPropertyIcSites(fn.instructions) ||
 		region.numberGuards.length > 4 ||
@@ -2015,10 +2084,7 @@ function validateFiniteObjectConstructionRegion(
 		) ||
 		region.virtualRecord !== region.accessIps.length > 0 ||
 		region.accessIps.length > 32 ||
-		region.accessIps.some((ip) => {
-			const access = fn.instructions[ip];
-			return access?.opcode !== "LOAD_PROPERTY" || !finiteKeyMatches(access);
-		}) ||
+		region.accessIps.some((ip) => fn.instructions[ip]?.opcode !== "LOAD_PROPERTY") ||
 		region.anchors.length !== 2 ||
 		region.anchors[0] !== region.allocationIp ||
 		region.anchors[1] !== region.storeIp ||
@@ -2029,6 +2095,39 @@ function validateFiniteObjectConstructionRegion(
 		region.cost.metadataOperations !== payloadIps.length
 	) {
 		throw new RangeError("serialize-vm: invalid finite-object construction region");
+	}
+}
+
+function validateFiniteObjectSelectorLinks(fn: VmFunction): void {
+	const selectorByAccess = new Map<
+		number,
+		Extract<VmRegion, { kind: "finite-property-selector" }>["selectors"][number]
+	>();
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "finite-property-selector") continue;
+		for (const selector of region.selectors) {
+			for (const access of selector.accesses) {
+				if (selectorByAccess.has(access.ip)) {
+					throw new RangeError("serialize-vm: duplicate finite-property selector access");
+				}
+				selectorByAccess.set(access.ip, selector);
+			}
+		}
+	}
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "finite-object-construction") continue;
+		for (const ip of [region.storeIp, ...region.accessIps]) {
+			const selector = selectorByAccess.get(ip);
+			if (
+				selector === undefined ||
+				selector.stringIndices.length !== region.keyStringIndices.length ||
+				selector.stringIndices.some(
+					(index, ordinal) => index !== region.keyStringIndices[ordinal],
+				)
+			) {
+				throw new RangeError("serialize-vm: finite object lacks its selector region");
+			}
+		}
 	}
 }
 
@@ -3920,24 +4019,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid finite-string metadata");
 				}
 				instruction.nativeFiniteString = { minimum, stringIndices };
-			} else if (
-				tag === 6 &&
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "STORE_PROPERTY")
-			) {
-				const minimum = r.i32();
-				const ordinal = r.i32();
-				const stringIndices = r.i32Array();
-				if (
-					ordinal < 0 ||
-					ordinal >= fn.registerCount ||
-					stringIndices.length === 0 ||
-					stringIndices.length > 8 ||
-					stringIndices.some((index) => index < 0 || index >= stringConstants.length)
-				) {
-					throw new RangeError("serialize-vm: invalid finite-property metadata");
-				}
-				instruction.nativeFiniteKey = { minimum, ordinal, stringIndices };
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
 				const reserveLength = r.i32();
 				if (reserveLength < 1 || reserveLength > 65_536) {
@@ -4101,9 +4182,18 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 1 &&
 					dependencyMask === 0 &&
 					obligationMask === 3;
+				const finitePropertySelectorContract =
+					kindTag === 16 &&
+					representationTag === 16 &&
+					materializationTag === 0 &&
+					dependencyMask === 0 &&
+					obligationMask === 1;
 				if (
 					compositionTag > 1 ||
-					(compositionTag === 1) !== (exactFreshArrayContract || numericFusionContract) ||
+					(compositionTag === 1) !==
+						(exactFreshArrayContract ||
+							numericFusionContract ||
+							finitePropertySelectorContract) ||
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
@@ -4119,7 +4209,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!cardinalityArrayContract &&
 						!exactFreshArrayContract &&
 						!numericFusionContract &&
-						!finiteObjectConstructionContract)
+						!finiteObjectConstructionContract &&
+						!finitePropertySelectorContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -4928,7 +5019,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						runtimeGuard: "number-operands",
 						pairs,
 					};
-				} else {
+				} else if (kindTag === 15) {
 					const allocationIp = r.i32();
 					const storeIp = r.i32();
 					const icIndex = r.i32();
@@ -4964,11 +5055,60 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						accessIps,
 						runtimeGuard: "number-leaves-and-prototype-shape",
 					};
+				} else {
+					const runtimeGuardTag = r.u8();
+					const selectorCount = r.count(2);
+					const selectors: Array<
+						Extract<VmRegion, { kind: "finite-property-selector" }>["selectors"][number]
+					> = [];
+					for (let selectorIndex = 0; selectorIndex < selectorCount; selectorIndex++) {
+						const producerIp = r.i32();
+						const ordinal = r.i32();
+						const minimum = r.i32();
+						const stringIndices = r.i32Array();
+						const accessCount = r.count(2);
+						const accesses: Array<{ ip: number; kind: "load" | "store" }> = [];
+						for (let accessIndex = 0; accessIndex < accessCount; accessIndex++) {
+							const ip = r.i32();
+							const kindTag = r.u8();
+							if (kindTag !== 1 && kindTag !== 2) {
+								throw new RangeError("serialize-vm: invalid finite-property access kind");
+							}
+							accesses.push({ ip, kind: kindTag === 1 ? "load" : "store" });
+						}
+						selectors.push({
+							producerIp,
+							ordinal,
+							minimum,
+							stringIndices,
+							accesses,
+						});
+					}
+					if (runtimeGuardTag !== 1) {
+						throw new RangeError("serialize-vm: invalid finite-property selector guard");
+					}
+					region = {
+						kind: "finite-property-selector",
+						license: {
+							guard: { dependencies: [], obligations: ["fallback"] },
+							genericTwin: "retained",
+							materialization: "none",
+						},
+						representation: "finite-property-domain",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						runtimeGuard: "integer-domain-and-shape-or-generic-access",
+						selectors,
+					};
 				}
 				validateRegion(fn, region, claimed, functions.length, stringConstants);
 				regions.push(region);
 			}
 			fn.regions = regions;
+			validateFiniteObjectSelectorLinks(fn);
 		}
 	}
 	if (r.remaining() !== 0) {

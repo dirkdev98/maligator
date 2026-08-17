@@ -947,6 +947,33 @@ export interface IRNumericFusionRegion extends IRRegionEnvelope<
 	}>;
 }
 
+/**
+ * Structural producer-consumer graph for bounded computed property names. The
+ * binary producer keeps its operation-local string table; this overlay owns all
+ * dynamic property accesses whose ordinal was proven unchanged since it ran.
+ */
+export interface IRFinitePropertySelectorRegion extends IRRegionEnvelope<
+	"finite-property-selector",
+	"finite-property-domain",
+	"none",
+	readonly [
+		Extract<IRInstruction, { type: "binary" }>,
+		Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>,
+	],
+	"structural"
+> {
+	readonly composition: "overlay";
+	readonly runtimeGuard: "integer-domain-and-shape-or-generic-access";
+	readonly selectors: ReadonlyArray<{
+		readonly source: Extract<IRInstruction, { type: "binary" }>;
+		readonly minimum: number;
+		readonly stringIndices: ReadonlyArray<number>;
+		readonly accesses: ReadonlyArray<
+			Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>
+		>;
+	}>;
+}
+
 /** Structural proof for a canonical finite-key object construction loop. */
 export interface IRFiniteObjectConstructionRegion extends IRRegionEnvelope<
 	"finite-object-construction",
@@ -991,6 +1018,7 @@ export type IRRegion =
 	| IRClosedRecordArrayRegion
 	| IRExactFreshArrayRegion
 	| IRFiniteObjectConstructionRegion
+	| IRFinitePropertySelectorRegion
 	| IRNumericFusionRegion
 	| IRRegExpExecProjectionRegion
 	| IRRegExpIteratorProjectionRegion
@@ -1425,14 +1453,6 @@ export type IRInstruction =
 			/** COMPILE-ONLY: dependency-guarded inherited load for this stack site. */
 			stackObjectInheritedSiteId?: number;
 			stackObjectInheritedGuard?: CompilerGuardPlan;
-			/** Native-only finite selector domain. The ordinary key remains available
-			 * for the exact generic fallback; the source's right operand selects a string.
-			 */
-			nativeFiniteKey?: {
-				minimum: number;
-				source: Extract<IRInstruction, { type: "binary" }>;
-				stringIndices: Array<number>;
-			};
 			/** COMPILE-ONLY: a non-escaping global `{}` is represented by a bounded
 			 * synthetic-global value table. Unknown selectors deopt/materialize it. */
 			nativeClosedGlobalTable?: {
@@ -1469,13 +1489,6 @@ export type IRInstruction =
 	| {
 			type: "storeProperty";
 
-			/** Native-only finite selector domain. The normal key and [[Set]]
-			 * fallback remain authoritative whenever the guarded shape misses. */
-			nativeFiniteKey?: {
-				minimum: number;
-				source: Extract<IRInstruction, { type: "binary" }>;
-				stringIndices: Array<number>;
-			};
 			nativeClosedGlobalTable?: {
 				baseIndex: number;
 				stateIndex: number;

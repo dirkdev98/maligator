@@ -63,6 +63,7 @@ import type {
 	IRCardinalityArrayRegion,
 	IRClosedRecordArrayRegion,
 	IRFiniteObjectConstructionRegion,
+	IRFinitePropertySelectorRegion,
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
@@ -2954,6 +2955,17 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 
 	const index = buildIRRegisterIndex(fn, { locations: true });
 	const locations = index.locations!;
+	const finiteSelectorByAccess = new Map<
+		IRInstruction,
+		IRFinitePropertySelectorRegion["selectors"][number]
+	>();
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "finite-property-selector") continue;
+		for (const selector of region.selectors) {
+			for (const access of selector.accesses)
+				finiteSelectorByAccess.set(access, selector);
+		}
+	}
 	const occupiedInstructions = new Set(
 		retainedRegions
 			.filter((region) => region.composition !== "overlay")
@@ -2987,10 +2999,9 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 
 	for (const block of fn.blocks) {
 		for (const store of block.instructions) {
-			if (store.type !== "storeProperty" || store.nativeFiniteKey === undefined) {
-				continue;
-			}
-			const finite = store.nativeFiniteKey;
+			if (store.type !== "storeProperty") continue;
+			const finite = finiteSelectorByAccess.get(store);
+			if (finite === undefined) continue;
 			const storeLocation = locations.get(store);
 			const sourceLocation = locations.get(finite.source);
 			if (
@@ -3274,11 +3285,13 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 					if (
 						use.position !== 1 ||
 						access.type !== "loadProperty" ||
-						access.nativeFiniteKey === undefined ||
-						access.nativeFiniteKey.stringIndices.length !== finite.stringIndices.length ||
-						access.nativeFiniteKey.stringIndices.some(
-							(stringIndex, ordinal) => stringIndex !== finite.stringIndices[ordinal],
-						)
+						finiteSelectorByAccess.get(access)?.stringIndices.length !==
+							finite.stringIndices.length ||
+						finiteSelectorByAccess
+							.get(access)
+							?.stringIndices.some(
+								(stringIndex, ordinal) => stringIndex !== finite.stringIndices[ordinal],
+							) === true
 					) {
 						virtualRecord = false;
 						break;
@@ -3350,10 +3363,15 @@ function annotateFiniteObjectConstructionsInFunction(fn: IRFunction): void {
 export function annotateFiniteStringConcats(program: IntermediateProgram): void {
 	const initialStringCount = program.stringConstants.length;
 	for (const fn of program.functions) {
+		const retainedRegions = (fn.regions ?? []).filter(
+			(region) => region.kind !== "finite-property-selector",
+		);
+		fn.regions = retainedRegions.length > 0 ? retainedRegions : undefined;
 		if (fn.isGenerator || fn.isAsync) continue;
 		const index = buildIRRegisterIndex(fn, { locations: true });
 		const { backEdges } = findBackEdges(fn);
 		if (backEdges.length === 0) continue;
+		const selectorPlans: Array<IRFinitePropertySelectorRegion["selectors"][number]> = [];
 
 		const incoming = fn.blocks.map(() => new Set<number>());
 		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
@@ -3490,6 +3508,9 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 							};
 							instruction.nativeFiniteString = finite;
 							if (finite.stringIndices.length <= 8) {
+								const accesses: Array<
+									Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>
+								> = [];
 								for (const use of index.uses.get(instruction.registers[0]) ?? []) {
 									const sourceLocation = index.locations?.get(instruction);
 									const useLocation = index.locations?.get(use.instruction);
@@ -3507,12 +3528,16 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 										((use.position === 2 && use.instruction.type === "loadProperty") ||
 											(use.position === 1 && use.instruction.type === "storeProperty"))
 									) {
-										use.instruction.nativeFiniteKey = {
-											minimum: finite.minimum,
-											source: instruction,
-											stringIndices: [...finite.stringIndices],
-										};
+										accesses.push(use.instruction);
 									}
+								}
+								if (accesses.length > 0) {
+									selectorPlans.push({
+										source: instruction,
+										minimum: finite.minimum,
+										stringIndices: [...finite.stringIndices],
+										accesses,
+									});
 								}
 							}
 						}
@@ -3584,6 +3609,57 @@ export function annotateFiniteStringConcats(program: IntermediateProgram): void 
 				) {
 					ranges.set(destination, produced);
 				}
+			}
+		}
+		if (
+			selectorPlans.length > 0 &&
+			retainedRegions.length < MAX_IR_REGIONS_PER_FUNCTION
+		) {
+			const selectors: Array<IRFinitePropertySelectorRegion["selectors"][number]> = [];
+			const claimedInstructions = new Set<IRInstruction>();
+			for (const selector of selectorPlans) {
+				const additions = [selector.source, ...selector.accesses].filter(
+					(instruction) => !claimedInstructions.has(instruction),
+				);
+				if (selectors.length >= 32 || claimedInstructions.size + additions.length > 96) {
+					break;
+				}
+				selectors.push(selector);
+				for (const instruction of additions) claimedInstructions.add(instruction);
+			}
+			const first = selectors[0];
+			const firstAccess = first?.accesses[0];
+			if (first !== undefined && firstAccess !== undefined) {
+				const claimed = [...claimedInstructions];
+				const ordinaryBlocks = [
+					...new Set(
+						claimed.map((instruction) => index.locations!.get(instruction)!.blockIndex),
+					),
+				].sort((left, right) => left - right);
+				const region: IRFinitePropertySelectorRegion = {
+					kind: "finite-property-selector",
+					license: {
+						guard: "structural",
+						genericTwin: "retained",
+						materialization: "none",
+					},
+					representation: "finite-property-domain",
+					composition: "overlay",
+					anchors: [first.source, firstAccess],
+					claimedInstructions: claimed,
+					controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+					cost: {
+						score: selectors.reduce(
+							(total, selector) =>
+								total + selector.stringIndices.length + selector.accesses.length,
+							0,
+						),
+						metadataOperations: claimed.length,
+					},
+					runtimeGuard: "integer-domain-and-shape-or-generic-access",
+					selectors,
+				};
+				fn.regions = [...(fn.regions ?? []), region];
 			}
 		}
 		annotateFiniteObjectConstructionsInFunction(fn);

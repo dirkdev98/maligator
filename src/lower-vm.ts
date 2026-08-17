@@ -12,6 +12,7 @@ import type {
 	IRImmediateValue,
 	IRInstruction,
 	IRNumericHofPlanOperation,
+	IRRegion,
 } from "./ir.ts";
 import { computeSafepointRoots } from "./liveness.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
@@ -621,6 +622,25 @@ export type VmNumericFusionRegion = VmRegionEnvelope<
 	}>;
 };
 
+export type VmFinitePropertySelectorRegion = VmRegionEnvelope<
+	"finite-property-selector",
+	"finite-property-domain",
+	"none"
+> & {
+	readonly composition: "overlay";
+	readonly runtimeGuard: "integer-domain-and-shape-or-generic-access";
+	readonly selectors: ReadonlyArray<{
+		readonly producerIp: number;
+		readonly ordinal: number;
+		readonly minimum: number;
+		readonly stringIndices: ReadonlyArray<number>;
+		readonly accesses: ReadonlyArray<{
+			readonly ip: number;
+			readonly kind: "load" | "store";
+		}>;
+	}>;
+};
+
 /**
  * Complete finite-key construction contract. The allocation, canonical store,
  * optional virtual reads, Number leaves, key table, and shared property IC are
@@ -674,6 +694,7 @@ export type VmRegion =
 	| VmInvariantJsonMapTemplateRegion
 	| VmNumericFusionRegion
 	| VmFiniteObjectConstructionRegion
+	| VmFinitePropertySelectorRegion
 	| VmStackObjectPlanRegion
 	| VmCardinalityArrayRegion
 	| VmStringSplitProjectionRegion
@@ -1303,11 +1324,6 @@ export type VmInstruction =
 			object: number;
 			key: number;
 			icIndex: number;
-			nativeFiniteKey?: {
-				minimum: number;
-				ordinal: number;
-				stringIndices: Array<number>;
-			};
 			/** EMITTER-DERIVED LOOKUP: materialized only from the central region table. */
 			nativeClosedRecordArrayAccess?: {
 				allocationIp: number;
@@ -1347,11 +1363,6 @@ export type VmInstruction =
 			key: number;
 			value: number;
 			icIndex: number;
-			nativeFiniteKey?: {
-				minimum: number;
-				ordinal: number;
-				stringIndices: Array<number>;
-			};
 			nativeClosedGlobalTable?: {
 				baseIndex: number;
 				stateIndex: number;
@@ -2085,13 +2096,133 @@ function lowerFunctionToVmFunction(
 	// Exclude every IR cardinality candidate from independent stack planning even
 	// when the region table or its payload is rejected below.
 	const cardinalityItemAllocationIps = new Set<number>();
+	const finiteSelectorByAccess = new Map<
+		IRInstruction,
+		Extract<IRRegion, { kind: "finite-property-selector" }>["selectors"][number]
+	>();
 	for (const region of fn.regions ?? []) {
-		if (region.kind !== "cardinality-array") continue;
-		const itemIp = instructionIndexByIrInstruction.get(region.anchors[2]);
-		if (itemIp !== undefined) cardinalityItemAllocationIps.add(itemIp);
+		if (region.kind === "cardinality-array") {
+			const itemIp = instructionIndexByIrInstruction.get(region.anchors[2]);
+			if (itemIp !== undefined) cardinalityItemAllocationIps.add(itemIp);
+		} else if (region.kind === "finite-property-selector") {
+			for (const selector of region.selectors) {
+				for (const access of selector.accesses)
+					finiteSelectorByAccess.set(access, selector);
+			}
+		}
 	}
 	const irRegions = (fn.regions?.length ?? 0) <= 8 ? (fn.regions ?? []) : [];
 	for (const region of irRegions) {
+		if (region.kind === "finite-property-selector") {
+			const anchors = region.anchors.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
+			const selectors = region.selectors.map((selector) => ({
+				producerIp: instructionIndexByIrInstruction.get(selector.source),
+				ordinal: selector.source.registers[2],
+				minimum: selector.minimum,
+				stringIndices: [...selector.stringIndices],
+				accesses: selector.accesses.map((access) => ({
+					ip: instructionIndexByIrInstruction.get(access),
+					kind: access.type === "loadProperty" ? ("load" as const) : ("store" as const),
+				})),
+			}));
+			if (
+				region.license.guard !== "structural" ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "none" ||
+				region.representation !== "finite-property-domain" ||
+				region.composition !== "overlay" ||
+				region.runtimeGuard !== "integer-domain-and-shape-or-generic-access" ||
+				anchors.some((ip) => ip === undefined) ||
+				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
+				region.controlFlow.exceptionalBlocks.length !== 0 ||
+				selectors.some(
+					(selector) =>
+						selector.producerIp === undefined ||
+						selector.accesses.some((access) => access.ip === undefined),
+				)
+			) {
+				continue;
+			}
+			const resolvedSelectors = selectors as Array<{
+				producerIp: number;
+				ordinal: number;
+				minimum: number;
+				stringIndices: Array<number>;
+				accesses: Array<{ ip: number; kind: "load" | "store" }>;
+			}>;
+			const payloadIps = resolvedSelectors.flatMap((selector) => [
+				selector.producerIp,
+				...selector.accesses.map((access) => access.ip),
+			]);
+			if (
+				resolvedSelectors.length === 0 ||
+				resolvedSelectors.length > 32 ||
+				resolvedSelectors.some((selector) => {
+					const producer = instructions[selector.producerIp];
+					return (
+						producer?.opcode !== "BINARY" ||
+						producer.operator !== "+" ||
+						producer.right !== selector.ordinal ||
+						producer.nativeFiniteString?.minimum !== selector.minimum ||
+						producer.nativeFiniteString.stringIndices.length !==
+							selector.stringIndices.length ||
+						producer.nativeFiniteString.stringIndices.some(
+							(index, ordinal) => index !== selector.stringIndices[ordinal],
+						) ||
+						selector.stringIndices.length === 0 ||
+						selector.stringIndices.length > 8 ||
+						selector.accesses.length === 0 ||
+						selector.accesses.some((access) => {
+							const instruction = instructions[access.ip];
+							return access.kind === "load"
+								? instruction?.opcode !== "LOAD_PROPERTY"
+								: instruction?.opcode !== "STORE_PROPERTY";
+						})
+					);
+				}) ||
+				new Set(payloadIps).size !== payloadIps.length ||
+				payloadIps.length !== claimedIps.length ||
+				payloadIps.some((ip) => !claimedIps.includes(ip)) ||
+				region.cost.score !==
+					resolvedSelectors.reduce(
+						(total, selector) =>
+							total + selector.stringIndices.length + selector.accesses.length,
+						0,
+					) ||
+				region.cost.metadataOperations !== payloadIps.length
+			) {
+				continue;
+			}
+			regions.push({
+				kind: "finite-property-selector",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback"] },
+					genericTwin: "retained",
+					materialization: "none",
+				},
+				representation: "finite-property-domain",
+				composition: "overlay",
+				anchors: anchors as [number, number],
+				claimedIps: claimedIps as Array<number>,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: [],
+				},
+				cost: { ...region.cost },
+				runtimeGuard: "integer-domain-and-shape-or-generic-access",
+				selectors: resolvedSelectors,
+			});
+			continue;
+		}
 		if (region.kind === "exact-fresh-array") {
 			const allocationIp = instructionIndexByIrInstruction.get(region.anchors[0]);
 			const anchorAccessIp = instructionIndexByIrInstruction.get(region.anchors[1]);
@@ -2197,34 +2328,31 @@ function lowerFunctionToVmFunction(
 			const resolvedAccessIps = accessIps as Array<number>;
 			const payloadIps = [allocationIp, storeIp, ...resolvedAccessIps];
 			const numberGuards = region.anchors[0].registers.slice(1);
-			const finiteKeysMatch = (
-				instruction: VmInstruction | undefined,
-			): instruction is Extract<
-				VmInstruction,
-				{ opcode: "LOAD_PROPERTY" | "STORE_PROPERTY" }
-			> =>
-				(instruction?.opcode === "LOAD_PROPERTY" ||
-					instruction?.opcode === "STORE_PROPERTY") &&
-				instruction.nativeFiniteKey !== undefined &&
-				instruction.nativeFiniteKey.stringIndices.length ===
-					region.keyStringIndices.length &&
-				instruction.nativeFiniteKey.stringIndices.every(
-					(index, ordinal) => index === region.keyStringIndices[ordinal],
+			const finiteKeysMatch = (instruction: IRInstruction): boolean => {
+				const selector = finiteSelectorByAccess.get(instruction);
+				return (
+					selector !== undefined &&
+					selector.stringIndices.length === region.keyStringIndices.length &&
+					selector.stringIndices.every(
+						(index, ordinal) => index === region.keyStringIndices[ordinal],
+					)
 				);
+			};
 			if (
 				allocation?.opcode !== "CREATE_OBJECT" ||
 				store?.opcode !== "STORE_PROPERTY" ||
-				!finiteKeysMatch(store) ||
+				!finiteKeysMatch(region.anchors[1]) ||
 				region.keyStringIndices.length === 0 ||
 				region.keyStringIndices.length > 32 ||
 				region.numberGuardCount !== numberGuards.length ||
 				region.numberGuardCount < 0 ||
 				region.numberGuardCount > 4 ||
 				region.virtualRecord !== resolvedAccessIps.length > 0 ||
-				resolvedAccessIps.some((ip) => {
-					const access = instructions[ip];
-					return access?.opcode !== "LOAD_PROPERTY" || !finiteKeysMatch(access);
-				}) ||
+				resolvedAccessIps.some(
+					(ip, ordinal) =>
+						instructions[ip]?.opcode !== "LOAD_PROPERTY" ||
+						!finiteKeysMatch(region.accesses[ordinal]!),
+				) ||
 				new Set(payloadIps).size !== payloadIps.length ||
 				payloadIps.length !== resolvedClaimedIps.length ||
 				payloadIps.some((ip) => !resolvedClaimedIps.includes(ip)) ||
@@ -4217,15 +4345,6 @@ function lowerInstructionToVmInstruction(
 								...instruction.nativeClosedGlobalTable,
 								guard: loadClosedGlobalGuard!,
 							},
-				...(instruction.nativeFiniteKey === undefined
-					? {}
-					: {
-							nativeFiniteKey: {
-								minimum: instruction.nativeFiniteKey.minimum,
-								ordinal: instruction.nativeFiniteKey.source.registers[2],
-								stringIndices: [...instruction.nativeFiniteKey.stringIndices],
-							},
-						}),
 			};
 		}
 		case "loadPropertyStatic":
@@ -4269,15 +4388,6 @@ function lowerInstructionToVmInstruction(
 								...instruction.nativeClosedGlobalTable,
 								guard: storeClosedGlobalGuard!,
 							},
-				...(instruction.nativeFiniteKey === undefined
-					? {}
-					: {
-							nativeFiniteKey: {
-								minimum: instruction.nativeFiniteKey.minimum,
-								ordinal: instruction.nativeFiniteKey.source.registers[2],
-								stringIndices: [...instruction.nativeFiniteKey.stringIndices],
-							},
-						}),
 			};
 		}
 		case "storePropertyStatic":

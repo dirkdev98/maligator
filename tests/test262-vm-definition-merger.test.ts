@@ -150,7 +150,7 @@ describe("Test262 VM definition merger", () => {
 			},
 			{
 				opcode: "BINARY",
-				dst: 0,
+				dst: 4,
 				left: 1,
 				right: 2,
 				operator: "+",
@@ -160,9 +160,8 @@ describe("Test262 VM definition merger", () => {
 				opcode: "LOAD_PROPERTY",
 				dst: 0,
 				object: 1,
-				key: 2,
+				key: 4,
 				icIndex: 0,
-				nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [0] },
 			},
 			{
 				opcode: "CREATE_OBJECT",
@@ -171,10 +170,9 @@ describe("Test262 VM definition merger", () => {
 			{
 				opcode: "STORE_PROPERTY",
 				object: 3,
-				key: 2,
+				key: 4,
 				value: 1,
 				icIndex: 1,
-				nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [0] },
 			},
 			{
 				opcode: "LOAD_PROPERTY",
@@ -196,6 +194,33 @@ describe("Test262 VM definition merger", () => {
 		];
 		const secondFunction = vmFunction(indexed);
 		secondFunction.regions = [
+			{
+				kind: "finite-property-selector",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback"] },
+					genericTwin: "retained",
+					materialization: "none",
+				},
+				representation: "finite-property-domain",
+				composition: "overlay",
+				anchors: [18, 19],
+				claimedIps: [18, 19, 21],
+				controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+				cost: { score: 3, metadataOperations: 3 },
+				runtimeGuard: "integer-domain-and-shape-or-generic-access",
+				selectors: [
+					{
+						producerIp: 18,
+						ordinal: 2,
+						minimum: 0,
+						stringIndices: [0],
+						accesses: [
+							{ ip: 19, kind: "load" },
+							{ ip: 21, kind: "store" },
+						],
+					},
+				],
+			},
 			{
 				kind: "finite-object-construction",
 				license: {
@@ -283,17 +308,21 @@ describe("Test262 VM definition merger", () => {
 		expect(rebased[18]).toMatchObject({
 			nativeFiniteString: { minimum: 0, stringIndices: [2] },
 		});
-		expect(rebased[19]).toMatchObject({
-			nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [2] },
-		});
 		expect(merged.functions[2]!.regions?.[0]).toMatchObject({
+			kind: "finite-property-selector",
+			selectors: [
+				{
+					producerIp: 18,
+					ordinal: 2,
+					stringIndices: [2],
+				},
+			],
+		});
+		expect(merged.functions[2]!.regions?.[1]).toMatchObject({
 			kind: "finite-object-construction",
 			icIndex: 1,
 			numberGuards: [2],
 			keyStringIndices: [2],
-		});
-		expect(rebased[21]).toMatchObject({
-			nativeFiniteKey: { minimum: 0, ordinal: 2, stringIndices: [2] },
 		});
 		expect(rebased[22]).toMatchObject({
 			nativeClosedGlobalTable: {

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 62u        // finite-object construction regions
+#define WIRE_VERSION 63u        // finite-property selector regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1780,16 +1780,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 for (u32 index = 0; r.ok && index < string_index_count; index++) {
                     (void) rd_i32(&r);
                 }
-            } else if (tag == 6) { // LOAD_PROPERTY finite selector domain
-                (void) rd_i32(&r); // minimum
-                (void) rd_i32(&r); // ordinal register
-                u32 string_index_count = rd_count(&r, sizeof(i32));
-                if (string_index_count == 0 || string_index_count > 8) {
-                    r.ok = false;
-                }
-                for (u32 index = 0; r.ok && index < string_index_count; index++) {
-                    (void) rd_i32(&r);
-                }
 			} else if (tag == 10) { // closed-global finite table
                 i32 base = rd_i32(&r);
                 i32 state = rd_i32(&r);
@@ -1947,17 +1937,21 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
 			bool finite_object_construction_contract = kind == 15 && representation == 15 &&
 				materialization == 1 && dependency_mask == 0 && obligation_mask == 3;
+			bool finite_property_selector_contract = kind == 16 && representation == 16 &&
+				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
-				 (composition == 1) !=
-					(exact_fresh_array_contract || numeric_fusion_contract) ||
+				(composition == 1) !=
+					(exact_fresh_array_contract || numeric_fusion_contract ||
+					 finite_property_selector_contract) ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
 				 !string_scan_contract && !private_aggregate_memo_contract &&
 				 !invariant_json_map_template_contract && !stack_object_plan_contract &&
 				 !cardinality_array_contract && !exact_fresh_array_contract &&
-				 !numeric_fusion_contract && !finite_object_construction_contract)) {
+				 !numeric_fusion_contract && !finite_object_construction_contract &&
+				 !finite_property_selector_contract)) {
                 r.ok = false;
             }
 
@@ -3393,6 +3387,55 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				u8 runtime_guard = rd_u8(&r);
 				if (runtime_guard != 1 || score != key_count + access_count ||
 					metadata_operations != payload_count) r.ok = false;
+			} else if (r.ok && kind == 16) {
+				u8 runtime_guard = rd_u8(&r);
+				u32 selector_count = rd_count(&r, 2);
+				u32 selector_score = 0;
+				i32 first_producer_ip = -1;
+				i32 first_access_ip = -1;
+				if (runtime_guard != 1 || selector_count == 0 || selector_count > 32 ||
+					anchor_count != 2) r.ok = false;
+				for (u32 selector = 0; r.ok && selector < selector_count; selector++) {
+					i32 producer_ip = rd_i32(&r);
+					i32 ordinal = rd_i32(&r);
+					(void) rd_i32(&r); // minimum
+					u32 key_count = rd_count(&r, sizeof(i32));
+					if (key_count == 0 || key_count > 8) r.ok = false;
+					for (u32 key = 0; r.ok && key < key_count; key++) {
+						i32 string_index = rd_i32(&r);
+						if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
+					}
+					u32 access_count = rd_count(&r, 2);
+					bool producer_ok = producer_ip >= 0 && producer_ip < fn->instruction_count &&
+						ordinal >= 0 && ordinal < fn->register_count && access_count > 0 &&
+						fn->instructions[producer_ip].opcode == MAL_OP_BINARY &&
+						fn->instructions[producer_ip].as.binary.op == MAL_BIN_ADD &&
+						fn->instructions[producer_ip].as.binary.right == ordinal;
+					if (!producer_ok) r.ok = false;
+					if (selector == 0) first_producer_ip = producer_ip;
+					MAL_REGION_PAYLOAD_REFERENCE(producer_ip);
+					for (u32 access = 0; r.ok && access < access_count; access++) {
+						i32 access_ip = rd_i32(&r);
+						u8 access_kind = rd_u8(&r);
+						bool access_ok = access_ip >= 0 && access_ip < fn->instruction_count &&
+							(access_kind == 1 || access_kind == 2);
+						if (access_ok && access_kind == 1) {
+							access_ok = fn->instructions[access_ip].opcode == MAL_OP_LOAD_PROPERTY &&
+								fn->instructions[access_ip].as.load_property.key ==
+									fn->instructions[producer_ip].as.binary.dst;
+						} else if (access_ok) {
+							access_ok = fn->instructions[access_ip].opcode == MAL_OP_STORE_PROPERTY &&
+								fn->instructions[access_ip].as.store_property.key ==
+									fn->instructions[producer_ip].as.binary.dst;
+						}
+						if (!access_ok) r.ok = false;
+						if (selector == 0 && access == 0) first_access_ip = access_ip;
+						MAL_REGION_PAYLOAD_REFERENCE(access_ip);
+					}
+					selector_score += key_count + access_count;
+				}
+				if (anchors[0] != first_producer_ip || anchors[1] != first_access_ip ||
+					score != selector_score || metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

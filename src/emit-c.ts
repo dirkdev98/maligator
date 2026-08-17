@@ -19,6 +19,7 @@ import type {
 	VmCardinalityArrayRegion,
 	VmExceptionHandler,
 	VmFiniteObjectConstructionRegion,
+	VmFinitePropertySelectorRegion,
 	VmFunction,
 	VmGuardPlan,
 	VmInvariantJsonMapTemplateRegion,
@@ -820,6 +821,48 @@ export function emitCompiledFunction(
 	const finiteRecordRegions = new Map<number, FiniteRecordRegion>();
 	const finiteRecordStores = new Map<number, FiniteRecordRegion>();
 	const finiteRecordAccesses = new Map<number, FiniteRecordRegion>();
+	type FinitePropertySelector = VmFinitePropertySelectorRegion["selectors"][number];
+	const finitePropertySelectors = new Map<number, FinitePropertySelector>();
+	for (const region of (fn.regions ?? []).filter(
+		(candidate): candidate is VmFinitePropertySelectorRegion =>
+			candidate.kind === "finite-property-selector",
+	)) {
+		for (const selector of region.selectors) {
+			const producer = fn.instructions[selector.producerIp];
+			if (
+				producer?.opcode !== "BINARY" ||
+				producer.operator !== "+" ||
+				producer.right !== selector.ordinal ||
+				producer.nativeFiniteString?.minimum !== selector.minimum ||
+				producer.nativeFiniteString.stringIndices.length !==
+					selector.stringIndices.length ||
+				producer.nativeFiniteString.stringIndices.some(
+					(index, ordinal) => index !== selector.stringIndices[ordinal],
+				) ||
+				selector.stringIndices.length === 0 ||
+				selector.stringIndices.length > 8
+			) {
+				throw new Error(
+					`Invalid finite-property selector at instruction ${selector.producerIp}`,
+				);
+			}
+			for (const access of selector.accesses) {
+				const instruction = fn.instructions[access.ip];
+				if (
+					(access.kind === "load"
+						? instruction?.opcode !== "LOAD_PROPERTY" || instruction.key !== producer.dst
+						: instruction?.opcode !== "STORE_PROPERTY" ||
+							instruction.key !== producer.dst) ||
+					finitePropertySelectors.has(access.ip)
+				) {
+					throw new Error(
+						`Invalid finite-property selector access at instruction ${access.ip}`,
+					);
+				}
+				finitePropertySelectors.set(access.ip, selector);
+			}
+		}
+	}
 	const finiteConstructionRegions = new Map<number, VmFiniteObjectConstructionRegion>();
 	for (const finite of (fn.regions ?? []).filter(
 		(region): region is VmFiniteObjectConstructionRegion =>
@@ -827,11 +870,21 @@ export function emitCompiledFunction(
 	)) {
 		const allocation = fn.instructions[finite.allocationIp];
 		const store = fn.instructions[finite.storeIp];
+		const selectorMatches = (ip: number): boolean => {
+			const selector = finitePropertySelectors.get(ip);
+			return (
+				selector !== undefined &&
+				selector.stringIndices.length === finite.keyStringIndices.length &&
+				selector.stringIndices.every(
+					(index, ordinal) => index === finite.keyStringIndices[ordinal],
+				)
+			);
+		};
 		if (
 			allocation?.opcode !== "CREATE_OBJECT" ||
 			store?.opcode !== "STORE_PROPERTY" ||
 			store.icIndex !== finite.icIndex ||
-			store.nativeFiniteKey === undefined ||
+			!selectorMatches(finite.storeIp) ||
 			finite.keyStringIndices.length === 0 ||
 			finite.keyStringIndices.length > 8 ||
 			finite.numberGuards.some(
@@ -839,7 +892,7 @@ export function emitCompiledFunction(
 			) ||
 			finite.accessIps.some((ip) => {
 				const access = fn.instructions[ip];
-				return access?.opcode !== "LOAD_PROPERTY" || access.nativeFiniteKey === undefined;
+				return access?.opcode !== "LOAD_PROPERTY" || !selectorMatches(ip);
 			}) ||
 			finiteConstructionRegions.has(finite.allocationIp)
 		) {
@@ -1290,6 +1343,7 @@ export function emitCompiledFunction(
 		finiteRecordStores,
 		finiteRecordAccesses,
 		finiteConstructionRegions,
+		finitePropertySelectors,
 		cardinalityRegions,
 		cardinalityAccesses,
 		cardinalityPushes,
@@ -1674,6 +1728,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -3017,6 +3072,10 @@ function emitBody(
 	finiteRecordStores: ReadonlyMap<number, FiniteRecordRegion>,
 	finiteRecordAccesses: ReadonlyMap<number, FiniteRecordRegion>,
 	finiteConstructionRegions: ReadonlyMap<number, VmFiniteObjectConstructionRegion>,
+	finitePropertySelectors: ReadonlyMap<
+		number,
+		VmFinitePropertySelectorRegion["selectors"][number]
+	>,
 	cardinalityRegions: ReadonlyMap<number, CardinalityRegion>,
 	cardinalityAccesses: ReadonlyMap<
 		number,
@@ -3971,6 +4030,7 @@ function emitBody(
 					exactFreshArrayAccessIps.has(ip),
 					numericFusionActionByIp.get(ip),
 					finiteConstructionRegions.get(ip),
+					finitePropertySelectors.get(ip),
 				);
 		if (emitted === null) {
 			return null;
@@ -4371,6 +4431,7 @@ function emitInstruction(
 	exactFreshArrayAccess?: boolean,
 	numericFusionAction?: NativeNumericFusionAction,
 	finiteConstruction?: VmFiniteObjectConstructionRegion,
+	finitePropertySelector?: VmFinitePropertySelectorRegion["selectors"][number],
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -5252,9 +5313,9 @@ function emitInstruction(
 			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
-				instruction.nativeFiniteKey !== undefined
+				finitePropertySelector !== undefined
 			) {
-				const finite = instruction.nativeFiniteKey;
+				const finite = finitePropertySelector;
 				const table = `__finite_property_keys_${ip}`;
 				const ordinalNumber =
 					reps[finite.ordinal] === "number"
@@ -5632,9 +5693,9 @@ function emitInstruction(
 			}
 			if (
 				instruction.opcode === "STORE_PROPERTY" &&
-				instruction.nativeFiniteKey !== undefined
+				finitePropertySelector !== undefined
 			) {
-				const finite = instruction.nativeFiniteKey;
+				const finite = finitePropertySelector;
 				const table = `__finite_store_keys_${ip}`;
 				const ordinalNumber =
 					reps[finite.ordinal] === "number"

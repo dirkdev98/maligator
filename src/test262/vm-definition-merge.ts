@@ -49,6 +49,16 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "finite-property-selector":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				selectors: region.selectors.map((selector) => ({
+					...selector,
+					stringIndices: selector.stringIndices.map((index) => index + base.string),
+					accesses: selector.accesses.map((access) => ({ ...access })),
+				})),
+			};
 		case "finite-object-construction":
 			return {
 				...cloneRegionEnvelope(region),
@@ -384,16 +394,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 								baseIndex: instruction.nativeClosedGlobalTable.baseIndex + base.global,
 								stateIndex: instruction.nativeClosedGlobalTable.stateIndex + base.global,
 							},
-				nativeFiniteKey:
-					instruction.nativeFiniteKey === undefined
-						? undefined
-						: {
-								minimum: instruction.nativeFiniteKey.minimum,
-								ordinal: instruction.nativeFiniteKey.ordinal,
-								stringIndices: instruction.nativeFiniteKey.stringIndices.map(
-									(index) => index + base.string,
-								),
-							},
 			};
 		case "STORE_PROPERTY":
 			return {
@@ -405,16 +405,6 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 								...instruction.nativeClosedGlobalTable,
 								baseIndex: instruction.nativeClosedGlobalTable.baseIndex + base.global,
 								stateIndex: instruction.nativeClosedGlobalTable.stateIndex + base.global,
-							},
-				nativeFiniteKey:
-					instruction.nativeFiniteKey === undefined
-						? undefined
-						: {
-								minimum: instruction.nativeFiniteKey.minimum,
-								ordinal: instruction.nativeFiniteKey.ordinal,
-								stringIndices: instruction.nativeFiniteKey.stringIndices.map(
-									(index) => index + base.string,
-								),
 							},
 			};
 		case "BINARY":

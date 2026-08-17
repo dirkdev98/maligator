@@ -474,13 +474,16 @@ test("carries a finite selector domain into computed property loads", () => {
 		globalThis.sum = sum;
 	`);
 	executeIROptimizations(program);
-	const load = instructionsOf(functionNamed(program, "sum")).find(
-		(instruction) =>
-			instruction.type === "loadProperty" && instruction.nativeFiniteKey !== undefined,
+	const selectorRegion = functionNamed(program, "sum").regions?.find(
+		(region) => region.kind === "finite-property-selector",
 	);
-	if (load?.type !== "loadProperty") throw new Error("expected finite property load");
-	expect(load.nativeFiniteKey?.minimum).toBe(0);
-	expect(load.nativeFiniteKey?.stringIndices).toHaveLength(4);
+	if (selectorRegion?.kind !== "finite-property-selector") {
+		throw new Error("expected finite property selector region");
+	}
+	expect(selectorRegion.selectors).toHaveLength(1);
+	expect(selectorRegion.selectors[0]?.minimum).toBe(0);
+	expect(selectorRegion.selectors[0]?.stringIndices).toHaveLength(4);
+	expect(selectorRegion.selectors[0]?.accesses[0]?.type).toBe("loadProperty");
 });
 
 test("proves a guarded fresh-object finite construction region", () => {
@@ -506,7 +509,14 @@ test("proves a guarded fresh-object finite construction region", () => {
 	expect(region.virtualRecord).toBe(false);
 	expect(allocation.registers).toHaveLength(2); // destination + guarded seed
 	expect(region.numberGuardCount).toBe(1);
-	expect(store.nativeFiniteKey?.stringIndices).toHaveLength(8);
+	const selectorRegion = build.regions?.find(
+		(candidate) => candidate.kind === "finite-property-selector",
+	);
+	if (selectorRegion?.kind !== "finite-property-selector") {
+		throw new Error("expected finite property selector region");
+	}
+	expect(selectorRegion.selectors[0]?.stringIndices).toHaveLength(8);
+	expect(selectorRegion.selectors[0]?.accesses).toContain(store);
 });
 
 test("virtualizes a finite construction observed only through its selector domain", () => {
@@ -571,10 +581,9 @@ test("does not reuse a finite selector ordinal after it changes", () => {
 	`);
 	executeIROptimizations(program);
 	expect(
-		instructionsOf(functionNamed(program, "sum")).some(
-			(instruction) =>
-				instruction.type === "loadProperty" && instruction.nativeFiniteKey !== undefined,
-		),
+		functionNamed(program, "sum").regions?.some(
+			(region) => region.kind === "finite-property-selector",
+		) ?? false,
 	).toBe(false);
 });
 
