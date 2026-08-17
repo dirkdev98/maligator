@@ -34,6 +34,10 @@ typedef struct MalHost {
     struct MalNodeHttpRequestState *ready_http_requests_tail;
     usize pending_http_completions;
     i64 timer_next_id;
+
+    /** Runtime-owned external assets installed for in-process development tests. */
+    void *development_assets;
+    void (*development_assets_free)(void *assets);
 } MalHost;
 
 /* Standalone lifecycle for embedders and host-only tests. */

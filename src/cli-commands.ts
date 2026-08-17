@@ -1,4 +1,4 @@
-import { existsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
@@ -45,7 +45,7 @@ import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
-import { FrontendCompilationSession } from "./frontend-cache.ts";
+import { cacheFrontendWire, FrontendCompilationSession } from "./frontend-cache.ts";
 import {
 	debugHofInlineSites,
 	debugInlinableCalls,
@@ -65,7 +65,10 @@ import {
 import type { PreparedProfile } from "./profile-artifact.ts";
 import {
 	executeTestCommand,
+	ISOLATED_TEST_RESULT_PREFIX,
+	prepareIsolatedTestCommand,
 	prepareProfiledTestCommand,
+	reportIsolatedTestResult,
 	reportProfiledTestResult,
 } from "./testing/command.ts";
 import type { TestCommandSummary } from "./testing/command.ts";
@@ -120,13 +123,14 @@ export interface CompilerInstallation {
 	licensePath?: string;
 	/** Source implementation supplied for the virtual maligator:test module. */
 	testModulePath: string;
-	/** Node-compatible globals installed before interpreted test modules. */
-	testNodeGlobalsPath: string;
+	/** Node-compatible globals installed before applications and interpreted tests. */
+	nodeGlobalsPath: string;
 	/** Cache identity of the active TypeScript erasure frontend. */
 	frontendIdentity: string;
 	/** Prebuilt multi-call executable capable of running development wire images. */
 	developmentRunner?: {
 		executablePath: string;
+		primordials: "locked" | "mutable";
 		webPlatform: boolean;
 		node: boolean;
 		realms: boolean;
@@ -147,7 +151,7 @@ export function developmentCompilerInstallation(
 		runtimeDirectory: path.resolve(sourceDirectory, "../runtime"),
 		licensePath: path.resolve(sourceDirectory, "../LICENSE"),
 		testModulePath: path.join(sourceDirectory, "testing/runtime.mjs"),
-		testNodeGlobalsPath: path.join(sourceDirectory, "testing/node-globals.mjs"),
+		nodeGlobalsPath: path.join(sourceDirectory, "node-globals.mjs"),
 		frontendIdentity: "typescript-strip-v1",
 		evalCompiler: {
 			kind: "source",
@@ -163,14 +167,14 @@ export function productCompilerInstallation(
 	testModulePath: string,
 	licensePath?: string,
 	developmentRunnerPath?: string,
-	testNodeGlobalsPath?: string,
+	nodeGlobalsPath?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
 		...(licensePath === undefined ? {} : { licensePath: path.resolve(licensePath) }),
 		testModulePath: path.resolve(testModulePath),
-		testNodeGlobalsPath: path.resolve(
-			testNodeGlobalsPath ?? path.join(path.dirname(testModulePath), "node-globals.mjs"),
+		nodeGlobalsPath: path.resolve(
+			nodeGlobalsPath ?? path.join(path.dirname(testModulePath), "node-globals.mjs"),
 		),
 		frontendIdentity: "compact-type-strip-v1",
 		...(developmentRunnerPath === undefined
@@ -178,6 +182,7 @@ export function productCompilerInstallation(
 			: {
 					developmentRunner: {
 						executablePath: path.resolve(developmentRunnerPath),
+						primordials: "locked" as const,
 						webPlatform: true,
 						node: true,
 						realms: true,
@@ -307,6 +312,7 @@ function compatibleDevelopmentRunner(
 	if (
 		runner === undefined ||
 		(Object.keys(config.assets).length > 0 && !runner.externalAssets) ||
+		config.engine.primordials !== runner.primordials ||
 		(config.surface.webPlatform && !runner.webPlatform) ||
 		(config.surface.node && !runner.node) ||
 		(config.engine.realms && !runner.realms) ||
@@ -440,6 +446,14 @@ function compileAndBuild(
 				return compileBuildFrontend({
 					entrypoint: entrypointPath,
 					config: buildConfig,
+					...(buildConfig.surface.node
+						? {
+								nodeGlobalsSource: readFileSync(
+									context.installation.nodeGlobalsPath,
+									"utf-8",
+								),
+							}
+						: {}),
 					stripTypes: context.stripTypes,
 					stripperIdentity: context.installation.frontendIdentity,
 					session: frontendSession,
@@ -1115,6 +1129,103 @@ export async function devCommand(
 
 const PROFILED_TEST_RESULT_PREFIX = "__MALIGATOR_TEST_RESULT__";
 
+function executeIsolatedTests(
+	command: TestCommand,
+	context: CommandContext,
+	config: ResolvedBuildConfig,
+): TestCommandSummary {
+	const compiled = prepareIsolatedTestCommand(command, context, config);
+	const derivation = buildDerivationFromConfig(config);
+	let toolchain: Toolchain;
+	try {
+		toolchain = requireToolchain({
+			needsCxx: config.surface.webPlatform,
+			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
+		});
+	} catch (error) {
+		if (error instanceof ToolchainError) commandError(error.message);
+		throw error;
+	}
+	const evalCompiler = context.installation.evalCompiler;
+	const compilerBake =
+		evalCompiler.kind === "source"
+			? {
+					kind: "source" as const,
+					sourceDirectory: evalCompiler.sourceDirectory,
+					entrypoint: evalCompiler.entrypoint,
+					bake: () =>
+						compileEntrypointToBuffer(evalCompiler.entrypoint, {
+							stripTypes: context.stripTypes,
+						}),
+				}
+			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
+	const nativeContext = resolveNativeBuildContext({
+		toolchain,
+		plan: selectNativeBuildPlan(toolchain, false),
+		runtimeDirectory: context.installation.runtimeDirectory,
+		features: derivation.features,
+		compilerBake,
+	});
+	const runner = buildDevelopmentRunner(
+		nativeContext,
+		false,
+		derivation.cacheSuffix,
+	).binaryPath;
+	const wirePath = cacheFrontendWire(compiled.wire);
+	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
+		cacheDirectory: ".cache/mal-cache",
+		session: new FrontendCompilationSession(),
+	});
+	const assetManifest = cacheDevelopmentAssets(assets);
+	const entrypoint = compiled.files[0]!;
+	const args = [
+		assetManifest === undefined
+			? "--maligator-internal-run-wires"
+			: "--maligator-internal-run-wires-assets",
+		"1",
+		...(assetManifest === undefined ? [] : [assetManifest]),
+		entrypoint,
+		wirePath,
+	];
+	const executionStartedAt = Date.now();
+	const outcome = executeBinaryCaptured(runner, args, runEnv());
+	const executionMs = Date.now() - executionStartedAt;
+	if (outcome.stderr !== "") process.stderr.write(outcome.stderr);
+	const outputLines = outcome.stdout.split("\n");
+	const resultLine = outputLines.find((line) =>
+		line.startsWith(ISOLATED_TEST_RESULT_PREFIX),
+	);
+	const applicationOutput = outputLines
+		.filter((line) => !line.startsWith(ISOLATED_TEST_RESULT_PREFIX))
+		.join("\n");
+	if (applicationOutput !== "") process.stdout.write(applicationOutput);
+	if (outcome.status !== 0 || resultLine === undefined) {
+		commandError(
+			`error: isolated test process ${
+				outcome.signal
+					? `received ${outcome.signal}`
+					: `exited with ${outcome.status ?? "unknown"}`
+			}${resultLine === undefined ? " without publishing a test result" : ""}`,
+		);
+	}
+	let testResult: TestRunResult;
+	try {
+		testResult = JSON.parse(
+			resultLine.slice(ISOLATED_TEST_RESULT_PREFIX.length),
+		) as TestRunResult;
+	} catch (error) {
+		commandError(
+			`error: isolated test result was invalid: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	return reportIsolatedTestResult(testResult, {
+		files: compiled.files.length,
+		discoveryMs: compiled.discoveryMs,
+		frontendMs: compiled.frontendMs,
+		executionMs,
+	});
+}
+
 function executeProfiledTests(
 	command: TestCommand,
 	context: CommandContext,
@@ -1332,7 +1443,10 @@ export async function runCli(
 				const config = loadCommandConfig(command, context.stripTypes);
 				result = command.profile
 					? executeProfiledTests(command, context, config)
-					: await executeTestCommand(command, context, config);
+					: context.installation.developmentRunner !== undefined &&
+						  compatibleDevelopmentRunner(config, context) === undefined
+						? executeIsolatedTests(command, context, config)
+						: await executeTestCommand(command, context, config);
 			} catch (error) {
 				commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
 			}

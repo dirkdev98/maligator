@@ -71,6 +71,7 @@ interface CompiledArtifact {
 interface LinkageValidationRequest {
 	schema: 1;
 	entrypoint: string;
+	entryPrelude?: NonNullable<BuildModuleGraphOptions["entryPrelude"]>;
 	config: ResolvedBuildConfig;
 	stripperIdentity: string;
 	cacheDirectory?: string;
@@ -113,6 +114,7 @@ export class UnsupportedBuildFragmentsError extends Error {
 
 export interface CompileBuildFragmentsOptions {
 	graph: ModuleGraph;
+	entryPrelude?: BuildModuleGraphOptions["entryPrelude"];
 	config: ResolvedBuildConfig;
 	facts: CompilerProgramFacts;
 	/** Reuse whole-graph analysis already required by locked-world diagnostics. */
@@ -287,6 +289,7 @@ function applicationGraph(
 		buildConfig: options.config,
 		parseCache,
 		virtualModules,
+		entryPrelude: options.entryPrelude,
 	});
 }
 
@@ -302,6 +305,13 @@ function environmentIdentity(options: CompileBuildFragmentsOptions): string {
 			engine: options.config.engine,
 			host: options.config.host,
 			surface: options.config.surface,
+			entryPrelude:
+				options.entryPrelude === undefined
+					? undefined
+					: {
+							specifier: options.entryPrelude.specifier,
+							source: digest(options.entryPrelude.source),
+						},
 		}),
 	);
 }
@@ -609,6 +619,7 @@ function prepareParallelLinkageValidation(
 	const request: LinkageValidationRequest = {
 		schema: 1,
 		entrypoint: options.graph.entry,
+		...(options.entryPrelude === undefined ? {} : { entryPrelude: options.entryPrelude }),
 		config: options.config,
 		stripperIdentity: options.stripperIdentity,
 		...(options.cacheDirectory === undefined
@@ -657,6 +668,7 @@ export function validateBuildFragmentRequest(
 		const graph = buildModuleGraph(request.entrypoint, {
 			buildConfig: request.config,
 			stripTypes,
+			entryPrelude: request.entryPrelude,
 		});
 		assertNoBoundaryCycle(graph);
 		const plans = planBoundary(graph);
@@ -671,6 +683,7 @@ export function validateBuildFragmentRequest(
 		const session = new FrontendCompilationSession();
 		const options: CompileBuildFragmentsOptions = {
 			graph,
+			entryPrelude: request.entryPrelude,
 			config: request.config,
 			facts: compilerProgramFactsFromConfig(request.config),
 			stripTypes,

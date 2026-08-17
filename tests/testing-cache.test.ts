@@ -12,7 +12,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { deserializeVmDefinition } from "../src/serialize-vm.ts";
 import {
+	compileIsolatedTestImage,
 	compileTestFile,
 	compileTestImage,
 	TestCompilationSession,
@@ -60,6 +62,35 @@ describe("test discovery", () => {
 });
 
 describe("test frontend artifact cache", () => {
+	test("bakes options and a machine-readable result into isolated test images", () => {
+		const root = temporaryDirectory();
+		const entry = path.join(root, "isolated.test.mjs");
+		write(
+			entry,
+			`import { expect, test } from "maligator:test"; test("ok", () => expect(1).toBe(1));\n`,
+		);
+		const prefix = "__ISOLATED_RESULT__";
+		const compiled = compileIsolatedTestImage(
+			{
+				files: [entry],
+				config: resolveBuildConfig({}),
+				stripTypes: stripTypesWithTypeScript,
+				stripperIdentity: "isolated-test-typescript-strip",
+				testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
+			},
+			{ repeat: 1, bail: false, timeoutMs: 1000 },
+			prefix,
+		);
+		const definition = deserializeVmDefinition(compiled.wire);
+		const strings = definition.stringConstants.map((units) =>
+			String.fromCharCode(...units),
+		);
+
+		expect(compiled.entries).toEqual([entry]);
+		expect(compiled.dependencies).toEqual([entry]);
+		expect(strings).toContain(prefix);
+	});
+
 	test("reuses unchanged wire and invalidates a changed transitive dependency", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

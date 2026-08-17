@@ -1,5 +1,5 @@
 import express from "express";
-import { MaligatorHeaders } from "../../src/testing/node-globals.mjs";
+import { MaligatorHeaders } from "../../src/node-globals.mjs";
 
 const app = express();
 app.use(express.json());

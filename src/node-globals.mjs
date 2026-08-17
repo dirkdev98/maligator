@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await -- This source is compiled inside Maligator, whose Node host objects intentionally have no TypeScript declarations. */
 
+/** Node-surface compatibility globals implemented over Maligator's node:* host modules. */
+
 import { request as nodeRequest } from "node:http";
 
 class MaligatorHeaders {

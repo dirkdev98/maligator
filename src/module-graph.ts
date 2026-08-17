@@ -176,6 +176,16 @@ export interface BuildModuleGraphOptions {
 	entrySource?: string;
 
 	/**
+	 * Toolchain-owned module evaluated before the application entrypoint. CommonJS
+	 * entries synchronously require it; ESM entries import it. The module remains a
+	 * virtual graph record, so it never becomes a runtime filesystem dependency.
+	 */
+	entryPrelude?: {
+		specifier: string;
+		source: string;
+	};
+
+	/**
 	 * Force the goal of *every* module in the graph, bypassing all detection.
 	 * Used when the caller knows the whole graph is one goal (e.g. test262 module
 	 * tests, where `.js` fixtures are modules despite the extension).
@@ -260,6 +270,11 @@ export function buildModuleGraph(
 		nodeEnabled,
 		conditions: exportConditions(nodeEnabled, "import"),
 	};
+	const virtualModule = (specifier: string) =>
+		options.virtualModules?.get(specifier) ??
+		(options.entryPrelude?.specifier === specifier
+			? { source: options.entryPrelude.source, goal: "module" as const }
+			: undefined);
 
 	const load = (
 		filePath: string,
@@ -287,6 +302,13 @@ export function buildModuleGraph(
 			}
 			parseSource = options.stripTypes(parseSource, filePath);
 		}
+		if (filePath === entry && options.entryPrelude !== undefined) {
+			const specifier = JSON.stringify(options.entryPrelude.specifier);
+			parseSource =
+				goal === "cjs"
+					? `require(${specifier});\n${parseSource}`
+					: `import ${specifier};\n${parseSource}`;
+		}
 		parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
 		const parse = () => {
 			const parsed = parseWithGoal(parseSource, goal);
@@ -302,9 +324,15 @@ export function buildModuleGraph(
 				// graph. Preserve the edge for later lowering/runtime handling.
 				return { ...dependency, resolvedPath: null };
 			}
-			const virtualModule = options.virtualModules?.get(dependency.specifier);
-			if (virtualModule !== undefined) {
-				if (dependency.kind === "dynamic" || dependency.kind === "require") {
+			const toolchainModule = virtualModule(dependency.specifier);
+			if (toolchainModule !== undefined) {
+				const entryPreludeRequire =
+					dependency.kind === "require" &&
+					dependency.specifier === options.entryPrelude?.specifier;
+				if (
+					dependency.kind === "dynamic" ||
+					(dependency.kind === "require" && !entryPreludeRequire)
+				) {
 					throw new SyntaxError(
 						`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
 					);
@@ -379,9 +407,14 @@ export function buildModuleGraph(
 				modules.set(resolvedPath, hostModuleRecord(host));
 				continue;
 			}
-			const virtualModule = options.virtualModules?.get(resolvedPath);
-			if (virtualModule !== undefined) {
-				load(resolvedPath, virtualModule.goal ?? "module", virtualModule.source, true);
+			const toolchainModule = virtualModule(resolvedPath);
+			if (toolchainModule !== undefined) {
+				load(
+					resolvedPath,
+					toolchainModule.goal ?? "module",
+					toolchainModule.source,
+					true,
+				);
 				continue;
 			}
 			load(

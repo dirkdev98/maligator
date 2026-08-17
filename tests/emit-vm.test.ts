@@ -1,7 +1,11 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { mathUnaryOperationKeys } from "../src/builtin-registry.ts";
+import {
+	directBuiltinOperationIds,
+	exactBuiltinCallDescriptor,
+	mathUnaryOperationKeys,
+} from "../src/builtin-registry.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
 import { emitCompiledFunction } from "../src/emit-c.ts";
@@ -192,6 +196,35 @@ describe("emit-vm instruction packing", () => {
 		expect(emitVmDefinition(descriptorDefinition, { compiled: false })).toContain(
 			".as.define_property = { .object = 1, .key = 2, .value = 3, .enumerable = true, .writable = false, .configurable = false }",
 		);
+	});
+
+	it("emits every registered direct builtin operation into interpreted C", () => {
+		for (const operation of directBuiltinOperationIds) {
+			const emitted = emitVmDefinition(
+				{
+					...definition,
+					functions: [
+						{
+							...fn,
+							instructions: [
+								{
+									opcode: "CALL_BUILTIN",
+									dst: 0,
+									thisValue: 1,
+									argumentCount: 1,
+									arguments: [2],
+									operation,
+								},
+							],
+						},
+					],
+				},
+				{ compiled: false },
+			);
+			expect(emitted).toContain(
+				`.operation = ${exactBuiltinCallDescriptor(operation)!.cOperation}`,
+			);
+		}
 	});
 
 	it("emits one flattened side table and raw f64 words", () => {

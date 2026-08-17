@@ -69,6 +69,7 @@ console.log(readFileSync(mal.assets.materialize("hello"), "utf-8"));
 				"--maligator-internal-run-wires-assets",
 				String(frontend.artifacts.length),
 				manifest,
+				entrypoint,
 				...frontend.artifacts.map((artifact) => artifact.path),
 			],
 			{ encoding: "utf-8" },

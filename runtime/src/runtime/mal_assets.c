@@ -16,8 +16,10 @@
 #endif
 
 #include "array_object.h"
+#include "development_assets.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "host.h"
 #include "host_registry.h"
 #include "intrinsics.h"
 #include "object.h"
@@ -160,6 +162,59 @@ static MalValue mal_test_run_wire_path(
     free(path);
     free(bytes);
     return result;
+}
+
+static void mal_test_development_assets_free(void *assets) {
+    mal_development_assets_free((MalDevelopmentAssets *) assets);
+}
+
+/** Replace the product CLI's own embedded assets while executing project tests. */
+static MalValue mal_test_set_development_assets(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    MalHost *host = mal_host(vm);
+    if (host == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "mal._setDevelopmentAssets requires a host runtime");
+        return mal_value_new_undefined();
+    }
+
+    MalDevelopmentAssets *loaded = nullptr;
+    const MalAsset *assets = nullptr;
+    i32 asset_count = 0;
+    if (argc > 0 && !mal_value_is_undefined(args[0])) {
+        char *path = mal_asset_to_cstr(vm, args[0], "manifestPath");
+        if (path == nullptr) return mal_value_new_undefined();
+        const char *error = "unknown error";
+        loaded = mal_development_assets_load(path, &error);
+        if (loaded == nullptr) {
+            usize length = strlen(path) + strlen(error) + 48;
+            char *message = malloc(length);
+            if (message != nullptr) {
+                snprintf(message, length,
+                    "mal._setDevelopmentAssets could not load '%s': %s", path, error);
+            }
+            mal_asset_throw_utf8(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                message != nullptr ? message : "Could not load development assets");
+            free(message);
+            free(path);
+            return mal_value_new_undefined();
+        }
+        free(path);
+        assets = mal_development_assets_get(loaded, &asset_count);
+    }
+
+    if (host->development_assets_free != nullptr) {
+        host->development_assets_free(host->development_assets);
+    }
+    host->development_assets = loaded;
+    host->development_assets_free =
+        loaded == nullptr ? nullptr : mal_test_development_assets_free;
+    vm->live_definition.assets = assets;
+    vm->live_definition.asset_count = asset_count;
+    return mal_value_new_undefined();
 }
 
 static MalValue mal_dev_spawn(
@@ -670,6 +725,9 @@ void mal_host_install_maligator(
         vm, mal, (const byte *) "_runWire", 1, mal_test_run_wire);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_runWirePath", 1, mal_test_run_wire_path);
+    mal_intrinsic_define_method_n(
+        vm, mal, (const byte *) "_setDevelopmentAssets", 1,
+        mal_test_set_development_assets);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_spawnDevelopmentProcess", 2, mal_dev_spawn);
     mal_intrinsic_define_method_n(

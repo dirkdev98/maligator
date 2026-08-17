@@ -2,8 +2,10 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
 	chmodSync,
 	copyFileSync,
+	cpSync,
 	existsSync,
 	mkdirSync,
+	renameSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -21,6 +23,9 @@ const distribution = path.join(root, "distribution");
 const noTools = path.join(root, "no-tools");
 const configPath = path.join(project, "maligator.build.ts");
 const developmentConfigPath = path.join(project, "maligator.development.build.ts");
+const expressFixturePath = "tests/fixtures/express-5";
+const expressConfigPath = `${expressFixturePath}/assets-app.build.mts`;
+const expressTestPath = `${expressFixturePath}/assets-app.test.mjs`;
 const fixture = "entry.mts";
 const originalPath = process.env.PATH ?? "";
 const progress = new CommandProgress("selfhost-cli");
@@ -34,6 +39,11 @@ mkdirSync(tools, { recursive: true });
 mkdirSync(project, { recursive: true });
 mkdirSync(distribution, { recursive: true });
 mkdirSync(noTools, { recursive: true });
+cpSync(
+	path.join(repositoryRoot, expressFixturePath),
+	path.join(project, expressFixturePath),
+	{ recursive: true },
+);
 
 const rustup = resolvePathExecutable("rustup", originalPath);
 const selectedCargo = execFileSync(rustup, ["which", "cargo"], {
@@ -285,6 +295,133 @@ setTimeout(() => {
 	console.log(
 		"ok   target materialized binary assets, executed eval, and forwarded arguments",
 	);
+
+	const expressRunOutput = invoke(["run", "--config", expressConfigPath]);
+	if (!expressRunOutput.includes("EXPRESS_ASSETS_SMOKE static payload")) {
+		throw new Error(
+			`Express asset run did not complete its HTTP checks:\n${expressRunOutput}`,
+		);
+	}
+	console.log("ok   run served Express routes from an external Mal asset snapshot");
+
+	const expressWatcher = spawn(
+		distributedCli,
+		["dev", "--config", expressConfigPath, "--", "--serve"],
+		{
+			cwd: project,
+			env: isolatedEnv,
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+	let expressWatchOutput = "";
+	expressWatcher.stdout.setEncoding("utf-8");
+	expressWatcher.stderr.setEncoding("utf-8");
+	expressWatcher.stdout.on("data", (chunk: string) => {
+		expressWatchOutput += chunk;
+	});
+	expressWatcher.stderr.on("data", (chunk: string) => {
+		expressWatchOutput += chunk;
+	});
+	const expressWatcherExit = new Promise<number | null>((resolve) => {
+		expressWatcher.once("exit", (code) => resolve(code));
+	});
+	const isolatedPublicAsset = path.join(project, expressFixturePath, "public/hello.txt");
+	let expressWatchExit: number | null | undefined;
+	const expressOrigins = () =>
+		[
+			...expressWatchOutput.matchAll(/EXPRESS_ASSETS_READY (http:\/\/127\.0\.0\.1:\d+)/g),
+		].map((match) => match[1]!);
+	const expectAsset = async (expected: string) => {
+		const origins = expressOrigins();
+		const origin = origins.at(-1);
+		if (origin === undefined)
+			throw new Error(`Express dev server did not publish an origin`);
+		const response = await fetch(`${origin}/assets/hello.txt`);
+		if (response.status !== 200 || (await response.text()) !== expected) {
+			throw new Error(`Express dev server did not serve ${JSON.stringify(expected)}`);
+		}
+	};
+	try {
+		await waitForOutput(() => expressWatchOutput, "EXPRESS_ASSETS_READY", 60_000);
+		await expectAsset("static payload\n");
+		writeFileSync(isolatedPublicAsset, "static payload updated\n");
+		await waitForOutput(
+			() => (expressOrigins().length >= 2 ? "EXPRESS_ASSETS_RESTARTED" : ""),
+			"EXPRESS_ASSETS_RESTARTED",
+			60_000,
+		);
+		await expectAsset("static payload updated\n");
+	} finally {
+		expressWatcher.kill("SIGTERM");
+		expressWatchExit = await new Promise<number | null>((resolve, reject) => {
+			const timeout = setTimeout(
+				() => reject(new Error(`Express watcher did not stop:\n${expressWatchOutput}`)),
+				5000,
+			);
+			void expressWatcherExit.then((code) => {
+				clearTimeout(timeout);
+				resolve(code);
+			});
+		});
+		copyFileSync(
+			path.join(repositoryRoot, expressFixturePath, "public/hello.txt"),
+			isolatedPublicAsset,
+		);
+	}
+	if (expressWatchExit !== 0) {
+		throw new Error(
+			`Express watcher exited with ${expressWatchExit}:\n${expressWatchOutput}`,
+		);
+	}
+	console.log("ok   dev rebuilt Express after a configured asset edit");
+
+	const expressBuildOutput = invoke(["build", "--config", expressConfigPath]);
+	const expressBinary = path.resolve(project, expressBuildOutput.trim());
+	if (!existsSync(expressBinary)) {
+		throw new Error(`Express asset build did not produce ${expressBinary}`);
+	}
+	const isolatedPublicDirectory = path.dirname(isolatedPublicAsset);
+	const hiddenPublicDirectory = `${isolatedPublicDirectory}.source-hidden`;
+	const buildAssetTmp = path.join(project, "build-asset-tmp");
+	mkdirSync(buildAssetTmp, { recursive: true });
+	const expressBuiltRun = (() => {
+		renameSync(isolatedPublicDirectory, hiddenPublicDirectory);
+		try {
+			return spawnSync(expressBinary, [], {
+				cwd: project,
+				env: { ...isolatedEnv, TMPDIR: buildAssetTmp },
+				encoding: "utf-8",
+				timeout: 30_000,
+			});
+		} finally {
+			renameSync(hiddenPublicDirectory, isolatedPublicDirectory);
+		}
+	})();
+	if (
+		expressBuiltRun.status !== 0 ||
+		!expressBuiltRun.stdout.includes("EXPRESS_ASSETS_SMOKE static payload")
+	) {
+		throw new Error(
+			`built Express asset application failed without its source assets:\n${expressBuiltRun.stdout}\n${expressBuiltRun.stderr}`,
+		);
+	}
+	console.log("ok   build embedded the Express public tree in a standalone application");
+
+	const expressTestOutput = invoke([
+		"test",
+		expressTestPath,
+		"--config",
+		expressConfigPath,
+	]);
+	if (
+		!expressTestOutput.includes("assets-app.test.mjs") ||
+		!expressTestOutput.includes("2 passed, 0 failed")
+	) {
+		throw new Error(
+			`Express asset tests did not run inside the product test command:\n${expressTestOutput}`,
+		);
+	}
+	console.log("ok   test exercised Express HTTP behavior with project Mal assets");
 
 	writeFileSync(
 		path.join(project, "minimal-runner.test.ts"),

@@ -887,6 +887,32 @@ test("resolves a toolchain-owned virtual ESM module", () => {
 	});
 });
 
+test("evaluates a toolchain entry prelude before ESM and CommonJS entries", () => {
+	const prelude = {
+		specifier: "maligator:node-globals",
+		source: `globalThis.fetch = () => "ok";\n`,
+	};
+	for (const entryName of ["prelude-entry.mjs", "prelude-entry.cjs"]) {
+		write(entryName, `globalThis.result = fetch();\n`);
+		const graph = buildModuleGraph(path.join(root, entryName), {
+			entryPrelude: prelude,
+		});
+
+		expect(graph.evaluationOrder).toEqual([prelude.specifier, graph.entry]);
+		expect(graph.modules.get(graph.entry)?.source).toBe(`globalThis.result = fetch();\n`);
+		expect(graph.modules.get(prelude.specifier)).toMatchObject({
+			goal: "module",
+			virtual: true,
+		});
+		expect(graph.modules.get(graph.entry)?.dependencies).toEqual([
+			expect.objectContaining({
+				specifier: prelude.specifier,
+				resolvedPath: prelude.specifier,
+			}),
+		]);
+	}
+});
+
 test("toolchain source transforms preserve original module identities", () => {
 	const entry = path.join(root, "transformed-entry.mjs");
 	write("transformed-entry.mjs", `globalThis.events.push("body");\n`);

@@ -57,6 +57,9 @@ void mal_host_free(MalHost *host) {
         return;
     }
     mal_host_shutdown(host);
+    if (host->development_assets_free != nullptr) {
+        host->development_assets_free(host->development_assets);
+    }
     // Before the reactor goes: a POSIX handler still bridging into it would wake
     // freed memory on the next Ctrl-C.
     mal_host_signal_reset();

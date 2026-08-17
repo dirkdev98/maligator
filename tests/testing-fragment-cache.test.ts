@@ -62,10 +62,7 @@ describe("relocatable test fragment cache", () => {
 			stripTypes: stripTypesWithTypeScript,
 			stripperIdentity: "node-globals-regression",
 			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
-			nodeGlobalsSource: readFileSync(
-				path.resolve("src/testing/node-globals.mjs"),
-				"utf-8",
-			),
+			nodeGlobalsSource: readFileSync(path.resolve("src/node-globals.mjs"), "utf-8"),
 			cacheDirectory: path.join(root, "cache"),
 		});
 

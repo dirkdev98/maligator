@@ -51,6 +51,7 @@ import { MALIGATOR_VERSION } from "./version.ts";
 const BUILD_FRONTEND_CACHE_SCHEMA = 1;
 const BUILD_FRONTEND_PIPELINE_VERSION = 1;
 const BUILD_FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/build-frontend";
+const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
@@ -111,6 +112,8 @@ export interface CompileBuildFrontendOptions {
 	config: ResolvedBuildConfig;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
+	/** Node compatibility globals evaluated before a Node-surface application. */
+	nodeGlobalsSource?: string;
 	optimization?: "development" | "full";
 	optimizationAblations?: ReadonlySet<OptimizationAblation>;
 	/** Include source-site identities and compiler remarks in the live definition. */
@@ -149,6 +152,9 @@ function cacheRoot(override: string | undefined): string {
 }
 
 function cacheIdentity(options: CompileBuildFrontendOptions): string {
+	const nodeGlobalsSource = options.config.surface.node
+		? options.nodeGlobalsSource
+		: undefined;
 	return digest(
 		JSON.stringify({
 			schema: BUILD_FRONTEND_CACHE_SCHEMA,
@@ -156,6 +162,8 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			version: MALIGATOR_VERSION,
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
+			nodeGlobals:
+				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
 			optimizationAblations: [...(options.optimizationAblations ?? [])].sort(),
 			relocatable: options.relocatable === true,
@@ -426,6 +434,10 @@ export function compileBuildFrontend(
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 	const identity = cacheIdentity(options);
+	const entryPrelude: BuildModuleGraphOptions["entryPrelude"] =
+		options.config.surface.node && options.nodeGlobalsSource !== undefined
+			? { specifier: NODE_GLOBALS_MODULE_ID, source: options.nodeGlobalsSource }
+			: undefined;
 	const session = options.session ?? new BuildCompilationSession();
 	session.useCacheDirectory(options.cacheDirectory);
 	const parseStatsBefore = session.moduleParses.statistics();
@@ -479,6 +491,7 @@ export function compileBuildFrontend(
 		buildConfig: options.config,
 		stripTypes: options.stripTypes,
 		parseCache: session.moduleParses,
+		entryPrelude,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
 	const facts = compilerProgramFactsFromConfig(options.config);
@@ -521,6 +534,7 @@ export function compileBuildFrontend(
 				phases,
 				onCompilePhase: options.onCompilePhase,
 				dependencyWorker: options.dependencyWorker,
+				entryPrelude,
 			});
 			definition = fragments.definition;
 			fragmentArtifactIdentities = fragments.artifacts.map(

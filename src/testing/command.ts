@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import { includeConfiguredAssets } from "../assets.ts";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import type { CommandContext } from "../cli-commands.ts";
 import type { TestCommand } from "../cli.ts";
 import { CommandProgress } from "../command-progress.ts";
+import { cacheDevelopmentAssets } from "../development-assets.ts";
 import {
+	compileIsolatedTestImage,
 	compileProfiledTestImage,
 	compileTestImage,
 	TestCompilationSession,
@@ -21,6 +24,7 @@ import type { TestEvent, TestFailure, TestRunResult } from "./protocol.ts";
 interface TestRuntimeBridge {
 	_runWire(wire: Uint8Array): unknown;
 	_runWirePath?(path: string): unknown;
+	_setDevelopmentAssets?(manifestPath?: string): void;
 }
 
 interface TestGlobals {
@@ -51,6 +55,8 @@ export interface TestCommandSummary {
 	artifactHits: number;
 	artifactMisses: number;
 }
+
+export const ISOLATED_TEST_RESULT_PREFIX = "__MALIGATOR_ISOLATED_TEST_RESULT__";
 
 function output(message = ""): void {
 	// eslint-disable-next-line no-console -- this is the product test reporter.
@@ -145,7 +151,9 @@ function testConfig(command: TestCommand) {
 		...(command.nameFilter === undefined ? {} : { nameFilter: command.nameFilter }),
 		...(command.shuffle === undefined
 			? {}
-			: { shuffleSeed: command.shuffle === true ? randomSeed() : command.shuffle }),
+			: {
+					shuffleSeed: command.shuffle === true ? randomSeed() : command.shuffle,
+				}),
 		repeat: command.repeat,
 		bail: command.bail,
 		timeoutMs: command.timeoutMs,
@@ -165,10 +173,7 @@ export function prepareProfiledTestCommand(
 	const discoveryMs = Date.now() - discoveryStartedAt;
 	if (files.length === 0) throw new Error("no test files were discovered");
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
-	const nodeGlobalsSource = readFileSync(
-		context.installation.testNodeGlobalsPath,
-		"utf-8",
-	);
+	const nodeGlobalsSource = readFileSync(context.installation.nodeGlobalsPath, "utf-8");
 	const frontendStartedAt = Date.now();
 	const compiled = compileProfiledTestImage(
 		{
@@ -181,18 +186,63 @@ export function prepareProfiledTestCommand(
 		},
 		testConfig(command),
 	);
-	return { ...compiled, files, discoveryMs, frontendMs: Date.now() - frontendStartedAt };
+	return {
+		...compiled,
+		files,
+		discoveryMs,
+		frontendMs: Date.now() - frontendStartedAt,
+	};
 }
 
-export function reportProfiledTestResult(
+/** Compile ordinary development-mode tests for a child runtime whose native
+ * feature policy matches the project config. */
+export function prepareIsolatedTestCommand(
+	command: TestCommand,
+	context: CommandContext,
+	config: ResolvedBuildConfig,
+) {
+	const discoveryStartedAt = Date.now();
+	const files = discoverTestFiles(command.paths);
+	const discoveryMs = Date.now() - discoveryStartedAt;
+	if (files.length === 0) throw new Error("no test files were discovered");
+	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
+	const nodeGlobalsSource = readFileSync(context.installation.nodeGlobalsPath, "utf-8");
+	const frontendStartedAt = Date.now();
+	const compiled = compileIsolatedTestImage(
+		{
+			files,
+			config,
+			stripTypes: context.stripTypes,
+			stripperIdentity: context.installation.frontendIdentity,
+			testModuleSource: moduleSource,
+			nodeGlobalsSource,
+		},
+		testConfig(command),
+		ISOLATED_TEST_RESULT_PREFIX,
+	);
+	return {
+		...compiled,
+		files,
+		discoveryMs,
+		frontendMs: Date.now() - frontendStartedAt,
+	};
+}
+
+function reportTestProcessResult(
 	result: TestRunResult,
-	timing: { files: number; discoveryMs: number; frontendMs: number; executionMs: number },
+	timing: {
+		files: number;
+		discoveryMs: number;
+		frontendMs: number;
+		executionMs: number;
+	},
+	mode: string,
 ): TestCommandSummary {
 	for (const fileResult of result.files) {
 		const count =
 			fileResult.passed + fileResult.failed + fileResult.skipped + fileResult.todo;
 		output(
-			`${fileResult.failed === 0 ? "✓" : "✗"} ${relative(fileResult.file)}       ${plural(count, "test")}   ${fileResult.durationMs}ms   production AOT`,
+			`${fileResult.failed === 0 ? "✓" : "✗"} ${relative(fileResult.file)}       ${plural(count, "test")}   ${fileResult.durationMs}ms   ${mode}`,
 		);
 		reportFailures(
 			fileResult.file,
@@ -206,7 +256,7 @@ export function reportProfiledTestResult(
 			`${result.todo > 0 ? `, ${result.todo} todo` : ""} in ${Math.round(result.durationMs)}ms`,
 	);
 	output(
-		`Timing: discovery ${timing.discoveryMs.toFixed(1)}ms, production frontend ${timing.frontendMs.toFixed(1)}ms, execution ${timing.executionMs.toFixed(1)}ms`,
+		`Timing: discovery ${timing.discoveryMs.toFixed(1)}ms, frontend ${timing.frontendMs.toFixed(1)}ms, execution ${timing.executionMs.toFixed(1)}ms`,
 	);
 	return {
 		exitCode: result.failed === 0 ? 0 : 1,
@@ -223,6 +273,25 @@ export function reportProfiledTestResult(
 		artifactHits: 0,
 		artifactMisses: 0,
 	};
+}
+
+export function reportIsolatedTestResult(
+	result: TestRunResult,
+	timing: Parameters<typeof reportTestProcessResult>[1],
+): TestCommandSummary {
+	return reportTestProcessResult(result, timing, "isolated interpreter");
+}
+
+export function reportProfiledTestResult(
+	result: TestRunResult,
+	timing: {
+		files: number;
+		discoveryMs: number;
+		frontendMs: number;
+		executionMs: number;
+	},
+): TestCommandSummary {
+	return reportTestProcessResult(result, timing, "production AOT");
 }
 
 /** Discover, compile to cached VM wire, and interpret the selected test files. */
@@ -251,9 +320,19 @@ export async function executeTestCommand(
 	progress.stagePassed(1, 3, "discover tests", plural(files.length, "file"));
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
 	const nodeGlobalsSource =
-		context.installation.testNodeGlobalsPath === undefined
+		context.installation.nodeGlobalsPath === undefined
 			? undefined
-			: readFileSync(context.installation.testNodeGlobalsPath, "utf-8");
+			: readFileSync(context.installation.nodeGlobalsPath, "utf-8");
+	const session = new TestCompilationSession();
+	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
+		cacheDirectory: ".cache/mal-cache",
+		session,
+	});
+	const assetManifest = cacheDevelopmentAssets(assets);
+	if (assetManifest !== undefined && globals.mal._setDevelopmentAssets === undefined) {
+		throw new Error("`maligator test` runtime does not support configured assets");
+	}
+	globals.mal._setDevelopmentAssets?.(assetManifest);
 	const runOptions = testConfig(command);
 	if (runOptions.shuffleSeed !== undefined)
 		output(`Shuffle seed: ${runOptions.shuffleSeed}`);
@@ -276,7 +355,6 @@ export async function executeTestCommand(
 	let artifactMisses = 0;
 	const startedAt = Date.now();
 	const phases = emptyPhases();
-	const session = new TestCompilationSession();
 	const groups: Array<CompiledGroup> = [];
 	const frontendFailures: Array<FrontendFailure> = [];
 	progress.stage(2, 3, "compile test image");

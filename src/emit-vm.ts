@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { IncludedAsset } from "./assets.ts";
+import { exactBuiltinCallDescriptor } from "./builtin-registry.ts";
 import { emitCompiledFunction } from "./emit-c.ts";
 import type { CompiledFunction } from "./emit-c.ts";
 import {
@@ -4153,7 +4154,7 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			if (operationIndex < 0) {
 				throw new Error(`Unknown direct builtin operation ${instruction.operation}`);
 			}
-			const operation = ["MAL_DIRECT_BUILTIN_STRING_SPLIT"][operationIndex];
+			const operation = exactBuiltinCallDescriptor(instruction.operation)?.cOperation;
 			if (operation === undefined) {
 				throw new Error(`Missing C direct builtin operation ${instruction.operation}`);
 			}

@@ -240,6 +240,26 @@ export interface CompiledProfiledTestImage {
 	dependencies: Array<string>;
 }
 
+export interface CompiledIsolatedTestImage {
+	wire: Uint8Array;
+	entries: Array<string>;
+	dependencies: Array<string>;
+}
+
+function testProcessEntrySource(
+	entries: Array<string>,
+	node: boolean,
+	runOptions: object,
+	resultPrefix: string,
+): string {
+	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
+	return `${node ? 'import "maligator:node-globals";\n' : ""}import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
+${imports}
+const __result = await __run(${JSON.stringify({ ...runOptions, files: entries })});
+console.log(${JSON.stringify(resultPrefix)} + JSON.stringify(__result));
+`;
+}
+
 /** Cold, production-optimized test image used only by `test --profile`. Ordinary
  * test execution retains its relocatable interpreted cache path. */
 export function compileProfiledTestImage(
@@ -250,12 +270,12 @@ export function compileProfiledTestImage(
 	if (entries.length === 0)
 		throw new Error("a profiled test image requires at least one entry");
 	const session = options.session ?? new TestCompilationSession();
-	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
-	const entrySource = `${options.config.surface.node ? 'import "maligator:node-globals";\n' : ""}import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
-${imports}
-const __result = await __run(${JSON.stringify({ ...runOptions, files: entries })});
-console.log(${JSON.stringify("__MALIGATOR_TEST_RESULT__")} + JSON.stringify(__result));
-`;
+	const entrySource = testProcessEntrySource(
+		entries,
+		options.config.surface.node,
+		runOptions,
+		"__MALIGATOR_TEST_RESULT__",
+	);
 	const graph = buildTestGraph(options, entries, session, entrySource);
 	const dependencies = dependencyIdentities(graph, session).map((entry) => entry.path);
 	const semantic = runSemanticAnalysisForGraph(graph);
@@ -266,6 +286,40 @@ console.log(${JSON.stringify("__MALIGATOR_TEST_RESULT__")} + JSON.stringify(__re
 			optimization: "full",
 			profile: true,
 		}),
+		entries,
+		dependencies,
+	};
+}
+
+/** Development-optimized test wire for a configuration-compatible child runtime. */
+export function compileIsolatedTestImage(
+	options: CompileTestImageOptions,
+	runOptions: object,
+	resultPrefix: string,
+): CompiledIsolatedTestImage {
+	const entries = resolvedEntries(options.files);
+	if (entries.length === 0)
+		throw new Error("an isolated test image requires at least one entry");
+	const session = options.session ?? new TestCompilationSession();
+	const graph = buildTestGraph(
+		options,
+		entries,
+		session,
+		testProcessEntrySource(
+			entries,
+			options.config.surface.node,
+			runOptions,
+			resultPrefix,
+		),
+	);
+	const dependencies = dependencyIdentities(graph, session).map((entry) => entry.path);
+	const semantic = runSemanticAnalysisForGraph(graph);
+	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
+	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
+	return {
+		wire: serializeVmDefinition(
+			compileSemanticProgramToVmDefinition(semantic, { optimization: "development" }),
+		),
 		entries,
 		dependencies,
 	};
