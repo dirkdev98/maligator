@@ -38,7 +38,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Bumped for IR-owned stack-object plans and their wider bounded VM sharding table.
-export const WIRE_VERSION = 64;
+export const WIRE_VERSION = 65;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1113,11 +1113,8 @@ export function serializeVmDefinition(
 					instruction.opcode === "STORE_PROPERTY"
 				) {
 					return (
-						((instruction.opcode === "LOAD_PROPERTY" ||
-							instruction.opcode === "STORE_PROPERTY") &&
-							instruction.nativeClosedGlobalTable !== undefined) ||
-						(instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-							instruction.nativePrimitiveStringLength === true)
+						instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+						instruction.nativePrimitiveStringLength === true
 					);
 				}
 				if (instruction.opcode === "CREATE_ARRAY") {
@@ -1130,22 +1127,7 @@ export function serializeVmDefinition(
 		w.u32(instructionMetadata.length);
 		for (const { instruction, instructionIndex } of instructionMetadata) {
 			w.u32(instructionIndex);
-			if (
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "STORE_PROPERTY") &&
-				instruction.nativeClosedGlobalTable !== undefined
-			) {
-				const { dependencyMask, obligationMask } = closedGlobalTableGuardMasks(
-					instruction.nativeClosedGlobalTable.guard,
-				);
-				w.u8(10);
-				w.i32(instruction.nativeClosedGlobalTable.baseIndex);
-				w.i32(instruction.nativeClosedGlobalTable.stateIndex);
-				w.i32(instruction.nativeClosedGlobalTable.mask);
-				w.u8(instruction.nativeClosedGlobalTable.direct ? 1 : 0);
-				w.u8(dependencyMask);
-				w.u8(obligationMask);
-			} else if (instruction.opcode === "CALL") {
+			if (instruction.opcode === "CALL") {
 				const guardedBuiltin = instruction.guardedBuiltinCall;
 				const guardedOperation = guardedBuiltin?.operation;
 				const guardedDependency = guardedBuiltin?.guard.dependencies[0];
@@ -1223,6 +1205,7 @@ export function serializeVmDefinition(
 				region,
 				claimedRegionInstructions,
 				def.functions.length,
+				def.globalCount,
 				def.stringConstants,
 			);
 			const kindTag =
@@ -1256,7 +1239,9 @@ export function serializeVmDefinition(
 																		? 14
 																		: region.kind === "finite-object-construction"
 																			? 15
-																			: 16;
+																			: region.kind === "finite-property-selector"
+																				? 16
+																				: 17;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1265,33 +1250,35 @@ export function serializeVmDefinition(
 						? 1
 						: 2;
 			const { dependencyMask, obligationMask } =
-				region.kind === "closed-record-array"
-					? closedRecordArrayGuardMasks(region.license)
-					: region.kind === "string-split-cursor"
-						? stringSplitCursorGuardMasks(region.license)
-						: region.kind === "numeric-hof"
-							? numericHofGuardMasks(region.license)
-							: region.kind === "string-split-projection"
-								? stringSplitProjectionGuardMasks(region.license)
-								: region.kind === "regexp-exec-projection"
-									? regexpExecProjectionGuardMasks(region.license)
-									: region.kind === "regexp-iterator-projection"
-										? regexpIteratorProjectionGuardMasks(region.license)
-										: region.kind === "string-slice-number"
-											? stringSliceNumberGuardMasks(region.license)
-											: region.kind === "string-scan-summary"
-												? stringScanGuardMasks(region.license)
-												: region.kind === "private-aggregate-memo"
-													? privateAggregateMemoGuardMasks(region.license)
-													: region.kind === "invariant-json-map-template"
-														? invariantJsonMapTemplateGuardMasks(region.license)
-														: region.kind === "stack-object-plan"
-															? stackObjectPlanGuardMasks(region.license)
-															: region.kind === "cardinality-array"
-																? cardinalityGuardMasks(region.license.guard)
-																: region.kind === "finite-object-construction"
-																	? { dependencyMask: 0, obligationMask: 3 }
-																	: { dependencyMask: 0, obligationMask: 1 };
+				region.kind === "closed-global-table"
+					? closedGlobalTableGuardMasks(region.license.guard)
+					: region.kind === "closed-record-array"
+						? closedRecordArrayGuardMasks(region.license)
+						: region.kind === "string-split-cursor"
+							? stringSplitCursorGuardMasks(region.license)
+							: region.kind === "numeric-hof"
+								? numericHofGuardMasks(region.license)
+								: region.kind === "string-split-projection"
+									? stringSplitProjectionGuardMasks(region.license)
+									: region.kind === "regexp-exec-projection"
+										? regexpExecProjectionGuardMasks(region.license)
+										: region.kind === "regexp-iterator-projection"
+											? regexpIteratorProjectionGuardMasks(region.license)
+											: region.kind === "string-slice-number"
+												? stringSliceNumberGuardMasks(region.license)
+												: region.kind === "string-scan-summary"
+													? stringScanGuardMasks(region.license)
+													: region.kind === "private-aggregate-memo"
+														? privateAggregateMemoGuardMasks(region.license)
+														: region.kind === "invariant-json-map-template"
+															? invariantJsonMapTemplateGuardMasks(region.license)
+															: region.kind === "stack-object-plan"
+																? stackObjectPlanGuardMasks(region.license)
+																: region.kind === "cardinality-array"
+																	? cardinalityGuardMasks(region.license.guard)
+																	: region.kind === "finite-object-construction"
+																		? { dependencyMask: 0, obligationMask: 3 }
+																		: { dependencyMask: 0, obligationMask: 1 };
 			w.u8(kindTag);
 			w.u8(region.composition === "overlay" ? 1 : 0);
 			w.i32Array([...region.anchors]);
@@ -1306,6 +1293,18 @@ export function serializeVmDefinition(
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
 			switch (region.kind) {
+				case "closed-global-table":
+					w.i32(region.sourceGlobalIndex);
+					w.i32(region.baseIndex);
+					w.i32(region.stateIndex);
+					w.i32(region.mask);
+					w.u32(region.accesses.length);
+					for (const access of region.accesses) {
+						w.i32(access.ip);
+						w.u8(access.kind === "load" ? 1 : 2);
+						w.u8(access.direct ? 1 : 0);
+					}
+					break;
 				case "closed-record-array":
 					w.i32(region.length);
 					w.i32Array([...region.elementLoadIps]);
@@ -1924,10 +1923,14 @@ function validateRegion(
 	region: VmRegion,
 	claimed: Set<number>,
 	functionCount: number,
+	globalCount: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
+		case "closed-global-table":
+			validateClosedGlobalTableRegion(fn, region, globalCount);
+			break;
 		case "closed-record-array":
 			validateClosedRecordArrayRegion(fn, region);
 			break;
@@ -3032,6 +3035,49 @@ function validateClosedRecordArrayRegion(
 	}
 }
 
+function validateClosedGlobalTableRegion(
+	fn: VmFunction,
+	region: Extract<VmRegion, { kind: "closed-global-table" }>,
+	globalCount: number,
+): void {
+	closedGlobalTableGuardMasks(region.license.guard);
+	const operationIps = region.accesses.map((access) => access.ip);
+	if (
+		region.representation !== "synthetic-global-value-table" ||
+		region.composition !== "overlay" ||
+		region.license.genericTwin !== "retained" ||
+		region.license.materialization !== "on-demand" ||
+		region.anchors.length !== 1 ||
+		region.anchors[0] !== operationIps[0] ||
+		!Number.isSafeInteger(region.sourceGlobalIndex) ||
+		region.sourceGlobalIndex < 0 ||
+		region.sourceGlobalIndex >= globalCount ||
+		!Number.isSafeInteger(region.baseIndex) ||
+		region.baseIndex < 0 ||
+		!Number.isSafeInteger(region.mask) ||
+		region.mask < 0 ||
+		region.mask > 1023 ||
+		(region.mask & (region.mask + 1)) !== 0 ||
+		region.stateIndex !== region.baseIndex + region.mask + 1 ||
+		region.stateIndex >= globalCount ||
+		region.accesses.length === 0 ||
+		region.accesses.length > MAX_REGION_CLAIMS ||
+		new Set(operationIps).size !== operationIps.length ||
+		operationIps.length !== region.claimedIps.length ||
+		operationIps.some((ip) => !region.claimedIps.includes(ip)) ||
+		region.accesses.some((access) => {
+			const instruction = fn.instructions[access.ip];
+			return access.kind === "load"
+				? instruction?.opcode !== "LOAD_PROPERTY"
+				: instruction?.opcode !== "STORE_PROPERTY";
+		}) ||
+		region.cost.score !== region.mask + 1 + region.accesses.length ||
+		region.cost.metadataOperations !== region.accesses.length
+	) {
+		throw new RangeError("serialize-vm: invalid closed-global table region metadata");
+	}
+}
+
 function validateStringSplitProjectionRegion(
 	fn: VmFunction,
 	region: Extract<VmRegion, { kind: "string-split-projection" }>,
@@ -4033,43 +4079,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					throw new RangeError("serialize-vm: invalid indexed-fill reserve metadata");
 				}
 				instruction.nativeFreshDenseReserveLength = reserveLength;
-			} else if (
-				tag === 10 &&
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "STORE_PROPERTY")
-			) {
-				const baseIndex = r.i32();
-				const stateIndex = r.i32();
-				const mask = r.i32();
-				const direct = r.u8();
-				const dependencyMask = r.u8();
-				const obligationMask = r.u8();
-				if (
-					baseIndex < 0 ||
-					stateIndex !== baseIndex + mask + 1 ||
-					stateIndex >= globalCount ||
-					mask < 0 ||
-					mask > 1023 ||
-					(mask & (mask + 1)) !== 0 ||
-					direct > 1 ||
-					(dependencyMask !== 1 && dependencyMask !== 8) ||
-					obligationMask !== 3
-				) {
-					throw new RangeError("serialize-vm: invalid closed-global table metadata");
-				}
-				instruction.nativeClosedGlobalTable = {
-					baseIndex,
-					stateIndex,
-					mask,
-					direct: direct === 1,
-					guard: {
-						dependencies:
-							dependencyMask === 1
-								? [{ kind: "world", fact: "primordials.locked" }]
-								: [{ kind: "epoch", family: "array-elements" }],
-						obligations: ["fallback", "materialize"],
-					},
-				};
 			} else if (tag === 11 && instruction.opcode === "LOAD_PROPERTY_STATIC") {
 				instruction.nativePrimitiveStringLength = true;
 			} else {
@@ -4196,12 +4205,19 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
+				const closedGlobalTableContract =
+					kindTag === 17 &&
+					representationTag === 17 &&
+					materializationTag === 1 &&
+					(dependencyMask === 1 || dependencyMask === 8) &&
+					obligationMask === 3;
 				if (
 					compositionTag > 1 ||
 					(compositionTag === 1) !==
 						(exactFreshArrayContract ||
 							numericFusionContract ||
-							finitePropertySelectorContract) ||
+							finitePropertySelectorContract ||
+							closedGlobalTableContract) ||
 					genericTwinTag !== 1 ||
 					(!closedRecordContract &&
 						!stringSplitCursorContract &&
@@ -4218,7 +4234,8 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						!exactFreshArrayContract &&
 						!numericFusionContract &&
 						!finiteObjectConstructionContract &&
-						!finitePropertySelectorContract)
+						!finitePropertySelectorContract &&
+						!closedGlobalTableContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
@@ -5063,7 +5080,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						accessIps,
 						runtimeGuard: "number-leaves-and-prototype-shape",
 					};
-				} else {
+				} else if (kindTag === 16) {
 					const runtimeGuardTag = r.u8();
 					const selectorCount = r.count(2);
 					const selectors: Array<
@@ -5111,8 +5128,62 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						runtimeGuard: "integer-domain-and-shape-or-generic-access",
 						selectors,
 					};
+				} else {
+					const sourceGlobalIndex = r.i32();
+					const baseIndex = r.i32();
+					const stateIndex = r.i32();
+					const mask = r.i32();
+					const accessCount = r.count(3);
+					const accesses: Array<
+						Extract<VmRegion, { kind: "closed-global-table" }>["accesses"][number]
+					> = [];
+					for (let accessIndex = 0; accessIndex < accessCount; accessIndex++) {
+						const ip = r.i32();
+						const accessKindTag = r.u8();
+						const directTag = r.u8();
+						if ((accessKindTag !== 1 && accessKindTag !== 2) || directTag > 1) {
+							throw new RangeError("serialize-vm: invalid closed-global table access");
+						}
+						accesses.push({
+							ip,
+							kind: accessKindTag === 1 ? "load" : "store",
+							direct: directTag === 1,
+						});
+					}
+					region = {
+						kind: "closed-global-table",
+						license: {
+							guard: {
+								dependencies:
+									dependencyMask === 1
+										? [{ kind: "world", fact: "primordials.locked" }]
+										: [{ kind: "epoch", family: "array-elements" }],
+								obligations: ["fallback", "materialize"],
+							},
+							genericTwin: "retained",
+							materialization: "on-demand",
+						},
+						representation: "synthetic-global-value-table",
+						composition: "overlay",
+						anchors,
+						claimedIps,
+						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
+						cost: { score, metadataOperations },
+						sourceGlobalIndex,
+						baseIndex,
+						stateIndex,
+						mask,
+						accesses,
+					};
 				}
-				validateRegion(fn, region, claimed, functions.length, stringConstants);
+				validateRegion(
+					fn,
+					region,
+					claimed,
+					functions.length,
+					globalCount,
+					stringConstants,
+				);
 				regions.push(region);
 			}
 			fn.regions = regions;

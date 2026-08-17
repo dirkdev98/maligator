@@ -180,20 +180,32 @@ describe("Test262 VM definition merger", () => {
 				object: 1,
 				key: 2,
 				icIndex: 2,
-				nativeClosedGlobalTable: {
-					baseIndex: 0,
-					stateIndex: 4,
-					mask: 3,
-					direct: true,
-					guard: {
-						dependencies: [{ kind: "epoch", family: "array-elements" }],
-						obligations: ["fallback", "materialize"],
-					},
-				},
 			},
 		];
 		const secondFunction = vmFunction(indexed);
 		secondFunction.regions = [
+			{
+				kind: "closed-global-table",
+				license: {
+					guard: {
+						dependencies: [{ kind: "epoch", family: "array-elements" }],
+						obligations: ["fallback", "materialize"],
+					},
+					genericTwin: "retained",
+					materialization: "on-demand",
+				},
+				representation: "synthetic-global-value-table",
+				composition: "overlay",
+				anchors: [22],
+				claimedIps: [22],
+				controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+				cost: { score: 5, metadataOperations: 1 },
+				sourceGlobalIndex: 0,
+				baseIndex: 0,
+				stateIndex: 4,
+				mask: 3,
+				accesses: [{ ip: 22, kind: "load", direct: true }],
+			},
 			{
 				kind: "finite-property-selector",
 				license: {
@@ -308,7 +320,7 @@ describe("Test262 VM definition merger", () => {
 		expect(rebased[18]).toMatchObject({
 			nativeFiniteString: { minimum: 0, stringIndices: [2] },
 		});
-		expect(merged.functions[2]!.regions?.[0]).toMatchObject({
+		expect(merged.functions[2]!.regions?.[1]).toMatchObject({
 			kind: "finite-property-selector",
 			selectors: [
 				{
@@ -318,19 +330,19 @@ describe("Test262 VM definition merger", () => {
 				},
 			],
 		});
-		expect(merged.functions[2]!.regions?.[1]).toMatchObject({
+		expect(merged.functions[2]!.regions?.[2]).toMatchObject({
 			kind: "finite-object-construction",
 			icIndex: 1,
 			numberGuards: [2],
 			keyStringIndices: [2],
 		});
-		expect(rebased[22]).toMatchObject({
-			nativeClosedGlobalTable: {
-				baseIndex: 3,
-				stateIndex: 7,
-				mask: 3,
-				direct: true,
-			},
+		expect(merged.functions[2]!.regions?.[0]).toMatchObject({
+			kind: "closed-global-table",
+			sourceGlobalIndex: 3,
+			baseIndex: 3,
+			stateIndex: 7,
+			mask: 3,
+			accesses: [{ ip: 22, kind: "load", direct: true }],
 		});
 		expect(second.functions[0]!.instructions).toEqual(indexed);
 	});

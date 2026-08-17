@@ -59,26 +59,20 @@ describe("closed global finite tables", () => {
 			}
 			globalThis.update = update;
 		`);
-		const accesses = definition.functions.flatMap((fn) =>
-			fn.instructions.flatMap((instruction) =>
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "STORE_PROPERTY") &&
-				instruction.nativeClosedGlobalTable !== undefined
-					? [instruction.nativeClosedGlobalTable]
-					: [],
-			),
+		const regions = definition.functions.flatMap((fn) =>
+			(fn.regions ?? []).filter((region) => region.kind === "closed-global-table"),
 		);
+		expect(regions).toHaveLength(1);
+		const [region] = regions;
+		const accesses = region!.accesses;
 		expect(accesses).toHaveLength(3);
 		expect(accesses.map((access) => access.direct)).toEqual([true, true, false]);
-		expect(new Set(accesses.map((access) => access.baseIndex))).toHaveLength(1);
-		expect(accesses[0]).toMatchObject({ mask: 7 });
-		expect(accesses[0]!.stateIndex).toBe(accesses[0]!.baseIndex + 8);
-		for (const access of accesses) {
-			expect(access.guard).toEqual({
-				dependencies: [{ kind: "epoch", family: "array-elements" }],
-				obligations: ["fallback", "materialize"],
-			});
-		}
+		expect(region).toMatchObject({ mask: 7 });
+		expect(region!.stateIndex).toBe(region!.baseIndex + 8);
+		expect(region!.license.guard).toEqual({
+			dependencies: [{ kind: "epoch", family: "array-elements" }],
+			obligations: ["fallback", "materialize"],
+		});
 	});
 
 	it("rejects escaping and cross-function table identities", () => {
@@ -91,12 +85,7 @@ describe("closed global finite tables", () => {
 		`);
 		expect(
 			definition.functions.some((fn) =>
-				fn.instructions.some(
-					(instruction) =>
-						(instruction.opcode === "LOAD_PROPERTY" ||
-							instruction.opcode === "STORE_PROPERTY") &&
-						instruction.nativeClosedGlobalTable !== undefined,
-				),
+				(fn.regions ?? []).some((region) => region.kind === "closed-global-table"),
 			),
 		).toBe(false);
 	});

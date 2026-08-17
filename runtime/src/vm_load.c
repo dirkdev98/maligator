@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 64u        // IR-owned stack-object plans and bounded sharding
+#define WIRE_VERSION 65u        // closed-global access proofs moved into regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1780,20 +1780,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 for (u32 index = 0; r.ok && index < string_index_count; index++) {
                     (void) rd_i32(&r);
                 }
-			} else if (tag == 10) { // closed-global finite table
-                i32 base = rd_i32(&r);
-                i32 state = rd_i32(&r);
-                i32 mask = rd_i32(&r);
-                u8 direct = rd_u8(&r);
-                u8 dependency_mask = rd_u8(&r);
-                u8 obligation_mask = rd_u8(&r);
-                if (base < 0 || state != base + mask + 1 ||
-                    state >= def->global_count || mask < 0 || mask > 1023 ||
-                    (mask & (mask + 1)) != 0 || direct > 1 ||
-                    (dependency_mask != 1 && dependency_mask != 8) ||
-                    obligation_mask != 3) {
-                    r.ok = false;
-                }
             } else if (tag == 11) { // guarded primitive-String length load
                 // No payload: generated native code alone consumes this hint.
             } else if (tag == 12) { // CREATE_ARRAY exact indexed-fill reserve
@@ -1939,11 +1925,14 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				materialization == 1 && dependency_mask == 0 && obligation_mask == 3;
 			bool finite_property_selector_contract = kind == 16 && representation == 16 &&
 				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
+			bool closed_global_table_contract = kind == 17 && representation == 17 &&
+				materialization == 1 && (dependency_mask == 1 || dependency_mask == 8) &&
+				obligation_mask == 3;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
 				(composition == 1) !=
 					(exact_fresh_array_contract || numeric_fusion_contract ||
-					 finite_property_selector_contract) ||
+					 finite_property_selector_contract || closed_global_table_contract) ||
                 (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
 				 !split_projection_contract && !regexp_exec_projection_contract &&
 				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
@@ -1951,7 +1940,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				 !invariant_json_map_template_contract && !stack_object_plan_contract &&
 				 !cardinality_array_contract && !exact_fresh_array_contract &&
 				 !numeric_fusion_contract && !finite_object_construction_contract &&
-				 !finite_property_selector_contract)) {
+				 !finite_property_selector_contract && !closed_global_table_contract)) {
                 r.ok = false;
             }
 
@@ -3454,6 +3443,34 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				}
 				if (anchors[0] != first_producer_ip || anchors[1] != first_access_ip ||
 					score != selector_score || metadata_operations != payload_count) r.ok = false;
+			} else if (r.ok && kind == 17) {
+				i32 source_global = rd_i32(&r);
+				i32 base = rd_i32(&r);
+				i32 state = rd_i32(&r);
+				i32 mask = rd_i32(&r);
+				u32 access_count = rd_count(&r, 3);
+				bool header_ok = anchor_count == 1 && source_global >= 0 &&
+					source_global < def->global_count && base >= 0 &&
+					mask >= 0 && mask <= 1023 && (mask & (mask + 1)) == 0 &&
+					state == base + mask + 1 && state < def->global_count &&
+					access_count > 0 && access_count <= 96;
+				if (!header_ok) r.ok = false;
+				for (u32 access = 0; r.ok && access < access_count; access++) {
+					i32 ip = rd_i32(&r);
+					u8 access_kind = rd_u8(&r);
+					u8 direct = rd_u8(&r);
+					bool access_ok = ip >= 0 && ip < fn->instruction_count &&
+						(access_kind == 1 || access_kind == 2) && direct <= 1;
+					if (access_ok && access_kind == 1) {
+						access_ok = fn->instructions[ip].opcode == MAL_OP_LOAD_PROPERTY;
+					} else if (access_ok) {
+						access_ok = fn->instructions[ip].opcode == MAL_OP_STORE_PROPERTY;
+					}
+					if (!access_ok || (access == 0 && anchors[0] != ip)) r.ok = false;
+					MAL_REGION_PAYLOAD_REFERENCE(ip);
+				}
+				if (score != (u32) (mask + 1) + access_count ||
+					metadata_operations != payload_count) r.ok = false;
             }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM

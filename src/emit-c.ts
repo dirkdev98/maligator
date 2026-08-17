@@ -17,6 +17,7 @@ import {
 } from "./lower-vm.ts";
 import type {
 	VmCardinalityArrayRegion,
+	VmClosedGlobalTableRegion,
 	VmExceptionHandler,
 	VmFiniteObjectConstructionRegion,
 	VmFinitePropertySelectorRegion,
@@ -75,6 +76,27 @@ import { profileOperationForInstruction } from "./profile-metadata.ts";
  * values of different reps joins to `boxed` (see inferReps).
  */
 type RegisterRep = "boxed" | "number" | "boolean";
+
+interface ClosedGlobalTableAccess {
+	readonly region: VmClosedGlobalTableRegion;
+	readonly access: VmClosedGlobalTableRegion["accesses"][number];
+}
+
+function closedGlobalTableAccesses(
+	fn: VmFunction,
+): ReadonlyMap<number, ClosedGlobalTableAccess> {
+	const accesses = new Map<number, ClosedGlobalTableAccess>();
+	for (const region of fn.regions ?? []) {
+		if (region.kind !== "closed-global-table") continue;
+		for (const access of region.accesses) {
+			if (accesses.has(access.ip)) {
+				throw new Error(`Overlapping closed-global table access at ${access.ip}`);
+			}
+			accesses.set(access.ip, { region, access });
+		}
+	}
+	return accesses;
+}
 
 export interface BackendProfileDecision {
 	instructionIndex: number;
@@ -696,6 +718,7 @@ export function emitCompiledFunction(
 
 	const promotableParams = override?.promotable ?? numericParamCandidates(fn);
 	const reps = inferReps(fn, promotableParams);
+	const closedGlobalTableAccessByIp = closedGlobalTableAccesses(fn);
 
 	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
 	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
@@ -1004,7 +1027,13 @@ export function emitCompiledFunction(
 		let stable = true;
 		for (let ip = region.allocationInstructionIndex + 1; ip <= lastIp; ip++) {
 			if (operationIps.has(ip)) continue;
-			if (nativeInstructionMayInvalidateSemanticEpoch(fn.instructions[ip]!, reps)) {
+			if (
+				nativeInstructionMayInvalidateSemanticEpoch(
+					fn.instructions[ip]!,
+					reps,
+					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
+				)
+			) {
 				stable = false;
 				break;
 			}
@@ -1082,7 +1111,13 @@ export function emitCompiledFunction(
 		let semanticEpochStable = true;
 		for (let ip = callIp + 1; ip <= backedgeIp; ip++) {
 			if (cursorOperations.has(ip)) continue;
-			if (nativeInstructionMayInvalidateSemanticEpoch(fn.instructions[ip]!, reps)) {
+			if (
+				nativeInstructionMayInvalidateSemanticEpoch(
+					fn.instructions[ip]!,
+					reps,
+					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
+				)
+			) {
 				semanticEpochStable = false;
 				break;
 			}
@@ -2025,6 +2060,7 @@ function nativeInstructionMayCaptureStack(
 function nativeInstructionMayInvalidateSemanticEpoch(
 	instruction: VmInstruction,
 	reps: Array<RegisterRep>,
+	directClosedGlobalAccess = false,
 ): boolean {
 	switch (instruction.opcode) {
 		case "CREATE_OBJECT":
@@ -2035,7 +2071,7 @@ function nativeInstructionMayInvalidateSemanticEpoch(
 			return false;
 		case "LOAD_PROPERTY":
 		case "STORE_PROPERTY":
-			if (instruction.nativeClosedGlobalTable?.direct === true) return false;
+			if (directClosedGlobalAccess) return false;
 			return true;
 		case "LOAD_PROPERTY_STATIC":
 			return instruction.nativePrimitiveStringLength !== true;
@@ -2525,6 +2561,7 @@ function findInheritedLoadLoopTwins(
 	fn: VmFunction,
 	reps: Array<RegisterRep>,
 	coro: CoroutineContext | null,
+	closedGlobalTableAccessByIp: ReadonlyMap<number, ClosedGlobalTableAccess>,
 ): Array<InheritedLoadLoopTwin> {
 	if (coro !== null) return [];
 
@@ -2589,7 +2626,11 @@ function findInheritedLoadLoopTwins(
 			}
 			if (
 				!LOOP_TWIN_SCALAR_OPCODES.has(instruction.opcode) ||
-				nativeInstructionMayInvalidateSemanticEpoch(instruction, reps)
+				nativeInstructionMayInvalidateSemanticEpoch(
+					instruction,
+					reps,
+					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
+				)
 			) {
 				scalarOnly = false;
 				break;
@@ -3205,7 +3246,13 @@ function emitBody(
 		jumpTargets.add(handler.handlerIp);
 	}
 	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
-	const inheritedLoadLoopTwins = findInheritedLoadLoopTwins(fn, reps, coro);
+	const closedGlobalTableAccessByIp = closedGlobalTableAccesses(fn);
+	const inheritedLoadLoopTwins = findInheritedLoadLoopTwins(
+		fn,
+		reps,
+		coro,
+		closedGlobalTableAccessByIp,
+	);
 	const inheritedLoadLoopTwinByHeader = new Map(
 		inheritedLoadLoopTwins.map((twin) => [twin.headerIp, twin] as const),
 	);
@@ -3399,10 +3446,8 @@ function emitBody(
 				flush();
 			}
 			if (
-				(instr.opcode === "LOAD_PROPERTY" &&
-					instr.nativeClosedGlobalTable === undefined) ||
-				(instr.opcode === "STORE_PROPERTY" &&
-					instr.nativeClosedGlobalTable === undefined) ||
+				(instr.opcode === "LOAD_PROPERTY" && !closedGlobalTableAccessByIp.has(ip)) ||
+				(instr.opcode === "STORE_PROPERTY" && !closedGlobalTableAccessByIp.has(ip)) ||
 				instr.opcode === "LOAD_PROPERTY_STATIC" ||
 				instr.opcode === "STORE_PROPERTY_STATIC"
 			) {
@@ -3950,6 +3995,7 @@ function emitBody(
 							fn.mappedArgumentSlots,
 							fn.hasPrototype,
 							{ twin: loopTwin, kind: "fast", publishPosition: debug },
+							closedGlobalTableAccessByIp.get(fastIp),
 						);
 				if (fast === null) return null;
 				for (const line of fast) lines.push(`    ${line}`);
@@ -4007,6 +4053,7 @@ function emitBody(
 								publishPosition: debug,
 							}
 						: undefined,
+					closedGlobalTableAccessByIp.get(ip),
 					stringCharCodeAtFusionByIp.get(ip),
 					nativeStringScanRegionActionByIp.get(ip),
 					nativeStringSplitProjectionActionByIp.get(ip),
@@ -4405,6 +4452,7 @@ function emitInstruction(
 	mappedArgumentSlots: Array<number>,
 	hasPrototype: boolean,
 	loopTwinEmission?: LoopTwinEmission,
+	closedGlobalTableAccess?: ClosedGlobalTableAccess,
 	stringCharCodeAtFusion?: StringCharCodeAtFusion,
 	nativeStringScanRegionAction?: NativeStringScanRegionAction,
 	nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction,
@@ -5010,11 +5058,11 @@ function emitInstruction(
 			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
-				instruction.nativeClosedGlobalTable !== undefined
+				closedGlobalTableAccess !== undefined
 			) {
-				const table = instruction.nativeClosedGlobalTable;
+				const { region: table, access } = closedGlobalTableAccess;
 				const fallback = emitInstruction(
-					{ ...instruction, nativeClosedGlobalTable: undefined },
+					instruction,
 					ip,
 					suffix,
 					reps,
@@ -5046,11 +5094,11 @@ function emitInstruction(
 				if (fallback === null) return null;
 				const state = `vm->globals[${table.stateIndex}]`;
 				const deopt = `mal_vm_closed_global_table_deopt(vm, ${boxed(instruction.object)}, ${table.baseIndex}, ${table.mask + 1}, ${table.stateIndex});`;
-				if (!table.direct) {
+				if (!access.direct) {
 					return [deopt, throwCheck, ...fallback];
 				}
 				const value = `__closed_global_value_${ip}`;
-				const semanticAdmission = closedGlobalTableAdmissionGuard(table.guard);
+				const semanticAdmission = closedGlobalTableAdmissionGuard(table.license.guard);
 				return [
 					`if (mal_value_is_undefined(${state}) && ${semanticAdmission}) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
 					`if (${state} == MAL_VALUE_FALSE && ${semanticAdmission}) {`,
@@ -5583,11 +5631,11 @@ function emitInstruction(
 		case "STORE_PROPERTY_STATIC": {
 			if (
 				instruction.opcode === "STORE_PROPERTY" &&
-				instruction.nativeClosedGlobalTable !== undefined
+				closedGlobalTableAccess !== undefined
 			) {
-				const table = instruction.nativeClosedGlobalTable;
+				const { region: table, access } = closedGlobalTableAccess;
 				const fallback = emitInstruction(
-					{ ...instruction, nativeClosedGlobalTable: undefined },
+					instruction,
 					ip,
 					suffix,
 					reps,
@@ -5619,10 +5667,10 @@ function emitInstruction(
 				if (fallback === null) return null;
 				const state = `vm->globals[${table.stateIndex}]`;
 				const deopt = `mal_vm_closed_global_table_deopt(vm, ${boxed(instruction.object)}, ${table.baseIndex}, ${table.mask + 1}, ${table.stateIndex});`;
-				if (!table.direct) {
+				if (!access.direct) {
 					return [deopt, throwCheck, ...fallback];
 				}
-				const semanticAdmission = closedGlobalTableAdmissionGuard(table.guard);
+				const semanticAdmission = closedGlobalTableAdmissionGuard(table.license.guard);
 				return [
 					`if (mal_value_is_undefined(${state}) && ${semanticAdmission}) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
 					`if (${state} == MAL_VALUE_FALSE && ${semanticAdmission}) {`,

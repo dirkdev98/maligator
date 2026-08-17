@@ -374,6 +374,23 @@ export type VmClosedRecordArrayRegion = VmRegionEnvelope<
 	}>;
 };
 
+export type VmClosedGlobalTableRegion = VmRegionEnvelope<
+	"closed-global-table",
+	"synthetic-global-value-table",
+	"on-demand"
+> & {
+	readonly composition: "overlay";
+	readonly sourceGlobalIndex: number;
+	readonly baseIndex: number;
+	readonly stateIndex: number;
+	readonly mask: number;
+	readonly accesses: ReadonlyArray<{
+		readonly ip: number;
+		readonly kind: "load" | "store";
+		readonly direct: boolean;
+	}>;
+};
+
 export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	"string-split-cursor",
 	"split-cursor-spans",
@@ -684,6 +701,7 @@ export type VmNumericHofRegion = VmRegionEnvelope<
 };
 
 export type VmRegion =
+	| VmClosedGlobalTableRegion
 	| VmClosedRecordArrayRegion
 	| VmExactFreshArrayRegion
 	| VmRegExpExecProjectionRegion
@@ -1324,13 +1342,6 @@ export type VmInstruction =
 			object: number;
 			key: number;
 			icIndex: number;
-			nativeClosedGlobalTable?: {
-				baseIndex: number;
-				stateIndex: number;
-				mask: number;
-				direct: boolean;
-				guard: VmGuardPlan;
-			};
 			/** EMITTER-ONLY: load from a private `array[i] = i` virtual range. */
 			nativeAffineRangeVirtualization?: {
 				allocationIp: number;
@@ -1359,13 +1370,6 @@ export type VmInstruction =
 			key: number;
 			value: number;
 			icIndex: number;
-			nativeClosedGlobalTable?: {
-				baseIndex: number;
-				stateIndex: number;
-				mask: number;
-				direct: boolean;
-				guard: VmGuardPlan;
-			};
 			/** EMITTER-ONLY: producer store for a private identity virtual range. */
 			nativeAffineRangeVirtualization?: {
 				allocationIp: number;
@@ -1991,6 +1995,101 @@ function lowerFunctionToVmFunction(
 	// Eight specialized regions plus one aggregate stack-object proof table.
 	const irRegions = (fn.regions?.length ?? 0) <= 9 ? (fn.regions ?? []) : [];
 	for (const region of irRegions) {
+		if (region.kind === "closed-global-table") {
+			const guard = lowerGuardPlan(region.license.guard);
+			const anchors = region.anchors.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const claimedIps = region.claimedInstructions.map((instruction) =>
+				instructionIndexByIrInstruction.get(instruction),
+			);
+			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
+				blockStartIps.get(blockIndex),
+			);
+			const accesses = region.accesses.map((access) => ({
+				ip: instructionIndexByIrInstruction.get(access.instruction),
+				kind:
+					access.instruction.type === "loadProperty"
+						? ("load" as const)
+						: ("store" as const),
+				direct: access.direct,
+			}));
+			if (
+				guard === undefined ||
+				region.license.genericTwin !== "retained" ||
+				region.license.materialization !== "on-demand" ||
+				region.representation !== "synthetic-global-value-table" ||
+				region.composition !== "overlay" ||
+				anchors.length !== 1 ||
+				anchors[0] === undefined ||
+				claimedIps.some((ip) => ip === undefined) ||
+				ordinaryBlockIps.some((ip) => ip === undefined) ||
+				region.controlFlow.exceptionalBlocks.length !== 0 ||
+				accesses.some((access) => access.ip === undefined)
+			) {
+				continue;
+			}
+			const resolvedClaimedIps = claimedIps as Array<number>;
+			const resolvedAccesses = accesses as Array<{
+				ip: number;
+				kind: "load" | "store";
+				direct: boolean;
+			}>;
+			if (
+				!guard.obligations.includes("fallback") ||
+				!guard.obligations.includes("materialize") ||
+				!Number.isSafeInteger(region.sourceGlobalIndex) ||
+				region.sourceGlobalIndex < 0 ||
+				!Number.isSafeInteger(region.baseIndex) ||
+				region.baseIndex < 0 ||
+				!Number.isSafeInteger(region.mask) ||
+				region.mask < 0 ||
+				region.mask > 1023 ||
+				(region.mask & (region.mask + 1)) !== 0 ||
+				region.stateIndex !== region.baseIndex + region.mask + 1 ||
+				resolvedAccesses.length === 0 ||
+				resolvedAccesses.length > 96 ||
+				new Set(resolvedAccesses.map((access) => access.ip)).size !==
+					resolvedAccesses.length ||
+				resolvedAccesses.some((access) =>
+					access.kind === "load"
+						? instructions[access.ip]?.opcode !== "LOAD_PROPERTY"
+						: instructions[access.ip]?.opcode !== "STORE_PROPERTY",
+				) ||
+				resolvedClaimedIps.length !== resolvedAccesses.length ||
+				resolvedClaimedIps.some(
+					(ip) => !resolvedAccesses.some((access) => access.ip === ip),
+				) ||
+				anchors[0] !== resolvedAccesses[0]!.ip ||
+				region.cost.score !== region.mask + 1 + resolvedAccesses.length ||
+				region.cost.metadataOperations !== resolvedAccesses.length
+			) {
+				continue;
+			}
+			regions.push({
+				kind: "closed-global-table",
+				license: {
+					guard,
+					genericTwin: "retained",
+					materialization: "on-demand",
+				},
+				representation: "synthetic-global-value-table",
+				composition: "overlay",
+				anchors: [anchors[0]],
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: [],
+				},
+				cost: { ...region.cost },
+				sourceGlobalIndex: region.sourceGlobalIndex,
+				baseIndex: region.baseIndex,
+				stateIndex: region.stateIndex,
+				mask: region.mask,
+				accesses: resolvedAccesses,
+			});
+			continue;
+		}
 		if (region.kind === "finite-property-selector") {
 			const anchors = region.anchors.map((instruction) =>
 				instructionIndexByIrInstruction.get(instruction),
@@ -4262,32 +4361,14 @@ function lowerInstructionToVmInstruction(
 				src: instruction.registers[0],
 				index: instruction.index,
 			};
-		case "loadProperty": {
-			const loadClosedGlobalGuard =
-				instruction.nativeClosedGlobalTable === undefined
-					? undefined
-					: lowerGuardPlan(instruction.nativeClosedGlobalTable.guard);
-			if (
-				instruction.nativeClosedGlobalTable !== undefined &&
-				loadClosedGlobalGuard === undefined
-			) {
-				throw new Error("Closed-global table lost its semantic guard");
-			}
+		case "loadProperty":
 			return {
 				opcode: "LOAD_PROPERTY",
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				key: instruction.registers[2],
 				icIndex: -1,
-				nativeClosedGlobalTable:
-					instruction.nativeClosedGlobalTable === undefined
-						? undefined
-						: {
-								...instruction.nativeClosedGlobalTable,
-								guard: loadClosedGlobalGuard!,
-							},
 			};
-		}
 		case "loadPropertyStatic":
 			return {
 				opcode: "LOAD_PROPERTY_STATIC",
@@ -4305,32 +4386,14 @@ function lowerInstructionToVmInstruction(
 				key: instruction.registers[2],
 				receiver: instruction.registers[3],
 			};
-		case "storeProperty": {
-			const storeClosedGlobalGuard =
-				instruction.nativeClosedGlobalTable === undefined
-					? undefined
-					: lowerGuardPlan(instruction.nativeClosedGlobalTable.guard);
-			if (
-				instruction.nativeClosedGlobalTable !== undefined &&
-				storeClosedGlobalGuard === undefined
-			) {
-				throw new Error("Closed-global table lost its semantic guard");
-			}
+		case "storeProperty":
 			return {
 				opcode: "STORE_PROPERTY",
 				object: instruction.registers[0],
 				key: instruction.registers[1],
 				value: instruction.registers[2],
 				icIndex: -1,
-				nativeClosedGlobalTable:
-					instruction.nativeClosedGlobalTable === undefined
-						? undefined
-						: {
-								...instruction.nativeClosedGlobalTable,
-								guard: storeClosedGlobalGuard!,
-							},
 			};
-		}
 		case "storePropertyStatic":
 			return {
 				opcode: "STORE_PROPERTY_STATIC",

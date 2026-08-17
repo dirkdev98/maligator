@@ -899,6 +899,32 @@ export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
 }
 
 /**
+ * Program-dictionary representation for one non-escaping global object. The
+ * initializer may live in another function, so the source global slot is the
+ * cross-function identity while this function-local region owns every dynamic
+ * access that can use the synthetic value table.
+ */
+export interface IRClosedGlobalTableRegion extends IRRegionEnvelope<
+	"closed-global-table",
+	"synthetic-global-value-table",
+	"on-demand",
+	readonly [Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>]
+> {
+	readonly composition: "overlay";
+	readonly sourceGlobalIndex: number;
+	readonly baseIndex: number;
+	readonly stateIndex: number;
+	readonly mask: number;
+	readonly accesses: ReadonlyArray<{
+		readonly instruction: Extract<
+			IRInstruction,
+			{ type: "loadProperty" | "storeProperty" }
+		>;
+		readonly direct: boolean;
+	}>;
+}
+
+/**
  * Backend-neutral certificate for one bounded push-only Array of same-shape
  * records. The ordinary Array, push, and property instructions remain the
  * semantic twin; native lowering may replace the whole region or none of it.
@@ -1059,6 +1085,7 @@ export interface IRStackObjectPlanRegion extends IRRegionEnvelope<
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type IRRegion =
 	| IRCardinalityArrayRegion
+	| IRClosedGlobalTableRegion
 	| IRClosedRecordArrayRegion
 	| IRExactFreshArrayRegion
 	| IRFiniteObjectConstructionRegion
@@ -1471,16 +1498,6 @@ export type IRInstruction =
 
 			// [destination, object, key]
 			registers: [number, number, number];
-			/** COMPILE-ONLY: a non-escaping global `{}` is represented by a bounded
-			 * synthetic-global value table. Unknown selectors deopt/materialize it. */
-			nativeClosedGlobalTable?: {
-				baseIndex: number;
-				stateIndex: number;
-				mask: number;
-				direct: boolean;
-				/** Array-indexed prototype semantics plus fallback/materialization. */
-				guard: CompilerGuardPlan;
-			};
 	  }
 	| {
 			type: "loadPropertyStatic";
@@ -1501,14 +1518,6 @@ export type IRInstruction =
 	  }
 	| {
 			type: "storeProperty";
-
-			nativeClosedGlobalTable?: {
-				baseIndex: number;
-				stateIndex: number;
-				mask: number;
-				direct: boolean;
-				guard: CompilerGuardPlan;
-			};
 
 			// [object, key, value]
 			registers: [number, number, number];

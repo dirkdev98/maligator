@@ -569,6 +569,10 @@ is general rather than a registry-shaped collection of special cases.
         table directly for inlining diagnostics and lowering, and shard independent
         sites into bounded VM regions through MALW v64. The wider 40-region VM cap
         preserves the existing 256-site analysis ceiling without stale side links.
+  - [x] Move closed-global finite-table access ownership and its shared semantic
+        license from dynamic property instructions into a structural overlay region.
+        MALW v65 carries the source global, synthetic slots, and direct/deopt access
+        graph as one cache-rebaseable certificate.
   - [x] Replace exact-fresh Array producer/access links with a structural overlay
         region. Carry overlay composition through VM lowering and the versioned
         wire/cache contract so dense indexed loads compose with enclosing numeric

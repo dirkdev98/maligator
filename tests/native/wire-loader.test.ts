@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { compileSemanticProgramToVmDefinition } from "../../src/compile-core.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
@@ -11,6 +12,8 @@ import {
 import { emitVmDefinition } from "../../src/emit-vm.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 import type { VmDefinition, VmFunction } from "../../src/lower-vm.ts";
+import { parseScript } from "../../src/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../../src/semantic-analysis.ts";
 import { serializeVmDefinition } from "../../src/serialize-vm.ts";
 import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
@@ -418,6 +421,40 @@ describe("wire loader side-data validation", () => {
 		writeFileSync(
 			wirePath,
 			serializeVmDefinition(numericDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
+	it("loads a nonempty closed-global table proof region payload", () => {
+		const entrypoint = path.join(directory, "closed-global-table-region.js");
+		const source = `const table = {};
+			function update(seed, other) {
+				const key = seed & 7;
+				const previous = table[key];
+				table[key] = seed;
+				if (other !== undefined) table[other] = seed + 1;
+				return previous;
+			}
+			globalThis.result = update(3, undefined);\n`;
+		writeFileSync(entrypoint, source);
+		const closedDefinition = compileSemanticProgramToVmDefinition(
+			analyzeSourceAndRunSemanticAnalysis(
+				source,
+				entrypoint,
+				parseScript(source, { strict: false }),
+			),
+		);
+		expect(
+			closedDefinition.functions.flatMap(
+				(fn) =>
+					fn.regions?.filter((region) => region.kind === "closed-global-table") ?? [],
+			),
+		).toHaveLength(1);
+		const wirePath = path.join(directory, "closed-global-table-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(closedDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);

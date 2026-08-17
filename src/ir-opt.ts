@@ -61,6 +61,7 @@ import { debugIntermediateProgram, getOrCreateStringConstant } from "./ir.ts";
 import type {
 	IntermediateProgram,
 	IRCardinalityArrayRegion,
+	IRClosedGlobalTableRegion,
 	IRClosedRecordArrayRegion,
 	IRFiniteObjectConstructionRegion,
 	IRFinitePropertySelectorRegion,
@@ -4969,7 +4970,9 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 	}
 
 	const indexes = new Map(
-		program.functions.map((fn) => [fn, buildIRRegisterIndex(fn)] as const),
+		program.functions.map(
+			(fn) => [fn, buildIRRegisterIndex(fn, { locations: true })] as const,
+		),
 	);
 	const rootDefinition = (fn: IRFunction, initial: number): IRInstruction | undefined => {
 		const definitions = indexes.get(fn)!.uniqueDefinitions;
@@ -5117,13 +5120,20 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 				}
 			}
 		}
-		const accessFunctions = new Set(accesses.map((access) => access.fn));
+		const uniqueAccesses = [
+			...new Map(
+				accesses.map((access) => [access.instruction, access] as const),
+			).values(),
+		];
+		const accessFunctions = new Set(uniqueAccesses.map((access) => access.fn));
 		const masks = new Set(
-			accesses.flatMap((access) => (access.mask === undefined ? [] : [access.mask])),
+			uniqueAccesses.flatMap((access) =>
+				access.mask === undefined ? [] : [access.mask],
+			),
 		);
 		if (
 			!valid ||
-			accesses.length === 0 ||
+			uniqueAccesses.length === 0 ||
 			accessFunctions.size !== 1 ||
 			masks.size !== 1
 		) {
@@ -5134,7 +5144,8 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 			accessFunction.isGenerator ||
 			accessFunction.isAsync ||
 			functionUsesWith(accessFunction) ||
-			accessFunction.semanticFile.hasDirectEval.size > 0
+			accessFunction.semanticFile.hasDirectEval.size > 0 ||
+			(accessFunction.regions?.length ?? 0) >= MAX_IR_REGIONS_PER_FUNCTION
 		) {
 			continue;
 		}
@@ -5153,16 +5164,42 @@ export function annotateClosedGlobalFiniteTables(program: IntermediateProgram): 
 		if (guard === undefined) continue;
 		program.nextGlobalIndex += width + 1;
 		syntheticGlobals += width + 1;
-		for (const access of accesses) {
-			access.instruction.nativeClosedGlobalTable = {
-				baseIndex,
-				stateIndex,
-				mask,
-				direct: access.mask === mask,
+		const claimedInstructions = uniqueAccesses.map((access) => access.instruction);
+		const ordinaryBlocks = [
+			...new Set(
+				claimedInstructions.map(
+					(instruction) =>
+						indexes.get(accessFunction)!.locations!.get(instruction)!.blockIndex,
+				),
+			),
+		].sort((left, right) => left - right);
+		const region: IRClosedGlobalTableRegion = {
+			kind: "closed-global-table",
+			license: {
 				guard,
-			};
-			annotated++;
-		}
+				genericTwin: "retained",
+				materialization: "on-demand",
+			},
+			representation: "synthetic-global-value-table",
+			composition: "overlay",
+			anchors: [claimedInstructions[0]!],
+			claimedInstructions,
+			controlFlow: { ordinaryBlocks, exceptionalBlocks: [] },
+			cost: {
+				score: width + claimedInstructions.length,
+				metadataOperations: claimedInstructions.length,
+			},
+			sourceGlobalIndex: globalIndex,
+			baseIndex,
+			stateIndex,
+			mask,
+			accesses: uniqueAccesses.map((access) => ({
+				instruction: access.instruction,
+				direct: access.mask === mask,
+			})),
+		};
+		accessFunction.regions = [...(accessFunction.regions ?? []), region];
+		annotated += uniqueAccesses.length;
 	}
 	return annotated;
 }

@@ -49,6 +49,15 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
+		case "closed-global-table":
+			return {
+				...cloneRegionEnvelope(region),
+				kind: region.kind,
+				sourceGlobalIndex: region.sourceGlobalIndex + base.global,
+				baseIndex: region.baseIndex + base.global,
+				stateIndex: region.stateIndex + base.global,
+				accesses: region.accesses.map((access) => ({ ...access })),
+			};
 		case "finite-property-selector":
 			return {
 				...cloneRegionEnvelope(region),
@@ -384,29 +393,8 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "TYPEOF_COMPARE":
 			return { ...instruction };
 		case "LOAD_PROPERTY":
-			return {
-				...instruction,
-				nativeClosedGlobalTable:
-					instruction.nativeClosedGlobalTable === undefined
-						? undefined
-						: {
-								...instruction.nativeClosedGlobalTable,
-								baseIndex: instruction.nativeClosedGlobalTable.baseIndex + base.global,
-								stateIndex: instruction.nativeClosedGlobalTable.stateIndex + base.global,
-							},
-			};
 		case "STORE_PROPERTY":
-			return {
-				...instruction,
-				nativeClosedGlobalTable:
-					instruction.nativeClosedGlobalTable === undefined
-						? undefined
-						: {
-								...instruction.nativeClosedGlobalTable,
-								baseIndex: instruction.nativeClosedGlobalTable.baseIndex + base.global,
-								stateIndex: instruction.nativeClosedGlobalTable.stateIndex + base.global,
-							},
-			};
+			return { ...instruction };
 		case "BINARY":
 			return {
 				...instruction,

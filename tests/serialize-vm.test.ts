@@ -460,34 +460,16 @@ describe("serialize-vm", () => {
 			object: 7,
 			key: 1,
 			icIndex: finiteStoreIc + 2,
-			nativeClosedGlobalTable: {
-				baseIndex: 0,
-				stateIndex: 4,
-				mask: 3,
-				direct: true,
-				guard: {
-					dependencies: [{ kind: "epoch", family: "array-elements" }],
-					obligations: ["fallback", "materialize"],
-				},
-			},
 		});
+		const closedGlobalLoadInstructionIndex = metadataInstructions.length - 1;
 		metadataInstructions.push({
 			opcode: "STORE_PROPERTY",
 			object: 7,
 			key: 1,
 			value: 2,
 			icIndex: finiteStoreIc + 3,
-			nativeClosedGlobalTable: {
-				baseIndex: 0,
-				stateIndex: 4,
-				mask: 3,
-				direct: false,
-				guard: {
-					dependencies: [{ kind: "world", fact: "primordials.locked" }],
-					obligations: ["fallback", "materialize"],
-				},
-			},
 		});
+		const closedGlobalStoreInstructionIndex = metadataInstructions.length - 1;
 		metadataInstructions.push({
 			opcode: "CREATE_ARRAY",
 			dst: 6,
@@ -526,6 +508,34 @@ describe("serialize-vm", () => {
 					],
 					gcRootRegisters: [0, 3, 7],
 					regions: [
+						{
+							kind: "closed-global-table",
+							license: {
+								guard: {
+									dependencies: [{ kind: "epoch", family: "array-elements" }],
+									obligations: ["fallback", "materialize"],
+								},
+								genericTwin: "retained",
+								materialization: "on-demand",
+							},
+							representation: "synthetic-global-value-table",
+							composition: "overlay",
+							anchors: [closedGlobalLoadInstructionIndex],
+							claimedIps: [
+								closedGlobalLoadInstructionIndex,
+								closedGlobalStoreInstructionIndex,
+							],
+							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
+							cost: { score: 6, metadataOperations: 2 },
+							sourceGlobalIndex: 5,
+							baseIndex: 0,
+							stateIndex: 4,
+							mask: 3,
+							accesses: [
+								{ ip: closedGlobalLoadInstructionIndex, kind: "load", direct: true },
+								{ ip: closedGlobalStoreInstructionIndex, kind: "store", direct: false },
+							],
+						},
 						{
 							kind: "finite-property-selector",
 							license: {
