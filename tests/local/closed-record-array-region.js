@@ -54,9 +54,29 @@ function conditionalFillKernel() {
 	return total;
 }
 
+function independentRegionsKernel() {
+	const left = [];
+	for (let index = 0; index < 8; index++) left.push({ x: index, y: index + 1 });
+	let total = 0;
+	for (let index = 0; index < 8; index++) {
+		const row = left[index];
+		total += row.x + row.y;
+	}
+
+	const right = [];
+	for (let index = 0; index < 4; index++) right.push({ p: index, q: index + 2 });
+	for (let index = 0; index < 4; index++) {
+		const row = right[index];
+		row.q = row.p + row.q;
+		total += row.q;
+	}
+	return total;
+}
+
 check("closed nested consumer loops", closedKernel() === 12716);
 check("escaping record keeps identity", escapingKernel());
 check("shape mutation stays generic", shapeMutationKernel() === 28);
 check("conditional fill stays generic", conditionalFillKernel() === 6);
+check("independent regions compose", independentRegionsKernel() === 84);
 
 console.log("closed-record-array-region PASS " + passed + "/" + passed);

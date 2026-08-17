@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
@@ -329,9 +330,10 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		expect(wire.at(-3)).toBe(12);
-		expect(wire.at(-1)).toBe(0); // empty numeric-HOF region table
-		wire[wire.length - 2] = 0;
+		expect(wire.at(-4)).toBe(12);
+		expect(wire.at(-2)).toBe(0); // empty numeric-HOF region table
+		expect(wire.at(-1)).toBe(0); // empty closed record-Array region table
+		wire[wire.length - 3] = 0;
 		rejectsWire("indexed-fill-reserve-zero", wire);
 	});
 
@@ -364,9 +366,10 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 
-		expect(wire.at(-3)).toBe(13);
-		expect(wire.at(-1)).toBe(0); // empty numeric-HOF region table
-		wire[wire.length - 2] = 2; // ZigZag(1): CREATE_NUMBER, not CREATE_ARRAY
+		expect(wire.at(-4)).toBe(13);
+		expect(wire.at(-2)).toBe(0); // empty numeric-HOF region table
+		expect(wire.at(-1)).toBe(0); // empty closed record-Array region table
+		wire[wire.length - 3] = 2; // ZigZag(1): CREATE_NUMBER, not CREATE_ARRAY
 		rejectsWire("exact-fresh-array-access-allocation", wire);
 	});
 
@@ -398,6 +401,39 @@ describe("wire loader side-data validation", () => {
 		writeFileSync(
 			wirePath,
 			serializeVmDefinition(numericDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
+	it("loads a nonempty closed record-Array proof region payload", () => {
+		const entrypoint = path.join(directory, "closed-record-array-region.mjs");
+		writeFileSync(
+			entrypoint,
+			`function run() {
+				const rows = [];
+				for (let index = 0; index < 8; index++) rows.push({ x: index, y: index + 1 });
+				let total = 0;
+				for (let index = 0; index < 8; index++) {
+					const row = rows[index];
+					row.y = row.x + row.y;
+					total += row.y;
+				}
+				return total;
+			}
+			globalThis.result = run();\n`,
+		);
+		const closedDefinition = compileEntrypoint(entrypoint, {
+			buildConfig: resolveBuildConfig({ engine: { primordials: "locked" } }),
+			stripTypes: stripTypesWithTypeScript,
+		});
+		expect(
+			closedDefinition.functions.flatMap((fn) => fn.nativeClosedRecordArrayRegions ?? []),
+		).not.toHaveLength(0);
+		const wirePath = path.join(directory, "closed-record-array-region.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(closedDefinition, { debugInfo: false }),
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);

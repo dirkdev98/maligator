@@ -11,6 +11,7 @@ import {
 	compilerGuardPlan,
 	knownBuiltinCallProves,
 } from "./compiler-facts.ts";
+import type { CompilerGuardPlan } from "./compiler-facts.ts";
 import {
 	analyzeExactFreshArrayUse,
 	analyzeExactFreshMapUse,
@@ -39,6 +40,7 @@ import {
 	optInlineSpeculative,
 } from "./inline.ts";
 import type { CapturedSlotOptimizationFacts } from "./inline.ts";
+import { buildIROrdinaryControlFlow, irInstructionDominates } from "./ir-control-flow.ts";
 import {
 	buildIRRegisterIndex,
 	definedRegisters,
@@ -48,6 +50,7 @@ import {
 import { debugIntermediateProgram, getOrCreateStringConstant } from "./ir.ts";
 import type {
 	IntermediateProgram,
+	IRClosedRecordArrayRegion,
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
@@ -1270,6 +1273,8 @@ export function executeIROptimizations(
 		if (residualFeatures.call) annotateDirectCallTargets(program);
 		if (residualFeatures.call) optImmediateCallOperands(program);
 		optDeadInstructionElimination(program);
+		if (residualFeatures.call && residualFeatures.property && residualFeatures.object)
+			annotateClosedRecordArrayRegions(program);
 		if (residualFeatures.call && residualFeatures.property)
 			annotateStringSplitCursorRegions(program);
 		annotateFiniteStringConcats(program);
@@ -1419,6 +1424,11 @@ export function executeIROptimizations(
 		runFinalPass(
 			"post-annotation-dead-instruction-elimination",
 			optDeadInstructionElimination,
+		);
+		runFinalPass(
+			"annotate-closed-record-array-regions",
+			annotateClosedRecordArrayRegions,
+			residualFeatures.call && residualFeatures.property && residualFeatures.object,
 		);
 		runFinalPass(
 			"annotate-string-split-cursors",
@@ -3718,6 +3728,543 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 		}
 	}
 	return changed;
+}
+
+interface IRClosedRecordCanonicalCounter {
+	readonly register: number;
+	readonly bound: number;
+	readonly initializer: IRInstruction;
+	readonly increment: Extract<IRInstruction, { type: "unary" }>;
+	readonly comparison: Extract<IRInstruction, { type: "binary" }>;
+	readonly exitBlock: number;
+}
+
+const MAX_CLOSED_RECORD_ARRAY_LENGTH = 65_536;
+const MAX_CLOSED_RECORD_ARRAY_CANDIDATES = 32;
+const MAX_CLOSED_RECORD_ARRAY_REGIONS = 8;
+const MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS = 64;
+const MAX_CLOSED_RECORD_SHAPE_SLOTS = 64;
+
+function compilerGuardIsWorldInvariant(guard: CompilerGuardPlan): boolean {
+	return (
+		guard.dependencies.length > 0 &&
+		guard.dependencies.every((dependency) => dependency.kind === "world") &&
+		guard.obligations.some((obligation) => obligation.kind === "fallback")
+	);
+}
+
+/**
+ * Prove and select disjoint private record-Array loop regions while IR retains
+ * virtual-register identity and block structure. The ordinary instructions are
+ * the complete semantic twin. Lowering resolves every instruction anchor or
+ * drops the certificate; no backend may rediscover this proof from VM opcodes.
+ */
+export function annotateClosedRecordArrayRegions(program: IntermediateProgram): number {
+	type ArrayAllocation = Extract<IRInstruction, { type: "createArray" }>;
+	type ElementLoad = Extract<IRInstruction, { type: "loadProperty" }>;
+	type StaticAccess = Extract<
+		IRInstruction,
+		{ type: "loadPropertyStatic" | "storePropertyStatic" }
+	>;
+	interface Candidate {
+		allocation: ArrayAllocation;
+		region: IRClosedRecordArrayRegion;
+		claimed: ReadonlySet<IRInstruction>;
+		benefit: number;
+		order: number;
+	}
+
+	let annotated = 0;
+	for (const fn of program.functions) {
+		const allocations = fn.blocks
+			.flatMap((block) => block.instructions)
+			.filter(
+				(instruction): instruction is ArrayAllocation =>
+					instruction.type === "createArray" && instruction.length === 0,
+			);
+		for (const allocation of allocations) delete allocation.nativeClosedRecordArrayRegion;
+		if (
+			allocations.length === 0 ||
+			allocations.length > MAX_CLOSED_RECORD_ARRAY_CANDIDATES ||
+			fn.isGenerator ||
+			fn.isAsync ||
+			fn.nextCapturedIndex !== 0 ||
+			fn.mappedArguments === true ||
+			fn.argumentsObjectRegister !== undefined ||
+			functionUsesWith(fn) ||
+			fn.semanticFile.hasDirectEval.size > 0 ||
+			fn.blocks.some((block) =>
+				block.instructions.some(
+					(instruction) =>
+						instruction.type === "tryBegin" ||
+						instruction.type === "tryEnd" ||
+						instruction.type === "catch",
+				),
+			)
+		) {
+			continue;
+		}
+
+		const index = buildIRRegisterIndex(fn, { locations: true });
+		const locations = index.locations!;
+		const definitions = index.uniqueDefinitions;
+		const cfg = buildIROrdinaryControlFlow(fn);
+		if (cfg.loops.length === 0) continue;
+
+		const moveRoot = (initial: number): number => {
+			let register = initial;
+			const seen = new Set<number>();
+			while (!seen.has(register)) {
+				seen.add(register);
+				const definition = definitions.get(register);
+				if (definition?.type !== "move") break;
+				register = definition.registers[1];
+			}
+			return register;
+		};
+		const rootDefinition = (register: number): IRInstruction | undefined =>
+			definitions.get(moveRoot(register));
+		const constant = (register: number): number | undefined => {
+			const definition = rootDefinition(register);
+			return definition?.type === "createNumber" || definition?.type === "createF64"
+				? definition.value
+				: undefined;
+		};
+		const moveAliases = (
+			seeds: ReadonlyArray<{ instruction: IRInstruction; register: number }>,
+		): { instructions: Set<IRInstruction>; registers: Set<number> } | undefined => {
+			if (seeds.some((seed) => definitions.get(seed.register) !== seed.instruction)) {
+				return undefined;
+			}
+			const instructions = new Set(seeds.map((seed) => seed.instruction));
+			const registers = new Set(seeds.map((seed) => seed.register));
+			const work = [...registers];
+			while (work.length > 0) {
+				const register = work.pop()!;
+				for (const use of index.uses.get(register) ?? []) {
+					if (use.instruction.type !== "move" || use.position !== 1) continue;
+					const destination = use.instruction.registers[0];
+					if (definitions.get(destination) !== use.instruction) continue;
+					instructions.add(use.instruction);
+					if (!registers.has(destination)) {
+						registers.add(destination);
+						work.push(destination);
+					}
+				}
+			}
+			return { instructions, registers };
+		};
+		const canonicalCounter = (
+			loop: (typeof cfg.loops)[number],
+			maximumBound: number,
+		): IRClosedRecordCanonicalCounter | undefined => {
+			const header = fn.blocks[loop.header];
+			if (header === undefined) return undefined;
+			const branches = header.instructions.filter(
+				(instruction): instruction is Extract<IRInstruction, { type: "jumpIf" }> =>
+					instruction.type === "jumpIf",
+			);
+			const exits = header.instructions.filter(
+				(instruction): instruction is Extract<IRInstruction, { type: "jump" }> =>
+					instruction.type === "jump" && !loop.blocks.has(instruction.blocks[0]),
+			);
+			const exit = exits[0];
+			if (branches.length !== 1 || exits.length !== 1 || exit === undefined) {
+				return undefined;
+			}
+			const branch = branches[0]!;
+			const comparison = definitions.get(branch.registers[0]);
+			if (
+				comparison?.type !== "binary" ||
+				comparison.operator !== "<" ||
+				!loop.blocks.has(branch.blocks[0])
+			) {
+				return undefined;
+			}
+			const bound = constant(comparison.registers[2]);
+			if (!Number.isSafeInteger(bound) || bound! <= 0 || bound! > maximumBound) {
+				return undefined;
+			}
+			const counter = comparison.registers[1];
+			const counterDefinitions = index.definitions.get(counter) ?? [];
+			if (counterDefinitions.length !== 2) return undefined;
+			let initializer: IRInstruction | undefined;
+			let increment: Extract<IRInstruction, { type: "unary" }> | undefined;
+			for (const entry of counterDefinitions) {
+				const location = locations.get(entry.instruction);
+				if (
+					(entry.instruction.type === "createNumber" ||
+						entry.instruction.type === "createF64") &&
+					entry.instruction.value === 0 &&
+					location !== undefined &&
+					!loop.blocks.has(location.blockIndex)
+				) {
+					initializer = entry.instruction;
+				} else if (
+					entry.instruction.type === "unary" &&
+					entry.instruction.operator === "increment" &&
+					entry.instruction.registers[0] === counter &&
+					entry.instruction.registers[1] === counter &&
+					location !== undefined &&
+					loop.blocks.has(location.blockIndex)
+				) {
+					increment = entry.instruction;
+				}
+			}
+			if (
+				initializer === undefined ||
+				increment === undefined ||
+				!irInstructionDominates(cfg, locations, initializer, comparison)
+			) {
+				return undefined;
+			}
+			return {
+				register: counter,
+				bound: bound!,
+				initializer,
+				increment,
+				comparison,
+				exitBlock: exit.blocks[0],
+			};
+		};
+		const exactProducerControl = (
+			loop: (typeof cfg.loops)[number],
+			counter: IRClosedRecordCanonicalCounter,
+		): boolean => {
+			const contained = cfg.loops.filter(
+				(candidate) =>
+					loop.blocks.has(candidate.header) && loop.blocks.has(candidate.backedge),
+			);
+			if (
+				contained.length !== 1 ||
+				contained[0]!.header !== loop.header ||
+				contained[0]!.backedge !== loop.backedge
+			) {
+				return false;
+			}
+			for (const block of loop.blocks) {
+				for (const predecessor of cfg.predecessors[block]!) {
+					if (!loop.blocks.has(predecessor) && block !== loop.header) return false;
+				}
+				for (const successor of cfg.successors[block]!) {
+					if (!loop.blocks.has(successor) && successor !== counter.exitBlock)
+						return false;
+					if (!loop.blocks.has(successor) && block !== loop.header) return false;
+				}
+			}
+			const inLoopHeaderPredecessors = cfg.predecessors[loop.header]!.filter((block) =>
+				loop.blocks.has(block),
+			);
+			const backedgeTerminator = fn.blocks[loop.backedge]?.instructions.findLast(
+				(instruction) => instruction.type !== "sourcePos",
+			);
+			return (
+				inLoopHeaderPredecessors.length === 1 &&
+				inLoopHeaderPredecessors[0] === loop.backedge &&
+				backedgeTerminator?.type === "jump" &&
+				backedgeTerminator.blocks[0] === loop.header &&
+				irInstructionDominates(cfg, locations, counter.increment, backedgeTerminator)
+			);
+		};
+		const addLoopInstructions = (
+			claimed: Set<IRInstruction>,
+			loop: (typeof cfg.loops)[number],
+		) => {
+			for (const block of loop.blocks) {
+				for (const instruction of fn.blocks[block]!.instructions)
+					claimed.add(instruction);
+			}
+		};
+
+		const candidates: Array<Candidate> = [];
+		for (const allocation of allocations) {
+			if (allocation.nativeCardinalityRegion !== undefined) continue;
+			const allocationLocation = locations.get(allocation);
+			const arrayAliases = moveAliases([
+				{ instruction: allocation, register: allocation.registers[0] },
+			]);
+			if (allocationLocation === undefined || arrayAliases === undefined) continue;
+
+			const pushes = new Map<
+				IRInstruction,
+				{
+					instruction: Extract<IRInstruction, { type: "call" | "callBuiltin" }>;
+					argument: number;
+					guard: CompilerGuardPlan;
+				}
+			>();
+			const elementLoads = new Set<ElementLoad>();
+			let closed = true;
+			for (const alias of arrayAliases.registers) {
+				for (const use of index.uses.get(alias) ?? []) {
+					const instruction = use.instruction;
+					if (instruction.type === "move" && use.position === 1) continue;
+					if (
+						instruction.type === "loadPropertyStatic" &&
+						use.position === 1 &&
+						decodeStringConstant(program, instruction.stringIndex) === "push"
+					) {
+						continue;
+					}
+					if (
+						instruction.type === "call" &&
+						use.position === 2 &&
+						instruction.registers.length === 4 &&
+						knownBuiltinCallProves(instruction.knownBuiltinCall, "Array.prototype.push")
+					) {
+						const call = instruction.knownBuiltinCall!;
+						const guard = compilerGuardPlan([call.identity, call.semantics]);
+						if (guard !== undefined && compilerGuardIsWorldInvariant(guard)) {
+							pushes.set(instruction, {
+								instruction,
+								argument: instruction.registers[3]!,
+								guard,
+							});
+							continue;
+						}
+					}
+					if (
+						instruction.type === "callBuiltin" &&
+						use.position === 1 &&
+						instruction.operation === "Array.prototype.push" &&
+						instruction.registers.length === 3
+					) {
+						const call = instruction.knownBuiltinCall;
+						const guard = compilerGuardPlan([call.identity, call.semantics]);
+						if (guard !== undefined && compilerGuardIsWorldInvariant(guard)) {
+							pushes.set(instruction, {
+								instruction,
+								argument: instruction.registers[2]!,
+								guard,
+							});
+							continue;
+						}
+					}
+					if (instruction.type === "loadProperty" && use.position === 1) {
+						if (arrayAliases.registers.has(instruction.registers[2])) {
+							closed = false;
+							break;
+						}
+						elementLoads.add(instruction);
+						continue;
+					}
+					closed = false;
+					break;
+				}
+				if (!closed) break;
+			}
+			if (!closed || pushes.size !== 1 || elementLoads.size === 0) continue;
+
+			const push = [...pushes.values()][0]!;
+			const pushLocation = locations.get(push.instruction);
+			const producerLoop =
+				pushLocation === undefined
+					? undefined
+					: cfg.loops
+							.filter((loop) => loop.blocks.has(pushLocation.blockIndex))
+							.sort((left, right) => left.blocks.size - right.blocks.size)[0];
+			const producerCounter =
+				producerLoop === undefined
+					? undefined
+					: canonicalCounter(producerLoop, MAX_CLOSED_RECORD_ARRAY_LENGTH);
+			const producerBackedge =
+				producerLoop === undefined
+					? undefined
+					: fn.blocks[producerLoop.backedge]?.instructions.findLast(
+							(instruction) => instruction.type !== "sourcePos",
+						);
+			if (
+				producerLoop === undefined ||
+				producerCounter === undefined ||
+				producerBackedge === undefined ||
+				!exactProducerControl(producerLoop, producerCounter) ||
+				producerLoop.blocks.has(allocationLocation.blockIndex) ||
+				!cfg.dominates(allocationLocation.blockIndex, producerLoop.header) ||
+				!irInstructionDominates(cfg, locations, allocation, producerCounter.comparison) ||
+				!irInstructionDominates(cfg, locations, push.instruction, producerBackedge)
+			) {
+				continue;
+			}
+
+			const producerObject = rootDefinition(push.argument);
+			const producerObjectLocation =
+				producerObject === undefined ? undefined : locations.get(producerObject);
+			if (
+				producerObject?.type !== "createObjectShaped" ||
+				producerObjectLocation === undefined ||
+				!producerLoop.blocks.has(producerObjectLocation.blockIndex) ||
+				!irInstructionDominates(cfg, locations, producerObject, push.instruction) ||
+				producerObject.keyStringIndices.length === 0 ||
+				producerObject.keyStringIndices.length > MAX_CLOSED_RECORD_SHAPE_SLOTS ||
+				new Set(
+					producerObject.keyStringIndices.map((stringIndex) =>
+						decodeStringConstant(program, stringIndex),
+					),
+				).size !== producerObject.keyStringIndices.length
+			) {
+				continue;
+			}
+
+			const consumerLoops = new Set<(typeof cfg.loops)[number]>();
+			let consumersProven = true;
+			for (const load of elementLoads) {
+				const loadLocation = locations.get(load);
+				const consumerLoop =
+					loadLocation === undefined
+						? undefined
+						: cfg.loops
+								.filter(
+									(loop) =>
+										loop !== producerLoop &&
+										loop.blocks.has(loadLocation.blockIndex) &&
+										cfg.dominates(producerCounter.exitBlock, loadLocation.blockIndex),
+								)
+								.sort((left, right) => left.blocks.size - right.blocks.size)[0];
+				const counter =
+					consumerLoop === undefined
+						? undefined
+						: canonicalCounter(consumerLoop, producerCounter.bound);
+				const consumerBackedge =
+					consumerLoop === undefined
+						? undefined
+						: fn.blocks[consumerLoop.backedge]?.instructions.findLast(
+								(instruction) => instruction.type !== "sourcePos",
+							);
+				if (
+					loadLocation === undefined ||
+					consumerLoop === undefined ||
+					counter === undefined ||
+					consumerBackedge === undefined ||
+					counter.bound !== producerCounter.bound ||
+					load.registers[2] !== counter.register ||
+					!cfg.dominates(consumerLoop.header, loadLocation.blockIndex) ||
+					!irInstructionDominates(cfg, locations, load, consumerBackedge)
+				) {
+					consumersProven = false;
+					break;
+				}
+				consumerLoops.add(consumerLoop);
+			}
+			if (!consumersProven) continue;
+
+			const recordAliases = moveAliases([
+				{ instruction: producerObject, register: producerObject.registers[0] },
+				...[...elementLoads].map((load) => ({
+					instruction: load,
+					register: load.registers[0],
+				})),
+			]);
+			if (recordAliases === undefined) continue;
+			const slotOf = (stringIndex: number): number => {
+				const key = decodeStringConstant(program, stringIndex);
+				return producerObject.keyStringIndices.findIndex(
+					(candidate) => decodeStringConstant(program, candidate) === key,
+				);
+			};
+			const accesses = new Map<
+				StaticAccess,
+				IRClosedRecordArrayRegion["accesses"][number]
+			>();
+			for (const alias of recordAliases.registers) {
+				for (const use of index.uses.get(alias) ?? []) {
+					const instruction = use.instruction;
+					if (instruction.type === "move" && use.position === 1) continue;
+					if (
+						instruction === push.instruction &&
+						((instruction.type === "call" && use.position === 3) ||
+							(instruction.type === "callBuiltin" && use.position === 2))
+					) {
+						continue;
+					}
+					if (instruction.type === "loadPropertyStatic" && use.position === 1) {
+						const slot = slotOf(instruction.stringIndex);
+						if (slot >= 0) {
+							accesses.set(instruction, {
+								instruction,
+								kind: "load",
+								slot,
+							});
+							continue;
+						}
+					}
+					if (
+						instruction.type === "storePropertyStatic" &&
+						use.position === 0 &&
+						!recordAliases.registers.has(instruction.registers[1])
+					) {
+						const slot = slotOf(instruction.stringIndex);
+						if (slot >= 0) {
+							accesses.set(instruction, {
+								instruction,
+								kind: "store",
+								slot,
+							});
+							continue;
+						}
+					}
+					closed = false;
+					break;
+				}
+				if (!closed) break;
+			}
+			if (!closed || accesses.size < 2) continue;
+
+			const operationCount = elementLoads.size + accesses.size;
+			const benefit = producerCounter.bound * operationCount;
+			if (benefit < 8) continue;
+			const claimed = new Set<IRInstruction>([
+				allocation,
+				...arrayAliases.instructions,
+				...recordAliases.instructions,
+				...elementLoads,
+				...accesses.keys(),
+			]);
+			addLoopInstructions(claimed, producerLoop);
+			for (const loop of consumerLoops) addLoopInstructions(claimed, loop);
+			candidates.push({
+				allocation,
+				region: {
+					license: {
+						guard: push.guard,
+						genericTwin: "retained",
+						materialization: "none",
+					},
+					producerObject,
+					length: producerCounter.bound,
+					elementLoads: [...elementLoads],
+					accesses: [...accesses.values()],
+				},
+				claimed,
+				benefit,
+				order:
+					allocationLocation.blockIndex * 1_000_000 + allocationLocation.instructionIndex,
+			});
+		}
+
+		const occupied = new Set<IRInstruction>();
+		let metadataOperations = 0;
+		let selected = 0;
+		for (const candidate of candidates.sort(
+			(left, right) => right.benefit - left.benefit || left.order - right.order,
+		)) {
+			const operations =
+				candidate.region.elementLoads.length + candidate.region.accesses.length;
+			if (
+				selected >= MAX_CLOSED_RECORD_ARRAY_REGIONS ||
+				metadataOperations + operations > MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS ||
+				[...candidate.claimed].some((instruction) => occupied.has(instruction))
+			) {
+				continue;
+			}
+			candidate.allocation.nativeClosedRecordArrayRegion = candidate.region;
+			for (const instruction of candidate.claimed) occupied.add(instruction);
+			metadataOperations += operations;
+			selected++;
+			annotated++;
+			if (selected >= MAX_CLOSED_RECORD_ARRAY_REGIONS) break;
+		}
+	}
+	return annotated;
 }
 
 /**

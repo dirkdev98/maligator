@@ -34,12 +34,15 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 44 for closed-dispatch numeric HOF regions.
-export const WIRE_VERSION = 44;
+// Bumped to 45 for IR-proven closed record-Array region certificates.
+export const WIRE_VERSION = 45;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
 const NUMERIC_HOF_BINOPS = ["+", "-", "*", "/", "%"] as const;
+const MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS = 64;
+const MAX_CLOSED_RECORD_ARRAY_REGIONS = 8;
+const MAX_CLOSED_RECORD_SHAPE_SLOTS = 64;
 // Preserve the original three wire tags; append the rest of the registry surface.
 const NUMERIC_HOF_MATH_OPS: ReadonlyArray<MathUnaryOperationKey> = [
 	"abs",
@@ -621,6 +624,32 @@ function numericHofGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
+function closedRecordArrayGuardMasks(
+	license: NonNullable<VmFunction["nativeClosedRecordArrayRegions"]>[number]["license"],
+): { dependencyMask: number; obligationMask: number } {
+	let dependencyMask = 0;
+	for (const dependency of license.guard.dependencies) {
+		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
+			dependencyMask |= 1;
+		} else {
+			throw new RangeError("serialize-vm: unsupported closed record-Array dependency");
+		}
+	}
+	let obligationMask = 0;
+	for (const obligation of license.guard.obligations) {
+		obligationMask |= obligation === "fallback" ? 1 : 2;
+	}
+	if (
+		license.genericTwin !== "retained" ||
+		license.materialization !== "none" ||
+		dependencyMask !== 1 ||
+		obligationMask !== 1
+	) {
+		throw new RangeError("serialize-vm: invalid closed record-Array guard plan");
+	}
+	return { dependencyMask, obligationMask };
+}
+
 function inheritedStackGuardMasks(guard: VmGuardPlan): {
 	dependencyMask: number;
 	obligationMask: number;
@@ -1115,6 +1144,31 @@ export function serializeVmDefinition(
 				}
 			}
 		}
+
+		const closedRecordArrayRegions = [...(fn.nativeClosedRecordArrayRegions ?? [])];
+		if (closedRecordArrayRegions.length > MAX_CLOSED_RECORD_ARRAY_REGIONS) {
+			throw new RangeError("serialize-vm: too many closed record-Array regions");
+		}
+		w.u32(closedRecordArrayRegions.length);
+		const claimedClosedRecordInstructions = new Set<number>();
+		for (const region of closedRecordArrayRegions) {
+			validateClosedRecordArrayRegion(fn, region, claimedClosedRecordInstructions);
+			const { dependencyMask, obligationMask } = closedRecordArrayGuardMasks(
+				region.license,
+			);
+			w.i32(region.allocationIp);
+			w.i32(region.producerObjectIp);
+			w.i32(region.length);
+			w.i32Array([...region.elementLoadIps]);
+			w.u32(region.accesses.length);
+			for (const access of region.accesses) {
+				w.i32(access.ip);
+				w.u8(access.kind === "load" ? 1 : 2);
+				w.i32(access.slot);
+			}
+			w.u8(dependencyMask);
+			w.u8(obligationMask);
+		}
 	}
 
 	return w.finish();
@@ -1389,6 +1443,56 @@ function validateNumericHofRegion(
 				throw new RangeError("serialize-vm: invalid numeric-HOF expression plan");
 		}
 	}
+}
+
+function validateClosedRecordArrayRegion(
+	fn: VmFunction,
+	region: NonNullable<VmFunction["nativeClosedRecordArrayRegions"]>[number],
+	claimed: Set<number>,
+): void {
+	closedRecordArrayGuardMasks(region.license);
+	const allocation = fn.instructions[region.allocationIp];
+	const producer = fn.instructions[region.producerObjectIp];
+	const operationIps = [
+		region.allocationIp,
+		region.producerObjectIp,
+		...region.elementLoadIps,
+		...region.accesses.map((access) => access.ip),
+	];
+	if (
+		allocation?.opcode !== "CREATE_ARRAY" ||
+		allocation.length !== 0 ||
+		producer?.opcode !== "CREATE_OBJECT_SHAPED" ||
+		producer.count === 0 ||
+		producer.count > MAX_CLOSED_RECORD_SHAPE_SLOTS ||
+		producer.count !== producer.keyStringIndices.length ||
+		!Number.isSafeInteger(region.length) ||
+		region.length <= 0 ||
+		region.length > 65_536 ||
+		region.elementLoadIps.length === 0 ||
+		region.elementLoadIps.length > MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS ||
+		region.accesses.length < 2 ||
+		region.accesses.length > MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS ||
+		region.elementLoadIps.length + region.accesses.length >
+			MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS ||
+		new Set(operationIps).size !== operationIps.length ||
+		operationIps.some((ip) => claimed.has(ip)) ||
+		region.elementLoadIps.some((ip) => fn.instructions[ip]?.opcode !== "LOAD_PROPERTY") ||
+		region.accesses.some((access) => {
+			const instruction = fn.instructions[access.ip];
+			return (
+				!Number.isSafeInteger(access.slot) ||
+				access.slot < 0 ||
+				access.slot >= producer.count ||
+				(access.kind === "load"
+					? instruction?.opcode !== "LOAD_PROPERTY_STATIC"
+					: instruction?.opcode !== "STORE_PROPERTY_STATIC")
+			);
+		})
+	) {
+		throw new RangeError("serialize-vm: invalid closed record-Array region metadata");
+	}
+	for (const ip of operationIps) claimed.add(ip);
 }
 
 function opcodeTag(opcode: string): number {
@@ -2453,6 +2557,67 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				regions.push(region);
 			}
 			fn.nativeNumericHofRegions = regions;
+		}
+
+		const closedRecordArrayRegionCount = r.count(7);
+		if (closedRecordArrayRegionCount > MAX_CLOSED_RECORD_ARRAY_REGIONS) {
+			throw new RangeError("serialize-vm: too many closed record-Array regions");
+		}
+		if (closedRecordArrayRegionCount > 0) {
+			const regions: Array<
+				NonNullable<VmFunction["nativeClosedRecordArrayRegions"]>[number]
+			> = [];
+			const claimed = new Set<number>();
+			for (
+				let regionIndex = 0;
+				regionIndex < closedRecordArrayRegionCount;
+				regionIndex++
+			) {
+				const allocationIp = r.i32();
+				const producerObjectIp = r.i32();
+				const length = r.i32();
+				const elementLoadIps = r.i32Array();
+				const accessCount = r.count(3);
+				const accesses: Array<{
+					ip: number;
+					kind: "load" | "store";
+					slot: number;
+				}> = [];
+				for (let accessIndex = 0; accessIndex < accessCount; accessIndex++) {
+					const ip = r.i32();
+					const kindTag = r.u8();
+					const slot = r.i32();
+					if (kindTag !== 1 && kindTag !== 2) {
+						throw new RangeError("serialize-vm: invalid closed record-Array access kind");
+					}
+					accesses.push({ ip, kind: kindTag === 1 ? "load" : "store", slot });
+				}
+				const dependencyMask = r.u8();
+				const obligationMask = r.u8();
+				if (dependencyMask !== 1 || obligationMask !== 1) {
+					throw new RangeError("serialize-vm: invalid closed record-Array guard plan");
+				}
+				const region = {
+					license: {
+						guard: {
+							dependencies: [
+								{ kind: "world" as const, fact: "primordials.locked" as const },
+							],
+							obligations: ["fallback" as const],
+						},
+						genericTwin: "retained" as const,
+						materialization: "none" as const,
+					},
+					allocationIp,
+					producerObjectIp,
+					length,
+					elementLoadIps,
+					accesses,
+				};
+				validateClosedRecordArrayRegion(fn, region, claimed);
+				regions.push(region);
+			}
+			fn.nativeClosedRecordArrayRegions = regions;
 		}
 	}
 	if (r.remaining() !== 0) {

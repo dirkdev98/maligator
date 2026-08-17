@@ -3106,9 +3106,34 @@ function emitBody(
 		inheritedLoadLoopTwins.map((twin) => [twin.backedgeIp, twin] as const),
 	);
 	const closedRecordAccessByIp = new Map<number, { regionId: number; slot: number }>();
+	const closedRecordElementLoadIps = new Set<number>();
+	for (const instruction of fn.instructions) {
+		if (instruction.opcode === "LOAD_PROPERTY") {
+			delete instruction.nativeClosedRecordArrayAccess;
+		}
+	}
 	for (const [regionId, region] of (fn.nativeClosedRecordArrayRegions ?? []).entries()) {
 		if (!vmGuardIsWorldInvariant(region.license.guard)) {
 			throw new Error("Closed record-Array region lacks a world-invariant license");
+		}
+		if (
+			fn.instructions[region.allocationIp]?.opcode !== "CREATE_ARRAY" ||
+			fn.instructions[region.producerObjectIp]?.opcode !== "CREATE_OBJECT_SHAPED"
+		) {
+			throw new Error(`Invalid closed record-Array region ${regionId}`);
+		}
+		for (const ip of region.elementLoadIps) {
+			if (
+				fn.instructions[ip]?.opcode !== "LOAD_PROPERTY" ||
+				closedRecordElementLoadIps.has(ip)
+			) {
+				throw new Error(`Overlapping closed record-Array element load at ${ip}`);
+			}
+			closedRecordElementLoadIps.add(ip);
+			const load = fn.instructions[ip];
+			if (load.opcode === "LOAD_PROPERTY") {
+				load.nativeClosedRecordArrayAccess = { allocationIp: region.allocationIp };
+			}
 		}
 		for (const access of region.accesses) {
 			if (closedRecordAccessByIp.has(access.ip)) {

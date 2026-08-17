@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 44u        // closed-dispatch numeric HOF regions
+#define WIRE_VERSION 45u        // IR-proven closed record-Array regions
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1903,6 +1903,91 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     r.ok = false;
                 }
             }
+        }
+
+        u32 closed_record_region_count = rd_count(&r, 7);
+        if (closed_record_region_count > 8) r.ok = false;
+        i32 claimed_closed_record_ips[528];
+        u32 claimed_closed_record_count = 0;
+        for (u32 region = 0; r.ok && region < closed_record_region_count; region++) {
+            const MalFunction *fn = &functions[i];
+            i32 allocation_ip = rd_i32(&r);
+            i32 producer_object_ip = rd_i32(&r);
+            i32 length = rd_i32(&r);
+            u32 element_count = rd_count(&r, sizeof(i32));
+            if (element_count == 0 || element_count > 64) r.ok = false;
+            i32 element_ips[64];
+            for (u32 element = 0; r.ok && element < element_count; element++) {
+                element_ips[element] = rd_i32(&r);
+            }
+            u32 access_count = rd_count(&r, 3);
+            if (access_count < 2 || access_count > 64 ||
+                element_count + access_count > 64) {
+                r.ok = false;
+            }
+            i32 access_ips[64];
+            u8 access_kinds[64];
+            i32 access_slots[64];
+            for (u32 access = 0; r.ok && access < access_count; access++) {
+                access_ips[access] = rd_i32(&r);
+                access_kinds[access] = rd_u8(&r);
+                access_slots[access] = rd_i32(&r);
+            }
+            u8 dependency_mask = rd_u8(&r);
+            u8 obligation_mask = rd_u8(&r);
+            bool header_ok = allocation_ip >= 0 &&
+                allocation_ip < fn->instruction_count &&
+                fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_ARRAY &&
+                fn->instructions[allocation_ip].as.create_array.length == 0 &&
+                producer_object_ip >= 0 &&
+                producer_object_ip < fn->instruction_count &&
+                fn->instructions[producer_object_ip].opcode == MAL_OP_CREATE_OBJECT_SHAPED &&
+                length > 0 && length <= 65536 &&
+                dependency_mask == 1 && obligation_mask == 1;
+            if (!header_ok) {
+                r.ok = false;
+                continue;
+            }
+#define MAL_CLOSED_RECORD_CLAIM(ip) do { \
+                i32 claim_ip = (ip); \
+                if (claim_ip < 0 || claim_ip >= fn->instruction_count) { \
+                    r.ok = false; \
+                } else { \
+                    for (u32 claim = 0; claim < claimed_closed_record_count; claim++) { \
+                        if (claimed_closed_record_ips[claim] == claim_ip) r.ok = false; \
+                    } \
+                    if (r.ok && claimed_closed_record_count < countof(claimed_closed_record_ips)) { \
+                        claimed_closed_record_ips[claimed_closed_record_count++] = claim_ip; \
+                    } else if (r.ok) { \
+                        r.ok = false; \
+                    } \
+                } \
+            } while (0)
+            MAL_CLOSED_RECORD_CLAIM(allocation_ip);
+            MAL_CLOSED_RECORD_CLAIM(producer_object_ip);
+            for (u32 element = 0; r.ok && element < element_count; element++) {
+                i32 ip = element_ips[element];
+                if (ip < 0 || ip >= fn->instruction_count ||
+                    fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY) {
+                    r.ok = false;
+                    break;
+                }
+                MAL_CLOSED_RECORD_CLAIM(ip);
+            }
+            for (u32 access = 0; r.ok && access < access_count; access++) {
+                i32 ip = access_ips[access];
+                u8 kind = access_kinds[access];
+                bool opcode_ok = ip >= 0 && ip < fn->instruction_count &&
+                    ((kind == 1 && fn->instructions[ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC) ||
+                     (kind == 2 && fn->instructions[ip].opcode == MAL_OP_STORE_PROPERTY_STATIC));
+                if (!opcode_ok || access_slots[access] < 0 ||
+                    access_slots[access] >= 64) {
+                    r.ok = false;
+                    break;
+                }
+                MAL_CLOSED_RECORD_CLAIM(ip);
+            }
+#undef MAL_CLOSED_RECORD_CLAIM
         }
     }
 

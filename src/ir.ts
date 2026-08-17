@@ -717,6 +717,31 @@ export interface IRStringSplitCursor {
 	readonly exitBlock: number;
 }
 
+/**
+ * Backend-neutral certificate for a private, fixed-length Array of same-shape
+ * records. The proof is selected while block identity and virtual-register
+ * provenance are intact; lowering must resolve every instruction anchor or
+ * discard the whole region.
+ */
+export interface IRClosedRecordArrayRegion {
+	readonly license: {
+		readonly guard: CompilerGuardPlan;
+		readonly genericTwin: "retained";
+		readonly materialization: "none";
+	};
+	readonly producerObject: Extract<IRInstruction, { type: "createObjectShaped" }>;
+	readonly length: number;
+	readonly elementLoads: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
+	readonly accesses: ReadonlyArray<{
+		readonly instruction: Extract<
+			IRInstruction,
+			{ type: "loadPropertyStatic" | "storePropertyStatic" }
+		>;
+		readonly kind: "load" | "store";
+		readonly slot: number;
+	}>;
+}
+
 export type IRInstruction =
 	| {
 			/**
@@ -869,6 +894,8 @@ export type IRInstruction =
 			 * exact canonical `[0, length)` indexed fill. Native code may reserve the
 			 * final dense capacity before executing the otherwise-unchanged loop. */
 			nativeFreshDenseReserveLength?: number;
+			/** Final IR region proof; the allocation is the region's stable anchor. */
+			nativeClosedRecordArrayRegion?: IRClosedRecordArrayRegion;
 
 			// [destination]
 			registers: [number];

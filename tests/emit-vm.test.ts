@@ -513,17 +513,18 @@ describe("native update-expression representation", () => {
 	}
 
 	function emitLocked(source: string): string {
+		return emitVmDefinition(lockedDefinition(source), { compiled: true });
+	}
+
+	function lockedDefinition(source: string): VmDefinition {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			source,
 			"locked-native-representation.js",
 			parseScript(source, { strict: false }),
 		);
-		return emitVmDefinition(
-			compileSemanticProgramToVmDefinition(semantic, {
-				facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
-			}),
-			{ compiled: true },
-		);
+		return compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+		});
 	}
 
 	it("keeps proven numeric loop updates on dense array paths", () => {
@@ -576,6 +577,68 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).toMatch(/__closed_record_\d+_o->slots\[1\]/);
 		expect(lockedOutput).toMatch(/mal_vm_object_slot_store\(__closed_record_\d+_o, 1,/);
 		expect(emit(source)).not.toContain("__closed_record_");
+	});
+
+	it("selects multiple disjoint IR regions and preserves them through the wire", () => {
+		const source = `
+			function summarize() {
+				const left = [];
+				for (let index = 0; index < 8; index++) left.push({ x: index, y: index + 1 });
+				let total = 0;
+				for (let index = 0; index < 8; index++) {
+					const row = left[index];
+					total += row.x + row.y;
+				}
+				const right = [];
+				for (let index = 0; index < 4; index++) right.push({ p: index, q: index + 2 });
+				for (let index = 0; index < 4; index++) {
+					const row = right[index];
+					row.q = row.p + row.q;
+					total += row.q;
+				}
+				return total;
+			}
+			globalThis.summarize = summarize;
+		`;
+		const lowered = lockedDefinition(source);
+		const loweredRegions = lowered.functions.flatMap(
+			(fn) => fn.nativeClosedRecordArrayRegions ?? [],
+		);
+		expect(loweredRegions.map((region) => region.length).sort((a, b) => a - b)).toEqual([
+			4, 8,
+		]);
+
+		const restored = deserializeVmDefinition(serializeVmDefinition(lowered));
+		const restoredRegions = restored.functions.flatMap(
+			(fn) => fn.nativeClosedRecordArrayRegions ?? [],
+		);
+		expect(restoredRegions).toEqual(loweredRegions);
+		const output = emitVmDefinition(restored, { compiled: true });
+		expect(
+			output.match(/MalObject \*__closed_record_\d+_o/g)?.length,
+		).toBeGreaterThanOrEqual(2);
+	});
+
+	it("admits only one certificate when two candidates share a consumer loop", () => {
+		const definition = lockedDefinition(`
+			function summarize() {
+				const left = [];
+				for (let index = 0; index < 4; index++) left.push({ x: index, y: index + 1 });
+				const right = [];
+				for (let index = 0; index < 4; index++) right.push({ x: index, y: index + 2 });
+				let total = 0;
+				for (let index = 0; index < 4; index++) {
+					const a = left[index];
+					const b = right[index];
+					total += a.x + a.y + b.x + b.y;
+				}
+				return total;
+			}
+			globalThis.summarize = summarize;
+		`);
+		expect(
+			definition.functions.flatMap((fn) => fn.nativeClosedRecordArrayRegions ?? []),
+		).toHaveLength(1);
 	});
 
 	it("keeps incomplete record-Array loop proofs on ordinary property paths", () => {

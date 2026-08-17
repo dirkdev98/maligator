@@ -702,7 +702,7 @@ export interface VmFunction {
 	}>;
 
 	/**
-	 * EMITTER-ONLY: one private fresh Array filled by a canonical loop with exact
+	 * SERIALIZED COMPILER METADATA: one private fresh Array filled by a canonical loop with exact
 	 * same-shape records, then read only by bounded indexed consumer loops. The
 	 * ordinary Array/property instructions remain the interpreter and rejected-
 	 * proof twin; native emission may use the complete dense/slot certificates.
@@ -1222,7 +1222,7 @@ export type VmInstruction =
 			nativeExactFreshArrayAccess?: {
 				allocationInstructionIndex: number;
 			};
-			/** EMITTER-ONLY: complete dense access in a closed record-Array region. */
+			/** EMITTER-DERIVED LOOKUP: materialized only from the central region table. */
 			nativeClosedRecordArrayAccess?: {
 				allocationIp: number;
 			};
@@ -1871,6 +1871,12 @@ function lowerFunctionToVmFunction(
 		call: Extract<IRInstruction, { type: "call" | "callBuiltin" }>;
 		cursor: IRStringSplitCursor;
 	}> = [];
+	const pendingClosedRecordArrayRegions: Array<{
+		allocation: Extract<IRInstruction, { type: "createArray" }>;
+		region: NonNullable<
+			Extract<IRInstruction, { type: "createArray" }>["nativeClosedRecordArrayRegion"]
+		>;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1983,6 +1989,15 @@ function lowerFunctionToVmFunction(
 				pendingStringSplitProjections.push({
 					call: instruction,
 					projection: instruction.stringSplitProjection,
+				});
+			}
+			if (
+				instruction.type === "createArray" &&
+				instruction.nativeClosedRecordArrayRegion !== undefined
+			) {
+				pendingClosedRecordArrayRegions.push({
+					allocation: instruction,
+					region: instruction.nativeClosedRecordArrayRegion,
 				});
 			}
 			if (
@@ -2153,6 +2168,85 @@ function lowerFunctionToVmFunction(
 			allocationInstructionIndex,
 			pushedStackObjectAllocationInstructionIndex,
 		};
+	}
+	const nativeClosedRecordArrayRegions: Array<
+		NonNullable<VmFunction["nativeClosedRecordArrayRegions"]>[number]
+	> = [];
+	const claimedClosedRecordInstructions = new Set<number>();
+	for (const pending of pendingClosedRecordArrayRegions) {
+		const guard = lowerGuardPlan(pending.region.license.guard);
+		const allocationIp = instructionIndexByIrInstruction.get(pending.allocation);
+		const producerObjectIp = instructionIndexByIrInstruction.get(
+			pending.region.producerObject,
+		);
+		const elementLoadIps = pending.region.elementLoads.map((instruction) =>
+			instructionIndexByIrInstruction.get(instruction),
+		);
+		const accesses = pending.region.accesses.map((access) => ({
+			ip: instructionIndexByIrInstruction.get(access.instruction),
+			kind: access.kind,
+			slot: access.slot,
+		}));
+		if (
+			guard === undefined ||
+			pending.region.license.genericTwin !== "retained" ||
+			pending.region.license.materialization !== "none" ||
+			allocationIp === undefined ||
+			producerObjectIp === undefined ||
+			elementLoadIps.some((ip) => ip === undefined) ||
+			accesses.some((access) => access.ip === undefined)
+		) {
+			continue;
+		}
+		const allocation = instructions[allocationIp];
+		const producerObject = instructions[producerObjectIp];
+		const resolvedElementLoadIps = elementLoadIps as Array<number>;
+		const resolvedAccesses = accesses as Array<{
+			ip: number;
+			kind: "load" | "store";
+			slot: number;
+		}>;
+		const claimed = [allocationIp, producerObjectIp, ...resolvedElementLoadIps];
+		if (
+			allocation?.opcode !== "CREATE_ARRAY" ||
+			allocation.length !== 0 ||
+			producerObject?.opcode !== "CREATE_OBJECT_SHAPED" ||
+			producerObject.count === 0 ||
+			producerObject.count > 64 ||
+			producerObject.count !== producerObject.keyStringIndices.length ||
+			pending.region.length <= 0 ||
+			pending.region.length > 65_536 ||
+			resolvedElementLoadIps.length === 0 ||
+			resolvedAccesses.length < 2 ||
+			resolvedElementLoadIps.some((ip) => instructions[ip]?.opcode !== "LOAD_PROPERTY") ||
+			resolvedAccesses.some((access) => {
+				const instruction = instructions[access.ip];
+				claimed.push(access.ip);
+				return (
+					access.slot < 0 ||
+					access.slot >= producerObject.count ||
+					(access.kind === "load"
+						? instruction?.opcode !== "LOAD_PROPERTY_STATIC"
+						: instruction?.opcode !== "STORE_PROPERTY_STATIC")
+				);
+			}) ||
+			claimed.some((ip) => claimedClosedRecordInstructions.has(ip))
+		) {
+			continue;
+		}
+		for (const ip of claimed) claimedClosedRecordInstructions.add(ip);
+		nativeClosedRecordArrayRegions.push({
+			license: {
+				guard,
+				genericTwin: "retained",
+				materialization: "none",
+			},
+			allocationIp,
+			producerObjectIp,
+			length: pending.region.length,
+			elementLoadIps: resolvedElementLoadIps,
+			accesses: resolvedAccesses,
+		});
 	}
 	const nativeNumericHofRegions: Array<
 		NonNullable<VmFunction["nativeNumericHofRegions"]>[number]
@@ -2467,6 +2561,10 @@ function lowerFunctionToVmFunction(
 			nativeStringSplitProjections.length > 0 ? nativeStringSplitProjections : undefined,
 		nativeStringSplitCursors:
 			nativeStringSplitCursors.length > 0 ? nativeStringSplitCursors : undefined,
+		nativeClosedRecordArrayRegions:
+			nativeClosedRecordArrayRegions.length > 0
+				? nativeClosedRecordArrayRegions
+				: undefined,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
 		stackObjectInheritedAccesses:
