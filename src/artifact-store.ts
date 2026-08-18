@@ -2,7 +2,6 @@ import { hash, randomUUID } from "node:crypto";
 import {
 	chmodSync,
 	copyFileSync,
-	existsSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
@@ -12,6 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { processIsAlive } from "./process-state.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
 const ACTION_SCHEMA = 1;
@@ -20,7 +20,7 @@ const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 type Json = null | boolean | number | string | Array<Json> | { [key: string]: Json };
 
-export interface ArtifactOutput {
+interface ArtifactOutput {
 	name: string;
 	digest: string;
 	size: number;
@@ -38,14 +38,14 @@ interface ArtifactActionManifest {
 	outputs: Array<Omit<ArtifactOutput, "path">>;
 }
 
-export interface ArtifactAction {
+interface ArtifactAction {
 	stage: string;
 	producer: string;
 	action: string;
 	outputs: Array<ArtifactOutput>;
 }
 
-export interface ArtifactPublication {
+interface ArtifactPublication {
 	name: string;
 	file: string;
 	mode?: number;
@@ -107,7 +107,7 @@ function assertOutputName(value: string): void {
 	}
 }
 
-export function artifactBlobPath(root: string, digest: string): string {
+function artifactBlobPath(root: string, digest: string): string {
 	assertDigest("artifact digest", digest);
 	return path.join(root, "blobs", "sha256", digest.slice(0, 2), digest.slice(2));
 }
@@ -291,16 +291,6 @@ export function materializeArtifact(output: ArtifactOutput, destination: string)
 
 interface ActionLockOwner {
 	pid: number;
-	createdAt: number;
-}
-
-function processIsAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code !== "ESRCH";
-	}
 }
 
 export function withArtifactActionLock<T>(
@@ -324,7 +314,7 @@ export function withArtifactActionLock<T>(
 			mkdirSync(lock);
 			writeFileSync(
 				path.join(lock, "owner.json"),
-				`${JSON.stringify({ pid: process.pid, createdAt: Date.now() } satisfies ActionLockOwner)}\n`,
+				`${JSON.stringify({ pid: process.pid } satisfies ActionLockOwner)}\n`,
 			);
 			break;
 		} catch (error) {
@@ -370,8 +360,4 @@ export function withArtifactActionLock<T>(
 			retryDelay: 10,
 		});
 	}
-}
-
-export function artifactStoreExists(root: string): boolean {
-	return existsSync(path.join(root, "actions")) || existsSync(path.join(root, "blobs"));
 }

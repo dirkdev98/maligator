@@ -8,7 +8,7 @@ import { inspectMaligatorCache } from "../src/cache-management.ts";
 import { normalAgentEnvironmentPlan } from "./command-requirements.ts";
 import { assertLoopbackAvailable } from "./test-environment.ts";
 
-export interface CpuActivity {
+interface CpuActivity {
 	logicalCpus: number;
 	loadAverage1m: number;
 	loadPerCpu: number;
@@ -43,7 +43,7 @@ function topCpuProcesses(): Pick<
 	return { topProcesses, processInspectionAvailable: true };
 }
 
-export function cpuActivity(): CpuActivity {
+function cpuActivity(): CpuActivity {
 	const logicalCpus = os.availableParallelism();
 	const loadAverage1m = os.loadavg()[0] ?? 0;
 	return {
@@ -61,7 +61,13 @@ export function shouldDeferHeavyCommand(
 	return (
 		activeMaligatorCommands > 0 ||
 		activity.loadPerCpu >= 0.8 ||
-		activity.topProcesses.some((entry) => entry.cpuPercent >= 80)
+		activity.topProcesses.some(
+			(entry) =>
+				entry.cpuPercent >= 80 &&
+				/(?:^|\/)(?:cc|clang|cargo|rustc|node|vitest|maligator|codex)(?:$|\s)/i.test(
+					entry.command,
+				),
+		)
 	);
 }
 
@@ -77,7 +83,7 @@ function probeDirectory(directory: string): { ok: boolean; error?: string } {
 	}
 }
 
-export async function inspectAgentEnvironment(workspace: string) {
+async function inspectAgentEnvironment(workspace: string) {
 	const plan = normalAgentEnvironmentPlan(workspace);
 	const directories = Object.fromEntries(
 		Object.entries(plan.paths).map(([name, directory]) => [

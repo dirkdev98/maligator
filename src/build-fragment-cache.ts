@@ -30,7 +30,7 @@ import { ESTREE_SKIP, ESTREE_STOP, traverseEstree } from "./estree-traversal.ts"
 import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
-	frontendDigest,
+	frontendDigest as digest,
 	frontendWirePath,
 	FrontendCompilationSession,
 } from "./frontend-cache.ts";
@@ -130,10 +130,6 @@ export interface CompileBuildFragmentsOptions {
 	phases: BuildFrontendPhases;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	dependencyWorker?: DependencyFragmentWorker;
-}
-
-function digest(value: string | Uint8Array): string {
-	return frontendDigest(value);
 }
 
 function cacheRoot(override: string | undefined): string {

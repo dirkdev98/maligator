@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { hash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress, formatCommandDuration } from "../src/command-progress.ts";
-import { hashDirectoryTrees } from "../src/file-tree.ts";
+import { hashDirectoryTreesCached } from "../src/file-tree.ts";
 import {
 	commandEnvironmentPlan,
 	mergeCommandRequirements,
@@ -24,41 +25,6 @@ interface Command {
 }
 
 const root = path.resolve(import.meta.dirname, "..");
-const smokeIdentity = hashDirectoryTrees({
-	root,
-	directories: [path.join(root, "src"), path.join(root, "runtime")],
-	include: (entry) => /\.(?:c|h|rs|ts|mts|json|toml)$/.test(entry.name),
-	prefix: [
-		process.platform,
-		process.arch,
-		process.version,
-		readFileSync(path.join(root, "package-lock.json"), "utf8"),
-		readFileSync(import.meta.filename, "utf8"),
-	],
-});
-const sharedCache = maligatorCacheDirectory();
-const smokeStampPath = path.join(sharedCache, "test-suite-smoke.json");
-let previousSmokeIdentity: string | undefined;
-try {
-	const stamp = JSON.parse(readFileSync(smokeStampPath, "utf8")) as {
-		identity?: unknown;
-	};
-	if (typeof stamp.identity === "string") previousSmokeIdentity = stamp.identity;
-} catch {
-	// A missing or damaged stamp is conservatively cold.
-}
-const coldSmokeRun =
-	previousSmokeIdentity !== smokeIdentity ||
-	[
-		path.join(sharedCache, "compiler-wire"),
-		path.join(sharedCache, "runtime"),
-		path.join(sharedCache, "rust"),
-		path.join(sharedCache, "test262-wires"),
-		path.join(root, ".cache/mal-build/test262/Test262Wire"),
-		path.join(root, ".cache/test262/.git"),
-		path.join(root, ".cache/test262-cache.json"),
-	].some((entry) => !existsSync(entry));
-const smokeFuseMs = coldSmokeRun ? 240_000 : 20_000;
 const usage = `usage: node scripts/test-suite.ts [smoke|check|full] [options]
 
 Tiers are cumulative: check starts with smoke; full starts with smoke and check.
@@ -548,6 +514,50 @@ if (jsonPlan) {
 	);
 	process.exit(0);
 }
+
+const sharedCache = maligatorCacheDirectory();
+const smokeIdentity = hashDirectoryTreesCached(
+	{
+		root,
+		directories: [path.join(root, "src"), path.join(root, "runtime")],
+		include: (entry) => /\.(?:c|h|rs|ts|mts|json|toml)$/.test(entry.name),
+		prefix: [
+			process.platform,
+			process.arch,
+			process.version,
+			readFileSync(path.join(root, "package-lock.json"), "utf8"),
+			readFileSync(import.meta.filename, "utf8"),
+		],
+	},
+	path.join(
+		sharedCache,
+		"source-digests",
+		`test-suite-${hash("sha256", root, "hex").slice(0, 16)}.json`,
+	),
+	"test-suite-smoke-v1",
+).digest;
+const smokeStampPath = path.join(sharedCache, "test-suite-smoke.json");
+let previousSmokeIdentity: string | undefined;
+try {
+	const stamp = JSON.parse(readFileSync(smokeStampPath, "utf8")) as {
+		identity?: unknown;
+	};
+	if (typeof stamp.identity === "string") previousSmokeIdentity = stamp.identity;
+} catch {
+	// A missing or damaged stamp is conservatively cold.
+}
+const coldSmokeRun =
+	previousSmokeIdentity !== smokeIdentity ||
+	[
+		path.join(sharedCache, "compiler-wire"),
+		path.join(sharedCache, "actions", "runtime-archive"),
+		path.join(sharedCache, "actions", "rust-library"),
+		path.join(sharedCache, "test262-wires"),
+		path.join(root, ".cache/mal-build/test262/Test262Wire"),
+		path.join(root, ".cache/test262/.git"),
+		path.join(root, ".cache/test262-cache.json"),
+	].some((entry) => !existsSync(entry));
+const smokeFuseMs = coldSmokeRun ? 240_000 : 20_000;
 
 if (coldSmokeRun) {
 	console.log("[test-suite] cold caches detected; smoke fuse extended to four minutes");

@@ -21,8 +21,13 @@ import {
 } from "./artifact-store.ts";
 import { runtimeCcFlags } from "./build-flags.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
-import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
+import {
+	hashDirectoryTrees,
+	hashDirectoryTreesCached,
+	legacyLocaleNameComparator,
+} from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
+import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { runNativeCommand, runNativeCommands } from "./native-command.ts";
 import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
@@ -31,34 +36,47 @@ import { toolArguments } from "./toolchain.ts";
 const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 1, "cc");
 const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 1, "ar");
 
-function runtimeSourceHash(runtimeDirectory: string, nodeEnabled: boolean): string {
+function runtimeSourceHash(
+	runtimeDirectory: string,
+	nodeEnabled: boolean,
+	cacheDirectory: string,
+): string {
 	const root = path.resolve(runtimeDirectory);
 	const llhttp = path.join(root, "vendor/llhttp");
 	const sqlite = path.join(root, "vendor/sqlite");
-	return hashDirectoryTrees({
-		root,
-		directories: [
-			path.join(root, "src"),
-			path.join(root, "rust/include"),
-			...(existsSync(llhttp)
-				? [path.join(llhttp, "include"), path.join(llhttp, "src")]
-				: []),
-			...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
-		],
-		include: (entry) => /\.[ch]$/.test(entry.name),
-		compareNames: legacyLocaleNameComparator,
-	});
+	return hashDirectoryTreesCached(
+		{
+			root,
+			directories: [
+				path.join(root, "src"),
+				path.join(root, "rust/include"),
+				...(existsSync(llhttp)
+					? [path.join(llhttp, "include"), path.join(llhttp, "src")]
+					: []),
+				...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
+			],
+			include: (entry) => /\.[ch]$/.test(entry.name),
+			compareNames: legacyLocaleNameComparator,
+		},
+		path.join(
+			cacheDirectory,
+			"source-digests",
+			`runtime-${nodeEnabled ? "node" : "base"}-${artifactDigest(root).slice(0, 16)}.json`,
+		),
+		"runtime-source-v1",
+	).digest;
 }
 
 /** Headers that generated application translation units compile against. */
 export function runtimeHeaderHash(
 	runtimeDirectory: string,
 	nodeEnabled: boolean,
+	cacheDirectory?: string,
 ): string {
 	const root = path.resolve(runtimeDirectory);
 	const llhttp = path.join(root, "vendor/llhttp/include");
 	const sqlite = path.join(root, "vendor/sqlite");
-	return hashDirectoryTrees({
+	const options = {
 		root,
 		directories: [
 			path.join(root, "src"),
@@ -66,16 +84,25 @@ export function runtimeHeaderHash(
 			...(existsSync(llhttp) ? [llhttp] : []),
 			...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
 		],
-		include: (entry) => entry.name.endsWith(".h"),
+		include: (entry: { name: string }) => entry.name.endsWith(".h"),
 		compareNames: legacyLocaleNameComparator,
-	});
+	};
+	if (cacheDirectory === undefined) return hashDirectoryTrees(options);
+	return hashDirectoryTreesCached(
+		options,
+		path.join(
+			cacheDirectory,
+			"source-digests",
+			`runtime-headers-${nodeEnabled ? "node" : "base"}-${artifactDigest(root).slice(0, 16)}.json`,
+		),
+		"runtime-headers-v1",
+	).digest;
 }
 
 export function runtimeArtifactKey(inputs: {
 	compilerWireDigest?: string;
 	compileArguments: Array<string>;
 	environmentFingerprint: string;
-	layerSourceDirectories: Array<string>;
 	sourceHash: string;
 	toolchainFingerprint: string;
 	target: string;
@@ -84,7 +111,6 @@ export function runtimeArtifactKey(inputs: {
 		compilerWireDigest: inputs.compilerWireDigest,
 		compileArguments: inputs.compileArguments,
 		environmentFingerprint: inputs.environmentFingerprint,
-		layerCount: inputs.layerSourceDirectories.length,
 		sourceHash: inputs.sourceHash,
 		toolchainFingerprint: inputs.toolchainFingerprint,
 		target: inputs.target,
@@ -120,23 +146,6 @@ interface RuntimeSource {
 	layer: "engine" | "host" | "runtime";
 	layerDirectory: string;
 	includeArguments?: Array<string>;
-}
-
-function stableRuntimeArgument(context: NativeBuildContext, argument: string): string {
-	const prefix = `-ffile-prefix-map=${context.runtimeDirectory}=`;
-	if (argument.startsWith(prefix)) {
-		return `-ffile-prefix-map=<runtime>=${argument.slice(prefix.length)}`;
-	}
-	const relative = path.relative(context.runtimeDirectory, argument);
-	if (relative === "") return "<runtime>";
-	if (
-		!relative.startsWith(`..${path.sep}`) &&
-		relative !== ".." &&
-		!path.isAbsolute(relative)
-	) {
-		return path.posix.join("<runtime>", ...relative.split(path.sep));
-	}
-	return argument;
 }
 
 function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
@@ -182,26 +191,27 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 	const identityFlags = flags.map((flag) =>
 		flag.startsWith("-DMAL_COMPILER_WIRE=")
 			? "-DMAL_COMPILER_WIRE=<content>"
-			: stableRuntimeArgument(context, flag),
+			: normalizeRuntimeBuildArgument(context.runtimeDirectory, flag),
 	);
 	const cacheKey = runtimeArtifactKey({
 		compilerWireDigest,
 		compileArguments: [
 			"-std=c2x",
 			...identityFlags,
-			...includeArguments.map((argument) => stableRuntimeArgument(context, argument)),
+			...includeArguments.map((argument) =>
+				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
+			),
 			"-c",
 			"<source>",
 			"-o",
 			"<object>",
 		],
 		environmentFingerprint: context.environmentFingerprint,
-		layerSourceDirectories: [
-			sourceRoot,
-			path.join(sourceRoot, "host"),
-			path.join(sourceRoot, "runtime"),
-		],
-		sourceHash: runtimeSourceHash(context.runtimeDirectory, context.features.nodeEnabled),
+		sourceHash: runtimeSourceHash(
+			context.runtimeDirectory,
+			context.features.nodeEnabled,
+			context.cacheDirectory,
+		),
 		toolchainFingerprint: context.toolchain.fingerprint,
 		target: context.toolchain.target,
 	});
@@ -280,8 +290,12 @@ function objectActionKey(
 		compilerWireDigest: layout.compilerWireDigest,
 		arguments: [
 			"-std=c2x",
-			...layout.flags.map((argument) => stableRuntimeArgument(context, argument)),
-			...includeArguments.map((argument) => stableRuntimeArgument(context, argument)),
+			...layout.flags.map((argument) =>
+				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
+			),
+			...includeArguments.map((argument) =>
+				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
+			),
 		],
 		environment: context.environmentFingerprint,
 		toolchain: context.toolchain.fingerprint,
@@ -305,6 +319,7 @@ function ensureRuntimeObjects(
 	const headerDigest = runtimeHeaderHash(
 		context.runtimeDirectory,
 		context.features.nodeEnabled,
+		context.cacheDirectory,
 	);
 	const sources = runtimeSources(context, layout);
 	const results = new Map<string, RuntimeObject>();

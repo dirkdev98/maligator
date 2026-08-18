@@ -13,7 +13,7 @@ import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
 	FrontendCompilationSession,
-	frontendDigest,
+	frontendDigest as digest,
 	frontendWirePath,
 } from "../frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
@@ -83,10 +83,6 @@ export interface CompiledTestImage {
 }
 
 export type CompiledTestFile = CompiledTestImage;
-
-function digest(value: string | Uint8Array): string {
-	return frontendDigest(value);
-}
 
 /**
  * One coherent filesystem view for a test command.

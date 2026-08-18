@@ -21,7 +21,7 @@ import {
 	frontendArtifactIdentity,
 	frontendArtifactUnchanged,
 	frontendArtifactCacheRoot,
-	frontendDigest,
+	frontendDigest as digest,
 } from "../frontend-cache.ts";
 import type { FrontendCompilationSession } from "../frontend-cache.ts";
 import type { FrontendArtifactIdentity } from "../frontend-cache.ts";
@@ -112,10 +112,6 @@ export class UnsupportedRelocatableTestImageError extends Error {
 			configurable: true,
 		});
 	}
-}
-
-function digest(value: string | Uint8Array): string {
-	return frontendDigest(value);
 }
 
 function cacheRoot(override: string | undefined): string {

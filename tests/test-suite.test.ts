@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -81,5 +83,19 @@ describe("test suite planner", () => {
 			check.stages.find((stage) => stage.name === "smoke: TypeScript")?.requirements.cpu,
 		).toBe("light");
 		expect(full.approval).toBe("explicit");
+	});
+
+	it("does not populate build caches while planning", () => {
+		const parent = mkdtempSync(path.join(os.tmpdir(), "maligator-plan-"));
+		try {
+			const cache = path.join(parent, "cache");
+			execFileSync(process.execPath, ["scripts/test-suite.ts", "check", "--plan=json"], {
+				cwd: root,
+				env: { ...process.env, MALIGATOR_CACHE_DIR: cache },
+			});
+			expect(existsSync(cache)).toBe(false);
+		} finally {
+			rmSync(parent, { recursive: true, force: true });
+		}
 	});
 });

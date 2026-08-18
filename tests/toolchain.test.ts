@@ -746,7 +746,6 @@ exit 7
 		const base = {
 			compileArguments: ["-std=c2x", "-O2", "-c", "<source>"],
 			environmentFingerprint: "environment-a",
-			layerSourceDirectories: ["/runtime/src"],
 			sourceHash: "source-a",
 			toolchainFingerprint: "toolchain-a",
 			target: "target-a",

@@ -1,4 +1,3 @@
-import { hash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -30,6 +29,7 @@ import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
+	frontendDigest as digest,
 	FrontendCompilationSession,
 	frontendWirePath,
 } from "./frontend-cache.ts";
@@ -140,10 +140,6 @@ export interface CompileBuildFrontendOptions {
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	/** Optional self-hosted worker command for independent dependency islands. */
 	dependencyWorker?: DependencyFragmentWorker;
-}
-
-function digest(value: string | Uint8Array): string {
-	return hash("sha256", value, "hex");
 }
 
 /**

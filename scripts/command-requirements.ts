@@ -7,7 +7,7 @@ import {
 	npmCacheDirectory,
 } from "../src/cache-root.ts";
 
-export type CommandCpuClass = "light" | "heavy" | "performance-sensitive";
+type CommandCpuClass = "light" | "heavy" | "performance-sensitive";
 export type CommandKind =
 	| "quality"
 	| "unit"
@@ -30,7 +30,7 @@ export interface CommandRequirements {
 	};
 }
 
-export interface CommandEnvironmentPlan {
+interface CommandEnvironmentPlan {
 	schema: 1;
 	approval: "none" | "explicit";
 	requirements: CommandRequirements;

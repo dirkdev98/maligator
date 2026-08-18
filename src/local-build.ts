@@ -24,6 +24,7 @@ import { maligatorBuildDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
+import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { runNativeCommand, runNativeCommands } from "./native-command.ts";
 import { ensureNativeArtifacts } from "./runtime-build.ts";
 import type { NativeArtifacts } from "./runtime-build.ts";
@@ -86,23 +87,6 @@ function applicationCompileArguments(context: NativeBuildContext): Array<string>
 	];
 }
 
-function stableRuntimeArgument(context: NativeBuildContext, argument: string): string {
-	const prefix = `-ffile-prefix-map=${context.runtimeDirectory}=`;
-	if (argument.startsWith(prefix)) {
-		return `-ffile-prefix-map=<runtime>=${argument.slice(prefix.length)}`;
-	}
-	const relative = path.relative(context.runtimeDirectory, argument);
-	if (relative === "") return "<runtime>";
-	if (
-		!relative.startsWith(`..${path.sep}`) &&
-		relative !== ".." &&
-		!path.isAbsolute(relative)
-	) {
-		return path.join("<runtime>", relative);
-	}
-	return argument;
-}
-
 interface GeneratedObjectInput {
 	sourcePath: string;
 	logicalPath: string;
@@ -138,13 +122,14 @@ function ensureGeneratedObjects(
 	const runtimeHeaders = runtimeHeaderHash(
 		context.runtimeDirectory,
 		context.features.nodeEnabled,
+		context.cacheDirectory,
 	);
 	for (const [index, input] of inputs.entries()) {
 		const key = artifactActionKey(GENERATED_OBJECT_PRODUCER, {
 			logicalPath: input.logicalPath,
 			source: artifactDigest(input.source),
 			compileArguments: compileArguments.map((argument) =>
-				stableRuntimeArgument(context, argument),
+				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
 			),
 			runtimeHeaders,
 			environment: context.environmentFingerprint,
@@ -297,7 +282,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			})),
 			{
 				sourcePath: mainFile,
-				logicalPath: stableRuntimeArgument(context, mainFile),
+				logicalPath: normalizeRuntimeBuildArgument(context.runtimeDirectory, mainFile),
 				source: readFileSync(mainFile, "utf-8"),
 			},
 		],
@@ -321,7 +306,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	]);
 	const linkKey = artifactActionKey(LINKED_BINARY_PRODUCER, {
 		compileArguments: compileArguments.map((argument) =>
-			stableRuntimeArgument(context, argument),
+			normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
 		),
 		objects: [...objects, mainObject].map((object) => object.digest),
 		artifacts: artifacts.linkArgs.map((argument) =>

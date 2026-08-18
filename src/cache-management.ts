@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { maligatorCacheBaseDirectory, maligatorCacheDirectory } from "./cache-root.ts";
+import { processIsAlive } from "./process-state.ts";
 
 const GIB = 1024 ** 3;
 const DAY = 24 * 60 * 60 * 1000;
@@ -33,10 +34,6 @@ const CACHE_FAMILIES: Array<CacheFamilyPolicy> = [
 	{ path: "dependency-fragments", keep: 64, entryKind: "grandchildren" },
 	{ path: "test", keep: 64, entryKind: "grandchildren" },
 	{ path: "frontend", keep: 512, entryKind: "grandchildren" },
-	{ path: "generated-c", keep: 64 },
-	{ path: "linked-binaries", keep: 24 },
-	{ path: "runtime", keep: 6 },
-	{ path: "rust", keep: 3 },
 	{ path: "compiler-wire", keep: 2 },
 	{ path: "test262-artifacts", keep: 2 },
 	{ path: "test262-wires", keep: 512, entryKind: "grandchildren" },
@@ -179,15 +176,6 @@ function blobEntries(root: string): Array<CacheEntry> {
 
 type CacheLeaseRecord = ActiveCacheCommand;
 
-function processIsAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code !== "ESRCH";
-	}
-}
-
 function activeCacheCommands(
 	root: string,
 	cleanStale: boolean,
@@ -242,7 +230,6 @@ export function createCacheLease(
 ): CacheLease {
 	const root = cacheRoot(cacheRootOverride);
 	const directory = path.join(root, LEASE_DIRECTORY);
-	mkdirSync(directory, { recursive: true });
 	const leasePath = path.join(directory, `${process.pid}-${randomUUID()}.json`);
 	const lockPath = path.join(root, PRUNE_LOCK);
 	const clearLockPath = globalClearLock(root);
@@ -252,6 +239,7 @@ export function createCacheLease(
 	) {
 		throw new Error("Maligator cache maintenance is active; retry the command shortly");
 	}
+	mkdirSync(directory, { recursive: true });
 	writeFileSync(
 		leasePath,
 		`${JSON.stringify({ pid: process.pid, startedAt: Date.now(), command } satisfies CacheLeaseRecord)}\n`,
@@ -279,11 +267,11 @@ export function createCacheLease(
 
 function acquirePruneLock(root: string): string {
 	const lockPath = path.join(root, PRUNE_LOCK);
-	mkdirSync(root, { recursive: true });
 	const clearLockPath = globalClearLock(root);
 	if (clearLockPath !== undefined && existsSync(clearLockPath)) {
 		throw new Error("Maligator cache clear is active");
 	}
+	mkdirSync(root, { recursive: true });
 	try {
 		mkdirSync(lockPath);
 	} catch (error) {
@@ -291,6 +279,10 @@ function acquirePruneLock(root: string): string {
 			throw new Error("Maligator cache maintenance is already active");
 		}
 		throw error;
+	}
+	if (clearLockPath !== undefined && existsSync(clearLockPath)) {
+		rmSync(lockPath, { recursive: true, force: true });
+		throw new Error("Maligator cache clear started concurrently");
 	}
 	return lockPath;
 }
@@ -432,33 +424,6 @@ export function pruneMaligatorCache(options: CachePruneOptions = {}): CachePrune
 			removedBytes: removed.reduce((total, item) => total + item.bytes, 0),
 			removed,
 			dryRun,
-		};
-	} finally {
-		rmSync(lockPath, { recursive: true, force: true });
-	}
-}
-
-/** Remove every rebuildable artifact in the shared cache after activity checks. */
-export function clearMaligatorCache(cacheRootOverride?: string): CacheClearResult {
-	const root = cacheRoot(cacheRootOverride);
-	const lockPath = acquirePruneLock(root);
-	try {
-		const activeLeases = activeCacheCommands(root, true).length;
-		if (activeLeases > 0) {
-			throw new Error(
-				`Refusing to clear while ${activeLeases} Maligator command${activeLeases === 1 ? " is" : "s are"} active`,
-			);
-		}
-		const before = inspectMaligatorCache(root);
-		for (const child of readdirSync(root)) {
-			if (child === LEASE_DIRECTORY || child === PRUNE_LOCK) continue;
-			rmSync(path.join(root, child), { recursive: true, force: true });
-		}
-		const after = inspectMaligatorCache(root);
-		return {
-			...after,
-			removedBytes: before.totalBytes - after.totalBytes,
-			removed: before.entries,
 		};
 	} finally {
 		rmSync(lockPath, { recursive: true, force: true });

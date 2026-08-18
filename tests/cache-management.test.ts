@@ -4,7 +4,6 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	clearAllMaligatorCaches,
-	clearMaligatorCache,
 	createCacheLease,
 	inspectMaligatorCache,
 	pruneMaligatorCache,
@@ -35,10 +34,10 @@ describe("Maligator cache management", () => {
 		const smokeStamp = path.join(root, "test-suite-smoke.json");
 		mkdirSync(path.dirname(smokeStamp), { recursive: true });
 		writeFileSync(smokeStamp, "{}\n");
-		const oldest = artifact(root, "runtime", "oldest", 100, 10);
-		const old = artifact(root, "runtime", "old", 100, 9);
+		const oldest = artifact(root, "compiler-wire", "oldest", 100, 10);
+		const old = artifact(root, "compiler-wire", "old", 100, 9);
 		const recent = Array.from({ length: 6 }, (_, index) =>
-			artifact(root, "runtime", `recent-${index}`, 100, 0),
+			artifact(root, "compiler-wire", `recent-${index}`, 100, 0),
 		);
 
 		const result = pruneMaligatorCache({
@@ -60,9 +59,9 @@ describe("Maligator cache management", () => {
 		const smokeStamp = path.join(root, "test-suite-smoke.json");
 		mkdirSync(path.dirname(smokeStamp), { recursive: true });
 		writeFileSync(smokeStamp, "{}\n");
-		const old = artifact(root, "runtime", "old", 100, 10);
+		const old = artifact(root, "compiler-wire", "old", 100, 10);
 		for (let index = 0; index < 6; index++) {
-			artifact(root, "runtime", `retained-${index}`, 100, 9 - index);
+			artifact(root, "compiler-wire", `retained-${index}`, 100, 9 - index);
 		}
 		const preview = pruneMaligatorCache({
 			cacheRoot: root,
@@ -83,25 +82,6 @@ describe("Maligator cache management", () => {
 			lease.release();
 		}
 		expect(inspectMaligatorCache(root).activeLeases).toBe(0);
-	});
-
-	it("clears every cache generation while preserving active-command safety", () => {
-		const root = cacheRoot();
-		const entry = artifact(root, "runtime", "old-version", 100, 10);
-		const lease = createCacheLease("test", root);
-		try {
-			expect(() => clearMaligatorCache(root)).toThrow(
-				"Refusing to clear while 1 Maligator command is active",
-			);
-		} finally {
-			lease.release();
-		}
-
-		const result = clearMaligatorCache(root);
-		expect(result.removed.map((candidate) => candidate.path)).toContain(entry);
-		expect(result.removedBytes).toBeGreaterThanOrEqual(100);
-		expect(existsSync(entry)).toBe(false);
-		expect(inspectMaligatorCache(root).totalBytes).toBe(0);
 	});
 
 	it("clears every layout generation without retaining old machinery", () => {
