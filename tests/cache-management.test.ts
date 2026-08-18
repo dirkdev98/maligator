@@ -30,6 +30,9 @@ function artifact(
 describe("Maligator cache management", () => {
 	it("retains recent entries and prunes old excess entries to a size target", () => {
 		const root = cacheRoot();
+		const smokeStamp = path.join(root, "mal-cache/test-suite-smoke.json");
+		mkdirSync(path.dirname(smokeStamp), { recursive: true });
+		writeFileSync(smokeStamp, "{}\n");
 		const oldest = artifact(root, "mal-cache/runtime", "oldest", 100, 10);
 		const old = artifact(root, "mal-cache/runtime", "old", 100, 9);
 		const recent = Array.from({ length: 6 }, (_, index) =>
@@ -46,11 +49,15 @@ describe("Maligator cache management", () => {
 		expect(result.removed.map((entry) => entry.path)).toContain(old);
 		expect(existsSync(oldest)).toBe(false);
 		expect(existsSync(old)).toBe(false);
+		expect(existsSync(smokeStamp)).toBe(false);
 		for (const directory of recent) expect(existsSync(directory)).toBe(true);
 	});
 
 	it("previews without deleting and refuses to race an active command", () => {
 		const root = cacheRoot();
+		const smokeStamp = path.join(root, "mal-cache/test-suite-smoke.json");
+		mkdirSync(path.dirname(smokeStamp), { recursive: true });
+		writeFileSync(smokeStamp, "{}\n");
 		const old = artifact(root, "mal-cache/runtime", "old", 100, 10);
 		for (let index = 0; index < 6; index++) {
 			artifact(root, "mal-cache/runtime", `retained-${index}`, 100, 9 - index);
@@ -63,6 +70,7 @@ describe("Maligator cache management", () => {
 		});
 		expect(preview.removed.map((entry) => entry.path)).toContain(old);
 		expect(existsSync(old)).toBe(true);
+		expect(existsSync(smokeStamp)).toBe(true);
 
 		const lease = createCacheLease("test", root);
 		try {

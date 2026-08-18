@@ -4,8 +4,15 @@ import {
 	isCanonicalTestEnvironmentChild,
 } from "../scripts/test-environment.ts";
 import { sanitizerEnvironment } from "../scripts/test-sanitize.ts";
+import { scaledNativeRunTimeoutMs } from "../src/test-harness.ts";
 
 describe("sanitizer runner", () => {
+	it("scales native child deadlines only for instrumented builds", () => {
+		expect(scaledNativeRunTimeoutMs(20000, {})).toBe(20000);
+		expect(scaledNativeRunTimeoutMs(20000, { MAL_UBSAN: "1" })).toBe(60000);
+		expect(scaledNativeRunTimeoutMs(20000, { MAL_ASAN: "1" })).toBe(60000);
+	});
+
 	it("uses UBSan on Darwin where ASan deadlocks during loader initialization", () => {
 		expect(sanitizerEnvironment("darwin")).toEqual({
 			MAL_UBSAN: "1",

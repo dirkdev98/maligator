@@ -17,6 +17,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const LEASE_DIRECTORY = ".leases";
 const PRUNE_LOCK = ".prune-lock";
 const MAINTENANCE_FILE = ".maintenance.json";
+const TEST_SUITE_SMOKE_FILE = "test-suite-smoke.json";
 
 interface CacheFamilyPolicy {
 	path: string;
@@ -248,6 +249,12 @@ export function pruneMaligatorCache(options: CachePruneOptions = {}): CachePrune
 			removed.push(candidate);
 			projectedBytes -= candidate.bytes;
 			if (!dryRun) rmSync(candidate.path, { recursive: true, force: true });
+		}
+		if (!dryRun && removed.length > 0) {
+			// The smoke marker means its native/runtime prerequisites are warm. Any
+			// real artifact removal invalidates that premise, so the next gate must
+			// use its cold-start fuse instead of reporting a false warm timeout.
+			rmSync(path.join(malCacheRoot(root), TEST_SUITE_SMOKE_FILE), { force: true });
 		}
 		const after = dryRun
 			? { ...before, totalBytes: projectedBytes }

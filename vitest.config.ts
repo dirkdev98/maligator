@@ -4,7 +4,10 @@ import { defineConfig } from "vitest/config";
 // Native tests build + link a C binary per fixture and spawn it; cap parallelism
 // so we don't launch a swarm of cc/link + server processes at once (battery-friendly,
 // matches the test262 half-cores default).
-const nativeForks = Math.max(2, Math.floor(os.cpus().length / 2));
+// Instrumented binaries are much heavier and can otherwise starve each other's
+// fixed-startup tests and child-process deadlines under the full sanitizer lane.
+const sanitizerBuild = process.env.MAL_ASAN === "1" || process.env.MAL_UBSAN === "1";
+const nativeForks = sanitizerBuild ? 1 : Math.max(2, Math.floor(os.cpus().length / 2));
 
 export default defineConfig({
 	test: {

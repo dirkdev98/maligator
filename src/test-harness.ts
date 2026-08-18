@@ -217,6 +217,13 @@ export interface RunOptions {
 	timeoutMs?: number;
 }
 
+export function scaledNativeRunTimeoutMs(
+	timeoutMs = 20000,
+	env: NodeJS.ProcessEnv = process.env,
+): number {
+	return env.MAL_ASAN === "1" || env.MAL_UBSAN === "1" ? timeoutMs * 3 : timeoutMs;
+}
+
 /** An error carrying the child's captured streams, so a failing test shows them. */
 export class RunError extends Error {
 	stdout: string;
@@ -239,11 +246,12 @@ export class RunError extends Error {
  * (with both streams) on a non-zero exit, timeout, or spawn failure.
  */
 export function runToStdout(binary: string, options: RunOptions = {}): string {
+	const env = { ...process.env, ...options.env };
 	try {
 		return execFileSync(binary, {
-			env: { ...process.env, ...options.env },
+			env,
 			encoding: "utf-8",
-			timeout: options.timeoutMs ?? 20000,
+			timeout: scaledNativeRunTimeoutMs(options.timeoutMs, env),
 		});
 	} catch (error) {
 		const e = error as { stdout?: string; stderr?: string };
