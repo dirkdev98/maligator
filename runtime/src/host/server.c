@@ -825,19 +825,22 @@ static void conn_write_cb(void *data) {
                 conn_close(c);
                 return;
             }
-            if (c->request_message_complete && !c->request_released) return;
+            // A response may finish before its request body. Even when the peer
+            // asked for Connection: close, keep the read side alive until the
+            // application consumes or discards the declared body; closing here
+            // races a client that submits the remainder from its response
+            // callback.
+            if (!c->request_message_complete) {
+                conn_process_stream(c);
+                return;
+            }
+            if (!c->request_released) return;
             if (!c->keep_alive || c->server->closing) {
                 conn_close(c);
                 return;
             }
-            if (c->request_message_complete) {
-                if (c->request_released) {
-                    conn_stream_reset_request(c);
-                    conn_arm_keep_alive_timeout(c);
-                    conn_process_stream(c);
-                }
-                return;
-            }
+            conn_stream_reset_request(c);
+            conn_arm_keep_alive_timeout(c);
             conn_process_stream(c);
             return;
         }

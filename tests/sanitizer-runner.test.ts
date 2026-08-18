@@ -8,6 +8,8 @@ import { scaledNativeRunTimeoutMs } from "../src/test-harness.ts";
 
 describe("sanitizer runner", () => {
 	it("scales native child deadlines only for instrumented builds", () => {
+		expect(scaledNativeRunTimeoutMs(undefined, {})).toBe(20000);
+		expect(scaledNativeRunTimeoutMs(undefined, { MAL_UBSAN: "1" })).toBe(60000);
 		expect(scaledNativeRunTimeoutMs(20000, {})).toBe(20000);
 		expect(scaledNativeRunTimeoutMs(20000, { MAL_UBSAN: "1" })).toBe(60000);
 		expect(scaledNativeRunTimeoutMs(20000, { MAL_ASAN: "1" })).toBe(60000);

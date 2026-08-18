@@ -121,16 +121,25 @@ describe("production profile recorder", () => {
 				MAL_PROFILE_CAPTURE: capture,
 				MAL_PROFILE_IDENTITY: captureIdentity,
 			},
-			stdio: "ignore",
+			stdio: ["ignore", "pipe", "ignore"],
 		});
 		const exited = new Promise<NodeJS.Signals | null>((resolve, reject) => {
 			child.once("error", reject);
 			child.once("exit", (_code, exitSignal) => resolve(exitSignal));
 		});
-		// Native startup initializes the full runtime before the recorder is armed.
-		await new Promise((resolve) => {
-			setTimeout(resolve, 750);
+		const ready = new Promise<void>((resolve, reject) => {
+			child.stdout.setEncoding("utf8");
+			child.stdout.once("data", (output: string) => {
+				if (output.includes("profile-ready")) resolve();
+				else reject(new Error(`unexpected profile readiness output: ${output}`));
+			});
 		});
+		await Promise.race([
+			ready,
+			exited.then(() => {
+				throw new Error("profile process exited before readiness");
+			}),
+		]);
 		child.kill("SIGTERM");
 		const signal = await exited;
 		expect(signal).toBe("SIGTERM");

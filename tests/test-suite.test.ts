@@ -49,7 +49,7 @@ describe("test suite planner", () => {
 		expect(help).toContain("npm run test262:report      full Test262 report");
 		expect(help).toContain("approval required");
 		expect(help).toContain("npm run test262:regressions");
-		expect(help).toContain("20-second warm / two-minute cold");
+		expect(help).toContain("20-second warm / four-minute cold");
 		expect(help).toContain("npm run test:check -- --list");
 	});
 });
