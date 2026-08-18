@@ -436,19 +436,21 @@ tables.
 Maligator keeps reusable inputs separate from project outputs:
 
 ```text
-.cache/mal-cache/toolchains/    tool identity and capability probes
-.cache/mal-cache/build-frontend/ portable normal-build frontend definitions
-.cache/mal-cache/generated-c/   compiled generated-C and driver objects
-.cache/mal-cache/runtime/       C runtime archives
-.cache/mal-cache/rust/          keyed Rust static libraries
-.cache/mal-cache/cargo/         Cargo downloads/cache
-.cache/mal-cache/compiler-wire/ baked eval compiler definitions
-.cache/mal-build/development/   generated C and development executables
-.cache/mal-build/production/    generated C and production executables
+<user-cache>/maligator/v1/actions/       producer/action result manifests
+<user-cache>/maligator/v1/blobs/sha256/  immutable content-addressed outputs
+<user-cache>/maligator/v1/frontend/      serialized VM definitions
+<user-cache>/maligator/v1/toolchains/    tool identity and capability probes
+<user-cache>/maligator/v1/work/          disposable compiler/Cargo scratch
+<project>/.cache/mal-build/development/  generated C and development executables
+<project>/.cache/mal-build/production/   generated C and production executables
 ```
 
-Cache keys include relevant source content, normalized feature config, target,
-selected toolchain identity, build environment, and exact compile or Cargo arguments.
+The user cache follows the platform convention (`~/Library/Caches` on macOS,
+`$XDG_CACHE_HOME` on Linux, and LocalAppData on Windows); `MALIGATOR_CACHE_DIR`
+overrides its base. Cache keys include relevant source content, producer protocol,
+normalized feature config, target, selected toolchain identity, build environment,
+and exact compile or Cargo arguments. Package semver is recorded as metadata, not
+used as a blanket invalidation key.
 Normal builds restore cached VM definitions before generated-C emission, skipping
 unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Generated translation units and the driver are
@@ -456,14 +458,15 @@ then compiled to independently content-addressed objects; unchanged objects are
 relinked without invoking their C compilation again. Normal output reports
 frontend, generated-C, toolchain, and native cache hit/miss status plus the final
 executable path. Removing
-`.cache/mal-build` forces project output regeneration; removing a specific
-`.cache/mal-cache` subtree forces that reusable artifact to be reprobed or rebuilt.
+`.cache/mal-build` forces project output materialization without discarding reusable
+artifacts. Use `maligator cache clear --all` for an intentional full cache reset.
 
-C and Rust artifacts are published only after validation and an atomic completion
-manifest. Invalid C archive bundles are quarantined before rebuilding, and incomplete
-Rust outputs are rebuilt before their completion manifest is replaced. Generated C
-and the final executable remain project outputs, while reusable compiler-wire and
-native artifacts remain under the explicitly selected cache root.
+C and Rust outputs are published as immutable blobs only after compilation succeeds;
+an atomic action manifest makes the result visible. Runtime GC stress/verification
+flags are execution inputs and reuse the same binary. Build-affecting sanitizer, GC,
+feature, backend, optimization, target, and toolchain dimensions get distinct action
+keys. Test/program verdicts and benchmark measurements are always executed and are
+never cache entries.
 
 ## Troubleshooting
 
@@ -473,7 +476,7 @@ native artifacts remain under the explicitly selected cache root.
 - `eval is disabled`: the default `engine.eval: false` compiles the call site but throws if it executes. Set `true` to embed the runtime compiler, or `"compile-check"` to reject statically visible uses during the build.
 - `RegExp is disabled`: remove `engine.regexp: false` or avoid regular expressions.
 - `Toolchain is not ready`: run `maligator doctor --verbose`, check `CC`/`CXX`, `PATH`, and the platform-specific installation suggestions.
-- A stale or suspect native artifact: remove the relevant directory under `.cache/mal-cache` and rebuild; cache identity changes normally invalidate it automatically.
+- A stale or suspect artifact: inspect with `maligator cache status`, preview `maligator cache prune --dry-run`, or deliberately reset with `maligator cache clear --all`; normal identity changes invalidate affected actions automatically.
 - A custom self-hosted CLI reports a missing `runtime` or `compilerWire` asset: build it with the source-tree and prebuilt-wire asset set shown above.
 
 ## Development
@@ -519,10 +522,13 @@ npm run test262:prepare             # populate/repair the pinned full-corpus cac
 # Inspect or reclaim Maligator-owned rebuildable caches.
 node ./src/index.ts cache status
 node ./src/index.ts cache prune --dry-run
+node ./src/index.ts cache clear --all
 
-# Show tier policy and list exact stage commands without executing them.
+# Check agent sandbox/cache access and inspect exact stage requirements.
+npm run env:check -- --json
 npm run test:help
 npm run test:check -- --list
+npm run test:check -- --plan=json
 ```
 
 See [`docs/testing.md`](docs/testing.md) for tier contents, fail-fast versus

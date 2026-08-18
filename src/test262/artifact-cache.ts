@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "../cache-root.ts";
+import { compilerImplementationDigest } from "../compiler-cache-identity.ts";
 
 /**
  * Content-addressed cache for the expensive build artifact in the test262
@@ -20,8 +21,8 @@ import { maligatorCacheDirectory } from "../cache-root.ts";
  * reused; we only re-link against the freshly built library.
  *
  * Correctness rests entirely on the cache key being conservative: it folds in a
- * fingerprint of the whole compiler (`src/**`), its package metadata, and every
- * runtime header (`runtime/src/**.h`) plus the cc flags and version, so any change
+ * fingerprint of the compiler implementation, dependency lock, and every runtime
+ * header (`runtime/src/**.h`) plus the cc flags, so any change
  * that could alter the emitted `.o` changes the key. Run results are never cached
  * - we always execute the binary - so flakes and behavioural changes still surface.
  */
@@ -108,12 +109,12 @@ function hashDirectory(
 	}
 }
 
-let cachedFingerprint: string | undefined;
+const CACHED_FINGERPRINTS = new Map<string, string>();
 
 /**
  * A stable hash of every input that can change a batch's `.o`: the whole
- * compiler (`src/**.ts` plus package metadata), every runtime header, and the cc
- * flags/version. The runtime `.c` files are deliberately excluded - they compile
+ * compiler implementation plus dependency lock, every runtime header, and the cc
+ * flags. The runtime `.c` files are deliberately excluded - they compile
  * into the library we always re-link, not into the batch object - which is
  * exactly what makes the implementation-edit loop a cache hit.
  */
@@ -121,26 +122,24 @@ export function buildFingerprint(
 	ccFlags: Array<string>,
 	toolchainFingerprint: string,
 ): string {
-	if (cachedFingerprint !== undefined) {
-		return cachedFingerprint;
-	}
+	const inputs = JSON.stringify({ ccFlags, toolchainFingerprint });
+	const cached = CACHED_FINGERPRINTS.get(inputs);
+	if (cached !== undefined) return cached;
 
 	const hash = createHash("sha256");
 	hash.update("v1-shared-test262-helpers\n");
-	hashDirectory(hash, "src", [".ts"]);
+	hash.update(compilerImplementationDigest());
 	hashDirectory(hash, "runtime/src", [".h"]);
-	for (const file of ["package.json", "package-lock.json"]) {
-		if (existsSync(file)) {
-			hash.update(file);
-			hash.update(readFileSync(file));
-		}
+	if (existsSync("package-lock.json")) {
+		hash.update("package-lock.json");
+		hash.update(readFileSync("package-lock.json"));
 	}
-	hash.update(ccFlags.join(" "));
-
+	hash.update(JSON.stringify(ccFlags));
 	hash.update(toolchainFingerprint);
 
-	cachedFingerprint = hash.digest("hex");
-	return cachedFingerprint;
+	const fingerprint = hash.digest("hex");
+	CACHED_FINGERPRINTS.set(inputs, fingerprint);
+	return fingerprint;
 }
 
 /**

@@ -26,6 +26,7 @@
 		"bench": "node ./scripts/bench.ts",
 		"bench:dx": "node ./scripts/dx-performance.ts",
 		"bench:profile-overhead": "node ./scripts/profile-overhead.ts",
+		"env:check": "node ./scripts/agent-environment.ts",
 		"format": "node ./scripts/quality.ts format",
 		"lint": "node ./scripts/quality.ts lint",
 		"lint:ci": "node ./scripts/quality.ts lint-ci",

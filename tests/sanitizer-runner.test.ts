@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
 	cleanTestEnvironment,
@@ -81,5 +82,19 @@ describe("sanitizer runner", () => {
 				},
 			),
 		).toBe(false);
+	});
+
+	it("reports the same sandbox contract without executing the sanitizer", () => {
+		const plan = JSON.parse(
+			execFileSync(process.execPath, ["scripts/test-sanitize.ts", "--plan=json"], {
+				encoding: "utf8",
+			}),
+		) as {
+			requirements: { capabilities: Record<string, boolean> };
+			coordination: { performanceLock: boolean };
+		};
+		expect(plan.requirements.capabilities.loopbackListen).toBe(true);
+		expect(plan.requirements.capabilities.cargoCacheWrite).toBe(true);
+		expect(plan.coordination.performanceLock).toBe(false);
 	});
 });

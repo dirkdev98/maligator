@@ -49,7 +49,7 @@ when investigating older history.
 
 ## Cache ownership
 
-Maligator bounds its project-local rebuildable caches without touching source,
+Maligator bounds its shared user-cache artifacts without touching source,
 the pinned Test262 corpus, committed baselines, or user output. Inspect usage
 with `maligator cache status`; preview or apply reclamation with
 `maligator cache prune --dry-run` and `maligator cache prune`. Explicit prune
@@ -64,7 +64,9 @@ Cache hits touch their artifact directory so retention follows actual reuse.
 Normal commands perform at most one conservative automatic maintenance check per
 day, with a 16 GiB target, a seven-day age threshold, and the same emergency cap.
 Use `--max-gb`, `--min-age-days`, and `--verbose` to tune or audit an explicit
-prune. WPT removes its per-run native scratch tree on exit; pass
+prune. `maligator cache clear --all` removes every Maligator cache-layout generation
+after the same live-command safety check, without retaining readers for old formats.
+WPT removes its per-run native scratch tree on exit; pass
 `--keep-artifacts` only when debugging generated sources or binaries.
 
 ## Tiers
@@ -201,8 +203,11 @@ selections and reports a sandbox error early when `listen(0)` is denied.
 
 Use `npm run test:help` for tier policy and
 `npm run test:check -- --list` (or another tier) to inspect exact stage commands
-without executing them. `-h`/`--help` is also side-effect-free on the Test262 and
-WPT runners.
+without executing them. `--plan=json` adds machine-readable CPU, approval, sandbox,
+and user/npm/Cargo cache requirements. `npm run env:check -- --json` probes those
+paths and loopback binding, then reports current CPU and active Maligator commands;
+heavy work may be deferred when busy, without an execution lock. `-h`/`--help` is
+also side-effect-free on the Test262 and WPT runners.
 
 ## Test Placement
 

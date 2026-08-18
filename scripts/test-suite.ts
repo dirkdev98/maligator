@@ -4,6 +4,12 @@ import * as path from "node:path";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress, formatCommandDuration } from "../src/command-progress.ts";
 import { hashDirectoryTrees } from "../src/file-tree.ts";
+import {
+	commandEnvironmentPlan,
+	mergeCommandRequirements,
+	requirementsForCommand,
+} from "./command-requirements.ts";
+import type { CommandKind, CommandRequirements } from "./command-requirements.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 type Tier = "smoke" | "check" | "full";
@@ -13,6 +19,7 @@ interface Command {
 	name: string;
 	command: string;
 	args: Array<string>;
+	requirements: CommandRequirements;
 	env?: NodeJS.ProcessEnv;
 }
 
@@ -77,6 +84,7 @@ Focused lanes:
 Options:
   --policy bail|complete  stop at the first failure or finish every stage
   --list                  print the exact commands without running them
+  --plan=json             print commands and environment requirements as JSON
   -h, --help              show this help
 
 Pass --list through a tier command, for example npm run test:check -- --list.`;
@@ -87,12 +95,18 @@ function exitWithUsage(message?: string): never {
 	process.exit(message === undefined ? 0 : 1);
 }
 
-function parseArguments(): { tier: Tier; policy: Policy; list: boolean } {
+function parseArguments(): {
+	tier: Tier;
+	policy: Policy;
+	list: boolean;
+	jsonPlan: boolean;
+} {
 	let tier: Tier = "check";
 	let tierSeen = false;
 	let policy: Policy = "bail";
 	let policySeen = false;
 	let list = false;
+	let jsonPlan = false;
 	for (let index = 2; index < process.argv.length; index++) {
 		const argument = process.argv[index];
 		if (argument === "-h" || argument === "--help") exitWithUsage();
@@ -117,9 +131,15 @@ function parseArguments(): { tier: Tier; policy: Policy; list: boolean } {
 			list = true;
 			continue;
 		}
+		if (argument === "--plan=json") {
+			if (jsonPlan) exitWithUsage("--plan=json may only be specified once");
+			jsonPlan = true;
+			continue;
+		}
 		exitWithUsage(`unknown argument: ${argument}`);
 	}
-	return { tier, policy, list };
+	if (list && jsonPlan) exitWithUsage("--list and --plan=json cannot be combined");
+	return { tier, policy, list, jsonPlan };
 }
 
 function readManifest(file: string): Array<string> {
@@ -172,16 +192,40 @@ function listFilesRecursively(
 	);
 }
 
-function npm(name: string, script: string, args: Array<string> = []): Command {
+function npm(
+	name: string,
+	script: string,
+	args: Array<string> = [],
+	kind: CommandKind = npmCommandKind(script),
+): Command {
 	return {
 		name,
 		command: "npm",
 		args: ["run", script, ...(args.length > 0 ? ["--", ...args] : [])],
+		requirements: requirementsForCommand(kind),
 	};
 }
 
-function node(name: string, script: string, args: Array<string> = []): Command {
-	return { name, command: process.execPath, args: [script, ...args] };
+function npmCommandKind(script: string): CommandKind {
+	if (script === "type-check" || script === "lint:ci") return "quality";
+	if (script === "test:unit" || script === "test:unit:full-only") return "unit";
+	if (script === "test:rust") return "rust";
+	if (script === "test:wpt") return "standards";
+	return "native";
+}
+
+function node(
+	name: string,
+	script: string,
+	args: Array<string> = [],
+	kind: CommandKind = script.includes("test262") ? "standards" : "compiler",
+): Command {
+	return {
+		name,
+		command: process.execPath,
+		args: [script, ...args],
+		requirements: requirementsForCommand(kind),
+	};
 }
 
 function shellArgument(value: string): string {
@@ -223,7 +267,7 @@ function runCommand(
 	return false;
 }
 
-const { tier, policy, list } = parseArguments();
+const { tier, policy, list, jsonPlan } = parseArguments();
 const fullOnlyUnit = readManifest("tests/test-suite-unit-full-only.txt");
 const unitSmoke = readManifest("tests/test-suite-unit-smoke.txt");
 const nativeSmoke = readManifest("tests/test-suite-native-smoke.txt");
@@ -478,6 +522,30 @@ if (list) {
 	for (const command of [...smokeCommands, ...laterCommands]) {
 		console.log(`${command.name}:\n  ${formatCommand(command)}`);
 	}
+	process.exit(0);
+}
+
+if (jsonPlan) {
+	const commands = [...smokeCommands, ...laterCommands];
+	console.log(
+		JSON.stringify(
+			{
+				...commandEnvironmentPlan(
+					mergeCommandRequirements(commands.map((command) => command.requirements)),
+					{ approval: tier === "full" ? "explicit" : "none", workspace: root },
+				),
+				tier,
+				policy,
+				stages: commands.map((command) => ({
+					name: command.name,
+					invocation: formatCommand(command),
+					requirements: command.requirements,
+				})),
+			},
+			null,
+			2,
+		),
+	);
 	process.exit(0);
 }
 

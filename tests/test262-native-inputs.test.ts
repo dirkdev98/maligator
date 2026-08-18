@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildFingerprint } from "../src/test262/artifact-cache.ts";
 import {
 	test262NativeBuildInputs,
 	test262SetNativeBuildInputs,
@@ -6,6 +7,17 @@ import {
 import type { Test262NativeBuildInputs } from "../src/test262/runtime.ts";
 
 describe("Test262 native build inputs", () => {
+	it("keys build artifacts by exact flags and toolchain", () => {
+		const initial = buildFingerprint(["-O0", "-DMAL_GC_GENERATIONAL=1"], "cc-a");
+		expect(buildFingerprint(["-O0", "-DMAL_GC_GENERATIONAL=1"], "cc-a")).toBe(initial);
+		expect(buildFingerprint(["-O1", "-DMAL_GC_GENERATIONAL=1"], "cc-a")).not.toBe(
+			initial,
+		);
+		expect(buildFingerprint(["-O0", "-DMAL_GC_GENERATIONAL=1"], "cc-b")).not.toBe(
+			initial,
+		);
+	});
+
 	it("installs one serializable toolchain and named artifact bundle", () => {
 		const inputs: Test262NativeBuildInputs = {
 			toolchain: {

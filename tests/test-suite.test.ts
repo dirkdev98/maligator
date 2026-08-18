@@ -53,5 +53,33 @@ describe("test suite planner", () => {
 		expect(help).toContain("npm run test262:regressions");
 		expect(help).toContain("20-second warm / four-minute cold");
 		expect(help).toContain("npm run test:check -- --list");
+		expect(help).toContain("--plan=json");
+	});
+
+	it("publishes exact sandbox and CPU requirements without a global lock", () => {
+		const check = JSON.parse(runSuite("check", "--plan=json")) as {
+			approval: string;
+			requirements: { capabilities: Record<string, boolean> };
+			coordination: { performanceLock: boolean; deferWhenBusy: boolean };
+			stages: Array<{ name: string; requirements: { cpu: string } }>;
+		};
+		const full = JSON.parse(runSuite("full", "--plan=json")) as {
+			approval: string;
+		};
+
+		expect(check.approval).toBe("none");
+		expect(check.requirements.capabilities.loopbackListen).toBe(true);
+		expect(check.requirements.capabilities.userCacheWrite).toBe(true);
+		expect(check.requirements.capabilities.npmCacheWrite).toBe(true);
+		expect(check.requirements.capabilities.cargoCacheWrite).toBe(true);
+		expect(check.coordination).toEqual({
+			inspectCpuBeforeHeavyWork: true,
+			deferWhenBusy: true,
+			performanceLock: false,
+		});
+		expect(
+			check.stages.find((stage) => stage.name === "smoke: TypeScript")?.requirements.cpu,
+		).toBe("light");
+		expect(full.approval).toBe("explicit");
 	});
 });

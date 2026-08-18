@@ -20,7 +20,7 @@ import { validateBuildFragmentRequest } from "./build-fragment-cache.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { BuildReporter } from "./build-progress.ts";
 import {
-	clearMaligatorCache,
+	clearAllMaligatorCaches,
 	createCacheLease,
 	DEFAULT_CACHE_MAX_BYTES,
 	DEFAULT_CACHE_MIN_AGE_MS,
@@ -40,7 +40,7 @@ import type {
 	RunCommand,
 	TestCommand,
 } from "./cli.ts";
-import { CommandProgress } from "./command-progress.ts";
+import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
@@ -1493,6 +1493,7 @@ function cacheSummaryLines(): Array<string> {
 	for (const entry of status.entries) {
 		families.set(entry.family, (families.get(entry.family) ?? 0) + entry.bytes);
 	}
+	const now = Date.now();
 	return [
 		`Root: ${status.root}`,
 		`Total: ${formatCacheBytes(status.totalBytes)} (${formatCacheBytes(status.managedBytes)} managed)`,
@@ -1500,6 +1501,10 @@ function cacheSummaryLines(): Array<string> {
 			.sort((left, right) => right[1] - left[1])
 			.map(([family, bytes]) => `  ${family}: ${formatCacheBytes(bytes)}`),
 		`Active commands: ${status.activeLeases}`,
+		...status.activeCommands.map(
+			(command) =>
+				`  pid ${command.pid}: ${command.command} (${formatCommandDuration(now - command.startedAt)})`,
+		),
 	];
 }
 
@@ -1516,7 +1521,7 @@ function runCacheCommand(command: CacheCommand): void {
 	if (command.action === "clear") {
 		progress.start("clear Maligator-owned rebuildable cache");
 		progress.stage(1, 1, "remove rebuildable entries");
-		const result = clearMaligatorCache();
+		const result = clearAllMaligatorCaches();
 		progress.stagePassed(
 			1,
 			1,

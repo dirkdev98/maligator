@@ -7,6 +7,8 @@
 - `npm run test:full` - Exhaustive fail-fast gate; includes full Test262, so ask before running
 - `npm run test:full:report` - Exhaustive completion policy; ask before running
 - `npm run test:help` - Show tier policy; add `-- --list` to a tier command to print exact stages
+- `npm run test:check -- --plan=json` - Print exact stage, CPU, approval, sandbox, and cache requirements without running tests
+- `npm run env:check -- --json` - Probe workspace/temp/user/npm/Cargo cache writes, `listen(0)`, active Maligator commands, and current CPU load
 - `npm run type-check` - TypeScript type checking
 - `npm run lint` - ESLint with auto-fix
 - `npm run lint:ci` - ESLint without auto-fix (CI)
@@ -25,12 +27,20 @@
 - `npm run test:wpt:report` - Complete compiled/normal curated WPT report
 - `npm run test:wpt:matrix-report` - Complete compiled/interpreted normal/GC-stress WPT report
 - `npm run bench` - Consolidated benchmark runner (size / language-vs-V8 / gc / http); `--update` merges selected lanes into the saved snapshot
-- `node ./src/index.ts cache status|prune` - Inspect or conservatively prune Maligator-owned rebuildable caches; use `prune --dry-run` to preview
+- `node ./src/index.ts cache status|prune|clear` - Inspect or reclaim Maligator-owned rebuildable caches; preview prune with `prune --dry-run`, and require `clear --all` for a full reset
 
-Native tests listed in `tests/test-suite-native-loopback.txt` bind `listen(0)`.
-Run them in a sandbox with loopback/network permission from the outset. If the
-runner reports `EPERM`/`EACCES`, rerun the exact command with an elevated sandbox;
-do not diagnose or change Maligator code for that environment failure.
+Before the first project command, select a sandbox that can bind loopback
+`listen(0)` and write the workspace, temporary directory, Maligator user cache,
+`npm config get cache`, and `${CARGO_HOME:-~/.cargo}`. `npm run env:check -- --json`
+prints and verifies the concrete paths. Network, Git writes, pushes, and publishing
+remain separate capabilities and must not be inferred from this normal sandbox.
+If the probe or test runner reports `EPERM`/`EACCES`, fix the sandbox and rerun the
+exact command; do not diagnose or change Maligator code for an environment failure.
+
+Before starting a heavy or performance-sensitive command, inspect current CPU
+activity and `maligator cache status`. Defer the planned command when another build,
+test, or benchmark would contaminate it. This is voluntary coordination: never
+create or wait on a global performance lock.
 
 ### Manual milestone scripts (not part of `npm test`)
 
@@ -86,7 +96,8 @@ For a fix queue maintained in a separate clone:
 - Ask for explicit approval before running the full Test262 suite, `test:full`, or `test:full:report`.
 - Use targeted single-test or small-batch verification during development.
 - Follow `docs/testing.md` when placing tests. If a regression could reasonably belong in more than one lane, ask the user rather than guessing.
-- Never use git worktrees.
+- Working inside an assigned managed checkout/worktree is allowed. Never create,
+  register, remove, prune, relocate, or switch worktrees unless explicitly asked.
 - When asked to commit, create unsigned local commits and do not push unless explicitly asked.
 - When a push is explicitly authorized, host-specific authentication instructions may
   be available in the ignored `AGENTS.local.md`. Never print or persist the GitHub

@@ -844,6 +844,15 @@ exit 7
 			}),
 		).toBe(baseFingerprint);
 		expect(
+			nativeBuildEnvironmentFingerprint({
+				...fake.env,
+				CFLAGS: "-DVALUE=1",
+				MAL_GC_STRESS: "1",
+				MAL_GC_VERIFY: "1",
+				MAL_GC_THRESHOLD: "64",
+			}),
+		).toBe(baseFingerprint);
+		expect(
 			nativeBuildEnvironmentFingerprint({ ...fake.env, CFLAGS: "-DVALUE=2" }),
 		).not.toBe(baseFingerprint);
 

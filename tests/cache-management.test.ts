@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	clearAllMaligatorCaches,
 	clearMaligatorCache,
 	createCacheLease,
 	inspectMaligatorCache,
@@ -101,5 +102,25 @@ describe("Maligator cache management", () => {
 		expect(result.removedBytes).toBeGreaterThanOrEqual(100);
 		expect(existsSync(entry)).toBe(false);
 		expect(inspectMaligatorCache(root).totalBytes).toBe(0);
+	});
+
+	it("clears every layout generation without retaining old machinery", () => {
+		const base = cacheRoot();
+		const firstRoot = path.join(base, "v1");
+		const first = artifact(firstRoot, "runtime", "first", 100, 10);
+		const second = artifact(path.join(base, "v2"), "future", "second", 200, 10);
+		const lease = createCacheLease("old-version", firstRoot);
+		expect(() => clearAllMaligatorCaches(base)).toThrow(
+			"Refusing to clear while 1 Maligator command is active",
+		);
+		lease.release();
+
+		const result = clearAllMaligatorCaches(base);
+
+		expect(result.root).toBe(base);
+		expect(result.removedBytes).toBeGreaterThanOrEqual(300);
+		expect(existsSync(first)).toBe(false);
+		expect(existsSync(second)).toBe(false);
+		expect(existsSync(base)).toBe(true);
 	});
 });

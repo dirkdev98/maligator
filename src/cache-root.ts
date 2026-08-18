@@ -3,24 +3,24 @@ import * as path from "node:path";
 
 export const MALIGATOR_CACHE_LAYOUT = "v1";
 
-function cacheBaseDirectory(
-	environment: NodeJS.ProcessEnv,
-	platform: NodeJS.Platform,
+export function maligatorCacheBaseDirectory(
+	environment: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform,
 ): string {
 	if (environment.MALIGATOR_CACHE_DIR !== undefined) {
-		return environment.MALIGATOR_CACHE_DIR;
+		return path.resolve(environment.MALIGATOR_CACHE_DIR);
 	}
 	if (platform === "win32") {
-		return path.join(
+		return path.resolve(
 			environment.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
 			"Maligator",
 			"Cache",
 		);
 	}
 	if (platform === "darwin") {
-		return path.join(os.homedir(), "Library", "Caches", "maligator");
+		return path.resolve(os.homedir(), "Library", "Caches", "maligator");
 	}
-	return path.join(
+	return path.resolve(
 		environment.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"),
 		"maligator",
 	);
@@ -33,7 +33,10 @@ export function maligatorCacheDirectory(
 	platform: NodeJS.Platform = process.platform,
 ): string {
 	if (override !== undefined) return path.resolve(override);
-	return path.resolve(cacheBaseDirectory(environment, platform), MALIGATOR_CACHE_LAYOUT);
+	return path.join(
+		maligatorCacheBaseDirectory(environment, platform),
+		MALIGATOR_CACHE_LAYOUT,
+	);
 }
 
 /** Checkout-local scratch and user-visible build materialization. */
