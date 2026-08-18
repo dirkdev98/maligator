@@ -6,7 +6,7 @@
  *
  * Two responsibilities beyond deduplication:
  *   - ordinary fixture frontends, generated objects, linked binaries, and the
- *     expensive C/Rust archives are atomically cached under `.cache/mal-cache`;
+ *     expensive C/Rust archives are atomically cached in the shared user cache;
  *     only the emitted `.c` and restored binary land in the caller's `outDir`.
  *   - the plain + MAL_GC_STRESS+MAL_GC_VERIFY re-run that every runner used to
  *     copy-paste is one constant ({@link STRESS_ENV}) plus small assert helpers.

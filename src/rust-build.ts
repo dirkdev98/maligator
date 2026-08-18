@@ -1,18 +1,18 @@
 import { hash } from "node:crypto";
-import {
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { statSync } from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
+import {
+	artifactActionKey,
+	artifactOutput,
+	artifactProducer,
+	publishArtifactAction,
+	readArtifactAction,
+	withArtifactActionLock,
+} from "./artifact-store.ts";
 import { platformLinkArgs } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
-import { touchCacheEntry } from "./cache-management.ts";
+import { cargoCacheDirectory } from "./cache-root.ts";
 import {
 	hashDirectoryTrees,
 	hashDirectoryTreesCached,
@@ -62,8 +62,10 @@ export interface RustArtifactKeyInputs {
 }
 
 export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
-	return hash("sha256", JSON.stringify({ schema: 1, ...inputs }), "hex").slice(0, 24);
+	return artifactActionKey(RUST_PRODUCER, inputs);
 }
+
+const RUST_PRODUCER = artifactProducer("rust-library", 1, "cargo-build");
 
 export interface RustArtifacts {
 	cacheKey: string;
@@ -125,7 +127,13 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 		toolchainFingerprint: context.toolchain.fingerprint,
 		rustTarget: context.toolchain.rustTarget,
 	});
-	const targetDirectory = path.join(context.cacheDirectory, "rust", cacheKey, "target");
+	const targetDirectory = path.join(
+		context.cacheDirectory,
+		"work",
+		"rust",
+		cacheKey,
+		"target",
+	);
 	const library = path.join(
 		targetDirectory,
 		...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
@@ -153,44 +161,12 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 	};
 }
 
-const RUST_MANIFEST = "artifact.json";
-
-function validRustCache(artifacts: RustArtifacts): boolean {
-	try {
-		const manifest = JSON.parse(
-			readFileSync(
-				path.join(path.dirname(artifacts.targetDirectory), RUST_MANIFEST),
-				"utf-8",
-			),
-		) as { schema?: unknown; cacheKey?: unknown; librarySize?: unknown };
-		const stats = statSync(artifacts.library);
-		return (
-			manifest.schema === 1 &&
-			manifest.cacheKey === artifacts.cacheKey &&
-			typeof manifest.librarySize === "number" &&
-			manifest.librarySize > 0 &&
-			stats.isFile() &&
-			stats.size === manifest.librarySize
-		);
-	} catch {
-		return false;
-	}
-}
-
-function publishRustManifest(artifacts: RustArtifacts, librarySize: number): void {
-	const keyDirectory = path.dirname(artifacts.targetDirectory);
-	mkdirSync(keyDirectory, { recursive: true });
-	const temporaryDirectory = mkdtempSync(path.join(keyDirectory, ".manifest-"));
-	try {
-		const temporaryPath = path.join(temporaryDirectory, RUST_MANIFEST);
-		writeFileSync(
-			temporaryPath,
-			`${JSON.stringify({ schema: 1, cacheKey: artifacts.cacheKey, librarySize })}\n`,
-		);
-		renameSync(temporaryPath, path.join(keyDirectory, RUST_MANIFEST));
-	} finally {
-		rmSync(temporaryDirectory, { recursive: true, force: true });
-	}
+function cachedRustArtifacts(artifacts: RustArtifacts, library: string): RustArtifacts {
+	return {
+		...artifacts,
+		library,
+		linkArgs: [library, ...artifacts.linkArgs.slice(1)],
+	};
 }
 
 /** Build the Rust FFI static library, relying on Cargo's target-directory locking. */
@@ -200,55 +176,82 @@ export function ensureRustArtifacts(
 ): RustArtifacts {
 	const startedAt = performance.now();
 	const artifacts = resolveRustArtifacts(context);
-	if (validRustCache(artifacts)) {
-		touchCacheEntry(path.dirname(artifacts.targetDirectory));
-		context.onCacheEvent?.({ artifact: "rust", hit: true, path: artifacts.library });
+	const cached = readArtifactAction(
+		context.cacheDirectory,
+		"rust-library",
+		RUST_PRODUCER,
+		artifacts.cacheKey,
+	);
+	if (cached !== undefined) {
+		const library = artifactOutput(cached, "libmal_rust.a").path;
+		context.onCacheEvent?.({ artifact: "rust", hit: true, path: library });
 		context.onBuildPhase?.({
 			phase: "rust",
 			durationMs: performance.now() - startedAt,
 			cache: "hit",
-			path: artifacts.library,
+			path: library,
 		});
-		return artifacts;
+		return cachedRustArtifacts(artifacts, library);
 	}
 	context.onCacheEvent?.({ artifact: "rust", hit: false, path: artifacts.library });
-	const currentPath = context.environment.PATH ?? "";
-	const cargoPath = context.toolchain.tools.cargo.path;
-	const toolchainBin = path.dirname(cargoPath);
-
-	runNativeCommand(
-		context,
-		cargoPath,
-		toolArguments(context.toolchain.tools.cargo, artifacts.cargoArguments),
-		{
-			cwd: path.join(context.runtimeDirectory, "rust"),
-			env: {
-				...context.environment,
-				...artifacts.nativeToolEnvironment,
-				PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
-				CARGO_HOME: path.join(context.cacheDirectory, "cargo"),
-				CARGO_TARGET_DIR: artifacts.targetDirectory,
-				RUSTC: context.toolchain.tools.rustc.path,
-			},
-			verbose,
+	const published = withArtifactActionLock(
+		context.cacheDirectory,
+		"rust-library",
+		RUST_PRODUCER,
+		artifacts.cacheKey,
+		() => {
+			const raced = readArtifactAction(
+				context.cacheDirectory,
+				"rust-library",
+				RUST_PRODUCER,
+				artifacts.cacheKey,
+			);
+			if (raced !== undefined) return raced;
+			const currentPath = context.environment.PATH ?? "";
+			const cargoPath = context.toolchain.tools.cargo.path;
+			const toolchainBin = path.dirname(cargoPath);
+			runNativeCommand(
+				context,
+				cargoPath,
+				toolArguments(context.toolchain.tools.cargo, artifacts.cargoArguments),
+				{
+					cwd: path.join(context.runtimeDirectory, "rust"),
+					env: {
+						...context.environment,
+						...artifacts.nativeToolEnvironment,
+						PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
+						CARGO_HOME: cargoCacheDirectory(context.environment),
+						CARGO_TARGET_DIR: artifacts.targetDirectory,
+						RUSTC: context.toolchain.tools.rustc.path,
+					},
+					verbose,
+				},
+			);
+			let librarySize = 0;
+			try {
+				const stats = statSync(artifacts.library);
+				if (stats.isFile()) librarySize = stats.size;
+			} catch {
+				// Report the common failure below.
+			}
+			if (librarySize === 0) {
+				throw new Error(`cargo completed without producing ${artifacts.library}`);
+			}
+			return publishArtifactAction(
+				context.cacheDirectory,
+				"rust-library",
+				RUST_PRODUCER,
+				artifacts.cacheKey,
+				[{ name: "libmal_rust.a", file: artifacts.library }],
+			);
 		},
 	);
-	let librarySize = 0;
-	try {
-		const stats = statSync(artifacts.library);
-		if (stats.isFile()) librarySize = stats.size;
-	} catch {
-		// Report the common failure below.
-	}
-	if (librarySize === 0) {
-		throw new Error(`cargo completed without producing ${artifacts.library}`);
-	}
-	publishRustManifest(artifacts, librarySize);
+	const library = artifactOutput(published, "libmal_rust.a").path;
 	context.onBuildPhase?.({
 		phase: "rust",
 		durationMs: performance.now() - startedAt,
 		cache: "miss",
-		path: artifacts.library,
+		path: library,
 	});
-	return artifacts;
+	return cachedRustArtifacts(artifacts, library);
 }

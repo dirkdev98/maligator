@@ -22,6 +22,7 @@ import {
 	sanitizerCcFlags,
 } from "../build-flags.ts";
 import { touchCacheEntry } from "../cache-management.ts";
+import { maligatorCacheDirectory } from "../cache-root.ts";
 import { compileEntrypointToBuffer } from "../compile-program.ts";
 import { compilerEntrypointSourceFiles } from "../compiler-bake.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
@@ -763,7 +764,7 @@ function test262WirePath(source: string): string {
 		`wire-v1-${variant}`,
 		[source],
 	);
-	const directory = path.join(".cache/mal-cache/test262-wires", variant);
+	const directory = path.join(maligatorCacheDirectory(), "test262-wires", variant);
 	mkdirSync(directory, { recursive: true });
 	return path.join(directory, `${key}.malw`);
 }

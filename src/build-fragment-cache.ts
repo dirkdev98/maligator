@@ -11,8 +11,13 @@ import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import type { BuildFrontendPhases } from "./build-frontend-cache.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import {
+	compilerConfigurationIdentity,
+	compilerProducerIdentity,
+} from "./compiler-cache-identity.ts";
 import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import {
@@ -48,10 +53,9 @@ import {
 	serializeVmDefinition,
 	WIRE_VERSION,
 } from "./serialize-vm.ts";
-import { MALIGATOR_VERSION } from "./version.ts";
 
 const FRAGMENT_SCHEMA = 1;
-const CACHE_DIRECTORY = ".cache/mal-cache/build-fragments";
+const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "build-fragments");
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 
 interface PlannedImport {
@@ -297,14 +301,11 @@ function environmentIdentity(options: CompileBuildFragmentsOptions): string {
 	return digest(
 		JSON.stringify({
 			schema: FRAGMENT_SCHEMA,
-			version: MALIGATOR_VERSION,
+			producer: compilerProducerIdentity("build-fragment", FRAGMENT_SCHEMA),
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: "development",
-			modules: options.config.modules,
-			engine: options.config.engine,
-			host: options.config.host,
-			surface: options.config.surface,
+			configuration: compilerConfigurationIdentity(options.config),
 			entryPrelude:
 				options.entryPrelude === undefined
 					? undefined

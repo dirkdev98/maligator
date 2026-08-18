@@ -20,6 +20,7 @@ import { validateBuildFragmentRequest } from "./build-fragment-cache.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { BuildReporter } from "./build-progress.ts";
 import {
+	clearMaligatorCache,
 	createCacheLease,
 	DEFAULT_CACHE_MAX_BYTES,
 	DEFAULT_CACHE_MIN_AGE_MS,
@@ -28,6 +29,7 @@ import {
 	maybeMaintainMaligatorCache,
 	pruneMaligatorCache,
 } from "./cache-management.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
 import { executeBinary, executeBinaryCaptured } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
@@ -402,7 +404,7 @@ function compileAndBuild(
 	const assets = reporter.phase("Collect assets", () => {
 		try {
 			return includeConfiguredAssets(buildConfig.assets, process.cwd(), {
-				cacheDirectory: ".cache/mal-cache",
+				cacheDirectory: maligatorCacheDirectory(),
 				session: frontendSession,
 			});
 		} catch (error) {
@@ -1289,7 +1291,7 @@ function executeProfiledTests(
 		compilerBake,
 	});
 	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
-		cacheDirectory: ".cache/mal-cache",
+		cacheDirectory: maligatorCacheDirectory(),
 		session: new FrontendCompilationSession(),
 	});
 	const source = emitVmTranslationUnits(compiled.definition, {
@@ -1508,6 +1510,19 @@ function runCacheCommand(command: CacheCommand): void {
 		progress.stage(1, 1, "scan cache");
 		for (const line of cacheSummaryLines()) log.info(line);
 		progress.stagePassed(1, 1, "scan cache");
+		progress.complete();
+		return;
+	}
+	if (command.action === "clear") {
+		progress.start("clear Maligator-owned rebuildable cache");
+		progress.stage(1, 1, "remove rebuildable entries");
+		const result = clearMaligatorCache();
+		progress.stagePassed(
+			1,
+			1,
+			"remove rebuildable entries",
+			`${result.removed.length} entries · ${formatCacheBytes(result.removedBytes)}`,
+		);
 		progress.complete();
 		return;
 	}

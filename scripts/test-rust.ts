@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
 
@@ -42,8 +43,8 @@ export function runRustTests(args = process.argv.slice(2)): number {
 			env: {
 				...process.env,
 				PATH: `${path.dirname(cargo)}${path.delimiter}${process.env.PATH ?? ""}`,
-				CARGO_HOME: path.join(root, ".cache/mal-cache/cargo"),
-				CARGO_TARGET_DIR: path.join(root, ".cache/mal-build/rust-tests"),
+				CARGO_HOME: cargoCacheDirectory(),
+				CARGO_TARGET_DIR: path.join(maligatorCacheDirectory(), "work", "rust-tests"),
 				RUSTC: rustc,
 			},
 		},

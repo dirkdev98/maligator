@@ -1,19 +1,26 @@
-import { hash } from "node:crypto";
 import {
-	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	renameSync,
 	rmSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
+import {
+	artifactActionKey,
+	artifactDigest,
+	artifactOutput,
+	artifactProducer,
+	materializeArtifact,
+	publishArtifactAction,
+	readArtifactAction,
+	withArtifactActionLock,
+} from "./artifact-store.ts";
 import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
-import { touchCacheEntry } from "./cache-management.ts";
+import { maligatorBuildDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
@@ -23,7 +30,9 @@ import type { NativeArtifacts } from "./runtime-build.ts";
 import { runtimeHeaderHash } from "./runtime-build.ts";
 import { toolArguments } from "./toolchain.ts";
 
-const BUILD_DIRECTORY = ".cache/mal-build";
+const BUILD_DIRECTORY = maligatorBuildDirectory();
+const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 1, "cc");
+const LINKED_BINARY_PRODUCER = artifactProducer("linked-binary", 1, "cc-link");
 
 export type { BuildCacheEvent } from "./native-build-context.ts";
 
@@ -53,91 +62,6 @@ export interface LocalBuildResult {
 	context: NativeBuildContext;
 }
 
-interface GeneratedObjectManifest {
-	schema: 1;
-	key: string;
-	size: number;
-	digest: string;
-}
-
-interface LinkedBinaryManifest {
-	schema: 1;
-	key: string;
-	size: number;
-	mode: number;
-	digest: string;
-}
-
-function validLinkedBinary(directory: string, key: string): boolean {
-	try {
-		const binaryPath = path.join(directory, "binary");
-		const manifest = JSON.parse(
-			readFileSync(path.join(directory, "artifact.json"), "utf-8"),
-		) as LinkedBinaryManifest;
-		const stats = statSync(binaryPath);
-		return (
-			manifest.schema === 1 &&
-			manifest.key === key &&
-			stats.isFile() &&
-			stats.size > 0 &&
-			manifest.size === stats.size &&
-			typeof manifest.mode === "number" &&
-			manifest.digest === hash("sha256", readFileSync(binaryPath), "hex")
-		);
-	} catch {
-		return false;
-	}
-}
-
-function publishLinkedBinary(directory: string, key: string, binaryPath: string): void {
-	const parent = path.dirname(directory);
-	mkdirSync(parent, { recursive: true });
-	const temporaryDirectory = mkdtempSync(path.join(parent, ".build-"));
-	try {
-		const temporaryBinary = path.join(temporaryDirectory, "binary");
-		copyFileSync(binaryPath, temporaryBinary);
-		const stats = statSync(temporaryBinary);
-		writeFileSync(
-			path.join(temporaryDirectory, "artifact.json"),
-			`${JSON.stringify({
-				schema: 1,
-				key,
-				size: stats.size,
-				mode: stats.mode & 0o777,
-				digest: hash("sha256", readFileSync(temporaryBinary), "hex"),
-			} satisfies LinkedBinaryManifest)}\n`,
-		);
-		try {
-			renameSync(temporaryDirectory, directory);
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (
-				(code !== "EEXIST" && code !== "ENOTEMPTY") ||
-				!validLinkedBinary(directory, key)
-			) {
-				throw error;
-			}
-		}
-	} finally {
-		rmSync(temporaryDirectory, { recursive: true, force: true });
-	}
-	if (!validLinkedBinary(directory, key)) {
-		throw new Error(`linked binary cache publication failed: ${directory}`);
-	}
-}
-
-function restoreLinkedBinary(directory: string, binaryPath: string): void {
-	const cachedBinary = path.join(directory, "binary");
-	const manifest = JSON.parse(
-		readFileSync(path.join(directory, "artifact.json"), "utf-8"),
-	) as LinkedBinaryManifest;
-	rmSync(binaryPath, { force: true });
-	copyFileSync(cachedBinary, binaryPath);
-	if ((statSync(binaryPath).mode & 0o777) !== manifest.mode) {
-		throw new Error(`linked binary cache restored the wrong file mode: ${binaryPath}`);
-	}
-}
-
 function applicationCompileArguments(context: NativeBuildContext): Array<string> {
 	return [
 		"-std=c2x",
@@ -158,40 +82,15 @@ function applicationCompileArguments(context: NativeBuildContext): Array<string>
 		...(existsSync(path.join(context.runtimeDirectory, "vendor/llhttp/include"))
 			? ["-I", path.join(context.runtimeDirectory, "vendor/llhttp/include")]
 			: []),
+		`-ffile-prefix-map=${context.runtimeDirectory}=<runtime>`,
 	];
 }
 
-function validGeneratedObject(directory: string, key: string): boolean {
-	try {
-		const objectPath = path.join(directory, "unit.o");
-		const manifest = JSON.parse(
-			readFileSync(path.join(directory, "artifact.json"), "utf-8"),
-		) as GeneratedObjectManifest;
-		const stats = statSync(objectPath);
-		return (
-			manifest.schema === 1 &&
-			manifest.key === key &&
-			stats.isFile() &&
-			stats.size > 0 &&
-			manifest.size === stats.size &&
-			manifest.digest === hash("sha256", readFileSync(objectPath), "hex")
-		);
-	} catch {
-		return false;
-	}
-}
-
-function generatedObjectDigest(objectPath: string): string {
-	const manifest = JSON.parse(
-		readFileSync(path.join(path.dirname(objectPath), "artifact.json"), "utf-8"),
-	) as GeneratedObjectManifest;
-	if (!validGeneratedObject(path.dirname(objectPath), manifest.key)) {
-		throw new Error(`generated object became invalid before linking: ${objectPath}`);
-	}
-	return manifest.digest;
-}
-
 function stableRuntimeArgument(context: NativeBuildContext, argument: string): string {
+	const prefix = `-ffile-prefix-map=${context.runtimeDirectory}=`;
+	if (argument.startsWith(prefix)) {
+		return `-ffile-prefix-map=<runtime>=${argument.slice(prefix.length)}`;
+	}
 	const relative = path.relative(context.runtimeDirectory, argument);
 	if (relative === "") return "<runtime>";
 	if (
@@ -206,18 +105,21 @@ function stableRuntimeArgument(context: NativeBuildContext, argument: string): s
 
 interface GeneratedObjectInput {
 	sourcePath: string;
+	logicalPath: string;
 	source: string;
 }
 
 interface PendingGeneratedObject {
 	index: number;
 	key: string;
-	directory: string;
-	objectPath: string;
-	temporaryDirectory: string;
 	temporaryObject: string;
 	sourcePath: string;
 	sourceSize: number;
+}
+
+interface GeneratedObject {
+	path: string;
+	digest: string;
 }
 
 function ensureGeneratedObjects(
@@ -226,9 +128,11 @@ function ensureGeneratedObjects(
 	compileArguments: Array<string>,
 	verbose: boolean,
 	onCacheEvent?: (event: { hit: boolean; path: string }) => void,
-): Array<string> {
-	const parent = path.join(context.cacheDirectory, "generated-c");
-	const results = new Array<string | undefined>(inputs.length);
+): Array<GeneratedObject> {
+	const parent = path.join(context.cacheDirectory, "work", "generated-object");
+	mkdirSync(parent, { recursive: true });
+	const temporaryDirectory = mkdtempSync(path.join(parent, "build-"));
+	const results = new Array<GeneratedObject | undefined>(inputs.length);
 	const cacheHits = new Array<boolean | undefined>(inputs.length);
 	const pending: Array<PendingGeneratedObject> = [];
 	const runtimeHeaders = runtimeHeaderHash(
@@ -236,39 +140,33 @@ function ensureGeneratedObjects(
 		context.features.nodeEnabled,
 	);
 	for (const [index, input] of inputs.entries()) {
-		const key = hash(
-			"sha256",
-			JSON.stringify({
-				schema: 1,
-				sourcePath: input.sourcePath,
-				source: hash("sha256", input.source, "hex"),
-				compileArguments,
-				runtimeHeaders,
-				environment: context.environmentFingerprint,
-				toolchain: context.toolchain.fingerprint,
-				target: context.toolchain.target,
-			}),
-			"hex",
-		).slice(0, 32);
-		const directory = path.join(parent, key);
-		const objectPath = path.join(directory, "unit.o");
-		if (validGeneratedObject(directory, key)) {
-			touchCacheEntry(directory);
-			results[index] = objectPath;
+		const key = artifactActionKey(GENERATED_OBJECT_PRODUCER, {
+			logicalPath: input.logicalPath,
+			source: artifactDigest(input.source),
+			compileArguments: compileArguments.map((argument) =>
+				stableRuntimeArgument(context, argument),
+			),
+			runtimeHeaders,
+			environment: context.environmentFingerprint,
+			toolchain: context.toolchain.fingerprint,
+			target: context.toolchain.target,
+		});
+		const cached = readArtifactAction(
+			context.cacheDirectory,
+			"generated-object",
+			GENERATED_OBJECT_PRODUCER,
+			key,
+		);
+		if (cached !== undefined) {
+			const output = artifactOutput(cached, "unit.o");
+			results[index] = { path: output.path, digest: output.digest };
 			cacheHits[index] = true;
 			continue;
 		}
-
-		mkdirSync(parent, { recursive: true });
-		rmSync(directory, { recursive: true, force: true });
-		const temporaryDirectory = mkdtempSync(path.join(parent, ".build-"));
 		pending.push({
 			index,
 			key,
-			directory,
-			objectPath,
-			temporaryDirectory,
-			temporaryObject: path.join(temporaryDirectory, "unit.o"),
+			temporaryObject: path.join(temporaryDirectory, `${String(index)}.o`),
 			sourcePath: input.sourcePath,
 			sourceSize: input.source.length,
 		});
@@ -283,6 +181,7 @@ function ensureGeneratedObjects(
 					tool: context.toolchain.tools.cc.path,
 					args: toolArguments(context.toolchain.tools.cc, [
 						...compileArguments,
+						`-ffile-prefix-map=${path.dirname(entry.sourcePath)}=<generated>`,
 						"-c",
 						entry.sourcePath,
 						"-o",
@@ -292,47 +191,26 @@ function ensureGeneratedObjects(
 			{ verbose },
 		);
 		for (const entry of pending) {
-			const bytes = readFileSync(entry.temporaryObject);
-			if (bytes.length === 0) {
-				throw new Error(`compiler produced an empty object: ${entry.sourcePath}`);
-			}
-			writeFileSync(
-				path.join(entry.temporaryDirectory, "artifact.json"),
-				`${JSON.stringify({
-					schema: 1,
-					key: entry.key,
-					size: bytes.length,
-					digest: hash("sha256", bytes, "hex"),
-				} satisfies GeneratedObjectManifest)}\n`,
+			const published = publishArtifactAction(
+				context.cacheDirectory,
+				"generated-object",
+				GENERATED_OBJECT_PRODUCER,
+				entry.key,
+				[{ name: "unit.o", file: entry.temporaryObject }],
 			);
-			try {
-				renameSync(entry.temporaryDirectory, entry.directory);
-			} catch (error) {
-				const code = (error as NodeJS.ErrnoException).code;
-				if (
-					(code !== "EEXIST" && code !== "ENOTEMPTY") ||
-					!validGeneratedObject(entry.directory, entry.key)
-				) {
-					throw error;
-				}
-			}
-			if (!validGeneratedObject(entry.directory, entry.key)) {
-				throw new Error(`generated object cache publication failed: ${entry.objectPath}`);
-			}
-			results[entry.index] = entry.objectPath;
+			const output = artifactOutput(published, "unit.o");
+			results[entry.index] = { path: output.path, digest: output.digest };
 			cacheHits[entry.index] = false;
 		}
 	} finally {
-		for (const entry of pending) {
-			rmSync(entry.temporaryDirectory, { recursive: true, force: true });
-		}
+		rmSync(temporaryDirectory, { recursive: true, force: true });
 	}
-	return results.map((objectPath, index) => {
-		if (objectPath === undefined) {
+	return results.map((object, index) => {
+		if (object === undefined) {
 			throw new Error(`generated object result missing for ${inputs[index]?.sourcePath}`);
 		}
-		onCacheEvent?.({ hit: cacheHits[index]!, path: objectPath });
-		return objectPath;
+		onCacheEvent?.({ hit: cacheHits[index]!, path: object.path });
+		return object;
 	});
 }
 
@@ -342,44 +220,13 @@ export function buildLoadDriver(
 	compilerBake: CompilerBakeInput,
 ): string {
 	const context = resolveNativeBuildContext({ compilerBake });
-	const artifacts = ensureNativeArtifacts(context, verbose);
-	const binaryPath = path.join(
-		BUILD_DIRECTORY,
-		context.plan.mode,
-		`MaligatorLoad${buildSuffix("", context.environment)}`,
-	);
-	mkdirSync(path.dirname(binaryPath), { recursive: true });
-
-	runNativeCommand(
+	return buildLocalBinary({
 		context,
-		context.toolchain.tools.cc.path,
-		toolArguments(context.toolchain.tools.cc, [
-			"-std=c2x",
-			...ccExtraFlags(
-				context.plan,
-				context.environment,
-				context.toolchain.platform ?? process.platform,
-			),
-			"-I",
-			path.join(context.runtimeDirectory, "src"),
-			"-I",
-			path.join(context.runtimeDirectory, "src/host"),
-			"-I",
-			path.join(context.runtimeDirectory, "src/runtime"),
-			"-I",
-			path.join(context.runtimeDirectory, "rust/include"),
-			...(existsSync(path.join(context.runtimeDirectory, "vendor/llhttp/include"))
-				? ["-I", path.join(context.runtimeDirectory, "vendor/llhttp/include")]
-				: []),
-			path.join(context.runtimeDirectory, "load_main.c"),
-			...artifacts.linkArgs,
-			"-o",
-			binaryPath,
-		]),
-		{ verbose },
-	);
-
-	return binaryPath;
+		name: "MaligatorLoad",
+		cSource: '#include "vm.h"\n',
+		verbose,
+		mainFile: path.join(context.runtimeDirectory, "load_main.c"),
+	}).binaryPath;
 }
 
 /** Build or restore the stable host-aware development wire runner. */
@@ -445,129 +292,155 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		[
 			...cPaths.map((sourcePath, index) => ({
 				sourcePath,
+				logicalPath: `<generated>/${String(index)}.c`,
 				source: sources[index]!,
 			})),
-			{ sourcePath: mainFile, source: readFileSync(mainFile, "utf-8") },
+			{
+				sourcePath: mainFile,
+				logicalPath: stableRuntimeArgument(context, mainFile),
+				source: readFileSync(mainFile, "utf-8"),
+			},
 		],
 		compileArguments,
 		options.verbose,
 		options.onGeneratedObjectCacheEvent,
 	);
 	const mainObject = generatedObjects.at(-1)!;
-	const objectPaths = generatedObjects.slice(0, -1);
+	const objects = generatedObjects.slice(0, -1);
 	context.onBuildPhase?.({
 		phase: "generated C objects",
 		durationMs: performance.now() - phaseStartedAt,
-		units: objectPaths.length + 1,
+		units: objects.length + 1,
 	});
 	const linkArguments = toolArguments(context.toolchain.tools.cc, [
 		...compileArguments,
-		...objectPaths,
-		mainObject,
+		...objects.map((object) => object.path),
+		mainObject.path,
 		...artifacts.linkArgs,
 		...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),
 	]);
-	const linkKey = hash(
-		"sha256",
-		JSON.stringify({
-			schema: 1,
-			compileArguments: compileArguments.map((argument) =>
-				stableRuntimeArgument(context, argument),
-			),
-			objects: [...objectPaths, mainObject].map(generatedObjectDigest),
-			artifacts: artifacts.linkArgs,
-			zigStripArgs: zigLinkTimeStrip ? context.toolchain.probes.stripArgs : [],
-			strip:
-				context.plan.strip && !zigLinkTimeStrip
-					? {
-							tool: context.toolchain.tools.strip,
-							args: context.toolchain.probes.stripArgs,
-						}
-					: undefined,
-			environment: context.environmentFingerprint,
-			toolchain: context.toolchain.fingerprint,
-			target: context.toolchain.target,
-		}),
-		"hex",
-	).slice(0, 32);
-	const linkCacheDirectory = path.join(
+	const linkKey = artifactActionKey(LINKED_BINARY_PRODUCER, {
+		compileArguments: compileArguments.map((argument) =>
+			stableRuntimeArgument(context, argument),
+		),
+		objects: [...objects, mainObject].map((object) => object.digest),
+		artifacts: artifacts.linkArgs.map((argument) =>
+			argument.startsWith("-")
+				? argument
+				: artifactDigest(new Uint8Array(readFileSync(argument))),
+		),
+		zigStripArgs: zigLinkTimeStrip ? context.toolchain.probes.stripArgs : [],
+		strip:
+			context.plan.strip && !zigLinkTimeStrip
+				? {
+						tool: context.toolchain.tools.strip,
+						args: context.toolchain.probes.stripArgs,
+					}
+				: undefined,
+		environment: context.environmentFingerprint,
+		toolchain: context.toolchain.fingerprint,
+		target: context.toolchain.target,
+	});
+	const cached = readArtifactAction(
 		context.cacheDirectory,
-		"linked-binaries",
+		"linked-binary",
+		LINKED_BINARY_PRODUCER,
 		linkKey,
 	);
-	const cachedBinaryPath = path.join(linkCacheDirectory, "binary");
 	phaseStartedAt = performance.now();
-	if (validLinkedBinary(linkCacheDirectory, linkKey)) {
-		touchCacheEntry(linkCacheDirectory);
-		context.onCacheEvent?.({ artifact: "binary", hit: true, path: cachedBinaryPath });
-		restoreLinkedBinary(linkCacheDirectory, binaryPath);
+	if (cached !== undefined) {
+		const binary = artifactOutput(cached, "binary");
+		context.onCacheEvent?.({ artifact: "binary", hit: true, path: binary.path });
+		materializeArtifact(binary, binaryPath);
 		context.onBuildPhase?.({
 			phase: "link",
 			durationMs: performance.now() - phaseStartedAt,
 			cache: "hit",
-			path: cachedBinaryPath,
+			path: binary.path,
 		});
 		return { binaryPath, artifacts, context };
 	}
-	context.onCacheEvent?.({ artifact: "binary", hit: false, path: cachedBinaryPath });
-	rmSync(linkCacheDirectory, { recursive: true, force: true });
-
-	runNativeCommand(
-		context,
-		context.toolchain.tools.cc.path,
-		[...linkArguments, "-o", binaryPath],
-		{ verbose: options.verbose },
-	);
-	context.onBuildPhase?.({
-		phase: "link",
-		durationMs: performance.now() - phaseStartedAt,
-		cache: "miss",
-		path: cachedBinaryPath,
-	});
-	let cacheable = true;
-	if (
-		context.plan.strip &&
-		context.toolchain.tools.strip !== undefined &&
-		!zigLinkTimeStrip
-	) {
-		const objcopy =
-			context.toolchain.tools.strip.args?.[0] === "objcopy"
-				? `${binaryPath}.stripped`
-				: undefined;
-		try {
-			phaseStartedAt = performance.now();
+	context.onCacheEvent?.({ artifact: "binary", hit: false, path: linkKey });
+	withArtifactActionLock(
+		context.cacheDirectory,
+		"linked-binary",
+		LINKED_BINARY_PRODUCER,
+		linkKey,
+		() => {
+			const raced = readArtifactAction(
+				context.cacheDirectory,
+				"linked-binary",
+				LINKED_BINARY_PRODUCER,
+				linkKey,
+			);
+			if (raced !== undefined) {
+				materializeArtifact(artifactOutput(raced, "binary"), binaryPath);
+				return;
+			}
 			runNativeCommand(
 				context,
-				context.toolchain.tools.strip.path,
-				toolArguments(context.toolchain.tools.strip, [
-					...context.toolchain.probes.stripArgs,
-					binaryPath,
-					...(objcopy === undefined ? [] : [objcopy]),
-				]),
+				context.toolchain.tools.cc.path,
+				[...linkArguments, "-o", binaryPath],
 				{ verbose: options.verbose },
 			);
 			context.onBuildPhase?.({
-				phase: "strip",
+				phase: "link",
 				durationMs: performance.now() - phaseStartedAt,
+				cache: "miss",
+				path: binaryPath,
 			});
-			if (objcopy !== undefined) renameSync(objcopy, binaryPath);
-		} catch (error) {
-			cacheable = false;
-			if (objcopy !== undefined) rmSync(objcopy, { force: true });
-			options.onWarning?.(
-				`production symbol stripping failed after a successful probe; leaving the binary unstripped: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
-	if (cacheable) {
-		phaseStartedAt = performance.now();
-		publishLinkedBinary(linkCacheDirectory, linkKey, binaryPath);
-		context.onBuildPhase?.({
-			phase: "publish binary",
-			durationMs: performance.now() - phaseStartedAt,
-			path: cachedBinaryPath,
-		});
-	}
+			let cacheable = true;
+			if (
+				context.plan.strip &&
+				context.toolchain.tools.strip !== undefined &&
+				!zigLinkTimeStrip
+			) {
+				const objcopy =
+					context.toolchain.tools.strip.args?.[0] === "objcopy"
+						? `${binaryPath}.stripped`
+						: undefined;
+				try {
+					const stripStartedAt = performance.now();
+					runNativeCommand(
+						context,
+						context.toolchain.tools.strip.path,
+						toolArguments(context.toolchain.tools.strip, [
+							...context.toolchain.probes.stripArgs,
+							binaryPath,
+							...(objcopy === undefined ? [] : [objcopy]),
+						]),
+						{ verbose: options.verbose },
+					);
+					context.onBuildPhase?.({
+						phase: "strip",
+						durationMs: performance.now() - stripStartedAt,
+					});
+					if (objcopy !== undefined) renameSync(objcopy, binaryPath);
+				} catch (error) {
+					cacheable = false;
+					if (objcopy !== undefined) rmSync(objcopy, { force: true });
+					options.onWarning?.(
+						`production symbol stripping failed after a successful probe; leaving the binary unstripped: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+			if (cacheable) {
+				const publishStartedAt = performance.now();
+				const published = publishArtifactAction(
+					context.cacheDirectory,
+					"linked-binary",
+					LINKED_BINARY_PRODUCER,
+					linkKey,
+					[{ name: "binary", file: binaryPath }],
+				);
+				context.onBuildPhase?.({
+					phase: "publish binary",
+					durationMs: performance.now() - publishStartedAt,
+					path: artifactOutput(published, "binary").path,
+				});
+			}
+		},
+	);
 
 	return { binaryPath, artifacts, context };
 }

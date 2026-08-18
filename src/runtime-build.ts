@@ -1,19 +1,25 @@
-import { hash } from "node:crypto";
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
-	renameSync,
 	rmSync,
 	statSync,
-	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
+import {
+	artifactActionKey,
+	artifactDigest,
+	artifactOutput,
+	artifactProducer,
+	publishArtifactAction,
+	readArtifactAction,
+	withArtifactActionLock,
+} from "./artifact-store.ts";
 import { runtimeCcFlags } from "./build-flags.ts";
-import { touchCacheEntry } from "./cache-management.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
 import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
@@ -21,6 +27,9 @@ import { runNativeCommand, runNativeCommands } from "./native-command.ts";
 import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
 import { toolArguments } from "./toolchain.ts";
+
+const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 1, "cc");
+const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 1, "ar");
 
 function runtimeSourceHash(runtimeDirectory: string, nodeEnabled: boolean): string {
 	const root = path.resolve(runtimeDirectory);
@@ -71,20 +80,15 @@ export function runtimeArtifactKey(inputs: {
 	toolchainFingerprint: string;
 	target: string;
 }): string {
-	return hash(
-		"sha256",
-		JSON.stringify({
-			schema: 1,
-			compilerWireDigest: inputs.compilerWireDigest,
-			compileArguments: inputs.compileArguments,
-			environmentFingerprint: inputs.environmentFingerprint,
-			layerSourceDirectories: inputs.layerSourceDirectories,
-			sourceHash: inputs.sourceHash,
-			toolchainFingerprint: inputs.toolchainFingerprint,
-			target: inputs.target,
-		}),
-		"hex",
-	).slice(0, 24);
+	return artifactActionKey(RUNTIME_ARCHIVE_PRODUCER, {
+		compilerWireDigest: inputs.compilerWireDigest,
+		compileArguments: inputs.compileArguments,
+		environmentFingerprint: inputs.environmentFingerprint,
+		layerCount: inputs.layerSourceDirectories.length,
+		sourceHash: inputs.sourceHash,
+		toolchainFingerprint: inputs.toolchainFingerprint,
+		target: inputs.target,
+	});
 }
 
 export interface RuntimeArchives {
@@ -102,25 +106,37 @@ export interface NativeArtifacts {
 	linkArgs: Array<string>;
 }
 
-function runtimeArchives(buildDirectory: string): RuntimeArchives {
-	const runtime = path.join(buildDirectory, "libMalRuntime.a");
-	const host = path.join(buildDirectory, "libMalHost.a");
-	const engine = path.join(buildDirectory, "libLibMaligator.a");
-	return { runtime, host, engine, linkArgs: [runtime, host, engine] };
-}
-
 interface RuntimeLayout {
-	buildDirectory: string;
 	flags: Array<string>;
 	includeArguments: Array<string>;
 	sqliteIncludeArguments: Array<string>;
 	cacheKey: string;
+	compilerWireDigest?: string;
 }
 
 interface RuntimeSource {
 	name: string;
 	path: string;
+	layer: "engine" | "host" | "runtime";
+	layerDirectory: string;
 	includeArguments?: Array<string>;
+}
+
+function stableRuntimeArgument(context: NativeBuildContext, argument: string): string {
+	const prefix = `-ffile-prefix-map=${context.runtimeDirectory}=`;
+	if (argument.startsWith(prefix)) {
+		return `-ffile-prefix-map=<runtime>=${argument.slice(prefix.length)}`;
+	}
+	const relative = path.relative(context.runtimeDirectory, argument);
+	if (relative === "") return "<runtime>";
+	if (
+		!relative.startsWith(`..${path.sep}`) &&
+		relative !== ".." &&
+		!path.isAbsolute(relative)
+	) {
+		return path.posix.join("<runtime>", ...relative.split(path.sep));
+	}
+	return argument;
 }
 
 function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
@@ -131,6 +147,10 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		}
 		compilerWire = ensureCompilerWire(context.compilerBake);
 	}
+	const compilerWireDigest =
+		compilerWire === undefined
+			? undefined
+			: artifactDigest(new Uint8Array(readFileSync(compilerWire)));
 	const flags = [
 		...runtimeCcFlags(
 			{},
@@ -140,6 +160,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		),
 		...context.features.cDefines,
 		...(compilerWire === undefined ? [] : [`-DMAL_COMPILER_WIRE="${compilerWire}"`]),
+		`-ffile-prefix-map=${context.runtimeDirectory}=<runtime>`,
 	];
 	const sourceRoot = path.join(context.runtimeDirectory, "src");
 	const llhttpRoot = path.join(context.runtimeDirectory, "vendor/llhttp");
@@ -159,250 +180,260 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		...sqliteIncludeArguments,
 	];
 	const identityFlags = flags.map((flag) =>
-		flag.startsWith("-DMAL_COMPILER_WIRE=") ? "-DMAL_COMPILER_WIRE=<content>" : flag,
+		flag.startsWith("-DMAL_COMPILER_WIRE=")
+			? "-DMAL_COMPILER_WIRE=<content>"
+			: stableRuntimeArgument(context, flag),
 	);
 	const cacheKey = runtimeArtifactKey({
-		compilerWireDigest:
-			compilerWire === undefined
-				? undefined
-				: hash("sha256", readFileSync(compilerWire), "hex"),
+		compilerWireDigest,
 		compileArguments: [
-			"<runtime-sources>",
 			"-std=c2x",
 			...identityFlags,
-			...includeArguments,
-			"-I",
-			"<layer-source>",
+			...includeArguments.map((argument) => stableRuntimeArgument(context, argument)),
 			"-c",
 			"<source>",
 			"-o",
 			"<object>",
-			...(sqliteIncludeArguments.length === 0
-				? []
-				: [
-						"<sqlite-amalgamation>",
-						"-std=c2x",
-						...identityFlags,
-						...sqliteIncludeArguments,
-						"-c",
-						"<source>",
-						"-o",
-						"<object>",
-					]),
 		],
 		environmentFingerprint: context.environmentFingerprint,
 		layerSourceDirectories: [
 			sourceRoot,
 			path.join(sourceRoot, "host"),
 			path.join(sourceRoot, "runtime"),
-			...(existsSync(llhttpRoot) ? [path.join(llhttpRoot, "src")] : []),
-			...(context.features.nodeEnabled && existsSync(sqliteRoot) ? [sqliteRoot] : []),
 		],
 		sourceHash: runtimeSourceHash(context.runtimeDirectory, context.features.nodeEnabled),
 		toolchainFingerprint: context.toolchain.fingerprint,
 		target: context.toolchain.target,
 	});
 	return {
-		buildDirectory: path.join(context.cacheDirectory, "runtime", cacheKey),
 		flags,
 		includeArguments,
 		sqliteIncludeArguments,
 		cacheKey,
+		compilerWireDigest,
 	};
 }
 
-const RUNTIME_MANIFEST = "artifact.json";
-const ARCHIVE_NAMES = ["libMalRuntime.a", "libMalHost.a", "libLibMaligator.a"];
-
-interface RuntimeArchiveManifest {
-	name: string;
-	size: number;
-	digest: string;
+function runtimeSources(
+	context: NativeBuildContext,
+	layout: RuntimeLayout,
+): Array<RuntimeSource> {
+	const sourceRoot = path.join(context.runtimeDirectory, "src");
+	const sources: Array<RuntimeSource> = [];
+	for (const layer of ["engine", "host", "runtime"] as const) {
+		const layerDirectory = layer === "engine" ? sourceRoot : path.join(sourceRoot, layer);
+		for (const name of readdirSync(layerDirectory)
+			.filter((entry) => entry.endsWith(".c"))
+			.sort()) {
+			sources.push({
+				name,
+				path: path.join(layerDirectory, name),
+				layer,
+				layerDirectory,
+			});
+		}
+	}
+	const llhttpSource = path.join(context.runtimeDirectory, "vendor/llhttp/src");
+	if (existsSync(llhttpSource)) {
+		for (const name of readdirSync(llhttpSource)
+			.filter((entry) => entry.endsWith(".c"))
+			.sort()) {
+			sources.push({
+				name: `llhttp-${name}`,
+				path: path.join(llhttpSource, name),
+				layer: "host",
+				layerDirectory: path.join(sourceRoot, "host"),
+			});
+		}
+	}
+	const sqliteSource = path.join(context.runtimeDirectory, "vendor/sqlite/sqlite3.c");
+	if (context.features.nodeEnabled && existsSync(sqliteSource)) {
+		sources.push({
+			name: "sqlite3.c",
+			path: sqliteSource,
+			layer: "host",
+			layerDirectory: path.join(sourceRoot, "host"),
+			includeArguments: layout.sqliteIncludeArguments,
+		});
+	}
+	return sources;
 }
 
-function archiveManifest(buildDirectory: string): Array<RuntimeArchiveManifest> {
-	return ARCHIVE_NAMES.map((name) => {
-		const archive = path.join(buildDirectory, name);
-		const stats = statSync(archive);
-		if (!stats.isFile() || stats.size === 0)
-			throw new Error(`invalid runtime archive: ${archive}`);
-		return {
-			name,
-			size: stats.size,
-			digest: hash("sha256", readFileSync(archive), "hex"),
-		};
+function objectActionKey(
+	context: NativeBuildContext,
+	layout: RuntimeLayout,
+	source: RuntimeSource,
+	headerDigest: string,
+): string {
+	const includeArguments = source.includeArguments ?? [
+		...layout.includeArguments,
+		"-I",
+		source.layerDirectory,
+	];
+	return artifactActionKey(RUNTIME_OBJECT_PRODUCER, {
+		source: path.posix.join(
+			"<runtime>",
+			...path.relative(context.runtimeDirectory, source.path).split(path.sep),
+		),
+		sourceDigest: artifactDigest(new Uint8Array(readFileSync(source.path))),
+		headerDigest,
+		compilerWireDigest: layout.compilerWireDigest,
+		arguments: [
+			"-std=c2x",
+			...layout.flags.map((argument) => stableRuntimeArgument(context, argument)),
+			...includeArguments.map((argument) => stableRuntimeArgument(context, argument)),
+		],
+		environment: context.environmentFingerprint,
+		toolchain: context.toolchain.fingerprint,
+		target: context.toolchain.target,
 	});
 }
 
-function validRuntimeCache(buildDirectory: string, cacheKey: string): boolean {
-	try {
-		const manifest = JSON.parse(
-			readFileSync(path.join(buildDirectory, RUNTIME_MANIFEST), "utf-8"),
-		) as { schema?: unknown; cacheKey?: unknown; archives?: unknown };
-		return (
-			manifest.schema === 1 &&
-			manifest.cacheKey === cacheKey &&
-			JSON.stringify(manifest.archives) ===
-				JSON.stringify(archiveManifest(buildDirectory))
-		);
-	} catch {
-		return false;
-	}
+interface RuntimeObject {
+	source: RuntimeSource;
+	path: string;
+	digest: string;
 }
 
-function discardInvalidRuntimeCache(buildDirectory: string, cacheKey: string): void {
-	if (!existsSync(buildDirectory) || validRuntimeCache(buildDirectory, cacheKey)) return;
-	const quarantineDirectory = mkdtempSync(
-		path.join(path.dirname(buildDirectory), ".invalid-runtime-"),
+function ensureRuntimeObjects(
+	context: NativeBuildContext,
+	layout: RuntimeLayout,
+	directory: string,
+	verbose: boolean,
+): Array<RuntimeObject> {
+	mkdirSync(directory, { recursive: true });
+	const headerDigest = runtimeHeaderHash(
+		context.runtimeDirectory,
+		context.features.nodeEnabled,
 	);
-	const quarantine = path.join(quarantineDirectory, "artifact");
-	try {
-		renameSync(buildDirectory, quarantine);
-		rmSync(quarantine, { recursive: true, force: true });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	} finally {
-		rmSync(quarantineDirectory, { recursive: true, force: true });
+	const sources = runtimeSources(context, layout);
+	const results = new Map<string, RuntimeObject>();
+	const pending = sources.flatMap((source) => {
+		const action = objectActionKey(context, layout, source, headerDigest);
+		const cached = readArtifactAction(
+			context.cacheDirectory,
+			"runtime-object",
+			RUNTIME_OBJECT_PRODUCER,
+			action,
+		);
+		if (cached !== undefined) {
+			const output = artifactOutput(cached, "object.o");
+			results.set(source.path, { source, path: output.path, digest: output.digest });
+			return [];
+		}
+		const output = path.join(directory, `${artifactDigest(source.path).slice(0, 12)}.o`);
+		return [{ source, action, output }];
+	});
+	runNativeCommands(
+		context,
+		[...pending]
+			.sort(
+				(left, right) =>
+					statSync(right.source.path).size - statSync(left.source.path).size,
+			)
+			.map(({ source, output }) => ({
+				tool: context.toolchain.tools.cc.path,
+				args: toolArguments(context.toolchain.tools.cc, [
+					"-std=c2x",
+					...layout.flags,
+					...(source.includeArguments ?? [
+						...layout.includeArguments,
+						"-I",
+						source.layerDirectory,
+					]),
+					"-c",
+					source.path,
+					"-o",
+					output,
+				]),
+			})),
+		{ verbose },
+	);
+	for (const { source, action, output } of pending) {
+		const published = publishArtifactAction(
+			context.cacheDirectory,
+			"runtime-object",
+			RUNTIME_OBJECT_PRODUCER,
+			action,
+			[{ name: "object.o", file: output }],
+		);
+		const artifact = artifactOutput(published, "object.o");
+		results.set(source.path, {
+			source,
+			path: artifact.path,
+			digest: artifact.digest,
+		});
 	}
+	return sources.map((source) => results.get(source.path)!);
 }
 
-function publishRuntimeCache(
-	temporaryDirectory: string,
-	buildDirectory: string,
-	cacheKey: string,
-): void {
-	for (;;) {
-		if (validRuntimeCache(buildDirectory, cacheKey)) {
-			rmSync(temporaryDirectory, { recursive: true, force: true });
-			return;
-		}
-		discardInvalidRuntimeCache(buildDirectory, cacheKey);
-		try {
-			renameSync(temporaryDirectory, buildDirectory);
-			return;
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
-		}
-	}
+function archivesFromAction(
+	action: NonNullable<ReturnType<typeof readArtifactAction>>,
+): RuntimeArchives {
+	const runtime = artifactOutput(action, "libMalRuntime.a").path;
+	const host = artifactOutput(action, "libMalHost.a").path;
+	const engine = artifactOutput(action, "libLibMaligator.a").path;
+	return { runtime, host, engine, linkArgs: [runtime, host, engine] };
 }
 
-function buildRuntimeCache(
+function buildRuntimeArchives(
 	context: NativeBuildContext,
 	layout: RuntimeLayout,
 	verbose: boolean,
-): void {
-	mkdirSync(path.dirname(layout.buildDirectory), { recursive: true });
-	discardInvalidRuntimeCache(layout.buildDirectory, layout.cacheKey);
-	if (validRuntimeCache(layout.buildDirectory, layout.cacheKey)) return;
-	const temporaryDirectory = mkdtempSync(
-		path.join(path.dirname(layout.buildDirectory), `${layout.cacheKey}.tmp-`),
-	);
+): RuntimeArchives {
+	const workRoot = path.join(context.cacheDirectory, "work", "runtime");
+	mkdirSync(workRoot, { recursive: true });
+	const temporaryDirectory = mkdtempSync(path.join(workRoot, "build-"));
 	try {
-		const sourceRoot = path.join(context.runtimeDirectory, "src");
-		const llhttpSource = path.join(context.runtimeDirectory, "vendor/llhttp/src");
-		const sqliteSource = path.join(context.runtimeDirectory, "vendor/sqlite/sqlite3.c");
-		const archives = runtimeArchives(temporaryDirectory);
-		const layers = [
-			{ name: "engine", source: sourceRoot, archive: archives.engine },
-			{ name: "host", source: path.join(sourceRoot, "host"), archive: archives.host },
-			{
-				name: "runtime",
-				source: path.join(sourceRoot, "runtime"),
-				archive: archives.runtime,
-			},
-		];
-		for (const layer of layers) {
+		const objects = ensureRuntimeObjects(
+			context,
+			layout,
+			path.join(temporaryDirectory, "compiled"),
+			verbose,
+		);
+		const publications: Array<{ name: string; file: string }> = [];
+		for (const layer of ["engine", "host", "runtime"] as const) {
 			const layerStartedAt = performance.now();
-			const objectDirectory = path.join(temporaryDirectory, "objects", layer.name);
+			const layerObjects = objects.filter((object) => object.source.layer === layer);
+			const objectDirectory = path.join(temporaryDirectory, "objects", layer);
 			mkdirSync(objectDirectory, { recursive: true });
-			const sources: Array<RuntimeSource> = readdirSync(layer.source)
-				.filter((name) => name.endsWith(".c"))
-				.sort()
-				.map((name) => ({
-					name,
-					path: path.join(layer.source, name),
-				}));
-			if (layer.name === "host" && existsSync(llhttpSource)) {
-				for (const name of readdirSync(llhttpSource)
-					.filter((entry) => entry.endsWith(".c"))
-					.sort()) {
-					sources.push({ name: `llhttp-${name}`, path: path.join(llhttpSource, name) });
-				}
-			}
-			if (
-				layer.name === "host" &&
-				context.features.nodeEnabled &&
-				existsSync(sqliteSource)
-			) {
-				sources.push({
-					name: "sqlite3.c",
-					path: sqliteSource,
-					includeArguments: layout.sqliteIncludeArguments,
-				});
-			}
-			const objects = sources.map((source) =>
-				path.join(objectDirectory, `${source.name.slice(0, -2)}.o`),
-			);
-			const compilationUnits = sources
-				.map((source, index) => ({ source, objectPath: objects[index]! }))
-				.sort(
-					(left, right) =>
-						statSync(right.source.path).size - statSync(left.source.path).size,
+			const materialized = layerObjects.map((object, index) => {
+				const destination = path.join(
+					objectDirectory,
+					`${String(index).padStart(4, "0")}-${object.source.name.slice(0, -2)}.o`,
 				);
-			runNativeCommands(
-				context,
-				compilationUnits.map(({ source, objectPath }) => ({
-					tool: context.toolchain.tools.cc.path,
-					args: toolArguments(context.toolchain.tools.cc, [
-						"-std=c2x",
-						...layout.flags,
-						...(source.includeArguments ?? [
-							...layout.includeArguments,
-							"-I",
-							layer.source,
-						]),
-						"-c",
-						source.path,
-						"-o",
-						objectPath,
-					]),
-				})),
-				{ verbose },
-			);
+				copyFileSync(object.path, destination);
+				return destination;
+			});
+			const archiveName =
+				layer === "engine"
+					? "libLibMaligator.a"
+					: layer === "host"
+						? "libMalHost.a"
+						: "libMalRuntime.a";
+			const archive = path.join(temporaryDirectory, archiveName);
 			runNativeCommand(
 				context,
 				context.toolchain.tools.ar.path,
-				toolArguments(context.toolchain.tools.ar, ["rcs", layer.archive, ...objects]),
+				toolArguments(context.toolchain.tools.ar, ["rcs", archive, ...materialized]),
 				{ verbose },
 			);
+			publications.push({ name: archiveName, file: archive });
 			context.onBuildPhase?.({
-				phase: `runtime C · ${layer.name}` as
-					| "runtime C · engine"
-					| "runtime C · host"
-					| "runtime C · runtime",
+				phase: `runtime C · ${layer}`,
 				durationMs: performance.now() - layerStartedAt,
-				units: sources.length,
-				path: layer.archive,
+				units: layerObjects.length,
+				path: archive,
 			});
 		}
-		if (
-			!archives.linkArgs.every((archive) => {
-				const stats = statSync(archive);
-				return stats.isFile() && stats.size > 0;
-			})
-		) {
-			throw new Error("native archiver completed without producing all runtime archives");
-		}
-		writeFileSync(
-			path.join(temporaryDirectory, RUNTIME_MANIFEST),
-			JSON.stringify({
-				schema: 1,
-				cacheKey: layout.cacheKey,
-				archives: archiveManifest(temporaryDirectory),
-			}),
+		const published = publishArtifactAction(
+			context.cacheDirectory,
+			"runtime-archive",
+			RUNTIME_ARCHIVE_PRODUCER,
+			layout.cacheKey,
+			publications,
 		);
-		publishRuntimeCache(temporaryDirectory, layout.buildDirectory, layout.cacheKey);
+		return archivesFromAction(published);
 	} finally {
 		rmSync(temporaryDirectory, { recursive: true, force: true });
 	}
@@ -415,21 +446,44 @@ export function ensureNativeArtifacts(
 ): NativeArtifacts {
 	const startedAt = performance.now();
 	const layout = runtimeLayout(context);
-	const cacheHit = validRuntimeCache(layout.buildDirectory, layout.cacheKey);
-	if (cacheHit) touchCacheEntry(layout.buildDirectory);
+	const cached = readArtifactAction(
+		context.cacheDirectory,
+		"runtime-archive",
+		RUNTIME_ARCHIVE_PRODUCER,
+		layout.cacheKey,
+	);
+	const cacheHit = cached !== undefined;
 	context.onCacheEvent?.({
 		artifact: "runtime",
 		hit: cacheHit,
-		path: layout.buildDirectory,
+		path: cached?.outputs[0]?.path ?? layout.cacheKey,
 	});
-	if (!cacheHit) buildRuntimeCache(context, layout, verbose);
+	const c =
+		cached === undefined
+			? withArtifactActionLock(
+					context.cacheDirectory,
+					"runtime-archive",
+					RUNTIME_ARCHIVE_PRODUCER,
+					layout.cacheKey,
+					() => {
+						const raced = readArtifactAction(
+							context.cacheDirectory,
+							"runtime-archive",
+							RUNTIME_ARCHIVE_PRODUCER,
+							layout.cacheKey,
+						);
+						return raced === undefined
+							? buildRuntimeArchives(context, layout, verbose)
+							: archivesFromAction(raced);
+					},
+				)
+			: archivesFromAction(cached);
 	context.onBuildPhase?.({
 		phase: "runtime",
 		durationMs: performance.now() - startedAt,
 		cache: cacheHit ? "hit" : "miss",
-		path: layout.buildDirectory,
+		path: c.runtime,
 	});
 	const rust = ensureRustArtifacts(context, verbose);
-	const c = runtimeArchives(layout.buildDirectory);
 	return { c, rust, linkArgs: [...c.linkArgs, ...rust.linkArgs] };
 }

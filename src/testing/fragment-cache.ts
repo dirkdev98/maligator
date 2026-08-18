@@ -3,7 +3,12 @@ import * as path from "node:path";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
+import { maligatorCacheDirectory } from "../cache-root.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
+import {
+	compilerConfigurationIdentity,
+	compilerProducerIdentity,
+} from "../compiler-cache-identity.ts";
 import { compilerProgramFactsFromConfig } from "../compiler-facts.ts";
 import {
 	compileDependencyFragments,
@@ -29,7 +34,6 @@ import {
 } from "../semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "../semantic-program.ts";
 import { serializeVmDefinition, WIRE_VERSION } from "../serialize-vm.ts";
-import { MALIGATOR_VERSION } from "../version.ts";
 import type {
 	CompileTestImageOptions,
 	DependencyIdentity,
@@ -40,7 +44,7 @@ import { TestCompilationSession } from "./cache.ts";
 const FRAGMENT_SCHEMA = 1;
 const TEST_MODULE_ID = "maligator:test";
 const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
-const CACHE_DIRECTORY = ".cache/mal-cache/test";
+const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
 const IDENTIFIER = /^[$A-Z_a-z][$\w]*$/;
 
 interface ArtifactReference extends FrontendArtifactIdentity {
@@ -162,16 +166,11 @@ function environmentIdentity(options: CompileTestImageOptions): string {
 	return digest(
 		JSON.stringify({
 			schema: FRAGMENT_SCHEMA,
-			version: MALIGATOR_VERSION,
+			producer: compilerProducerIdentity("test-fragment", FRAGMENT_SCHEMA),
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: "development",
-			flags: {
-				modules: options.config.modules,
-				engine: options.config.engine,
-				host: options.config.host,
-				surface: options.config.surface,
-			},
+			configuration: compilerConfigurationIdentity(options.config),
 			runtime: digest(options.testModuleSource),
 			nodeGlobals:
 				options.config.surface.node === true

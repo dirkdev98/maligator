@@ -6,6 +6,7 @@ import type {
 	NativeFeatureInput,
 	NativeFeatureSpec,
 } from "./build-flags.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { requireToolchain } from "./toolchain.ts";
 import type { Toolchain } from "./toolchain.ts";
@@ -57,7 +58,7 @@ export interface NativeBuildContext {
 
 export interface NativeBuildContextOptions {
 	runtimeDirectory?: string;
-	/** Root for all reusable native artifacts. Defaults to project `.cache/mal-cache`. */
+	/** Root for all reusable native artifacts. Defaults to the shared user cache. */
 	cacheDirectory?: string;
 	features?: NativeFeatureInput | NativeFeatureSpec;
 	toolchain?: Toolchain;
@@ -137,7 +138,7 @@ export function resolveNativeBuildContext(
 	options: NativeBuildContextOptions = {},
 ): NativeBuildContext {
 	const runtimeDirectory = path.resolve(options.runtimeDirectory ?? "runtime");
-	const cacheDirectory = path.resolve(options.cacheDirectory ?? ".cache/mal-cache");
+	const cacheDirectory = maligatorCacheDirectory(options.cacheDirectory);
 	const baseEnvironment = options.environment ?? process.env;
 	const normalizedFeatures =
 		options.features === undefined

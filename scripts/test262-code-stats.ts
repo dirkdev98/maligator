@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { maligatorCacheDirectory } from "../src/cache-root.ts";
 
 interface BatchManifest {
 	schemaVersion?: number;
@@ -104,7 +105,11 @@ function recoverVariant(
 	legacyHelperObject: string,
 	executable: string,
 ): Array<CodeStats> {
-	const directory = `.cache/mal-cache/test262-artifacts/${variant}-interpreted`;
+	const directory = path.join(
+		maligatorCacheDirectory(),
+		"test262-artifacts",
+		`${variant}-interpreted`,
+	);
 	if (!existsSync(directory)) {
 		throw new Error(`Missing interpreted artifact cache: ${directory}`);
 	}

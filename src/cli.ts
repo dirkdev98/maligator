@@ -67,7 +67,7 @@ export interface TestCommand {
 
 export interface CacheCommand {
 	kind: "cache";
-	action: "status" | "prune";
+	action: "status" | "prune" | "clear";
 	dryRun: boolean;
 	verbose: boolean;
 	maxBytes?: number;
@@ -99,6 +99,7 @@ Commands:
   doctor                       Check native build toolchains
   cache status                 Show Maligator-owned cache usage
   cache prune                  Remove stale rebuildable cache entries
+  cache clear --all            Remove every rebuildable cache entry
   build [entry]                Compile an application
   run [entry] [-- args...]     Compile and run an application
   dev [entry] [-- args...]     Watch, rebuild, and restart an application
@@ -362,9 +363,10 @@ function positiveNumber(value: string, option: string): number {
 function parseCache(args: Array<string>): CliCommand {
 	const action = args[1];
 	if (action === "--help" || action === "-h") return { kind: "help" };
-	if (action !== "status" && action !== "prune") {
-		throw new CliUsageError("cache requires 'status' or 'prune'");
+	if (action !== "status" && action !== "prune" && action !== "clear") {
+		throw new CliUsageError("cache requires 'status', 'prune', or 'clear'");
 	}
+	let clearConfirmed = false;
 	const command: CacheCommand = {
 		kind: "cache",
 		action,
@@ -374,6 +376,10 @@ function parseCache(args: Array<string>): CliCommand {
 	for (let index = 2; index < args.length; index++) {
 		const argument = args[index]!;
 		if (argument === "--help" || argument === "-h") return { kind: "help" };
+		if (action === "clear" && argument === "--all") {
+			clearConfirmed = true;
+			continue;
+		}
 		if (action === "prune" && argument === "--dry-run") {
 			command.dryRun = true;
 			continue;
@@ -399,6 +405,9 @@ function parseCache(args: Array<string>): CliCommand {
 			continue;
 		}
 		return unexpectedArgument(`cache ${action}`, argument);
+	}
+	if (action === "clear" && !clearConfirmed) {
+		throw new CliUsageError("cache clear requires '--all'");
 	}
 	return command;
 }

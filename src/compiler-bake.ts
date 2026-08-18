@@ -10,10 +10,11 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import type { BuildConfigTypeStripper } from "./build-config.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
 import { buildModuleGraph } from "./module-graph.ts";
 
-const COMPILER_WIRE_CACHE = ".cache/mal-cache/compiler-wire";
+const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
 const SOURCE_MANIFEST = "artifact.json";
 
 interface CompilerBakeCacheInput {

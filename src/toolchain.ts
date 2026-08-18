@@ -11,6 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 
 const CACHE_SCHEMA = 1;
 const C2X_FLAGS = ["-std=c2x"];
@@ -82,6 +83,7 @@ export interface ToolchainReport {
 
 export interface InspectToolchainOptions {
 	rootDir?: string;
+	cacheDirectory?: string;
 	rustDir?: string;
 	env?: NodeJS.ProcessEnv;
 	platform?: NodeJS.Platform;
@@ -548,6 +550,10 @@ function addMissingIssue(
 
 export function inspectToolchain(options: InspectToolchainOptions = {}): ToolchainReport {
 	const rootDir = path.resolve(options.rootDir ?? process.cwd());
+	const cacheDirectory =
+		options.cacheDirectory === undefined && options.rootDir !== undefined
+			? path.join(rootDir, ".cache", "maligator-test")
+			: maligatorCacheDirectory(options.cacheDirectory);
 	const rustDir = path.resolve(options.rustDir ?? path.join(rootDir, "runtime/rust"));
 	let env = options.env ?? process.env;
 	const searchPath = env.PATH ?? "";
@@ -573,7 +579,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 	const arch = crossTarget?.arch ?? hostArch;
 	const environmentOverrides: NodeJS.ProcessEnv = {};
 	if (crossTarget !== undefined) {
-		const zigCacheRoot = path.join(rootDir, ".cache/mal-cache/zig");
+		const zigCacheRoot = path.join(cacheDirectory, "zig");
 		environmentOverrides.ZIG_GLOBAL_CACHE_DIR =
 			env.ZIG_GLOBAL_CACHE_DIR ?? path.join(zigCacheRoot, "global");
 		environmentOverrides.ZIG_LOCAL_CACHE_DIR =
@@ -754,7 +760,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		needsCxx,
 	);
 	report.fingerprint = fingerprint;
-	const cacheDir = path.join(rootDir, ".cache/mal-cache/toolchains");
+	const cacheDir = path.join(cacheDirectory, "toolchains");
 	const cachePath = path.join(cacheDir, `${fingerprint}.json`);
 	let probes: ToolchainProbes | undefined;
 	try {

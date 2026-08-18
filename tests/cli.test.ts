@@ -193,6 +193,15 @@ describe("parseCliArgs", () => {
 			maxBytes: 2.5 * 1024 ** 3,
 			minAgeMs: 3 * 24 * 60 * 60 * 1000,
 		});
+		expect(parseCliArgs(["cache", "clear", "--all"])).toEqual({
+			kind: "cache",
+			action: "clear",
+			dryRun: false,
+			verbose: false,
+		});
+		expect(() => parseCliArgs(["cache", "clear"])).toThrow(
+			"cache clear requires '--all'",
+		);
 	});
 
 	it("accepts the internal build diagnostics through the strict parser", () => {

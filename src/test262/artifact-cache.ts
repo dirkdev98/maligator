@@ -8,6 +8,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { maligatorCacheDirectory } from "../cache-root.ts";
 
 /**
  * Content-addressed cache for the expensive build artifact in the test262
@@ -34,7 +35,11 @@ import * as path from "node:path";
 function cacheDir(): string {
 	const variant = process.env.T262_VARIANT ?? "unknown";
 	const backend = process.env.MAL_INTERP === "1" ? "interpreted" : "compiled";
-	return `.cache/mal-cache/test262-artifacts/${variant}-${backend}`;
+	return path.join(
+		maligatorCacheDirectory(),
+		"test262-artifacts",
+		`${variant}-${backend}`,
+	);
 }
 
 /**

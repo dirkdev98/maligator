@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import type { IncludedAsset } from "./assets.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import { frontendDigest } from "./frontend-cache.ts";
 
 const DEVELOPMENT_ASSET_MANIFEST_VERSION = 1;
@@ -67,7 +68,7 @@ export function serializeDevelopmentAssets(assets: Array<IncludedAsset>): Uint8A
 /** Publish one content-addressed external-asset manifest for run/dev. */
 export function cacheDevelopmentAssets(
 	assets: Array<IncludedAsset>,
-	cacheDirectory = ".cache/mal-cache",
+	cacheDirectory = maligatorCacheDirectory(),
 ): string | undefined {
 	if (assets.length === 0) return undefined;
 	const bytes = serializeDevelopmentAssets(assets);

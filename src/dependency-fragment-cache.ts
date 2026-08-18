@@ -2,8 +2,13 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import {
+	compilerConfigurationIdentity,
+	compilerProducerIdentity,
+} from "./compiler-cache-identity.ts";
 import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import {
@@ -24,10 +29,9 @@ import {
 } from "./semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "./semantic-program.ts";
 import { serializeVmDefinition, WIRE_VERSION } from "./serialize-vm.ts";
-import { MALIGATOR_VERSION } from "./version.ts";
 
 const DEPENDENCY_FRAGMENT_SCHEMA = 1;
-const CACHE_DIRECTORY = ".cache/mal-cache/dependency-fragments";
+const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "dependency-fragments");
 
 /** Stable runtime registry populated before application and test fragments execute. */
 export const DEVELOPMENT_LINKED_MODULES_GLOBAL = "__maligatorDevelopmentLinkedModules";
@@ -102,14 +106,14 @@ function environmentIdentity(options: CompileDependencyFragmentsOptions): string
 	return frontendDigest(
 		JSON.stringify({
 			schema: DEPENDENCY_FRAGMENT_SCHEMA,
-			version: MALIGATOR_VERSION,
+			producer: compilerProducerIdentity(
+				"dependency-fragment",
+				DEPENDENCY_FRAGMENT_SCHEMA,
+			),
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: "development",
-			modules: options.config.modules,
-			engine: options.config.engine,
-			host: options.config.host,
-			surface: options.config.surface,
+			configuration: compilerConfigurationIdentity(options.config),
 		}),
 	);
 }

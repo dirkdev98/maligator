@@ -16,8 +16,13 @@ import {
 	compileBuildFragments,
 	UnsupportedBuildFragmentsError,
 } from "./build-fragment-cache.ts";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { CompileCorePhase } from "./compile-core.ts";
+import {
+	compilerConfigurationIdentity,
+	compilerProducerIdentity,
+} from "./compiler-cache-identity.ts";
 import type { CompilerDiagnostic, OptimizationAblation } from "./compiler-diagnostics.ts";
 import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
@@ -46,11 +51,13 @@ import {
 	serializeVmDefinition,
 	WIRE_VERSION,
 } from "./serialize-vm.ts";
-import { MALIGATOR_VERSION } from "./version.ts";
 
 const BUILD_FRONTEND_CACHE_SCHEMA = 1;
 const BUILD_FRONTEND_PIPELINE_VERSION = 1;
-const BUILD_FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/build-frontend";
+const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
+	maligatorCacheDirectory(),
+	"build-frontend",
+);
 const NODE_GLOBALS_MODULE_ID = "maligator:node-globals";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
@@ -158,8 +165,10 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 	return digest(
 		JSON.stringify({
 			schema: BUILD_FRONTEND_CACHE_SCHEMA,
-			pipeline: BUILD_FRONTEND_PIPELINE_VERSION,
-			version: MALIGATOR_VERSION,
+			producer: compilerProducerIdentity(
+				"build-frontend",
+				BUILD_FRONTEND_PIPELINE_VERSION,
+			),
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
 			nodeGlobals:
@@ -168,10 +177,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			optimizationAblations: [...(options.optimizationAblations ?? [])].sort(),
 			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
-			modules: options.config.modules,
-			engine: options.config.engine,
-			host: options.config.host,
-			surface: options.config.surface,
+			configuration: compilerConfigurationIdentity(options.config),
 		}),
 	);
 }

@@ -2,7 +2,12 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
+import { maligatorCacheDirectory } from "../cache-root.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
+import {
+	compilerConfigurationIdentity,
+	compilerProducerIdentity,
+} from "../compiler-cache-identity.ts";
 import type { DependencyFragmentWorker } from "../dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -21,10 +26,9 @@ import {
 } from "../semantic-analysis.ts";
 import { runSemanticAnalysisForGraph } from "../semantic-program.ts";
 import { serializeVmDefinition, WIRE_VERSION } from "../serialize-vm.ts";
-import { MALIGATOR_VERSION } from "../version.ts";
 
 const TEST_CACHE_SCHEMA = 1;
-const TEST_CACHE_DIRECTORY = ".cache/mal-cache/test";
+const TEST_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
 const TEST_MODULE_ID = "maligator:test";
 const TEST_IMAGE_TRANSFORM = 1;
 
@@ -104,20 +108,14 @@ function resolvedEntries(files: Array<string>): Array<string> {
 }
 
 function cacheIdentity(options: CompileTestOptions): string {
-	const flags = {
-		modules: options.config.modules,
-		engine: options.config.engine,
-		host: options.config.host,
-		surface: options.config.surface,
-	};
 	return digest(
 		JSON.stringify({
 			schema: TEST_CACHE_SCHEMA,
-			version: MALIGATOR_VERSION,
+			producer: compilerProducerIdentity("test-frontend", TEST_CACHE_SCHEMA),
 			wireVersion: WIRE_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: "development",
-			flags,
+			configuration: compilerConfigurationIdentity(options.config),
 			testModule: digest(options.testModuleSource),
 			nodeGlobals:
 				options.config.surface.node === true

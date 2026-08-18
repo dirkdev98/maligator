@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress, formatCommandDuration } from "../src/command-progress.ts";
 import { hashDirectoryTrees } from "../src/file-tree.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
@@ -28,7 +29,8 @@ const smokeIdentity = hashDirectoryTrees({
 		readFileSync(import.meta.filename, "utf8"),
 	],
 });
-const smokeStampPath = path.join(root, ".cache/mal-cache/test-suite-smoke.json");
+const sharedCache = maligatorCacheDirectory();
+const smokeStampPath = path.join(sharedCache, "test-suite-smoke.json");
 let previousSmokeIdentity: string | undefined;
 try {
 	const stamp = JSON.parse(readFileSync(smokeStampPath, "utf8")) as {
@@ -41,14 +43,14 @@ try {
 const coldSmokeRun =
 	previousSmokeIdentity !== smokeIdentity ||
 	[
-		".cache/mal-cache/compiler-wire",
-		".cache/mal-cache/runtime",
-		".cache/mal-cache/rust",
-		".cache/mal-cache/test262-wires",
-		".cache/mal-build/test262/Test262Wire",
-		".cache/test262/.git",
-		".cache/test262-cache.json",
-	].some((entry) => !existsSync(path.join(root, entry)));
+		path.join(sharedCache, "compiler-wire"),
+		path.join(sharedCache, "runtime"),
+		path.join(sharedCache, "rust"),
+		path.join(sharedCache, "test262-wires"),
+		path.join(root, ".cache/mal-build/test262/Test262Wire"),
+		path.join(root, ".cache/test262/.git"),
+		path.join(root, ".cache/test262-cache.json"),
+	].some((entry) => !existsSync(entry));
 const smokeFuseMs = coldSmokeRun ? 240_000 : 20_000;
 const usage = `usage: node scripts/test-suite.ts [smoke|check|full] [options]
 

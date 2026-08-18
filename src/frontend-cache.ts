@@ -10,9 +10,10 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { maligatorCacheDirectory } from "./cache-root.ts";
 import { ModuleParseCache } from "./module-graph.ts";
 
-export const FRONTEND_CACHE_DIRECTORY = ".cache/mal-cache/frontend";
+export const FRONTEND_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "frontend");
 
 export interface FrontendDependencyIdentity {
 	path: string;
@@ -146,7 +147,7 @@ export class FrontendCompilationSession {
 
 	/** Attach this session to the shared project cache before reading dependencies. */
 	useCacheDirectory(cacheDirectory?: string): void {
-		const root = path.resolve(cacheDirectory ?? ".cache/mal-cache");
+		const root = maligatorCacheDirectory(cacheDirectory);
 		const projectRoot = path.resolve(process.cwd());
 		const file = path.join(
 			root,

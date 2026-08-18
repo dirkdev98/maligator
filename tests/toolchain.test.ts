@@ -13,6 +13,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { normalizeNativeFeatures, selectNativeBuildPlan } from "../src/build-flags.ts";
+import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
 import { ensureCompilerWire } from "../src/compiler-bake.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
 import {
@@ -56,12 +57,13 @@ if [ "$1" = "--version" ]; then printf '%s\n' '${version}'; exit 0; fi
 if [ "$1" = "-dumpmachine" ]; then printf '%s\n' 'fake-target'; exit 0; fi
 ${thinLto ? "" : 'case " $* " in *" -flto=thin "*) exit 1;; esac'}
 ${lto ? "" : 'case " $* " in *" -flto"*) exit 1;; esac'}
+invocation="$*"
 out=''
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-o" ]; then shift; out="$1"; fi
 	shift
 done
-if [ -n "$out" ]; then printf 'x' > "$out"; /bin/chmod +x "$out"; fi
+if [ -n "$out" ]; then printf '%s' "$invocation" > "$out"; /bin/chmod +x "$out"; fi
 exit 0
 `;
 }
@@ -333,7 +335,7 @@ exit 7
 		});
 		expect(context.plan).toMatchObject({ mode: "production", lto: true, strip: true });
 		expect(context.environment.ZIG_GLOBAL_CACHE_DIR).toContain(
-			path.join(fake.root, ".cache/mal-cache/zig"),
+			path.join(fake.root, ".cache/maligator-test/zig"),
 		);
 		const artifacts = resolveRustArtifacts(context);
 		expect(artifacts.cargoArguments).toContain(rustTarget);
@@ -1074,25 +1076,23 @@ exit 7
 		const first = ensureNativeArtifacts(context);
 		expect(first.c.runtime).toContain(cacheDirectory);
 		expect(readFileSync(fake.logPath, "utf-8")).toContain(
-			`cargo-home ${path.join(cacheDirectory, "cargo")}`,
+			`cargo-home ${cargoCacheDirectory(fake.env)}`,
 		);
 		const afterFirst = compileInvocationCount(fake.logPath);
-		writeFileSync(path.join(path.dirname(first.c.runtime), "artifact.json"), "{}");
-		const rebuilt = ensureNativeArtifacts(context);
-		expect(rebuilt.c.runtime).toBe(first.c.runtime);
-		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(afterFirst);
-		const afterManifestRecovery = compileInvocationCount(fake.logPath);
-		writeFileSync(rebuilt.c.runtime, "corrupt\n");
 		expect(ensureNativeArtifacts(context).c.runtime).toBe(first.c.runtime);
-		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(afterManifestRecovery);
+		expect(compileInvocationCount(fake.logPath)).toBe(afterFirst);
+		writeFileSync(first.c.runtime, "corrupt\n");
+		const repaired = ensureNativeArtifacts(context);
+		expect(readFileSync(repaired.c.runtime, "utf-8")).toBe("!<arch>\n");
+		expect(compileInvocationCount(fake.logPath)).toBe(afterFirst);
 
 		writeFileSync(path.join(runtimeDirectory, "src/engine.c"), "int engine_value = 2;\n");
-		const changed = ensureNativeArtifacts(context);
-		expect(changed.c.runtime).not.toBe(first.c.runtime);
-		expect(events).toEqual([false, false, false, false]);
+		ensureNativeArtifacts(context);
+		expect(compileInvocationCount(fake.logPath)).toBe(afterFirst + 1);
+		expect(events).toEqual([false, true, false, false]);
 	});
 
-	it("runs Cargo when the Rust completion manifest is missing or corrupt", () => {
+	it("runs Cargo when the cached Rust library is missing or corrupt", () => {
 		const fake = createFakeToolchain();
 		const runtimeDirectory = createMinimalRuntime(fake);
 		const toolchain = inspectToolchain({
@@ -1115,17 +1115,13 @@ exit 7
 				.filter((line) => line.startsWith("cargo build ")).length;
 		const first = ensureRustArtifacts(context);
 		expect(cargoBuildCount()).toBe(1);
-		const manifestPath = path.join(path.dirname(first.targetDirectory), "artifact.json");
-		rmSync(manifestPath);
-		ensureRustArtifacts(context);
+		rmSync(first.library);
+		const repaired = ensureRustArtifacts(context);
 		expect(cargoBuildCount()).toBe(2);
-		writeFileSync(manifestPath, "{}");
-		ensureRustArtifacts(context);
+		writeFileSync(repaired.library, "{}");
+		const rebuilt = ensureRustArtifacts(context);
 		expect(cargoBuildCount()).toBe(3);
-		expect(JSON.parse(readFileSync(manifestPath, "utf-8"))).toMatchObject({
-			schema: 1,
-			cacheKey: first.cacheKey,
-		});
+		expect(readFileSync(rebuilt.library, "utf-8")).toBe("!<arch>\n");
 	});
 
 	it("publishes concurrent runtime builds as one complete cache entry", async () => {
@@ -1244,9 +1240,7 @@ exit 7
 	it("stores compiler wires under the reusable cache", () => {
 		const bytes = new Uint8Array([0x4d, 0x41, 0x4c]);
 		const wirePath = ensureCompilerWire({ kind: "bytes", bytes });
-		expect(wirePath).toContain(
-			`${path.sep}.cache${path.sep}mal-cache${path.sep}compiler-wire`,
-		);
+		expect(wirePath).toContain(path.join(maligatorCacheDirectory(), "compiler-wire"));
 		expect(readFileSync(wirePath)).toEqual(Buffer.from(bytes));
 	});
 
