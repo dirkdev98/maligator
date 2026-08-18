@@ -575,6 +575,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->fibers_head = nullptr;
     // Host context (reactor/timers) is attached by the host layer, not the engine.
     vm->host = nullptr;
+    vm->runtime_cleanup_count = 0;
     vm->active_job = nullptr;
     vm->kept_objects = nullptr;
     vm->kept_count = 0;
@@ -772,8 +773,22 @@ void mal_vm_clear_kept_objects(MalVm *vm) {
     vm->kept_count = 0;
 }
 
+bool mal_vm_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm)) {
+    if (cleanup == nullptr) return false;
+    for (usize i = 0; i < vm->runtime_cleanup_count; i++) {
+        if (vm->runtime_cleanups[i] == cleanup) return true;
+    }
+    if (vm->runtime_cleanup_count == countof(vm->runtime_cleanups)) return false;
+    vm->runtime_cleanups[vm->runtime_cleanup_count++] = cleanup;
+    return true;
+}
+
 void mal_vm_free(MalVm *vm) {
 	mal_profile_finish(vm);
+    for (usize i = vm->runtime_cleanup_count; i > 0; i--) {
+        vm->runtime_cleanups[i - 1](vm);
+    }
+    vm->runtime_cleanup_count = 0;
     // Tear down fibers. Spawned fibers own their stack + exec buffers (freed by
     // mal_fiber_destroy); the main fiber adopted vm->value_stack / vm->frames, so
     // it only gets unlinked here and its struct freed — those buffers are released

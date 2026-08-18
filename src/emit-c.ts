@@ -1817,6 +1817,17 @@ function emitResumableFunction(
 	if (body.some((line) => /\br-\d/.test(line))) {
 		return null;
 	}
+	// A resume dispatch jumps directly into `body`, so any function-wide state
+	// declared at its head would otherwise be skipped and read uninitialized after
+	// an await/yield. Reacquire the semantic epoch on every C invocation before the
+	// dispatch; register-backed JavaScript state remains in the coroutine buffer.
+	const resumablePreamble: Array<string> = [];
+	const watchedMethodsEpoch = body.findIndex((line) =>
+		line.startsWith("u64 __watched_methods_epoch = "),
+	);
+	if (watchedMethodsEpoch >= 0) {
+		resumablePreamble.push(...body.splice(watchedMethodsEpoch, 1));
+	}
 
 	const resumePoints = resumePointsOf(fn);
 	const symbol = `mal_compiled_${index}${suffix}`;
@@ -1846,6 +1857,7 @@ function emitResumableFunction(
 	if (body.some((line) => line.includes("__literal_shapes"))) {
 		lines.push(`    MalShape **__literal_shapes = vm->literal_shape_cache[${index}];`);
 	}
+	lines.push(...resumablePreamble);
 
 	lines.push(`    MalValue *__gc_slots;`);
 	lines.push(

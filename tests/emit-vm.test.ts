@@ -1530,6 +1530,16 @@ describe("native update-expression representation", () => {
 		);
 	});
 
+	it("reacquires watched-method epochs before resumable dispatch", () => {
+		const output = emit(
+			`"use strict"; async function read(object) { for (let i = 0; i < 2; i++) { await 0; object.value; } } globalThis.read = read;`,
+		);
+		const epoch = output.indexOf("u64 __watched_methods_epoch = ");
+		const dispatch = output.indexOf("switch (resume_state->frame.instruction_pointer)");
+		expect(epoch).toBeGreaterThanOrEqual(0);
+		expect(dispatch).toBeGreaterThan(epoch);
+	});
+
 	it("revalidates consolidated regions only after observable gaps", () => {
 		const pureOutput = emit(
 			`"use strict"; function read(object) { return object.a + object.b; } globalThis.read = read;`,

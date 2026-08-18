@@ -2198,7 +2198,7 @@ void mal_host_install_node_crypto(
         mal_builtin_math_set_seed_source(mal_host_entropy);
         crypto_roots_installed = true;
     }
-    if (!mal_host_register_runtime_cleanup(vm, mal_node_crypto_free)) {
+    if (!mal_vm_register_runtime_cleanup(vm, mal_node_crypto_free)) {
         mal_gc_unroot(&root);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Could not register node:crypto runtime cleanup");

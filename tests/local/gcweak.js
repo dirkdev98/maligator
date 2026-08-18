@@ -80,6 +80,13 @@ function makeHeldIdentity() {
 	return new WeakRef(target);
 }
 
+// A live target must not keep its independently weak unregister token alive.
+// GC verification catches a stale token edge after the token itself is swept.
+const liveEphemeralTokenTarget = { tag: "live-ephemeral-token" };
+function registerEphemeralToken() {
+	registry.register(liveEphemeralTokenTarget, "live-ephemeral-token", {});
+}
+
 // --- Live target held for the whole run, plus a ClearKeptObjects probe. ---
 let liveTarget = { tag: "live" };
 const liveRef = new WeakRef(liveTarget);
@@ -98,6 +105,7 @@ const turns = [
 		cycleRefs.arr = makeSelfRefArray(3);
 		cycleRefs.unreg = makeUnregistered(4);
 		cycleRefs.held = makeHeldIdentity();
+		registerEphemeralToken();
 
 		// ClearKeptObjects probe: construct a WeakRef (pins target this turn) and
 		// deref it (re-pins). The target local dies at turn end; only keptRef + the
@@ -119,6 +127,10 @@ const turns = [
 			liveRef.deref() === liveTarget && liveRef.deref().tag === "live",
 		);
 		ok("clearkept-reclaimed-next-turn", keptRef.deref() === undefined);
+		ok(
+			"finreg-live-target-outlasts-token",
+			liveEphemeralTokenTarget.tag === "live-ephemeral-token",
+		);
 	},
 
 	// Turn 2: the checkpoint after turn 1 drained the FinalizationRegistry cleanup

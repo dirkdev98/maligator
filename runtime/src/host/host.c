@@ -57,9 +57,6 @@ void mal_host_free(MalHost *host) {
         return;
     }
     mal_host_shutdown(host);
-    for (usize i = host->runtime_cleanup_count; i > 0; i--) {
-        host->runtime_cleanups[i - 1](host->vm);
-    }
     if (host->development_assets_free != nullptr) {
         host->development_assets_free(host->development_assets);
     }
@@ -84,7 +81,6 @@ MalHost *mal_host_attach(MalVm *vm) {
         return nullptr;
     }
     vm->host = host;
-    host->vm = vm;
     return host;
 }
 
@@ -96,17 +92,6 @@ void mal_host_detach(MalVm *vm) {
     mal_host_free(host);
     free(host);
     vm->host = nullptr;
-}
-
-bool mal_host_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm)) {
-    MalHost *host = mal_host(vm);
-    if (host == nullptr || cleanup == nullptr) return false;
-    for (usize i = 0; i < host->runtime_cleanup_count; i++) {
-        if (host->runtime_cleanups[i] == cleanup) return true;
-    }
-    if (host->runtime_cleanup_count == countof(host->runtime_cleanups)) return false;
-    host->runtime_cleanups[host->runtime_cleanup_count++] = cleanup;
-    return true;
 }
 
 bool mal_host_post_progress(

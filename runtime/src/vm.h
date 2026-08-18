@@ -1656,6 +1656,10 @@ typedef struct MalVm {
      */
     void *host;
 
+    /** Runtime modules reached by this isolate register their teardown here. */
+    void (*runtime_cleanups[8])(MalVm *vm);
+    usize runtime_cleanup_count;
+
     /**
      * Lazily allocated strong roots for repeated 2-4-unit concatenations. Keep
      * this tail-only so enabling the optimization does not perturb offsets of
@@ -1945,6 +1949,9 @@ static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 136 : 128),
 typedef MalVmFrame MalCallable;
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
+
+/** Register one idempotent runtime-module teardown with the owning isolate. */
+bool mal_vm_register_runtime_cleanup(MalVm *vm, void (*cleanup)(MalVm *vm));
 
 /** Process-wide loaded bytecode footprint used by benchmark telemetry. */
 u64 mal_vm_loaded_instruction_count(void);
