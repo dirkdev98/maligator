@@ -15,23 +15,15 @@ are normative for host work.
 
 ## Active host work
 
-- [ ] Finish H1 with Happy Eyeballs, pumped turns, and runtime-owned timer state.
-      Generation-checked operation handles, owned FIFO tasks, exactly-once terminal
-      transitions, checked readiness registration, and independent read/write fd
-      interests are implemented. The thread-safe completion queue, pollable wake
-      source, and retained-work accounting now drive a bounded pthread DNS pool
-      with numeric-literal bypass, owned ordered IPv4/IPv6 results, queue saturation,
-      cancellation, shutdown joining, and reactor-side completion ownership tests.
-      Happy Eyeballs connection racing, bounded teardown for a system resolver stuck
-      inside `getaddrinfo`, a public one-turn pump, embedder access to the existing
-      wake source, and timer ownership remain.
-- [ ] Finish H2 hard limits, pipelining, and parser fuzzing around the implemented
-      shared llhttp codec and streaming server.
-- [ ] Finish H3 connection pooling and global WinterTC `fetch()` over the implemented
-      neutral streaming HTTP/1 client and Node adapter, with no host
-      auto-decompression.
+- [ ] Finish H1 with Happy Eyeballs connection racing, bounded teardown for a system
+      resolver stuck inside `getaddrinfo`, a public one-turn pump, embedder access to
+      the existing wake source, and runtime-owned timer state.
+- [ ] Finish H2 hard limits, pipelining, and parser fuzzing around the shared llhttp
+      codec and streaming server.
+- [ ] Finish H3 connection pooling and global WinterTC `fetch()` over the neutral
+      streaming HTTP/1 client and Node adapter, with no host auto-decompression.
 - [ ] Finish H4 production sanitizer, fuzz, leak, symbol/size, and benchmark gates for
-      the implemented optional Rustls layer.
+      the optional Rustls layer.
 
 WinterTC runtime semantics are owned by the
 [server-profile roadmap](wintertc.md). Node API semantics are owned by the

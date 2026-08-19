@@ -26,8 +26,7 @@ client/server work in both compiled and interpreted programs.
 ## Active compatibility work
 
 - [ ] Complete `package.json#exports` wildcard matching, null targets, target
-      validation, and remaining Node entry-resolution behavior. Exact subpaths,
-      import/require conditions, and package encapsulation are implemented.
+      validation, and remaining Node entry-resolution behavior.
 - [ ] Complete observable `node:http` and `node:net` semantics beyond the streaming
       Express and postgres.js baselines: richer socket APIs, Agent/connection reuse,
       and remaining validation and lifecycle edges.
@@ -39,9 +38,7 @@ observable Node API adapters over that substrate.
 ## Queued performance work
 
 - [ ] Close measured Express gaps without regressing fixture behavior or bare-server
-      throughput. Profile call dispatch and object shaping; inherited-value caching
-      depends on the per-chain validity cells owned by the
-      [compiler optimization roadmap](compiler.md).
+      throughput. Profile call dispatch and object shaping.
 
 ## Active ecosystem work
 

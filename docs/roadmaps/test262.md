@@ -7,19 +7,17 @@ document.
 ## Queued cross-cutting features
 
 - [ ] Finish dynamic import runtime resolution, attributes, and evaluation/error
-      order beyond implemented literal module loading.
+      order.
 - [ ] Implement import-defer forms.
 - [ ] Implement `AbstractModuleSource` support required by source-phase imports.
-- [ ] Add `$262.agent` and multi-agent Atomics behavior. Core Atomics and
-      SharedArrayBuffer are already implemented.
+- [ ] Add `$262.agent` and multi-agent Atomics behavior.
 
 `ShadowRealm.prototype.importValue` is owned by the
 [`eval` and realms roadmap](eval-realms.md).
 
 ## Active correctness clusters
 
-- [ ] Fix the remaining RegExp `@@replace` protocol/coercion cases. `@@split`,
-      `@@match`, and `@@search` are complete in the committed baseline.
+- [ ] Fix the remaining RegExp `@@replace` protocol/coercion cases.
 - [ ] Fix remaining arguments-object own-index creation, legacy caller, and
       parameter-expression cases.
 - [ ] Work the current class, compound-assignment, `super`, Proxy, and iterator-helper

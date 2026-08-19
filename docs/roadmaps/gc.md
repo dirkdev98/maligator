@@ -7,9 +7,8 @@ marking on the mutator thread. This file contains only unfinished work.
 ## Active safety
 
 - [ ] Complete recoverable allocation failure for CELL, RAW, LOS, GC-internal, and
-      direct native allocations. Extend the existing nullable CELL foundation,
-      emergency exception, and fault injection so OOM remains catchable without GC
-      corruption or recursive allocation.
+      direct native allocations so OOM remains catchable without GC corruption or
+      recursive allocation.
 
 ## Queued allocation elimination
 

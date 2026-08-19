@@ -31,5 +31,4 @@ Recoverable allocation failure is owned by the [GC roadmap](docs/roadmaps/gc.md)
 ## Triggered work
 
 - Reconsider exact timezone-offset caching only if Date profiling makes offset
-  lookup a top-five self-time contributor; the previous measurement was about 2% of
-  the DST shard.
+  lookup a top-five self-time contributor.
