@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	clearAllMaligatorCaches,
 	createCacheLease,
@@ -82,6 +82,23 @@ describe("Maligator cache management", () => {
 			lease.release();
 		}
 		expect(inspectMaligatorCache(root).activeLeases).toBe(0);
+	});
+
+	it("warns and continues when the cache lease cannot be written", () => {
+		const root = cacheRoot();
+		writeFileSync(path.join(root, ".leases"), "not a directory\n");
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const lease = createCacheLease("build", root);
+			expect(lease.path).toBeUndefined();
+			expect(stderr).toHaveBeenCalledWith(
+				expect.stringContaining("continuing without cache coordination"),
+			);
+			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("MALIGATOR_CACHE_DIR"));
+			lease.release();
+		} finally {
+			stderr.mockRestore();
+		}
 	});
 
 	it("clears every layout generation without retaining old machinery", () => {

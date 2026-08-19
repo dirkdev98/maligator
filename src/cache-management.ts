@@ -86,7 +86,7 @@ export interface CachePruneOptions {
 }
 
 export interface CacheLease {
-	path: string;
+	path?: string;
 	release(): void;
 }
 
@@ -239,12 +239,20 @@ export function createCacheLease(
 	) {
 		throw new Error("Maligator cache maintenance is active; retry the command shortly");
 	}
-	mkdirSync(directory, { recursive: true });
-	writeFileSync(
-		leasePath,
-		`${JSON.stringify({ pid: process.pid, startedAt: Date.now(), command } satisfies CacheLeaseRecord)}\n`,
-		{ flag: "wx" },
-	);
+	try {
+		mkdirSync(directory, { recursive: true });
+		writeFileSync(
+			leasePath,
+			`${JSON.stringify({ pid: process.pid, startedAt: Date.now(), command } satisfies CacheLeaseRecord)}\n`,
+			{ flag: "wx" },
+		);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		process.stderr.write(
+			`warning: unable to write Maligator cache lease in '${directory}'${code === undefined ? "" : ` (${code})`}; continuing without cache coordination. Set MALIGATOR_CACHE_DIR to a writable directory to restore cache coordination.\n`,
+		);
+		return { release() {} };
+	}
 	if (
 		existsSync(lockPath) ||
 		(clearLockPath !== undefined && existsSync(clearLockPath))
