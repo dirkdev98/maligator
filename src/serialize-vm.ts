@@ -40,7 +40,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Pre-1.0 compatibility starts from this format baseline.
-export const WIRE_VERSION = 2;
+export const WIRE_VERSION = 3;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1585,6 +1585,7 @@ export function serializeVmDefinition(
 				case "string-slice-number":
 					w.i32(region.propertyIp);
 					w.i32(region.sliceCallIp);
+					w.i32(region.sliceStartIp);
 					w.i32(region.numberIntrinsicIp);
 					w.i32(region.numberCallIp);
 					w.i32(region.numberCallee);
@@ -2760,12 +2761,9 @@ function validateStringSliceNumberRegion(
 	stringSliceNumberGuardMasks(region.license);
 	const property = fn.instructions[region.propertyIp];
 	const sliceCall = fn.instructions[region.sliceCallIp];
+	const sliceStartInstruction = fn.instructions[region.sliceStartIp];
 	const numberIntrinsic = fn.instructions[region.numberIntrinsicIp];
 	const numberCall = fn.instructions[region.numberCallIp];
-	const sliceStart =
-		sliceCall?.opcode === "CALL" && sliceCall.arguments[0] !== undefined
-			? decodeVmValueOperand(sliceCall.arguments[0])
-			: undefined;
 	const numberArgument =
 		numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
 			? decodeVmValueOperand(numberCall.arguments[0])
@@ -2773,6 +2771,7 @@ function validateStringSliceNumberRegion(
 	const payload = new Set([
 		region.propertyIp,
 		region.sliceCallIp,
+		region.sliceStartIp,
 		region.numberIntrinsicIp,
 		region.numberCallIp,
 	]);
@@ -2796,10 +2795,9 @@ function validateStringSliceNumberRegion(
 		sliceCall.arguments.length !== 1 ||
 		property.dst !== sliceCall.callee ||
 		property.object !== sliceCall.thisValue ||
-		region.propertyIp + 1 !== region.sliceCallIp ||
-		region.sliceCallIp + 1 !== region.numberCallIp ||
-		sliceStart?.kind !== "number" ||
-		!Object.is(sliceStart.value, region.sliceStart) ||
+		(sliceStartInstruction?.opcode !== "CREATE_NUMBER" &&
+			sliceStartInstruction?.opcode !== "CREATE_F64") ||
+		!Object.is(sliceStartInstruction.value, region.sliceStart) ||
 		!Number.isFinite(region.sliceStart) ||
 		numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
 		numberIntrinsic.intrinsic !== "Number" ||
@@ -5084,6 +5082,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				} else if (kindTag === 7) {
 					const propertyIp = r.i32();
 					const sliceCallIp = r.i32();
+					const sliceStartIp = r.i32();
 					const numberIntrinsicIp = r.i32();
 					const numberCallIp = r.i32();
 					const numberCallee = r.i32();
@@ -5110,6 +5109,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						cost: { score, metadataOperations },
 						propertyIp,
 						sliceCallIp,
+						sliceStartIp,
 						numberIntrinsicIp,
 						numberCallIp,
 						numberCallee,

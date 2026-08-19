@@ -252,10 +252,11 @@ function builtinSourceSite(
  */
 const annotateKnownBuiltinCalls: CoreFunctionPass = {
 	name: "annotate-known-builtin-calls",
-	run(fn, _analyses, program) {
+	run(fn, analyses, program) {
 		const compilation = program.compilation;
 		if (compilation === undefined) return fn;
 		const definitions = new Map<CoreValueId, CoreInstruction>();
+		const canonical = coreCanonicalValues(fn, analyses.controlFlow(fn));
 		const representations = new Map(
 			fn.values.map(({ id, representation }) => [id, representation]),
 		);
@@ -284,12 +285,15 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 					) {
 						return instruction;
 					}
-					const property = definitions.get(instruction.inputs[0]!);
+					const property = definitions.get(
+						canonical.get(instruction.inputs[0]!) ?? instruction.inputs[0]!,
+					);
 					const stringIndex = property?.attributes.stringIndex;
 					if (
 						property?.opcode !== "loadPropertyStatic" ||
 						property.inputs.length !== 1 ||
-						property.inputs[0] !== instruction.inputs[1] ||
+						(canonical.get(property.inputs[0]!) ?? property.inputs[0]) !==
+							(canonical.get(instruction.inputs[1]!) ?? instruction.inputs[1]) ||
 						typeof stringIndex !== "number"
 					) {
 						return instruction;
@@ -457,6 +461,66 @@ function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction
 		}
 	}
 	return definitions;
+}
+
+/** Canonical producer identity through moves and all-ordinary single-value phis. */
+function coreCanonicalValues(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+): ReadonlyMap<CoreValueId, CoreValueId> {
+	const canonical = new Map(fn.values.map(({ id }) => [id, id] as const));
+	const root = (value: CoreValueId): CoreValueId => {
+		let current = value;
+		const seen = new Set<CoreValueId>();
+		while (!seen.has(current)) {
+			seen.add(current);
+			const next = canonical.get(current);
+			if (next === undefined || next === current) break;
+			current = next;
+		}
+		return current;
+	};
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (
+					instruction.opcode !== "move" ||
+					instruction.inputs.length !== 1 ||
+					instruction.outputs.length !== 1
+				) {
+					continue;
+				}
+				const output = instruction.outputs[0]!;
+				const source = root(instruction.inputs[0]!);
+				if (root(output) !== source) {
+					canonical.set(output, source);
+					changed = true;
+				}
+			}
+			const incoming = cfg.predecessors[block.id]!;
+			if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
+				continue;
+			}
+			for (const [index, parameter] of block.parameters.entries()) {
+				const first = incoming[0]!.arguments[index];
+				if (first === undefined) continue;
+				const source = root(first);
+				if (
+					incoming.every((edge) => {
+						const argument = edge.arguments[index];
+						return argument !== undefined && root(argument) === source;
+					}) &&
+					root(parameter.value) !== source
+				) {
+					canonical.set(parameter.value, source);
+					changed = true;
+				}
+			}
+		}
+	}
+	return new Map([...canonical].map(([value]) => [value, root(value)]));
 }
 
 function capturedStoreValues(fn: CoreFunction): Map<string, CoreValueId> {
@@ -1758,6 +1822,199 @@ const selectNumericFusionRegions: CoreFunctionPass = {
 	},
 };
 
+interface CoreKnownBuiltinProof {
+	readonly proof: Readonly<Record<string, unknown>>;
+	readonly sourceSite?: string;
+}
+
+function coreKnownBuiltinProof(
+	instruction: CoreInstruction,
+	operation: string,
+	options: {
+		readonly lowering?: string;
+		readonly result?: string;
+	} = {},
+): CoreKnownBuiltinProof | undefined {
+	const call = attributeObject(instruction.attributes.knownBuiltinCall);
+	if (call?.operation !== operation) return undefined;
+	const identity = attributeObject(call.identity);
+	const semantics = attributeObject(call.semantics);
+	const semanticValue = attributeObject(semantics?.value);
+	const proof = attributeObject(identity?.proof);
+	if (
+		identity?.kind !== "known" ||
+		semantics?.kind !== "known" ||
+		proof === undefined ||
+		!Array.isArray(proof.dependencies) ||
+		!Array.isArray(proof.obligations) ||
+		!proof.obligations.some(
+			(obligation) => attributeObject(obligation)?.kind === "fallback",
+		) ||
+		(options.lowering !== undefined &&
+			(!Array.isArray(semanticValue?.lowerings) ||
+				!semanticValue.lowerings.includes(options.lowering))) ||
+		(options.result !== undefined && semanticValue?.result !== options.result)
+	) {
+		return undefined;
+	}
+	return {
+		proof,
+		...(typeof call.sourceSite === "string" ? { sourceSite: call.sourceSite } : {}),
+	};
+}
+
+/** Select exact `String.prototype.slice` -> `%Number%` span conversion. */
+const selectStringSliceNumberRegions: CoreFunctionPass = {
+	name: "select-string-slice-number-regions",
+	run(fn, analyses, program) {
+		if (fn.regions.filter(({ kind }) => kind === "string-slice-number").length >= 8) {
+			return fn;
+		}
+		const definitions = functionDefinitions(fn);
+		const canonical = coreCanonicalValues(fn, analyses.controlFlow(fn));
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const uses = new Map<
+			CoreValueId,
+			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+		>();
+		const blocksByInstruction = new Map<CoreInstructionId, CoreBlock>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				blocksByInstruction.set(instruction.id, block);
+				for (const [position, input] of instruction.inputs.entries()) {
+					const key = root(input);
+					const entries = uses.get(key) ?? [];
+					entries.push({ instruction, position });
+					uses.set(key, entries);
+				}
+			}
+		}
+		const occupied = new Set(
+			fn.regions
+				.filter(({ kind }) => kind !== "numeric-fusion")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			for (const sliceCall of block.instructions) {
+				if (
+					sliceCall.opcode !== "call" ||
+					sliceCall.inputs.length !== 3 ||
+					sliceCall.outputs.length !== 1
+				) {
+					continue;
+				}
+				const builtin = coreKnownBuiltinProof(
+					sliceCall,
+					"String.prototype.slice",
+					{ lowering: "number-consumer-fusion", result: "string" },
+				);
+				if (builtin === undefined) continue;
+				const property = definitions.get(root(sliceCall.inputs[0]!));
+				if (
+					property?.opcode !== "loadPropertyStatic" ||
+					property.inputs.length !== 1 ||
+					root(property.inputs[0]!) !== root(sliceCall.inputs[1]!) ||
+					typeof property.attributes.stringIndex !== "number" ||
+					decodeString(program, property.attributes.stringIndex) !== "slice" ||
+					property.outputs.length !== 1
+				) {
+					continue;
+				}
+				const propertyUses = uses.get(root(property.outputs[0]!));
+				const sliceUses = uses.get(root(sliceCall.outputs[0]!));
+				if (
+					propertyUses?.length !== 1 ||
+					propertyUses[0]?.instruction !== sliceCall ||
+					propertyUses[0].position !== 0 ||
+					sliceUses?.length !== 1 ||
+					sliceUses[0]?.position !== 2
+				) {
+					continue;
+				}
+				const numberCall = sliceUses[0].instruction;
+				if (
+					numberCall.opcode !== "call" ||
+					numberCall.inputs.length !== 3 ||
+					root(numberCall.inputs[2]!) !== root(sliceCall.outputs[0]!)
+				) {
+					continue;
+				}
+				const numberIntrinsic = definitions.get(root(numberCall.inputs[0]!));
+				if (
+					numberIntrinsic?.opcode !== "loadIntrinsic" ||
+					numberIntrinsic.attributes.intrinsic !== "Number"
+				) {
+					continue;
+				}
+				const start = definitions.get(root(sliceCall.inputs[2]!));
+				if (
+					start === undefined ||
+					(start.opcode !== "createNumber" && start.opcode !== "createF64")
+				) {
+					continue;
+				}
+				const sliceStart = start.attributes.value;
+				if (typeof sliceStart !== "number" || !Number.isFinite(sliceStart)) continue;
+
+				const claimed = [property, sliceCall, start, numberIntrinsic, numberCall];
+				if (
+					new Set(claimed.map(({ id }) => id)).size !== claimed.length ||
+					claimed.some(({ id }) => occupied.has(id))
+				) {
+					continue;
+				}
+				const ordinaryBlocks = [
+					...new Set(claimed.map(({ id }) => blocksByInstruction.get(id)!.id)),
+				];
+				const exceptionalBlocks = [
+					...new Set(
+						claimed.flatMap(({ id }) => {
+							const handler = blocksByInstruction.get(id)?.handler;
+							return handler === undefined ? [] : [handler.block];
+						}),
+					),
+				];
+				if (exceptionalBlocks.some((handler) => ordinaryBlocks.includes(handler))) {
+					continue;
+				}
+				const claimedInstructions = claimed.map(({ id }) => id);
+				regions.push({
+					kind: "string-slice-number",
+					anchors: [sliceCall.id, numberCall.id],
+					claimedInstructions,
+					ordinaryBlocks,
+					exceptionalBlocks,
+					data: coreAttributeObject(
+						{
+							license: {
+								guard: builtin.proof,
+								genericTwin: "retained",
+								materialization: "none",
+							},
+							representation: "primitive-string-span-number",
+							cost: { score: 16, metadataOperations: claimedInstructions.length },
+							property: { $coreInstruction: property.id },
+							sliceStartInstruction: { $coreInstruction: start.id },
+							numberIntrinsic: { $coreInstruction: numberIntrinsic.id },
+							numberCall: { $coreInstruction: numberCall.id },
+							sliceStart,
+						},
+						"string-slice-number",
+					),
+				});
+				for (const { id } of claimed) occupied.add(id);
+				if (regions.filter(({ kind }) => kind === "string-slice-number").length >= 8) {
+					break;
+				}
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
 function origin(
 	value: CoreValueId,
 	environment: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -2170,9 +2427,15 @@ const eliminateRedundantTdzChecks: CoreFunctionPass = {
 				}),
 			}),
 		);
-		return removed
-			? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 }
-			: fn;
+		if (!removed) return fn;
+		// A TDZ check can be the last throwing instruction covered by a handler.
+		// Removing it also removes Core's exceptional edge, so immediately restore
+		// the verifier invariant that every retained block is reachable.
+		return removeUnreachableBlocks({
+			...fn,
+			blocks,
+			mutationEpoch: fn.mutationEpoch + 1,
+		});
 	},
 };
 
@@ -2263,7 +2526,8 @@ const foldTypeofComparisons: CoreFunctionPass = {
 const foldStaticPropertyKeys: CoreFunctionPass = {
 	name: "fold-static-property-keys",
 	ablation: "static-properties",
-	run(fn) {
+	run(fn, analyses) {
+		const canonical = coreCanonicalValues(fn, analyses.controlFlow(fn));
 		const strings = new Map<CoreValueId, number>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -2289,7 +2553,8 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 					) {
 						return instruction;
 					}
-					const stringIndex = strings.get(instruction.inputs[1]!);
+					const key = instruction.inputs[1]!;
+					const stringIndex = strings.get(canonical.get(key) ?? key);
 					if (stringIndex === undefined) return instruction;
 					changed = true;
 					return {
@@ -3179,6 +3444,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateFreshDenseIndexedReserves,
 	selectStackObjectRegions,
+	selectStringSliceNumberRegions,
 	selectNumericFusionRegions,
 ];
 

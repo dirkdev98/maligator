@@ -578,6 +578,7 @@ export type VmStringSliceNumberRegion = VmRegionEnvelope<
 > & {
 	readonly propertyIp: number;
 	readonly sliceCallIp: number;
+	readonly sliceStartIp: number;
 	readonly numberIntrinsicIp: number;
 	readonly numberCallIp: number;
 	readonly numberCallee: number;
@@ -3521,6 +3522,9 @@ function lowerFunctionToVmFunction(
 				const sliceCallIp = resolvedAnchors[0];
 				const numberCallIp = resolvedAnchors[1];
 				const propertyIp = instructionIndexByIrInstruction.get(region.property);
+				const sliceStartIp = instructionIndexByIrInstruction.get(
+					region.sliceStartInstruction,
+				);
 				const numberIntrinsicIp = instructionIndexByIrInstruction.get(
 					region.numberIntrinsic,
 				);
@@ -3531,18 +3535,16 @@ function lowerFunctionToVmFunction(
 					guard.obligations.includes("materialize") ||
 					resolvedAnchors.length !== 2 ||
 					propertyIp === undefined ||
+					sliceStartIp === undefined ||
 					numberIntrinsicIp === undefined
 				) {
 					continue;
 				}
 				const property = instructions[propertyIp];
 				const sliceCall = instructions[sliceCallIp!];
+				const sliceStartInstruction = instructions[sliceStartIp];
 				const numberIntrinsic = instructions[numberIntrinsicIp];
 				const numberCall = instructions[numberCallIp!];
-				const sliceStart =
-					sliceCall?.opcode === "CALL" && sliceCall.arguments[0] !== undefined
-						? decodeVmValueOperand(sliceCall.arguments[0])
-						: undefined;
 				const numberArgument =
 					numberCall?.opcode === "CALL" && numberCall.arguments[0] !== undefined
 						? decodeVmValueOperand(numberCall.arguments[0])
@@ -3550,6 +3552,7 @@ function lowerFunctionToVmFunction(
 				const payloadIps = new Set([
 					propertyIp,
 					sliceCallIp!,
+					sliceStartIp,
 					numberIntrinsicIp,
 					numberCallIp!,
 				]);
@@ -3566,10 +3569,9 @@ function lowerFunctionToVmFunction(
 					sliceCall.arguments.length !== 1 ||
 					property.dst !== sliceCall.callee ||
 					property.object !== sliceCall.thisValue ||
-					propertyIp + 1 !== sliceCallIp ||
-					sliceCallIp + 1 !== numberCallIp ||
-					sliceStart?.kind !== "number" ||
-					!Object.is(sliceStart.value, region.sliceStart) ||
+					(sliceStartInstruction?.opcode !== "CREATE_NUMBER" &&
+						sliceStartInstruction?.opcode !== "CREATE_F64") ||
+					!Object.is(sliceStartInstruction.value, region.sliceStart) ||
 					!Number.isFinite(region.sliceStart) ||
 					numberIntrinsic?.opcode !== "LOAD_INTRINSIC" ||
 					numberIntrinsic.intrinsic !== "Number" ||
@@ -3597,9 +3599,10 @@ function lowerFunctionToVmFunction(
 					},
 					cost: region.cost,
 					propertyIp,
-					sliceCallIp: sliceCallIp,
+					sliceCallIp: sliceCallIp!,
+					sliceStartIp,
 					numberIntrinsicIp,
-					numberCallIp: numberCallIp,
+					numberCallIp: numberCallIp!,
 					numberCallee: numberCall.callee,
 					receiver: sliceCall.thisValue,
 					sliceStart: region.sliceStart,

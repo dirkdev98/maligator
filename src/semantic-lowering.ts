@@ -806,6 +806,10 @@ export interface RegisterStringSliceNumberRegion extends RegisterRegionEnvelope<
 	]
 > {
 	readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+	readonly sliceStartInstruction: Extract<
+		RegisterInstruction,
+		{ type: "createNumber" | "createF64" }
+	>;
 	readonly numberIntrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
 	readonly numberCall: Extract<RegisterInstruction, { type: "call" }>;
 	readonly sliceStart: number;
