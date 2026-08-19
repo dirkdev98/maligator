@@ -1,9 +1,9 @@
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
-import { importSemanticRegisterGraph } from "./core-ir-lowering.ts";
+import { buildCoreProgramFromSemanticGraph } from "./core-frontend-builder.ts";
 import type { CoreProgram } from "./core-ir.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
-import { lowerSemanticProgramToRegisterGraph } from "./semantic-lowering.ts";
+import { lowerSemanticProgramToGraph } from "./semantic-lowering.ts";
 
 export interface CoreFrontendOptions {
 	readonly evalCompletion?: boolean;
@@ -27,7 +27,7 @@ export function lowerSemanticProgramToCore(
 		(<T>(_phase: "lower semantic program" | "construct core ir", run: () => T): T =>
 			run());
 	const lowered = runPhase("lower semantic program", () =>
-		lowerSemanticProgramToRegisterGraph(semantic, {
+		lowerSemanticProgramToGraph(semantic, {
 			evalCompletion: options.evalCompletion,
 			evalDirect: options.evalDirect,
 			directEvalContext: options.directEvalContext,
@@ -36,6 +36,6 @@ export function lowerSemanticProgramToCore(
 		}),
 	);
 	return runPhase("construct core ir", () =>
-		importSemanticRegisterGraph(lowered, { verify: true }),
+		buildCoreProgramFromSemanticGraph(lowered, { verify: true }),
 	);
 }

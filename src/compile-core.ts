@@ -3,9 +3,9 @@ import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import { attachCoreCompilerSiteFacts } from "./compiler-site-facts.ts";
 import { lowerSemanticProgramToCore } from "./core-frontend.ts";
-import { lowerCoreProgramToRegisters } from "./core-ir-lowering.ts";
 import { executeCoreOptimizations } from "./core-ir-opt.ts";
 import type { CoreProgram } from "./core-ir.ts";
+import { lowerCoreProgramToTarget } from "./core-target-lowering.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { lowerCoreProgramToVmDefinition } from "./lower-vm.ts";
 import type { VmDefinition } from "./lower-vm.ts";
@@ -58,7 +58,7 @@ export function compileSemanticProgramToVmDefinition(
 	});
 	options.afterCoreOptimization?.(optimized);
 	const lowered = runPhase("lower core ir", () =>
-		lowerCoreProgramToRegisters(optimized, {
+		lowerCoreProgramToTarget(optimized, {
 			reuseRegisters: options.optimization !== "development",
 		}),
 	);

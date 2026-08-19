@@ -1,5 +1,5 @@
 import type { CompilerGuardPlan } from "./compiler-facts.ts";
-import type { RegisterInstruction } from "./semantic-lowering.ts";
+import type { CompilerInstruction } from "./compiler-instruction.ts";
 
 /**
  * Post-allocation form of a Core speculative-region certificate. Core owns the
@@ -10,7 +10,7 @@ export interface CoreAllocatedRegionEnvelope<
 	Kind extends string,
 	Representation extends string,
 	Materialization extends "none" | "on-demand" | "whole-region",
-	Anchors extends ReadonlyArray<RegisterInstruction>,
+	Anchors extends ReadonlyArray<CompilerInstruction>,
 	Guard = CompilerGuardPlan,
 > {
 	readonly kind: Kind;
@@ -23,7 +23,7 @@ export interface CoreAllocatedRegionEnvelope<
 	/** Overlay regions may share instructions with an exclusive representation. */
 	readonly composition?: "overlay";
 	readonly anchors: Anchors;
-	readonly claimedInstructions: ReadonlyArray<RegisterInstruction>;
+	readonly claimedInstructions: ReadonlyArray<CompilerInstruction>;
 	readonly controlFlow: {
 		readonly ordinaryBlocks: ReadonlyArray<number>;
 		readonly exceptionalBlocks: ReadonlyArray<number>;
@@ -40,24 +40,24 @@ export interface CoreAllocatedStringSplitProjectionRegion extends CoreAllocatedR
 	"projected-elements",
 	"whole-region",
 	readonly [
-		Extract<RegisterInstruction, { type: "call" | "callBuiltin" }>,
-		Extract<RegisterInstruction, { type: "loadProperty" | "loadPropertyStatic" }>,
+		Extract<CompilerInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<CompilerInstruction, { type: "loadProperty" | "loadPropertyStatic" }>,
 	]
 > {
 	/** Ordinary property producer retained by a dynamic-call twin. */
-	readonly property?: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly separatorStringIndex: number;
 	/** Allocated registers for every Core SSA alias licensed as the call result. */
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly loads: ReadonlyArray<
 		| {
-				readonly instruction: Extract<RegisterInstruction, { type: "loadProperty" }>;
+				readonly instruction: Extract<CompilerInstruction, { type: "loadProperty" }>;
 				readonly kind: "element";
 				readonly index: number;
 		  }
 		| {
 				readonly instruction: Extract<
-					RegisterInstruction,
+					CompilerInstruction,
 					{ type: "loadPropertyStatic" }
 				>;
 				readonly kind: "length";
@@ -71,61 +71,61 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 	"regexp-capture-spans",
 	"whole-region",
 	readonly [
-		Extract<RegisterInstruction, { type: "call" }>,
-		Extract<RegisterInstruction, { type: "loadProperty" }>,
+		Extract<CompilerInstruction, { type: "call" }>,
+		Extract<CompilerInstruction, { type: "loadProperty" }>,
 	]
 > {
-	readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly nullChecks: ReadonlyArray<{
-		readonly comparison: Extract<RegisterInstruction, { type: "binary" }>;
-		readonly nullValue: Extract<RegisterInstruction, { type: "createNull" }>;
+		readonly comparison: Extract<CompilerInstruction, { type: "binary" }>;
+		readonly nullValue: Extract<CompilerInstruction, { type: "createNull" }>;
 	}>;
 	readonly lockedLiteral?: {
 		readonly constructorIntrinsic: Extract<
-			RegisterInstruction,
+			CompilerInstruction,
 			{ type: "loadIntrinsic" }
 		>;
-		readonly construct: Extract<RegisterInstruction, { type: "construct" }>;
+		readonly construct: Extract<CompilerInstruction, { type: "construct" }>;
 	};
 	readonly lastIndexEffect: "retained-call-twin";
 	readonly loads: ReadonlyArray<{
-		readonly instruction: Extract<RegisterInstruction, { type: "loadProperty" }>;
-		readonly key: Extract<RegisterInstruction, { type: "createNumber" }>;
+		readonly instruction: Extract<CompilerInstruction, { type: "loadProperty" }>;
+		readonly key: Extract<CompilerInstruction, { type: "createNumber" }>;
 		readonly captureIndex: number;
 		readonly consumer?:
 			| {
 					readonly kind: "length";
-					readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+					readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 			  }
 			| {
 					readonly kind: "charCodeAtZero";
-					readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
-					readonly call: Extract<RegisterInstruction, { type: "call" }>;
-					readonly zero?: Extract<RegisterInstruction, { type: "createNumber" }>;
+					readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+					readonly call: Extract<CompilerInstruction, { type: "call" }>;
+					readonly zero?: Extract<CompilerInstruction, { type: "createNumber" }>;
 			  }
 			| {
 					readonly kind: "number";
-					readonly intrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
-					readonly call: Extract<RegisterInstruction, { type: "call" }>;
+					readonly intrinsic: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
+					readonly call: Extract<CompilerInstruction, { type: "call" }>;
 			  }
 			| {
 					readonly kind: "asciiCaseLength";
 					readonly upperProperty: Extract<
-						RegisterInstruction,
+						CompilerInstruction,
 						{ type: "loadPropertyStatic" }
 					>;
-					readonly upperCall: Extract<RegisterInstruction, { type: "call" }>;
+					readonly upperCall: Extract<CompilerInstruction, { type: "call" }>;
 					readonly lowerProperty: Extract<
-						RegisterInstruction,
+						CompilerInstruction,
 						{ type: "loadPropertyStatic" }
 					>;
-					readonly lowerCall: Extract<RegisterInstruction, { type: "call" }>;
+					readonly lowerCall: Extract<CompilerInstruction, { type: "call" }>;
 					readonly resultMoves: ReadonlyArray<
-						Extract<RegisterInstruction, { type: "move" }>
+						Extract<CompilerInstruction, { type: "move" }>
 					>;
 					readonly lengthProperty: Extract<
-						RegisterInstruction,
+						CompilerInstruction,
 						{ type: "loadPropertyStatic" }
 					>;
 			  };
@@ -138,22 +138,22 @@ export interface CoreAllocatedRegExpIteratorProjectionRegion extends CoreAllocat
 	"regexp-iterator-capture-spans",
 	"on-demand",
 	readonly [
-		Extract<RegisterInstruction, { type: "iteratorStep" }>,
-		Extract<RegisterInstruction, { type: "jumpIf" }>,
-		Extract<RegisterInstruction, { type: "loadProperty" }>,
+		Extract<CompilerInstruction, { type: "iteratorStep" }>,
+		Extract<CompilerInstruction, { type: "jumpIf" }>,
+		Extract<CompilerInstruction, { type: "loadProperty" }>,
 	]
 > {
-	readonly doneBranch: Extract<RegisterInstruction, { type: "jumpIf" }>;
+	readonly doneBranch: Extract<CompilerInstruction, { type: "jumpIf" }>;
 	readonly exitBlock: number;
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly statefulEffect: "iterator-last-index-retained-step";
 	readonly runtimeGuard: "exact-brand-next-realm-regexp";
 	readonly loads: ReadonlyArray<{
-		readonly instruction: Extract<RegisterInstruction, { type: "loadProperty" }>;
-		readonly key: Extract<RegisterInstruction, { type: "createNumber" }>;
+		readonly instruction: Extract<CompilerInstruction, { type: "loadProperty" }>;
+		readonly key: Extract<CompilerInstruction, { type: "createNumber" }>;
 		readonly captureIndex: number;
-		readonly numberIntrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
-		readonly numberCall: Extract<RegisterInstruction, { type: "call" }>;
+		readonly numberIntrinsic: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
+		readonly numberCall: Extract<CompilerInstruction, { type: "call" }>;
 	}>;
 }
 
@@ -163,17 +163,17 @@ export interface CoreAllocatedStringSliceNumberRegion extends CoreAllocatedRegio
 	"primitive-string-span-number",
 	"none",
 	readonly [
-		Extract<RegisterInstruction, { type: "call" }>,
-		Extract<RegisterInstruction, { type: "call" }>,
+		Extract<CompilerInstruction, { type: "call" }>,
+		Extract<CompilerInstruction, { type: "call" }>,
 	]
 > {
-	readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly sliceStartInstruction: Extract<
-		RegisterInstruction,
+		CompilerInstruction,
 		{ type: "createNumber" | "createF64" }
 	>;
-	readonly numberIntrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
-	readonly numberCall: Extract<RegisterInstruction, { type: "call" }>;
+	readonly numberIntrinsic: Extract<CompilerInstruction, { type: "loadIntrinsic" }>;
+	readonly numberCall: Extract<CompilerInstruction, { type: "call" }>;
 	readonly sliceStart: number;
 }
 
@@ -183,22 +183,22 @@ export interface CoreAllocatedStringSplitCursorRegion extends CoreAllocatedRegio
 	"split-cursor-spans",
 	"on-demand",
 	readonly [
-		Extract<RegisterInstruction, { type: "call" | "callBuiltin" }>,
-		Extract<RegisterInstruction, { type: "jumpIf" }>,
-		Extract<RegisterInstruction, { type: "loadPropertyStatic" }>,
-		Extract<RegisterInstruction, { type: "jump" }>,
+		Extract<CompilerInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<CompilerInstruction, { type: "jumpIf" }>,
+		Extract<CompilerInstruction, { type: "loadPropertyStatic" }>,
+		Extract<CompilerInstruction, { type: "jump" }>,
 	]
 > {
 	/** Ordinary property producer retained by a dynamic-call twin. */
-	readonly property?: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
-	readonly compare: Extract<RegisterInstruction, { type: "binary" }>;
-	readonly element: Extract<RegisterInstruction, { type: "loadProperty" }>;
-	readonly trimProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
-	readonly trimCall: Extract<RegisterInstruction, { type: "call" }>;
-	readonly increment: Extract<RegisterInstruction, { type: "unary" }>;
+	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly compare: Extract<CompilerInstruction, { type: "binary" }>;
+	readonly element: Extract<CompilerInstruction, { type: "loadProperty" }>;
+	readonly trimProperty: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
+	readonly trimCall: Extract<CompilerInstruction, { type: "call" }>;
+	readonly increment: Extract<CompilerInstruction, { type: "unary" }>;
 	readonly resultRegisters: ReadonlyArray<number>;
 	readonly primitiveStringLengths: ReadonlyArray<
-		Extract<RegisterInstruction, { type: "loadPropertyStatic" }>
+		Extract<CompilerInstruction, { type: "loadPropertyStatic" }>
 	>;
 	readonly exitBlock: number;
 }
@@ -209,16 +209,16 @@ export interface CoreAllocatedNumericFusionRegion extends CoreAllocatedRegionEnv
 	"binary-pairs-f64",
 	"none",
 	readonly [
-		Extract<RegisterInstruction, { type: "binary" }>,
-		Extract<RegisterInstruction, { type: "binary" }>,
+		Extract<CompilerInstruction, { type: "binary" }>,
+		Extract<CompilerInstruction, { type: "binary" }>,
 	],
 	"structural"
 > {
 	readonly composition: "overlay";
 	readonly runtimeGuard: "number-operands";
 	readonly pairs: ReadonlyArray<{
-		readonly first: Extract<RegisterInstruction, { type: "binary" }>;
-		readonly finish: Extract<RegisterInstruction, { type: "binary" }>;
+		readonly first: Extract<CompilerInstruction, { type: "binary" }>;
+		readonly finish: Extract<CompilerInstruction, { type: "binary" }>;
 		readonly firstUsePosition: 1 | 2;
 	}>;
 }
@@ -228,17 +228,17 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 	"stack-object-plan",
 	"activation-local-fixed-shape-objects",
 	"none" | "on-demand",
-	readonly [Extract<RegisterInstruction, { type: "createObject" | "createObjectShaped" }>]
+	readonly [Extract<CompilerInstruction, { type: "createObject" | "createObjectShaped" }>]
 > {
 	readonly sites: ReadonlyArray<{
 		readonly allocation: Extract<
-			RegisterInstruction,
+			CompilerInstruction,
 			{ type: "createObject" | "createObjectShaped" }
 		>;
 		readonly slotCount: number;
 		readonly accesses: ReadonlyArray<{
 			readonly instruction: Extract<
-				RegisterInstruction,
+				CompilerInstruction,
 				{
 					type:
 						| "loadProperty"
@@ -250,11 +250,11 @@ export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionE
 			readonly slot: number;
 		}>;
 		readonly inheritedAccess?: Extract<
-			RegisterInstruction,
+			CompilerInstruction,
 			{ type: "loadProperty" | "loadPropertyStatic" }
 		>;
 		readonly materializations: ReadonlyArray<{
-			readonly instruction: Extract<RegisterInstruction, { type: "return" }>;
+			readonly instruction: Extract<CompilerInstruction, { type: "return" }>;
 			readonly kind: "return";
 		}>;
 	}>;

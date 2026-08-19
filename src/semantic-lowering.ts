@@ -1,13 +1,16 @@
 import type { ESTree } from "meriyah";
-import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
 import type {
 	CompilerOptimizationDecision,
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
-import type { CompilerProgramFacts, KnownBuiltinCall } from "./compiler-facts.ts";
-import type { CoreAllocatedRegion } from "./core-ir-regions.ts";
+import type { CompilerProgramFacts } from "./compiler-facts.ts";
+import type {
+	CompilerBinaryOperator,
+	CompilerInstruction,
+	CompilerIntrinsic,
+} from "./compiler-instruction.ts";
 import {
 	DIRECT_EVAL_PRIVATE_FIELD,
 	DIRECT_EVAL_PRIVATE_GETTER,
@@ -43,7 +46,7 @@ import type {
 } from "./semantic-analysis.ts";
 import { debugEnabled, log } from "./utils.ts";
 
-export interface SemanticLoweringProgram {
+export interface SemanticGraph {
 	/**
 	 * The semantic program that we are compiling.
 	 */
@@ -83,7 +86,7 @@ export interface SemanticLoweringProgram {
 	 *
 	 * The first function in this list is the initial entrypoint.
 	 */
-	functions: Array<RegisterFunction>;
+	functions: Array<SemanticGraphFunction>;
 	stringConstants: Array<Array<number>>;
 	stringConstantToIndex: Map<string, number>;
 
@@ -284,7 +287,7 @@ type BindingLocation =
  * the brand marker of the *declaring* class, so access from a nested class
  * brand-checks against the right class.
  */
-interface RegisterPrivateName {
+interface SemanticPrivateName {
 	static: boolean;
 	brandBinding: Binding;
 	fieldBinding?: Binding;
@@ -299,13 +302,13 @@ interface RegisterPrivateName {
  * install as ordinary own data properties. Computed public keys are evaluated
  * once at class definition and captured.
  */
-type RegisterInstanceFieldKey =
+type SemanticInstanceFieldKey =
 	// Non-computed public key, the own-property name.
 	| { kind: "name"; name: string }
 	// Computed key, converted once at class definition and captured.
 	| { kind: "captured"; binding: Binding };
 
-type RegisterInstanceFieldPlanEntry =
+type SemanticInstanceFieldPlanEntry =
 	| {
 			private: true;
 			fieldBinding: Binding;
@@ -315,7 +318,7 @@ type RegisterInstanceFieldPlanEntry =
 	  }
 	| {
 			private: false;
-			key: RegisterInstanceFieldKey;
+			key: SemanticInstanceFieldKey;
 			valueNode: ESTree.Expression | null;
 			initializerNode: ESTree.PropertyDefinition;
 	  };
@@ -324,15 +327,15 @@ type RegisterInstanceFieldPlanEntry =
  * A static class element in source order, run once by the static initializer
  * with this = the constructor: a static field install or a static block body.
  */
-type RegisterStaticElement =
-	| { kind: "field"; entry: RegisterInstanceFieldPlanEntry }
+type SemanticStaticElement =
+	| { kind: "field"; entry: SemanticInstanceFieldPlanEntry }
 	| { kind: "block"; node: ESTree.StaticBlock; body: Array<ESTree.Statement> };
 
 /**
  * Class body context carried by constructor and method functions so super
  * references can reach the parent class through its captured binding.
  */
-interface RegisterClassContext {
+interface SemanticClassContext {
 	superBinding?: Binding;
 
 	/**
@@ -357,7 +360,7 @@ interface RegisterClassContext {
 	 * the per-class-evaluation symbols and brand markers are captured so any
 	 * `#x` reference resolves lexically with no dynamic lookup.
 	 */
-	privateNames?: Map<string, RegisterPrivateName>;
+	privateNames?: Map<string, SemanticPrivateName>;
 	instanceBrandBinding?: Binding;
 	staticBrandBinding?: Binding;
 
@@ -368,7 +371,7 @@ interface RegisterClassContext {
 	 */
 	isConstructor?: boolean;
 	isDerivedConstructor?: boolean;
-	instanceFieldPlan?: Array<RegisterInstanceFieldPlanEntry>;
+	instanceFieldPlan?: Array<SemanticInstanceFieldPlanEntry>;
 
 	/** Shared derived-constructor environment used by lexical arrows and eval. */
 	usesSharedSuperState?: boolean;
@@ -377,12 +380,12 @@ interface RegisterClassContext {
 	instanceInitializerBinding?: Binding;
 }
 
-export interface RegisterFunction {
+export interface SemanticGraphFunction {
 	semanticFile: SemanticFile;
 	functionIndex: number;
 
 	/**
-	 * Eval-completion register (see SemanticLoweringProgram.evalCompletion). When set,
+	 * Eval-completion register (see SemanticGraph.evalCompletion). When set,
 	 * this is the Script entry function: statement evaluation maintains its
 	 * completion value here, the function returns it, and it is initialized to
 	 * undefined at entry. Undefined on every other function.
@@ -413,14 +416,7 @@ export interface RegisterFunction {
 	 */
 	nameStringIndex: number;
 
-	blocks: Array<RegisterBlock>;
-	/**
-	 * Function-level speculative-region certificates selected after the ordinary
-	 * Core has reached its optimization fixpoint. Instructions remain the complete
-	 * semantic twin; lowering drops an entire certificate when any common anchor,
-	 * claim, scope, license, representation, or cost invariant no longer resolves.
-	 */
-	regions?: ReadonlyArray<CoreAllocatedRegion>;
+	blocks: Array<SemanticGraphBlock>;
 	argumentsObjectRegister?: number;
 	/** Prologue snapshots for statically classified direct arguments reads. */
 	staticArgumentsRegisters?: Map<ESTree.Node, number>;
@@ -428,7 +424,7 @@ export interface RegisterFunction {
 	staticMappedArgumentBindings?: Map<ESTree.Node, Binding>;
 	/** Register cache for the lazily created missing-index arguments object. */
 	staticArgumentsFallbackRegister?: number;
-	classContext?: RegisterClassContext;
+	classContext?: SemanticClassContext;
 
 	/**
 	 * Whether this function owns a `prototype` property. Constructors (normal
@@ -518,7 +514,7 @@ export interface RegisterFunction {
 	 * Stack of enclosing loops, used to patch break and continue jumps once
 	 * the loop exit and continue targets exist.
 	 */
-	loops?: Array<RegisterLoopContext>;
+	loops?: Array<SemanticControlContext>;
 
 	/**
 	 * Labels collected by a LabeledStatement, consumed by the immediately
@@ -528,7 +524,7 @@ export interface RegisterFunction {
 	pendingLabels?: Array<string>;
 }
 
-interface RegisterLoopContext {
+interface SemanticControlContext {
 	/**
 	 * break targets the innermost breakable (loop/switch) or, when labeled, the
 	 * matching labeled scope; continue the innermost / matching loop. "label"
@@ -539,8 +535,8 @@ interface RegisterLoopContext {
 	 * "iterator" entries track a destructuring iterator across suspension.
 	 */
 	kind: "loop" | "switch" | "finally" | "label" | "with" | "iterator";
-	breakJumps: Array<Extract<RegisterInstruction, { type: "jump" }>>;
-	continueJumps: Array<Extract<RegisterInstruction, { type: "jump" }>>;
+	breakJumps: Array<Extract<CompilerInstruction, { type: "jump" }>>;
+	continueJumps: Array<Extract<CompilerInstruction, { type: "jump" }>>;
 
 	/**
 	 * Labels attached to this scope (a single statement may carry several).
@@ -574,7 +570,7 @@ interface RegisterLoopContext {
 	 * entry block (patched once it exists), plus the registers carrying the
 	 * pending completion kind and value across the finalizer.
 	 */
-	finallyEntryJumps?: Array<Extract<RegisterInstruction, { type: "jump" }>>;
+	finallyEntryJumps?: Array<Extract<CompilerInstruction, { type: "jump" }>>;
 	completionKindReg?: number;
 	completionValueReg?: number;
 
@@ -585,11 +581,14 @@ interface RegisterLoopContext {
 	 * carries a unique kind code and the epilogue re-dispatch for it. NORMAL
 	 * needs no arm (it falls through).
 	 */
-	finalizerArms?: Map<string, { kind: number; fill: (block: RegisterBlock) => void }>;
+	finalizerArms?: Map<
+		string,
+		{ kind: number; fill: (block: SemanticGraphBlock) => void }
+	>;
 }
 
-export interface RegisterBlock {
-	instructions: Array<RegisterInstruction>;
+export interface SemanticGraphBlock {
+	instructions: Array<CompilerInstruction>;
 }
 
 /**
@@ -598,986 +597,11 @@ export interface RegisterBlock {
  * Short-circuit expressions create blocks mid-expression and advance the
  * cursor, so instructions following a sub-expression land in the right block.
  */
-interface RegisterCursor {
-	block: RegisterBlock;
+interface SemanticCursor {
+	block: SemanticGraphBlock;
 }
 
-export type RegisterImmediateValue =
-	| { kind: "undefined" }
-	| { kind: "null" }
-	| { kind: "boolean"; value: boolean }
-	| { kind: "number"; value: number }
-	| { kind: "string"; index: number };
-
-export type RegisterTypeofResult =
-	| "undefined"
-	| "object"
-	| "boolean"
-	| "number"
-	| "string"
-	| "symbol"
-	| "bigint"
-	| "function";
-
-export type RegisterInstruction =
-	| {
-			/**
-			 * Source-position marker — carries no runtime opcode. Records the
-			 * interned source position (an index into program.sourcePositions) of
-			 * the statement that follows. lowerFunctionToVmFunction consumes these
-			 * into the per-function position table (which drives VM stack traces and
-			 * the native backend's `pos` writes) and strips them from the bytecode,
-			 * so the VM never dispatches one. Core import strips it into source
-			 * metadata before optimization and allocation.
-			 */
-			type: "sourcePos";
-			pos: number;
-	  }
-	| {
-			type: "move";
-
-			// [dest, source]
-			registers: [number, number];
-	  }
-	| {
-			type: "return";
-
-			// [return value]
-			registers: [number];
-	  }
-	| {
-			type: "jumpIf";
-
-			// [ifTrueRegister]
-			registers: [number];
-
-			// [jumpTarget];
-			blocks: [number];
-	  }
-	| {
-			type: "jump";
-
-			// [jumpTarget]
-			blocks: [number];
-	  }
-	| {
-			type: "createNumber";
-
-			// [destination]
-			registers: [number];
-
-			value: number;
-	  }
-	| {
-			type: "createF64";
-
-			// [destination]
-			registers: [number];
-
-			value: number;
-	  }
-	| {
-			type: "createBoolean";
-
-			// [destination]
-			registers: [number];
-
-			value: boolean;
-	  }
-	| {
-			type: "createString";
-
-			// [destination]
-			registers: [number];
-
-			stringIndex: number;
-	  }
-	| {
-			type: "createBigint";
-
-			// [destination]
-			registers: [number];
-
-			// Index into the program's immortal bigint constant pool.
-			bigintIndex: number;
-	  }
-	| {
-			type: "createObject";
-
-			// [destination, ...finite-region Number guards]
-			registers: [number, ...Array<number>];
-	  }
-	| {
-			// A fully static data-property object literal: all keys are known
-			// non-index strings, so the final shape is built once and the slots are
-			// filled directly, skipping per-property defineProperty transitions.
-			type: "createObjectShaped";
-
-			// [destination, ...valueRegisters] — one value register per key, in order
-			registers: [number, ...Array<number>];
-
-			// String-constant index of each key, parallel to the value registers.
-			keyStringIndices: Array<number>;
-	  }
-	| {
-			type: "createArray";
-			/** COMPILE-ONLY: a pristine empty Array is immediately followed by an
-			 * exact canonical `[0, length)` indexed fill. Native code may reserve the
-			 * final dense capacity before executing the otherwise-unchanged loop. */
-			freshDenseReserveLength?: number;
-			// [destination]
-			registers: [number];
-
-			length: number;
-	  }
-	| {
-			type: "instantiateLiteralTemplate";
-
-			// [destination]
-			registers: [number];
-
-			// Offset into SemanticLoweringProgram.literalTemplateData.
-			templateOffset: number;
-	  }
-	| {
-			// Build an `import * as ns` module namespace exotic object. Each export
-			// names a string constant and the global slot holding its live value.
-			type: "createModuleNamespace";
-
-			// [destination]
-			registers: [number];
-
-			exports: Array<{ nameStringIndex: number; slot: number }>;
-	  }
-	| {
-			// Build (and cache, per call site) a tagged-template strings object: a
-			// frozen array of the cooked strings with a frozen `.raw` array of the
-			// raw strings. `cacheSlot` is a dedicated global slot the runtime fills
-			// on first evaluation so the object identity is stable across calls. A
-			// cooked index of -1 means the cooked value is `undefined` (an invalid
-			// escape sequence, legal only in a tagged template).
-			type: "createTemplateObject";
-
-			// [destination]
-			registers: [number];
-
-			cacheSlot: number;
-			cookedIndices: Array<number>;
-			rawIndices: Array<number>;
-	  }
-	| {
-			type: "createUndefined";
-
-			// [destination]
-			registers: [number];
-	  }
-	| {
-			// The uninitialized ("empty") sentinel for a binding in its temporal
-			// dead zone. Stored into let/const/class binding slots before the
-			// declaration runs; reading one (via throwIfTdz) throws ReferenceError.
-			type: "createEmpty";
-
-			// [destination]
-			registers: [number];
-	  }
-	| {
-			type: "createNull";
-
-			// [destination]
-			registers: [number];
-	  }
-	| {
-			type: "createFunction";
-
-			// [destination]
-			registers: [number];
-
-			functionIndex: number;
-	  }
-	| {
-			type: "createArgumentsObject";
-
-			// [destination]
-			registers: [number];
-	  }
-	| {
-			// Direct non-escaping `arguments.length` from frame metadata.
-			type: "loadArgumentCount";
-			registers: [number];
-	  }
-	| {
-			// Direct non-escaping `arguments[index]` from the retained argument slice.
-			type: "loadArgument";
-			registers: [number];
-			index: number;
-	  }
-	| {
-			// Direct static index read. Supplied indexes use the optional live mapped
-			// value; missing indexes lazily materialize and cache the arguments object.
-			type: "loadStaticArgument";
-			// [destination, updated fallback cache, mapped value or -1,
-			// previous fallback cache]. The duplicated cache operand makes its
-			// read/write contract explicit to Core dataflow and allocation.
-			registers: [number, number, number, number];
-			index: number;
-	  }
-	| {
-			type: "loadThis";
-
-			// [destination]
-			registers: [number];
-	  }
-	| {
-			// Speculative-call-inlining guard (produced by the inliner, not the front end):
-			// dst := callee is a function object with `functionIndex`. Feeds a jumpIf that
-			// picks the inlined body vs the deopt call.
-			type: "guardFunctionIndex";
-			// [destination (boolean), callee]
-			registers: [number, number];
-			functionIndex: number;
-	  }
-	| {
-			// Per-iteration loop environment (CreatePerIterationEnvironment). envPush
-			// enters a loop scope (fresh env, parent = current); envCopy replaces the
-			// current scope env with a sibling that copies the bindings forward; envPop
-			// restores the enclosing env. scopeId is a synthetic negative capture-scope
-			// id; slotCount = number of captured loop-head bindings.
-			type: "envPush" | "envCopy";
-			scopeId: number;
-			slotCount: number;
-	  }
-	| {
-			type: "envPop";
-	  }
-	| {
-			type: "call";
-
-			// [destination, callee, this, ...arguments]
-			registers: [number, number, number, ...Array<number>];
-			/**
-			 * Canonical fact-system call target. Consumers must validate the identity
-			 * proof and preserve its fallback obligation before specializing the call.
-			 */
-			knownBuiltinCall?: KnownBuiltinCall;
-			/**
-			 * COMPILE-ONLY: the exact ordinary script-function index held by the callee.
-			 * Native lowering guards the live callee before entering this target and
-			 * falls back to generic dispatch on a mismatch.
-			 */
-			directFunctionIndex?: number;
-			/**
-			 * COMPILE-ONLY: this is an exact `target.call(thisArg, ...args)` property-call
-			 * shape. Native lowering guards the loaded method against the retained
-			 * %Function.prototype.call% before calling `target` with shifted arguments.
-			 */
-			directFunctionCall?: true;
-			/** Exact ordinary script target used by directFunctionCall, when known. */
-			directCallTargetFunctionIndex?: number;
-			/**
-			 * COMPILE-ONLY: the Number position is statically known to be an exact
-			 * non-negative integer and, for `inBounds`, below this primitive String
-			 * receiver's length on every path reaching the call.
-			 */
-			directStringCharCodeAtPosition?: "inBounds";
-			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
-			immediateValues?: Array<RegisterImmediateValue | undefined>;
-	  }
-	| {
-			/**
-			 * A locked canonical unary Math call after its identity, exact arity, and
-			 * Number representation obligations have all been discharged. The ordinary
-			 * namespace/property/call twin has been removed; this operation cannot invoke
-			 * user code or coerce its operand.
-			 */
-			type: "mathUnaryNumber";
-			// [destination, operand]
-			registers: [number, number];
-			operation: string;
-	  }
-	| {
-			/** Locked two-Number Math.min/Math.max with no remaining fallback edge. */
-			type: "mathBinaryNumber";
-			// [destination, left, right]
-			registers: [number, number, number];
-			operation: string;
-	  }
-	| {
-			/**
-			 * Exact locked builtin invocation after property resolution and callback
-			 * identity have both been proved. Argument evaluation remains explicit;
-			 * this operation may still allocate, call user code, or throw according to its
-			 * registry effects, but it has no dynamic property/call fallback edge.
-			 */
-			type: "callBuiltin";
-			// [destination, this, ...arguments]
-			registers: [number, number, ...Array<number>];
-			operation: DirectBuiltinOperationId;
-			/** Canonical facts remain attached after dynamic dispatch is erased. */
-			knownBuiltinCall: KnownBuiltinCall;
-	  }
-	| {
-			type: "construct";
-
-			// [destination, callee, ...arguments]
-			registers: [number, number, ...Array<number>];
-			/**
-			 * COMPILE-ONLY: the exact ordinary script-constructor index held by the
-			 * callee. Native lowering guards the live callee before direct construction
-			 * and falls back to generic [[Construct]] dispatch on a mismatch.
-			 */
-			directFunctionIndex?: number;
-			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
-			immediateValues?: Array<RegisterImmediateValue | undefined>;
-	  }
-	| {
-			type: "throw";
-
-			// [value]
-			registers: [number];
-	  }
-	| {
-			type: "catch";
-
-			// [destination]
-			registers: [number];
-	  }
-	| {
-			// Marks the start of a protected instruction range. Lowering turns the
-			// marker positions into the static exception handler table.
-			type: "tryBegin";
-
-			// [handlerBlock, tryEndBlock]
-			// The tryEnd block is referenced here so the optimizer cannot drop
-			// it when the try body terminates early (return / throw).
-			blocks: [number, number];
-	  }
-	| {
-			// Marks the end of a protected instruction range.
-			type: "tryEnd";
-	  }
-	| {
-			type: "loadIntrinsic";
-
-			// [destination]
-			registers: [number];
-
-			intrinsic: RegisterIntrinsic;
-	  }
-	| {
-			type: `load${"Local" | "Captured" | "Global"}`;
-
-			// [destination]
-			registers: [number];
-
-			functionIndex?: number;
-			index: number;
-	  }
-	| {
-			// [destination]; the active frame's new.target (undefined for a
-			// plain call, the constructor for a `new`/construct activation).
-			type: "loadNewTarget";
-
-			registers: [number];
-	  }
-	| {
-			// [destination]; the function object that pushed the active frame. Used
-			// to initialize a named function expression's own-name binding to the
-			// closure at entry (the interpreter reads frame->callee, compiled reads
-			// its callee parameter).
-			type: "loadCallee";
-
-			registers: [number];
-	  }
-	| {
-			type: `store${"Local" | "Captured" | "Global"}`;
-
-			// [source]
-			registers: [number];
-
-			functionIndex?: number;
-			index: number;
-	  }
-	| {
-			type: "loadProperty";
-
-			// [destination, object, key]
-			registers: [number, number, number];
-	  }
-	| {
-			type: "loadPropertyStatic";
-
-			// [destination, object]
-			registers: [number, number];
-			stringIndex: number;
-			/** COMPILE-ONLY: this loop-bound `length` load has a matched guarded
-			 * primitive-String consumer, so native code may try the String brand first. */
-			primitiveStringLength?: true;
-	  }
-	| {
-			type: "loadSuperProperty";
-
-			// [destination, base, key, receiver] — lookup starts at base while
-			// accessors are invoked with receiver (the super reference's thisValue).
-			registers: [number, number, number, number];
-	  }
-	| {
-			type: "storeProperty";
-
-			// [object, key, value]
-			registers: [number, number, number];
-	  }
-	| {
-			type: "storePropertyStatic";
-
-			// [object, value]
-			registers: [number, number];
-			stringIndex: number;
-	  }
-	| {
-			type: "toPropertyKey";
-
-			// [destination, object, key] — object-coercibility-check the base (a nil
-			// base throws first) then ToPropertyKey(key) once, so a read-modify-write
-			// member access converts a computed key a single time in the right order.
-			registers: [number, number, number];
-	  }
-	| {
-			type: "storeSuperProperty";
-
-			// [object, key, value, receiver] — the lookup walks object (the
-			// super base) while the write applies to receiver (this).
-			registers: [number, number, number, number];
-	  }
-	| {
-			type: "loadPrototype";
-
-			// [destination, object] — the object's [[Prototype]], null for
-			// non-objects and end-of-chain.
-			registers: [number, number];
-	  }
-	| {
-			type: "getIterator";
-
-			// [iterator_dst, next_dst, source] — spec GetIterator; the
-			// iterator object and its cached next method (the IteratorRecord).
-			registers: [number, number, number];
-	  }
-	| {
-			type: "getAsyncIterator";
-
-			// [iterator_dst, next_dst, source] — GetIterator(source, async):
-			// @@asyncIterator, or the sync iterator wrapped. For for-await-of.
-			registers: [number, number, number];
-	  }
-	| {
-			type: "iteratorNext";
-
-			// [result_dst, iterator, next] — call next() and leave the raw
-			// result (a promise for async iteration) to be awaited.
-			registers: [number, number, number];
-	  }
-	| {
-			type: "iteratorStep";
-
-			// [value_dst, done_dst, iterator, next] — spec IteratorStep; the
-			// step value and a done boolean.
-			registers: [number, number, number, number];
-	  }
-	| {
-			type: "iteratorClose";
-
-			// [iterator] — spec IteratorClose. `normal` selects the
-			// normal-completion variant (propagates return()'s throw, TypeError on a
-			// non-object result), used after a destructuring pattern finishes without
-			// exhausting the iterator. The default (omitted/false) is the
-			// abrupt-completion variant for break/return/throw loop exits.
-			registers: [number];
-			normal?: boolean;
-	  }
-	| {
-			type: "forInKeys";
-
-			// [destination, source] — collect the enumerable string keys of
-			// source into a fresh array the for-in loop then iterates.
-			registers: [number, number];
-	  }
-	| {
-			// Generator prologue: suspend the activation and return a generator
-			// object to the caller. No operands; uses the frame's return target.
-			type: "generatorStart";
-	  }
-	| {
-			// Async-function prologue: create the result promise + hidden state,
-			// hand the promise to the caller, then keep running the body. No
-			// operands.
-			type: "asyncStart";
-	  }
-	| {
-			type: "yield";
-			/**
-			 * COMPILE-ONLY: resumption can only perform the standard completed-generator
-			 * next/return/throw behavior, so the runtime may release the activation now.
-			 */
-			terminal?: true;
-
-			// [valueDst, modeDst, yieldedSrc] — yieldedSrc is handed out; on
-			// resume the sent value lands in valueDst and the resume mode code in
-			// modeDst.
-			registers: [number, number, number];
-	  }
-	| {
-			type: "await";
-
-			// [valueDst, modeDst, awaitedSrc] — awaitedSrc is awaited; on resume
-			// the settled value lands in valueDst and the resume mode code in
-			// modeDst (same layout as yield, so the resume dispatch is shared).
-			registers: [number, number, number];
-	  }
-	| {
-			type: "callSpread";
-
-			// [destination, callee, this, arguments_array]
-			registers: [number, number, number, number];
-	  }
-	| {
-			type: "callSpreadIterable";
-
-			// [destination, callee, this, iterable] — used when the entire
-			// argument list is one spread element.
-			registers: [number, number, number, number];
-	  }
-	| {
-			type: "constructSpread";
-
-			// [destination, callee, arguments_array]
-			registers: [number, number, number];
-	  }
-	| {
-			type: "constructSuper";
-
-			// [destination, parent, arguments_array]
-			registers: [number, number, number];
-	  }
-	| {
-			type: "constructSuperExplicit";
-
-			// [destination, parent, arguments_array, new_target, current_this]. The
-			// final operand aliases destination: the packed VM op is two-address, while
-			// the duplicate keeps its read-before-write dependency explicit.
-			registers: [number, number, number, number, number];
-	  }
-	| {
-			type: "setThis";
-
-			// [value] — synchronize the current activation's this binding.
-			registers: [number];
-	  }
-	| {
-			type: "mergeDataProperties";
-
-			// [target, source] — object spread {...source} into target.
-			registers: [number, number];
-	  }
-	| {
-			type: "deleteProperty";
-
-			// [destination, object, key]
-			registers: [number, number, number];
-	  }
-	| {
-			type: "defineAccessor";
-
-			// [object, key, accessor]
-			registers: [number, number, number];
-
-			kind: "get" | "set";
-
-			// Object literal accessors are enumerable, class accessors not.
-			enumerable: boolean;
-	  }
-	| {
-			type: "defineProperty";
-
-			// [object, key, value]; defines an own data property. Ordinary
-			// object/class members use the writable/configurable defaults; class
-			// constructor prototype wiring overrides both to false.
-			registers: [number, number, number];
-
-			enumerable: boolean;
-			writable?: boolean;
-			configurable?: boolean;
-	  }
-	| {
-			// SetFunctionName([func], [key]): set an anonymous function/class value's
-			// `name` own property from a *computed* property key (spec
-			// NamedEvaluation / PropertyDefinitionEvaluation) — a string key names it
-			// directly, a symbol key names it `[description]` (or "" if the symbol has
-			// none). Emitted for a computed-key literal member whose value is an
-			// anonymous function definition (static keys use the compile-time nameHint).
-			type: "setFunctionName";
-
-			// A getter/setter prefixes the computed name with "get "/"set "
-			// (SetFunctionName's prefix argument). Undefined for plain members.
-			namePrefix?: "get" | "set";
-
-			// [func, key] — both uses (no destination).
-			registers: [number, number];
-	  }
-	| {
-			// [destination]; mints a fresh hidden symbol that keys a private
-			// class member for this class evaluation.
-			type: "createPrivateName";
-
-			registers: [number];
-	  }
-	| {
-			// Mint fresh hidden symbols directly into captured slots. The slots are
-			// parallel to capturedIndices and all belong to functionIndex.
-			type: "createPrivateNames";
-			functionIndex: number;
-			capturedIndices: Array<number>;
-	  }
-	| {
-			// [object, key, value]; installs a private member (field or brand
-			// marker) keyed by the private symbol in key. Throws if already
-			// present.
-			type: "definePrivate";
-
-			registers: [number, number, number];
-	  }
-	| {
-			// [object, ...keys]; install undefined-valued private instance fields
-			// in source order, stopping on the first duplicate stamp.
-			type: "initPrivateFields";
-
-			registers: [number, ...Array<number>];
-	  }
-	| {
-			// [destination, object, key]; own-only read keyed by a private
-			// symbol. Throws TypeError when the receiver lacks the member.
-			type: "loadPrivate";
-
-			registers: [number, number, number];
-	  }
-	| {
-			// [object, key, value]; own-only write keyed by a private symbol.
-			// Throws TypeError when the receiver lacks the member.
-			type: "storePrivate";
-
-			registers: [number, number, number];
-	  }
-	| {
-			// [destination, object, key]; the `#x in o` brand check. Yields a
-			// boolean; throws TypeError when the receiver is not an object.
-			type: "hasPrivate";
-
-			registers: [number, number, number];
-	  }
-	| {
-			type: "setPrototype";
-
-			// [object, prototype]
-			registers: [number, number];
-
-			// Object literal `__proto__:` definitions ignore values that are
-			// neither object nor null; class extends wiring always applies.
-			literal: boolean;
-	  }
-	| {
-			type: "loadUndeclared";
-
-			// [destination]; never written, the instruction always throws a
-			// ReferenceError naming the unresolvable identifier.
-			registers: [number];
-
-			nameStringIndex: number;
-	  }
-	| {
-			// Runtime resolution of a statically undeclared name: the global object
-			// property, or ReferenceError if absent. This applies in both modes.
-			type: "loadGlobalProperty";
-			registers: [number];
-			nameStringIndex: number;
-	  }
-	| {
-			// Write [src] to a global object property (created if absent): a
-			// script top-level `var`/`function` binding store. A declaration-only
-			// write creates a missing non-configurable var property but preserves an
-			// existing property's value and descriptor.
-			type: "storeGlobalProperty";
-			registers: [number];
-			nameStringIndex: number;
-			declaration?: boolean;
-			declarationConfigurable?: boolean;
-	  }
-	| {
-			// Declaration-initialize a contiguous run of script `var` global
-			// properties to undefined. Global declaration checks and Annex B's
-			// EMPTY-valued stores remain scalar storeGlobalProperty instructions.
-			type: "initGlobalVars";
-			nameStringIndices: Array<number>;
-			declarationConfigurable: boolean;
-	  }
-	| {
-			// Throw ReferenceError if [source] holds the uninitialized sentinel:
-			// the named let/const/class binding is still in its temporal dead zone.
-			type: "throwIfTdz";
-
-			// [source]
-			registers: [number];
-
-			nameStringIndex: number;
-	  }
-	| {
-			// `with (obj)` entry: ToObject([object]) and push it onto the frame's
-			// with-object stack (throws if [object] is null/undefined).
-			type: "withEnter";
-
-			// [object]
-			registers: [number];
-	  }
-	| {
-			// Pop the innermost with-object off the frame's stack. Emitted on every
-			// edge that leaves the with body (normal, break, continue, return).
-			type: "withExit";
-			registers: [];
-	  }
-	| {
-			// Dynamic `with`-scope read: [destination] gets the value if the named
-			// binding is provided by some active with-object (HasProperty honoring
-			// `Symbol.unscopables`, innermost first), else the EMPTY sentinel so the
-			// compiler can fall back to the static binding.
-			type: "withGet";
-
-			// [destination]
-			registers: [number];
-
-			nameStringIndex: number;
-	  }
-	| {
-			// Dynamic `with`-scope reference base: [destination] gets the with-object
-			// that provides the named binding (HasProperty honoring `Symbol.unscopables`,
-			// innermost first), else the EMPTY sentinel. Unlike withGet this returns the
-			// *object* (not its value) so an assignment can capture the reference base
-			// BEFORE evaluating the right-hand side — PutValue uses the initially-created
-			// Reference (spec 11.13.1 / with S12.10). The compiler then reads/stores the
-			// property on that captured base, or falls back to the static binding on EMPTY.
-			type: "withResolveBase";
-
-			// [destination]
-			registers: [number];
-
-			nameStringIndex: number;
-	  }
-	| {
-			// Dynamic `with`-scope write: if some active with-object provides the
-			// named binding, set it there and write `true` to [found]; otherwise
-			// write `false` so the compiler falls back to the static store. [value]
-			// holds the value to assign.
-			type: "withSet";
-
-			// [found, value]
-			registers: [number, number];
-
-			nameStringIndex: number;
-	  }
-	| {
-			// [destination] = ([source] is the EMPTY sentinel). Lets the compiler
-			// branch on a withGet miss.
-			type: "isEmpty";
-
-			// [destination, source]
-			registers: [number, number];
-	  }
-	| {
-			// RequireObjectCoercible: throws a TypeError when the value is null
-			// or undefined. Emitted at the start of destructuring patterns so
-			// nil sources throw even when the pattern reads no properties.
-			type: "requireCoercible";
-
-			// [value]
-			registers: [number];
-	  }
-	| {
-			// ClassDefinitionEvaluation heritage check: throws a TypeError unless
-			// the superclass is a constructor whose `prototype` is an object or
-			// null. Emitted before a class uses its (non-null) superclass.
-			type: "checkSuperClass";
-
-			// [parent]
-			registers: [number];
-	  }
-	| {
-			// Collect the frame arguments from startIndex onward into a fresh
-			// array, for rest parameters.
-			type: "createRestArguments";
-
-			// [destination]
-			registers: [number];
-
-			startIndex: number;
-	  }
-	| {
-			// Collect the elements of an array-like source from startIndex
-			// onward into a fresh array, for array pattern rest elements.
-			// Approximates the spec's iterator protocol with index reads.
-			type: "arrayRest";
-
-			// [destination, source]
-			registers: [number, number];
-
-			startIndex: number;
-	  }
-	| {
-			// CopyDataProperties: copy the source's own enumerable properties
-			// into a fresh object, skipping the excluded keys. Used for object
-			// pattern rest elements.
-			type: "copyDataProperties";
-
-			// [destination, source, ...excludedKeys]
-			registers: [number, number, ...Array<number>];
-	  }
-	| {
-			type: "binary";
-
-			// [destination, left, right]
-			registers: [number, number, number];
-
-			operator:
-				| "+"
-				| "-"
-				| "*"
-				| "/"
-				| "%"
-				| "**"
-				| "&"
-				| "|"
-				| "^"
-				| "<<"
-				| ">>"
-				| ">>>"
-				| "<"
-				| "<="
-				| ">"
-				| ">="
-				| "=="
-				| "!="
-				| "==="
-				| "!=="
-				| "in"
-				| "instanceof";
-	  }
-	| {
-			type: "unary";
-
-			// [destination, operand]
-			registers: [number, number];
-
-			operator:
-				| "!"
-				| "-"
-				| "+"
-				| "~"
-				| "typeof"
-				| "tonumeric"
-				| "increment"
-				| "decrement";
-	  }
-	| {
-			// Non-allocating comparison against one of the canonical typeof results.
-			type: "typeofCompare";
-
-			// [destination, operand]
-			registers: [number, number];
-
-			expected: RegisterTypeofResult;
-			negated: boolean;
-	  };
-
-type RegisterBinaryOperator = Extract<
-	RegisterInstruction,
-	{ type: "binary" }
->["operator"];
-type RegisterIntrinsic =
-	| "Object"
-	| "Array"
-	| "Function"
-	| "Error"
-	| "TypeError"
-	| "RangeError"
-	| "ReferenceError"
-	| "SyntaxError"
-	| "URIError"
-	| "EvalError"
-	| "AggregateError"
-	| "String"
-	| "Number"
-	| "Boolean"
-	| "Symbol"
-	| "BigInt"
-	| "ArrayBuffer"
-	| "SharedArrayBuffer"
-	| "Int8Array"
-	| "Uint8Array"
-	| "Uint8ClampedArray"
-	| "Int16Array"
-	| "Uint16Array"
-	| "Int32Array"
-	| "Uint32Array"
-	| "Float32Array"
-	| "Float64Array"
-	| "BigInt64Array"
-	| "BigUint64Array"
-	| "DataView"
-	| "Map"
-	| "Set"
-	| "WeakMap"
-	| "WeakSet"
-	| "WeakRef"
-	| "FinalizationRegistry"
-	| "Promise"
-	| "Date"
-	| "RegExp"
-	| "Intl"
-	| "Iterator"
-	| "AsyncIterator"
-	| "parseInt"
-	| "parseFloat"
-	| "isNaN"
-	| "isFinite"
-	| "decodeURI"
-	| "decodeURIComponent"
-	| "encodeURI"
-	| "encodeURIComponent"
-	| "Math"
-	| "JSON"
-	| "Atomics"
-	| "Reflect"
-	| "Proxy"
-	| "console"
-	| "globalThis"
-	| "eval"
-	| "NaN"
-	| "Infinity"
-	// The CommonJS require native. Not a user-visible global: the compiler emits
-	// it for the synthetic CJS entry and for resolved `require("specifier")` calls.
-	| "__cjs_require"
-	// Internal helper for guarded array-iteration inlining (the inliner emits
-	// LOAD_INTRINSIC + call to test a receiver before the inlined loop). Not a
-	// user-visible global.
-	| "__arrayIterationEligible"
-	// Internal flatMap append helper for guarded inlining: flattens a mapped value
-	// one level into the result array being built. Not a user-visible global.
-	| "__arrayFlatMapAppend"
-	// The direct-eval intrinsic (builtin_eval.c). Emitted as the callee of a
-	// direct `eval(...)` call; receives the source + a marshaled scope object.
-	// Not a user-visible global.
-	| "__directEval"
-	// HostImportModuleDynamically entry point. Not a user-visible global; emitted
-	// for the syntactic ImportCall form `import(specifier)`.
-	| "__dynamicImport";
-
-const irIntrinsics = new Set<string>([
+const compilerIntrinsics = new Set<string>([
 	"Object",
 	"Array",
 	"Function",
@@ -1643,11 +667,11 @@ const irIntrinsics = new Set<string>([
 	"__dynamicImport",
 ]);
 
-function isIRIntrinsic(name: string): name is RegisterIntrinsic {
-	return irIntrinsics.has(name);
+function isCompilerIntrinsic(name: string): name is CompilerIntrinsic {
+	return compilerIntrinsics.has(name);
 }
 
-const irBinaryOperators = new Set<string>([
+const compilerBinaryOperators = new Set<string>([
 	"+",
 	"-",
 	"*",
@@ -1672,11 +696,11 @@ const irBinaryOperators = new Set<string>([
 	"instanceof",
 ]);
 
-function isRegisterBinaryOperator(operator: string): operator is RegisterBinaryOperator {
-	return irBinaryOperators.has(operator);
+function isCompilerBinaryOperator(operator: string): operator is CompilerBinaryOperator {
+	return compilerBinaryOperators.has(operator);
 }
 
-export function debugSemanticLoweringProgram(program: SemanticLoweringProgram) {
+export function debugSemanticGraph(program: SemanticGraph) {
 	let output = "";
 	const indent = "  ";
 
@@ -1695,7 +719,7 @@ export function debugSemanticLoweringProgram(program: SemanticLoweringProgram) {
 }
 
 /**
- * Frontend lowering from a SemanticProgram to an ephemeral register graph.
+ * Frontend lowering from a SemanticProgram to an ephemeral construction graph.
  *
  * Choosing a tracing compiler might bite us in the back later, as we might drop things like
  * functions that are used in dynamic `eval`. But for now it has some advantages:
@@ -1705,7 +729,7 @@ export function debugSemanticLoweringProgram(program: SemanticLoweringProgram) {
  *
  * We might never support dynamic eval tho, so in that case we are all setup ;)
  */
-export function lowerSemanticProgramToRegisterGraph(
+export function lowerSemanticProgramToGraph(
 	semantic: SemanticProgram,
 	options: {
 		evalCompletion?: boolean;
@@ -1715,7 +739,7 @@ export function lowerSemanticProgramToRegisterGraph(
 		collectOptimizationDiagnostics?: boolean;
 	} = {},
 ) {
-	const program: SemanticLoweringProgram = {
+	const program: SemanticGraph = {
 		semantic,
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
 		optimizationDecisions:
@@ -1826,7 +850,7 @@ export function lowerSemanticProgramToRegisterGraph(
 		compileCjsWrappers(program);
 	}
 
-	if (debugEnabled) debugSemanticLoweringProgram(program);
+	if (debugEnabled) debugSemanticGraph(program);
 
 	return program;
 }
@@ -1840,7 +864,7 @@ export function lowerSemanticProgramToRegisterGraph(
  * with live bindings, and there is no per-module init function or orchestrator.
  */
 function compileMergedModuleInit(
-	program: SemanticLoweringProgram,
+	program: SemanticGraph,
 	evaluationOrder: Array<string>,
 	cjsEntryId?: number,
 ) {
@@ -1853,7 +877,7 @@ function compileMergedModuleInit(
 		program.compiledModuleInitForPaths.set(modulePath, null);
 	}
 
-	const fn: RegisterFunction = {
+	const fn: SemanticGraphFunction = {
 		// Switched to each module in turn so identifier resolution uses the right
 		// file's bindings while compiling that module's segment.
 		semanticFile: program.semantic.files[0]!,
@@ -1869,17 +893,17 @@ function compileMergedModuleInit(
 	};
 	program.functions.push(fn);
 
-	let tail: RegisterBlock | null = null;
+	let tail: SemanticGraphBlock | null = null;
 
 	// Pure-data CommonJS modules are built once up front, before any module body.
 	if (program.cjsEagerSlot.size > 0) {
-		const eagerBlock: RegisterBlock = { instructions: [] };
+		const eagerBlock: SemanticGraphBlock = { instructions: [] };
 		fn.blocks.push(eagerBlock);
 		emitCjsEagerInits(program, fn, { block: eagerBlock });
 		tail = eagerBlock;
 	}
 	if (program.cjsHostSlot.size > 0) {
-		const hostBlock: RegisterBlock = { instructions: [] };
+		const hostBlock: SemanticGraphBlock = { instructions: [] };
 		fn.blocks.push(hostBlock);
 		if (tail) {
 			tail.instructions.push({ type: "jump", blocks: [fn.blocks.length - 1] });
@@ -1900,7 +924,7 @@ function compileMergedModuleInit(
 		}
 		fn.semanticFile = file;
 
-		const prologue: RegisterBlock = { instructions: [] };
+		const prologue: SemanticGraphBlock = { instructions: [] };
 		const prologueIndex = fn.blocks.push(prologue) - 1;
 		// Chain the previous module's tail into this module's segment.
 		if (tail) {
@@ -1917,12 +941,12 @@ function compileMergedModuleInit(
 	}
 
 	if (cjsEntryId !== undefined) {
-		const entryBlock: RegisterBlock = { instructions: [] };
+		const entryBlock: SemanticGraphBlock = { instructions: [] };
 		const entryBlockIndex = fn.blocks.push(entryBlock) - 1;
 		if (tail) {
 			tail.instructions.push({ type: "jump", blocks: [entryBlockIndex] });
 		}
-		const cursor: RegisterCursor = { block: entryBlock };
+		const cursor: SemanticCursor = { block: entryBlock };
 		emitRequiredEsmNamespaceInits(program, fn, entryBlock);
 		emitCjsRequire(program, fn, cursor, cjsEntryId);
 	}
@@ -1937,9 +961,9 @@ function compileMergedModuleInit(
 
 /** Materialize each synchronously-required ESM namespace after ESM evaluation. */
 function emitRequiredEsmNamespaceInits(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 ) {
 	for (const [modulePath, slot] of program.cjsEsmNamespaceSlot) {
 		const namespace = emitNamespaceObjectRegister(
@@ -1956,12 +980,12 @@ function emitRequiredEsmNamespaceInits(
  * Compile the top-level statements of a single-module program (or the
  * entrypoint when there is only one module) into its own init function.
  */
-function compileFileInit(program: SemanticLoweringProgram, initFile: SemanticFile) {
+function compileFileInit(program: SemanticGraph, initFile: SemanticFile) {
 	if (program.compiledModuleInitForPaths.has(initFile.path)) {
 		return program.compiledModuleInitForPaths.get(initFile.path) ?? -1;
 	}
 
-	const fn: RegisterFunction = {
+	const fn: SemanticGraphFunction = {
 		semanticFile: initFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -1989,7 +1013,7 @@ function compileFileInit(program: SemanticLoweringProgram, initFile: SemanticFil
 	// A prologue block (TDZ inits + namespace objects) only when needed, so a
 	// module with only var/function top-levels compiles exactly as before.
 	if (moduleNeedsPrologue(program, initFile) || program.evalDirect) {
-		const prologue: RegisterBlock = { instructions: [] };
+		const prologue: SemanticGraphBlock = { instructions: [] };
 		fn.blocks.push(prologue);
 		if (moduleNeedsPrologue(program, initFile)) {
 			emitModulePrologue(program, fn, prologue, initFile);
@@ -2032,9 +1056,9 @@ function compileFileInit(program: SemanticLoweringProgram, initFile: SemanticFil
 
 /** EvalDeclarationInstantiation for sloppy direct-eval vars not already present. */
 function emitDirectEvalVarDeclarations(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	file: SemanticFile,
 ): void {
 	if (
@@ -2078,12 +1102,12 @@ function emitDirectEvalVarDeclarations(
 			registers: [alreadyPersistent, base, persistent],
 			operator: "===",
 		});
-		const skip: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+		const skip: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 			type: "jumpIf",
 			registers: [alreadyPersistent],
 			blocks: [-1],
 		};
-		const createJump: Extract<RegisterInstruction, { type: "jump" }> = {
+		const createJump: Extract<CompilerInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -2104,7 +1128,7 @@ function emitDirectEvalVarDeclarations(
 			name,
 			undefinedValue,
 		);
-		const createJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+		const createJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -2124,8 +1148,8 @@ interface DirectEvalContextBinding {
 }
 
 function prepareDirectEvalClassContext(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 ): Array<DirectEvalContextBinding> {
 	const inherited = program.directEvalContext;
 	const bindings: Array<DirectEvalContextBinding> = [];
@@ -2183,7 +1207,7 @@ function prepareDirectEvalClassContext(
 		}
 	}
 
-	const privateNames = new Map<string, RegisterPrivateName>();
+	const privateNames = new Map<string, SemanticPrivateName>();
 	for (let index = 0; index < inherited.privateNames.length; index++) {
 		const inheritedName = inherited.privateNames[index]!;
 		const makeBinding = (slot: DirectEvalPrivateSlot): Binding => {
@@ -2195,7 +1219,7 @@ function prepareDirectEvalClassContext(
 			bindings.push({ key: directEvalPrivateScopeKey(index, slot), binding });
 			return binding;
 		};
-		const entry: RegisterPrivateName = {
+		const entry: SemanticPrivateName = {
 			static: (inheritedName.flags & DIRECT_EVAL_PRIVATE_STATIC) !== 0,
 			brandBinding: makeBinding("brand"),
 		};
@@ -2227,9 +1251,9 @@ function prepareDirectEvalClassContext(
 }
 
 function emitDirectEvalContextBindings(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	bindings: Array<DirectEvalContextBinding>,
 ): void {
 	for (const { key, binding } of bindings) {
@@ -2253,7 +1277,7 @@ function emitDirectEvalContextBindings(
  * graph off by requiring the entrypoint. Eligible ESM dependencies are
  * evaluated first and exposed to require as stable namespace objects.
  */
-function compileCjsProgram(program: SemanticLoweringProgram, initFile: SemanticFile) {
+function compileCjsProgram(program: SemanticGraph, initFile: SemanticFile) {
 	assignCjsModuleIds(program);
 	classifyPureDataCjsModules(program);
 	classifyCommonJsHostModules(program);
@@ -2272,7 +1296,7 @@ function compileCjsProgram(program: SemanticLoweringProgram, initFile: SemanticF
 }
 
 /** Allocate one stable namespace slot for every ESM target of CommonJS require. */
-function classifyCommonJsEsmModules(program: SemanticLoweringProgram) {
+function classifyCommonJsEsmModules(program: SemanticGraph) {
 	const graph = program.semantic.graph;
 	if (!graph) {
 		return;
@@ -2298,7 +1322,7 @@ function classifyCommonJsEsmModules(program: SemanticLoweringProgram) {
 }
 
 /** Reject mixed graphs that cannot be evaluated synchronously by scope hoisting. */
-function validateSynchronousCommonJsEsm(program: SemanticLoweringProgram) {
+function validateSynchronousCommonJsEsm(program: SemanticGraph) {
 	if (program.cjsEsmNamespaceSlot.size === 0) {
 		return;
 	}
@@ -2342,7 +1366,7 @@ function validateSynchronousCommonJsEsm(program: SemanticLoweringProgram) {
 }
 
 /** Assign a registry id to every CommonJS module in the graph. */
-function assignCjsModuleIds(program: SemanticLoweringProgram) {
+function assignCjsModuleIds(program: SemanticGraph) {
 	for (const file of program.semantic.files) {
 		if (file.commonjs && !program.cjsModuleId.has(file.path)) {
 			program.cjsModuleId.set(file.path, program.cjsModuleId.size);
@@ -2351,7 +1375,7 @@ function assignCjsModuleIds(program: SemanticLoweringProgram) {
 }
 
 /** Give each side-effect-free pure-data CommonJS module an eager exports slot. */
-function classifyPureDataCjsModules(program: SemanticLoweringProgram) {
+function classifyPureDataCjsModules(program: SemanticGraph) {
 	for (const file of program.semantic.files) {
 		if (
 			file.commonjs &&
@@ -2364,7 +1388,7 @@ function classifyPureDataCjsModules(program: SemanticLoweringProgram) {
 }
 
 /** Allocate one stable exports slot for each host built-in reached by require. */
-function classifyCommonJsHostModules(program: SemanticLoweringProgram) {
+function classifyCommonJsHostModules(program: SemanticGraph) {
 	const graph = program.semantic.graph;
 	if (!graph) {
 		return;
@@ -2389,9 +1413,9 @@ function classifyCommonJsHostModules(program: SemanticLoweringProgram) {
  * a pure-data module (built once at init), else a lazy `require()` call.
  */
 function emitCjsModuleExports(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	cjsPath: string,
 ): number {
 	const esmNamespaceSlot = program.cjsEsmNamespaceSlot.get(cjsPath);
@@ -2429,9 +1453,9 @@ function emitCjsModuleExports(
 
 /** Build host CommonJS exports once, preserving the ESM default object's identity. */
 function emitCommonJsHostInits(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 ) {
 	for (const [specifier, slot] of program.cjsHostSlot) {
 		const hostModule = program.hostModules.find(
@@ -2479,9 +1503,9 @@ function emitCommonJsHostInits(
  * effects.
  */
 function emitCjsEagerInits(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 ) {
 	for (const [cjsPath, slot] of program.cjsEagerSlot) {
 		const value = emitCjsRequire(program, fn, cursor, program.cjsModuleId.get(cjsPath)!);
@@ -2494,7 +1518,7 @@ function emitCjsEagerInits(
 }
 
 /** Compile every CommonJS module's wrapper, recording its index by id. */
-function compileCjsWrappers(program: SemanticLoweringProgram) {
+function compileCjsWrappers(program: SemanticGraph) {
 	for (const file of program.semantic.files) {
 		if (file.commonjs) {
 			const id = program.cjsModuleId.get(file.path)!;
@@ -2509,9 +1533,9 @@ function compileCjsWrappers(program: SemanticLoweringProgram) {
  * it. Emitted into the module's init prologue, before its body runs.
  */
 function emitCjsImportInits(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	file: SemanticFile,
 ) {
 	for (const cjsImport of program.cjsImports.get(file.path) ?? []) {
@@ -2549,9 +1573,9 @@ function emitCjsImportInits(
 
 /** `object.name` → a fresh register holding the loaded value. */
 function emitLoadProperty(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	objectRegister: number,
 	name: string,
 ): number {
@@ -2566,9 +1590,9 @@ function emitLoadProperty(
 
 /** `object.name = value` (data store). */
 function emitStoreProperty(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	objectRegister: number,
 	name: string,
 	valueRegister: number,
@@ -2581,8 +1605,8 @@ function emitStoreProperty(
 }
 
 /** The synthetic CJS program entry (function 0): `require(entryId)`. */
-function compileCjsEntryDriver(program: SemanticLoweringProgram, entryId: number) {
-	const fn: RegisterFunction = {
+function compileCjsEntryDriver(program: SemanticGraph, entryId: number) {
+	const fn: SemanticGraphFunction = {
 		semanticFile: program.semantic.files[0]!,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -2596,9 +1620,9 @@ function compileCjsEntryDriver(program: SemanticLoweringProgram, entryId: number
 	};
 	program.functions.push(fn);
 
-	const block: RegisterBlock = { instructions: [] };
+	const block: SemanticGraphBlock = { instructions: [] };
 	fn.blocks.push(block);
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	emitCommonJsHostInits(program, fn, cursor);
 	emitCjsEagerInits(program, fn, cursor);
 	emitCjsRequire(program, fn, cursor, entryId);
@@ -2612,13 +1636,10 @@ function compileCjsEntryDriver(program: SemanticLoweringProgram, entryId: number
  * wrapper's `this` is `exports` (set by mal_vm_cjs_require), so module top-level
  * `this` resolves correctly with no special handling.
  */
-function compileCjsModuleWrapper(
-	program: SemanticLoweringProgram,
-	file: SemanticFile,
-): number {
+function compileCjsModuleWrapper(program: SemanticGraph, file: SemanticFile): number {
 	program.compiledModuleInitForPaths.set(file.path, null);
 
-	const fn: RegisterFunction = {
+	const fn: SemanticGraphFunction = {
 		semanticFile: file,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -2632,7 +1653,7 @@ function compileCjsModuleWrapper(
 	};
 	program.functions.push(fn);
 
-	const paramsBlock: RegisterBlock = { instructions: [] };
+	const paramsBlock: SemanticGraphBlock = { instructions: [] };
 	fn.blocks.push(paramsBlock);
 
 	// Bind the wrapper parameters to the incoming argument registers [0..5), in
@@ -2693,9 +1714,9 @@ function commonJsDirname(filePath: string): string {
 
 /** Emit a call to the CJS `require` intrinsic with a numeric module id. */
 function emitCjsRequire(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	moduleId: number,
 ): number {
 	const callee = nextRegisterDestination(fn);
@@ -2726,9 +1747,9 @@ function emitCjsRequire(
  * shadowed require, which throws at runtime).
  */
 function tryCompileCjsRequireCall(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	callExpression: ESTree.CallExpression,
 ): number | undefined {
 	const callee = callExpression.callee as unknown as ESTree.Node;
@@ -2773,9 +1794,9 @@ function tryCompileCjsRequireCall(
 }
 
 function emitMissingCjsModuleThrow(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	specifier: string,
 	requesterPath: string,
 ): number {
@@ -2807,7 +1828,7 @@ function emitMissingCjsModuleThrow(
  * module was retained specifically so its Node-shaped error can be caught.
  */
 function resolveCjsModulePath(
-	program: SemanticLoweringProgram,
+	program: SemanticGraph,
 	file: SemanticFile,
 	specifier: string,
 ): string | null | undefined {
@@ -2828,9 +1849,9 @@ function resolveCjsModulePath(
  * runs throws ReferenceError. Skips functions (hoisted) and imports (aliased).
  */
 function emitTdzHoleInits(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	bindings: Array<Binding>,
 ) {
 	for (const binding of bindings) {
@@ -2850,9 +1871,9 @@ function emitTdzHoleInits(
  * parameters already have their entry value and must not be reset.
  */
 function emitVarDeclarationInits(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	scope: Scope,
 	functionNames: ReadonlySet<string>,
 ) {
@@ -2947,9 +1968,9 @@ function emitVarDeclarationInits(
 }
 
 function emitGlobalDeclarationChecks(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	scope: Scope,
 	functionDeclarations: ReadonlyArray<ESTree.FunctionDeclaration>,
 	functionNames: ReadonlySet<string>,
@@ -3011,9 +2032,9 @@ function emitGlobalDeclarationChecks(
  * all function kinds.
  */
 function emitFunctionBodyTdz(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	functionNode:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -3032,10 +2053,7 @@ function emitFunctionBodyTdz(
  * Whether a module needs an init prologue: it has top-level TDZ bindings
  * (let/const/class) or `import * as ns` namespace objects to build.
  */
-function moduleNeedsPrologue(
-	program: SemanticLoweringProgram,
-	file: SemanticFile,
-): boolean {
+function moduleNeedsPrologue(program: SemanticGraph, file: SemanticFile): boolean {
 	return (
 		(file.scopes[0]?.bindings ?? []).some(isTdzBinding) ||
 		(program.namespaceImports.get(file.path)?.length ?? 0) > 0 ||
@@ -3059,7 +2077,7 @@ function fileUsesImportMeta(file: SemanticFile): boolean {
 	);
 }
 
-function importMetaSlot(program: SemanticLoweringProgram, file: SemanticFile): number {
+function importMetaSlot(program: SemanticGraph, file: SemanticFile): number {
 	const key = `\0import-meta:${file.path}`;
 	let slot = program.dynamicModuleStatusSlot.get(key);
 	if (slot === undefined) {
@@ -3079,9 +2097,9 @@ function importMetaUrl(filePath: string): string {
 }
 
 function emitImportMetaInit(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	file: SemanticFile,
 ): void {
 	if (!fileUsesImportMeta(file)) return;
@@ -3134,9 +2152,9 @@ function emitImportMetaInit(
  * any `import * as ns` namespace objects.
  */
 function emitModulePrologue(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	file: SemanticFile,
 ) {
 	emitTdzHoleInits(program, fn, block, file.scopes[0]?.bindings ?? []);
@@ -3160,7 +2178,7 @@ function emitModulePrologue(
  * dependents that follow it — the spec ordering falls out for free.
  */
 function makeInitAsyncIfTopLevelAwait(
-	fn: RegisterFunction,
+	fn: SemanticGraphFunction,
 	modules: Array<SemanticFile>,
 ) {
 	if (modules.some((file) => hasTopLevelAwait(file.ast))) {
@@ -3256,9 +2274,9 @@ function referencesSuper(node: unknown): boolean {
  * and, unless an arrow, has its own this/super).
  */
 function inheritedPrivateEnvironment(
-	fn: RegisterFunction,
+	fn: SemanticGraphFunction,
 	isArrow: boolean,
-): RegisterClassContext | undefined {
+): SemanticClassContext | undefined {
 	const context = fn.classContext;
 	if (!context) {
 		return undefined;
@@ -3296,10 +2314,10 @@ function inheritedPrivateEnvironment(
 }
 
 function compileNewFunction(
-	program: SemanticLoweringProgram,
+	program: SemanticGraph,
 	binding: Binding,
 	functionNode: ESTree.Node,
-	classContext?: RegisterClassContext,
+	classContext?: SemanticClassContext,
 ) {
 	if (
 		functionNode.type !== "FunctionDeclaration" &&
@@ -3326,7 +2344,7 @@ function compileNewFunction(
 	}
 
 	const fnFile = foundFile ?? program.semantic.files[0]!;
-	const fn: RegisterFunction = {
+	const fn: SemanticGraphFunction = {
 		semanticFile: fnFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(
@@ -3389,10 +2407,10 @@ function compileNewFunction(
 }
 
 function compileNewFunctionExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	functionNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
-	classContext?: RegisterClassContext,
+	classContext?: SemanticClassContext,
 	nameOverride?: string,
 	isMethod?: boolean,
 ) {
@@ -3408,7 +2426,7 @@ function compileNewFunctionExpression(
 	// and class constructors keep it (default true); async is excluded at runtime.
 	const hasPrototype = isGenerator ? true : !(isArrow || isMethod);
 
-	const compiledFn: RegisterFunction = {
+	const compiledFn: SemanticGraphFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(
@@ -3501,8 +2519,8 @@ function compileNewFunctionExpression(
  * resolve the slot through the enclosing frame's environment.
  */
 function createCapturedBinding(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	name: string,
 ): Binding {
 	const binding: Binding = { kind: "const", name, usageNodes: [], scopedTo: "captured" };
@@ -3531,9 +2549,9 @@ function classFieldKeyName(key: ESTree.Expression | ESTree.PrivateIdentifier): s
  * two evaluations of the same class source are not brand compatible.
  */
 function mintPrivateNames(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	bindings: Array<Binding | undefined>,
 ) {
 	const capturedIndices: Array<number> = [];
@@ -3561,10 +2579,10 @@ function mintPrivateNames(
  * (CreateDataProperty). `this` is the receiver being initialized.
  */
 function emitFieldInstall(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
-	entry: RegisterInstanceFieldPlanEntry,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
+	entry: SemanticInstanceFieldPlanEntry,
 ) {
 	emitLexicalProviderCaptures(program, fn, cursor, entry.initializerNode, true);
 	const nameHint = entry.private
@@ -3623,9 +2641,9 @@ function emitFieldInstall(
 
 /** Snapshot a field/static-block provider for arrows that capture its context. */
 function emitLexicalProviderCaptures(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	node: ESTree.PropertyDefinition | ESTree.StaticBlock | ESTree.Program,
 	newTargetIsUndefined: boolean,
 ): void {
@@ -3668,10 +2686,10 @@ function emitLexicalProviderCaptures(
  * field initializers in source order. No-op when the class has none.
  */
 function emitInstanceElementInit(
-	program: SemanticLoweringProgram,
-	ctorFn: RegisterFunction,
-	cursor: RegisterCursor,
-	classContext: RegisterClassContext,
+	program: SemanticGraph,
+	ctorFn: SemanticGraphFunction,
+	cursor: SemanticCursor,
+	classContext: SemanticClassContext,
 ) {
 	const brand = classContext.instanceBrandBinding;
 	const plan = classContext.instanceFieldPlan ?? [];
@@ -3737,13 +2755,13 @@ function emitInstanceElementInit(
  * initializers in source order.
  */
 function buildStaticInitializer(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	staticContext: RegisterClassContext,
-	staticElements: Array<RegisterStaticElement>,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	staticContext: SemanticClassContext,
+	staticElements: Array<SemanticStaticElement>,
 	staticBrandBinding: Binding | undefined,
 ): number {
-	const initFn: RegisterFunction = {
+	const initFn: SemanticGraphFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -3759,9 +2777,9 @@ function buildStaticInitializer(
 	};
 	program.functions.push(initFn);
 
-	const block: RegisterBlock = { instructions: [] };
+	const block: SemanticGraphBlock = { instructions: [] };
 	initFn.blocks.push(block);
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 
 	if (staticBrandBinding) {
 		const thisRegister = nextRegisterDestination(initFn);
@@ -3803,11 +2821,11 @@ function buildStaticInitializer(
 
 /** Build the caller-owned InitializeInstanceElements closure used by eval/arrow super(). */
 function buildInstanceInitializer(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	constructorContext: RegisterClassContext,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	constructorContext: SemanticClassContext,
 ): number {
-	const initFn: RegisterFunction = {
+	const initFn: SemanticGraphFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -3831,7 +2849,7 @@ function buildInstanceInitializer(
 	};
 	program.functions.push(initFn);
 
-	const block: RegisterBlock = { instructions: [] };
+	const block: SemanticGraphBlock = { instructions: [] };
 	initFn.blocks.push(block);
 	emitInstanceElementInit(program, initFn, { block }, constructorContext);
 	endFunction(initFn);
@@ -3849,9 +2867,9 @@ function buildInstanceInitializer(
  * install through the constructor's InitializeInstanceElements sequence.
  */
 function compileClass(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
 	nameHint?: string,
 ): number {
@@ -3902,14 +2920,14 @@ function compileClass(
 	// captured bindings that will hold them. ownNames holds this class's own
 	// declarations; they are layered over the enclosing class's private
 	// environment so a nested class can still reach an outer class's privates.
-	const ownNames = new Map<string, RegisterPrivateName>();
+	const ownNames = new Map<string, SemanticPrivateName>();
 	let instanceBrandBinding: Binding | undefined;
 	let staticBrandBinding: Binding | undefined;
-	const instanceFieldPlan: Array<RegisterInstanceFieldPlanEntry> = [];
-	const staticElements: Array<RegisterStaticElement> = [];
+	const instanceFieldPlan: Array<SemanticInstanceFieldPlanEntry> = [];
+	const staticElements: Array<SemanticStaticElement> = [];
 	const computedFieldKeys = new Map<ESTree.PropertyDefinition, Binding>();
 
-	const ensurePrivateEntry = (name: string, isStatic: boolean): RegisterPrivateName => {
+	const ensurePrivateEntry = (name: string, isStatic: boolean): SemanticPrivateName => {
 		const brandBinding = isStatic
 			? (staticBrandBinding ??= createCapturedBinding(program, fn, `__sbrand_${classId}`))
 			: (instanceBrandBinding ??= createCapturedBinding(
@@ -3940,7 +2958,7 @@ function compileClass(
 				throw new SyntaxError("'arguments' is not allowed in a class field initializer");
 			}
 			const valueNode = (member.value ?? null) as ESTree.Expression | null;
-			let entry: RegisterInstanceFieldPlanEntry;
+			let entry: SemanticInstanceFieldPlanEntry;
 			if (member.key.type === "PrivateIdentifier") {
 				const name = `#${member.key.name}`;
 				const privateEntry = ensurePrivateEntry(name, member.static);
@@ -4023,7 +3041,7 @@ function compileClass(
 
 	// Layer this class's own private names over the enclosing private
 	// environment so nested classes resolve outer privates (with shadowing).
-	const privateNames = new Map<string, RegisterPrivateName>([
+	const privateNames = new Map<string, SemanticPrivateName>([
 		...(fn.classContext?.privateNames ?? []),
 		...ownNames,
 	]);
@@ -4091,7 +3109,7 @@ function compileClass(
 			: undefined;
 	// NamedEvaluation: anonymous class expressions take the binding name.
 	const className = classNode.id?.name ?? nameHint ?? "";
-	const constructorContext: RegisterClassContext = {
+	const constructorContext: SemanticClassContext = {
 		...sharedContext,
 		isStatic: false,
 		isConstructor: true,
@@ -4375,9 +3393,9 @@ function compileClass(
 }
 
 function compileClassMemberKey(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	member: ESTree.MethodDefinition,
 ): number {
 	if (!member.key) {
@@ -4400,9 +3418,9 @@ function compileClassMemberKey(
 }
 
 function loadCapturedBinding(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	binding: Binding,
 ): number {
 	return loadRegisterFromLocation(
@@ -4418,8 +3436,8 @@ function loadCapturedBinding(
  * against the class that declared the member rather than the current one.
  */
 function privateBrandBinding(
-	_fn: RegisterFunction,
-	entry: RegisterPrivateName,
+	_fn: SemanticGraphFunction,
+	entry: SemanticPrivateName,
 ): Binding | undefined {
 	return entry.brandBinding;
 }
@@ -4430,11 +3448,11 @@ function privateBrandBinding(
  * not branded by the declaring class. The loaded value is discarded.
  */
 function emitPrivateBrandCheck(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	objectReg: number,
-	entry: RegisterPrivateName,
+	entry: SemanticPrivateName,
 ) {
 	const brand = privateBrandBinding(fn, entry);
 	if (!brand) {
@@ -4455,9 +3473,9 @@ function emitPrivateBrandCheck(
  * placeholder for expression-position callers.
  */
 function emitThrowTypeError(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	message: string,
 ): number {
 	const constructor = nextRegisterDestination(fn);
@@ -4483,9 +3501,9 @@ interface CompiledPrivateMemberReference {
 
 /** Evaluate a private member reference without performing its later GetValue/PutValue. */
 function compilePrivateMemberReference(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	member: ESTree.MemberExpression,
 ): CompiledPrivateMemberReference {
 	if (member.property.type !== "PrivateIdentifier") {
@@ -4502,9 +3520,9 @@ function compilePrivateMemberReference(
  * shared function for methods, or a brand-checked getter call for accessors.
  */
 function compilePrivateMemberLoad(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	objectReg: number,
 	name: string,
 ): number {
@@ -4555,9 +3573,9 @@ function compilePrivateMemberLoad(
  * brand-checked setter call for accessors.
  */
 function compilePrivateMemberStore(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	objectReg: number,
 	name: string,
 	valueReg: number,
@@ -4600,13 +3618,13 @@ function compilePrivateMemberStore(
  * arguments to the parent constructor on the same this for derived ones.
  */
 function compileDefaultConstructor(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	superBinding: Binding | undefined,
 	name: string,
-	classContext: RegisterClassContext,
+	classContext: SemanticClassContext,
 ): number {
-	const ctorFn: RegisterFunction = {
+	const ctorFn: SemanticGraphFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, name),
@@ -4623,9 +3641,9 @@ function compileDefaultConstructor(
 	};
 	program.functions.push(ctorFn);
 
-	const block: RegisterBlock = { instructions: [] };
+	const block: SemanticGraphBlock = { instructions: [] };
 	ctorFn.blocks.push(block);
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 
 	if (superBinding) {
 		const location = getOrCreateBindingLocation(program, ctorFn, superBinding);
@@ -4659,7 +3677,7 @@ function compileDefaultConstructor(
 /**
  * Return 'undefined' from all blocks that don't unconditionally jump yet.
  */
-function endFunction(fn: RegisterFunction) {
+function endFunction(fn: SemanticGraphFunction) {
 	for (const block of fn.blocks) {
 		const lastInstruction = block.instructions.at(-1);
 		if (
@@ -4699,9 +3717,9 @@ function superThisStateKey(): string {
 }
 
 function loadSharedSuperThis(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	checkInitialized: boolean,
 ): number {
 	const binding = fn.classContext?.superThisStateBinding;
@@ -4730,9 +3748,9 @@ function loadSharedSuperThis(
 }
 
 function storeSharedSuperThis(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	value: number,
 ): void {
 	const binding = fn.classContext?.superThisStateBinding;
@@ -4752,11 +3770,11 @@ function storeSharedSuperThis(
 }
 
 function synchronizeSharedConstructorReturns(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 ): void {
 	for (const block of fn.blocks) {
-		const rewritten: RegisterBlock = { instructions: [] };
+		const rewritten: SemanticGraphBlock = { instructions: [] };
 		for (const instruction of block.instructions) {
 			if (instruction.type === "return") {
 				const value = loadSharedSuperThis(program, fn, { block: rewritten }, false);
@@ -4792,7 +3810,7 @@ function functionStrict(
 }
 
 /** Whether code in this function runs sloppy (non-strict). */
-function isSloppyFunction(fn: RegisterFunction): boolean {
+function isSloppyFunction(fn: SemanticGraphFunction): boolean {
 	return !(fn.strict ?? fn.semanticFile.strict);
 }
 
@@ -4814,9 +3832,9 @@ function isScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
 
 /** SetMutableBinding through the global object's Object Environment Record. */
 function emitGlobalPropertyStore(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	name: string,
 	value: number,
 ) {
@@ -4860,18 +3878,18 @@ function computeFunctionLength(
  * index is known.
  */
 function compileFunctionParams(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
 		| ESTree.ArrowFunctionExpression,
-): RegisterCursor {
-	const block: RegisterBlock = {
+): SemanticCursor {
+	const block: SemanticGraphBlock = {
 		instructions: [],
 	};
 	fn.blocks.push(block);
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 
 	// Claim the pinned parameter registers up front: destructuring and default
 	// expressions allocate registers of their own, so allocating per-parameter
@@ -5077,8 +4095,8 @@ function compileFunctionParams(
 	}
 
 	// A direct eval anywhere in these parameter expressions is in a
-	// parameter-expression context (see RegisterFunction.inParameterExpression). Nested
-	// function/arrow bodies get their own RegisterFunction, so the flag does not leak
+	// parameter-expression context (see SemanticGraphFunction.inParameterExpression). Nested
+	// function/arrow bodies get their own SemanticGraphFunction, so the flag does not leak
 	// into them.
 	const savedInParams = fn.inParameterExpression;
 	fn.inParameterExpression = true;
@@ -5111,9 +4129,9 @@ function compileFunctionParams(
  * patterns, where targets may also be member expressions.
  */
 function compilePatternTarget(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	target: ESTree.Node,
 	value: number,
 	// Forwarded to the leaf: true for a destructuring *assignment* target (so a
@@ -5189,9 +4207,9 @@ function compilePatternTarget(
  * reference semantics as identifier assignment.
  */
 function compileIdentifierTarget(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	isAssign = false,
@@ -5209,9 +4227,9 @@ function compileIdentifierTarget(
  * static store.
  */
 function compileWithDynamicWrite(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	isAssign = false,
@@ -5223,12 +4241,12 @@ function compileWithDynamicWrite(
 		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 	});
 
-	const skipJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const skipJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [found],
 		blocks: [-1],
 	};
-	const fallbackJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const fallbackJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5237,7 +4255,7 @@ function compileWithDynamicWrite(
 	const fallbackIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[fallbackIdx]!;
 	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, isAssign);
-	const fallbackJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const fallbackJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5259,9 +4277,9 @@ function compileWithDynamicWrite(
  * the withSet-after-RHS path in `compileWithDynamicWrite` gets wrong.
  */
 function compileWithDynamicAssignment(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 	left: ESTree.Identifier,
 ): number {
@@ -5280,19 +4298,19 @@ function compileWithDynamicAssignment(
 	});
 	const empty = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [empty, base] });
-	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [empty],
 		blocks: [-1],
 	};
-	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
 	cursor.block.instructions.push(missJump, foundJump);
 	const result = nextRegisterDestination(fn);
 
-	const compileValue = (branch: RegisterCursor, current?: number): number => {
+	const compileValue = (branch: SemanticCursor, current?: number): number => {
 		const right = compileExpression(
 			program,
 			fn,
@@ -5323,7 +4341,7 @@ function compileWithDynamicAssignment(
 	const foundValue = compileValue(foundCursor, foundCurrent);
 	compileWithBaseStore(program, fn, foundCursor, base, key, left, foundValue);
 	foundCursor.block.instructions.push({ type: "move", registers: [result, foundValue] });
-	const foundJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5338,7 +4356,7 @@ function compileWithDynamicAssignment(
 	const missValue = compileValue(missCursor, missCurrent);
 	compileStaticIdentifierTarget(program, fn, missCursor, left, missValue, true);
 	missCursor.block.instructions.push({ type: "move", registers: [result, missValue] });
-	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5359,9 +4377,9 @@ function compileWithDynamicAssignment(
  * resolve the static binding. Both paths join into one result register.
  */
 function compileWithBaseRead(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	base: number,
 	key: number,
 	identifier: ESTree.Identifier,
@@ -5370,12 +4388,12 @@ function compileWithBaseRead(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
 
-	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5388,7 +4406,7 @@ function compileWithBaseRead(
 		type: "loadProperty",
 		registers: [result, base, key],
 	});
-	const foundJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5399,7 +4417,7 @@ function compileWithBaseRead(
 	cursor.block = fn.blocks[missIdx]!;
 	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
 	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
-	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5421,9 +4439,9 @@ function compileWithBaseRead(
  * `with` environment even though the `with` statement itself is sloppy-only.
  */
 function compileWithBaseStore(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	base: number,
 	key: number,
 	identifier: ESTree.Identifier,
@@ -5432,12 +4450,12 @@ function compileWithBaseStore(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
 
-	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5455,14 +4473,14 @@ function compileWithBaseStore(
 		registers: [stillExists, key, base],
 		operator: "in",
 	});
-	let throwJoin: Extract<RegisterInstruction, { type: "jump" }> | undefined;
+	let throwJoin: Extract<CompilerInstruction, { type: "jump" }> | undefined;
 	if (!isSloppyFunction(fn)) {
-		const storeJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+		const storeJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 			type: "jumpIf",
 			registers: [stillExists],
 			blocks: [-1],
 		};
-		const throwJump: Extract<RegisterInstruction, { type: "jump" }> = {
+		const throwJump: Extract<CompilerInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -5489,7 +4507,7 @@ function compileWithBaseStore(
 		registers: [base, key, value],
 	});
 	emitDirectEvalDirtyMark(program, fn, cursor, base, key);
-	const foundJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5499,7 +4517,7 @@ function compileWithBaseStore(
 	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
 	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, true);
-	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5518,9 +4536,9 @@ function compileWithBaseStore(
 
 /** Record a Set only when a captured with-reference targets the injected eval scope. */
 function emitDirectEvalDirtyMark(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	base: number,
 	key: number,
 ): void {
@@ -5535,12 +4553,12 @@ function emitDirectEvalDirtyMark(
 		registers: [isEvalScope, base, evalScope],
 		operator: "===",
 	});
-	const markJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const markJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [isEvalScope],
 		blocks: [-1],
 	};
-	const skipJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const skipJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5554,7 +4572,7 @@ function emitDirectEvalDirtyMark(
 		{ type: "createBoolean", registers: [assigned], value: true },
 		{ type: "storeProperty", registers: [dirtyTracker, key, assigned] },
 	);
-	const markJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const markJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5568,9 +4586,9 @@ function emitDirectEvalDirtyMark(
 }
 
 function compileStaticIdentifierTarget(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	// True when this identifier is an assignment target (a destructuring
@@ -5599,7 +4617,7 @@ function compileStaticIdentifierTarget(
 		return;
 	}
 
-	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
+	if (binding.undeclared && !isCompilerIntrinsic(binding.name)) {
 		// A statically-undeclared name can still resolve through the global object's
 		// Object Environment Record. The runtime store checks whether the property
 		// exists and throws for an actually-unresolvable strict assignment.
@@ -5616,9 +4634,9 @@ function compileStaticIdentifierTarget(
  * value is undefined. Same branch-and-join structure as ternaries.
  */
 function compileDefaultedValue(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	value: number,
 	defaultExpression: ESTree.Expression,
 	nameHint?: string,
@@ -5637,12 +4655,12 @@ function compileDefaultedValue(
 		operator: "===",
 	});
 
-	const defaultJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const defaultJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [-1],
 	};
-	const skipJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const skipJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5661,7 +4679,7 @@ function compileDefaultedValue(
 		type: "move",
 		registers: [result, defaultValue],
 	});
-	const joinJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const joinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5677,9 +4695,9 @@ function compileDefaultedValue(
 }
 
 function compileObjectPatternTarget(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	pattern: ESTree.ObjectPattern,
 	value: number,
 	isAssign = false,
@@ -5799,8 +4817,8 @@ function privateAssignmentMemberTarget(
  * freed by the allocator.
  */
 function compileIteratorDrainInto(
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	array: number,
 	index: number,
 	one: number,
@@ -5820,7 +4838,7 @@ function compileIteratorDrainInto(
 		type: "iteratorStep",
 		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
 	});
-	const exitJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const exitJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [doneRegister],
 		blocks: [-1],
@@ -5857,8 +4875,8 @@ function compileIteratorDrainInto(
  * Drain the rest of an iterator into a fresh array.
  */
 function compileIteratorRest(
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	iteratorRegister: number,
 	nextRegister: number,
 	doneRegister?: number,
@@ -5890,14 +4908,14 @@ function compileIteratorRest(
  * outside this helper: a throw from next() must not close the iterator.
  */
 function compileWithIteratorCloseOnThrow(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	iteratorRegister: number,
 	compileTarget: () => void,
 	doneRegister?: number,
 ): void {
-	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
@@ -5905,12 +4923,12 @@ function compileWithIteratorCloseOnThrow(
 
 	compileTarget();
 
-	const tryExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
 	tryBegin.blocks[1] = tryExitIdx;
 	cursor.block.instructions.push({ type: "jump", blocks: [tryExitIdx] });
 
-	const handler: RegisterBlock = { instructions: [] };
+	const handler: SemanticGraphBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handler) - 1;
 	const caught = nextRegisterDestination(fn);
 	handler.instructions.push({ type: "catch", registers: [caught] });
@@ -5936,9 +4954,9 @@ function compileWithIteratorCloseOnThrow(
  * ToPropertyKey later. Locals carry the reference across tryEnd's invisible edge.
  */
 function compileCapturedMemberReference(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	target: ESTree.MemberExpression,
 	iteratorRegister: number,
 	doneRegister?: number,
@@ -6032,9 +5050,9 @@ function compileCapturedMemberReference(
 }
 
 function compileCapturedMemberStore(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	reference: CompiledMemberReference | CompiledPrivateMemberReference,
 	value: number,
 ): void {
@@ -6053,9 +5071,9 @@ function compileCapturedMemberStore(
 }
 
 function compileArrayPatternTarget(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	pattern: ESTree.ArrayPattern,
 	value: number,
 	isAssign = false,
@@ -6074,7 +5092,7 @@ function compileArrayPatternTarget(
 		registers: [doneRegister],
 		value: false,
 	});
-	const iteratorScope: RegisterLoopContext = {
+	const iteratorScope: SemanticControlContext = {
 		kind: "iterator",
 		breakJumps: [],
 		continueJumps: [],
@@ -6220,8 +5238,8 @@ function compileArrayPatternTarget(
  * It adds the block to the function and returns the block index.
  */
 function compileStatementsToBlock(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	statements: Array<ESTree.Statement>,
 	/**
 	 * Hoist top-level function declarations in this list to the start of the
@@ -6237,7 +5255,7 @@ function compileStatementsToBlock(
 	 */
 	hoistFunctions = false,
 ): number {
-	let block: RegisterBlock = {
+	let block: SemanticGraphBlock = {
 		instructions: [],
 	};
 	// Store the first block index so we can return that to allow jumping to that block.
@@ -6519,9 +5537,9 @@ function compileStatementsToBlock(
 }
 
 function compileClassDeclaration(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ClassDeclaration,
 ) {
 	const binding = fn.semanticFile.nodeToBinding.get(statement);
@@ -6529,7 +5547,7 @@ function compileClassDeclaration(
 		return;
 	}
 
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	const ctor = compileClass(program, fn, cursor, statement);
 	if (ctor === -1) {
 		return;
@@ -6547,9 +5565,9 @@ function compileClassDeclaration(
  * synthetic default binding (created by the linker).
  */
 function compileExportDefault(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ExportDefaultDeclaration,
 ) {
 	const declaration = statement.declaration;
@@ -6563,7 +5581,7 @@ function compileExportDefault(
 		return;
 	}
 
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	let value: number;
 	if (declaration.type === "FunctionDeclaration") {
 		const functionIndex = compileNewFunctionExpression(
@@ -6599,12 +5617,12 @@ function compileExportDefault(
 }
 
 function compileExpressionStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ExpressionStatement,
 ) {
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	const result = compileExpression(program, fn, cursor, statement.expression);
 	// Eval completion: record this statement's value as the running completion.
 	// Use cursor.block (the expression's final block after any control flow), so
@@ -6619,7 +5637,7 @@ function compileExpressionStatement(
 }
 
 /** Initialize a compound statement's spec-level completion value. */
-function resetEvalCompletion(fn: RegisterFunction, block: RegisterBlock) {
+function resetEvalCompletion(fn: SemanticGraphFunction, block: SemanticGraphBlock) {
 	if (fn.completionRegister !== undefined) {
 		block.instructions.push({
 			type: "createUndefined",
@@ -6629,9 +5647,9 @@ function resetEvalCompletion(fn: RegisterFunction, block: RegisterBlock) {
 }
 
 function compileFunctionDeclaration(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.FunctionDeclaration,
 ) {
 	const binding = fn.semanticFile.nodeToBinding.get(statement);
@@ -6713,12 +5731,12 @@ function compileFunctionDeclaration(
  * fall-through blocks, and break jumps are patched to the exit.
  */
 function compileSwitchStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.SwitchStatement,
 ) {
-	const switchContext: RegisterLoopContext = {
+	const switchContext: SemanticControlContext = {
 		kind: "switch",
 		breakJumps: [],
 		continueJumps: [],
@@ -6726,14 +5744,14 @@ function compileSwitchStatement(
 	};
 	(fn.loops ??= []).push(switchContext);
 
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	const discriminant = compileExpression(program, fn, cursor, statement.discriminant);
 	resetEvalCompletion(fn, cursor.block);
 
 	// Case bodies first, chained for fall-through, so the dispatch tests can
 	// reference their block indexes.
 	const bodyStarts: Array<number> = [];
-	let previousTail: RegisterBlock | undefined;
+	let previousTail: SemanticGraphBlock | undefined;
 	for (const switchCase of statement.cases) {
 		const start = compileStatementsToBlock(program, fn, switchCase.consequent);
 		if (previousTail) {
@@ -6748,7 +5766,7 @@ function compileSwitchStatement(
 	}
 
 	// The last body and the all-misses path both continue at the exit.
-	const lastBodyExitJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const lastBodyExitJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -6776,7 +5794,7 @@ function compileSwitchStatement(
 		});
 	}
 
-	const missJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const missJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [defaultCase >= 0 ? bodyStarts[defaultCase]! : -1],
 	};
@@ -6798,9 +5816,9 @@ function compileSwitchStatement(
  * condition, conditionally enters the body, and falls through to the exit.
  */
 function compileWhileStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.WhileStatement,
 ) {
 	resetEvalCompletion(fn, block);
@@ -6810,7 +5828,7 @@ function compileWhileStatement(
 		blocks: [headerIdx],
 	});
 
-	const loop: RegisterLoopContext = {
+	const loop: SemanticControlContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -6818,7 +5836,7 @@ function compileWhileStatement(
 	};
 	(fn.loops ??= []).push(loop);
 
-	const headerCursor: RegisterCursor = { block: fn.blocks[headerIdx]! };
+	const headerCursor: SemanticCursor = { block: fn.blocks[headerIdx]! };
 	const condition = compileExpression(program, fn, headerCursor, statement.test);
 
 	const bodyIdx = compileStatementsToBlock(
@@ -6831,7 +5849,7 @@ function compileWhileStatement(
 		registers: [condition],
 		blocks: [bodyIdx],
 	});
-	const exitJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const exitJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		// Patched below, once the exit block exists.
 		blocks: [-1],
@@ -6860,13 +5878,13 @@ function compileWhileStatement(
  * bottom decides on re-entry.
  */
 function compileDoWhileStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.DoWhileStatement,
 ) {
 	resetEvalCompletion(fn, block);
-	const loop: RegisterLoopContext = {
+	const loop: SemanticControlContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -6891,14 +5909,14 @@ function compileDoWhileStatement(
 		blocks: [conditionIdx],
 	});
 
-	const conditionCursor: RegisterCursor = { block: fn.blocks[conditionIdx]! };
+	const conditionCursor: SemanticCursor = { block: fn.blocks[conditionIdx]! };
 	const condition = compileExpression(program, fn, conditionCursor, statement.test);
 	conditionCursor.block.instructions.push({
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [bodyIdx],
 	});
-	const exitJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const exitJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -6923,8 +5941,8 @@ function compileDoWhileStatement(
  * Returns null when no such binding is captured (the common case — zero overhead).
  */
 function setupPerIterationScope(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	loopNode: ESTree.ForStatement | ESTree.ForInStatement | ESTree.ForOfStatement,
 ): { scopeId: number; slotCount: number } | null {
 	const loopScope = fn.semanticFile.nodeToScope.get(loopNode);
@@ -6957,9 +5975,9 @@ function setupPerIterationScope(
  * loop with the update block as the continue target.
  */
 function compileForStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ForStatement,
 ) {
 	// Per-iteration env, if head or direct body bindings are captured. ENV_PUSH enters scope
@@ -6976,7 +5994,7 @@ function compileForStatement(
 		});
 	}
 
-	const initCursor: RegisterCursor = { block };
+	const initCursor: SemanticCursor = { block };
 	if (statement.init?.type === "VariableDeclaration") {
 		compileVariableDeclaration(program, fn, block, statement.init);
 		// The declaration manages its own cursor; re-resolve the tail block.
@@ -7000,7 +6018,7 @@ function compileForStatement(
 		blocks: [headerIdx],
 	});
 
-	const loop: RegisterLoopContext = {
+	const loop: SemanticControlContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -7010,7 +6028,7 @@ function compileForStatement(
 	};
 	(fn.loops ??= []).push(loop);
 
-	const headerCursor: RegisterCursor = { block: fn.blocks[headerIdx]! };
+	const headerCursor: SemanticCursor = { block: fn.blocks[headerIdx]! };
 	let condition: number;
 	if (statement.test) {
 		condition = compileExpression(program, fn, headerCursor, statement.test);
@@ -7029,7 +6047,7 @@ function compileForStatement(
 		registers: [condition],
 		blocks: [bodyIdx],
 	});
-	const exitJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const exitJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -7043,7 +6061,7 @@ function compileForStatement(
 		blocks: [updateIdx],
 	});
 
-	const updateCursor: RegisterCursor = { block: fn.blocks[updateIdx]! };
+	const updateCursor: SemanticCursor = { block: fn.blocks[updateIdx]! };
 	// CreatePerIterationEnvironment: copy the bindings forward (Li→Li+1) before the
 	// increment, so the increment and next test/body run in the fresh env.
 	if (perIter) {
@@ -7085,12 +6103,12 @@ function compileForStatement(
  * straight back to the step header (no close, per spec).
  */
 function compileForOfStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ForOfStatement,
 ) {
-	const entryCursor: RegisterCursor = { block };
+	const entryCursor: SemanticCursor = { block };
 	const perIter = setupPerIterationScope(program, fn, statement);
 	const lexicalHead =
 		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
@@ -7147,12 +6165,12 @@ function compileForOfStatement(
  * rather than throwing, which the key-collection op handles.
  */
 function compileForInStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ForInStatement,
 ) {
-	const entryCursor: RegisterCursor = { block };
+	const entryCursor: SemanticCursor = { block };
 	const perIter = setupPerIterationScope(program, fn, statement);
 	const lexicalHead =
 		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
@@ -7199,9 +6217,9 @@ function compileForInStatement(
  * protected range that closes the iterator on a throw.
  */
 function compileForInOfLoop(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	entryCursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	entryCursor: SemanticCursor,
 	iterable: number,
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
@@ -7229,7 +6247,7 @@ function compileForInOfLoop(
 		blocks: [headerIdx],
 	});
 
-	const loop: RegisterLoopContext = {
+	const loop: SemanticControlContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -7249,7 +6267,7 @@ function compileForInOfLoop(
 		type: "iteratorStep",
 		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
 	});
-	const exitJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const exitJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [doneRegister],
 		// Patched below, once the exit block exists.
@@ -7259,7 +6277,7 @@ function compileForInOfLoop(
 
 	// Binding and body run inside a protected range; a throw closes the
 	// iterator and propagates. The step itself stays unprotected, as specced.
-	const bindBlock: RegisterBlock = { instructions: [] };
+	const bindBlock: SemanticGraphBlock = { instructions: [] };
 	const bindIdx = fn.blocks.push(bindBlock) - 1;
 	header.instructions.push({
 		type: "jump",
@@ -7277,14 +6295,14 @@ function compileForInOfLoop(
 		});
 	}
 
-	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		// Patched below: [handler, end].
 		blocks: [-1, -1],
 	};
 	bindBlock.instructions.push(tryBegin);
 
-	const bindCursor: RegisterCursor = { block: bindBlock };
+	const bindCursor: SemanticCursor = { block: bindBlock };
 	if (left.type === "VariableDeclaration") {
 		const declaration = left.declarations[0];
 		if (declaration) {
@@ -7313,7 +6331,7 @@ function compileForInOfLoop(
 	tryBegin.blocks[1] = backIdx;
 
 	// Handler: close the iterator, rethrow the original completion.
-	const handlerBlock: RegisterBlock = { instructions: [] };
+	const handlerBlock: SemanticGraphBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 	const caughtRegister = nextRegisterDestination(fn);
 	handlerBlock.instructions.push({
@@ -7359,9 +6377,9 @@ function compileForInOfLoop(
  * is the async-iterator get and the await-driven header step.
  */
 function compileForAwaitOfLoop(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	entryCursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	entryCursor: SemanticCursor,
 	iterable: number,
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
@@ -7392,7 +6410,7 @@ function compileForAwaitOfLoop(
 	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
 	entryCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
 
-	const loop: RegisterLoopContext = {
+	const loop: SemanticControlContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -7409,7 +6427,7 @@ function compileForAwaitOfLoop(
 	// Header: raw = next.call(iterator); result = await raw; unpack done/value.
 	// The await splits the header — emitResumeDispatch moves the cursor onto a
 	// continuation block, where the unpack and exit test live.
-	const headerCursor: RegisterCursor = { block: fn.blocks[headerIdx]! };
+	const headerCursor: SemanticCursor = { block: fn.blocks[headerIdx]! };
 	const rawRegister = nextRegisterDestination(fn);
 	headerCursor.block.instructions.push({
 		type: "iteratorNext",
@@ -7427,7 +6445,7 @@ function compileForAwaitOfLoop(
 		type: "loadProperty",
 		registers: [doneRegister, resultRegister, doneKey],
 	});
-	const exitJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const exitJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [doneRegister],
 		blocks: [-1],
@@ -7447,7 +6465,7 @@ function compileForAwaitOfLoop(
 	});
 
 	// Binding and body run inside a protected range; a throw closes the iterator.
-	const bindBlock: RegisterBlock = { instructions: [] };
+	const bindBlock: SemanticGraphBlock = { instructions: [] };
 	const bindIdx = fn.blocks.push(bindBlock) - 1;
 	headerCursor.block.instructions.push({ type: "jump", blocks: [bindIdx] });
 
@@ -7459,13 +6477,13 @@ function compileForAwaitOfLoop(
 		});
 	}
 
-	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
 	bindBlock.instructions.push(tryBegin);
 
-	const bindCursor: RegisterCursor = { block: bindBlock };
+	const bindCursor: SemanticCursor = { block: bindBlock };
 	if (left.type === "VariableDeclaration") {
 		const declaration = left.declarations[0];
 		if (declaration) {
@@ -7488,7 +6506,7 @@ function compileForAwaitOfLoop(
 
 	// Handler: await the close, but preserve the original throw over every close
 	// failure as required by AsyncIteratorClose.
-	const handlerBlock: RegisterBlock = { instructions: [] };
+	const handlerBlock: SemanticGraphBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 	const caughtRegister = nextRegisterDestination(fn);
 	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
@@ -7521,7 +6539,7 @@ function compileForAwaitOfLoop(
  * Consume the labels a LabeledStatement stashed for the loop/switch it
  * immediately precedes, clearing them so nested statements don't inherit them.
  */
-function takePendingLabels(fn: RegisterFunction): Set<string> | undefined {
+function takePendingLabels(fn: SemanticGraphFunction): Set<string> | undefined {
 	const labels = fn.pendingLabels;
 	fn.pendingLabels = undefined;
 	return labels && labels.length > 0 ? new Set(labels) : undefined;
@@ -7541,9 +6559,9 @@ const LOOP_STATEMENT_TYPES = new Set<string>([
  * statement makes a break-only target whose break jumps to the join after it.
  */
 function compileLabeledStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.LabeledStatement,
 ) {
 	// Peel stacked labels (`a: b: for ...`) down to the labeled statement.
@@ -7563,7 +6581,7 @@ function compileLabeledStatement(
 	}
 
 	// Labeled non-loop statement: a break-only target.
-	const labelContext: RegisterLoopContext = {
+	const labelContext: SemanticControlContext = {
 		kind: "label",
 		breakJumps: [],
 		continueJumps: [],
@@ -7587,9 +6605,9 @@ function compileLabeledStatement(
 }
 
 function compileBreakStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.BreakStatement,
 ) {
 	const label = statement.label?.name;
@@ -7606,9 +6624,9 @@ function compileBreakStatement(
 }
 
 function compileContinueStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ContinueStatement,
 ) {
 	const label = statement.label?.name;
@@ -7628,12 +6646,12 @@ function compileContinueStatement(
  * the VM based on the statically known handler ranges.
  */
 function compileThrowStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ThrowStatement,
 ) {
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	const value = compileExpression(program, fn, cursor, statement.argument);
 	cursor.block.instructions.push({
 		type: "throw",
@@ -7647,9 +6665,9 @@ function compileThrowStatement(
  * model in compileTryFinally.
  */
 function compileTryStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.TryStatement,
 ) {
 	if (statement.finalizer) {
@@ -7668,12 +6686,12 @@ function compileTryStatement(
  * Values that cross the try/catch boundary go through bindings.
  */
 function compileTryCatch(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.TryStatement,
 ) {
-	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		// Patched below, once the handler and exit blocks exist.
 		blocks: [-1, -1],
@@ -7693,7 +6711,7 @@ function compileTryCatch(
 	// The end marker lives directly after the try body, so the protected range
 	// ends before the handler.
 	const tryBodyLastBlock = fn.blocks.at(-1)!;
-	const tryExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
 	tryBegin.blocks[1] = tryExitIdx;
 	tryBodyLastBlock.instructions.push({
@@ -7703,7 +6721,7 @@ function compileTryCatch(
 
 	// The handler block must start with the catch instruction, which consumes
 	// the throw completion the unwinder left in place.
-	const handlerBlock: RegisterBlock = { instructions: [] };
+	const handlerBlock: SemanticGraphBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 
 	const caughtRegister = nextRegisterDestination(fn);
@@ -7715,7 +6733,7 @@ function compileTryCatch(
 	if (statement.handler) {
 		// Catch parameter destructuring can branch; throws inside it happen
 		// past the protected range and so propagate outward, as specced.
-		const handlerCursor: RegisterCursor = { block: handlerBlock };
+		const handlerCursor: SemanticCursor = { block: handlerBlock };
 		if (statement.handler.param) {
 			compilePatternTarget(
 				program,
@@ -7759,14 +6777,14 @@ function compileTryCatch(
  * route through the finalizer via emitReturn/emitBreak/emitContinue.
  */
 function compileTryFinally(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.TryStatement,
 ) {
 	const kindReg = nextRegisterDestination(fn);
 	const valueReg = nextRegisterDestination(fn);
-	const finallyCtx: RegisterLoopContext = {
+	const finallyCtx: SemanticControlContext = {
 		kind: "finally",
 		breakJumps: [],
 		continueJumps: [],
@@ -7778,10 +6796,10 @@ function compileTryFinally(
 	const entryJumps = finallyCtx.finallyEntryJumps!;
 
 	// Route a normal completion into the finalizer (falls through afterward).
-	const routeNormal = (target: RegisterBlock) =>
+	const routeNormal = (target: SemanticGraphBlock) =>
 		routeThroughFinalizer(target, finallyCtx, "normal", null);
 	// Route a thrown completion in: the epilogue re-throws the stashed value.
-	const routeThrow = (target: RegisterBlock, value: number) =>
+	const routeThrow = (target: SemanticGraphBlock, value: number) =>
 		routeThroughFinalizer(
 			target,
 			finallyCtx,
@@ -7791,7 +6809,7 @@ function compileTryFinally(
 		);
 
 	// --- protected try body ---
-	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
@@ -7810,14 +6828,14 @@ function compileTryFinally(
 
 	// Normal completion of the try body ends the protected range and enters the
 	// finalizer with a NORMAL completion.
-	const tryNormalExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryNormalExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
 	const tryNormalExitIdx = fn.blocks.push(tryNormalExit) - 1;
 	tryBegin.blocks[1] = tryNormalExitIdx;
 	tryBodyLastBlock.instructions.push({ type: "jump", blocks: [tryNormalExitIdx] });
 	routeNormal(tryNormalExit);
 
 	// --- handler for the try body ---
-	const handlerBlock: RegisterBlock = { instructions: [] };
+	const handlerBlock: SemanticGraphBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 	const caughtRegister = nextRegisterDestination(fn);
 	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
@@ -7825,7 +6843,7 @@ function compileTryFinally(
 	if (statement.handler) {
 		// Bind the catch parameter, then run the catch body in its own protected
 		// range so a throw out of it still runs the finalizer.
-		const handlerCursor: RegisterCursor = { block: handlerBlock };
+		const handlerCursor: SemanticCursor = { block: handlerBlock };
 		if (statement.handler.param) {
 			compilePatternTarget(
 				program,
@@ -7836,7 +6854,7 @@ function compileTryFinally(
 			);
 		}
 
-		const catchTryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
+		const catchTryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 			type: "tryBegin",
 			blocks: [-1, -1],
 		};
@@ -7852,13 +6870,13 @@ function compileTryFinally(
 		const catchBodyLastBlock = fn.blocks.at(-1)!;
 		fn.loops.pop();
 
-		const catchNormalExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
+		const catchNormalExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
 		const catchNormalExitIdx = fn.blocks.push(catchNormalExit) - 1;
 		catchTryBegin.blocks[1] = catchNormalExitIdx;
 		catchBodyLastBlock.instructions.push({ type: "jump", blocks: [catchNormalExitIdx] });
 		routeNormal(catchNormalExit);
 
-		const catchHandler: RegisterBlock = { instructions: [] };
+		const catchHandler: SemanticGraphBlock = { instructions: [] };
 		catchTryBegin.blocks[0] = fn.blocks.push(catchHandler) - 1;
 		const caught2 = nextRegisterDestination(fn);
 		catchHandler.instructions.push({ type: "catch", registers: [caught2] });
@@ -7891,13 +6909,13 @@ function compileTryFinally(
 	// which routes through any *enclosing* finalizers (finallyCtx is popped).
 	const dispatchBlocks: Array<{ kind: number; idx: number }> = [];
 	for (const { kind, fill } of finallyCtx.finalizerArms!.values()) {
-		const armBlock: RegisterBlock = { instructions: [] };
+		const armBlock: SemanticGraphBlock = { instructions: [] };
 		const idx = fn.blocks.push(armBlock) - 1;
 		fill(armBlock);
 		dispatchBlocks.push({ kind, idx });
 	}
 
-	const epilogue: RegisterBlock = { instructions: [] };
+	const epilogue: SemanticGraphBlock = { instructions: [] };
 	const epilogueIdx = fn.blocks.push(epilogue) - 1;
 	finalizerLastBlock.instructions.push({ type: "jump", blocks: [epilogueIdx] });
 
@@ -7925,9 +6943,9 @@ function compileTryFinally(
  * skipped, since the statement switch had no BlockStatement case.
  */
 function compileBlockStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.BlockStatement,
 ) {
 	// Block-scoped let/const/class start uninitialized (TDZ) at block entry.
@@ -7950,17 +6968,17 @@ function compileBlockStatement(
  * `with` is a strict-mode SyntaxError, so this only runs for sloppy code.
  */
 function compileWithStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.WithStatement,
 ) {
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	const object = compileExpression(program, fn, cursor, statement.object);
 	cursor.block.instructions.push({ type: "withEnter", registers: [object] });
 	resetEvalCompletion(fn, cursor.block);
 
-	const withContext: RegisterLoopContext = {
+	const withContext: SemanticControlContext = {
 		kind: "with",
 		breakJumps: [],
 		continueJumps: [],
@@ -7989,12 +7007,12 @@ function compileWithStatement(
  * block.
  */
 function compileIfStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.IfStatement,
 ) {
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	const condition = compileExpression(program, fn, cursor, statement.test);
 	resetEvalCompletion(fn, cursor.block);
 	const consequentBlock = compileStatementsToBlock(
@@ -8033,14 +7051,14 @@ const COMPLETION_NORMAL = 0;
 
 /** Throw unless value is an ECMAScript Object, returning the success block. */
 function emitIteratorResultObjectCheck(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	value: number,
-): RegisterBlock {
-	const valid: RegisterBlock = { instructions: [] };
+): SemanticGraphBlock {
+	const valid: SemanticGraphBlock = { instructions: [] };
 	const validIdx = fn.blocks.push(valid) - 1;
-	const invalid: RegisterBlock = { instructions: [] };
+	const invalid: SemanticGraphBlock = { instructions: [] };
 	const invalidIdx = fn.blocks.push(invalid) - 1;
 	const typeName = nextRegisterDestination(fn);
 	const isFunction = nextRegisterDestination(fn);
@@ -8100,13 +7118,13 @@ function emitIteratorResultObjectCheck(
  * and rejects a fulfilled primitive.
  */
 function emitAsyncIteratorClose(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	iteratorRegister: number,
 	normal: boolean,
-): RegisterBlock {
-	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> | undefined = normal
+): SemanticGraphBlock {
+	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> | undefined = normal
 		? undefined
 		: { type: "tryBegin", blocks: [-1, -1] };
 	if (tryBegin) block.instructions.push(tryBegin);
@@ -8129,7 +7147,7 @@ function emitAsyncIteratorClose(
 			operator: "==",
 		},
 	);
-	const noReturnJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const noReturnJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [noReturn],
 		blocks: [-1],
@@ -8151,7 +7169,7 @@ function emitAsyncIteratorClose(
 		closingScopeIndex === undefined || closingScopeIndex < 0
 			? undefined
 			: fn.loops!.splice(closingScopeIndex, 1)[0];
-	const closeCursor: RegisterCursor = { block };
+	const closeCursor: SemanticCursor = { block };
 	const awaited = compileAwaitRegister(program, fn, closeCursor, result);
 	if (closingScope && closingScopeIndex !== undefined) {
 		fn.loops!.splice(closingScopeIndex, 0, closingScope);
@@ -8164,25 +7182,25 @@ function emitAsyncIteratorClose(
 			closeCursor.block,
 			awaited,
 		);
-		const continuation: RegisterBlock = { instructions: [] };
+		const continuation: SemanticGraphBlock = { instructions: [] };
 		const continuationIdx = fn.blocks.push(continuation) - 1;
 		noReturnJump.blocks[0] = continuationIdx;
 		closeCursor.block.instructions.push({ type: "jump", blocks: [continuationIdx] });
 		return continuation;
 	}
 
-	const tryExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
 	tryBegin!.blocks[1] = tryExitIdx;
 	noReturnJump.blocks[0] = tryExitIdx;
 	closeCursor.block.instructions.push({ type: "jump", blocks: [tryExitIdx] });
 
-	const handler: RegisterBlock = { instructions: [] };
+	const handler: SemanticGraphBlock = { instructions: [] };
 	tryBegin!.blocks[0] = fn.blocks.push(handler) - 1;
 	const ignored = nextRegisterDestination(fn);
 	handler.instructions.push({ type: "catch", registers: [ignored] });
 
-	const continuation: RegisterBlock = { instructions: [] };
+	const continuation: SemanticGraphBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 	tryExit.instructions.push({ type: "jump", blocks: [continuationIdx] });
 	handler.instructions.push({ type: "jump", blocks: [continuationIdx] });
@@ -8195,15 +7213,15 @@ function emitAsyncIteratorClose(
  * cause an enclosing handler to close the same iterator again.
  */
 function emitIteratorCloseForCompletion(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	iteratorRegister: number,
 	normal: boolean,
 	doneRegister?: number,
 	async = false,
-): RegisterBlock {
-	const emitClose = (target: RegisterBlock) => {
+): SemanticGraphBlock {
+	const emitClose = (target: SemanticGraphBlock) => {
 		if (async) {
 			return emitAsyncIteratorClose(program, fn, target, iteratorRegister, normal);
 		}
@@ -8219,14 +7237,14 @@ function emitIteratorCloseForCompletion(
 		return emitClose(block);
 	}
 
-	const skipJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const skipJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [doneRegister],
 		blocks: [-1],
 	};
 	block.instructions.push(skipJump);
 
-	const closeBlock: RegisterBlock = { instructions: [] };
+	const closeBlock: SemanticGraphBlock = { instructions: [] };
 	const closeIdx = fn.blocks.push(closeBlock) - 1;
 	block.instructions.push({ type: "jump", blocks: [closeIdx] });
 	closeBlock.instructions.push({
@@ -8236,7 +7254,7 @@ function emitIteratorCloseForCompletion(
 	});
 	const closeEnd = emitClose(closeBlock);
 
-	const continuation: RegisterBlock = { instructions: [] };
+	const continuation: SemanticGraphBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 	skipJump.blocks[0] = continuationIdx;
 	closeEnd.instructions.push({ type: "jump", blocks: [continuationIdx] });
@@ -8250,10 +7268,10 @@ function emitIteratorCloseForCompletion(
  * and falls through. Kind codes are local to one finalizer's kind register.
  */
 function routeThroughFinalizer(
-	block: RegisterBlock,
-	scope: RegisterLoopContext,
+	block: SemanticGraphBlock,
+	scope: SemanticControlContext,
 	key: string,
-	fill: ((block: RegisterBlock) => void) | null,
+	fill: ((block: SemanticGraphBlock) => void) | null,
 	valueRegister?: number,
 ) {
 	const arms = scope.finalizerArms!;
@@ -8281,7 +7299,7 @@ function routeThroughFinalizer(
 			registers: [scope.completionValueReg!, valueRegister],
 		});
 	}
-	const jump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const jump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -8296,9 +7314,9 @@ function routeThroughFinalizer(
  * once the finally body has run.
  */
 function emitReturn(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	valueRegister: number,
 ) {
 	const scopes = fn.loops ?? [];
@@ -8346,9 +7364,9 @@ function emitReturn(
  * out (including the target) are closed.
  */
 function emitBreak(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	label?: string,
 ) {
 	const scopes = fn.loops ?? [];
@@ -8395,7 +7413,7 @@ function emitBreak(
 		}
 
 		if (isTarget) {
-			const jump: Extract<RegisterInstruction, { type: "jump" }> = {
+			const jump: Extract<CompilerInstruction, { type: "jump" }> = {
 				type: "jump",
 				blocks: [-1],
 			};
@@ -8413,9 +7431,9 @@ function emitBreak(
  * iterators; the target loop's iterator stays open (it re-steps from the header).
  */
 function emitContinue(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	label?: string,
 ) {
 	const scopes = fn.loops ?? [];
@@ -8476,7 +7494,7 @@ function emitContinue(
 			continue;
 		}
 
-		const jump: Extract<RegisterInstruction, { type: "jump" }> = {
+		const jump: Extract<CompilerInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -8526,7 +7544,7 @@ function containsTailCallBlocker(node: unknown): boolean {
  * is about to push, and compileReturnStatement can see the eligibility.
  */
 function prepareTailCallLoop(
-	fn: RegisterFunction,
+	fn: SemanticGraphFunction,
 	functionNode:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -8552,9 +7570,9 @@ function prepareTailCallLoop(
  * to an ordinary return.
  */
 function tryEmitSelfTailCall(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	call: ESTree.CallExpression,
 ): boolean {
 	if (fn.bodyEntryBlock === undefined || fn.tailCallNode === undefined) {
@@ -8630,12 +7648,12 @@ function tryEmitSelfTailCall(
  * Naively compile a return statement.
  */
 function compileReturnStatement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.ReturnStatement,
 ) {
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 
 	if (
 		fn.tcoEligible &&
@@ -8659,12 +7677,12 @@ function compileReturnStatement(
  * Naively compile variable declarations.
  */
 function compileVariableDeclaration(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	statement: ESTree.VariableDeclaration,
 ) {
-	const cursor: RegisterCursor = { block };
+	const cursor: SemanticCursor = { block };
 	for (const decl of statement.declarations) {
 		// Link `const f = <function>` so a self-recursive tail call reached through
 		// f is recognizable. Recorded before the initializer compiles, since that
@@ -8774,9 +7792,9 @@ const RESUME_MODE_RETURN = 2;
  * and throws a TypeError.
  */
 function compileYieldStarExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.YieldExpression,
 ) {
 	const operand = compileExpression(program, fn, cursor, expression.argument!);
@@ -8802,30 +7820,30 @@ function compileYieldStarExpression(
 	cursor.block.instructions.push({ type: "createUndefined", registers: [sentValue] });
 	cursor.block.instructions.push({ type: "createNumber", registers: [mode], value: 0 });
 
-	const header: RegisterBlock = { instructions: [] };
+	const header: SemanticGraphBlock = { instructions: [] };
 	const headerIdx = fn.blocks.push(header) - 1;
-	const nextMode: RegisterBlock = { instructions: [] };
+	const nextMode: SemanticGraphBlock = { instructions: [] };
 	const nextModeIdx = fn.blocks.push(nextMode) - 1;
-	const throwMode: RegisterBlock = { instructions: [] };
+	const throwMode: SemanticGraphBlock = { instructions: [] };
 	const throwModeIdx = fn.blocks.push(throwMode) - 1;
-	const noThrow: RegisterBlock = { instructions: [] };
+	const noThrow: SemanticGraphBlock = { instructions: [] };
 	const noThrowIdx = fn.blocks.push(noThrow) - 1;
-	const returnMode: RegisterBlock = { instructions: [] };
+	const returnMode: SemanticGraphBlock = { instructions: [] };
 	const returnModeIdx = fn.blocks.push(returnMode) - 1;
-	const noReturn: RegisterBlock = { instructions: [] };
+	const noReturn: SemanticGraphBlock = { instructions: [] };
 	const noReturnIdx = fn.blocks.push(noReturn) - 1;
-	const check: RegisterBlock = { instructions: [] };
+	const check: SemanticGraphBlock = { instructions: [] };
 	const checkIdx = fn.blocks.push(check) - 1;
-	const doneBlock: RegisterBlock = { instructions: [] };
+	const doneBlock: SemanticGraphBlock = { instructions: [] };
 	const doneIdx = fn.blocks.push(doneBlock) - 1;
-	const doneReturn: RegisterBlock = { instructions: [] };
+	const doneReturn: SemanticGraphBlock = { instructions: [] };
 	const doneReturnIdx = fn.blocks.push(doneReturn) - 1;
-	const continuation: RegisterBlock = { instructions: [] };
+	const continuation: SemanticGraphBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 
 	cursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
 
-	const stringRegister = (block: RegisterBlock, value: string) => {
+	const stringRegister = (block: SemanticGraphBlock, value: string) => {
 		const reg = nextRegisterDestination(fn);
 		block.instructions.push({
 			type: "createString",
@@ -8834,7 +7852,7 @@ function compileYieldStarExpression(
 		});
 		return reg;
 	};
-	const nullishGuard = (block: RegisterBlock, valueReg: number, target: number) => {
+	const nullishGuard = (block: SemanticGraphBlock, valueReg: number, target: number) => {
 		const undef = nextRegisterDestination(fn);
 		const isNullish = nextRegisterDestination(fn);
 		block.instructions.push({ type: "createUndefined", registers: [undef] });
@@ -8845,7 +7863,7 @@ function compileYieldStarExpression(
 		});
 		block.instructions.push({ type: "jumpIf", registers: [isNullish], blocks: [target] });
 	};
-	const modeEquals = (block: RegisterBlock, modeValue: number, target: number) => {
+	const modeEquals = (block: SemanticGraphBlock, modeValue: number, target: number) => {
 		const constReg = nextRegisterDestination(fn);
 		const matchReg = nextRegisterDestination(fn);
 		block.instructions.push({
@@ -8862,9 +7880,9 @@ function compileYieldStarExpression(
 	};
 	// After an inner next/throw/return call leaves its result in `result`, await
 	// it (async delegation) and continue to the done/value check.
-	const stepAndContinue = (block: RegisterBlock) => {
+	const stepAndContinue = (block: SemanticGraphBlock) => {
 		if (isAsync) {
-			const stepCursor: RegisterCursor = { block };
+			const stepCursor: SemanticCursor = { block };
 			const awaited = compileAwaitRegister(program, fn, stepCursor, result);
 			stepCursor.block.instructions.push({ type: "move", registers: [result, awaited] });
 			stepCursor.block.instructions.push({ type: "jump", blocks: [checkIdx] });
@@ -8937,7 +7955,7 @@ function compileYieldStarExpression(
 	// delegation awaits it first (spec: "If generatorKind is async, set value to
 	// ? Await(value)"), so a returned promise resolves before it leaves yield*.
 	if (isAsync) {
-		const noReturnCursor: RegisterCursor = { block: noReturn };
+		const noReturnCursor: SemanticCursor = { block: noReturn };
 		const awaited = compileAwaitRegister(program, fn, noReturnCursor, sentValue);
 		emitReturn(program, fn, noReturnCursor.block, awaited);
 	} else {
@@ -8951,9 +7969,9 @@ function compileYieldStarExpression(
 	// (e.g. `next()` returning 42) is a TypeError, not a silently-swallowed
 	// `{ done: undefined }`. All three resume modes reach here, so this covers
 	// them for both sync and async delegation.
-	const checkBody: RegisterBlock = { instructions: [] };
+	const checkBody: SemanticGraphBlock = { instructions: [] };
 	const checkBodyIdx = fn.blocks.push(checkBody) - 1;
-	const notObject: RegisterBlock = { instructions: [] };
+	const notObject: SemanticGraphBlock = { instructions: [] };
 	const notObjectIdx = fn.blocks.push(notObject) - 1;
 	{
 		const typeName = nextRegisterDestination(fn);
@@ -9048,11 +8066,11 @@ function compileYieldStarExpression(
 		// next()/throw() resumption is used as-is (not awaited). The awaited value
 		// replaces `sentValue` so returnMode forwards the unwrapped value.
 		if (isAsync) {
-			const unwrapAwait: RegisterBlock = { instructions: [] };
+			const unwrapAwait: SemanticGraphBlock = { instructions: [] };
 			const unwrapAwaitIdx = fn.blocks.push(unwrapAwait) - 1;
 			modeEquals(checkBody, RESUME_MODE_RETURN, unwrapAwaitIdx);
 			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
-			const unwrapCursor: RegisterCursor = { block: unwrapAwait };
+			const unwrapCursor: SemanticCursor = { block: unwrapAwait };
 			const awaited = compileAwaitRegister(program, fn, unwrapCursor, sentValue);
 			unwrapCursor.block.instructions.push({
 				type: "move",
@@ -9091,9 +8109,9 @@ function compileYieldStarExpression(
  * range); a return() returns it, routed through enclosing finalizers.
  */
 function compileYieldExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.YieldExpression,
 ) {
 	if (expression.delegate) {
@@ -9136,9 +8154,9 @@ function compileYieldExpression(
  * return() unwinds.
  */
 function emitResumeDispatch(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	valueDst: number,
 	modeDst: number,
 	// AsyncGeneratorUnwrapYieldResumption: an async generator's `yield` awaits a
@@ -9147,22 +8165,22 @@ function emitResumeDispatch(
 	awaitReturnValue = false,
 ): number {
 	// throw() resumption: throw the sent value at the suspend point.
-	const throwBlock: RegisterBlock = { instructions: [] };
+	const throwBlock: SemanticGraphBlock = { instructions: [] };
 	const throwIdx = fn.blocks.push(throwBlock) - 1;
 	throwBlock.instructions.push({ type: "throw", registers: [valueDst] });
 
 	// return() resumption: return the sent value, through enclosing finalizers.
-	const returnBlock: RegisterBlock = { instructions: [] };
+	const returnBlock: SemanticGraphBlock = { instructions: [] };
 	const returnIdx = fn.blocks.push(returnBlock) - 1;
 	if (awaitReturnValue) {
-		const returnCursor: RegisterCursor = { block: returnBlock };
+		const returnCursor: SemanticCursor = { block: returnBlock };
 		const awaited = compileAwaitRegister(program, fn, returnCursor, valueDst);
 		emitReturn(program, fn, returnCursor.block, awaited);
 	} else {
 		emitReturn(program, fn, returnBlock, valueDst);
 	}
 
-	const continuation: RegisterBlock = { instructions: [] };
+	const continuation: SemanticGraphBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 
 	const throwConst = nextRegisterDestination(fn);
@@ -9209,9 +8227,9 @@ function emitResumeDispatch(
 }
 
 function compileAwaitExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.AwaitExpression,
 ): number {
 	const awaitedSrc = compileExpression(program, fn, cursor, expression.argument);
@@ -9220,9 +8238,9 @@ function compileAwaitExpression(
 
 /** Suspend on the value in awaitedSrc and continue with the settled value. */
 function compileAwaitRegister(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	awaitedSrc: number,
 ): number {
 	const valueDst = nextRegisterDestination(fn);
@@ -9244,9 +8262,9 @@ function compileAwaitRegister(
  * expressions: the binding or property name the value is assigned to.
  */
 function compileExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.Expression | ESTree.PrivateIdentifier,
 	nameHint?: string,
 ) {
@@ -9429,13 +8447,13 @@ function compileExpression(
  * undefined.
  */
 function compileOptionalChain(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	node: ESTree.Expression,
 ): number {
 	const result = nextRegisterDestination(fn);
-	const shortCircuits: Array<Extract<RegisterInstruction, { type: "jumpIf" }>> = [];
+	const shortCircuits: Array<Extract<CompilerInstruction, { type: "jumpIf" }>> = [];
 	const value = compileChainElement(program, fn, cursor, node, shortCircuits);
 	if (value === -1) {
 		return -1;
@@ -9446,7 +8464,7 @@ function compileOptionalChain(
 		return result;
 	}
 
-	const successJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const successJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -9455,10 +8473,10 @@ function compileOptionalChain(
 	// Short-circuit landing block: the chain result is undefined.
 	const shortIdx = fn.blocks.push({ instructions: [] }) - 1;
 	const shortBlock = fn.blocks[shortIdx]!;
-	const shortCursor: RegisterCursor = { block: shortBlock };
+	const shortCursor: SemanticCursor = { block: shortBlock };
 	const undefinedRegister = compileUndefined(fn, shortCursor);
 	shortBlock.instructions.push({ type: "move", registers: [result, undefinedRegister] });
-	const shortJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const shortJoinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -9481,10 +8499,10 @@ function compileOptionalChain(
  * compileOptionalChain.
  */
 function emitOptionalGuard(
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	base: number,
-	shortCircuits: Array<Extract<RegisterInstruction, { type: "jumpIf" }>>,
+	shortCircuits: Array<Extract<CompilerInstruction, { type: "jumpIf" }>>,
 ) {
 	const undefinedRegister = compileUndefined(fn, cursor);
 	const isNil = nextRegisterDestination(fn);
@@ -9494,12 +8512,12 @@ function emitOptionalGuard(
 		operator: "==",
 	});
 
-	const shortJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const shortJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [isNil],
 		blocks: [-1],
 	};
-	const continueJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const continueJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -9516,11 +8534,11 @@ function emitOptionalGuard(
  * circuit jump list through nested member accesses and calls.
  */
 function compileChainElement(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	node: ESTree.Expression,
-	shortCircuits: Array<Extract<RegisterInstruction, { type: "jumpIf" }>>,
+	shortCircuits: Array<Extract<CompilerInstruction, { type: "jumpIf" }>>,
 ): number {
 	if (node.type === "MemberExpression") {
 		if (node.object.type === "Super") {
@@ -9682,9 +8700,9 @@ function compileChainElement(
 }
 
 function compileFunctionExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 	nameHint?: string,
 ) {
@@ -9709,9 +8727,9 @@ function compileFunctionExpression(
 }
 
 function compileAssignment(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	if (
@@ -9821,9 +8839,9 @@ function compileAssignment(
 }
 
 function compileIdentifierAssignment(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	if (
@@ -9853,10 +8871,10 @@ function compileIdentifierAssignment(
 		? globalPropertyLocation(program, binding.name)
 		: null;
 	const runtimeGlobalLocation =
-		binding.undeclared && !isIRIntrinsic(binding.name)
+		binding.undeclared && !isCompilerIntrinsic(binding.name)
 			? globalPropertyLocation(program, binding.name)
 			: null;
-	if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
+	if (binding.undeclared && !isCompilerIntrinsic(binding.name) && !hostGlobalLocation) {
 		// A plain assignment must resolve against the runtime global object in both
 		// modes. Sloppy code creates an absent property; strict code throws only when
 		// the property is actually absent. Resolve the strict reference before the
@@ -9881,12 +8899,12 @@ function compileIdentifierAssignment(
 			}
 			const value = compileExpression(program, fn, cursor, assignmentExpression.right);
 			if (initiallyPresent !== undefined) {
-				const storeJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+				const storeJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 					type: "jumpIf",
 					registers: [initiallyPresent],
 					blocks: [-1],
 				};
-				const throwJump: Extract<RegisterInstruction, { type: "jump" }> = {
+				const throwJump: Extract<CompilerInstruction, { type: "jump" }> = {
 					type: "jump",
 					blocks: [-1],
 				};
@@ -9895,7 +8913,7 @@ function compileIdentifierAssignment(
 				const storeIndex = fn.blocks.push({ instructions: [] }) - 1;
 				cursor.block = fn.blocks[storeIndex]!;
 				emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
-				const storeJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+				const storeJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 					type: "jump",
 					blocks: [-1],
 				};
@@ -9909,7 +8927,7 @@ function compileIdentifierAssignment(
 					registers: [undeclared],
 					nameStringIndex: getOrCreateStringConstant(program, binding.name),
 				});
-				const throwJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+				const throwJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 					type: "jump",
 					blocks: [-1],
 				};
@@ -10038,9 +9056,9 @@ function compileIdentifierAssignment(
  * value when it short-circuits, otherwise the assigned value.
  */
 function compileLogicalAssignment(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	const left = assignmentExpression.left;
@@ -10085,7 +9103,7 @@ function compileLogicalAssignment(
 				: null;
 			location =
 				hostGlobalLocation ??
-				(binding.undeclared && !isIRIntrinsic(binding.name)
+				(binding.undeclared && !isCompilerIntrinsic(binding.name)
 					? globalPropertyLocation(program, binding.name)
 					: getOrCreateBindingLocation(program, fn, binding));
 			current = loadRegisterFromLocation(fn, cursor.block, location);
@@ -10125,12 +9143,12 @@ function compileLogicalAssignment(
 		});
 	}
 
-	const conditionalJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const conditionalJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [-1],
 	};
-	const fallthroughJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const fallthroughJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10180,7 +9198,7 @@ function compileLogicalAssignment(
 		compileMemberStore(cursor, member, right);
 	}
 
-	const assignJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const assignJoinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10207,9 +9225,9 @@ function compileLogicalAssignment(
  * hand side, with both sides writing the shared result register.
  */
 function compileLogicalExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.LogicalExpression,
 ): number {
 	const result = nextRegisterDestination(fn);
@@ -10232,12 +9250,12 @@ function compileLogicalExpression(
 		});
 	}
 
-	const conditionalJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const conditionalJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [-1],
 	};
-	const fallthroughJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const fallthroughJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10250,7 +9268,7 @@ function compileLogicalExpression(
 		type: "move",
 		registers: [result, right],
 	});
-	const rightJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const rightJoinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10277,20 +9295,20 @@ function compileLogicalExpression(
  * expressions.
  */
 function compileConditionalExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.ConditionalExpression,
 ): number {
 	const result = nextRegisterDestination(fn);
 	const condition = compileExpression(program, fn, cursor, expression.test);
 
-	const consequentJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const consequentJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [-1],
 	};
-	const alternateJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const alternateJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10303,7 +9321,7 @@ function compileConditionalExpression(
 		type: "move",
 		registers: [result, consequent],
 	});
-	const consequentJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const consequentJoinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10316,7 +9334,7 @@ function compileConditionalExpression(
 		type: "move",
 		registers: [result, alternate],
 	});
-	const alternateJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const alternateJoinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10337,9 +9355,9 @@ function compileConditionalExpression(
  * leading quasi keeps the chain string-typed so + coerces the expressions.
  */
 function compileTemplateLiteral(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.TemplateLiteral,
 ): number {
 	let result = compileStaticString(
@@ -10389,9 +9407,9 @@ function compileTemplateLiteral(
  * (required by the spec — tags routinely use it as a cache key / WeakMap key).
  */
 function compileTaggedTemplate(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.TaggedTemplateExpression,
 ): number {
 	const tagNode = expression.tag as unknown as ESTree.Node;
@@ -10454,9 +9472,9 @@ function compileTaggedTemplate(
 }
 
 function compileUnaryExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.UnaryExpression,
 ): number {
 	if (expression.operator === "void") {
@@ -10474,7 +9492,7 @@ function compileUnaryExpression(
 		if (binding) {
 			retainHostGlobal(program, binding);
 		}
-		if (binding?.undeclared && !isIRIntrinsic(argument.name)) {
+		if (binding?.undeclared && !isCompilerIntrinsic(argument.name)) {
 			if (
 				fn.semanticFile.withDynamicNodes.has(argument) ||
 				(program.evalDirect && identifierIsFree(fn, argument))
@@ -10534,9 +9552,9 @@ function compileUnaryExpression(
  * cannot reach this point: the parser rejects it in (implied) strict mode.
  */
 function compileDeleteExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.UnaryExpression,
 ): number {
 	if (expression.argument.type === "MemberExpression") {
@@ -10584,9 +9602,9 @@ function compileDeleteExpression(
  * configurable); a resolvable binding cannot be deleted (`delete x` is false).
  */
 function compileStaticIdentifierDelete(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
@@ -10622,9 +9640,9 @@ function compileStaticIdentifierDelete(
  * paths join with the boolean result in one register.
  */
 function compileWithDynamicDelete(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const nameStringIndex = getOrCreateStringConstant(program, identifier.name);
@@ -10638,12 +9656,12 @@ function compileWithDynamicDelete(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
 
-	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10662,7 +9680,7 @@ function compileWithDynamicDelete(
 		type: "deleteProperty",
 		registers: [result, base, key],
 	});
-	const foundJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10673,7 +9691,7 @@ function compileWithDynamicDelete(
 	cursor.block = fn.blocks[missIdx]!;
 	const staticResult = compileStaticIdentifierDelete(program, fn, cursor, identifier);
 	cursor.block.instructions.push({ type: "move", registers: [result, staticResult] });
-	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10693,9 +9711,9 @@ function compileWithDynamicDelete(
  * ToNumber (unary plus) so the postfix result is the numeric old value.
  */
 function compileUpdateExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.UpdateExpression,
 ): number {
 	// UpdateExpression coerces with ToNumeric (not ToNumber): a BigInt operand
@@ -10835,7 +9853,7 @@ function assignmentOperatorToBinaryOperator(operator: string) {
 	}
 
 	const binaryOperator = operator.slice(0, -1);
-	if (!isRegisterBinaryOperator(binaryOperator)) {
+	if (!isCompilerBinaryOperator(binaryOperator)) {
 		throw new Error(`Unsupported assignment operator ${operator}`);
 	}
 
@@ -10843,9 +9861,9 @@ function assignmentOperatorToBinaryOperator(operator: string) {
 }
 
 function compileBinary(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	binaryExpression: ESTree.BinaryExpression,
 ): number {
 	// Ergonomic brand check `#x in obj`: present iff obj carries the declaring
@@ -10871,7 +9889,7 @@ function compileBinary(
 		return destination;
 	}
 
-	if (!isRegisterBinaryOperator(binaryExpression.operator)) {
+	if (!isCompilerBinaryOperator(binaryExpression.operator)) {
 		throw new Error(`Unsupported binary operator ${binaryExpression.operator}`);
 	}
 
@@ -11028,9 +10046,9 @@ function appendTemplateNumber(out: Array<number>, value: number): void {
 }
 
 function compileLiteralTemplate(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	root: ESTree.ArrayExpression | ESTree.ObjectExpression,
 ): number | null {
 	if (!isStaticLiteralTemplate(root)) return null;
@@ -11171,15 +10189,15 @@ function isAnonymousFunctionDefinition(node: ESTree.Node | null | undefined): bo
  * the erroneous `prototype` that a plain function value would carry.
  */
 function compileObjectMemberFunction(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	valueNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 	homeObjectBinding: Binding | undefined,
 	nameHint: string | undefined,
 ): number {
 	const inherited = inheritedPrivateEnvironment(fn, false);
-	const classContext: RegisterClassContext = {
+	const classContext: SemanticClassContext = {
 		isStatic: false,
 		privateNames: inherited?.privateNames,
 		homeObjectBinding,
@@ -11202,9 +10220,9 @@ function compileObjectMemberFunction(
 }
 
 function compileObjectExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	objectExpression: ESTree.ObjectExpression,
 ): number {
 	const template = compileLiteralTemplate(program, fn, cursor, objectExpression);
@@ -11363,9 +10381,9 @@ function compileObjectExpression(
 }
 
 function compileArrayExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	arrayExpression: ESTree.ArrayExpression,
 ): number {
 	const template = compileLiteralTemplate(program, fn, cursor, arrayExpression);
@@ -11471,9 +10489,9 @@ function compileArrayExpression(
 }
 
 function compileMemberExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number {
 	const staticArgumentsResult = compileStaticArgumentsMember(
@@ -11500,9 +10518,9 @@ function compileMemberExpression(
 }
 
 function compileStaticArgumentsMember(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number | undefined {
 	if (memberExpression.object.type !== "Identifier") return undefined;
@@ -11541,8 +10559,8 @@ interface CompiledMemberReference {
 }
 
 function compileMemberLoad(
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	member: CompiledMemberReference,
 ): number {
 	const destination = nextRegisterDestination(fn);
@@ -11561,8 +10579,8 @@ function compileMemberLoad(
 }
 
 function compileMemberKeyOnce(
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	member: CompiledMemberReference,
 ): number {
 	let coercibleBase = member.object;
@@ -11586,7 +10604,7 @@ function compileMemberKeyOnce(
 }
 
 function compileMemberStore(
-	cursor: RegisterCursor,
+	cursor: SemanticCursor,
 	member: CompiledMemberReference,
 	value: number,
 ): void {
@@ -11601,9 +10619,9 @@ function compileMemberStore(
 }
 
 function compileMemberObjectAndKey(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	memberExpression: ESTree.MemberExpression,
 ): CompiledMemberReference {
 	let object = -1;
@@ -11649,9 +10667,9 @@ function compileMemberObjectAndKey(
  * the parent itself in static ones.
  */
 function compileSuperObject(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 ): number {
 	const classContext = fn.classContext;
 	if (!classContext) {
@@ -11721,9 +10739,9 @@ function compileSuperObject(
 }
 
 function compilePropertyKey(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	property: ESTree.Property,
 ) {
 	if (property.computed) {
@@ -11742,9 +10760,9 @@ function compilePropertyKey(
 }
 
 function compileStaticString(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	value: string,
 ) {
 	const destination = nextRegisterDestination(fn);
@@ -11762,9 +10780,9 @@ function compileStaticString(
  * arguments appended directly and spreads drained through their iterators.
  */
 function compileSpreadArgumentsArray(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	args: Array<ESTree.Expression | ESTree.SpreadElement>,
 ): number {
 	const array = nextRegisterDestination(fn);
@@ -11821,7 +10839,7 @@ function compileSpreadArgumentsArray(
  * and globals backed by internal slots can be marshaled too.
  */
 function visibleBindingsForDirectEval(
-	fn: RegisterFunction,
+	fn: SemanticGraphFunction,
 	callNode: ESTree.Node,
 ): Map<string, Binding> {
 	const result = new Map<string, Binding>();
@@ -11852,8 +10870,8 @@ function visibleBindingsForDirectEval(
 }
 
 function inheritedContextForDirectEval(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	callNode: ESTree.CallExpression,
 ): DirectEvalContext {
 	const classContext = fn.classContext;
@@ -11974,9 +10992,9 @@ function inheritedContextForDirectEval(
 }
 
 function storeDirectEvalScopeValue(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	scopeObject: number,
 	keyName: string,
 	value: number,
@@ -11989,9 +11007,9 @@ function storeDirectEvalScopeValue(
 }
 
 function loadDirectEvalHomeObject(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 ): number {
 	const classContext = fn.classContext;
 	if (classContext?.homeObjectBinding) {
@@ -12010,9 +11028,9 @@ function loadDirectEvalHomeObject(
 }
 
 function marshalDirectEvalInheritedContext(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	scopeObject: number,
 	context: DirectEvalContext,
 ): void {
@@ -12076,9 +11094,9 @@ function marshalDirectEvalInheritedContext(
 }
 
 function ensureDirectEvalPersistentScope(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 ): number {
 	if (program.evalDirect && program.directEvalPersistentScopeBinding) {
 		return loadCapturedBinding(
@@ -12116,9 +11134,9 @@ function ensureDirectEvalPersistentScope(
  * and would skip an actual same-value Set through an accessor's setter.
  */
 function compileDirectEval(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const bindings = visibleBindingsForDirectEval(fn, callExpression);
@@ -12358,21 +11376,21 @@ function compileDirectEval(
 				type: "loadProperty",
 				registers: [dirty, dirtyTracker, key],
 			});
-			const dirtyJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+			const dirtyJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 				type: "jumpIf",
 				registers: [dirty],
 				blocks: [-1],
 			};
-			const skipJump: Extract<RegisterInstruction, { type: "jump" }> = {
+			const skipJump: Extract<CompilerInstruction, { type: "jump" }> = {
 				type: "jump",
 				blocks: [-1],
 			};
 			cursor.block.instructions.push(dirtyJump, skipJump);
 
-			const writeBlock: RegisterBlock = { instructions: [] };
+			const writeBlock: SemanticGraphBlock = { instructions: [] };
 			const writeIndex = fn.blocks.push(writeBlock) - 1;
 			storeRegisterAtLocation(writeBlock, location, value);
-			const joinJump: Extract<RegisterInstruction, { type: "jump" }> = {
+			const joinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 				type: "jump",
 				blocks: [-1],
 			};
@@ -12392,9 +11410,9 @@ function compileDirectEval(
 }
 
 function compileImportExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	source: ESTree.Expression,
 	options?: ESTree.Expression | null,
 ): number {
@@ -12423,7 +11441,7 @@ function compileImportExpression(
 		.map((file) => file.path)
 		.sort();
 	const result = nextRegisterDestination(fn);
-	const joinJumps: Array<Extract<RegisterInstruction, { type: "jump" }>> = [];
+	const joinJumps: Array<Extract<CompilerInstruction, { type: "jump" }>> = [];
 
 	for (const candidate of candidates) {
 		const candidateSpecifier = compileStaticString(program, fn, cursor, candidate);
@@ -12433,12 +11451,12 @@ function compileImportExpression(
 			registers: [matches, specifier, candidateSpecifier],
 			operator: "===",
 		});
-		const matchJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+		const matchJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 			type: "jumpIf",
 			registers: [matches],
 			blocks: [-1],
 		};
-		const nextJump: Extract<RegisterInstruction, { type: "jump" }> = {
+		const nextJump: Extract<CompilerInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -12449,7 +11467,7 @@ function compileImportExpression(
 		cursor.block = fn.blocks[matchIndex]!;
 		const imported = emitDynamicImportCall(program, fn, cursor, specifier, candidate);
 		cursor.block.instructions.push({ type: "move", registers: [result, imported] });
-		const joinJump: Extract<RegisterInstruction, { type: "jump" }> = {
+		const joinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -12471,9 +11489,9 @@ function compileImportExpression(
 }
 
 function emitDynamicImportCall(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	specifier: number,
 	targetPath?: string,
 ): number {
@@ -12530,8 +11548,8 @@ function emitDynamicImportCall(
 }
 
 function dynamicImportTargetPath(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	source: ESTree.Expression,
 ): string | undefined {
 	if (source.type !== "Literal" || typeof source.value !== "string") {
@@ -12546,10 +11564,7 @@ function dynamicImportTargetPath(
 	);
 }
 
-function getDynamicModuleStatusSlot(
-	program: SemanticLoweringProgram,
-	modulePath: string,
-): number {
+function getDynamicModuleStatusSlot(program: SemanticGraph, modulePath: string): number {
 	let slot = program.dynamicModuleStatusSlot.get(modulePath);
 	if (slot === undefined) {
 		slot = program.nextGlobalIndex++;
@@ -12559,9 +11574,9 @@ function getDynamicModuleStatusSlot(
 }
 
 function compileDynamicImport(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const source = callExpression.arguments[0];
@@ -12574,9 +11589,9 @@ function compileDynamicImport(
 }
 
 function compileCall(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const calleeNode = callExpression.callee as unknown as ESTree.Node;
@@ -12692,9 +11707,9 @@ function compileCall(
 
 /** Compile SuperCall with the active derived-constructor environment. */
 function compileSuperCall(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const superBinding = fn.classContext?.superBinding;
@@ -12780,9 +11795,9 @@ function compileSuperCall(
  * prototype property and substitutes non-object return values.
  */
 function compileNewExpression(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	expression: ESTree.NewExpression,
 ): number {
 	const calleeNode = expression.callee as unknown as ESTree.Node;
@@ -12841,9 +11856,9 @@ function compileNewExpression(
  * Statements that store the a variable internally handle the store instructions.
  */
 function compileIdentifier(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	if (identifierUsesDynamicEnvironment(program, fn, identifier)) {
@@ -12857,14 +11872,17 @@ function compileIdentifier(
  * compiled. In direct-eval mode these are routed through the with-dynamic path
  * so they probe the caller scope object before the global.
  */
-function identifierIsFree(fn: RegisterFunction, identifier: ESTree.Identifier): boolean {
+function identifierIsFree(
+	fn: SemanticGraphFunction,
+	identifier: ESTree.Identifier,
+): boolean {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	return !binding || binding.undeclared === true;
 }
 
 function isDirectEvalVarBinding(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	if (
@@ -12882,8 +11900,8 @@ function isDirectEvalVarBinding(
 }
 
 function isNewDirectEvalVarBinding(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	return (
@@ -12893,8 +11911,8 @@ function isNewDirectEvalVarBinding(
 }
 
 function identifierUsesDynamicEnvironment(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	return (
@@ -12910,9 +11928,9 @@ function identifierUsesDynamicEnvironment(
  * paths join with the value in a single register.
  */
 function compileWithDynamicRead(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const result = nextRegisterDestination(fn);
@@ -12925,12 +11943,12 @@ function compileWithDynamicRead(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, result] });
 
-	const fallbackJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const fallbackJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const foundJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -12941,7 +11959,7 @@ function compileWithDynamicRead(
 	cursor.block = fn.blocks[fallbackIdx]!;
 	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
 	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
-	const fallbackJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const fallbackJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -12962,9 +11980,9 @@ function compileWithDynamicRead(
  * (never a ReferenceError — typeof of an unresolvable name does not throw).
  */
 function compileWithDynamicTypeof(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const result = nextRegisterDestination(fn);
@@ -12977,12 +11995,12 @@ function compileWithDynamicTypeof(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, probe] });
 
-	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const hitJump: Extract<RegisterInstruction, { type: "jump" }> = {
+	const hitJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -12996,7 +12014,7 @@ function compileWithDynamicTypeof(
 		registers: [result, probe],
 		operator: "typeof",
 	});
-	const hitJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const hitJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -13007,7 +12025,7 @@ function compileWithDynamicTypeof(
 	cursor.block = fn.blocks[missIdx]!;
 	const undefinedString = compileStaticString(program, fn, cursor, "undefined");
 	cursor.block.instructions.push({ type: "move", registers: [result, undefinedString] });
-	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
+	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -13024,9 +12042,9 @@ function compileWithDynamicTypeof(
 }
 
 function compileStaticIdentifier(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	if (identifier.name === "undefined") {
@@ -13039,7 +12057,7 @@ function compileStaticIdentifier(
 	}
 	retainHostGlobal(program, binding);
 
-	if (binding.undeclared && isIRIntrinsic(identifier.name)) {
+	if (binding.undeclared && isCompilerIntrinsic(identifier.name)) {
 		const destination = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "loadIntrinsic",
@@ -13083,7 +12101,7 @@ function compileStaticIdentifier(
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */
-function retainHostGlobal(program: SemanticLoweringProgram, binding: Binding): boolean {
+function retainHostGlobal(program: SemanticGraph, binding: Binding): boolean {
 	if (
 		program.hostProcess &&
 		binding.undeclared &&
@@ -13102,10 +12120,7 @@ function retainHostGlobal(program: SemanticLoweringProgram, binding: Binding): b
 	return false;
 }
 
-function globalPropertyLocation(
-	program: SemanticLoweringProgram,
-	name: string,
-): BindingLocation {
+function globalPropertyLocation(program: SemanticGraph, name: string): BindingLocation {
 	return {
 		type: "globalProperty",
 		nameStringIndex: getOrCreateStringConstant(program, name),
@@ -13134,7 +12149,7 @@ function isTdzBinding(binding: Binding): boolean {
  * parameter default (an earlier-declared parameter is initialized, a later one
  * is not, and only the runtime EMPTY check can tell them apart).
  */
-function bindingNeedsTdzGuard(fn: RegisterFunction, binding: Binding): boolean {
+function bindingNeedsTdzGuard(fn: SemanticGraphFunction, binding: Binding): boolean {
 	return (
 		!binding.undeclared && (isTdzBinding(binding) || (fn.inParameterExpression ?? false))
 	);
@@ -13148,9 +12163,9 @@ function bindingNeedsTdzGuard(fn: RegisterFunction, binding: Binding): boolean {
  * A no-op once the slot holds a real value.
  */
 function emitTdzGuard(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	binding: Binding,
 	current: number,
 ) {
@@ -13171,9 +12186,9 @@ function emitTdzGuard(
  * the predicate so an undeclared binding never allocates a slot.
  */
 function emitWriteTdzGuard(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	binding: Binding,
 	hostGlobalLocation: BindingLocation | null,
 ) {
@@ -13198,9 +12213,9 @@ function emitWriteTdzGuard(
  * bindings; any that somehow are not are skipped.
  */
 function emitNamespaceObject(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	binding: Binding,
 	exports: Array<{ name: string; exporter: Binding }>,
 ) {
@@ -13210,9 +12225,9 @@ function emitNamespaceObject(
 }
 
 function emitNamespaceObjectRegister(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	exports: Array<{ name: string; exporter: Binding }>,
 ): number {
 	const entries: Array<{ nameStringIndex: number; slot: number }> = [];
@@ -13238,8 +12253,8 @@ function emitNamespaceObjectRegister(
 }
 
 function loadRegisterFromLocation(
-	fn: RegisterFunction,
-	block: RegisterBlock,
+	fn: SemanticGraphFunction,
+	block: SemanticGraphBlock,
 	location: BindingLocation,
 ) {
 	const destination = nextRegisterDestination(fn);
@@ -13284,7 +12299,7 @@ function loadRegisterFromLocation(
 }
 
 function getArgumentsBinding(
-	fn: RegisterFunction,
+	fn: SemanticGraphFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -13338,7 +12353,7 @@ function getArgumentsBinding(
  * arrows to capture, or undefined. Arrows never own one (they inherit `this`).
  */
 function getLexicalThisBinding(
-	fn: RegisterFunction,
+	fn: SemanticGraphFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -13357,7 +12372,7 @@ function getLexicalThisBinding(
  * nested arrows to capture, or undefined. Arrows never own one.
  */
 function getLexicalNewTargetBinding(
-	fn: RegisterFunction,
+	fn: SemanticGraphFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -13372,9 +12387,9 @@ function getLexicalNewTargetBinding(
 }
 
 function compileLiteral(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	literal: ESTree.Literal,
 ): number {
 	if (
@@ -13471,7 +12486,7 @@ function compileLiteral(
 	return -1;
 }
 
-function compileUndefined(fn: RegisterFunction, cursor: RegisterCursor) {
+function compileUndefined(fn: SemanticGraphFunction, cursor: SemanticCursor) {
 	const destination = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "createUndefined",
@@ -13482,8 +12497,8 @@ function compileUndefined(fn: RegisterFunction, cursor: RegisterCursor) {
 }
 
 function compileNumberLiteral(
-	fn: RegisterFunction,
-	cursor: RegisterCursor,
+	fn: SemanticGraphFunction,
+	cursor: SemanticCursor,
 	value: number,
 ) {
 	const destination = nextRegisterDestination(fn);
@@ -13497,10 +12512,7 @@ function compileNumberLiteral(
 	return destination;
 }
 
-export function getOrCreateStringConstant(
-	program: SemanticLoweringProgram,
-	value: string,
-) {
+export function getOrCreateStringConstant(program: SemanticGraph, value: string) {
 	const existing = program.stringConstantToIndex.get(value);
 	if (existing !== undefined) {
 		return existing;
@@ -13517,7 +12529,7 @@ export function getOrCreateStringConstant(
 }
 
 function getOrCreateSourcePosition(
-	program: SemanticLoweringProgram,
+	program: SemanticGraph,
 	line: number,
 	column: number,
 ): number {
@@ -13539,7 +12551,7 @@ function getOrCreateSourcePosition(
  * `callerPosId` chain, emitting one frame per inline level. Used by the inliner.
  */
 export function addInlineSourcePosition(
-	program: SemanticLoweringProgram,
+	program: SemanticGraph,
 	line: number,
 	column: number,
 	inlinedFunctionIndex: number,
@@ -13556,8 +12568,8 @@ export function addInlineSourcePosition(
  * inherited by every following instruction until the next marker.
  */
 function emitSourcePos(
-	program: SemanticLoweringProgram,
-	block: RegisterBlock,
+	program: SemanticGraph,
+	block: SemanticGraphBlock,
 	node: ESTree.Node,
 ): void {
 	const loc = node.loc;
@@ -13571,7 +12583,7 @@ function emitSourcePos(
 	});
 }
 
-function getOrCreateBigintConstant(program: SemanticLoweringProgram, value: bigint) {
+function getOrCreateBigintConstant(program: SemanticGraph, value: bigint) {
 	const existing = program.bigintConstantToIndex.get(value);
 	if (existing !== undefined) {
 		return existing;
@@ -13588,7 +12600,7 @@ function getOrCreateBigintConstant(program: SemanticLoweringProgram, value: bigi
  * At a later compiler stage these should be optimized to reduce the number of registers needed
  * with things like live-ness checking.
  */
-function nextRegisterDestination(fn: RegisterFunction) {
+function nextRegisterDestination(fn: SemanticGraphFunction) {
 	return fn.nextRegisterDestination++;
 }
 
@@ -13598,8 +12610,8 @@ function nextRegisterDestination(fn: RegisterFunction) {
  * per binding.
  */
 function getOrCreateBindingLocation(
-	program: SemanticLoweringProgram,
-	fn: RegisterFunction,
+	program: SemanticGraph,
+	fn: SemanticGraphFunction,
 	binding: Binding,
 ) {
 	let location = program.bindingToStorage.get(binding);
@@ -13650,7 +12662,7 @@ function getOrCreateBindingLocation(
  * Store register at a binding location.
  */
 function storeRegisterAtLocation(
-	block: RegisterBlock,
+	block: SemanticGraphBlock,
 	location: BindingLocation,
 	register: number,
 ) {

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
-import {
-	coreRegisterClasses,
-	lowerCoreProgramToRegisters,
-} from "../src/core-ir-lowering.ts";
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/core-ir.ts";
+import {
+	coreRegisterClasses,
+	lowerCoreProgramToTarget,
+} from "../src/core-target-lowering.ts";
 import { lowerCoreProgramToVmDefinition } from "../src/lower-vm.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
@@ -50,7 +50,7 @@ describe("Core IR lowering", () => {
 		);
 		expect(exceptional.length).toBeGreaterThan(0);
 
-		const lowered = lowerCoreProgramToRegisters(converted);
+		const lowered = lowerCoreProgramToTarget(converted);
 		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
 	});
@@ -89,7 +89,7 @@ describe("Core IR lowering", () => {
 			for (const value of [1, 2, 3]) total += value;
 			console.log(total);
 		`);
-		const lowered = lowerCoreProgramToRegisters(converted);
+		const lowered = lowerCoreProgramToTarget(converted);
 		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.length).toBeGreaterThan(0);
 		expect(
@@ -129,7 +129,7 @@ describe("Core IR lowering", () => {
 				}),
 			}),
 		};
-		const allocated = lowerCoreProgramToRegisters(malformed);
+		const allocated = lowerCoreProgramToTarget(malformed);
 		expect(() => lowerCoreProgramToVmDefinition(allocated)).toThrow(
 			/Invalid Core string-split-projection region during VM lowering/,
 		);
@@ -235,7 +235,7 @@ describe("Core IR lowering", () => {
 			),
 		};
 
-		const lowered = lowerCoreProgramToRegisters(switched);
+		const lowered = lowerCoreProgramToTarget(switched);
 		const instructions = lowered.functions[functionIndex]!.blocks.flatMap(
 			({ instructions }) => instructions,
 		);
@@ -258,9 +258,7 @@ describe("Core IR lowering", () => {
 			}
 			new Child();
 		`);
-		const lowered = lowerCoreProgramToRegisters(
-			executeCoreOptimizations(converted).program,
-		);
+		const lowered = lowerCoreProgramToTarget(executeCoreOptimizations(converted).program);
 		const instructions = lowered.functions.flatMap((fn) =>
 			fn.blocks.flatMap((block) => block.instructions),
 		);

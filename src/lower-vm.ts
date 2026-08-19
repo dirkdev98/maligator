@@ -6,23 +6,26 @@ import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
-import type { CoreRegisterFunction, CoreRegisterProgram } from "./core-ir-lowering.ts";
+import type {
+	CompilerImmediateValue,
+	CompilerInstruction,
+} from "./compiler-instruction.ts";
 import type { CoreProgram } from "./core-ir.ts";
+import type { CoreTargetFunction, CoreTargetProgram } from "./core-target-lowering.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
-import type { RegisterImmediateValue, RegisterInstruction } from "./semantic-lowering.ts";
 
-type RegisterBinaryOperator = Extract<
-	RegisterInstruction,
+type CompilerBinaryOperator = Extract<
+	CompilerInstruction,
 	{ type: "binary" }
 >["operator"];
-type RegisterUnaryOperator = Extract<RegisterInstruction, { type: "unary" }>["operator"];
-type RegisterIntrinsic = Extract<
-	RegisterInstruction,
+type CompilerUnaryOperator = Extract<CompilerInstruction, { type: "unary" }>["operator"];
+type CompilerIntrinsic = Extract<
+	CompilerInstruction,
 	{ type: "loadIntrinsic" }
 >["intrinsic"];
-type RegisterTypeofResult = Extract<
-	RegisterInstruction,
+type CompilerTypeofResult = Extract<
+	CompilerInstruction,
 	{ type: "typeofCompare" }
 >["expected"];
 
@@ -46,7 +49,7 @@ export type DecodedVmValueOperand =
 
 export function encodeVmValueOperand(
 	register: number,
-	value: RegisterImmediateValue | undefined,
+	value: CompilerImmediateValue | undefined,
 ): number {
 	if (value === undefined) return register;
 	switch (value.kind) {
@@ -1117,7 +1120,7 @@ export type VmInstruction =
 	| {
 			opcode: "LOAD_INTRINSIC";
 			dst: number;
-			intrinsic: RegisterIntrinsic;
+			intrinsic: CompilerIntrinsic;
 	  }
 	| {
 			opcode: "LOAD_CAPTURED";
@@ -1447,19 +1450,19 @@ export type VmInstruction =
 			dst: number;
 			left: number;
 			right: number;
-			operator: RegisterBinaryOperator;
+			operator: CompilerBinaryOperator;
 	  }
 	| {
 			opcode: "UNARY";
 			dst: number;
 			src: number;
-			operator: RegisterUnaryOperator;
+			operator: CompilerUnaryOperator;
 	  }
 	| {
 			opcode: "TYPEOF_COMPARE";
 			dst: number;
 			src: number;
-			expected: RegisterTypeofResult;
+			expected: CompilerTypeofResult;
 			negated: boolean;
 	  };
 
@@ -1664,10 +1667,10 @@ export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
 }
 
 /**
- * Lower the allocated Core register form to a VM definition that can be emitted as C.
+ * Lower the allocated Core target form to a VM definition that can be emitted as C.
  */
 export function lowerCoreProgramToVmDefinition(
-	program: CoreRegisterProgram,
+	program: CoreTargetProgram,
 	profile = false,
 ): VmDefinition {
 	const core = program.core;
@@ -1790,7 +1793,7 @@ function buildHostInstalls(
  * absolute instructions.
  */
 function lowerFunctionToVmFunction(
-	fn: CoreRegisterFunction,
+	fn: CoreTargetFunction,
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	instructionSites?: WeakMap<object, { id: string }>,
@@ -1817,7 +1820,7 @@ function lowerFunctionToVmFunction(
 	const instructions: Array<VmInstruction> = [];
 	const compilerSiteIds: Array<string | undefined> = [];
 	let propertyIcCount = 0;
-	const propertyIcIndexByInstruction = new Map<RegisterInstruction, number>();
+	const propertyIcIndexByInstruction = new Map<CompilerInstruction, number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (
@@ -1834,7 +1837,7 @@ function lowerFunctionToVmFunction(
 	const handlers: Array<VmExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
-	const instructionIndexByIrInstruction = new Map<RegisterInstruction, number>();
+	const instructionIndexByTargetInstruction = new Map<CompilerInstruction, number>();
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1859,7 +1862,7 @@ function lowerFunctionToVmFunction(
 				continue;
 			}
 			const instructionIndex = instructions.length;
-			instructionIndexByIrInstruction.set(instruction, instructionIndex);
+			instructionIndexByTargetInstruction.set(instruction, instructionIndex);
 			const vmInstruction = lowerInstructionToVmInstruction(blockStartIps, instruction);
 			switch (vmInstruction.opcode) {
 				case "LOAD_PROPERTY":
@@ -1887,18 +1890,18 @@ function lowerFunctionToVmFunction(
 	for (const region of fn.regions ?? []) {
 		if (region.kind === "numeric-fusion") {
 			const anchors = region.anchors.map((instruction) =>
-				instructionIndexByIrInstruction.get(instruction),
+				instructionIndexByTargetInstruction.get(instruction),
 			);
 			const claimedIps = region.claimedInstructions.map((instruction) =>
-				instructionIndexByIrInstruction.get(instruction),
+				instructionIndexByTargetInstruction.get(instruction),
 			);
 			const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((blockIndex) =>
 				blockStartIps.get(blockIndex),
 			);
 			const pairs = region.pairs.map((pair) => ({
 				...pair,
-				firstIp: instructionIndexByIrInstruction.get(pair.first),
-				finishIp: instructionIndexByIrInstruction.get(pair.finish),
+				firstIp: instructionIndexByTargetInstruction.get(pair.first),
+				finishIp: instructionIndexByTargetInstruction.get(pair.finish),
 			}));
 			if (
 				region.license.guard !== "structural" ||
@@ -2013,7 +2016,7 @@ function lowerFunctionToVmFunction(
 						}
 					: lowerGuardPlan(region.license.guard);
 			const aggregateClaims = region.claimedInstructions.map((instruction) =>
-				instructionIndexByIrInstruction.get(instruction),
+				instructionIndexByTargetInstruction.get(instruction),
 			);
 			const resolvedSites: Array<VmStackObjectPlanRegion["sites"][number]> = [];
 			const payloadIps: Array<number> = [];
@@ -2052,19 +2055,19 @@ function lowerFunctionToVmFunction(
 				throw coreRegionError(region.kind, "unmapped aggregate claim");
 			}
 			for (const site of region.sites) {
-				const allocationIp = instructionIndexByIrInstruction.get(site.allocation);
+				const allocationIp = instructionIndexByTargetInstruction.get(site.allocation);
 				const allocation =
 					allocationIp === undefined ? undefined : instructions[allocationIp];
 				const accesses = site.accesses.map((access) => ({
-					ip: instructionIndexByIrInstruction.get(access.instruction),
+					ip: instructionIndexByTargetInstruction.get(access.instruction),
 					slot: access.slot,
 				}));
 				const inheritedAccessIp =
 					site.inheritedAccess === undefined
 						? undefined
-						: instructionIndexByIrInstruction.get(site.inheritedAccess);
+						: instructionIndexByTargetInstruction.get(site.inheritedAccess);
 				const materializations = site.materializations.map((materialization) => ({
-					ip: instructionIndexByIrInstruction.get(materialization.instruction),
+					ip: instructionIndexByTargetInstruction.get(materialization.instruction),
 					kind: materialization.kind,
 				}));
 				if (
@@ -2193,10 +2196,10 @@ function lowerFunctionToVmFunction(
 		}
 		const guard = lowerGuardPlan(region.license.guard);
 		const anchors = region.anchors.map((instruction) =>
-			instructionIndexByIrInstruction.get(instruction),
+			instructionIndexByTargetInstruction.get(instruction),
 		);
 		const claimedIps = region.claimedInstructions.map((instruction) =>
-			instructionIndexByIrInstruction.get(instruction),
+			instructionIndexByTargetInstruction.get(instruction),
 		);
 		const ordinaryBlockIps = region.controlFlow.ordinaryBlocks.map((block) =>
 			blockStartIps.get(block),
@@ -2276,27 +2279,27 @@ function lowerFunctionToVmFunction(
 			case "regexp-exec-projection": {
 				const callIp = resolvedAnchors[0];
 				const firstLoadIp = resolvedAnchors[1];
-				const propertyIp = instructionIndexByIrInstruction.get(region.property);
+				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
 				const nullChecks = region.nullChecks.map((check) => ({
-					comparisonIp: instructionIndexByIrInstruction.get(check.comparison),
-					nullIp: instructionIndexByIrInstruction.get(check.nullValue),
+					comparisonIp: instructionIndexByTargetInstruction.get(check.comparison),
+					nullIp: instructionIndexByTargetInstruction.get(check.nullValue),
 				}));
 				const lockedLiteral =
 					region.lockedLiteral === undefined
 						? undefined
 						: {
-								constructorIntrinsicIp: instructionIndexByIrInstruction.get(
+								constructorIntrinsicIp: instructionIndexByTargetInstruction.get(
 									region.lockedLiteral.constructorIntrinsic,
 								),
-								constructIp: instructionIndexByIrInstruction.get(
+								constructIp: instructionIndexByTargetInstruction.get(
 									region.lockedLiteral.construct,
 								),
 							};
 				const loads = region.loads.map((load) => {
 					const consumer = load.consumer;
 					return {
-						ip: instructionIndexByIrInstruction.get(load.instruction),
-						keyIp: instructionIndexByIrInstruction.get(load.key),
+						ip: instructionIndexByTargetInstruction.get(load.instruction),
+						keyIp: instructionIndexByTargetInstruction.get(load.key),
 						captureIndex: load.captureIndex,
 						dst: load.instruction.registers[0],
 						consumer:
@@ -2305,50 +2308,54 @@ function lowerFunctionToVmFunction(
 								: consumer.kind === "length"
 									? {
 											kind: consumer.kind,
-											propertyIp: instructionIndexByIrInstruction.get(consumer.property),
+											propertyIp: instructionIndexByTargetInstruction.get(
+												consumer.property,
+											),
 										}
 									: consumer.kind === "charCodeAtZero"
 										? {
 												kind: consumer.kind,
-												propertyIp: instructionIndexByIrInstruction.get(
+												propertyIp: instructionIndexByTargetInstruction.get(
 													consumer.property,
 												),
-												callIp: instructionIndexByIrInstruction.get(consumer.call),
+												callIp: instructionIndexByTargetInstruction.get(consumer.call),
 												...(consumer.zero === undefined
 													? {}
 													: {
-															zeroIp: instructionIndexByIrInstruction.get(consumer.zero),
+															zeroIp: instructionIndexByTargetInstruction.get(
+																consumer.zero,
+															),
 														}),
 											}
 										: consumer.kind === "number"
 											? {
 													kind: consumer.kind,
-													intrinsicIp: instructionIndexByIrInstruction.get(
+													intrinsicIp: instructionIndexByTargetInstruction.get(
 														consumer.intrinsic,
 													),
-													callIp: instructionIndexByIrInstruction.get(consumer.call),
+													callIp: instructionIndexByTargetInstruction.get(consumer.call),
 												}
 											: {
 													kind: consumer.kind,
-													upperPropertyIp: instructionIndexByIrInstruction.get(
+													upperPropertyIp: instructionIndexByTargetInstruction.get(
 														consumer.upperProperty,
 													),
-													upperCallIp: instructionIndexByIrInstruction.get(
+													upperCallIp: instructionIndexByTargetInstruction.get(
 														consumer.upperCall,
 													),
-													lowerPropertyIp: instructionIndexByIrInstruction.get(
+													lowerPropertyIp: instructionIndexByTargetInstruction.get(
 														consumer.lowerProperty,
 													),
 													lowerIcIndex: propertyIcIndexByInstruction.get(
 														consumer.lowerProperty,
 													),
-													lowerCallIp: instructionIndexByIrInstruction.get(
+													lowerCallIp: instructionIndexByTargetInstruction.get(
 														consumer.lowerCall,
 													),
 													resultMoveIps: consumer.resultMoves.map((move) =>
-														instructionIndexByIrInstruction.get(move),
+														instructionIndexByTargetInstruction.get(move),
 													),
-													lengthPropertyIp: instructionIndexByIrInstruction.get(
+													lengthPropertyIp: instructionIndexByTargetInstruction.get(
 														consumer.lengthProperty,
 													),
 												},
@@ -2561,12 +2568,14 @@ function lowerFunctionToVmFunction(
 				const firstLoadIp = resolvedAnchors[2];
 				const exitIp = blockStartIps.get(region.exitBlock);
 				const loads = region.loads.map((load) => ({
-					ip: instructionIndexByIrInstruction.get(load.instruction),
-					keyIp: instructionIndexByIrInstruction.get(load.key),
+					ip: instructionIndexByTargetInstruction.get(load.instruction),
+					keyIp: instructionIndexByTargetInstruction.get(load.key),
 					captureIndex: load.captureIndex,
 					dst: load.instruction.registers[0],
-					numberIntrinsicIp: instructionIndexByIrInstruction.get(load.numberIntrinsic),
-					numberCallIp: instructionIndexByIrInstruction.get(load.numberCall),
+					numberIntrinsicIp: instructionIndexByTargetInstruction.get(
+						load.numberIntrinsic,
+					),
+					numberCallIp: instructionIndexByTargetInstruction.get(load.numberCall),
 				}));
 				if (
 					region.representation !== "regexp-iterator-capture-spans" ||
@@ -2683,11 +2692,11 @@ function lowerFunctionToVmFunction(
 			case "string-slice-number": {
 				const sliceCallIp = resolvedAnchors[0];
 				const numberCallIp = resolvedAnchors[1];
-				const propertyIp = instructionIndexByIrInstruction.get(region.property);
-				const sliceStartIp = instructionIndexByIrInstruction.get(
+				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
+				const sliceStartIp = instructionIndexByTargetInstruction.get(
 					region.sliceStartInstruction,
 				);
-				const numberIntrinsicIp = instructionIndexByIrInstruction.get(
+				const numberIntrinsicIp = instructionIndexByTargetInstruction.get(
 					region.numberIntrinsic,
 				);
 				if (
@@ -2778,9 +2787,9 @@ function lowerFunctionToVmFunction(
 				const propertyIp =
 					region.property === undefined
 						? -1
-						: instructionIndexByIrInstruction.get(region.property);
+						: instructionIndexByTargetInstruction.get(region.property);
 				const loads = region.loads.map((load) => ({
-					ip: instructionIndexByIrInstruction.get(load.instruction),
+					ip: instructionIndexByTargetInstruction.get(load.instruction),
 					kind: load.kind,
 					...(load.kind === "element" ? { index: load.index } : {}),
 					dst: load.instruction.registers[0],
@@ -2981,16 +2990,18 @@ function lowerFunctionToVmFunction(
 				const propertyIp =
 					region.property === undefined
 						? -1
-						: instructionIndexByIrInstruction.get(region.property);
-				const elementIp = instructionIndexByIrInstruction.get(region.element);
-				const trimPropertyIp = instructionIndexByIrInstruction.get(region.trimProperty);
-				const trimCallIp = instructionIndexByIrInstruction.get(region.trimCall);
-				const compareIp = instructionIndexByIrInstruction.get(region.compare);
-				const incrementIp = instructionIndexByIrInstruction.get(region.increment);
+						: instructionIndexByTargetInstruction.get(region.property);
+				const elementIp = instructionIndexByTargetInstruction.get(region.element);
+				const trimPropertyIp = instructionIndexByTargetInstruction.get(
+					region.trimProperty,
+				);
+				const trimCallIp = instructionIndexByTargetInstruction.get(region.trimCall);
+				const compareIp = instructionIndexByTargetInstruction.get(region.compare);
+				const incrementIp = instructionIndexByTargetInstruction.get(region.increment);
 				const exitIp = blockStartIps.get(region.exitBlock);
 				const trimIcIndex = propertyIcIndexByInstruction.get(region.trimProperty);
 				const primitiveStringLengthIps = region.primitiveStringLengths.map((load) =>
-					instructionIndexByIrInstruction.get(load),
+					instructionIndexByTargetInstruction.get(load),
 				);
 				if (
 					region.representation !== "split-cursor-spans" ||
@@ -3167,7 +3178,7 @@ function lowerFunctionToVmFunction(
 }
 
 /**
- * Map the Core register form to the VM instruction set.
+ * Map the allocated Core target instruction to the VM instruction set.
  */
 function lowerGuardPlan(plan: CompilerGuardPlan): VmGuardPlan | undefined {
 	const dependencies: Array<VmSemanticDependency> = [];
@@ -3195,7 +3206,7 @@ function lowerGuardPlan(plan: CompilerGuardPlan): VmGuardPlan | undefined {
 }
 
 function lowerGuardedBuiltinCall(
-	instruction: Extract<RegisterInstruction, { type: "call" }>,
+	instruction: Extract<CompilerInstruction, { type: "call" }>,
 ): VmGuardedBuiltinCall | undefined {
 	const call = instruction.knownBuiltinCall;
 	if (
@@ -3218,7 +3229,7 @@ function lowerGuardedBuiltinCall(
 
 function lowerInstructionToVmInstruction(
 	blockStartIps: Map<number, number>,
-	instruction: RegisterInstruction,
+	instruction: CompilerInstruction,
 ): VmInstruction {
 	switch (instruction.type) {
 		case "sourcePos":
