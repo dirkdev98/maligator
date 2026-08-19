@@ -3525,7 +3525,8 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         return true;
     }
 
-    if (!(own_desc.flags & MAL_PROPERTY_WRITABLE)) {
+    if (!(own_desc.flags & MAL_PROPERTY_WRITABLE) &&
+        !(own_desc.flags & MAL_PROPERTY_SHADOW_WRITABLE)) {
         return false;
     }
     if (!mal_value_is_object(receiver)) {
@@ -4032,7 +4033,8 @@ static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey ke
             continue;
         }
         return !(lookup.desc.flags & MAL_PROPERTY_ACCESSOR) &&
-            (lookup.desc.flags & MAL_PROPERTY_WRITABLE);
+            (lookup.desc.flags &
+             (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_SHADOW_WRITABLE));
     }
     return true;
 }

@@ -12,7 +12,7 @@ typedef struct MalPropertyAccessors {
     MalValue setter;
 } MalPropertyAccessors;
 
-static_assert(MAL_PROPERTY_ACCESSOR <= UINT8_MAX,
+static_assert(MAL_PROPERTY_INTERNAL_FLAGS <= UINT8_MAX,
               "property flags no longer fit in a table entry");
 static_assert(sizeof(MalPropertyAccessors) == 16,
               "accessor sidecar should use the 16-byte raw class");

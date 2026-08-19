@@ -297,6 +297,7 @@ static MalDefineOwnStatus mal_builtin_object_try_define_parsed_impl(
         if (!parse.has_configurable && (existing.desc.flags & MAL_PROPERTY_CONFIGURABLE)) {
             desc.flags |= MAL_PROPERTY_CONFIGURABLE;
         }
+        desc.flags |= existing.desc.flags & MAL_PROPERTY_INTERNAL_FLAGS;
     }
 
     // Array exotic [[DefineOwnProperty]] for an index (10.4.2.1): defining at or

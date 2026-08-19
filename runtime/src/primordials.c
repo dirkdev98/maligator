@@ -65,6 +65,18 @@ static void mal_primordials_lock_value(MalVm *vm, MalValue value) {
         MalPropertyDesc desc;
         if (!mal_vm_get_own_property(vm, value, keys.keys[i], &present, &desc)) abort();
         if (!present) continue;
+        if (!(desc.flags & MAL_PROPERTY_ACCESSOR) &&
+            (desc.flags & MAL_PROPERTY_WRITABLE)) {
+            // Freezing a writable inherited data property must not change
+            // OrdinarySet on ordinary descendants. Retain the pre-freeze
+            // writability as internal metadata so a distinct receiver can still
+            // create an own shadowing property.
+            desc.flags |= MAL_PROPERTY_SHADOW_WRITABLE;
+            if (mal_object_define_own(object, keys.keys[i], &desc) !=
+                MAL_DEFINE_OWN_APPLIED) {
+                abort();
+            }
+        }
         if (desc.flags & MAL_PROPERTY_ACCESSOR) {
             mal_primordials_lock_value(vm, desc.getter);
             mal_primordials_lock_value(vm, desc.setter);

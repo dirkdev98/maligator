@@ -466,7 +466,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     }
 
     MalPropertyDesc stored = *desc;
-    stored.flags |= lookup.desc.flags & MAL_PROPERTY_PRIMORDIAL;
+    stored.flags |= lookup.desc.flags & MAL_PROPERTY_INTERNAL_FLAGS;
     mal_property_write_entry(table, lookup.entry, &stored);
     mal_gc_card_desc(&object->header, &stored); // old object -> young desc refs
     return MAL_DEFINE_OWN_APPLIED;

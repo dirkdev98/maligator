@@ -35,6 +35,21 @@ check(
 		Object.hasOwn(applicationError, "name"),
 );
 
+class AssignedApplicationError extends Error {
+	constructor(message) {
+		super(message);
+		this.name = "AssignedApplicationError";
+	}
+}
+const assignedApplicationError = new AssignedApplicationError("assigned own property");
+check(
+	"Error subclasses can assign an own name over the locked prototype",
+	assignedApplicationError.name === "AssignedApplicationError" &&
+		assignedApplicationError.message === "assigned own property" &&
+		Object.hasOwn(assignedApplicationError, "name") &&
+		assignedApplicationError instanceof AssignedApplicationError,
+);
+
 function lockedCodeUnit(value, position) {
 	return value.charCodeAt(position);
 }

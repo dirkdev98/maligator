@@ -14,6 +14,14 @@ typedef enum MalPropertyFlags {
     MAL_PROPERTY_ACCESSOR = 1 << 3,
     /** Internal marker for a protected global primordial binding. */
     MAL_PROPERTY_PRIMORDIAL = 1 << 4,
+    /**
+     * Internal marker recording that a data property was writable before its
+     * primordial owner was frozen. OrdinarySet may still shadow it on a distinct
+     * receiver while direct writes to the primordial remain forbidden.
+     */
+    MAL_PROPERTY_SHADOW_WRITABLE = 1 << 5,
+    MAL_PROPERTY_INTERNAL_FLAGS =
+        MAL_PROPERTY_PRIMORDIAL | MAL_PROPERTY_SHADOW_WRITABLE,
 } MalPropertyFlags;
 
 /**
