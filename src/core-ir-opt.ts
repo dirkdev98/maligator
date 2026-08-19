@@ -1978,6 +1978,160 @@ function mergeCoreBuiltinProofs(
 	};
 }
 
+/**
+ * Certify the canonical `i < text.length` loop relation for String#charCodeAt.
+ * The backend still retains the ordinary Get/Call twin and uses this fact only
+ * after its primitive-string, builtin-identity, and numeric-representation guards.
+ */
+const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
+	name: "annotate-bounded-string-char-code-at-positions",
+	run(fn, analyses, program) {
+		const cfg = analyses.controlFlow(fn);
+		const canonical = coreCanonicalValues(fn, cfg);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const definitions = functionDefinitions(fn);
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+			}
+		}
+		const boundedCalls = new Set<CoreInstructionId>();
+		const primitiveLengths = new Set<CoreInstructionId>();
+		for (const loop of cfg.loops) {
+			const header = fn.blocks[loop.header]!;
+			const branch = header.terminator;
+			if (
+				branch.kind !== "branch" ||
+				!loop.blocks.has(branch.consequent.block) ||
+				loop.blocks.has(branch.alternate.block) ||
+				header.handler !== undefined
+			) {
+				continue;
+			}
+			const bodyIncoming = cfg.predecessors[branch.consequent.block]!.filter(
+				({ kind }) => kind === "ordinary",
+			);
+			if (bodyIncoming.length !== 1 || bodyIncoming[0]!.from !== header.id) continue;
+			const comparison = definitions.get(root(branch.condition));
+			if (
+				comparison?.opcode !== "binary" ||
+				comparison.attributes.operator !== "<" ||
+				comparison.inputs.length !== 2 ||
+				locations.get(comparison.id)?.block.id !== header.id
+			) {
+				continue;
+			}
+			const position = comparison.inputs[0]!;
+			const length = definitions.get(root(comparison.inputs[1]!));
+			if (
+				length?.opcode !== "loadPropertyStatic" ||
+				length.inputs.length !== 1 ||
+				length.outputs.length !== 1 ||
+				typeof length.attributes.stringIndex !== "number" ||
+				decodeString(program, length.attributes.stringIndex) !== "length" ||
+				locations.get(length.id)?.block.id !== header.id ||
+				locations.get(length.id)!.index >= locations.get(comparison.id)!.index
+			) {
+				continue;
+			}
+			const positionParameter = header.parameters.findIndex(
+				(parameter) => root(parameter.value) === root(position),
+			);
+			if (positionParameter < 0) continue;
+			const incoming = cfg.predecessors[header.id]!.filter(
+				({ kind }) => kind === "ordinary",
+			);
+			const outside = incoming.filter(({ from }) => !loop.blocks.has(from));
+			const inside = incoming.filter(({ from }) => loop.blocks.has(from));
+			if (outside.length !== 1 || inside.length !== 1 || inside[0]!.from !== loop.backedge) {
+				continue;
+			}
+			const initial = outside[0]!.arguments[positionParameter];
+			const updated = inside[0]!.arguments[positionParameter];
+			if (initial === undefined || updated === undefined) continue;
+			const zero = definitions.get(root(initial));
+			const increment = definitions.get(root(updated));
+			if (
+				zero?.opcode !== "createNumber" ||
+				!Object.is(zero.attributes.value, 0) ||
+				loop.blocks.has(locations.get(zero.id)!.block.id) ||
+				increment?.opcode !== "unary" ||
+				increment.attributes.operator !== "increment" ||
+				increment.inputs.length !== 1 ||
+				locations.get(increment.id)?.block.id !== loop.backedge
+			) {
+				continue;
+			}
+			const numeric = definitions.get(root(increment.inputs[0]!));
+			const incrementSource =
+				numeric?.opcode === "unary" &&
+				numeric.attributes.operator === "tonumeric" &&
+				numeric.inputs.length === 1
+					? numeric.inputs[0]
+					: increment.inputs[0];
+			if (root(incrementSource!) !== root(position)) continue;
+			const receiver = root(length.inputs[0]!);
+			for (const blockId of loop.blocks) {
+				const block = fn.blocks[blockId]!;
+				if (block.handler !== undefined) continue;
+				for (const call of block.instructions) {
+					if (
+						call.opcode !== "call" ||
+						call.inputs.length !== 3 ||
+						root(call.inputs[1]!) !== receiver ||
+						root(call.inputs[2]!) !== root(position) ||
+						coreKnownBuiltinProof(call, "String.prototype.charCodeAt") === undefined ||
+						!cfg.dominates(branch.consequent.block, block.id)
+					) {
+						continue;
+					}
+					const callLocation = locations.get(call.id)!;
+					const incrementLocation = locations.get(increment.id)!;
+					if (
+						callLocation.block.id === incrementLocation.block.id &&
+						callLocation.index >= incrementLocation.index
+					) {
+						continue;
+					}
+					boundedCalls.add(call.id);
+					primitiveLengths.add(length.id);
+				}
+			}
+		}
+		if (boundedCalls.size === 0) return fn;
+		return {
+			...fn,
+			blocks: fn.blocks.map((block) => ({
+				...block,
+				instructions: block.instructions.map((instruction) =>
+					boundedCalls.has(instruction.id)
+						? {
+								...instruction,
+								attributes: {
+									...instruction.attributes,
+									directStringCharCodeAtPosition: "inBounds",
+								},
+							}
+						: primitiveLengths.has(instruction.id)
+							? {
+									...instruction,
+									attributes: {
+										...instruction.attributes,
+										primitiveStringLength: true,
+									},
+								}
+							: instruction,
+				),
+			})),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
 /** Select closed capture projections from an exact `RegExp.prototype.exec`. */
 const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 	name: "select-regexp-exec-projection-regions",
@@ -4972,6 +5126,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 
 const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateFreshDenseIndexedReserves,
+	annotateBoundedStringCharCodeAtPositions,
 	selectStackObjectRegions,
 	selectRegExpExecProjectionRegions,
 	selectRegExpIteratorProjectionRegions,
