@@ -508,6 +508,246 @@ function exactFunctionValue(
 	return undefined;
 }
 
+interface CoreDirectCallFacts {
+	readonly functions: ReadonlyMap<string, number>;
+}
+
+function programValueKey(functionIndex: number, value: CoreValueId): string {
+	return `${functionIndex}:${value}`;
+}
+
+/**
+ * Resolve immutable function provenance through Core SSA and the frontend's
+ * closed lexical/global slots. Reassignable global properties never
+ * participate. TDZ sentinel stores are ignored only for lexical global slots.
+ */
+function coreDirectCallFacts(program: CoreProgram): CoreDirectCallFacts {
+	interface Store {
+		readonly source: string;
+	}
+	const capturedStores = new Map<string, Array<Store>>();
+	const globalStores = new Map<number, Array<Store>>();
+	const functions = new Map<string, number>();
+	const empty = new Set<string>();
+	const addStore = <K>(map: Map<K, Array<Store>>, slot: K, source: string): void => {
+		const stores = map.get(slot) ?? [];
+		stores.push({ source });
+		map.set(slot, stores);
+	};
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) {
+					const key = programValueKey(fn.functionIndex, output);
+					if (instruction.opcode === "createFunction") {
+						const target = instruction.attributes.functionIndex;
+						if (typeof target === "number") functions.set(key, target);
+					} else if (instruction.opcode === "createEmpty") {
+						empty.add(key);
+					}
+				}
+				if (instruction.inputs.length !== 1) continue;
+				const source = programValueKey(fn.functionIndex, instruction.inputs[0]!);
+				if (instruction.opcode === "storeGlobal") {
+					const index = instruction.attributes.index;
+					if (typeof index === "number") addStore(globalStores, index, source);
+				} else if (instruction.opcode === "storeCaptured") {
+					const owner = instruction.attributes.functionIndex;
+					const index = instruction.attributes.index;
+					if (typeof owner === "number" && typeof index === "number") {
+						addStore(capturedStores, `${owner}:${index}`, source);
+					}
+				}
+			}
+		}
+	}
+
+	let changed = true;
+	while (changed) {
+		changed = false;
+		const capturedFunctions = new Map<string, number>();
+		for (const [slot, stores] of capturedStores) {
+			if (stores.length !== 1) continue;
+			const target = functions.get(stores[0]!.source);
+			if (target !== undefined) capturedFunctions.set(slot, target);
+		}
+		const globalFunctions = new Map<number, number>();
+		for (const [slot, stores] of globalStores) {
+			const values = stores.filter(({ source }) => !empty.has(source));
+			if (values.length !== 1) continue;
+			const target = functions.get(values[0]!.source);
+			if (target !== undefined) globalFunctions.set(slot, target);
+		}
+
+		for (const fn of program.functions) {
+			const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry, { exceptions: false });
+			for (const block of fn.blocks) {
+				for (const instruction of block.instructions) {
+					const output = instruction.outputs[0];
+					if (output === undefined) continue;
+					const destination = programValueKey(fn.functionIndex, output);
+					const sourceValue = instruction.inputs[0];
+					const source =
+						sourceValue === undefined
+							? undefined
+							: programValueKey(fn.functionIndex, sourceValue);
+					let target: number | undefined;
+					if (instruction.opcode === "move" && source !== undefined) {
+						target = functions.get(source);
+						if (empty.has(source) && !empty.has(destination)) {
+							empty.add(destination);
+							changed = true;
+						}
+					} else if (instruction.opcode === "loadGlobal") {
+						const index = instruction.attributes.index;
+						if (typeof index === "number") {
+							target = globalFunctions.get(index);
+						}
+					} else if (instruction.opcode === "loadCaptured") {
+						const owner = instruction.attributes.functionIndex;
+						const index = instruction.attributes.index;
+						if (typeof owner === "number" && typeof index === "number") {
+							const slot = `${owner}:${index}`;
+							target = capturedFunctions.get(slot);
+						}
+					}
+					if (target !== undefined && !functions.has(destination)) {
+						functions.set(destination, target);
+						changed = true;
+					}
+				}
+
+				const incoming = cfg.predecessors[block.id]!;
+				if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
+					continue;
+				}
+				for (const [index, parameter] of block.parameters.entries()) {
+					const destination = programValueKey(fn.functionIndex, parameter.value);
+					const sources = incoming.map((edge) =>
+						programValueKey(fn.functionIndex, edge.arguments[index]!),
+					);
+					const target = functions.get(sources[0]!);
+					if (
+						target !== undefined &&
+						sources.every((source) => functions.get(source) === target) &&
+						!functions.has(destination)
+					) {
+						functions.set(destination, target);
+						changed = true;
+					}
+				}
+			}
+		}
+	}
+	return { functions };
+}
+
+function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResult {
+	const facts = coreDirectCallFacts(program);
+	const functionsByIndex = new Map(
+		program.functions.map((fn) => [fn.functionIndex, fn] as const),
+	);
+	let changed = false;
+	const functions = program.functions.map((fn): CoreFunction => {
+		const definitions = functionDefinitions(fn);
+		const moveRoot = (initial: CoreValueId): CoreValueId => {
+			let value = initial;
+			const seen = new Set<CoreValueId>();
+			while (!seen.has(value)) {
+				seen.add(value);
+				const definition = definitions.get(value);
+				if (definition?.opcode !== "move" || definition.inputs.length !== 1) break;
+				value = definition.inputs[0]!;
+			}
+			return value;
+		};
+		let functionChanged = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (instruction.opcode !== "call" && instruction.opcode !== "construct") {
+						return instruction;
+					}
+					const callee = instruction.inputs[0];
+					if (callee === undefined) return instruction;
+					const target = facts.functions.get(programValueKey(fn.functionIndex, callee));
+					const targetFunction =
+						target === undefined ? undefined : functionsByIndex.get(target);
+					const attributes: Record<string, CoreAttributeValue> = {
+						...instruction.attributes,
+					};
+					if (
+						targetFunction !== undefined &&
+						(instruction.opcode === "call" ||
+							(!targetFunction.isGenerator &&
+								!targetFunction.isAsync &&
+								targetFunction.metadata.hasPrototype))
+					) {
+						attributes.directFunctionIndex = targetFunction.functionIndex;
+					}
+					if (instruction.opcode === "call" && instruction.inputs.length >= 2) {
+						const calleeDefinition = definitions.get(moveRoot(callee));
+						const receiver = calleeDefinition?.inputs[0];
+						const thisValue = instruction.inputs[1]!;
+						const staticKey =
+							calleeDefinition?.opcode === "loadPropertyStatic" &&
+							typeof calleeDefinition.attributes.stringIndex === "number"
+								? decodeString(program, calleeDefinition.attributes.stringIndex)
+								: calleeDefinition?.opcode === "loadProperty" &&
+									calleeDefinition.inputs[1] !== undefined
+									? (() => {
+											const key = definitions.get(
+												moveRoot(calleeDefinition.inputs[1]),
+											);
+											return key?.opcode === "createString" &&
+												typeof key.attributes.stringIndex === "number"
+												? decodeString(program, key.attributes.stringIndex)
+												: undefined;
+										})()
+									: undefined;
+						if (
+							(calleeDefinition?.opcode === "loadPropertyStatic" ||
+								calleeDefinition?.opcode === "loadProperty") &&
+							staticKey === "call" &&
+							receiver !== undefined &&
+							moveRoot(receiver) === moveRoot(thisValue)
+						) {
+							const receiverKey = programValueKey(fn.functionIndex, thisValue);
+							const receiverTarget =
+								facts.functions.get(receiverKey) ??
+								facts.functions.get(programValueKey(fn.functionIndex, receiver));
+							// The runtime validates the loaded method against the realm's exact
+							// %Function.prototype.call% object. A miss invokes the original
+							// method with the original receiver and arguments, so no static
+							// callable/provenance assumption is required for flattening.
+							attributes.directFunctionCall = true;
+							if (
+								receiverTarget !== undefined &&
+								functionsByIndex.has(receiverTarget)
+							) {
+								attributes.directCallTargetFunctionIndex = receiverTarget;
+							}
+						}
+					}
+					if (stableAttributeValue(attributes) === stableAttributes(instruction)) {
+						return instruction;
+					}
+					functionChanged = true;
+					return { ...instruction, attributes };
+				}),
+			}),
+		);
+		if (!functionChanged) return fn;
+		changed = true;
+		return { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 };
+	});
+	return {
+		program: changed ? { ...program, functions } : program,
+		changed,
+	};
+}
+
 function linearInlineTarget(target: CoreFunction): LinearInlineTarget | undefined {
 	if (target.isGenerator || target.isAsync || target.regions.length > 0) return undefined;
 	const blocks: Array<CoreBlock> = [];
@@ -2399,18 +2639,29 @@ export function executeCoreOptimizations(
 	const inlineResult = inlineAblated
 		? { program, changed: false }
 		: inlineSimpleCoreFunctions(program);
-	const workingProgram = inlineResult.program;
-	let changed = inlineResult.changed;
+	const directBefore = collectOptimizationTrace
+		? coreOptimizationMetrics(inlineResult.program)
+		: undefined;
+	const directResult = annotateCoreDirectCallTargets(inlineResult.program);
+	const workingProgram = directResult.program;
+	let changed = inlineResult.changed || directResult.changed;
 	let functions = [...workingProgram.functions];
-	for (const fn of functions) {
+	for (const fn of inlineResult.program.functions) {
 		traces.push({
 			name: "inline-small-functions",
 			round: 0,
 			changed: fn !== program.functions[fn.functionIndex],
 		});
 	}
+	for (const fn of functions) {
+		traces.push({
+			name: "annotate-direct-call-targets",
+			round: 0,
+			changed: fn !== inlineResult.program.functions[fn.functionIndex],
+		});
+	}
 	if (inlineBefore !== undefined) {
-		const inlineAfter = coreOptimizationMetrics(workingProgram);
+		const inlineAfter = coreOptimizationMetrics(inlineResult.program);
 		optimizationTrace.push(
 			optimizationPassDelta(
 				{
@@ -2422,6 +2673,21 @@ export function executeCoreOptimizations(
 				},
 				inlineBefore,
 				inlineAfter,
+			),
+		);
+	}
+	if (directBefore !== undefined) {
+		const directAfter = coreOptimizationMetrics(workingProgram);
+		optimizationTrace.push(
+			optimizationPassDelta(
+				{
+					pass: "annotate-direct-call-targets",
+					stage: "normalization",
+					status: "executed",
+					changed: directResult.changed,
+				},
+				directBefore,
+				directAfter,
 			),
 		);
 	}
