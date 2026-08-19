@@ -11,7 +11,10 @@ import {
 	knownFact,
 	sourceSiteId,
 } from "./compiler-facts.ts";
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreTerminatorEdges,
+} from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreFunction } from "./core-ir-verifier.ts";
@@ -1262,6 +1265,496 @@ const selectStackObjectRegions: CoreFunctionPass = {
 		return regions.length === fn.regions.length
 			? fn
 			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
+const MAX_FRESH_DENSE_INDEXED_RESERVE = 65_536;
+const FRESH_DENSE_NUMERIC_OPERATORS = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+function coreBlockParameters(
+	fn: CoreFunction,
+): ReadonlyMap<CoreValueId, { readonly block: CoreBlockId; readonly index: number }> {
+	const result = new Map<
+		CoreValueId,
+		{ readonly block: CoreBlockId; readonly index: number }
+	>();
+	for (const block of fn.blocks) {
+		for (const [index, parameter] of block.parameters.entries()) {
+			result.set(parameter.value, { block: block.id, index });
+		}
+	}
+	return result;
+}
+
+function exactIntegerValue(
+	value: CoreValueId,
+	definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
+): number | undefined {
+	const seen = new Set<CoreValueId>();
+	let current = value;
+	while (!seen.has(current)) {
+		seen.add(current);
+		const definition = definitions.get(current);
+		if (definition === undefined) return undefined;
+		if (definition.opcode === "move" && definition.inputs.length === 1) {
+			current = definition.inputs[0]!;
+			continue;
+		}
+		if (definition.opcode !== "createNumber") return undefined;
+		const number = definition.attributes.value;
+		return typeof number === "number" && Number.isSafeInteger(number)
+			? number
+			: undefined;
+	}
+	return undefined;
+}
+
+/**
+ * Prove a canonical exact fresh-Array indexed-fill loop and move only its
+ * geometric storage allocation to the allocation site. The original stores,
+ * checks, polls, and fallback behavior remain intact.
+ */
+const annotateFreshDenseIndexedReserves: CoreFunctionPass = {
+	name: "annotate-fresh-dense-indexed-reserves",
+	run(fn, analyses) {
+		if (fn.isGenerator || fn.isAsync) return fn;
+		const cfg = analyses.controlFlow(fn);
+		const definitions = functionDefinitions(fn);
+		const parameters = coreBlockParameters(fn);
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlockId; readonly index: number }
+		>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block: block.id, index });
+			}
+		}
+
+		const reserveLengths = new Map<CoreInstructionId, number>();
+		for (const block of fn.blocks) {
+			for (const allocation of block.instructions) {
+				if (
+					allocation.opcode !== "createArray" ||
+					allocation.outputs.length !== 1 ||
+					allocation.attributes.length !== 0 ||
+					allocation.attributes.freshDenseReserveLength !== undefined
+				) {
+					continue;
+				}
+				const allocationValue = allocation.outputs[0]!;
+				const allocationLocation = locations.get(allocation.id)!;
+				const aliasMemo = new Map<CoreValueId, boolean>();
+				const aliasVisiting = new Set<CoreValueId>();
+				const isAllocationAlias = (value: CoreValueId): boolean => {
+					if (value === allocationValue) return true;
+					const memo = aliasMemo.get(value);
+					if (memo !== undefined) return memo;
+					if (aliasVisiting.has(value)) return true;
+					aliasVisiting.add(value);
+					const definition = definitions.get(value);
+					const parameter = parameters.get(value);
+					let result = false;
+					if (definition?.opcode === "move" && definition.inputs.length === 1) {
+						result = isAllocationAlias(definition.inputs[0]!);
+					} else if (parameter !== undefined) {
+						const incoming = cfg.predecessors[parameter.block]!.filter(
+							(edge) => edge.kind === "ordinary",
+						);
+						result =
+							incoming.length > 0 &&
+							incoming.every((edge) => {
+								const argument = edge.arguments[parameter.index];
+								return argument !== undefined && isAllocationAlias(argument);
+							});
+					}
+					aliasVisiting.delete(value);
+					aliasMemo.set(value, result);
+					return result;
+				};
+
+				for (const loop of cfg.loops) {
+					if (
+						loop.blocks.size !== 2 ||
+						loop.blocks.has(block.id) ||
+						!cfg.dominates(block.id, loop.header)
+					) {
+						continue;
+					}
+					const header = fn.blocks[loop.header]!;
+					const backedge = cfg.predecessors[loop.header]!.find(
+						(edge) => edge.kind === "ordinary" && edge.from === loop.backedge,
+					);
+					const entryEdges = cfg.predecessors[loop.header]!.filter(
+						(edge) => edge.kind === "ordinary" && edge.from !== loop.backedge,
+					);
+					if (backedge === undefined || entryEdges.length !== 1) continue;
+					const entryEdge = entryEdges[0]!;
+					if (entryEdge.from !== block.id) continue;
+					if (header.terminator.kind !== "branch") continue;
+					const comparison = definitions.get(header.terminator.condition);
+					if (
+						comparison?.opcode !== "binary" ||
+						comparison.attributes.operator !== "<" ||
+						comparison.inputs.length !== 2
+					) {
+						continue;
+					}
+					const counter = comparison.inputs[0]!;
+					const counterParameterIndex = header.parameters.findIndex(
+						(parameter) => parameter.value === counter,
+					);
+					const bound = exactIntegerValue(comparison.inputs[1]!, definitions);
+					if (
+						counterParameterIndex < 0 ||
+						bound === undefined ||
+						bound <= 0 ||
+						bound > MAX_FRESH_DENSE_INDEXED_RESERVE ||
+						exactIntegerValue(entryEdge.arguments[counterParameterIndex]!, definitions) !==
+							0
+					) {
+						continue;
+					}
+					const bodyEdge = header.terminator.consequent;
+					const exitEdge = header.terminator.alternate;
+					if (
+						!loop.blocks.has(bodyEdge.block) ||
+						loop.blocks.has(exitEdge.block) ||
+						cfg.predecessors[exitEdge.block]!.filter(({ kind }) => kind === "ordinary")
+							.length !== 1
+					) {
+						continue;
+					}
+
+					const counterFamily = new Set<CoreValueId>([counter]);
+					let familyChanged = true;
+					while (familyChanged) {
+						familyChanged = false;
+						for (const candidate of fn.blocks) {
+							const incoming = cfg.predecessors[candidate.id]!.filter(
+								(edge) => edge.kind === "ordinary",
+							);
+							for (const [index, parameter] of candidate.parameters.entries()) {
+								if (
+									!counterFamily.has(parameter.value) &&
+									incoming.length > 0 &&
+									incoming.every((edge) => {
+										const argument = edge.arguments[index];
+										return argument !== undefined && counterFamily.has(argument);
+									})
+								) {
+									counterFamily.add(parameter.value);
+									familyChanged = true;
+								}
+							}
+						}
+					}
+					for (const [index, argument] of bodyEdge.arguments.entries()) {
+						if (argument !== counter) continue;
+						const parameter = fn.blocks[bodyEdge.block]!.parameters[index];
+						if (parameter !== undefined) counterFamily.add(parameter.value);
+					}
+
+					const increment = definitions.get(backedge.arguments[counterParameterIndex]!);
+					if (
+						increment?.opcode !== "unary" ||
+						increment.attributes.operator !== "increment" ||
+						increment.inputs.length !== 1
+					) {
+						continue;
+					}
+					const numericSource = definitions.get(increment.inputs[0]!);
+					const incrementInput =
+						numericSource?.opcode === "unary" &&
+						numericSource.attributes.operator === "tonumeric" &&
+						numericSource.inputs.length === 1
+							? numericSource.inputs[0]!
+							: increment.inputs[0]!;
+					if (!counterFamily.has(incrementInput)) continue;
+
+					const stores = fn.blocks
+						.filter((candidate) => loop.blocks.has(candidate.id))
+						.flatMap((candidate) => candidate.instructions)
+						.filter(
+							(instruction) =>
+								instruction.opcode === "storeProperty" &&
+								instruction.inputs.length === 3 &&
+								isAllocationAlias(instruction.inputs[0]!),
+						);
+					if (stores.length !== 1) continue;
+					const store = stores[0]!;
+					if (!counterFamily.has(store.inputs[1]!)) continue;
+
+					const numericMemo = new Map<CoreValueId, boolean>();
+					const proveNumeric = (value: CoreValueId): boolean => {
+						if (counterFamily.has(value)) return true;
+						const memo = numericMemo.get(value);
+						if (memo !== undefined) return memo;
+						numericMemo.set(value, false);
+						const definition = definitions.get(value);
+						if (definition === undefined) return false;
+						let proven = false;
+						if (definition.opcode === "createNumber") {
+							proven = true;
+						} else if (definition.opcode === "move" && definition.inputs.length === 1) {
+							proven = proveNumeric(definition.inputs[0]!);
+						} else if (
+							definition.opcode === "unary" &&
+							typeof definition.attributes.operator === "string" &&
+							["+", "-", "~", "tonumeric"].includes(
+								definition.attributes.operator,
+							) &&
+							definition.inputs.length === 1
+						) {
+							proven = proveNumeric(definition.inputs[0]!);
+						} else if (
+							definition.opcode === "binary" &&
+							typeof definition.attributes.operator === "string" &&
+							FRESH_DENSE_NUMERIC_OPERATORS.has(definition.attributes.operator) &&
+							definition.inputs.length === 2
+						) {
+							proven =
+								proveNumeric(definition.inputs[0]!) &&
+								proveNumeric(definition.inputs[1]!);
+						}
+						numericMemo.set(value, proven);
+						return proven;
+					};
+					if (!proveNumeric(store.inputs[2]!)) continue;
+
+					let safe = true;
+					for (const candidate of fn.blocks) {
+						for (const instruction of candidate.instructions) {
+							for (const [position, input] of instruction.inputs.entries()) {
+								if (!isAllocationAlias(input)) continue;
+								if (
+									(instruction.opcode === "move" && position === 0) ||
+									(instruction.opcode === "throwIfTdz" && position === 0) ||
+									(instruction === store && position === 0) ||
+									cfg.dominates(exitEdge.block, candidate.id)
+								) {
+									continue;
+								}
+								safe = false;
+							}
+						}
+					}
+					if (!safe) continue;
+					const allocationBlock = fn.blocks[allocationLocation.block]!;
+					if (
+						allocationBlock.instructions
+							.slice(allocationLocation.index + 1)
+							.some(
+								(instruction) =>
+									instruction.opcode !== "createNumber" &&
+									instruction.opcode !== "move",
+							)
+					) {
+						continue;
+					}
+					reserveLengths.set(allocation.id, bound);
+					break;
+				}
+			}
+		}
+		if (reserveLengths.size === 0) return fn;
+		return {
+			...fn,
+			blocks: fn.blocks.map((block) => ({
+				...block,
+				instructions: block.instructions.map((instruction) => {
+					const length = reserveLengths.get(instruction.id);
+					return length === undefined
+						? instruction
+						: {
+								...instruction,
+								attributes: {
+									...instruction.attributes,
+									freshDenseReserveLength: length,
+								},
+							};
+				}),
+			})),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
+const NATIVE_NUMERIC_FUSION_OPERATORS = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+const NATIVE_NUMERIC_FUSION_FINISH_OPERATORS = new Set([
+	...NATIVE_NUMERIC_FUSION_OPERATORS,
+	"<",
+	"<=",
+	">",
+	">=",
+	"==",
+	"!=",
+	"===",
+	"!==",
+]);
+
+const selectNumericFusionRegions: CoreFunctionPass = {
+	name: "select-numeric-fusion-regions",
+	run(fn) {
+		if (fn.isGenerator || fn.isAsync) return fn;
+		const claimed = new Set(fn.regions.flatMap((region) => region.claimedInstructions));
+		const uses = new Map<
+			CoreValueId,
+			Array<{
+				readonly instruction: CoreInstruction;
+				readonly position: number;
+				readonly block: CoreBlockId;
+				readonly index: number;
+			}>
+		>();
+		const nonInstructionUses = new Set<CoreValueId>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				for (const [position, input] of instruction.inputs.entries()) {
+					const entries = uses.get(input) ?? [];
+					entries.push({ instruction, position, block: block.id, index });
+					uses.set(input, entries);
+				}
+			}
+			if (block.handler !== undefined) {
+				for (const value of block.handler.arguments) nonInstructionUses.add(value);
+			}
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				for (const value of edge.arguments) nonInstructionUses.add(value);
+			}
+			switch (block.terminator.kind) {
+				case "branch":
+				case "guard":
+					nonInstructionUses.add(block.terminator.condition);
+					break;
+				case "switch":
+					nonInstructionUses.add(block.terminator.discriminant);
+					break;
+				case "return":
+				case "throw":
+					nonInstructionUses.add(block.terminator.value);
+					break;
+				case "jump":
+				case "unreachable":
+					break;
+			}
+		}
+
+		const participating = new Set<CoreInstructionId>();
+		const pairs: Array<{
+			readonly first: CoreInstruction;
+			readonly finish: CoreInstruction;
+			readonly firstUsePosition: 1 | 2;
+			readonly block: CoreBlockId;
+		}> = [];
+		for (const block of fn.blocks) {
+			for (const [firstIndex, first] of block.instructions.entries()) {
+				if (
+					first.opcode !== "binary" ||
+					typeof first.attributes.operator !== "string" ||
+					!NATIVE_NUMERIC_FUSION_OPERATORS.has(first.attributes.operator) ||
+					first.outputs.length !== 1 ||
+					participating.has(first.id) ||
+					claimed.has(first.id)
+				) {
+					continue;
+				}
+				const output = first.outputs[0]!;
+				const outputUses = uses.get(output);
+				if (outputUses?.length !== 1 || nonInstructionUses.has(output)) continue;
+				const use = outputUses[0]!;
+				const finish = use.instruction;
+				if (
+					finish.opcode !== "binary" ||
+					(use.position !== 0 && use.position !== 1) ||
+					typeof finish.attributes.operator !== "string" ||
+					!NATIVE_NUMERIC_FUSION_FINISH_OPERATORS.has(
+						finish.attributes.operator,
+					) ||
+					use.block !== block.id ||
+					use.index <= firstIndex ||
+					participating.has(finish.id) ||
+					claimed.has(finish.id)
+				) {
+					continue;
+				}
+				pairs.push({
+					first,
+					finish,
+					firstUsePosition: use.position === 0 ? 1 : 2,
+					block: block.id,
+				});
+				participating.add(first.id);
+				participating.add(finish.id);
+				if (pairs.length >= 32) break;
+			}
+			if (pairs.length >= 32) break;
+		}
+		const firstPair = pairs[0];
+		if (firstPair === undefined) return fn;
+		const claimedInstructions = pairs.flatMap(({ first, finish }) => [
+			first.id,
+			finish.id,
+		]);
+		const region: CoreFunction["regions"][number] = {
+			kind: "numeric-fusion",
+			anchors: [firstPair.first.id, firstPair.finish.id],
+			claimedInstructions,
+			ordinaryBlocks: [...new Set(pairs.map(({ block }) => block))],
+			exceptionalBlocks: [],
+			data: coreAttributeObject(
+				{
+					license: {
+						guard: "structural",
+						genericTwin: "retained",
+						materialization: "none",
+					},
+					representation: "binary-pairs-f64",
+					composition: "overlay",
+					cost: {
+						score: pairs.length,
+						metadataOperations: claimedInstructions.length,
+					},
+					runtimeGuard: "number-operands",
+					pairs: pairs.map(({ first, finish, firstUsePosition }) => ({
+						first: { $coreInstruction: first.id },
+						finish: { $coreInstruction: finish.id },
+						firstUsePosition,
+					})),
+				},
+				"numeric-fusion",
+			),
+		};
+		return {
+			...fn,
+			regions: [...fn.regions, region],
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
 	},
 };
 
@@ -2583,13 +3076,18 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateKnownBuiltinCalls,
 	foldTypeofComparisons,
 	foldExactObjectObservations,
-	selectStackObjectRegions,
 	foldPrimitiveConstants,
 	simplifyControlFlow,
 	combineLinearBlocks,
 	foldStaticPropertyKeys,
 	copyAndValueNumber,
 	deadInstructionElimination,
+];
+
+const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	annotateFreshDenseIndexedReserves,
+	selectStackObjectRegions,
+	selectNumericFusionRegions,
 ];
 
 function claimedInstructionSnapshots(fn: CoreFunction): ReadonlyMap<number, string> {
@@ -2784,6 +3282,48 @@ export function executeCoreOptimizations(
 			}
 		}
 		if (!roundChanged) break;
+	}
+	for (const pass of CORE_FINALIZATION_PASSES) {
+		const beforeProgram = { ...workingProgram, functions };
+		const before = collectOptimizationTrace
+			? coreOptimizationMetrics(beforeProgram)
+			: undefined;
+		const ablated =
+			pass.ablation !== undefined && options.ablations?.has(pass.ablation) === true;
+		let passChanged = false;
+		if (!ablated) {
+			functions = functions.map((fn) => {
+				const candidate = pass.run(fn, analyses, beforeProgram);
+				const functionChanged = candidate !== fn;
+				traces.push({ name: pass.name, round: maxRounds, changed: functionChanged });
+				if (functionChanged) {
+					verifyCoreFunction(candidate, coreOpcodeRegistry);
+					passChanged = true;
+					changed = true;
+				}
+				return candidate;
+			});
+		} else {
+			for (const _fn of functions) {
+				traces.push({ name: pass.name, round: maxRounds, changed: false });
+			}
+		}
+		if (before !== undefined) {
+			const after = coreOptimizationMetrics({ ...workingProgram, functions });
+			optimizationTrace.push(
+				optimizationPassDelta(
+					{
+						pass: pass.name,
+						stage: "finalization",
+						status: ablated ? "ablated" : "executed",
+						changed: passChanged,
+						...(pass.ablation === undefined ? {} : { ablation: pass.ablation }),
+					},
+					before,
+					after,
+				),
+			);
+		}
 	}
 	return {
 		program: {
