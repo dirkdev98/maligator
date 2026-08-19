@@ -40,7 +40,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Pre-1.0 compatibility starts from this format baseline.
-export const WIRE_VERSION = 4;
+export const WIRE_VERSION = 5;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1569,7 +1569,7 @@ export function serializeVmDefinition(
 					w.i32(region.next);
 					w.i32(region.value);
 					w.i32(region.done);
-					w.i32Array([...region.aliasMoveIps]);
+					w.i32Array([...region.resultRegisters]);
 					w.u8(region.statefulEffect === "iterator-last-index-retained-step" ? 1 : 0);
 					w.u8(region.runtimeGuard === "exact-brand-next-realm-regexp" ? 1 : 0);
 					w.u32(region.loads.length);
@@ -2987,9 +2987,7 @@ function validateRegExpIteratorProjectionRegion(
 	regexpIteratorProjectionGuardMasks(region.license);
 	const step = fn.instructions[region.stepIp];
 	const doneBranch = fn.instructions[region.doneBranchIp];
-	const aliases = new Set<number>([
-		step?.opcode === "ITERATOR_STEP" ? step.valueDst : -1,
-	]);
+	const aliases = new Set(region.resultRegisters);
 	let valid =
 		region.representation === "regexp-iterator-capture-spans" &&
 		region.statefulEffect === "iterator-last-index-retained-step" &&
@@ -3007,16 +3005,17 @@ function validateRegExpIteratorProjectionRegion(
 		region.next === step.next &&
 		region.value === step.valueDst &&
 		region.done === step.doneDst &&
+		aliases.has(step.valueDst) &&
+		region.resultRegisters.length > 0 &&
+		new Set(region.resultRegisters).size === region.resultRegisters.length &&
+		region.resultRegisters.every(
+			(register) =>
+				Number.isInteger(register) && register >= 0 && register < fn.registerCount,
+		) &&
 		region.loads.length > 0 &&
 		region.loads.length <= 8 &&
 		region.controlFlow.exceptionalHandlerIps.length > 0;
-	for (const ip of region.aliasMoveIps) {
-		const move = fn.instructions[ip];
-		if (move?.opcode !== "MOVE" || !aliases.has(move.src)) valid = false;
-		else aliases.add(move.dst);
-	}
 	const payload = new Set<number>([region.stepIp, region.doneBranchIp]);
-	for (const ip of region.aliasMoveIps) payload.add(ip);
 	const indices = new Set<number>();
 	for (const load of region.loads) {
 		const capture = fn.instructions[load.ip];
@@ -5026,7 +5025,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					const next = r.i32();
 					const value = r.i32();
 					const done = r.i32();
-					const aliasMoveIps = r.i32Array();
+					const resultRegisters = r.i32Array();
 					const statefulEffect = r.u8();
 					const runtimeGuard = r.u8();
 					const loadCount = r.count(4);
@@ -5073,7 +5072,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						next,
 						value,
 						done,
-						aliasMoveIps,
+						resultRegisters,
 						statefulEffect: "iterator-last-index-retained-step",
 						runtimeGuard: "exact-brand-next-realm-regexp",
 						loads,

@@ -11,6 +11,7 @@ import type {
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
 import {
+	compilerGuardPlan,
 	compilerFactIsWorldInvariant,
 	knownFact,
 	sourceSiteId,
@@ -2449,6 +2450,250 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 	},
 };
 
+/** Select closed constant captures from one exact RegExp iterator step. */
+const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
+	name: "select-regexp-iterator-projection-regions",
+	run(fn, analyses, program) {
+		const protector = program.compilation?.facts.protectors.get("watched-methods");
+		const guard = compilerGuardPlan(
+			[protector],
+			[
+				{
+					kind: "fallback",
+					id: `regexp-iterator-projection:${fn.functionIndex}`,
+				},
+				{
+					kind: "materialize",
+					id: `regexp-iterator-projection:${fn.functionIndex}`,
+				},
+			],
+		);
+		if (
+			guard === undefined ||
+			fn.regions.filter(({ kind }) => kind === "regexp-iterator-projection").length >= 8
+		) {
+			return fn;
+		}
+		const cfg = analyses.controlFlow(fn);
+		const canonical = coreCanonicalValues(fn, cfg);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const definitions = functionDefinitions(fn);
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		const uses = new Map<
+			CoreValueId,
+			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+		>();
+		const terminatorUses = new Set<CoreValueId>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+				for (const [position, input] of instruction.inputs.entries()) {
+					const key = root(input);
+					const entries = uses.get(key) ?? [];
+					entries.push({ instruction, position });
+					uses.set(key, entries);
+				}
+			}
+			locations.set(block.terminator.id, {
+				block,
+				index: block.instructions.length,
+			});
+			switch (block.terminator.kind) {
+				case "branch":
+				case "guard":
+					terminatorUses.add(root(block.terminator.condition));
+					break;
+				case "switch":
+					terminatorUses.add(root(block.terminator.discriminant));
+					break;
+				case "return":
+				case "throw":
+					terminatorUses.add(root(block.terminator.value));
+					break;
+				case "jump":
+				case "unreachable":
+					break;
+			}
+		}
+		const instructionDominates = (
+			producer: CoreInstruction,
+			consumer: CoreInstruction,
+		): boolean => {
+			const producerLocation = locations.get(producer.id);
+			const consumerLocation = locations.get(consumer.id);
+			if (producerLocation === undefined || consumerLocation === undefined) return false;
+			return producerLocation.block.id === consumerLocation.block.id
+				? producerLocation.index < consumerLocation.index
+				: cfg.dominates(producerLocation.block.id, consumerLocation.block.id);
+		};
+		const occupied = new Set(
+			fn.regions
+				.filter(({ kind }) => kind !== "numeric-fusion")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			const step = block.instructions.at(-1);
+			const doneBranch = block.terminator;
+			if (
+				step?.opcode !== "iteratorStep" ||
+				step.inputs.length !== 2 ||
+				step.outputs.length !== 2 ||
+				doneBranch.kind !== "branch" ||
+				root(doneBranch.condition) !== root(step.outputs[1]!) ||
+				doneBranch.consequent.block === block.id
+			) {
+				continue;
+			}
+			const result = root(step.outputs[0]!);
+			if (terminatorUses.has(result)) continue;
+			const resultValues = fn.values
+				.map(({ id }) => id)
+				.filter((value) => root(value) === result);
+			const loads: Array<{
+				readonly instruction: CoreInstruction;
+				readonly key: CoreInstruction;
+				readonly captureIndex: number;
+				readonly numberIntrinsic: CoreInstruction;
+				readonly numberCall: CoreInstruction;
+			}> = [];
+			const captureIndices = new Set<number>();
+			let safe = true;
+			for (const use of uses.get(result) ?? []) {
+				const capture = use.instruction;
+				if (
+					capture.opcode === "move" &&
+					use.position === 0 &&
+					capture.outputs.length === 1 &&
+					root(capture.outputs[0]!) === result
+				) {
+					continue;
+				}
+				if (
+					capture.opcode !== "loadProperty" ||
+					use.position !== 0 ||
+					capture.inputs.length !== 2 ||
+					capture.outputs.length !== 1 ||
+					!instructionDominates(step, capture)
+				) {
+					safe = false;
+					break;
+				}
+				const key = definitions.get(root(capture.inputs[1]!));
+				const captureIndex = key?.attributes.value;
+				const captureUses = uses.get(root(capture.outputs[0]!)) ?? [];
+				const numberUse = captureUses[0];
+				const numberCall = numberUse?.instruction;
+				const numberIntrinsic =
+					numberCall?.opcode === "call"
+						? definitions.get(root(numberCall.inputs[0]!))
+						: undefined;
+				if (
+					key?.opcode !== "createNumber" ||
+					typeof captureIndex !== "number" ||
+					!Number.isInteger(captureIndex) ||
+					captureIndex <= 0 ||
+					captureIndex > 0xffff ||
+					captureIndices.has(captureIndex) ||
+					captureUses.length !== 1 ||
+					numberUse?.position !== 2 ||
+					numberCall?.opcode !== "call" ||
+					numberCall.inputs.length !== 3 ||
+					root(numberCall.inputs[2]!) !== root(capture.outputs[0]!) ||
+					numberIntrinsic?.opcode !== "loadIntrinsic" ||
+					numberIntrinsic.attributes.intrinsic !== "Number" ||
+					!instructionDominates(key, capture) ||
+					!instructionDominates(numberIntrinsic, numberCall)
+				) {
+					safe = false;
+					break;
+				}
+				captureIndices.add(captureIndex);
+				loads.push({
+					instruction: capture,
+					key,
+					captureIndex,
+					numberIntrinsic,
+					numberCall,
+				});
+			}
+			if (!safe || loads.length === 0 || loads.length > 8) continue;
+			const claimed = new Set<CoreInstruction>([step]);
+			for (const load of loads) {
+				claimed.add(load.key);
+				claimed.add(load.instruction);
+				claimed.add(load.numberIntrinsic);
+				claimed.add(load.numberCall);
+			}
+			const claimedInstructions = [
+				...claimed,
+			].map(({ id }) => id);
+			claimedInstructions.splice(1, 0, doneBranch.id);
+			const ordinaryBlocks = [
+				...new Set(claimedInstructions.map((id) => locations.get(id)!.block.id)),
+			];
+			const exceptionalBlocks = [
+				...new Set(
+					claimedInstructions.flatMap((id) => {
+						const handler = locations.get(id)?.block.handler;
+						return handler === undefined ? [] : [handler.block];
+					}),
+				),
+			];
+			if (
+				claimedInstructions.some((id) => occupied.has(id)) ||
+				exceptionalBlocks.some((handler) => ordinaryBlocks.includes(handler))
+			) {
+				continue;
+			}
+			regions.push({
+				kind: "regexp-iterator-projection",
+				anchors: [step.id, doneBranch.id, loads[0]!.instruction.id],
+				claimedInstructions,
+				ordinaryBlocks,
+				exceptionalBlocks,
+				data: coreAttributeObject(
+					{
+						license: {
+							guard,
+							genericTwin: "retained",
+							materialization: "on-demand",
+						},
+						representation: "regexp-iterator-capture-spans",
+						cost: {
+							score: loads.length * 16,
+							metadataOperations: claimedInstructions.length,
+						},
+						doneBranch: { $coreInstruction: doneBranch.id },
+						exitBlock: { $coreBlock: doneBranch.consequent.block },
+						resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
+						statefulEffect: "iterator-last-index-retained-step",
+						runtimeGuard: "exact-brand-next-realm-regexp",
+						loads: loads.map((load) => ({
+							instruction: { $coreInstruction: load.instruction.id },
+							key: { $coreInstruction: load.key.id },
+							captureIndex: load.captureIndex,
+							numberIntrinsic: { $coreInstruction: load.numberIntrinsic.id },
+							numberCall: { $coreInstruction: load.numberCall.id },
+						})),
+					},
+					"regexp-iterator-projection",
+				),
+			});
+			for (const id of claimedInstructions) occupied.add(id);
+			if (regions.filter(({ kind }) => kind === "regexp-iterator-projection").length >= 8) {
+				break;
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
 /** Select a non-escaping exact `String.prototype.split` projection. */
 const selectStringSplitProjectionRegions: CoreFunctionPass = {
 	name: "select-string-split-projection-regions",
@@ -4298,6 +4543,7 @@ const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateFreshDenseIndexedReserves,
 	selectStackObjectRegions,
 	selectRegExpExecProjectionRegions,
+	selectRegExpIteratorProjectionRegions,
 	selectStringSplitProjectionRegions,
 	selectStringSliceNumberRegions,
 	selectNumericFusionRegions,

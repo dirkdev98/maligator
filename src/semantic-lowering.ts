@@ -778,7 +778,8 @@ export interface RegisterRegExpIteratorProjectionRegion extends RegisterRegionEn
 > {
 	readonly doneBranch: Extract<RegisterInstruction, { type: "jumpIf" }>;
 	readonly exitBlock: number;
-	readonly aliasMoves: ReadonlyArray<Extract<RegisterInstruction, { type: "move" }>>;
+	/** Allocated registers for every Core SSA alias licensed as the step value. */
+	readonly resultRegisters: ReadonlyArray<number>;
 	readonly statefulEffect: "iterator-last-index-retained-step";
 	readonly runtimeGuard: "exact-brand-next-realm-regexp";
 	readonly loads: ReadonlyArray<{

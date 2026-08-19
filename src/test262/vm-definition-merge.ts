@@ -163,7 +163,7 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 			return {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
-				aliasMoveIps: [...region.aliasMoveIps],
+				resultRegisters: [...region.resultRegisters],
 				loads: region.loads.map((load) => ({ ...load })),
 			};
 		case "string-slice-number":

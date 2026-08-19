@@ -558,7 +558,7 @@ export type VmRegExpIteratorProjectionRegion = VmRegionEnvelope<
 	readonly next: number;
 	readonly value: number;
 	readonly done: number;
-	readonly aliasMoveIps: ReadonlyArray<number>;
+	readonly resultRegisters: ReadonlyArray<number>;
 	readonly statefulEffect: "iterator-last-index-retained-step";
 	readonly runtimeGuard: "exact-brand-next-realm-regexp";
 	readonly loads: ReadonlyArray<{
@@ -3375,9 +3375,6 @@ function lowerFunctionToVmFunction(
 				const doneBranchIp = resolvedAnchors[1];
 				const firstLoadIp = resolvedAnchors[2];
 				const exitIp = blockStartIps.get(region.exitBlock);
-				const aliasMoveIps = region.aliasMoves.map((move) =>
-					instructionIndexByIrInstruction.get(move),
-				);
 				const loads = region.loads.map((load) => ({
 					ip: instructionIndexByIrInstruction.get(load.instruction),
 					keyIp: instructionIndexByIrInstruction.get(load.key),
@@ -3395,7 +3392,7 @@ function lowerFunctionToVmFunction(
 					region.runtimeGuard !== "exact-brand-next-realm-regexp" ||
 					resolvedAnchors.length !== 3 ||
 					exitIp === undefined ||
-					aliasMoveIps.some((ip) => ip === undefined) ||
+					region.resultRegisters.length === 0 ||
 					loads.some(
 						(load) =>
 							load.ip === undefined ||
@@ -3406,29 +3403,20 @@ function lowerFunctionToVmFunction(
 				) {
 					continue;
 				}
-				const resolvedAliasMoveIps = aliasMoveIps as Array<number>;
 				const resolvedLoads = loads as Array<
 					VmRegExpIteratorProjectionRegion["loads"][number]
 				>;
+				const resultRegisters = [...new Set(region.resultRegisters)];
 				const step = instructions[stepIp!];
 				const doneBranch = instructions[doneBranchIp!];
-				const aliases = new Set<number>([
-					step?.opcode === "ITERATOR_STEP" ? step.valueDst : -1,
-				]);
+				const aliases = new Set(resultRegisters);
 				let operationsValid =
 					step?.opcode === "ITERATOR_STEP" &&
+					aliases.has(step.valueDst) &&
 					doneBranch?.opcode === "JUMP_IF" &&
 					doneBranchIp === stepIp! + 1 &&
 					doneBranch.cond === step.doneDst &&
 					doneBranch.targetIp === exitIp;
-				for (const aliasIp of resolvedAliasMoveIps) {
-					const move = instructions[aliasIp];
-					if (move?.opcode !== "MOVE" || !aliases.has(move.src)) {
-						operationsValid = false;
-						break;
-					}
-					aliases.add(move.dst);
-				}
 				for (const load of resolvedLoads) {
 					const capture = instructions[load.ip];
 					const key = instructions[load.keyIp];
@@ -3457,7 +3445,6 @@ function lowerFunctionToVmFunction(
 						argument.register === load.dst;
 				}
 				const payloadIps = new Set<number>([stepIp!, doneBranchIp!]);
-				for (const ip of resolvedAliasMoveIps) payloadIps.add(ip);
 				for (const load of resolvedLoads) {
 					payloadIps.add(load.ip);
 					payloadIps.add(load.keyIp);
@@ -3468,6 +3455,10 @@ function lowerFunctionToVmFunction(
 					!operationsValid ||
 					step?.opcode !== "ITERATOR_STEP" ||
 					firstLoadIp !== resolvedLoads[0]?.ip ||
+					resultRegisters.some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					) ||
 					resolvedLoads.length === 0 ||
 					resolvedLoads.length > 8 ||
 					new Set(resolvedLoads.map((load) => load.captureIndex)).size !==
@@ -3497,7 +3488,7 @@ function lowerFunctionToVmFunction(
 					next: step.next,
 					value: step.valueDst,
 					done: step.doneDst,
-					aliasMoveIps: resolvedAliasMoveIps,
+					resultRegisters,
 					statefulEffect: "iterator-last-index-retained-step",
 					runtimeGuard: "exact-brand-next-realm-regexp",
 					loads: resolvedLoads,
