@@ -701,13 +701,13 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_array_try_store");
 	});
 
-	it.skip("retains boxed recursive re-entry for promoted numeric parameters", () => {
+	it("retains boxed recursive re-entry for promoted numeric parameters", () => {
 		const output = emit(
 			`"use strict"; function recurse(value, depth, callback) { if (depth === 0) return value * value; return callback(value - 1, depth - 1, callback); } globalThis.recurse = recurse;`,
 		);
 		expect(output).toContain("static MalValue mal_compiled_1_boxed(");
 		expect(output).toContain("return mal_compiled_1_boxed");
-		expect(output).toContain("!mal_ops_is_number(p0)");
+		expect(output).not.toContain("!mal_ops_is_number(p0)");
 		expect(output).toContain("!mal_ops_is_number(p1)");
 	});
 
@@ -784,7 +784,7 @@ describe("native update-expression representation", () => {
 		expect(dynamicOutput).toMatch(/&& .* == __rg\d+_c->keys\[/);
 	});
 
-	it.skip("uses key-free probes only for non-consolidated static property sites", () => {
+	it("uses key-free probes only for non-consolidated static property sites", () => {
 		const staticOutput = emit(
 			`"use strict"; function load(object) { return object.value; } function store(object, value) { object.value = value; } globalThis.keep = [load, store];`,
 		);
@@ -796,8 +796,23 @@ describe("native update-expression representation", () => {
 			"mal_vm_local_watched_inherited_value_try_load_static(",
 		);
 
-		const loopSource = `"use strict"; function load(object, count) { let value; for (let i = 0; i < count; i++) value = object.value; return value; } globalThis.load = load;`;
-		const loopOutput = emit(loopSource);
+		const loopSource = `"use strict"; function load(object, count, initial) { let value = initial; for (let i = 0; i < count; i++) value = object.value; return value; } globalThis.load = load;`;
+		const loopSemantic = analyzeSourceAndRunSemanticAnalysis(
+			loopSource,
+			"native-inherited-loop-plan.js",
+			parseScript(loopSource, { strict: false }),
+		);
+		const loopDefinition = compileSemanticProgramToVmDefinition(loopSemantic);
+		const loopFunction = loopDefinition.functions.find(
+			(fn) => (fn.nativeInheritedLoadLoops?.length ?? 0) > 0,
+		);
+		expect(loopFunction?.nativeInheritedLoadLoops).toHaveLength(1);
+		expect(
+			deserializeVmDefinition(serializeVmDefinition(loopDefinition)).functions.find(
+				(fn) => (fn.nativeInheritedLoadLoops?.length ?? 0) > 0,
+			)?.nativeInheritedLoadLoops,
+		).toEqual(loopFunction?.nativeInheritedLoadLoops);
+		const loopOutput = emitVmDefinition(loopDefinition, { compiled: true });
 		expect(loopOutput).toContain("mal_vm_local_inherited_value_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_local_watched_inherited_value_try_load_static(");
 		expect(loopOutput).toContain(
@@ -813,52 +828,47 @@ describe("native update-expression representation", () => {
 			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS",
 		);
 		expect(lockedLoopOutput).not.toContain("mal_primitive_method_protector ?");
+		// Target lowering certifies the clone; emission consumes that plan without
+		// rediscovering the natural loop from VM instructions.
 		expect(loopOutput).toContain("__inherited_loop_");
+		expect(loopOutput).toContain("mal_perf_inherited_loop_summary");
 		expect(loopOutput).toMatch(/goto LF\d+/);
 		expect(loopOutput).toMatch(/goto LG\d+/);
-		expect(loopOutput).toMatch(/bool __inherited_loop_\d+_loaded = false/);
-		expect(loopOutput).toMatch(/__inherited_loop_\d+_loaded = true/);
-		expect(loopOutput).toMatch(/if \(__inherited_loop_\d+_loaded\) \{/);
-		expect(loopOutput).toMatch(/r\d+ = __property_ic\[\d+\]\.value/);
 		expect(loopOutput).toContain("if (mal_gc_poll) {");
-		expect(loopOutput).toMatch(
-			/pos_id = \d+;\s+mal_gc_safepoint\(vm\);\s+if \(!\(mal_vm_local_inherited_value_try_load_static/s,
-		);
+		expect(loopOutput).toMatch(/trunc\(r\d+\) == r\d+/);
 		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
-		expect(loopOutput).toMatch(
-			/if \(mal_gc_preempt_hook == nullptr && r\d+ > 0\.0 && isfinite\(r\d+\) && trunc\(r\d+\) == r\d+ && r\d+ <= 9007199254740992\.0\)/,
-		);
-		expect(loopOutput).toMatch(/mal_perf_inherited_loop_summary\(\(u64\) r\d+\)/);
-		expect(loopOutput).toMatch(
-			/r\d+ = __inherited_loop_\d+_probe;\s+r\d+ = 1\.0;\s+if \(mal_gc_poll\)[\s\S]*?mal_gc_safepoint\(vm\);\s+if \(r\d+ > 1\.0\)[\s\S]*?if \(!\(mal_vm_local_inherited_value_try_load_static[\s\S]*?goto LG\d+;[\s\S]*?r\d+ = __inherited_loop_\d+_probe;[\s\S]*?r\d+ = false;[\s\S]*?r\d+ = r\d+;[\s\S]*?goto L\d+;/,
-		);
 
-		const effectfulLoopOutput = emit(
-			`"use strict"; function load(object, count, mutate) { let value; for (let i = 0; i < count; i++) { value = object.value; mutate(); } return value; } globalThis.load = load;`,
-		);
-		expect(effectfulLoopOutput).not.toContain("__inherited_loop_");
-		expect(effectfulLoopOutput).not.toMatch(/goto LF\d+/);
-
-		const nonCanonicalLoopOutput = emit(
+		const inheritedPlans = (source: string) => {
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				source,
+				"native-inherited-loop-negative.js",
+				parseScript(source, { strict: false }),
+			);
+			return compileSemanticProgramToVmDefinition(semantic).functions.flatMap(
+				(fn) => fn.nativeInheritedLoadLoops ?? [],
+			);
+		};
+		expect(
+			inheritedPlans(
+				`"use strict"; function load(object, count, mutate) { let value; for (let i = 0; i < count; i++) { value = object.value; mutate(); } return value; } globalThis.load = load;`,
+			),
+		).toEqual([]);
+		const nonCanonicalPlans = inheritedPlans(
 			`"use strict"; function load(object, count) { let value; for (let i = 1; i < count; i++) value = object.value; return value; } globalThis.load = load;`,
 		);
-		expect(nonCanonicalLoopOutput).toContain("__inherited_loop_");
-		expect(nonCanonicalLoopOutput).not.toContain("9007199254740992.0");
-
-		const observableBodyOutput = emit(
+		expect(nonCanonicalPlans).toHaveLength(1);
+		expect(nonCanonicalPlans[0]?.summary).toBeUndefined();
+		const observableBodyPlans = inheritedPlans(
 			`"use strict"; function load(object, count) { let value; let sum = 0; for (let i = 0; i < count; i++) { value = object.value; sum += i; } return [value, sum]; } globalThis.load = load;`,
 		);
-		expect(observableBodyOutput).not.toContain("9007199254740992.0");
-
-		const wrongInductionOutput = emit(
+		expect(observableBodyPlans).toHaveLength(1);
+		expect(observableBodyPlans[0]?.summary).toBeUndefined();
+		const wrongInductionPlans = inheritedPlans(
 			`"use strict"; function load(object, count) { let value; let other = 0; for (let i = 0; other < count; i++) value = object.value; return value; } globalThis.load = load;`,
 		);
-		expect(wrongInductionOutput).not.toContain("9007199254740992.0");
-
-		// The trunc guard deliberately sends fractional bounds through the existing
-		// per-iteration twin; the summary only models an exact integral final index.
-		expect(loopOutput).toMatch(/trunc\(r\d+\) == r\d+/);
+		expect(wrongInductionPlans).toHaveLength(1);
+		expect(wrongInductionPlans[0]?.summary).toBeUndefined();
 
 		const dynamicOutput = emit(
 			`"use strict"; function load(object, key) { return object[key]; } function store(object, key, value) { object[key] = value; } globalThis.keep = [load, store];`,

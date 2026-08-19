@@ -458,6 +458,23 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 				positions: fn.positions.map((position) => shifted(position, base.position)),
 				gcRootRegisters:
 					fn.gcRootRegisters === undefined ? undefined : [...fn.gcRootRegisters],
+				nativeRepresentationPlan:
+					fn.nativeRepresentationPlan === undefined
+						? undefined
+						: {
+								generic: [...fn.nativeRepresentationPlan.generic],
+								specialized: [...fn.nativeRepresentationPlan.specialized],
+								promotedNumericParameters: [
+									...fn.nativeRepresentationPlan.promotedNumericParameters,
+								],
+							},
+				nativeInheritedLoadLoops: fn.nativeInheritedLoadLoops?.map((loop) => ({
+					...loop,
+					position: shifted(loop.position, base.position),
+					deferredRegisters: [...loop.deferredRegisters],
+					deferredMoveIps: [...loop.deferredMoveIps],
+					summary: loop.summary === undefined ? undefined : { ...loop.summary },
+				})),
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
 				regions: fn.regions?.map((region) => cloneRegion(region, base)),
 			})),

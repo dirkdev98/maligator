@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 8;
+export const WIRE_VERSION = 9;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -882,6 +882,114 @@ export function serializeVmDefinition(
 	for (const fn of def.functions) {
 		w.u8(fn.gcRootRegisters === undefined ? 0 : 1);
 		w.i32Array([...(fn.gcRootRegisters ?? [])]);
+
+		const representationPlan = fn.nativeRepresentationPlan;
+		w.u8(representationPlan === undefined ? 0 : 1);
+		if (representationPlan !== undefined) {
+			const representationTag = (representation: string): number =>
+				representation === "boxed"
+					? 0
+					: representation === "number"
+						? 1
+						: representation === "boolean"
+							? 2
+							: -1;
+			if (
+				representationPlan.generic.length !== fn.registerCount ||
+				representationPlan.specialized.length !== fn.registerCount ||
+				representationPlan.generic.some(
+					(representation) => representationTag(representation) < 0,
+				) ||
+				representationPlan.specialized.some(
+					(representation) => representationTag(representation) < 0,
+				) ||
+				representationPlan.promotedNumericParameters.some(
+					(parameter, index, parameters) =>
+						!Number.isInteger(parameter) ||
+						parameter < 0 ||
+						parameter >= fn.parameterCount ||
+						(index > 0 && parameters[index - 1]! >= parameter) ||
+						representationPlan.specialized[parameter] !== "number" ||
+						representationPlan.generic[parameter] !== "boxed",
+				)
+			) {
+				throw new RangeError("serialize-vm: invalid native representation plan");
+			}
+			w.u32(representationPlan.generic.length);
+			for (const representation of representationPlan.generic) {
+				w.u8(representationTag(representation));
+			}
+			w.u32(representationPlan.specialized.length);
+			for (const representation of representationPlan.specialized) {
+				w.u8(representationTag(representation));
+			}
+			w.i32Array([...representationPlan.promotedNumericParameters]);
+		}
+
+		const inheritedLoadLoops = fn.nativeInheritedLoadLoops ?? [];
+		w.u32(inheritedLoadLoops.length);
+		let previousLoopHeader = -1;
+		for (const loop of inheritedLoadLoops) {
+			const property = fn.instructions[loop.propertyIp];
+			const backedge = fn.instructions[loop.backedgeIp];
+			if (
+				!Number.isInteger(loop.headerIp) ||
+				loop.headerIp <= previousLoopHeader ||
+				loop.headerIp <= 0 ||
+				loop.backedgeIp <= loop.headerIp ||
+				loop.backedgeIp >= fn.instructions.length ||
+				loop.propertyIp < loop.headerIp ||
+				loop.propertyIp > loop.backedgeIp ||
+				loop.receiver < 0 ||
+				loop.receiver >= fn.registerCount ||
+				loop.icIndex < 0 ||
+				property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				property.object !== loop.receiver ||
+				property.icIndex !== loop.icIndex ||
+				backedge?.opcode !== "JUMP" ||
+				backedge.targetIp !== loop.headerIp ||
+				loop.deferredRegisters.some(
+					(register, index) =>
+						register < 0 ||
+						register >= fn.registerCount ||
+						(index > 0 && loop.deferredRegisters[index - 1]! >= register),
+				) ||
+				loop.deferredMoveIps.some(
+					(ip, index) =>
+						ip < loop.headerIp ||
+						ip > loop.backedgeIp ||
+						fn.instructions[ip]?.opcode !== "MOVE" ||
+						(index > 0 && loop.deferredMoveIps[index - 1]! >= ip),
+				) ||
+				(loop.summary !== undefined &&
+					(loop.summary.index < 0 ||
+						loop.summary.index >= fn.registerCount ||
+						loop.summary.bound < 0 ||
+						loop.summary.bound >= fn.registerCount ||
+						loop.summary.condition < 0 ||
+						loop.summary.condition >= fn.registerCount ||
+						loop.summary.exitIp <= loop.backedgeIp ||
+						loop.summary.exitIp >= fn.instructions.length))
+			) {
+				throw new RangeError("serialize-vm: invalid native inherited-load loop plan");
+			}
+			previousLoopHeader = loop.headerIp;
+			w.i32(loop.headerIp);
+			w.i32(loop.backedgeIp);
+			w.i32(loop.propertyIp);
+			w.i32(loop.receiver);
+			w.i32(loop.icIndex);
+			w.i32(loop.position);
+			w.i32Array([...loop.deferredRegisters]);
+			w.i32Array([...loop.deferredMoveIps]);
+			w.u8(loop.summary === undefined ? 0 : 1);
+			if (loop.summary !== undefined) {
+				w.i32(loop.summary.index);
+				w.i32(loop.summary.bound);
+				w.i32(loop.summary.condition);
+				w.i32(loop.summary.exitIp);
+			}
+		}
 
 		const instructionMetadata = fn.instructions
 			.map((instruction, instructionIndex) => ({ instruction, instructionIndex }))
@@ -2753,6 +2861,135 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			throw new Error("serialize-vm: invalid GC-root metadata");
 		}
 		if (hasGcRootRegisters === 1) fn.gcRootRegisters = gcRootRegisters;
+
+		const hasNativeRepresentationPlan = r.u8();
+		if (hasNativeRepresentationPlan > 1) {
+			throw new Error("serialize-vm: invalid native representation metadata");
+		}
+		if (hasNativeRepresentationPlan === 1) {
+			const readRepresentations = (): Array<"boxed" | "number" | "boolean"> => {
+				const count = r.count(1);
+				if (count !== fn.registerCount) {
+					throw new Error("serialize-vm: native representation count mismatch");
+				}
+				return Array.from({ length: count }, () => {
+					const tag = r.u8();
+					if (tag === 0) return "boxed";
+					if (tag === 1) return "number";
+					if (tag === 2) return "boolean";
+					throw new Error("serialize-vm: invalid native representation tag");
+				});
+			};
+			const generic = readRepresentations();
+			const specialized = readRepresentations();
+			const promotedNumericParameters = r.i32Array();
+			if (
+				promotedNumericParameters.some(
+					(parameter, index) =>
+						parameter < 0 ||
+						parameter >= fn.parameterCount ||
+						(index > 0 && promotedNumericParameters[index - 1]! >= parameter) ||
+						specialized[parameter] !== "number" ||
+						generic[parameter] !== "boxed",
+				)
+			) {
+				throw new Error("serialize-vm: invalid native representation plan");
+			}
+			fn.nativeRepresentationPlan = {
+				generic,
+				specialized,
+				promotedNumericParameters,
+			};
+		}
+
+		const inheritedLoadLoopCount = r.count(2);
+		const nativeInheritedLoadLoops = Array.from(
+			{ length: inheritedLoadLoopCount },
+			() => {
+				const headerIp = r.i32();
+				const backedgeIp = r.i32();
+				const propertyIp = r.i32();
+				const receiver = r.i32();
+				const icIndex = r.i32();
+				const position = r.i32();
+				const deferredRegisters = r.i32Array();
+				const deferredMoveIps = r.i32Array();
+				const hasSummary = r.u8();
+				if (hasSummary > 1) {
+					throw new Error("serialize-vm: invalid native inherited-load summary tag");
+				}
+				const summary =
+					hasSummary === 0
+						? undefined
+						: {
+								index: r.i32(),
+								bound: r.i32(),
+								condition: r.i32(),
+								exitIp: r.i32(),
+							};
+				return {
+					headerIp,
+					backedgeIp,
+					propertyIp,
+					receiver,
+					icIndex,
+					position,
+					deferredRegisters,
+					deferredMoveIps,
+					summary,
+				};
+			},
+		);
+		if (
+			nativeInheritedLoadLoops.some((loop, index) => {
+				const property = fn.instructions[loop.propertyIp];
+				const backedge = fn.instructions[loop.backedgeIp];
+				return (
+					loop.headerIp <= 0 ||
+					(index > 0 && nativeInheritedLoadLoops[index - 1]!.headerIp >= loop.headerIp) ||
+					loop.backedgeIp <= loop.headerIp ||
+					loop.backedgeIp >= fn.instructions.length ||
+					loop.propertyIp < loop.headerIp ||
+					loop.propertyIp > loop.backedgeIp ||
+					loop.receiver < 0 ||
+					loop.receiver >= fn.registerCount ||
+					loop.icIndex < 0 ||
+					property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					property.object !== loop.receiver ||
+					property.icIndex !== loop.icIndex ||
+					backedge?.opcode !== "JUMP" ||
+					backedge.targetIp !== loop.headerIp ||
+					loop.deferredRegisters.some(
+						(register, registerIndex) =>
+							register < 0 ||
+							register >= fn.registerCount ||
+							(registerIndex > 0 &&
+								loop.deferredRegisters[registerIndex - 1]! >= register),
+					) ||
+					loop.deferredMoveIps.some(
+						(ip, moveIndex) =>
+							ip < loop.headerIp ||
+							ip > loop.backedgeIp ||
+							fn.instructions[ip]?.opcode !== "MOVE" ||
+							(moveIndex > 0 && loop.deferredMoveIps[moveIndex - 1]! >= ip),
+					) ||
+					(loop.summary !== undefined &&
+						(loop.summary.index < 0 ||
+							loop.summary.index >= fn.registerCount ||
+							loop.summary.bound < 0 ||
+							loop.summary.bound >= fn.registerCount ||
+							loop.summary.condition < 0 ||
+							loop.summary.condition >= fn.registerCount ||
+							loop.summary.exitIp <= loop.backedgeIp ||
+							loop.summary.exitIp >= fn.instructions.length))
+				);
+			})
+		) {
+			throw new Error("serialize-vm: invalid native inherited-load loop plan");
+		}
+		if (nativeInheritedLoadLoops.length > 0) {
+			fn.nativeInheritedLoadLoops = nativeInheritedLoadLoops;
+		}
 
 		const instructionMetadataCount = r.count(2);
 		let previousInstructionMetadataIndex = -1;

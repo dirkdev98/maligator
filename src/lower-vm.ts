@@ -534,6 +534,45 @@ export type VmRegion =
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion;
 
+/** Physical storage selected by Core target lowering for native emission. */
+export type VmRegisterRepresentation = "boxed" | "number" | "boolean";
+
+/**
+ * Complete native representation contract for one allocated function. The
+ * generic plan accepts every JavaScript argument. The specialized plan may
+ * unbox only the listed parameters after its entry guards have succeeded.
+ * Emitters consume this contract verbatim and never recover representations
+ * from VM instruction patterns.
+ */
+export interface VmNativeRepresentationPlan {
+	readonly generic: ReadonlyArray<VmRegisterRepresentation>;
+	readonly specialized: ReadonlyArray<VmRegisterRepresentation>;
+	readonly promotedNumericParameters: ReadonlyArray<number>;
+}
+
+/**
+ * One exact natural-loop specialization selected at the target-lowering
+ * boundary. The ordinary VM interval remains the generic twin. Native emission
+ * may clone the interval only after validating the inherited-property cache and
+ * must return to the generic twin whenever a safepoint invalidates that cache.
+ */
+export interface VmNativeInheritedLoadLoopPlan {
+	readonly headerIp: number;
+	readonly backedgeIp: number;
+	readonly propertyIp: number;
+	readonly receiver: number;
+	readonly icIndex: number;
+	readonly position: number;
+	readonly deferredRegisters: ReadonlyArray<number>;
+	readonly deferredMoveIps: ReadonlyArray<number>;
+	readonly summary?: {
+		readonly index: number;
+		readonly bound: number;
+		readonly condition: number;
+		readonly exitIp: number;
+	};
+}
+
 export interface VmGuardedBuiltinCall {
 	readonly operation: VmGuardedBuiltinOperation;
 	/** The shared semantic facts and fallback contract for this specialization. */
@@ -724,6 +763,12 @@ export interface VmFunction {
 	 * boxed register.
 	 */
 	gcRootRegisters?: ReadonlyArray<number>;
+
+	/** Compile-only representation/versioning decision produced by target lowering. */
+	nativeRepresentationPlan?: VmNativeRepresentationPlan;
+
+	/** Compile-only inherited-load loop certificates produced by target lowering. */
+	nativeInheritedLoadLoops?: ReadonlyArray<VmNativeInheritedLoadLoopPlan>;
 }
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
@@ -1453,6 +1498,753 @@ export function vmInstructionWriteRegisters(
 			return dst === undefined ? [] : [dst];
 		}
 	}
+}
+
+const VM_NUMERIC_PARAMETER_BINARY = new Set<RegisterBinaryOperator>([
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"<",
+	"<=",
+	">",
+	">=",
+]);
+
+const VM_NATIVE_COMPARE_BINARY = new Set<RegisterBinaryOperator>([
+	"<",
+	"<=",
+	">",
+	">=",
+	"===",
+	"==",
+	"!==",
+	"!=",
+]);
+
+const VM_NATIVE_NUMBER_BINARY = new Set<RegisterBinaryOperator>([
+	"+",
+	"-",
+	"*",
+	"/",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"%",
+]);
+
+/** Select profitable guarded numeric parameters before native emission. */
+function numericParameterCandidates(fn: VmFunction): Set<number> {
+	if (fn.parameterCount === 0) return new Set();
+	const numericReads: Array<Array<number>> = fn.instructions.map(() => []);
+	const disqualifyingReads: Array<Array<number>> = fn.instructions.map(() => []);
+
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		const numeric = numericReads[ip]!;
+		const disqualifying = disqualifyingReads[ip]!;
+		switch (instruction.opcode) {
+			case "MOVE":
+			case "CREATE_UNDEFINED":
+			case "CREATE_NULL":
+			case "CREATE_EMPTY":
+			case "CREATE_BOOLEAN":
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+			case "CREATE_STRING":
+			case "CREATE_BIGINT":
+			case "CREATE_OBJECT":
+			case "CREATE_OBJECT_SHAPED":
+			case "CREATE_ARRAY":
+			case "CREATE_MODULE_NAMESPACE":
+			case "CREATE_TEMPLATE_OBJECT":
+			case "INSTANTIATE_LITERAL_TEMPLATE":
+			case "CREATE_FUNCTION":
+			case "CREATE_ARGUMENTS_OBJECT":
+			case "LOAD_ARGUMENT_COUNT":
+			case "LOAD_ARGUMENT":
+			case "LOAD_STATIC_ARGUMENT":
+			case "CREATE_REST_ARGUMENTS":
+			case "DEFINE_PROPERTY":
+			case "DEFINE_ACCESSOR":
+			case "DEFINE_PRIVATE":
+			case "INIT_PRIVATE_FIELDS":
+			case "CREATE_PRIVATE_NAME":
+			case "CREATE_PRIVATE_NAMES":
+			case "LOAD_THIS":
+			case "LOAD_NEW_TARGET":
+			case "LOAD_CALLEE":
+			case "LOAD_UNDECLARED":
+			case "LOAD_GLOBAL_PROPERTY":
+			case "LOAD_CAPTURED":
+			case "LOAD_GLOBAL":
+			case "LOAD_INTRINSIC":
+			case "STORE_GLOBAL":
+			case "STORE_GLOBAL_PROPERTY":
+			case "STORE_CAPTURED":
+			case "INIT_GLOBAL_VARS":
+			case "THROW_IF_TDZ":
+			case "THROW":
+			case "JUMP":
+			case "JUMP_IF":
+			case "RETURN":
+			case "CATCH":
+			case "TRY_BEGIN":
+			case "TRY_END":
+			case "GENERATOR_START":
+			case "ASYNC_START":
+			case "YIELD":
+			case "AWAIT":
+			case "ENV_PUSH":
+			case "ENV_COPY":
+			case "ENV_POP":
+			case "ITERATOR_CLOSE":
+			case "MERGE_DATA_PROPERTIES":
+			case "DELETE_PROPERTY":
+			case "SET_PROTOTYPE":
+			case "WITH_ENTER":
+			case "WITH_EXIT":
+			case "WITH_GET":
+			case "WITH_SET":
+			case "WITH_RESOLVE_BASE":
+			case "IS_EMPTY":
+			case "REQUIRE_COERCIBLE":
+			case "SET_FUNCTION_NAME":
+			case "CHECK_SUPER_CLASS":
+			case "GUARD_FUNCTION_INDEX":
+			case "TERMINAL_YIELD":
+			case "SET_THIS":
+				break;
+			case "CONSTRUCT":
+			case "CONSTRUCT_SPREAD":
+				disqualifying.push(instruction.callee);
+				break;
+			case "CONSTRUCT_SUPER":
+			case "CONSTRUCT_SUPER_EXPLICIT":
+				disqualifying.push(instruction.parent);
+				break;
+			case "LOAD_PROPERTY":
+				disqualifying.push(instruction.object);
+				numeric.push(instruction.key);
+				break;
+			case "LOAD_SUPER_PROPERTY":
+				disqualifying.push(instruction.object, instruction.receiver);
+				numeric.push(instruction.key);
+				break;
+			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROTOTYPE":
+				disqualifying.push(instruction.object);
+				break;
+			case "STORE_PROPERTY":
+				disqualifying.push(instruction.object);
+				numeric.push(instruction.key);
+				break;
+			case "STORE_PROPERTY_STATIC":
+				disqualifying.push(instruction.object);
+				break;
+			case "STORE_SUPER_PROPERTY":
+				disqualifying.push(instruction.object, instruction.receiver);
+				numeric.push(instruction.key);
+				break;
+			case "TO_PROPERTY_KEY":
+				disqualifying.push(instruction.object, instruction.key);
+				break;
+			case "FOR_IN_KEYS":
+				disqualifying.push(instruction.source);
+				break;
+			case "ARRAY_REST":
+				disqualifying.push(instruction.src);
+				break;
+			case "GET_ITERATOR":
+			case "GET_ASYNC_ITERATOR":
+				disqualifying.push(instruction.source);
+				break;
+			case "ITERATOR_NEXT":
+			case "ITERATOR_STEP":
+				disqualifying.push(instruction.iterator, instruction.next);
+				break;
+			case "CALL": {
+				disqualifying.push(instruction.callee, instruction.thisValue);
+				const guarded = instruction.guardedBuiltinCall;
+				const descriptor =
+					guarded === undefined
+						? undefined
+						: builtinOperationDescriptor(guarded.operation);
+				if (
+					guarded !== undefined &&
+					vmGuardIsWorldInvariant(guarded.guard) &&
+					descriptor?.nativeNumberArity === instruction.arguments.length
+				) {
+					for (const operand of instruction.arguments) {
+						const decoded = decodeVmValueOperand(operand);
+						if (decoded.kind === "register") numeric.push(decoded.register);
+					}
+				}
+				break;
+			}
+			case "CALL_BUILTIN":
+				disqualifying.push(instruction.thisValue);
+				break;
+			case "CALL_SPREAD":
+			case "CALL_SPREAD_ITERABLE":
+				disqualifying.push(instruction.callee, instruction.thisValue);
+				break;
+			case "MATH_UNARY_NUMBER":
+				numeric.push(instruction.src);
+				break;
+			case "MATH_BINARY_NUMBER":
+				numeric.push(instruction.left, instruction.right);
+				break;
+			case "BINARY":
+				if (instruction.operator === "in" || instruction.operator === "instanceof") {
+					disqualifying.push(instruction.left, instruction.right);
+				} else if (VM_NUMERIC_PARAMETER_BINARY.has(instruction.operator)) {
+					numeric.push(instruction.left, instruction.right);
+				}
+				break;
+			case "UNARY":
+				if (
+					instruction.operator === "-" ||
+					instruction.operator === "+" ||
+					instruction.operator === "~" ||
+					instruction.operator === "tonumeric" ||
+					instruction.operator === "increment" ||
+					instruction.operator === "decrement"
+				) {
+					numeric.push(instruction.src);
+				} else {
+					disqualifying.push(instruction.src);
+				}
+				break;
+			case "TYPEOF_COMPARE":
+				break;
+			default:
+				return new Set();
+		}
+	}
+
+	const numericUse = new Set(numericReads.flat());
+	const disqualifyingUse = new Set(disqualifyingReads.flat());
+	const moveTargets = new Map<number, Array<number>>();
+	for (const instruction of fn.instructions) {
+		if (instruction.opcode !== "MOVE") continue;
+		const targets = moveTargets.get(instruction.src) ?? [];
+		targets.push(instruction.dst);
+		moveTargets.set(instruction.src, targets);
+	}
+	const result = new Set<number>();
+	for (let parameter = 0; parameter < fn.parameterCount; parameter++) {
+		const seen = new Set<number>([parameter]);
+		const pending = [parameter];
+		let justified = false;
+		let disqualified = false;
+		while (pending.length > 0) {
+			const register = pending.pop()!;
+			if (disqualifyingUse.has(register)) {
+				disqualified = true;
+				break;
+			}
+			justified ||= numericUse.has(register);
+			for (const target of moveTargets.get(register) ?? []) {
+				if (seen.has(target)) continue;
+				seen.add(target);
+				pending.push(target);
+			}
+		}
+		if (justified && !disqualified) result.add(parameter);
+	}
+	return result;
+}
+
+function nativeProducedRepresentation(
+	instruction: VmInstruction,
+	representations: ReadonlyArray<VmRegisterRepresentation | null>,
+): VmRegisterRepresentation | null {
+	switch (instruction.opcode) {
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
+			return "number";
+		case "CREATE_BOOLEAN":
+		case "GUARD_FUNCTION_INDEX":
+		case "TYPEOF_COMPARE":
+			return "boolean";
+		case "MOVE":
+			return representations[instruction.src] ?? null;
+		case "BINARY": {
+			if (VM_NATIVE_COMPARE_BINARY.has(instruction.operator)) return "boolean";
+			if (!VM_NATIVE_NUMBER_BINARY.has(instruction.operator)) return "boxed";
+			const left = representations[instruction.left] ?? null;
+			const right = representations[instruction.right] ?? null;
+			if (left === null || right === null) return null;
+			return left === "number" && right === "number" ? "number" : "boxed";
+		}
+		case "UNARY": {
+			if (instruction.operator === "!") return "boolean";
+			if (
+				instruction.operator !== "-" &&
+				instruction.operator !== "+" &&
+				instruction.operator !== "~" &&
+				instruction.operator !== "tonumeric" &&
+				instruction.operator !== "increment" &&
+				instruction.operator !== "decrement"
+			) {
+				return "boxed";
+			}
+			const source = representations[instruction.src] ?? null;
+			return source === null ? null : source === "number" ? "number" : "boxed";
+		}
+		case "CALL": {
+			const guarded = instruction.guardedBuiltinCall;
+			const descriptor =
+				guarded === undefined ? undefined : builtinOperationDescriptor(guarded.operation);
+			if (
+				guarded === undefined ||
+				!vmGuardIsWorldInvariant(guarded.guard) ||
+				descriptor?.nativeNumberArity !== instruction.arguments.length
+			) {
+				return "boxed";
+			}
+			for (const operand of instruction.arguments) {
+				const decoded = decodeVmValueOperand(operand);
+				if (decoded.kind === "register" && representations[decoded.register] === null) {
+					return null;
+				}
+				if (
+					(decoded.kind !== "number" && decoded.kind !== "register") ||
+					(decoded.kind === "register" && representations[decoded.register] !== "number")
+				) {
+					return "boxed";
+				}
+			}
+			return "number";
+		}
+		default:
+			return "boxed";
+	}
+}
+
+function inferNativeRepresentations(
+	fn: VmFunction,
+	promotedParameters: ReadonlySet<number>,
+): Array<VmRegisterRepresentation> {
+	const representations: Array<VmRegisterRepresentation | null> = Array.from(
+		{ length: fn.registerCount },
+		() => null,
+	);
+	for (let index = 0; index < fn.parameterCount; index++) {
+		representations[index] = promotedParameters.has(index) ? "number" : "boxed";
+	}
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const instruction of fn.instructions) {
+			const produced = nativeProducedRepresentation(instruction, representations);
+			if (produced === null) continue;
+			for (const destination of vmInstructionWriteRegisters(instruction)) {
+				if (destination < 0) continue;
+				const current = representations[destination];
+				const joined =
+					current === null ? produced : current === produced ? current : "boxed";
+				if (joined === current) continue;
+				representations[destination] = joined;
+				changed = true;
+			}
+		}
+	}
+	return representations.map((representation) => representation ?? "boxed");
+}
+
+/** Build the complete native storage contract at the target-lowering boundary. */
+function nativeRepresentationPlan(fn: VmFunction): VmNativeRepresentationPlan {
+	const candidates = numericParameterCandidates(fn);
+	const generic = inferNativeRepresentations(fn, new Set());
+	const specialized = inferNativeRepresentations(fn, candidates);
+	const promotedNumericParameters = [...candidates].filter(
+		(parameter) => specialized[parameter] === "number",
+	);
+	return { generic, specialized, promotedNumericParameters };
+}
+
+const VM_INHERITED_LOOP_SCALAR_OPCODES = new Set<VmInstruction["opcode"]>([
+	"MOVE",
+	"CREATE_UNDEFINED",
+	"CREATE_NULL",
+	"CREATE_EMPTY",
+	"CREATE_BOOLEAN",
+	"CREATE_NUMBER",
+	"CREATE_F64",
+	"IS_EMPTY",
+	"TYPEOF_COMPARE",
+	"BINARY",
+	"UNARY",
+	"JUMP",
+	"JUMP_IF",
+]);
+
+function nativeScalarInstructionMayRunUserCode(
+	instruction: VmInstruction,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+): boolean {
+	switch (instruction.opcode) {
+		case "MOVE":
+		case "CREATE_UNDEFINED":
+		case "CREATE_NULL":
+		case "CREATE_EMPTY":
+		case "CREATE_BOOLEAN":
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "IS_EMPTY":
+		case "TYPEOF_COMPARE":
+		case "JUMP":
+		case "JUMP_IF":
+			return false;
+		case "BINARY":
+			return !(
+				(representations[instruction.left] === "number" &&
+					representations[instruction.right] === "number") ||
+				instruction.operator === "===" ||
+				instruction.operator === "!=="
+			);
+		case "UNARY":
+			return !(
+				representations[instruction.src] === "number" || instruction.operator === "!"
+			);
+		default:
+			return true;
+	}
+}
+
+function inheritedLoopReadRegisters(instruction: VmInstruction): Array<number> {
+	switch (instruction.opcode) {
+		case "MOVE":
+			return [instruction.src];
+		case "IS_EMPTY":
+		case "UNARY":
+		case "TYPEOF_COMPARE":
+			return [instruction.src];
+		case "BINARY":
+			return [instruction.left, instruction.right];
+		case "JUMP_IF":
+			return [instruction.cond];
+		default:
+			return [];
+	}
+}
+
+function deferredInheritedMoveChain(
+	fn: VmFunction,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	headerIp: number,
+	backedgeIp: number,
+	propertyIp: number,
+	propertyDst: number,
+): { registers: Array<number>; moveIps: Array<number> } | null {
+	const registers = new Set<number>([propertyDst]);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let ip = headerIp; ip <= backedgeIp; ip++) {
+			const instruction = fn.instructions[ip]!;
+			if (
+				instruction.opcode === "MOVE" &&
+				registers.has(instruction.src) &&
+				!registers.has(instruction.dst)
+			) {
+				registers.add(instruction.dst);
+				changed = true;
+			}
+		}
+	}
+	if ([...registers].some((register) => representations[register] !== "boxed")) {
+		return null;
+	}
+
+	const moveIps = new Set<number>();
+	for (let ip = headerIp; ip <= backedgeIp; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (ip === propertyIp) continue;
+		if (
+			instruction.opcode === "MOVE" &&
+			registers.has(instruction.src) &&
+			registers.has(instruction.dst)
+		) {
+			moveIps.add(ip);
+			continue;
+		}
+		if (
+			inheritedLoopReadRegisters(instruction).some((register) => registers.has(register))
+		) {
+			return null;
+		}
+		if (
+			vmInstructionWriteRegisters(instruction).some((register) => registers.has(register))
+		) {
+			return null;
+		}
+	}
+	return {
+		registers: [...registers].sort((left, right) => left - right),
+		moveIps: [...moveIps].sort((left, right) => left - right),
+	};
+}
+
+function inheritedLoadLoopSummary(
+	fn: VmFunction,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	headerIp: number,
+	backedgeIp: number,
+	propertyIp: number,
+	preheaderIp: number,
+	deferred: ReturnType<typeof deferredInheritedMoveChain>,
+): VmNativeInheritedLoadLoopPlan["summary"] {
+	const preheader = fn.instructions[preheaderIp];
+	const initializeIndex = fn.instructions[preheaderIp - 1];
+	const initializeEdges = fn.instructions
+		.map((instruction, ip) => ({ instruction, ip }))
+		.filter(
+			({ instruction }) =>
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				instruction.targetIp === preheaderIp - 1,
+		);
+	const initializeEdge = initializeEdges.length === 1 ? initializeEdges[0] : undefined;
+	const initialize =
+		initializeEdge?.instruction.opcode === "JUMP" && initializeEdge.ip > 0
+			? fn.instructions[initializeEdge.ip - 1]
+			: undefined;
+	const compare = fn.instructions[headerIp];
+	const enter = fn.instructions[headerIp + 1];
+	const exit = fn.instructions[headerIp + 2];
+	const increment = fn.instructions[backedgeIp - 1];
+	if (
+		initialize?.opcode !== "CREATE_NUMBER" ||
+		initialize.value !== 0 ||
+		initializeIndex?.opcode !== "MOVE" ||
+		initializeIndex.src !== initialize.dst ||
+		preheader?.opcode !== "JUMP" ||
+		preheader.targetIp !== headerIp ||
+		compare?.opcode !== "BINARY" ||
+		compare.operator !== "<" ||
+		compare.left !== initializeIndex.dst ||
+		enter?.opcode !== "JUMP_IF" ||
+		enter.cond !== compare.dst ||
+		enter.targetIp !== propertyIp ||
+		exit?.opcode !== "JUMP" ||
+		exit.targetIp <= backedgeIp ||
+		propertyIp !== headerIp + 3 ||
+		increment?.opcode !== "UNARY" ||
+		increment.operator !== "increment" ||
+		increment.src !== initializeIndex.dst ||
+		increment.dst !== initializeIndex.dst ||
+		deferred === null ||
+		representations[initializeIndex.dst] !== "number" ||
+		representations[compare.right] !== "number" ||
+		representations[compare.dst] !== "boolean"
+	) {
+		return undefined;
+	}
+
+	if (
+		fn.instructions.some(
+			(instruction, ip) =>
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				instruction.targetIp === preheaderIp &&
+				ip !== preheaderIp - 1,
+		) ||
+		fn.handlers.some(
+			(handler) =>
+				handler.handlerIp === preheaderIp || handler.handlerIp === preheaderIp - 1,
+		)
+	) {
+		return undefined;
+	}
+
+	const deferredMoveIps = new Set(deferred.moveIps);
+	for (let ip = propertyIp + 1; ip < backedgeIp - 1; ip++) {
+		const instruction = fn.instructions[ip]!;
+		const canonicalNumericIndex =
+			instruction.opcode === "UNARY" &&
+			instruction.operator === "tonumeric" &&
+			instruction.src === initializeIndex.dst &&
+			instruction.dst === initializeIndex.dst;
+		if (!deferredMoveIps.has(ip) && !canonicalNumericIndex) return undefined;
+	}
+	if (
+		fn.instructions
+			.slice(headerIp, backedgeIp + 1)
+			.some((instruction) =>
+				vmInstructionWriteRegisters(instruction).includes(compare.right),
+			)
+	) {
+		return undefined;
+	}
+
+	return {
+		index: initializeIndex.dst,
+		bound: compare.right,
+		condition: compare.dst,
+		exitIp: exit.targetIp,
+	};
+}
+
+/**
+ * Certify the deliberately small inherited-load loop domain before emission.
+ * Nested or overlapping intervals fail closed until Core exposes a loop forest.
+ */
+function nativeInheritedLoadLoopPlans(
+	fn: VmFunction,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+): Array<VmNativeInheritedLoadLoopPlan> {
+	if (fn.isGenerator || fn.isAsync) return [];
+	const candidates: Array<VmNativeInheritedLoadLoopPlan> = [];
+	for (let backedgeIp = 0; backedgeIp < fn.instructions.length; backedgeIp++) {
+		const backedge = fn.instructions[backedgeIp]!;
+		if (backedge.opcode !== "JUMP" || backedge.targetIp >= backedgeIp) continue;
+		const headerIp = backedge.targetIp;
+		if (headerIp <= 0) continue;
+		const externalEntries = fn.instructions
+			.map((instruction, ip) => ({ instruction, ip }))
+			.filter(
+				({ instruction, ip }) =>
+					(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+					instruction.targetIp === headerIp &&
+					(ip < headerIp || ip > backedgeIp),
+			);
+		if (
+			externalEntries.length !== 1 ||
+			externalEntries[0]!.instruction.opcode !== "JUMP"
+		) {
+			continue;
+		}
+		const preheaderIp = externalEntries[0]!.ip;
+
+		let exactControlFlow = true;
+		for (let sourceIp = 0; sourceIp < fn.instructions.length; sourceIp++) {
+			const instruction = fn.instructions[sourceIp]!;
+			if (instruction.opcode !== "JUMP" && instruction.opcode !== "JUMP_IF") continue;
+			const target = instruction.targetIp;
+			if (
+				sourceIp >= headerIp &&
+				sourceIp <= backedgeIp &&
+				target <= sourceIp &&
+				!(sourceIp === backedgeIp && target === headerIp)
+			) {
+				exactControlFlow = false;
+				break;
+			}
+			if (
+				(sourceIp < headerIp || sourceIp > backedgeIp) &&
+				target >= headerIp &&
+				target <= backedgeIp &&
+				!(sourceIp === preheaderIp && target === headerIp)
+			) {
+				exactControlFlow = false;
+				break;
+			}
+		}
+		if (!exactControlFlow) continue;
+		if (
+			fn.handlers.some(
+				(handler) =>
+					(handler.handlerIp >= headerIp && handler.handlerIp <= backedgeIp) ||
+					Math.max(handler.startIp, headerIp) < Math.min(handler.endIp, backedgeIp + 1),
+			)
+		) {
+			continue;
+		}
+
+		const loads: Array<{
+			ip: number;
+			instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
+		}> = [];
+		let scalarOnly = true;
+		for (let ip = headerIp; ip <= backedgeIp; ip++) {
+			const instruction = fn.instructions[ip]!;
+			if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
+				loads.push({ ip, instruction });
+				continue;
+			}
+			if (
+				!VM_INHERITED_LOOP_SCALAR_OPCODES.has(instruction.opcode) ||
+				nativeScalarInstructionMayRunUserCode(instruction, representations)
+			) {
+				scalarOnly = false;
+				break;
+			}
+		}
+		if (!scalarOnly || loads.length !== 1) continue;
+		const load = loads[0]!;
+		if (
+			(fn.regions ?? []).some(
+				(region) =>
+					region.kind === "stack-object-plan" &&
+					region.sites.some(
+						(site) =>
+							site.inheritedAccessIp === load.ip ||
+							site.accesses.some((access) => access.ip === load.ip),
+					),
+			)
+		) {
+			continue;
+		}
+		if (representations[load.instruction.object] !== "boxed") continue;
+		if (
+			fn.instructions
+				.slice(headerIp, backedgeIp + 1)
+				.some((instruction) =>
+					vmInstructionWriteRegisters(instruction).includes(load.instruction.object),
+				)
+		) {
+			continue;
+		}
+		const deferred = deferredInheritedMoveChain(
+			fn,
+			representations,
+			headerIp,
+			backedgeIp,
+			load.ip,
+			load.instruction.dst,
+		);
+		const summary = inheritedLoadLoopSummary(
+			fn,
+			representations,
+			headerIp,
+			backedgeIp,
+			load.ip,
+			preheaderIp,
+			deferred,
+		);
+		candidates.push({
+			headerIp,
+			backedgeIp,
+			propertyIp: load.ip,
+			receiver: load.instruction.object,
+			icIndex: load.instruction.icIndex,
+			position: fn.positions[load.ip] ?? -1,
+			deferredRegisters: deferred?.registers ?? [],
+			deferredMoveIps: deferred?.moveIps ?? [],
+			summary,
+		});
+	}
+	return candidates.filter(
+		(candidate, index) =>
+			!candidates.some(
+				(other, otherIndex) =>
+					index !== otherIndex &&
+					Math.max(candidate.headerIp, other.headerIp) <=
+						Math.min(candidate.backedgeIp, other.backedgeIp),
+			),
+	);
 }
 
 const VM_REGISTER_USE_FIELDS = [
@@ -3010,7 +3802,7 @@ function lowerFunctionToVmFunction(
 		registerCount: fn.registerCount,
 	});
 
-	return {
+	const lowered: VmFunction = {
 		nameStringIndex: fn.nameStringIndex,
 		isGenerator: fn.isGenerator,
 		isAsync: fn.isAsync,
@@ -3036,6 +3828,17 @@ function lowerFunctionToVmFunction(
 			: undefined,
 		gcRootRegisters,
 		regions: regions.length > 0 ? regions : undefined,
+	};
+	const representationPlan = nativeRepresentationPlan(lowered);
+	const inheritedLoadLoops = nativeInheritedLoadLoopPlans(
+		lowered,
+		representationPlan.specialized,
+	);
+	return {
+		...lowered,
+		nativeRepresentationPlan: representationPlan,
+		nativeInheritedLoadLoops:
+			inheritedLoadLoops.length === 0 ? undefined : inheritedLoadLoops,
 	};
 }
 

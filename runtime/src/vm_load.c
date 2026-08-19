@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 8u
+#define WIRE_VERSION 9u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1749,6 +1749,95 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
         }
         for (u32 root = 0; r.ok && root < gc_root_count; root++) {
             (void) rd_i32(&r);
+        }
+
+        u8 has_native_representation_plan = rd_u8(&r);
+        if (has_native_representation_plan > 1) r.ok = false;
+        if (has_native_representation_plan == 1) {
+            u32 generic_count = rd_count(&r, 1);
+            if (generic_count != (u32) functions[i].register_count) r.ok = false;
+            for (u32 reg = 0; r.ok && reg < generic_count; reg++) {
+                if (rd_u8(&r) > 2) r.ok = false;
+            }
+            u32 specialized_count = rd_count(&r, 1);
+            if (specialized_count != (u32) functions[i].register_count) r.ok = false;
+            for (u32 reg = 0; r.ok && reg < specialized_count; reg++) {
+                if (rd_u8(&r) > 2) r.ok = false;
+            }
+            u32 promoted_count = rd_count(&r, 1);
+            i32 previous_parameter = -1;
+            for (u32 parameter = 0; r.ok && parameter < promoted_count; parameter++) {
+                i32 index = rd_i32(&r);
+                if (index <= previous_parameter || index >= functions[i].parameter_count) {
+                    r.ok = false;
+                }
+                previous_parameter = index;
+            }
+        }
+
+        u32 inherited_loop_count = rd_count(&r, 2);
+        i32 previous_loop_header = -1;
+        for (u32 loop = 0; r.ok && loop < inherited_loop_count; loop++) {
+            i32 header_ip = rd_i32(&r);
+            i32 backedge_ip = rd_i32(&r);
+            i32 property_ip = rd_i32(&r);
+            i32 receiver = rd_i32(&r);
+            i32 ic_index = rd_i32(&r);
+            (void) rd_i32(&r); /* source position */
+            bool loop_indices_ok = header_ip > previous_loop_header && header_ip > 0 &&
+                                   backedge_ip > header_ip &&
+                                   backedge_ip < functions[i].instruction_count &&
+                                   property_ip >= header_ip && property_ip <= backedge_ip;
+            if (!loop_indices_ok || receiver < 0 || receiver >= functions[i].register_count ||
+                ic_index < 0 || ic_index >= functions[i].property_ic_count) {
+                r.ok = false;
+            } else {
+                const MalInstruction *property = &functions[i].instructions[property_ip];
+                const MalInstruction *backedge = &functions[i].instructions[backedge_ip];
+                if (property->opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
+                    property->as.load_property_static.object != receiver ||
+                    property->as.load_property_static.ic_index != ic_index ||
+                    backedge->opcode != MAL_OP_JUMP ||
+                    backedge->as.jump.target_ip != header_ip) {
+                    r.ok = false;
+                }
+            }
+            previous_loop_header = header_ip;
+
+            u32 deferred_register_count = rd_count(&r, 1);
+            i32 previous_register = -1;
+            for (u32 reg = 0; r.ok && reg < deferred_register_count; reg++) {
+                i32 index = rd_i32(&r);
+                if (index <= previous_register || index >= functions[i].register_count) {
+                    r.ok = false;
+                }
+                previous_register = index;
+            }
+            u32 deferred_move_count = rd_count(&r, 1);
+            i32 previous_move_ip = -1;
+            for (u32 move = 0; r.ok && move < deferred_move_count; move++) {
+                i32 move_ip = rd_i32(&r);
+                if (move_ip <= previous_move_ip || move_ip < header_ip ||
+                    move_ip > backedge_ip ||
+                    functions[i].instructions[move_ip].opcode != MAL_OP_MOVE) {
+                    r.ok = false;
+                }
+                previous_move_ip = move_ip;
+            }
+            u8 has_summary = rd_u8(&r);
+            if (has_summary > 1) r.ok = false;
+            if (has_summary == 1) {
+                i32 index = rd_i32(&r);
+                i32 bound = rd_i32(&r);
+                i32 condition = rd_i32(&r);
+                i32 exit_ip = rd_i32(&r);
+                if (index < 0 || index >= functions[i].register_count || bound < 0 ||
+                    bound >= functions[i].register_count || condition < 0 ||
+                    condition >= functions[i].register_count || exit_ip <= backedge_ip ||
+                    exit_ip >= functions[i].instruction_count) {
+                    r.ok = false;
+                }
+            }
         }
 
         u32 instruction_metadata_count = rd_count(&r, 2);

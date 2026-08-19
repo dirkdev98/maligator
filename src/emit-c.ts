@@ -1,4 +1,3 @@
-import { builtinOperationDescriptor } from "./builtin-registry.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
@@ -18,8 +17,10 @@ import type {
 	VmFunction,
 	VmGuardPlan,
 	VmInstruction,
+	VmNativeInheritedLoadLoopPlan,
 	VmRegion,
 	VmRegionLicense,
+	VmRegisterRepresentation,
 	VmSemanticDependency,
 	VmSemanticProtectorFact,
 	VmStackObjectPlanRegion,
@@ -33,7 +34,7 @@ import { profileOperationForInstruction } from "./profile-metadata.ts";
  * to the interpreter).
  *
  * VALUE REPRESENTATION & UNBOXING: each register has a `RegisterRep`. A register
- * that a static forward analysis (inferReps) proves *always* holds a JS number —
+ * that Core target lowering marks as always holding a JS number —
  * literals and the results of +,-,*,/ and unary -,+ over other proven-number
  * registers — gets the `number` rep and is emitted as a C `double`, with native
  * arithmetic and no per-op type checks or boxing. Such a value is boxed (via
@@ -66,9 +67,9 @@ import { profileOperationForInstruction } from "./profile-metadata.ts";
 /**
  * How a register's value is held in the emitted C: a raw C `double`, a raw C
  * `bool`, or a boxed `MalValue`. A register reused across its lifetime for
- * values of different reps joins to `boxed` (see inferReps).
+ * values of different reps joins to `boxed` in the target-lowering plan.
  */
-type RegisterRep = "boxed" | "number" | "boolean";
+type RegisterRep = VmRegisterRepresentation;
 
 export interface BackendProfileDecision {
 	instructionIndex: number;
@@ -311,270 +312,6 @@ function binaryOpCanThrow(operator: string): boolean {
 }
 
 /**
- * Binary operators whose operands are unambiguously numeric, so using a
- * parameter as one is strong evidence the parameter is meant to be a number and
- * justifies promoting it to `number`-rep (and hoisting an entry guard). `+` and
- * the equality operators are deliberately excluded: `+` is also string
- * concatenation and equality accepts any type, so a parameter used only there
- * is left boxed to avoid an entry guard that would bail on ordinary non-numeric
- * callers.
- */
-const UNAMBIGUOUS_NUMERIC_BINARY = new Set<string>([
-	"-",
-	"*",
-	"/",
-	"%",
-	"**",
-	"&",
-	"|",
-	"^",
-	"<<",
-	">>",
-	">>>",
-	"<",
-	"<=",
-	">",
-	">=",
-]);
-
-/**
- * PARAM-ENTRY UNBOXING: the parameter registers eligible for speculative
- * number-rep promotion. A parameter qualifies when every read of it is
- * numeric-friendly — at least one unambiguously-numeric use (so promotion
- * actually pays; a parameter only boxed at a boundary gains nothing) and no use
- * that strongly implies a non-number (a property base/key, a callee/receiver, a
- * generic type query like `!`/unfused typeof, or `in`/`instanceof`). A fused
- * TYPEOF_COMPARE is neutral: the numeric version's entry guard makes its result
- * statically known, while the boxed version retains the source predicate.
- *
- * Promotion is *speculative*, not a proof: a promoted parameter is unboxed once
- * at function entry behind a guard that bails to the interpreter when an
- * argument is not actually a number (see emitCompiledFunction), so the fast
- * body then runs fully unboxed with no per-op guards. Correctness therefore
- * does not depend on this scan — it only governs profitability and how often
- * the guard bails. A parameter reassigned to a non-number is separately demoted
- * to boxed by inferReps, so the entry guard only covers parameters that both
- * qualify here and survive as number-rep.
- *
- * Returns the empty set if the function contains an opcode the backend doesn't
- * lower: it won't compile, so promotion is moot, and this avoids classifying
- * register reads the scan doesn't model.
- */
-function numericParamCandidates(fn: VmFunction): Set<number> {
-	const paramCount = fn.parameterCount;
-	if (paramCount === 0) {
-		return new Set();
-	}
-
-	// Record the use *at each instruction*, rather than globally by physical
-	// register. Allocation deliberately reuses a color after a value dies; a
-	// global register graph then lets a later unrelated object use poison an
-	// earlier numeric parameter. The dataflow below follows the parameter value
-	// through MOVEs and kills its provenance on every physical-register rewrite.
-	const numericReads: Array<Array<number>> = fn.instructions.map(() => []);
-	const disqualifyingReads: Array<Array<number>> = fn.instructions.map(() => []);
-	let legacyUnsupported = false;
-
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
-		if (
-			instruction.opcode === "CREATE_OBJECT_SHAPED" ||
-			instruction.opcode === "LOAD_GLOBAL_PROPERTY" ||
-			instruction.opcode === "STORE_GLOBAL_PROPERTY" ||
-			instruction.opcode === "INIT_GLOBAL_VARS" ||
-			instruction.opcode === "THROW_IF_TDZ"
-		) {
-			// The former global-register classifier rejected these opcodes. Preserve
-			// that admission policy except for a parameter explicitly participating
-			// in the guarded finite-construction region below.
-			legacyUnsupported = true;
-		}
-		const numeric = numericReads[ip]!;
-		const disqualifying = disqualifyingReads[ip]!;
-		switch (instruction.opcode) {
-			case "MOVE":
-				break;
-			// No register reads, or a neutral boundary read (the value is boxed
-			// there regardless) that neither justifies nor disqualifies promotion.
-			case "CREATE_UNDEFINED":
-			case "CREATE_NULL":
-			case "CREATE_BOOLEAN":
-			case "CREATE_NUMBER":
-			case "CREATE_F64":
-			case "CREATE_STRING":
-			case "CREATE_BIGINT":
-			case "CREATE_OBJECT":
-			case "CREATE_OBJECT_SHAPED": // value registers are boxed boundaries
-			case "CREATE_ARRAY":
-			case "INSTANTIATE_LITERAL_TEMPLATE":
-			case "CREATE_FUNCTION":
-			case "CREATE_ARGUMENTS_OBJECT": // reads the raw args, no register operand
-			case "LOAD_ARGUMENT_COUNT": // reads arg_count, no register operand
-			case "LOAD_ARGUMENT": // reads the raw args, no register operand
-			case "LOAD_STATIC_ARGUMENT": // register reads are boxed boundaries
-			case "CREATE_REST_ARGUMENTS": // reads the raw args, no register operand
-			case "DEFINE_PROPERTY": // object is the literal; key/value boxed boundary reads
-			case "LOAD_THIS":
-			case "LOAD_NEW_TARGET":
-			case "LOAD_UNDECLARED":
-			case "LOAD_GLOBAL_PROPERTY": // no register operand
-			case "LOAD_CAPTURED":
-			case "LOAD_GLOBAL":
-			case "LOAD_INTRINSIC":
-			case "STORE_GLOBAL": // src boxed at the global-store boundary
-			case "STORE_GLOBAL_PROPERTY": // src boxed at the global-property boundary
-			case "STORE_CAPTURED": // src boxed into the captured slot
-			case "INIT_GLOBAL_VARS": // no register operand
-			case "THROW_IF_TDZ": // a promoted Number cannot be EMPTY
-			case "THROW": // value boxed at the throw boundary
-			case "JUMP":
-			case "JUMP_IF": // cond read via native truthiness — fine for a number
-			case "RETURN": // value boxed at return
-				break;
-			case "CONSTRUCT":
-				disqualifying.push(instruction.callee);
-				// arguments are neutral boundary reads
-				break;
-			case "LOAD_PROPERTY":
-			case "LOAD_SUPER_PROPERTY":
-				disqualifying.push(instruction.object);
-				// A numeric key enables the dense-array index path. Non-number callers
-				// take the boxed entry fallback before any body effects.
-				numeric.push(instruction.key);
-				if (instruction.opcode === "LOAD_SUPER_PROPERTY") {
-					disqualifying.push(instruction.receiver);
-				}
-				break;
-			case "LOAD_PROPERTY_STATIC":
-				disqualifying.push(instruction.object);
-				break;
-			case "STORE_PROPERTY":
-				disqualifying.push(instruction.object);
-				numeric.push(instruction.key);
-				// value is a neutral boundary read
-				break;
-			case "STORE_PROPERTY_STATIC":
-				disqualifying.push(instruction.object);
-				break;
-			case "TO_PROPERTY_KEY":
-				// object and key are read as boxed values, never numerically.
-				disqualifying.push(instruction.object, instruction.key);
-				break;
-			case "FOR_IN_KEYS":
-				// source is enumerated as an object, never read numerically.
-				disqualifying.push(instruction.source);
-				break;
-			case "ARRAY_REST":
-				// src is read as an array-like, never numerically.
-				disqualifying.push(instruction.src);
-				break;
-			case "CALL":
-				disqualifying.push(instruction.callee, instruction.thisValue);
-				{
-					const guarded = instruction.guardedBuiltinCall;
-					const descriptor =
-						guarded === undefined
-							? undefined
-							: builtinOperationDescriptor(guarded.operation);
-					if (
-						guarded !== undefined &&
-						vmGuardIsWorldInvariant(guarded.guard) &&
-						descriptor?.nativeNumberArity === instruction.arguments.length
-					) {
-						for (const operand of instruction.arguments) {
-							const decoded = decodeVmValueOperand(operand);
-							if (decoded.kind === "register") numeric.push(decoded.register);
-						}
-					}
-				}
-				break;
-			case "CALL_BUILTIN":
-				disqualifying.push(instruction.thisValue);
-				// arguments are neutral boxed boundary reads
-				break;
-			case "MATH_UNARY_NUMBER":
-				numeric.push(instruction.src);
-				break;
-			case "MATH_BINARY_NUMBER":
-				numeric.push(instruction.left, instruction.right);
-				break;
-			case "BINARY":
-				if (instruction.operator === "in" || instruction.operator === "instanceof") {
-					disqualifying.push(instruction.left, instruction.right);
-				} else if (UNAMBIGUOUS_NUMERIC_BINARY.has(instruction.operator)) {
-					numeric.push(instruction.left, instruction.right);
-				}
-				// `+` and the equality operators are neutral
-				break;
-			case "UNARY":
-				if (
-					instruction.operator === "-" ||
-					instruction.operator === "+" ||
-					instruction.operator === "~" ||
-					instruction.operator === "tonumeric" ||
-					instruction.operator === "increment" ||
-					instruction.operator === "decrement"
-				) {
-					numeric.push(instruction.src);
-				} else {
-					// !, typeof, void, delete — not numeric
-					disqualifying.push(instruction.src);
-				}
-				break;
-			case "TYPEOF_COMPARE":
-				// A canonical source-level type predicate is compatible with a numeric
-				// specialization. It does not justify promotion by itself (a separate
-				// numeric use must still pay for the version), but it no longer blocks
-				// that specialization; TYPEOF_COMPARE emission folds it from the proven
-				// representation in the fast version.
-				break;
-			default:
-				// An opcode the backend can't lower yet: the function won't compile.
-				return new Set();
-		}
-	}
-
-	// Preserve the former physical-register admission policy for every ordinary
-	// function. The flow-sensitive extension below is deliberately additive only
-	// for parameters that are already runtime guards of a finite construction.
-	const legacyPromotable = new Set<number>();
-	if (!legacyUnsupported) {
-		const numericUse = new Set(numericReads.flat());
-		const disqualifyingUse = new Set(disqualifyingReads.flat());
-		const moveTargets = new Map<number, Array<number>>();
-		for (const instruction of fn.instructions) {
-			if (instruction.opcode !== "MOVE") continue;
-			const targets = moveTargets.get(instruction.src) ?? [];
-			targets.push(instruction.dst);
-			moveTargets.set(instruction.src, targets);
-		}
-		for (let p = 0; p < paramCount; p++) {
-			const seen = new Set<number>([p]);
-			const stack = [p];
-			let justified = false;
-			let disqualified = false;
-			while (stack.length > 0) {
-				const register = stack.pop()!;
-				if (disqualifyingUse.has(register)) {
-					disqualified = true;
-					break;
-				}
-				justified ||= numericUse.has(register);
-				for (const target of moveTargets.get(register) ?? []) {
-					if (!seen.has(target)) {
-						seen.add(target);
-						stack.push(target);
-					}
-				}
-			}
-			if (justified && !disqualified) legacyPromotable.add(p);
-		}
-	}
-
-	return legacyPromotable;
-}
-
-/**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
  */
@@ -583,9 +320,9 @@ export function emitCompiledFunction(
 	index: number,
 	suffix: string,
 	debug: boolean,
-	// Set when emitting the boxed fallback variant (see below): a fixed symbol and
-	// an empty promotable set (no speculation, no guard, no further fallback).
-	override?: { symbol: string; promotable: Set<number> },
+	// Set when emitting the generic fallback variant (see below): a fixed symbol,
+	// the generic target-lowering representation plan, and no further fallback.
+	override?: { symbol: string },
 	linkage: "static" | "external" = "static",
 	directCompiledTargets: ReadonlyMap<number, number> = new Map(),
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
@@ -607,8 +344,31 @@ export function emitCompiledFunction(
 	// access and CREATE_FUNCTION see this activation's slots.
 	const capturesEnv = fn.capturedCount > 0;
 
-	const promotableParams = override?.promotable ?? numericParamCandidates(fn);
-	const reps = inferReps(fn, promotableParams);
+	const plan = fn.nativeRepresentationPlan;
+	if (
+		plan !== undefined &&
+		(plan.generic.length !== fn.registerCount ||
+			plan.specialized.length !== fn.registerCount ||
+			plan.promotedNumericParameters.some(
+				(parameter) =>
+					!Number.isInteger(parameter) ||
+					parameter < 0 ||
+					parameter >= fn.parameterCount ||
+					plan.specialized[parameter] !== "number",
+			))
+	) {
+		throw new Error(`Invalid native representation plan for function ${index}`);
+	}
+	const boxedRepresentations = (): Array<RegisterRep> =>
+		Array.from({ length: fn.registerCount }, () => "boxed");
+	const reps = [
+		...(override === undefined
+			? (plan?.specialized ?? boxedRepresentations())
+			: (plan?.generic ?? boxedRepresentations())),
+	];
+	const promotableParams = new Set(
+		override === undefined ? (plan?.promotedNumericParameters ?? []) : [],
+	);
 
 	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
 	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
@@ -895,6 +655,7 @@ export function emitCompiledFunction(
 		gcUnlink,
 		thisSlot,
 		null,
+		override === undefined ? (fn.nativeInheritedLoadLoops ?? []) : [],
 		stackObjectSites,
 		stackObjectAccesses,
 		stackObjectMaterializations,
@@ -928,7 +689,7 @@ export function emitCompiledFunction(
 		return null;
 	}
 
-	// Parameters that qualified for promotion AND survived inferReps as
+	// Parameters selected by target lowering and represented as
 	// number-rep (i.e. were not reassigned to a non-number) are unboxed once at
 	// entry behind a speculative guard.
 	const promotedParams = Array.from({ length: fn.parameterCount }, (_, i) => i).filter(
@@ -981,7 +742,7 @@ export function emitCompiledFunction(
 			index,
 			suffix,
 			debug,
-			{ symbol: boxedSymbol, promotable: new Set() },
+			{ symbol: boxedSymbol },
 			linkage,
 			directCompiledTargets,
 			semanticProtectors,
@@ -1244,6 +1005,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		[],
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1423,67 +1185,6 @@ function zeroOf(rep: RegisterRep): string {
 	return rep === "number" ? "0.0" : rep === "boolean" ? "false" : "MAL_VALUE_UNDEFINED";
 }
 
-/**
- * Join two reps for a register written by more than one instruction: a register
- * that only ever holds one native kind keeps it; any disagreement (or a boxed
- * definition) makes it `boxed`. `null` is the optimistic top (no info yet).
- */
-function joinReps(current: RegisterRep | null, produced: RegisterRep): RegisterRep {
-	if (current === null) {
-		return produced;
-	}
-	return current === produced ? current : "boxed";
-}
-
-/**
- * Forward fixpoint over the rep lattice (top = unknown, then {number, boolean},
- * bottom = boxed). A register's rep is the join of the reps its definitions
- * produce; producedRep depends on operand reps, so iterate to a fixpoint. Reps
- * only move down (unknown → native → boxed), so it converges.
- *
- * Parameters hold incoming (boxed) arguments, so by default they start — and
- * stay — boxed. A parameter in `promotableParams` is instead *speculatively*
- * seeded as `number`: if it has no other definition it stays number-rep (and is
- * unboxed at entry behind a guard); if the body reassigns it to a non-number,
- * that definition joins it back to boxed and it is not promoted.
- */
-function inferReps(fn: VmFunction, promotableParams: Set<number>): Array<RegisterRep> {
-	const reps: Array<RegisterRep | null> = Array.from(
-		{ length: fn.registerCount },
-		() => null,
-	);
-	for (let i = 0; i < fn.parameterCount; i++) {
-		reps[i] = promotableParams.has(i) ? "number" : "boxed";
-	}
-
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const instruction of fn.instructions) {
-			const produced = producedRep(instruction, reps);
-			// A definition whose rep can't be determined yet (an operand is still
-			// unknown) is left for a later iteration rather than forced to boxed.
-			if (produced === null) {
-				continue;
-			}
-			for (const dst of vmInstructionWriteRegisters(instruction)) {
-				if (dst < 0) {
-					continue;
-				}
-				const joined = joinReps(reps[dst] ?? null, produced);
-				if (joined !== reps[dst]) {
-					reps[dst] = joined;
-					changed = true;
-				}
-			}
-		}
-	}
-
-	// A register never written (so never read in well-formed IR) resolves to a
-	// boxed undefined.
-	return reps.map((rep) => rep ?? "boxed");
-}
-
 /** Whether this instruction can synchronously capture the current JS stack,
  * directly or by re-entering user code. The whitelist is intentionally narrow;
  * unknown/helper operations publish the pending source position. */
@@ -1563,90 +1264,6 @@ function nativeInstructionMayInvalidateSemanticEpoch(
 }
 
 /**
- * The rep an instruction's result naturally has, given current operand reps, or
- * null when an operand is still unknown (defer to a later fixpoint iteration).
- * Comparisons and `!` always yield a boolean; native arithmetic over numbers
- * yields a number; everything else is boxed.
- */
-function producedRep(
-	instruction: VmInstruction,
-	reps: Array<RegisterRep | null>,
-): RegisterRep | null {
-	switch (instruction.opcode) {
-		case "CREATE_NUMBER":
-		case "CREATE_F64":
-		case "MATH_UNARY_NUMBER":
-		case "MATH_BINARY_NUMBER":
-			return "number";
-		case "CREATE_BOOLEAN":
-			return "boolean";
-		case "GUARD_FUNCTION_INDEX":
-		case "TYPEOF_COMPARE":
-			return "boolean";
-		case "MOVE":
-			return reps[instruction.src] ?? null;
-		case "BINARY": {
-			if (instruction.operator in NATIVE_COMPARE) {
-				return "boolean";
-			}
-			if (producesNumberFromNumbers(instruction.operator)) {
-				const left = reps[instruction.left] ?? null;
-				const right = reps[instruction.right] ?? null;
-				if (left === null || right === null) {
-					return null;
-				}
-				return left === "number" && right === "number" ? "number" : "boxed";
-			}
-			return "boxed";
-		}
-		case "UNARY": {
-			if (instruction.operator === "!") {
-				return "boolean";
-			}
-			if (
-				instruction.operator === "-" ||
-				instruction.operator === "+" ||
-				instruction.operator === "~" ||
-				instruction.operator === "tonumeric" ||
-				instruction.operator === "increment" ||
-				instruction.operator === "decrement"
-			) {
-				const src = reps[instruction.src] ?? null;
-				return src === null ? null : src === "number" ? "number" : "boxed";
-			}
-			return "boxed";
-		}
-		case "CALL": {
-			const guarded = instruction.guardedBuiltinCall;
-			const descriptor =
-				guarded === undefined ? undefined : builtinOperationDescriptor(guarded.operation);
-			if (
-				guarded === undefined ||
-				!vmGuardIsWorldInvariant(guarded.guard) ||
-				descriptor?.nativeNumberArity !== instruction.arguments.length
-			) {
-				return "boxed";
-			}
-			for (const operand of instruction.arguments) {
-				const decoded = decodeVmValueOperand(operand);
-				if (decoded.kind === "register" && reps[decoded.register] === null) {
-					return null;
-				}
-				if (decoded.kind !== "number" && decoded.kind !== "register") {
-					return "boxed";
-				}
-				if (decoded.kind === "register" && reps[decoded.register] !== "number") {
-					return "boxed";
-				}
-			}
-			return "number";
-		}
-		default:
-			return "boxed";
-	}
-}
-
-/**
  * A property-access instruction's membership in a guarded region (see the region
  * detection in emitBody). `name` is the region's base identifier; `declare` marks the
  * run's first access (which emits the hoisted receiver guard). For a consolidated object
@@ -1665,6 +1282,35 @@ interface RegionAccess {
 	leadingIcIndex: number;
 	icIndices: Array<number>;
 	commit: boolean;
+}
+
+interface NativeInheritedLoadLoop extends VmNativeInheritedLoadLoopPlan {
+	readonly probeName: string;
+	readonly loadedName: string;
+	readonly deferredMoveIpSet: ReadonlySet<number>;
+}
+
+interface LoopTwinEmission {
+	readonly twin: NativeInheritedLoadLoop;
+	readonly kind: "fast" | "generic";
+	readonly publishPosition: boolean;
+}
+
+function inheritedLoopValidation(twin: NativeInheritedLoadLoop): string {
+	const receiver = `r${twin.receiver}`;
+	const ic = `&__property_ic[${twin.icIndex}]`;
+	return `(mal_vm_local_inherited_value_try_load_static(mal_vm_as_object(${receiver}), ${ic}, &${twin.probeName}) || mal_vm_local_watched_inherited_value_try_load_static(vm, __watched_methods_epoch, ${receiver}, ${ic}, &${twin.probeName}))`;
+}
+
+function materializeDeferredInheritedValue(twin: NativeInheritedLoadLoop): Array<string> {
+	if (twin.deferredRegisters.length === 0) return [];
+	return [
+		`if (${twin.loadedName}) {`,
+		...twin.deferredRegisters.map(
+			(register) => `  r${register} = __property_ic[${twin.icIndex}].value;`,
+		),
+		`}`,
+	];
 }
 
 /**
@@ -1779,380 +1425,6 @@ interface NativeStringSliceNumberFusionAction {
 	role: "property" | "slice" | "number";
 	lockedIdentity: boolean;
 	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
-}
-
-/**
- * One exact natural loop that may execute a dependency-backed inherited static
- * load through a cloned native fast body. The ordinary body remains in place as
- * the generic twin. Entry and post-safepoint validation prove the IC row before
- * the fast body reads its cached value directly.
- */
-interface InheritedLoadLoopTwin {
-	headerIp: number;
-	backedgeIp: number;
-	propertyIp: number;
-	receiver: number;
-	icIndex: number;
-	probeName: string;
-	position: number;
-	deferredRegisters: Array<number>;
-	deferredMoveIps: ReadonlySet<number>;
-	loadedName: string;
-	summary?: InheritedLoadLoopSummary;
-}
-
-/**
- * Exact terminal state for the deliberately tiny counted-loop summary domain.
- * The runtime guard accepts only positive integral finite bounds through 2^53;
- * every other Number value executes the ordinary fast/generic loop twin.
- */
-interface InheritedLoadLoopSummary {
-	index: number;
-	bound: number;
-	condition: number;
-	exitIp: number;
-}
-
-interface LoopTwinEmission {
-	twin: InheritedLoadLoopTwin;
-	kind: "fast" | "generic";
-	publishPosition: boolean;
-}
-
-const LOOP_TWIN_SCALAR_OPCODES = new Set<VmInstruction["opcode"]>([
-	"MOVE",
-	"CREATE_UNDEFINED",
-	"CREATE_NULL",
-	"CREATE_EMPTY",
-	"CREATE_BOOLEAN",
-	"CREATE_NUMBER",
-	"CREATE_F64",
-	"IS_EMPTY",
-	"TYPEOF_COMPARE",
-	"BINARY",
-	"UNARY",
-	"JUMP",
-	"JUMP_IF",
-]);
-
-function loopTwinValidation(twin: InheritedLoadLoopTwin): string {
-	const receiver = `r${twin.receiver}`;
-	const ic = `&__property_ic[${twin.icIndex}]`;
-	return `(mal_vm_local_inherited_value_try_load_static(mal_vm_as_object(${receiver}), ${ic}, &${twin.probeName}) || mal_vm_local_watched_inherited_value_try_load_static(vm, __watched_methods_epoch, ${receiver}, ${ic}, &${twin.probeName}))`;
-}
-
-function loopTwinReadRegisters(instruction: VmInstruction): Array<number> {
-	switch (instruction.opcode) {
-		case "MOVE":
-			return [instruction.src];
-		case "IS_EMPTY":
-		case "UNARY":
-		case "TYPEOF_COMPARE":
-			return [instruction.src];
-		case "BINARY":
-			return [instruction.left, instruction.right];
-		case "JUMP_IF":
-			return [instruction.cond];
-		default:
-			return [];
-	}
-}
-
-/**
- * A dependency-backed value may stay in its IC owner throughout a fast loop
- * when it only flows through MOVEs. Materializing every member of the move chain
- * on exit preserves the VM-register state while removing repeated rooted-slot
- * stores from the hot body. Any real use or overwrite rejects deferral.
- */
-function deferredInheritedMoveChain(
-	fn: VmFunction,
-	reps: Array<RegisterRep>,
-	headerIp: number,
-	backedgeIp: number,
-	propertyIp: number,
-	propertyDst: number,
-): { registers: Array<number>; moveIps: ReadonlySet<number> } | null {
-	const registers = new Set<number>([propertyDst]);
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (let ip = headerIp; ip <= backedgeIp; ip++) {
-			const instruction = fn.instructions[ip]!;
-			if (
-				instruction.opcode === "MOVE" &&
-				registers.has(instruction.src) &&
-				!registers.has(instruction.dst)
-			) {
-				registers.add(instruction.dst);
-				changed = true;
-			}
-		}
-	}
-	if ([...registers].some((register) => reps[register] !== "boxed")) return null;
-
-	const moveIps = new Set<number>();
-	for (let ip = headerIp; ip <= backedgeIp; ip++) {
-		const instruction = fn.instructions[ip]!;
-		if (ip === propertyIp) continue;
-		if (
-			instruction.opcode === "MOVE" &&
-			registers.has(instruction.src) &&
-			registers.has(instruction.dst)
-		) {
-			moveIps.add(ip);
-			continue;
-		}
-		if (loopTwinReadRegisters(instruction).some((register) => registers.has(register))) {
-			return null;
-		}
-		if (
-			vmInstructionWriteRegisters(instruction).some((register) => registers.has(register))
-		) {
-			return null;
-		}
-	}
-	return { registers: [...registers].sort((left, right) => left - right), moveIps };
-}
-
-function materializeDeferredInheritedValue(twin: InheritedLoadLoopTwin): Array<string> {
-	if (twin.deferredRegisters.length === 0) return [];
-	return [
-		`if (${twin.loadedName}) {`,
-		...twin.deferredRegisters.map(
-			(register) => `  r${register} = __property_ic[${twin.icIndex}].value;`,
-		),
-		`}`,
-	];
-}
-
-function inheritedLoadLoopSummary(
-	fn: VmFunction,
-	reps: Array<RegisterRep>,
-	headerIp: number,
-	backedgeIp: number,
-	propertyIp: number,
-	deferred: ReturnType<typeof deferredInheritedMoveChain>,
-): InheritedLoadLoopSummary | undefined {
-	// Match the actual canonical lowering, including the initialization and both
-	// arms of the loop test. Keeping this positional proof exact makes it clear
-	// that no skipped instruction can observe an iteration.
-	const initialize = fn.instructions[headerIp - 2];
-	const preheader = fn.instructions[headerIp - 1];
-	const compare = fn.instructions[headerIp];
-	const enter = fn.instructions[headerIp + 1];
-	const exit = fn.instructions[headerIp + 2];
-	const increment = fn.instructions[backedgeIp - 1];
-	if (
-		initialize?.opcode !== "CREATE_NUMBER" ||
-		initialize.value !== 0 ||
-		preheader?.opcode !== "JUMP" ||
-		preheader.targetIp !== headerIp ||
-		compare?.opcode !== "BINARY" ||
-		compare.operator !== "<" ||
-		compare.left !== initialize.dst ||
-		enter?.opcode !== "JUMP_IF" ||
-		enter.cond !== compare.dst ||
-		enter.targetIp !== propertyIp ||
-		exit?.opcode !== "JUMP" ||
-		exit.targetIp <= backedgeIp ||
-		propertyIp !== headerIp + 3 ||
-		increment?.opcode !== "UNARY" ||
-		increment.operator !== "increment" ||
-		increment.src !== initialize.dst ||
-		increment.dst !== initialize.dst ||
-		deferred === null ||
-		reps[initialize.dst] !== "number" ||
-		reps[compare.right] !== "number" ||
-		reps[compare.dst] !== "boolean"
-	) {
-		return undefined;
-	}
-
-	// No edge or handler may reach the preheader after bypassing the adjacent
-	// zero initialization. Edges to the initializer itself remain safe.
-	if (
-		fn.instructions.some(
-			(instruction) =>
-				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-				instruction.targetIp === headerIp - 1,
-		) ||
-		fn.handlers.some((handler) => handler.handlerIp === headerIp - 1)
-	) {
-		return undefined;
-	}
-
-	// Between the load and unit increment, its result may only flow through the
-	// already-proved deferred MOVE chain. This also excludes extra arithmetic or
-	// any other body work even when the general loop twin could clone it safely.
-	for (let ip = propertyIp + 1; ip < backedgeIp - 1; ip++) {
-		if (!deferred.moveIps.has(ip)) return undefined;
-	}
-	if (
-		fn.instructions
-			.slice(headerIp, backedgeIp + 1)
-			.some((instruction) =>
-				vmInstructionWriteRegisters(instruction).includes(compare.right),
-			)
-	) {
-		return undefined;
-	}
-
-	return {
-		index: initialize.dst,
-		bound: compare.right,
-		condition: compare.dst,
-		exitIp: exit.targetIp,
-	};
-}
-
-/**
- * Find the first deliberately small loop-twin domain. Requiring a literal
- * flattened interval, one preheader edge, one unconditional backedge, and no
- * handler/resume/observable instruction makes cloning mechanically exact. This
- * is a proof-oriented seed, not an attempt to recognize every reducible loop.
- */
-function findInheritedLoadLoopTwins(
-	fn: VmFunction,
-	reps: Array<RegisterRep>,
-	coro: CoroutineContext | null,
-): Array<InheritedLoadLoopTwin> {
-	if (coro !== null) return [];
-
-	const candidates: Array<InheritedLoadLoopTwin> = [];
-	for (let backedgeIp = 0; backedgeIp < fn.instructions.length; backedgeIp++) {
-		const backedge = fn.instructions[backedgeIp]!;
-		if (backedge.opcode !== "JUMP" || backedge.targetIp >= backedgeIp) continue;
-		const headerIp = backedge.targetIp;
-		if (headerIp <= 0) continue;
-		const preheader = fn.instructions[headerIp - 1];
-		if (preheader?.opcode !== "JUMP" || preheader.targetIp !== headerIp) continue;
-
-		// The interval must have exactly one backedge and no entry except the
-		// immediately preceding preheader jump. Forward exits remain legal.
-		let exactControlFlow = true;
-		for (let sourceIp = 0; sourceIp < fn.instructions.length; sourceIp++) {
-			const instruction = fn.instructions[sourceIp]!;
-			if (instruction.opcode !== "JUMP" && instruction.opcode !== "JUMP_IF") {
-				continue;
-			}
-			const target = instruction.targetIp;
-			if (
-				sourceIp >= headerIp &&
-				sourceIp <= backedgeIp &&
-				target <= sourceIp &&
-				!(sourceIp === backedgeIp && target === headerIp)
-			) {
-				exactControlFlow = false;
-				break;
-			}
-			if (
-				(sourceIp < headerIp || sourceIp > backedgeIp) &&
-				target >= headerIp &&
-				target <= backedgeIp &&
-				!(sourceIp === headerIp - 1 && target === headerIp)
-			) {
-				exactControlFlow = false;
-				break;
-			}
-		}
-		if (!exactControlFlow) continue;
-		if (
-			fn.handlers.some(
-				(handler) =>
-					(handler.handlerIp >= headerIp && handler.handlerIp <= backedgeIp) ||
-					Math.max(handler.startIp, headerIp) < Math.min(handler.endIp, backedgeIp + 1),
-			)
-		) {
-			continue;
-		}
-
-		const loads: Array<{
-			ip: number;
-			instruction: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
-		}> = [];
-		let scalarOnly = true;
-		for (let ip = headerIp; ip <= backedgeIp; ip++) {
-			const instruction = fn.instructions[ip]!;
-			if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
-				loads.push({ ip, instruction });
-				continue;
-			}
-			if (
-				!LOOP_TWIN_SCALAR_OPCODES.has(instruction.opcode) ||
-				nativeInstructionMayInvalidateSemanticEpoch(instruction, reps)
-			) {
-				scalarOnly = false;
-				break;
-			}
-		}
-		if (!scalarOnly || loads.length !== 1) continue;
-		const load = loads[0]!;
-		if (
-			(fn.regions ?? []).some(
-				(region) =>
-					region.kind === "stack-object-plan" &&
-					region.sites.some(
-						(site) =>
-							site.inheritedAccessIp === load.ip ||
-							site.accesses.some((access) => access.ip === load.ip),
-					),
-			)
-		) {
-			continue;
-		}
-		if (reps[load.instruction.object] !== "boxed") continue;
-		if (
-			fn.instructions
-				.slice(headerIp, backedgeIp + 1)
-				.some((instruction) =>
-					vmInstructionWriteRegisters(instruction).includes(load.instruction.object),
-				)
-		) {
-			continue;
-		}
-		const deferred = deferredInheritedMoveChain(
-			fn,
-			reps,
-			headerIp,
-			backedgeIp,
-			load.ip,
-			load.instruction.dst,
-		);
-		const summary = inheritedLoadLoopSummary(
-			fn,
-			reps,
-			headerIp,
-			backedgeIp,
-			load.ip,
-			deferred,
-		);
-
-		candidates.push({
-			headerIp,
-			backedgeIp,
-			propertyIp: load.ip,
-			receiver: load.instruction.object,
-			icIndex: load.instruction.icIndex,
-			probeName: `__inherited_loop_${headerIp}_probe`,
-			position: fn.positions[load.ip] ?? -1,
-			deferredRegisters: deferred?.registers ?? [],
-			deferredMoveIps: deferred?.moveIps ?? new Set<number>(),
-			loadedName: `__inherited_loop_${headerIp}_loaded`,
-			summary,
-		});
-	}
-
-	// Nested/overlapping intervals need a real loop forest. Fail closed until that
-	// structure exists rather than composing ad-hoc clone label namespaces.
-	return candidates.filter(
-		(candidate, index) =>
-			!candidates.some(
-				(other, otherIndex) =>
-					index !== otherIndex &&
-					Math.max(candidate.headerIp, other.headerIp) <=
-						Math.min(candidate.backedgeIp, other.backedgeIp),
-			),
-	);
 }
 
 interface DenseIteratorCursor {
@@ -2348,6 +1620,7 @@ function emitBody(
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
+	inheritedLoadLoopPlans: ReadonlyArray<VmNativeInheritedLoadLoopPlan>,
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
@@ -2426,12 +1699,72 @@ function emitBody(
 		jumpTargets.add(handler.handlerIp);
 	}
 	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
-	const inheritedLoadLoopTwins = findInheritedLoadLoopTwins(fn, reps, coro);
-	const inheritedLoadLoopTwinByHeader = new Map(
-		inheritedLoadLoopTwins.map((twin) => [twin.headerIp, twin] as const),
+	const inheritedLoadLoops: Array<NativeInheritedLoadLoop> = inheritedLoadLoopPlans.map(
+		(plan) => {
+			const property = fn.instructions[plan.propertyIp];
+			const backedge = fn.instructions[plan.backedgeIp];
+			const orderedUnique = (values: ReadonlyArray<number>): boolean =>
+				values.every(
+					(value, index) =>
+						Number.isInteger(value) && (index === 0 || values[index - 1]! < value),
+				);
+			if (
+				!Number.isInteger(plan.headerIp) ||
+				!Number.isInteger(plan.backedgeIp) ||
+				plan.headerIp <= 0 ||
+				plan.backedgeIp <= plan.headerIp ||
+				property?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				property.object !== plan.receiver ||
+				property.icIndex !== plan.icIndex ||
+				plan.propertyIp < plan.headerIp ||
+				plan.propertyIp > plan.backedgeIp ||
+				backedge?.opcode !== "JUMP" ||
+				backedge.targetIp !== plan.headerIp ||
+				!orderedUnique(plan.deferredRegisters) ||
+				plan.deferredRegisters.some(
+					(register) =>
+						register < 0 || register >= fn.registerCount || reps[register] !== "boxed",
+				) ||
+				!orderedUnique(plan.deferredMoveIps) ||
+				plan.deferredMoveIps.some(
+					(ip) =>
+						ip < plan.headerIp ||
+						ip > plan.backedgeIp ||
+						fn.instructions[ip]?.opcode !== "MOVE",
+				)
+			) {
+				throw new Error(`Invalid native inherited-load loop plan at ${plan.headerIp}`);
+			}
+			const summary = plan.summary;
+			if (
+				summary !== undefined &&
+				(summary.index < 0 ||
+					summary.index >= fn.registerCount ||
+					summary.bound < 0 ||
+					summary.bound >= fn.registerCount ||
+					summary.condition < 0 ||
+					summary.condition >= fn.registerCount ||
+					summary.exitIp <= plan.backedgeIp ||
+					summary.exitIp >= fn.instructions.length ||
+					reps[summary.index] !== "number" ||
+					reps[summary.bound] !== "number" ||
+					reps[summary.condition] !== "boolean")
+			) {
+				throw new Error(`Invalid native inherited-load loop summary at ${plan.headerIp}`);
+			}
+			return {
+				...plan,
+				probeName: `__inherited_loop_${plan.headerIp}_probe`,
+				loadedName: `__inherited_loop_${plan.headerIp}_loaded`,
+				deferredMoveIpSet: new Set(plan.deferredMoveIps),
+			};
+		},
 	);
-	const inheritedLoadLoopTwinByBackedge = new Map(
-		inheritedLoadLoopTwins.map((twin) => [twin.backedgeIp, twin] as const),
+	const inheritedLoadLoopByHeader = new Map(
+		inheritedLoadLoops.map((loop) => [loop.headerIp, loop] as const),
+	);
+	const inheritedLoadLoopByBackedge = new Map(
+		inheritedLoadLoops.map((loop) => [loop.backedgeIp, loop] as const),
 	);
 	// Canonical Math calls arrive through the shared builtin-call fact path. The
 	// property Get and argument evaluation remain ordinary instructions; this only
@@ -2856,10 +2189,10 @@ function emitBody(
 	const lines: Array<string> = denseIteratorCursors.map(
 		(cursor) => `MalIteratorObject *${cursor.name} = nullptr;`,
 	);
-	for (const twin of inheritedLoadLoopTwins) {
-		lines.push(`MalValue ${twin.probeName} = MAL_VALUE_UNDEFINED;`);
-		if (twin.deferredRegisters.length > 0) {
-			lines.push(`bool ${twin.loadedName} = false;`);
+	for (const loop of inheritedLoadLoops) {
+		lines.push(`MalValue ${loop.probeName} = MAL_VALUE_UNDEFINED;`);
+		if (loop.deferredRegisters.length > 0) {
+			lines.push(`bool ${loop.loadedName} = false;`);
 		}
 	}
 	for (const site of stringSplitProjectionSites.values()) {
@@ -2969,40 +2302,37 @@ function emitBody(
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 		}
-		const loopTwin = inheritedLoadLoopTwinByHeader.get(ip);
-		if (loopTwin !== undefined) {
-			if (loopTwin.deferredRegisters.length > 0) {
-				lines.push(`    ${loopTwin.loadedName} = false;`);
+		const inheritedLoadLoop = inheritedLoadLoopByHeader.get(ip);
+		if (inheritedLoadLoop !== undefined) {
+			if (inheritedLoadLoop.deferredRegisters.length > 0) {
+				lines.push(`    ${inheritedLoadLoop.loadedName} = false;`);
 			}
-			const summary = loopTwin.summary;
+			const summary = inheritedLoadLoop.summary;
 			if (summary === undefined) {
 				lines.push(
-					`    if (${loopTwinValidation(loopTwin)}) goto LF${loopTwin.headerIp};`,
-					`    goto LG${loopTwin.headerIp};`,
+					`    if (${inheritedLoopValidation(inheritedLoadLoop)}) goto LF${inheritedLoadLoop.headerIp};`,
+					`    goto LG${inheritedLoadLoop.headerIp};`,
 				);
 			} else {
 				const bound = `r${summary.bound}`;
 				lines.push(
-					`    if (${loopTwinValidation(loopTwin)}) {`,
+					`    if (${inheritedLoopValidation(inheritedLoadLoop)}) {`,
 					`      if (mal_gc_preempt_hook == nullptr && ${bound} > 0.0 && isfinite(${bound}) && trunc(${bound}) == ${bound} && ${bound} <= 9007199254740992.0) {`,
-					// Model the first iteration before the poll. The ordinary loop polls at
-					// its backedge, so a fiber mutation there must leave count=1 with the
-					// old value and resume count>1 at index 1 on the generic twin.
-					...loopTwin.deferredRegisters.map(
-						(register) => `        r${register} = ${loopTwin.probeName};`,
+					...inheritedLoadLoop.deferredRegisters.map(
+						(register) => `        r${register} = ${inheritedLoadLoop.probeName};`,
 					),
 					`        r${summary.index} = 1.0;`,
 					"        if (mal_gc_poll) {",
-					...(debug && loopTwin.position !== -1
+					...(debug && inheritedLoadLoop.position !== -1
 						? [
-								`          vm->native_frames[vm->native_frame_count - 1].pos_id = ${loopTwin.position};`,
+								`          vm->native_frames[vm->native_frame_count - 1].pos_id = ${inheritedLoadLoop.position};`,
 							]
 						: []),
 					"          mal_gc_safepoint(vm);",
 					`          if (${bound} > 1.0) {`,
-					`            if (!${loopTwinValidation(loopTwin)}) goto LG${loopTwin.headerIp};`,
-					...loopTwin.deferredRegisters.map(
-						(register) => `            r${register} = ${loopTwin.probeName};`,
+					`            if (!${inheritedLoopValidation(inheritedLoadLoop)}) goto LG${inheritedLoadLoop.headerIp};`,
+					...inheritedLoadLoop.deferredRegisters.map(
+						(register) => `            r${register} = ${inheritedLoadLoop.probeName};`,
 					),
 					"          }",
 					"        }",
@@ -3011,23 +2341,31 @@ function emitBody(
 					`        r${summary.index} = ${bound};`,
 					`        goto L${summary.exitIp};`,
 					"      }",
-					`      goto LF${loopTwin.headerIp};`,
+					`      goto LF${inheritedLoadLoop.headerIp};`,
 					"    }",
-					`    goto LG${loopTwin.headerIp};`,
+					`    goto LG${inheritedLoadLoop.headerIp};`,
 				);
 			}
-			const fastJumpTargets = new Set<number>([loopTwin.headerIp]);
-			for (let fastIp = loopTwin.headerIp; fastIp <= loopTwin.backedgeIp; fastIp++) {
+			const fastJumpTargets = new Set<number>([inheritedLoadLoop.headerIp]);
+			for (
+				let fastIp = inheritedLoadLoop.headerIp;
+				fastIp <= inheritedLoadLoop.backedgeIp;
+				fastIp++
+			) {
 				const instruction = fn.instructions[fastIp]!;
 				if (
 					(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-					instruction.targetIp >= loopTwin.headerIp &&
-					instruction.targetIp <= loopTwin.backedgeIp
+					instruction.targetIp >= inheritedLoadLoop.headerIp &&
+					instruction.targetIp <= inheritedLoadLoop.backedgeIp
 				) {
 					fastJumpTargets.add(instruction.targetIp);
 				}
 			}
-			for (let fastIp = loopTwin.headerIp; fastIp <= loopTwin.backedgeIp; fastIp++) {
+			for (
+				let fastIp = inheritedLoadLoop.headerIp;
+				fastIp <= inheritedLoadLoop.backedgeIp;
+				fastIp++
+			) {
 				if (fastJumpTargets.has(fastIp)) lines.push(`LF${fastIp}:;`);
 				const fast = emitInstruction(
 					fn.instructions[fastIp]!,
@@ -3048,7 +2386,7 @@ function emitBody(
 						mappedArgumentSlots: fn.mappedArgumentSlots,
 						hasPrototype: fn.hasPrototype,
 						loopTwinEmission: {
-							twin: loopTwin,
+							twin: inheritedLoadLoop,
 							kind: "fast",
 							publishPosition: debug,
 						},
@@ -3057,7 +2395,7 @@ function emitBody(
 				if (fast === null) return null;
 				for (const line of fast) lines.push(`    ${line}`);
 			}
-			lines.push(`LG${loopTwin.headerIp}:;`);
+			lines.push(`LG${inheritedLoadLoop.headerIp}:;`);
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 		}
@@ -3088,9 +2426,9 @@ function emitBody(
 				mappedArguments: fn.mappedArguments,
 				mappedArgumentSlots: fn.mappedArgumentSlots,
 				hasPrototype: fn.hasPrototype,
-				loopTwinEmission: inheritedLoadLoopTwinByBackedge.has(ip)
+				loopTwinEmission: inheritedLoadLoopByBackedge.has(ip)
 					? {
-							twin: inheritedLoadLoopTwinByBackedge.get(ip)!,
+							twin: inheritedLoadLoopByBackedge.get(ip)!,
 							kind: "generic",
 							publishPosition: debug,
 						}
@@ -3570,7 +2908,7 @@ function emitInstruction(
 		case "MOVE": {
 			if (
 				loopTwinEmission?.kind === "fast" &&
-				loopTwinEmission.twin.deferredMoveIps.has(ip)
+				loopTwinEmission.twin.deferredMoveIpSet.has(ip)
 			) {
 				return [];
 			}
@@ -3590,8 +2928,8 @@ function emitInstruction(
 		case "CREATE_NULL":
 			return [`r${instruction.dst} = MAL_VALUE_NULL;`];
 		case "CREATE_EMPTY":
-			// The TDZ hole sentinel. The dst is always boxed-rep (producedRep
-			// defaults it to boxed), so a number/boolean register never holds it.
+			// The TDZ hole sentinel. Target lowering always gives the destination a
+			// boxed representation, so a number/boolean register never holds it.
 			return [`r${instruction.dst} = MAL_VALUE_EMPTY;`];
 		case "THROW_IF_TDZ":
 			// Read-before-initialization check on a let/const/class binding. The
@@ -4468,7 +3806,7 @@ function emitInstruction(
 			}
 
 			// The dst is `number`-rep only when the lattice proved both operands are
-			// numbers (see producedRep / producesNumberFromNumbers) — emit native
+			// numbers in the target plan (see producesNumberFromNumbers) — emit native
 			// arithmetic or a native ToInt32-based bitwise/shift/remainder, all
 			// holding their integer-valued results as a double.
 			if (reps[dst] === "number") {
@@ -5399,7 +4737,7 @@ function emitInstruction(
 					return [poll, `goto LG${instruction.targetIp};`];
 				}
 				return [
-					`if (mal_gc_poll) {`,
+					"if (mal_gc_poll) {",
 					...materializeDeferredInheritedValue(loopTwinEmission.twin).map(
 						(line) => `  ${line}`,
 					),
@@ -5408,9 +4746,9 @@ function emitInstruction(
 								`  vm->native_frames[vm->native_frame_count - 1].pos_id = ${loopTwinEmission.twin.position};`,
 							]
 						: []),
-					`  mal_gc_safepoint(vm);`,
-					`  if (!${loopTwinValidation(loopTwinEmission.twin)}) goto LG${instruction.targetIp};`,
-					`}`,
+					"  mal_gc_safepoint(vm);",
+					`  if (!${inheritedLoopValidation(loopTwinEmission.twin)}) goto LG${instruction.targetIp};`,
+					"}",
 					`goto LF${instruction.targetIp};`,
 				];
 			}
@@ -5448,7 +4786,7 @@ function emitInstruction(
 						(line) => `  ${line}`,
 					),
 					`  goto L${instruction.targetIp};`,
-					`}`,
+					"}",
 				];
 			}
 			return instruction.targetIp <= ip

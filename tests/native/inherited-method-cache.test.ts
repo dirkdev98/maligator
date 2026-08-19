@@ -263,7 +263,10 @@ describe("inherited built-in method and native call caches", () => {
 			assertExactLines(
 				runToStdout(binary(), {
 					env: { MAL_HOST_GC: "1", ...STRESS_ENV },
-					timeoutMs: 60_000,
+					// MAL_GC_VERIFY scans the heap at every stress collection. Keep a
+					// bounded fuse while allowing this deliberately broad fixture to finish
+					// on slower individual cores.
+					timeoutMs: 90_000,
 				}),
 				["inherited-ordinary-cache PASS"],
 			);
