@@ -1,6 +1,9 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	assertUsableMaligatorCacheRoot,
 	MALIGATOR_CACHE_LAYOUT,
 	maligatorCacheBaseDirectory,
 	maligatorCacheDirectory,
@@ -30,5 +33,25 @@ describe("Maligator user cache root", () => {
 		expect(
 			maligatorCacheBaseDirectory({ MALIGATOR_CACHE_DIR: "/shared/maligator" }, "darwin"),
 		).toBe("/shared/maligator");
+	});
+
+	it("refuses a configured root whose path component is a file", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-cache-root-"));
+		const configured = path.join(directory, "cache-file");
+		writeFileSync(configured, "not a directory\n");
+		const environment = { MALIGATOR_CACHE_DIR: configured };
+
+		expect(() =>
+			assertUsableMaligatorCacheRoot(
+				path.join(configured, MALIGATOR_CACHE_LAYOUT),
+				environment,
+			),
+		).toThrow(/is a file, not a directory[\s\S]*MALIGATOR_CACHE_DIR/);
+		expect(() =>
+			assertUsableMaligatorCacheRoot(
+				path.join(directory, MALIGATOR_CACHE_LAYOUT),
+				environment,
+			),
+		).not.toThrow();
 	});
 });

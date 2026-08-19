@@ -101,6 +101,14 @@ describe("Maligator cache management", () => {
 		}
 	});
 
+	it("refuses to lease or inspect a cache root that is a file", () => {
+		const root = path.join(cacheRoot(), "cache-file");
+		writeFileSync(root, "not a directory\n");
+
+		expect(() => createCacheLease("build", root)).toThrow("is a file, not a directory");
+		expect(() => inspectMaligatorCache(root)).toThrow("is a file, not a directory");
+	});
+
 	it("clears every layout generation without retaining old machinery", () => {
 		const base = cacheRoot();
 		const firstRoot = path.join(base, "v1");

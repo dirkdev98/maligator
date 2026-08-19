@@ -29,7 +29,7 @@ import {
 	maybeMaintainMaligatorCache,
 	pruneMaligatorCache,
 } from "./cache-management.ts";
-import { maligatorCacheDirectory } from "./cache-root.ts";
+import { maligatorCacheDirectory, MaligatorCacheRootError } from "./cache-root.ts";
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
 import { executeBinary, executeBinaryCaptured } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
@@ -1446,6 +1446,10 @@ export async function runCli(
 		if (error instanceof CommandError) {
 			writeStderr(error.message);
 			process.exit(error.exitCode);
+		}
+		if (error instanceof MaligatorCacheRootError) {
+			writeStderr(`error: ${error.message}`);
+			process.exit(1);
 		}
 		if (verbose && error instanceof Error && error.stack !== undefined) {
 			writeStderr(error.stack);

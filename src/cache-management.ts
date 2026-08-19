@@ -11,7 +11,11 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
-import { maligatorCacheBaseDirectory, maligatorCacheDirectory } from "./cache-root.ts";
+import {
+	assertUsableMaligatorCacheRoot,
+	maligatorCacheBaseDirectory,
+	maligatorCacheDirectory,
+} from "./cache-root.ts";
 import { processIsAlive } from "./process-state.ts";
 
 const GIB = 1024 ** 3;
@@ -91,7 +95,9 @@ export interface CacheLease {
 }
 
 function cacheRoot(override?: string): string {
-	return maligatorCacheDirectory(override);
+	const root = maligatorCacheDirectory(override);
+	assertUsableMaligatorCacheRoot(root);
+	return root;
 }
 
 function globalClearLock(root: string): string | undefined {
@@ -441,6 +447,7 @@ export function pruneMaligatorCache(options: CachePruneOptions = {}): CachePrune
 /** Delete all layout generations without attempting to interpret their formats. */
 export function clearAllMaligatorCaches(cacheBaseOverride?: string): CacheClearResult {
 	const base = path.resolve(cacheBaseOverride ?? maligatorCacheBaseDirectory());
+	assertUsableMaligatorCacheRoot(base);
 	mkdirSync(base, { recursive: true });
 	const lockPath = path.join(base, GLOBAL_CLEAR_LOCK);
 	try {

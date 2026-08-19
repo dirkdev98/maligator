@@ -1,7 +1,77 @@
+import { statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 export const MALIGATOR_CACHE_LAYOUT = "v1";
+
+/** Cache configuration that no Maligator command can recover from on its own. */
+export class MaligatorCacheRootError extends Error {
+	constructor(message: string) {
+		super(message);
+		Object.defineProperty(this, "name", {
+			value: "MaligatorCacheRootError",
+			configurable: true,
+		});
+	}
+}
+
+function contains(parent: string, child: string): boolean {
+	if (parent === child) return true;
+	const relative = path.relative(parent, child);
+	return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function nearestExistingAncestor(target: string): { path: string; directory: boolean } {
+	let current = target;
+	for (;;) {
+		try {
+			return { path: current, directory: statSync(current).isDirectory() };
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "EACCES" || code === "EPERM") {
+				throw new MaligatorCacheRootError(
+					`cannot inspect the Maligator cache path '${current}' (${code}). This is an environment or sandbox failure: grant write capability for that path or point MALIGATOR_CACHE_DIR at a writable directory, then rerun the exact command.`,
+				);
+			}
+			// ENOTDIR means a path component is a file, which the ancestor walk reports.
+			if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+			const parent = path.dirname(current);
+			if (parent === current) return { path: current, directory: true };
+			current = parent;
+		}
+	}
+}
+
+/**
+ * A configured cache path that is a file must fail loudly: an unreadable root
+ * otherwise looks exactly like a missing directory, so every cache family reads
+ * as absent and the command reports a healthy empty cache.
+ */
+export function assertUsableMaligatorCacheRoot(
+	target: string,
+	environment: NodeJS.ProcessEnv = process.env,
+): void {
+	const resolved = path.resolve(target);
+	const existing = nearestExistingAncestor(resolved);
+	if (existing.directory) return;
+	const configured =
+		environment.MALIGATOR_CACHE_DIR === undefined
+			? undefined
+			: path.resolve(environment.MALIGATOR_CACHE_DIR);
+	throw new MaligatorCacheRootError(
+		[
+			`invalid Maligator cache root: '${existing.path}' is a file, not a directory${
+				existing.path === resolved
+					? ""
+					: `, so Maligator cannot create its cache directory '${resolved}' underneath it`
+			}.`,
+			...(configured === undefined || !contains(configured, resolved)
+				? []
+				: [`MALIGATOR_CACHE_DIR is set to '${configured}'.`]),
+			"Remove or move that file, or point MALIGATOR_CACHE_DIR at a writable directory.",
+		].join("\n"),
+	);
+}
 
 export function maligatorCacheBaseDirectory(
 	environment: NodeJS.ProcessEnv = process.env,

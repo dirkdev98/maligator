@@ -412,6 +412,24 @@ describe("command shell", () => {
 		expect(result.stderr).toContain("Compiler phase · construct core ir:");
 	});
 
+	it("rejects a configured cache root that is a file instead of reporting an empty cache", () => {
+		const configured = path.join(tmpdir(), "cache-file");
+		writeFileSync(configured, "not a directory\n");
+
+		const result = invokeCli(["cache", "status"], repoRoot, {
+			...process.env,
+			MALIGATOR_CACHE_DIR: configured,
+		});
+
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("MALIGATOR_CACHE_DIR");
+		expect(result.stderr).toContain(configured);
+		expect(result.stderr).toContain("is a file, not a directory");
+		expect(result.stderr).toContain("writable directory");
+		expect(result.stdout).not.toContain("Total:");
+		expect(result.stdout).not.toContain("managed");
+	});
+
 	it("returns nonzero and actionable diagnostics when doctor cannot find tools", () => {
 		const result = invokeCli(["doctor"], repoRoot, { ...process.env, PATH: "" });
 		expect(result.status).toBe(1);
