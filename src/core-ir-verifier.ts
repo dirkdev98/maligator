@@ -4,6 +4,7 @@ import type {
 	CoreBlockId,
 	CoreEdge,
 	CoreEffectDomain,
+	CoreFact,
 	CoreFunction,
 	CoreInstructionEffects,
 	CoreInstructionId,
@@ -63,6 +64,12 @@ function terminatorUses(terminator: CoreTerminator): ReadonlyArray<CoreValueId> 
 				...terminator.consequent.arguments,
 				...terminator.alternate.arguments,
 			];
+		case "guard":
+			return [
+				terminator.condition,
+				...terminator.success.arguments,
+				...terminator.fallback.arguments,
+			];
 		case "switch":
 			return [
 				terminator.discriminant,
@@ -81,6 +88,13 @@ interface ValueDefinitionLocation {
 	readonly block: CoreBlockId;
 	/** -1 for a block parameter, otherwise the instruction's in-block index. */
 	readonly instructionIndex: number;
+}
+
+interface GuardLocation {
+	readonly instruction: CoreInstructionId;
+	readonly fact: CoreFact["id"];
+	readonly block: CoreBlockId;
+	readonly success: CoreBlockId;
 }
 
 function verifyEdge(
@@ -148,6 +162,7 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 		fn.values.map((value) => [value.id, value]),
 	);
 	const facts = new Map(fn.facts.map((fact) => [fact.id, fact]));
+	const guards = new Map<CoreInstructionId, GuardLocation>();
 
 	for (const block of fn.blocks) {
 		let exceptionParameters = 0;
@@ -231,6 +246,19 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 			fail(`duplicate instruction id @${block.terminator.id}`);
 		}
 		instructionIds.add(block.terminator.id);
+		if (block.terminator.kind === "guard") {
+			if (!facts.has(block.terminator.fact)) {
+				fail(
+					`guard @${block.terminator.id} references unknown fact ${block.terminator.fact}`,
+				);
+			}
+			guards.set(block.terminator.id, {
+				instruction: block.terminator.id,
+				fact: block.terminator.fact,
+				block: block.id,
+				success: block.terminator.success.block,
+			});
+		}
 		for (const edge of coreTerminatorEdges(block.terminator))
 			verifyEdge(edge, block, blocks);
 
@@ -260,6 +288,68 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 		fail(`block b${unreachable?.id} is unreachable`);
 	}
 
+	for (const fact of fn.facts) {
+		const guardObligations = fact.obligations.filter(
+			(
+				obligation,
+			): obligation is Extract<(typeof fact.obligations)[number], { kind: "guard" }> =>
+				obligation.kind === "guard",
+		);
+		if (fact.validity.kind === "asserted" && guardObligations.length === 0) {
+			fail(`asserted fact ${fact.id} has no guard obligation`);
+		}
+		if (
+			fact.validity.kind === "epoch" &&
+			guardObligations.length === 0 &&
+			!fact.obligations.some(({ kind }) => kind === "fallback")
+		) {
+			fail(`epoch fact ${fact.id} has neither a guard nor a fallback`);
+		}
+		if (fact.validity.kind === "guard") {
+			const guard = guards.get(fact.validity.instruction);
+			if (guard === undefined || guard.fact !== fact.id) {
+				fail(`fact ${fact.id} names a guard that does not establish it`);
+			}
+		}
+		for (const obligation of fact.obligations) {
+			if (obligation.kind === "guard") {
+				const guard = guards.get(obligation.instruction);
+				if (guard === undefined || guard.fact !== fact.id) {
+					fail(`fact ${fact.id} has an invalid guard obligation`);
+				}
+			} else if (obligation.id.length === 0) {
+				fail(`fact ${fact.id} has an empty ${obligation.kind} obligation`);
+			}
+		}
+	}
+
+	const verifyFactAvailable = (
+		fact: CoreFact,
+		block: CoreBlock,
+		instructionId: CoreInstructionId,
+	): void => {
+		const guardObligations = fact.obligations.filter(
+			(
+				obligation,
+			): obligation is Extract<(typeof fact.obligations)[number], { kind: "guard" }> =>
+				obligation.kind === "guard",
+		);
+		if (
+			(fact.validity.kind === "asserted" || fact.validity.kind === "epoch") &&
+			guardObligations.length === 0
+		) {
+			fail(`fact ${fact.id} cannot refine @${instructionId} without a guard`);
+		}
+		for (const obligation of guardObligations) {
+			const guard = guards.get(obligation.instruction)!;
+			if (!cfg.dominates(guard.success, block.id)) {
+				fail(
+					`guard @${guard.instruction} for fact ${fact.id} does not dominate @${instructionId}`,
+				);
+			}
+		}
+	};
+
 	const verifyUse = (
 		valueId: CoreValueId,
 		block: CoreBlock,
@@ -283,6 +373,13 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 		for (const [instructionIndex, instruction] of block.instructions.entries()) {
 			for (const input of instruction.inputs) {
 				verifyUse(input, block, instructionIndex, `instruction @${instruction.id}`);
+			}
+			if (instruction.effectRefinement !== undefined) {
+				verifyFactAvailable(
+					facts.get(instruction.effectRefinement.proof)!,
+					block,
+					instruction.id,
+				);
 			}
 		}
 		for (const value of terminatorUses(block.terminator)) {

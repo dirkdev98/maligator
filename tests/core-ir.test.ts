@@ -190,4 +190,78 @@ describe("Core IR", () => {
 			/asserted fact .* without a guard/,
 		);
 	});
+
+	it("allows a runtime guard to establish a fact on only its success edge", () => {
+		const opcodes = registry();
+		const builder = new CoreFunctionBuilder(0, opcodes);
+		const entry = builder.createBlock([
+			{ representation: "boolean" },
+			{ representation: "boxed" },
+		]);
+		const fast = builder.createBlock([{ representation: "boxed" }]);
+		const fallback = builder.createBlock([{ representation: "boxed" }]);
+		const [condition, input] = builder.block(entry).parameters.map(({ value }) => value);
+		const fact = builder.setGuardTerminator(entry, {
+			condition: condition!,
+			success: { block: fast, arguments: [input!] },
+			fallback: { block: fallback, arguments: [input!] },
+			fact: {
+				kind: "exact-call-target",
+				value: 7,
+				origin: "test",
+				obligations: [{ kind: "fallback", id: "generic-call" }],
+			},
+		});
+		const [result] = builder.appendInstruction(
+			fast,
+			"call",
+			[builder.block(fast).parameters[0]!.value],
+			{ effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact } },
+		);
+		builder.setTerminator(fast, { kind: "return", value: result! });
+		builder.setTerminator(fallback, {
+			kind: "return",
+			value: builder.block(fallback).parameters[0]!.value,
+		});
+
+		const fn = builder.finish(entry);
+		expect(() => verifyCoreFunction(fn, opcodes)).not.toThrow();
+		expect(formatCoreFunction(fn)).toContain("guard %0 proves !0");
+	});
+
+	it("rejects a guarded fact after its success and fallback paths merge", () => {
+		const opcodes = registry();
+		const builder = new CoreFunctionBuilder(0, opcodes);
+		const entry = builder.createBlock([
+			{ representation: "boolean" },
+			{ representation: "boxed" },
+		]);
+		const success = builder.createBlock([{ representation: "boxed" }]);
+		const merge = builder.createBlock([{ representation: "boxed" }]);
+		const [condition, input] = builder.block(entry).parameters.map(({ value }) => value);
+		const fact = builder.setGuardTerminator(entry, {
+			condition: condition!,
+			success: { block: success, arguments: [input!] },
+			fallback: { block: merge, arguments: [input!] },
+			fact: { kind: "exact-call-target", value: 7, origin: "test" },
+		});
+		builder.setTerminator(success, {
+			kind: "jump",
+			edge: {
+				block: merge,
+				arguments: [builder.block(success).parameters[0]!.value],
+			},
+		});
+		const [result] = builder.appendInstruction(
+			merge,
+			"call",
+			[builder.block(merge).parameters[0]!.value],
+			{ effectRefinement: { effects: CORE_NO_EFFECTS, proof: fact } },
+		);
+		builder.setTerminator(merge, { kind: "return", value: result! });
+
+		expect(() => verifyCoreFunction(builder.finish(entry), opcodes)).toThrow(
+			/does not dominate/,
+		);
+	});
 });

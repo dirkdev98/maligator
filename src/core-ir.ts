@@ -254,6 +254,14 @@ export type CoreTerminator =
 			readonly alternate: CoreEdge;
 	  })
 	| (CoreTerminatorBase & {
+			readonly kind: "guard";
+			readonly condition: CoreValueId;
+			/** Fact established only along the success edge. */
+			readonly fact: CoreFactId;
+			readonly success: CoreEdge;
+			readonly fallback: CoreEdge;
+	  })
+	| (CoreTerminatorBase & {
 			readonly kind: "switch";
 			readonly discriminant: CoreValueId;
 			readonly cases: ReadonlyArray<{
@@ -322,6 +330,18 @@ export interface AppendCoreInstructionOptions {
 	readonly payload?: unknown;
 	readonly sourcePosition?: number;
 	readonly effectRefinement?: CoreEffectRefinement;
+}
+
+export interface SetCoreGuardTerminatorInput {
+	readonly condition: CoreValueId;
+	readonly success: CoreEdge;
+	readonly fallback: CoreEdge;
+	readonly sourcePosition?: number;
+	readonly fact: Omit<CoreFact, "id" | "validity" | "obligations"> & {
+		readonly obligations?: ReadonlyArray<
+			Exclude<CoreFactObligation, { readonly kind: "guard" }>
+		>;
+	};
 }
 
 function arityAccepts(arity: CoreArity, count: number): boolean {
@@ -456,6 +476,40 @@ export class CoreFunctionBuilder {
 		return id;
 	}
 
+	/** Create a fact and the CFG guard that establishes it as one atomic operation. */
+	setGuardTerminator(
+		blockId: CoreBlockId,
+		input: SetCoreGuardTerminatorInput,
+	): CoreFactId {
+		const block = this.#requireBlock(blockId);
+		if (block.terminator !== undefined) {
+			throw new Error(`Block ${blockId} already has a terminator`);
+		}
+		this.#requireBlock(input.success.block);
+		this.#requireBlock(input.fallback.block);
+		const instruction = this.#allocateInstructionId();
+		const fact = coreFactId(this.#facts.length);
+		this.#facts.push({
+			...input.fact,
+			id: fact,
+			validity: { kind: "guard", instruction },
+			obligations: [{ kind: "guard", instruction }, ...(input.fact.obligations ?? [])],
+		});
+		block.terminator = {
+			kind: "guard",
+			id: instruction,
+			condition: input.condition,
+			fact,
+			success: { ...input.success, arguments: [...input.success.arguments] },
+			fallback: { ...input.fallback, arguments: [...input.fallback.arguments] },
+			...(input.sourcePosition === undefined
+				? {}
+				: { sourcePosition: input.sourcePosition }),
+		};
+		this.#mutationEpoch++;
+		return fact;
+	}
+
 	addFact(fact: Omit<CoreFact, "id">): CoreFactId {
 		const id = coreFactId(this.#facts.length);
 		this.#facts.push({ ...fact, id, obligations: [...fact.obligations] });
@@ -537,6 +591,8 @@ function formatTerminator(terminator: CoreTerminator): string {
 			return `jump ${formatEdge(terminator.edge)}`;
 		case "branch":
 			return `branch ${formatValue(terminator.condition)}, ${formatEdge(terminator.consequent)}, ${formatEdge(terminator.alternate)}`;
+		case "guard":
+			return `guard ${formatValue(terminator.condition)} proves !${terminator.fact}, ${formatEdge(terminator.success)}, ${formatEdge(terminator.fallback)}`;
 		case "switch":
 			return `switch ${formatValue(terminator.discriminant)}, ${terminator.cases
 				.map(({ value, edge }) => `${JSON.stringify(value)}: ${formatEdge(edge)}`)

@@ -37,6 +37,8 @@ export function coreTerminatorEdges(
 			return [terminator.edge];
 		case "branch":
 			return [terminator.consequent, terminator.alternate];
+		case "guard":
+			return [terminator.success, terminator.fallback];
 		case "switch":
 			return [...terminator.cases.map(({ edge }) => edge), terminator.default];
 		case "return":

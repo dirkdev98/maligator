@@ -373,6 +373,13 @@ function rewriteTerminator(
 				consequent: rewriteEdge(terminator.consequent, replacements),
 				alternate: rewriteEdge(terminator.alternate, replacements),
 			};
+		case "guard":
+			return {
+				...terminator,
+				condition: resolveValue(terminator.condition, replacements),
+				success: rewriteEdge(terminator.success, replacements),
+				fallback: rewriteEdge(terminator.fallback, replacements),
+			};
 		case "switch":
 			return {
 				...terminator,
@@ -507,6 +514,11 @@ function collectUses(fn: CoreFunction): Set<CoreValueId> {
 				uses.add(block.terminator.condition);
 				addEdge(block.terminator.consequent);
 				addEdge(block.terminator.alternate);
+				break;
+			case "guard":
+				uses.add(block.terminator.condition);
+				addEdge(block.terminator.success);
+				addEdge(block.terminator.fallback);
 				break;
 			case "switch":
 				uses.add(block.terminator.discriminant);

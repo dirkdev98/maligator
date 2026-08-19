@@ -867,6 +867,16 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 					{ type: "jump", blocks: [edgeBlock(block.terminator.alternate)] },
 				);
 				break;
+			case "guard":
+				instructions.push(
+					{
+						type: "jumpIf",
+						registers: [registerForValue(block.terminator.condition)],
+						blocks: [edgeBlock(block.terminator.success)],
+					},
+					{ type: "jump", blocks: [edgeBlock(block.terminator.fallback)] },
+				);
+				break;
 			case "return":
 			case "throw":
 				instructions.push(
