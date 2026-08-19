@@ -6,7 +6,6 @@ import type {
 	CoreEdge,
 	CoreFunction,
 	CoreImmediate,
-	CoreInstructionId,
 	CoreInstructionAttributes,
 	CoreFunctionMetadata,
 	CoreProgram,
@@ -28,15 +27,6 @@ import type {
 	IRInstruction,
 } from "./ir.ts";
 
-interface LegacyInstructionLowering {
-	readonly registerLayout?: ReadonlyArray<
-		| { readonly kind: "output"; readonly index: number }
-		| { readonly kind: "input"; readonly index: number }
-		| { readonly kind: "literal"; readonly value: number }
-	>;
-	readonly attributes: CoreInstructionAttributes;
-}
-
 interface LegacyToken {
 	readonly instruction: IRInstruction;
 	readonly sourcePosition?: number;
@@ -47,7 +37,6 @@ type SegmentTerminator =
 			readonly kind: "jump";
 			readonly target: number;
 			readonly sourcePosition?: number;
-			readonly origin?: IRInstruction;
 	  }
 	| {
 			readonly kind: "branch";
@@ -55,19 +44,16 @@ type SegmentTerminator =
 			readonly consequent: number;
 			readonly alternate: number;
 			readonly sourcePosition?: number;
-			readonly origin?: IRInstruction;
 	  }
 	| {
 			readonly kind: "return";
 			readonly value: number;
 			readonly sourcePosition?: number;
-			readonly origin?: IRInstruction;
 	  }
 	| {
 			readonly kind: "throw";
 			readonly value: number;
 			readonly sourcePosition?: number;
-			readonly origin?: IRInstruction;
 	  }
 	| { readonly kind: "unreachable"; readonly sourcePosition?: number };
 
@@ -87,13 +73,7 @@ interface LegacySegment {
 
 export interface CoreFunctionLowering {
 	readonly legacy: IRFunction;
-	readonly instructionOrigins: ReadonlyMap<CoreInstructionId, IRInstruction>;
-	readonly instructionLowering: ReadonlyMap<
-		CoreInstructionId,
-		LegacyInstructionLowering
-	>;
 	readonly legacyRegisters: ReadonlyMap<CoreValueId, number>;
-	readonly legacyBlockByCoreBlock: ReadonlyMap<CoreBlockId, number>;
 }
 
 export interface CoreProgramBridge {
@@ -178,9 +158,8 @@ function cloneCoreAttribute(
 
 function legacyPayload(
 	instruction: IRInstruction,
-	retainLoweringMetadata = true,
 	expandImmediateOperands = false,
-): LegacyInstructionLowering {
+): CoreInstructionAttributes {
 	const attributes: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(instruction)) {
 		if (
@@ -192,22 +171,7 @@ function legacyPayload(
 			attributes[key] = cloneCoreAttribute(value, `${instruction.type}.${key}`);
 		}
 	}
-	if (!retainLoweringMetadata || !("registers" in instruction)) {
-		return { attributes: attributes as CoreInstructionAttributes };
-	}
-	let outputIndex = 0;
-	let inputIndex = 0;
-	const destinations = destinationCount(instruction);
-	const registerLayout = instruction.registers.map((register, position) => {
-		if (position < destinations) {
-			return { kind: "output" as const, index: outputIndex++ };
-		}
-		if (register < 0 && !expandImmediateOperands) {
-			return { kind: "literal" as const, value: register };
-		}
-		return { kind: "input" as const, index: inputIndex++ };
-	});
-	return { registerLayout, attributes: attributes as CoreInstructionAttributes };
+	return attributes as CoreInstructionAttributes;
 }
 
 function immediateOperand(
@@ -223,7 +187,6 @@ function appendImmediateValue(
 	builder: CoreFunctionBuilder,
 	block: CoreBlockId,
 	value: IRImmediateValue,
-	retainLoweringMetadata: boolean,
 	sourcePosition: number | undefined,
 ): CoreValueId {
 	const specification = (() => {
@@ -254,7 +217,6 @@ function coreInstructionInputs(
 	instruction: IRInstruction,
 	builder: CoreFunctionBuilder,
 	block: CoreBlockId,
-	retainLoweringMetadata: boolean,
 	sourcePosition: number | undefined,
 	requireValue: (register: number, context: string) => CoreValueId,
 ): { readonly inputs: ReadonlyArray<CoreValueId>; readonly expandedImmediates: boolean } {
@@ -275,7 +237,6 @@ function coreInstructionInputs(
 				builder,
 				block,
 				immediate,
-				retainLoweringMetadata,
 				sourcePosition,
 			),
 		);
@@ -497,7 +458,6 @@ function establishSegmentTerminators(
 					segment.terminator = {
 						kind: "jump",
 						target: mapTarget(instruction.blocks[0]),
-						origin: instruction,
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -510,7 +470,6 @@ function establishSegmentTerminators(
 						condition: instruction.registers[0],
 						consequent: mapTarget(instruction.blocks[0]),
 						alternate: fallthrough,
-						origin: instruction,
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -519,7 +478,6 @@ function establishSegmentTerminators(
 					segment.terminator = {
 						kind: instruction.type,
 						value: instruction.registers[0],
-						origin: instruction,
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -538,7 +496,6 @@ function establishSegmentTerminators(
 				condition: conditional.registers[0],
 				consequent: mapTarget(conditional.blocks[0]),
 				alternate: mapTarget(alternate.blocks[0]),
-				origin: conditional,
 				...(controls[0]!.sourcePosition === undefined
 					? {}
 					: { sourcePosition: controls[0]!.sourcePosition }),
@@ -807,8 +764,6 @@ function convertStraightLineFunction(
 			.parameters.slice(0, fn.parameterCount)
 			.map(({ value }, index) => [index, value]),
 	);
-	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
-	const instructionLowering = new Map<CoreInstructionId, LegacyInstructionLowering>();
 	const legacyRegisters = new Map<CoreValueId, number>();
 	if (retainLoweringMetadata) {
 		for (const [register, value] of values) legacyRegisters.set(value, register);
@@ -820,19 +775,17 @@ function convertStraightLineFunction(
 			continue;
 		}
 		if (instruction === terminator) {
-			const id = builder.setTerminator(block, {
+			builder.setTerminator(block, {
 				kind: instruction.type,
 				value: values.get(instruction.registers[0])!,
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			});
-			if (retainLoweringMetadata) instructionOrigins.set(id, instruction);
 			continue;
 		}
 		const { inputs, expandedImmediates } = coreInstructionInputs(
 			instruction,
 			builder,
 			block,
-			retainLoweringMetadata,
 			sourcePosition,
 			(register, context) => {
 				const value = values.get(register);
@@ -843,24 +796,15 @@ function convertStraightLineFunction(
 			},
 		);
 		const destinations = definedRegisters(instruction);
-		const lowering = legacyPayload(
-			instruction,
-			retainLoweringMetadata,
-			expandedImmediates,
-		);
+		const attributes = legacyPayload(instruction, expandedImmediates);
 		const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 			outputCount: destinations.length,
 			outputRepresentations: destinations.map((_, index) =>
 				outputRepresentation(instruction, index),
 			),
-			attributes: lowering.attributes,
+			attributes,
 			...(sourcePosition === undefined ? {} : { sourcePosition }),
 		});
-		const appended = builder.block(block).instructions.at(-1)!;
-		if (retainLoweringMetadata) {
-			instructionOrigins.set(appended.id, instruction);
-			instructionLowering.set(appended.id, lowering);
-		}
 		for (const [index, register] of destinations.entries()) {
 			values.set(register, outputs[index]!);
 			if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
@@ -875,10 +819,7 @@ function convertStraightLineFunction(
 	return {
 		core,
 		legacy: fn,
-		instructionOrigins,
-		instructionLowering,
 		legacyRegisters,
-		legacyBlockByCoreBlock: retainLoweringMetadata ? new Map([[block, 0]]) : new Map(),
 	};
 }
 
@@ -904,10 +845,7 @@ function convertFunction(
 		parameterCount: fn.parameterCount,
 		metadata: coreFunctionMetadata(fn),
 	});
-	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
-	const instructionLowering = new Map<CoreInstructionId, LegacyInstructionLowering>();
 	const legacyRegisters = new Map<CoreValueId, number>();
-	const legacyBlockByCoreBlock = new Map<CoreBlockId, number>();
 	const coreBlocks: Array<CoreBlockId> = [];
 	const blockRegisters: Array<Array<number>> = [];
 	for (const segment of segments) {
@@ -920,7 +858,6 @@ function convertFunction(
 			...liveIn.map(() => ({ representation: "boxed" as const })),
 		]);
 		coreBlocks.push(block);
-		if (retainLoweringMetadata) legacyBlockByCoreBlock.set(block, segment.oldBlock);
 		const parameters = builder.block(block).parameters;
 		let parameterIndex = 0;
 		if (segment.catchRegister !== undefined) {
@@ -968,30 +905,23 @@ function convertFunction(
 				instruction,
 				builder,
 				block,
-				retainLoweringMetadata,
 				sourcePosition,
 				(register, context) => requireValue(values, register, context),
 			);
 			const destinations = definedRegisters(instruction);
-			const lowering = legacyPayload(
-				instruction,
-				retainLoweringMetadata,
-				expandedImmediates,
-			);
+			const attributes = legacyPayload(instruction, expandedImmediates);
 			const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 				outputCount: destinations.length,
 				outputRepresentations: destinations.map((_, index) =>
 					outputRepresentation(instruction, index),
 				),
-				attributes: lowering.attributes,
+				attributes,
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			});
 			const appended = builder.block(block).instructions.at(-1);
 			if (appended === undefined) {
 				throw new Error(`Core bridge failed to append ${instruction.type}`);
 			}
-			if (retainLoweringMetadata) instructionOrigins.set(appended.id, instruction);
-			if (retainLoweringMetadata) instructionLowering.set(appended.id, lowering);
 			for (const [index, register] of destinations.entries()) {
 				values.set(register, outputs[index]!);
 				if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
@@ -1045,12 +975,7 @@ function convertFunction(
 				terminator = { kind: "unreachable" };
 				break;
 		}
-		const terminatorId = builder.setTerminator(block, terminator);
-		if ("origin" in legacyTerminator && legacyTerminator.origin !== undefined) {
-			if (retainLoweringMetadata) {
-				instructionOrigins.set(terminatorId, legacyTerminator.origin);
-			}
-		}
+		builder.setTerminator(block, terminator);
 		if (segment.exceptionalSuccessor !== undefined) {
 			builder.setHandler(
 				block,
@@ -1073,10 +998,7 @@ function convertFunction(
 	return {
 		core,
 		legacy: fn,
-		instructionOrigins,
-		instructionLowering,
 		legacyRegisters,
-		legacyBlockByCoreBlock,
 	};
 }
 
@@ -1138,41 +1060,16 @@ function parallelMoves(
 
 function rebuildInstruction(
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
-	origin: IRInstruction | undefined,
-	lowering: LegacyInstructionLowering | undefined,
 	registerForValue: (value: CoreValueId) => number,
 ): IRInstruction {
-	const retainedLayout =
-		origin?.type === instruction.opcode ? lowering?.registerLayout : undefined;
-	const registerLayout =
-		retainedLayout ?? [
-			...instruction.outputs.map((_, index) => ({ kind: "output" as const, index })),
-			...instruction.inputs.map((_, index) => ({ kind: "input" as const, index })),
-		];
-	const rebuilt = {
+	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
+	return {
 		type: instruction.opcode,
 		...instruction.attributes,
-		...(lowering?.registerLayout === undefined && registerLayout.length === 0
+		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}
-			: {
-					registers: registerLayout.map((operand) => {
-						switch (operand.kind) {
-							case "output":
-								return registerForValue(instruction.outputs[operand.index]!);
-							case "input":
-								return registerForValue(instruction.inputs[operand.index]!);
-							case "literal":
-								return operand.value;
-						}
-					}),
-				}),
+			: { registers }),
 	} as IRInstruction;
-	if (origin === undefined || origin.type !== rebuilt.type) return rebuilt;
-	for (const key of Object.keys(origin)) {
-		delete (origin as unknown as Record<string, unknown>)[key];
-	}
-	Object.assign(origin, rebuilt);
-	return origin;
 }
 
 function sourcePositionMarker(position: number | undefined): Array<IRInstruction> {
@@ -1283,47 +1180,23 @@ function lowerFunctionBridge(
 		}
 		for (const instruction of block.instructions) {
 			instructions.push(...sourcePositionMarker(instruction.sourcePosition));
-			instructions.push(
-				rebuildInstruction(
-					instruction,
-					lowering.instructionOrigins.get(instruction.id),
-					lowering.instructionLowering.get(instruction.id),
-					registerForValue,
-				),
-			);
+			instructions.push(rebuildInstruction(instruction, registerForValue));
 		}
 		instructions.push(...sourcePositionMarker(block.terminator.sourcePosition));
 		switch (block.terminator.kind) {
 			case "jump":
-				instructions.push(
-					rebuildInstruction(
-						{
-							id: block.terminator.id,
-							opcode: "jump",
-							inputs: [],
-							outputs: [],
-							attributes: { blocks: [edgeBlock(block.terminator.edge)] },
-						},
-						lowering.instructionOrigins.get(block.terminator.id),
-						undefined,
-						registerForValue,
-					),
-				);
+				instructions.push({
+					type: "jump",
+					blocks: [edgeBlock(block.terminator.edge)],
+				});
 				break;
 			case "branch":
 				instructions.push(
-					rebuildInstruction(
-						{
-							id: block.terminator.id,
-							opcode: "jumpIf",
-							inputs: [block.terminator.condition],
-							outputs: [],
-							attributes: { blocks: [edgeBlock(block.terminator.consequent)] },
-						},
-						lowering.instructionOrigins.get(block.terminator.id),
-						undefined,
-						registerForValue,
-					),
+					{
+						type: "jumpIf",
+						registers: [registerForValue(block.terminator.condition)],
+						blocks: [edgeBlock(block.terminator.consequent)],
+					},
 					{ type: "jump", blocks: [edgeBlock(block.terminator.alternate)] },
 				);
 				break;
@@ -1339,20 +1212,10 @@ function lowerFunctionBridge(
 				break;
 			case "return":
 			case "throw":
-				instructions.push(
-					rebuildInstruction(
-						{
-							id: block.terminator.id,
-							opcode: block.terminator.kind,
-							inputs: [block.terminator.value],
-							outputs: [],
-							attributes: {},
-						},
-						lowering.instructionOrigins.get(block.terminator.id),
-						undefined,
-						registerForValue,
-					),
-				);
+				instructions.push({
+					type: block.terminator.kind,
+					registers: [registerForValue(block.terminator.value)],
+				});
 				break;
 			case "switch":
 				for (const switchCase of block.terminator.cases) {
