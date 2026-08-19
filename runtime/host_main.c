@@ -93,16 +93,17 @@ int main(int argc, char **argv) {
 #if MAL_NODE
     mal_node_immediates_install(&vm, global_this);
 #endif
+#if MAL_URL
+    mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)
+#endif
 #if MAL_WEB_PLATFORM
-    // The WinterTC web personality (surface.webPlatform). Off → none of these
-    // install, so their translation units — and the ada C++ URL parser + `-lc++`
-    // they'd pull — are never referenced and drop out at link. `Mal.serve` rides in
-    // with mal_fetch_install (web_fetch.c). The reactor (mal_host_attach) is a separate
+    // The broader WinterTC web personality (surface.webPlatform). URL is installed
+    // separately because Node also owns that global. `Mal.serve` rides in with
+    // mal_fetch_install (web_fetch.c). The reactor (mal_host_attach) is a separate
     // axis and stays: a non-web host program still gets the event loop.
     mal_fetch_install(&vm, global_this);          // fetch / Response / Headers / Mal.serve
     mal_events_install(&vm, global_this);         // EventTarget / Event
     mal_web_globals_install(&vm, global_this);    // TextEncoder / TextDecoder / …
-    mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)
     mal_readable_stream_install(&vm, global_this); // ReadableStream default mode
     mal_writable_stream_install(&vm, global_this); // WritableStream default mode
 #endif

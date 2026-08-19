@@ -642,7 +642,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 					"cxx",
 					env.CXX
 						? `CXX points to an unavailable compiler: ${env.CXX}`
-						: "a C++ compiler was not found on PATH (required by the web-platform runtime)",
+						: "a C++ compiler was not found on PATH (required by the URL runtime)",
 				);
 			} else tools.cxx = cxx;
 		}

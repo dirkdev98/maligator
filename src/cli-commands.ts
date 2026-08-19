@@ -261,6 +261,10 @@ function resolveEntrypoint(
 	return path.resolve(entrypoint);
 }
 
+function configNeedsCxx(config: ResolvedBuildConfig): boolean {
+	return config.surface.webPlatform || config.surface.node;
+}
+
 function selectToolchain(
 	command: BuildCommand | RunCommand | DevCommand,
 	config: ResolvedBuildConfig,
@@ -275,7 +279,7 @@ function selectToolchain(
 		return {};
 	}
 	const selectionKey = JSON.stringify({
-		needsCxx: config.surface.webPlatform,
+		needsCxx: configNeedsCxx(config),
 		target: command.kind === "build" ? command.target : undefined,
 		production: command.profile || (command.kind === "build" && command.production),
 	});
@@ -283,7 +287,7 @@ function selectToolchain(
 	if (retained !== undefined) return retained;
 	try {
 		const toolchain = requireToolchain({
-			needsCxx: config.surface.webPlatform,
+			needsCxx: configNeedsCxx(config),
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 			target: command.kind === "build" ? command.target : undefined,
 		});
@@ -1114,7 +1118,7 @@ function executeIsolatedTests(
 	let toolchain: Toolchain;
 	try {
 		toolchain = requireToolchain({
-			needsCxx: config.surface.webPlatform,
+			needsCxx: configNeedsCxx(config),
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 		});
 	} catch (error) {
@@ -1224,7 +1228,7 @@ function executeProfiledTests(
 	let toolchain: Toolchain;
 	try {
 		toolchain = requireToolchain({
-			needsCxx: config.surface.webPlatform,
+			needsCxx: configNeedsCxx(config),
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 		});
 	} catch (error) {

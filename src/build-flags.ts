@@ -176,7 +176,7 @@ export function normalizeNativeFeatures(
 	];
 	const cargoFeatures = sortedUnique([
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
-		...(webPlatformEnabled ? ["web-platform"] : []),
+		...(webPlatformEnabled || nodeEnabled ? ["url"] : []),
 		...(regexpEnabled ? ["regexp"] : []),
 		...(temporalEnabled ? ["temporal"] : []),
 		...(nodeEnabled ? ["node-argon2", "node-tls", "node-zlib"] : []),
@@ -371,9 +371,9 @@ export function optFlags(
  * baked compiler and turns the eval/Function runtime path into an EvalError throw.
  * `intlEnabled: false` adds `-DMAL_INTL=0`, which drops the Intl global + the ICU
  * call sites (kept in lockstep with the Rust `intl` Cargo feature).
- * `webPlatformEnabled: false` adds `-DMAL_WEB_PLATFORM=0`, which compiles web_url.c away
- * so no ada FFI symbols are referenced (in lockstep with the Rust `web-platform`
- * feature, which drops the C++ ada parser + `-lc++`). `temporalEnabled: false`
+ * `webPlatformEnabled: false` adds `-DMAL_WEB_PLATFORM=0`; when Node is also off,
+ * this compiles web_url.c away in lockstep with the Rust `url` feature and drops
+ * the C++ ada parser + `-lc++`. `temporalEnabled: false`
  * adds `-DMAL_TEMPORAL=0` and omits the Rust Temporal feature. `nodeEnabled: true` adds
  * `-DMAL_NODE=1`, opting the node host built-in surface in (it defaults off, so —
  * unlike the default-on features above — only the ON case emits a define).

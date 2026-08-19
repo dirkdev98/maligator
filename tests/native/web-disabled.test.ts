@@ -13,9 +13,9 @@ import {
 
 // The runtime half of `surface.webPlatform: false` (the cache-suffix / derivation
 // half is covered by tests/build-config.test.ts). Builds the host entry into the
-// web-off archive: `-DMAL_WEB_PLATFORM=0` compiles web_url.c away and the Rust crate is
-// built without the `web-platform` feature, so the ada C++ parser AND the `-lc++`
-// link are dropped. That this binary LINKS at all — with the URL install gated out
+// web-off archive: with Node also off, `-DMAL_WEB_PLATFORM=0` compiles web_url.c
+// away and the Rust crate is built without the `url` feature, so the ada C++ parser
+// AND the `-lc++` link are dropped. That this binary LINKS at all — with URL gated out
 // of host_main and no `mal_url_*` symbols in the archive — is the core assertion.
 // The web-off build selects its own content-addressed artifacts.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-web-off-"));

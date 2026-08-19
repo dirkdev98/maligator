@@ -3,7 +3,7 @@
 /// Build a slice from a nullable `(ptr, len)` pair. A null pointer is accepted
 /// only for the empty slice; non-empty inputs must satisfy the ordinary
 /// `from_raw_parts` validity requirements.
-#[cfg(any(test, feature = "intl", feature = "regexp", feature = "web-platform"))]
+#[cfg(any(test, feature = "intl", feature = "regexp", feature = "url"))]
 pub(crate) unsafe fn nullable_slice<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
     if len == 0 {
         &[]
@@ -12,7 +12,7 @@ pub(crate) unsafe fn nullable_slice<'a, T>(ptr: *const T, len: usize) -> &'a [T]
     }
 }
 
-#[cfg(any(test, feature = "intl", feature = "regexp", feature = "web-platform"))]
+#[cfg(any(test, feature = "intl", feature = "regexp", feature = "url"))]
 pub(crate) unsafe fn nullable_u16_slice<'a>(ptr: *const u16, len: usize) -> &'a [u16] {
     unsafe { nullable_slice(ptr, len) }
 }

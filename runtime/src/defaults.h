@@ -68,13 +68,8 @@ typedef size_t usize;
 #define MAL_INTL 1
 #endif
 
-// Whether this build includes the WHATWG URL surface (the ada-url C++ parser).
-// Default on; the build config sets `-DMAL_WEB_PLATFORM=0` (see build-flags.ts)
-// when `surface.webPlatform` is false, which compiles web_url.c away so no `mal_url_*`
-// ada FFI symbols are referenced. Must be kept in lockstep with the Rust crate's
-// `web-platform` Cargo feature (rust-build.ts) — with it off the ada archive + the
-// `-lc++` link are dropped, so a stray URL reference would fail to link. URL is
-// installed only by the host entry (host_main.c), gated on this too.
+// Whether this build includes the broader WinterTC web surface. URL is shared with
+// Node and therefore has its own derived MAL_URL capability below.
 #ifndef MAL_WEB_PLATFORM
 #define MAL_WEB_PLATFORM 1
 #endif
@@ -111,6 +106,12 @@ typedef size_t usize;
 // axis. Not tied to any Rust Cargo feature (node adds no Rust deps).
 #ifndef MAL_NODE
 #define MAL_NODE 0
+#endif
+
+// WHATWG URL / URLSearchParams are globals in both supported host personalities.
+// Keep this in lockstep with the Rust crate's `url` feature and the C++ link flag.
+#ifndef MAL_URL
+#define MAL_URL (MAL_WEB_PLATFORM || MAL_NODE)
 #endif
 
 /* Production-faithful source profiler. Profile builds opt in explicitly so

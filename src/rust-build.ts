@@ -146,7 +146,7 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 		library,
 		linkArgs: [
 			library,
-			...(context.features.webPlatformEnabled
+			...(context.features.cargoFeatures.includes("url")
 				? context.toolchain.probes.cxxLinkArgs
 				: []),
 			...platformLinkArgs(

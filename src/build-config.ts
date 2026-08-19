@@ -638,7 +638,7 @@ function shortHash(value: unknown): string {
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	// The generated binary depends on eval, whether Intl is on, which services are selected
-	// (each flips a -DMAL_INTL_HAS_* define), web-platform (web_url.c gating), regexp
+	// (each flips a -DMAL_INTL_HAS_* define), shared URL (web or Node), regexp
 	// (builtin_regexp/regexp_object/gc/string gating), Temporal, and node (the host built-in
 	// surface), primordial policy, but NOT on the locale set (that only changes
 	// Rust/ICU datagen).

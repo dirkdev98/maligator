@@ -154,7 +154,7 @@ export function resolveNativeBuildContext(
 		options.toolchain ??
 		requireToolchain({
 			env: baseEnvironment,
-			needsCxx: features.webPlatformEnabled,
+			needsCxx: features.cargoFeatures.includes("url"),
 			rustDir: path.join(runtimeDirectory, "rust"),
 			target: options.target,
 		});

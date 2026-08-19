@@ -54,9 +54,8 @@ temporal_capi = { version = "0.2.6", default-features = false, optional = true }
 # docs/decisions/03-regexp.md.
 regress = { version = "0.11", features = ["utf16"], optional = true }
 # ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Optional + gated
-# behind the `web-platform` feature (engine surface.webPlatform): dropping it drops
-# the C++ URL parser AND its C++ runtime link argument. The native artifact resolver
-# appends that argument only when web-platform is on. See src/url.rs + mal_url.h.
+# behind the `url` feature, selected by either the web or Node host surface. A build
+# with neither drops the parser and its C++ runtime link argument. See src/url.rs.
 ada-url = { version = "3", optional = true }
 # Pure-Rust streaming codecs for the node:zlib backend. `zlib-rs` is selected
 # explicitly so enabling Node never introduces a system libz dependency.
@@ -79,15 +78,15 @@ rustls-pemfile = { version = "2", optional = true }
 rust-argon2 = { version = "3", default-features = false, optional = true }
 
 [features]
-# On by default so dev/test262 builds carry the full Intl + web + RegExp surface.
+# On by default so dev/test262 builds carry the full Intl + URL + RegExp surface.
 # The build maps the resolved config to an explicit feature set (src/rust-build.ts):
-# Intl services via intl-*, the URL (ada) parser via web-platform, the RegExp engine
+# Intl services via intl-*, the URL (ada) parser via url, the RegExp engine
 # via regexp. jiff (tz) is non-optional and always builds.
-default = ["intl-full", "web-platform", "regexp"]
+default = ["intl-full", "url", "regexp"]
 
-# The WHATWG URL surface: the ada-url (C++) parser. Off drops ada + the `-lc++`
-# link. Maps to engine surface.webPlatform (rust-build.ts) + C `-DMAL_WEB_PLATFORM`.
-web-platform = ["dep:ada-url"]
+# The WHATWG URL surface: the ada-url (C++) parser. Selected by surface.webPlatform
+# or surface.node; off only when both are off, dropping ada + the `-lc++` link.
+url = ["dep:ada-url"]
 
 # The RegExp engine (regress). Off drops the regex engine + its Unicode tables.
 # Maps to engine.regexp (rust-build.ts) + C `-DMAL_REGEXP`.

@@ -115,9 +115,8 @@ export interface BuildOptions {
 	 */
 	intlFeatures?: Array<MaligatorIntlFeature>;
 	/**
-	 * Include the WHATWG URL (ada) surface. Defaults to true — internal tooling opts
-	 * in. Set false to build the `surface.webPlatform: false` archive (no ada / URL,
-	 * no `-lc++`).
+	 * Include the broader web surface. Defaults to true — internal tooling opts in.
+	 * With Node also disabled, false drops ada / URL and the C++ runtime link.
 	 */
 	webPlatformEnabled?: boolean;
 	/** Include the Node compatibility surface. Defaults to false. */

@@ -492,6 +492,13 @@ describe("surface.node build derivation + cache", () => {
 		expect(buildDerivationFromConfig(nodeOn).features.nodeEnabled).toBe(true);
 	});
 
+	it("keeps the shared URL runtime in a node-only build", () => {
+		const nodeOnly = resolveBuildConfig({
+			surface: { webPlatform: false, node: true },
+		});
+		expect(buildDerivationFromConfig(nodeOnly).features.cargoFeatures).toContain("url");
+	});
+
 	it("node-on gets a distinct non-empty C cache suffix; node-off stays canonical", () => {
 		// node defaults off and all internal-tooling builds are node-off, so node-off
 		// keeps the unsuffixed (canonical) archive; node-on gets its own C archive.

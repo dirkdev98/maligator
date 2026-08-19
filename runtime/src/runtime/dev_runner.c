@@ -107,12 +107,16 @@ int mal_dev_run_wires(
 #else
     (void) node;
 #endif
+#if MAL_URL
+    if (web_platform || node) {
+        mal_url_install(&vm, global_this);
+    }
+#endif
 #if MAL_WEB_PLATFORM
     if (web_platform) {
         mal_fetch_install(&vm, global_this);
         mal_events_install(&vm, global_this);
         mal_web_globals_install(&vm, global_this);
-        mal_url_install(&vm, global_this);
         mal_readable_stream_install(&vm, global_this);
         mal_writable_stream_install(&vm, global_this);
     }

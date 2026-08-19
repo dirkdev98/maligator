@@ -1026,7 +1026,7 @@ exit 7
 				nodeEnabled: true,
 				intlFeatures: [],
 				cDefines: ["-DMAL_EVAL=1"],
-				cargoFeatures: ["web-platform"],
+				cargoFeatures: ["stale"],
 			},
 		});
 
@@ -1043,6 +1043,7 @@ exit 7
 			"node-argon2",
 			"node-tls",
 			"node-zlib",
+			"url",
 		]);
 	});
 

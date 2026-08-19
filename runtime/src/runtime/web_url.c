@@ -23,11 +23,11 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-// The entire URL surface depends on the ada C++ parser (mal_url_* FFI). A
-// surface.webPlatform:false build drops ada + the `-lc++` link (Rust `web-platform`
+// The entire URL surface depends on the ada C++ parser (mal_url_* FFI). A build
+// with neither webPlatform nor Node drops ada + the `-lc++` link (Rust `url`
 // feature), so this TU must reference no ada symbols — compile it away wholesale.
-// URLSearchParams lives here too (pure C, but part of the same web surface).
-#if MAL_WEB_PLATFORM
+// URLSearchParams lives here too (pure C, but shared by both host personalities).
+#if MAL_URL
 
 /* ---------------------------------------------------------------------------
  * Shared helpers.
@@ -1442,4 +1442,4 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
         MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT, usp_iterator_trace);
 }
 
-#endif // MAL_WEB_PLATFORM
+#endif // MAL_URL

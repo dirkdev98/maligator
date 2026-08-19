@@ -116,7 +116,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	const derivation = buildDerivationFromConfig(config);
 	progress("selecting the native toolchain");
 	const toolchain = requireToolchain({
-		needsCxx: config.surface.webPlatform,
+		needsCxx: derivation.features.cargoFeatures.includes("url"),
 		rustDir: path.join(runtimeDirectory, "rust"),
 		target: options.target,
 	});
