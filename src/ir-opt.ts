@@ -2278,59 +2278,6 @@ function annotateFreshDenseIndexedReserves(program: IntermediateProgram): void {
 	}
 }
 
-/**
- * Correctness-preserving development pipeline.
- *
- * Development images need local-slot lowering before VM lowering. A single
- * linear cleanup pass also removes the bulk of redundant moves and dead IR
- * without running a whole-program fixpoint. Shipped binaries continue through
- * the production pipeline above.
- */
-export function executeIRDevelopmentOptimizations(program: IntermediateProgram): void {
-	// Keep only normalization required by lowering and resumable execution. The
-	// production passes below reduce output by about 20%, but on representative
-	// dependency graphs their repeated Map/Set scans cost substantially more than
-	// the larger development wire costs to lower, serialize, load, and execute.
-	if (program.optimizationTrace === undefined) {
-		optDropInstructionsAfterJumpsOrReturns(program);
-		optDropUnreferencedBlocks(program);
-		optLocalsToRegister(program);
-		annotateTerminalYieldSites(program);
-		if (debugEnabled) debugIntermediateProgram(program);
-		return;
-	}
-	runTracedOptimizationPass(
-		program,
-		"drop-after-terminator",
-		"normalization",
-		"executed",
-		optDropInstructionsAfterJumpsOrReturns,
-	);
-	runTracedOptimizationPass(
-		program,
-		"drop-unreferenced-blocks",
-		"normalization",
-		"executed",
-		optDropUnreferencedBlocks,
-	);
-	runTracedOptimizationPass(
-		program,
-		"locals-to-registers",
-		"normalization",
-		"executed",
-		optLocalsToRegister,
-	);
-	runTracedOptimizationPass(
-		program,
-		"annotate-terminal-yield-sites",
-		"finalization",
-		"executed",
-		annotateTerminalYieldSites,
-	);
-
-	if (debugEnabled) debugIntermediateProgram(program);
-}
-
 function optEliminateRedundantNumericCoercions(program: IntermediateProgram): boolean {
 	let changed = false;
 	for (const fn of program.functions) {

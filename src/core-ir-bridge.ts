@@ -167,6 +167,30 @@ function splitLegacyBlocks(fn: IRFunction): {
 	const segments: Array<LegacySegment> = [];
 	const segmentsByOldBlock: Array<Array<number>> = fn.blocks.map(() => []);
 	const activeHandlers: Array<number> = [];
+	const storedLocals = new Set<number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type === "storeLocal") storedLocals.add(instruction.index);
+		}
+	}
+	const localRegisters = new Map<number, number>();
+	let nextLocalRegister = fn.nextRegisterDestination;
+	const normalizeLocal = (instruction: IRInstruction): IRInstruction => {
+		if (instruction.type !== "loadLocal" && instruction.type !== "storeLocal") {
+			return instruction;
+		}
+		if (instruction.type === "loadLocal" && !storedLocals.has(instruction.index)) {
+			return { type: "createUndefined", registers: [instruction.registers[0]] };
+		}
+		let register = localRegisters.get(instruction.index);
+		if (register === undefined) {
+			register = nextLocalRegister++;
+			localRegisters.set(instruction.index, register);
+		}
+		return instruction.type === "loadLocal"
+			? { type: "move", registers: [instruction.registers[0], register] }
+			: { type: "move", registers: [register, instruction.registers[0]] };
+	};
 	let sourcePosition: number | undefined;
 
 	for (let oldBlock = 0; oldBlock < fn.blocks.length; oldBlock++) {
@@ -190,7 +214,8 @@ function splitLegacyBlocks(fn: IRFunction): {
 			segmentHandler = activeHandlers.at(-1) ?? null;
 		};
 
-		for (const instruction of fn.blocks[oldBlock]!.instructions) {
+		for (const originalInstruction of fn.blocks[oldBlock]!.instructions) {
+			const instruction = normalizeLocal(originalInstruction);
 			if (instruction.type === "sourcePos") {
 				sourcePosition = instruction.pos;
 				continue;
@@ -527,6 +552,14 @@ function convertStraightLineFunction(
 	const executable = fn.blocks[0]!.instructions.filter(
 		(instruction) => instruction.type !== "sourcePos",
 	);
+	if (
+		executable.some(
+			(instruction) =>
+				instruction.type === "loadLocal" || instruction.type === "storeLocal",
+		)
+	) {
+		return undefined;
+	}
 	const terminator = executable.at(-1);
 	if (terminator?.type !== "return" && terminator?.type !== "throw") {
 		return undefined;

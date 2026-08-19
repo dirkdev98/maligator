@@ -6,7 +6,6 @@ import {
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/core-ir.ts";
-import { executeIRDevelopmentOptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { allocateDevelopmentRegisters } from "../src/register-alloc.ts";
@@ -16,7 +15,6 @@ function bridge(source: string) {
 	const program = compileSemanticProgramToIr(
 		analyzeSourceAndRunSemanticAnalysis(source, "core-bridge.js"),
 	);
-	executeIRDevelopmentOptimizations(program);
 	return intermediateProgramToCore(program);
 }
 
