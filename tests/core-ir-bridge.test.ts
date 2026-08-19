@@ -1,21 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
 import {
-	intermediateProgramToCore,
 	lowerCoreProgramToRegisters,
 } from "../src/core-ir-bridge.ts";
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/core-ir.ts";
-import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { lowerCoreProgramToVmDefinition } from "../src/lower-vm.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 function bridge(source: string) {
-	const program = compileSemanticProgramToIr(
+	return lowerSemanticProgramToCore(
 		analyzeSourceAndRunSemanticAnalysis(source, "core-bridge.js"),
 	);
-	return intermediateProgramToCore(program);
 }
 
 describe("Core IR semantic bridge", () => {
@@ -92,7 +90,7 @@ describe("Core IR semantic bridge", () => {
 	});
 
 	it("represents call operands as explicit SSA producers", () => {
-		const program = compileSemanticProgramToIr(
+		const converted = lowerSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(
 				`
 				function invoke(fn) {
@@ -103,7 +101,6 @@ describe("Core IR semantic bridge", () => {
 				"core-immediates.js",
 			),
 		);
-		const converted = intermediateProgramToCore(program);
 		const call = converted.functions
 			.flatMap((fn) => fn.blocks)
 			.flatMap((block) => block.instructions)

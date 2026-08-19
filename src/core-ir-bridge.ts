@@ -26,12 +26,6 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
-import {
-	destinationCount,
-	definedRegisters,
-	usedRegisters,
-} from "./ir-register-index.ts";
-import { isIrStructuralInstructionType } from "./ir-structure.ts";
 import type {
 	IntermediateProgram,
 	IRBlock,
@@ -40,6 +34,42 @@ import type {
 	IRInstruction,
 	IRRegion,
 } from "./ir.ts";
+
+const structuralInstructionTypes: ReadonlySet<string> = new Set([
+	"catch",
+	"jump",
+	"jumpIf",
+	"return",
+	"sourcePos",
+	"throw",
+	"tryBegin",
+	"tryEnd",
+]);
+
+function isStructuralInstruction(type: string): boolean {
+	return structuralInstructionTypes.has(type);
+}
+
+function destinationCount(instruction: IRInstruction): number {
+	if (!("registers" in instruction)) return 0;
+	if (isCoreOpcode(instruction.type)) return coreOpcode(instruction.type).outputs.minimum;
+	if (isStructuralInstruction(instruction.type)) return instruction.type === "catch" ? 1 : 0;
+	throw new Error(`Unknown semantic-lowering instruction ${String(instruction.type)}`);
+}
+
+function definedRegisters(instruction: IRInstruction): Array<number> {
+	if (!("registers" in instruction)) return [];
+	return instruction.registers
+		.slice(0, destinationCount(instruction))
+		.filter((register) => register >= 0);
+}
+
+function usedRegisters(instruction: IRInstruction): Array<number> {
+	if (!("registers" in instruction)) return [];
+	return instruction.registers
+		.slice(destinationCount(instruction))
+		.filter((register) => register >= 0);
+}
 
 type ImportedRegisterRepresentation = "boxed" | "number" | "boolean";
 
@@ -251,7 +281,7 @@ function isControlInstruction(
 
 function instructionMayThrow(instruction: IRInstruction): boolean {
 	if (isCoreOpcode(instruction.type)) return coreOpcode(instruction.type).effects.mayThrow;
-	if (isIrStructuralInstructionType(instruction.type)) {
+	if (isStructuralInstruction(instruction.type)) {
 		return instruction.type === "throw";
 	}
 	throw new Error(`Unknown legacy IR instruction ${String(instruction.type)}`);

@@ -2,14 +2,11 @@ import type { OptimizationAblation } from "./compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import { attachCoreCompilerSiteFacts } from "./compiler-site-facts.ts";
-import {
-	intermediateProgramToCore,
-	lowerCoreProgramToRegisters,
-} from "./core-ir-bridge.ts";
+import { lowerSemanticProgramToCore } from "./core-frontend.ts";
+import { lowerCoreProgramToRegisters } from "./core-ir-bridge.ts";
 import { executeCoreOptimizations } from "./core-ir-opt.ts";
 import type { CoreProgram } from "./core-ir.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
-import { compileSemanticProgramToIr } from "./ir.ts";
 import { lowerCoreProgramToVmDefinition } from "./lower-vm.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
@@ -44,19 +41,15 @@ export function compileSemanticProgramToVmDefinition(
 ): VmDefinition {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
-	const ir = runPhase("lower semantic program", () =>
-		compileSemanticProgramToIr(semantic, {
-			...options.semanticLowering,
-			collectOptimizationDiagnostics: options.profile === true,
-			facts: {
-				...(options.facts ?? conservativeCompilerProgramFacts()),
-				compilationMode: options.optimization ?? "full",
-			},
-		}),
-	);
-	const core = runPhase("construct core ir", () =>
-		intermediateProgramToCore(ir, { verify: true }),
-	);
+	const core = lowerSemanticProgramToCore(semantic, {
+		...options.semanticLowering,
+		collectOptimizationDiagnostics: options.profile === true,
+		facts: {
+			...(options.facts ?? conservativeCompilerProgramFacts()),
+			compilationMode: options.optimization ?? "full",
+		},
+		runPhase,
+	});
 	const optimized = runPhase("core ir optimizations", () => {
 		const result = executeCoreOptimizations(core, {
 			ablations: options.optimizationAblations,

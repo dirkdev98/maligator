@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { compileSemanticProgramToIr } from "../src/ir.ts";
-import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.ts";
+import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
+import type { CoreFunction, CoreInstruction, CoreProgram } from "../src/core-ir.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
@@ -10,16 +10,17 @@ function compileScript(source: string, evalCompletion = false) {
 		"duplicate.js",
 		parseScript(source, { strict: false }),
 	);
-	return compileSemanticProgramToIr(semantic, { evalCompletion });
+	return lowerSemanticProgramToCore(semantic, { evalCompletion });
 }
 
-function instructionsOf(fn: IRFunction): Array<IRInstruction> {
+function instructionsOf(fn: CoreFunction): Array<CoreInstruction> {
 	return fn.blocks.flatMap((block) => block.instructions);
 }
 
-function functionsNamed(program: IntermediateProgram, name: string): Array<IRFunction> {
+function functionsNamed(program: CoreProgram, name: string): Array<CoreFunction> {
 	return program.functions.filter(
-		(fn) => String.fromCharCode(...program.stringConstants[fn.nameStringIndex]!) === name,
+		(fn) =>
+			String.fromCharCode(...program.stringConstants[fn.metadata.nameStringIndex]!) === name,
 	);
 }
 
@@ -37,12 +38,11 @@ test.each([
 		const functions = functionsNamed(compileScript(source, evalCompletion), "f");
 
 		expect(functions).toHaveLength(1);
-		expect(instructionsOf(functions[0]!)).toContainEqual(
-			expect.objectContaining({ type: "createNumber", value: 2 }),
-		);
-		expect(instructionsOf(functions[0]!)).not.toContainEqual(
-			expect.objectContaining({ type: "createNumber", value: 1 }),
-		);
+		const values = instructionsOf(functions[0]!)
+			.filter(({ opcode }) => opcode === "createNumber")
+			.map(({ attributes }) => attributes.value);
+		expect(values).toContain(2);
+		expect(values).not.toContain(1);
 	},
 );
 
@@ -58,9 +58,11 @@ test.each([false, true])(
 		);
 
 		expect(functions).toHaveLength(1);
-		expect(instructionsOf(functions[0]!)).toContainEqual(
-			expect.objectContaining({ type: "createNumber", value: 2 }),
-		);
+		expect(
+			instructionsOf(functions[0]!).some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 2,
+			),
+		).toBe(true);
 	},
 );
 
@@ -72,9 +74,9 @@ test("duplicate global functions perform one declaration check and initializatio
 	);
 	const stores = instructions.filter(
 		(instruction) =>
-			instruction.type === "storeGlobalProperty" &&
-			instruction.declaration &&
-			instruction.nameStringIndex === nameIndex,
+			instruction.opcode === "storeGlobalProperty" &&
+			instruction.attributes.declaration === true &&
+			instruction.attributes.nameStringIndex === nameIndex,
 	);
 
 	expect(stores).toHaveLength(2);

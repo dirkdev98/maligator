@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCoreControlFlow } from "../src/core-ir-control-flow.ts";
 import { CORE_OPCODES, coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
-import {
-	IR_OPCODE_UNIVERSES_ARE_EXHAUSTIVE,
-	IR_STRUCTURAL_INSTRUCTION_TYPES,
-} from "../src/ir-structure.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import {
 	CORE_NO_EFFECTS,
@@ -49,17 +45,6 @@ function registry(): CoreOpcodeRegistry {
 
 describe("Core IR", () => {
 	it("keeps structural control out of opcodes and enforces exact arities", () => {
-		expect(IR_OPCODE_UNIVERSES_ARE_EXHAUSTIVE).toBe(true);
-		expect(IR_STRUCTURAL_INSTRUCTION_TYPES).toEqual([
-			"catch",
-			"jump",
-			"jumpIf",
-			"return",
-			"sourcePos",
-			"throw",
-			"tryBegin",
-			"tryEnd",
-		]);
 		expect(CORE_OPCODES).not.toEqual(
 			expect.arrayContaining([
 				"catch",

@@ -6,7 +6,7 @@ import {
 	decodeDirectEvalContext,
 	encodeDirectEvalContext,
 } from "../src/direct-eval-context.ts";
-import { compileSemanticProgramToIr } from "../src/ir.ts";
+import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
 import { parseScript } from "../src/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
@@ -29,37 +29,40 @@ function generatedDirectEvalContext(source: string): DirectEvalContext {
 		"test.js",
 		parseScript(source, { strict: false }),
 	);
-	const program = compileSemanticProgramToIr(semantic);
+	const program = lowerSemanticProgramToCore(semantic);
 	const instructions = program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
 	);
 	const intrinsic = instructions.find(
 		(instruction) =>
-			instruction.type === "loadIntrinsic" && instruction.intrinsic === "__directEval",
+			instruction.opcode === "loadIntrinsic" &&
+			instruction.attributes.intrinsic === "__directEval",
 	);
-	expect(intrinsic?.type).toBe("loadIntrinsic");
-	if (intrinsic?.type !== "loadIntrinsic") {
+	expect(intrinsic?.opcode).toBe("loadIntrinsic");
+	if (intrinsic?.opcode !== "loadIntrinsic") {
 		throw new Error("Expected a compiled direct eval");
 	}
 	const call = instructions.find(
 		(instruction) =>
-			instruction.type === "call" && instruction.registers[1] === intrinsic.registers[0],
+			instruction.opcode === "call" && instruction.inputs[0] === intrinsic.outputs[0],
 	);
-	expect(call?.type).toBe("call");
-	if (call?.type !== "call") {
+	expect(call?.opcode).toBe("call");
+	if (call?.opcode !== "call") {
 		throw new Error("Expected a direct eval call");
 	}
 	const encodedContext = instructions.find(
 		(instruction) =>
-			instruction.type === "createString" &&
-			instruction.registers[0] === call.registers[10],
+			instruction.opcode === "createString" &&
+			instruction.outputs[0] === call.inputs[9],
 	);
-	expect(encodedContext?.type).toBe("createString");
-	if (encodedContext?.type !== "createString") {
+	expect(encodedContext?.opcode).toBe("createString");
+	if (encodedContext?.opcode !== "createString") {
 		throw new Error("Expected an encoded direct eval context");
 	}
+	const stringIndex = encodedContext.attributes.stringIndex;
+	if (typeof stringIndex !== "number") throw new Error("Invalid encoded eval context");
 	return decodeDirectEvalContext(
-		String.fromCharCode(...program.stringConstants[encodedContext.stringIndex]!),
+		String.fromCharCode(...program.stringConstants[stringIndex]!),
 	);
 }
 
@@ -296,7 +299,7 @@ test("strict direct eval keeps var and function declarations off the global obje
 			eval: { callerStrict: true, direct: true },
 		},
 	);
-	const program = compileSemanticProgramToIr(semantic, { evalDirect: true });
+	const program = lowerSemanticProgramToCore(semantic, { evalDirect: true });
 	const instructions = program.functions.flatMap((fn) =>
 		fn.blocks.flatMap((block) => block.instructions),
 	);
@@ -304,14 +307,14 @@ test("strict direct eval keeps var and function declarations off the global obje
 	expect(
 		instructions.some(
 			(instruction) =>
-				instruction.type === "storeLocal" || instruction.type === "storeCaptured",
+				instruction.opcode === "storeLocal" || instruction.opcode === "storeCaptured",
 		),
 	).toBe(true);
-	expect(instructions.some((instruction) => instruction.type === "storeGlobal")).toBe(
+	expect(instructions.some((instruction) => instruction.opcode === "storeGlobal")).toBe(
 		false,
 	);
 	expect(
-		instructions.some((instruction) => instruction.type === "storeGlobalProperty"),
+		instructions.some((instruction) => instruction.opcode === "storeGlobalProperty"),
 	).toBe(false);
 });
 
