@@ -718,12 +718,12 @@ export interface RegisterRegExpExecProjectionRegion extends RegisterRegionEnvelo
 	"whole-region",
 	readonly [
 		Extract<RegisterInstruction, { type: "call" }>,
-		Extract<RegisterInstruction, { type: "move" }>,
 		Extract<RegisterInstruction, { type: "loadProperty" }>,
 	]
 > {
 	readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
-	readonly aliasMoves: ReadonlyArray<Extract<RegisterInstruction, { type: "move" }>>;
+	/** Allocated registers for every Core SSA alias licensed as the call result. */
+	readonly resultRegisters: ReadonlyArray<number>;
 	readonly nullChecks: ReadonlyArray<{
 		readonly comparison: Extract<RegisterInstruction, { type: "binary" }>;
 		readonly nullValue: Extract<RegisterInstruction, { type: "createNull" }>;

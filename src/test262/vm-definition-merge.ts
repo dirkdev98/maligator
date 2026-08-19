@@ -143,7 +143,7 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				...(region.lockedLiteral === undefined
 					? {}
 					: { lockedLiteral: { ...region.lockedLiteral } }),
-				aliasMoveIps: [...region.aliasMoveIps],
+				resultRegisters: [...region.resultRegisters],
 				nullChecks: region.nullChecks.map((check) => ({ ...check })),
 				loads: region.loads.map((load) => ({
 					...load,

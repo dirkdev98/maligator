@@ -1939,6 +1939,516 @@ function coreKnownBuiltinProof(
 	};
 }
 
+function coreProofIsWorldInvariant(proof: CoreKnownBuiltinProof["proof"]): boolean {
+	return (
+		proof.dependencies.length > 0 &&
+		proof.dependencies.every(
+			(dependency) => attributeObject(dependency)?.kind === "world",
+		)
+	);
+}
+
+/** Select closed capture projections from an exact `RegExp.prototype.exec`. */
+const selectRegExpExecProjectionRegions: CoreFunctionPass = {
+	name: "select-regexp-exec-projection-regions",
+	run(fn, analyses, program) {
+		if (fn.regions.filter(({ kind }) => kind === "regexp-exec-projection").length >= 8) {
+			return fn;
+		}
+		const cfg = analyses.controlFlow(fn);
+		const canonical = coreCanonicalValues(fn, cfg);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const definitions = functionDefinitions(fn);
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		const uses = new Map<
+			CoreValueId,
+			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+		>();
+		const escapingValues = new Set<CoreValueId>();
+		const markEscape = (value: CoreValueId) => escapingValues.add(root(value));
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+				for (const [position, input] of instruction.inputs.entries()) {
+					const key = root(input);
+					const entries = uses.get(key) ?? [];
+					entries.push({ instruction, position });
+					uses.set(key, entries);
+				}
+			}
+			if (block.handler !== undefined) {
+				for (const value of block.handler.arguments) markEscape(value);
+			}
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				const target = fn.blocks[edge.block]!;
+				for (const [index, argument] of edge.arguments.entries()) {
+					const parameter = target.parameters[index];
+					if (parameter === undefined || root(parameter.value) !== root(argument)) {
+						markEscape(argument);
+					}
+				}
+			}
+			switch (block.terminator.kind) {
+				case "branch":
+				case "guard":
+					markEscape(block.terminator.condition);
+					break;
+				case "switch":
+					markEscape(block.terminator.discriminant);
+					break;
+				case "return":
+				case "throw":
+					markEscape(block.terminator.value);
+					break;
+				case "jump":
+				case "unreachable":
+					break;
+			}
+		}
+		const instructionDominates = (
+			producer: CoreInstruction,
+			consumer: CoreInstruction,
+		): boolean => {
+			const producerLocation = locations.get(producer.id);
+			const consumerLocation = locations.get(consumer.id);
+			if (producerLocation === undefined || consumerLocation === undefined) return false;
+			return producerLocation.block.id === consumerLocation.block.id
+				? producerLocation.index < consumerLocation.index
+				: cfg.dominates(producerLocation.block.id, consumerLocation.block.id);
+		};
+		const staticProperty = (
+			instruction: CoreInstruction | undefined,
+			name: string,
+		): instruction is CoreInstruction =>
+			instruction?.opcode === "loadPropertyStatic" &&
+			typeof instruction.attributes.stringIndex === "number" &&
+			decodeString(program, instruction.attributes.stringIndex) === name;
+		const occupied = new Set(
+			fn.regions
+				.filter(({ kind }) => kind !== "numeric-fusion")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			for (const call of block.instructions) {
+				if (call.opcode !== "call" || call.inputs.length !== 3 || call.outputs.length !== 1) {
+					continue;
+				}
+				const builtin = coreKnownBuiltinProof(call, "RegExp.prototype.exec", {
+					lowering: "capture-projection",
+					result: "regexp-match-or-null",
+				});
+				if (builtin === undefined) continue;
+				const property = definitions.get(root(call.inputs[0]!));
+				if (
+					!staticProperty(property, "exec") ||
+					property.inputs.length !== 1 ||
+					property.outputs.length !== 1 ||
+					root(property.inputs[0]!) !== root(call.inputs[1]!) ||
+					!instructionDominates(property, call)
+				) {
+					continue;
+				}
+				const propertyUses = uses.get(root(property.outputs[0]!));
+				if (
+					propertyUses?.length !== 1 ||
+					propertyUses[0]?.instruction !== call ||
+					propertyUses[0].position !== 0
+				) {
+					continue;
+				}
+				const result = root(call.outputs[0]!);
+				if (escapingValues.has(result)) continue;
+				const resultValues = fn.values
+					.map(({ id }) => id)
+					.filter((value) => root(value) === result);
+				const nullChecks: Array<{
+					readonly comparison: CoreInstruction;
+					readonly nullValue: CoreInstruction;
+				}> = [];
+				const loads: Array<{
+					readonly instruction: CoreInstruction;
+					readonly key: CoreInstruction;
+					readonly captureIndex: number;
+					consumer?:
+						| { readonly kind: "length"; readonly property: CoreInstruction }
+						| {
+								readonly kind: "charCodeAtZero";
+								readonly property: CoreInstruction;
+								readonly call: CoreInstruction;
+								readonly zero?: CoreInstruction;
+						  }
+						| {
+								readonly kind: "number";
+								readonly intrinsic: CoreInstruction;
+								readonly call: CoreInstruction;
+						  }
+						| {
+								readonly kind: "asciiCaseLength";
+								readonly upperProperty: CoreInstruction;
+								readonly upperCall: CoreInstruction;
+								readonly lowerProperty: CoreInstruction;
+								readonly lowerCall: CoreInstruction;
+								readonly resultMoves: ReadonlyArray<CoreInstruction>;
+								readonly lengthProperty: CoreInstruction;
+						  };
+				}> = [];
+				const captureIndices = new Set<number>();
+				let safe = true;
+				for (const use of uses.get(result) ?? []) {
+					const consumer = use.instruction;
+					if (
+						consumer.opcode === "move" &&
+						use.position === 0 &&
+						consumer.outputs.length === 1 &&
+						root(consumer.outputs[0]!) === result
+					) {
+						continue;
+					}
+					if (
+						consumer.opcode === "binary" &&
+						(consumer.attributes.operator === "===" ||
+							consumer.attributes.operator === "!==")
+					) {
+						const other = consumer.inputs[use.position === 0 ? 1 : 0];
+						const nullValue = other === undefined ? undefined : definitions.get(root(other));
+						if (
+							nullValue?.opcode === "createNull" &&
+							instructionDominates(nullValue, consumer)
+						) {
+							nullChecks.push({ comparison: consumer, nullValue });
+							continue;
+						}
+					}
+					if (
+						consumer.opcode === "loadProperty" &&
+						use.position === 0 &&
+						consumer.inputs.length === 2 &&
+						consumer.outputs.length === 1 &&
+						instructionDominates(call, consumer)
+					) {
+						const key = definitions.get(root(consumer.inputs[1]!));
+						const captureIndex = key?.attributes.value;
+						if (
+							key?.opcode === "createNumber" &&
+							typeof captureIndex === "number" &&
+							Number.isInteger(captureIndex) &&
+							captureIndex > 0 &&
+							captureIndex <= 0xffff &&
+							!captureIndices.has(captureIndex) &&
+							instructionDominates(key, consumer)
+						) {
+							loads.push({ instruction: consumer, key, captureIndex });
+							captureIndices.add(captureIndex);
+							continue;
+						}
+					}
+					safe = false;
+					break;
+				}
+				if (!safe || loads.length === 0 || loads.length > 8) continue;
+
+				for (const load of loads) {
+					const capture = root(load.instruction.outputs[0]!);
+					const captureUses = uses.get(capture) ?? [];
+					if (captureUses.length === 1) {
+						const consumer = captureUses[0]!.instruction;
+						if (
+							captureUses[0]!.position === 0 &&
+							staticProperty(consumer, "length") &&
+							consumer.inputs.length === 1
+						) {
+							load.consumer = { kind: "length", property: consumer };
+							continue;
+						}
+						if (
+							consumer.opcode === "call" &&
+							captureUses[0]!.position === 2 &&
+							consumer.inputs.length === 3
+						) {
+							const intrinsic = definitions.get(root(consumer.inputs[0]!));
+							if (
+								intrinsic?.opcode === "loadIntrinsic" &&
+								intrinsic.attributes.intrinsic === "Number" &&
+								instructionDominates(intrinsic, consumer)
+							) {
+								load.consumer = { kind: "number", intrinsic, call: consumer };
+								continue;
+							}
+						}
+					}
+					if (captureUses.length !== 2) continue;
+					const upperPropertyUse = captureUses.find(
+						({ instruction, position }) =>
+							position === 0 && staticProperty(instruction, "toUpperCase"),
+					);
+					const upperCallUse = captureUses.find(
+						({ instruction, position }) => instruction.opcode === "call" && position === 1,
+					);
+					const upperProperty = upperPropertyUse?.instruction;
+					const upperCall = upperCallUse?.instruction;
+					if (
+						upperProperty !== undefined &&
+						upperCall?.opcode === "call" &&
+						upperCall.inputs.length === 2 &&
+						root(upperCall.inputs[0]!) === root(upperProperty.outputs[0]!) &&
+						(uses.get(root(upperProperty.outputs[0]!))?.length ?? 0) === 1
+					) {
+						const upperResult = root(upperCall.outputs[0]!);
+						const upperUses = uses.get(upperResult) ?? [];
+						const lowerPropertyUse = upperUses.find(
+							({ instruction, position }) =>
+								position === 0 && staticProperty(instruction, "toLowerCase"),
+						);
+						const lowerCallUse = upperUses.find(
+							({ instruction, position }) =>
+								instruction.opcode === "call" && position === 1,
+						);
+						const lowerProperty = lowerPropertyUse?.instruction;
+						const lowerCall = lowerCallUse?.instruction;
+						if (
+							upperUses.length === 2 &&
+							lowerProperty !== undefined &&
+							lowerCall?.opcode === "call" &&
+							lowerCall.inputs.length === 2 &&
+							root(lowerCall.inputs[0]!) === root(lowerProperty.outputs[0]!) &&
+							(uses.get(root(lowerProperty.outputs[0]!))?.length ?? 0) === 1
+						) {
+							const lowerUses = uses.get(root(lowerCall.outputs[0]!)) ?? [];
+							const lengthProperty = lowerUses[0]?.instruction;
+							if (
+								lowerUses.length === 1 &&
+								lowerUses[0]?.position === 0 &&
+								staticProperty(lengthProperty, "length")
+							) {
+								load.consumer = {
+									kind: "asciiCaseLength",
+									upperProperty,
+									upperCall,
+									lowerProperty,
+									lowerCall,
+									resultMoves: [],
+									lengthProperty,
+								};
+								continue;
+							}
+						}
+					}
+					const propertyUse = captureUses.find(
+						({ instruction, position }) =>
+							position === 0 && staticProperty(instruction, "charCodeAt"),
+					);
+					const callUse = captureUses.find(
+						({ instruction, position }) => instruction.opcode === "call" && position === 1,
+					);
+					const charProperty = propertyUse?.instruction;
+					const charCall = callUse?.instruction;
+					if (
+						charProperty === undefined ||
+						charCall?.opcode !== "call" ||
+						charCall.inputs.length !== 3 ||
+						root(charCall.inputs[0]!) !== root(charProperty.outputs[0]!) ||
+						(uses.get(root(charProperty.outputs[0]!))?.length ?? 0) !== 1
+					) {
+						continue;
+					}
+					const zero = definitions.get(root(charCall.inputs[2]!));
+					if (zero?.opcode === "createNumber" && Object.is(zero.attributes.value, 0)) {
+						load.consumer = { kind: "charCodeAtZero", property: charProperty, call: charCall, zero };
+					}
+				}
+
+				let lockedLiteral:
+					| {
+							readonly constructorIntrinsic: CoreInstruction;
+							readonly construct: CoreInstruction;
+					  }
+					| undefined;
+				const construct = definitions.get(root(call.inputs[1]!));
+				if (
+					coreProofIsWorldInvariant(builtin.proof) &&
+					construct?.opcode === "construct" &&
+					construct.outputs.length === 1
+				) {
+					const receiverUses = uses.get(root(construct.outputs[0]!)) ?? [];
+					const constructorIntrinsic = definitions.get(root(construct.inputs[0]!));
+					if (
+						receiverUses.length === 2 &&
+						receiverUses.every(
+							({ instruction }) => instruction === property || instruction === call,
+						) &&
+						constructorIntrinsic?.opcode === "loadIntrinsic" &&
+						constructorIntrinsic.attributes.intrinsic === "RegExp" &&
+						instructionDominates(constructorIntrinsic, construct) &&
+						instructionDominates(construct, call)
+					) {
+						lockedLiteral = { constructorIntrinsic, construct };
+					}
+				}
+
+				const claimed = new Set<CoreInstruction>([property, call]);
+				for (const { comparison, nullValue } of nullChecks) {
+					claimed.add(comparison);
+					claimed.add(nullValue);
+				}
+				for (const load of loads) {
+					claimed.add(load.key);
+					claimed.add(load.instruction);
+					const consumer = load.consumer;
+					if (consumer?.kind === "length") claimed.add(consumer.property);
+					else if (consumer?.kind === "number") {
+						claimed.add(consumer.intrinsic);
+						claimed.add(consumer.call);
+					} else if (consumer?.kind === "charCodeAtZero") {
+						claimed.add(consumer.property);
+						claimed.add(consumer.call);
+						if (consumer.zero !== undefined) claimed.add(consumer.zero);
+					} else if (consumer?.kind === "asciiCaseLength") {
+						claimed.add(consumer.upperProperty);
+						claimed.add(consumer.upperCall);
+						claimed.add(consumer.lowerProperty);
+						claimed.add(consumer.lowerCall);
+						for (const move of consumer.resultMoves) claimed.add(move);
+						claimed.add(consumer.lengthProperty);
+					}
+				}
+				if (lockedLiteral !== undefined) {
+					claimed.add(lockedLiteral.constructorIntrinsic);
+					claimed.add(lockedLiteral.construct);
+				}
+				const claimedInstructions = [...claimed].map(({ id }) => id);
+				const ordinaryBlocks = [
+					...new Set([...claimed].map(({ id }) => locations.get(id)!.block.id)),
+				];
+				if (
+					claimedInstructions.length > 96 ||
+					claimedInstructions.some((id) => occupied.has(id)) ||
+					[...claimed].some(({ id }) => locations.get(id)?.block.handler !== undefined)
+				) {
+					continue;
+				}
+				const obligations = [
+					...builtin.proof.obligations,
+					{
+						kind: "materialize",
+						id: `regexp-exec-projection:${builtin.sourceSite ?? fn.functionIndex}`,
+					},
+				];
+				regions.push({
+					kind: "regexp-exec-projection",
+					anchors: [call.id, loads[0]!.instruction.id],
+					claimedInstructions,
+					ordinaryBlocks,
+					exceptionalBlocks: [],
+					data: coreAttributeObject(
+						{
+							license: {
+								guard: { dependencies: builtin.proof.dependencies, obligations },
+								genericTwin: "retained",
+								materialization: "whole-region",
+							},
+							representation: "regexp-capture-spans",
+							cost: {
+								score: loads.length * 12 + nullChecks.length * 2,
+								metadataOperations: claimedInstructions.length,
+							},
+							property: { $coreInstruction: property.id },
+							resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
+							nullChecks: nullChecks.map(({ comparison, nullValue }) => ({
+								comparison: { $coreInstruction: comparison.id },
+								nullValue: { $coreInstruction: nullValue.id },
+							})),
+							...(lockedLiteral === undefined
+								? {}
+								: {
+									lockedLiteral: {
+										constructorIntrinsic: {
+											$coreInstruction: lockedLiteral.constructorIntrinsic.id,
+										},
+										construct: { $coreInstruction: lockedLiteral.construct.id },
+									},
+								}),
+							lastIndexEffect: "retained-call-twin",
+							loads: loads.map((load) => ({
+								instruction: { $coreInstruction: load.instruction.id },
+								key: { $coreInstruction: load.key.id },
+								captureIndex: load.captureIndex,
+								...(load.consumer === undefined
+									? {}
+									: {
+										consumer:
+											load.consumer.kind === "length"
+												? {
+														kind: "length",
+														property: {
+															$coreInstruction: load.consumer.property.id,
+														},
+													}
+												: load.consumer.kind === "number"
+													? {
+															kind: "number",
+															intrinsic: {
+																$coreInstruction: load.consumer.intrinsic.id,
+															},
+															call: { $coreInstruction: load.consumer.call.id },
+														}
+												: load.consumer.kind === "charCodeAtZero"
+													? {
+															kind: "charCodeAtZero",
+															property: {
+																$coreInstruction: load.consumer.property.id,
+															},
+															call: { $coreInstruction: load.consumer.call.id },
+															...(load.consumer.zero === undefined
+																? {}
+																: {
+																		zero: {
+																			$coreInstruction: load.consumer.zero.id,
+																		},
+																	}),
+														}
+													: {
+															kind: "asciiCaseLength",
+															upperProperty: {
+																$coreInstruction: load.consumer.upperProperty.id,
+															},
+															upperCall: {
+																$coreInstruction: load.consumer.upperCall.id,
+															},
+															lowerProperty: {
+																$coreInstruction: load.consumer.lowerProperty.id,
+															},
+															lowerCall: {
+																$coreInstruction: load.consumer.lowerCall.id,
+															},
+															resultMoves: load.consumer.resultMoves.map(({ id }) => ({
+																$coreInstruction: id,
+															})),
+															lengthProperty: {
+																$coreInstruction: load.consumer.lengthProperty.id,
+															},
+														},
+									}),
+							})),
+						},
+						"regexp-exec-projection",
+					),
+				});
+				for (const id of claimedInstructions) occupied.add(id);
+				if (regions.filter(({ kind }) => kind === "regexp-exec-projection").length >= 8) {
+					break;
+				}
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
 /** Select a non-escaping exact `String.prototype.split` projection. */
 const selectStringSplitProjectionRegions: CoreFunctionPass = {
 	name: "select-string-split-projection-regions",
@@ -3787,6 +4297,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateFreshDenseIndexedReserves,
 	selectStackObjectRegions,
+	selectRegExpExecProjectionRegions,
 	selectStringSplitProjectionRegions,
 	selectStringSliceNumberRegions,
 	selectNumericFusionRegions,

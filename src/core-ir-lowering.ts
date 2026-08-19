@@ -1510,10 +1510,11 @@ function lowerCoreRegionData(
 	value: unknown,
 	instructions: ReadonlyMap<CoreInstructionId, RegisterInstruction>,
 	blocks: ReadonlyMap<CoreBlockId, number>,
+	values: ReadonlyMap<CoreValueId, number>,
 ): unknown {
 	if (value === undefined || value === null || typeof value !== "object") return value;
 	if (Array.isArray(value)) {
-		return value.map((entry) => lowerCoreRegionData(entry, instructions, blocks));
+		return value.map((entry) => lowerCoreRegionData(entry, instructions, blocks, values));
 	}
 	const object = value as Readonly<Record<string, unknown>>;
 	if (Object.keys(object).length === 1 && typeof object.$coreInstruction === "number") {
@@ -1532,9 +1533,16 @@ function lowerCoreRegionData(
 		}
 		return block;
 	}
+	if (Object.keys(object).length === 1 && typeof object.$coreValue === "number") {
+		const register = values.get(object.$coreValue as CoreValueId);
+		if (register === undefined) {
+			throw new Error(`Core region lowering lost value %${object.$coreValue}`);
+		}
+		return register;
+	}
 	const result: Record<string, unknown> = {};
 	for (const [key, entry] of Object.entries(object)) {
-		result[key] = lowerCoreRegionData(entry, instructions, blocks);
+		result[key] = lowerCoreRegionData(entry, instructions, blocks, values);
 	}
 	return result;
 }
@@ -1544,6 +1552,7 @@ function lowerCoreRegions(
 	instructions: ReadonlyMap<CoreInstructionId, RegisterInstruction>,
 	omittedBlocks: ReadonlySet<CoreBlockId>,
 	blocks: ReadonlyMap<CoreBlockId, number>,
+	values: ReadonlyMap<CoreValueId, number>,
 ): ReadonlyArray<RegisterRegion> | undefined {
 	if (regions.length === 0) return undefined;
 	const requireInstruction = (id: CoreInstructionId): RegisterInstruction => {
@@ -1559,7 +1568,7 @@ function lowerCoreRegions(
 		return block;
 	};
 	return regions.map((region) => ({
-		...(lowerCoreRegionData(region.data, instructions, blocks) as object),
+		...(lowerCoreRegionData(region.data, instructions, blocks, values) as object),
 		kind: region.kind,
 		anchors: region.anchors.map(requireInstruction),
 		claimedInstructions: region.claimedInstructions.map(requireInstruction),
@@ -2318,6 +2327,7 @@ function lowerFunctionBridge(
 				loweredInstructions,
 				absorbedAlternateBlocks,
 				loweredBlockForCore,
+				new Map(core.values.map(({ id }) => [id, registerForValue(id)])),
 			),
 			isGenerator: core.isGenerator,
 			isAsync: core.isAsync,

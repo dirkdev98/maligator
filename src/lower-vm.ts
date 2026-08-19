@@ -509,7 +509,7 @@ export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
 	readonly receiver: number;
 	readonly input: number;
 	readonly result: number;
-	readonly aliasMoveIps: ReadonlyArray<number>;
+	readonly resultRegisters: ReadonlyArray<number>;
 	readonly nullChecks: ReadonlyArray<{
 		readonly comparisonIp: number;
 		readonly nullIp: number;
@@ -3089,12 +3089,8 @@ function lowerFunctionToVmFunction(
 			}
 			case "regexp-exec-projection": {
 				const callIp = resolvedAnchors[0];
-				const firstAliasIp = resolvedAnchors[1];
-				const firstLoadIp = resolvedAnchors[2];
+				const firstLoadIp = resolvedAnchors[1];
 				const propertyIp = instructionIndexByIrInstruction.get(region.property);
-				const aliasMoveIps = region.aliasMoves.map((candidate) =>
-					instructionIndexByIrInstruction.get(candidate),
-				);
 				const nullChecks = region.nullChecks.map((check) => ({
 					comparisonIp: instructionIndexByIrInstruction.get(check.comparison),
 					nullIp: instructionIndexByIrInstruction.get(check.nullValue),
@@ -3174,7 +3170,6 @@ function lowerFunctionToVmFunction(
 				});
 				const unresolved =
 					propertyIp === undefined ||
-					aliasMoveIps.some((ip) => ip === undefined) ||
 					nullChecks.some(
 						(check) => check.comparisonIp === undefined || check.nullIp === undefined,
 					) ||
@@ -3197,12 +3192,12 @@ function lowerFunctionToVmFunction(
 					!guard.obligations.includes("fallback") ||
 					!guard.obligations.includes("materialize") ||
 					region.lastIndexEffect !== "retained-call-twin" ||
-					resolvedAnchors.length !== 3
+					resolvedAnchors.length !== 2 ||
+					region.resultRegisters.length === 0
 				) {
 					continue;
 				}
 				const resolvedPropertyIp = propertyIp;
-				const resolvedAliasMoveIps = aliasMoveIps as Array<number>;
 				const resolvedNullChecks = nullChecks as Array<{
 					comparisonIp: number;
 					nullIp: number;
@@ -3213,30 +3208,19 @@ function lowerFunctionToVmFunction(
 				const resolvedLoads = loads as Array<
 					VmRegExpExecProjectionRegion["loads"][number]
 				>;
+				const resultRegisters = [...new Set(region.resultRegisters)];
 				const loweredCall = instructions[callIp!];
 				const loweredProperty = instructions[resolvedPropertyIp];
-				const loweredFirstAlias = instructions[firstAliasIp!];
-				const aliases = new Set<number>([
-					loweredCall?.opcode === "CALL" ? loweredCall.dst : -1,
-				]);
+				const aliases = new Set(resultRegisters);
 				let operationsValid =
 					loweredCall?.opcode === "CALL" &&
+					aliases.has(loweredCall.dst) &&
 					loweredCall.arguments.length === 1 &&
 					loweredCall.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
 					loweredProperty?.opcode === "LOAD_PROPERTY_STATIC" &&
 					loweredProperty.dst === loweredCall.callee &&
 					loweredProperty.object === loweredCall.thisValue &&
-					resolvedPropertyIp + 1 === callIp &&
-					loweredFirstAlias?.opcode === "MOVE" &&
-					loweredFirstAlias.src === loweredCall.dst;
-				for (const aliasIp of resolvedAliasMoveIps) {
-					const move = instructions[aliasIp];
-					if (move?.opcode !== "MOVE" || !aliases.has(move.src)) {
-						operationsValid = false;
-						break;
-					}
-					aliases.add(move.dst);
-				}
+					resolvedPropertyIp + 1 === callIp;
 				for (const check of resolvedNullChecks) {
 					const comparison = instructions[check.comparisonIp];
 					const nullValue = instructions[check.nullIp];
@@ -3310,7 +3294,6 @@ function lowerFunctionToVmFunction(
 						instructions[resolvedLockedLiteral.constructIp]?.opcode === "CONSTRUCT";
 				}
 				const payloadIps = new Set<number>([resolvedPropertyIp, callIp!]);
-				for (const ip of resolvedAliasMoveIps) payloadIps.add(ip);
 				for (const check of resolvedNullChecks) {
 					payloadIps.add(check.comparisonIp);
 					payloadIps.add(check.nullIp);
@@ -3343,8 +3326,11 @@ function lowerFunctionToVmFunction(
 				if (
 					!operationsValid ||
 					loweredCall?.opcode !== "CALL" ||
-					firstAliasIp !== resolvedAliasMoveIps[0] ||
 					firstLoadIp !== resolvedLoads[0]?.ip ||
+					resultRegisters.some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					) ||
 					resolvedLoads.length === 0 ||
 					resolvedLoads.length > 8 ||
 					new Set(resolvedLoads.map((load) => load.captureIndex)).size !==
@@ -3377,7 +3363,7 @@ function lowerFunctionToVmFunction(
 					receiver: loweredCall.thisValue,
 					input: loweredCall.arguments[0]!,
 					result: loweredCall.dst,
-					aliasMoveIps: resolvedAliasMoveIps,
+					resultRegisters,
 					nullChecks: resolvedNullChecks,
 					lastIndexEffect: "retained-call-twin",
 					loads: resolvedLoads,

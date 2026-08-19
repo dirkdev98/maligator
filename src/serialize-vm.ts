@@ -40,7 +40,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Pre-1.0 compatibility starts from this format baseline.
-export const WIRE_VERSION = 3;
+export const WIRE_VERSION = 4;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1516,7 +1516,7 @@ export function serializeVmDefinition(
 					w.i32(region.receiver);
 					w.i32(region.input);
 					w.i32(region.result);
-					w.i32Array([...region.aliasMoveIps]);
+					w.i32Array([...region.resultRegisters]);
 					w.u32(region.nullChecks.length);
 					for (const check of region.nullChecks) {
 						w.i32(check.comparisonIp);
@@ -2827,14 +2827,13 @@ function validateRegExpExecProjectionRegion(
 	regexpExecProjectionGuardMasks(region.license);
 	const property = fn.instructions[region.propertyIp];
 	const call = fn.instructions[region.callIp];
-	const aliases = new Set<number>([call?.opcode === "CALL" ? call.dst : -1]);
+	const aliases = new Set(region.resultRegisters);
 	let valid =
 		region.representation === "regexp-capture-spans" &&
 		region.lastIndexEffect === "retained-call-twin" &&
-		region.anchors.length === 3 &&
+		region.anchors.length === 2 &&
 		region.anchors[0] === region.callIp &&
-		region.anchors[1] === region.aliasMoveIps[0] &&
-		region.anchors[2] === region.loads[0]?.ip &&
+		region.anchors[1] === region.loads[0]?.ip &&
 		property?.opcode === "LOAD_PROPERTY_STATIC" &&
 		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) === "exec" &&
 		call?.opcode === "CALL" &&
@@ -2847,14 +2846,15 @@ function validateRegExpExecProjectionRegion(
 		region.receiver === call.thisValue &&
 		region.input === call.arguments[0] &&
 		region.result === call.dst &&
-		region.aliasMoveIps.length > 0 &&
+		aliases.has(call.dst) &&
+		region.resultRegisters.length > 0 &&
+		new Set(region.resultRegisters).size === region.resultRegisters.length &&
+		region.resultRegisters.every(
+			(register) =>
+				Number.isInteger(register) && register >= 0 && register < fn.registerCount,
+		) &&
 		region.loads.length > 0 &&
 		region.loads.length <= 8;
-	for (const ip of region.aliasMoveIps) {
-		const move = fn.instructions[ip];
-		if (move?.opcode !== "MOVE" || !aliases.has(move.src)) valid = false;
-		else aliases.add(move.dst);
-	}
 	for (const check of region.nullChecks) {
 		const comparison = fn.instructions[check.comparisonIp];
 		const nullValue = fn.instructions[check.nullIp];
@@ -2886,7 +2886,6 @@ function validateRegExpExecProjectionRegion(
 		}
 	}
 	const payload = new Set<number>([region.propertyIp, region.callIp]);
-	for (const ip of region.aliasMoveIps) payload.add(ip);
 	for (const check of region.nullChecks) {
 		payload.add(check.comparisonIp);
 		payload.add(check.nullIp);
@@ -4915,7 +4914,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					const receiver = r.i32();
 					const input = r.i32();
 					const result = r.i32();
-					const aliasMoveIps = r.i32Array();
+					const resultRegisters = r.i32Array();
 					const nullCheckCount = r.count(5);
 					const nullChecks: Array<{
 						comparisonIp: number;
@@ -5014,7 +5013,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						receiver,
 						input,
 						result,
-						aliasMoveIps,
+						resultRegisters,
 						nullChecks,
 						lastIndexEffect: "retained-call-twin",
 						loads,
