@@ -80,7 +80,6 @@ export interface CoreFunctionLowering {
 	readonly instructionOrigins: ReadonlyMap<CoreInstructionId, IRInstruction>;
 	readonly legacyRegisters: ReadonlyMap<CoreValueId, number>;
 	readonly legacyBlockByCoreBlock: ReadonlyMap<CoreBlockId, number>;
-	readonly bodyEntryBlock?: CoreBlockId;
 }
 
 export interface CoreProgramBridge {
@@ -631,7 +630,11 @@ function convertStraightLineFunction(
 			if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
 		}
 	}
-	const core = builder.finish(block);
+	const finished = builder.finish(block);
+	const core =
+		fn.bodyEntryBlock === 0
+			? { ...finished, bodyEntry: block }
+			: finished;
 	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	return {
 		core,
@@ -639,9 +642,6 @@ function convertStraightLineFunction(
 		instructionOrigins,
 		legacyRegisters,
 		legacyBlockByCoreBlock: retainLoweringMetadata ? new Map([[block, 0]]) : new Map(),
-		...(retainLoweringMetadata && fn.bodyEntryBlock === 0
-			? { bodyEntryBlock: block }
-			: {}),
 	};
 }
 
@@ -805,21 +805,22 @@ function convertFunction(
 		}
 	}
 
-	const core = builder.finish(coreBlocks[0]!);
-	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	const bodyEntrySegment =
 		fn.bodyEntryBlock === undefined
 			? undefined
 			: segments.find(({ oldBlock }) => oldBlock === fn.bodyEntryBlock);
+	const finished = builder.finish(coreBlocks[0]!);
+	const core =
+		bodyEntrySegment === undefined
+			? finished
+			: { ...finished, bodyEntry: coreBlockId(bodyEntrySegment.id) };
+	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	return {
 		core,
 		legacy: fn,
 		instructionOrigins,
 		legacyRegisters,
 		legacyBlockByCoreBlock,
-		...(!retainLoweringMetadata || bodyEntrySegment === undefined
-			? {}
-			: { bodyEntryBlock: coreBlockId(bodyEntrySegment.id) }),
 	};
 }
 
@@ -1069,7 +1070,7 @@ function lowerFunctionBridge(
 		blocks,
 		regions: undefined,
 		nextRegisterDestination: nextRegister.value,
-		bodyEntryBlock: lowering.bodyEntryBlock,
+		bodyEntryBlock: core.bodyEntry,
 	};
 }
 

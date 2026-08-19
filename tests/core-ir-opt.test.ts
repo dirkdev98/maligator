@@ -63,4 +63,86 @@ describe("Core IR optimizer", () => {
 		expect(opcodes).toContain("storePropertyStatic");
 		expect(opcodes).toContain("loadPropertyStatic");
 	});
+
+	it("folds primitive control and removes unreachable blocks", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const dead = builder.createBlock();
+		const body = builder.createBlock();
+		const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
+			payload: { fields: { value: true } },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: condition!,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: dead, arguments: [] },
+		});
+		const [deadValue] = builder.appendInstruction(dead, "createNumber", [], {
+			payload: { fields: { value: 1 } },
+		});
+		builder.setTerminator(dead, { kind: "return", value: deadValue! });
+		const [result] = builder.appendInstruction(body, "createNumber", [], {
+			payload: { fields: { value: 2 } },
+		});
+		builder.setTerminator(body, { kind: "return", value: result! });
+		const original = builder.finish(entry);
+		const program: CoreProgram = {
+			functions: [{ ...original, bodyEntry: body }],
+		};
+
+		const fn = executeCoreOptimizations(program).program.functions[0]!;
+		expect(fn.blocks).toHaveLength(2);
+		expect(fn.bodyEntry).toBe(1);
+		expect(fn.blocks[0]!.terminator).toMatchObject({
+			kind: "jump",
+			edge: { block: 1 },
+		});
+		expect(fn.blocks[0]!.instructions).toHaveLength(0);
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("folds a primitive switch with JavaScript strict equality", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const one = builder.createBlock();
+		const two = builder.createBlock();
+		const fallback = builder.createBlock();
+		const [discriminant] = builder.appendInstruction(entry, "createNumber", [], {
+			payload: { fields: { value: 2 } },
+		});
+		builder.setTerminator(entry, {
+			kind: "switch",
+			discriminant: discriminant!,
+			cases: [
+				{ value: { kind: "number", value: 1 }, edge: { block: one, arguments: [] } },
+				{ value: { kind: "number", value: 2 }, edge: { block: two, arguments: [] } },
+			],
+			default: { block: fallback, arguments: [] },
+		});
+		for (const [block, value] of [
+			[one, 1],
+			[two, 2],
+			[fallback, 3],
+		] as const) {
+			const [result] = builder.appendInstruction(block, "createNumber", [], {
+				payload: { fields: { value } },
+			});
+			builder.setTerminator(block, { kind: "return", value: result! });
+		}
+
+		const fn = executeCoreOptimizations({
+			functions: [builder.finish(entry)],
+		}).program.functions[0]!;
+		expect(fn.blocks).toHaveLength(2);
+		expect(fn.blocks[0]!.terminator).toMatchObject({
+			kind: "jump",
+			edge: { block: 1 },
+		});
+		expect(fn.blocks[1]!.instructions[0]).toMatchObject({
+			opcode: "createNumber",
+			payload: { fields: { value: 2 } },
+		});
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
 });

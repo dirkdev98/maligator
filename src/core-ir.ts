@@ -299,6 +299,8 @@ export interface CoreFunction {
 	readonly isGenerator: boolean;
 	readonly isAsync: boolean;
 	readonly entry: CoreBlockId;
+	/** Loop header used when proven self-tail calls re-enter the function body. */
+	readonly bodyEntry?: CoreBlockId;
 	readonly blocks: ReadonlyArray<CoreBlock>;
 	readonly values: ReadonlyArray<CoreValue>;
 	readonly facts: ReadonlyArray<CoreFact>;

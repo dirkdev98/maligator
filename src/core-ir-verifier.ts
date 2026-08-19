@@ -155,6 +155,9 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 	requireStableIds(fn.facts, "fact");
 	const blocks = new Map(fn.blocks.map((block) => [block.id, block]));
 	if (!blocks.has(fn.entry)) fail(`unknown entry block b${fn.entry}`);
+	if (fn.bodyEntry !== undefined && !blocks.has(fn.bodyEntry)) {
+		fail(`unknown body entry block b${fn.bodyEntry}`);
+	}
 
 	const instructionIds = new Set<CoreInstructionId>();
 	const definitions = new Map<CoreValueId, ValueDefinitionLocation>();

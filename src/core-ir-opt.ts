@@ -7,12 +7,15 @@ import type {
 	CoreBlock,
 	CoreBlockId,
 	CoreEdge,
+	CoreFact,
 	CoreFunction,
+	CoreImmediate,
 	CoreInstruction,
 	CoreProgram,
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreBlockId } from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
 	readonly maxRounds?: number;
@@ -432,6 +435,243 @@ function stablePayload(payload: unknown): string {
 	return payload === undefined ? "" : JSON.stringify(payload);
 }
 
+function constantImmediate(instruction: CoreInstruction): CoreImmediate | undefined {
+	const fields = legacyFields(instruction);
+	switch (instruction.opcode) {
+		case "createUndefined":
+			return { kind: "undefined" };
+		case "createNull":
+			return { kind: "null" };
+		case "createBoolean":
+			return typeof fields.value === "boolean"
+				? { kind: "boolean", value: fields.value }
+				: undefined;
+		case "createNumber":
+		case "createF64":
+			return typeof fields.value === "number"
+				? { kind: "number", value: fields.value }
+				: undefined;
+		case "createString":
+			return typeof fields.stringIndex === "number"
+				? { kind: "string", index: fields.stringIndex }
+				: undefined;
+		default:
+			return undefined;
+	}
+}
+
+function immediateTruthiness(value: CoreImmediate): boolean | undefined {
+	switch (value.kind) {
+		case "undefined":
+		case "null":
+			return false;
+		case "boolean":
+			return value.value;
+		case "number":
+			return value.value !== 0 && !Number.isNaN(value.value);
+		case "string":
+			// The canonical string table does not yet expose contents to Core.
+			return undefined;
+	}
+}
+
+function immediateStrictEquals(left: CoreImmediate, right: CoreImmediate): boolean {
+	if (left.kind !== right.kind) return false;
+	switch (left.kind) {
+		case "undefined":
+		case "null":
+			return true;
+		case "boolean":
+			return left.value === (right as Extract<CoreImmediate, { kind: "boolean" }>).value;
+		case "number":
+			return left.value === (right as Extract<CoreImmediate, { kind: "number" }>).value;
+		case "string":
+			return left.index === (right as Extract<CoreImmediate, { kind: "string" }>).index;
+	}
+}
+
+function remapEdge(
+	edge: CoreEdge,
+	blocks: ReadonlyMap<CoreBlockId, CoreBlockId>,
+): CoreEdge {
+	const block = blocks.get(edge.block);
+	if (block === undefined) throw new Error(`Cannot retain edge to removed Core block ${edge.block}`);
+	return { ...edge, block };
+}
+
+function remapBlockTerminator(
+	terminator: CoreTerminator,
+	blocks: ReadonlyMap<CoreBlockId, CoreBlockId>,
+): CoreTerminator {
+	switch (terminator.kind) {
+		case "jump":
+			return { ...terminator, edge: remapEdge(terminator.edge, blocks) };
+		case "branch":
+			return {
+				...terminator,
+				consequent: remapEdge(terminator.consequent, blocks),
+				alternate: remapEdge(terminator.alternate, blocks),
+			};
+		case "guard":
+			return {
+				...terminator,
+				success: remapEdge(terminator.success, blocks),
+				fallback: remapEdge(terminator.fallback, blocks),
+			};
+		case "switch":
+			return {
+				...terminator,
+				cases: terminator.cases.map((entry) => ({
+					...entry,
+					edge: remapEdge(entry.edge, blocks),
+				})),
+				default: remapEdge(terminator.default, blocks),
+			};
+		case "return":
+		case "throw":
+		case "unreachable":
+			return terminator;
+	}
+}
+
+function factSurvivesBlockRemoval(
+	fact: CoreFact,
+	liveInstructions: ReadonlySet<number>,
+): boolean {
+	if (
+		fact.validity.kind === "guard" &&
+		!liveInstructions.has(fact.validity.instruction)
+	) {
+		return false;
+	}
+	return fact.obligations.every(
+		(obligation) =>
+			obligation.kind !== "guard" || liveInstructions.has(obligation.instruction),
+	);
+}
+
+function removeUnreachableBlocks(fn: CoreFunction): CoreFunction {
+	const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
+	if (cfg.reachable.size === fn.blocks.length) return fn;
+	const blockIds = new Map<CoreBlockId, CoreBlockId>();
+	for (const block of fn.blocks) {
+		if (cfg.reachable.has(block.id)) blockIds.set(block.id, coreBlockId(blockIds.size));
+	}
+	const liveInstructions = new Set<number>();
+	for (const block of fn.blocks) {
+		if (!cfg.reachable.has(block.id)) continue;
+		for (const instruction of block.instructions) liveInstructions.add(instruction.id);
+		liveInstructions.add(block.terminator.id);
+	}
+	const blocks = fn.blocks
+		.filter((block) => cfg.reachable.has(block.id))
+		.map((block): CoreBlock => {
+			const id = blockIds.get(block.id)!;
+			const handlerTarget =
+				block.handler === undefined ? undefined : blockIds.get(block.handler.block);
+			return {
+				...block,
+				id,
+				terminator: remapBlockTerminator(block.terminator, blockIds),
+				...(handlerTarget === undefined
+					? { handler: undefined }
+					: { handler: { ...block.handler!, block: handlerTarget } }),
+			};
+		});
+	const values = fn.values
+		.filter((value) =>
+			value.definition.kind === "block-parameter"
+				? blockIds.has(value.definition.block)
+				: liveInstructions.has(value.definition.instruction),
+		)
+		.map((value) =>
+			value.definition.kind !== "block-parameter"
+				? value
+				: {
+						...value,
+						definition: {
+							...value.definition,
+							block: blockIds.get(value.definition.block)!,
+						},
+					},
+		);
+	const entry = blockIds.get(fn.entry);
+	if (entry === undefined) throw new Error("Core entry block became unreachable");
+	const bodyEntry =
+		fn.bodyEntry === undefined ? undefined : blockIds.get(fn.bodyEntry);
+	return {
+		...fn,
+		entry,
+		...(bodyEntry === undefined ? { bodyEntry: undefined } : { bodyEntry }),
+		blocks,
+		values,
+		facts: fn.facts.filter((fact) => factSurvivesBlockRemoval(fact, liveInstructions)),
+		mutationEpoch: fn.mutationEpoch + 1,
+	};
+}
+
+/** Resolve primitive branches and switches, then restore Core's dense reachable CFG. */
+const simplifyControlFlow: CoreFunctionPass = {
+	name: "simplify-control-flow",
+	run(fn) {
+		const constants = new Map<CoreValueId, CoreImmediate>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.outputs.length !== 1) continue;
+				const value = constantImmediate(instruction);
+				if (value !== undefined) constants.set(instruction.outputs[0]!, value);
+			}
+		}
+		let changed = false;
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			const terminator = block.terminator;
+			if (terminator.kind === "branch") {
+				const condition = constants.get(terminator.condition);
+				const truthy = condition === undefined ? undefined : immediateTruthiness(condition);
+				if (truthy === undefined) return block;
+				changed = true;
+				return {
+					...block,
+					terminator: {
+						kind: "jump",
+						id: terminator.id,
+						edge: truthy ? terminator.consequent : terminator.alternate,
+						...(terminator.sourcePosition === undefined
+							? {}
+							: { sourcePosition: terminator.sourcePosition }),
+					},
+				};
+			}
+			if (terminator.kind === "switch") {
+				const discriminant = constants.get(terminator.discriminant);
+				if (discriminant === undefined) return block;
+				const matched = terminator.cases.find(({ value }) =>
+					immediateStrictEquals(discriminant, value),
+				);
+				changed = true;
+				return {
+					...block,
+					terminator: {
+						kind: "jump",
+						id: terminator.id,
+						edge: matched?.edge ?? terminator.default,
+						...(terminator.sourcePosition === undefined
+							? {}
+							: { sourcePosition: terminator.sourcePosition }),
+					},
+				};
+			}
+			return block;
+		});
+		if (!changed) return fn;
+		return removeUnreachableBlocks({
+			...fn,
+			blocks,
+			mutationEpoch: fn.mutationEpoch + 1,
+		});
+	},
+};
+
 const VALUE_NUMBERED_OPCODES = new Set([
 	"createBigint",
 	"createBoolean",
@@ -565,6 +805,7 @@ const deadInstructionElimination: CoreFunctionPass = {
 
 const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
+	simplifyControlFlow,
 	foldStaticPropertyKeys,
 	copyAndValueNumber,
 	deadInstructionElimination,
