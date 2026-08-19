@@ -9,7 +9,6 @@ import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/core-ir.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { lowerCoreProgramToVmDefinition } from "../src/lower-vm.ts";
-import { allocateDevelopmentRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 function bridge(source: string) {
@@ -55,7 +54,6 @@ describe("Core IR semantic bridge", () => {
 		expect(exceptional.length).toBeGreaterThan(0);
 
 		const lowered = lowerCoreProgramToRegisters(converted);
-		allocateDevelopmentRegisters(lowered);
 		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
 	});
@@ -67,7 +65,6 @@ describe("Core IR semantic bridge", () => {
 			console.log(total);
 		`);
 		const lowered = lowerCoreProgramToRegisters(converted);
-		allocateDevelopmentRegisters(lowered);
 		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.length).toBeGreaterThan(0);
 		expect(

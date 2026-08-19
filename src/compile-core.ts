@@ -12,7 +12,6 @@ import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
 import { lowerCoreProgramToVmDefinition } from "./lower-vm.ts";
 import type { VmDefinition } from "./lower-vm.ts";
-import { allocateDevelopmentRegisters, allocateRegisters } from "./register-alloc.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
 
 export type CompileCorePhase =
@@ -20,7 +19,6 @@ export type CompileCorePhase =
 	| "construct core ir"
 	| "core ir optimizations"
 	| "lower core ir"
-	| "register allocation"
 	| "lower to vm";
 
 export interface CompileCoreOptions {
@@ -67,12 +65,9 @@ export function compileSemanticProgramToVmDefinition(
 	});
 	options.afterCoreOptimization?.(optimized);
 	const lowered = runPhase("lower core ir", () =>
-		lowerCoreProgramToRegisters(optimized),
-	);
-	runPhase("register allocation", () =>
-		options.optimization === "development"
-			? allocateDevelopmentRegisters(lowered)
-			: allocateRegisters(lowered),
+		lowerCoreProgramToRegisters(optimized, {
+			reuseRegisters: options.optimization !== "development",
+		}),
 	);
 	return runPhase("lower to vm", () =>
 		lowerCoreProgramToVmDefinition(lowered, options.profile === true),

@@ -28,8 +28,6 @@ describe("compileSemanticProgramToVmDefinition", () => {
 			"after optimization",
 			"start:lower core ir",
 			"end:lower core ir",
-			"start:register allocation",
-			"end:register allocation",
 			"start:lower to vm",
 			"end:lower to vm",
 		]);

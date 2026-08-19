@@ -39,7 +39,6 @@ describe("compileEntrypoint build policy", () => {
 			"construct core ir",
 			"core ir optimizations",
 			"lower core ir",
-			"register allocation",
 			"lower to vm",
 		]);
 	});
@@ -61,7 +60,6 @@ describe("compileEntrypoint build policy", () => {
 			"construct core ir",
 			"core ir optimizations",
 			"lower core ir",
-			"register allocation",
 			"lower to vm",
 			"serialize",
 		]);

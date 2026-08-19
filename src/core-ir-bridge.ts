@@ -1,3 +1,8 @@
+import { builtinOperationDescriptor } from "./builtin-registry.ts";
+import {
+	compilerFactIsWorldInvariant,
+	knownBuiltinCallProves,
+} from "./compiler-facts.ts";
 import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
 import { coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import { verifyCoreFunction, verifyCoreProgram } from "./core-ir-verifier.ts";
@@ -32,8 +37,133 @@ import type {
 	IRInstruction,
 	IRRegion,
 } from "./ir.ts";
-import { inferVirtualReps } from "./register-alloc.ts";
-import type { RegisterRep } from "./register-alloc.ts";
+
+type ImportedRegisterRepresentation = "boxed" | "number" | "boolean";
+
+const COMPARE_OPERATORS = new Set(["<", "<=", ">", ">=", "===", "==", "!==", "!="]);
+const NUMBER_FROM_NUMBERS = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"%",
+]);
+
+function importedInstructionRepresentation(
+	instruction: IRInstruction,
+	representationOf: (register: number) => ImportedRegisterRepresentation | null,
+): ImportedRegisterRepresentation | null {
+	switch (instruction.type) {
+		case "createNumber":
+		case "createF64":
+		case "mathUnaryNumber":
+		case "mathBinaryNumber":
+			return "number";
+		case "createBoolean":
+		case "typeofCompare":
+			return "boolean";
+		case "move":
+			return representationOf(instruction.registers[1]);
+		case "binary": {
+			if (COMPARE_OPERATORS.has(instruction.operator)) return "boolean";
+			if (!NUMBER_FROM_NUMBERS.has(instruction.operator)) return "boxed";
+			const left = representationOf(instruction.registers[1]);
+			const right = representationOf(instruction.registers[2]);
+			return left === null || right === null
+				? null
+				: left === "number" && right === "number"
+					? "number"
+					: "boxed";
+		}
+		case "unary": {
+			if (instruction.operator === "!") return "boolean";
+			if (
+				!["-", "+", "~", "tonumeric", "increment", "decrement"].includes(
+					instruction.operator,
+				)
+			) {
+				return "boxed";
+			}
+			const source = representationOf(instruction.registers[1]);
+			return source === null ? null : source === "number" ? "number" : "boxed";
+		}
+		case "call": {
+			const call = instruction.knownBuiltinCall;
+			const descriptor =
+				call === undefined ? undefined : builtinOperationDescriptor(call.operation);
+			const arguments_ = instruction.registers.slice(3);
+			if (
+				call === undefined ||
+				descriptor?.nativeNumberArity !== arguments_.length ||
+				!knownBuiltinCallProves(call, call.operation) ||
+				!compilerFactIsWorldInvariant(call.identity)
+			) {
+				return "boxed";
+			}
+			for (const argument of arguments_) {
+				const representation = representationOf(argument);
+				if (representation === null) return null;
+				if (representation !== "number") return "boxed";
+			}
+			return "number";
+		}
+		default:
+			return "boxed";
+	}
+}
+
+function inferImportedRegisterRepresentations(
+	fn: IRFunction,
+): Map<number, ImportedRegisterRepresentation> {
+	const representations = new Map<number, ImportedRegisterRepresentation | null>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) continue;
+			for (const register of instruction.registers) {
+				if (register < 0 || representations.has(register)) continue;
+				representations.set(register, register < fn.parameterCount ? "boxed" : null);
+			}
+		}
+	}
+	const representationOf = (
+		register: number,
+	): ImportedRegisterRepresentation | null =>
+		representations.has(register) ? representations.get(register)! : "boxed";
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const produced = importedInstructionRepresentation(
+					instruction,
+					representationOf,
+				);
+				if (produced === null) continue;
+				for (const destination of definedRegisters(instruction)) {
+					if (destination < fn.parameterCount) continue;
+					const current = representations.get(destination) ?? null;
+					const joined = current === null ? produced : current === produced ? current : "boxed";
+					if (joined !== current) {
+						representations.set(destination, joined);
+						changed = true;
+					}
+				}
+			}
+		}
+	}
+	return new Map(
+		[...representations].map(([register, representation]) => [
+			register,
+			representation ?? "boxed",
+		]),
+	);
+}
 
 interface LegacyToken {
 	readonly instruction: IRInstruction;
@@ -252,7 +382,7 @@ function coreInstructionInputs(
 function outputRepresentation(
 	instruction: IRInstruction,
 	index: number,
-	registerRepresentations: ReadonlyMap<number, RegisterRep>,
+	registerRepresentations: ReadonlyMap<number, ImportedRegisterRepresentation>,
 ): CoreRepresentation {
 	if (instruction.type === "createNumber" || instruction.type === "createF64") return "f64";
 	if (instruction.type === "mathUnaryNumber" || instruction.type === "mathBinaryNumber") {
@@ -276,7 +406,7 @@ function outputRepresentation(
 }
 
 function coreRegisterRepresentation(
-	registerRepresentations: ReadonlyMap<number, RegisterRep>,
+	registerRepresentations: ReadonlyMap<number, ImportedRegisterRepresentation>,
 	register: number,
 ): CoreRepresentation {
 	switch (registerRepresentations.get(register)) {
@@ -840,7 +970,7 @@ function sortedRegisters(registers: ReadonlySet<number>): Array<number> {
 function convertStraightLineFunction(
 	fn: IRFunction,
 	verify: boolean,
-	registerRepresentations: ReadonlyMap<number, RegisterRep>,
+	registerRepresentations: ReadonlyMap<number, ImportedRegisterRepresentation>,
 ): ConvertedCoreFunction | undefined {
 	if (fn.blocks.length !== 1) return undefined;
 	const executable = fn.blocks[0]!.instructions.filter(
@@ -960,7 +1090,7 @@ function convertFunction(
 	fn: IRFunction,
 	verify: boolean,
 ): ConvertedCoreFunction {
-	const registerRepresentations = inferVirtualReps(fn);
+	const registerRepresentations = inferImportedRegisterRepresentations(fn);
 	const straightLine = convertStraightLineFunction(
 		fn,
 		verify,
@@ -1391,7 +1521,10 @@ function lowerCoreRegions(
 	})) as unknown as ReadonlyArray<IRRegion>;
 }
 
-export function coreRegisterClasses(core: CoreFunction): {
+export function coreRegisterClasses(
+	core: CoreFunction,
+	reuseRegisters = true,
+): {
 	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
 	readonly registers: Map<CoreValueId, number>;
 } {
@@ -1501,6 +1634,19 @@ export function coreRegisterClasses(core: CoreFunction): {
 	const abi = new Map<CoreValueId, number>(
 		core.parameters.map((value, index) => [value, index]),
 	);
+	let snapshotIndex = 0;
+	for (const instruction of core.blocks[core.entry]!.instructions) {
+		if (
+			instruction.opcode !== "loadArgumentCount" &&
+			instruction.opcode !== "loadArgument"
+		) {
+			break;
+		}
+		const output = instruction.outputs[0];
+		if (output !== undefined) {
+			abi.set(output, core.parameters.length + snapshotIndex++);
+		}
+	}
 	const find = (value: CoreValueId): CoreValueId => {
 		const direct = parent.get(value)!;
 		if (direct === value) return value;
@@ -1550,9 +1696,59 @@ export function coreRegisterClasses(core: CoreFunction): {
 	const roots = new Map<CoreValueId, CoreValueId>(
 		core.values.map(({ id }) => [id, find(id)]),
 	);
+	const rootInterference = new Map<CoreValueId, Set<CoreValueId>>();
+	for (const root of new Set(roots.values())) rootInterference.set(root, new Set());
+	for (const [value, neighbors] of interference) {
+		const root = find(value);
+		for (const neighbor of neighbors) {
+			const neighborRoot = find(neighbor);
+			if (neighborRoot !== root) rootInterference.get(root)!.add(neighborRoot);
+		}
+	}
 	const registers = new Map<CoreValueId, number>();
-	for (const [index, parameter] of core.parameters.entries()) {
-		registers.set(find(parameter), index);
+	const colorRepresentations = new Map<number, CoreRepresentation>();
+	for (const [value, color] of abi) {
+		const root = find(value);
+		const existing = registers.get(root);
+		if (existing !== undefined && existing !== color) {
+			throw new Error(`Core ABI values with distinct slots merged at %${root}`);
+		}
+		registers.set(root, color);
+		colorRepresentations.set(color, representations.get(root)!);
+	}
+	let nextUniqueColor = Math.max(-1, ...registers.values()) + 1;
+	const orderedRoots = [...rootInterference.keys()].sort(
+		(left, right) =>
+			(rootInterference.get(right)?.size ?? 0) -
+				(rootInterference.get(left)?.size ?? 0) ||
+			left - right,
+	);
+	for (const root of orderedRoots) {
+		if (registers.has(root)) continue;
+		const representation = representations.get(root)!;
+		if (!reuseRegisters) {
+			registers.set(root, nextUniqueColor);
+			colorRepresentations.set(nextUniqueColor, representation);
+			nextUniqueColor++;
+			continue;
+		}
+		const unavailable = new Set(
+			[...(rootInterference.get(root) ?? [])].flatMap((neighbor) => {
+				const color = registers.get(neighbor);
+				return color === undefined ? [] : [color];
+			}),
+		);
+		let color = 0;
+		while (
+			unavailable.has(color) ||
+			(colorRepresentations.has(color) &&
+				colorRepresentations.get(color) !== representation)
+		) {
+			color++;
+		}
+		registers.set(root, color);
+		colorRepresentations.set(color, representation);
+		nextUniqueColor = Math.max(nextUniqueColor, color + 1);
 	}
 	return { roots, registers };
 }
@@ -1726,6 +1922,7 @@ function lowerFunctionBridge(
 	core: CoreFunction,
 	legacy: IRFunction,
 	instructionSites?: WeakMap<object, CompilerSiteFacts>,
+	reuseRegisters = true,
 ): IRFunction {
 	verifyCoreFunction(core, coreOpcodeRegistry);
 	const loweredInstructions = new Map<CoreInstructionId, IRInstruction>();
@@ -1765,8 +1962,13 @@ function lowerFunctionBridge(
 		blockOrder.map((block, index) => [block, index]),
 	);
 	const blocks: Array<IRBlock> = blockOrder.map(() => ({ instructions: [] }));
-	const nextRegister = { value: core.parameters.length };
-	const { roots, registers: allocatedRegisters } = coreRegisterClasses(core);
+	const { roots, registers: allocatedRegisters } = coreRegisterClasses(
+		core,
+		reuseRegisters,
+	);
+	const nextRegister = {
+		value: Math.max(-1, ...allocatedRegisters.values()) + 1,
+	};
 	const registerForValue = (value: CoreValueId): number => {
 		const root = roots.get(value)!;
 		let register = allocatedRegisters.get(root);
@@ -2009,7 +2211,14 @@ function lowerFunctionBridge(
 }
 
 /** Lower canonical SSA back into the existing VM-facing register form. */
-export function lowerCoreProgramToRegisters(core: CoreProgram): CoreRegisterProgram {
+export interface LowerCoreToRegistersOptions {
+	readonly reuseRegisters?: boolean;
+}
+
+export function lowerCoreProgramToRegisters(
+	core: CoreProgram,
+	options: LowerCoreToRegistersOptions = {},
+): CoreRegisterProgram {
 	const compilation = core.compilation;
 	if (compilation === undefined) {
 		throw new Error("Core program is missing product compilation metadata");
@@ -2054,6 +2263,7 @@ export function lowerCoreProgramToRegisters(core: CoreProgram): CoreRegisterProg
 						: {}),
 				},
 				compilation.facts.instructionSites,
+				options.reuseRegisters ?? true,
 			);
 		}),
 	};

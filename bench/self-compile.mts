@@ -53,7 +53,6 @@ const compilePhases = {
 	"construct core ir": "optimizeMs",
 	"core ir optimizations": "optimizeMs",
 	"lower core ir": "optimizeMs",
-	"register allocation": "regallocMs",
 	"lower to vm": "lowerMs",
 } as const;
 const definition = compileEntrypoint(path.resolve(inputPath), {

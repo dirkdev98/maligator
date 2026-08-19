@@ -5,7 +5,6 @@ export const PROFILE_PHASE_NAMES = [
 	"construct core ir",
 	"core ir optimizations",
 	"lower core ir",
-	"register allocation",
 	"lower to vm",
 	"serialize",
 ] as const;

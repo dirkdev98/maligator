@@ -417,7 +417,7 @@ function publish(file: string, contents: string | Uint8Array): void {
  *
  * The artifact is the same relocatable VM wire consumed by the interpreter, now
  * including native-code generation metadata. Cache hits therefore skip parsing,
- * graph construction, semantic analysis, optimization, register allocation, and
+ * graph construction, semantic analysis, Core optimization/allocation, and
  * lowering without changing the generated C contract.
  */
 export function compileBuildFrontend(
