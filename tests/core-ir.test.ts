@@ -310,4 +310,30 @@ describe("Core IR", () => {
 			/does not dominate/,
 		);
 	});
+
+	it("requires certificate data references to belong to the claimed slice", () => {
+		const opcodes = registry();
+		const builder = new CoreFunctionBuilder(0, opcodes);
+		const entry = builder.createBlock();
+		const [value] = builder.appendInstruction(entry, "constant", []);
+		builder.setTerminator(entry, { kind: "return", value: value! });
+		const complete = builder.finish(entry);
+		const producer = complete.blocks[0]!.instructions[0]!;
+		const terminator = complete.blocks[0]!.terminator;
+		const invalid = {
+			...complete,
+			regions: [
+				{
+					kind: "test-certificate",
+					anchors: [terminator.id],
+					claimedInstructions: [terminator.id],
+					ordinaryBlocks: [entry],
+					exceptionalBlocks: [],
+					data: { producer: { $coreInstruction: producer.id } },
+				},
+			],
+		};
+
+		expect(() => verifyCoreFunction(invalid, opcodes)).toThrow(/not claimed/);
+	});
 });

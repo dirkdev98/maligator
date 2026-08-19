@@ -184,12 +184,19 @@ function verifyRegionReferences(
 	value: unknown,
 	path: string,
 	instructions: ReadonlySet<CoreInstructionId>,
+	claimedInstructions: ReadonlySet<CoreInstructionId>,
 	blocks: ReadonlyMap<CoreBlockId, CoreBlock>,
 ): void {
 	if (value === null || typeof value !== "object") return;
 	if (Array.isArray(value)) {
 		for (const [index, entry] of value.entries()) {
-			verifyRegionReferences(entry, `${path}[${index}]`, instructions, blocks);
+			verifyRegionReferences(
+				entry,
+				`${path}[${index}]`,
+				instructions,
+				claimedInstructions,
+				blocks,
+			);
 		}
 		return;
 	}
@@ -197,6 +204,9 @@ function verifyRegionReferences(
 	if (Object.keys(object).length === 1 && typeof object.$coreInstruction === "number") {
 		if (!instructions.has(object.$coreInstruction as CoreInstructionId)) {
 			fail(`${path} references unknown instruction @${object.$coreInstruction}`);
+		}
+		if (!claimedInstructions.has(object.$coreInstruction as CoreInstructionId)) {
+			fail(`${path} references instruction @${object.$coreInstruction} that is not claimed`);
 		}
 		return;
 	}
@@ -207,7 +217,13 @@ function verifyRegionReferences(
 		return;
 	}
 	for (const [key, entry] of Object.entries(object)) {
-		verifyRegionReferences(entry, `${path}.${key}`, instructions, blocks);
+		verifyRegionReferences(
+			entry,
+			`${path}.${key}`,
+			instructions,
+			claimedInstructions,
+			blocks,
+		);
 	}
 }
 
@@ -432,6 +448,7 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 			region.data,
 			`region ${region.kind}.data`,
 			instructionIds,
+			claimed,
 			blocks,
 		);
 	}
