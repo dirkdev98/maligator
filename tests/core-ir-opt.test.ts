@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
@@ -75,6 +77,38 @@ describe("Core IR optimizer", () => {
 		expect(opcodes).toContain("loadPropertyStatic");
 	});
 
+	it("attaches guarded builtin identity and semantics to Core calls", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			"function append(array, value) { array.push(value); }",
+			"core-known-builtin.js",
+		);
+		let call: CoreFunction["blocks"][number]["instructions"][number] | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			afterCoreOptimization(program) {
+				call = program.functions
+					.flatMap(({ blocks }) => blocks)
+					.flatMap(({ instructions }) => instructions)
+					.find(({ opcode }) => opcode === "call");
+			},
+		});
+
+		expect(call?.attributes.knownBuiltinCall).toMatchObject({
+			operation: "Array.prototype.push",
+			identity: {
+				kind: "known",
+				proof: {
+					dependencies: [{ kind: "world", fact: "primordials.locked" }],
+					obligations: [{ kind: "fallback" }],
+				},
+			},
+			semantics: {
+				kind: "known",
+				value: { result: "array-length" },
+			},
+		});
+	});
+
 	it("folds primitive arithmetic with exact f64 edge semantics", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const entry = builder.createBlock();
@@ -97,9 +131,8 @@ describe("Core IR optimizer", () => {
 		});
 		builder.setTerminator(entry, { kind: "return", value: equal! });
 
-		const fn = executeCoreOptimizations(
-			coreProgram([builder.finish(entry)]),
-		).program.functions[0]!;
+		const fn = executeCoreOptimizations(coreProgram([builder.finish(entry)])).program
+			.functions[0]!;
 		expect(fn.blocks[0]!.instructions).toHaveLength(1);
 		expect(fn.blocks[0]!.instructions[0]).toMatchObject({
 			opcode: "createBoolean",
@@ -174,9 +207,8 @@ describe("Core IR optimizer", () => {
 			builder.setTerminator(block, { kind: "return", value: result! });
 		}
 
-		const fn = executeCoreOptimizations(
-			coreProgram([builder.finish(entry)]),
-		).program.functions[0]!;
+		const fn = executeCoreOptimizations(coreProgram([builder.finish(entry)])).program
+			.functions[0]!;
 		expect(fn.blocks).toHaveLength(1);
 		expect(fn.blocks[0]!.terminator).toMatchObject({ kind: "return" });
 		expect(fn.blocks[0]!.instructions[0]).toMatchObject({
@@ -204,9 +236,8 @@ describe("Core IR optimizer", () => {
 		]);
 		builder.setTerminator(body, { kind: "return", value: result! });
 
-		const fn = executeCoreOptimizations(
-			coreProgram([builder.finish(entry)]),
-		).program.functions[0]!;
+		const fn = executeCoreOptimizations(coreProgram([builder.finish(entry)])).program
+			.functions[0]!;
 		expect(fn.blocks).toHaveLength(1);
 		expect(fn.blocks[0]!.instructions[0]).toMatchObject({
 			opcode: "call",
@@ -248,9 +279,8 @@ describe("Core IR optimizer", () => {
 			],
 		};
 
-		const optimized = executeCoreOptimizations(
-			coreProgram([protectedFunction]),
-		).program.functions[0]!;
+		const optimized = executeCoreOptimizations(coreProgram([protectedFunction])).program
+			.functions[0]!;
 		const optimizedCall = optimized.blocks[0]!.instructions.find(
 			(instruction) => instruction.id === call.id,
 		);
@@ -290,9 +320,8 @@ describe("Core IR optimizer", () => {
 			],
 		};
 
-		const optimized = executeCoreOptimizations(
-			coreProgram([protectedFunction]),
-		).program.functions[0]!;
+		const optimized = executeCoreOptimizations(coreProgram([protectedFunction])).program
+			.functions[0]!;
 
 		expect(
 			optimized.blocks[0]!.instructions.find(

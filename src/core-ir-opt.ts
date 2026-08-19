@@ -1,8 +1,10 @@
+import { builtinOperations } from "./builtin-registry.ts";
 import type {
 	OptimizationAblation,
 	OptimizationMetrics,
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
+import { knownFact, sourceSiteId } from "./compiler-facts.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
@@ -10,6 +12,7 @@ import { verifyCoreFunction } from "./core-ir-verifier.ts";
 import type {
 	CoreBlock,
 	CoreBlockId,
+	CoreAttributeValue,
 	CoreEdge,
 	CoreFact,
 	CoreFunction,
@@ -77,6 +80,29 @@ function attributeObject(value: unknown): Readonly<Record<string, unknown>> | un
 	return value !== null && typeof value === "object" && !Array.isArray(value)
 		? (value as Readonly<Record<string, unknown>>)
 		: undefined;
+}
+
+function coreAttribute(value: unknown, path: string): CoreAttributeValue {
+	if (
+		value === undefined ||
+		value === null ||
+		typeof value === "boolean" ||
+		typeof value === "number" ||
+		typeof value === "string"
+	) {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value.map((entry, index) => coreAttribute(entry, `${path}[${index}]`));
+	}
+	if (typeof value !== "object") {
+		throw new Error(`Unsupported Core attribute ${path}: ${typeof value}`);
+	}
+	const result: Record<string, CoreAttributeValue> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		result[key] = coreAttribute(entry, `${path}.${key}`);
+	}
+	return result;
 }
 
 function knownBuiltinIdentity(instruction: CoreInstruction): boolean {
@@ -163,6 +189,149 @@ function optimizationPassDelta(
 ): OptimizationPassDelta {
 	return { ...pass, before, after, delta: metricDelta(before, after) };
 }
+
+const BUILTIN_OPERATION_BY_KEY = new Map(
+	builtinOperations.map((operation) => [operation.key, operation] as const),
+);
+
+function decodeString(program: CoreProgram, index: number): string | undefined {
+	const units = program.stringConstants[index];
+	return units === undefined ? undefined : String.fromCodePoint(...units);
+}
+
+function builtinSourceSite(
+	program: CoreProgram,
+	fn: CoreFunction,
+	positionId: number | undefined,
+	operation: string,
+): ReturnType<typeof sourceSiteId> | undefined {
+	if (positionId === undefined) return undefined;
+	const position = program.sourcePositions[positionId];
+	if (position === undefined) return undefined;
+	const owner =
+		position.inlinedFunctionIndex === undefined
+			? fn
+			: program.functions.find(
+					(candidate) => candidate.functionIndex === position.inlinedFunctionIndex,
+				);
+	return owner === undefined
+		? undefined
+		: sourceSiteId(
+				owner.metadata.sourcePath,
+				position.line,
+				position.column,
+				`builtin-call:${operation}`,
+			);
+}
+
+/**
+ * Attach guarded builtin identity and semantics to an ordinary property call.
+ * Static method names are globally unique in the registry. The loaded callee
+ * remains an SSA input and the fact retains a fallback obligation, so mutable
+ * worlds still perform the exact runtime identity check before specializing.
+ */
+const annotateKnownBuiltinCalls: CoreFunctionPass = {
+	name: "annotate-known-builtin-calls",
+	run(fn, _analyses, program) {
+		const compilation = program.compilation;
+		if (compilation === undefined) return fn;
+		const definitions = new Map<CoreValueId, CoreInstruction>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) definitions.set(output, instruction);
+			}
+		}
+		let changed = false;
+		let guardOrdinal = 0;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction) => {
+					if (
+						instruction.opcode !== "call" ||
+						instruction.attributes.knownBuiltinCall !== undefined ||
+						instruction.inputs.length < 2
+					) {
+						return instruction;
+					}
+					const property = definitions.get(instruction.inputs[0]!);
+					const stringIndex = property?.attributes.stringIndex;
+					if (
+						property?.opcode !== "loadPropertyStatic" ||
+						property.inputs.length !== 1 ||
+						property.inputs[0] !== instruction.inputs[1] ||
+						typeof stringIndex !== "number"
+					) {
+						return instruction;
+					}
+					const key = decodeString(program, stringIndex);
+					const descriptor =
+						key === undefined ? undefined : BUILTIN_OPERATION_BY_KEY.get(key);
+					if (descriptor === undefined) return instruction;
+					const site = builtinSourceSite(
+						program,
+						fn,
+						instruction.sourcePosition,
+						descriptor.id,
+					);
+					const sharedIdentity = compilation.facts.builtinIdentities.get(descriptor.id);
+					const identity =
+						sharedIdentity?.kind === "known"
+							? knownFact(sharedIdentity.value, {
+									scope:
+										site === undefined
+											? { kind: "function" as const, id: fn.functionIndex }
+											: { kind: "site" as const, id: site },
+									dependencies: sharedIdentity.proof.dependencies,
+									obligations: [
+										...sharedIdentity.proof.obligations,
+										{
+											kind: "fallback" as const,
+											id: `generic-call:${site ?? `${fn.functionIndex}:${guardOrdinal}`}`,
+										},
+									],
+									origin: `guarded-builtin-site-analysis:${sharedIdentity.proof.origin}`,
+								})
+							: (sharedIdentity ?? {
+									kind: "unknown" as const,
+									reason: "not-analyzed" as const,
+								});
+					guardOrdinal++;
+					changed = true;
+					return {
+						...instruction,
+						attributes: {
+							...instruction.attributes,
+							knownBuiltinCall: coreAttribute(
+								{
+									operation: descriptor.id,
+									identity,
+									semantics:
+										identity.kind === "known"
+											? knownFact(
+													{
+														effects: descriptor.effects,
+														result: descriptor.result,
+														lowerings: descriptor.lowerings,
+													},
+													{
+														...identity.proof,
+														origin: `builtin-registry-semantics:${descriptor.id}`,
+													},
+												)
+											: identity,
+									...(site === undefined ? {} : { sourceSite: site }),
+								},
+								"knownBuiltinCall",
+							),
+						},
+					};
+				}),
+			}),
+		);
+		return changed ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	},
+};
 
 function origin(
 	value: CoreValueId,
@@ -417,7 +586,11 @@ interface CoreFunctionPass {
 	readonly ablation?: OptimizationAblation;
 	/** Block identity is part of a region certificate until CFG regions migrate. */
 	readonly changesControlFlow?: boolean;
-	run(fn: CoreFunction, analyses: CoreAnalysisManager): CoreFunction;
+	run(
+		fn: CoreFunction,
+		analyses: CoreAnalysisManager,
+		program: CoreProgram,
+	): CoreFunction;
 }
 
 function instructionAttribute(instruction: CoreInstruction, name: string): unknown {
@@ -1252,6 +1425,7 @@ const combineLinearBlocks: CoreFunctionPass = {
 
 const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
+	annotateKnownBuiltinCalls,
 	foldPrimitiveConstants,
 	simplifyControlFlow,
 	combineLinearBlocks,
@@ -1364,7 +1538,7 @@ export function executeCoreOptimizations(
 					return fn;
 				}
 				const claimed = claimedInstructionSnapshots(fn);
-				const candidate = pass.run(fn, analyses);
+				const candidate = pass.run(fn, analyses, beforeProgram);
 				const next = preservesClaimedInstructions(claimed, candidate) ? candidate : fn;
 				const functionChanged = next !== fn;
 				traces.push({ name: pass.name, round, changed: functionChanged });
