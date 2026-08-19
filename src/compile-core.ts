@@ -8,7 +8,6 @@ import {
 } from "./core-ir-bridge.ts";
 import { executeCoreOptimizations } from "./core-ir-opt.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
-import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
 import type { IntermediateProgram } from "./ir.ts";
 import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
@@ -18,7 +17,6 @@ import type { SemanticProgram } from "./semantic-analysis.ts";
 
 export type CompileCorePhase =
 	| "compile to ir"
-	| "normalize semantic ir"
 	| "construct core ir"
 	| "core ir optimizations"
 	| "lower core ir"
@@ -57,11 +55,6 @@ export function compileSemanticProgramToVmDefinition(
 				compilationMode: options.optimization ?? "full",
 			},
 		}),
-	);
-	runPhase("normalize semantic ir", () =>
-		options.optimization === "development"
-			? undefined
-			: executeIROptimizations(ir, { ablations: options.optimizationAblations }),
 	);
 	const core = runPhase("construct core ir", () =>
 		intermediateProgramToCore(ir, { verify: true }),

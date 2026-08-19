@@ -23,17 +23,14 @@ import {
 } from "../build-flags.ts";
 import { touchCacheEntry } from "../cache-management.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
+import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
 import { compileEntrypointToBuffer } from "../compile-program.ts";
 import { compilerEntrypointSourceFiles } from "../compiler-bake.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
-import { executeIROptimizations } from "../ir-opt.ts";
-import { compileSemanticProgramToIr } from "../ir.ts";
 import { buildLocalBinary } from "../local-build.ts";
-import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
 import type { VmDefinition } from "../lower-vm.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";
 import { parseModule, parseScript } from "../parser.ts";
-import { allocateRegisters } from "../register-alloc.ts";
 import { ensureNativeArtifacts } from "../runtime-build.ts";
 import type { NativeArtifacts } from "../runtime-build.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
@@ -684,10 +681,7 @@ function test262CompileToC(
 					)
 				: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
 
-		const irProgram = compileSemanticProgramToIr(semanticProgram);
-		executeIROptimizations(irProgram);
-		allocateRegisters(irProgram);
-		const vmDefinition = lowerIrProgramToVmDefinition(irProgram);
+		const vmDefinition = compileSemanticProgramToVmDefinition(semanticProgram);
 
 		if (negativeAtCompile) {
 			// The source compiled cleanly, but a parse/early/resolution negative

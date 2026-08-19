@@ -40,7 +40,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Pre-1.0 compatibility starts from this format baseline.
-export const WIRE_VERSION = 1;
+export const WIRE_VERSION = 2;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 

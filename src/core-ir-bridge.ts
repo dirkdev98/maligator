@@ -1828,6 +1828,20 @@ function lowerFunctionBridge(
 			if (omittedInstructions.has(instruction.id)) continue;
 			instructions.push(...sourcePositionMarker(instruction.sourcePosition));
 			const lowered = rebuildInstruction(core, instruction, registerForValue);
+			if (lowered.type === "constructSuperExplicit") {
+				// Core models current-this as an ordinary SSA input. The compact VM op is
+				// two-address, so satisfy that target constraint here instead of leaking it
+				// into Core value allocation.
+				const destination = lowered.registers[0];
+				const currentThis = lowered.registers[4];
+				if (destination !== currentThis) {
+					instructions.push({
+						type: "move",
+						registers: [destination, currentThis],
+					});
+				}
+				lowered.registers[4] = destination;
+			}
 			instructions.push(lowered);
 			loweredInstructions.set(instruction.id, lowered);
 		}

@@ -11,15 +11,12 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { normalizeNativeFeatures } from "../src/build-flags.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { emitVmDefinition } from "../src/emit-vm.ts";
-import { executeIROptimizations } from "../src/ir-opt.ts";
-import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
-import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import { parseScript } from "../src/parser.ts";
-import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
@@ -53,10 +50,7 @@ function buildBinary(name: string, compiled: boolean): string {
 		path.resolve(fixture!),
 		parsed,
 	);
-	const ir = compileSemanticProgramToIr(semanticProgram);
-	executeIROptimizations(ir);
-	allocateRegisters(ir);
-	const definition = lowerIrProgramToVmDefinition(ir);
+	const definition = compileSemanticProgramToVmDefinition(semanticProgram);
 	const cSource = emitVmDefinition(definition, { compiled });
 	return buildLocalBinary({ context, name, cSource, verbose: false }).binaryPath;
 }

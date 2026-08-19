@@ -217,4 +217,88 @@ describe("Core IR optimizer", () => {
 		);
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 	});
+
+	it("optimizes outside a region while preserving its claimed instruction slice", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [callee] = builder.appendInstruction(entry, "createUndefined", []);
+		const [result] = builder.appendInstruction(entry, "call", [callee!, callee!]);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const complete = builder.finish(entry);
+		const call = complete.blocks[0]!.instructions.find(
+			(instruction) => instruction.opcode === "call",
+		)!;
+		const protectedFunction = {
+			...complete,
+			regions: [
+				{
+					kind: "test-certificate",
+					anchors: [call.id],
+					claimedInstructions: [call.id],
+					ordinaryBlocks: [entry],
+					exceptionalBlocks: [],
+					data: { call: { $coreInstruction: call.id } },
+				},
+			],
+		};
+
+		const optimized = executeCoreOptimizations(
+			coreProgram([protectedFunction]),
+		).program.functions[0]!;
+		const optimizedCall = optimized.blocks[0]!.instructions.find(
+			(instruction) => instruction.id === call.id,
+		);
+
+		expect(optimizedCall).toEqual(call);
+		expect(
+			optimized.blocks[0]!.instructions.filter(
+				(instruction) => instruction.opcode === "createNumber",
+			),
+		).toHaveLength(0);
+		expect(() => verifyCoreFunction(optimized, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("rejects a pass result that mutates a claimed instruction", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [dead] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [result] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const complete = builder.finish(entry);
+		const claimed = complete.blocks[0]!.instructions.find(
+			(instruction) => instruction.outputs[0] === dead,
+		)!;
+		const protectedFunction = {
+			...complete,
+			regions: [
+				{
+					kind: "test-certificate",
+					anchors: [claimed.id],
+					claimedInstructions: [claimed.id],
+					ordinaryBlocks: [entry],
+					exceptionalBlocks: [],
+					data: { producer: { $coreInstruction: claimed.id } },
+				},
+			],
+		};
+
+		const optimized = executeCoreOptimizations(
+			coreProgram([protectedFunction]),
+		).program.functions[0]!;
+
+		expect(
+			optimized.blocks[0]!.instructions.find(
+				(instruction) => instruction.id === claimed.id,
+			),
+		).toEqual(claimed);
+		expect(() => verifyCoreFunction(optimized, coreOpcodeRegistry)).not.toThrow();
+	});
 });

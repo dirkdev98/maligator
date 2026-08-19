@@ -275,6 +275,8 @@ export interface CoreOptimizationResult {
 interface CoreFunctionPass {
 	readonly name: string;
 	readonly ablation?: OptimizationAblation;
+	/** Block identity is part of a region certificate until CFG regions migrate. */
+	readonly changesControlFlow?: boolean;
 	run(fn: CoreFunction, analyses: CoreAnalysisManager): CoreFunction;
 }
 
@@ -848,6 +850,7 @@ function removeUnreachableBlocks(fn: CoreFunction): CoreFunction {
 /** Resolve primitive branches and switches, then restore Core's dense reachable CFG. */
 const simplifyControlFlow: CoreFunctionPass = {
 	name: "simplify-control-flow",
+	changesControlFlow: true,
 	run(fn) {
 		const constants = new Map<CoreValueId, CoreImmediate>();
 		for (const block of fn.blocks) {
@@ -1041,6 +1044,7 @@ const deadInstructionElimination: CoreFunctionPass = {
 /** Merge one dominance-safe linear edge at a time, substituting block arguments. */
 const combineLinearBlocks: CoreFunctionPass = {
 	name: "combine-linear-blocks",
+	changesControlFlow: true,
 	run(fn, analyses) {
 		const cfg = analyses.controlFlow(fn);
 		for (const predecessor of fn.blocks) {
@@ -1108,6 +1112,37 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	deadInstructionElimination,
 ];
 
+function claimedInstructionSnapshots(fn: CoreFunction): ReadonlyMap<number, string> {
+	const claimed = new Set(
+		fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
+	);
+	if (claimed.size === 0) return new Map();
+	const snapshots = new Map<number, string>();
+	for (const block of fn.blocks) {
+		for (const instruction of [...block.instructions, block.terminator]) {
+			if (!claimed.has(instruction.id)) continue;
+			snapshots.set(
+				instruction.id,
+				`${block.id}\0${stableAttributeValue(instruction)}`,
+			);
+		}
+	}
+	return snapshots;
+}
+
+function preservesClaimedInstructions(
+	before: ReadonlyMap<number, string>,
+	fn: CoreFunction,
+): boolean {
+	if (before.size === 0) return true;
+	const after = claimedInstructionSnapshots(fn);
+	if (after.size !== before.size) return false;
+	for (const [instruction, snapshot] of before) {
+		if (after.get(instruction) !== snapshot) return false;
+	}
+	return true;
+}
+
 export function executeCoreOptimizations(
 	program: CoreProgram,
 	options: CoreOptimizationOptions = {},
@@ -1139,11 +1174,13 @@ export function executeCoreOptimizations(
 				continue;
 			}
 			functions = functions.map((fn) => {
-				if (fn.regions.length > 0) {
+				if (fn.regions.length > 0 && pass.changesControlFlow === true) {
 					traces.push({ name: pass.name, round, changed: false });
 					return fn;
 				}
-				const next = pass.run(fn, analyses);
+				const claimed = claimedInstructionSnapshots(fn);
+				const candidate = pass.run(fn, analyses);
+				const next = preservesClaimedInstructions(claimed, candidate) ? candidate : fn;
 				const passChanged = next !== fn;
 				traces.push({ name: pass.name, round, changed: passChanged });
 				if (passChanged) {

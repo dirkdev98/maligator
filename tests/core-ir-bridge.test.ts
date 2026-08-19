@@ -4,6 +4,7 @@ import {
 	intermediateProgramToCore,
 } from "../src/core-ir-bridge.ts";
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
+import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/core-ir.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
@@ -224,5 +225,38 @@ describe("Core IR semantic bridge", () => {
 				.flatMap((fn) => fn.regions ?? [])
 				.map(({ kind }) => kind),
 		).toContain("stack-object-plan");
+	});
+
+	it("lowers explicit super current-this through the VM two-address constraint", () => {
+		const converted = bridge(`
+			class Parent {}
+			class Child extends Parent {
+				constructor() {
+					super();
+					this.repeat = () => super();
+				}
+			}
+			new Child();
+		`);
+		const lowered = coreProgramToIntermediate({
+			...converted,
+			core: executeCoreOptimizations(converted.core).program,
+		});
+		const instructions = lowered.functions.flatMap((fn) =>
+			fn.blocks.flatMap((block) => block.instructions),
+		);
+		const constructIndex = instructions.findIndex(
+			(instruction) => instruction.type === "constructSuperExplicit",
+		);
+		const construct = instructions[constructIndex]!;
+		if (construct.type !== "constructSuperExplicit") {
+			throw new Error("missing explicit super construction");
+		}
+
+		expect(construct.registers[0]).toBe(construct.registers[4]);
+		const move = instructions[constructIndex - 1]!;
+		expect(move.type).toBe("move");
+		if (move.type !== "move") throw new Error("missing target-constraint move");
+		expect(move.registers[0]).toBe(construct.registers[0]);
 	});
 });
