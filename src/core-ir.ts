@@ -7,6 +7,13 @@
  * deliberately outside this module.
  */
 
+import type {
+	CompilerOptimizationDecision,
+	OptimizationPassDelta,
+} from "./compiler-diagnostics.ts";
+import type { CompilerProgramFacts } from "./compiler-facts.ts";
+import type { SemanticProgram } from "./semantic-analysis.ts";
+
 declare const coreBlockIdBrand: unique symbol;
 declare const coreInstructionIdBrand: unique symbol;
 declare const coreValueIdBrand: unique symbol;
@@ -370,6 +377,29 @@ export interface CoreProgram {
 		readonly callerPosId?: number;
 	}>;
 	readonly globalCount: number;
+	/**
+	 * Whole-compilation data that is not part of function SSA. Standalone Core
+	 * unit tests may omit it; every product compilation supplies it before the
+	 * backend boundary.
+	 */
+	readonly compilation?: CoreCompilationMetadata;
+}
+
+export interface CoreHostInstallCandidate {
+	readonly installer: string;
+	readonly exports: ReadonlyArray<{ readonly name: string; readonly slot: number }>;
+}
+
+export interface CoreCompilationMetadata {
+	readonly semantic: SemanticProgram;
+	readonly facts: CompilerProgramFacts;
+	readonly optimizationDecisions?: ReadonlyArray<CompilerOptimizationDecision>;
+	readonly optimizationTrace?: ReadonlyArray<OptimizationPassDelta>;
+	readonly cjsModuleFunctionIndices: ReadonlyArray<number>;
+	/** Host exports with assigned global slots; the backend drops unread slots. */
+	readonly hostInstallCandidates: ReadonlyArray<CoreHostInstallCandidate>;
+	/** Slot-free installers retained by reachable global surfaces such as process. */
+	readonly retainedHostInstallers: ReadonlyArray<string>;
 }
 
 interface MutableCoreBlock {

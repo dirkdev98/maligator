@@ -8,26 +8,25 @@ import {
 	definedRegisters,
 	usedRegisters,
 } from "./ir-register-index.ts";
-import { debugIntermediateProgram } from "./ir.ts";
-import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
+import type { IRBlock, IRFunction, IRInstruction } from "./ir.ts";
 import {
 	applyInstructionSuccessorLiveness,
 	computeRegisterLiveness,
 	findBackEdges,
 } from "./liveness.ts";
-import { debugEnabled } from "./utils.ts";
-
 export { definedRegister } from "./ir-register-index.ts";
+
+interface RegisterProgram {
+	readonly functions: ReadonlyArray<IRFunction>;
+}
 
 /**
  * Optimize from virtual registers to VM registers.
  */
-export function allocateRegisters(program: IntermediateProgram) {
+export function allocateRegisters(program: RegisterProgram): void {
 	for (const fn of program.functions) {
 		allocateRegistersForFunction(fn);
 	}
-
-	if (debugEnabled) debugIntermediateProgram(program);
 }
 
 /**
@@ -39,14 +38,12 @@ export function allocateRegisters(program: IntermediateProgram) {
  * frames are larger, but register identities cannot alias incorrectly and the
  * production allocator remains unchanged.
  */
-export function allocateDevelopmentRegisters(program: IntermediateProgram): void {
+export function allocateDevelopmentRegisters(program: RegisterProgram): void {
 	for (const fn of program.functions) {
 		if (!developmentRegistersAlreadyValid(fn)) {
 			allocateDense(fn, allVirtualRegisters(fn));
 		}
 	}
-
-	if (debugEnabled) debugIntermediateProgram(program);
 }
 
 /**

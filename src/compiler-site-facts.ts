@@ -4,22 +4,14 @@ import type {
 	FactDependency,
 	FactObligation,
 	FactProof,
-	RepresentationFact,
+	KnownBuiltinCall,
 	ShapeFact,
 	SourceSiteId,
 } from "./compiler-facts.ts";
 import { knownFact, sourceSiteId } from "./compiler-facts.ts";
-import { ensureCompilerEscape, ensureCompilerSummaries } from "./compiler-summaries.ts";
-import { escapeOfRegister } from "./escape.ts";
-import { decodeStringConstant } from "./inline.ts";
-import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
+import type { CoreFunction, CoreInstruction, CoreProgram } from "./core-ir.ts";
 
-const localSites = new WeakMap<
-	IntermediateProgram,
-	ReadonlyMap<string, CompilerSiteFacts>
->();
-
-const allocationTypes = new Set<IRInstruction["type"]>([
+const allocationOpcodes = new Set([
 	"createObject",
 	"createObjectShaped",
 	"createArray",
@@ -32,17 +24,17 @@ const allocationTypes = new Set<IRInstruction["type"]>([
 	"createBigint",
 ]);
 
-function functionId(fn: IRFunction): string {
-	return `${encodeURIComponent(fn.semanticFile.path)}#${fn.functionIndex}`;
+function functionId(fn: CoreFunction): string {
+	return `${encodeURIComponent(fn.metadata.sourcePath)}#${fn.functionIndex}`;
 }
 
 function logicalSourceSite(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	positionId: number,
+	program: CoreProgram,
+	fn: CoreFunction,
+	positionId: number | undefined,
 	kind: string,
 ): SourceSiteId | undefined {
-	if (positionId < 0) return undefined;
+	if (positionId === undefined) return undefined;
 	const position = program.sourcePositions[positionId];
 	if (position === undefined) return undefined;
 	const owner =
@@ -51,12 +43,18 @@ function logicalSourceSite(
 			: program.functions.find(
 					(candidate) => candidate.functionIndex === position.inlinedFunctionIndex,
 				);
-	if (owner === undefined) return undefined;
-	return sourceSiteId(owner.semanticFile.path, position.line, position.column, kind);
+	return owner === undefined
+		? undefined
+		: sourceSiteId(
+				owner.metadata.sourcePath,
+				position.line,
+				position.column,
+				kind,
+			);
 }
 
 function siteProof(
-	fn: IRFunction,
+	fn: CoreFunction,
 	sourceSite: SourceSiteId | undefined,
 	origin: string,
 	dependencies: ReadonlyArray<FactDependency> = [],
@@ -73,30 +71,38 @@ function siteProof(
 	};
 }
 
+function numberArray(value: unknown): ReadonlyArray<number> | undefined {
+	return Array.isArray(value) && value.every((entry) => typeof entry === "number")
+		? value
+		: undefined;
+}
+
+function decodeString(program: CoreProgram, index: number): string {
+	const units = program.stringConstants[index];
+	return units === undefined ? "" : String.fromCodePoint(...units);
+}
+
 function shapeFact(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	instruction: IRInstruction,
+	program: CoreProgram,
+	fn: CoreFunction,
+	instruction: CoreInstruction,
 	sourceSite: SourceSiteId | undefined,
 ): CompilerFact<ShapeFact> | undefined {
-	if (instruction.type === "createObject") {
+	if (instruction.opcode === "createObject") {
 		return knownFact(
 			{ kind: "object", keys: [] },
 			siteProof(fn, sourceSite, "fresh-empty-object"),
 		);
 	}
-	if (instruction.type === "createObjectShaped") {
+	if (instruction.opcode === "createObjectShaped") {
+		const indices = numberArray(instruction.attributes.keyStringIndices);
+		if (indices === undefined) return undefined;
 		return knownFact(
-			{
-				kind: "object",
-				keys: instruction.keyStringIndices.map((index) =>
-					decodeStringConstant(program, index),
-				),
-			},
+			{ kind: "object", keys: indices.map((index) => decodeString(program, index)) },
 			siteProof(fn, sourceSite, "static-literal-shape"),
 		);
 	}
-	if (instruction.type === "createArray") {
+	if (instruction.opcode === "createArray") {
 		return knownFact(
 			{ kind: "array", elements: "dense" },
 			siteProof(fn, sourceSite, "fresh-dense-array"),
@@ -106,120 +112,80 @@ function shapeFact(
 }
 
 function immutableBindingFact(
-	program: IntermediateProgram,
-	instruction: IRInstruction,
+	program: CoreProgram,
+	instruction: CoreInstruction,
 ): CompilerFact<"immutable"> | undefined {
-	if (instruction.type === "loadIntrinsic") {
-		return program.facts.immutableGlobalBindings.get(instruction.intrinsic);
+	const facts = program.compilation?.facts;
+	if (facts === undefined) return undefined;
+	if (instruction.opcode === "loadIntrinsic") {
+		const intrinsic = instruction.attributes.intrinsic;
+		return typeof intrinsic === "string"
+			? facts.immutableGlobalBindings.get(intrinsic)
+			: undefined;
 	}
 	if (
-		instruction.type === "loadGlobalProperty" ||
-		instruction.type === "storeGlobalProperty"
+		instruction.opcode === "loadGlobalProperty" ||
+		instruction.opcode === "storeGlobalProperty"
 	) {
-		return program.facts.immutableGlobalBindings.get(
-			decodeStringConstant(program, instruction.nameStringIndex),
-		);
+		const index = instruction.attributes.nameStringIndex;
+		return typeof index === "number"
+			? facts.immutableGlobalBindings.get(decodeString(program, index))
+			: undefined;
 	}
 	return undefined;
 }
 
-/**
- * Classify final residual instructions after optimization and before register
- * allocation. These facts are diagnostic in Phase 2; lowering behavior is unchanged.
- */
-export function ensureCompilerSiteFacts(
-	program: IntermediateProgram,
-): ReadonlyMap<string, CompilerSiteFacts> {
-	const cached = localSites.get(program);
-	if (cached !== undefined) return cached;
+function knownBuiltinCall(instruction: CoreInstruction): KnownBuiltinCall | undefined {
+	const candidate = instruction.attributes.knownBuiltinCall;
+	return candidate !== null && typeof candidate === "object"
+		? (candidate as unknown as KnownBuiltinCall)
+		: undefined;
+}
 
-	ensureCompilerSummaries(program);
-	const escape = ensureCompilerEscape(program);
+/** Attach final residual facts directly to immutable Core instruction identities. */
+export function attachCoreCompilerSiteFacts(program: CoreProgram): CoreProgram {
+	const compilation = program.compilation;
+	if (compilation === undefined) return program;
 	const sites = new Map<string, CompilerSiteFacts>();
-	const instructionSites = program.facts.instructionSites;
+	const instructionSites = compilation.facts.instructionSites;
 
 	for (const fn of program.functions) {
-		const context = escape.contexts.get(fn.functionIndex);
-		const stackObjectSites = new Map<
-			IRInstruction,
-			{ readonly materializations: ReadonlyArray<unknown> }
-		>();
-		for (const region of fn.regions ?? []) {
-			if (region.kind === "stack-object-plan") {
-				for (const site of region.sites) stackObjectSites.set(site.allocation, site);
-			} else if (
-				region.kind === "cardinality-array" &&
-				region.itemStackObjectProof === "closed-fixed-shape"
-			) {
-				stackObjectSites.set(region.anchors[2], { materializations: [] });
-			}
-		}
-
-		let positionId = -1;
-		for (const [blockIndex, block] of fn.blocks.entries()) {
-			for (const [instructionIndex, instruction] of block.instructions.entries()) {
-				if (instruction.type === "sourcePos") {
-					positionId = instruction.pos;
-					continue;
-				}
-				const id = `${fn.functionIndex}:${blockIndex}:${instructionIndex}:${instruction.type}`;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const id = `${fn.functionIndex}:${block.id}:${instruction.id}:${instruction.opcode}`;
 				const sourceSite = logicalSourceSite(
 					program,
 					fn,
-					positionId,
-					`residual:${instruction.type}`,
+					instruction.sourcePosition,
+					`residual:${instruction.opcode}`,
 				);
-				const isAllocation = allocationTypes.has(instruction.type);
-				const destination =
-					isAllocation && "registers" in instruction
-						? instruction.registers[0]
-						: undefined;
-				const escapeFact =
-					context === undefined || destination === undefined
-						? undefined
-						: knownFact(
-								escapeOfRegister(program, fn, context, destination, escape.summaries),
-								siteProof(fn, sourceSite, "program-escape-fixed-point", [
-									{ kind: "summary", id: functionId(fn) },
-								]),
-							);
-				const stackObjectSite = stackObjectSites.get(instruction);
-				const stackObject = stackObjectSite !== undefined;
-				const materializes = (stackObjectSite?.materializations.length ?? 0) > 0;
-				const representation: CompilerFact<RepresentationFact> | undefined = isAllocation
+				const shape = shapeFact(program, fn, instruction, sourceSite);
+				const immutableBinding = immutableBindingFact(program, instruction);
+				const builtin = knownBuiltinCall(instruction);
+				const isAllocation = allocationOpcodes.has(instruction.opcode);
+				const representation = isAllocation
 					? knownFact(
-							stackObject ? "stack" : "heap",
-							siteProof(
-								fn,
-								sourceSite,
-								stackObject ? "closed-stack-object-proof" : "residual-heap-value",
-								[],
-								materializes ? [{ kind: "materialize", id: `stack-object:${id}` }] : [],
-							),
+							"heap" as const,
+							siteProof(fn, sourceSite, "residual-heap-value"),
 						)
 					: undefined;
-				const binding = immutableBindingFact(program, instruction);
-				const shape = shapeFact(program, fn, instruction, sourceSite);
 				const facts: CompilerSiteFacts = {
 					id,
 					...(sourceSite === undefined ? {} : { sourceSite }),
 					functionId: functionId(fn),
-					instruction: instruction.type,
+					instruction: instruction.opcode,
 					...(shape === undefined ? {} : { shape }),
-					...(escapeFact === undefined ? {} : { escape: escapeFact }),
 					...(representation === undefined ? {} : { representation }),
-					...((instruction.type === "call" || instruction.type === "callBuiltin") &&
-					instruction.knownBuiltinCall !== undefined
-						? {
-								builtinIdentity: instruction.knownBuiltinCall.identity,
-								builtinSemantics: instruction.knownBuiltinCall.semantics,
-							}
-						: {}),
-					...(binding === undefined ? {} : { immutableBinding: binding }),
+					...(builtin === undefined
+						? {}
+						: {
+								builtinIdentity: builtin.identity,
+								builtinSemantics: builtin.semantics,
+							}),
+					...(immutableBinding === undefined ? {} : { immutableBinding }),
 				};
 				if (
 					facts.shape !== undefined ||
-					facts.escape !== undefined ||
 					facts.representation !== undefined ||
 					facts.builtinIdentity !== undefined ||
 					facts.builtinSemantics !== undefined ||
@@ -232,7 +198,11 @@ export function ensureCompilerSiteFacts(
 		}
 	}
 
-	program.facts = { ...program.facts, sites };
-	localSites.set(program, sites);
-	return sites;
+	return {
+		...program,
+		compilation: {
+			...compilation,
+			facts: { ...compilation.facts, sites },
+		},
+	};
 }

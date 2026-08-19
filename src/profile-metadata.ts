@@ -1,5 +1,5 @@
 import type { CompilerSiteFacts, FactDependency } from "./compiler-facts.ts";
-import type { IntermediateProgram } from "./ir.ts";
+import type { CoreProgram } from "./core-ir.ts";
 import type { VmDefinition, VmInstruction } from "./lower-vm.ts";
 
 export interface ProfileSite {
@@ -435,13 +435,21 @@ export function finalizeCompilerRemarks(
  * optimized program. Normalized source text, not line number, anchors identity so
  * unrelated insertions do not churn a site. */
 export function buildProfileMetadata(
-	program: IntermediateProgram,
+	program: CoreProgram,
 	definition: VmDefinition,
 ): void {
-	const sourcePaths = program.semantic.files.map((file) => normalizedPath(file.path));
+	const compilation = program.compilation;
+	if (compilation === undefined) {
+		throw new Error("Core program is missing product compilation metadata");
+	}
+	const sourcePaths = compilation.semantic.files.map((file) =>
+		normalizedPath(file.path),
+	);
 	const root = commonDirectory(sourcePaths);
 	const fileByPath = new Map(
-		program.semantic.files.map((file) => [normalizedPath(file.path), file] as const),
+		compilation.semantic.files.map(
+			(file) => [normalizedPath(file.path), file] as const,
+		),
 	);
 	const sites: Array<ProfileSite> = [];
 	const remarks: Array<CompilerRemark> = [];
@@ -612,7 +620,7 @@ export function buildProfileMetadata(
 			const compilerSite =
 				compilerSiteId === undefined
 					? undefined
-					: program.facts.sites.get(compilerSiteId);
+					: compilation.facts.sites.get(compilerSiteId);
 			for (const remark of [
 				remarkForInstruction(instruction),
 				...factRemarks(compilerSite, operation),
@@ -623,7 +631,7 @@ export function buildProfileMetadata(
 		fn.profileSiteIds = siteIds;
 	}
 
-	for (const decision of program.optimizationDecisions ?? []) {
+	for (const decision of compilation.optimizationDecisions ?? []) {
 		const siteId = ensureDecisionSite(
 			decision.functionIndex,
 			decision.positionId,

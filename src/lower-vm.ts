@@ -6,8 +6,9 @@ import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
+import type { CoreRegisterProgram } from "./core-ir-bridge.ts";
+import type { CoreProgram } from "./core-ir.ts";
 import type {
-	IntermediateProgram,
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
@@ -17,7 +18,6 @@ import type {
 import { computeSafepointRoots } from "./liveness.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
-import type { Binding } from "./semantic-analysis.ts";
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
 type IRUnaryOperator = Extract<IRInstruction, { type: "unary" }>["operator"];
@@ -1837,10 +1837,15 @@ export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
 /**
  * Lower optimized IR to a VM definition that can then be emitted as C.
  */
-export function lowerIrProgramToVmDefinition(
-	program: IntermediateProgram,
+export function lowerCoreProgramToVmDefinition(
+	program: CoreRegisterProgram,
 	profile = false,
 ): VmDefinition {
+	const core = program.core;
+	const compilation = core.compilation;
+	if (compilation === undefined) {
+		throw new Error("Core program is missing product compilation metadata");
+	}
 	// Build the debug-info file table: distinct source paths in first-seen order.
 	const files: Array<string> = [];
 	const fileToIndex = new Map<string, number>();
@@ -1857,24 +1862,24 @@ export function lowerIrProgramToVmDefinition(
 		lowerFunctionToVmFunction(
 			fn,
 			fileIndexFor(fn.semanticFile.path),
-			program.stringConstants,
-			profile ? program.facts.instructionSites : undefined,
+			core.stringConstants,
+			profile ? compilation.facts.instructionSites : undefined,
 		),
 	);
 
 	const definition: VmDefinition = {
-		entrypointPath: program.semantic.entrypointPath,
+		entrypointPath: compilation.semantic.entrypointPath,
 		functionCount: program.functions.length,
 		functions,
-		stringConstants: program.stringConstants,
-		bigintConstants: program.bigintConstants,
-		literalTemplateData: program.literalTemplateData,
-		globalCount: program.nextGlobalIndex,
+		stringConstants: core.stringConstants.map((units) => [...units]),
+		bigintConstants: [...core.bigintConstants],
+		literalTemplateData: [...core.literalTemplateData],
+		globalCount: core.globalCount,
 		semanticProtectors: (
 			["primitive-methods", "watched-methods", "array-elements"] as const
 		).map((family) => {
 			const plan = compilerGuardPlan(
-				[program.facts.protectors.get(family)],
+				[compilation.facts.protectors.get(family)],
 				[{ kind: "fallback", id: `semantic-protector:${family}` }],
 			);
 			const guard = plan === undefined ? undefined : lowerGuardPlan(plan);
@@ -1883,13 +1888,15 @@ export function lowerIrProgramToVmDefinition(
 			}
 			return { family, guard };
 		}),
-		cjsModuleFunctionIndices: program.cjsWrapperFunctionIndex,
-		hostInstalls: buildHostInstalls(program, functions),
+		cjsModuleFunctionIndices: [...compilation.cjsModuleFunctionIndices],
+		hostInstalls: buildHostInstalls(core, functions),
 		files,
-		sourcePositions: program.sourcePositions,
-		...(profile ? { optimizationTrace: program.optimizationTrace } : {}),
+		sourcePositions: core.sourcePositions.map((position) => ({ ...position })),
+		...(profile && compilation.optimizationTrace !== undefined
+			? { optimizationTrace: [...compilation.optimizationTrace] }
+			: {}),
 	};
-	if (profile) buildProfileMetadata(program, definition);
+	if (profile) buildProfileMetadata(core, definition);
 	return definition;
 }
 
@@ -1900,9 +1907,13 @@ export function lowerIrProgramToVmDefinition(
  * retention. Process remains statically retained from global-property analysis.
  */
 function buildHostInstalls(
-	program: IntermediateProgram,
+	program: CoreProgram,
 	functions: Array<VmFunction>,
 ): VmDefinition["hostInstalls"] {
+	const compilation = program.compilation;
+	if (compilation === undefined) {
+		throw new Error("Core program is missing product compilation metadata");
+	}
 	const readGlobalSlots = new Set<number>();
 	for (const fn of functions) {
 		for (const instruction of fn.instructions) {
@@ -1918,13 +1929,6 @@ function buildHostInstalls(
 		}
 	}
 
-	const globalSlotOf = (binding: Binding): number | null => {
-		const location = program.bindingToStorage.get(binding);
-		return location?.type === "global" && readGlobalSlots.has(location.index)
-			? location.index
-			: null;
-	};
-
 	const manifest: VmDefinition["hostInstalls"] = [];
 	const installFor = (installer: string) => {
 		let install = manifest.find((entry) => entry.installer === installer);
@@ -1934,11 +1938,10 @@ function buildHostInstalls(
 		}
 		return install;
 	};
-	for (const hostModule of program.hostModules) {
+	for (const hostModule of compilation.hostInstallCandidates) {
 		const usedExports: Array<{ name: string; slot: number }> = [];
-		for (const { name, binding } of hostModule.exports) {
-			const slot = globalSlotOf(binding);
-			if (slot !== null) {
+		for (const { name, slot } of hostModule.exports) {
+			if (readGlobalSlots.has(slot)) {
 				usedExports.push({ name, slot });
 			}
 		}
@@ -1947,12 +1950,7 @@ function buildHostInstalls(
 		}
 	}
 
-	if (program.hostProcess?.retained) {
-		installFor(program.hostProcess.installer);
-	}
-	if (program.hostBuffer?.retained) {
-		installFor(program.hostBuffer.installer);
-	}
+	for (const installer of compilation.retainedHostInstallers) installFor(installer);
 
 	return manifest;
 }

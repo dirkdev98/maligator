@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-	coreProgramToIntermediate,
 	intermediateProgramToCore,
+	lowerCoreProgramToRegisters,
 } from "../src/core-ir-bridge.ts";
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/core-ir.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
-import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
+import { lowerCoreProgramToVmDefinition } from "../src/lower-vm.ts";
 import { allocateDevelopmentRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
@@ -30,10 +30,10 @@ describe("Core IR semantic bridge", () => {
 			}
 			choose(true);
 		`);
-		for (const fn of converted.core.functions) {
+		for (const fn of converted.functions) {
 			expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 		}
-		const printed = converted.core.functions
+		const printed = converted.functions
 			.map((fn) => formatCoreFunction(fn))
 			.join("\n");
 		expect(printed).toMatch(/b\d+\(%\d+: boxed/);
@@ -49,14 +49,14 @@ describe("Core IR semantic bridge", () => {
 			}
 			read({ value: 2 });
 		`);
-		const exceptional = converted.core.functions.flatMap((fn) =>
+		const exceptional = converted.functions.flatMap((fn) =>
 			fn.blocks.filter(({ handler }) => handler !== undefined),
 		);
 		expect(exceptional.length).toBeGreaterThan(0);
 
-		const lowered = coreProgramToIntermediate(converted);
+		const lowered = lowerCoreProgramToRegisters(converted);
 		allocateDevelopmentRegisters(lowered);
-		const vm = lowerIrProgramToVmDefinition(lowered);
+		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
 	});
 
@@ -66,9 +66,9 @@ describe("Core IR semantic bridge", () => {
 			for (const value of [1, 2, 3]) total += value;
 			console.log(total);
 		`);
-		const lowered = coreProgramToIntermediate(converted);
+		const lowered = lowerCoreProgramToRegisters(converted);
 		allocateDevelopmentRegisters(lowered);
-		const vm = lowerIrProgramToVmDefinition(lowered);
+		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.length).toBeGreaterThan(0);
 		expect(
 			vm.functions.flatMap(({ instructions }) => instructions).length,
@@ -82,7 +82,7 @@ describe("Core IR semantic bridge", () => {
 			}
 			make();
 		`);
-		const batches = converted.core.functions.flatMap((fn) =>
+		const batches = converted.functions.flatMap((fn) =>
 			fn.blocks.flatMap((block) =>
 				block.instructions.filter(({ opcode }) => opcode === "createPrivateNames"),
 			),
@@ -107,14 +107,14 @@ describe("Core IR semantic bridge", () => {
 			),
 		);
 		const converted = intermediateProgramToCore(program);
-		const call = converted.core.functions
+		const call = converted.functions
 			.flatMap((fn) => fn.blocks)
 			.flatMap((block) => block.instructions)
 			.find((instruction) => instruction.opcode === "call" && instruction.inputs.length > 2);
 
 		expect(call?.inputs).toHaveLength(7);
 		expect(call?.attributes).not.toHaveProperty("immediateValues");
-		const opcodes = converted.core.functions.flatMap((fn) =>
+		const opcodes = converted.functions.flatMap((fn) =>
 			fn.blocks.flatMap((block) => block.instructions.map(({ opcode }) => opcode)),
 		);
 		expect(opcodes).toEqual(
@@ -136,10 +136,10 @@ describe("Core IR semantic bridge", () => {
 			}
 			pick(true);
 		`);
-		const functionIndex = converted.core.functions.findIndex((fn) =>
+		const functionIndex = converted.functions.findIndex((fn) =>
 			fn.blocks.some(({ terminator }) => terminator.kind === "branch"),
 		);
-		const fn = converted.core.functions[functionIndex]!;
+		const fn = converted.functions[functionIndex]!;
 		const blockIndex = fn.blocks.findIndex(
 			({ terminator }) => terminator.kind === "branch",
 		);
@@ -159,9 +159,7 @@ describe("Core IR semantic bridge", () => {
 		};
 		const switched = {
 			...converted,
-			core: {
-			...converted.core,
-			functions: converted.core.functions.map((candidate, index) =>
+			functions: converted.functions.map((candidate, index) =>
 				index === functionIndex
 					? {
 							...candidate,
@@ -171,10 +169,9 @@ describe("Core IR semantic bridge", () => {
 						}
 					: candidate,
 			),
-			},
 		};
 
-		const lowered = coreProgramToIntermediate(switched);
+		const lowered = lowerCoreProgramToRegisters(switched);
 		const instructions = lowered.functions[functionIndex]!.blocks.flatMap(
 			({ instructions }) => instructions,
 		);
@@ -197,10 +194,9 @@ describe("Core IR semantic bridge", () => {
 			}
 			new Child();
 		`);
-		const lowered = coreProgramToIntermediate({
-			...converted,
-			core: executeCoreOptimizations(converted.core).program,
-		});
+		const lowered = lowerCoreProgramToRegisters(
+			executeCoreOptimizations(converted).program,
+		);
 		const instructions = lowered.functions.flatMap((fn) =>
 			fn.blocks.flatMap((block) => block.instructions),
 		);

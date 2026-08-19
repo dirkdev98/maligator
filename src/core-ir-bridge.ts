@@ -1,11 +1,13 @@
 import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
 import { coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import { verifyCoreFunction, verifyCoreProgram } from "./core-ir-verifier.ts";
+import type { CompilerSiteFacts } from "./compiler-facts.ts";
 import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
 	CoreFunction,
+	CoreHostInstallCandidate,
 	CoreImmediate,
 	CoreInstructionId,
 	CoreInstructionAttributes,
@@ -81,9 +83,9 @@ interface LegacySegment {
 	exceptionalSuccessor?: number;
 }
 
-export interface CoreProgramBridge {
-	readonly source: IntermediateProgram;
+export interface CoreRegisterProgram {
 	readonly core: CoreProgram;
+	readonly functions: Array<IRFunction>;
 }
 
 interface ConvertedCoreFunction {
@@ -1139,7 +1141,7 @@ function convertFunction(
 export function intermediateProgramToCore(
 	program: IntermediateProgram,
 	options: CoreProgramConstructionOptions = {},
-): CoreProgramBridge {
+): CoreProgram {
 	const verify = options.verify ?? true;
 	const converted = program.functions.map((fn) => convertFunction(fn, false));
 	const core: CoreProgram = {
@@ -1149,12 +1151,45 @@ export function intermediateProgramToCore(
 		literalTemplateData: [...program.literalTemplateData],
 		sourcePositions: program.sourcePositions.map((position) => ({ ...position })),
 		globalCount: program.nextGlobalIndex,
+		compilation: {
+			semantic: program.semantic,
+			facts: program.facts,
+			...(program.optimizationDecisions === undefined
+				? {}
+				: { optimizationDecisions: [...program.optimizationDecisions] }),
+			...(program.optimizationTrace === undefined
+				? {}
+				: { optimizationTrace: [...program.optimizationTrace] }),
+			cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
+			hostInstallCandidates: coreHostInstallCandidates(program),
+			retainedHostInstallers: [program.hostProcess, program.hostBuffer]
+				.flatMap((host) => (host?.retained === true ? [host.installer] : []))
+				.filter((installer, index, installers) => installers.indexOf(installer) === index),
+		},
 	};
 	if (verify) verifyCoreProgram(core, coreOpcodeRegistry);
-	return {
-		source: program,
-		core,
-	};
+	return core;
+}
+
+function coreHostInstallCandidates(
+	program: IntermediateProgram,
+): Array<CoreHostInstallCandidate> {
+	const candidates = new Map<
+		string,
+		Array<{ readonly name: string; readonly slot: number }>
+	>();
+	for (const hostModule of program.hostModules) {
+		const entries = candidates.get(hostModule.installer) ?? [];
+		for (const { name, binding } of hostModule.exports) {
+			const location = program.bindingToStorage.get(binding);
+			if (location?.type === "global") entries.push({ name, slot: location.index });
+		}
+		if (entries.length > 0) candidates.set(hostModule.installer, entries);
+	}
+	return [...candidates].map(([installer, entries]) => ({
+		installer,
+		exports: entries,
+	}));
 }
 
 function parallelMoves(
@@ -1690,6 +1725,7 @@ function coreBlockLayout(
 function lowerFunctionBridge(
 	core: CoreFunction,
 	legacy: IRFunction,
+	instructionSites?: WeakMap<object, CompilerSiteFacts>,
 ): IRFunction {
 	verifyCoreFunction(core, coreOpcodeRegistry);
 	const loweredInstructions = new Map<CoreInstructionId, IRInstruction>();
@@ -1828,6 +1864,8 @@ function lowerFunctionBridge(
 			if (omittedInstructions.has(instruction.id)) continue;
 			instructions.push(...sourcePositionMarker(instruction.sourcePosition));
 			const lowered = rebuildInstruction(core, instruction, registerForValue);
+			const compilerSite = instructionSites?.get(instruction);
+			if (compilerSite !== undefined) instructionSites?.set(lowered, compilerSite);
 			if (lowered.type === "constructSuperExplicit") {
 				// Core models current-this as an ordinary SSA input. The compact VM op is
 				// two-address, so satisfy that target constraint here instead of leaking it
@@ -1971,13 +2009,52 @@ function lowerFunctionBridge(
 }
 
 /** Lower canonical SSA back into the existing VM-facing register form. */
-export function coreProgramToIntermediate(
-	bridge: CoreProgramBridge,
-): IntermediateProgram {
+export function lowerCoreProgramToRegisters(core: CoreProgram): CoreRegisterProgram {
+	const compilation = core.compilation;
+	if (compilation === undefined) {
+		throw new Error("Core program is missing product compilation metadata");
+	}
 	return {
-		...bridge.source,
-		functions: bridge.core.functions.map((fn, index) =>
-			lowerFunctionBridge(fn, bridge.source.functions[index]!),
-		),
+		core,
+		functions: core.functions.map((fn) => {
+			const semanticFile = compilation.semantic.files.find(
+				(file) => file.path === fn.metadata.sourcePath,
+			);
+			if (semanticFile === undefined) {
+				throw new Error(
+					`Core function ${fn.functionIndex} refers to unknown source ${fn.metadata.sourcePath}`,
+				);
+			}
+			return lowerFunctionBridge(
+				fn,
+				{
+					semanticFile,
+					functionIndex: fn.functionIndex,
+					nameStringIndex: fn.metadata.nameStringIndex,
+					blocks: [],
+					parameterCount: fn.parameters.length,
+					mappedArguments: fn.metadata.mappedArguments,
+					mappedArgumentSlots: [...fn.metadata.mappedArgumentSlots],
+					length: fn.metadata.length,
+					nextRegisterDestination: fn.parameters.length,
+					nextLocalIndex: 0,
+					nextCapturedIndex: fn.metadata.capturedCount,
+					strict: fn.metadata.strict,
+					isGenerator: fn.isGenerator,
+					isAsync: fn.isAsync,
+					hasPrototype: fn.metadata.hasPrototype,
+					...(fn.metadata.isClassConstructor
+						? {
+								classContext: {
+									isStatic: false,
+									isConstructor: true,
+									isDerivedConstructor: fn.metadata.isDerivedConstructor,
+								},
+							}
+						: {}),
+				},
+				compilation.facts.instructionSites,
+			);
+		}),
 	};
 }

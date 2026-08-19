@@ -1,16 +1,16 @@
 import type { OptimizationAblation } from "./compiler-diagnostics.ts";
 import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
-import { ensureCompilerSiteFacts } from "./compiler-site-facts.ts";
+import { attachCoreCompilerSiteFacts } from "./compiler-site-facts.ts";
 import {
-	coreProgramToIntermediate,
 	intermediateProgramToCore,
+	lowerCoreProgramToRegisters,
 } from "./core-ir-bridge.ts";
 import { executeCoreOptimizations } from "./core-ir-opt.ts";
 import type { CoreProgram } from "./core-ir.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
-import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
+import { lowerCoreProgramToVmDefinition } from "./lower-vm.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import { allocateDevelopmentRegisters, allocateRegisters } from "./register-alloc.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
@@ -59,25 +59,22 @@ export function compileSemanticProgramToVmDefinition(
 	const core = runPhase("construct core ir", () =>
 		intermediateProgramToCore(ir, { verify: true }),
 	);
-	const optimized = runPhase("core ir optimizations", () =>
-		({
-			...core,
-			core: executeCoreOptimizations(core.core, {
-				ablations: options.optimizationAblations,
-			}).program,
-		}),
-	);
-	options.afterCoreOptimization?.(optimized.core);
+	const optimized = runPhase("core ir optimizations", () => {
+		const result = executeCoreOptimizations(core, {
+			ablations: options.optimizationAblations,
+		}).program;
+		return options.profile === true ? attachCoreCompilerSiteFacts(result) : result;
+	});
+	options.afterCoreOptimization?.(optimized);
 	const lowered = runPhase("lower core ir", () =>
-		coreProgramToIntermediate(optimized),
+		lowerCoreProgramToRegisters(optimized),
 	);
-	if (options.profile === true) ensureCompilerSiteFacts(lowered);
 	runPhase("register allocation", () =>
 		options.optimization === "development"
 			? allocateDevelopmentRegisters(lowered)
 			: allocateRegisters(lowered),
 	);
 	return runPhase("lower to vm", () =>
-		lowerIrProgramToVmDefinition(lowered, options.profile === true),
+		lowerCoreProgramToVmDefinition(lowered, options.profile === true),
 	);
 }
