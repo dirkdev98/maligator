@@ -32,8 +32,6 @@ export interface CompileCoreOptions {
 	profile?: boolean;
 	/** Bounded pass groups disabled only for controlled attribution builds. */
 	optimizationAblations?: ReadonlySet<OptimizationAblation>;
-	/** Verify the read-only production Core import as an explicit diagnostic. */
-	verifyCoreIr?: boolean;
 	ir?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -65,29 +63,19 @@ export function compileSemanticProgramToVmDefinition(
 			? undefined
 			: executeIROptimizations(ir, { ablations: options.optimizationAblations }),
 	);
-	const usesCoreLowering = options.optimization === "development";
-	const constructsCore = usesCoreLowering || options.verifyCoreIr === true;
 	const core = runPhase("construct core ir", () =>
-		constructsCore
-			? intermediateProgramToCore(ir, {
-					verify: true,
-				})
-			: undefined,
+		intermediateProgramToCore(ir, { verify: true }),
 	);
 	const optimized = runPhase("core ir optimizations", () =>
-		usesCoreLowering && core !== undefined
-			? {
-					...core,
-					core: executeCoreOptimizations(core.core, {
-						ablations: options.optimizationAblations,
-					}).program,
-				}
-			: core,
+		({
+			...core,
+			core: executeCoreOptimizations(core.core, {
+				ablations: options.optimizationAblations,
+			}).program,
+		}),
 	);
 	const lowered = runPhase("lower core ir", () =>
-		usesCoreLowering && optimized !== undefined
-			? coreProgramToIntermediate(optimized)
-			: ir,
+		coreProgramToIntermediate(optimized),
 	);
 	if (options.profile === true) ensureCompilerSiteFacts(lowered);
 	options.afterOptimization?.(lowered);

@@ -1139,6 +1139,10 @@ export function executeCoreOptimizations(
 				continue;
 			}
 			functions = functions.map((fn) => {
+				if (fn.regions.length > 0) {
+					traces.push({ name: pass.name, round, changed: false });
+					return fn;
+				}
 				const next = pass.run(fn, analyses);
 				const passChanged = next !== fn;
 				traces.push({ name: pass.name, round, changed: passChanged });

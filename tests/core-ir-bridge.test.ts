@@ -9,7 +9,7 @@ import { formatCoreFunction } from "../src/core-ir.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
-import { allocateDevelopmentRegisters } from "../src/register-alloc.ts";
+import { allocateDevelopmentRegisters, allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 function bridge(source: string) {
@@ -185,5 +185,44 @@ describe("Core IR semantic bridge", () => {
 				expect.objectContaining({ type: "binary", operator: "===" }),
 			]),
 		);
+	});
+
+	it("round-trips optimized region certificates through Core identities", () => {
+		const program = compileSemanticProgramToIr(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function f(value) {
+					const object = { x: value };
+					const inherited = object.toString;
+					return typeof inherited === "function" ? object.x : 0;
+				}
+				globalThis.keep = f;`,
+				"core-regions.js",
+			),
+		);
+		executeIROptimizations(program);
+		const expectedKinds = program.functions
+			.flatMap((fn) => fn.regions ?? [])
+			.map(({ kind }) => kind);
+		expect(expectedKinds).toContain("stack-object-plan");
+
+		const converted = intermediateProgramToCore(program);
+		expect(
+			converted.core.functions.flatMap(({ regions }) =>
+				regions.map(({ kind }) => kind),
+			),
+		).toEqual(expectedKinds);
+		const lowered = coreProgramToIntermediate(converted);
+		expect(
+			lowered.functions
+				.flatMap((fn) => fn.regions ?? [])
+				.map(({ kind }) => kind),
+		).toEqual(expectedKinds);
+		allocateRegisters(lowered);
+		const definition = lowerIrProgramToVmDefinition(lowered);
+		expect(
+			definition.functions
+				.flatMap((fn) => fn.regions ?? [])
+				.map(({ kind }) => kind),
+		).toContain("stack-object-plan");
 	});
 });

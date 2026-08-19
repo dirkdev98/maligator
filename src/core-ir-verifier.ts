@@ -180,6 +180,37 @@ function verifyAttributeValue(
 	}
 }
 
+function verifyRegionReferences(
+	value: unknown,
+	path: string,
+	instructions: ReadonlySet<CoreInstructionId>,
+	blocks: ReadonlyMap<CoreBlockId, CoreBlock>,
+): void {
+	if (value === null || typeof value !== "object") return;
+	if (Array.isArray(value)) {
+		for (const [index, entry] of value.entries()) {
+			verifyRegionReferences(entry, `${path}[${index}]`, instructions, blocks);
+		}
+		return;
+	}
+	const object = value as Readonly<Record<string, unknown>>;
+	if (Object.keys(object).length === 1 && typeof object.$coreInstruction === "number") {
+		if (!instructions.has(object.$coreInstruction as CoreInstructionId)) {
+			fail(`${path} references unknown instruction @${object.$coreInstruction}`);
+		}
+		return;
+	}
+	if (Object.keys(object).length === 1 && typeof object.$coreBlock === "number") {
+		if (!blocks.has(object.$coreBlock as CoreBlockId)) {
+			fail(`${path} references unknown block b${object.$coreBlock}`);
+		}
+		return;
+	}
+	for (const [key, entry] of Object.entries(object)) {
+		verifyRegionReferences(entry, `${path}.${key}`, instructions, blocks);
+	}
+}
+
 /** Throws CoreIrVerificationError when any canonical middle-end invariant is broken. */
 export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistry): void {
 	if (!Number.isSafeInteger(fn.functionIndex) || fn.functionIndex < 0) {
@@ -363,6 +394,46 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 	if (definitions.size !== fn.values.length) {
 		const missing = fn.values.find(({ id }) => !definitions.has(id));
 		fail(`value ${missing?.id} has no definition`);
+	}
+
+	for (const [regionIndex, region] of fn.regions.entries()) {
+		if (region.kind.length === 0) fail(`region ${regionIndex} has an empty kind`);
+		if (region.anchors.length === 0) fail(`region ${region.kind} has no anchors`);
+		const claimed = new Set(region.claimedInstructions);
+		if (claimed.size !== region.claimedInstructions.length) {
+			fail(`region ${region.kind} claims an instruction more than once`);
+		}
+		for (const instruction of region.claimedInstructions) {
+			if (!instructionIds.has(instruction)) {
+				fail(`region ${region.kind} claims unknown instruction @${instruction}`);
+			}
+		}
+		for (const anchor of region.anchors) {
+			if (!instructionIds.has(anchor)) {
+				fail(`region ${region.kind} has unknown anchor @${anchor}`);
+			}
+			if (!claimed.has(anchor)) {
+				fail(`region ${region.kind} anchor @${anchor} is not claimed`);
+			}
+		}
+		for (const [kind, regionBlocks] of [
+			["ordinary", region.ordinaryBlocks],
+			["exceptional", region.exceptionalBlocks],
+		] as const) {
+			if (new Set(regionBlocks).size !== regionBlocks.length) {
+				fail(`region ${region.kind} repeats an ${kind} block`);
+			}
+			for (const block of regionBlocks) {
+				if (!blocks.has(block)) fail(`region ${region.kind} has unknown ${kind} block b${block}`);
+			}
+		}
+		verifyAttributeValue(region.data, `region ${region.kind}.data`);
+		verifyRegionReferences(
+			region.data,
+			`region ${region.kind}.data`,
+			instructionIds,
+			blocks,
+		);
 	}
 
 	const cfg = buildCoreControlFlow(fn, registry);

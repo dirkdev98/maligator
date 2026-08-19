@@ -68,7 +68,7 @@ describe("compileSemanticProgramToVmDefinition", () => {
 		expect(definition.functionCount).toBe(definition.functions.length);
 	});
 
-	it("continuously verifies that optimized production IR is representable in Core", () => {
+	it("routes optimized production IR through Core", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`
 			function invoke(fn, C, flag) {
@@ -87,7 +87,6 @@ describe("compileSemanticProgramToVmDefinition", () => {
 		expect(() =>
 			compileSemanticProgramToVmDefinition(semantic, {
 				optimization: "full",
-				verifyCoreIr: true,
 			}),
 		).not.toThrow();
 	});

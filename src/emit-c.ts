@@ -1037,11 +1037,58 @@ export function emitCompiledFunction(
 			}
 		}
 		if (stable) {
+			const blockStarts = new Set<number>([0]);
+			for (let ip = 0; ip < fn.instructions.length; ip++) {
+				const instruction = fn.instructions[ip]!;
+				if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+					blockStarts.add(instruction.targetIp);
+				}
+				if (
+					instruction.opcode === "JUMP" ||
+					instruction.opcode === "RETURN" ||
+					instruction.opcode === "THROW"
+				) {
+					if (ip + 1 < fn.instructions.length) blockStarts.add(ip + 1);
+				}
+			}
+			const orderedBlockStarts = [...blockStarts].sort((left, right) => left - right);
+			const internalTransfer = (sourceIp: number, visiting = new Set<number>()): boolean => {
+				const start = orderedBlockStarts.findLast((candidate) => candidate <= sourceIp);
+				if (start === undefined || visiting.has(start)) return false;
+				if (
+					fn.instructions[sourceIp]?.opcode !== "JUMP" ||
+					fn.instructions
+						.slice(start, sourceIp)
+						.some(({ opcode }) => opcode !== "MOVE")
+				) {
+					return false;
+				}
+				const predecessors: Array<number> = [];
+				for (let ip = 0; ip < fn.instructions.length; ip++) {
+					const instruction = fn.instructions[ip]!;
+					if (
+						(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+						instruction.targetIp === start
+					) {
+						predecessors.push(ip);
+					}
+				}
+				if (predecessors.length === 0) return false;
+				const nextVisiting = new Set(visiting).add(start);
+				return predecessors.every(
+					(predecessor) =>
+						(predecessor >= region.allocationInstructionIndex && predecessor <= lastIp) ||
+						internalTransfer(predecessor, nextVisiting),
+				);
+			};
 			const externalEntryIps = new Set<number>();
 			for (let sourceIp = 0; sourceIp < fn.instructions.length; sourceIp++) {
 				const instruction = fn.instructions[sourceIp]!;
 				if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
-					if (sourceIp < region.allocationInstructionIndex || sourceIp > lastIp) {
+					if (
+						(sourceIp < region.allocationInstructionIndex || sourceIp > lastIp) &&
+						!internalTransfer(sourceIp)
+					) {
 						externalEntryIps.add(instruction.targetIp);
 					}
 				}

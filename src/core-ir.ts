@@ -325,6 +325,20 @@ export interface CoreFunctionMetadata {
 	readonly hasPrototype: boolean;
 }
 
+/**
+ * Atomic optimization certificate expressed only in Core identities. Its
+ * generic semantic twin stays in the graph, so a backend may consume or ignore
+ * the entire certificate without changing JavaScript behavior.
+ */
+export interface CoreRegion {
+	readonly kind: string;
+	readonly anchors: ReadonlyArray<CoreInstructionId>;
+	readonly claimedInstructions: ReadonlyArray<CoreInstructionId>;
+	readonly ordinaryBlocks: ReadonlyArray<CoreBlockId>;
+	readonly exceptionalBlocks: ReadonlyArray<CoreBlockId>;
+	readonly data: CoreAttributeObject;
+}
+
 export interface CoreFunction {
 	readonly functionIndex: number;
 	readonly isGenerator: boolean;
@@ -338,6 +352,7 @@ export interface CoreFunction {
 	readonly blocks: ReadonlyArray<CoreBlock>;
 	readonly values: ReadonlyArray<CoreValue>;
 	readonly facts: ReadonlyArray<CoreFact>;
+	readonly regions: ReadonlyArray<CoreRegion>;
 	/** Incremented by every committed transform; analysis caches key on this. */
 	readonly mutationEpoch: number;
 }
@@ -641,6 +656,7 @@ export class CoreFunctionBuilder {
 			blocks,
 			values: this.#values.map((value) => ({ ...value })),
 			facts: this.#facts.map((fact) => ({ ...fact, obligations: [...fact.obligations] })),
+			regions: [],
 			mutationEpoch: this.#mutationEpoch,
 		};
 	}

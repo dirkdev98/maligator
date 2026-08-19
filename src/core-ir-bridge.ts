@@ -1,4 +1,5 @@
 import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
+import { coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import { verifyCoreFunction, verifyCoreProgram } from "./core-ir-verifier.ts";
 import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
 import type {
@@ -6,9 +7,11 @@ import type {
 	CoreEdge,
 	CoreFunction,
 	CoreImmediate,
+	CoreInstructionId,
 	CoreInstructionAttributes,
 	CoreFunctionMetadata,
 	CoreProgram,
+	CoreRegion,
 	CoreRepresentation,
 	CoreTerminatorInput,
 	CoreValueId,
@@ -25,7 +28,10 @@ import type {
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
+	IRRegion,
 } from "./ir.ts";
+import { inferVirtualReps } from "./register-alloc.ts";
+import type { RegisterRep } from "./register-alloc.ts";
 
 interface LegacyToken {
 	readonly instruction: IRInstruction;
@@ -37,6 +43,7 @@ type SegmentTerminator =
 			readonly kind: "jump";
 			readonly target: number;
 			readonly sourcePosition?: number;
+			readonly origins?: ReadonlyArray<IRInstruction>;
 	  }
 	| {
 			readonly kind: "branch";
@@ -44,16 +51,19 @@ type SegmentTerminator =
 			readonly consequent: number;
 			readonly alternate: number;
 			readonly sourcePosition?: number;
+			readonly origins?: ReadonlyArray<IRInstruction>;
 	  }
 	| {
 			readonly kind: "return";
 			readonly value: number;
 			readonly sourcePosition?: number;
+			readonly origins?: ReadonlyArray<IRInstruction>;
 	  }
 	| {
 			readonly kind: "throw";
 			readonly value: number;
 			readonly sourcePosition?: number;
+			readonly origins?: ReadonlyArray<IRInstruction>;
 	  }
 	| { readonly kind: "unreachable"; readonly sourcePosition?: number };
 
@@ -240,8 +250,9 @@ function coreInstructionInputs(
 function outputRepresentation(
 	instruction: IRInstruction,
 	index: number,
+	registerRepresentations: ReadonlyMap<number, RegisterRep>,
 ): CoreRepresentation {
-	if (instruction.type === "createF64") return "f64";
+	if (instruction.type === "createNumber" || instruction.type === "createF64") return "f64";
 	if (instruction.type === "mathUnaryNumber" || instruction.type === "mathBinaryNumber") {
 		return "f64";
 	}
@@ -255,7 +266,26 @@ function outputRepresentation(
 	) {
 		return "boolean";
 	}
+	const register = definedRegisters(instruction)[index];
+	const inferred = register === undefined ? undefined : registerRepresentations.get(register);
+	if (inferred === "number") return "f64";
+	if (inferred === "boolean") return "boolean";
 	return "boxed";
+}
+
+function coreRegisterRepresentation(
+	registerRepresentations: ReadonlyMap<number, RegisterRep>,
+	register: number,
+): CoreRepresentation {
+	switch (registerRepresentations.get(register)) {
+		case "number":
+			return "f64";
+		case "boolean":
+			return "boolean";
+		case "boxed":
+		case undefined:
+			return "boxed";
+	}
 }
 
 function coreFunctionMetadata(fn: IRFunction): CoreFunctionMetadata {
@@ -274,6 +304,111 @@ function coreFunctionMetadata(fn: IRFunction): CoreFunctionMetadata {
 			isClassConstructor && (fn.classContext?.isDerivedConstructor ?? false),
 		hasPrototype: fn.hasPrototype ?? true,
 	};
+}
+
+const CORE_REGION_COMMON_FIELDS = new Set([
+	"kind",
+	"anchors",
+	"claimedInstructions",
+	"controlFlow",
+]);
+
+function coreRegionData(
+	value: unknown,
+	instructionIds: ReadonlyMap<IRInstruction, CoreInstructionId>,
+	coreBlocksByLegacyBlock: ReadonlyMap<number, ReadonlyArray<CoreBlockId>>,
+): unknown {
+	if (value === undefined || value === null || typeof value !== "object") return value;
+	const instruction = instructionIds.get(value as IRInstruction);
+	if (instruction !== undefined) return { $coreInstruction: instruction };
+	if (Array.isArray(value)) {
+		return value.map((entry) =>
+			coreRegionData(entry, instructionIds, coreBlocksByLegacyBlock),
+		);
+	}
+	if (
+		"type" in value &&
+		typeof value.type === "string" &&
+		(("registers" in value && Array.isArray(value.registers)) ||
+			("blocks" in value && Array.isArray(value.blocks)))
+	) {
+		throw new Error(`Core region references an instruction outside its function graph`);
+	}
+	const result: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (key === "exitBlock" && typeof entry === "number") {
+			const block = coreBlocksByLegacyBlock.get(entry)?.[0];
+			if (block === undefined) {
+				throw new Error(`Core region references unknown exit block ${entry}`);
+			}
+			result[key] = { $coreBlock: block };
+		} else {
+			result[key] = coreRegionData(
+				entry,
+				instructionIds,
+				coreBlocksByLegacyBlock,
+			);
+		}
+	}
+	return result;
+}
+
+function convertRegions(
+	regions: ReadonlyArray<IRRegion> | undefined,
+	instructionIds: ReadonlyMap<IRInstruction, CoreInstructionId>,
+	coreBlocksByLegacyBlock: ReadonlyMap<number, ReadonlyArray<CoreBlockId>>,
+): ReadonlyArray<CoreRegion> {
+	if (regions === undefined) return [];
+	const requireInstruction = (instruction: IRInstruction): CoreInstructionId => {
+		const id = instructionIds.get(instruction);
+		if (id === undefined) {
+			throw new Error(`Core region references missing ${instruction.type} instruction`);
+		}
+		return id;
+	};
+	const blocks = (legacyBlocks: ReadonlyArray<number>): Array<CoreBlockId> =>
+		legacyBlocks.flatMap((block) => {
+			const converted = coreBlocksByLegacyBlock.get(block);
+			if (converted === undefined) {
+				throw new Error(`Core region references missing legacy block ${block}`);
+			}
+			return converted;
+		});
+	const handlerBlocks = (legacyBlocks: ReadonlyArray<number>): Array<CoreBlockId> =>
+		legacyBlocks.map((block) => {
+			const converted = coreBlocksByLegacyBlock.get(block)?.[0];
+			if (converted === undefined) {
+				throw new Error(`Core region references missing legacy handler block ${block}`);
+			}
+			return converted;
+		});
+	return regions.map((region) => {
+		const data: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(region)) {
+			if (CORE_REGION_COMMON_FIELDS.has(key)) continue;
+			if (key === "exitBlock" && typeof value === "number") {
+				const block = coreBlocksByLegacyBlock.get(value)?.[0];
+				if (block === undefined) {
+					throw new Error(`Core region references unknown exit block ${value}`);
+				}
+				data[key] = { $coreBlock: block };
+			} else {
+				data[key] = coreRegionData(
+					value,
+					instructionIds,
+					coreBlocksByLegacyBlock,
+				);
+			}
+		}
+		return {
+			kind: region.kind,
+			anchors: region.anchors.map(requireInstruction),
+			claimedInstructions: region.claimedInstructions.map(requireInstruction),
+			ordinaryBlocks: blocks(region.controlFlow.ordinaryBlocks),
+			exceptionalBlocks: handlerBlocks(region.controlFlow.exceptionalBlocks),
+			data: data as CoreRegion["data"],
+		};
+	});
 }
 
 function splitLegacyBlocks(fn: IRFunction): {
@@ -450,6 +585,7 @@ function establishSegmentTerminators(
 					segment.terminator = {
 						kind: "jump",
 						target: mapTarget(instruction.blocks[0]),
+						origins: [instruction],
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -462,6 +598,7 @@ function establishSegmentTerminators(
 						condition: instruction.registers[0],
 						consequent: mapTarget(instruction.blocks[0]),
 						alternate: fallthrough,
+						origins: [instruction],
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -470,6 +607,7 @@ function establishSegmentTerminators(
 					segment.terminator = {
 						kind: instruction.type,
 						value: instruction.registers[0],
+						origins: [instruction],
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -488,6 +626,7 @@ function establishSegmentTerminators(
 				condition: conditional.registers[0],
 				consequent: mapTarget(conditional.blocks[0]),
 				alternate: mapTarget(alternate.blocks[0]),
+				origins: [conditional, alternate],
 				...(controls[0]!.sourcePosition === undefined
 					? {}
 					: { sourcePosition: controls[0]!.sourcePosition }),
@@ -699,6 +838,7 @@ function sortedRegisters(registers: ReadonlySet<number>): Array<number> {
 function convertStraightLineFunction(
 	fn: IRFunction,
 	verify: boolean,
+	registerRepresentations: ReadonlyMap<number, RegisterRep>,
 ): ConvertedCoreFunction | undefined {
 	if (fn.blocks.length !== 1) return undefined;
 	const executable = fn.blocks[0]!.instructions.filter(
@@ -755,6 +895,7 @@ function convertStraightLineFunction(
 			.parameters.slice(0, fn.parameterCount)
 			.map(({ value }, index) => [index, value]),
 	);
+	const instructionIds = new Map<IRInstruction, CoreInstructionId>();
 	let sourcePosition: number | undefined;
 	for (const instruction of fn.blocks[0]!.instructions) {
 		if (instruction.type === "sourcePos") {
@@ -762,11 +903,12 @@ function convertStraightLineFunction(
 			continue;
 		}
 		if (instruction === terminator) {
-			builder.setTerminator(block, {
+			const id = builder.setTerminator(block, {
 				kind: instruction.type,
 				value: values.get(instruction.registers[0])!,
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			});
+			instructionIds.set(instruction, id);
 			continue;
 		}
 		const { inputs, expandedImmediates } = coreInstructionInputs(
@@ -787,20 +929,25 @@ function convertStraightLineFunction(
 		const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 			outputCount: destinations.length,
 			outputRepresentations: destinations.map((_, index) =>
-				outputRepresentation(instruction, index),
+				outputRepresentation(instruction, index, registerRepresentations),
 			),
 			attributes,
 			...(sourcePosition === undefined ? {} : { sourcePosition }),
 		});
+		instructionIds.set(instruction, builder.block(block).instructions.at(-1)!.id);
 		for (const [index, register] of destinations.entries()) {
 			values.set(register, outputs[index]!);
 		}
 	}
 	const finished = builder.finish(block);
-	const core =
+	const graph =
 		fn.bodyEntryBlock === 0
 			? { ...finished, bodyEntry: block }
 			: finished;
+	const core = {
+		...graph,
+		regions: convertRegions(fn.regions, instructionIds, new Map([[0, [block]]])),
+	};
 	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	return {
 		core,
@@ -811,7 +958,12 @@ function convertFunction(
 	fn: IRFunction,
 	verify: boolean,
 ): ConvertedCoreFunction {
-	const straightLine = convertStraightLineFunction(fn, verify);
+	const registerRepresentations = inferVirtualReps(fn);
+	const straightLine = convertStraightLineFunction(
+		fn,
+		verify,
+		registerRepresentations,
+	);
 	if (straightLine !== undefined) return straightLine;
 	const { segments: splitSegments, segmentsByOldBlock } = splitLegacyBlocks(fn);
 	establishSegmentTerminators(fn, splitSegments, segmentsByOldBlock);
@@ -830,6 +982,7 @@ function convertFunction(
 	});
 	const coreBlocks: Array<CoreBlockId> = [];
 	const blockRegisters: Array<Array<number>> = [];
+	const coreBlocksByLegacyBlock = new Map<number, Array<CoreBlockId>>();
 	for (const segment of segments) {
 		const liveIn = sortedRegisters(segment.liveIn);
 		blockRegisters.push(liveIn);
@@ -837,10 +990,16 @@ function convertFunction(
 			...(segment.catchRegister === undefined
 				? []
 				: [{ role: "exception" as const, representation: "boxed" as const }]),
-			...liveIn.map(() => ({ representation: "boxed" as const })),
+			...liveIn.map((register) => ({
+				representation: coreRegisterRepresentation(registerRepresentations, register),
+			})),
 		]);
 		coreBlocks.push(block);
+		const legacyBlocks = coreBlocksByLegacyBlock.get(segment.oldBlock) ?? [];
+		legacyBlocks.push(block);
+		coreBlocksByLegacyBlock.set(segment.oldBlock, legacyBlocks);
 	}
+	const instructionIds = new Map<IRInstruction, CoreInstructionId>();
 
 	const requireValue = (
 		values: ReadonlyMap<number, CoreValueId>,
@@ -881,7 +1040,7 @@ function convertFunction(
 			const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 				outputCount: destinations.length,
 				outputRepresentations: destinations.map((_, index) =>
-					outputRepresentation(instruction, index),
+					outputRepresentation(instruction, index, registerRepresentations),
 				),
 				attributes,
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
@@ -890,6 +1049,7 @@ function convertFunction(
 			if (appended === undefined) {
 				throw new Error(`Core bridge failed to append ${instruction.type}`);
 			}
+			instructionIds.set(instruction, appended.id);
 			for (const [index, register] of destinations.entries()) {
 				values.set(register, outputs[index]!);
 			}
@@ -942,7 +1102,11 @@ function convertFunction(
 				terminator = { kind: "unreachable" };
 				break;
 		}
-		builder.setTerminator(block, terminator);
+		const terminatorId = builder.setTerminator(block, terminator);
+		for (const origin of
+			"origins" in legacyTerminator ? (legacyTerminator.origins ?? []) : []) {
+			instructionIds.set(origin, terminatorId);
+		}
 		if (segment.exceptionalSuccessor !== undefined) {
 			builder.setHandler(
 				block,
@@ -957,10 +1121,14 @@ function convertFunction(
 			? undefined
 			: segments.find(({ oldBlock }) => oldBlock === fn.bodyEntryBlock);
 	const finished = builder.finish(coreBlocks[0]!);
-	const core =
+	const graph =
 		bodyEntrySegment === undefined
 			? finished
 			: { ...finished, bodyEntry: coreBlockId(bodyEntrySegment.id) };
+	const core = {
+		...graph,
+		regions: convertRegions(fn.regions, instructionIds, coreBlocksByLegacyBlock),
+	};
 	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	return {
 		core,
@@ -1020,17 +1188,70 @@ function parallelMoves(
 }
 
 function rebuildInstruction(
+	core: CoreFunction,
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
 	registerForValue: (value: CoreValueId) => number,
 ): IRInstruction {
 	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
+	const immediateValues: Array<IRImmediateValue | undefined> = [];
+	if (instruction.opcode === "call" || instruction.opcode === "construct") {
+		for (const [index, input] of instruction.inputs.entries()) {
+			const value = coreImmediateValue(core, input);
+			if (value === undefined) continue;
+			const position = instruction.outputs.length + index;
+			registers[position] = -1;
+			immediateValues[position] = value;
+		}
+	}
 	return {
 		type: instruction.opcode,
 		...instruction.attributes,
+		...(immediateValues.length === 0 ? {} : { immediateValues }),
 		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}
 			: { registers }),
 	} as IRInstruction;
+}
+
+function coreImmediateValue(
+	core: CoreFunction,
+	value: CoreValueId,
+): IRImmediateValue | undefined {
+	const definition = core.values.find(({ id }) => id === value)?.definition;
+	if (definition?.kind !== "instruction") return undefined;
+	const instruction = core.blocks
+		.flatMap(({ instructions }) => instructions)
+		.find(({ id }) => id === definition.instruction);
+	if (instruction === undefined || definition.index !== 0) return undefined;
+	switch (instruction.opcode) {
+		case "createUndefined":
+			return { kind: "undefined" };
+		case "createNull":
+			return { kind: "null" };
+		case "createBoolean":
+			return typeof instruction.attributes.value === "boolean"
+				? { kind: "boolean", value: instruction.attributes.value }
+				: undefined;
+		case "createNumber":
+		case "createF64": {
+			const number = instruction.attributes.value;
+			return typeof number === "number" &&
+				Number.isInteger(number) &&
+				!Object.is(number, -0) &&
+				number >= -0x0800_0000 &&
+				number <= 0x07ff_ffff
+				? { kind: "number", value: number }
+				: undefined;
+		}
+		case "createString": {
+			const index = instruction.attributes.stringIndex;
+			return typeof index === "number" && index <= 0x0fff_ffff
+				? { kind: "string", index }
+				: undefined;
+		}
+		default:
+			return undefined;
+	}
 }
 
 function sourcePositionMarker(position: number | undefined): Array<IRInstruction> {
@@ -1067,32 +1288,465 @@ function lowerCoreImmediate(
 	}
 }
 
+function lowerCoreRegionData(
+	value: unknown,
+	instructions: ReadonlyMap<CoreInstructionId, IRInstruction>,
+	blocks: ReadonlyMap<CoreBlockId, number>,
+): unknown {
+	if (value === undefined || value === null || typeof value !== "object") return value;
+	if (Array.isArray(value)) {
+		return value.map((entry) => lowerCoreRegionData(entry, instructions, blocks));
+	}
+	const object = value as Readonly<Record<string, unknown>>;
+	if (Object.keys(object).length === 1 && typeof object.$coreInstruction === "number") {
+		const instruction = instructions.get(object.$coreInstruction as CoreInstructionId);
+		if (instruction === undefined) {
+			throw new Error(
+				`Core region lowering lost instruction @${object.$coreInstruction}`,
+			);
+		}
+		return instruction;
+	}
+	if (Object.keys(object).length === 1 && typeof object.$coreBlock === "number") {
+		const block = blocks.get(object.$coreBlock as CoreBlockId);
+		if (block === undefined) {
+			throw new Error(`Core region lowering lost block b${object.$coreBlock}`);
+		}
+		return block;
+	}
+	const result: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(object)) {
+		result[key] = lowerCoreRegionData(entry, instructions, blocks);
+	}
+	return result;
+}
+
+function lowerCoreRegions(
+	regions: ReadonlyArray<CoreRegion>,
+	instructions: ReadonlyMap<CoreInstructionId, IRInstruction>,
+	omittedBlocks: ReadonlySet<CoreBlockId>,
+	blocks: ReadonlyMap<CoreBlockId, number>,
+): ReadonlyArray<IRRegion> | undefined {
+	if (regions.length === 0) return undefined;
+	const requireInstruction = (id: CoreInstructionId): IRInstruction => {
+		const instruction = instructions.get(id);
+		if (instruction === undefined) {
+			throw new Error(`Core region lowering lost instruction @${id}`);
+		}
+		return instruction;
+	};
+	const requireBlock = (id: CoreBlockId): number => {
+		const block = blocks.get(id);
+		if (block === undefined) throw new Error(`Core region lowering lost block b${id}`);
+		return block;
+	};
+	return regions.map((region) => ({
+		...(lowerCoreRegionData(region.data, instructions, blocks) as object),
+		kind: region.kind,
+		anchors: region.anchors.map(requireInstruction),
+		claimedInstructions: region.claimedInstructions.map(requireInstruction),
+		controlFlow: {
+			ordinaryBlocks: region.ordinaryBlocks
+				.filter((block) => !omittedBlocks.has(block))
+				.map(requireBlock),
+			exceptionalBlocks: region.exceptionalBlocks.filter(
+				(block) => !omittedBlocks.has(block),
+			).map(requireBlock),
+		},
+	})) as unknown as ReadonlyArray<IRRegion>;
+}
+
+export function coreRegisterClasses(core: CoreFunction): {
+	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
+	readonly registers: Map<CoreValueId, number>;
+} {
+	const representations = new Map(
+		core.values.map(({ id, representation }) => [id, representation]),
+	);
+	const uses = core.blocks.map(() => new Set<CoreValueId>());
+	const definitions = core.blocks.map(() => new Set<CoreValueId>());
+	const successors = core.blocks.map(() => new Set<CoreBlockId>());
+	const terminatorValues = (block: CoreFunction["blocks"][number]): Array<CoreValueId> => {
+		const edgeArguments = coreTerminatorEdges(block.terminator).flatMap(
+			(edge) => edge.arguments,
+		);
+		switch (block.terminator.kind) {
+			case "branch":
+			case "guard":
+				return [block.terminator.condition, ...edgeArguments];
+			case "switch":
+				return [block.terminator.discriminant, ...edgeArguments];
+			case "return":
+			case "throw":
+				return [block.terminator.value];
+			case "jump":
+				return edgeArguments;
+			case "unreachable":
+				return [];
+		}
+	};
+	for (const block of core.blocks) {
+		const blockUses = uses[block.id]!;
+		const blockDefinitions = definitions[block.id]!;
+		for (const { value } of block.parameters) blockDefinitions.add(value);
+		const addUse = (value: CoreValueId): void => {
+			if (!blockDefinitions.has(value)) blockUses.add(value);
+		};
+		for (const instruction of block.instructions) {
+			for (const input of instruction.inputs) addUse(input);
+			for (const output of instruction.outputs) blockDefinitions.add(output);
+		}
+		for (const value of terminatorValues(block)) addUse(value);
+		for (const argument of block.handler?.arguments ?? []) addUse(argument);
+		for (const edge of coreTerminatorEdges(block.terminator)) {
+			successors[block.id]!.add(edge.block);
+		}
+		if (block.handler !== undefined) successors[block.id]!.add(block.handler.block);
+	}
+	const liveIn = core.blocks.map((_, index) => new Set(uses[index]));
+	const liveOut = core.blocks.map(() => new Set<CoreValueId>());
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let index = core.blocks.length - 1; index >= 0; index--) {
+			const nextOut = new Set<CoreValueId>();
+			for (const successor of successors[index]!) {
+				for (const value of liveIn[successor]!) nextOut.add(value);
+			}
+			const nextIn = new Set(uses[index]);
+			for (const value of nextOut) {
+				if (!definitions[index]!.has(value)) nextIn.add(value);
+			}
+			if (
+				nextOut.size !== liveOut[index]!.size ||
+				[...nextOut].some((value) => !liveOut[index]!.has(value)) ||
+				nextIn.size !== liveIn[index]!.size ||
+				[...nextIn].some((value) => !liveIn[index]!.has(value))
+			) {
+				liveOut[index] = nextOut;
+				liveIn[index] = nextIn;
+				changed = true;
+			}
+		}
+	}
+	const interference = new Map<CoreValueId, Set<CoreValueId>>(
+		core.values.map(({ id }) => [id, new Set()]),
+	);
+	const interfere = (left: CoreValueId, right: CoreValueId): void => {
+		if (left === right) return;
+		interference.get(left)!.add(right);
+		interference.get(right)!.add(left);
+	};
+	for (const block of core.blocks) {
+		const live = new Set(liveOut[block.id]);
+		for (const value of terminatorValues(block)) live.add(value);
+		for (const argument of block.handler?.arguments ?? []) live.add(argument);
+		for (let index = block.instructions.length - 1; index >= 0; index--) {
+			const instruction = block.instructions[index]!;
+			for (const output of instruction.outputs) {
+				for (const value of live) interfere(output, value);
+			}
+			for (const left of instruction.outputs) {
+				for (const right of instruction.outputs) interfere(left, right);
+				live.delete(left);
+			}
+			for (const input of instruction.inputs) live.add(input);
+		}
+		for (const { value } of block.parameters) {
+			for (const liveValue of live) interfere(value, liveValue);
+			for (const { value: other } of block.parameters) interfere(value, other);
+		}
+	}
+	const parent = new Map<CoreValueId, CoreValueId>(
+		core.values.map(({ id }) => [id, id]),
+	);
+	const members = new Map<CoreValueId, Set<CoreValueId>>(
+		core.values.map(({ id }) => [id, new Set([id])]),
+	);
+	const abi = new Map<CoreValueId, number>(
+		core.parameters.map((value, index) => [value, index]),
+	);
+	const find = (value: CoreValueId): CoreValueId => {
+		const direct = parent.get(value)!;
+		if (direct === value) return value;
+		const root = find(direct);
+		parent.set(value, root);
+		return root;
+	};
+	const union = (left: CoreValueId, right: CoreValueId): boolean => {
+		const leftRoot = find(left);
+		const rightRoot = find(right);
+		if (leftRoot === rightRoot) return true;
+		if (representations.get(leftRoot) !== representations.get(rightRoot)) return false;
+		const leftAbi = [...members.get(leftRoot)!].flatMap((value) =>
+			abi.has(value) ? [abi.get(value)!] : [],
+		);
+		const rightAbi = [...members.get(rightRoot)!].flatMap((value) =>
+			abi.has(value) ? [abi.get(value)!] : [],
+		);
+		if (leftAbi.length > 0 && rightAbi.length > 0 && leftAbi[0] !== rightAbi[0]) {
+			return false;
+		}
+		if (
+			[...members.get(leftRoot)!].some((leftValue) =>
+				[...members.get(rightRoot)!].some((rightValue) =>
+					interference.get(leftValue)!.has(rightValue),
+				),
+			)
+		) {
+			return false;
+		}
+		parent.set(rightRoot, leftRoot);
+		for (const value of members.get(rightRoot)!) members.get(leftRoot)!.add(value);
+		members.delete(rightRoot);
+		return true;
+	};
+	for (const block of core.blocks) {
+		if (block.id === core.entry || block.parameters[0]?.role === "exception") continue;
+		for (const [index, parameter] of block.parameters.entries()) {
+			const arguments_ = core.blocks.flatMap((predecessor) =>
+				coreTerminatorEdges(predecessor.terminator)
+					.filter((edge) => edge.block === block.id)
+					.map((edge) => edge.arguments[index]!),
+			);
+			for (const argument of arguments_) union(parameter.value, argument);
+		}
+	}
+	const roots = new Map<CoreValueId, CoreValueId>(
+		core.values.map(({ id }) => [id, find(id)]),
+	);
+	const registers = new Map<CoreValueId, number>();
+	for (const [index, parameter] of core.parameters.entries()) {
+		registers.set(find(parameter), index);
+	}
+	return { roots, registers };
+}
+
+function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructionId> {
+	const result = new Set<CoreInstructionId>();
+	const visit = (value: unknown): void => {
+		if (value === undefined || value === null || typeof value !== "object") return;
+		if (Array.isArray(value)) {
+			for (const entry of value) visit(entry);
+			return;
+		}
+		const object = value as Readonly<Record<string, unknown>>;
+		if (
+			Object.keys(object).length === 1 &&
+			typeof object.$coreInstruction === "number"
+		) {
+			result.add(object.$coreInstruction as CoreInstructionId);
+			return;
+		}
+		for (const entry of Object.values(object)) visit(entry);
+	};
+	for (const region of core.regions) {
+		for (const id of region.anchors) result.add(id);
+		for (const id of region.claimedInstructions) result.add(id);
+		visit(region.data);
+	}
+	return result;
+}
+
+function immediateOnlyInstructions(
+	core: CoreFunction,
+	protectedInstructions: ReadonlySet<CoreInstructionId>,
+): ReadonlySet<CoreInstructionId> {
+	const embedded = new Set<CoreValueId>();
+	const ordinary = new Set<CoreValueId>();
+	for (const block of core.blocks) {
+		for (const instruction of block.instructions) {
+			for (const input of instruction.inputs) {
+				if (
+					(instruction.opcode === "call" || instruction.opcode === "construct") &&
+					coreImmediateValue(core, input) !== undefined
+				) {
+					embedded.add(input);
+				} else {
+					ordinary.add(input);
+				}
+			}
+		}
+		const ordinaryTerminatorUse = (value: CoreValueId): void => {
+			ordinary.add(value);
+		};
+		switch (block.terminator.kind) {
+			case "branch":
+			case "guard":
+				ordinaryTerminatorUse(block.terminator.condition);
+				break;
+			case "switch":
+				ordinaryTerminatorUse(block.terminator.discriminant);
+				break;
+			case "return":
+			case "throw":
+				ordinaryTerminatorUse(block.terminator.value);
+				break;
+			case "jump":
+			case "unreachable":
+				break;
+		}
+		for (const edge of coreTerminatorEdges(block.terminator)) {
+			for (const argument of edge.arguments) ordinaryTerminatorUse(argument);
+		}
+		for (const argument of block.handler?.arguments ?? []) ordinaryTerminatorUse(argument);
+	}
+	return new Set(
+		core.blocks.flatMap((block) =>
+			block.instructions.flatMap((instruction) =>
+				!protectedInstructions.has(instruction.id) &&
+				instruction.outputs.length > 0 &&
+				instruction.outputs.every(
+					(output) => embedded.has(output) && !ordinary.has(output),
+				)
+					? [instruction.id]
+					: [],
+			),
+		),
+	);
+}
+
+function coreBlockLayout(
+	core: CoreFunction,
+	omitted: ReadonlySet<CoreBlockId>,
+): Array<CoreBlockId> {
+	const forwardingTarget = (block: CoreBlockId): CoreBlockId => {
+		let current = block;
+		const seen = new Set<CoreBlockId>();
+		while (omitted.has(current)) {
+			if (seen.has(current)) throw new Error(`Cyclic omitted Core block b${current}`);
+			seen.add(current);
+			const forwarding = core.blocks[current]!;
+			if (forwarding.terminator.kind !== "jump") {
+				throw new Error(`Omitted Core block b${current} is not a forwarding block`);
+			}
+			current = forwarding.terminator.edge.block;
+		}
+		return current;
+	};
+	const successors = (block: CoreFunction["blocks"][number]): Array<CoreBlockId> => {
+		const exceptional =
+			block.handler === undefined ? [] : [forwardingTarget(block.handler.block)];
+		switch (block.terminator.kind) {
+			case "jump":
+				return [...exceptional, forwardingTarget(block.terminator.edge.block)];
+			case "branch":
+				return [
+					...exceptional,
+					forwardingTarget(block.terminator.alternate.block),
+					forwardingTarget(block.terminator.consequent.block),
+				];
+			case "guard":
+				return [
+					...exceptional,
+					forwardingTarget(block.terminator.fallback.block),
+					forwardingTarget(block.terminator.success.block),
+				];
+			case "switch":
+				return [
+					...exceptional,
+					forwardingTarget(block.terminator.default.block),
+					...block.terminator.cases
+						.toReversed()
+						.map(({ edge }) => forwardingTarget(edge.block)),
+				];
+			case "return":
+			case "throw":
+			case "unreachable":
+				return exceptional;
+		}
+	};
+
+	const visited = new Set<CoreBlockId>();
+	const order: Array<CoreBlockId> = [];
+	const visit = (start: CoreBlockId): void => {
+		if (omitted.has(start) || visited.has(start)) return;
+		const postorder: Array<CoreBlockId> = [];
+		visited.add(start);
+		const stack: Array<{
+			readonly block: CoreBlockId;
+			readonly successors: ReadonlyArray<CoreBlockId>;
+			index: number;
+		}> = [{ block: start, successors: successors(core.blocks[start]!), index: 0 }];
+		while (stack.length > 0) {
+			const frame = stack.at(-1)!;
+			if (frame.index >= frame.successors.length) {
+				postorder.push(frame.block);
+				stack.pop();
+				continue;
+			}
+			const next = frame.successors[frame.index++]!;
+			if (omitted.has(next) || visited.has(next)) continue;
+			visited.add(next);
+			stack.push({ block: next, successors: successors(core.blocks[next]!), index: 0 });
+		}
+		order.push(...postorder.toReversed());
+	};
+	visit(core.entry);
+	for (const block of core.blocks) visit(block.id);
+	return order;
+}
+
 function lowerFunctionBridge(
 	core: CoreFunction,
 	legacy: IRFunction,
 ): IRFunction {
 	verifyCoreFunction(core, coreOpcodeRegistry);
-	// Legacy region certificates contain a graph of instruction identities and
-	// exact control-flow envelopes. They stay on their already optimized lowering
-	// path until each region kind becomes an explicit Core operation/fact; silently
-	// approximating those proofs during de-SSA would be a correctness bug.
-	if ((legacy.regions?.length ?? 0) > 0) return legacy;
-	const blocks: Array<IRBlock> = core.blocks.map(() => ({ instructions: [] }));
-	const nextRegister = { value: core.parameters.length };
-	const allocatedRegisters = new Map<CoreValueId, number>(
-		core.parameters.map((value, index) => [value, index]),
+	const loweredInstructions = new Map<CoreInstructionId, IRInstruction>();
+	const protectedInstructions = coreRegionInstructionIds(core);
+	const omittedInstructions = immediateOnlyInstructions(core, protectedInstructions);
+	const predecessorCounts = core.blocks.map(() => 0);
+	for (const block of core.blocks) {
+		for (const edge of coreTerminatorEdges(block.terminator)) {
+			predecessorCounts[edge.block]!++;
+		}
+		if (block.handler !== undefined) predecessorCounts[block.handler.block]!++;
+	}
+	const absorbedAlternateBlocks = new Set<CoreBlockId>();
+	for (const block of core.blocks) {
+		const alternate =
+			block.terminator.kind === "branch"
+				? block.terminator.alternate
+				: block.terminator.kind === "guard"
+					? block.terminator.fallback
+					: undefined;
+		if (alternate === undefined) continue;
+		const forwarding = core.blocks[alternate.block]!;
+		if (
+			predecessorCounts[forwarding.id] === 1 &&
+			forwarding.id !== core.entry &&
+			forwarding.id !== core.bodyEntry &&
+			forwarding.parameters[0]?.role !== "exception" &&
+			forwarding.instructions.length === 0 &&
+			forwarding.handler === undefined &&
+			forwarding.terminator.kind === "jump"
+		) {
+			absorbedAlternateBlocks.add(forwarding.id);
+		}
+	}
+	const blockOrder = coreBlockLayout(core, absorbedAlternateBlocks);
+	const loweredBlockForCore = new Map<CoreBlockId, number>(
+		blockOrder.map((block, index) => [block, index]),
 	);
+	const blocks: Array<IRBlock> = blockOrder.map(() => ({ instructions: [] }));
+	const nextRegister = { value: core.parameters.length };
+	const { roots, registers: allocatedRegisters } = coreRegisterClasses(core);
 	const registerForValue = (value: CoreValueId): number => {
-		let register = allocatedRegisters.get(value);
+		const root = roots.get(value)!;
+		let register = allocatedRegisters.get(root);
 		if (register === undefined) {
 			register = nextRegister.value++;
-			allocatedRegisters.set(value, register);
+			allocatedRegisters.set(root, register);
 		}
 		return register;
 	};
 
 	const edgeBlock = (edge: CoreEdge): number => {
 		const target = core.blocks[edge.block]!;
+		const loweredTarget = loweredBlockForCore.get(edge.block);
+		if (loweredTarget === undefined) {
+			throw new Error(`Ordinary Core edge targets omitted block ${edge.block}`);
+		}
 		if (target.parameters[0]?.role === "exception") {
 			throw new Error(`Ordinary Core edge targets exception block ${edge.block}`);
 		}
@@ -1103,22 +1757,56 @@ function lowerFunctionBridge(
 			})),
 			nextRegister,
 		);
-		if (instructions.length === 0) return edge.block;
+		if (instructions.length === 0) return loweredTarget;
 		const index = blocks.length;
 		blocks.push({
-			instructions: [...instructions, { type: "jump", blocks: [edge.block] }],
+			instructions: [...instructions, { type: "jump", blocks: [loweredTarget] }],
 		});
 		return index;
 	};
+	const absorbAlternate = (
+		edge: CoreEdge,
+	): { readonly edge: CoreEdge; readonly terminator: CoreInstructionId } | undefined => {
+		if (!absorbedAlternateBlocks.has(edge.block)) return undefined;
+		const forwarding = core.blocks[edge.block]!;
+		if (forwarding.terminator.kind !== "jump") return undefined;
+		const substitutions = new Map(
+			forwarding.parameters.map((parameter, index) => [
+				parameter.value,
+				edge.arguments[index]!,
+			]),
+		);
+		return {
+			edge: {
+				block: forwarding.terminator.edge.block,
+				arguments: forwarding.terminator.edge.arguments.map(
+					(argument) => substitutions.get(argument) ?? argument,
+				),
+			},
+			terminator: forwarding.terminator.id,
+		};
+	};
+	const nextEmittedBlock = (block: CoreBlockId): number | undefined => {
+		const lowered = loweredBlockForCore.get(block);
+		return lowered === undefined || lowered + 1 >= blockOrder.length
+			? undefined
+			: lowered + 1;
+	};
 
-	for (const block of core.blocks) {
-		const instructions = blocks[block.id]!.instructions;
+	for (const coreBlock of blockOrder) {
+		const block = core.blocks[coreBlock]!;
+		const loweredBlock = loweredBlockForCore.get(block.id)!;
+		const instructions = blocks[loweredBlock]!.instructions;
 		if (block.handler !== undefined) {
 			const target = core.blocks[block.handler.block]!;
+			const loweredHandler = loweredBlockForCore.get(block.handler.block);
+			if (loweredHandler === undefined) {
+				throw new Error(`Core handler targets omitted block ${block.handler.block}`);
+			}
 			const explicitParameters = target.parameters.slice(1);
 			instructions.push({
 				type: "tryBegin",
-				blocks: [block.handler.block, block.id],
+				blocks: [loweredHandler, loweredBlock],
 			});
 			instructions.push(
 				...parallelMoves(
@@ -1137,43 +1825,86 @@ function lowerFunctionBridge(
 			});
 		}
 		for (const instruction of block.instructions) {
+			if (omittedInstructions.has(instruction.id)) continue;
 			instructions.push(...sourcePositionMarker(instruction.sourcePosition));
-			instructions.push(rebuildInstruction(instruction, registerForValue));
+			const lowered = rebuildInstruction(core, instruction, registerForValue);
+			instructions.push(lowered);
+			loweredInstructions.set(instruction.id, lowered);
 		}
 		instructions.push(...sourcePositionMarker(block.terminator.sourcePosition));
 		switch (block.terminator.kind) {
 			case "jump":
-				instructions.push({
-					type: "jump",
-					blocks: [edgeBlock(block.terminator.edge)],
-				});
+				{
+					const target = edgeBlock(block.terminator.edge);
+					if (
+						block.handler !== undefined &&
+						!protectedInstructions.has(block.terminator.id) &&
+						target === nextEmittedBlock(block.id)
+					) {
+						break;
+					}
+					const lowered: IRInstruction = {
+						type: "jump",
+						blocks: [target],
+					};
+					instructions.push(lowered);
+					loweredInstructions.set(block.terminator.id, lowered);
+				}
 				break;
 			case "branch":
-				instructions.push(
-					{
+				{
+					const absorbed = absorbAlternate(block.terminator.alternate);
+					const lowered: IRInstruction = {
 						type: "jumpIf",
 						registers: [registerForValue(block.terminator.condition)],
 						blocks: [edgeBlock(block.terminator.consequent)],
-					},
-					{ type: "jump", blocks: [edgeBlock(block.terminator.alternate)] },
+					};
+					const alternate: IRInstruction = {
+						type: "jump",
+						blocks: [edgeBlock(absorbed?.edge ?? block.terminator.alternate)],
+					};
+				instructions.push(
+					lowered,
+					alternate,
 				);
+				loweredInstructions.set(block.terminator.id, lowered);
+				if (absorbed !== undefined) {
+					loweredInstructions.set(absorbed.terminator, alternate);
+				}
+				}
 				break;
 			case "guard":
-				instructions.push(
-					{
+				{
+					const absorbed = absorbAlternate(block.terminator.fallback);
+					const lowered: IRInstruction = {
 						type: "jumpIf",
 						registers: [registerForValue(block.terminator.condition)],
 						blocks: [edgeBlock(block.terminator.success)],
-					},
-					{ type: "jump", blocks: [edgeBlock(block.terminator.fallback)] },
+					};
+					const fallback: IRInstruction = {
+						type: "jump",
+						blocks: [edgeBlock(absorbed?.edge ?? block.terminator.fallback)],
+					};
+				instructions.push(
+					lowered,
+					fallback,
 				);
+				loweredInstructions.set(block.terminator.id, lowered);
+				if (absorbed !== undefined) {
+					loweredInstructions.set(absorbed.terminator, fallback);
+				}
+				}
 				break;
 			case "return":
 			case "throw":
-				instructions.push({
+				{
+					const lowered: IRInstruction = {
 					type: block.terminator.kind,
 					registers: [registerForValue(block.terminator.value)],
-				});
+					};
+					instructions.push(lowered);
+					loweredInstructions.set(block.terminator.id, lowered);
+				}
 				break;
 			case "switch":
 				for (const switchCase of block.terminator.cases) {
@@ -1211,9 +1942,17 @@ function lowerFunctionBridge(
 	return {
 		...legacy,
 		blocks,
-		regions: undefined,
+		regions: lowerCoreRegions(
+			core.regions,
+			loweredInstructions,
+			absorbedAlternateBlocks,
+			loweredBlockForCore,
+		),
 		nextRegisterDestination: nextRegister.value,
-		bodyEntryBlock: core.bodyEntry,
+		bodyEntryBlock:
+			core.bodyEntry === undefined
+				? undefined
+				: loweredBlockForCore.get(core.bodyEntry),
 	};
 }
 
