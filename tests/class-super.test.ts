@@ -1,9 +1,7 @@
 import { expect, test } from "vitest";
-import { executeIROptimizations } from "../src/ir-opt.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
-import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
-import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 import { deserializeVmDefinition, serializeVmDefinition } from "../src/serialize-vm.ts";
 
@@ -38,9 +36,7 @@ test("super reads retain their receiver through IR, lowering, and wire encoding"
 		expect(load.registers).toHaveLength(4);
 	}
 
-	executeIROptimizations(ir);
-	allocateRegisters(ir);
-	const vm = lowerIrProgramToVmDefinition(ir);
+	const vm = compileSemanticProgramToVmDefinition(ir.semantic);
 	const lowered = vm.functions.flatMap((fn) => fn.instructions);
 	expect(
 		lowered.filter((instruction) => instruction.opcode === "LOAD_SUPER_PROPERTY"),
@@ -81,10 +77,8 @@ test("class heritage defines the constructor prototype without ordinary assignme
 		configurable: false,
 	});
 
-	executeIROptimizations(ir);
-	allocateRegisters(ir);
 	const roundTripped = deserializeVmDefinition(
-		serializeVmDefinition(lowerIrProgramToVmDefinition(ir)),
+		serializeVmDefinition(compileSemanticProgramToVmDefinition(ir.semantic)),
 	);
 	expect(
 		roundTripped.functions

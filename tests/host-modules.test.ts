@@ -3,12 +3,9 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { emitVmDefinition } from "../src/emit-vm.ts";
-import { executeIROptimizations } from "../src/ir-opt.ts";
-import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { VmDefinition } from "../src/lower-vm.ts";
-import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
-import { allocateRegisters } from "../src/register-alloc.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
 import {
 	deserializeVmDefinition,
@@ -43,10 +40,7 @@ function compile(source: string, options: { node?: boolean } = {}): VmDefinition
 		entry,
 		options.node ? { buildConfig: nodeOn } : {},
 	);
-	const ir = compileSemanticProgramToIr(program);
-	executeIROptimizations(ir);
-	allocateRegisters(ir);
-	return lowerIrProgramToVmDefinition(ir);
+	return compileSemanticProgramToVmDefinition(program);
 }
 
 /** Every LOAD_GLOBAL slot index read anywhere in the program. */

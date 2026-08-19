@@ -51,7 +51,7 @@ export interface SelfCompileMetrics {
 interface SelfCompilePhases {
 	graphMs: number;
 	semanticMs: number;
-	compileToIrMs: number;
+	lowerSemanticMs: number;
 	optimizeMs: number;
 	regallocMs: number;
 	lowerMs: number;

@@ -736,8 +736,8 @@ export function registerEscapesFrame(
 //
 // This classifier deliberately remains diagnostic: its escape summaries permit
 // non-retaining calls and dynamic-key reads, neither of which is sufficient proof
-// for a C-stack pointer. Native emission uses the narrower, instruction-keyed
-// closed-use proof in ir-opt.ts instead and must not consume this result directly.
+// for a C-stack pointer. A Core transform must establish a narrower,
+// instruction-keyed closed-use proof before native emission consumes it.
 // ---------------------------------------------------------------------------
 
 export type StackAllocClass = "scalar" | "stack";
@@ -746,7 +746,7 @@ export interface StackAllocCandidate {
 	register: number;
 	allocType: string;
 	/** "stack": identity observed (call arg / dynamic-key read) — the residual only
-	 * stack allocation can take. "scalar": ir-opt.ts already removes it entirely;
+	 * stack allocation can take. "scalar": scalar replacement removes it entirely;
 	 * reported for comparison. */
 	klass: StackAllocClass;
 }

@@ -31,7 +31,7 @@ const config: ResolvedBuildConfig = {
 const phases = {
 	graphMs: 0,
 	semanticMs: 0,
-	compileToIrMs: 0,
+	lowerSemanticMs: 0,
 	optimizeMs: 0,
 	regallocMs: 0,
 	lowerMs: 0,
@@ -49,8 +49,7 @@ const measure = <T,>(phase: Phase, run: () => T): T => {
 const compilePhases = {
 	graph: "graphMs",
 	semantic: "semanticMs",
-	"compile to ir": "compileToIrMs",
-	"normalize semantic ir": "optimizeMs",
+	"lower semantic program": "lowerSemanticMs",
 	"construct core ir": "optimizeMs",
 	"core ir optimizations": "optimizeMs",
 	"lower core ir": "optimizeMs",

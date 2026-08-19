@@ -19,10 +19,8 @@ describe("compileSemanticProgramToVmDefinition", () => {
 
 		expect(definition.functions.length).toBeGreaterThan(0);
 		expect(events).toEqual([
-			"start:compile to ir",
-			"end:compile to ir",
-			"start:normalize semantic ir",
-			"end:normalize semantic ir",
+			"start:lower semantic program",
+			"end:lower semantic program",
 			"start:construct core ir",
 			"end:construct core ir",
 			"start:core ir optimizations",

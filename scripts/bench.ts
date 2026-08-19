@@ -648,7 +648,7 @@ interface SelfCompileRun {
 interface SelfCompilePhases {
 	graphMs: number;
 	semanticMs: number;
-	compileToIrMs: number;
+	lowerSemanticMs: number;
 	optimizeMs: number;
 	regallocMs: number;
 	lowerMs: number;
@@ -804,7 +804,9 @@ function benchSelfCompile(runs: number): SelfCompileMetrics {
 			maligatorPhases: {
 				graphMs: median(maligatorPhases.map((phases) => phases.graphMs)),
 				semanticMs: median(maligatorPhases.map((phases) => phases.semanticMs)),
-				compileToIrMs: median(maligatorPhases.map((phases) => phases.compileToIrMs)),
+				lowerSemanticMs: median(
+					maligatorPhases.map((phases) => phases.lowerSemanticMs),
+				),
 				optimizeMs: median(maligatorPhases.map((phases) => phases.optimizeMs)),
 				regallocMs: median(maligatorPhases.map((phases) => phases.regallocMs)),
 				lowerMs: median(maligatorPhases.map((phases) => phases.lowerMs)),
@@ -814,7 +816,7 @@ function benchSelfCompile(runs: number): SelfCompileMetrics {
 			nodePhases: {
 				graphMs: median(nodePhases.map((phases) => phases.graphMs)),
 				semanticMs: median(nodePhases.map((phases) => phases.semanticMs)),
-				compileToIrMs: median(nodePhases.map((phases) => phases.compileToIrMs)),
+				lowerSemanticMs: median(nodePhases.map((phases) => phases.lowerSemanticMs)),
 				optimizeMs: median(nodePhases.map((phases) => phases.optimizeMs)),
 				regallocMs: median(nodePhases.map((phases) => phases.regallocMs)),
 				lowerMs: median(nodePhases.map((phases) => phases.lowerMs)),
@@ -2668,10 +2670,10 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 		);
 		console.log(`  node      ${entry.selfCompile.nodeMs.toFixed(1)}ms`);
 		console.log(
-			`  front end maligator graph ${entry.selfCompile.maligatorPhases.graphMs.toFixed(0)}ms, semantic ${entry.selfCompile.maligatorPhases.semanticMs.toFixed(0)}ms, IR ${entry.selfCompile.maligatorPhases.compileToIrMs.toFixed(0)}ms`,
+			`  front end maligator graph ${entry.selfCompile.maligatorPhases.graphMs.toFixed(0)}ms, semantic ${entry.selfCompile.maligatorPhases.semanticMs.toFixed(0)}ms, Core lowering ${entry.selfCompile.maligatorPhases.lowerSemanticMs.toFixed(0)}ms`,
 		);
 		console.log(
-			`            node      graph ${entry.selfCompile.nodePhases.graphMs.toFixed(0)}ms, semantic ${entry.selfCompile.nodePhases.semanticMs.toFixed(0)}ms, IR ${entry.selfCompile.nodePhases.compileToIrMs.toFixed(0)}ms`,
+			`            node      graph ${entry.selfCompile.nodePhases.graphMs.toFixed(0)}ms, semantic ${entry.selfCompile.nodePhases.semanticMs.toFixed(0)}ms, Core lowering ${entry.selfCompile.nodePhases.lowerSemanticMs.toFixed(0)}ms`,
 		);
 		console.log(
 			`  back end  maligator optimize ${entry.selfCompile.maligatorPhases.optimizeMs.toFixed(0)}ms, regalloc ${entry.selfCompile.maligatorPhases.regallocMs.toFixed(0)}ms, lower ${entry.selfCompile.maligatorPhases.lowerMs.toFixed(0)}ms, emit ${entry.selfCompile.maligatorPhases.emitMs.toFixed(0)}ms, write ${entry.selfCompile.maligatorPhases.writeMs.toFixed(0)}ms`,

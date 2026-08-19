@@ -16,7 +16,7 @@ import { allocateDevelopmentRegisters, allocateRegisters } from "./register-allo
 import type { SemanticProgram } from "./semantic-analysis.ts";
 
 export type CompileCorePhase =
-	| "compile to ir"
+	| "lower semantic program"
 	| "construct core ir"
 	| "core ir optimizations"
 	| "lower core ir"
@@ -46,7 +46,7 @@ export function compileSemanticProgramToVmDefinition(
 ): VmDefinition {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
-	const ir = runPhase("compile to ir", () =>
+	const ir = runPhase("lower semantic program", () =>
 		compileSemanticProgramToIr(semantic, {
 			...options.ir,
 			collectOptimizationDiagnostics: options.profile === true,

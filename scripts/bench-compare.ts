@@ -19,7 +19,8 @@ export const BENCHMARK_LANE_RULES: ReadonlyArray<{
 }> = [
 	{ pattern: /^(scripts\/bench|bench\/)/, lanes: ["*"] },
 	{
-		pattern: /^src\/(ir|ir-opt|inline|escape|liveness|register-alloc|emit-c|lower-vm)/,
+		pattern:
+			/^src\/(core-ir|compile-core|ir|inline|escape|liveness|register-alloc|emit-c|lower-vm)/,
 		lanes: ["compiler", "language", "module", "stack-object"],
 	},
 	{
