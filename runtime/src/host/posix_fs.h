@@ -60,6 +60,9 @@ int mal_posix_fs_append_file(const char *path, const byte *data, usize len);
 /* Remove one non-directory filesystem entry. */
 int mal_posix_fs_unlink(const char *path);
 
+/* Replace one filesystem entry's POSIX mode bits. */
+int mal_posix_fs_chmod(const char *path, u32 mode);
+
 /* Write all bytes to an open descriptor. Returns 0 or an errno. */
 int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written);
 

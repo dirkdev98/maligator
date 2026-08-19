@@ -1,4 +1,5 @@
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -297,13 +298,6 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		durationMs: performance.now() - phaseStartedAt,
 		units: objects.length + 1,
 	});
-	const linkArguments = toolArguments(context.toolchain.tools.cc, [
-		...compileArguments,
-		...objects.map((object) => object.path),
-		mainObject.path,
-		...artifacts.linkArgs,
-		...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),
-	]);
 	const linkKey = artifactActionKey(LINKED_BINARY_PRODUCER, {
 		compileArguments: compileArguments.map((argument) =>
 			normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
@@ -362,12 +356,43 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 				materializeArtifact(artifactOutput(raced, "binary"), binaryPath);
 				return;
 			}
-			runNativeCommand(
-				context,
-				context.toolchain.tools.cc.path,
-				[...linkArguments, "-o", binaryPath],
-				{ verbose: options.verbose },
-			);
+			const linkWorkRoot = path.join(context.cacheDirectory, "work", "link");
+			mkdirSync(linkWorkRoot, { recursive: true });
+			const linkDirectory = mkdtempSync(path.join(linkWorkRoot, "inputs-"));
+			try {
+				const materializedObjects = [...objects, mainObject].map((object, index) => {
+					const destination = path.join(
+						linkDirectory,
+						`${String(index).padStart(4, "0")}.o`,
+					);
+					copyFileSync(object.path, destination);
+					return destination;
+				});
+				let archiveIndex = 0;
+				const materializedArtifacts = artifacts.linkArgs.map((argument) => {
+					if (argument.startsWith("-")) return argument;
+					const destination = path.join(
+						linkDirectory,
+						`${String(archiveIndex++).padStart(4, "0")}.a`,
+					);
+					copyFileSync(argument, destination);
+					return destination;
+				});
+				const materializedLinkArguments = toolArguments(context.toolchain.tools.cc, [
+					...compileArguments,
+					...materializedObjects,
+					...materializedArtifacts,
+					...(zigLinkTimeStrip ? context.toolchain.probes.stripArgs : []),
+				]);
+				runNativeCommand(
+					context,
+					context.toolchain.tools.cc.path,
+					[...materializedLinkArguments, "-o", binaryPath],
+					{ verbose: options.verbose },
+				);
+			} finally {
+				rmSync(linkDirectory, { recursive: true, force: true });
+			}
 			context.onBuildPhase?.({
 				phase: "link",
 				durationMs: performance.now() - phaseStartedAt,

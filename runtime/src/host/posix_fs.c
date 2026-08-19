@@ -198,6 +198,11 @@ int mal_posix_fs_unlink(const char *path) {
     return 0;
 }
 
+int mal_posix_fs_chmod(const char *path, u32 mode) {
+    if (chmod(path, (mode_t) mode) != 0) return errno;
+    return 0;
+}
+
 int mal_posix_fs_write_fd(int fd, const byte *data, usize len, usize *written) {
     usize off = 0;
     while (off < len) {

@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,6 +25,7 @@ describe("layered artifact store", () => {
 		]);
 		const destination = path.join(root, "output", "binary");
 		materializeArtifact(artifactOutput(published, "binary"), destination);
+		expect(statSync(destination).mode & 0o777).toBe(0o755);
 		writeFileSync(destination, "mutated output");
 
 		const restored = readArtifactAction(root, "example", producer, action);

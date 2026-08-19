@@ -1,6 +1,7 @@
 import {
 	Stats,
 	appendFileSync,
+	chmodSync,
 	copyFileSync,
 	existsSync,
 	lstatSync,
@@ -63,6 +64,8 @@ mkdirSync(nested, { recursive: true });
 check("recursive mkdir accepts an existing directory", statSync(nested).isDirectory());
 
 writeFileSync(textFile, "héllo 😀");
+chmodSync(textFile, 0o640);
+eq("chmodSync updates mode bits", statSync(textFile).mode & 0o777, 0o640);
 const touchedAt = new Date(1_600_000_000_123);
 utimesSync(textFile, touchedAt, touchedAt);
 check(
@@ -312,6 +315,7 @@ const nulPath = `${root}/nul-prefix\0suffix`;
 rejectsNul("existsSync rejects NUL in path", () => existsSync(nulPath));
 rejectsNul("readFileSync rejects NUL in path", () => readFileSync(nulPath, "utf8"));
 rejectsNul("writeFileSync rejects NUL in path", () => writeFileSync(nulPath, "bad"));
+rejectsNul("chmodSync rejects NUL in path", () => chmodSync(nulPath, 0o600));
 rejectsNul("statSync rejects NUL in path", () => statSync(nulPath));
 rejectsNul("readdirSync rejects NUL in path", () => readdirSync(nulPath));
 rejectsNul("mkdirSync rejects NUL in path", () => mkdirSync(nulPath));

@@ -404,6 +404,37 @@ static MalValue node_fs_unlink_sync(
     return mal_value_new_undefined();
 }
 
+static bool node_fs_mode(MalVm *vm, MalValue value, u32 *mode) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || number < 0 || number > 4294967295.0 || trunc(number) != number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "chmodSync mode must be a non-negative 32-bit integer");
+        return false;
+    }
+    *mode = (u32) number;
+    return true;
+}
+
+static MalValue node_fs_chmod_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    u32 mode;
+    if (!node_fs_mode(vm, argc >= 2 ? args[1] : mal_value_new_undefined(), &mode)) {
+        free(path);
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_chmod(path, mode);
+    if (err != 0) node_fs_throw_errno(vm, err, "chmod", path);
+    free(path);
+    return mal_value_new_undefined();
+}
+
 static MalValue node_fs_write_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue nt, MalValue callee) {
@@ -1355,6 +1386,9 @@ static MalValue node_fs_export(
     if (strcmp(name, "appendFileSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "appendFileSync", 2, node_fs_append_file_sync);
     }
+    if (strcmp(name, "chmodSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "chmodSync", 2, node_fs_chmod_sync);
+    }
     if (strcmp(name, "unlinkSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "unlinkSync", 1, node_fs_unlink_sync);
     }
@@ -1453,7 +1487,7 @@ void mal_host_install_node_fs(
         node_fs_is_symbolic_link);
 
     static const char *names[] = {
-        "Stats", "appendFileSync", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
+		"Stats", "appendFileSync", "chmodSync", "copyFileSync", "createReadStream", "existsSync", "lstatSync", "mkdirSync",
 		"mkdtempSync", "readFile", "readFileSync", "readdir", "readdirSync", "realpathSync", "renameSync",
         "rmSync", "statSync", "stat", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
     };

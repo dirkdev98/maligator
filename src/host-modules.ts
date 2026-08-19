@@ -97,6 +97,7 @@ const FS: HostModuleSpec = {
 	named: [
 		"Stats",
 		"appendFileSync",
+		"chmodSync",
 		"copyFileSync",
 		"createReadStream",
 		"existsSync",
