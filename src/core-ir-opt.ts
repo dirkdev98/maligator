@@ -2085,6 +2085,97 @@ const foldExactObjectObservations: CoreFunctionPass = {
 	},
 };
 
+const MAY_PRODUCE_EMPTY_OPCODES = new Set([
+	"createEmpty",
+	"loadCaptured",
+	"loadGlobal",
+	"loadLocal",
+]);
+
+/**
+ * Empty is an internal TDZ sentinel, not a JavaScript value. Core SSA makes its
+ * provenance explicit, so remove a check only when no incoming definition can
+ * carry that sentinel. Cyclic phis start non-empty and become maybe-empty only
+ * when a real Empty-producing source reaches the cycle.
+ */
+const eliminateRedundantTdzChecks: CoreFunctionPass = {
+	name: "eliminate-redundant-tdz-checks",
+	run(fn, analyses) {
+		const cfg = analyses.controlFlow(fn);
+		const maybeEmpty = new Set<CoreValueId>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (
+					MAY_PRODUCE_EMPTY_OPCODES.has(instruction.opcode) ||
+					(instruction.opcode === "loadThis" && fn.metadata.isDerivedConstructor)
+				) {
+					for (const output of instruction.outputs) maybeEmpty.add(output);
+				}
+			}
+		}
+
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const block of fn.blocks) {
+				for (const instruction of block.instructions) {
+					if (
+						(instruction.opcode === "move" || instruction.opcode === "setThis") &&
+						instruction.inputs.some((input) => maybeEmpty.has(input))
+					) {
+						for (const output of instruction.outputs) {
+							if (!maybeEmpty.has(output)) {
+								maybeEmpty.add(output);
+								changed = true;
+							}
+						}
+					}
+				}
+				const incoming = cfg.predecessors[block.id]!;
+				for (const [index, parameter] of block.parameters.entries()) {
+					if (parameter.role === "exception" || maybeEmpty.has(parameter.value)) {
+						continue;
+					}
+					const canBeEmpty = incoming.some((edge) => {
+						const argumentIndex =
+							edge.kind === "exceptional" && block.parameters[0]?.role === "exception"
+								? index - 1
+								: index;
+						const argument =
+							argumentIndex < 0 ? undefined : edge.arguments[argumentIndex];
+						return argument === undefined || maybeEmpty.has(argument);
+					});
+					if (canBeEmpty) {
+						maybeEmpty.add(parameter.value);
+						changed = true;
+					}
+				}
+			}
+		}
+
+		let removed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.filter((instruction) => {
+					if (
+						instruction.opcode === "throwIfTdz" &&
+						instruction.inputs.length === 1 &&
+						!maybeEmpty.has(instruction.inputs[0]!)
+					) {
+						removed = true;
+						return false;
+					}
+					return true;
+				}),
+			}),
+		);
+		return removed
+			? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 }
+			: fn;
+	},
+};
+
 const TYPEOF_RESULTS = new Set([
 	"undefined",
 	"object",
@@ -3076,6 +3167,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateKnownBuiltinCalls,
 	foldTypeofComparisons,
 	foldExactObjectObservations,
+	eliminateRedundantTdzChecks,
 	foldPrimitiveConstants,
 	simplifyControlFlow,
 	combineLinearBlocks,

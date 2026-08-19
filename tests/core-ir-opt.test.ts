@@ -215,6 +215,36 @@ describe("Core IR optimizer", () => {
 		});
 	});
 
+	it("removes TDZ checks only when Core SSA excludes the Empty sentinel", () => {
+		const optimizedOpcodes = (source: string): Array<string> => {
+			const semantic = analyzeSourceAndRunSemanticAnalysis(source, "core-tdz.js");
+			let opcodes: Array<string> = [];
+			compileSemanticProgramToVmDefinition(semantic, {
+				afterCoreOptimization(program) {
+					opcodes = program.functions.flatMap((fn) =>
+						fn.blocks.flatMap((block) =>
+							block.instructions.map(({ opcode }) => opcode),
+						),
+					);
+				},
+			});
+			return opcodes;
+		};
+		const safe = optimizedOpcodes(`
+			function safe(object) {
+				let errors = 0;
+				try { object.x; } catch { errors = errors + 1; }
+				return errors + 1;
+			}
+		`);
+		const unsafe = optimizedOpcodes(`
+			function unsafe() { return value; let value = 1; }
+		`);
+
+		expect(safe).not.toContain("throwIfTdz");
+		expect(unsafe).toContain("throwIfTdz");
+	});
+
 	it("folds primitive arithmetic with exact f64 edge semantics", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const entry = builder.createBlock();
