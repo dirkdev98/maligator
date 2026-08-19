@@ -114,14 +114,31 @@ function requireDenseIds<T extends { readonly id: number }>(
 	}
 }
 
+function requireStableIds<T extends { readonly id: number }>(
+	values: ReadonlyArray<T>,
+	kind: string,
+): void {
+	let previous = -1;
+	const seen = new Set<number>();
+	for (const value of values) {
+		if (!Number.isSafeInteger(value.id) || value.id < 0)
+			fail(`invalid ${kind} id ${value.id}`);
+		if (seen.has(value.id)) fail(`duplicate ${kind} id ${value.id}`);
+		if (value.id <= previous)
+			fail(`${kind} ids must stay in monotonically allocated order`);
+		seen.add(value.id);
+		previous = value.id;
+	}
+}
+
 /** Throws CoreIrVerificationError when any canonical middle-end invariant is broken. */
 export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistry): void {
 	if (!Number.isSafeInteger(fn.functionIndex) || fn.functionIndex < 0) {
 		fail(`invalid function index ${fn.functionIndex}`);
 	}
 	requireDenseIds(fn.blocks, "block");
-	requireDenseIds(fn.values, "value");
-	requireDenseIds(fn.facts, "fact");
+	requireStableIds(fn.values, "value");
+	requireStableIds(fn.facts, "fact");
 	const blocks = new Map(fn.blocks.map((block) => [block.id, block]));
 	if (!blocks.has(fn.entry)) fail(`unknown entry block b${fn.entry}`);
 

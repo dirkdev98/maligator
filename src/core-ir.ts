@@ -288,6 +288,8 @@ export interface CoreBlock {
 
 export interface CoreFunction {
 	readonly functionIndex: number;
+	readonly isGenerator: boolean;
+	readonly isAsync: boolean;
 	readonly entry: CoreBlockId;
 	readonly blocks: ReadonlyArray<CoreBlock>;
 	readonly values: ReadonlyArray<CoreValue>;
@@ -309,6 +311,11 @@ export interface CoreBlockParameterSpec {
 	readonly role?: "value" | "exception";
 }
 
+export interface CoreFunctionOptions {
+	readonly isGenerator?: boolean;
+	readonly isAsync?: boolean;
+}
+
 export interface AppendCoreInstructionOptions {
 	readonly outputCount?: number;
 	readonly outputRepresentations?: ReadonlyArray<CoreRepresentation>;
@@ -325,18 +332,26 @@ function arityAccepts(arity: CoreArity, count: number): boolean {
 export class CoreFunctionBuilder {
 	readonly #functionIndex: number;
 	readonly #registry: CoreOpcodeRegistry;
+	readonly #isGenerator: boolean;
+	readonly #isAsync: boolean;
 	readonly #blocks: Array<MutableCoreBlock> = [];
 	readonly #values: Array<CoreValue> = [];
 	readonly #facts: Array<CoreFact> = [];
 	#nextInstruction = 0;
 	#mutationEpoch = 0;
 
-	constructor(functionIndex: number, registry: CoreOpcodeRegistry) {
+	constructor(
+		functionIndex: number,
+		registry: CoreOpcodeRegistry,
+		options: CoreFunctionOptions = {},
+	) {
 		if (!Number.isSafeInteger(functionIndex) || functionIndex < 0) {
 			throw new Error(`Invalid function index ${functionIndex}`);
 		}
 		this.#functionIndex = functionIndex;
 		this.#registry = registry;
+		this.#isGenerator = options.isGenerator === true;
+		this.#isAsync = options.isAsync === true;
 	}
 
 	createBlock(parameters: ReadonlyArray<CoreBlockParameterSpec> = []): CoreBlockId {
@@ -475,6 +490,8 @@ export class CoreFunctionBuilder {
 		});
 		return {
 			functionIndex: this.#functionIndex,
+			isGenerator: this.#isGenerator,
+			isAsync: this.#isAsync,
 			entry,
 			blocks,
 			values: this.#values.map((value) => ({ ...value })),

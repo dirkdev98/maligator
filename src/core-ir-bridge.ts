@@ -5,15 +5,24 @@ import type {
 	CoreBlockId,
 	CoreEdge,
 	CoreFunction,
+	CoreInstructionId,
 	CoreRepresentation,
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
-import { definedRegisters, usedRegisters } from "./ir-register-index.ts";
+import {
+	destinationCount,
+	definedRegisters,
+	usedRegisters,
+} from "./ir-register-index.ts";
 import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
 
 interface LegacyInstructionPayload {
-	readonly hadRegisters: boolean;
+	readonly registerLayout?: ReadonlyArray<
+		| { readonly kind: "output"; readonly index: number }
+		| { readonly kind: "input"; readonly index: number }
+		| { readonly kind: "literal"; readonly value: number }
+	>;
 	readonly fields: Readonly<Record<string, unknown>>;
 }
 
@@ -23,16 +32,32 @@ interface LegacyToken {
 }
 
 type SegmentTerminator =
-	| { readonly kind: "jump"; readonly target: number; readonly sourcePosition?: number }
+	| {
+			readonly kind: "jump";
+			readonly target: number;
+			readonly sourcePosition?: number;
+			readonly origin?: IRInstruction;
+	  }
 	| {
 			readonly kind: "branch";
 			readonly condition: number;
 			readonly consequent: number;
 			readonly alternate: number;
 			readonly sourcePosition?: number;
+			readonly origin?: IRInstruction;
 	  }
-	| { readonly kind: "return"; readonly value: number; readonly sourcePosition?: number }
-	| { readonly kind: "throw"; readonly value: number; readonly sourcePosition?: number }
+	| {
+			readonly kind: "return";
+			readonly value: number;
+			readonly sourcePosition?: number;
+			readonly origin?: IRInstruction;
+	  }
+	| {
+			readonly kind: "throw";
+			readonly value: number;
+			readonly sourcePosition?: number;
+			readonly origin?: IRInstruction;
+	  }
 	| { readonly kind: "unreachable"; readonly sourcePosition?: number };
 
 interface LegacySegment {
@@ -52,11 +77,24 @@ interface LegacySegment {
 export interface CoreFunctionBridge {
 	readonly core: CoreFunction;
 	readonly legacy: IRFunction;
+	readonly instructionOrigins: ReadonlyMap<CoreInstructionId, IRInstruction>;
+	readonly legacyRegisters: ReadonlyMap<CoreValueId, number>;
+	readonly legacyBlockByCoreBlock: ReadonlyMap<CoreBlockId, number>;
+	readonly bodyEntryBlock?: CoreBlockId;
 }
 
 export interface CoreProgramBridge {
 	readonly source: IntermediateProgram;
 	readonly functions: ReadonlyArray<CoreFunctionBridge>;
+}
+
+export interface CoreProgramLoweringOptions {
+	/**
+	 * Retain an already optimized lowering graph while Core becomes the owner of
+	 * its proof families. This is an explicit migration mode, not a wire-format
+	 * compatibility path.
+	 */
+	readonly preserveOptimizedSource?: boolean;
 }
 
 function isControlInstruction(
@@ -78,7 +116,18 @@ function legacyPayload(instruction: IRInstruction): LegacyInstructionPayload {
 	for (const [key, value] of Object.entries(instruction)) {
 		if (key !== "type" && key !== "registers" && key !== "blocks") fields[key] = value;
 	}
-	return { hadRegisters: "registers" in instruction, fields };
+	if (!("registers" in instruction)) return { fields };
+	let outputIndex = 0;
+	let inputIndex = 0;
+	const destinations = destinationCount(instruction);
+	const registerLayout = instruction.registers.map((register, position) => {
+		if (register < 0) return { kind: "literal" as const, value: register };
+		if (position < destinations) {
+			return { kind: "output" as const, index: outputIndex++ };
+		}
+		return { kind: "input" as const, index: inputIndex++ };
+	});
+	return { registerLayout, fields };
 }
 
 function outputRepresentation(
@@ -170,7 +219,14 @@ function splitLegacyBlocks(fn: IRFunction): {
 						coreOpcode(instruction.type).effects.mayThrow));
 			if (isolatedExceptionalInstruction) flush();
 			tokens.push(token);
-			if (isolatedExceptionalInstruction) flush();
+			// Legacy conditional jumps can occur in the middle of a block: their
+			// false edge continues at the next instruction. Core IR makes that edge
+			// explicit, so every control instruction ends a segment. Instructions
+			// following an unconditional control form a dead segment that the CFG
+			// reachability pass removes.
+			if (isolatedExceptionalInstruction || isControlInstruction(instruction)) {
+				flush();
+			}
 		}
 		flush(segmentsByOldBlock[oldBlock]!.length === 0);
 	}
@@ -238,6 +294,7 @@ function establishSegmentTerminators(
 					segment.terminator = {
 						kind: "jump",
 						target: mapTarget(instruction.blocks[0]),
+						origin: instruction,
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -250,6 +307,7 @@ function establishSegmentTerminators(
 						condition: instruction.registers[0],
 						consequent: mapTarget(instruction.blocks[0]),
 						alternate: fallthrough,
+						origin: instruction,
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -258,6 +316,7 @@ function establishSegmentTerminators(
 					segment.terminator = {
 						kind: instruction.type,
 						value: instruction.registers[0],
+						origin: instruction,
 						...(sourcePosition === undefined ? {} : { sourcePosition }),
 					};
 					break;
@@ -276,6 +335,7 @@ function establishSegmentTerminators(
 				condition: conditional.registers[0],
 				consequent: mapTarget(conditional.blocks[0]),
 				alternate: mapTarget(alternate.blocks[0]),
+				origin: conditional,
 				...(controls[0]!.sourcePosition === undefined
 					? {}
 					: { sourcePosition: controls[0]!.sourcePosition }),
@@ -452,20 +512,37 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 	analyzeSegments(splitSegments, segmentsByOldBlock);
 	const segments = pruneUnreachableSegments(splitSegments);
 
-	const builder = new CoreFunctionBuilder(fn.functionIndex, coreOpcodeRegistry);
+	const builder = new CoreFunctionBuilder(fn.functionIndex, coreOpcodeRegistry, {
+		isGenerator: fn.isGenerator === true,
+		isAsync: fn.isAsync === true,
+	});
+	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
+	const legacyRegisters = new Map<CoreValueId, number>();
+	const legacyBlockByCoreBlock = new Map<CoreBlockId, number>();
 	const coreBlocks: Array<CoreBlockId> = [];
 	const blockRegisters: Array<Array<number>> = [];
 	for (const segment of segments) {
 		const liveIn = sortedRegisters(segment.liveIn);
 		blockRegisters.push(liveIn);
-		coreBlocks.push(
-			builder.createBlock([
-				...(segment.catchRegister === undefined
-					? []
-					: [{ role: "exception" as const, representation: "boxed" as const }]),
-				...liveIn.map(() => ({ representation: "boxed" as const })),
-			]),
-		);
+		const block = builder.createBlock([
+			...(segment.catchRegister === undefined
+				? []
+				: [{ role: "exception" as const, representation: "boxed" as const }]),
+			...liveIn.map(() => ({ representation: "boxed" as const })),
+		]);
+		coreBlocks.push(block);
+		legacyBlockByCoreBlock.set(block, segment.oldBlock);
+		const parameters = builder.block(block).parameters;
+		let parameterIndex = 0;
+		if (segment.catchRegister !== undefined) {
+			if (segment.catchRegister >= 0) {
+				legacyRegisters.set(parameters[parameterIndex]!.value, segment.catchRegister);
+			}
+			parameterIndex++;
+		}
+		for (const register of liveIn) {
+			legacyRegisters.set(parameters[parameterIndex++]!.value, register);
+		}
 	}
 
 	const requireValue = (
@@ -507,8 +584,14 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 				payload: legacyPayload(instruction),
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			});
+			const appended = builder.block(block).instructions.at(-1);
+			if (appended === undefined) {
+				throw new Error(`Core bridge failed to append ${instruction.type}`);
+			}
+			instructionOrigins.set(appended.id, instruction);
 			for (const [index, register] of destinations.entries()) {
 				values.set(register, outputs[index]!);
+				legacyRegisters.set(outputs[index]!, register);
 			}
 		}
 
@@ -559,7 +642,10 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 				terminator = { kind: "unreachable" };
 				break;
 		}
-		builder.setTerminator(block, terminator);
+		const terminatorId = builder.setTerminator(block, terminator);
+		if ("origin" in legacyTerminator && legacyTerminator.origin !== undefined) {
+			instructionOrigins.set(terminatorId, legacyTerminator.origin);
+		}
 		if (segment.exceptionalSuccessor !== undefined) {
 			builder.setHandler(
 				block,
@@ -571,7 +657,20 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 
 	const core = builder.finish(coreBlocks[0]!);
 	verifyCoreFunction(core, coreOpcodeRegistry);
-	return { core, legacy: fn };
+	const bodyEntrySegment =
+		fn.bodyEntryBlock === undefined
+			? undefined
+			: segments.find(({ oldBlock }) => oldBlock === fn.bodyEntryBlock);
+	return {
+		core,
+		legacy: fn,
+		instructionOrigins,
+		legacyRegisters,
+		legacyBlockByCoreBlock,
+		...(bodyEntrySegment === undefined
+			? {}
+			: { bodyEntryBlock: coreBlockId(bodyEntrySegment.id) }),
+	};
 }
 
 /** Convert normalized semantic-lowering output into canonical block-parameter SSA. */
@@ -582,10 +681,6 @@ export function intermediateProgramToCore(
 		source: program,
 		functions: program.functions.map(convertFunction),
 	};
-}
-
-function valueRegister(value: CoreValueId): number {
-	return value;
 }
 
 function parallelMoves(
@@ -620,23 +715,34 @@ function parallelMoves(
 
 function rebuildInstruction(
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
+	origin: IRInstruction | undefined,
+	registerForValue: (value: CoreValueId) => number,
 ): IRInstruction {
 	const payload = instruction.payload as LegacyInstructionPayload | undefined;
 	if (payload === undefined) {
 		throw new Error(`Core opcode ${instruction.opcode} has no legacy lowering payload`);
 	}
-	return {
+	const rebuilt = {
 		type: instruction.opcode,
 		...payload.fields,
-		...(payload.hadRegisters
-			? {
-					registers: [
-						...instruction.outputs.map(valueRegister),
-						...instruction.inputs.map(valueRegister),
-					],
-				}
-			: {}),
+		...(payload.registerLayout === undefined
+			? {}
+			: {
+					registers: payload.registerLayout.map((operand) => {
+						switch (operand.kind) {
+							case "output":
+								return registerForValue(instruction.outputs[operand.index]!);
+							case "input":
+								return registerForValue(instruction.inputs[operand.index]!);
+							case "literal":
+								return operand.value;
+						}
+					}),
+				}),
 	} as IRInstruction;
+	if (origin === undefined || origin.type !== rebuilt.type) return rebuilt;
+	Object.assign(origin, rebuilt);
+	return origin;
 }
 
 function sourcePositionMarker(position: number | undefined): Array<IRInstruction> {
@@ -646,8 +752,26 @@ function sourcePositionMarker(position: number | undefined): Array<IRInstruction
 function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 	const { core, legacy } = bridge;
 	verifyCoreFunction(core, coreOpcodeRegistry);
+	// Legacy region certificates contain a graph of instruction identities and
+	// exact control-flow envelopes. They stay on their already optimized lowering
+	// path until each region kind becomes an explicit Core operation/fact; silently
+	// approximating those proofs during de-SSA would be a correctness bug.
+	if ((legacy.regions?.length ?? 0) > 0) return legacy;
 	const blocks: Array<IRBlock> = core.blocks.map(() => ({ instructions: [] }));
-	const nextRegister = { value: core.values.length };
+	const nextRegister = {
+		value:
+			Math.max(legacy.nextRegisterDestination - 1, ...bridge.legacyRegisters.values()) +
+			1,
+	};
+	const allocatedRegisters = new Map(bridge.legacyRegisters);
+	const registerForValue = (value: CoreValueId): number => {
+		let register = allocatedRegisters.get(value);
+		if (register === undefined) {
+			register = nextRegister.value++;
+			allocatedRegisters.set(value, register);
+		}
+		return register;
+	};
 
 	const edgeBlock = (edge: CoreEdge): number => {
 		const target = core.blocks[edge.block]!;
@@ -656,11 +780,12 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 		}
 		const instructions = parallelMoves(
 			target.parameters.map((parameter, index) => ({
-				destination: valueRegister(parameter.value),
-				source: valueRegister(edge.arguments[index]!),
+				destination: registerForValue(parameter.value),
+				source: registerForValue(edge.arguments[index]!),
 			})),
 			nextRegister,
 		);
+		if (instructions.length === 0) return edge.block;
 		const index = blocks.length;
 		blocks.push({
 			instructions: [...instructions, { type: "jump", blocks: [edge.block] }],
@@ -680,8 +805,8 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 			instructions.push(
 				...parallelMoves(
 					explicitParameters.map((parameter, index) => ({
-						destination: valueRegister(parameter.value),
-						source: valueRegister(block.handler!.arguments[index]!),
+						destination: registerForValue(parameter.value),
+						source: registerForValue(block.handler!.arguments[index]!),
 					})),
 					nextRegister,
 				),
@@ -690,37 +815,76 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 		if (block.parameters[0]?.role === "exception") {
 			instructions.push({
 				type: "catch",
-				registers: [valueRegister(block.parameters[0].value)],
+				registers: [registerForValue(block.parameters[0].value)],
 			});
 		}
 		for (const instruction of block.instructions) {
 			instructions.push(...sourcePositionMarker(instruction.sourcePosition));
-			instructions.push(rebuildInstruction(instruction));
+			instructions.push(
+				rebuildInstruction(
+					instruction,
+					bridge.instructionOrigins.get(instruction.id),
+					registerForValue,
+				),
+			);
 		}
 		instructions.push(...sourcePositionMarker(block.terminator.sourcePosition));
 		switch (block.terminator.kind) {
 			case "jump":
-				instructions.push({
-					type: "jump",
-					blocks: [edgeBlock(block.terminator.edge)],
-				});
+				instructions.push(
+					rebuildInstruction(
+						{
+							id: block.terminator.id,
+							opcode: "jump",
+							inputs: [],
+							outputs: [],
+							payload: {
+								registerLayout: undefined,
+								fields: { blocks: [edgeBlock(block.terminator.edge)] },
+							},
+						},
+						bridge.instructionOrigins.get(block.terminator.id),
+						registerForValue,
+					),
+				);
 				break;
 			case "branch":
 				instructions.push(
-					{
-						type: "jumpIf",
-						registers: [valueRegister(block.terminator.condition)],
-						blocks: [edgeBlock(block.terminator.consequent)],
-					},
+					rebuildInstruction(
+						{
+							id: block.terminator.id,
+							opcode: "jumpIf",
+							inputs: [block.terminator.condition],
+							outputs: [],
+							payload: {
+								registerLayout: [{ kind: "input", index: 0 }],
+								fields: { blocks: [edgeBlock(block.terminator.consequent)] },
+							},
+						},
+						bridge.instructionOrigins.get(block.terminator.id),
+						registerForValue,
+					),
 					{ type: "jump", blocks: [edgeBlock(block.terminator.alternate)] },
 				);
 				break;
 			case "return":
 			case "throw":
-				instructions.push({
-					type: block.terminator.kind,
-					registers: [valueRegister(block.terminator.value)],
-				});
+				instructions.push(
+					rebuildInstruction(
+						{
+							id: block.terminator.id,
+							opcode: block.terminator.kind,
+							inputs: [block.terminator.value],
+							outputs: [],
+							payload: {
+								registerLayout: [{ kind: "input", index: 0 }],
+								fields: {},
+							},
+						},
+						bridge.instructionOrigins.get(block.terminator.id),
+						registerForValue,
+					),
+				);
 				break;
 			case "switch":
 				throw new Error("Core switch lowering is not implemented yet");
@@ -735,17 +899,21 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 		blocks,
 		regions: undefined,
 		nextRegisterDestination: nextRegister.value,
-		bodyEntryBlock:
-			legacy.bodyEntryBlock === undefined
-				? undefined
-				: coreBlockId(legacy.bodyEntryBlock),
+		bodyEntryBlock: bridge.bodyEntryBlock,
 	};
 }
 
 /** Lower canonical SSA back into the existing VM-facing register form. */
 export function coreProgramToIntermediate(
 	bridge: CoreProgramBridge,
+	options: CoreProgramLoweringOptions = {},
 ): IntermediateProgram {
+	if (options.preserveOptimizedSource === true) {
+		for (const { core } of bridge.functions) {
+			verifyCoreFunction(core, coreOpcodeRegistry);
+		}
+		return bridge.source;
+	}
 	return {
 		...bridge.source,
 		functions: bridge.functions.map(lowerFunctionBridge),

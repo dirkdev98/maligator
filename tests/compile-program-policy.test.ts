@@ -36,13 +36,16 @@ describe("compileEntrypoint build policy", () => {
 			"graph",
 			"semantic",
 			"compile to ir",
-			"ir optimizations",
+			"normalize semantic ir",
+			"construct core ir",
+			"core ir optimizations",
+			"lower core ir",
 			"register allocation",
 			"lower to vm",
 		]);
 	});
 
-	test("reports serialization as the seventh wire compiler phase", () => {
+	test("reports serialization after the complete wire compiler pipeline", () => {
 		const phases: Array<string> = [];
 		const bytes = compileEntrypointToBuffer(entrypoint("const answer = 40 + 2;"), {
 			runPhase: (phase, run) => {
@@ -56,7 +59,10 @@ describe("compileEntrypoint build policy", () => {
 			"graph",
 			"semantic",
 			"compile to ir",
-			"ir optimizations",
+			"normalize semantic ir",
+			"construct core ir",
+			"core ir optimizations",
+			"lower core ir",
 			"register allocation",
 			"lower to vm",
 			"serialize",

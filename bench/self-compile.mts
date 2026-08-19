@@ -42,7 +42,7 @@ type Phase = keyof typeof phases;
 const measure = <T,>(phase: Phase, run: () => T): T => {
 	const startedAt = Date.now();
 	const result = run();
-	phases[phase] = Date.now() - startedAt;
+	phases[phase] += Date.now() - startedAt;
 	return result;
 };
 
@@ -50,7 +50,10 @@ const compilePhases = {
 	graph: "graphMs",
 	semantic: "semanticMs",
 	"compile to ir": "compileToIrMs",
-	"ir optimizations": "optimizeMs",
+	"normalize semantic ir": "optimizeMs",
+	"construct core ir": "optimizeMs",
+	"core ir optimizations": "optimizeMs",
+	"lower core ir": "optimizeMs",
 	"register allocation": "regallocMs",
 	"lower to vm": "lowerMs",
 } as const;
