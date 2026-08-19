@@ -1,5 +1,4 @@
 import type { OptimizationAblation } from "./compiler-diagnostics.ts";
-import type { CoreProgramBridge } from "./core-ir-bridge.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
@@ -10,6 +9,7 @@ import type {
 	CoreEdge,
 	CoreFunction,
 	CoreInstruction,
+	CoreProgram,
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -302,7 +302,7 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 };
 
 export interface CoreOptimizationResult {
-	readonly program: CoreProgramBridge;
+	readonly program: CoreProgram;
 	readonly changed: boolean;
 	readonly passes: ReadonlyArray<{
 		readonly name: string;
@@ -314,11 +314,7 @@ export interface CoreOptimizationResult {
 interface CoreFunctionPass {
 	readonly name: string;
 	readonly ablation?: OptimizationAblation;
-	run(
-		fn: CoreFunction,
-		analyses: CoreAnalysisManager,
-		bridge: CoreProgramBridge["functions"][number],
-	): CoreFunction;
+	run(fn: CoreFunction, analyses: CoreAnalysisManager): CoreFunction;
 }
 
 /** Per-function analysis cache keyed by the immutable function snapshot. */
@@ -452,8 +448,7 @@ const VALUE_NUMBERED_OPCODES = new Set([
 const copyAndValueNumber: CoreFunctionPass = {
 	name: "copy-and-value-number",
 	ablation: "constant-folding",
-	run(fn, _analyses, bridge) {
-		if ((bridge.legacy.regions?.length ?? 0) > 0) return fn;
+	run(fn) {
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removedInstructions = new Set<number>();
 		const blocks = fn.blocks.map((block): CoreBlock => {
@@ -538,8 +533,7 @@ function collectUses(fn: CoreFunction): Set<CoreValueId> {
 
 const deadInstructionElimination: CoreFunctionPass = {
 	name: "dead-instruction-elimination",
-	run(fn, _analyses, bridge) {
-		if ((bridge.legacy.regions?.length ?? 0) > 0) return fn;
+	run(fn) {
 		const uses = collectUses(fn);
 		const removedInstructions = new Set<number>();
 		const removedValues = new Map<CoreValueId, CoreValueId>();
@@ -577,7 +571,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 ];
 
 export function executeCoreOptimizations(
-	program: CoreProgramBridge,
+	program: CoreProgram,
 	options: CoreOptimizationOptions = {},
 ): CoreOptimizationResult {
 	const maxRounds = options.maxRounds ?? 8;
@@ -587,7 +581,7 @@ export function executeCoreOptimizations(
 	const analyses = new CoreAnalysisManager();
 	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
 	let changed = false;
-	let functions = program.functions.map(({ core }) => core);
+	let functions = [...program.functions];
 	for (let round = 0; round < maxRounds; round++) {
 		let roundChanged = false;
 		for (const pass of CORE_PASSES) {
@@ -606,8 +600,8 @@ export function executeCoreOptimizations(
 				}
 				continue;
 			}
-			functions = functions.map((fn, index) => {
-				const next = pass.run(fn, analyses, program.functions[index]!);
+			functions = functions.map((fn) => {
+				const next = pass.run(fn, analyses);
 				const passChanged = next !== fn;
 				traces.push({ name: pass.name, round, changed: passChanged });
 				if (passChanged) {
@@ -621,13 +615,7 @@ export function executeCoreOptimizations(
 		if (!roundChanged) break;
 	}
 	return {
-		program: {
-			...program,
-			functions: program.functions.map((bridge, index) => ({
-				...bridge,
-				core: functions[index]!,
-			})),
-		},
+		program: { ...program, functions },
 		changed,
 		passes: traces,
 	};

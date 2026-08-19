@@ -6,6 +6,7 @@ import type {
 	CoreEdge,
 	CoreFunction,
 	CoreInstructionId,
+	CoreProgram,
 	CoreRepresentation,
 	CoreTerminatorInput,
 	CoreValueId,
@@ -74,8 +75,7 @@ interface LegacySegment {
 	exceptionalSuccessor?: number;
 }
 
-export interface CoreFunctionBridge {
-	readonly core: CoreFunction;
+export interface CoreFunctionLowering {
 	readonly legacy: IRFunction;
 	readonly instructionOrigins: ReadonlyMap<CoreInstructionId, IRInstruction>;
 	readonly legacyRegisters: ReadonlyMap<CoreValueId, number>;
@@ -85,7 +85,12 @@ export interface CoreFunctionBridge {
 
 export interface CoreProgramBridge {
 	readonly source: IntermediateProgram;
-	readonly functions: ReadonlyArray<CoreFunctionBridge>;
+	readonly core: CoreProgram;
+	readonly lowering: ReadonlyArray<CoreFunctionLowering>;
+}
+
+interface ConvertedCoreFunction extends CoreFunctionLowering {
+	readonly core: CoreFunction;
 }
 
 export interface CoreProgramConstructionOptions {
@@ -547,7 +552,7 @@ function convertStraightLineFunction(
 	fn: IRFunction,
 	verify: boolean,
 	retainLoweringMetadata: boolean,
-): CoreFunctionBridge | undefined {
+): ConvertedCoreFunction | undefined {
 	if (fn.blocks.length !== 1) return undefined;
 	const executable = fn.blocks[0]!.instructions.filter(
 		(instruction) => instruction.type !== "sourcePos",
@@ -644,7 +649,7 @@ function convertFunction(
 	fn: IRFunction,
 	verify: boolean,
 	retainLoweringMetadata: boolean,
-): CoreFunctionBridge {
+): ConvertedCoreFunction {
 	const straightLine = convertStraightLineFunction(fn, verify, retainLoweringMetadata);
 	if (straightLine !== undefined) return straightLine;
 	const { segments: splitSegments, segmentsByOldBlock } = splitLegacyBlocks(fn);
@@ -825,11 +830,13 @@ export function intermediateProgramToCore(
 ): CoreProgramBridge {
 	const verify = options.verify ?? true;
 	const retainLoweringMetadata = options.retainLoweringMetadata ?? true;
+	const converted = program.functions.map((fn) =>
+		convertFunction(fn, verify, retainLoweringMetadata),
+	);
 	return {
 		source: program,
-		functions: program.functions.map((fn) =>
-			convertFunction(fn, verify, retainLoweringMetadata),
-		),
+		core: { functions: converted.map(({ core }) => core) },
+		lowering: converted.map(({ core: _core, ...lowering }) => lowering),
 	};
 }
 
@@ -899,8 +906,11 @@ function sourcePositionMarker(position: number | undefined): Array<IRInstruction
 	return position === undefined ? [] : [{ type: "sourcePos", pos: position }];
 }
 
-function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
-	const { core, legacy } = bridge;
+function lowerFunctionBridge(
+	core: CoreFunction,
+	lowering: CoreFunctionLowering,
+): IRFunction {
+	const { legacy } = lowering;
 	verifyCoreFunction(core, coreOpcodeRegistry);
 	// Legacy region certificates contain a graph of instruction identities and
 	// exact control-flow envelopes. They stay on their already optimized lowering
@@ -910,10 +920,10 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 	const blocks: Array<IRBlock> = core.blocks.map(() => ({ instructions: [] }));
 	const nextRegister = {
 		value:
-			Math.max(legacy.nextRegisterDestination - 1, ...bridge.legacyRegisters.values()) +
+			Math.max(legacy.nextRegisterDestination - 1, ...lowering.legacyRegisters.values()) +
 			1,
 	};
-	const allocatedRegisters = new Map(bridge.legacyRegisters);
+	const allocatedRegisters = new Map(lowering.legacyRegisters);
 	const registerForValue = (value: CoreValueId): number => {
 		let register = allocatedRegisters.get(value);
 		if (register === undefined) {
@@ -973,7 +983,7 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 			instructions.push(
 				rebuildInstruction(
 					instruction,
-					bridge.instructionOrigins.get(instruction.id),
+					lowering.instructionOrigins.get(instruction.id),
 					registerForValue,
 				),
 			);
@@ -993,7 +1003,7 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 								fields: { blocks: [edgeBlock(block.terminator.edge)] },
 							},
 						},
-						bridge.instructionOrigins.get(block.terminator.id),
+						lowering.instructionOrigins.get(block.terminator.id),
 						registerForValue,
 					),
 				);
@@ -1011,7 +1021,7 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 								fields: { blocks: [edgeBlock(block.terminator.consequent)] },
 							},
 						},
-						bridge.instructionOrigins.get(block.terminator.id),
+						lowering.instructionOrigins.get(block.terminator.id),
 						registerForValue,
 					),
 					{ type: "jump", blocks: [edgeBlock(block.terminator.alternate)] },
@@ -1041,7 +1051,7 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 								fields: {},
 							},
 						},
-						bridge.instructionOrigins.get(block.terminator.id),
+						lowering.instructionOrigins.get(block.terminator.id),
 						registerForValue,
 					),
 				);
@@ -1059,7 +1069,7 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 		blocks,
 		regions: undefined,
 		nextRegisterDestination: nextRegister.value,
-		bodyEntryBlock: bridge.bodyEntryBlock,
+		bodyEntryBlock: lowering.bodyEntryBlock,
 	};
 }
 
@@ -1069,6 +1079,8 @@ export function coreProgramToIntermediate(
 ): IntermediateProgram {
 	return {
 		...bridge.source,
-		functions: bridge.functions.map(lowerFunctionBridge),
+		functions: bridge.core.functions.map((fn, index) =>
+			lowerFunctionBridge(fn, bridge.lowering[index]!),
+		),
 	};
 }

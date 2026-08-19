@@ -77,9 +77,12 @@ export function compileSemanticProgramToVmDefinition(
 	);
 	const optimized = runPhase("core ir optimizations", () =>
 		usesCoreLowering && core !== undefined
-			? executeCoreOptimizations(core, {
-					ablations: options.optimizationAblations,
-				}).program
+			? {
+					...core,
+					core: executeCoreOptimizations(core.core, {
+						ablations: options.optimizationAblations,
+					}).program,
+				}
 			: core,
 	);
 	const lowered = runPhase("lower core ir", () =>

@@ -29,11 +29,11 @@ describe("Core IR semantic bridge", () => {
 			}
 			choose(true);
 		`);
-		for (const { core } of converted.functions) {
-			expect(() => verifyCoreFunction(core, coreOpcodeRegistry)).not.toThrow();
+		for (const fn of converted.core.functions) {
+			expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 		}
-		const printed = converted.functions
-			.map(({ core }) => formatCoreFunction(core))
+		const printed = converted.core.functions
+			.map((fn) => formatCoreFunction(fn))
 			.join("\n");
 		expect(printed).toMatch(/b\d+\(%\d+: boxed/);
 		expect(printed).toContain("branch");
@@ -48,8 +48,8 @@ describe("Core IR semantic bridge", () => {
 			}
 			read({ value: 2 });
 		`);
-		const exceptional = converted.functions.flatMap(({ core }) =>
-			core.blocks.filter(({ handler }) => handler !== undefined),
+		const exceptional = converted.core.functions.flatMap((fn) =>
+			fn.blocks.filter(({ handler }) => handler !== undefined),
 		);
 		expect(exceptional.length).toBeGreaterThan(0);
 
@@ -81,8 +81,8 @@ describe("Core IR semantic bridge", () => {
 			}
 			make();
 		`);
-		const batches = converted.functions.flatMap(({ core }) =>
-			core.blocks.flatMap((block) =>
+		const batches = converted.core.functions.flatMap((fn) =>
+			fn.blocks.flatMap((block) =>
 				block.instructions.filter(({ opcode }) => opcode === "createPrivateNames"),
 			),
 		);

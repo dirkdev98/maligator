@@ -306,6 +306,11 @@ export interface CoreFunction {
 	readonly mutationEpoch: number;
 }
 
+/** Canonical middle-end program, independent of frontend and backend adapters. */
+export interface CoreProgram {
+	readonly functions: ReadonlyArray<CoreFunction>;
+}
+
 interface MutableCoreBlock {
 	readonly id: CoreBlockId;
 	readonly parameters: Array<CoreBlockParameter>;
