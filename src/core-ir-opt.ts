@@ -1,6 +1,8 @@
 import { builtinOperations } from "./builtin-registry.ts";
 import type {
+	CompilerOptimizationDecision,
 	OptimizationAblation,
+	OptimizationDecisionReason,
 	OptimizationMetrics,
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
@@ -18,11 +20,12 @@ import type {
 	CoreFunction,
 	CoreImmediate,
 	CoreInstruction,
+	CoreInstructionId,
 	CoreProgram,
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreBlockId } from "./core-ir.ts";
+import { coreBlockId, coreInstructionId, coreValueId } from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
 	readonly maxRounds?: number;
@@ -98,6 +101,13 @@ function coreAttribute(value: unknown, path: string): CoreAttributeValue {
 	if (typeof value !== "object") {
 		throw new Error(`Unsupported Core attribute ${path}: ${typeof value}`);
 	}
+	return coreAttributeObject(value as Readonly<Record<string, unknown>>, path);
+}
+
+function coreAttributeObject(
+	value: Readonly<Record<string, unknown>>,
+	path: string,
+): Readonly<Record<string, CoreAttributeValue>> {
 	const result: Record<string, CoreAttributeValue> = {};
 	for (const [key, entry] of Object.entries(value)) {
 		result[key] = coreAttribute(entry, `${path}.${key}`);
@@ -330,6 +340,624 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 			}),
 		);
 		return changed ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	},
+};
+
+const MAX_INLINE_INSTRUCTIONS = 40;
+const INLINE_DISQUALIFYING_OPCODES = new Set([
+	"loadThis",
+	"loadNewTarget",
+	"loadCallee",
+	"createArgumentsObject",
+	"createRestArguments",
+	"withEnter",
+	"withExit",
+	"withGet",
+	"withResolveBase",
+	"withSet",
+	"yield",
+	"await",
+	"asyncStart",
+	"generatorStart",
+]);
+
+interface LinearInlineTarget {
+	readonly blocks: ReadonlyArray<CoreBlock>;
+	readonly instructionCount: number;
+}
+
+interface InlineProgramResult {
+	readonly program: CoreProgram;
+	readonly changed: boolean;
+}
+
+function storageKey(instruction: CoreInstruction): string | undefined {
+	if (instruction.opcode !== "loadCaptured" && instruction.opcode !== "storeCaptured") {
+		return undefined;
+	}
+	const owner = instruction.attributes.functionIndex;
+	const index = instruction.attributes.index;
+	return typeof owner === "number" && typeof index === "number"
+		? `${owner}:${index}`
+		: undefined;
+}
+
+function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction> {
+	const definitions = new Map<CoreValueId, CoreInstruction>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			for (const output of instruction.outputs) definitions.set(output, instruction);
+		}
+	}
+	return definitions;
+}
+
+function capturedStoreValues(fn: CoreFunction): Map<string, CoreValueId> {
+	const candidates = new Map<string, Array<CoreValueId>>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.opcode !== "storeCaptured" || instruction.inputs.length !== 1) {
+				continue;
+			}
+			const key = storageKey(instruction);
+			if (key === undefined) continue;
+			const values = candidates.get(key) ?? [];
+			values.push(instruction.inputs[0]!);
+			candidates.set(key, values);
+		}
+	}
+	return new Map(
+		[...candidates].flatMap(([key, values]) =>
+			values.length === 1 ? [[key, values[0]!] as const] : [],
+		),
+	);
+}
+
+function exactFunctionValue(
+	value: CoreValueId,
+	definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
+	stores: ReadonlyMap<string, CoreValueId>,
+): number | undefined {
+	const seen = new Set<CoreValueId>();
+	let current = value;
+	while (!seen.has(current)) {
+		seen.add(current);
+		const definition = definitions.get(current);
+		if (definition === undefined) return undefined;
+		if (definition.opcode === "createFunction") {
+			const index = definition.attributes.functionIndex;
+			return typeof index === "number" ? index : undefined;
+		}
+		if (definition.opcode === "move" && definition.inputs.length === 1) {
+			current = definition.inputs[0]!;
+			continue;
+		}
+		if (definition.opcode === "loadCaptured") {
+			const key = storageKey(definition);
+			const stored = key === undefined ? undefined : stores.get(key);
+			if (stored === undefined) return undefined;
+			current = stored;
+			continue;
+		}
+		return undefined;
+	}
+	return undefined;
+}
+
+function linearInlineTarget(target: CoreFunction): LinearInlineTarget | undefined {
+	if (target.isGenerator || target.isAsync || target.regions.length > 0) return undefined;
+	const blocks: Array<CoreBlock> = [];
+	const visited = new Set<CoreBlockId>();
+	let block = target.blocks[target.entry];
+	let instructionCount = 0;
+	while (block !== undefined && !visited.has(block.id)) {
+		visited.add(block.id);
+		if (
+			block.handler !== undefined ||
+			block.parameters.some(({ role }) => role === "exception")
+		) {
+			return undefined;
+		}
+		for (const instruction of block.instructions) {
+			if (
+				INLINE_DISQUALIFYING_OPCODES.has(instruction.opcode) ||
+				instruction.effectRefinement !== undefined
+			) {
+				return undefined;
+			}
+			instructionCount++;
+			if (instructionCount > MAX_INLINE_INSTRUCTIONS) return undefined;
+		}
+		blocks.push(block);
+		if (block.terminator.kind === "return") {
+			return instructionCount === 0 ? undefined : { blocks, instructionCount };
+		}
+		if (block.terminator.kind !== "jump") return undefined;
+		block = target.blocks[block.terminator.edge.block];
+	}
+	return undefined;
+}
+
+function targetShapeDeclineReason(target: CoreFunction): OptimizationDecisionReason {
+	if (
+		target.blocks.some(
+			(block) =>
+				block.handler !== undefined ||
+				block.parameters.some(({ role }) => role === "exception"),
+		)
+	) {
+		return "exception-region";
+	}
+	if (
+		target.blocks.some((block) =>
+			block.instructions.some(({ opcode }) => opcode === "createFunction"),
+		)
+	) {
+		return "inner-closure";
+	}
+	return "relocation";
+}
+
+function targetAllocates(target: CoreFunction): boolean {
+	return target.blocks.some((block) =>
+		block.instructions.some(({ opcode }) => ALLOCATION_OPCODES.has(opcode)),
+	);
+}
+
+function recordInlineDecision(
+	decisions: Array<CompilerOptimizationDecision> | undefined,
+	fn: CoreFunction,
+	call: CoreInstruction,
+	outcome: "applied" | "declined",
+	reason: OptimizationDecisionReason | "inline",
+): void {
+	const positionId = call.sourcePosition;
+	if (decisions === undefined || positionId === undefined) return;
+	const code: CompilerOptimizationDecision["code"] =
+		outcome === "applied"
+			? `optimization.applied.${reason}`
+			: `optimization.declined.${reason as OptimizationDecisionReason}`;
+	if (
+		decisions.some(
+			(decision) =>
+				decision.functionIndex === fn.functionIndex &&
+				decision.positionId === positionId &&
+				decision.code === code,
+		)
+	) {
+		return;
+	}
+	decisions.push({
+		functionIndex: fn.functionIndex,
+		positionId,
+		operation: "call",
+		phase: "optimization",
+		code,
+		outcome,
+		...(outcome === "declined" ? { reason: reason as OptimizationDecisionReason } : {}),
+	});
+}
+
+function nextInstructionId(fn: CoreFunction): number {
+	let next = 0;
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions)
+			next = Math.max(next, instruction.id + 1);
+		next = Math.max(next, block.terminator.id + 1);
+	}
+	return next;
+}
+
+function inlineSourcePosition(
+	positions: Array<CoreProgram["sourcePositions"][number]>,
+	targetFunctionIndex: number,
+	positionId: number | undefined,
+	callerPositionId: number | undefined,
+): number | undefined {
+	if (positionId === undefined || callerPositionId === undefined) return positionId;
+	const position = positions[positionId];
+	if (position === undefined || position.inlinedFunctionIndex !== undefined) {
+		return positionId;
+	}
+	return (
+		positions.push({
+			line: position.line,
+			column: position.column,
+			inlinedFunctionIndex: targetFunctionIndex,
+			callerPosId: callerPositionId,
+		}) - 1
+	);
+}
+
+function inlineLinearCall(
+	fn: CoreFunction,
+	block: CoreBlock,
+	call: CoreInstruction,
+	target: CoreFunction,
+	linear: LinearInlineTarget,
+	positions: Array<CoreProgram["sourcePositions"][number]>,
+): CoreFunction | undefined {
+	if (call.outputs.length !== 1 || call.inputs.length < 2) return undefined;
+	let instructionNumber = nextInstructionId(fn);
+	let valueNumber = fn.values.reduce((next, value) => Math.max(next, value.id + 1), 0);
+	const values = [...fn.values];
+	const valueMap = new Map<CoreValueId, CoreValueId>();
+	const cloned: Array<CoreInstruction> = [];
+	const arguments_ = call.inputs.slice(2);
+	for (const [index, parameter] of target.parameters.entries()) {
+		const argument = arguments_[index];
+		if (argument !== undefined) {
+			valueMap.set(parameter, argument);
+			continue;
+		}
+		const instructionId = coreInstructionId(instructionNumber++);
+		const valueId = coreValueId(valueNumber++);
+		cloned.push({
+			id: instructionId,
+			opcode: "createUndefined",
+			inputs: [],
+			outputs: [valueId],
+			attributes: {},
+			...(call.sourcePosition === undefined
+				? {}
+				: { sourcePosition: call.sourcePosition }),
+		});
+		values.push({
+			id: valueId,
+			representation: "boxed",
+			definition: { kind: "instruction", instruction: instructionId, index: 0 },
+		});
+		valueMap.set(parameter, valueId);
+	}
+	const targetValues = new Map(target.values.map((value) => [value.id, value] as const));
+	const resolveTarget = (value: CoreValueId): CoreValueId | undefined =>
+		valueMap.get(value);
+	let returnValue: CoreValueId | undefined;
+	for (const [blockIndex, targetBlock] of linear.blocks.entries()) {
+		if (blockIndex > 0) {
+			const predecessor = linear.blocks[blockIndex - 1]!;
+			if (predecessor.terminator.kind !== "jump") return undefined;
+			for (const [index, parameter] of targetBlock.parameters.entries()) {
+				const argument = predecessor.terminator.edge.arguments[index];
+				const resolved = argument === undefined ? undefined : resolveTarget(argument);
+				if (resolved === undefined) return undefined;
+				valueMap.set(parameter.value, resolved);
+			}
+		}
+		for (const instruction of targetBlock.instructions) {
+			const inputs = instruction.inputs.map(resolveTarget);
+			if (inputs.some((input) => input === undefined)) return undefined;
+			const instructionId = coreInstructionId(instructionNumber++);
+			const outputs = instruction.outputs.map((output, outputIndex) => {
+				const source = targetValues.get(output);
+				if (source === undefined) throw new Error(`Missing Core inline value ${output}`);
+				const valueId = coreValueId(valueNumber++);
+				values.push({
+					id: valueId,
+					representation: source.representation,
+					definition: {
+						kind: "instruction",
+						instruction: instructionId,
+						index: outputIndex,
+					},
+				});
+				valueMap.set(output, valueId);
+				return valueId;
+			});
+			cloned.push({
+				...instruction,
+				id: instructionId,
+				inputs: inputs as Array<CoreValueId>,
+				outputs,
+				...(instruction.sourcePosition === undefined
+					? {}
+					: {
+							sourcePosition: inlineSourcePosition(
+								positions,
+								target.functionIndex,
+								instruction.sourcePosition,
+								call.sourcePosition,
+							),
+						}),
+			});
+		}
+		if (targetBlock.terminator.kind === "return") {
+			returnValue = resolveTarget(targetBlock.terminator.value);
+		}
+	}
+	if (returnValue === undefined) return undefined;
+	const blocks = fn.blocks.map(
+		(candidate): CoreBlock =>
+			candidate.id === block.id
+				? {
+						...candidate,
+						instructions: candidate.instructions.flatMap((instruction) =>
+							instruction.id === call.id ? cloned : [instruction],
+						),
+					}
+				: candidate,
+	);
+	return rewriteFunction(
+		{ ...fn, values },
+		blocks,
+		new Map([[call.outputs[0]!, returnValue]]),
+		new Set([call.id]),
+	);
+}
+
+function inlineSimpleCoreFunctions(program: CoreProgram): InlineProgramResult {
+	const compilation = program.compilation;
+	const decisions =
+		compilation?.optimizationDecisions === undefined
+			? undefined
+			: [...compilation.optimizationDecisions];
+	const positions = program.sourcePositions.map((position) => ({ ...position }));
+	let changed = false;
+	const functions = program.functions.map((original) => {
+		let fn = original;
+		for (let expansion = 0; expansion < 8; expansion++) {
+			const definitions = functionDefinitions(fn);
+			const stores = capturedStoreValues(fn);
+			const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
+			let next: CoreFunction | undefined;
+			for (const block of fn.blocks) {
+				for (const call of block.instructions) {
+					if (call.opcode !== "call" || call.inputs.length < 2) continue;
+					const targetIndex = exactFunctionValue(call.inputs[0]!, definitions, stores);
+					if (targetIndex === undefined || targetIndex === fn.functionIndex) continue;
+					const target = program.functions.find(
+						(candidate) => candidate.functionIndex === targetIndex,
+					);
+					if (target === undefined) continue;
+					const inLoop = cfg.loops.some((loop) => loop.blocks.has(block.id));
+					if (inLoop && targetAllocates(target)) {
+						recordInlineDecision(decisions, fn, call, "declined", "escape-cost-barrier");
+						continue;
+					}
+					const linear = linearInlineTarget(target);
+					if (linear === undefined) {
+						recordInlineDecision(
+							decisions,
+							fn,
+							call,
+							"declined",
+							targetShapeDeclineReason(target),
+						);
+						continue;
+					}
+					next = inlineLinearCall(fn, block, call, target, linear, positions);
+					if (next !== undefined) {
+						recordInlineDecision(decisions, fn, call, "applied", "inline");
+						verifyCoreFunction(next, coreOpcodeRegistry);
+					}
+					break;
+				}
+				if (next !== undefined) break;
+			}
+			if (next === undefined) break;
+			fn = next;
+			changed = true;
+		}
+		return fn;
+	});
+	return {
+		program: {
+			...program,
+			functions,
+			sourcePositions: positions,
+			...(compilation === undefined
+				? {}
+				: {
+						compilation: {
+							...compilation,
+							...(decisions === undefined ? {} : { optimizationDecisions: decisions }),
+						},
+					}),
+		},
+		changed,
+	};
+}
+
+function coreInstructionBlock(
+	fn: CoreFunction,
+	instructionId: CoreInstructionId,
+): CoreBlockId | undefined {
+	return fn.blocks.find((block) =>
+		[...block.instructions, block.terminator].some(({ id }) => id === instructionId),
+	)?.id;
+}
+
+function stackObjectRegion(
+	fn: CoreFunction,
+	allocation: CoreInstruction,
+	analyses: CoreAnalysisManager,
+): CoreFunction["regions"][number] | undefined {
+	if (allocation.opcode !== "createObjectShaped" || allocation.outputs.length !== 1) {
+		return undefined;
+	}
+	const keyStringIndices = allocation.attributes.keyStringIndices;
+	if (
+		!Array.isArray(keyStringIndices) ||
+		!keyStringIndices.every((index) => typeof index === "number") ||
+		new Set(keyStringIndices).size !== keyStringIndices.length
+	) {
+		return undefined;
+	}
+	const slotByStringIndex = new Map(
+		keyStringIndices.map((stringIndex, slot) => [stringIndex, slot] as const),
+	);
+	const cfg = analyses.controlFlow(fn);
+	const aliases = new Set<CoreValueId>([allocation.outputs[0]!]);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (
+					instruction.opcode === "move" &&
+					instruction.inputs.length === 1 &&
+					aliases.has(instruction.inputs[0]!) &&
+					instruction.outputs.length === 1 &&
+					!aliases.has(instruction.outputs[0]!)
+				) {
+					aliases.add(instruction.outputs[0]!);
+					changed = true;
+				}
+			}
+			const incoming = cfg.predecessors[block.id]!.filter(
+				(edge) => edge.kind === "ordinary",
+			);
+			for (const [index, parameter] of block.parameters.entries()) {
+				if (
+					incoming.length > 0 &&
+					incoming.every((edge) => {
+						const argument = edge.arguments[index];
+						return argument !== undefined && aliases.has(argument as CoreValueId);
+					}) &&
+					!aliases.has(parameter.value)
+				) {
+					aliases.add(parameter.value);
+					changed = true;
+				}
+			}
+		}
+	}
+
+	const accesses: Array<{
+		readonly instruction: CoreInstruction;
+		readonly slot: number;
+	}> = [];
+	const materializations: Array<CoreTerminator & { readonly kind: "return" }> = [];
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			for (const [position, input] of instruction.inputs.entries()) {
+				if (!aliases.has(input)) continue;
+				if (instruction.opcode === "move" && position === 0) continue;
+				if (instruction.opcode === "throwIfTdz" && position === 0) continue;
+				if (
+					(instruction.opcode === "loadPropertyStatic" ||
+						instruction.opcode === "storePropertyStatic") &&
+					position === 0
+				) {
+					const stringIndex = instruction.attributes.stringIndex;
+					const slot =
+						typeof stringIndex === "number"
+							? slotByStringIndex.get(stringIndex)
+							: undefined;
+					if (slot === undefined) return undefined;
+					accesses.push({ instruction, slot });
+					continue;
+				}
+				return undefined;
+			}
+		}
+		if (block.handler?.arguments.some((value) => aliases.has(value)) === true) {
+			return undefined;
+		}
+		const terminator = block.terminator;
+		if (terminator.kind === "return" && aliases.has(terminator.value)) {
+			materializations.push(terminator);
+		} else if (
+			(terminator.kind === "throw" && aliases.has(terminator.value)) ||
+			((terminator.kind === "branch" || terminator.kind === "guard") &&
+				aliases.has(terminator.condition)) ||
+			(terminator.kind === "switch" && aliases.has(terminator.discriminant))
+		) {
+			return undefined;
+		}
+	}
+
+	const claimedInstructions = [
+		allocation.id,
+		...accesses.map(({ instruction }) => instruction.id),
+		...materializations.map(({ id }) => id),
+	];
+	if (new Set(claimedInstructions).size !== claimedInstructions.length) return undefined;
+	const ordinaryBlocks = [
+		...new Set(
+			claimedInstructions.flatMap((instruction) => {
+				const block = coreInstructionBlock(fn, instruction);
+				return block === undefined ? [] : [block];
+			}),
+		),
+	];
+	if (ordinaryBlocks.length === 0) return undefined;
+	const materializeObligations = materializations.map(({ id }) => ({
+		kind: "materialize" as const,
+		id: `stack-object-return:${fn.functionIndex}:${id}`,
+	}));
+	return {
+		kind: "stack-object-plan",
+		anchors: [allocation.id],
+		claimedInstructions,
+		ordinaryBlocks,
+		exceptionalBlocks: [],
+		data: coreAttributeObject(
+			{
+				license: {
+					guard: {
+						dependencies: [],
+						obligations: [
+							{
+								kind: "fallback",
+								id: `stack-object:${fn.functionIndex}:${allocation.id}`,
+							},
+							...materializeObligations,
+						],
+					},
+					genericTwin: "retained",
+					materialization: "on-demand",
+				},
+				representation: "activation-local-fixed-shape-objects",
+				cost: {
+					score: Math.max(1, keyStringIndices.length),
+					metadataOperations: claimedInstructions.length,
+				},
+				sites: [
+					{
+						allocation: { $coreInstruction: allocation.id },
+						slotCount: keyStringIndices.length,
+						accesses: accesses.map(({ instruction, slot }) => ({
+							instruction: { $coreInstruction: instruction.id },
+							slot,
+						})),
+						materializations: materializations.map(({ id }) => ({
+							instruction: { $coreInstruction: id },
+							kind: "return",
+						})),
+					},
+				],
+			},
+			"stack-object-plan",
+		),
+	};
+}
+
+const selectStackObjectRegions: CoreFunctionPass = {
+	name: "select-stack-object-regions",
+	ablation: "escape",
+	run(fn, analyses) {
+		const existingAllocations = new Set(
+			fn.regions
+				.filter(({ kind }) => kind === "stack-object-plan")
+				.flatMap(({ anchors }) => anchors),
+		);
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (
+					instruction.opcode !== "createObjectShaped" ||
+					existingAllocations.has(instruction.id)
+				) {
+					continue;
+				}
+				const region = stackObjectRegion(fn, instruction, analyses);
+				if (region !== undefined) regions.push(region);
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
 	},
 };
 
@@ -1426,6 +2054,7 @@ const combineLinearBlocks: CoreFunctionPass = {
 const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	annotateKnownBuiltinCalls,
+	selectStackObjectRegions,
 	foldPrimitiveConstants,
 	simplifyControlFlow,
 	combineLinearBlocks,
@@ -1474,8 +2103,39 @@ export function executeCoreOptimizations(
 	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
 	const optimizationTrace: Array<OptimizationPassDelta> = [];
 	const collectOptimizationTrace = program.compilation?.optimizationTrace !== undefined;
-	let changed = false;
-	let functions = [...program.functions];
+	const inlineBefore = collectOptimizationTrace
+		? coreOptimizationMetrics(program)
+		: undefined;
+	const inlineAblated = options.ablations?.has("inlining") === true;
+	const inlineResult = inlineAblated
+		? { program, changed: false }
+		: inlineSimpleCoreFunctions(program);
+	const workingProgram = inlineResult.program;
+	let changed = inlineResult.changed;
+	let functions = [...workingProgram.functions];
+	for (const fn of functions) {
+		traces.push({
+			name: "inline-small-functions",
+			round: 0,
+			changed: fn !== program.functions[fn.functionIndex],
+		});
+	}
+	if (inlineBefore !== undefined) {
+		const inlineAfter = coreOptimizationMetrics(workingProgram);
+		optimizationTrace.push(
+			optimizationPassDelta(
+				{
+					pass: "inline-small-functions",
+					stage: "normalization",
+					status: inlineAblated ? "ablated" : "executed",
+					changed: inlineResult.changed,
+					ablation: "inlining",
+				},
+				inlineBefore,
+				inlineAfter,
+			),
+		);
+	}
 	for (let round = 0; round < maxRounds; round++) {
 		let roundChanged = false;
 		for (const pass of CORE_PASSES) {
@@ -1484,7 +2144,7 @@ export function executeCoreOptimizations(
 				(pass === copyAndValueNumber || pass === deadInstructionElimination);
 			const ablated =
 				pass.ablation !== undefined && options.ablations?.has(pass.ablation) === true;
-			const beforeProgram = { ...program, functions };
+			const beforeProgram = { ...workingProgram, functions };
 			const before = collectOptimizationTrace
 				? coreOptimizationMetrics(beforeProgram)
 				: undefined;
@@ -1551,7 +2211,7 @@ export function executeCoreOptimizations(
 				return next;
 			});
 			if (before !== undefined) {
-				const after = coreOptimizationMetrics({ ...program, functions });
+				const after = coreOptimizationMetrics({ ...workingProgram, functions });
 				optimizationTrace.push(
 					optimizationPassDelta(
 						{
@@ -1572,13 +2232,13 @@ export function executeCoreOptimizations(
 	}
 	return {
 		program: {
-			...program,
+			...workingProgram,
 			functions,
-			...(program.compilation === undefined
+			...(workingProgram.compilation === undefined
 				? {}
 				: {
 						compilation: {
-							...program.compilation,
+							...workingProgram.compilation,
 							...(collectOptimizationTrace ? { optimizationTrace } : {}),
 						},
 					}),

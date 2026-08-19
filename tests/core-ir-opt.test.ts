@@ -109,6 +109,76 @@ describe("Core IR optimizer", () => {
 		});
 	});
 
+	it("inlines an exact linear closure while retaining its source chain", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function outer(value) {
+				function addOne(input) { return input + 1; }
+				return addOne(value);
+			}`,
+			"core-inline.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			profile: true,
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const outer = optimized!.functions[1]!;
+		expect(
+			outer.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(({ opcode }) => opcode === "call"),
+		).toBe(false);
+		const binary = outer.blocks
+			.flatMap(({ instructions }) => instructions)
+			.find(({ opcode }) => opcode === "binary")!;
+		expect(optimized!.sourcePositions[binary.sourcePosition!]).toMatchObject({
+			inlinedFunctionIndex: 2,
+		});
+		expect(optimized!.compilation?.optimizationDecisions).toContainEqual(
+			expect.objectContaining({
+				functionIndex: 1,
+				code: "optimization.applied.inline",
+				outcome: "applied",
+			}),
+		);
+	});
+
+	it("selects a fixed-shape Core stack object with explicit materialization", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function choose(value, escape) {
+				const object = { value };
+				if (escape) return object;
+				return object.value;
+			}`,
+			"core-stack-object.js",
+		);
+		let optimized: CoreProgram | undefined;
+		const definition = compileSemanticProgramToVmDefinition(semantic, {
+			profile: true,
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		expect(optimized!.functions[1]!.regions).toContainEqual(
+			expect.objectContaining({ kind: "stack-object-plan" }),
+		);
+		expect(definition.functions[1]!.regions).toContainEqual(
+			expect.objectContaining({
+				kind: "stack-object-plan",
+				sites: [expect.objectContaining({ materializations: [expect.any(Object)] })],
+			}),
+		);
+		expect(definition.profileRemarks).toContainEqual(
+			expect.objectContaining({
+				code: "optimization.applied.partial-escape-materialization",
+			}),
+		);
+	});
+
 	it("folds primitive arithmetic with exact f64 edge semantics", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const entry = builder.createBlock();

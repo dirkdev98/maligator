@@ -45,12 +45,7 @@ function logicalSourceSite(
 				);
 	return owner === undefined
 		? undefined
-		: sourceSiteId(
-				owner.metadata.sourcePath,
-				position.line,
-				position.column,
-				kind,
-			);
+		: sourceSiteId(owner.metadata.sourcePath, position.line, position.column, kind);
 }
 
 function siteProof(
@@ -142,6 +137,62 @@ function knownBuiltinCall(instruction: CoreInstruction): KnownBuiltinCall | unde
 		: undefined;
 }
 
+function attributeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Readonly<Record<string, unknown>>)
+		: undefined;
+}
+
+function stackObjectFacts(fn: CoreFunction): Map<
+	number,
+	{
+		readonly escape: "none" | "returned";
+		readonly dependencies: ReadonlyArray<FactDependency>;
+		readonly obligations: ReadonlyArray<FactObligation>;
+	}
+> {
+	const facts = new Map<
+		number,
+		{
+			readonly escape: "none" | "returned";
+			readonly dependencies: ReadonlyArray<FactDependency>;
+			readonly obligations: ReadonlyArray<FactObligation>;
+		}
+	>();
+	for (const region of fn.regions) {
+		if (region.kind !== "stack-object-plan") continue;
+		const license = attributeObject(region.data.license);
+		const guard = attributeObject(license?.guard);
+		const dependencies = guard?.dependencies;
+		const obligations = guard?.obligations;
+		const sites = region.data.sites;
+		if (
+			!Array.isArray(sites) ||
+			!Array.isArray(dependencies) ||
+			!Array.isArray(obligations)
+		) {
+			continue;
+		}
+		for (const site of sites) {
+			const siteObject = attributeObject(site);
+			if (siteObject === undefined) continue;
+			const allocation = attributeObject(siteObject.allocation);
+			const instruction = allocation?.$coreInstruction;
+			if (typeof instruction !== "number") continue;
+			facts.set(instruction, {
+				escape:
+					Array.isArray(siteObject.materializations) &&
+					siteObject.materializations.length > 0
+						? "returned"
+						: "none",
+				dependencies,
+				obligations,
+			});
+		}
+	}
+	return facts;
+}
+
 /** Attach final residual facts directly to immutable Core instruction identities. */
 export function attachCoreCompilerSiteFacts(program: CoreProgram): CoreProgram {
 	const compilation = program.compilation;
@@ -150,6 +201,7 @@ export function attachCoreCompilerSiteFacts(program: CoreProgram): CoreProgram {
 	const instructionSites = compilation.facts.instructionSites;
 
 	for (const fn of program.functions) {
+		const stackObjects = stackObjectFacts(fn);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				const id = `${fn.functionIndex}:${block.id}:${instruction.id}:${instruction.opcode}`;
@@ -163,18 +215,34 @@ export function attachCoreCompilerSiteFacts(program: CoreProgram): CoreProgram {
 				const immutableBinding = immutableBindingFact(program, instruction);
 				const builtin = knownBuiltinCall(instruction);
 				const isAllocation = allocationOpcodes.has(instruction.opcode);
+				const stackObject = stackObjects.get(instruction.id);
+				const stackProof =
+					stackObject === undefined
+						? undefined
+						: siteProof(
+								fn,
+								sourceSite,
+								"core-stack-object-region",
+								stackObject.dependencies,
+								stackObject.obligations,
+							);
 				const representation = isAllocation
 					? knownFact(
-							"heap" as const,
-							siteProof(fn, sourceSite, "residual-heap-value"),
+							stackProof === undefined ? ("heap" as const) : ("stack" as const),
+							stackProof ?? siteProof(fn, sourceSite, "residual-heap-value"),
 						)
 					: undefined;
+				const escape =
+					stackObject === undefined || stackProof === undefined
+						? undefined
+						: knownFact(stackObject.escape, stackProof);
 				const facts: CompilerSiteFacts = {
 					id,
 					...(sourceSite === undefined ? {} : { sourceSite }),
 					functionId: functionId(fn),
 					instruction: instruction.opcode,
 					...(shape === undefined ? {} : { shape }),
+					...(escape === undefined ? {} : { escape }),
 					...(representation === undefined ? {} : { representation }),
 					...(builtin === undefined
 						? {}
@@ -186,6 +254,7 @@ export function attachCoreCompilerSiteFacts(program: CoreProgram): CoreProgram {
 				};
 				if (
 					facts.shape !== undefined ||
+					facts.escape !== undefined ||
 					facts.representation !== undefined ||
 					facts.builtinIdentity !== undefined ||
 					facts.builtinSemantics !== undefined ||
