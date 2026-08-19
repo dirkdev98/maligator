@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCoreControlFlow } from "../src/core-ir-control-flow.ts";
+import { CORE_OPCODES, coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import {
 	CORE_NO_EFFECTS,
@@ -43,6 +44,36 @@ function registry(): CoreOpcodeRegistry {
 }
 
 describe("Core IR", () => {
+	it("keeps structural control out of opcodes and enforces exact arities", () => {
+		expect(CORE_OPCODES).not.toEqual(
+			expect.arrayContaining([
+				"catch",
+				"jump",
+				"jumpIf",
+				"return",
+				"sourcePos",
+				"throw",
+				"tryBegin",
+				"tryEnd",
+			]),
+		);
+		expect(coreOpcodeRegistry.require("binary").inputs).toEqual({
+			minimum: 2,
+			maximum: 2,
+		});
+		expect(coreOpcodeRegistry.require("call").inputs).toEqual({
+			minimum: 2,
+			maximum: 65_535,
+		});
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		expect(() =>
+			builder.appendInstruction(entry, "binary", [
+				builder.block(entry).parameters[0]!.value,
+			]),
+		).toThrow(/binary expects 2\.\.2 inputs/);
+	});
+
 	it("builds, verifies, prints, and analyzes block-parameter SSA", () => {
 		const opcodes = registry();
 		const builder = new CoreFunctionBuilder(3, opcodes);

@@ -21,7 +21,7 @@
  * would drop a live root, so we never risk it.
  */
 
-import { coreOpcode } from "./core-ir-opcodes.ts";
+import { coreOpcode, isCoreOpcode } from "./core-ir-opcodes.ts";
 import { buildIRExceptionHandlers } from "./ir-control-flow.ts";
 import { definedRegisters, usedRegisters } from "./ir-register-index.ts";
 import type { IRFunction, IRInstruction, IntermediateProgram } from "./ir.ts";
@@ -43,7 +43,7 @@ import { log } from "./utils.ts";
  */
 /** Whether GC can run at this instruction (so live values must be rooted). */
 export function isSafepoint(instruction: IRInstruction): boolean {
-	return coreOpcode(instruction.type).effects.mayGc;
+	return isCoreOpcode(instruction.type) && coreOpcode(instruction.type).effects.mayGc;
 }
 
 /** Block-index targets of a control-flow branch (jump / jumpIf). */

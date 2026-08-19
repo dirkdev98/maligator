@@ -1,9 +1,13 @@
-import { coreOpcode } from "./core-ir-opcodes.ts";
+import { coreOpcode, isCoreOpcode } from "./core-ir-opcodes.ts";
 import type { IRFunction, IRInstruction } from "./ir.ts";
 
 /** Number of leading register operands defined by an instruction. */
 export function destinationCount(instruction: IRInstruction): number {
-	return "registers" in instruction ? coreOpcode(instruction.type).outputs.minimum : 0;
+	if (!("registers" in instruction)) return 0;
+	if (instruction.type === "catch") return 1;
+	return isCoreOpcode(instruction.type)
+		? coreOpcode(instruction.type).outputs.minimum
+		: 0;
 }
 
 /** Every non-sentinel register written by an instruction. */

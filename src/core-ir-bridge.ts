@@ -1,4 +1,4 @@
-import { coreOpcode, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
 import { verifyCoreFunction } from "./core-ir-verifier.ts";
 import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
 import type {
@@ -113,6 +113,10 @@ function isControlInstruction(
 	);
 }
 
+function instructionMayThrow(instruction: IRInstruction): boolean {
+	return isCoreOpcode(instruction.type) && coreOpcode(instruction.type).effects.mayThrow;
+}
+
 function legacyPayload(
 	instruction: IRInstruction,
 	retainLoweringMetadata = true,
@@ -220,8 +224,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 			const isolatedExceptionalInstruction =
 				handler !== null &&
 				(instruction.type === "throw" ||
-					(!isControlInstruction(instruction) &&
-						coreOpcode(instruction.type).effects.mayThrow));
+					(!isControlInstruction(instruction) && instructionMayThrow(instruction)));
 			if (isolatedExceptionalInstruction) flush();
 			tokens.push(token);
 			// Legacy conditional jumps can occur in the middle of a block: their
@@ -441,9 +444,7 @@ function analyzeSegments(
 			handlerTargets.add(target);
 			if (
 				segment.terminator?.kind === "throw" ||
-				segment.tokens.some(
-					({ instruction }) => coreOpcode(instruction.type).effects.mayThrow,
-				)
+				segment.tokens.some(({ instruction }) => instructionMayThrow(instruction))
 			) {
 				segment.exceptionalSuccessor = target;
 			}

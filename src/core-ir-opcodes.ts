@@ -1,11 +1,9 @@
 import { CORE_NO_EFFECTS, CoreOpcodeRegistry, coreArity } from "./core-ir.ts";
 import type { CoreEffectDomain, CoreInstructionEffects } from "./core-ir.ts";
-import type { IRInstruction } from "./ir.ts";
 
 /**
- * First complete opcode contract for the cutover. The legacy spelling remains
- * only while semantic lowering is moved into Core IR; all middle-end consumers
- * use this registry rather than private allowlists.
+ * Canonical Core operations. Control flow, exception entry, and source-position
+ * markers are structural Core concepts and therefore cannot appear as opcodes.
  */
 export const CORE_OPCODES = [
 	"arrayRest",
@@ -16,7 +14,6 @@ export const CORE_OPCODES = [
 	"callBuiltin",
 	"callSpread",
 	"callSpreadIterable",
-	"catch",
 	"checkSuperClass",
 	"construct",
 	"constructSpread",
@@ -61,8 +58,6 @@ export const CORE_OPCODES = [
 	"iteratorClose",
 	"iteratorNext",
 	"iteratorStep",
-	"jump",
-	"jumpIf",
 	"loadArgument",
 	"loadArgumentCount",
 	"loadCallee",
@@ -85,11 +80,9 @@ export const CORE_OPCODES = [
 	"mergeDataProperties",
 	"move",
 	"requireCoercible",
-	"return",
 	"setFunctionName",
 	"setPrototype",
 	"setThis",
-	"sourcePos",
 	"storeCaptured",
 	"storeGlobal",
 	"storeGlobalProperty",
@@ -98,11 +91,8 @@ export const CORE_OPCODES = [
 	"storeProperty",
 	"storePropertyStatic",
 	"storeSuperProperty",
-	"throw",
 	"throwIfTdz",
 	"toPropertyKey",
-	"tryBegin",
-	"tryEnd",
 	"typeofCompare",
 	"unary",
 	"withEnter",
@@ -111,11 +101,7 @@ export const CORE_OPCODES = [
 	"withResolveBase",
 	"withSet",
 	"yield",
-] as const satisfies ReadonlyArray<IRInstruction["type"]>;
-
-type MissingOpcode = Exclude<IRInstruction["type"], (typeof CORE_OPCODES)[number]>;
-const allOpcodesAreDeclared: MissingOpcode extends never ? true : never = true;
-void allOpcodesAreDeclared;
+] as const;
 
 export type CoreOpcode = (typeof CORE_OPCODES)[number];
 
@@ -133,15 +119,11 @@ const NO_OUTPUT = new Set<CoreOpcode>([
 	"initGlobalVars",
 	"initPrivateFields",
 	"iteratorClose",
-	"jump",
-	"jumpIf",
 	"mergeDataProperties",
 	"requireCoercible",
-	"return",
 	"setFunctionName",
 	"setPrototype",
 	"setThis",
-	"sourcePos",
 	"storeCaptured",
 	"storeGlobal",
 	"storeGlobalProperty",
@@ -150,10 +132,7 @@ const NO_OUTPUT = new Set<CoreOpcode>([
 	"storeProperty",
 	"storePropertyStatic",
 	"storeSuperProperty",
-	"throw",
 	"throwIfTdz",
-	"tryBegin",
-	"tryEnd",
 	"withEnter",
 	"withExit",
 ]);
@@ -177,23 +156,16 @@ const GC_FREE = new Set<CoreOpcode>([
 	"createUndefined",
 	"generatorStart",
 	"isEmpty",
-	"jump",
-	"jumpIf",
 	"loadCaptured",
 	"loadGlobal",
 	"loadIntrinsic",
 	"loadLocal",
 	"loadNewTarget",
 	"move",
-	"return",
 	"setThis",
-	"sourcePos",
 	"storeCaptured",
 	"storeGlobal",
 	"storeLocal",
-	"throw",
-	"tryBegin",
-	"tryEnd",
 	"typeofCompare",
 	"withExit",
 ]);
@@ -316,6 +288,104 @@ const PROPERTY_WRITES = new Set<CoreOpcode>([
 	"withSet",
 ]);
 
+const INPUT_ARITIES = {
+	arrayRest: [1, 1],
+	asyncStart: [0, 0],
+	await: [1, 1],
+	binary: [2, 2],
+	call: [2, 65_535],
+	callBuiltin: [1, 65_535],
+	callSpread: [3, 3],
+	callSpreadIterable: [3, 3],
+	checkSuperClass: [1, 1],
+	construct: [1, 65_535],
+	constructSpread: [2, 2],
+	constructSuper: [2, 2],
+	constructSuperExplicit: [4, 4],
+	copyDataProperties: [1, 65_535],
+	createArgumentsObject: [0, 0],
+	createArray: [0, 0],
+	createBigint: [0, 0],
+	createBoolean: [0, 0],
+	createEmpty: [0, 0],
+	createF64: [0, 0],
+	createFunction: [0, 0],
+	createModuleNamespace: [0, 0],
+	createNull: [0, 0],
+	createNumber: [0, 0],
+	createObject: [0, 65_535],
+	createObjectShaped: [0, 65_535],
+	createPrivateName: [0, 0],
+	createPrivateNames: [0, 0],
+	createRestArguments: [0, 0],
+	createString: [0, 0],
+	createTemplateObject: [0, 0],
+	createUndefined: [0, 0],
+	defineAccessor: [3, 3],
+	definePrivate: [3, 3],
+	defineProperty: [3, 3],
+	deleteProperty: [2, 2],
+	envCopy: [0, 0],
+	envPop: [0, 0],
+	envPush: [0, 0],
+	forInKeys: [1, 1],
+	generatorStart: [0, 0],
+	getAsyncIterator: [1, 1],
+	getIterator: [1, 1],
+	guardFunctionIndex: [1, 1],
+	hasPrivate: [2, 2],
+	initGlobalVars: [0, 0],
+	initPrivateFields: [1, 65_535],
+	instantiateLiteralTemplate: [0, 0],
+	isEmpty: [1, 1],
+	iteratorClose: [1, 1],
+	iteratorNext: [2, 2],
+	iteratorStep: [2, 2],
+	loadArgument: [0, 0],
+	loadArgumentCount: [0, 0],
+	loadCallee: [0, 0],
+	loadCaptured: [0, 0],
+	loadGlobal: [0, 0],
+	loadGlobalProperty: [0, 0],
+	loadIntrinsic: [0, 0],
+	loadLocal: [0, 0],
+	loadNewTarget: [0, 0],
+	loadPrivate: [2, 2],
+	loadProperty: [2, 2],
+	loadPropertyStatic: [1, 1],
+	loadPrototype: [1, 1],
+	loadStaticArgument: [2, 2],
+	loadSuperProperty: [3, 3],
+	loadThis: [0, 0],
+	loadUndeclared: [0, 0],
+	mathBinaryNumber: [2, 2],
+	mathUnaryNumber: [1, 1],
+	mergeDataProperties: [2, 2],
+	move: [1, 1],
+	requireCoercible: [1, 1],
+	setFunctionName: [2, 2],
+	setPrototype: [2, 2],
+	setThis: [1, 1],
+	storeCaptured: [1, 1],
+	storeGlobal: [1, 1],
+	storeGlobalProperty: [1, 1],
+	storeLocal: [1, 1],
+	storePrivate: [3, 3],
+	storeProperty: [3, 3],
+	storePropertyStatic: [2, 2],
+	storeSuperProperty: [4, 4],
+	throwIfTdz: [1, 1],
+	toPropertyKey: [2, 2],
+	typeofCompare: [1, 1],
+	unary: [1, 1],
+	withEnter: [1, 1],
+	withExit: [0, 0],
+	withGet: [0, 0],
+	withResolveBase: [0, 0],
+	withSet: [1, 1],
+	yield: [1, 1],
+} as const satisfies Record<CoreOpcode, readonly [number, number]>;
+
 function domainsFor(
 	opcode: CoreOpcode,
 	kind: "reads" | "writes",
@@ -369,15 +439,22 @@ function effectsFor(opcode: CoreOpcode): CoreInstructionEffects {
 export const coreOpcodeRegistry = new CoreOpcodeRegistry();
 for (const opcode of CORE_OPCODES) {
 	const outputs = NO_OUTPUT.has(opcode) ? 0 : TWO_OUTPUTS.has(opcode) ? 2 : 1;
+	const [minimumInputs, maximumInputs] = INPUT_ARITIES[opcode];
 	coreOpcodeRegistry.define({
 		opcode,
-		inputs: coreArity(0, 65_535),
+		inputs: coreArity(minimumInputs, maximumInputs),
 		outputs: coreArity(outputs),
 		effects: effectsFor(opcode),
 		discardable: DISCARDABLE.has(opcode),
 	});
 }
 
-export function coreOpcode(type: IRInstruction["type"]) {
+const CORE_OPCODE_SET: ReadonlySet<string> = new Set(CORE_OPCODES);
+
+export function isCoreOpcode(type: string): type is CoreOpcode {
+	return CORE_OPCODE_SET.has(type);
+}
+
+export function coreOpcode(type: CoreOpcode) {
 	return coreOpcodeRegistry.require(type);
 }
