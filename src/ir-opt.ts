@@ -1291,6 +1291,8 @@ export interface IROptimizationOptions {
 	ablations?: ReadonlySet<OptimizationAblation>;
 }
 
+type IROptimizationPhase = "all" | "transforms" | "finalization";
+
 type OptimizationStage = OptimizationPassDelta["stage"];
 
 function runTracedOptimizationPass(
@@ -1424,26 +1426,30 @@ const optimizationIndexBuildCounts = {
 };
 
 /** Execute the ordered IR optimization pipeline. */
-export function executeIROptimizations(
+function executeIROptimizationPhase(
 	program: IntermediateProgram,
 	options: IROptimizationOptions = {},
+	phase: IROptimizationPhase = "all",
 ) {
 	const ablations = options.ablations;
-	// Eliminate provably-redundant temporal-dead-zone checks before the main
-	// fixpoint. It needs to see the original `loadLocal`/`storeLocal` form
-	// (optLocalsToRegister below rewrites those into `move`s), so it runs once
-	// up front against the pristine IR.
-	if (program.optimizationTrace === undefined && ablations === undefined) {
-		optEliminateRedundantTdzChecks(program);
-	} else {
-		runTracedOptimizationPass(
-			program,
-			"eliminate-redundant-tdz-checks",
-			"normalization",
-			"executed",
-			optEliminateRedundantTdzChecks,
-		);
-	}
+	const runTransforms = phase !== "finalization";
+	const runFinalization = phase !== "transforms";
+	if (runTransforms) {
+		// Eliminate provably-redundant temporal-dead-zone checks before the main
+		// fixpoint. It needs to see the original `loadLocal`/`storeLocal` form
+		// (optLocalsToRegister below rewrites those into `move`s), so it runs once
+		// up front against the pristine IR.
+		if (program.optimizationTrace === undefined && ablations === undefined) {
+			optEliminateRedundantTdzChecks(program);
+		} else {
+			runTracedOptimizationPass(
+				program,
+				"eliminate-redundant-tdz-checks",
+				"normalization",
+				"executed",
+				optEliminateRedundantTdzChecks,
+			);
+		}
 
 	const passes: Array<{
 		name: string;
@@ -1669,7 +1675,8 @@ export function executeIROptimizations(
 			break;
 		}
 	}
-	if (program.optimizationTrace === undefined && ablations === undefined) {
+	}
+	if (runFinalization && program.optimizationTrace === undefined && ablations === undefined) {
 		// Preserve the allocation-free orchestration path for ordinary production
 		// compiles. Profiling and explicit ablations alone enter the named-pass wrapper.
 		optCommonPrimitiveConstants(program);
@@ -1729,7 +1736,7 @@ export function executeIROptimizations(
 		annotateNativeNumericFusions(program);
 		if (residualFeatures.object) annotateStackObjectSites(program);
 		annotateTerminalYieldSites(program);
-	} else {
+	} else if (runFinalization) {
 		const runFinalPass = (
 			name: string,
 			run: (program: IntermediateProgram) => unknown,
@@ -1916,7 +1923,28 @@ export function executeIROptimizations(
 		runFinalPass("annotate-terminal-yield-sites", annotateTerminalYieldSites);
 	}
 
-	if (debugEnabled) debugIntermediateProgram(program);
+	if (debugEnabled && runFinalization) debugIntermediateProgram(program);
+}
+
+export function executeIRTransformOptimizations(
+	program: IntermediateProgram,
+	options: IROptimizationOptions = {},
+): void {
+	executeIROptimizationPhase(program, options, "transforms");
+}
+
+export function finalizeIROptimizations(
+	program: IntermediateProgram,
+	options: IROptimizationOptions = {},
+): void {
+	executeIROptimizationPhase(program, options, "finalization");
+}
+
+export function executeIROptimizations(
+	program: IntermediateProgram,
+	options: IROptimizationOptions = {},
+): void {
+	executeIROptimizationPhase(program, options, "all");
 }
 
 const MAX_FRESH_DENSE_INDEXED_RESERVE = 65_536;

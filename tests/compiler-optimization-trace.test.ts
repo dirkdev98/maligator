@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import type { OptimizationAblation } from "../src/compiler-diagnostics.ts";
-import { executeIROptimizations } from "../src/ir-opt.ts";
+import {
+	executeIROptimizations,
+	executeIRTransformOptimizations,
+	finalizeIROptimizations,
+} from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { IntermediateProgram, IRInstruction } from "../src/ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -41,6 +45,29 @@ test("ordinary compilation pays no optimization tracing cost", () => {
 
 	const traced = optimize(inlineSource);
 	expect(traced.functions).toEqual(program.functions);
+});
+
+test("transform and finalization phases compose to the full pipeline", () => {
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		inlineSource,
+		"optimization-trace.js",
+	);
+	const complete = compileSemanticProgramToIr(semantic, {
+		collectOptimizationDiagnostics: true,
+	});
+	const phased = compileSemanticProgramToIr(semantic, {
+		collectOptimizationDiagnostics: true,
+	});
+
+	executeIROptimizations(complete);
+	executeIRTransformOptimizations(phased);
+	expect(phased.optimizationTrace?.some((event) => event.stage === "finalization")).toBe(
+		false,
+	);
+	finalizeIROptimizations(phased);
+
+	expect(phased.functions).toEqual(complete.functions);
+	expect(phased.optimizationTrace).toEqual(complete.optimizationTrace);
 });
 
 test("profile tracing records stable pass names and selected IR deltas", () => {
