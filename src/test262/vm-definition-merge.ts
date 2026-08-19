@@ -133,7 +133,7 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
 				separatorStringIndex: region.separatorStringIndex + base.string,
-				aliasMoveIps: [...region.aliasMoveIps],
+				resultRegisters: [...region.resultRegisters],
 				loads: region.loads.map((load) => ({ ...load })),
 			};
 		case "regexp-exec-projection":

@@ -678,7 +678,7 @@ export interface RegisterRegionEnvelope<
 /**
  * Backend-neutral certificate for a closed String#split projected result. The
  * call and first projected load are stable anchors; every retained property
- * twin, result-alias move, and projected load is claimed by the envelope.
+ * twin and projected load is claimed by the envelope.
  */
 export interface RegisterStringSplitProjectionRegion extends RegisterRegionEnvelope<
 	"string-split-projection",
@@ -692,7 +692,8 @@ export interface RegisterStringSplitProjectionRegion extends RegisterRegionEnvel
 	/** Ordinary property producer retained by a dynamic-call twin. */
 	readonly property?: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
 	readonly separatorStringIndex: number;
-	readonly aliasMoves: ReadonlyArray<Extract<RegisterInstruction, { type: "move" }>>;
+	/** Allocated registers for every Core SSA alias licensed as the call result. */
+	readonly resultRegisters: ReadonlyArray<number>;
 	readonly loads: ReadonlyArray<
 		| {
 				readonly instruction: Extract<RegisterInstruction, { type: "loadProperty" }>;
@@ -700,7 +701,10 @@ export interface RegisterStringSplitProjectionRegion extends RegisterRegionEnvel
 				readonly index: number;
 		  }
 		| {
-				readonly instruction: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+				readonly instruction: Extract<
+					RegisterInstruction,
+					{ type: "loadPropertyStatic" }
+				>;
 				readonly kind: "length";
 		  }
 	>;
@@ -729,7 +733,10 @@ export interface RegisterRegExpExecProjectionRegion extends RegisterRegionEnvelo
 		readonly nullValue: Extract<RegisterInstruction, { type: "createNull" }>;
 	}>;
 	readonly lockedLiteral?: {
-		readonly constructorIntrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
+		readonly constructorIntrinsic: Extract<
+			RegisterInstruction,
+			{ type: "loadIntrinsic" }
+		>;
 		readonly construct: Extract<RegisterInstruction, { type: "construct" }>;
 	};
 	readonly lastIndexEffect: "retained-call-twin";
@@ -755,12 +762,23 @@ export interface RegisterRegExpExecProjectionRegion extends RegisterRegionEnvelo
 			  }
 			| {
 					readonly kind: "asciiCaseLength";
-					readonly upperProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+					readonly upperProperty: Extract<
+						RegisterInstruction,
+						{ type: "loadPropertyStatic" }
+					>;
 					readonly upperCall: Extract<RegisterInstruction, { type: "call" }>;
-					readonly lowerProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+					readonly lowerProperty: Extract<
+						RegisterInstruction,
+						{ type: "loadPropertyStatic" }
+					>;
 					readonly lowerCall: Extract<RegisterInstruction, { type: "call" }>;
-					readonly resultMoves: ReadonlyArray<Extract<RegisterInstruction, { type: "move" }>>;
-					readonly lengthProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+					readonly resultMoves: ReadonlyArray<
+						Extract<RegisterInstruction, { type: "move" }>
+					>;
+					readonly lengthProperty: Extract<
+						RegisterInstruction,
+						{ type: "loadPropertyStatic" }
+					>;
 			  };
 	}>;
 }
@@ -874,7 +892,10 @@ export interface RegisterNumericHofRegion extends RegisterRegionEnvelope<
 		  }
 		| {
 				readonly kind: "closed";
-				readonly receiverAllocation: Extract<RegisterInstruction, { type: "createArray" }>;
+				readonly receiverAllocation: Extract<
+					RegisterInstruction,
+					{ type: "createArray" }
+				>;
 		  };
 }
 
@@ -894,7 +915,9 @@ export interface RegisterClosedRecordArrayRegion extends RegisterRegionEnvelope<
 	]
 > {
 	readonly length: number;
-	readonly elementLoads: ReadonlyArray<Extract<RegisterInstruction, { type: "loadProperty" }>>;
+	readonly elementLoads: ReadonlyArray<
+		Extract<RegisterInstruction, { type: "loadProperty" }>
+	>;
 	readonly accesses: ReadonlyArray<{
 		readonly instruction: Extract<
 			RegisterInstruction,
@@ -1037,7 +1060,9 @@ export interface RegisterFiniteObjectConstructionRegion extends RegisterRegionEn
 	readonly keyStringIndices: ReadonlyArray<number>;
 	readonly numberGuardCount: number;
 	readonly virtualRecord: boolean;
-	readonly accesses: ReadonlyArray<Extract<RegisterInstruction, { type: "loadProperty" }>>;
+	readonly accesses: ReadonlyArray<
+		Extract<RegisterInstruction, { type: "loadProperty" }>
+	>;
 }
 
 /**
@@ -1057,7 +1082,9 @@ export interface RegisterExactFreshArrayRegion extends RegisterRegionEnvelope<
 > {
 	readonly composition: "overlay";
 	readonly runtimeGuard: "dense-storage-or-generic-load";
-	readonly accesses: ReadonlyArray<Extract<RegisterInstruction, { type: "loadProperty" }>>;
+	readonly accesses: ReadonlyArray<
+		Extract<RegisterInstruction, { type: "loadProperty" }>
+	>;
 }
 
 /**
@@ -1995,7 +2022,10 @@ export type RegisterInstruction =
 			negated: boolean;
 	  };
 
-type RegisterBinaryOperator = Extract<RegisterInstruction, { type: "binary" }>["operator"];
+type RegisterBinaryOperator = Extract<
+	RegisterInstruction,
+	{ type: "binary" }
+>["operator"];
 type RegisterIntrinsic =
 	| "Object"
 	| "Array"
@@ -3530,7 +3560,10 @@ function emitFunctionBodyTdz(
  * Whether a module needs an init prologue: it has top-level TDZ bindings
  * (let/const/class) or `import * as ns` namespace objects to build.
  */
-function moduleNeedsPrologue(program: SemanticLoweringProgram, file: SemanticFile): boolean {
+function moduleNeedsPrologue(
+	program: SemanticLoweringProgram,
+	file: SemanticFile,
+): boolean {
 	return (
 		(file.scopes[0]?.bindings ?? []).some(isTdzBinding) ||
 		(program.namespaceImports.get(file.path)?.length ?? 0) > 0 ||
@@ -3654,7 +3687,10 @@ function emitModulePrologue(
  * top-levels sequentially in evaluation order, a suspended await holds up the
  * dependents that follow it — the spec ordering falls out for free.
  */
-function makeInitAsyncIfTopLevelAwait(fn: RegisterFunction, modules: Array<SemanticFile>) {
+function makeInitAsyncIfTopLevelAwait(
+	fn: RegisterFunction,
+	modules: Array<SemanticFile>,
+) {
 	if (modules.some((file) => hasTopLevelAwait(file.ast))) {
 		fn.isAsync = true;
 		fn.blocks[0]!.instructions.unshift({ type: "asyncStart" });
@@ -4909,7 +4945,10 @@ function loadCapturedBinding(
  * brand, carried on the entry so access from a nested class brand-checks
  * against the class that declared the member rather than the current one.
  */
-function privateBrandBinding(_fn: RegisterFunction, entry: RegisterPrivateName): Binding | undefined {
+function privateBrandBinding(
+	_fn: RegisterFunction,
+	entry: RegisterPrivateName,
+): Binding | undefined {
 	return entry.brandBinding;
 }
 
@@ -13970,7 +14009,11 @@ function compileUndefined(fn: RegisterFunction, cursor: RegisterCursor) {
 	return destination;
 }
 
-function compileNumberLiteral(fn: RegisterFunction, cursor: RegisterCursor, value: number) {
+function compileNumberLiteral(
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
+	value: number,
+) {
 	const destination = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "createNumber",
@@ -13982,7 +14025,10 @@ function compileNumberLiteral(fn: RegisterFunction, cursor: RegisterCursor, valu
 	return destination;
 }
 
-export function getOrCreateStringConstant(program: SemanticLoweringProgram, value: string) {
+export function getOrCreateStringConstant(
+	program: SemanticLoweringProgram,
+	value: string,
+) {
 	const existing = program.stringConstantToIndex.get(value);
 	if (existing !== undefined) {
 		return existing;

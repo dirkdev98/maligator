@@ -6,24 +6,30 @@ import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
-import type {
-	CoreRegisterFunction,
-	CoreRegisterProgram,
-} from "./core-ir-lowering.ts";
+import type { CoreRegisterFunction, CoreRegisterProgram } from "./core-ir-lowering.ts";
 import type { CoreProgram } from "./core-ir.ts";
+import { buildProfileMetadata } from "./profile-metadata.ts";
+import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import type {
 	RegisterImmediateValue,
 	RegisterInstruction,
 	RegisterNumericHofPlanOperation,
 	RegisterRegion,
 } from "./semantic-lowering.ts";
-import { buildProfileMetadata } from "./profile-metadata.ts";
-import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 
-type RegisterBinaryOperator = Extract<RegisterInstruction, { type: "binary" }>["operator"];
+type RegisterBinaryOperator = Extract<
+	RegisterInstruction,
+	{ type: "binary" }
+>["operator"];
 type RegisterUnaryOperator = Extract<RegisterInstruction, { type: "unary" }>["operator"];
-type RegisterIntrinsic = Extract<RegisterInstruction, { type: "loadIntrinsic" }>["intrinsic"];
-type RegisterTypeofResult = Extract<RegisterInstruction, { type: "typeofCompare" }>["expected"];
+type RegisterIntrinsic = Extract<
+	RegisterInstruction,
+	{ type: "loadIntrinsic" }
+>["intrinsic"];
+type RegisterTypeofResult = Extract<
+	RegisterInstruction,
+	{ type: "typeofCompare" }
+>["expected"];
 
 const VM_VALUE_UNDEFINED = -1;
 const VM_VALUE_NULL = -2;
@@ -483,8 +489,7 @@ export type VmStringSplitProjectionRegion = VmRegionEnvelope<
 	readonly callee: number;
 	readonly receiver: number;
 	readonly separatorStringIndex: number;
-	readonly result: number;
-	readonly aliasMoveIps: ReadonlyArray<number>;
+	readonly resultRegisters: ReadonlyArray<number>;
 	readonly loads: ReadonlyArray<{
 		readonly ip: number;
 		readonly kind: "element" | "length";
@@ -3594,9 +3599,6 @@ function lowerFunctionToVmFunction(
 					region.property === undefined
 						? -1
 						: instructionIndexByIrInstruction.get(region.property);
-				const aliasMoveIps = region.aliasMoves.map((instruction) =>
-					instructionIndexByIrInstruction.get(instruction),
-				);
 				const loads = region.loads.map((load) => ({
 					ip: instructionIndexByIrInstruction.get(load.instruction),
 					kind: load.kind,
@@ -3610,16 +3612,13 @@ function lowerFunctionToVmFunction(
 					!guard.obligations.includes("materialize") ||
 					resolvedAnchors.length !== 2 ||
 					propertyIp === undefined ||
-					aliasMoveIps.some((ip) => ip === undefined) ||
 					loads.some((load) => load.ip === undefined)
 				) {
 					continue;
 				}
 				const loweredCall = instructions[callIp!];
 				const loweredProperty = propertyIp < 0 ? undefined : instructions[propertyIp];
-				const resolvedAliasMoveIps = (aliasMoveIps as Array<number>).sort(
-					(left, right) => left - right,
-				);
+				const resultRegisters = [...new Set(region.resultRegisters)];
 				const resolvedLoads = loads as Array<{
 					ip: number;
 					kind: "element" | "length";
@@ -3698,70 +3697,47 @@ function lowerFunctionToVmFunction(
 							: false;
 				const elementLoads = resolvedLoads.filter((load) => load.kind === "element");
 				const lengthLoads = resolvedLoads.filter((load) => load.kind === "length");
-				const aliases = new Map<number, VmInstruction>();
-				if (loweredCall?.opcode === "CALL" || loweredCall?.opcode === "CALL_BUILTIN") {
-					aliases.set(loweredCall.dst, loweredCall);
-				}
-				const projectionOperations = [
-					...resolvedAliasMoveIps.map((ip) => ({ ip, kind: "alias" as const })),
-					...resolvedLoads.map((load) => ({ ip: load.ip, kind: "load" as const, load })),
-				].sort((left, right) => left.ip - right.ip);
+				const aliases = new Set(resultRegisters);
 				let operationsValid = true;
-				for (const operation of projectionOperations) {
-					const lowered = instructions[operation.ip];
-					if (operation.kind === "alias") {
+				for (const load of resolvedLoads) {
+					const lowered = instructions[load.ip];
+					if (
+						(lowered?.opcode !== "LOAD_PROPERTY" &&
+							lowered?.opcode !== "LOAD_PROPERTY_STATIC") ||
+						!aliases.has(lowered.object) ||
+						lowered.dst !== load.dst
+					) {
+						operationsValid = false;
+						break;
+					}
+					if (load.kind === "element") {
+						const key =
+							lowered.opcode === "LOAD_PROPERTY"
+								? latestDefinition(lowered.key, load.ip)
+								: undefined;
 						if (
-							lowered?.opcode !== "MOVE" ||
-							!aliases.has(lowered.src) ||
-							latestDefinition(lowered.src, operation.ip) !== aliases.get(lowered.src)
+							lowered.opcode !== "LOAD_PROPERTY" ||
+							!Number.isInteger(load.index) ||
+							load.index! < 0 ||
+							load.index! > 0xffff ||
+							key?.opcode !== "CREATE_NUMBER" ||
+							key.value !== load.index
 						) {
 							operationsValid = false;
 							break;
 						}
-						aliases.set(lowered.dst, lowered);
-					} else {
-						const load = operation.load;
-						if (
-							(lowered?.opcode !== "LOAD_PROPERTY" &&
-								lowered?.opcode !== "LOAD_PROPERTY_STATIC") ||
-							!aliases.has(lowered.object) ||
-							latestDefinition(lowered.object, operation.ip) !==
-								aliases.get(lowered.object) ||
-							lowered.dst !== load.dst
-						) {
-							operationsValid = false;
-							break;
-						}
-						if (load.kind === "element") {
-							const key =
-								lowered.opcode === "LOAD_PROPERTY"
-									? latestDefinition(lowered.key, operation.ip)
-									: undefined;
-							if (
-								lowered.opcode !== "LOAD_PROPERTY" ||
-								!Number.isInteger(load.index) ||
-								load.index! < 0 ||
-								load.index! > 0xffff ||
-								key?.opcode !== "CREATE_NUMBER" ||
-								key.value !== load.index
-							) {
-								operationsValid = false;
-								break;
-							}
-						} else if (
-							lowered.opcode !== "LOAD_PROPERTY_STATIC" ||
-							load.index !== undefined ||
-							!stringConstantEquals(lowered.stringIndex, "length")
-						) {
-							operationsValid = false;
-							break;
-						}
+					} else if (
+						lowered.opcode !== "LOAD_PROPERTY_STATIC" ||
+						load.index !== undefined ||
+						!stringConstantEquals(lowered.stringIndex, "length")
+					) {
+						operationsValid = false;
+						break;
 					}
 				}
 				const payloadIps = [
 					...(propertyIp < 0 ? [] : [propertyIp]),
 					callIp!,
-					...resolvedAliasMoveIps,
 					...resolvedLoads.map((load) => load.ip),
 				];
 				if (
@@ -3769,6 +3745,12 @@ function lowerFunctionToVmFunction(
 					loweredCall === undefined ||
 					(loweredCall.opcode !== "CALL" && loweredCall.opcode !== "CALL_BUILTIN") ||
 					loweredCall.arguments.length !== 1 ||
+					resultRegisters.length === 0 ||
+					!resultRegisters.includes(loweredCall.dst) ||
+					resultRegisters.some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					) ||
 					!separatorMatches ||
 					region.separatorStringIndex < 0 ||
 					(stringConstants[region.separatorStringIndex]?.length ?? 0) === 0 ||
@@ -3806,8 +3788,7 @@ function lowerFunctionToVmFunction(
 					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
 					receiver: loweredCall.thisValue,
 					separatorStringIndex: region.separatorStringIndex,
-					result: loweredCall.dst,
-					aliasMoveIps: resolvedAliasMoveIps,
+					resultRegisters,
 					loads: resolvedLoads,
 				});
 				break;

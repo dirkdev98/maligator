@@ -16,10 +16,7 @@ import {
 	knownFact,
 	sourceSiteId,
 } from "./compiler-facts.ts";
-import {
-	buildCoreControlFlow,
-	coreTerminatorEdges,
-} from "./core-ir-control-flow.ts";
+import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreFunction } from "./core-ir-verifier.ts";
@@ -414,10 +411,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 							inputs: [instruction.inputs[1]!, ...forwardedArguments],
 							attributes: {
 								operation: exact.id,
-								knownBuiltinCall: coreAttribute(
-									knownBuiltinCall,
-									"knownBuiltinCall",
-								),
+								knownBuiltinCall: coreAttribute(knownBuiltinCall, "knownBuiltinCall"),
 							},
 						};
 					}
@@ -425,10 +419,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 						...instruction,
 						attributes: {
 							...instruction.attributes,
-							knownBuiltinCall: coreAttribute(
-								knownBuiltinCall,
-								"knownBuiltinCall",
-							),
+							knownBuiltinCall: coreAttribute(knownBuiltinCall, "knownBuiltinCall"),
 						},
 					};
 				}),
@@ -436,9 +427,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 		);
 		const filteredBlocks = blocks.map((block) => ({
 			...block,
-			instructions: block.instructions.filter(
-				({ id }) => !removedInstructions.has(id),
-			),
+			instructions: block.instructions.filter(({ id }) => !removedInstructions.has(id)),
 		}));
 		return changed
 			? {
@@ -447,9 +436,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 					values: fn.values
 						.filter(({ id }) => !removedValues.has(id))
 						.map((value) =>
-							numericOutputs.has(value.id)
-								? { ...value, representation: "f64" }
-								: value,
+							numericOutputs.has(value.id) ? { ...value, representation: "f64" } : value,
 						),
 					mutationEpoch: fn.mutationEpoch + 1,
 				}
@@ -811,11 +798,9 @@ function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResul
 							typeof calleeDefinition.attributes.stringIndex === "number"
 								? decodeString(program, calleeDefinition.attributes.stringIndex)
 								: calleeDefinition?.opcode === "loadProperty" &&
-									calleeDefinition.inputs[1] !== undefined
+									  calleeDefinition.inputs[1] !== undefined
 									? (() => {
-											const key = definitions.get(
-												moveRoot(calleeDefinition.inputs[1]),
-											);
+											const key = definitions.get(moveRoot(calleeDefinition.inputs[1]));
 											return key?.opcode === "createString" &&
 												typeof key.attributes.stringIndex === "number"
 												? decodeString(program, key.attributes.stringIndex)
@@ -838,10 +823,7 @@ function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResul
 							// method with the original receiver and arguments, so no static
 							// callable/provenance assumption is required for flattening.
 							attributes.directFunctionCall = true;
-							if (
-								receiverTarget !== undefined &&
-								functionsByIndex.has(receiverTarget)
-							) {
+							if (receiverTarget !== undefined && functionsByIndex.has(receiverTarget)) {
 								attributes.directCallTargetFunctionIndex = receiverTarget;
 							}
 						}
@@ -1536,8 +1518,10 @@ const annotateFreshDenseIndexedReserves: CoreFunctionPass = {
 						bound === undefined ||
 						bound <= 0 ||
 						bound > MAX_FRESH_DENSE_INDEXED_RESERVE ||
-						exactIntegerValue(entryEdge.arguments[counterParameterIndex]!, definitions) !==
-							0
+						exactIntegerValue(
+							entryEdge.arguments[counterParameterIndex]!,
+							definitions,
+						) !== 0
 					) {
 						continue;
 					}
@@ -1627,9 +1611,7 @@ const annotateFreshDenseIndexedReserves: CoreFunctionPass = {
 						} else if (
 							definition.opcode === "unary" &&
 							typeof definition.attributes.operator === "string" &&
-							["+", "-", "~", "tonumeric"].includes(
-								definition.attributes.operator,
-							) &&
+							["+", "-", "~", "tonumeric"].includes(definition.attributes.operator) &&
 							definition.inputs.length === 1
 						) {
 							proven = proveNumeric(definition.inputs[0]!);
@@ -1672,8 +1654,7 @@ const annotateFreshDenseIndexedReserves: CoreFunctionPass = {
 							.slice(allocationLocation.index + 1)
 							.some(
 								(instruction) =>
-									instruction.opcode !== "createNumber" &&
-									instruction.opcode !== "move",
+									instruction.opcode !== "createNumber" && instruction.opcode !== "move",
 							)
 					) {
 						continue;
@@ -1806,9 +1787,7 @@ const selectNumericFusionRegions: CoreFunctionPass = {
 					finish.opcode !== "binary" ||
 					(use.position !== 0 && use.position !== 1) ||
 					typeof finish.attributes.operator !== "string" ||
-					!NATIVE_NUMERIC_FUSION_FINISH_OPERATORS.has(
-						finish.attributes.operator,
-					) ||
+					!NATIVE_NUMERIC_FUSION_FINISH_OPERATORS.has(finish.attributes.operator) ||
 					use.block !== block.id ||
 					use.index <= firstIndex ||
 					participating.has(finish.id) ||
@@ -1921,16 +1900,10 @@ function coreKnownBuiltinProof(
 	}
 	const dependencies = new Map<string, unknown>();
 	const obligations = new Map<string, unknown>();
-	for (const dependency of [
-		...identityDependencies,
-		...semanticsDependencies,
-	]) {
+	for (const dependency of [...identityDependencies, ...semanticsDependencies]) {
 		dependencies.set(stableAttributeValue(dependency), dependency);
 	}
-	for (const obligation of [
-		...identityObligations,
-		...semanticsObligations,
-	]) {
+	for (const obligation of [...identityObligations, ...semanticsObligations]) {
 		obligations.set(stableAttributeValue(obligation), obligation);
 	}
 	return {
@@ -2047,7 +2020,11 @@ const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
 			);
 			const outside = incoming.filter(({ from }) => !loop.blocks.has(from));
 			const inside = incoming.filter(({ from }) => loop.blocks.has(from));
-			if (outside.length !== 1 || inside.length !== 1 || inside[0]!.from !== loop.backedge) {
+			if (
+				outside.length !== 1 ||
+				inside.length !== 1 ||
+				inside[0]!.from !== loop.backedge
+			) {
 				continue;
 			}
 			const initial = outside[0]!.arguments[positionParameter];
@@ -2218,7 +2195,11 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 		const regions = [...fn.regions];
 		for (const block of fn.blocks) {
 			for (const call of block.instructions) {
-				if (call.opcode !== "call" || call.inputs.length !== 3 || call.outputs.length !== 1) {
+				if (
+					call.opcode !== "call" ||
+					call.inputs.length !== 3 ||
+					call.outputs.length !== 1
+				) {
 					continue;
 				}
 				const builtin = coreKnownBuiltinProof(call, "RegExp.prototype.exec", {
@@ -2298,7 +2279,8 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 							consumer.attributes.operator === "!==")
 					) {
 						const other = consumer.inputs[use.position === 0 ? 1 : 0];
-						const nullValue = other === undefined ? undefined : definitions.get(root(other));
+						const nullValue =
+							other === undefined ? undefined : definitions.get(root(other));
 						if (
 							nullValue?.opcode === "createNull" &&
 							instructionDominates(nullValue, consumer)
@@ -2370,7 +2352,8 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 							position === 0 && staticProperty(instruction, "toUpperCase"),
 					);
 					const upperCallUse = captureUses.find(
-						({ instruction, position }) => instruction.opcode === "call" && position === 1,
+						({ instruction, position }) =>
+							instruction.opcode === "call" && position === 1,
 					);
 					const upperProperty = upperPropertyUse?.instruction;
 					const upperCall = upperCallUse?.instruction;
@@ -2426,7 +2409,8 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 							position === 0 && staticProperty(instruction, "charCodeAt"),
 					);
 					const callUse = captureUses.find(
-						({ instruction, position }) => instruction.opcode === "call" && position === 1,
+						({ instruction, position }) =>
+							instruction.opcode === "call" && position === 1,
 					);
 					const charProperty = propertyUse?.instruction;
 					const charCall = callUse?.instruction;
@@ -2441,7 +2425,12 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 					}
 					const zero = definitions.get(root(charCall.inputs[2]!));
 					if (zero?.opcode === "createNumber" && Object.is(zero.attributes.value, 0)) {
-						load.consumer = { kind: "charCodeAtZero", property: charProperty, call: charCall, zero };
+						load.consumer = {
+							kind: "charCodeAtZero",
+							property: charProperty,
+							call: charCall,
+							zero,
+						};
 					}
 				}
 
@@ -2548,13 +2537,13 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 							...(lockedLiteral === undefined
 								? {}
 								: {
-									lockedLiteral: {
-										constructorIntrinsic: {
-											$coreInstruction: lockedLiteral.constructorIntrinsic.id,
+										lockedLiteral: {
+											constructorIntrinsic: {
+												$coreInstruction: lockedLiteral.constructorIntrinsic.id,
+											},
+											construct: { $coreInstruction: lockedLiteral.construct.id },
 										},
-										construct: { $coreInstruction: lockedLiteral.construct.id },
-									},
-								}),
+									}),
 							lastIndexEffect: "retained-call-twin",
 							loads: loads.map((load) => ({
 								instruction: { $coreInstruction: load.instruction.id },
@@ -2563,59 +2552,61 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 								...(load.consumer === undefined
 									? {}
 									: {
-										consumer:
-											load.consumer.kind === "length"
-												? {
-														kind: "length",
-														property: {
-															$coreInstruction: load.consumer.property.id,
-														},
-													}
-												: load.consumer.kind === "number"
+											consumer:
+												load.consumer.kind === "length"
 													? {
-															kind: "number",
-															intrinsic: {
-																$coreInstruction: load.consumer.intrinsic.id,
-															},
-															call: { $coreInstruction: load.consumer.call.id },
-														}
-												: load.consumer.kind === "charCodeAtZero"
-													? {
-															kind: "charCodeAtZero",
+															kind: "length",
 															property: {
 																$coreInstruction: load.consumer.property.id,
 															},
-															call: { $coreInstruction: load.consumer.call.id },
-															...(load.consumer.zero === undefined
-																? {}
-																: {
-																		zero: {
-																			$coreInstruction: load.consumer.zero.id,
-																		},
-																	}),
 														}
-													: {
-															kind: "asciiCaseLength",
-															upperProperty: {
-																$coreInstruction: load.consumer.upperProperty.id,
-															},
-															upperCall: {
-																$coreInstruction: load.consumer.upperCall.id,
-															},
-															lowerProperty: {
-																$coreInstruction: load.consumer.lowerProperty.id,
-															},
-															lowerCall: {
-																$coreInstruction: load.consumer.lowerCall.id,
-															},
-															resultMoves: load.consumer.resultMoves.map(({ id }) => ({
-																$coreInstruction: id,
-															})),
-															lengthProperty: {
-																$coreInstruction: load.consumer.lengthProperty.id,
-															},
-														},
-									}),
+													: load.consumer.kind === "number"
+														? {
+																kind: "number",
+																intrinsic: {
+																	$coreInstruction: load.consumer.intrinsic.id,
+																},
+																call: { $coreInstruction: load.consumer.call.id },
+															}
+														: load.consumer.kind === "charCodeAtZero"
+															? {
+																	kind: "charCodeAtZero",
+																	property: {
+																		$coreInstruction: load.consumer.property.id,
+																	},
+																	call: { $coreInstruction: load.consumer.call.id },
+																	...(load.consumer.zero === undefined
+																		? {}
+																		: {
+																				zero: {
+																					$coreInstruction: load.consumer.zero.id,
+																				},
+																			}),
+																}
+															: {
+																	kind: "asciiCaseLength",
+																	upperProperty: {
+																		$coreInstruction: load.consumer.upperProperty.id,
+																	},
+																	upperCall: {
+																		$coreInstruction: load.consumer.upperCall.id,
+																	},
+																	lowerProperty: {
+																		$coreInstruction: load.consumer.lowerProperty.id,
+																	},
+																	lowerCall: {
+																		$coreInstruction: load.consumer.lowerCall.id,
+																	},
+																	resultMoves: load.consumer.resultMoves.map(
+																		({ id }) => ({
+																			$coreInstruction: id,
+																		}),
+																	),
+																	lengthProperty: {
+																		$coreInstruction: load.consumer.lengthProperty.id,
+																	},
+																},
+										}),
 							})),
 						},
 						"regexp-exec-projection",
@@ -2811,9 +2802,7 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 				claimed.add(load.numberIntrinsic);
 				claimed.add(load.numberCall);
 			}
-			const claimedInstructions = [
-				...claimed,
-			].map(({ id }) => id);
+			const claimedInstructions = [...claimed].map(({ id }) => id);
 			claimedInstructions.splice(1, 0, doneBranch.id);
 			const ordinaryBlocks = [
 				...new Set(claimedInstructions.map((id) => locations.get(id)!.block.id)),
@@ -2867,7 +2856,9 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 				),
 			});
 			for (const id of claimedInstructions) occupied.add(id);
-			if (regions.filter(({ kind }) => kind === "regexp-iterator-projection").length >= 8) {
+			if (
+				regions.filter(({ kind }) => kind === "regexp-iterator-projection").length >= 8
+			) {
 				break;
 			}
 		}
@@ -2970,9 +2961,7 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 				.flatMap(({ claimedInstructions }) => claimedInstructions),
 		);
 		const handlerTargets = new Set(
-			fn.blocks.flatMap(({ handler }) =>
-				handler === undefined ? [] : [handler.block],
-			),
+			fn.blocks.flatMap(({ handler }) => (handler === undefined ? [] : [handler.block])),
 		);
 		const regions = [...fn.regions];
 		for (const loop of cfg.loops) {
@@ -3014,7 +3003,10 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 			let exactLoopControl = true;
 			for (const blockId of loop.blocks) {
 				for (const edge of cfg.predecessors[blockId]!) {
-					if (edge.kind !== "ordinary" || (!loop.blocks.has(edge.from) && blockId !== header.id)) {
+					if (
+						edge.kind !== "ordinary" ||
+						(!loop.blocks.has(edge.from) && blockId !== header.id)
+					) {
 						exactLoopControl = false;
 					}
 				}
@@ -3060,11 +3052,10 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 			}
 			const dynamicSplit = splitCall.opcode === "call";
 			if (splitCall.inputs.length !== (dynamicSplit ? 3 : 2)) continue;
-			const splitProof = coreKnownBuiltinProof(
-				splitCall,
-				"String.prototype.split",
-				{ lowering: "closed-string-split", result: "array-of-strings" },
-			);
+			const splitProof = coreKnownBuiltinProof(splitCall, "String.prototype.split", {
+				lowering: "closed-string-split",
+				result: "array-of-strings",
+			});
 			if (splitProof === undefined) continue;
 			const splitProperty = dynamicSplit
 				? definitions.get(root(splitCall.inputs[0]!))
@@ -3172,9 +3163,7 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 					{ instruction: trimProperty, position: 0 },
 					{ instruction: trimCall, position: 1 },
 				]) ||
-				!exactUses(trimProperty.outputs[0]!, [
-					{ instruction: trimCall, position: 0 },
-				])
+				!exactUses(trimProperty.outputs[0]!, [{ instruction: trimCall, position: 0 }])
 			) {
 				continue;
 			}
@@ -3192,7 +3181,8 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 			];
 			if (
 				ordinaryBlocks.some(
-					(blockId) => fn.blocks[blockId]!.handler !== undefined || handlerTargets.has(blockId),
+					(blockId) =>
+						fn.blocks[blockId]!.handler !== undefined || handlerTargets.has(blockId),
 				)
 			) {
 				continue;
@@ -3303,9 +3293,7 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 		>();
 		const nonInstructionUses = new Set<CoreValueId>();
 		const handlerTargets = new Set(
-			fn.blocks.flatMap(({ handler }) =>
-				handler === undefined ? [] : [handler.block],
-			),
+			fn.blocks.flatMap(({ handler }) => (handler === undefined ? [] : [handler.block])),
 		);
 		const addNonInstructionUse = (value: CoreValueId) => {
 			nonInstructionUses.add(root(value));
@@ -3408,7 +3396,6 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 
 				const result = root(call.outputs[0]!);
 				if (nonInstructionUses.has(result)) continue;
-				const aliasMoves: Array<CoreInstruction> = [];
 				const loads: Array<{
 					readonly instruction: CoreInstruction;
 					readonly kind: "element" | "length";
@@ -3425,7 +3412,6 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 						consumer.outputs.length === 1 &&
 						root(consumer.outputs[0]!) === result
 					) {
-						aliasMoves.push(consumer);
 						continue;
 					}
 					if (
@@ -3472,12 +3458,10 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 					const location = locations.get(instruction.id)!;
 					return location.block.id * 0x1_0000 + location.index;
 				};
-				aliasMoves.sort((left, right) => order(left) - order(right));
 				loads.sort((left, right) => order(left.instruction) - order(right.instruction));
 				const claimed = [
 					...(property === undefined ? [] : [property]),
 					call,
-					...aliasMoves,
 					...loads.map(({ instruction }) => instruction),
 				];
 				const ordinaryBlocks = [
@@ -3499,6 +3483,9 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 					},
 				];
 				const claimedInstructions = claimed.map(({ id }) => id);
+				const resultValues = fn.values
+					.map(({ id }) => id)
+					.filter((value) => root(value) === result);
 				regions.push({
 					kind: "string-split-projection",
 					anchors: [call.id, loads[0]!.instruction.id],
@@ -3524,7 +3511,7 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 								? {}
 								: { property: { $coreInstruction: property.id } }),
 							separatorStringIndex,
-							aliasMoves: aliasMoves.map(({ id }) => ({ $coreInstruction: id })),
+							resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
 							loads: loads.map((load) => ({
 								instruction: { $coreInstruction: load.instruction.id },
 								kind: load.kind,
@@ -3535,7 +3522,9 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 					),
 				});
 				for (const { id } of claimed) occupied.add(id);
-				if (regions.filter(({ kind }) => kind === "string-split-projection").length >= 8) {
+				if (
+					regions.filter(({ kind }) => kind === "string-split-projection").length >= 8
+				) {
 					break;
 				}
 			}
@@ -3587,11 +3576,10 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 				) {
 					continue;
 				}
-				const builtin = coreKnownBuiltinProof(
-					sliceCall,
-					"String.prototype.slice",
-					{ lowering: "number-consumer-fusion", result: "string" },
-				);
+				const builtin = coreKnownBuiltinProof(sliceCall, "String.prototype.slice", {
+					lowering: "number-consumer-fusion",
+					result: "string",
+				});
 				if (builtin === undefined) continue;
 				const property = definitions.get(root(sliceCall.inputs[0]!));
 				if (
@@ -4175,7 +4163,7 @@ const foldTypeofComparisons: CoreFunctionPass = {
 						instructionAttribute(left, "operator") === "typeof"
 							? left
 							: right?.opcode === "unary" &&
-								instructionAttribute(right, "operator") === "typeof"
+								  instructionAttribute(right, "operator") === "typeof"
 								? right
 								: undefined;
 					const constant = unary === left ? right : unary === right ? left : undefined;

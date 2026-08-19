@@ -39,8 +39,8 @@ import type {
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Pre-1.0 compatibility starts from this format baseline.
-export const WIRE_VERSION = 6;
+// Internal wire formats are hard cut-overs: stale artifacts must rebuild.
+export const WIRE_VERSION = 7;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1425,8 +1425,7 @@ export function serializeVmDefinition(
 					w.i32(region.callee);
 					w.i32(region.receiver);
 					w.i32(region.separatorStringIndex);
-					w.i32(region.result);
-					w.i32Array([...region.aliasMoveIps]);
+					w.i32Array([...region.resultRegisters]);
 					w.u32(region.loads.length);
 					for (const load of region.loads) {
 						w.i32(load.ip);
@@ -3507,34 +3506,14 @@ function validateStringSplitProjectionRegion(
 						);
 					})()
 				: false;
-	const aliases = new Map<number, VmInstruction>();
-	if (call !== undefined) aliases.set(region.result, call);
-	const operations = [
-		...region.aliasMoveIps.map((ip) => ({ ip, kind: "alias" as const })),
-		...region.loads.map((load) => ({ ip: load.ip, kind: "load" as const, load })),
-	].sort((left, right) => left.ip - right.ip);
+	const resultRegisters = new Set(region.resultRegisters);
 	let operationsValid = true;
-	for (const operation of operations) {
-		const instruction = fn.instructions[operation.ip];
-		if (operation.kind === "alias") {
-			if (
-				instruction?.opcode !== "MOVE" ||
-				!aliases.has(instruction.src) ||
-				latestDefinition(instruction.src, operation.ip) !== aliases.get(instruction.src)
-			) {
-				operationsValid = false;
-				break;
-			}
-			aliases.set(instruction.dst, instruction);
-			continue;
-		}
-		const load = operation.load;
+	for (const load of region.loads) {
+		const instruction = fn.instructions[load.ip];
 		if (
 			(instruction?.opcode !== "LOAD_PROPERTY" &&
 				instruction?.opcode !== "LOAD_PROPERTY_STATIC") ||
-			!aliases.has(instruction.object) ||
-			latestDefinition(instruction.object, operation.ip) !==
-				aliases.get(instruction.object) ||
+			!resultRegisters.has(instruction.object) ||
 			instruction.dst !== load.dst
 		) {
 			operationsValid = false;
@@ -3572,7 +3551,6 @@ function validateStringSplitProjectionRegion(
 	const operationIps = [
 		...(region.propertyIp < 0 ? [] : [region.propertyIp]),
 		region.callIp,
-		...region.aliasMoveIps,
 		...region.loads.map((load) => load.ip),
 	];
 	if (
@@ -3584,9 +3562,11 @@ function validateStringSplitProjectionRegion(
 		!callMatches ||
 		(call?.opcode !== "CALL" && call?.opcode !== "CALL_BUILTIN") ||
 		call.arguments.length !== 1 ||
-		call.dst !== region.result ||
 		!registerValid(region.receiver) ||
-		!registerValid(region.result) ||
+		region.resultRegisters.length === 0 ||
+		resultRegisters.size !== region.resultRegisters.length ||
+		region.resultRegisters.some((register) => !registerValid(register)) ||
+		!resultRegisters.has(call.dst) ||
 		region.separatorStringIndex < 0 ||
 		region.separatorStringIndex >= stringConstants.length ||
 		stringConstants[region.separatorStringIndex]?.length === 0 ||
@@ -3595,11 +3575,7 @@ function validateStringSplitProjectionRegion(
 		elementLoads.length > 8 ||
 		lengthLoads.length > 1 ||
 		new Set(elementLoads.map((load) => load.index)).size !== elementLoads.length ||
-		new Set(region.aliasMoveIps).size !== region.aliasMoveIps.length ||
 		new Set(region.loads.map((load) => load.ip)).size !== region.loads.length ||
-		region.aliasMoveIps.some(
-			(ip, index) => ip <= callIp || (index > 0 && region.aliasMoveIps[index - 1]! >= ip),
-		) ||
 		region.loads.some(
 			(load, index) =>
 				load.ip <= callIp || (index > 0 && region.loads[index - 1]!.ip >= load.ip),
@@ -4841,8 +4817,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					const callee = r.i32();
 					const receiver = r.i32();
 					const separatorStringIndex = r.i32();
-					const result = r.i32();
-					const aliasMoveIps = r.i32Array();
+					const resultRegisters = r.i32Array();
 					const loadCount = r.count(4);
 					const loads: Array<
 						Extract<VmRegion, { kind: "string-split-projection" }>["loads"][number]
@@ -4898,8 +4873,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						callee,
 						receiver,
 						separatorStringIndex,
-						result,
-						aliasMoveIps,
+						resultRegisters,
 						loads,
 					};
 				} else if (kindTag === 5) {
