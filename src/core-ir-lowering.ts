@@ -28,7 +28,6 @@ import type {
 } from "./core-ir.ts";
 import type {
 	SemanticLoweringProgram,
-	RegisterBlock,
 	RegisterFunction,
 	RegisterImmediateValue,
 	RegisterInstruction,
@@ -248,8 +247,28 @@ interface RegisterSegment {
 
 export interface CoreRegisterProgram {
 	readonly core: CoreProgram;
-	readonly functions: Array<RegisterFunction>;
+	readonly functions: Array<CoreRegisterFunction>;
 	readonly gcRootRegisters: ReadonlyArray<ReadonlyArray<number> | undefined>;
+}
+
+export interface CoreRegisterFunction {
+	readonly sourcePath: string;
+	readonly functionIndex: number;
+	readonly nameStringIndex: number;
+	readonly blocks: Array<{ readonly instructions: Array<RegisterInstruction> }>;
+	readonly regions?: ReadonlyArray<RegisterRegion>;
+	readonly isGenerator: boolean;
+	readonly isAsync: boolean;
+	readonly parameterCount: number;
+	readonly mappedArgumentSlots: Array<number>;
+	readonly mappedArguments: boolean;
+	readonly length: number;
+	readonly registerCount: number;
+	readonly capturedCount: number;
+	readonly strict: boolean;
+	readonly isClassConstructor: boolean;
+	readonly isDerivedConstructor: boolean;
+	readonly hasPrototype: boolean;
 }
 
 interface ConvertedCoreFunction {
@@ -1986,13 +2005,12 @@ function coreBlockLayout(
 }
 
 interface LoweredCoreFunction {
-	readonly fn: RegisterFunction;
+	readonly fn: CoreRegisterFunction;
 	readonly gcRootRegisters: ReadonlyArray<number>;
 }
 
 function lowerFunctionBridge(
 	core: CoreFunction,
-	template: RegisterFunction,
 	instructionSites?: WeakMap<object, CompilerSiteFacts>,
 	reuseRegisters = true,
 ): LoweredCoreFunction {
@@ -2033,7 +2051,9 @@ function lowerFunctionBridge(
 	const loweredBlockForCore = new Map<CoreBlockId, number>(
 		blockOrder.map((block, index) => [block, index]),
 	);
-	const blocks: Array<RegisterBlock> = blockOrder.map(() => ({ instructions: [] }));
+	const blocks: Array<{ instructions: Array<RegisterInstruction> }> = blockOrder.map(
+		() => ({ instructions: [] }),
+	);
 	const {
 		roots,
 		registers: allocatedRegisters,
@@ -2268,7 +2288,9 @@ function lowerFunctionBridge(
 
 	return {
 		fn: {
-			...template,
+			sourcePath: core.metadata.sourcePath,
+			functionIndex: core.functionIndex,
+			nameStringIndex: core.metadata.nameStringIndex,
 			blocks,
 			regions: lowerCoreRegions(
 				core.regions,
@@ -2276,17 +2298,24 @@ function lowerFunctionBridge(
 				absorbedAlternateBlocks,
 				loweredBlockForCore,
 			),
-			nextRegisterDestination: nextRegister.value,
-			bodyEntryBlock:
-				core.bodyEntry === undefined
-					? undefined
-					: loweredBlockForCore.get(core.bodyEntry),
+			isGenerator: core.isGenerator,
+			isAsync: core.isAsync,
+			parameterCount: core.parameters.length,
+			mappedArgumentSlots: [...core.metadata.mappedArgumentSlots],
+			mappedArguments: core.metadata.mappedArguments,
+			length: core.metadata.length,
+			registerCount: nextRegister.value,
+			capturedCount: core.metadata.capturedCount,
+			strict: core.metadata.strict,
+			isClassConstructor: core.metadata.isClassConstructor,
+			isDerivedConstructor: core.metadata.isDerivedConstructor,
+			hasPrototype: core.metadata.hasPrototype,
 		},
 		gcRootRegisters,
 	};
 }
 
-/** Lower canonical SSA back into the existing VM-facing register form. */
+/** Allocate canonical SSA into the VM-facing register form. */
 export interface LowerCoreToRegistersOptions {
 	readonly reuseRegisters?: boolean;
 }
@@ -2299,47 +2328,13 @@ export function lowerCoreProgramToRegisters(
 	if (compilation === undefined) {
 		throw new Error("Core program is missing product compilation metadata");
 	}
-	const lowered = core.functions.map((fn) => {
-			const semanticFile = compilation.semantic.files.find(
-				(file) => file.path === fn.metadata.sourcePath,
-			);
-			if (semanticFile === undefined) {
-				throw new Error(
-					`Core function ${fn.functionIndex} refers to unknown source ${fn.metadata.sourcePath}`,
-				);
-			}
-			return lowerFunctionBridge(
-				fn,
-				{
-					semanticFile,
-					functionIndex: fn.functionIndex,
-					nameStringIndex: fn.metadata.nameStringIndex,
-					blocks: [],
-					parameterCount: fn.parameters.length,
-					mappedArguments: fn.metadata.mappedArguments,
-					mappedArgumentSlots: [...fn.metadata.mappedArgumentSlots],
-					length: fn.metadata.length,
-					nextRegisterDestination: fn.parameters.length,
-					nextLocalIndex: 0,
-					nextCapturedIndex: fn.metadata.capturedCount,
-					strict: fn.metadata.strict,
-					isGenerator: fn.isGenerator,
-					isAsync: fn.isAsync,
-					hasPrototype: fn.metadata.hasPrototype,
-					...(fn.metadata.isClassConstructor
-						? {
-								classContext: {
-									isStatic: false,
-									isConstructor: true,
-									isDerivedConstructor: fn.metadata.isDerivedConstructor,
-								},
-							}
-						: {}),
-				},
-				compilation.facts.instructionSites,
-				options.reuseRegisters ?? true,
-			);
-		});
+	const lowered = core.functions.map((fn) =>
+		lowerFunctionBridge(
+			fn,
+			compilation.facts.instructionSites,
+			options.reuseRegisters ?? true,
+		),
+	);
 	return {
 		core,
 		functions: lowered.map(({ fn }) => fn),

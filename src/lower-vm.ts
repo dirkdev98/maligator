@@ -6,10 +6,12 @@ import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
-import type { CoreRegisterProgram } from "./core-ir-lowering.ts";
+import type {
+	CoreRegisterFunction,
+	CoreRegisterProgram,
+} from "./core-ir-lowering.ts";
 import type { CoreProgram } from "./core-ir.ts";
 import type {
-	RegisterFunction,
 	RegisterImmediateValue,
 	RegisterInstruction,
 	RegisterNumericHofPlanOperation,
@@ -1860,7 +1862,7 @@ export function lowerCoreProgramToVmDefinition(
 	const functions = program.functions.map((fn, index) =>
 		lowerFunctionToVmFunction(
 			fn,
-			fileIndexFor(fn.semanticFile.path),
+			fileIndexFor(fn.sourcePath),
 			core.stringConstants,
 			profile ? compilation.facts.instructionSites : undefined,
 			program.gcRootRegisters[index],
@@ -1960,7 +1962,7 @@ function buildHostInstalls(
  * absolute instructions.
  */
 function lowerFunctionToVmFunction(
-	fn: RegisterFunction,
+	fn: CoreRegisterFunction,
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	instructionSites?: WeakMap<object, { id: string }>,
@@ -4075,28 +4077,26 @@ function lowerFunctionToVmFunction(
 		argumentSnapshotCount,
 		instructions,
 		parameterCount: fn.parameterCount,
-		registerCount: fn.nextRegisterDestination,
+		registerCount: fn.registerCount,
 	});
 
 	return {
 		nameStringIndex: fn.nameStringIndex,
-		isGenerator: fn.isGenerator ?? false,
-		isAsync: fn.isAsync ?? false,
+		isGenerator: fn.isGenerator,
+		isAsync: fn.isAsync,
 		parameterCount: fn.parameterCount,
-		mappedArguments: fn.mappedArguments ?? false,
-		mappedArgumentSlots: fn.mappedArgumentSlots ?? [],
+		mappedArguments: fn.mappedArguments,
+		mappedArgumentSlots: fn.mappedArgumentSlots,
 		length: fn.length,
-		registerCount: fn.nextRegisterDestination,
-		capturedCount: fn.nextCapturedIndex,
-		strict: fn.strict ?? fn.semanticFile.strict,
+		registerCount: fn.registerCount,
+		capturedCount: fn.capturedCount,
+		strict: fn.strict,
 		needsArguments,
 		argumentSnapshotCount,
 		argumentSnapshotPlan,
-		isDerivedConstructor:
-			(fn.classContext?.isConstructor ?? false) &&
-			(fn.classContext?.isDerivedConstructor ?? false),
-		isClassConstructor: fn.classContext?.isConstructor ?? false,
-		hasPrototype: fn.hasPrototype ?? true,
+		isDerivedConstructor: fn.isDerivedConstructor,
+		isClassConstructor: fn.isClassConstructor,
+		hasPrototype: fn.hasPrototype,
 		instructions,
 		handlers,
 		fileIndex,
