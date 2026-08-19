@@ -114,9 +114,7 @@ describe("Core IR semantic bridge", () => {
 			.find((instruction) => instruction.opcode === "call" && instruction.inputs.length > 2);
 
 		expect(call?.inputs).toHaveLength(7);
-		expect(call?.payload).not.toMatchObject({
-			fields: { immediateValues: expect.anything() },
-		});
+		expect(call?.attributes).not.toHaveProperty("immediateValues");
 		const opcodes = converted.core.functions.flatMap((fn) =>
 			fn.blocks.flatMap((block) => block.instructions.map(({ opcode }) => opcode)),
 		);

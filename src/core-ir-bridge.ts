@@ -6,6 +6,7 @@ import type {
 	CoreEdge,
 	CoreFunction,
 	CoreInstructionId,
+	CoreInstructionAttributes,
 	CoreFunctionMetadata,
 	CoreProgram,
 	CoreRepresentation,
@@ -26,13 +27,13 @@ import type {
 	IRInstruction,
 } from "./ir.ts";
 
-interface LegacyInstructionPayload {
+interface LegacyInstructionLowering {
 	readonly registerLayout?: ReadonlyArray<
 		| { readonly kind: "output"; readonly index: number }
 		| { readonly kind: "input"; readonly index: number }
 		| { readonly kind: "literal"; readonly value: number }
 	>;
-	readonly fields: Readonly<Record<string, unknown>>;
+	readonly attributes: CoreInstructionAttributes;
 }
 
 interface LegacyToken {
@@ -86,6 +87,10 @@ interface LegacySegment {
 export interface CoreFunctionLowering {
 	readonly legacy: IRFunction;
 	readonly instructionOrigins: ReadonlyMap<CoreInstructionId, IRInstruction>;
+	readonly instructionLowering: ReadonlyMap<
+		CoreInstructionId,
+		LegacyInstructionLowering
+	>;
 	readonly legacyRegisters: ReadonlyMap<CoreValueId, number>;
 	readonly legacyBlockByCoreBlock: ReadonlyMap<CoreBlockId, number>;
 }
@@ -133,12 +138,49 @@ function instructionMayThrow(instruction: IRInstruction): boolean {
 	throw new Error(`Unknown legacy IR instruction ${String(instruction.type)}`);
 }
 
+function cloneCoreAttribute(
+	value: unknown,
+	path: string,
+	ancestors: ReadonlySet<object> = new Set(),
+): unknown {
+	if (
+		value === undefined ||
+		value === null ||
+		typeof value === "boolean" ||
+		typeof value === "number" ||
+		typeof value === "string"
+	) {
+		return value;
+	}
+	if (typeof value !== "object") {
+		throw new Error(`Unsupported Core attribute ${path}: ${typeof value}`);
+	}
+	if (ancestors.has(value)) throw new Error(`Cyclic Core attribute ${path}`);
+	const nextAncestors = new Set(ancestors).add(value);
+	if (Array.isArray(value)) {
+		const arrayValue: ReadonlyArray<unknown> = value;
+		const result = Array.from(arrayValue, (entry, index) =>
+			cloneCoreAttribute(entry, `${path}[${index}]`, nextAncestors),
+		);
+		return result;
+	}
+	const prototype = Object.getPrototypeOf(value) as unknown;
+	if (prototype !== Object.prototype && prototype !== null) {
+		throw new Error(`Unsupported Core attribute object ${path}`);
+	}
+	const result: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		result[key] = cloneCoreAttribute(entry, `${path}.${key}`, nextAncestors);
+	}
+	return result;
+}
+
 function legacyPayload(
 	instruction: IRInstruction,
 	retainLoweringMetadata = true,
 	expandImmediateOperands = false,
-): LegacyInstructionPayload {
-	const fields: Record<string, unknown> = {};
+): LegacyInstructionLowering {
+	const attributes: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(instruction)) {
 		if (
 			key !== "type" &&
@@ -146,10 +188,12 @@ function legacyPayload(
 			key !== "blocks" &&
 			!(expandImmediateOperands && key === "immediateValues")
 		) {
-			fields[key] = value;
+			attributes[key] = cloneCoreAttribute(value, `${instruction.type}.${key}`);
 		}
 	}
-	if (!retainLoweringMetadata || !("registers" in instruction)) return { fields };
+	if (!retainLoweringMetadata || !("registers" in instruction)) {
+		return { attributes: attributes as CoreInstructionAttributes };
+	}
 	let outputIndex = 0;
 	let inputIndex = 0;
 	const destinations = destinationCount(instruction);
@@ -162,7 +206,7 @@ function legacyPayload(
 		}
 		return { kind: "input" as const, index: inputIndex++ };
 	});
-	return { registerLayout, fields };
+	return { registerLayout, attributes: attributes as CoreInstructionAttributes };
 }
 
 function immediateOperand(
@@ -199,12 +243,7 @@ function appendImmediateValue(
 		}
 	})();
 	const [output] = builder.appendInstruction(block, specification.opcode, [], {
-		payload: {
-			...(retainLoweringMetadata
-				? { registerLayout: [{ kind: "output" as const, index: 0 }] }
-				: {}),
-			fields: specification.fields,
-		},
+		attributes: specification.fields,
 		...(sourcePosition === undefined ? {} : { sourcePosition }),
 	});
 	return output!;
@@ -768,6 +807,7 @@ function convertStraightLineFunction(
 			.map(({ value }, index) => [index, value]),
 	);
 	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
+	const instructionLowering = new Map<CoreInstructionId, LegacyInstructionLowering>();
 	const legacyRegisters = new Map<CoreValueId, number>();
 	if (retainLoweringMetadata) {
 		for (const [register, value] of values) legacyRegisters.set(value, register);
@@ -802,20 +842,24 @@ function convertStraightLineFunction(
 			},
 		);
 		const destinations = definedRegisters(instruction);
+		const lowering = legacyPayload(
+			instruction,
+			retainLoweringMetadata,
+			expandedImmediates,
+		);
 		const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 			outputCount: destinations.length,
 			outputRepresentations: destinations.map((_, index) =>
 				outputRepresentation(instruction, index),
 			),
-			payload: legacyPayload(
-				instruction,
-				retainLoweringMetadata,
-				expandedImmediates,
-			),
+			attributes: lowering.attributes,
 			...(sourcePosition === undefined ? {} : { sourcePosition }),
 		});
 		const appended = builder.block(block).instructions.at(-1)!;
-		if (retainLoweringMetadata) instructionOrigins.set(appended.id, instruction);
+		if (retainLoweringMetadata) {
+			instructionOrigins.set(appended.id, instruction);
+			instructionLowering.set(appended.id, lowering);
+		}
 		for (const [index, register] of destinations.entries()) {
 			values.set(register, outputs[index]!);
 			if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
@@ -831,6 +875,7 @@ function convertStraightLineFunction(
 		core,
 		legacy: fn,
 		instructionOrigins,
+		instructionLowering,
 		legacyRegisters,
 		legacyBlockByCoreBlock: retainLoweringMetadata ? new Map([[block, 0]]) : new Map(),
 	};
@@ -859,6 +904,7 @@ function convertFunction(
 		metadata: coreFunctionMetadata(fn),
 	});
 	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
+	const instructionLowering = new Map<CoreInstructionId, LegacyInstructionLowering>();
 	const legacyRegisters = new Map<CoreValueId, number>();
 	const legacyBlockByCoreBlock = new Map<CoreBlockId, number>();
 	const coreBlocks: Array<CoreBlockId> = [];
@@ -926,16 +972,17 @@ function convertFunction(
 				(register, context) => requireValue(values, register, context),
 			);
 			const destinations = definedRegisters(instruction);
+			const lowering = legacyPayload(
+				instruction,
+				retainLoweringMetadata,
+				expandedImmediates,
+			);
 			const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 				outputCount: destinations.length,
 				outputRepresentations: destinations.map((_, index) =>
 					outputRepresentation(instruction, index),
 				),
-				payload: legacyPayload(
-					instruction,
-					retainLoweringMetadata,
-					expandedImmediates,
-				),
+				attributes: lowering.attributes,
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			});
 			const appended = builder.block(block).instructions.at(-1);
@@ -943,6 +990,7 @@ function convertFunction(
 				throw new Error(`Core bridge failed to append ${instruction.type}`);
 			}
 			if (retainLoweringMetadata) instructionOrigins.set(appended.id, instruction);
+			if (retainLoweringMetadata) instructionLowering.set(appended.id, lowering);
 			for (const [index, register] of destinations.entries()) {
 				values.set(register, outputs[index]!);
 				if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
@@ -1025,6 +1073,7 @@ function convertFunction(
 		core,
 		legacy: fn,
 		instructionOrigins,
+		instructionLowering,
 		legacyRegisters,
 		legacyBlockByCoreBlock,
 	};
@@ -1089,19 +1138,23 @@ function parallelMoves(
 function rebuildInstruction(
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
 	origin: IRInstruction | undefined,
+	lowering: LegacyInstructionLowering | undefined,
 	registerForValue: (value: CoreValueId) => number,
 ): IRInstruction {
-	const payload = instruction.payload as LegacyInstructionPayload | undefined;
-	if (payload === undefined) {
-		throw new Error(`Core opcode ${instruction.opcode} has no legacy lowering payload`);
-	}
+	const retainedLayout =
+		origin?.type === instruction.opcode ? lowering?.registerLayout : undefined;
+	const registerLayout =
+		retainedLayout ?? [
+			...instruction.outputs.map((_, index) => ({ kind: "output" as const, index })),
+			...instruction.inputs.map((_, index) => ({ kind: "input" as const, index })),
+		];
 	const rebuilt = {
 		type: instruction.opcode,
-		...payload.fields,
-		...(payload.registerLayout === undefined
+		...instruction.attributes,
+		...(lowering?.registerLayout === undefined && registerLayout.length === 0
 			? {}
 			: {
-					registers: payload.registerLayout.map((operand) => {
+					registers: registerLayout.map((operand) => {
 						switch (operand.kind) {
 							case "output":
 								return registerForValue(instruction.outputs[operand.index]!);
@@ -1114,6 +1167,9 @@ function rebuildInstruction(
 				}),
 	} as IRInstruction;
 	if (origin === undefined || origin.type !== rebuilt.type) return rebuilt;
+	for (const key of Object.keys(origin)) {
+		delete (origin as unknown as Record<string, unknown>)[key];
+	}
 	Object.assign(origin, rebuilt);
 	return origin;
 }
@@ -1200,6 +1256,7 @@ function lowerFunctionBridge(
 				rebuildInstruction(
 					instruction,
 					lowering.instructionOrigins.get(instruction.id),
+					lowering.instructionLowering.get(instruction.id),
 					registerForValue,
 				),
 			);
@@ -1214,12 +1271,10 @@ function lowerFunctionBridge(
 							opcode: "jump",
 							inputs: [],
 							outputs: [],
-							payload: {
-								registerLayout: undefined,
-								fields: { blocks: [edgeBlock(block.terminator.edge)] },
-							},
+							attributes: { blocks: [edgeBlock(block.terminator.edge)] },
 						},
 						lowering.instructionOrigins.get(block.terminator.id),
+						undefined,
 						registerForValue,
 					),
 				);
@@ -1232,12 +1287,10 @@ function lowerFunctionBridge(
 							opcode: "jumpIf",
 							inputs: [block.terminator.condition],
 							outputs: [],
-							payload: {
-								registerLayout: [{ kind: "input", index: 0 }],
-								fields: { blocks: [edgeBlock(block.terminator.consequent)] },
-							},
+							attributes: { blocks: [edgeBlock(block.terminator.consequent)] },
 						},
 						lowering.instructionOrigins.get(block.terminator.id),
+						undefined,
 						registerForValue,
 					),
 					{ type: "jump", blocks: [edgeBlock(block.terminator.alternate)] },
@@ -1262,12 +1315,10 @@ function lowerFunctionBridge(
 							opcode: block.terminator.kind,
 							inputs: [block.terminator.value],
 							outputs: [],
-							payload: {
-								registerLayout: [{ kind: "input", index: 0 }],
-								fields: {},
-							},
+							attributes: {},
 						},
 						lowering.instructionOrigins.get(block.terminator.id),
+						undefined,
 						registerForValue,
 					),
 				);

@@ -11,13 +11,13 @@ function programWithConstants(): CoreProgram {
 	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 	const entry = builder.createBlock();
 	const [first] = builder.appendInstruction(entry, "createNumber", [], {
-		payload: { value: 1 },
+		attributes: { value: 1 },
 	});
 	const [duplicate] = builder.appendInstruction(entry, "createNumber", [], {
-		payload: { value: 1 },
+		attributes: { value: 1 },
 	});
 	const [unused] = builder.appendInstruction(entry, "createNumber", [], {
-		payload: { value: 2 },
+		attributes: { value: 2 },
 	});
 	const [moved] = builder.appendInstruction(entry, "move", [duplicate!]);
 	void first;
@@ -46,7 +46,7 @@ describe("Core IR optimizer", () => {
 		expect(fn.blocks[0]!.instructions).toHaveLength(1);
 		expect(fn.blocks[0]!.instructions[0]).toMatchObject({
 			opcode: "createNumber",
-			payload: { value: 1 },
+			attributes: { value: 1 },
 		});
 		expect(fn.blocks[0]!.terminator).toMatchObject({
 			kind: "return",
@@ -81,7 +81,7 @@ describe("Core IR optimizer", () => {
 		const dead = builder.createBlock();
 		const body = builder.createBlock();
 		const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
-			payload: { fields: { value: true } },
+			attributes: { value: true },
 		});
 		builder.setTerminator(entry, {
 			kind: "branch",
@@ -90,11 +90,11 @@ describe("Core IR optimizer", () => {
 			alternate: { block: dead, arguments: [] },
 		});
 		const [deadValue] = builder.appendInstruction(dead, "createNumber", [], {
-			payload: { fields: { value: 1 } },
+			attributes: { value: 1 },
 		});
 		builder.setTerminator(dead, { kind: "return", value: deadValue! });
 		const [result] = builder.appendInstruction(body, "createNumber", [], {
-			payload: { fields: { value: 2 } },
+			attributes: { value: 2 },
 		});
 		builder.setTerminator(body, { kind: "return", value: result! });
 		const original = builder.finish(entry);
@@ -118,7 +118,7 @@ describe("Core IR optimizer", () => {
 		const two = builder.createBlock();
 		const fallback = builder.createBlock();
 		const [discriminant] = builder.appendInstruction(entry, "createNumber", [], {
-			payload: { fields: { value: 2 } },
+			attributes: { value: 2 },
 		});
 		builder.setTerminator(entry, {
 			kind: "switch",
@@ -135,7 +135,7 @@ describe("Core IR optimizer", () => {
 			[fallback, 3],
 		] as const) {
 			const [result] = builder.appendInstruction(block, "createNumber", [], {
-				payload: { fields: { value } },
+				attributes: { value },
 			});
 			builder.setTerminator(block, { kind: "return", value: result! });
 		}
@@ -150,7 +150,7 @@ describe("Core IR optimizer", () => {
 		});
 		expect(fn.blocks[1]!.instructions[0]).toMatchObject({
 			opcode: "createNumber",
-			payload: { fields: { value: 2 } },
+			attributes: { value: 2 },
 		});
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 	});

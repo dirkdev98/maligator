@@ -212,12 +212,29 @@ export interface CoreEffectRefinement {
 	readonly proof: CoreFactId;
 }
 
+export type CoreAttributeValue =
+	| undefined
+	| null
+	| boolean
+	| number
+	| string
+	| ReadonlyArray<CoreAttributeValue>
+	| CoreAttributeObject;
+
+// A recursive interface is required here; TypeScript rejects the equivalent
+// recursive Record alias even though instruction attributes are ordinary data.
+export interface CoreAttributeObject {
+	readonly [key: string]: CoreAttributeValue;
+}
+
+export type CoreInstructionAttributes = Readonly<Record<string, CoreAttributeValue>>;
+
 export interface CoreInstruction {
 	readonly id: CoreInstructionId;
 	readonly opcode: string;
 	readonly inputs: ReadonlyArray<CoreValueId>;
 	readonly outputs: ReadonlyArray<CoreValueId>;
-	readonly payload?: unknown;
+	readonly attributes: CoreInstructionAttributes;
 	readonly sourcePosition?: number;
 	readonly effectRefinement?: CoreEffectRefinement;
 }
@@ -363,7 +380,7 @@ export interface CoreFunctionOptions {
 export interface AppendCoreInstructionOptions {
 	readonly outputCount?: number;
 	readonly outputRepresentations?: ReadonlyArray<CoreRepresentation>;
-	readonly payload?: unknown;
+	readonly attributes?: CoreInstructionAttributes;
 	readonly sourcePosition?: number;
 	readonly effectRefinement?: CoreEffectRefinement;
 }
@@ -494,7 +511,7 @@ export class CoreFunctionBuilder {
 			opcode,
 			inputs: [...inputs],
 			outputs,
-			...(options.payload === undefined ? {} : { payload: options.payload }),
+			attributes: { ...(options.attributes ?? {}) },
 			...(options.sourcePosition === undefined
 				? {}
 				: { sourcePosition: options.sourcePosition }),
@@ -598,6 +615,7 @@ export class CoreFunctionBuilder {
 					...instruction,
 					inputs: [...instruction.inputs],
 					outputs: [...instruction.outputs],
+					attributes: { ...instruction.attributes },
 				})),
 				terminator: block.terminator,
 				...(block.handler === undefined
@@ -701,12 +719,12 @@ export function formatCoreFunction(fn: CoreFunction): string {
 			const outputs = instruction.outputs.map(formatValue).join(", ");
 			const assignment = outputs.length === 0 ? "" : `${outputs} = `;
 			const inputs = instruction.inputs.map(formatValue).join(", ");
-			const payload =
-				instruction.payload === undefined
+			const attributes =
+				Object.keys(instruction.attributes).length === 0
 					? ""
-					: ` ${JSON.stringify(instruction.payload)}`;
+					: ` ${JSON.stringify(instruction.attributes)}`;
 			lines.push(
-				`    @${instruction.id} ${assignment}${instruction.opcode}(${inputs})${payload}`,
+				`    @${instruction.id} ${assignment}${instruction.opcode}(${inputs})${attributes}`,
 			);
 		}
 		lines.push(`    @${block.terminator.id} ${formatTerminator(block.terminator)}`);

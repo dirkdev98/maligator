@@ -24,21 +24,6 @@ export interface CoreOptimizationOptions {
 	readonly simplifyValues?: boolean;
 }
 
-type LegacyRegisterOperand =
-	| { readonly kind: "output"; readonly index: number }
-	| { readonly kind: "input"; readonly index: number }
-	| { readonly kind: "literal"; readonly value: number };
-
-interface LegacyInstructionPayload {
-	readonly registerLayout?: ReadonlyArray<LegacyRegisterOperand>;
-	readonly fields: Readonly<Record<string, unknown>>;
-}
-
-function legacyFields(instruction: CoreInstruction): Readonly<Record<string, unknown>> {
-	const payload = instruction.payload as LegacyInstructionPayload | undefined;
-	return payload?.fields ?? {};
-}
-
 function origin(
 	value: CoreValueId,
 	environment: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -75,10 +60,10 @@ function exactNumberTest(
 	const [constant, compare] = instructions;
 	return (
 		constant?.opcode === "createNumber" &&
-		legacyFields(constant).value === value &&
+		instructionAttribute(constant, "value") === value &&
 		constant.outputs.length === 1 &&
 		compare?.opcode === "binary" &&
-		legacyFields(compare).operator === "===" &&
+		instructionAttribute(compare, "operator") === "===" &&
 		compare.outputs.length === 1 &&
 		compare.outputs[0] === condition &&
 		compare.inputs.length === 2 &&
@@ -205,7 +190,7 @@ const annotateTerminalYieldSites: CoreFunctionPass = {
 				) {
 					continue;
 				}
-				if (legacyFields(instruction).terminal !== true) {
+				if (instructionAttribute(instruction, "terminal") !== true) {
 					terminal.add(instruction.id);
 				}
 			}
@@ -217,13 +202,9 @@ const annotateTerminalYieldSites: CoreFunctionPass = {
 				...block,
 				instructions: block.instructions.map((instruction) => {
 					if (!terminal.has(instruction.id)) return instruction;
-					const payload = instruction.payload as LegacyInstructionPayload;
 					return {
 						...instruction,
-						payload: {
-							...payload,
-							fields: { ...payload.fields, terminal: true },
-						},
+						attributes: { ...instruction.attributes, terminal: true },
 					};
 				}),
 			})),
@@ -231,24 +212,6 @@ const annotateTerminalYieldSites: CoreFunctionPass = {
 		};
 	},
 };
-
-function removeLegacyInput(
-	payload: LegacyInstructionPayload,
-	removedInput: number,
-): LegacyInstructionPayload["registerLayout"] {
-	if (payload.registerLayout === undefined) return undefined;
-	const result: Array<LegacyRegisterOperand> = [];
-	for (const operand of payload.registerLayout) {
-		if (operand.kind !== "input") {
-			result.push(operand);
-		} else if (operand.index !== removedInput) {
-			result.push(
-				operand.index > removedInput ? { ...operand, index: operand.index - 1 } : operand,
-			);
-		}
-	}
-	return result;
-}
 
 /** Fold an exact string SSA value into the property operation's attributes. */
 const foldStaticPropertyKeys: CoreFunctionPass = {
@@ -258,7 +221,7 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 		const strings = new Map<CoreValueId, number>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				const stringIndex = legacyFields(instruction).stringIndex;
+				const stringIndex = instructionAttribute(instruction, "stringIndex");
 				if (
 					instruction.opcode === "createString" &&
 					instruction.outputs.length === 1 &&
@@ -282,7 +245,6 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 					}
 					const stringIndex = strings.get(instruction.inputs[1]!);
 					if (stringIndex === undefined) return instruction;
-					const payload = instruction.payload as LegacyInstructionPayload;
 					changed = true;
 					return {
 						...instruction,
@@ -291,11 +253,7 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 								? "loadPropertyStatic"
 								: "storePropertyStatic",
 						inputs: instruction.inputs.filter((_, index) => index !== 1),
-						payload: {
-							...payload,
-							registerLayout: removeLegacyInput(payload, 1),
-							fields: { ...payload.fields, stringIndex },
-						},
+						attributes: { ...instruction.attributes, stringIndex },
 					};
 				}),
 			}),
@@ -318,6 +276,10 @@ interface CoreFunctionPass {
 	readonly name: string;
 	readonly ablation?: OptimizationAblation;
 	run(fn: CoreFunction, analyses: CoreAnalysisManager): CoreFunction;
+}
+
+function instructionAttribute(instruction: CoreInstruction, name: string): unknown {
+	return instruction.attributes[name];
 }
 
 /** Per-function analysis cache keyed by the immutable function snapshot. */
@@ -431,29 +393,37 @@ function rewriteFunction(
 	};
 }
 
-function stablePayload(payload: unknown): string {
-	return payload === undefined ? "" : JSON.stringify(payload);
+function stableAttributes(instruction: CoreInstruction): string {
+	return JSON.stringify(instruction.attributes);
 }
 
 function constantImmediate(instruction: CoreInstruction): CoreImmediate | undefined {
-	const fields = legacyFields(instruction);
 	switch (instruction.opcode) {
 		case "createUndefined":
 			return { kind: "undefined" };
 		case "createNull":
 			return { kind: "null" };
 		case "createBoolean":
-			return typeof fields.value === "boolean"
-				? { kind: "boolean", value: fields.value }
+			return typeof instructionAttribute(instruction, "value") === "boolean"
+				? {
+						kind: "boolean",
+						value: instructionAttribute(instruction, "value") as boolean,
+					}
 				: undefined;
 		case "createNumber":
 		case "createF64":
-			return typeof fields.value === "number"
-				? { kind: "number", value: fields.value }
+			return typeof instructionAttribute(instruction, "value") === "number"
+				? {
+						kind: "number",
+						value: instructionAttribute(instruction, "value") as number,
+					}
 				: undefined;
 		case "createString":
-			return typeof fields.stringIndex === "number"
-				? { kind: "string", index: fields.stringIndex }
+			return typeof instructionAttribute(instruction, "stringIndex") === "number"
+				? {
+						kind: "string",
+						index: instructionAttribute(instruction, "stringIndex") as number,
+					}
 				: undefined;
 		default:
 			return undefined;
@@ -709,7 +679,7 @@ const copyAndValueNumber: CoreFunctionPass = {
 					continue;
 				}
 				if (VALUE_NUMBERED_OPCODES.has(instruction.opcode)) {
-					const key = `${instruction.opcode}\0${instruction.inputs.join(",")}\0${stablePayload(instruction.payload)}`;
+					const key = `${instruction.opcode}\0${instruction.inputs.join(",")}\0${stableAttributes(instruction)}`;
 					const previous = available.get(key);
 					if (previous !== undefined && previous.length === instruction.outputs.length) {
 						for (const [index, output] of instruction.outputs.entries()) {

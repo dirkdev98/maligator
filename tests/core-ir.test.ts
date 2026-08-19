@@ -99,11 +99,11 @@ describe("Core IR", () => {
 		const condition = builder.block(entry).parameters[0]!.value;
 		const [left] = builder.appendInstruction(consequent, "constant", [], {
 			outputRepresentations: ["f64"],
-			payload: { value: 1 },
+			attributes: { value: 1 },
 		});
 		const [right] = builder.appendInstruction(alternate, "constant", [], {
 			outputRepresentations: ["f64"],
-			payload: { value: 2 },
+			attributes: { value: 2 },
 		});
 		builder.setTerminator(entry, {
 			kind: "branch",

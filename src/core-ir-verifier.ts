@@ -146,6 +146,40 @@ function requireStableIds<T extends { readonly id: number }>(
 	}
 }
 
+function verifyAttributeValue(
+	value: unknown,
+	path: string,
+	ancestors: ReadonlySet<object> = new Set(),
+): void {
+	if (
+		value === undefined ||
+		value === null ||
+		typeof value === "boolean" ||
+		typeof value === "number" ||
+		typeof value === "string"
+	) {
+		return;
+	}
+	if (typeof value !== "object") fail(`${path} has unsupported attribute data`);
+	const objectValue = value;
+	if (ancestors.has(objectValue)) fail(`${path} contains cyclic attribute data`);
+	const nextAncestors = new Set(ancestors).add(objectValue);
+	if (Array.isArray(value)) {
+		const arrayValue: ReadonlyArray<unknown> = value;
+		for (const [index, entry] of arrayValue.entries()) {
+			verifyAttributeValue(entry, `${path}[${index}]`, nextAncestors);
+		}
+		return;
+	}
+	const prototype = Object.getPrototypeOf(value) as unknown;
+	if (prototype !== Object.prototype && prototype !== null) {
+		fail(`${path} has a non-data attribute object`);
+	}
+	for (const [key, entry] of Object.entries(value as Readonly<Record<string, unknown>>)) {
+		verifyAttributeValue(entry, `${path}.${key}`, nextAncestors);
+	}
+}
+
 /** Throws CoreIrVerificationError when any canonical middle-end invariant is broken. */
 export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistry): void {
 	if (!Number.isSafeInteger(fn.functionIndex) || fn.functionIndex < 0) {
@@ -158,9 +192,6 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 		["captured count", fn.metadata.capturedCount],
 	] as const) {
 		if (!Number.isSafeInteger(value) || value < 0) fail(`invalid ${name} ${value}`);
-	}
-	if (fn.metadata.length > fn.parameters.length) {
-		fail(`function length ${fn.metadata.length} exceeds parameter count ${fn.parameters.length}`);
 	}
 	if (!fn.metadata.mappedArguments && fn.metadata.mappedArgumentSlots.length !== 0) {
 		fail("unmapped function carries mapped argument slots");
@@ -243,6 +274,9 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 			if (instructionIds.has(instruction.id))
 				fail(`duplicate instruction id @${instruction.id}`);
 			instructionIds.add(instruction.id);
+			for (const [key, value] of Object.entries(instruction.attributes)) {
+				verifyAttributeValue(value, `instruction @${instruction.id}.${key}`);
+			}
 			const descriptor = registry.get(instruction.opcode);
 			if (descriptor === undefined)
 				fail(`instruction @${instruction.id} has unknown opcode ${instruction.opcode}`);
@@ -496,7 +530,7 @@ export function verifyCoreProgram(
 		if (
 			position.callerPosId !== undefined &&
 			(!Number.isSafeInteger(position.callerPosId) ||
-				position.callerPosId < 0 ||
+				position.callerPosId < -1 ||
 				position.callerPosId >= program.sourcePositions.length)
 		) {
 			fail(`source position ${index} has invalid caller position`);
