@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildCoreControlFlow } from "../src/core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreCanonicalValueRoots,
+} from "../src/core-ir-control-flow.ts";
 import { CORE_OPCODES, coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import {
@@ -22,6 +25,13 @@ function registry(): CoreOpcodeRegistry {
 	registry.define({
 		opcode: "add",
 		inputs: coreArity(2),
+		outputs: coreArity(1),
+		effects: CORE_NO_EFFECTS,
+		discardable: true,
+	});
+	registry.define({
+		opcode: "move",
+		inputs: coreArity(1),
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
 		discardable: true,
@@ -114,8 +124,48 @@ describe("Core IR", () => {
 		const cfg = buildCoreControlFlow(fn, opcodes);
 		expect(cfg.dominates(entry, merge)).toBe(true);
 		expect(cfg.dominates(consequent, merge)).toBe(false);
+		const canonical = coreCanonicalValueRoots(fn, cfg);
+		const mergeValue = builder.block(merge).parameters[0]!.value;
+		expect(canonical.get(mergeValue)).toBe(mergeValue);
+		expect(canonical.get(mergeValue)).not.toBe(canonical.get(left!));
+		expect(canonical.get(mergeValue)).not.toBe(canonical.get(right!));
 		expect(formatCoreFunction(fn)).toContain("branch %0, b1(), b2()");
 		expect(formatCoreFunction(fn)).toContain("b3(%1: f64)");
+	});
+
+	it("canonicalizes moves and loop-carried copies to their external producer", () => {
+		const opcodes = registry();
+		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const header = builder.createBlock([{ representation: "boxed" }]);
+		const body = builder.createBlock();
+		const exit = builder.createBlock([{ representation: "boxed" }]);
+		const input = builder.block(entry).parameters[0]!.value;
+		const loopValue = builder.block(header).parameters[0]!.value;
+		const [moved] = builder.appendInstruction(body, "move", [loopValue]);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [input] },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: input,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [loopValue] },
+		});
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [moved!] },
+		});
+		const result = builder.block(exit).parameters[0]!.value;
+		builder.setTerminator(exit, { kind: "return", value: result });
+		const fn = builder.finish(entry);
+
+		expect(() => verifyCoreFunction(fn, opcodes)).not.toThrow();
+		const canonical = coreCanonicalValueRoots(fn, buildCoreControlFlow(fn, opcodes));
+		expect(canonical.get(loopValue)).toBe(input);
+		expect(canonical.get(moved!)).toBe(input);
+		expect(canonical.get(result)).toBe(input);
 	});
 
 	it("rejects values that do not dominate an incoming edge", () => {

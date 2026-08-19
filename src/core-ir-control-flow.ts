@@ -5,6 +5,7 @@ import type {
 	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreValueId } from "./core-ir.ts";
 
 export type CoreControlEdgeKind = "ordinary" | "exceptional";
 
@@ -35,44 +36,48 @@ export function coreCanonicalValueRoots(
 	fn: CoreFunction,
 	cfg: CoreControlFlow,
 ): ReadonlyMap<CoreValueId, CoreValueId> {
-	const canonical = new Map(fn.values.map(({ id }) => [id, id] as const));
+	const parent = new Int32Array((fn.values.at(-1)?.id ?? -1) + 1);
+	parent.fill(-1);
+	for (const { id } of fn.values) parent[id] = id;
 	const root = (value: CoreValueId): CoreValueId => {
-		let current = value;
-		const seen = new Set<CoreValueId>();
-		while (!seen.has(current)) {
-			seen.add(current);
-			const next = canonical.get(current);
-			if (next === undefined || next === current) break;
+		let current: number = value;
+		while (parent[current] !== current) current = parent[current]!;
+		const result = coreValueId(current);
+		current = value;
+		while (parent[current] !== current) {
+			const next = parent[current]!;
+			parent[current] = result;
 			current = next;
 		}
-		return current;
+		return result;
 	};
+	// Moves are unconditional aliases. Point their producer class at the source
+	// class so the representative remains the original producer when possible.
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				instruction.opcode !== "move" ||
+				instruction.inputs.length !== 1 ||
+				instruction.outputs.length !== 1
+			) {
+				continue;
+			}
+			const output = root(instruction.outputs[0]!);
+			const source = root(instruction.inputs[0]!);
+			if (output !== source) parent[output] = source;
+		}
+	}
 	let changed = true;
 	while (changed) {
 		changed = false;
 		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (
-					instruction.opcode !== "move" ||
-					instruction.inputs.length !== 1 ||
-					instruction.outputs.length !== 1
-				) {
-					continue;
-				}
-				const output = instruction.outputs[0]!;
-				const source = root(instruction.inputs[0]!);
-				if (root(output) !== source) {
-					canonical.set(output, source);
-					changed = true;
-				}
-			}
 			const incoming = cfg.predecessors[block.id]!;
 			if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
 				continue;
 			}
 			for (const [index, parameter] of block.parameters.entries()) {
 				const current = root(parameter.value);
-				const externalSources = new Set<CoreValueId>();
+				let externalSource: CoreValueId | undefined;
 				let complete = true;
 				for (const edge of incoming) {
 					const argument = edge.arguments[index];
@@ -83,17 +88,21 @@ export function coreCanonicalValueRoots(
 					const source = root(argument);
 					// A loop-carried copy cycle contributes no new value. Collapse the
 					// cycle only when every value entering it from outside has one root.
-					if (source !== current) externalSources.add(source);
+					if (source === current) continue;
+					if (externalSource === undefined) externalSource = source;
+					else if (externalSource !== source) {
+						complete = false;
+						break;
+					}
 				}
-				if (complete && externalSources.size === 1) {
-					const source = externalSources.values().next().value!;
-					canonical.set(parameter.value, source);
+				if (complete && externalSource !== undefined) {
+					parent[current] = externalSource;
 					changed = true;
 				}
 			}
 		}
 	}
-	return new Map([...canonical].map(([value]) => [value, root(value)]));
+	return new Map(fn.values.map(({ id }) => [id, root(id)]));
 }
 
 export function coreTerminatorEdges(

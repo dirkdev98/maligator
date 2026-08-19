@@ -262,7 +262,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 		const compilation = program.compilation;
 		if (compilation === undefined) return fn;
 		const definitions = new Map<CoreValueId, CoreInstruction>();
-		const canonical = coreCanonicalValueRoots(fn, analyses.controlFlow(fn));
+		const canonical = analyses.canonicalValues(fn);
 		const representations = new Map(
 			fn.values.map(({ id, representation }) => [id, representation]),
 		);
@@ -2023,7 +2023,7 @@ const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
 	name: "annotate-bounded-string-char-code-at-positions",
 	run(fn, analyses, program) {
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValueRoots(fn, cfg);
+		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -2180,7 +2180,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValueRoots(fn, cfg);
+		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -2712,7 +2712,7 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValueRoots(fn, cfg);
+		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -2939,7 +2939,7 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValueRoots(fn, cfg);
+		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -3340,7 +3340,7 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValueRoots(fn, cfg);
+		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -3606,7 +3606,7 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const definitions = functionDefinitions(fn);
-		const canonical = coreCanonicalValueRoots(fn, analyses.controlFlow(fn));
+		const canonical = analyses.canonicalValues(fn);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const uses = new Map<
 			CoreValueId,
@@ -4261,7 +4261,7 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 	name: "fold-static-property-keys",
 	ablation: "static-properties",
 	run(fn, analyses) {
-		const canonical = coreCanonicalValueRoots(fn, analyses.controlFlow(fn));
+		const canonical = analyses.canonicalValues(fn);
 		const strings = new Map<CoreValueId, number>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -4336,12 +4336,25 @@ function instructionAttribute(instruction: CoreInstruction, name: string): unkno
 /** Per-function analysis cache keyed by the immutable function snapshot. */
 export class CoreAnalysisManager {
 	readonly #controlFlow = new WeakMap<CoreFunction, CoreControlFlow>();
+	readonly #canonicalValues = new WeakMap<
+		CoreFunction,
+		ReadonlyMap<CoreValueId, CoreValueId>
+	>();
 
 	controlFlow(fn: CoreFunction): CoreControlFlow {
 		let analysis = this.#controlFlow.get(fn);
 		if (analysis === undefined) {
 			analysis = buildCoreControlFlow(fn, coreOpcodeRegistry);
 			this.#controlFlow.set(fn, analysis);
+		}
+		return analysis;
+	}
+
+	canonicalValues(fn: CoreFunction): ReadonlyMap<CoreValueId, CoreValueId> {
+		let analysis = this.#canonicalValues.get(fn);
+		if (analysis === undefined) {
+			analysis = coreCanonicalValueRoots(fn, this.controlFlow(fn));
+			this.#canonicalValues.set(fn, analysis);
 		}
 		return analysis;
 	}
