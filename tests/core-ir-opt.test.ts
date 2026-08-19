@@ -177,15 +177,44 @@ describe("Core IR optimizer", () => {
 		const fn = executeCoreOptimizations(
 			coreProgram([builder.finish(entry)]),
 		).program.functions[0]!;
-		expect(fn.blocks).toHaveLength(2);
-		expect(fn.blocks[0]!.terminator).toMatchObject({
-			kind: "jump",
-			edge: { block: 1 },
-		});
-		expect(fn.blocks[1]!.instructions[0]).toMatchObject({
+		expect(fn.blocks).toHaveLength(1);
+		expect(fn.blocks[0]!.terminator).toMatchObject({ kind: "return" });
+		expect(fn.blocks[0]!.instructions[0]).toMatchObject({
 			opcode: "createNumber",
 			attributes: { value: 2 },
 		});
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("combines linear SSA blocks by substituting edge arguments", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const body = builder.createBlock([{ representation: "boxed" }]);
+		const parameter = builder.block(entry).parameters[0]!.value;
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: body, arguments: [parameter] },
+		});
+		const bodyParameter = builder.block(body).parameters[0]!.value;
+		const [result] = builder.appendInstruction(body, "call", [
+			bodyParameter,
+			bodyParameter,
+		]);
+		builder.setTerminator(body, { kind: "return", value: result! });
+
+		const fn = executeCoreOptimizations(
+			coreProgram([builder.finish(entry)]),
+		).program.functions[0]!;
+		expect(fn.blocks).toHaveLength(1);
+		expect(fn.blocks[0]!.instructions[0]).toMatchObject({
+			opcode: "call",
+			inputs: [parameter, parameter],
+		});
+		expect(fn.values).not.toEqual(
+			expect.arrayContaining([expect.objectContaining({ id: bodyParameter })]),
+		);
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 	});
 });

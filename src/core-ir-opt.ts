@@ -1038,10 +1038,71 @@ const deadInstructionElimination: CoreFunctionPass = {
 	},
 };
 
+/** Merge one dominance-safe linear edge at a time, substituting block arguments. */
+const combineLinearBlocks: CoreFunctionPass = {
+	name: "combine-linear-blocks",
+	run(fn, analyses) {
+		const cfg = analyses.controlFlow(fn);
+		for (const predecessor of fn.blocks) {
+			if (predecessor.handler !== undefined || predecessor.terminator.kind !== "jump") {
+				continue;
+			}
+			const targetId = predecessor.terminator.edge.block;
+			if (
+				targetId === predecessor.id ||
+				targetId === fn.entry ||
+				targetId === fn.bodyEntry
+			) {
+				continue;
+			}
+			const target = fn.blocks[targetId];
+			if (target === undefined || target.handler !== undefined) continue;
+			const incoming = cfg.predecessors[targetId]!;
+			if (
+				incoming.length !== 1 ||
+				incoming[0]!.kind !== "ordinary" ||
+				incoming[0]!.from !== predecessor.id
+			) {
+				continue;
+			}
+			const replacements = new Map<CoreValueId, CoreValueId>();
+			for (const [index, parameter] of target.parameters.entries()) {
+				replacements.set(
+					parameter.value,
+					predecessor.terminator.edge.arguments[index]!,
+				);
+			}
+			const merged: CoreBlock = {
+				...predecessor,
+				instructions: [
+					...predecessor.instructions,
+					...target.instructions.map((instruction) => ({
+						...instruction,
+						inputs: instruction.inputs.map((value) =>
+							resolveValue(value, replacements),
+						),
+					})),
+				],
+				terminator: rewriteTerminator(target.terminator, replacements),
+			};
+			const blocks = fn.blocks.map((block) =>
+				block.id === predecessor.id ? merged : block,
+			);
+			return removeUnreachableBlocks({
+				...fn,
+				blocks,
+				mutationEpoch: fn.mutationEpoch + 1,
+			});
+		}
+		return fn;
+	},
+};
+
 const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	foldPrimitiveConstants,
 	simplifyControlFlow,
+	combineLinearBlocks,
 	foldStaticPropertyKeys,
 	copyAndValueNumber,
 	deadInstructionElimination,
