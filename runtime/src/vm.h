@@ -1637,7 +1637,7 @@ typedef struct MalVm {
     MalCjsModuleSlot *cjs_registry;
 
     /**
-     * Fibers (see docs/roadmaps/isolate-reactor.md). This MalVm is the *isolate*: it owns the
+     * Fibers (see docs/decisions/03-wave-0-host-architecture.md). This MalVm is the *isolate*: it owns the
      * heap + globals, and one or more fibers execute on it (one at a time on this
      * thread). `current_fiber` is the running one — its per-execution slice
      * (value stack, frames, completion, GC root chains, stack limit) is live in

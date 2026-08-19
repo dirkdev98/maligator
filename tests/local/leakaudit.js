@@ -1,5 +1,5 @@
-// GC leak-audit exerciser (T6.3). Touches every §A–D allocation category from
-// docs/roadmaps/gc.md, dropping most allocations and keeping a sample. Run it with
+// GC leak-audit exerciser (T6.3). Touches every §A–D allocation category, dropping
+// most allocations and keeping a sample. Run it with
 // `npm run test:leak`, which expects zero leaks at shutdown. A non-zero count names
 // the leaking category in the grouped backtrace.
 //

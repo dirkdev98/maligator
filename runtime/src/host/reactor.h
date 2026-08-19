@@ -5,7 +5,7 @@
 #include <stdatomic.h>
 
 /*
- * The I/O reactor (see docs/roadmaps/isolate-reactor.md). Completion-oriented core: a caller
+ * The I/O reactor (see docs/decisions/03-wave-0-host-architecture.md). Completion-oriented core: a caller
  * registers interest (an fd becoming ready, or a deadline passing) together with a
  * *waker* — "make my task runnable again" — and when the event occurs the reactor
  * fires the waker. The scheduler's run loop drains runnable fibers, then blocks in

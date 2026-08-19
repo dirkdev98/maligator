@@ -8,7 +8,8 @@
 #include "vm.h"
 
 /*
- * The host context (the "host" layer in docs/roadmaps/isolate-reactor.md). Holds
+ * The host context (the "host" layer in
+ * docs/decisions/03-wave-0-host-architecture.md). Holds
  * the platform services an embedder provides: the I/O reactor now, threads/clock later. It is
  * attached to an isolate via `vm->host` (an opaque `void *` on the engine side, so
  * the engine has no host/reactor type dependency), letting host-layer code and

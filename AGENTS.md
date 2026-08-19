@@ -87,7 +87,7 @@ For a fix queue maintained in a separate clone:
 
 ## Working Preferences
 
-- Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `docs/roadmaps/isolate-reactor.md`).
+- Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `docs/decisions/03-wave-0-host-architecture.md`).
 
 - Internal backwards compatibility is never required. Refactor internal representations and migrate all callers freely; prefer a clean cutover, invalidating or rebuilding internal artifacts where needed, over preserving legacy paths, adapters, shims, dual formats, or staged compatibility.
 

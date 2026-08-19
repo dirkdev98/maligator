@@ -75,8 +75,8 @@ volatile bool mal_gc_poll = false;
 MalRootFrame *mal_root_frame_head = nullptr;
 MalRootSpan *mal_root_span_head = nullptr;
 
-/* Preemption hook (docs/roadmaps/isolate-reactor.md). Null in a plain run; the scheduler
- * installs one so a safepoint can yield the running fiber when its reduction
+/* Preemption hook (docs/decisions/03-wave-0-host-architecture.md). Null in a plain
+ * run; the scheduler installs one so a safepoint can yield the running fiber when its reduction
  * budget is exhausted. Called from mal_gc_safepoint, i.e. only where a context
  * switch is safe (roots precise, no un-rooted native frame). */
 void (*mal_gc_preempt_hook)(MalVm *vm) = nullptr;

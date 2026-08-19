@@ -6,7 +6,7 @@
 
 /*
  * Fibers — the stackful execution unit of the isolate scheduler (see
- * docs/roadmaps/isolate-reactor.md). Each fiber owns its own C stack, so a running
+ * docs/decisions/03-wave-0-host-architecture.md). Each fiber owns its own C stack, so a running
  * fiber can be preempted
  * at any safepoint (mal_gc_poll site) by switching stacks back to the scheduler,
  * and resumed later. This is what makes actors "preemptively fair, CPU-bound
