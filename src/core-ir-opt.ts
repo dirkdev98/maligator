@@ -18,6 +18,7 @@ import {
 } from "./compiler-facts.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import { verifyCoreFunction } from "./core-ir-verifier.ts";
 import type {
@@ -25,7 +26,6 @@ import type {
 	CoreBlockId,
 	CoreAttributeValue,
 	CoreEdge,
-	CoreFact,
 	CoreFunction,
 	CoreImmediate,
 	CoreInstruction,
@@ -34,7 +34,7 @@ import type {
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreBlockId, coreInstructionId, coreValueId } from "./core-ir.ts";
+import { coreInstructionId, coreValueId } from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
 	readonly maxRounds?: number;
@@ -4110,7 +4110,7 @@ const eliminateRedundantTdzChecks: CoreFunctionPass = {
 		// A TDZ check can be the last throwing instruction covered by a handler.
 		// Removing it also removes Core's exceptional edge, so immediately restore
 		// the verifier invariant that every retained block is reachable.
-		return removeUnreachableBlocks({
+		return removeUnreachableCoreBlocks({
 			...fn,
 			blocks,
 			mutationEpoch: fn.mutationEpoch + 1,
@@ -4733,126 +4733,6 @@ function immediateStrictEquals(left: CoreImmediate, right: CoreImmediate): boole
 	}
 }
 
-function remapEdge(
-	edge: CoreEdge,
-	blocks: ReadonlyMap<CoreBlockId, CoreBlockId>,
-): CoreEdge {
-	const block = blocks.get(edge.block);
-	if (block === undefined)
-		throw new Error(`Cannot retain edge to removed Core block ${edge.block}`);
-	return { ...edge, block };
-}
-
-function remapBlockTerminator(
-	terminator: CoreTerminator,
-	blocks: ReadonlyMap<CoreBlockId, CoreBlockId>,
-): CoreTerminator {
-	switch (terminator.kind) {
-		case "jump":
-			return { ...terminator, edge: remapEdge(terminator.edge, blocks) };
-		case "branch":
-			return {
-				...terminator,
-				consequent: remapEdge(terminator.consequent, blocks),
-				alternate: remapEdge(terminator.alternate, blocks),
-			};
-		case "guard":
-			return {
-				...terminator,
-				success: remapEdge(terminator.success, blocks),
-				fallback: remapEdge(terminator.fallback, blocks),
-			};
-		case "switch":
-			return {
-				...terminator,
-				cases: terminator.cases.map((entry) => ({
-					...entry,
-					edge: remapEdge(entry.edge, blocks),
-				})),
-				default: remapEdge(terminator.default, blocks),
-			};
-		case "return":
-		case "throw":
-		case "unreachable":
-			return terminator;
-	}
-}
-
-function factSurvivesBlockRemoval(
-	fact: CoreFact,
-	liveInstructions: ReadonlySet<number>,
-): boolean {
-	if (
-		fact.validity.kind === "guard" &&
-		!liveInstructions.has(fact.validity.instruction)
-	) {
-		return false;
-	}
-	return fact.obligations.every(
-		(obligation) =>
-			obligation.kind !== "guard" || liveInstructions.has(obligation.instruction),
-	);
-}
-
-function removeUnreachableBlocks(fn: CoreFunction): CoreFunction {
-	const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
-	if (cfg.reachable.size === fn.blocks.length) return fn;
-	const blockIds = new Map<CoreBlockId, CoreBlockId>();
-	for (const block of fn.blocks) {
-		if (cfg.reachable.has(block.id)) blockIds.set(block.id, coreBlockId(blockIds.size));
-	}
-	const liveInstructions = new Set<number>();
-	for (const block of fn.blocks) {
-		if (!cfg.reachable.has(block.id)) continue;
-		for (const instruction of block.instructions) liveInstructions.add(instruction.id);
-		liveInstructions.add(block.terminator.id);
-	}
-	const blocks = fn.blocks
-		.filter((block) => cfg.reachable.has(block.id))
-		.map((block): CoreBlock => {
-			const id = blockIds.get(block.id)!;
-			const handlerTarget =
-				block.handler === undefined ? undefined : blockIds.get(block.handler.block);
-			return {
-				...block,
-				id,
-				terminator: remapBlockTerminator(block.terminator, blockIds),
-				...(handlerTarget === undefined
-					? { handler: undefined }
-					: { handler: { ...block.handler!, block: handlerTarget } }),
-			};
-		});
-	const values = fn.values
-		.filter((value) =>
-			value.definition.kind === "block-parameter"
-				? blockIds.has(value.definition.block)
-				: liveInstructions.has(value.definition.instruction),
-		)
-		.map((value) =>
-			value.definition.kind !== "block-parameter"
-				? value
-				: {
-						...value,
-						definition: {
-							...value.definition,
-							block: blockIds.get(value.definition.block)!,
-						},
-					},
-		);
-	const entry = blockIds.get(fn.entry);
-	if (entry === undefined) throw new Error("Core entry block became unreachable");
-	const bodyEntry = fn.bodyEntry === undefined ? undefined : blockIds.get(fn.bodyEntry);
-	return {
-		...fn,
-		entry,
-		...(bodyEntry === undefined ? { bodyEntry: undefined } : { bodyEntry }),
-		blocks,
-		values,
-		facts: fn.facts.filter((fact) => factSurvivesBlockRemoval(fact, liveInstructions)),
-		mutationEpoch: fn.mutationEpoch + 1,
-	};
-}
-
 /** Resolve primitive branches and switches, then restore Core's dense reachable CFG. */
 const simplifyControlFlow: CoreFunctionPass = {
 	name: "simplify-control-flow",
@@ -4909,7 +4789,7 @@ const simplifyControlFlow: CoreFunctionPass = {
 			return block;
 		});
 		if (!changed) return fn;
-		return removeUnreachableBlocks({
+		return removeUnreachableCoreBlocks({
 			...fn,
 			blocks,
 			mutationEpoch: fn.mutationEpoch + 1,
@@ -5096,7 +4976,7 @@ const combineLinearBlocks: CoreFunctionPass = {
 			const blocks = fn.blocks.map((block) =>
 				block.id === predecessor.id ? merged : block,
 			);
-			return removeUnreachableBlocks({
+			return removeUnreachableCoreBlocks({
 				...fn,
 				blocks,
 				mutationEpoch: fn.mutationEpoch + 1,

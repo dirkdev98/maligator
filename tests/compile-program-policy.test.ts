@@ -35,7 +35,6 @@ describe("compileEntrypoint build policy", () => {
 		expect(phases).toEqual([
 			"graph",
 			"semantic",
-			"lower semantic program",
 			"construct core ir",
 			"core ir optimizations",
 			"lower core ir",
@@ -56,7 +55,6 @@ describe("compileEntrypoint build policy", () => {
 		expect(phases).toEqual([
 			"graph",
 			"semantic",
-			"lower semantic program",
 			"construct core ir",
 			"core ir optimizations",
 			"lower core ir",

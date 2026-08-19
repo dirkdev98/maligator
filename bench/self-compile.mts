@@ -49,8 +49,7 @@ const measure = <T,>(phase: Phase, run: () => T): T => {
 const compilePhases = {
 	graph: "graphMs",
 	semantic: "semanticMs",
-	"lower semantic program": "lowerSemanticMs",
-	"construct core ir": "optimizeMs",
+	"construct core ir": "lowerSemanticMs",
 	"core ir optimizations": "optimizeMs",
 	"lower core ir": "optimizeMs",
 	"lower to vm": "lowerMs",

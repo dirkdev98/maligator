@@ -162,7 +162,7 @@ export function buildNativeBinary(options: BuildOptions): string {
 
 /** Compile and link a fixture, retaining the exact context and linked artifacts. */
 export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinaryResult {
-	// Reuse the real build-config resolution so semantic graph capabilities and
+	// Reuse the real build-config resolution so semantic capabilities and
 	// output suffix, Cargo features, and C defines match the CLI exactly.
 	const config =
 		options.config ??

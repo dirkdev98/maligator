@@ -12,7 +12,6 @@ import type { VmDefinition } from "./lower-vm.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
 
 export type CompileCorePhase =
-	| "lower semantic program"
 	| "construct core ir"
 	| "core ir optimizations"
 	| "lower core ir"

@@ -567,13 +567,14 @@ describe("native update-expression representation", () => {
 		});
 	}
 
-	it("keeps loop updates generic until Core proves their representation", () => {
+	it("proves numeric induction variables during direct Core construction", () => {
 		const output = emit(
 			`"use strict"; function sum(array) { let total = 0; for (let i = 0; i < array.length; i++) total += array[i]; return total; } globalThis.sum = sum;`,
 		);
-		expect(output).toContain("mal_vm_object_try_load(");
-		expect(output).toContain("MAL_UNARY_TO_NUMERIC");
-		expect(output).toContain("MAL_UNARY_INCREMENT");
+		expect(output).toContain("mal_vm_array_try_load(");
+		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
+		expect(output).not.toContain("MAL_UNARY_INCREMENT");
+		expect(output).toContain("+= 1.0;");
 		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
 	});
 
@@ -615,13 +616,14 @@ describe("native update-expression representation", () => {
 		expect(() => serializeVmDefinition(malformed)).toThrow(/invalid region envelope/);
 	});
 
-	it("pre-reserves a pristine canonical indexed fill without replacing its stores", () => {
+	it("pre-reserves a pristine indexed fill and retains guarded array stores", () => {
 		const output = emit(
 			`"use strict"; function fill() { const array = []; for (let i = 0; i < 1000; i++) array[i] = i; return array; } globalThis.fill = fill;`,
 		);
 		expect(output).toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
 		expect(output).toContain(", 1000);");
-		expect(output).toContain("mal_vm_object_try_store(");
+		expect(output).toContain("mal_vm_array_try_store(");
+		expect(output).toContain("mal_vm_array_fast_store_index(");
 		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
 	});
 
@@ -745,12 +747,13 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
 	});
 
-	it("keeps in-place updates boxed until Core proves the loop value", () => {
+	it("keeps proven in-place numeric loop updates unboxed", () => {
 		const output = emit(
 			`"use strict"; function count(limit) { let value = 0; while (value < limit) value++; return value; } globalThis.count = count;`,
 		);
-		expect(output).toContain("MAL_UNARY_TO_NUMERIC");
-		expect(output).toContain("MAL_UNARY_INCREMENT");
+		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
+		expect(output).not.toContain("MAL_UNARY_INCREMENT");
+		expect(output).toContain("+= 1.0;");
 	});
 
 	it("takes a dense own-element fast path for the in operator", () => {
@@ -761,13 +764,14 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_IN");
 	});
 
-	it("keeps initialized locals correct across exception edges", () => {
+	it("keeps proven numeric locals unboxed across exception edges", () => {
 		const output = emit(
 			`"use strict"; function classify(value) { let errors = 0; try { value.x; } catch { errors = errors + 1; } return errors + 1; } globalThis.classify = classify;`,
 		);
 		expect(output).toContain("static MalValue mal_compiled_1(");
 		expect(output).not.toContain("mal_vm_op_throw_if_tdz");
-		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
+		expect(output).not.toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
+		expect(output).toContain(" += ");
 	});
 
 	it("emits independent per-site property guards without backend regions", () => {
@@ -1451,13 +1455,13 @@ describe("native update-expression representation", () => {
 		expect(element.opcode).toBe("LOAD_PROPERTY");
 		if (element.opcode !== "LOAD_PROPERTY")
 			throw new Error("expected cursor element load");
-		expect(owner.registerRepresentations[element.key]).toBe("boxed");
+		expect(owner.registerRepresentations[element.key]).toBe("number");
 		const emitted = emitVmDefinition(cached, { compiled: true });
 		expect(emitted).toContain("mal_builtin_string_split_cursor_init(vm,");
 		expect(emitted).toContain(
-			`mal_vm_array_fast_load(vm, r${element.object}, r${element.key}, &__property_ic[${element.icIndex}])`,
+			`mal_vm_array_fast_load_index(vm, r${element.object}, r${element.key}, &__property_ic[${element.icIndex}])`,
 		);
-		expect(emitted).not.toContain(
+		expect(emitted).toContain(
 			`mal_vm_array_try_load(__property_receiver_${cursor.elementIp}, r${element.key}`,
 		);
 		const duplicate: VmDefinition = {

@@ -1,7 +1,6 @@
 export const PROFILE_PHASE_NAMES = [
 	"graph",
 	"semantic",
-	"lower semantic program",
 	"construct core ir",
 	"core ir optimizations",
 	"lower core ir",

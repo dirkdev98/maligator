@@ -135,7 +135,7 @@ export type CompilerInstruction =
 			// [destination]
 			registers: [number];
 
-			// Offset into SemanticGraph.literalTemplateData.
+			// Offset into the program's literal-template pool.
 			templateOffset: number;
 	  }
 	| {

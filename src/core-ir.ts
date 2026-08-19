@@ -450,10 +450,10 @@ function arityAccepts(arity: CoreArity, count: number): boolean {
 export class CoreFunctionBuilder {
 	readonly #functionIndex: number;
 	readonly #registry: CoreOpcodeRegistry;
-	readonly #isGenerator: boolean;
-	readonly #isAsync: boolean;
+	#isGenerator: boolean;
+	#isAsync: boolean;
 	readonly #parameterCount: number;
-	readonly #metadata: CoreFunctionMetadata;
+	#metadata: CoreFunctionMetadata;
 	readonly #blocks: Array<MutableCoreBlock> = [];
 	readonly #values: Array<CoreValue> = [];
 	readonly #facts: Array<CoreFact> = [];
@@ -509,6 +509,104 @@ export class CoreFunctionBuilder {
 			});
 		}
 		return id;
+	}
+
+	appendBlockParameter(
+		blockId: CoreBlockId,
+		spec: CoreBlockParameterSpec = {},
+	): CoreValueId {
+		const block = this.#requireBlock(blockId);
+		const representation = spec.representation ?? "boxed";
+		const value = this.#createValue(representation, {
+			kind: "block-parameter",
+			block: blockId,
+			index: block.parameters.length,
+		});
+		block.parameters.push({
+			value,
+			representation,
+			role: spec.role ?? "value",
+		});
+		this.#mutationEpoch++;
+		return value;
+	}
+
+	prependBlockParameter(
+		blockId: CoreBlockId,
+		spec: CoreBlockParameterSpec = {},
+	): CoreValueId {
+		const block = this.#requireBlock(blockId);
+		for (const [index, parameter] of block.parameters.entries()) {
+			const existing = this.#values[parameter.value]!;
+			this.#values[parameter.value] = {
+				...existing,
+				definition: { kind: "block-parameter", block: blockId, index: index + 1 },
+			};
+		}
+		const representation = spec.representation ?? "boxed";
+		const value = this.#createValue(representation, {
+			kind: "block-parameter",
+			block: blockId,
+			index: 0,
+		});
+		block.parameters.unshift({
+			value,
+			representation,
+			role: spec.role ?? "value",
+		});
+		this.#mutationEpoch++;
+		return value;
+	}
+
+	value(id: CoreValueId): Readonly<CoreValue> {
+		const value = this.#values[id];
+		if (value === undefined || value.id !== id) {
+			throw new Error(`Unknown Core value ${id}`);
+		}
+		return value;
+	}
+
+	setValueRepresentation(id: CoreValueId, representation: CoreRepresentation): void {
+		const value = this.value(id);
+		if (value.representation === representation) return;
+		this.#values[id] = { ...value, representation };
+		if (value.definition.kind === "block-parameter") {
+			const parameter = this.#requireBlock(value.definition.block).parameters[
+				value.definition.index
+			];
+			if (parameter?.value !== id) {
+				throw new Error(`Core value ${id} does not match its block parameter`);
+			}
+			this.#requireBlock(value.definition.block).parameters[value.definition.index] = {
+				...parameter,
+				representation,
+			};
+		}
+		this.#mutationEpoch++;
+	}
+
+	configureFunction(options: CoreFunctionOptions): void {
+		this.#isGenerator = options.isGenerator ?? this.#isGenerator;
+		this.#isAsync = options.isAsync ?? this.#isAsync;
+		if (
+			options.parameterCount !== undefined &&
+			options.parameterCount !== this.#parameterCount
+		) {
+			throw new Error(
+				`Cannot change Core parameter count from ${this.#parameterCount} to ${options.parameterCount}`,
+			);
+		}
+		if (options.metadata !== undefined) {
+			this.#metadata = {
+				...this.#metadata,
+				...options.metadata,
+				mappedArgumentSlots:
+					options.metadata.mappedArgumentSlots === undefined
+						? this.#metadata.mappedArgumentSlots
+						: [...options.metadata.mappedArgumentSlots],
+			};
+		}
+		this.#mutationEpoch++;
 	}
 
 	block(id: CoreBlockId): Readonly<MutableCoreBlock> {

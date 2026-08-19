@@ -405,7 +405,7 @@ describe("command shell", () => {
 		expect(result.stderr).toContain("Frontend phases:");
 		expect(result.stderr).toContain("File digests:");
 		expect(result.stderr).toContain("Dependencies: 1");
-		expect(result.stderr).toContain("Compiler phase · lower semantic program:");
+		expect(result.stderr).toContain("Compiler phase · construct core ir:");
 	});
 
 	it("returns nonzero and actionable diagnostics when doctor cannot find tools", () => {

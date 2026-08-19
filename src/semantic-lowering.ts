@@ -12,6 +12,20 @@ import type {
 	CompilerIntrinsic,
 } from "./compiler-instruction.ts";
 import {
+	emitCoreEntryInstructions,
+	finishDirectCoreFunction,
+	initializeDirectCoreFunction,
+} from "./core-frontend-construction.ts";
+import type {
+	CoreConstructionBlock,
+	CoreInstructionEmitter,
+} from "./core-frontend-construction.ts";
+import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
+import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { verifyCoreProgram } from "./core-ir-verifier.ts";
+import { formatCoreFunction } from "./core-ir.ts";
+import type { CoreHostInstallCandidate, CoreProgram } from "./core-ir.ts";
+import {
 	DIRECT_EVAL_PRIVATE_FIELD,
 	DIRECT_EVAL_PRIVATE_GETTER,
 	DIRECT_EVAL_PRIVATE_METHOD,
@@ -46,7 +60,7 @@ import type {
 } from "./semantic-analysis.ts";
 import { debugEnabled, log } from "./utils.ts";
 
-export interface SemanticGraph {
+interface CoreFrontendContext {
 	/**
 	 * The semantic program that we are compiling.
 	 */
@@ -86,7 +100,7 @@ export interface SemanticGraph {
 	 *
 	 * The first function in this list is the initial entrypoint.
 	 */
-	functions: Array<SemanticGraphFunction>;
+	functions: Array<CoreFrontendFunction>;
 	stringConstants: Array<Array<number>>;
 	stringConstantToIndex: Map<string, number>;
 
@@ -380,12 +394,12 @@ interface SemanticClassContext {
 	instanceInitializerBinding?: Binding;
 }
 
-export interface SemanticGraphFunction {
+interface CoreFrontendFunction {
 	semanticFile: SemanticFile;
 	functionIndex: number;
 
 	/**
-	 * Eval-completion register (see SemanticGraph.evalCompletion). When set,
+	 * Eval-completion variable (see CoreFrontendContext.evalCompletion). When set,
 	 * this is the Script entry function: statement evaluation maintains its
 	 * completion value here, the function returns it, and it is initialized to
 	 * undefined at entry. Undefined on every other function.
@@ -416,7 +430,7 @@ export interface SemanticGraphFunction {
 	 */
 	nameStringIndex: number;
 
-	blocks: Array<SemanticGraphBlock>;
+	blocks: Array<CoreFrontendBlock>;
 	argumentsObjectRegister?: number;
 	/** Prologue snapshots for statically classified direct arguments reads. */
 	staticArgumentsRegisters?: Map<ESTree.Node, number>;
@@ -479,8 +493,8 @@ export interface SemanticGraphFunction {
 	isAsync?: boolean;
 
 	/**
-	 * Expected number of initial register values. Before evaluating the arguments and assigning
-	 * them to (destructured) arguments.
+	 * Number of boxed ABI parameters before evaluating and assigning destructured
+	 * arguments.
 	 */
 	parameterCount: number;
 
@@ -496,9 +510,9 @@ export interface SemanticGraphFunction {
 	length: number;
 
 	/**
-	 * The next available register index (unoptimized).
+	 * The next function-local variable identity used by direct SSA construction.
 	 */
-	nextRegisterDestination: number;
+	nextCoreVariable: number;
 
 	/**
 	 * Next available local variable index
@@ -581,14 +595,11 @@ interface SemanticControlContext {
 	 * carries a unique kind code and the epilogue re-dispatch for it. NORMAL
 	 * needs no arm (it falls through).
 	 */
-	finalizerArms?: Map<
-		string,
-		{ kind: number; fill: (block: SemanticGraphBlock) => void }
-	>;
+	finalizerArms?: Map<string, { kind: number; fill: (block: CoreFrontendBlock) => void }>;
 }
 
-export interface SemanticGraphBlock {
-	instructions: Array<CompilerInstruction>;
+interface CoreFrontendBlock extends CoreConstructionBlock {
+	emitter: CoreInstructionEmitter;
 }
 
 /**
@@ -597,9 +608,18 @@ export interface SemanticGraphBlock {
  * Short-circuit expressions create blocks mid-expression and advance the
  * cursor, so instructions following a sub-expression land in the right block.
  */
-interface SemanticCursor {
-	block: SemanticGraphBlock;
+interface CoreFrontendCursor {
+	block: CoreFrontendBlock;
 }
+
+const unboundCoreEmitter: CoreInstructionEmitter = {
+	emit() {
+		throw new Error("Core frontend block is not attached to a function");
+	},
+	last() {
+		return undefined;
+	},
+};
 
 const compilerIntrinsics = new Set<string>([
 	"Object",
@@ -700,26 +720,8 @@ function isCompilerBinaryOperator(operator: string): operator is CompilerBinaryO
 	return compilerBinaryOperators.has(operator);
 }
 
-export function debugSemanticGraph(program: SemanticGraph) {
-	let output = "";
-	const indent = "  ";
-
-	for (const fn of program.functions) {
-		output += `FN (params: ${fn.parameterCount}, regCount: ${fn.nextRegisterDestination})\n`;
-		for (const block of fn.blocks) {
-			output += `${indent}BLOCK\n`;
-
-			for (const instruction of block.instructions) {
-				output += `${indent}${indent}${instruction.type} : ${JSON.stringify({ ...instruction, type: undefined })}\n`;
-			}
-		}
-	}
-
-	log.debug(output);
-}
-
 /**
- * Frontend lowering from a SemanticProgram to an ephemeral construction graph.
+ * Construct canonical Core directly from a semantically analyzed program.
  *
  * Choosing a tracing compiler might bite us in the back later, as we might drop things like
  * functions that are used in dynamic `eval`. But for now it has some advantages:
@@ -729,7 +731,7 @@ export function debugSemanticGraph(program: SemanticGraph) {
  *
  * We might never support dynamic eval tho, so in that case we are all setup ;)
  */
-export function lowerSemanticProgramToGraph(
+export function constructSemanticProgramCore(
 	semantic: SemanticProgram,
 	options: {
 		evalCompletion?: boolean;
@@ -738,8 +740,8 @@ export function lowerSemanticProgramToGraph(
 		facts?: CompilerProgramFacts;
 		collectOptimizationDiagnostics?: boolean;
 	} = {},
-) {
-	const program: SemanticGraph = {
+): CoreProgram {
+	const program: CoreFrontendContext = {
 		semantic,
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
 		optimizationDecisions:
@@ -850,9 +852,71 @@ export function lowerSemanticProgramToGraph(
 		compileCjsWrappers(program);
 	}
 
-	if (debugEnabled) debugSemanticGraph(program);
+	const core = finishCoreProgram(program);
+	if (debugEnabled) {
+		log.debug(core.functions.map((fn) => formatCoreFunction(fn)).join("\n"));
+	}
+	verifyCoreProgram(core, coreOpcodeRegistry);
+	return core;
+}
 
-	return program;
+function finishCoreProgram(program: CoreFrontendContext): CoreProgram {
+	return {
+		functions: program.functions.map((fn) =>
+			removeUnreachableCoreBlocks(finishDirectCoreFunction(fn)),
+		),
+		stringConstants: program.stringConstants.map((units) => [...units]),
+		bigintConstants: [...program.bigintConstants],
+		literalTemplateData: [...program.literalTemplateData],
+		sourcePositions: program.sourcePositions.map((position) => ({ ...position })),
+		globalCount: program.nextGlobalIndex,
+		compilation: {
+			semantic: program.semantic,
+			facts: program.facts,
+			...(program.optimizationDecisions === undefined
+				? {}
+				: { optimizationDecisions: [...program.optimizationDecisions] }),
+			...(program.optimizationTrace === undefined
+				? {}
+				: { optimizationTrace: [...program.optimizationTrace] }),
+			cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
+			hostInstallCandidates: coreHostInstallCandidates(program),
+			retainedHostInstallers: [program.hostProcess, program.hostBuffer]
+				.flatMap((host) => (host?.retained === true ? [host.installer] : []))
+				.filter(
+					(installer, index, installers) => installers.indexOf(installer) === index,
+				),
+		},
+	};
+}
+
+function coreHostInstallCandidates(
+	program: CoreFrontendContext,
+): Array<CoreHostInstallCandidate> {
+	const candidates = new Map<
+		string,
+		Array<{ readonly name: string; readonly slot: number }>
+	>();
+	for (const hostModule of program.hostModules) {
+		const entries = candidates.get(hostModule.installer) ?? [];
+		for (const { name, binding } of hostModule.exports) {
+			const location = program.bindingToStorage.get(binding);
+			if (location?.type === "global") entries.push({ name, slot: location.index });
+		}
+		if (entries.length > 0) candidates.set(hostModule.installer, entries);
+	}
+	return [...candidates].map(([installer, entries]) => ({
+		installer,
+		exports: entries,
+	}));
+}
+
+function registerCoreFunction(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+): void {
+	initializeDirectCoreFunction(fn);
+	program.functions.push(fn);
 }
 
 /**
@@ -864,7 +928,7 @@ export function lowerSemanticProgramToGraph(
  * with live bindings, and there is no per-module init function or orchestrator.
  */
 function compileMergedModuleInit(
-	program: SemanticGraph,
+	program: CoreFrontendContext,
 	evaluationOrder: Array<string>,
 	cjsEntryId?: number,
 ) {
@@ -877,36 +941,40 @@ function compileMergedModuleInit(
 		program.compiledModuleInitForPaths.set(modulePath, null);
 	}
 
-	const fn: SemanticGraphFunction = {
+	const fn: CoreFrontendFunction = {
 		// Switched to each module in turn so identifier resolution uses the right
 		// file's bindings while compiling that module's segment.
 		semanticFile: program.semantic.files[0]!,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
+		isAsync: evaluationOrder.some((path) => {
+			const file = fileByPath.get(path);
+			return file !== undefined && !file.commonjs && hasTopLevelAwait(file.ast);
+		}),
 
 		parameterCount: 0,
 		length: 0,
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
-	program.functions.push(fn);
+	registerCoreFunction(program, fn);
 
-	let tail: SemanticGraphBlock | null = null;
+	let tail: CoreFrontendBlock | null = null;
 
 	// Pure-data CommonJS modules are built once up front, before any module body.
 	if (program.cjsEagerSlot.size > 0) {
-		const eagerBlock: SemanticGraphBlock = { instructions: [] };
+		const eagerBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		fn.blocks.push(eagerBlock);
 		emitCjsEagerInits(program, fn, { block: eagerBlock });
 		tail = eagerBlock;
 	}
 	if (program.cjsHostSlot.size > 0) {
-		const hostBlock: SemanticGraphBlock = { instructions: [] };
+		const hostBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		fn.blocks.push(hostBlock);
 		if (tail) {
-			tail.instructions.push({ type: "jump", blocks: [fn.blocks.length - 1] });
+			tail.emitter.emit({ type: "jump", blocks: [fn.blocks.length - 1] });
 		}
 		emitCommonJsHostInits(program, fn, { block: hostBlock });
 		tail = hostBlock;
@@ -924,46 +992,41 @@ function compileMergedModuleInit(
 		}
 		fn.semanticFile = file;
 
-		const prologue: SemanticGraphBlock = { instructions: [] };
+		const prologue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		const prologueIndex = fn.blocks.push(prologue) - 1;
 		// Chain the previous module's tail into this module's segment.
 		if (tail) {
-			tail.instructions.push({ type: "jump", blocks: [prologueIndex] });
+			tail.emitter.emit({ type: "jump", blocks: [prologueIndex] });
 		}
 
 		emitModulePrologue(program, fn, prologue, file);
 		// Initialize CommonJS imports (require + property reads) before the body.
 		emitCjsImportInits(program, fn, { block: prologue }, file);
 		const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body, true);
-		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
+		prologue.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 
 		tail = fn.blocks[fn.blocks.length - 1]!;
 	}
 
 	if (cjsEntryId !== undefined) {
-		const entryBlock: SemanticGraphBlock = { instructions: [] };
+		const entryBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		const entryBlockIndex = fn.blocks.push(entryBlock) - 1;
 		if (tail) {
-			tail.instructions.push({ type: "jump", blocks: [entryBlockIndex] });
+			tail.emitter.emit({ type: "jump", blocks: [entryBlockIndex] });
 		}
-		const cursor: SemanticCursor = { block: entryBlock };
+		const cursor: CoreFrontendCursor = { block: entryBlock };
 		emitRequiredEsmNamespaceInits(program, fn, entryBlock);
 		emitCjsRequire(program, fn, cursor, cjsEntryId);
 	}
 
-	const modules = evaluationOrder
-		.map((modulePath) => fileByPath.get(modulePath))
-		.filter((file): file is SemanticFile => file !== undefined && !file.commonjs);
-	makeInitAsyncIfTopLevelAwait(fn, modules);
-
-	endFunction(fn);
+	endFunction(program, fn);
 }
 
 /** Materialize each synchronously-required ESM namespace after ESM evaluation. */
 function emitRequiredEsmNamespaceInits(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 ) {
 	for (const [modulePath, slot] of program.cjsEsmNamespaceSlot) {
 		const namespace = emitNamespaceObjectRegister(
@@ -972,7 +1035,7 @@ function emitRequiredEsmNamespaceInits(
 			block,
 			program.moduleNamespaces.get(modulePath) ?? [],
 		);
-		block.instructions.push({ type: "storeGlobal", registers: [namespace], index: slot });
+		block.emitter.emit({ type: "storeGlobal", registers: [namespace], index: slot });
 	}
 }
 
@@ -980,25 +1043,26 @@ function emitRequiredEsmNamespaceInits(
  * Compile the top-level statements of a single-module program (or the
  * entrypoint when there is only one module) into its own init function.
  */
-function compileFileInit(program: SemanticGraph, initFile: SemanticFile) {
+function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 	if (program.compiledModuleInitForPaths.has(initFile.path)) {
 		return program.compiledModuleInitForPaths.get(initFile.path) ?? -1;
 	}
 
-	const fn: SemanticGraphFunction = {
+	const fn: CoreFrontendFunction = {
 		semanticFile: initFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
+		isAsync: hasTopLevelAwait(initFile.ast),
 
 		parameterCount: 0,
 		length: 0,
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
 
-	program.functions.push(fn);
+	registerCoreFunction(program, fn);
 	program.compiledModuleInitForPaths.set(initFile.path, fn.functionIndex);
 	const inheritedContextBindings = program.evalDirect
 		? prepareDirectEvalClassContext(program, fn)
@@ -1007,13 +1071,13 @@ function compileFileInit(program: SemanticGraph, initFile: SemanticFile) {
 	// Eval entry: reserve the completion register up front so body
 	// ExpressionStatements can move into it; endFunction returns it.
 	if (program.evalCompletion) {
-		fn.completionRegister = nextRegisterDestination(fn);
+		fn.completionRegister = nextCoreVariable(fn);
 	}
 
 	// A prologue block (TDZ inits + namespace objects) only when needed, so a
 	// module with only var/function top-levels compiles exactly as before.
 	if (moduleNeedsPrologue(program, initFile) || program.evalDirect) {
-		const prologue: SemanticGraphBlock = { instructions: [] };
+		const prologue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		fn.blocks.push(prologue);
 		if (moduleNeedsPrologue(program, initFile)) {
 			emitModulePrologue(program, fn, prologue, initFile);
@@ -1029,36 +1093,25 @@ function compileFileInit(program: SemanticGraph, initFile: SemanticFile) {
 			emitDirectEvalVarDeclarations(program, fn, prologueCursor, initFile);
 			emitLexicalProviderCaptures(program, fn, prologueCursor, initFile.ast, false);
 			const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body, true);
-			prologueCursor.block.instructions.push({ type: "jump", blocks: [bodyEntry] });
+			prologueCursor.block.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 		} else {
 			const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body, true);
-			prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
+			prologue.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 		}
 	} else {
 		compileStatementsToBlock(program, fn, initFile.ast.body, true);
 	}
 
-	// Initialize the completion to undefined before any body runs (so a script
-	// with no value-producing statement — e.g. `var x = 1` — evaluates to
-	// undefined). blocks[0] is the entry; prepend ahead of everything.
-	if (fn.completionRegister !== undefined && fn.blocks.length > 0) {
-		fn.blocks[0]!.instructions.unshift({
-			type: "createUndefined",
-			registers: [fn.completionRegister],
-		});
-	}
-
-	makeInitAsyncIfTopLevelAwait(fn, [initFile]);
-	endFunction(fn);
+	endFunction(program, fn);
 
 	return fn.functionIndex;
 }
 
 /** EvalDeclarationInstantiation for sloppy direct-eval vars not already present. */
 function emitDirectEvalVarDeclarations(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	file: SemanticFile,
 ): void {
 	if (
@@ -1090,14 +1143,14 @@ function emitDirectEvalVarDeclarations(
 		program.directEvalPersistentScopeBinding,
 	);
 	for (const name of names) {
-		const base = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const base = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "withResolveBase",
 			registers: [base],
 			nameStringIndex: getOrCreateStringConstant(program, name),
 		});
-		const alreadyPersistent = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const alreadyPersistent = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [alreadyPersistent, base, persistent],
 			operator: "===",
@@ -1111,12 +1164,12 @@ function emitDirectEvalVarDeclarations(
 			type: "jump",
 			blocks: [-1],
 		};
-		cursor.block.instructions.push(skip, createJump);
+		cursor.block.emitter.emit(skip, createJump);
 
-		const createIndex = fn.blocks.push({ instructions: [] }) - 1;
+		const createIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 		const createBlock = fn.blocks[createIndex]!;
-		const undefinedValue = nextRegisterDestination(fn);
-		createBlock.instructions.push({
+		const undefinedValue = nextCoreVariable(fn);
+		createBlock.emitter.emit({
 			type: "createUndefined",
 			registers: [undefinedValue],
 		});
@@ -1132,9 +1185,9 @@ function emitDirectEvalVarDeclarations(
 			type: "jump",
 			blocks: [-1],
 		};
-		createBlock.instructions.push(createJoin);
+		createBlock.emitter.emit(createJoin);
 
-		const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+		const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 		skip.blocks[0] = joinIndex;
 		createJump.blocks[0] = createIndex;
 		createJoin.blocks[0] = joinIndex;
@@ -1148,8 +1201,8 @@ interface DirectEvalContextBinding {
 }
 
 function prepareDirectEvalClassContext(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 ): Array<DirectEvalContextBinding> {
 	const inherited = program.directEvalContext;
 	const bindings: Array<DirectEvalContextBinding> = [];
@@ -1251,14 +1304,14 @@ function prepareDirectEvalClassContext(
 }
 
 function emitDirectEvalContextBindings(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	bindings: Array<DirectEvalContextBinding>,
 ): void {
 	for (const { key, binding } of bindings) {
-		const value = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const value = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "withGet",
 			registers: [value],
 			nameStringIndex: getOrCreateStringConstant(program, key),
@@ -1277,7 +1330,7 @@ function emitDirectEvalContextBindings(
  * graph off by requiring the entrypoint. Eligible ESM dependencies are
  * evaluated first and exposed to require as stable namespace objects.
  */
-function compileCjsProgram(program: SemanticGraph, initFile: SemanticFile) {
+function compileCjsProgram(program: CoreFrontendContext, initFile: SemanticFile) {
 	assignCjsModuleIds(program);
 	classifyPureDataCjsModules(program);
 	classifyCommonJsHostModules(program);
@@ -1296,7 +1349,7 @@ function compileCjsProgram(program: SemanticGraph, initFile: SemanticFile) {
 }
 
 /** Allocate one stable namespace slot for every ESM target of CommonJS require. */
-function classifyCommonJsEsmModules(program: SemanticGraph) {
+function classifyCommonJsEsmModules(program: CoreFrontendContext) {
 	const graph = program.semantic.graph;
 	if (!graph) {
 		return;
@@ -1322,7 +1375,7 @@ function classifyCommonJsEsmModules(program: SemanticGraph) {
 }
 
 /** Reject mixed graphs that cannot be evaluated synchronously by scope hoisting. */
-function validateSynchronousCommonJsEsm(program: SemanticGraph) {
+function validateSynchronousCommonJsEsm(program: CoreFrontendContext) {
 	if (program.cjsEsmNamespaceSlot.size === 0) {
 		return;
 	}
@@ -1366,7 +1419,7 @@ function validateSynchronousCommonJsEsm(program: SemanticGraph) {
 }
 
 /** Assign a registry id to every CommonJS module in the graph. */
-function assignCjsModuleIds(program: SemanticGraph) {
+function assignCjsModuleIds(program: CoreFrontendContext) {
 	for (const file of program.semantic.files) {
 		if (file.commonjs && !program.cjsModuleId.has(file.path)) {
 			program.cjsModuleId.set(file.path, program.cjsModuleId.size);
@@ -1375,7 +1428,7 @@ function assignCjsModuleIds(program: SemanticGraph) {
 }
 
 /** Give each side-effect-free pure-data CommonJS module an eager exports slot. */
-function classifyPureDataCjsModules(program: SemanticGraph) {
+function classifyPureDataCjsModules(program: CoreFrontendContext) {
 	for (const file of program.semantic.files) {
 		if (
 			file.commonjs &&
@@ -1388,7 +1441,7 @@ function classifyPureDataCjsModules(program: SemanticGraph) {
 }
 
 /** Allocate one stable exports slot for each host built-in reached by require. */
-function classifyCommonJsHostModules(program: SemanticGraph) {
+function classifyCommonJsHostModules(program: CoreFrontendContext) {
 	const graph = program.semantic.graph;
 	if (!graph) {
 		return;
@@ -1413,15 +1466,15 @@ function classifyCommonJsHostModules(program: SemanticGraph) {
  * a pure-data module (built once at init), else a lazy `require()` call.
  */
 function emitCjsModuleExports(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	cjsPath: string,
 ): number {
 	const esmNamespaceSlot = program.cjsEsmNamespaceSlot.get(cjsPath);
 	if (esmNamespaceSlot !== undefined) {
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadGlobal",
 			registers: [destination],
 			index: esmNamespaceSlot,
@@ -1430,8 +1483,8 @@ function emitCjsModuleExports(
 	}
 	const hostSlot = program.cjsHostSlot.get(cjsPath);
 	if (hostSlot !== undefined) {
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadGlobal",
 			registers: [destination],
 			index: hostSlot,
@@ -1440,8 +1493,8 @@ function emitCjsModuleExports(
 	}
 	const slot = program.cjsEagerSlot.get(cjsPath);
 	if (slot !== undefined) {
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadGlobal",
 			registers: [destination],
 			index: slot,
@@ -1453,9 +1506,9 @@ function emitCjsModuleExports(
 
 /** Build host CommonJS exports once, preserving the ESM default object's identity. */
 function emitCommonJsHostInits(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 ) {
 	for (const [specifier, slot] of program.cjsHostSlot) {
 		const hostModule = program.hostModules.find(
@@ -1474,8 +1527,8 @@ function emitCommonJsHostInits(
 				getOrCreateBindingLocation(program, fn, defaultExport.binding),
 			);
 		} else {
-			exportsRegister = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			exportsRegister = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "createObject",
 				registers: [exportsRegister],
 			});
@@ -1488,7 +1541,7 @@ function emitCommonJsHostInits(
 				emitStoreProperty(program, fn, cursor, exportsRegister, hostExport.name, value);
 			}
 		}
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "storeGlobal",
 			registers: [exportsRegister],
 			index: slot,
@@ -1503,13 +1556,13 @@ function emitCommonJsHostInits(
  * effects.
  */
 function emitCjsEagerInits(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 ) {
 	for (const [cjsPath, slot] of program.cjsEagerSlot) {
 		const value = emitCjsRequire(program, fn, cursor, program.cjsModuleId.get(cjsPath)!);
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "storeGlobal",
 			registers: [value],
 			index: slot,
@@ -1518,7 +1571,7 @@ function emitCjsEagerInits(
 }
 
 /** Compile every CommonJS module's wrapper, recording its index by id. */
-function compileCjsWrappers(program: SemanticGraph) {
+function compileCjsWrappers(program: CoreFrontendContext) {
 	for (const file of program.semantic.files) {
 		if (file.commonjs) {
 			const id = program.cjsModuleId.get(file.path)!;
@@ -1533,9 +1586,9 @@ function compileCjsWrappers(program: SemanticGraph) {
  * it. Emitted into the module's init prologue, before its body runs.
  */
 function emitCjsImportInits(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	file: SemanticFile,
 ) {
 	for (const cjsImport of program.cjsImports.get(file.path) ?? []) {
@@ -1555,8 +1608,8 @@ function emitCjsImportInits(
 		} else if (cjsImport.kind === "namespace") {
 			// Build a namespace object: default = module.exports + a snapshot of each
 			// statically-detected named export (module.exports[name]).
-			valueRegister = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			valueRegister = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "createObject",
 				registers: [valueRegister],
 			});
@@ -1573,15 +1626,15 @@ function emitCjsImportInits(
 
 /** `object.name` → a fresh register holding the loaded value. */
 function emitLoadProperty(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	objectRegister: number,
 	name: string,
 ): number {
 	const keyRegister = compileStaticString(program, fn, cursor, name);
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadProperty",
 		registers: [destination, objectRegister, keyRegister],
 	});
@@ -1590,23 +1643,23 @@ function emitLoadProperty(
 
 /** `object.name = value` (data store). */
 function emitStoreProperty(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	objectRegister: number,
 	name: string,
 	valueRegister: number,
 ) {
 	const keyRegister = compileStaticString(program, fn, cursor, name);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "storeProperty",
 		registers: [objectRegister, keyRegister, valueRegister],
 	});
 }
 
 /** The synthetic CJS program entry (function 0): `require(entryId)`. */
-function compileCjsEntryDriver(program: SemanticGraph, entryId: number) {
-	const fn: SemanticGraphFunction = {
+function compileCjsEntryDriver(program: CoreFrontendContext, entryId: number) {
+	const fn: CoreFrontendFunction = {
 		semanticFile: program.semantic.files[0]!,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -1614,20 +1667,20 @@ function compileCjsEntryDriver(program: SemanticGraph, entryId: number) {
 
 		parameterCount: 0,
 		length: 0,
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
-	program.functions.push(fn);
+	registerCoreFunction(program, fn);
 
-	const block: SemanticGraphBlock = { instructions: [] };
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	fn.blocks.push(block);
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	emitCommonJsHostInits(program, fn, cursor);
 	emitCjsEagerInits(program, fn, cursor);
 	emitCjsRequire(program, fn, cursor, entryId);
 
-	endFunction(fn);
+	endFunction(program, fn);
 }
 
 /**
@@ -1636,10 +1689,13 @@ function compileCjsEntryDriver(program: SemanticGraph, entryId: number) {
  * wrapper's `this` is `exports` (set by mal_vm_cjs_require), so module top-level
  * `this` resolves correctly with no special handling.
  */
-function compileCjsModuleWrapper(program: SemanticGraph, file: SemanticFile): number {
+function compileCjsModuleWrapper(
+	program: CoreFrontendContext,
+	file: SemanticFile,
+): number {
 	program.compiledModuleInitForPaths.set(file.path, null);
 
-	const fn: SemanticGraphFunction = {
+	const fn: CoreFrontendFunction = {
 		semanticFile: file,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -1647,20 +1703,20 @@ function compileCjsModuleWrapper(program: SemanticGraph, file: SemanticFile): nu
 
 		parameterCount: COMMONJS_BINDINGS.length,
 		length: COMMONJS_BINDINGS.length,
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
-	program.functions.push(fn);
+	registerCoreFunction(program, fn);
 
-	const paramsBlock: SemanticGraphBlock = { instructions: [] };
+	const paramsBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	fn.blocks.push(paramsBlock);
 
 	// Bind the wrapper parameters to the incoming argument registers [0..5), in
 	// the order mal_vm_cjs_require passes them.
 	const programScope = file.scopes[0];
 	for (const name of COMMONJS_BINDINGS) {
-		const register = nextRegisterDestination(fn);
+		const register = nextCoreVariable(fn);
 		const binding = programScope?.bindings.find(
 			(candidate) => candidate.name === name && !candidate.undeclared,
 		);
@@ -1691,9 +1747,9 @@ function compileCjsModuleWrapper(program: SemanticGraph, file: SemanticFile): nu
 		emitTdzHoleInits(program, fn, paramsBlock, programScope.bindings);
 	}
 	const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body, true);
-	paramsBlock.instructions.push({ type: "jump", blocks: [bodyEntry] });
+	paramsBlock.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 
-	endFunction(fn);
+	endFunction(program, fn);
 	return fn.functionIndex;
 }
 
@@ -1714,26 +1770,26 @@ function commonJsDirname(filePath: string): string {
 
 /** Emit a call to the CJS `require` intrinsic with a numeric module id. */
 function emitCjsRequire(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	moduleId: number,
 ): number {
-	const callee = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const callee = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadIntrinsic",
 		registers: [callee],
 		intrinsic: "__cjs_require",
 	});
 	const thisRegister = compileUndefined(fn, cursor);
-	const idRegister = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const idRegister = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createNumber",
 		registers: [idRegister],
 		value: moduleId,
 	});
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "call",
 		registers: [destination, callee, thisRegister, idRegister],
 	});
@@ -1747,9 +1803,9 @@ function emitCjsRequire(
  * shadowed require, which throws at runtime).
  */
 function tryCompileCjsRequireCall(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number | undefined {
 	const callee = callExpression.callee as unknown as ESTree.Node;
@@ -1794,14 +1850,14 @@ function tryCompileCjsRequireCall(
 }
 
 function emitMissingCjsModuleThrow(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	specifier: string,
 	requesterPath: string,
 ): number {
-	const constructor = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const constructor = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadIntrinsic",
 		registers: [constructor],
 		intrinsic: "Error",
@@ -1812,14 +1868,14 @@ function emitMissingCjsModuleThrow(
 		cursor,
 		`Cannot find module '${specifier}'\nRequire stack:\n- ${requesterPath}`,
 	);
-	const error = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const error = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "construct",
 		registers: [error, constructor, message],
 	});
 	const code = compileStaticString(program, fn, cursor, "MODULE_NOT_FOUND");
 	emitStoreProperty(program, fn, cursor, error, "code", code);
-	cursor.block.instructions.push({ type: "throw", registers: [error] });
+	cursor.block.emitter.emit({ type: "throw", registers: [error] });
 	return error;
 }
 
@@ -1828,7 +1884,7 @@ function emitMissingCjsModuleThrow(
  * module was retained specifically so its Node-shaped error can be caught.
  */
 function resolveCjsModulePath(
-	program: SemanticGraph,
+	program: CoreFrontendContext,
 	file: SemanticFile,
 	specifier: string,
 ): string | null | undefined {
@@ -1849,9 +1905,9 @@ function resolveCjsModulePath(
  * runs throws ReferenceError. Skips functions (hoisted) and imports (aliased).
  */
 function emitTdzHoleInits(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	bindings: Array<Binding>,
 ) {
 	for (const binding of bindings) {
@@ -1859,8 +1915,8 @@ function emitTdzHoleInits(
 			continue;
 		}
 		const location = getOrCreateBindingLocation(program, fn, binding);
-		const register = nextRegisterDestination(fn);
-		block.instructions.push({ type: "createEmpty", registers: [register] });
+		const register = nextCoreVariable(fn);
+		block.emitter.emit({ type: "createEmpty", registers: [register] });
 		storeRegisterAtLocation(block, location, register);
 	}
 }
@@ -1871,9 +1927,9 @@ function emitTdzHoleInits(
  * parameters already have their entry value and must not be reset.
  */
 function emitVarDeclarationInits(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	scope: Scope,
 	functionNames: ReadonlySet<string>,
 ) {
@@ -1881,7 +1937,7 @@ function emitVarDeclarationInits(
 	let pendingGlobalNames: Array<number> = [];
 	const flushGlobalNames = () => {
 		if (pendingGlobalNames.length === 0) return;
-		block.instructions.push({
+		block.emitter.emit({
 			type: "initGlobalVars",
 			nameStringIndices: pendingGlobalNames,
 			declarationConfigurable: program.evalCompletion,
@@ -1931,12 +1987,12 @@ function emitVarDeclarationInits(
 				continue;
 			}
 			flushGlobalNames();
-			const value = nextRegisterDestination(fn);
-			block.instructions.push({
+			const value = nextCoreVariable(fn);
+			block.emitter.emit({
 				type: "createEmpty",
 				registers: [value],
 			});
-			block.instructions.push({
+			block.emitter.emit({
 				type: "storeGlobalProperty",
 				registers: [value],
 				nameStringIndex: location.nameStringIndex,
@@ -1968,9 +2024,9 @@ function emitVarDeclarationInits(
 }
 
 function emitGlobalDeclarationChecks(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	scope: Scope,
 	functionDeclarations: ReadonlyArray<ESTree.FunctionDeclaration>,
 	functionNames: ReadonlySet<string>,
@@ -1984,9 +2040,9 @@ function emitGlobalDeclarationChecks(
 		if (location.type !== "globalProperty") {
 			continue;
 		}
-		const check = nextRegisterDestination(fn);
-		block.instructions.push({ type: "createEmpty", registers: [check] });
-		block.instructions.push({
+		const check = nextCoreVariable(fn);
+		block.emitter.emit({ type: "createEmpty", registers: [check] });
+		block.emitter.emit({
 			type: "storeGlobalProperty",
 			registers: [check],
 			nameStringIndex: location.nameStringIndex,
@@ -2012,9 +2068,9 @@ function emitGlobalDeclarationChecks(
 		if (location.type !== "globalProperty") {
 			continue;
 		}
-		const check = nextRegisterDestination(fn);
-		block.instructions.push({ type: "createNull", registers: [check] });
-		block.instructions.push({
+		const check = nextCoreVariable(fn);
+		block.emitter.emit({ type: "createNull", registers: [check] });
+		block.emitter.emit({
 			type: "storeGlobalProperty",
 			registers: [check],
 			nameStringIndex: location.nameStringIndex,
@@ -2032,9 +2088,9 @@ function emitGlobalDeclarationChecks(
  * all function kinds.
  */
 function emitFunctionBodyTdz(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	functionNode:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -2053,7 +2109,7 @@ function emitFunctionBodyTdz(
  * Whether a module needs an init prologue: it has top-level TDZ bindings
  * (let/const/class) or `import * as ns` namespace objects to build.
  */
-function moduleNeedsPrologue(program: SemanticGraph, file: SemanticFile): boolean {
+function moduleNeedsPrologue(program: CoreFrontendContext, file: SemanticFile): boolean {
 	return (
 		(file.scopes[0]?.bindings ?? []).some(isTdzBinding) ||
 		(program.namespaceImports.get(file.path)?.length ?? 0) > 0 ||
@@ -2077,7 +2133,7 @@ function fileUsesImportMeta(file: SemanticFile): boolean {
 	);
 }
 
-function importMetaSlot(program: SemanticGraph, file: SemanticFile): number {
+function importMetaSlot(program: CoreFrontendContext, file: SemanticFile): number {
 	const key = `\0import-meta:${file.path}`;
 	let slot = program.dynamicModuleStatusSlot.get(key);
 	if (slot === undefined) {
@@ -2097,16 +2153,16 @@ function importMetaUrl(filePath: string): string {
 }
 
 function emitImportMetaInit(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	file: SemanticFile,
 ): void {
 	if (!fileUsesImportMeta(file)) return;
 
 	const cursor = { block };
-	const object = nextRegisterDestination(fn);
-	block.instructions.push({ type: "createObject", registers: [object] });
+	const object = nextCoreVariable(fn);
+	block.emitter.emit({ type: "createObject", registers: [object] });
 	for (const [name, value] of [["url", importMetaUrl(file.path)]] as const) {
 		emitStoreProperty(
 			program,
@@ -2131,15 +2187,15 @@ function emitImportMetaInit(
 				compileStaticString(program, fn, cursor, value),
 			);
 		}
-		const main = nextRegisterDestination(fn);
-		block.instructions.push({
+		const main = nextCoreVariable(fn);
+		block.emitter.emit({
 			type: "createBoolean",
 			registers: [main],
 			value: file.path === program.semantic.entrypointPath,
 		});
 		emitStoreProperty(program, fn, cursor, object, "main", main);
 	}
-	block.instructions.push({
+	block.emitter.emit({
 		type: "storeGlobal",
 		registers: [object],
 		index: importMetaSlot(program, file),
@@ -2152,9 +2208,9 @@ function emitImportMetaInit(
  * any `import * as ns` namespace objects.
  */
 function emitModulePrologue(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	file: SemanticFile,
 ) {
 	emitTdzHoleInits(program, fn, block, file.scopes[0]?.bindings ?? []);
@@ -2177,16 +2233,6 @@ function emitModulePrologue(
  * top-levels sequentially in evaluation order, a suspended await holds up the
  * dependents that follow it — the spec ordering falls out for free.
  */
-function makeInitAsyncIfTopLevelAwait(
-	fn: SemanticGraphFunction,
-	modules: Array<SemanticFile>,
-) {
-	if (modules.some((file) => hasTopLevelAwait(file.ast))) {
-		fn.isAsync = true;
-		fn.blocks[0]!.instructions.unshift({ type: "asyncStart" });
-	}
-}
-
 /**
  * Whether a module has top-level await: an AwaitExpression that is not nested
  * inside a function (so it runs as part of module evaluation).
@@ -2274,7 +2320,7 @@ function referencesSuper(node: unknown): boolean {
  * and, unless an arrow, has its own this/super).
  */
 function inheritedPrivateEnvironment(
-	fn: SemanticGraphFunction,
+	fn: CoreFrontendFunction,
 	isArrow: boolean,
 ): SemanticClassContext | undefined {
 	const context = fn.classContext;
@@ -2314,7 +2360,7 @@ function inheritedPrivateEnvironment(
 }
 
 function compileNewFunction(
-	program: SemanticGraph,
+	program: CoreFrontendContext,
 	binding: Binding,
 	functionNode: ESTree.Node,
 	classContext?: SemanticClassContext,
@@ -2344,7 +2390,7 @@ function compileNewFunction(
 	}
 
 	const fnFile = foundFile ?? program.semantic.files[0]!;
-	const fn: SemanticGraphFunction = {
+	const fn: CoreFrontendFunction = {
 		semanticFile: fnFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(
@@ -2360,12 +2406,12 @@ function compileNewFunction(
 
 		parameterCount: functionNode.params.length,
 		length: computeFunctionLength(functionNode),
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
 
-	program.functions.push(fn);
+	registerCoreFunction(program, fn);
 	program.nodeToFunctionCache.set(functionNode, { fnIndex: fn.functionIndex });
 
 	const paramsCursor = compileFunctionParams(program, fn, functionNode);
@@ -2384,31 +2430,19 @@ function compileNewFunction(
 		true,
 	);
 	emitFunctionBodyTdz(program, fn, paramsCursor.block, functionNode);
-	paramsCursor.block.instructions.push({
+	paramsCursor.block.emitter.emit({
 		type: "jump",
 		blocks: [bodyBlock],
 	});
 
-	// A generator suspends and returns the generator object after parameter setup,
-	// so generatorStart goes at the body (defaults still eval eagerly at call).
-	if (fn.isGenerator) {
-		fn.blocks[bodyBlock]!.instructions.unshift({ type: "generatorStart" });
-	} else if (fn.isAsync) {
-		// An async function's result promise must wrap parameter instantiation: a
-		// throw while evaluating a default parameter rejects the promise (it does
-		// not propagate synchronously). So asyncStart goes at the very entry
-		// (block 0), before the parameter prologue.
-		fn.blocks[0]!.instructions.unshift({ type: "asyncStart" });
-	}
-
-	endFunction(fn);
+	endFunction(program, fn);
 
 	return fn.functionIndex;
 }
 
 function compileNewFunctionExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	functionNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 	classContext?: SemanticClassContext,
 	nameOverride?: string,
@@ -2426,7 +2460,7 @@ function compileNewFunctionExpression(
 	// and class constructors keep it (default true); async is excluded at runtime.
 	const hasPrototype = isGenerator ? true : !(isArrow || isMethod);
 
-	const compiledFn: SemanticGraphFunction = {
+	const compiledFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(
@@ -2444,12 +2478,12 @@ function compileNewFunctionExpression(
 
 		parameterCount: functionNode.params.length,
 		length: computeFunctionLength(functionNode),
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
 
-	program.functions.push(compiledFn);
+	registerCoreFunction(program, compiledFn);
 	program.nodeToFunctionCache.set(functionNode, { fnIndex: compiledFn.functionIndex });
 	if (
 		classContext?.isConstructor &&
@@ -2487,27 +2521,12 @@ function compileNewFunctionExpression(
 		true,
 	);
 	emitFunctionBodyTdz(program, compiledFn, paramsCursor.block, functionNode);
-	paramsCursor.block.instructions.push({
+	paramsCursor.block.emitter.emit({
 		type: "jump",
 		blocks: [bodyBlock],
 	});
 
-	if (compiledFn.isGenerator) {
-		compiledFn.blocks[bodyBlock]!.instructions.unshift({ type: "generatorStart" });
-	} else if (compiledFn.isAsync) {
-		// asyncStart wraps parameter instantiation (block 0) so a default-parameter
-		// throw rejects the result promise instead of propagating synchronously.
-		compiledFn.blocks[0]!.instructions.unshift({ type: "asyncStart" });
-	}
-
-	endFunction(compiledFn);
-	if (
-		classContext?.isConstructor &&
-		classContext.isDerivedConstructor &&
-		classContext.superThisStateBinding
-	) {
-		synchronizeSharedConstructorReturns(program, compiledFn);
-	}
+	endFunction(program, compiledFn);
 
 	return compiledFn.functionIndex;
 }
@@ -2519,8 +2538,8 @@ function compileNewFunctionExpression(
  * resolve the slot through the enclosing frame's environment.
  */
 function createCapturedBinding(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	name: string,
 ): Binding {
 	const binding: Binding = { kind: "const", name, usageNodes: [], scopedTo: "captured" };
@@ -2549,9 +2568,9 @@ function classFieldKeyName(key: ESTree.Expression | ESTree.PrivateIdentifier): s
  * two evaluations of the same class source are not brand compatible.
  */
 function mintPrivateNames(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	bindings: Array<Binding | undefined>,
 ) {
 	const capturedIndices: Array<number> = [];
@@ -2566,7 +2585,7 @@ function mintPrivateNames(
 		capturedIndices.push(location.index);
 	}
 	if (capturedIndices.length === 0) return;
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "createPrivateNames",
 		functionIndex: fn.functionIndex,
 		capturedIndices,
@@ -2579,9 +2598,9 @@ function mintPrivateNames(
  * (CreateDataProperty). `this` is the receiver being initialized.
  */
 function emitFieldInstall(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	entry: SemanticInstanceFieldPlanEntry,
 ) {
 	emitLexicalProviderCaptures(program, fn, cursor, entry.initializerNode, true);
@@ -2607,8 +2626,8 @@ function emitFieldInstall(
 		value = compileUndefined(fn, cursor);
 	}
 
-	const thisRegister = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+	const thisRegister = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "loadThis", registers: [thisRegister] });
 
 	if (entry.private) {
 		const symbol = loadRegisterFromLocation(
@@ -2616,7 +2635,7 @@ function emitFieldInstall(
 			cursor.block,
 			getOrCreateBindingLocation(program, fn, entry.fieldBinding),
 		);
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "definePrivate",
 			registers: [thisRegister, symbol, value],
 		});
@@ -2632,7 +2651,7 @@ function emitFieldInstall(
 					getOrCreateBindingLocation(program, fn, entry.key.binding),
 				);
 
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "defineProperty",
 		registers: [thisRegister, key, value],
 		enumerable: true,
@@ -2641,17 +2660,17 @@ function emitFieldInstall(
 
 /** Snapshot a field/static-block provider for arrows that capture its context. */
 function emitLexicalProviderCaptures(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	node: ESTree.PropertyDefinition | ESTree.StaticBlock | ESTree.Program,
 	newTargetIsUndefined: boolean,
 ): void {
 	const scope = fn.semanticFile.nodeToScope.get(node);
 	const thisBinding = scope?.bindings.find((binding) => binding.implicit === "this");
 	if (thisBinding?.scopedTo === "captured" && !fn.classContext?.superThisStateBinding) {
-		const value = nextRegisterDestination(fn);
-		cursor.block.instructions.push({ type: "loadThis", registers: [value] });
+		const value = nextCoreVariable(fn);
+		cursor.block.emitter.emit({ type: "loadThis", registers: [value] });
 		storeRegisterAtLocation(
 			cursor.block,
 			getOrCreateBindingLocation(program, fn, thisBinding),
@@ -2668,9 +2687,9 @@ function emitLexicalProviderCaptures(
 	) {
 		const value = newTargetIsUndefined
 			? compileUndefined(fn, cursor)
-			: nextRegisterDestination(fn);
+			: nextCoreVariable(fn);
 		if (!newTargetIsUndefined) {
-			cursor.block.instructions.push({ type: "loadNewTarget", registers: [value] });
+			cursor.block.emitter.emit({ type: "loadNewTarget", registers: [value] });
 		}
 		storeRegisterAtLocation(
 			cursor.block,
@@ -2686,9 +2705,9 @@ function emitLexicalProviderCaptures(
  * field initializers in source order. No-op when the class has none.
  */
 function emitInstanceElementInit(
-	program: SemanticGraph,
-	ctorFn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	ctorFn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	classContext: SemanticClassContext,
 ) {
 	const brand = classContext.instanceBrandBinding;
@@ -2698,20 +2717,20 @@ function emitInstanceElementInit(
 	}
 
 	if (brand) {
-		const thisRegister = nextRegisterDestination(ctorFn);
-		cursor.block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+		const thisRegister = nextCoreVariable(ctorFn);
+		cursor.block.emitter.emit({ type: "loadThis", registers: [thisRegister] });
 		const symbol = loadRegisterFromLocation(
 			ctorFn,
 			cursor.block,
 			getOrCreateBindingLocation(program, ctorFn, brand),
 		);
-		const marker = nextRegisterDestination(ctorFn);
-		cursor.block.instructions.push({
+		const marker = nextCoreVariable(ctorFn);
+		cursor.block.emitter.emit({
 			type: "createBoolean",
 			registers: [marker],
 			value: true,
 		});
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "definePrivate",
 			registers: [thisRegister, symbol, marker],
 		});
@@ -2725,8 +2744,8 @@ function emitInstanceElementInit(
 			continue;
 		}
 
-		const thisRegister = nextRegisterDestination(ctorFn);
-		cursor.block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+		const thisRegister = nextCoreVariable(ctorFn);
+		cursor.block.emitter.emit({ type: "loadThis", registers: [thisRegister] });
 		const keys: Array<number> = [];
 		let next = i;
 		while (next < plan.length) {
@@ -2741,7 +2760,7 @@ function emitInstanceElementInit(
 			);
 			next++;
 		}
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "initPrivateFields",
 			registers: [thisRegister, ...keys],
 		});
@@ -2755,13 +2774,13 @@ function emitInstanceElementInit(
  * initializers in source order.
  */
 function buildStaticInitializer(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	staticContext: SemanticClassContext,
 	staticElements: Array<SemanticStaticElement>,
 	staticBrandBinding: Binding | undefined,
 ): number {
-	const initFn: SemanticGraphFunction = {
+	const initFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -2771,31 +2790,31 @@ function buildStaticInitializer(
 		strict: true,
 		parameterCount: 0,
 		length: 0,
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
-	program.functions.push(initFn);
+	registerCoreFunction(program, initFn);
 
-	const block: SemanticGraphBlock = { instructions: [] };
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	initFn.blocks.push(block);
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 
 	if (staticBrandBinding) {
-		const thisRegister = nextRegisterDestination(initFn);
-		cursor.block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+		const thisRegister = nextCoreVariable(initFn);
+		cursor.block.emitter.emit({ type: "loadThis", registers: [thisRegister] });
 		const symbol = loadRegisterFromLocation(
 			initFn,
 			cursor.block,
 			getOrCreateBindingLocation(program, initFn, staticBrandBinding),
 		);
-		const marker = nextRegisterDestination(initFn);
-		cursor.block.instructions.push({
+		const marker = nextCoreVariable(initFn);
+		cursor.block.emitter.emit({
 			type: "createBoolean",
 			registers: [marker],
 			value: true,
 		});
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "definePrivate",
 			registers: [thisRegister, symbol, marker],
 		});
@@ -2811,21 +2830,21 @@ function buildStaticInitializer(
 
 		emitLexicalProviderCaptures(program, initFn, cursor, element.node, true);
 		const entryBlock = compileStatementsToBlock(program, initFn, element.body, true);
-		cursor.block.instructions.push({ type: "jump", blocks: [entryBlock] });
+		cursor.block.emitter.emit({ type: "jump", blocks: [entryBlock] });
 		cursor.block = initFn.blocks.at(-1)!;
 	}
 
-	endFunction(initFn);
+	endFunction(program, initFn);
 	return initFn.functionIndex;
 }
 
 /** Build the caller-owned InitializeInstanceElements closure used by eval/arrow super(). */
 function buildInstanceInitializer(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	constructorContext: SemanticClassContext,
 ): number {
-	const initFn: SemanticGraphFunction = {
+	const initFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -2843,16 +2862,16 @@ function buildInstanceInitializer(
 		strict: true,
 		parameterCount: 0,
 		length: 0,
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
-	program.functions.push(initFn);
+	registerCoreFunction(program, initFn);
 
-	const block: SemanticGraphBlock = { instructions: [] };
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	initFn.blocks.push(block);
 	emitInstanceElementInit(program, initFn, { block }, constructorContext);
-	endFunction(initFn);
+	endFunction(program, initFn);
 	return initFn.functionIndex;
 }
 
@@ -2867,9 +2886,9 @@ function buildInstanceInitializer(
  * install through the constructor's InitializeInstanceElements sequence.
  */
 function compileClass(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
 	nameHint?: string,
 ): number {
@@ -2882,8 +2901,8 @@ function compileClass(
 		// evaluating heritage. Reserve its owner here so heritage closures capture
 		// this frame, and leave it in the TDZ through class-element evaluation.
 		const location = getOrCreateBindingLocation(program, fn, selfBinding);
-		const empty = nextRegisterDestination(fn);
-		cursor.block.instructions.push({ type: "createEmpty", registers: [empty] });
+		const empty = nextCoreVariable(fn);
+		cursor.block.emitter.emit({ type: "createEmpty", registers: [empty] });
 		storeRegisterAtLocation(cursor.block, location, empty);
 	}
 
@@ -2901,7 +2920,7 @@ function compileClass(
 		if (
 			!(classNode.superClass.type === "Literal" && classNode.superClass.value === null)
 		) {
-			cursor.block.instructions.push({ type: "checkSuperClass", registers: [parent] });
+			cursor.block.emitter.emit({ type: "checkSuperClass", registers: [parent] });
 		}
 
 		superBinding = createCapturedBinding(program, fn, `__super_${classId}`);
@@ -3075,14 +3094,14 @@ function compileClass(
 		if (key === -1) {
 			key = compileUndefined(fn, cursor);
 		}
-		const coercible = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const coercible = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createBoolean",
 			registers: [coercible],
 			value: true,
 		});
-		const propertyKey = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const propertyKey = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "toPropertyKey",
 			registers: [propertyKey, coercible, key],
 		});
@@ -3136,8 +3155,8 @@ function compileClass(
 				);
 	if (instanceInitializerBinding) {
 		const initializerIndex = buildInstanceInitializer(program, fn, constructorContext);
-		const initializer = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const initializer = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createFunction",
 			registers: [initializer],
 			functionIndex: initializerIndex,
@@ -3149,8 +3168,8 @@ function compileClass(
 		);
 	}
 
-	const ctor = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const ctor = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createFunction",
 		registers: [ctor],
 		functionIndex: constructorIndex,
@@ -3181,37 +3200,37 @@ function compileClass(
 	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
 	let prototype: number;
 	if (parent !== -1) {
-		const parentPrototype = nextRegisterDestination(fn);
+		const parentPrototype = nextCoreVariable(fn);
 		if (extendsNull) {
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "createNull",
 				registers: [parentPrototype],
 			});
 		} else {
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "loadProperty",
 				registers: [parentPrototype, parent, prototypeKey],
 			});
 		}
 
-		prototype = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		prototype = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createObject",
 			registers: [prototype],
 		});
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "setPrototype",
 			registers: [prototype, parentPrototype],
 			literal: false,
 		});
 
 		const constructorKey = compileStaticString(program, fn, cursor, "constructor");
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "defineProperty",
 			registers: [prototype, constructorKey, ctor],
 			enumerable: false,
 		});
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "defineProperty",
 			registers: [ctor, prototypeKey, prototype],
 			enumerable: false,
@@ -3221,27 +3240,27 @@ function compileClass(
 		// constructorParent: the superclass, or %Function.prototype% for extends null.
 		let constructorParent = parent;
 		if (extendsNull) {
-			const functionCtor = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const functionCtor = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "loadIntrinsic",
 				registers: [functionCtor],
 				intrinsic: "Function",
 			});
-			constructorParent = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			constructorParent = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "loadProperty",
 				registers: [constructorParent, functionCtor, prototypeKey],
 			});
 		}
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "setPrototype",
 			registers: [ctor, constructorParent],
 			literal: false,
 		});
 	} else {
 		// Materializes the default prototype with its constructor backref.
-		prototype = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		prototype = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadProperty",
 			registers: [prototype, ctor, prototypeKey],
 		});
@@ -3302,8 +3321,8 @@ function compileClass(
 			methodName,
 			true,
 		);
-		const method = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const method = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createFunction",
 			registers: [method],
 			functionIndex: methodIndex,
@@ -3332,7 +3351,7 @@ function compileClass(
 		// name comes from the (already-evaluated) key at runtime, prefixed
 		// "get "/"set " for accessors. Static keys were named at creation.
 		if (member.computed) {
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "setFunctionName",
 				registers: [method, key],
 				namePrefix:
@@ -3340,14 +3359,14 @@ function compileClass(
 			});
 		}
 		if (member.kind === "get" || member.kind === "set") {
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "defineAccessor",
 				registers: [target, key, method],
 				kind: member.kind,
 				enumerable: false,
 			});
 		} else {
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "defineProperty",
 				registers: [target, key, method],
 				enumerable: false,
@@ -3376,14 +3395,14 @@ function compileClass(
 			staticElements,
 			staticBrandBinding,
 		);
-		const initFunction = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const initFunction = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createFunction",
 			registers: [initFunction],
 			functionIndex: staticInitIndex,
 		});
-		const result = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const result = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "call",
 			registers: [result, initFunction, ctor],
 		});
@@ -3393,9 +3412,9 @@ function compileClass(
 }
 
 function compileClassMemberKey(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	member: ESTree.MethodDefinition,
 ): number {
 	if (!member.key) {
@@ -3418,9 +3437,9 @@ function compileClassMemberKey(
 }
 
 function loadCapturedBinding(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	binding: Binding,
 ): number {
 	return loadRegisterFromLocation(
@@ -3436,7 +3455,7 @@ function loadCapturedBinding(
  * against the class that declared the member rather than the current one.
  */
 function privateBrandBinding(
-	_fn: SemanticGraphFunction,
+	_fn: CoreFrontendFunction,
 	entry: SemanticPrivateName,
 ): Binding | undefined {
 	return entry.brandBinding;
@@ -3448,9 +3467,9 @@ function privateBrandBinding(
  * not branded by the declaring class. The loaded value is discarded.
  */
 function emitPrivateBrandCheck(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	objectReg: number,
 	entry: SemanticPrivateName,
 ) {
@@ -3460,8 +3479,8 @@ function emitPrivateBrandCheck(
 	}
 
 	const brandSymbol = loadCapturedBinding(program, fn, cursor, brand);
-	const discard = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const discard = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadPrivate",
 		registers: [discard, objectReg, brandSymbol],
 	});
@@ -3473,24 +3492,24 @@ function emitPrivateBrandCheck(
  * placeholder for expression-position callers.
  */
 function emitThrowTypeError(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	message: string,
 ): number {
-	const constructor = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const constructor = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadIntrinsic",
 		registers: [constructor],
 		intrinsic: "TypeError",
 	});
 	const messageRegister = compileStaticString(program, fn, cursor, message);
-	const error = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const error = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "construct",
 		registers: [error, constructor, messageRegister],
 	});
-	cursor.block.instructions.push({ type: "throw", registers: [error] });
+	cursor.block.emitter.emit({ type: "throw", registers: [error] });
 	return error;
 }
 
@@ -3501,9 +3520,9 @@ interface CompiledPrivateMemberReference {
 
 /** Evaluate a private member reference without performing its later GetValue/PutValue. */
 function compilePrivateMemberReference(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	member: ESTree.MemberExpression,
 ): CompiledPrivateMemberReference {
 	if (member.property.type !== "PrivateIdentifier") {
@@ -3520,9 +3539,9 @@ function compilePrivateMemberReference(
  * shared function for methods, or a brand-checked getter call for accessors.
  */
 function compilePrivateMemberLoad(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	objectReg: number,
 	name: string,
 ): number {
@@ -3533,8 +3552,8 @@ function compilePrivateMemberLoad(
 
 	if (entry.fieldBinding) {
 		const symbol = loadCapturedBinding(program, fn, cursor, entry.fieldBinding);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadPrivate",
 			registers: [destination, objectReg, symbol],
 		});
@@ -3550,8 +3569,8 @@ function compilePrivateMemberLoad(
 	emitPrivateBrandCheck(program, fn, cursor, objectReg, entry);
 	if (entry.getBinding) {
 		const getter = loadCapturedBinding(program, fn, cursor, entry.getBinding);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "call",
 			registers: [destination, getter, objectReg],
 		});
@@ -3573,9 +3592,9 @@ function compilePrivateMemberLoad(
  * brand-checked setter call for accessors.
  */
 function compilePrivateMemberStore(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	objectReg: number,
 	name: string,
 	valueReg: number,
@@ -3587,7 +3606,7 @@ function compilePrivateMemberStore(
 
 	if (entry.fieldBinding) {
 		const symbol = loadCapturedBinding(program, fn, cursor, entry.fieldBinding);
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "storePrivate",
 			registers: [objectReg, symbol, valueReg],
 		});
@@ -3597,8 +3616,8 @@ function compilePrivateMemberStore(
 	emitPrivateBrandCheck(program, fn, cursor, objectReg, entry);
 	if (entry.setBinding) {
 		const setter = loadCapturedBinding(program, fn, cursor, entry.setBinding);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "call",
 			registers: [destination, setter, objectReg, valueReg],
 		});
@@ -3618,13 +3637,13 @@ function compilePrivateMemberStore(
  * arguments to the parent constructor on the same this for derived ones.
  */
 function compileDefaultConstructor(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	superBinding: Binding | undefined,
 	name: string,
 	classContext: SemanticClassContext,
 ): number {
-	const ctorFn: SemanticGraphFunction = {
+	const ctorFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, name),
@@ -3635,15 +3654,15 @@ function compileDefaultConstructor(
 
 		parameterCount: 0,
 		length: 0,
-		nextRegisterDestination: 0,
+		nextCoreVariable: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
-	program.functions.push(ctorFn);
+	registerCoreFunction(program, ctorFn);
 
-	const block: SemanticGraphBlock = { instructions: [] };
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	ctorFn.blocks.push(block);
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 
 	if (superBinding) {
 		const location = getOrCreateBindingLocation(program, ctorFn, superBinding);
@@ -3652,15 +3671,15 @@ function compileDefaultConstructor(
 		// `constructor(...args) { super(...args); }`: forward every argument to
 		// the parent's [[Construct]] (with the active new.target) and bind the
 		// result as `this`.
-		const argumentsArray = nextRegisterDestination(ctorFn);
-		cursor.block.instructions.push({
+		const argumentsArray = nextCoreVariable(ctorFn);
+		cursor.block.emitter.emit({
 			type: "createRestArguments",
 			registers: [argumentsArray],
 			startIndex: 0,
 		});
 
-		const result = nextRegisterDestination(ctorFn);
-		cursor.block.instructions.push({
+		const result = nextCoreVariable(ctorFn);
+		cursor.block.emitter.emit({
 			type: "constructSuper",
 			registers: [result, parent, argumentsArray],
 		});
@@ -3670,16 +3689,16 @@ function compileDefaultConstructor(
 	// a derived one installs right after the synthesized super() returns.
 	emitInstanceElementInit(program, ctorFn, cursor, classContext);
 
-	endFunction(ctorFn);
+	endFunction(program, ctorFn);
 	return ctorFn.functionIndex;
 }
 
 /**
  * Return 'undefined' from all blocks that don't unconditionally jump yet.
  */
-function endFunction(fn: SemanticGraphFunction) {
+function endFunction(program: CoreFrontendContext, fn: CoreFrontendFunction) {
 	for (const block of fn.blocks) {
-		const lastInstruction = block.instructions.at(-1);
+		const lastInstruction = block.emitter.last();
 		if (
 			lastInstruction?.type === "return" ||
 			lastInstruction?.type === "jump" ||
@@ -3691,24 +3710,16 @@ function endFunction(fn: SemanticGraphFunction) {
 		// The eval entry returns its completion value; every other function's
 		// implicit return is undefined.
 		if (fn.completionRegister !== undefined) {
-			block.instructions.push({
-				type: "return",
-				registers: [fn.completionRegister],
-			});
+			emitReturn(program, fn, block, fn.completionRegister);
 			continue;
 		}
 
-		const destinationRegister = nextRegisterDestination(fn);
-		block.instructions.push(
-			{
-				type: "createUndefined",
-				registers: [destinationRegister],
-			},
-			{
-				type: "return",
-				registers: [destinationRegister],
-			},
-		);
+		const destinationRegister = nextCoreVariable(fn);
+		block.emitter.emit({
+			type: "createUndefined",
+			registers: [destinationRegister],
+		});
+		emitReturn(program, fn, block, destinationRegister);
 	}
 }
 
@@ -3717,9 +3728,9 @@ function superThisStateKey(): string {
 }
 
 function loadSharedSuperThis(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	checkInitialized: boolean,
 ): number {
 	const binding = fn.classContext?.superThisStateBinding;
@@ -3732,13 +3743,13 @@ function loadSharedSuperThis(
 		getOrCreateBindingLocation(program, fn, binding),
 	);
 	const key = compileStaticString(program, fn, cursor, superThisStateKey());
-	const value = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const value = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadProperty",
 		registers: [value, state, key],
 	});
 	if (checkInitialized) {
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "throwIfTdz",
 			registers: [value],
 			nameStringIndex: getOrCreateStringConstant(program, "this"),
@@ -3748,9 +3759,9 @@ function loadSharedSuperThis(
 }
 
 function storeSharedSuperThis(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	value: number,
 ): void {
 	const binding = fn.classContext?.superThisStateBinding;
@@ -3763,27 +3774,10 @@ function storeSharedSuperThis(
 		getOrCreateBindingLocation(program, fn, binding),
 	);
 	const key = compileStaticString(program, fn, cursor, superThisStateKey());
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "storeProperty",
 		registers: [state, key, value],
 	});
-}
-
-function synchronizeSharedConstructorReturns(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-): void {
-	for (const block of fn.blocks) {
-		const rewritten: SemanticGraphBlock = { instructions: [] };
-		for (const instruction of block.instructions) {
-			if (instruction.type === "return") {
-				const value = loadSharedSuperThis(program, fn, { block: rewritten }, false);
-				rewritten.instructions.push({ type: "setThis", registers: [value] });
-			}
-			rewritten.instructions.push(instruction);
-		}
-		block.instructions = rewritten.instructions;
-	}
 }
 
 /**
@@ -3810,7 +3804,7 @@ function functionStrict(
 }
 
 /** Whether code in this function runs sloppy (non-strict). */
-function isSloppyFunction(fn: SemanticGraphFunction): boolean {
+function isSloppyFunction(fn: CoreFrontendFunction): boolean {
 	return !(fn.strict ?? fn.semanticFile.strict);
 }
 
@@ -3832,13 +3826,13 @@ function isScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
 
 /** SetMutableBinding through the global object's Object Environment Record. */
 function emitGlobalPropertyStore(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	name: string,
 	value: number,
 ) {
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "storeGlobalProperty",
 		registers: [value],
 		nameStringIndex: getOrCreateStringConstant(program, name),
@@ -3878,23 +3872,23 @@ function computeFunctionLength(
  * index is known.
  */
 function compileFunctionParams(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
 		| ESTree.ArrowFunctionExpression,
-): SemanticCursor {
-	const block: SemanticGraphBlock = {
-		instructions: [],
+): CoreFrontendCursor {
+	const block: CoreFrontendBlock = {
+		emitter: unboundCoreEmitter,
 	};
 	fn.blocks.push(block);
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 
 	// Claim the pinned parameter registers up front: destructuring and default
 	// expressions allocate registers of their own, so allocating per-parameter
 	// inside the loop would break the [0..parameterCount) calling convention.
-	const parameterRegisters = node.params.map(() => nextRegisterDestination(fn));
+	const parameterRegisters = node.params.map(() => nextCoreVariable(fn));
 
 	// The arguments object snapshots the frame arguments, which parameter
 	// initialization never mutates; creating it before the parameter logic
@@ -3954,8 +3948,8 @@ function compileFunctionParams(
 					? argumentCountRegister
 					: indexRegisters.get(access.index);
 			if (destination === undefined) {
-				destination = nextRegisterDestination(fn);
-				block.instructions.push(
+				destination = nextCoreVariable(fn);
+				block.emitter.emit(
 					access.kind === "length"
 						? { type: "loadArgumentCount", registers: [destination] }
 						: { type: "loadArgument", registers: [destination], index: access.index },
@@ -3971,9 +3965,9 @@ function compileFunctionParams(
 		fn.argumentsObjectRegister = emptyFallback;
 		fn.staticArgumentsFallbackRegister = emptyFallback;
 	} else if (argumentsBinding && materializesArguments) {
-		const destination = nextRegisterDestination(fn);
+		const destination = nextCoreVariable(fn);
 		fn.argumentsObjectRegister = destination;
-		block.instructions.push({
+		block.emitter.emit({
 			type: "createArgumentsObject",
 			registers: [destination],
 		});
@@ -3996,14 +3990,14 @@ function compileFunctionParams(
 		? fn.classContext.superThisStateBinding
 		: undefined;
 	if (sharedThisBinding) {
-		const state = nextRegisterDestination(fn);
-		const empty = nextRegisterDestination(fn);
-		block.instructions.push(
+		const state = nextCoreVariable(fn);
+		const empty = nextCoreVariable(fn);
+		block.emitter.emit(
 			{ type: "createObject", registers: [state] },
 			{ type: "createEmpty", registers: [empty] },
 		);
 		const key = compileStaticString(program, fn, cursor, superThisStateKey());
-		block.instructions.push({ type: "storeProperty", registers: [state, key, empty] });
+		block.emitter.emit({ type: "storeProperty", registers: [state, key, empty] });
 		storeRegisterAtLocation(
 			block,
 			getOrCreateBindingLocation(program, fn, sharedThisBinding),
@@ -4016,14 +4010,14 @@ function compileFunctionParams(
 			// stores the cell — see compileSuperCall). loadThis would throw here, so
 			// seed the cell with the EMPTY sentinel; a nested arrow reading `this`
 			// before super() then throws via the cell, matching direct access.
-			const emptyRegister = nextRegisterDestination(fn);
-			block.instructions.push({ type: "createEmpty", registers: [emptyRegister] });
+			const emptyRegister = nextCoreVariable(fn);
+			block.emitter.emit({ type: "createEmpty", registers: [emptyRegister] });
 			storeRegisterAtLocation(block, location, emptyRegister);
 			// Stash so compileSuperCall can refresh the cell once super() binds this.
 			fn.lexicalThisBinding = thisBinding;
 		} else {
-			const thisRegister = nextRegisterDestination(fn);
-			block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+			const thisRegister = nextCoreVariable(fn);
+			block.emitter.emit({ type: "loadThis", registers: [thisRegister] });
 			storeRegisterAtLocation(block, location, thisRegister);
 		}
 	}
@@ -4037,8 +4031,8 @@ function compileFunctionParams(
 			? fn.classContext.superNewTargetBinding
 			: undefined) ?? getLexicalNewTargetBinding(fn, node);
 	if (newTargetBinding && newTargetBinding.scopedTo === "captured") {
-		const newTargetRegister = nextRegisterDestination(fn);
-		block.instructions.push({ type: "loadNewTarget", registers: [newTargetRegister] });
+		const newTargetRegister = nextCoreVariable(fn);
+		block.emitter.emit({ type: "loadNewTarget", registers: [newTargetRegister] });
 		storeRegisterAtLocation(
 			block,
 			getOrCreateBindingLocation(program, fn, newTargetBinding),
@@ -4055,8 +4049,8 @@ function compileFunctionParams(
 	// same-named parameter simply leaves this store's location unread.
 	const selfNameBinding = fn.semanticFile.nodeToBinding.get(node);
 	if (selfNameBinding?.immutableSelfReference) {
-		const calleeRegister = nextRegisterDestination(fn);
-		block.instructions.push({ type: "loadCallee", registers: [calleeRegister] });
+		const calleeRegister = nextCoreVariable(fn);
+		block.emitter.emit({ type: "loadCallee", registers: [calleeRegister] });
 		storeRegisterAtLocation(
 			block,
 			getOrCreateBindingLocation(program, fn, selfNameBinding),
@@ -4084,8 +4078,8 @@ function compileFunctionParams(
 			if (!binding || binding.undeclared) {
 				continue;
 			}
-			const empty = nextRegisterDestination(fn);
-			cursor.block.instructions.push({ type: "createEmpty", registers: [empty] });
+			const empty = nextCoreVariable(fn);
+			cursor.block.emitter.emit({ type: "createEmpty", registers: [empty] });
 			storeRegisterAtLocation(
 				cursor.block,
 				getOrCreateBindingLocation(program, fn, binding),
@@ -4095,8 +4089,8 @@ function compileFunctionParams(
 	}
 
 	// A direct eval anywhere in these parameter expressions is in a
-	// parameter-expression context (see SemanticGraphFunction.inParameterExpression). Nested
-	// function/arrow bodies get their own SemanticGraphFunction, so the flag does not leak
+	// parameter-expression context (see CoreFrontendFunction.inParameterExpression). Nested
+	// function/arrow bodies get their own CoreFrontendFunction, so the flag does not leak
 	// into them.
 	const savedInParams = fn.inParameterExpression;
 	fn.inParameterExpression = true;
@@ -4106,8 +4100,8 @@ function compileFunctionParams(
 		if (param.type === "RestElement") {
 			// The pinned register holds a stray positional argument; replace it
 			// with the collected rest array.
-			const rest = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const rest = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "createRestArguments",
 				registers: [rest],
 				startIndex: i,
@@ -4129,9 +4123,9 @@ function compileFunctionParams(
  * patterns, where targets may also be member expressions.
  */
 function compilePatternTarget(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	target: ESTree.Node,
 	value: number,
 	// Forwarded to the leaf: true for a destructuring *assignment* target (so a
@@ -4207,9 +4201,9 @@ function compilePatternTarget(
  * reference semantics as identifier assignment.
  */
 function compileIdentifierTarget(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	isAssign = false,
@@ -4227,15 +4221,15 @@ function compileIdentifierTarget(
  * static store.
  */
 function compileWithDynamicWrite(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	isAssign = false,
 ) {
-	const found = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const found = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "withSet",
 		registers: [found, value],
 		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
@@ -4250,18 +4244,18 @@ function compileWithDynamicWrite(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(skipJump, fallbackJump);
+	cursor.block.emitter.emit(skipJump, fallbackJump);
 
-	const fallbackIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const fallbackIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[fallbackIdx]!;
 	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, isAssign);
 	const fallbackJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(fallbackJoin);
+	cursor.block.emitter.emit(fallbackJoin);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	skipJump.blocks[0] = joinIdx;
 	fallbackJump.blocks[0] = fallbackIdx;
 	fallbackJoin.blocks[0] = joinIdx;
@@ -4277,27 +4271,27 @@ function compileWithDynamicWrite(
  * the withSet-after-RHS path in `compileWithDynamicWrite` gets wrong.
  */
 function compileWithDynamicAssignment(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 	left: ESTree.Identifier,
 ): number {
 	const nameStringIndex = getOrCreateStringConstant(program, left.name);
-	const base = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const base = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "withResolveBase",
 		registers: [base],
 		nameStringIndex,
 	});
-	const key = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const key = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createString",
 		registers: [key],
 		stringIndex: nameStringIndex,
 	});
-	const empty = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "isEmpty", registers: [empty, base] });
+	const empty = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [empty, base] });
 	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [empty],
@@ -4307,10 +4301,10 @@ function compileWithDynamicAssignment(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJump, foundJump);
-	const result = nextRegisterDestination(fn);
+	cursor.block.emitter.emit(missJump, foundJump);
+	const result = nextCoreVariable(fn);
 
-	const compileValue = (branch: SemanticCursor, current?: number): number => {
+	const compileValue = (branch: CoreFrontendCursor, current?: number): number => {
 		const right = compileExpression(
 			program,
 			fn,
@@ -4319,8 +4313,8 @@ function compileWithDynamicAssignment(
 			left.name,
 		);
 		if (assignmentExpression.operator === "=") return right;
-		const value = nextRegisterDestination(fn);
-		branch.block.instructions.push({
+		const value = nextCoreVariable(fn);
+		branch.block.emitter.emit({
 			type: "binary",
 			registers: [value, current!, right],
 			operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
@@ -4328,26 +4322,26 @@ function compileWithDynamicAssignment(
 		return value;
 	};
 
-	const foundIndex = fn.blocks.push({ instructions: [] }) - 1;
+	const foundIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	const foundCursor = { block: fn.blocks[foundIndex]! };
 	let foundCurrent: number | undefined;
 	if (assignmentExpression.operator !== "=") {
-		foundCurrent = nextRegisterDestination(fn);
-		foundCursor.block.instructions.push({
+		foundCurrent = nextCoreVariable(fn);
+		foundCursor.block.emitter.emit({
 			type: "loadProperty",
 			registers: [foundCurrent, base, key],
 		});
 	}
 	const foundValue = compileValue(foundCursor, foundCurrent);
 	compileWithBaseStore(program, fn, foundCursor, base, key, left, foundValue);
-	foundCursor.block.instructions.push({ type: "move", registers: [result, foundValue] });
+	foundCursor.block.emitter.emit({ type: "move", registers: [result, foundValue] });
 	const foundJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	foundCursor.block.instructions.push(foundJoin);
+	foundCursor.block.emitter.emit(foundJoin);
 
-	const missIndex = fn.blocks.push({ instructions: [] }) - 1;
+	const missIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	const missCursor = { block: fn.blocks[missIndex]! };
 	const missCurrent =
 		assignmentExpression.operator === "="
@@ -4355,14 +4349,14 @@ function compileWithDynamicAssignment(
 			: compileStaticIdentifier(program, fn, missCursor, left);
 	const missValue = compileValue(missCursor, missCurrent);
 	compileStaticIdentifierTarget(program, fn, missCursor, left, missValue, true);
-	missCursor.block.instructions.push({ type: "move", registers: [result, missValue] });
+	missCursor.block.emitter.emit({ type: "move", registers: [result, missValue] });
 	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	missCursor.block.instructions.push(missJoin);
+	missCursor.block.emitter.emit(missJoin);
 
-	const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	missJump.blocks[0] = missIndex;
 	foundJump.blocks[0] = foundIndex;
 	foundJoin.blocks[0] = joinIndex;
@@ -4377,16 +4371,16 @@ function compileWithDynamicAssignment(
  * resolve the static binding. Both paths join into one result register.
  */
 function compileWithBaseRead(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	base: number,
 	key: number,
 	identifier: ESTree.Identifier,
 ): number {
-	const result = nextRegisterDestination(fn);
-	const emptyFlag = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
+	const result = nextCoreVariable(fn);
+	const emptyFlag = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [emptyFlag, base] });
 
 	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
@@ -4397,12 +4391,12 @@ function compileWithBaseRead(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJump, foundJump);
+	cursor.block.emitter.emit(missJump, foundJump);
 
 	// Found: [[Get]] the property off the captured base object.
-	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const foundIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[foundIdx]!;
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "loadProperty",
 		registers: [result, base, key],
 	});
@@ -4410,20 +4404,20 @@ function compileWithBaseRead(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(foundJoin);
+	cursor.block.emitter.emit(foundJoin);
 
 	// Miss: resolve the static binding into the same result register.
-	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const missIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
 	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
-	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
+	cursor.block.emitter.emit({ type: "move", registers: [result, staticValue] });
 	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJoin);
+	cursor.block.emitter.emit(missJoin);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	foundJump.blocks[0] = foundIdx;
 	missJump.blocks[0] = missIdx;
 	foundJoin.blocks[0] = joinIdx;
@@ -4439,16 +4433,16 @@ function compileWithBaseRead(
  * `with` environment even though the `with` statement itself is sloppy-only.
  */
 function compileWithBaseStore(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	base: number,
 	key: number,
 	identifier: ESTree.Identifier,
 	value: number,
 ) {
-	const emptyFlag = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
+	const emptyFlag = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [emptyFlag, base] });
 
 	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
@@ -4459,16 +4453,16 @@ function compileWithBaseStore(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJump, foundJump);
+	cursor.block.emitter.emit(missJump, foundJump);
 
 	// Found: SetMutableBinding on the captured with-object. In strict code a
 	// binding that vanished between GetValue and PutValue (a getter that deleted
 	// it during a compound read) is unresolvable, so PutValue re-checks
 	// HasProperty and throws a ReferenceError instead of recreating the property.
-	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const foundIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[foundIdx]!;
-	const stillExists = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const stillExists = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "binary",
 		registers: [stillExists, key, base],
 		operator: "in",
@@ -4484,25 +4478,25 @@ function compileWithBaseStore(
 			type: "jump",
 			blocks: [-1],
 		};
-		cursor.block.instructions.push(storeJump, throwJump);
+		cursor.block.emitter.emit(storeJump, throwJump);
 
-		const throwIdx = fn.blocks.push({ instructions: [] }) - 1;
+		const throwIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 		cursor.block = fn.blocks[throwIdx]!;
-		const undeclared = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const undeclared = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadUndeclared",
 			registers: [undeclared],
 			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 		});
 		throwJoin = { type: "jump", blocks: [-1] };
-		cursor.block.instructions.push(throwJoin);
+		cursor.block.emitter.emit(throwJoin);
 
-		const storeIdx = fn.blocks.push({ instructions: [] }) - 1;
+		const storeIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 		storeJump.blocks[0] = storeIdx;
 		throwJump.blocks[0] = throwIdx;
 		cursor.block = fn.blocks[storeIdx]!;
 	}
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "storeProperty",
 		registers: [base, key, value],
 	});
@@ -4511,19 +4505,19 @@ function compileWithBaseStore(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(foundJoin);
+	cursor.block.emitter.emit(foundJoin);
 
 	// Miss: static store.
-	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const missIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
 	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, true);
 	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJoin);
+	cursor.block.emitter.emit(missJoin);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	foundJump.blocks[0] = foundIdx;
 	missJump.blocks[0] = missIdx;
 	foundJoin.blocks[0] = joinIdx;
@@ -4536,9 +4530,9 @@ function compileWithBaseStore(
 
 /** Record a Set only when a captured with-reference targets the injected eval scope. */
 function emitDirectEvalDirtyMark(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	base: number,
 	key: number,
 ): void {
@@ -4547,8 +4541,8 @@ function emitDirectEvalDirtyMark(
 	if (!scopeBinding || !dirtyBinding) return;
 
 	const evalScope = loadCapturedBinding(program, fn, cursor, scopeBinding);
-	const isEvalScope = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const isEvalScope = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "binary",
 		registers: [isEvalScope, base, evalScope],
 		operator: "===",
@@ -4562,13 +4556,13 @@ function emitDirectEvalDirtyMark(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(markJump, skipJump);
+	cursor.block.emitter.emit(markJump, skipJump);
 
-	const markIndex = fn.blocks.push({ instructions: [] }) - 1;
+	const markIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[markIndex]!;
 	const dirtyTracker = loadCapturedBinding(program, fn, cursor, dirtyBinding);
-	const assigned = nextRegisterDestination(fn);
-	cursor.block.instructions.push(
+	const assigned = nextCoreVariable(fn);
+	cursor.block.emitter.emit(
 		{ type: "createBoolean", registers: [assigned], value: true },
 		{ type: "storeProperty", registers: [dirtyTracker, key, assigned] },
 	);
@@ -4576,9 +4570,9 @@ function emitDirectEvalDirtyMark(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(markJoin);
+	cursor.block.emitter.emit(markJoin);
 
-	const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	markJump.blocks[0] = markIndex;
 	skipJump.blocks[0] = joinIndex;
 	markJoin.blocks[0] = joinIndex;
@@ -4586,9 +4580,9 @@ function emitDirectEvalDirtyMark(
 }
 
 function compileStaticIdentifierTarget(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	// True when this identifier is an assignment target (a destructuring
@@ -4634,22 +4628,22 @@ function compileStaticIdentifierTarget(
  * value is undefined. Same branch-and-join structure as ternaries.
  */
 function compileDefaultedValue(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	value: number,
 	defaultExpression: ESTree.Expression,
 	nameHint?: string,
 ): number {
-	const result = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const result = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "move",
 		registers: [result, value],
 	});
 
 	const undefinedRegister = compileUndefined(fn, cursor);
-	const condition = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const condition = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "binary",
 		registers: [condition, value, undefinedRegister],
 		operator: "===",
@@ -4664,9 +4658,9 @@ function compileDefaultedValue(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(defaultJump, skipJump);
+	cursor.block.emitter.emit(defaultJump, skipJump);
 
-	const defaultIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const defaultIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[defaultIdx]!;
 	const defaultValue = compileExpression(
 		program,
@@ -4675,7 +4669,7 @@ function compileDefaultedValue(
 		defaultExpression,
 		nameHint,
 	);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "move",
 		registers: [result, defaultValue],
 	});
@@ -4683,9 +4677,9 @@ function compileDefaultedValue(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(joinJump);
+	cursor.block.emitter.emit(joinJump);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	defaultJump.blocks[0] = defaultIdx;
 	skipJump.blocks[0] = joinIdx;
 	joinJump.blocks[0] = joinIdx;
@@ -4695,15 +4689,15 @@ function compileDefaultedValue(
 }
 
 function compileObjectPatternTarget(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	pattern: ESTree.ObjectPattern,
 	value: number,
 	isAssign = false,
 ) {
 	// Nil sources throw even when the pattern reads no properties.
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "requireCoercible",
 		registers: [value],
 	});
@@ -4721,8 +4715,8 @@ function compileObjectPatternTarget(
 			const privateReference = privateTarget
 				? compilePrivateMemberReference(program, fn, cursor, privateTarget)
 				: undefined;
-			const rest = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const rest = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "copyDataProperties",
 				registers: [rest, value, ...consumedKeys],
 			});
@@ -4753,8 +4747,8 @@ function compileObjectPatternTarget(
 			// PropertyName evaluation applies ToPropertyKey once. Reuse that
 			// canonical string/symbol for both the property read and the later
 			// rest-exclusion list so an observable coercion cannot run twice.
-			const propertyKey = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const propertyKey = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "toPropertyKey",
 				registers: [propertyKey, value, key],
 			});
@@ -4771,8 +4765,8 @@ function compileObjectPatternTarget(
 			? compilePrivateMemberReference(program, fn, cursor, privateTarget)
 			: undefined;
 
-		const propertyValue = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const propertyValue = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadProperty",
 			registers: [propertyValue, value, key],
 		});
@@ -4817,24 +4811,24 @@ function privateAssignmentMemberTarget(
  * freed by the allocator.
  */
 function compileIteratorDrainInto(
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	array: number,
 	index: number,
 	one: number,
 	iteratorRegister: number,
 	nextRegister: number,
-	doneRegister = nextRegisterDestination(fn),
+	doneRegister = nextCoreVariable(fn),
 ) {
-	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
-	cursor.block.instructions.push({
+	const headerIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block.emitter.emit({
 		type: "jump",
 		blocks: [headerIdx],
 	});
 
 	const header = fn.blocks[headerIdx]!;
-	const valueRegister = nextRegisterDestination(fn);
-	header.instructions.push({
+	const valueRegister = nextCoreVariable(fn);
+	header.emitter.emit({
 		type: "iteratorStep",
 		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
 	});
@@ -4843,30 +4837,30 @@ function compileIteratorDrainInto(
 		registers: [doneRegister],
 		blocks: [-1],
 	};
-	header.instructions.push(exitJump);
+	header.emitter.emit(exitJump);
 
-	const bodyIdx = fn.blocks.push({ instructions: [] }) - 1;
-	header.instructions.push({
+	const bodyIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	header.emitter.emit({
 		type: "jump",
 		blocks: [bodyIdx],
 	});
 	const body = fn.blocks[bodyIdx]!;
-	body.instructions.push({
+	body.emitter.emit({
 		type: "storeProperty",
 		registers: [array, index, valueRegister],
 	});
 	// Increment in place: index is loop-carried.
-	body.instructions.push({
+	body.emitter.emit({
 		type: "binary",
 		registers: [index, index, one],
 		operator: "+",
 	});
-	body.instructions.push({
+	body.emitter.emit({
 		type: "jump",
 		blocks: [headerIdx],
 	});
 
-	const afterIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const afterIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	exitJump.blocks[0] = afterIdx;
 	cursor.block = fn.blocks[afterIdx]!;
 }
@@ -4875,14 +4869,14 @@ function compileIteratorDrainInto(
  * Drain the rest of an iterator into a fresh array.
  */
 function compileIteratorRest(
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	iteratorRegister: number,
 	nextRegister: number,
 	doneRegister?: number,
 ): number {
-	const rest = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const rest = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createArray",
 		registers: [rest],
 		length: 0,
@@ -4908,9 +4902,9 @@ function compileIteratorRest(
  * outside this helper: a throw from next() must not close the iterator.
  */
 function compileWithIteratorCloseOnThrow(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	iteratorRegister: number,
 	compileTarget: () => void,
 	doneRegister?: number,
@@ -4919,19 +4913,20 @@ function compileWithIteratorCloseOnThrow(
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
-	cursor.block.instructions.push(tryBegin);
+	cursor.block.emitter.emit(tryBegin);
 
 	compileTarget();
 
-	const tryExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
+	tryExit.emitter.emit({ type: "tryEnd" });
 	tryBegin.blocks[1] = tryExitIdx;
-	cursor.block.instructions.push({ type: "jump", blocks: [tryExitIdx] });
+	cursor.block.emitter.emit({ type: "jump", blocks: [tryExitIdx] });
 
-	const handler: SemanticGraphBlock = { instructions: [] };
+	const handler: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	tryBegin.blocks[0] = fn.blocks.push(handler) - 1;
-	const caught = nextRegisterDestination(fn);
-	handler.instructions.push({ type: "catch", registers: [caught] });
+	const caught = nextCoreVariable(fn);
+	handler.emitter.emit({ type: "catch", registers: [caught] });
 
 	const rethrowBlock = emitIteratorCloseForCompletion(
 		program,
@@ -4941,10 +4936,10 @@ function compileWithIteratorCloseOnThrow(
 		false,
 		doneRegister,
 	);
-	rethrowBlock.instructions.push({ type: "throw", registers: [caught] });
+	rethrowBlock.emitter.emit({ type: "throw", registers: [caught] });
 
-	const continuationIdx = fn.blocks.push({ instructions: [] }) - 1;
-	tryExit.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	const continuationIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	tryExit.emitter.emit({ type: "jump", blocks: [continuationIdx] });
 	cursor.block = fn.blocks[continuationIdx]!;
 }
 
@@ -4954,9 +4949,9 @@ function compileWithIteratorCloseOnThrow(
  * ToPropertyKey later. Locals carry the reference across tryEnd's invisible edge.
  */
 function compileCapturedMemberReference(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	target: ESTree.MemberExpression,
 	iteratorRegister: number,
 	doneRegister?: number,
@@ -4970,7 +4965,7 @@ function compileCapturedMemberReference(
 			iteratorRegister,
 			() => {
 				const reference = compilePrivateMemberReference(program, fn, cursor, target);
-				cursor.block.instructions.push({
+				cursor.block.emitter.emit({
 					type: "storeLocal",
 					registers: [reference.object],
 					index: objectSlot,
@@ -4979,8 +4974,8 @@ function compileCapturedMemberReference(
 			doneRegister,
 		);
 
-		const capturedObject = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const capturedObject = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadLocal",
 			registers: [capturedObject],
 			index: objectSlot,
@@ -5007,7 +5002,7 @@ function compileCapturedMemberReference(
 				key: fn.nextLocalIndex++,
 				receiver: compiled.receiver === undefined ? undefined : fn.nextLocalIndex++,
 			};
-			cursor.block.instructions.push(
+			cursor.block.emitter.emit(
 				{
 					type: "storeLocal",
 					registers: [compiled.object],
@@ -5016,7 +5011,7 @@ function compileCapturedMemberReference(
 				{ type: "storeLocal", registers: [compiled.key], index: slots.key },
 			);
 			if (compiled.receiver !== undefined && slots.receiver !== undefined) {
-				cursor.block.instructions.push({
+				cursor.block.emitter.emit({
 					type: "storeLocal",
 					registers: [compiled.receiver],
 					index: slots.receiver,
@@ -5030,9 +5025,9 @@ function compileCapturedMemberReference(
 		return compiled;
 	}
 
-	const object = nextRegisterDestination(fn);
-	const key = nextRegisterDestination(fn);
-	cursor.block.instructions.push(
+	const object = nextCoreVariable(fn);
+	const key = nextCoreVariable(fn);
+	cursor.block.emitter.emit(
 		{ type: "loadLocal", registers: [object], index: slots.object },
 		{ type: "loadLocal", registers: [key], index: slots.key },
 	);
@@ -5040,8 +5035,8 @@ function compileCapturedMemberReference(
 		return { object, key };
 	}
 
-	const receiver = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const receiver = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadLocal",
 		registers: [receiver],
 		index: slots.receiver,
@@ -5050,9 +5045,9 @@ function compileCapturedMemberReference(
 }
 
 function compileCapturedMemberStore(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	reference: CompiledMemberReference | CompiledPrivateMemberReference,
 	value: number,
 ): void {
@@ -5071,23 +5066,23 @@ function compileCapturedMemberStore(
 }
 
 function compileArrayPatternTarget(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	pattern: ESTree.ArrayPattern,
 	value: number,
 	isAssign = false,
 ) {
 	// Spec-shaped: the source goes through GetIterator (nil and non-iterable
 	// values throw TypeError), elements consume steps in order.
-	const iteratorRegister = nextRegisterDestination(fn);
-	const nextRegister = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const iteratorRegister = nextCoreVariable(fn);
+	const nextRegister = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "getIterator",
 		registers: [iteratorRegister, nextRegister, value],
 	});
-	const doneRegister = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const doneRegister = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createBoolean",
 		registers: [doneRegister],
 		value: false,
@@ -5165,8 +5160,8 @@ function compileArrayPatternTarget(
 		// Holes consume a step without binding. An exhausted iterator steps
 		// to undefined; the extra next() calls past done are a known
 		// deviation from the spec's [[Done]] tracking.
-		const elementValue = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const elementValue = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "iteratorStep",
 			registers: [elementValue, doneRegister, iteratorRegister, nextRegister],
 		});
@@ -5238,8 +5233,8 @@ function compileArrayPatternTarget(
  * It adds the block to the function and returns the block index.
  */
 function compileStatementsToBlock(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	statements: Array<ESTree.Statement>,
 	/**
 	 * Hoist top-level function declarations in this list to the start of the
@@ -5255,8 +5250,8 @@ function compileStatementsToBlock(
 	 */
 	hoistFunctions = false,
 ): number {
-	let block: SemanticGraphBlock = {
-		instructions: [],
+	let block: CoreFrontendBlock = {
+		emitter: unboundCoreEmitter,
 	};
 	// Store the first block index so we can return that to allow jumping to that block.
 	const blockIdx = fn.blocks.push(block) - 1;
@@ -5385,13 +5380,13 @@ function compileStatementsToBlock(
 			const lastBlockIdx = fn.blocks.indexOf(block);
 
 			block = {
-				instructions: [],
+				emitter: unboundCoreEmitter,
 			};
 
 			const jumpTarget = fn.blocks.push(block) - 1;
 			// Unconditionally add the jump. In a later pass we can optimize these jumps out.
 			for (let i = lastBlockIdx + 1; i < jumpTarget; i++) {
-				fn.blocks[i]!.instructions.push({
+				fn.blocks[i]!.emitter.emit({
 					type: "jump",
 					blocks: [jumpTarget],
 				});
@@ -5523,10 +5518,10 @@ function compileStatementsToBlock(
 	// fell through to the after-loop block instead of the update.
 	if (fn.blocks.at(-1) !== block) {
 		const lastBlockIdx = fn.blocks.indexOf(block);
-		block = { instructions: [] };
+		block = { emitter: unboundCoreEmitter };
 		const jumpTarget = fn.blocks.push(block) - 1;
 		for (let i = lastBlockIdx + 1; i < jumpTarget; i++) {
-			fn.blocks[i]!.instructions.push({
+			fn.blocks[i]!.emitter.emit({
 				type: "jump",
 				blocks: [jumpTarget],
 			});
@@ -5537,9 +5532,9 @@ function compileStatementsToBlock(
 }
 
 function compileClassDeclaration(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ClassDeclaration,
 ) {
 	const binding = fn.semanticFile.nodeToBinding.get(statement);
@@ -5547,7 +5542,7 @@ function compileClassDeclaration(
 		return;
 	}
 
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	const ctor = compileClass(program, fn, cursor, statement);
 	if (ctor === -1) {
 		return;
@@ -5565,9 +5560,9 @@ function compileClassDeclaration(
  * synthetic default binding (created by the linker).
  */
 function compileExportDefault(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ExportDefaultDeclaration,
 ) {
 	const declaration = statement.declaration;
@@ -5581,7 +5576,7 @@ function compileExportDefault(
 		return;
 	}
 
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	let value: number;
 	if (declaration.type === "FunctionDeclaration") {
 		const functionIndex = compileNewFunctionExpression(
@@ -5591,8 +5586,8 @@ function compileExportDefault(
 			undefined,
 			"default",
 		);
-		value = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		value = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createFunction",
 			registers: [value],
 			functionIndex,
@@ -5617,19 +5612,19 @@ function compileExportDefault(
 }
 
 function compileExpressionStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ExpressionStatement,
 ) {
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	const result = compileExpression(program, fn, cursor, statement.expression);
 	// Eval completion: record this statement's value as the running completion.
 	// Use cursor.block (the expression's final block after any control flow), so
 	// the move lands where the result is live; an unexecuted branch never reaches
 	// here, giving the correct last-executed-value semantics.
 	if (fn.completionRegister !== undefined && result !== undefined) {
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "move",
 			registers: [fn.completionRegister, result],
 		});
@@ -5637,9 +5632,9 @@ function compileExpressionStatement(
 }
 
 /** Initialize a compound statement's spec-level completion value. */
-function resetEvalCompletion(fn: SemanticGraphFunction, block: SemanticGraphBlock) {
+function resetEvalCompletion(fn: CoreFrontendFunction, block: CoreFrontendBlock) {
 	if (fn.completionRegister !== undefined) {
-		block.instructions.push({
+		block.emitter.emit({
 			type: "createUndefined",
 			registers: [fn.completionRegister],
 		});
@@ -5647,9 +5642,9 @@ function resetEvalCompletion(fn: SemanticGraphFunction, block: SemanticGraphBloc
 }
 
 function compileFunctionDeclaration(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.FunctionDeclaration,
 ) {
 	const binding = fn.semanticFile.nodeToBinding.get(statement);
@@ -5679,8 +5674,8 @@ function compileFunctionDeclaration(
 		inheritedPrivateEnvironment(fn, false),
 	);
 
-	const destination = nextRegisterDestination(fn);
-	block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	block.emitter.emit({
 		type: "createFunction",
 		registers: [destination],
 
@@ -5713,7 +5708,7 @@ function compileFunctionDeclaration(
 	}
 
 	if (location.type === "globalProperty") {
-		block.instructions.push({
+		block.emitter.emit({
 			type: "storeGlobalProperty",
 			registers: [destination],
 			nameStringIndex: location.nameStringIndex,
@@ -5731,9 +5726,9 @@ function compileFunctionDeclaration(
  * fall-through blocks, and break jumps are patched to the exit.
  */
 function compileSwitchStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.SwitchStatement,
 ) {
 	const switchContext: SemanticControlContext = {
@@ -5744,18 +5739,18 @@ function compileSwitchStatement(
 	};
 	(fn.loops ??= []).push(switchContext);
 
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	const discriminant = compileExpression(program, fn, cursor, statement.discriminant);
 	resetEvalCompletion(fn, cursor.block);
 
 	// Case bodies first, chained for fall-through, so the dispatch tests can
 	// reference their block indexes.
 	const bodyStarts: Array<number> = [];
-	let previousTail: SemanticGraphBlock | undefined;
+	let previousTail: CoreFrontendBlock | undefined;
 	for (const switchCase of statement.cases) {
 		const start = compileStatementsToBlock(program, fn, switchCase.consequent);
 		if (previousTail) {
-			previousTail.instructions.push({
+			previousTail.emitter.emit({
 				type: "jump",
 				blocks: [start],
 			});
@@ -5770,7 +5765,7 @@ function compileSwitchStatement(
 		type: "jump",
 		blocks: [-1],
 	};
-	previousTail?.instructions.push(lastBodyExitJump);
+	previousTail?.emitter.emit(lastBodyExitJump);
 
 	let defaultCase = -1;
 	for (let i = 0; i < statement.cases.length; i++) {
@@ -5781,13 +5776,13 @@ function compileSwitchStatement(
 		}
 
 		const test = compileExpression(program, fn, cursor, switchCase.test);
-		const matches = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const matches = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [matches, discriminant, test],
 			operator: "===",
 		});
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "jumpIf",
 			registers: [matches],
 			blocks: [bodyStarts[i]!],
@@ -5798,9 +5793,9 @@ function compileSwitchStatement(
 		type: "jump",
 		blocks: [defaultCase >= 0 ? bodyStarts[defaultCase]! : -1],
 	};
-	cursor.block.instructions.push(missJump);
+	cursor.block.emitter.emit(missJump);
 
-	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	lastBodyExitJump.blocks[0] = exitIdx;
 	if (defaultCase < 0) {
 		missJump.blocks[0] = exitIdx;
@@ -5816,14 +5811,14 @@ function compileSwitchStatement(
  * condition, conditionally enters the body, and falls through to the exit.
  */
 function compileWhileStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.WhileStatement,
 ) {
 	resetEvalCompletion(fn, block);
-	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
-	block.instructions.push({
+	const headerIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	block.emitter.emit({
 		type: "jump",
 		blocks: [headerIdx],
 	});
@@ -5836,7 +5831,7 @@ function compileWhileStatement(
 	};
 	(fn.loops ??= []).push(loop);
 
-	const headerCursor: SemanticCursor = { block: fn.blocks[headerIdx]! };
+	const headerCursor: CoreFrontendCursor = { block: fn.blocks[headerIdx]! };
 	const condition = compileExpression(program, fn, headerCursor, statement.test);
 
 	const bodyIdx = compileStatementsToBlock(
@@ -5844,7 +5839,7 @@ function compileWhileStatement(
 		fn,
 		normalizeStatementOrBlock(statement.body),
 	);
-	headerCursor.block.instructions.push({
+	headerCursor.block.emitter.emit({
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [bodyIdx],
@@ -5854,15 +5849,15 @@ function compileWhileStatement(
 		// Patched below, once the exit block exists.
 		blocks: [-1],
 	};
-	headerCursor.block.instructions.push(exitJump);
+	headerCursor.block.emitter.emit(exitJump);
 
 	// Back edge from the body tail to the condition.
-	fn.blocks.at(-1)!.instructions.push({
+	fn.blocks.at(-1)!.emitter.emit({
 		type: "jump",
 		blocks: [headerIdx],
 	});
 
-	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
@@ -5878,9 +5873,9 @@ function compileWhileStatement(
  * bottom decides on re-entry.
  */
 function compileDoWhileStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.DoWhileStatement,
 ) {
 	resetEvalCompletion(fn, block);
@@ -5897,21 +5892,21 @@ function compileDoWhileStatement(
 		fn,
 		normalizeStatementOrBlock(statement.body),
 	);
-	block.instructions.push({
+	block.emitter.emit({
 		type: "jump",
 		blocks: [bodyIdx],
 	});
 
 	const bodyLastBlock = fn.blocks.at(-1)!;
-	const conditionIdx = fn.blocks.push({ instructions: [] }) - 1;
-	bodyLastBlock.instructions.push({
+	const conditionIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	bodyLastBlock.emitter.emit({
 		type: "jump",
 		blocks: [conditionIdx],
 	});
 
-	const conditionCursor: SemanticCursor = { block: fn.blocks[conditionIdx]! };
+	const conditionCursor: CoreFrontendCursor = { block: fn.blocks[conditionIdx]! };
 	const condition = compileExpression(program, fn, conditionCursor, statement.test);
-	conditionCursor.block.instructions.push({
+	conditionCursor.block.emitter.emit({
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [bodyIdx],
@@ -5920,9 +5915,9 @@ function compileDoWhileStatement(
 		type: "jump",
 		blocks: [-1],
 	};
-	conditionCursor.block.instructions.push(exitJump);
+	conditionCursor.block.emitter.emit(exitJump);
 
-	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
@@ -5941,8 +5936,8 @@ function compileDoWhileStatement(
  * Returns null when no such binding is captured (the common case — zero overhead).
  */
 function setupPerIterationScope(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	loopNode: ESTree.ForStatement | ESTree.ForInStatement | ESTree.ForOfStatement,
 ): { scopeId: number; slotCount: number } | null {
 	const loopScope = fn.semanticFile.nodeToScope.get(loopNode);
@@ -5975,9 +5970,9 @@ function setupPerIterationScope(
  * loop with the update block as the continue target.
  */
 function compileForStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ForStatement,
 ) {
 	// Per-iteration env, if head or direct body bindings are captured. ENV_PUSH enters scope
@@ -5987,14 +5982,14 @@ function compileForStatement(
 	// head bindings resolve to the scope env.
 	const perIter = setupPerIterationScope(program, fn, statement);
 	if (perIter) {
-		block.instructions.push({
+		block.emitter.emit({
 			type: "envPush",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
 		});
 	}
 
-	const initCursor: SemanticCursor = { block };
+	const initCursor: CoreFrontendCursor = { block };
 	if (statement.init?.type === "VariableDeclaration") {
 		compileVariableDeclaration(program, fn, block, statement.init);
 		// The declaration manages its own cursor; re-resolve the tail block.
@@ -6004,7 +5999,7 @@ function compileForStatement(
 	}
 
 	if (perIter) {
-		initCursor.block.instructions.push({
+		initCursor.block.emitter.emit({
 			type: "envCopy",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
@@ -6012,8 +6007,8 @@ function compileForStatement(
 	}
 	resetEvalCompletion(fn, initCursor.block);
 
-	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
-	initCursor.block.instructions.push({
+	const headerIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	initCursor.block.emitter.emit({
 		type: "jump",
 		blocks: [headerIdx],
 	});
@@ -6028,13 +6023,13 @@ function compileForStatement(
 	};
 	(fn.loops ??= []).push(loop);
 
-	const headerCursor: SemanticCursor = { block: fn.blocks[headerIdx]! };
+	const headerCursor: CoreFrontendCursor = { block: fn.blocks[headerIdx]! };
 	let condition: number;
 	if (statement.test) {
 		condition = compileExpression(program, fn, headerCursor, statement.test);
 	} else {
-		condition = nextRegisterDestination(fn);
-		headerCursor.block.instructions.push({
+		condition = nextCoreVariable(fn);
+		headerCursor.block.emitter.emit({
 			type: "createBoolean",
 			registers: [condition],
 			value: true,
@@ -6042,7 +6037,7 @@ function compileForStatement(
 	}
 
 	const bodyIdx = compileStatementsToBlock(program, fn, [statement.body]);
-	headerCursor.block.instructions.push({
+	headerCursor.block.emitter.emit({
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [bodyIdx],
@@ -6051,21 +6046,21 @@ function compileForStatement(
 		type: "jump",
 		blocks: [-1],
 	};
-	headerCursor.block.instructions.push(exitJump);
+	headerCursor.block.emitter.emit(exitJump);
 
 	// The update block is the continue target and closes the back edge.
 	const bodyLastBlock = fn.blocks.at(-1)!;
-	const updateIdx = fn.blocks.push({ instructions: [] }) - 1;
-	bodyLastBlock.instructions.push({
+	const updateIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	bodyLastBlock.emitter.emit({
 		type: "jump",
 		blocks: [updateIdx],
 	});
 
-	const updateCursor: SemanticCursor = { block: fn.blocks[updateIdx]! };
+	const updateCursor: CoreFrontendCursor = { block: fn.blocks[updateIdx]! };
 	// CreatePerIterationEnvironment: copy the bindings forward (Li→Li+1) before the
 	// increment, so the increment and next test/body run in the fresh env.
 	if (perIter) {
-		updateCursor.block.instructions.push({
+		updateCursor.block.emitter.emit({
 			type: "envCopy",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
@@ -6074,17 +6069,17 @@ function compileForStatement(
 	if (statement.update) {
 		compileExpression(program, fn, updateCursor, statement.update);
 	}
-	updateCursor.block.instructions.push({
+	updateCursor.block.emitter.emit({
 		type: "jump",
 		blocks: [headerIdx],
 	});
 
-	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	// The exit block runs ENV_POP for the normal (test-false) exit and for any break
 	// targeting this loop (both jump here). A break/continue crossing this loop to an
 	// outer target instead pops via emitBreak/emitContinue.
 	if (perIter) {
-		fn.blocks[exitIdx]!.instructions.push({ type: "envPop" });
+		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
 	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
@@ -6103,17 +6098,17 @@ function compileForStatement(
  * straight back to the step header (no close, per spec).
  */
 function compileForOfStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ForOfStatement,
 ) {
-	const entryCursor: SemanticCursor = { block };
+	const entryCursor: CoreFrontendCursor = { block };
 	const perIter = setupPerIterationScope(program, fn, statement);
 	const lexicalHead =
 		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
 	if (perIter && lexicalHead) {
-		entryCursor.block.instructions.push({
+		entryCursor.block.emitter.emit({
 			type: "envPush",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
@@ -6165,17 +6160,17 @@ function compileForOfStatement(
  * rather than throwing, which the key-collection op handles.
  */
 function compileForInStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ForInStatement,
 ) {
-	const entryCursor: SemanticCursor = { block };
+	const entryCursor: CoreFrontendCursor = { block };
 	const perIter = setupPerIterationScope(program, fn, statement);
 	const lexicalHead =
 		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
 	if (perIter && lexicalHead) {
-		entryCursor.block.instructions.push({
+		entryCursor.block.emitter.emit({
 			type: "envPush",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
@@ -6192,8 +6187,8 @@ function compileForInStatement(
 		return;
 	}
 
-	const keys = nextRegisterDestination(fn);
-	entryCursor.block.instructions.push({
+	const keys = nextCoreVariable(fn);
+	entryCursor.block.emitter.emit({
 		type: "forInKeys",
 		registers: [keys, source],
 	});
@@ -6217,9 +6212,9 @@ function compileForInStatement(
  * protected range that closes the iterator on a throw.
  */
 function compileForInOfLoop(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	entryCursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	entryCursor: CoreFrontendCursor,
 	iterable: number,
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
@@ -6227,22 +6222,22 @@ function compileForInOfLoop(
 	perIterEnvEntered: boolean,
 ) {
 	const labels = takePendingLabels(fn);
-	const iteratorRegister = nextRegisterDestination(fn);
-	const nextRegister = nextRegisterDestination(fn);
-	entryCursor.block.instructions.push({
+	const iteratorRegister = nextCoreVariable(fn);
+	const nextRegister = nextCoreVariable(fn);
+	entryCursor.block.emitter.emit({
 		type: "getIterator",
 		registers: [iteratorRegister, nextRegister, iterable],
 	});
 	if (perIter && !perIterEnvEntered) {
-		entryCursor.block.instructions.push({
+		entryCursor.block.emitter.emit({
 			type: "envPush",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
 		});
 	}
 
-	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
-	entryCursor.block.instructions.push({
+	const headerIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	entryCursor.block.emitter.emit({
 		type: "jump",
 		blocks: [headerIdx],
 	});
@@ -6260,10 +6255,10 @@ function compileForInOfLoop(
 	(fn.loops ??= []).push(loop);
 
 	const header = fn.blocks[headerIdx]!;
-	const valueRegister = nextRegisterDestination(fn);
-	const doneRegister = nextRegisterDestination(fn);
+	const valueRegister = nextCoreVariable(fn);
+	const doneRegister = nextCoreVariable(fn);
 	loop.iteratorDoneRegister = doneRegister;
-	header.instructions.push({
+	header.emitter.emit({
 		type: "iteratorStep",
 		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
 	});
@@ -6273,13 +6268,13 @@ function compileForInOfLoop(
 		// Patched below, once the exit block exists.
 		blocks: [-1],
 	};
-	header.instructions.push(exitJump);
+	header.emitter.emit(exitJump);
 
 	// Binding and body run inside a protected range; a throw closes the
 	// iterator and propagates. The step itself stays unprotected, as specced.
-	const bindBlock: SemanticGraphBlock = { instructions: [] };
+	const bindBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const bindIdx = fn.blocks.push(bindBlock) - 1;
-	header.instructions.push({
+	header.emitter.emit({
 		type: "jump",
 		blocks: [bindIdx],
 	});
@@ -6288,7 +6283,7 @@ function compileForInOfLoop(
 	// each iteration. The head pattern and body TDZ initialization overwrite copied
 	// values before user code can observe them.
 	if (perIter) {
-		bindBlock.instructions.push({
+		bindBlock.emitter.emit({
 			type: "envCopy",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
@@ -6300,9 +6295,9 @@ function compileForInOfLoop(
 		// Patched below: [handler, end].
 		blocks: [-1, -1],
 	};
-	bindBlock.instructions.push(tryBegin);
+	bindBlock.emitter.emit(tryBegin);
 
-	const bindCursor: SemanticCursor = { block: bindBlock };
+	const bindCursor: CoreFrontendCursor = { block: bindBlock };
 	if (left.type === "VariableDeclaration") {
 		const declaration = left.declarations[0];
 		if (declaration) {
@@ -6313,28 +6308,27 @@ function compileForInOfLoop(
 	}
 
 	const bodyIdx = compileStatementsToBlock(program, fn, [body]);
-	bindCursor.block.instructions.push({
+	bindCursor.block.emitter.emit({
 		type: "jump",
 		blocks: [bodyIdx],
 	});
 
 	// The protected range ends before the back edge.
 	const bodyLastBlock = fn.blocks.at(-1)!;
-	const backIdx =
-		fn.blocks.push({
-			instructions: [{ type: "tryEnd" }, { type: "jump", blocks: [headerIdx] }],
-		}) - 1;
-	bodyLastBlock.instructions.push({
+	const back: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const backIdx = fn.blocks.push(back) - 1;
+	back.emitter.emit({ type: "tryEnd" }, { type: "jump", blocks: [headerIdx] });
+	bodyLastBlock.emitter.emit({
 		type: "jump",
 		blocks: [backIdx],
 	});
 	tryBegin.blocks[1] = backIdx;
 
 	// Handler: close the iterator, rethrow the original completion.
-	const handlerBlock: SemanticGraphBlock = { instructions: [] };
+	const handlerBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
-	const caughtRegister = nextRegisterDestination(fn);
-	handlerBlock.instructions.push({
+	const caughtRegister = nextCoreVariable(fn);
+	handlerBlock.emitter.emit({
 		type: "catch",
 		registers: [caughtRegister],
 	});
@@ -6346,18 +6340,18 @@ function compileForInOfLoop(
 		false,
 		doneRegister,
 	);
-	rethrowBlock.instructions.push({
+	rethrowBlock.emitter.emit({
 		type: "throw",
 		registers: [caughtRegister],
 	});
 
-	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	// Restore the enclosing env on the normal (done) exit and on any break targeting
 	// this loop (both jump here). The throw handler above does not pop: a rethrow
 	// unwinds the frame (or is caught in an outer scope, where the per-iteration
 	// env's parent chain still resolves correctly).
 	if (perIter) {
-		fn.blocks[exitIdx]!.instructions.push({ type: "envPop" });
+		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
 	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
@@ -6377,9 +6371,9 @@ function compileForInOfLoop(
  * is the async-iterator get and the await-driven header step.
  */
 function compileForAwaitOfLoop(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	entryCursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	entryCursor: CoreFrontendCursor,
 	iterable: number,
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
@@ -6387,28 +6381,28 @@ function compileForAwaitOfLoop(
 	perIterEnvEntered: boolean,
 ) {
 	const labels = takePendingLabels(fn);
-	const iteratorRegister = nextRegisterDestination(fn);
-	const nextRegister = nextRegisterDestination(fn);
-	const doneRegister = nextRegisterDestination(fn);
-	entryCursor.block.instructions.push({
+	const iteratorRegister = nextCoreVariable(fn);
+	const nextRegister = nextCoreVariable(fn);
+	const doneRegister = nextCoreVariable(fn);
+	entryCursor.block.emitter.emit({
 		type: "getAsyncIterator",
 		registers: [iteratorRegister, nextRegister, iterable],
 	});
-	entryCursor.block.instructions.push({
+	entryCursor.block.emitter.emit({
 		type: "createBoolean",
 		registers: [doneRegister],
 		value: false,
 	});
 	if (perIter && !perIterEnvEntered) {
-		entryCursor.block.instructions.push({
+		entryCursor.block.emitter.emit({
 			type: "envPush",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
 		});
 	}
 
-	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
-	entryCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
+	const headerIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	entryCursor.block.emitter.emit({ type: "jump", blocks: [headerIdx] });
 
 	const loop: SemanticControlContext = {
 		kind: "loop",
@@ -6427,21 +6421,21 @@ function compileForAwaitOfLoop(
 	// Header: raw = next.call(iterator); result = await raw; unpack done/value.
 	// The await splits the header — emitResumeDispatch moves the cursor onto a
 	// continuation block, where the unpack and exit test live.
-	const headerCursor: SemanticCursor = { block: fn.blocks[headerIdx]! };
-	const rawRegister = nextRegisterDestination(fn);
-	headerCursor.block.instructions.push({
+	const headerCursor: CoreFrontendCursor = { block: fn.blocks[headerIdx]! };
+	const rawRegister = nextCoreVariable(fn);
+	headerCursor.block.emitter.emit({
 		type: "iteratorNext",
 		registers: [rawRegister, iteratorRegister, nextRegister],
 	});
 	const resultRegister = compileAwaitRegister(program, fn, headerCursor, rawRegister);
 
-	const doneKey = nextRegisterDestination(fn);
-	headerCursor.block.instructions.push({
+	const doneKey = nextCoreVariable(fn);
+	headerCursor.block.emitter.emit({
 		type: "createString",
 		registers: [doneKey],
 		stringIndex: getOrCreateStringConstant(program, "done"),
 	});
-	headerCursor.block.instructions.push({
+	headerCursor.block.emitter.emit({
 		type: "loadProperty",
 		registers: [doneRegister, resultRegister, doneKey],
 	});
@@ -6450,27 +6444,27 @@ function compileForAwaitOfLoop(
 		registers: [doneRegister],
 		blocks: [-1],
 	};
-	headerCursor.block.instructions.push(exitJump);
+	headerCursor.block.emitter.emit(exitJump);
 
-	const valueRegister = nextRegisterDestination(fn);
-	const valueKey = nextRegisterDestination(fn);
-	headerCursor.block.instructions.push({
+	const valueRegister = nextCoreVariable(fn);
+	const valueKey = nextCoreVariable(fn);
+	headerCursor.block.emitter.emit({
 		type: "createString",
 		registers: [valueKey],
 		stringIndex: getOrCreateStringConstant(program, "value"),
 	});
-	headerCursor.block.instructions.push({
+	headerCursor.block.emitter.emit({
 		type: "loadProperty",
 		registers: [valueRegister, resultRegister, valueKey],
 	});
 
 	// Binding and body run inside a protected range; a throw closes the iterator.
-	const bindBlock: SemanticGraphBlock = { instructions: [] };
+	const bindBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const bindIdx = fn.blocks.push(bindBlock) - 1;
-	headerCursor.block.instructions.push({ type: "jump", blocks: [bindIdx] });
+	headerCursor.block.emitter.emit({ type: "jump", blocks: [bindIdx] });
 
 	if (perIter) {
-		bindBlock.instructions.push({
+		bindBlock.emitter.emit({
 			type: "envCopy",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
@@ -6481,9 +6475,9 @@ function compileForAwaitOfLoop(
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
-	bindBlock.instructions.push(tryBegin);
+	bindBlock.emitter.emit(tryBegin);
 
-	const bindCursor: SemanticCursor = { block: bindBlock };
+	const bindCursor: CoreFrontendCursor = { block: bindBlock };
 	if (left.type === "VariableDeclaration") {
 		const declaration = left.declarations[0];
 		if (declaration) {
@@ -6494,22 +6488,21 @@ function compileForAwaitOfLoop(
 	}
 
 	const bodyIdx = compileStatementsToBlock(program, fn, [body]);
-	bindCursor.block.instructions.push({ type: "jump", blocks: [bodyIdx] });
+	bindCursor.block.emitter.emit({ type: "jump", blocks: [bodyIdx] });
 
 	const bodyLastBlock = fn.blocks.at(-1)!;
-	const backIdx =
-		fn.blocks.push({
-			instructions: [{ type: "tryEnd" }, { type: "jump", blocks: [headerIdx] }],
-		}) - 1;
-	bodyLastBlock.instructions.push({ type: "jump", blocks: [backIdx] });
+	const back: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	const backIdx = fn.blocks.push(back) - 1;
+	back.emitter.emit({ type: "tryEnd" }, { type: "jump", blocks: [headerIdx] });
+	bodyLastBlock.emitter.emit({ type: "jump", blocks: [backIdx] });
 	tryBegin.blocks[1] = backIdx;
 
 	// Handler: await the close, but preserve the original throw over every close
 	// failure as required by AsyncIteratorClose.
-	const handlerBlock: SemanticGraphBlock = { instructions: [] };
+	const handlerBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
-	const caughtRegister = nextRegisterDestination(fn);
-	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
+	const caughtRegister = nextCoreVariable(fn);
+	handlerBlock.emitter.emit({ type: "catch", registers: [caughtRegister] });
 	const rethrowBlock = emitIteratorCloseForCompletion(
 		program,
 		fn,
@@ -6519,11 +6512,11 @@ function compileForAwaitOfLoop(
 		doneRegister,
 		true,
 	);
-	rethrowBlock.instructions.push({ type: "throw", registers: [caughtRegister] });
+	rethrowBlock.emitter.emit({ type: "throw", registers: [caughtRegister] });
 
-	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	if (perIter) {
-		fn.blocks[exitIdx]!.instructions.push({ type: "envPop" });
+		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
 	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
@@ -6539,7 +6532,7 @@ function compileForAwaitOfLoop(
  * Consume the labels a LabeledStatement stashed for the loop/switch it
  * immediately precedes, clearing them so nested statements don't inherit them.
  */
-function takePendingLabels(fn: SemanticGraphFunction): Set<string> | undefined {
+function takePendingLabels(fn: CoreFrontendFunction): Set<string> | undefined {
 	const labels = fn.pendingLabels;
 	fn.pendingLabels = undefined;
 	return labels && labels.length > 0 ? new Set(labels) : undefined;
@@ -6559,9 +6552,9 @@ const LOOP_STATEMENT_TYPES = new Set<string>([
  * statement makes a break-only target whose break jumps to the join after it.
  */
 function compileLabeledStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.LabeledStatement,
 ) {
 	// Peel stacked labels (`a: b: for ...`) down to the labeled statement.
@@ -6576,7 +6569,7 @@ function compileLabeledStatement(
 		// The following loop/switch claims these labels for its own context.
 		fn.pendingLabels = labels;
 		const entry = compileStatementsToBlock(program, fn, [inner]);
-		block.instructions.push({ type: "jump", blocks: [entry] });
+		block.emitter.emit({ type: "jump", blocks: [entry] });
 		return;
 	}
 
@@ -6593,21 +6586,21 @@ function compileLabeledStatement(
 		fn,
 		normalizeStatementOrBlock(inner),
 	);
-	block.instructions.push({ type: "jump", blocks: [bodyEntry] });
+	block.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 	const bodyTail = fn.blocks.at(-1)!;
 	fn.loops.pop();
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
-	bodyTail.instructions.push({ type: "jump", blocks: [joinIdx] });
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	bodyTail.emitter.emit({ type: "jump", blocks: [joinIdx] });
 	for (const jump of labelContext.breakJumps) {
 		jump.blocks[0] = joinIdx;
 	}
 }
 
 function compileBreakStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.BreakStatement,
 ) {
 	const label = statement.label?.name;
@@ -6624,9 +6617,9 @@ function compileBreakStatement(
 }
 
 function compileContinueStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ContinueStatement,
 ) {
 	const label = statement.label?.name;
@@ -6646,14 +6639,14 @@ function compileContinueStatement(
  * the VM based on the statically known handler ranges.
  */
 function compileThrowStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ThrowStatement,
 ) {
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	const value = compileExpression(program, fn, cursor, statement.argument);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "throw",
 		registers: [value],
 	});
@@ -6665,9 +6658,9 @@ function compileThrowStatement(
  * model in compileTryFinally.
  */
 function compileTryStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.TryStatement,
 ) {
 	if (statement.finalizer) {
@@ -6686,9 +6679,9 @@ function compileTryStatement(
  * Values that cross the try/catch boundary go through bindings.
  */
 function compileTryCatch(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.TryStatement,
 ) {
 	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
@@ -6696,14 +6689,14 @@ function compileTryCatch(
 		// Patched below, once the handler and exit blocks exist.
 		blocks: [-1, -1],
 	};
-	block.instructions.push(tryBegin);
+	block.emitter.emit(tryBegin);
 
 	const tryBlock = compileStatementsToBlock(
 		program,
 		fn,
 		normalizeStatementOrBlock(statement.block),
 	);
-	block.instructions.push({
+	block.emitter.emit({
 		type: "jump",
 		blocks: [tryBlock],
 	});
@@ -6711,21 +6704,22 @@ function compileTryCatch(
 	// The end marker lives directly after the try body, so the protected range
 	// ends before the handler.
 	const tryBodyLastBlock = fn.blocks.at(-1)!;
-	const tryExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
+	tryExit.emitter.emit({ type: "tryEnd" });
 	tryBegin.blocks[1] = tryExitIdx;
-	tryBodyLastBlock.instructions.push({
+	tryBodyLastBlock.emitter.emit({
 		type: "jump",
 		blocks: [tryExitIdx],
 	});
 
 	// The handler block must start with the catch instruction, which consumes
 	// the throw completion the unwinder left in place.
-	const handlerBlock: SemanticGraphBlock = { instructions: [] };
+	const handlerBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 
-	const caughtRegister = nextRegisterDestination(fn);
-	handlerBlock.instructions.push({
+	const caughtRegister = nextCoreVariable(fn);
+	handlerBlock.emitter.emit({
 		type: "catch",
 		registers: [caughtRegister],
 	});
@@ -6733,7 +6727,7 @@ function compileTryCatch(
 	if (statement.handler) {
 		// Catch parameter destructuring can branch; throws inside it happen
 		// past the protected range and so propagate outward, as specced.
-		const handlerCursor: SemanticCursor = { block: handlerBlock };
+		const handlerCursor: CoreFrontendCursor = { block: handlerBlock };
 		if (statement.handler.param) {
 			compilePatternTarget(
 				program,
@@ -6749,13 +6743,13 @@ function compileTryCatch(
 			fn,
 			normalizeStatementOrBlock(statement.handler.body),
 		);
-		handlerCursor.block.instructions.push({
+		handlerCursor.block.emitter.emit({
 			type: "jump",
 			blocks: [catchBlock],
 		});
 	} else {
 		// try with neither catch nor finally is invalid; rethrow to be safe.
-		handlerBlock.instructions.push({
+		handlerBlock.emitter.emit({
 			type: "throw",
 			registers: [caughtRegister],
 		});
@@ -6777,13 +6771,13 @@ function compileTryCatch(
  * route through the finalizer via emitReturn/emitBreak/emitContinue.
  */
 function compileTryFinally(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.TryStatement,
 ) {
-	const kindReg = nextRegisterDestination(fn);
-	const valueReg = nextRegisterDestination(fn);
+	const kindReg = nextCoreVariable(fn);
+	const valueReg = nextCoreVariable(fn);
 	const finallyCtx: SemanticControlContext = {
 		kind: "finally",
 		breakJumps: [],
@@ -6796,15 +6790,15 @@ function compileTryFinally(
 	const entryJumps = finallyCtx.finallyEntryJumps!;
 
 	// Route a normal completion into the finalizer (falls through afterward).
-	const routeNormal = (target: SemanticGraphBlock) =>
+	const routeNormal = (target: CoreFrontendBlock) =>
 		routeThroughFinalizer(target, finallyCtx, "normal", null);
 	// Route a thrown completion in: the epilogue re-throws the stashed value.
-	const routeThrow = (target: SemanticGraphBlock, value: number) =>
+	const routeThrow = (target: CoreFrontendBlock, value: number) =>
 		routeThroughFinalizer(
 			target,
 			finallyCtx,
 			"throw",
-			(b) => b.instructions.push({ type: "throw", registers: [valueReg] }),
+			(b) => b.emitter.emit({ type: "throw", registers: [valueReg] }),
 			value,
 		);
 
@@ -6813,7 +6807,7 @@ function compileTryFinally(
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
-	block.instructions.push(tryBegin);
+	block.emitter.emit(tryBegin);
 
 	fn.loops ??= [];
 	fn.loops.push(finallyCtx);
@@ -6822,28 +6816,29 @@ function compileTryFinally(
 		fn,
 		normalizeStatementOrBlock(statement.block),
 	);
-	block.instructions.push({ type: "jump", blocks: [tryBlock] });
+	block.emitter.emit({ type: "jump", blocks: [tryBlock] });
 	const tryBodyLastBlock = fn.blocks.at(-1)!;
 	fn.loops.pop();
 
 	// Normal completion of the try body ends the protected range and enters the
 	// finalizer with a NORMAL completion.
-	const tryNormalExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryNormalExit: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const tryNormalExitIdx = fn.blocks.push(tryNormalExit) - 1;
+	tryNormalExit.emitter.emit({ type: "tryEnd" });
 	tryBegin.blocks[1] = tryNormalExitIdx;
-	tryBodyLastBlock.instructions.push({ type: "jump", blocks: [tryNormalExitIdx] });
+	tryBodyLastBlock.emitter.emit({ type: "jump", blocks: [tryNormalExitIdx] });
 	routeNormal(tryNormalExit);
 
 	// --- handler for the try body ---
-	const handlerBlock: SemanticGraphBlock = { instructions: [] };
+	const handlerBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
-	const caughtRegister = nextRegisterDestination(fn);
-	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
+	const caughtRegister = nextCoreVariable(fn);
+	handlerBlock.emitter.emit({ type: "catch", registers: [caughtRegister] });
 
 	if (statement.handler) {
 		// Bind the catch parameter, then run the catch body in its own protected
 		// range so a throw out of it still runs the finalizer.
-		const handlerCursor: SemanticCursor = { block: handlerBlock };
+		const handlerCursor: CoreFrontendCursor = { block: handlerBlock };
 		if (statement.handler.param) {
 			compilePatternTarget(
 				program,
@@ -6858,7 +6853,7 @@ function compileTryFinally(
 			type: "tryBegin",
 			blocks: [-1, -1],
 		};
-		handlerCursor.block.instructions.push(catchTryBegin);
+		handlerCursor.block.emitter.emit(catchTryBegin);
 
 		fn.loops.push(finallyCtx);
 		const catchBlock = compileStatementsToBlock(
@@ -6866,20 +6861,21 @@ function compileTryFinally(
 			fn,
 			normalizeStatementOrBlock(statement.handler.body),
 		);
-		handlerCursor.block.instructions.push({ type: "jump", blocks: [catchBlock] });
+		handlerCursor.block.emitter.emit({ type: "jump", blocks: [catchBlock] });
 		const catchBodyLastBlock = fn.blocks.at(-1)!;
 		fn.loops.pop();
 
-		const catchNormalExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
+		const catchNormalExit: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		const catchNormalExitIdx = fn.blocks.push(catchNormalExit) - 1;
+		catchNormalExit.emitter.emit({ type: "tryEnd" });
 		catchTryBegin.blocks[1] = catchNormalExitIdx;
-		catchBodyLastBlock.instructions.push({ type: "jump", blocks: [catchNormalExitIdx] });
+		catchBodyLastBlock.emitter.emit({ type: "jump", blocks: [catchNormalExitIdx] });
 		routeNormal(catchNormalExit);
 
-		const catchHandler: SemanticGraphBlock = { instructions: [] };
+		const catchHandler: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		catchTryBegin.blocks[0] = fn.blocks.push(catchHandler) - 1;
-		const caught2 = nextRegisterDestination(fn);
-		catchHandler.instructions.push({ type: "catch", registers: [caught2] });
+		const caught2 = nextCoreVariable(fn);
+		catchHandler.emitter.emit({ type: "catch", registers: [caught2] });
 		routeThrow(catchHandler, caught2);
 	} else {
 		// No catch clause: an exception in the body runs the finalizer then
@@ -6909,30 +6905,30 @@ function compileTryFinally(
 	// which routes through any *enclosing* finalizers (finallyCtx is popped).
 	const dispatchBlocks: Array<{ kind: number; idx: number }> = [];
 	for (const { kind, fill } of finallyCtx.finalizerArms!.values()) {
-		const armBlock: SemanticGraphBlock = { instructions: [] };
+		const armBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		const idx = fn.blocks.push(armBlock) - 1;
 		fill(armBlock);
 		dispatchBlocks.push({ kind, idx });
 	}
 
-	const epilogue: SemanticGraphBlock = { instructions: [] };
+	const epilogue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const epilogueIdx = fn.blocks.push(epilogue) - 1;
-	finalizerLastBlock.instructions.push({ type: "jump", blocks: [epilogueIdx] });
+	finalizerLastBlock.emitter.emit({ type: "jump", blocks: [epilogueIdx] });
 
 	for (const { kind, idx } of dispatchBlocks) {
-		const constReg = nextRegisterDestination(fn);
-		const matchReg = nextRegisterDestination(fn);
-		epilogue.instructions.push({
+		const constReg = nextCoreVariable(fn);
+		const matchReg = nextCoreVariable(fn);
+		epilogue.emitter.emit({
 			type: "createNumber",
 			registers: [constReg],
 			value: kind,
 		});
-		epilogue.instructions.push({
+		epilogue.emitter.emit({
 			type: "binary",
 			registers: [matchReg, kindReg, constReg],
 			operator: "===",
 		});
-		epilogue.instructions.push({ type: "jumpIf", registers: [matchReg], blocks: [idx] });
+		epilogue.emitter.emit({ type: "jumpIf", registers: [matchReg], blocks: [idx] });
 	}
 	// Fall through: NORMAL completion continues after the try.
 }
@@ -6943,9 +6939,9 @@ function compileTryFinally(
  * skipped, since the statement switch had no BlockStatement case.
  */
 function compileBlockStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.BlockStatement,
 ) {
 	// Block-scoped let/const/class start uninitialized (TDZ) at block entry.
@@ -6954,7 +6950,7 @@ function compileBlockStatement(
 		emitTdzHoleInits(program, fn, block, scope.bindings);
 	}
 	const bodyEntry = compileStatementsToBlock(program, fn, statement.body);
-	block.instructions.push({ type: "jump", blocks: [bodyEntry] });
+	block.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 }
 
 /**
@@ -6968,14 +6964,14 @@ function compileBlockStatement(
  * `with` is a strict-mode SyntaxError, so this only runs for sloppy code.
  */
 function compileWithStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.WithStatement,
 ) {
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	const object = compileExpression(program, fn, cursor, statement.object);
-	cursor.block.instructions.push({ type: "withEnter", registers: [object] });
+	cursor.block.emitter.emit({ type: "withEnter", registers: [object] });
 	resetEvalCompletion(fn, cursor.block);
 
 	const withContext: SemanticControlContext = {
@@ -6991,15 +6987,15 @@ function compileWithStatement(
 	);
 	fn.loops.pop();
 
-	cursor.block.instructions.push({ type: "jump", blocks: [bodyEntry] });
+	cursor.block.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 
 	// Normal completion of the body pops the with-object, then falls through to
 	// a fresh exit block (the back edge / continuation the dispatch loop resumes
 	// from). Abrupt exits (break/continue/return) emit their own withExit.
 	const bodyTail = fn.blocks.at(-1)!;
-	bodyTail.instructions.push({ type: "withExit", registers: [] });
-	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
-	bodyTail.instructions.push({ type: "jump", blocks: [exitIdx] });
+	bodyTail.emitter.emit({ type: "withExit", registers: [] });
+	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	bodyTail.emitter.emit({ type: "jump", blocks: [exitIdx] });
 }
 
 /**
@@ -7007,12 +7003,12 @@ function compileWithStatement(
  * block.
  */
 function compileIfStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.IfStatement,
 ) {
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	const condition = compileExpression(program, fn, cursor, statement.test);
 	resetEvalCompletion(fn, cursor.block);
 	const consequentBlock = compileStatementsToBlock(
@@ -7020,7 +7016,7 @@ function compileIfStatement(
 		fn,
 		normalizeStatementOrBlock(statement.consequent),
 	);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [consequentBlock],
@@ -7036,7 +7032,7 @@ function compileIfStatement(
 		fn,
 		normalizeStatementOrBlock(alternate),
 	);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "jump",
 		blocks: [alternateBlock],
 	});
@@ -7051,25 +7047,25 @@ const COMPLETION_NORMAL = 0;
 
 /** Throw unless value is an ECMAScript Object, returning the success block. */
 function emitIteratorResultObjectCheck(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	value: number,
-): SemanticGraphBlock {
-	const valid: SemanticGraphBlock = { instructions: [] };
+): CoreFrontendBlock {
+	const valid: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const validIdx = fn.blocks.push(valid) - 1;
-	const invalid: SemanticGraphBlock = { instructions: [] };
+	const invalid: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const invalidIdx = fn.blocks.push(invalid) - 1;
-	const typeName = nextRegisterDestination(fn);
-	const isFunction = nextRegisterDestination(fn);
-	const isObject = nextRegisterDestination(fn);
-	const notObject = nextRegisterDestination(fn);
-	const nullValue = nextRegisterDestination(fn);
-	const isNull = nextRegisterDestination(fn);
-	const functionName = nextRegisterDestination(fn);
-	const objectName = nextRegisterDestination(fn);
+	const typeName = nextCoreVariable(fn);
+	const isFunction = nextCoreVariable(fn);
+	const isObject = nextCoreVariable(fn);
+	const notObject = nextCoreVariable(fn);
+	const nullValue = nextCoreVariable(fn);
+	const isNull = nextCoreVariable(fn);
+	const functionName = nextCoreVariable(fn);
+	const objectName = nextCoreVariable(fn);
 
-	block.instructions.push(
+	block.emitter.emit(
 		{ type: "unary", registers: [typeName, value], operator: "typeof" },
 		{
 			type: "createString",
@@ -7092,10 +7088,10 @@ function emitIteratorResultObjectCheck(
 		{ type: "jump", blocks: [validIdx] },
 	);
 
-	const typeError = nextRegisterDestination(fn);
-	const error = nextRegisterDestination(fn);
-	const message = nextRegisterDestination(fn);
-	invalid.instructions.push(
+	const typeError = nextCoreVariable(fn);
+	const error = nextCoreVariable(fn);
+	const message = nextCoreVariable(fn);
+	invalid.emitter.emit(
 		{ type: "loadIntrinsic", registers: [typeError], intrinsic: "TypeError" },
 		{
 			type: "createString",
@@ -7118,22 +7114,22 @@ function emitIteratorResultObjectCheck(
  * and rejects a fulfilled primitive.
  */
 function emitAsyncIteratorClose(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	iteratorRegister: number,
 	normal: boolean,
-): SemanticGraphBlock {
+): CoreFrontendBlock {
 	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> | undefined = normal
 		? undefined
 		: { type: "tryBegin", blocks: [-1, -1] };
-	if (tryBegin) block.instructions.push(tryBegin);
+	if (tryBegin) block.emitter.emit(tryBegin);
 
-	const returnKey = nextRegisterDestination(fn);
-	const returnMethod = nextRegisterDestination(fn);
-	const undefinedValue = nextRegisterDestination(fn);
-	const noReturn = nextRegisterDestination(fn);
-	block.instructions.push(
+	const returnKey = nextCoreVariable(fn);
+	const returnMethod = nextCoreVariable(fn);
+	const undefinedValue = nextCoreVariable(fn);
+	const noReturn = nextCoreVariable(fn);
+	block.emitter.emit(
 		{
 			type: "createString",
 			registers: [returnKey],
@@ -7152,10 +7148,10 @@ function emitAsyncIteratorClose(
 		registers: [noReturn],
 		blocks: [-1],
 	};
-	block.instructions.push(noReturnJump);
+	block.emitter.emit(noReturnJump);
 
-	const result = nextRegisterDestination(fn);
-	block.instructions.push({
+	const result = nextCoreVariable(fn);
+	block.emitter.emit({
 		type: "call",
 		registers: [result, returnMethod, iteratorRegister],
 	});
@@ -7169,7 +7165,7 @@ function emitAsyncIteratorClose(
 		closingScopeIndex === undefined || closingScopeIndex < 0
 			? undefined
 			: fn.loops!.splice(closingScopeIndex, 1)[0];
-	const closeCursor: SemanticCursor = { block };
+	const closeCursor: CoreFrontendCursor = { block };
 	const awaited = compileAwaitRegister(program, fn, closeCursor, result);
 	if (closingScope && closingScopeIndex !== undefined) {
 		fn.loops!.splice(closingScopeIndex, 0, closingScope);
@@ -7182,28 +7178,29 @@ function emitAsyncIteratorClose(
 			closeCursor.block,
 			awaited,
 		);
-		const continuation: SemanticGraphBlock = { instructions: [] };
+		const continuation: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 		const continuationIdx = fn.blocks.push(continuation) - 1;
 		noReturnJump.blocks[0] = continuationIdx;
-		closeCursor.block.instructions.push({ type: "jump", blocks: [continuationIdx] });
+		closeCursor.block.emitter.emit({ type: "jump", blocks: [continuationIdx] });
 		return continuation;
 	}
 
-	const tryExit: SemanticGraphBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
+	tryExit.emitter.emit({ type: "tryEnd" });
 	tryBegin!.blocks[1] = tryExitIdx;
 	noReturnJump.blocks[0] = tryExitIdx;
-	closeCursor.block.instructions.push({ type: "jump", blocks: [tryExitIdx] });
+	closeCursor.block.emitter.emit({ type: "jump", blocks: [tryExitIdx] });
 
-	const handler: SemanticGraphBlock = { instructions: [] };
+	const handler: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	tryBegin!.blocks[0] = fn.blocks.push(handler) - 1;
-	const ignored = nextRegisterDestination(fn);
-	handler.instructions.push({ type: "catch", registers: [ignored] });
+	const ignored = nextCoreVariable(fn);
+	handler.emitter.emit({ type: "catch", registers: [ignored] });
 
-	const continuation: SemanticGraphBlock = { instructions: [] };
+	const continuation: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
-	tryExit.instructions.push({ type: "jump", blocks: [continuationIdx] });
-	handler.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	tryExit.emitter.emit({ type: "jump", blocks: [continuationIdx] });
+	handler.emitter.emit({ type: "jump", blocks: [continuationIdx] });
 	return continuation;
 }
 
@@ -7213,19 +7210,19 @@ function emitAsyncIteratorClose(
  * cause an enclosing handler to close the same iterator again.
  */
 function emitIteratorCloseForCompletion(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	iteratorRegister: number,
 	normal: boolean,
 	doneRegister?: number,
 	async = false,
-): SemanticGraphBlock {
-	const emitClose = (target: SemanticGraphBlock) => {
+): CoreFrontendBlock {
+	const emitClose = (target: CoreFrontendBlock) => {
 		if (async) {
 			return emitAsyncIteratorClose(program, fn, target, iteratorRegister, normal);
 		}
-		target.instructions.push({
+		target.emitter.emit({
 			type: "iteratorClose",
 			registers: [iteratorRegister],
 			normal,
@@ -7242,22 +7239,22 @@ function emitIteratorCloseForCompletion(
 		registers: [doneRegister],
 		blocks: [-1],
 	};
-	block.instructions.push(skipJump);
+	block.emitter.emit(skipJump);
 
-	const closeBlock: SemanticGraphBlock = { instructions: [] };
+	const closeBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const closeIdx = fn.blocks.push(closeBlock) - 1;
-	block.instructions.push({ type: "jump", blocks: [closeIdx] });
-	closeBlock.instructions.push({
+	block.emitter.emit({ type: "jump", blocks: [closeIdx] });
+	closeBlock.emitter.emit({
 		type: "createBoolean",
 		registers: [doneRegister],
 		value: true,
 	});
 	const closeEnd = emitClose(closeBlock);
 
-	const continuation: SemanticGraphBlock = { instructions: [] };
+	const continuation: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 	skipJump.blocks[0] = continuationIdx;
-	closeEnd.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	closeEnd.emitter.emit({ type: "jump", blocks: [continuationIdx] });
 	return continuation;
 }
 
@@ -7268,10 +7265,10 @@ function emitIteratorCloseForCompletion(
  * and falls through. Kind codes are local to one finalizer's kind register.
  */
 function routeThroughFinalizer(
-	block: SemanticGraphBlock,
+	block: CoreFrontendBlock,
 	scope: SemanticControlContext,
 	key: string,
-	fill: ((block: SemanticGraphBlock) => void) | null,
+	fill: ((block: CoreFrontendBlock) => void) | null,
 	valueRegister?: number,
 ) {
 	const arms = scope.finalizerArms!;
@@ -7288,13 +7285,13 @@ function routeThroughFinalizer(
 		}
 	}
 
-	block.instructions.push({
+	block.emitter.emit({
 		type: "createNumber",
 		registers: [scope.completionKindReg!],
 		value: kind,
 	});
 	if (valueRegister !== undefined) {
-		block.instructions.push({
+		block.emitter.emit({
 			type: "move",
 			registers: [scope.completionValueReg!, valueRegister],
 		});
@@ -7303,7 +7300,7 @@ function routeThroughFinalizer(
 		type: "jump",
 		blocks: [-1],
 	};
-	block.instructions.push(jump);
+	block.emitter.emit(jump);
 	scope.finallyEntryJumps!.push(jump);
 }
 
@@ -7314,9 +7311,9 @@ function routeThroughFinalizer(
  * once the finally body has run.
  */
 function emitReturn(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	valueRegister: number,
 ) {
 	const scopes = fn.loops ?? [];
@@ -7335,7 +7332,7 @@ function emitReturn(
 		}
 
 		if (scope.kind === "with") {
-			block.instructions.push({ type: "withExit", registers: [] });
+			block.emitter.emit({ type: "withExit", registers: [] });
 		}
 
 		if (scope.iteratorRegister !== undefined) {
@@ -7350,8 +7347,16 @@ function emitReturn(
 			);
 		}
 	}
+	if (
+		fn.classContext?.isConstructor &&
+		fn.classContext.isDerivedConstructor &&
+		fn.classContext.superThisStateBinding
+	) {
+		const currentThis = loadSharedSuperThis(program, fn, { block }, false);
+		block.emitter.emit({ type: "setThis", registers: [currentThis] });
+	}
 
-	block.instructions.push({
+	block.emitter.emit({
 		type: "return",
 		registers: [valueRegister],
 	});
@@ -7364,9 +7369,9 @@ function emitReturn(
  * out (including the target) are closed.
  */
 function emitBreak(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	label?: string,
 ) {
 	const scopes = fn.loops ?? [];
@@ -7385,7 +7390,7 @@ function emitBreak(
 
 		// Leaving a with body pops its object.
 		if (scope.kind === "with") {
-			block.instructions.push({ type: "withExit", registers: [] });
+			block.emitter.emit({ type: "withExit", registers: [] });
 		}
 
 		// Leaving this loop closes its for-of iterator.
@@ -7409,7 +7414,7 @@ function emitBreak(
 		// Restore the enclosing env when crossing a per-iteration loop to an outer
 		// target; the target loop's own exit block pops for a direct break.
 		if (scope.perIterationScopeId !== undefined && !isTarget) {
-			block.instructions.push({ type: "envPop" });
+			block.emitter.emit({ type: "envPop" });
 		}
 
 		if (isTarget) {
@@ -7417,7 +7422,7 @@ function emitBreak(
 				type: "jump",
 				blocks: [-1],
 			};
-			block.instructions.push(jump);
+			block.emitter.emit(jump);
 			scope.breakJumps.push(jump);
 			return;
 		}
@@ -7431,9 +7436,9 @@ function emitBreak(
  * iterators; the target loop's iterator stays open (it re-steps from the header).
  */
 function emitContinue(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	label?: string,
 ) {
 	const scopes = fn.loops ?? [];
@@ -7453,7 +7458,7 @@ function emitContinue(
 		// Continuing out of a with body pops its object (a with is never a
 		// continue target).
 		if (scope.kind === "with") {
-			block.instructions.push({ type: "withExit", registers: [] });
+			block.emitter.emit({ type: "withExit", registers: [] });
 			continue;
 		}
 		if (scope.kind === "iterator") {
@@ -7489,7 +7494,7 @@ function emitContinue(
 				);
 			}
 			if (scope.perIterationScopeId !== undefined) {
-				block.instructions.push({ type: "envPop" });
+				block.emitter.emit({ type: "envPop" });
 			}
 			continue;
 		}
@@ -7498,7 +7503,7 @@ function emitContinue(
 			type: "jump",
 			blocks: [-1],
 		};
-		block.instructions.push(jump);
+		block.emitter.emit(jump);
 		scope.continueJumps.push(jump);
 		return;
 	}
@@ -7544,7 +7549,7 @@ function containsTailCallBlocker(node: unknown): boolean {
  * is about to push, and compileReturnStatement can see the eligibility.
  */
 function prepareTailCallLoop(
-	fn: SemanticGraphFunction,
+	fn: CoreFrontendFunction,
 	functionNode:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -7570,9 +7575,9 @@ function prepareTailCallLoop(
  * to an ordinary return.
  */
 function tryEmitSelfTailCall(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	call: ESTree.CallExpression,
 ): boolean {
 	if (fn.bodyEntryBlock === undefined || fn.tailCallNode === undefined) {
@@ -7640,7 +7645,7 @@ function tryEmitSelfTailCall(
 		storeRegisterAtLocation(cursor.block, locations[i]!, value);
 	}
 
-	cursor.block.instructions.push({ type: "jump", blocks: [fn.bodyEntryBlock] });
+	cursor.block.emitter.emit({ type: "jump", blocks: [fn.bodyEntryBlock] });
 	return true;
 }
 
@@ -7648,12 +7653,12 @@ function tryEmitSelfTailCall(
  * Naively compile a return statement.
  */
 function compileReturnStatement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.ReturnStatement,
 ) {
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 
 	if (
 		fn.tcoEligible &&
@@ -7677,12 +7682,12 @@ function compileReturnStatement(
  * Naively compile variable declarations.
  */
 function compileVariableDeclaration(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	statement: ESTree.VariableDeclaration,
 ) {
-	const cursor: SemanticCursor = { block };
+	const cursor: CoreFrontendCursor = { block };
 	for (const decl of statement.declarations) {
 		// Link `const f = <function>` so a self-recursive tail call reached through
 		// f is recognizable. Recorded before the initializer compiles, since that
@@ -7752,14 +7757,14 @@ function compileVariableDeclaration(
 			identifierUsesDynamicEnvironment(program, fn, decl.id)
 		) {
 			const nameStringIndex = getOrCreateStringConstant(program, binding.name);
-			const base = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const base = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "withResolveBase",
 				registers: [base],
 				nameStringIndex,
 			});
-			const key = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const key = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "createString",
 				registers: [key],
 				stringIndex: nameStringIndex,
@@ -7792,9 +7797,9 @@ const RESUME_MODE_RETURN = 2;
  * and throws a TypeError.
  */
 function compileYieldStarExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.YieldExpression,
 ) {
 	const operand = compileExpression(program, fn, cursor, expression.argument!);
@@ -7806,98 +7811,98 @@ function compileYieldStarExpression(
 
 	// Loop-carried registers (kept alive across the back edge by the
 	// >1-block freeing guard in the allocator).
-	const iterator = nextRegisterDestination(fn);
-	const nextMethod = nextRegisterDestination(fn);
-	const sentValue = nextRegisterDestination(fn);
-	const mode = nextRegisterDestination(fn);
-	const result = nextRegisterDestination(fn);
-	const exprResult = nextRegisterDestination(fn);
+	const iterator = nextCoreVariable(fn);
+	const nextMethod = nextCoreVariable(fn);
+	const sentValue = nextCoreVariable(fn);
+	const mode = nextCoreVariable(fn);
+	const result = nextCoreVariable(fn);
+	const exprResult = nextCoreVariable(fn);
 
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: isAsync ? "getAsyncIterator" : "getIterator",
 		registers: [iterator, nextMethod, operand],
 	});
-	cursor.block.instructions.push({ type: "createUndefined", registers: [sentValue] });
-	cursor.block.instructions.push({ type: "createNumber", registers: [mode], value: 0 });
+	cursor.block.emitter.emit({ type: "createUndefined", registers: [sentValue] });
+	cursor.block.emitter.emit({ type: "createNumber", registers: [mode], value: 0 });
 
-	const header: SemanticGraphBlock = { instructions: [] };
+	const header: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const headerIdx = fn.blocks.push(header) - 1;
-	const nextMode: SemanticGraphBlock = { instructions: [] };
+	const nextMode: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const nextModeIdx = fn.blocks.push(nextMode) - 1;
-	const throwMode: SemanticGraphBlock = { instructions: [] };
+	const throwMode: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const throwModeIdx = fn.blocks.push(throwMode) - 1;
-	const noThrow: SemanticGraphBlock = { instructions: [] };
+	const noThrow: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const noThrowIdx = fn.blocks.push(noThrow) - 1;
-	const returnMode: SemanticGraphBlock = { instructions: [] };
+	const returnMode: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const returnModeIdx = fn.blocks.push(returnMode) - 1;
-	const noReturn: SemanticGraphBlock = { instructions: [] };
+	const noReturn: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const noReturnIdx = fn.blocks.push(noReturn) - 1;
-	const check: SemanticGraphBlock = { instructions: [] };
+	const check: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const checkIdx = fn.blocks.push(check) - 1;
-	const doneBlock: SemanticGraphBlock = { instructions: [] };
+	const doneBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const doneIdx = fn.blocks.push(doneBlock) - 1;
-	const doneReturn: SemanticGraphBlock = { instructions: [] };
+	const doneReturn: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const doneReturnIdx = fn.blocks.push(doneReturn) - 1;
-	const continuation: SemanticGraphBlock = { instructions: [] };
+	const continuation: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 
-	cursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
+	cursor.block.emitter.emit({ type: "jump", blocks: [headerIdx] });
 
-	const stringRegister = (block: SemanticGraphBlock, value: string) => {
-		const reg = nextRegisterDestination(fn);
-		block.instructions.push({
+	const stringRegister = (block: CoreFrontendBlock, value: string) => {
+		const reg = nextCoreVariable(fn);
+		block.emitter.emit({
 			type: "createString",
 			registers: [reg],
 			stringIndex: getOrCreateStringConstant(program, value),
 		});
 		return reg;
 	};
-	const nullishGuard = (block: SemanticGraphBlock, valueReg: number, target: number) => {
-		const undef = nextRegisterDestination(fn);
-		const isNullish = nextRegisterDestination(fn);
-		block.instructions.push({ type: "createUndefined", registers: [undef] });
-		block.instructions.push({
+	const nullishGuard = (block: CoreFrontendBlock, valueReg: number, target: number) => {
+		const undef = nextCoreVariable(fn);
+		const isNullish = nextCoreVariable(fn);
+		block.emitter.emit({ type: "createUndefined", registers: [undef] });
+		block.emitter.emit({
 			type: "binary",
 			registers: [isNullish, valueReg, undef],
 			operator: "==",
 		});
-		block.instructions.push({ type: "jumpIf", registers: [isNullish], blocks: [target] });
+		block.emitter.emit({ type: "jumpIf", registers: [isNullish], blocks: [target] });
 	};
-	const modeEquals = (block: SemanticGraphBlock, modeValue: number, target: number) => {
-		const constReg = nextRegisterDestination(fn);
-		const matchReg = nextRegisterDestination(fn);
-		block.instructions.push({
+	const modeEquals = (block: CoreFrontendBlock, modeValue: number, target: number) => {
+		const constReg = nextCoreVariable(fn);
+		const matchReg = nextCoreVariable(fn);
+		block.emitter.emit({
 			type: "createNumber",
 			registers: [constReg],
 			value: modeValue,
 		});
-		block.instructions.push({
+		block.emitter.emit({
 			type: "binary",
 			registers: [matchReg, mode, constReg],
 			operator: "===",
 		});
-		block.instructions.push({ type: "jumpIf", registers: [matchReg], blocks: [target] });
+		block.emitter.emit({ type: "jumpIf", registers: [matchReg], blocks: [target] });
 	};
 	// After an inner next/throw/return call leaves its result in `result`, await
 	// it (async delegation) and continue to the done/value check.
-	const stepAndContinue = (block: SemanticGraphBlock) => {
+	const stepAndContinue = (block: CoreFrontendBlock) => {
 		if (isAsync) {
-			const stepCursor: SemanticCursor = { block };
+			const stepCursor: CoreFrontendCursor = { block };
 			const awaited = compileAwaitRegister(program, fn, stepCursor, result);
-			stepCursor.block.instructions.push({ type: "move", registers: [result, awaited] });
-			stepCursor.block.instructions.push({ type: "jump", blocks: [checkIdx] });
+			stepCursor.block.emitter.emit({ type: "move", registers: [result, awaited] });
+			stepCursor.block.emitter.emit({ type: "jump", blocks: [checkIdx] });
 		} else {
-			block.instructions.push({ type: "jump", blocks: [checkIdx] });
+			block.emitter.emit({ type: "jump", blocks: [checkIdx] });
 		}
 	};
 
 	// header: dispatch on the resume mode.
 	modeEquals(header, RESUME_MODE_THROW, throwModeIdx);
 	modeEquals(header, RESUME_MODE_RETURN, returnModeIdx);
-	header.instructions.push({ type: "jump", blocks: [nextModeIdx] });
+	header.emitter.emit({ type: "jump", blocks: [nextModeIdx] });
 
 	// next(): advance via the cached next method.
-	nextMode.instructions.push({
+	nextMode.emitter.emit({
 		type: "call",
 		registers: [result, nextMethod, iterator, sentValue],
 	});
@@ -7905,28 +7910,28 @@ function compileYieldStarExpression(
 
 	// throw(): forward to the inner throw, or close + TypeError if absent.
 	{
-		const throwM = nextRegisterDestination(fn);
-		throwMode.instructions.push({
+		const throwM = nextCoreVariable(fn);
+		throwMode.emitter.emit({
 			type: "loadProperty",
 			registers: [throwM, iterator, stringRegister(throwMode, "throw")],
 		});
 		nullishGuard(throwMode, throwM, noThrowIdx);
-		throwMode.instructions.push({
+		throwMode.emitter.emit({
 			type: "call",
 			registers: [result, throwM, iterator, sentValue],
 		});
 		stepAndContinue(throwMode);
 	}
-	noThrow.instructions.push({ type: "iteratorClose", registers: [iterator] });
+	noThrow.emitter.emit({ type: "iteratorClose", registers: [iterator] });
 	{
-		const te = nextRegisterDestination(fn);
-		noThrow.instructions.push({
+		const te = nextCoreVariable(fn);
+		noThrow.emitter.emit({
 			type: "loadIntrinsic",
 			registers: [te],
 			intrinsic: "TypeError",
 		});
-		const err = nextRegisterDestination(fn);
-		noThrow.instructions.push({
+		const err = nextCoreVariable(fn);
+		noThrow.emitter.emit({
 			type: "construct",
 			registers: [
 				err,
@@ -7934,18 +7939,18 @@ function compileYieldStarExpression(
 				stringRegister(noThrow, "The iterator does not provide a 'throw' method"),
 			],
 		});
-		noThrow.instructions.push({ type: "throw", registers: [err] });
+		noThrow.emitter.emit({ type: "throw", registers: [err] });
 	}
 
 	// return(): forward to the inner return, or return the received value.
 	{
-		const returnM = nextRegisterDestination(fn);
-		returnMode.instructions.push({
+		const returnM = nextCoreVariable(fn);
+		returnMode.emitter.emit({
 			type: "loadProperty",
 			registers: [returnM, iterator, stringRegister(returnMode, "return")],
 		});
 		nullishGuard(returnMode, returnM, noReturnIdx);
-		returnMode.instructions.push({
+		returnMode.emitter.emit({
 			type: "call",
 			registers: [result, returnM, iterator, sentValue],
 		});
@@ -7955,7 +7960,7 @@ function compileYieldStarExpression(
 	// delegation awaits it first (spec: "If generatorKind is async, set value to
 	// ? Await(value)"), so a returned promise resolves before it leaves yield*.
 	if (isAsync) {
-		const noReturnCursor: SemanticCursor = { block: noReturn };
+		const noReturnCursor: CoreFrontendCursor = { block: noReturn };
 		const awaited = compileAwaitRegister(program, fn, noReturnCursor, sentValue);
 		emitReturn(program, fn, noReturnCursor.block, awaited);
 	} else {
@@ -7969,25 +7974,25 @@ function compileYieldStarExpression(
 	// (e.g. `next()` returning 42) is a TypeError, not a silently-swallowed
 	// `{ done: undefined }`. All three resume modes reach here, so this covers
 	// them for both sync and async delegation.
-	const checkBody: SemanticGraphBlock = { instructions: [] };
+	const checkBody: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const checkBodyIdx = fn.blocks.push(checkBody) - 1;
-	const notObject: SemanticGraphBlock = { instructions: [] };
+	const notObject: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const notObjectIdx = fn.blocks.push(notObject) - 1;
 	{
-		const typeName = nextRegisterDestination(fn);
-		check.instructions.push({
+		const typeName = nextCoreVariable(fn);
+		check.emitter.emit({
 			type: "unary",
 			registers: [typeName, result],
 			operator: "typeof",
 		});
 		// typeof "function" → a callable object: always valid.
-		const isFunc = nextRegisterDestination(fn);
-		check.instructions.push({
+		const isFunc = nextCoreVariable(fn);
+		check.emitter.emit({
 			type: "binary",
 			registers: [isFunc, typeName, stringRegister(check, "function")],
 			operator: "===",
 		});
-		check.instructions.push({
+		check.emitter.emit({
 			type: "jumpIf",
 			registers: [isFunc],
 			blocks: [checkBodyIdx],
@@ -7995,56 +8000,56 @@ function compileYieldStarExpression(
 		// Otherwise it must be typeof "object" AND not null (typeof null is
 		// "object"); anything else (number/string/boolean/undefined/symbol/bigint)
 		// is a non-object result.
-		const isObjType = nextRegisterDestination(fn);
-		check.instructions.push({
+		const isObjType = nextCoreVariable(fn);
+		check.emitter.emit({
 			type: "binary",
 			registers: [isObjType, typeName, stringRegister(check, "object")],
 			operator: "===",
 		});
-		const notObjType = nextRegisterDestination(fn);
-		check.instructions.push({
+		const notObjType = nextCoreVariable(fn);
+		check.emitter.emit({
 			type: "unary",
 			registers: [notObjType, isObjType],
 			operator: "!",
 		});
-		check.instructions.push({
+		check.emitter.emit({
 			type: "jumpIf",
 			registers: [notObjType],
 			blocks: [notObjectIdx],
 		});
 		nullishGuard(check, result, notObjectIdx);
-		check.instructions.push({ type: "jump", blocks: [checkBodyIdx] });
+		check.emitter.emit({ type: "jump", blocks: [checkBodyIdx] });
 	}
 	{
-		const te = nextRegisterDestination(fn);
-		notObject.instructions.push({
+		const te = nextCoreVariable(fn);
+		notObject.emitter.emit({
 			type: "loadIntrinsic",
 			registers: [te],
 			intrinsic: "TypeError",
 		});
-		const err = nextRegisterDestination(fn);
-		notObject.instructions.push({
+		const err = nextCoreVariable(fn);
+		notObject.emitter.emit({
 			type: "construct",
 			registers: [err, te, stringRegister(notObject, "Iterator result is not an object")],
 		});
-		notObject.instructions.push({ type: "throw", registers: [err] });
+		notObject.emitter.emit({ type: "throw", registers: [err] });
 	}
 
 	// checkBody: a done result ends the delegation; otherwise yield the value out
 	// and loop back to advance the inner iterator on the next resume.
 	{
-		const doneReg = nextRegisterDestination(fn);
-		checkBody.instructions.push({
+		const doneReg = nextCoreVariable(fn);
+		checkBody.emitter.emit({
 			type: "loadProperty",
 			registers: [doneReg, result, stringRegister(checkBody, "done")],
 		});
-		checkBody.instructions.push({
+		checkBody.emitter.emit({
 			type: "jumpIf",
 			registers: [doneReg],
 			blocks: [doneIdx],
 		});
-		const valueReg = nextRegisterDestination(fn);
-		checkBody.instructions.push({
+		const valueReg = nextCoreVariable(fn);
+		checkBody.emitter.emit({
 			type: "loadProperty",
 			registers: [valueReg, result, stringRegister(checkBody, "value")],
 		});
@@ -8056,7 +8061,7 @@ function compileYieldStarExpression(
 		// it (only a plain `yield x` awaits x). Awaiting here would wrongly unwrap
 		// a promise yielded by a hand-written async iterator. For a sync operand
 		// the value is already awaited inside the AsyncFromSyncIterator wrapper.
-		checkBody.instructions.push({
+		checkBody.emitter.emit({
 			type: "yield",
 			registers: [sentValue, mode, valueReg],
 		});
@@ -8066,19 +8071,19 @@ function compileYieldStarExpression(
 		// next()/throw() resumption is used as-is (not awaited). The awaited value
 		// replaces `sentValue` so returnMode forwards the unwrapped value.
 		if (isAsync) {
-			const unwrapAwait: SemanticGraphBlock = { instructions: [] };
+			const unwrapAwait: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 			const unwrapAwaitIdx = fn.blocks.push(unwrapAwait) - 1;
 			modeEquals(checkBody, RESUME_MODE_RETURN, unwrapAwaitIdx);
-			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
-			const unwrapCursor: SemanticCursor = { block: unwrapAwait };
+			checkBody.emitter.emit({ type: "jump", blocks: [headerIdx] });
+			const unwrapCursor: CoreFrontendCursor = { block: unwrapAwait };
 			const awaited = compileAwaitRegister(program, fn, unwrapCursor, sentValue);
-			unwrapCursor.block.instructions.push({
+			unwrapCursor.block.emitter.emit({
 				type: "move",
 				registers: [sentValue, awaited],
 			});
-			unwrapCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
+			unwrapCursor.block.emitter.emit({ type: "jump", blocks: [headerIdx] });
 		} else {
-			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
+			checkBody.emitter.emit({ type: "jump", blocks: [headerIdx] });
 		}
 	}
 
@@ -8086,14 +8091,14 @@ function compileYieldStarExpression(
 	// the inner returns from the outer generator; otherwise it is the yield*
 	// expression value.
 	{
-		const doneValue = nextRegisterDestination(fn);
-		doneBlock.instructions.push({
+		const doneValue = nextCoreVariable(fn);
+		doneBlock.emitter.emit({
 			type: "loadProperty",
 			registers: [doneValue, result, stringRegister(doneBlock, "value")],
 		});
 		modeEquals(doneBlock, RESUME_MODE_RETURN, doneReturnIdx);
-		doneBlock.instructions.push({ type: "move", registers: [exprResult, doneValue] });
-		doneBlock.instructions.push({ type: "jump", blocks: [continuationIdx] });
+		doneBlock.emitter.emit({ type: "move", registers: [exprResult, doneValue] });
+		doneBlock.emitter.emit({ type: "jump", blocks: [continuationIdx] });
 		emitReturn(program, fn, doneReturn, doneValue);
 	}
 
@@ -8109,9 +8114,9 @@ function compileYieldStarExpression(
  * range); a return() returns it, routed through enclosing finalizers.
  */
 function compileYieldExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.YieldExpression,
 ) {
 	if (expression.delegate) {
@@ -8128,9 +8133,9 @@ function compileYieldExpression(
 		yieldedSrc = compileAwaitRegister(program, fn, cursor, yieldedSrc);
 	}
 
-	const valueDst = nextRegisterDestination(fn);
-	const modeDst = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const valueDst = nextCoreVariable(fn);
+	const modeDst = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "yield",
 		registers: [valueDst, modeDst, yieldedSrc],
 	});
@@ -8154,9 +8159,9 @@ function compileYieldExpression(
  * return() unwinds.
  */
 function emitResumeDispatch(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	valueDst: number,
 	modeDst: number,
 	// AsyncGeneratorUnwrapYieldResumption: an async generator's `yield` awaits a
@@ -8165,61 +8170,61 @@ function emitResumeDispatch(
 	awaitReturnValue = false,
 ): number {
 	// throw() resumption: throw the sent value at the suspend point.
-	const throwBlock: SemanticGraphBlock = { instructions: [] };
+	const throwBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const throwIdx = fn.blocks.push(throwBlock) - 1;
-	throwBlock.instructions.push({ type: "throw", registers: [valueDst] });
+	throwBlock.emitter.emit({ type: "throw", registers: [valueDst] });
 
 	// return() resumption: return the sent value, through enclosing finalizers.
-	const returnBlock: SemanticGraphBlock = { instructions: [] };
+	const returnBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const returnIdx = fn.blocks.push(returnBlock) - 1;
 	if (awaitReturnValue) {
-		const returnCursor: SemanticCursor = { block: returnBlock };
+		const returnCursor: CoreFrontendCursor = { block: returnBlock };
 		const awaited = compileAwaitRegister(program, fn, returnCursor, valueDst);
 		emitReturn(program, fn, returnCursor.block, awaited);
 	} else {
 		emitReturn(program, fn, returnBlock, valueDst);
 	}
 
-	const continuation: SemanticGraphBlock = { instructions: [] };
+	const continuation: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 
-	const throwConst = nextRegisterDestination(fn);
-	const isThrow = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const throwConst = nextCoreVariable(fn);
+	const isThrow = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createNumber",
 		registers: [throwConst],
 		value: RESUME_MODE_THROW,
 	});
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "binary",
 		registers: [isThrow, modeDst, throwConst],
 		operator: "===",
 	});
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "jumpIf",
 		registers: [isThrow],
 		blocks: [throwIdx],
 	});
 
-	const returnConst = nextRegisterDestination(fn);
-	const isReturn = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const returnConst = nextCoreVariable(fn);
+	const isReturn = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createNumber",
 		registers: [returnConst],
 		value: RESUME_MODE_RETURN,
 	});
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "binary",
 		registers: [isReturn, modeDst, returnConst],
 		operator: "===",
 	});
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "jumpIf",
 		registers: [isReturn],
 		blocks: [returnIdx],
 	});
 
-	cursor.block.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	cursor.block.emitter.emit({ type: "jump", blocks: [continuationIdx] });
 
 	// next()/fulfilled resumption continues here with the sent/resolved value.
 	cursor.block = continuation;
@@ -8227,9 +8232,9 @@ function emitResumeDispatch(
 }
 
 function compileAwaitExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.AwaitExpression,
 ): number {
 	const awaitedSrc = compileExpression(program, fn, cursor, expression.argument);
@@ -8238,14 +8243,14 @@ function compileAwaitExpression(
 
 /** Suspend on the value in awaitedSrc and continue with the settled value. */
 function compileAwaitRegister(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	awaitedSrc: number,
 ): number {
-	const valueDst = nextRegisterDestination(fn);
-	const modeDst = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const valueDst = nextCoreVariable(fn);
+	const modeDst = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "await",
 		registers: [valueDst, modeDst, awaitedSrc],
 	});
@@ -8256,15 +8261,15 @@ function compileAwaitRegister(
 /**
  * Expression compilation dispatch.
  *
- * Expressions always return the virtual register index they used.
+ * Expressions return the logical variable identity holding their Core value.
  *
  * nameHint carries the NamedEvaluation name for anonymous function and class
  * expressions: the binding or property name the value is assigned to.
  */
 function compileExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.Expression | ESTree.PrivateIdentifier,
 	nameHint?: string,
 ) {
@@ -8316,7 +8321,7 @@ function compileExpression(
 				const location = getOrCreateBindingLocation(program, fn, thisBinding);
 				return loadRegisterFromLocation(fn, cursor.block, location);
 			}
-			const destination = nextRegisterDestination(fn);
+			const destination = nextCoreVariable(fn);
 			// Top-level `this` in a global *script* is globalThis in BOTH strict
 			// and sloppy mode (ScriptEvaluation binds globalThis regardless of
 			// strictness); only a module's top-level `this` is undefined. A DIRECT
@@ -8339,14 +8344,14 @@ function compileExpression(
 				!fn.semanticFile.commonjs &&
 				!program.evalDirect
 			) {
-				cursor.block.instructions.push({
+				cursor.block.emitter.emit({
 					type: "loadIntrinsic",
 					registers: [destination],
 					intrinsic: "globalThis",
 				});
 				return destination;
 			}
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "loadThis",
 				registers: [destination],
 			});
@@ -8354,8 +8359,8 @@ function compileExpression(
 		}
 		case "MetaProperty": {
 			if (isImportMeta(expression)) {
-				const destination = nextRegisterDestination(fn);
-				cursor.block.instructions.push({
+				const destination = nextCoreVariable(fn);
+				cursor.block.emitter.emit({
 					type: "loadGlobal",
 					registers: [destination],
 					index: importMetaSlot(program, fn.semanticFile),
@@ -8382,8 +8387,8 @@ function compileExpression(
 			if (fn.inFieldInitializer) {
 				return compileUndefined(fn, cursor);
 			}
-			const destination = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const destination = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "loadNewTarget",
 				registers: [destination],
 			});
@@ -8447,19 +8452,19 @@ function compileExpression(
  * undefined.
  */
 function compileOptionalChain(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	node: ESTree.Expression,
 ): number {
-	const result = nextRegisterDestination(fn);
+	const result = nextCoreVariable(fn);
 	const shortCircuits: Array<Extract<CompilerInstruction, { type: "jumpIf" }>> = [];
 	const value = compileChainElement(program, fn, cursor, node, shortCircuits);
 	if (value === -1) {
 		return -1;
 	}
 
-	cursor.block.instructions.push({ type: "move", registers: [result, value] });
+	cursor.block.emitter.emit({ type: "move", registers: [result, value] });
 	if (shortCircuits.length === 0) {
 		return result;
 	}
@@ -8468,21 +8473,21 @@ function compileOptionalChain(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(successJump);
+	cursor.block.emitter.emit(successJump);
 
 	// Short-circuit landing block: the chain result is undefined.
-	const shortIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const shortIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	const shortBlock = fn.blocks[shortIdx]!;
-	const shortCursor: SemanticCursor = { block: shortBlock };
+	const shortCursor: CoreFrontendCursor = { block: shortBlock };
 	const undefinedRegister = compileUndefined(fn, shortCursor);
-	shortBlock.instructions.push({ type: "move", registers: [result, undefinedRegister] });
+	shortBlock.emitter.emit({ type: "move", registers: [result, undefinedRegister] });
 	const shortJoinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	shortBlock.instructions.push(shortJoinJump);
+	shortBlock.emitter.emit(shortJoinJump);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	successJump.blocks[0] = joinIdx;
 	shortJoinJump.blocks[0] = joinIdx;
 	for (const jump of shortCircuits) {
@@ -8499,14 +8504,14 @@ function compileOptionalChain(
  * compileOptionalChain.
  */
 function emitOptionalGuard(
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	base: number,
 	shortCircuits: Array<Extract<CompilerInstruction, { type: "jumpIf" }>>,
 ) {
 	const undefinedRegister = compileUndefined(fn, cursor);
-	const isNil = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const isNil = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "binary",
 		registers: [isNil, base, undefinedRegister],
 		operator: "==",
@@ -8521,10 +8526,10 @@ function emitOptionalGuard(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(shortJump, continueJump);
+	cursor.block.emitter.emit(shortJump, continueJump);
 	shortCircuits.push(shortJump);
 
-	const continueIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const continueIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	continueJump.blocks[0] = continueIdx;
 	cursor.block = fn.blocks[continueIdx]!;
 }
@@ -8534,9 +8539,9 @@ function emitOptionalGuard(
  * circuit jump list through nested member accesses and calls.
  */
 function compileChainElement(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	node: ESTree.Expression,
 	shortCircuits: Array<Extract<CompilerInstruction, { type: "jumpIf" }>>,
 ): number {
@@ -8574,8 +8579,8 @@ function compileChainElement(
 			: node.property.type === "Identifier"
 				? compileStaticString(program, fn, cursor, node.property.name)
 				: -1;
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadProperty",
 			registers: [destination, object, key],
 		});
@@ -8629,8 +8634,8 @@ function compileChainElement(
 						: calleeNode.property.type === "Identifier"
 							? compileStaticString(program, fn, cursor, calleeNode.property.name)
 							: -1;
-					callee = nextRegisterDestination(fn);
-					cursor.block.instructions.push({
+					callee = nextCoreVariable(fn);
+					cursor.block.emitter.emit({
 						type: "loadProperty",
 						registers: [callee, object, key],
 					});
@@ -8662,8 +8667,8 @@ function compileChainElement(
 					cursor,
 					node.arguments[0].argument,
 				);
-				const destination = nextRegisterDestination(fn);
-				cursor.block.instructions.push({
+				const destination = nextCoreVariable(fn);
+				cursor.block.emitter.emit({
 					type: "callSpreadIterable",
 					registers: [destination, callee, thisRegister, iterable],
 				});
@@ -8675,8 +8680,8 @@ function compileChainElement(
 				cursor,
 				node.arguments,
 			);
-			const destination = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const destination = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "callSpread",
 				registers: [destination, callee, thisRegister, argumentsArray],
 			});
@@ -8686,8 +8691,8 @@ function compileChainElement(
 		const args = node.arguments.map((arg) =>
 			arg.type === "SpreadElement" ? -1 : compileExpression(program, fn, cursor, arg),
 		);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "call",
 			registers: [destination, callee, thisRegister, ...args],
 		});
@@ -8700,9 +8705,9 @@ function compileChainElement(
 }
 
 function compileFunctionExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 	nameHint?: string,
 ) {
@@ -8710,8 +8715,8 @@ function compileFunctionExpression(
 	// expression keeps its own name.
 	const anonymous = expression.type === "ArrowFunctionExpression" || !expression.id;
 
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createFunction",
 		registers: [destination],
 		functionIndex: compileNewFunctionExpression(
@@ -8727,9 +8732,9 @@ function compileFunctionExpression(
 }
 
 function compileAssignment(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	if (
@@ -8774,8 +8779,8 @@ function compileAssignment(
 		} else {
 			const current = compilePrivateMemberLoad(program, fn, cursor, object, name);
 			const right = compileExpression(program, fn, cursor, assignmentExpression.right);
-			value = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			value = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "binary",
 				registers: [value, current, right],
 				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
@@ -8814,8 +8819,8 @@ function compileAssignment(
 		const binaryOperator = assignmentOperatorToBinaryOperator(
 			assignmentExpression.operator,
 		);
-		const current = nextRegisterDestination(fn);
-		cursor.block.instructions.push(
+		const current = nextCoreVariable(fn);
+		cursor.block.emitter.emit(
 			member.receiver === undefined
 				? { type: "loadProperty", registers: [current, object, effectiveKey] }
 				: {
@@ -8825,8 +8830,8 @@ function compileAssignment(
 		);
 
 		const right = compileExpression(program, fn, cursor, assignmentExpression.right);
-		value = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		value = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [value, current, right],
 			operator: binaryOperator,
@@ -8839,9 +8844,9 @@ function compileAssignment(
 }
 
 function compileIdentifierAssignment(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	if (
@@ -8883,15 +8888,15 @@ function compileIdentifierAssignment(
 		if (assignmentExpression.operator === "=") {
 			let initiallyPresent: number | undefined;
 			if (!isSloppyFunction(fn)) {
-				const global = nextRegisterDestination(fn);
-				cursor.block.instructions.push({
+				const global = nextCoreVariable(fn);
+				cursor.block.emitter.emit({
 					type: "loadIntrinsic",
 					registers: [global],
 					intrinsic: "globalThis",
 				});
 				const key = compileStaticString(program, fn, cursor, binding.name);
-				initiallyPresent = nextRegisterDestination(fn);
-				cursor.block.instructions.push({
+				initiallyPresent = nextCoreVariable(fn);
+				cursor.block.emitter.emit({
 					type: "binary",
 					registers: [initiallyPresent, key, global],
 					operator: "in",
@@ -8908,21 +8913,21 @@ function compileIdentifierAssignment(
 					type: "jump",
 					blocks: [-1],
 				};
-				cursor.block.instructions.push(storeJump, throwJump);
+				cursor.block.emitter.emit(storeJump, throwJump);
 
-				const storeIndex = fn.blocks.push({ instructions: [] }) - 1;
+				const storeIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 				cursor.block = fn.blocks[storeIndex]!;
 				emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
 				const storeJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 					type: "jump",
 					blocks: [-1],
 				};
-				cursor.block.instructions.push(storeJoin);
+				cursor.block.emitter.emit(storeJoin);
 
-				const throwIndex = fn.blocks.push({ instructions: [] }) - 1;
+				const throwIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 				cursor.block = fn.blocks[throwIndex]!;
-				const undeclared = nextRegisterDestination(fn);
-				cursor.block.instructions.push({
+				const undeclared = nextCoreVariable(fn);
+				cursor.block.emitter.emit({
 					type: "loadUndeclared",
 					registers: [undeclared],
 					nameStringIndex: getOrCreateStringConstant(program, binding.name),
@@ -8931,9 +8936,9 @@ function compileIdentifierAssignment(
 					type: "jump",
 					blocks: [-1],
 				};
-				cursor.block.instructions.push(throwJoin);
+				cursor.block.emitter.emit(throwJoin);
 
-				const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+				const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 				storeJump.blocks[0] = storeIndex;
 				throwJump.blocks[0] = throwIndex;
 				storeJoin.blocks[0] = joinIndex;
@@ -8961,8 +8966,8 @@ function compileIdentifierAssignment(
 			const location = getOrCreateBindingLocation(program, fn, binding);
 			const current = loadRegisterFromLocation(fn, cursor.block, location);
 			const right = compileExpression(program, fn, cursor, assignmentExpression.right);
-			value = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			value = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "binary",
 				registers: [value, current, right],
 				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
@@ -8991,8 +8996,8 @@ function compileIdentifierAssignment(
 			if (right === -1) {
 				return -1;
 			}
-			const value = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const value = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "binary",
 				registers: [value, current, right],
 				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
@@ -9036,8 +9041,8 @@ function compileIdentifierAssignment(
 		if (right === -1) {
 			return -1;
 		}
-		value = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		value = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [value, current, right],
 			operator: binaryOperator,
@@ -9056,9 +9061,9 @@ function compileIdentifierAssignment(
  * value when it short-circuits, otherwise the assigned value.
  */
 function compileLogicalAssignment(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	const left = assignmentExpression.left;
@@ -9083,14 +9088,14 @@ function compileLogicalAssignment(
 		nameHint = binding.name;
 		if (identifierUsesDynamicEnvironment(program, fn, left)) {
 			const nameStringIndex = getOrCreateStringConstant(program, left.name);
-			const base = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const base = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "withResolveBase",
 				registers: [base],
 				nameStringIndex,
 			});
-			const key = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const key = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "createString",
 				registers: [key],
 				stringIndex: nameStringIndex,
@@ -9128,15 +9133,15 @@ function compileLogicalAssignment(
 		return -1;
 	}
 
-	const result = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "move", registers: [result, current] });
+	const result = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "move", registers: [result, current] });
 
 	// The condition register decides whether to enter the assign branch.
 	let condition = current;
 	if (assignmentExpression.operator === "??=") {
 		const undefinedRegister = compileUndefined(fn, cursor);
-		condition = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		condition = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [condition, current, undefinedRegister],
 			operator: "==",
@@ -9152,10 +9157,10 @@ function compileLogicalAssignment(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(conditionalJump, fallthroughJump);
+	cursor.block.emitter.emit(conditionalJump, fallthroughJump);
 
 	// Assign branch: evaluate the right hand side and store it.
-	const assignIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const assignIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[assignIdx]!;
 	const right = compileExpression(
 		program,
@@ -9167,7 +9172,7 @@ function compileLogicalAssignment(
 	if (right === -1) {
 		return -1;
 	}
-	cursor.block.instructions.push({ type: "move", registers: [result, right] });
+	cursor.block.emitter.emit({ type: "move", registers: [result, right] });
 
 	if (withReference) {
 		compileWithBaseStore(
@@ -9202,9 +9207,9 @@ function compileLogicalAssignment(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(assignJoinJump);
+	cursor.block.emitter.emit(assignJoinJump);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	if (assignmentExpression.operator === "||=") {
 		// A truthy current value skips the assignment.
 		conditionalJump.blocks[0] = joinIdx;
@@ -9225,14 +9230,14 @@ function compileLogicalAssignment(
  * hand side, with both sides writing the shared result register.
  */
 function compileLogicalExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.LogicalExpression,
 ): number {
-	const result = nextRegisterDestination(fn);
+	const result = nextCoreVariable(fn);
 	const left = compileExpression(program, fn, cursor, expression.left);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "move",
 		registers: [result, left],
 	});
@@ -9242,8 +9247,8 @@ function compileLogicalExpression(
 	let condition = left;
 	if (expression.operator === "??") {
 		const undefinedRegister = compileUndefined(fn, cursor);
-		condition = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		condition = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [condition, left, undefinedRegister],
 			operator: "==",
@@ -9259,12 +9264,12 @@ function compileLogicalExpression(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(conditionalJump, fallthroughJump);
+	cursor.block.emitter.emit(conditionalJump, fallthroughJump);
 
-	const rightIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const rightIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[rightIdx]!;
 	const right = compileExpression(program, fn, cursor, expression.right);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "move",
 		registers: [result, right],
 	});
@@ -9272,9 +9277,9 @@ function compileLogicalExpression(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(rightJoinJump);
+	cursor.block.emitter.emit(rightJoinJump);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	if (expression.operator === "||") {
 		// A truthy left value skips the right side.
 		conditionalJump.blocks[0] = joinIdx;
@@ -9295,12 +9300,12 @@ function compileLogicalExpression(
  * expressions.
  */
 function compileConditionalExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.ConditionalExpression,
 ): number {
-	const result = nextRegisterDestination(fn);
+	const result = nextCoreVariable(fn);
 	const condition = compileExpression(program, fn, cursor, expression.test);
 
 	const consequentJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
@@ -9312,12 +9317,12 @@ function compileConditionalExpression(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(consequentJump, alternateJump);
+	cursor.block.emitter.emit(consequentJump, alternateJump);
 
-	const consequentIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const consequentIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[consequentIdx]!;
 	const consequent = compileExpression(program, fn, cursor, expression.consequent);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "move",
 		registers: [result, consequent],
 	});
@@ -9325,12 +9330,12 @@ function compileConditionalExpression(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(consequentJoinJump);
+	cursor.block.emitter.emit(consequentJoinJump);
 
-	const alternateIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const alternateIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[alternateIdx]!;
 	const alternate = compileExpression(program, fn, cursor, expression.alternate);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "move",
 		registers: [result, alternate],
 	});
@@ -9338,9 +9343,9 @@ function compileConditionalExpression(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(alternateJoinJump);
+	cursor.block.emitter.emit(alternateJoinJump);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	consequentJump.blocks[0] = consequentIdx;
 	alternateJump.blocks[0] = alternateIdx;
 	consequentJoinJump.blocks[0] = joinIdx;
@@ -9355,9 +9360,9 @@ function compileConditionalExpression(
  * leading quasi keeps the chain string-typed so + coerces the expressions.
  */
 function compileTemplateLiteral(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.TemplateLiteral,
 ): number {
 	let result = compileStaticString(
@@ -9374,8 +9379,8 @@ function compileTemplateLiteral(
 			cursor,
 			expression.expressions[i] as ESTree.Expression,
 		);
-		let next = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		let next = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [next, result, part],
 			operator: "+",
@@ -9385,8 +9390,8 @@ function compileTemplateLiteral(
 		const quasi = expression.quasis[i + 1]?.value.cooked ?? "";
 		if (quasi.length > 0) {
 			const quasiRegister = compileStaticString(program, fn, cursor, quasi);
-			next = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			next = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "binary",
 				registers: [next, result, quasiRegister],
 				operator: "+",
@@ -9407,9 +9412,9 @@ function compileTemplateLiteral(
  * (required by the spec — tags routinely use it as a cache key / WeakMap key).
  */
 function compileTaggedTemplate(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.TaggedTemplateExpression,
 ): number {
 	const tagNode = expression.tag as unknown as ESTree.Node;
@@ -9449,8 +9454,8 @@ function compileTaggedTemplate(
 		getOrCreateStringConstant(program, quasi.value.raw ?? ""),
 	);
 
-	const stringsRegister = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const stringsRegister = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createTemplateObject",
 		registers: [stringsRegister],
 		cacheSlot: program.nextGlobalIndex++,
@@ -9462,8 +9467,8 @@ function compileTaggedTemplate(
 		compileExpression(program, fn, cursor, argument),
 	);
 
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "call",
 		registers: [destination, callee, thisRegister, stringsRegister, ...args],
 	});
@@ -9472,9 +9477,9 @@ function compileTaggedTemplate(
 }
 
 function compileUnaryExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.UnaryExpression,
 ): number {
 	if (expression.operator === "void") {
@@ -9508,15 +9513,15 @@ function compileUnaryExpression(
 			// ordinary [[Get]] yields undefined for an absent property (so the result
 			// is "undefined"), the real type when the global exists (incl. ones added
 			// at runtime), and propagates a throwing getter, matching GetValue.
-			const global = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const global = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "loadIntrinsic",
 				registers: [global],
 				intrinsic: "globalThis",
 			});
 			const value = emitLoadProperty(program, fn, cursor, global, argument.name);
-			const destination = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const destination = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "unary",
 				registers: [destination, value],
 				operator: "typeof",
@@ -9536,8 +9541,8 @@ function compileUnaryExpression(
 	}
 
 	const operand = compileExpression(program, fn, cursor, expression.argument);
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "unary",
 		registers: [destination, operand],
 		operator: expression.operator,
@@ -9552,9 +9557,9 @@ function compileUnaryExpression(
  * cannot reach this point: the parser rejects it in (implied) strict mode.
  */
 function compileDeleteExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.UnaryExpression,
 ): number {
 	if (expression.argument.type === "MemberExpression") {
@@ -9564,8 +9569,8 @@ function compileDeleteExpression(
 			cursor,
 			expression.argument,
 		);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "deleteProperty",
 			registers: [destination, object, key],
 		});
@@ -9586,8 +9591,8 @@ function compileDeleteExpression(
 
 	compileExpression(program, fn, cursor, expression.argument);
 
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createBoolean",
 		registers: [destination],
 		value: true,
@@ -9602,30 +9607,30 @@ function compileDeleteExpression(
  * configurable); a resolvable binding cannot be deleted (`delete x` is false).
  */
 function compileStaticIdentifierDelete(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	if (binding?.undeclared) {
 		retainHostGlobal(program, binding);
-		const global = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const global = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadIntrinsic",
 			registers: [global],
 			intrinsic: "globalThis",
 		});
 		const key = compileStaticString(program, fn, cursor, binding.name);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "deleteProperty",
 			registers: [destination, global, key],
 		});
 		return destination;
 	}
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createBoolean",
 		registers: [destination],
 		value: false,
@@ -9640,21 +9645,21 @@ function compileStaticIdentifierDelete(
  * paths join with the boolean result in one register.
  */
 function compileWithDynamicDelete(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const nameStringIndex = getOrCreateStringConstant(program, identifier.name);
-	const base = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const base = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "withResolveBase",
 		registers: [base],
 		nameStringIndex,
 	});
-	const result = nextRegisterDestination(fn);
-	const emptyFlag = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
+	const result = nextCoreVariable(fn);
+	const emptyFlag = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [emptyFlag, base] });
 
 	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
@@ -9665,18 +9670,18 @@ function compileWithDynamicDelete(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJump, foundJump);
+	cursor.block.emitter.emit(missJump, foundJump);
 
 	// Found: delete the property off the captured with-object.
-	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const foundIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[foundIdx]!;
-	const key = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const key = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createString",
 		registers: [key],
 		stringIndex: nameStringIndex,
 	});
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "deleteProperty",
 		registers: [result, base, key],
 	});
@@ -9684,20 +9689,20 @@ function compileWithDynamicDelete(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(foundJoin);
+	cursor.block.emitter.emit(foundJoin);
 
 	// Miss: static delete into the same result register.
-	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const missIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
 	const staticResult = compileStaticIdentifierDelete(program, fn, cursor, identifier);
-	cursor.block.instructions.push({ type: "move", registers: [result, staticResult] });
+	cursor.block.emitter.emit({ type: "move", registers: [result, staticResult] });
 	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJoin);
+	cursor.block.emitter.emit(missJoin);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	foundJump.blocks[0] = foundIdx;
 	missJump.blocks[0] = missIdx;
 	foundJoin.blocks[0] = joinIdx;
@@ -9711,9 +9716,9 @@ function compileWithDynamicDelete(
  * ToNumber (unary plus) so the postfix result is the numeric old value.
  */
 function compileUpdateExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.UpdateExpression,
 ): number {
 	// UpdateExpression coerces with ToNumeric (not ToNumber): a BigInt operand
@@ -9737,14 +9742,14 @@ function compileUpdateExpression(
 				program,
 				expression.argument.name,
 			);
-			const base = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const base = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "withResolveBase",
 				registers: [base],
 				nameStringIndex,
 			});
-			const key = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const key = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "createString",
 				registers: [key],
 				stringIndex: nameStringIndex,
@@ -9757,14 +9762,14 @@ function compileUpdateExpression(
 				key,
 				expression.argument,
 			);
-			const oldValue = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const oldValue = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "unary",
 				registers: [oldValue, current],
 				operator: "tonumeric",
 			});
-			const newValue = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const newValue = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "unary",
 				registers: [newValue, oldValue],
 				operator: step,
@@ -9777,15 +9782,15 @@ function compileUpdateExpression(
 			hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
 		const current = loadRegisterFromLocation(fn, cursor.block, location);
 		emitTdzGuard(program, fn, cursor.block, binding, current);
-		const oldValue = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const oldValue = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "unary",
 			registers: [oldValue, current],
 			operator: "tonumeric",
 		});
 
-		const newValue = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const newValue = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "unary",
 			registers: [newValue, oldValue],
 			operator: step,
@@ -9821,15 +9826,15 @@ function compileUpdateExpression(
 			? compilePrivateMemberLoad(program, fn, cursor, object, privateName)
 			: compileMemberLoad(fn, cursor, { ...resolved, key: effectiveKey });
 
-		const oldValue = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const oldValue = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "unary",
 			registers: [oldValue, current],
 			operator: "tonumeric",
 		});
 
-		const newValue = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const newValue = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "unary",
 			registers: [newValue, oldValue],
 			operator: step,
@@ -9861,9 +9866,9 @@ function assignmentOperatorToBinaryOperator(operator: string) {
 }
 
 function compileBinary(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	binaryExpression: ESTree.BinaryExpression,
 ): number {
 	// Ergonomic brand check `#x in obj`: present iff obj carries the declaring
@@ -9881,8 +9886,8 @@ function compileBinary(
 		}
 
 		const brandSymbol = loadCapturedBinding(program, fn, cursor, brand);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "hasPrivate",
 			registers: [destination, object, brandSymbol],
 		});
@@ -9896,9 +9901,9 @@ function compileBinary(
 	const left = compileExpression(program, fn, cursor, binaryExpression.left);
 	const right = compileExpression(program, fn, cursor, binaryExpression.right);
 
-	const destination = nextRegisterDestination(fn);
+	const destination = nextCoreVariable(fn);
 
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "binary",
 
 		registers: [destination, left, right],
@@ -10046,9 +10051,9 @@ function appendTemplateNumber(out: Array<number>, value: number): void {
 }
 
 function compileLiteralTemplate(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	root: ESTree.ArrayExpression | ESTree.ObjectExpression,
 ): number | null {
 	if (!isStaticLiteralTemplate(root)) return null;
@@ -10121,8 +10126,8 @@ function compileLiteralTemplate(
 
 	const templateOffset = program.literalTemplateData.length;
 	for (const word of encoded) program.literalTemplateData.push(word);
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "instantiateLiteralTemplate",
 		registers: [destination],
 		templateOffset,
@@ -10189,9 +10194,9 @@ function isAnonymousFunctionDefinition(node: ESTree.Node | null | undefined): bo
  * the erroneous `prototype` that a plain function value would carry.
  */
 function compileObjectMemberFunction(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	valueNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 	homeObjectBinding: Binding | undefined,
 	nameHint: string | undefined,
@@ -10210,8 +10215,8 @@ function compileObjectMemberFunction(
 		nameHint,
 		true,
 	);
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createFunction",
 		registers: [destination],
 		functionIndex,
@@ -10220,9 +10225,9 @@ function compileObjectMemberFunction(
 }
 
 function compileObjectExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	objectExpression: ESTree.ObjectExpression,
 ): number {
 	const template = compileLiteralTemplate(program, fn, cursor, objectExpression);
@@ -10235,8 +10240,8 @@ function compileObjectExpression(
 		const valueRegisters = staticShape.values.map((value, i) =>
 			compileExpression(program, fn, cursor, value, staticShape.names[i]),
 		);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createObjectShaped",
 			registers: [destination, ...valueRegisters],
 			keyStringIndices: staticShape.names.map((name) =>
@@ -10246,8 +10251,8 @@ function compileObjectExpression(
 		return destination;
 	}
 
-	const object = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const object = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createObject",
 		registers: [object],
 	});
@@ -10291,7 +10296,7 @@ function compileObjectExpression(
 			// Object spread copies the source's own enumerable properties into
 			// the literal under construction.
 			const source = compileExpression(program, fn, cursor, property.argument);
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "mergeDataProperties",
 				registers: [object, source],
 			});
@@ -10319,7 +10324,7 @@ function compileObjectExpression(
 				cursor,
 				property.value as ESTree.Expression,
 			);
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "setPrototype",
 				registers: [object, prototype],
 				literal: true,
@@ -10340,7 +10345,7 @@ function compileObjectExpression(
 				homeObjectBinding,
 				accessorNameHint,
 			);
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "defineAccessor",
 				registers: [object, key, accessor],
 				kind: property.kind,
@@ -10365,12 +10370,12 @@ function compileObjectExpression(
 		// function definition takes its name from the key at runtime (a static key
 		// was already handled by the `name` nameHint passed above).
 		if (name === undefined && isAnonymousFunctionDefinition(property.value)) {
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "setFunctionName",
 				registers: [value, key],
 			});
 		}
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "defineProperty",
 			registers: [object, key, value],
 			enumerable: true,
@@ -10381,9 +10386,9 @@ function compileObjectExpression(
 }
 
 function compileArrayExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	arrayExpression: ESTree.ArrayExpression,
 ): number {
 	const template = compileLiteralTemplate(program, fn, cursor, arrayExpression);
@@ -10394,8 +10399,8 @@ function compileArrayExpression(
 	);
 
 	if (!hasSpread) {
-		const array = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const array = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createArray",
 			registers: [array],
 			length: arrayExpression.elements.length,
@@ -10412,7 +10417,7 @@ function compileArrayExpression(
 			// Array-literal elements are CreateDataPropertyOrThrow (own data
 			// property), not [[Set]] — so a poisoned Array.prototype index
 			// accessor is not consulted.
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "defineProperty",
 				registers: [array, key, value],
 				enumerable: true,
@@ -10424,8 +10429,8 @@ function compileArrayExpression(
 
 	// Spread makes the element indexes dynamic: append through a running
 	// index register, spreads drain their source iterator.
-	const array = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const array = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createArray",
 		registers: [array],
 		length: 0,
@@ -10437,7 +10442,7 @@ function compileArrayExpression(
 		if (!element) {
 			// Holes only advance the index; the final length store accounts
 			// for trailing ones.
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "binary",
 				registers: [index, index, one],
 				operator: "+",
@@ -10447,9 +10452,9 @@ function compileArrayExpression(
 
 		if (element.type === "SpreadElement") {
 			const source = compileExpression(program, fn, cursor, element.argument);
-			const iteratorRegister = nextRegisterDestination(fn);
-			const nextRegister = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const iteratorRegister = nextCoreVariable(fn);
+			const nextRegister = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "getIterator",
 				registers: [iteratorRegister, nextRegister, source],
 			});
@@ -10466,12 +10471,12 @@ function compileArrayExpression(
 		}
 
 		const value = compileExpression(program, fn, cursor, element);
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "defineProperty",
 			registers: [array, index, value],
 			enumerable: true,
 		});
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [index, index, one],
 			operator: "+",
@@ -10480,7 +10485,7 @@ function compileArrayExpression(
 
 	// Trailing holes only bumped the index; sync the length field.
 	const lengthKey = compileStaticString(program, fn, cursor, "length");
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "storeProperty",
 		registers: [array, lengthKey, index],
 	});
@@ -10489,9 +10494,9 @@ function compileArrayExpression(
 }
 
 function compileMemberExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number {
 	const staticArgumentsResult = compileStaticArgumentsMember(
@@ -10518,9 +10523,9 @@ function compileMemberExpression(
 }
 
 function compileStaticArgumentsMember(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number | undefined {
 	if (memberExpression.object.type !== "Identifier") return undefined;
@@ -10543,8 +10548,8 @@ function compileStaticArgumentsMember(
 				getOrCreateBindingLocation(program, fn, mappedBinding),
 			)
 		: snapshot!;
-	const result = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const result = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadStaticArgument",
 		registers: [result, fallbackRegister, direct, fallbackRegister],
 		index: access.index,
@@ -10559,12 +10564,12 @@ interface CompiledMemberReference {
 }
 
 function compileMemberLoad(
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	member: CompiledMemberReference,
 ): number {
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push(
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit(
 		member.receiver === undefined
 			? {
 					type: "loadProperty",
@@ -10579,8 +10584,8 @@ function compileMemberLoad(
 }
 
 function compileMemberKeyOnce(
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	member: CompiledMemberReference,
 ): number {
 	let coercibleBase = member.object;
@@ -10588,15 +10593,15 @@ function compileMemberKeyOnce(
 		// TO_PROPERTY_KEY also checks its ordinary member base. A super reference
 		// checks its (possibly null) base only when GetValue runs, after key
 		// conversion, so use an inert coercible value for this conversion step.
-		coercibleBase = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		coercibleBase = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createBoolean",
 			registers: [coercibleBase],
 			value: true,
 		});
 	}
-	const key = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const key = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "toPropertyKey",
 		registers: [key, coercibleBase, member.key],
 	});
@@ -10604,11 +10609,11 @@ function compileMemberKeyOnce(
 }
 
 function compileMemberStore(
-	cursor: SemanticCursor,
+	cursor: CoreFrontendCursor,
 	member: CompiledMemberReference,
 	value: number,
 ): void {
-	cursor.block.instructions.push(
+	cursor.block.emitter.emit(
 		member.receiver === undefined
 			? { type: "storeProperty", registers: [member.object, member.key, value] }
 			: {
@@ -10619,9 +10624,9 @@ function compileMemberStore(
 }
 
 function compileMemberObjectAndKey(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	memberExpression: ESTree.MemberExpression,
 ): CompiledMemberReference {
 	let object = -1;
@@ -10640,8 +10645,8 @@ function compileMemberObjectAndKey(
 				getOrCreateBindingLocation(program, fn, lexicalThisBinding),
 			);
 		} else {
-			receiver = nextRegisterDestination(fn);
-			cursor.block.instructions.push({ type: "loadThis", registers: [receiver] });
+			receiver = nextCoreVariable(fn);
+			cursor.block.emitter.emit({ type: "loadThis", registers: [receiver] });
 		}
 	} else {
 		object = compileExpression(program, fn, cursor, memberExpression.object);
@@ -10667,9 +10672,9 @@ function compileMemberObjectAndKey(
  * the parent itself in static ones.
  */
 function compileSuperObject(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 ): number {
 	const classContext = fn.classContext;
 	if (!classContext) {
@@ -10685,8 +10690,8 @@ function compileSuperObject(
 			classContext.homeObjectBinding,
 		);
 		const home = loadRegisterFromLocation(fn, cursor.block, location);
-		const object = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const object = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadPrototype",
 			registers: [object, home],
 		});
@@ -10701,16 +10706,16 @@ function compileSuperObject(
 
 		if (!classContext.isStatic) {
 			const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
-			const prototype = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const prototype = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "loadProperty",
 				registers: [prototype, home, prototypeKey],
 			});
 			home = prototype;
 		}
 
-		const object = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const object = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadPrototype",
 			registers: [object, home],
 		});
@@ -10729,8 +10734,8 @@ function compileSuperObject(
 	}
 
 	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
-	const object = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const object = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadProperty",
 		registers: [object, parent, prototypeKey],
 	});
@@ -10739,9 +10744,9 @@ function compileSuperObject(
 }
 
 function compilePropertyKey(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	property: ESTree.Property,
 ) {
 	if (property.computed) {
@@ -10760,13 +10765,13 @@ function compilePropertyKey(
 }
 
 function compileStaticString(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	value: string,
 ) {
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createString",
 		registers: [destination],
 		stringIndex: getOrCreateStringConstant(program, value),
@@ -10780,13 +10785,13 @@ function compileStaticString(
  * arguments appended directly and spreads drained through their iterators.
  */
 function compileSpreadArgumentsArray(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	args: Array<ESTree.Expression | ESTree.SpreadElement>,
 ): number {
-	const array = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const array = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createArray",
 		registers: [array],
 		length: 0,
@@ -10797,9 +10802,9 @@ function compileSpreadArgumentsArray(
 	for (const arg of args) {
 		if (arg.type === "SpreadElement") {
 			const source = compileExpression(program, fn, cursor, arg.argument);
-			const iteratorRegister = nextRegisterDestination(fn);
-			const nextRegister = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const iteratorRegister = nextCoreVariable(fn);
+			const nextRegister = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "getIterator",
 				registers: [iteratorRegister, nextRegister, source],
 			});
@@ -10816,11 +10821,11 @@ function compileSpreadArgumentsArray(
 		}
 
 		const value = compileExpression(program, fn, cursor, arg);
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "storeProperty",
 			registers: [array, index, value],
 		});
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [index, index, one],
 			operator: "+",
@@ -10839,7 +10844,7 @@ function compileSpreadArgumentsArray(
  * and globals backed by internal slots can be marshaled too.
  */
 function visibleBindingsForDirectEval(
-	fn: SemanticGraphFunction,
+	fn: CoreFrontendFunction,
 	callNode: ESTree.Node,
 ): Map<string, Binding> {
 	const result = new Map<string, Binding>();
@@ -10870,8 +10875,8 @@ function visibleBindingsForDirectEval(
 }
 
 function inheritedContextForDirectEval(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	callNode: ESTree.CallExpression,
 ): DirectEvalContext {
 	const classContext = fn.classContext;
@@ -10992,24 +10997,24 @@ function inheritedContextForDirectEval(
 }
 
 function storeDirectEvalScopeValue(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	scopeObject: number,
 	keyName: string,
 	value: number,
 ): void {
 	const key = compileStaticString(program, fn, cursor, keyName);
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "storeProperty",
 		registers: [scopeObject, key, value],
 	});
 }
 
 function loadDirectEvalHomeObject(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 ): number {
 	const classContext = fn.classContext;
 	if (classContext?.homeObjectBinding) {
@@ -11019,8 +11024,8 @@ function loadDirectEvalHomeObject(
 	const constructor = loadCapturedBinding(program, fn, cursor, classContext.classBinding);
 	if (classContext.isStatic) return constructor;
 	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
-	const prototype = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const prototype = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadProperty",
 		registers: [prototype, constructor, prototypeKey],
 	});
@@ -11028,9 +11033,9 @@ function loadDirectEvalHomeObject(
 }
 
 function marshalDirectEvalInheritedContext(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	scopeObject: number,
 	context: DirectEvalContext,
 ): void {
@@ -11094,9 +11099,9 @@ function marshalDirectEvalInheritedContext(
 }
 
 function ensureDirectEvalPersistentScope(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 ): number {
 	if (program.evalDirect && program.directEvalPersistentScopeBinding) {
 		return loadCapturedBinding(
@@ -11107,10 +11112,11 @@ function ensureDirectEvalPersistentScope(
 		);
 	}
 	if (fn.directEvalPersistentScopeRegister === undefined) {
-		const scope = nextRegisterDestination(fn);
-		const nullPrototype = nextRegisterDestination(fn);
+		const scope = nextCoreVariable(fn);
+		const nullPrototype = nextCoreVariable(fn);
 		fn.directEvalPersistentScopeRegister = scope;
-		fn.blocks[0]!.instructions.unshift(
+		emitCoreEntryInstructions(
+			fn,
 			{ type: "createObject", registers: [scope] },
 			{ type: "createNull", registers: [nullPrototype] },
 			{ type: "setPrototype", registers: [scope, nullPrototype], literal: false },
@@ -11134,9 +11140,9 @@ function ensureDirectEvalPersistentScope(
  * and would skip an actual same-value Set through an accessor's setter.
  */
 function compileDirectEval(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const bindings = visibleBindingsForDirectEval(fn, callExpression);
@@ -11146,10 +11152,10 @@ function compileDirectEval(
 			? ensureDirectEvalPersistentScope(program, fn, cursor)
 			: undefined;
 
-	const scopeObject = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "createObject", registers: [scopeObject] });
-	const nullPrototype = nextRegisterDestination(fn);
-	cursor.block.instructions.push(
+	const scopeObject = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "createObject", registers: [scopeObject] });
+	const nullPrototype = nextCoreVariable(fn);
+	cursor.block.emitter.emit(
 		{ type: "createNull", registers: [nullPrototype] },
 		{
 			type: "setPrototype",
@@ -11157,8 +11163,8 @@ function compileDirectEval(
 			literal: false,
 		},
 	);
-	const dirtyTracker = nextRegisterDestination(fn);
-	cursor.block.instructions.push(
+	const dirtyTracker = nextCoreVariable(fn);
+	cursor.block.emitter.emit(
 		{ type: "createObject", registers: [dirtyTracker] },
 		{
 			type: "setPrototype",
@@ -11194,8 +11200,8 @@ function compileDirectEval(
 			!binding.implicit &&
 			fn.semanticFile.scopes[0]?.bindings.includes(binding)
 		) {
-			value = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			value = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "withGet",
 				registers: [value],
 				nameStringIndex: getOrCreateStringConstant(program, name),
@@ -11205,15 +11211,15 @@ function compileDirectEval(
 			value = loadRegisterFromLocation(fn, cursor.block, location);
 		}
 		const key = compileStaticString(program, fn, cursor, name);
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "storeProperty",
 			registers: [scopeObject, key, value],
 		});
 	}
 	marshalDirectEvalInheritedContext(program, fn, cursor, scopeObject, inheritedContext);
 
-	const callee = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const callee = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadIntrinsic",
 		registers: [callee],
 		intrinsic: "__directEval",
@@ -11227,16 +11233,16 @@ function compileDirectEval(
 	);
 	// Direct eval inherits the caller's strictness — pass it so the eval'd code's
 	// strict/sloppy semantics are correct (a "use strict" prologue still promotes).
-	const callerStrict = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const callerStrict = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createBoolean",
 		registers: [callerStrict],
 		value: !isSloppyFunction(fn),
 	});
 	// Retained in the intrinsic ABI; parameter-environment conflicts are encoded
 	// in inheritedContext so arrows and non-arrow functions remain distinct.
-	const inParamExpr = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const inParamExpr = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createBoolean",
 		registers: [inParamExpr],
 		value: fn.inParameterExpression ?? false,
@@ -11265,25 +11271,25 @@ function compileDirectEval(
 			while (owner && !FUNCTION_UNIT_NODE_TYPES.has(owner.node.type))
 				owner = owner.parent;
 		}
-		callerThis = nextRegisterDestination(fn);
+		callerThis = nextCoreVariable(fn);
 		if (
 			owner?.node.type === "Program" &&
 			fn.semanticFile.type === "script" &&
 			!fn.semanticFile.commonjs &&
 			!program.evalDirect
 		) {
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "loadIntrinsic",
 				registers: [callerThis],
 				intrinsic: "globalThis",
 			});
 		} else if (owner?.node.type === "Program" && !program.evalDirect) {
-			cursor.block.instructions.push({
+			cursor.block.emitter.emit({
 				type: "createUndefined",
 				registers: [callerThis],
 			});
 		} else {
-			cursor.block.instructions.push({ type: "loadThis", registers: [callerThis] });
+			cursor.block.emitter.emit({ type: "loadThis", registers: [callerThis] });
 		}
 	}
 
@@ -11305,8 +11311,8 @@ function compileDirectEval(
 	} else if (fn.inFieldInitializer || !inheritedContext.allowNewTarget) {
 		callerNewTarget = compileUndefined(fn, cursor);
 	} else {
-		callerNewTarget = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		callerNewTarget = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadNewTarget",
 			registers: [callerNewTarget],
 		});
@@ -11315,8 +11321,8 @@ function compileDirectEval(
 	// A field-initializer eval inherits the "no arguments" context: `arguments`
 	// in the eval'd code is a SyntaxError. Pass the flag so the eval compile
 	// applies the early error.
-	const inFieldInitializer = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const inFieldInitializer = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createBoolean",
 		registers: [inFieldInitializer],
 		value: fn.inFieldInitializer ?? false,
@@ -11333,8 +11339,8 @@ function compileDirectEval(
 		cursor,
 		directEvalPersistentScopeKey(),
 	);
-	const result = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const result = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "call",
 		registers: [
 			result,
@@ -11361,8 +11367,8 @@ function compileDirectEval(
 		}
 		const location = getOrCreateBindingLocation(program, fn, binding);
 		const key = compileStaticString(program, fn, cursor, name);
-		const value = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const value = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadProperty",
 			registers: [value, scopeObject, key],
 		});
@@ -11371,8 +11377,8 @@ function compileDirectEval(
 			// tracker — not value equality (=== treats NaN as "changed" when it
 			// isn't, and treats a same-value Set through an accessor as "unchanged"
 			// when the setter must still run).
-			const dirty = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const dirty = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "loadProperty",
 				registers: [dirty, dirtyTracker, key],
 			});
@@ -11385,18 +11391,18 @@ function compileDirectEval(
 				type: "jump",
 				blocks: [-1],
 			};
-			cursor.block.instructions.push(dirtyJump, skipJump);
+			cursor.block.emitter.emit(dirtyJump, skipJump);
 
-			const writeBlock: SemanticGraphBlock = { instructions: [] };
+			const writeBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 			const writeIndex = fn.blocks.push(writeBlock) - 1;
 			storeRegisterAtLocation(writeBlock, location, value);
 			const joinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 				type: "jump",
 				blocks: [-1],
 			};
-			writeBlock.instructions.push(joinJump);
+			writeBlock.emitter.emit(joinJump);
 
-			const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+			const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 			dirtyJump.blocks[0] = writeIndex;
 			skipJump.blocks[0] = joinIndex;
 			joinJump.blocks[0] = joinIndex;
@@ -11410,9 +11416,9 @@ function compileDirectEval(
 }
 
 function compileImportExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	source: ESTree.Expression,
 	options?: ESTree.Expression | null,
 ): number {
@@ -11440,13 +11446,13 @@ function compileImportExpression(
 		.filter((file) => !file.commonjs && candidatePaths.has(file.path))
 		.map((file) => file.path)
 		.sort();
-	const result = nextRegisterDestination(fn);
+	const result = nextCoreVariable(fn);
 	const joinJumps: Array<Extract<CompilerInstruction, { type: "jump" }>> = [];
 
 	for (const candidate of candidates) {
 		const candidateSpecifier = compileStaticString(program, fn, cursor, candidate);
-		const matches = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const matches = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "binary",
 			registers: [matches, specifier, candidateSpecifier],
 			operator: "===",
@@ -11460,38 +11466,38 @@ function compileImportExpression(
 			type: "jump",
 			blocks: [-1],
 		};
-		cursor.block.instructions.push(matchJump, nextJump);
+		cursor.block.emitter.emit(matchJump, nextJump);
 
-		const matchIndex = fn.blocks.push({ instructions: [] }) - 1;
+		const matchIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 		matchJump.blocks[0] = matchIndex;
 		cursor.block = fn.blocks[matchIndex]!;
 		const imported = emitDynamicImportCall(program, fn, cursor, specifier, candidate);
-		cursor.block.instructions.push({ type: "move", registers: [result, imported] });
+		cursor.block.emitter.emit({ type: "move", registers: [result, imported] });
 		const joinJump: Extract<CompilerInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
-		cursor.block.instructions.push(joinJump);
+		cursor.block.emitter.emit(joinJump);
 		joinJumps.push(joinJump);
 
-		const nextIndex = fn.blocks.push({ instructions: [] }) - 1;
+		const nextIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 		nextJump.blocks[0] = nextIndex;
 		cursor.block = fn.blocks[nextIndex]!;
 	}
 
 	const missing = emitDynamicImportCall(program, fn, cursor, specifier);
-	cursor.block.instructions.push({ type: "move", registers: [result, missing] });
-	const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block.emitter.emit({ type: "move", registers: [result, missing] });
+	const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	for (const jump of joinJumps) jump.blocks[0] = joinIndex;
-	cursor.block.instructions.push({ type: "jump", blocks: [joinIndex] });
+	cursor.block.emitter.emit({ type: "jump", blocks: [joinIndex] });
 	cursor.block = fn.blocks[joinIndex]!;
 	return result;
 }
 
 function emitDynamicImportCall(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	specifier: number,
 	targetPath?: string,
 ): number {
@@ -11510,17 +11516,17 @@ function emitDynamicImportCall(
 		? program.moduleNamespaces.get(targetPath)
 		: undefined;
 
-	const callee = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const callee = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "loadIntrinsic",
 		registers: [callee],
 		intrinsic: "__dynamicImport",
 	});
 	const thisRegister = compileUndefined(fn, cursor);
 	const initFn =
-		targetInitIndex >= 0 ? nextRegisterDestination(fn) : compileUndefined(fn, cursor);
+		targetInitIndex >= 0 ? nextCoreVariable(fn) : compileUndefined(fn, cursor);
 	if (targetInitIndex >= 0) {
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "createFunction",
 			registers: [initFn],
 			functionIndex: targetInitIndex,
@@ -11531,8 +11537,8 @@ function emitDynamicImportCall(
 		: compileUndefined(fn, cursor);
 	const statusSlot = targetPath ? getDynamicModuleStatusSlot(program, targetPath) : -1;
 	const statusSlotRegister = compileNumberLiteral(fn, cursor, statusSlot);
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "call",
 		registers: [
 			destination,
@@ -11548,8 +11554,8 @@ function emitDynamicImportCall(
 }
 
 function dynamicImportTargetPath(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	source: ESTree.Expression,
 ): string | undefined {
 	if (source.type !== "Literal" || typeof source.value !== "string") {
@@ -11564,7 +11570,10 @@ function dynamicImportTargetPath(
 	);
 }
 
-function getDynamicModuleStatusSlot(program: SemanticGraph, modulePath: string): number {
+function getDynamicModuleStatusSlot(
+	program: CoreFrontendContext,
+	modulePath: string,
+): number {
 	let slot = program.dynamicModuleStatusSlot.get(modulePath);
 	if (slot === undefined) {
 		slot = program.nextGlobalIndex++;
@@ -11574,9 +11583,9 @@ function getDynamicModuleStatusSlot(program: SemanticGraph, modulePath: string):
 }
 
 function compileDynamicImport(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const source = callExpression.arguments[0];
@@ -11589,9 +11598,9 @@ function compileDynamicImport(
 }
 
 function compileCall(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const calleeNode = callExpression.callee as unknown as ESTree.Node;
@@ -11666,8 +11675,8 @@ function compileCall(
 				cursor,
 				callExpression.arguments[0].argument,
 			);
-			const destination = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const destination = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "callSpreadIterable",
 				registers: [destination, callee, thisRegister, iterable],
 			});
@@ -11679,8 +11688,8 @@ function compileCall(
 			cursor,
 			callExpression.arguments,
 		);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "callSpread",
 			registers: [destination, callee, thisRegister, argumentsArray],
 		});
@@ -11695,9 +11704,9 @@ function compileCall(
 
 		return compileExpression(program, fn, cursor, arg);
 	});
-	const destination = nextRegisterDestination(fn);
+	const destination = nextCoreVariable(fn);
 
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "call",
 		registers: [destination, callee, thisRegister, ...args],
 	});
@@ -11707,9 +11716,9 @@ function compileCall(
 
 /** Compile SuperCall with the active derived-constructor environment. */
 function compileSuperCall(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const superBinding = fn.classContext?.superBinding;
@@ -11730,7 +11739,7 @@ function compileSuperCall(
 		cursor,
 		callExpression.arguments,
 	);
-	const destination = nextRegisterDestination(fn);
+	const destination = nextCoreVariable(fn);
 	if (fn.classContext?.superThisStateBinding && fn.classContext.superNewTargetBinding) {
 		const newTarget = loadRegisterFromLocation(
 			fn,
@@ -11738,11 +11747,11 @@ function compileSuperCall(
 			getOrCreateBindingLocation(program, fn, fn.classContext.superNewTargetBinding),
 		);
 		const currentThis = loadSharedSuperThis(program, fn, cursor, false);
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "move",
 			registers: [destination, currentThis],
 		});
-		cursor.block.instructions.push({
+		cursor.block.emitter.emit({
 			type: "constructSuperExplicit",
 			registers: [destination, parent, argumentsArray, newTarget, destination],
 		});
@@ -11758,15 +11767,15 @@ function compileSuperCall(
 					fn.classContext.instanceInitializerBinding,
 				),
 			);
-			const ignored = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
+			const ignored = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
 				type: "call",
 				registers: [ignored, initializer, destination],
 			});
 		}
 		return destination;
 	}
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "constructSuper",
 		registers: [destination, parent, argumentsArray],
 	});
@@ -11795,9 +11804,9 @@ function compileSuperCall(
  * prototype property and substitutes non-object return values.
  */
 function compileNewExpression(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	expression: ESTree.NewExpression,
 ): number {
 	const calleeNode = expression.callee as unknown as ESTree.Node;
@@ -11813,8 +11822,8 @@ function compileNewExpression(
 	// `new undefined` is a non-constructor and throws deterministically on both
 	// backends (and keeps the function out of the native backend's r-1 bail).
 	if (callee < 0) {
-		callee = nextRegisterDestination(fn);
-		cursor.block.instructions.push({ type: "createUndefined", registers: [callee] });
+		callee = nextCoreVariable(fn);
+		cursor.block.emitter.emit({ type: "createUndefined", registers: [callee] });
 	}
 
 	if (expression.arguments.some((arg) => arg.type === "SpreadElement")) {
@@ -11824,8 +11833,8 @@ function compileNewExpression(
 			cursor,
 			expression.arguments,
 		);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "constructSpread",
 			registers: [destination, callee, argumentsArray],
 		});
@@ -11840,9 +11849,9 @@ function compileNewExpression(
 
 		return compileExpression(program, fn, cursor, arg);
 	});
-	const destination = nextRegisterDestination(fn);
+	const destination = nextCoreVariable(fn);
 
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "construct",
 		registers: [destination, callee, ...args],
 	});
@@ -11856,9 +11865,9 @@ function compileNewExpression(
  * Statements that store the a variable internally handle the store instructions.
  */
 function compileIdentifier(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	if (identifierUsesDynamicEnvironment(program, fn, identifier)) {
@@ -11873,7 +11882,7 @@ function compileIdentifier(
  * so they probe the caller scope object before the global.
  */
 function identifierIsFree(
-	fn: SemanticGraphFunction,
+	fn: CoreFrontendFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
@@ -11881,8 +11890,8 @@ function identifierIsFree(
 }
 
 function isDirectEvalVarBinding(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	if (
@@ -11900,8 +11909,8 @@ function isDirectEvalVarBinding(
 }
 
 function isNewDirectEvalVarBinding(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	return (
@@ -11911,8 +11920,8 @@ function isNewDirectEvalVarBinding(
 }
 
 function identifierUsesDynamicEnvironment(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	return (
@@ -11928,20 +11937,20 @@ function identifierUsesDynamicEnvironment(
  * paths join with the value in a single register.
  */
 function compileWithDynamicRead(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 ): number {
-	const result = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const result = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "withGet",
 		registers: [result],
 		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 	});
 
-	const emptyFlag = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, result] });
+	const emptyFlag = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [emptyFlag, result] });
 
 	const fallbackJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
@@ -11952,20 +11961,20 @@ function compileWithDynamicRead(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(fallbackJump, foundJump);
+	cursor.block.emitter.emit(fallbackJump, foundJump);
 
 	// Miss: resolve the static binding into the same result register.
-	const fallbackIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const fallbackIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[fallbackIdx]!;
 	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
-	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
+	cursor.block.emitter.emit({ type: "move", registers: [result, staticValue] });
 	const fallbackJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(fallbackJoin);
+	cursor.block.emitter.emit(fallbackJoin);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	fallbackJump.blocks[0] = fallbackIdx;
 	foundJump.blocks[0] = joinIdx;
 	fallbackJoin.blocks[0] = joinIdx;
@@ -11980,20 +11989,20 @@ function compileWithDynamicRead(
  * (never a ReferenceError — typeof of an unresolvable name does not throw).
  */
 function compileWithDynamicTypeof(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 ): number {
-	const result = nextRegisterDestination(fn);
-	const probe = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const result = nextCoreVariable(fn);
+	const probe = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "withGet",
 		registers: [probe],
 		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 	});
-	const emptyFlag = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, probe] });
+	const emptyFlag = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [emptyFlag, probe] });
 
 	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
@@ -12004,12 +12013,12 @@ function compileWithDynamicTypeof(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJump, hitJump);
+	cursor.block.emitter.emit(missJump, hitJump);
 
 	// Hit: typeof the probed value.
-	const hitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const hitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[hitIdx]!;
-	cursor.block.instructions.push({
+	cursor.block.emitter.emit({
 		type: "unary",
 		registers: [result, probe],
 		operator: "typeof",
@@ -12018,20 +12027,20 @@ function compileWithDynamicTypeof(
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(hitJoin);
+	cursor.block.emitter.emit(hitJoin);
 
 	// Miss: the name resolves nowhere → "undefined".
-	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const missIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
 	const undefinedString = compileStaticString(program, fn, cursor, "undefined");
-	cursor.block.instructions.push({ type: "move", registers: [result, undefinedString] });
+	cursor.block.emitter.emit({ type: "move", registers: [result, undefinedString] });
 	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
-	cursor.block.instructions.push(missJoin);
+	cursor.block.emitter.emit(missJoin);
 
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	missJump.blocks[0] = missIdx;
 	hitJump.blocks[0] = hitIdx;
 	hitJoin.blocks[0] = joinIdx;
@@ -12042,9 +12051,9 @@ function compileWithDynamicTypeof(
 }
 
 function compileStaticIdentifier(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	if (identifier.name === "undefined") {
@@ -12058,8 +12067,8 @@ function compileStaticIdentifier(
 	retainHostGlobal(program, binding);
 
 	if (binding.undeclared && isCompilerIntrinsic(identifier.name)) {
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadIntrinsic",
 			registers: [destination],
 			intrinsic: identifier.name,
@@ -12082,8 +12091,8 @@ function compileStaticIdentifier(
 		// (Reading an undeclared name is a ReferenceError in strict AND sloppy; only
 		// assignment differs.) The compiler can't see runtime-added or host-declared
 		// globals, so a statically-undeclared name is not necessarily unresolvable.
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadGlobalProperty",
 			registers: [destination],
 			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
@@ -12101,7 +12110,7 @@ function compileStaticIdentifier(
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */
-function retainHostGlobal(program: SemanticGraph, binding: Binding): boolean {
+function retainHostGlobal(program: CoreFrontendContext, binding: Binding): boolean {
 	if (
 		program.hostProcess &&
 		binding.undeclared &&
@@ -12120,7 +12129,10 @@ function retainHostGlobal(program: SemanticGraph, binding: Binding): boolean {
 	return false;
 }
 
-function globalPropertyLocation(program: SemanticGraph, name: string): BindingLocation {
+function globalPropertyLocation(
+	program: CoreFrontendContext,
+	name: string,
+): BindingLocation {
 	return {
 		type: "globalProperty",
 		nameStringIndex: getOrCreateStringConstant(program, name),
@@ -12149,7 +12161,7 @@ function isTdzBinding(binding: Binding): boolean {
  * parameter default (an earlier-declared parameter is initialized, a later one
  * is not, and only the runtime EMPTY check can tell them apart).
  */
-function bindingNeedsTdzGuard(fn: SemanticGraphFunction, binding: Binding): boolean {
+function bindingNeedsTdzGuard(fn: CoreFrontendFunction, binding: Binding): boolean {
 	return (
 		!binding.undeclared && (isTdzBinding(binding) || (fn.inParameterExpression ?? false))
 	);
@@ -12163,16 +12175,16 @@ function bindingNeedsTdzGuard(fn: SemanticGraphFunction, binding: Binding): bool
  * A no-op once the slot holds a real value.
  */
 function emitTdzGuard(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	binding: Binding,
 	current: number,
 ) {
 	if (!bindingNeedsTdzGuard(fn, binding)) {
 		return;
 	}
-	block.instructions.push({
+	block.emitter.emit({
 		type: "throwIfTdz",
 		registers: [current],
 		nameStringIndex: getOrCreateStringConstant(program, binding.name),
@@ -12186,9 +12198,9 @@ function emitTdzGuard(
  * the predicate so an undeclared binding never allocates a slot.
  */
 function emitWriteTdzGuard(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	binding: Binding,
 	hostGlobalLocation: BindingLocation | null,
 ) {
@@ -12213,9 +12225,9 @@ function emitWriteTdzGuard(
  * bindings; any that somehow are not are skipped.
  */
 function emitNamespaceObject(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	binding: Binding,
 	exports: Array<{ name: string; exporter: Binding }>,
 ) {
@@ -12225,9 +12237,9 @@ function emitNamespaceObject(
 }
 
 function emitNamespaceObjectRegister(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	exports: Array<{ name: string; exporter: Binding }>,
 ): number {
 	const entries: Array<{ nameStringIndex: number; slot: number }> = [];
@@ -12242,8 +12254,8 @@ function emitNamespaceObjectRegister(
 		});
 	}
 
-	const namespace = nextRegisterDestination(fn);
-	block.instructions.push({
+	const namespace = nextCoreVariable(fn);
+	block.emitter.emit({
 		type: "createModuleNamespace",
 		registers: [namespace],
 		exports: entries,
@@ -12253,14 +12265,14 @@ function emitNamespaceObjectRegister(
 }
 
 function loadRegisterFromLocation(
-	fn: SemanticGraphFunction,
-	block: SemanticGraphBlock,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
 	location: BindingLocation,
 ) {
-	const destination = nextRegisterDestination(fn);
+	const destination = nextCoreVariable(fn);
 	switch (location.type) {
 		case "local": {
-			block.instructions.push({
+			block.emitter.emit({
 				type: "loadLocal",
 				registers: [destination],
 				index: location.index,
@@ -12268,7 +12280,7 @@ function loadRegisterFromLocation(
 			break;
 		}
 		case "global": {
-			block.instructions.push({
+			block.emitter.emit({
 				type: "loadGlobal",
 				registers: [destination],
 				index: location.index,
@@ -12276,7 +12288,7 @@ function loadRegisterFromLocation(
 			break;
 		}
 		case "captured": {
-			block.instructions.push({
+			block.emitter.emit({
 				type: "loadCaptured",
 				registers: [destination],
 
@@ -12286,7 +12298,7 @@ function loadRegisterFromLocation(
 			break;
 		}
 		case "globalProperty": {
-			block.instructions.push({
+			block.emitter.emit({
 				type: "loadGlobalProperty",
 				registers: [destination],
 				nameStringIndex: location.nameStringIndex,
@@ -12299,7 +12311,7 @@ function loadRegisterFromLocation(
 }
 
 function getArgumentsBinding(
-	fn: SemanticGraphFunction,
+	fn: CoreFrontendFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -12353,7 +12365,7 @@ function getArgumentsBinding(
  * arrows to capture, or undefined. Arrows never own one (they inherit `this`).
  */
 function getLexicalThisBinding(
-	fn: SemanticGraphFunction,
+	fn: CoreFrontendFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -12372,7 +12384,7 @@ function getLexicalThisBinding(
  * nested arrows to capture, or undefined. Arrows never own one.
  */
 function getLexicalNewTargetBinding(
-	fn: SemanticGraphFunction,
+	fn: CoreFrontendFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -12387,9 +12399,9 @@ function getLexicalNewTargetBinding(
 }
 
 function compileLiteral(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	literal: ESTree.Literal,
 ): number {
 	if (
@@ -12407,8 +12419,8 @@ function compileLiteral(
 		// (e.g. `1e309`) — materializes as an f64. Previously non-finite literals
 		// fell through to `return -1` and were silently dropped (the store/call
 		// read register -1), corrupting the value.
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createF64",
 			registers: [destination],
 			value: literal.value,
@@ -12418,8 +12430,8 @@ function compileLiteral(
 	}
 
 	if (typeof literal.value === "boolean") {
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createBoolean",
 			registers: [destination],
 			value: literal.value,
@@ -12429,8 +12441,8 @@ function compileLiteral(
 	}
 
 	if (typeof literal.value === "string") {
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createString",
 			registers: [destination],
 			stringIndex: getOrCreateStringConstant(program, literal.value),
@@ -12440,8 +12452,8 @@ function compileLiteral(
 	}
 
 	if (typeof literal.value === "bigint") {
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createBigint",
 			registers: [destination],
 			bigintIndex: getOrCreateBigintConstant(program, literal.value),
@@ -12451,8 +12463,8 @@ function compileLiteral(
 	}
 
 	if (literal.value === null) {
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "createNull",
 			registers: [destination],
 		});
@@ -12466,16 +12478,16 @@ function compileLiteral(
 	// (The compiled matcher is rebuilt per evaluation; a per-site cache is a
 	// possible later optimization.)
 	if ("regex" in literal && literal.regex) {
-		const constructor = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const constructor = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "loadIntrinsic",
 			registers: [constructor],
 			intrinsic: "RegExp",
 		});
 		const patternReg = compileStaticString(program, fn, cursor, literal.regex.pattern);
 		const flagsReg = compileStaticString(program, fn, cursor, literal.regex.flags);
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+		const destination = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
 			type: "construct",
 			registers: [destination, constructor, patternReg, flagsReg],
 		});
@@ -12486,9 +12498,9 @@ function compileLiteral(
 	return -1;
 }
 
-function compileUndefined(fn: SemanticGraphFunction, cursor: SemanticCursor) {
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+function compileUndefined(fn: CoreFrontendFunction, cursor: CoreFrontendCursor) {
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createUndefined",
 		registers: [destination],
 	});
@@ -12497,12 +12509,12 @@ function compileUndefined(fn: SemanticGraphFunction, cursor: SemanticCursor) {
 }
 
 function compileNumberLiteral(
-	fn: SemanticGraphFunction,
-	cursor: SemanticCursor,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
 	value: number,
 ) {
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
 		type: "createNumber",
 		registers: [destination],
 
@@ -12512,7 +12524,7 @@ function compileNumberLiteral(
 	return destination;
 }
 
-export function getOrCreateStringConstant(program: SemanticGraph, value: string) {
+export function getOrCreateStringConstant(program: CoreFrontendContext, value: string) {
 	const existing = program.stringConstantToIndex.get(value);
 	if (existing !== undefined) {
 		return existing;
@@ -12529,7 +12541,7 @@ export function getOrCreateStringConstant(program: SemanticGraph, value: string)
 }
 
 function getOrCreateSourcePosition(
-	program: SemanticGraph,
+	program: CoreFrontendContext,
 	line: number,
 	column: number,
 ): number {
@@ -12551,7 +12563,7 @@ function getOrCreateSourcePosition(
  * `callerPosId` chain, emitting one frame per inline level. Used by the inliner.
  */
 export function addInlineSourcePosition(
-	program: SemanticGraph,
+	program: CoreFrontendContext,
 	line: number,
 	column: number,
 	inlinedFunctionIndex: number,
@@ -12568,8 +12580,8 @@ export function addInlineSourcePosition(
  * inherited by every following instruction until the next marker.
  */
 function emitSourcePos(
-	program: SemanticGraph,
-	block: SemanticGraphBlock,
+	program: CoreFrontendContext,
+	block: CoreFrontendBlock,
 	node: ESTree.Node,
 ): void {
 	const loc = node.loc;
@@ -12577,13 +12589,13 @@ function emitSourcePos(
 		return;
 	}
 
-	block.instructions.push({
+	block.emitter.emit({
 		type: "sourcePos",
 		pos: getOrCreateSourcePosition(program, loc.start.line, loc.start.column),
 	});
 }
 
-function getOrCreateBigintConstant(program: SemanticGraph, value: bigint) {
+function getOrCreateBigintConstant(program: CoreFrontendContext, value: bigint) {
 	const existing = program.bigintConstantToIndex.get(value);
 	if (existing !== undefined) {
 		return existing;
@@ -12594,14 +12606,9 @@ function getOrCreateBigintConstant(program: SemanticGraph, value: bigint) {
 	return index;
 }
 
-/**
- * We use virtual register per function in this conversion pass.
- *
- * At a later compiler stage these should be optimized to reduce the number of registers needed
- * with things like live-ness checking.
- */
-function nextRegisterDestination(fn: SemanticGraphFunction) {
-	return fn.nextRegisterDestination++;
+/** Allocate a logical variable; the Core constructor resolves it to SSA values. */
+function nextCoreVariable(fn: CoreFrontendFunction) {
+	return fn.nextCoreVariable++;
 }
 
 /**
@@ -12610,8 +12617,8 @@ function nextRegisterDestination(fn: SemanticGraphFunction) {
  * per binding.
  */
 function getOrCreateBindingLocation(
-	program: SemanticGraph,
-	fn: SemanticGraphFunction,
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
 	binding: Binding,
 ) {
 	let location = program.bindingToStorage.get(binding);
@@ -12662,13 +12669,13 @@ function getOrCreateBindingLocation(
  * Store register at a binding location.
  */
 function storeRegisterAtLocation(
-	block: SemanticGraphBlock,
+	block: CoreFrontendBlock,
 	location: BindingLocation,
 	register: number,
 ) {
 	switch (location.type) {
 		case "local": {
-			block.instructions.push({
+			block.emitter.emit({
 				type: "storeLocal",
 				registers: [register],
 				index: location.index,
@@ -12676,7 +12683,7 @@ function storeRegisterAtLocation(
 			break;
 		}
 		case "global": {
-			block.instructions.push({
+			block.emitter.emit({
 				type: "storeGlobal",
 				registers: [register],
 				index: location.index,
@@ -12684,7 +12691,7 @@ function storeRegisterAtLocation(
 			break;
 		}
 		case "captured": {
-			block.instructions.push({
+			block.emitter.emit({
 				type: "storeCaptured",
 				registers: [register],
 
@@ -12694,7 +12701,7 @@ function storeRegisterAtLocation(
 			break;
 		}
 		case "globalProperty": {
-			block.instructions.push({
+			block.emitter.emit({
 				type: "storeGlobalProperty",
 				registers: [register],
 				nameStringIndex: location.nameStringIndex,
