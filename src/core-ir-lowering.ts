@@ -6,6 +6,7 @@ import {
 import type { CompilerSiteFacts } from "./compiler-facts.ts";
 import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
 import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
+import type { CoreAllocatedRegion } from "./core-ir-regions.ts";
 import { verifyCoreFunction, verifyCoreProgram } from "./core-ir-verifier.ts";
 import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
 import type {
@@ -28,7 +29,6 @@ import type {
 	RegisterFunction,
 	RegisterImmediateValue,
 	RegisterInstruction,
-	RegisterRegion,
 } from "./semantic-lowering.ts";
 
 const structuralInstructionTypes: ReadonlySet<string> = new Set([
@@ -250,7 +250,7 @@ export interface CoreRegisterFunction {
 	readonly functionIndex: number;
 	readonly nameStringIndex: number;
 	readonly blocks: Array<{ readonly instructions: Array<RegisterInstruction> }>;
-	readonly regions?: ReadonlyArray<RegisterRegion>;
+	readonly regions?: ReadonlyArray<CoreAllocatedRegion>;
 	readonly isGenerator: boolean;
 	readonly isAsync: boolean;
 	readonly parameterCount: number;
@@ -525,7 +525,7 @@ function coreRegionData(
 }
 
 function convertRegions(
-	regions: ReadonlyArray<RegisterRegion> | undefined,
+	regions: ReadonlyArray<CoreAllocatedRegion> | undefined,
 	instructionIds: ReadonlyMap<RegisterInstruction, CoreInstructionId>,
 	coreBlocksBySourceBlock: ReadonlyMap<number, ReadonlyArray<CoreBlockId>>,
 ): ReadonlyArray<CoreRegion> {
@@ -1532,7 +1532,7 @@ function lowerCoreRegions(
 	omittedBlocks: ReadonlySet<CoreBlockId>,
 	blocks: ReadonlyMap<CoreBlockId, number>,
 	values: ReadonlyMap<CoreValueId, number>,
-): ReadonlyArray<RegisterRegion> | undefined {
+): ReadonlyArray<CoreAllocatedRegion> | undefined {
 	if (regions.length === 0) return undefined;
 	const requireInstruction = (id: CoreInstructionId): RegisterInstruction => {
 		const instruction = instructions.get(id);
@@ -1559,7 +1559,7 @@ function lowerCoreRegions(
 				.filter((block) => !omittedBlocks.has(block))
 				.map(requireBlock),
 		},
-	})) as unknown as ReadonlyArray<RegisterRegion>;
+	})) as unknown as ReadonlyArray<CoreAllocatedRegion>;
 }
 
 export function coreRegisterClasses(
