@@ -179,6 +179,58 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("certifies only closed String.split projections", () => {
+		const compile = (body: string): CoreProgram => {
+			const semantic = analyzeSourceAndRunSemanticAnalysis(
+				`function project(value) { ${body} }`,
+				"core-string-split.js",
+			);
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToVmDefinition(semantic, {
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			});
+			return optimized!;
+		};
+
+		const closed = compile(
+			'const fields = value.split(";"); return fields[1] + fields.length;',
+		);
+		const regions = closed.functions[1]!.regions.filter(
+			({ kind }) => kind === "string-split-projection",
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			kind: "string-split-projection",
+			data: {
+				license: {
+					genericTwin: "retained",
+					materialization: "whole-region",
+				},
+				representation: "projected-elements",
+			},
+		});
+		const obligations = (
+			regions[0]!.data.license as {
+				readonly guard: { readonly obligations: ReadonlyArray<unknown> };
+			}
+		).guard.obligations;
+		expect(obligations).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "fallback" }),
+				expect.objectContaining({ kind: "materialize" }),
+			]),
+		);
+
+		const escaping = compile('return value.split(";");');
+		expect(
+			escaping.functions[1]!.regions.some(
+				({ kind }) => kind === "string-split-projection",
+			),
+		).toBe(false);
+	});
+
 	it("folds exact object observations before selecting partial escape regions", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function choose(value, escape) {

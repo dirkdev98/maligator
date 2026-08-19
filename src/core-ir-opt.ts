@@ -1823,8 +1823,15 @@ const selectNumericFusionRegions: CoreFunctionPass = {
 };
 
 interface CoreKnownBuiltinProof {
-	readonly proof: Readonly<Record<string, unknown>>;
+	readonly proof: {
+		readonly dependencies: ReadonlyArray<unknown>;
+		readonly obligations: ReadonlyArray<unknown>;
+	};
 	readonly sourceSite?: string;
+}
+
+function unknownArray(value: unknown): ReadonlyArray<unknown> | undefined {
+	return Array.isArray(value) ? (value as ReadonlyArray<unknown>) : undefined;
 }
 
 function coreKnownBuiltinProof(
@@ -1840,28 +1847,306 @@ function coreKnownBuiltinProof(
 	const identity = attributeObject(call.identity);
 	const semantics = attributeObject(call.semantics);
 	const semanticValue = attributeObject(semantics?.value);
-	const proof = attributeObject(identity?.proof);
+	const identityProof = attributeObject(identity?.proof);
+	const semanticsProof = attributeObject(semantics?.proof);
+	const identityDependencies = unknownArray(identityProof?.dependencies);
+	const identityObligations = unknownArray(identityProof?.obligations);
+	const semanticsDependencies = unknownArray(semanticsProof?.dependencies);
+	const semanticsObligations = unknownArray(semanticsProof?.obligations);
+	const lowerings = unknownArray(semanticValue?.lowerings);
 	if (
 		identity?.kind !== "known" ||
 		semantics?.kind !== "known" ||
-		proof === undefined ||
-		!Array.isArray(proof.dependencies) ||
-		!Array.isArray(proof.obligations) ||
-		!proof.obligations.some(
+		identityDependencies === undefined ||
+		identityObligations === undefined ||
+		semanticsDependencies === undefined ||
+		semanticsObligations === undefined ||
+		![...identityObligations, ...semanticsObligations].some(
 			(obligation) => attributeObject(obligation)?.kind === "fallback",
 		) ||
 		(options.lowering !== undefined &&
-			(!Array.isArray(semanticValue?.lowerings) ||
-				!semanticValue.lowerings.includes(options.lowering))) ||
+			(lowerings === undefined || !lowerings.includes(options.lowering))) ||
 		(options.result !== undefined && semanticValue?.result !== options.result)
 	) {
 		return undefined;
 	}
+	const dependencies = new Map<string, unknown>();
+	const obligations = new Map<string, unknown>();
+	for (const dependency of [
+		...identityDependencies,
+		...semanticsDependencies,
+	]) {
+		dependencies.set(stableAttributeValue(dependency), dependency);
+	}
+	for (const obligation of [
+		...identityObligations,
+		...semanticsObligations,
+	]) {
+		obligations.set(stableAttributeValue(obligation), obligation);
+	}
 	return {
-		proof,
+		proof: {
+			dependencies: [...dependencies.entries()]
+				.sort(([left], [right]) => left.localeCompare(right))
+				.map(([, dependency]) => dependency),
+			obligations: [...obligations.entries()]
+				.sort(([left], [right]) => left.localeCompare(right))
+				.map(([, obligation]) => obligation),
+		},
 		...(typeof call.sourceSite === "string" ? { sourceSite: call.sourceSite } : {}),
 	};
 }
+
+/** Select a non-escaping exact `String.prototype.split` projection. */
+const selectStringSplitProjectionRegions: CoreFunctionPass = {
+	name: "select-string-split-projection-regions",
+	run(fn, analyses, program) {
+		if (fn.regions.filter(({ kind }) => kind === "string-split-projection").length >= 8) {
+			return fn;
+		}
+		const cfg = analyses.controlFlow(fn);
+		const canonical = coreCanonicalValues(fn, cfg);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const definitions = functionDefinitions(fn);
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		const uses = new Map<
+			CoreValueId,
+			Array<{
+				readonly instruction: CoreInstruction;
+				readonly position: number;
+			}>
+		>();
+		const nonInstructionUses = new Set<CoreValueId>();
+		const handlerTargets = new Set(
+			fn.blocks.flatMap(({ handler }) =>
+				handler === undefined ? [] : [handler.block],
+			),
+		);
+		const addNonInstructionUse = (value: CoreValueId) => {
+			nonInstructionUses.add(root(value));
+		};
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+				for (const [position, input] of instruction.inputs.entries()) {
+					const key = root(input);
+					const entries = uses.get(key) ?? [];
+					entries.push({ instruction, position });
+					uses.set(key, entries);
+				}
+			}
+			if (block.handler !== undefined) {
+				for (const value of block.handler.arguments) addNonInstructionUse(value);
+			}
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				for (const value of edge.arguments) addNonInstructionUse(value);
+			}
+			switch (block.terminator.kind) {
+				case "branch":
+				case "guard":
+					addNonInstructionUse(block.terminator.condition);
+					break;
+				case "switch":
+					addNonInstructionUse(block.terminator.discriminant);
+					break;
+				case "return":
+				case "throw":
+					addNonInstructionUse(block.terminator.value);
+					break;
+				case "jump":
+				case "unreachable":
+					break;
+			}
+		}
+		const instructionDominates = (
+			producer: CoreInstruction,
+			consumer: CoreInstruction,
+		): boolean => {
+			const producerLocation = locations.get(producer.id);
+			const consumerLocation = locations.get(consumer.id);
+			if (producerLocation === undefined || consumerLocation === undefined) return false;
+			return producerLocation.block.id === consumerLocation.block.id
+				? producerLocation.index < consumerLocation.index
+				: cfg.dominates(producerLocation.block.id, consumerLocation.block.id);
+		};
+		const occupied = new Set(
+			fn.regions
+				.filter(({ kind }) => kind !== "numeric-fusion")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const regions = [...fn.regions];
+		for (const block of fn.blocks) {
+			for (const call of block.instructions) {
+				if (call.opcode !== "call" || call.inputs.length !== 3 || call.outputs.length !== 1) {
+					continue;
+				}
+				const builtin = coreKnownBuiltinProof(call, "String.prototype.split", {
+					lowering: "projected-string-split",
+					result: "array-of-strings",
+				});
+				if (builtin === undefined) continue;
+				const property = definitions.get(root(call.inputs[0]!));
+				const separator = definitions.get(root(call.inputs[2]!));
+				const separatorStringIndex = separator?.attributes.stringIndex;
+				if (
+					property?.opcode !== "loadPropertyStatic" ||
+					property.inputs.length !== 1 ||
+					property.outputs.length !== 1 ||
+					root(property.inputs[0]!) !== root(call.inputs[1]!) ||
+					typeof property.attributes.stringIndex !== "number" ||
+					decodeString(program, property.attributes.stringIndex) !== "split" ||
+					separator?.opcode !== "createString" ||
+					typeof separatorStringIndex !== "number" ||
+					(decodeString(program, separatorStringIndex)?.length ?? 0) === 0 ||
+					!instructionDominates(property, call) ||
+					!instructionDominates(separator, call)
+				) {
+					continue;
+				}
+				const propertyUses = uses.get(root(property.outputs[0]!));
+				if (
+					propertyUses?.length !== 1 ||
+					propertyUses[0]?.instruction !== call ||
+					propertyUses[0].position !== 0
+				) {
+					continue;
+				}
+
+				const result = root(call.outputs[0]!);
+				if (nonInstructionUses.has(result)) continue;
+				const aliasMoves: Array<CoreInstruction> = [];
+				const loads: Array<{
+					readonly instruction: CoreInstruction;
+					readonly kind: "element" | "length";
+					readonly index?: number;
+				}> = [];
+				const projectedIndices = new Set<number>();
+				let lengthSeen = false;
+				let safe = true;
+				for (const use of uses.get(result) ?? []) {
+					const consumer = use.instruction;
+					if (
+						consumer.opcode === "move" &&
+						use.position === 0 &&
+						consumer.outputs.length === 1 &&
+						root(consumer.outputs[0]!) === result
+					) {
+						aliasMoves.push(consumer);
+						continue;
+					}
+					if (
+						consumer.opcode === "loadPropertyStatic" &&
+						use.position === 0 &&
+						consumer.outputs.length === 1 &&
+						typeof consumer.attributes.stringIndex === "number" &&
+						decodeString(program, consumer.attributes.stringIndex) === "length" &&
+						!lengthSeen &&
+						instructionDominates(call, consumer)
+					) {
+						loads.push({ instruction: consumer, kind: "length" });
+						lengthSeen = true;
+						continue;
+					}
+					if (
+						consumer.opcode === "loadProperty" &&
+						use.position === 0 &&
+						consumer.inputs.length === 2 &&
+						consumer.outputs.length === 1 &&
+						instructionDominates(call, consumer)
+					) {
+						const key = definitions.get(root(consumer.inputs[1]!));
+						const index = key?.attributes.value;
+						if (
+							key?.opcode === "createNumber" &&
+							typeof index === "number" &&
+							Number.isInteger(index) &&
+							index >= 0 &&
+							index <= 0xffff &&
+							!projectedIndices.has(index) &&
+							instructionDominates(key, consumer)
+						) {
+							loads.push({ instruction: consumer, kind: "element", index });
+							projectedIndices.add(index);
+							continue;
+						}
+					}
+					safe = false;
+					break;
+				}
+				if (!safe || projectedIndices.size === 0 || projectedIndices.size > 8) continue;
+				const order = (instruction: CoreInstruction): number => {
+					const location = locations.get(instruction.id)!;
+					return location.block.id * 0x1_0000 + location.index;
+				};
+				aliasMoves.sort((left, right) => order(left) - order(right));
+				loads.sort((left, right) => order(left.instruction) - order(right.instruction));
+				const claimed = [property, call, ...aliasMoves, ...loads.map(({ instruction }) => instruction)];
+				const ordinaryBlocks = [
+					...new Set(claimed.map(({ id }) => locations.get(id)!.block.id)),
+				];
+				if (
+					new Set(claimed.map(({ id }) => id)).size !== claimed.length ||
+					claimed.some(({ id }) => occupied.has(id)) ||
+					claimed.some(({ id }) => locations.get(id)?.block.handler !== undefined) ||
+					ordinaryBlocks.some((id) => handlerTargets.has(id))
+				) {
+					continue;
+				}
+				const obligations = [
+					...builtin.proof.obligations,
+					{
+						kind: "materialize",
+						id: `string-split-projection:${builtin.sourceSite ?? fn.functionIndex}`,
+					},
+				];
+				const claimedInstructions = claimed.map(({ id }) => id);
+				regions.push({
+					kind: "string-split-projection",
+					anchors: [call.id, loads[0]!.instruction.id],
+					claimedInstructions,
+					ordinaryBlocks,
+					exceptionalBlocks: [],
+					data: coreAttributeObject(
+						{
+							license: {
+								guard: {
+									dependencies: builtin.proof.dependencies,
+									obligations,
+								},
+								genericTwin: "retained",
+								materialization: "whole-region",
+							},
+							representation: "projected-elements",
+							cost: {
+								score: projectedIndices.size * 8 + loads.length,
+								metadataOperations: claimedInstructions.length,
+							},
+							property: { $coreInstruction: property.id },
+							separatorStringIndex,
+							aliasMoves: aliasMoves.map(({ id }) => ({ $coreInstruction: id })),
+							loads: loads.map((load) => ({
+								instruction: { $coreInstruction: load.instruction.id },
+								kind: load.kind,
+								...(load.index === undefined ? {} : { index: load.index }),
+							})),
+						},
+						"string-split-projection",
+					),
+				});
+				for (const { id } of claimed) occupied.add(id);
+				if (regions.filter(({ kind }) => kind === "string-split-projection").length >= 8) {
+					break;
+				}
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
 
 /** Select exact `String.prototype.slice` -> `%Number%` span conversion. */
 const selectStringSliceNumberRegions: CoreFunctionPass = {
@@ -3444,6 +3729,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateFreshDenseIndexedReserves,
 	selectStackObjectRegions,
+	selectStringSplitProjectionRegions,
 	selectStringSliceNumberRegions,
 	selectNumericFusionRegions,
 ];
