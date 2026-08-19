@@ -226,10 +226,7 @@ describe("opt-in performance statistics", () => {
 		expect(field(dependencies, "unregister_scan_steps")).toBeGreaterThan(0);
 
 		const ic = reportLine(result.stderr, "[perf-ic-stats]");
-		const loadHits =
-			field(ic, "load_mono_hits") +
-			field(ic, "load_region_hits") +
-			field(ic, "load_slow_mono_hits");
+		const loadHits = field(ic, "load_mono_hits") + field(ic, "load_slow_mono_hits");
 		expect(loadHits).toBeGreaterThan(0);
 		expect(field(ic, "load_slow_mono_hits")).toBeGreaterThan(1000);
 		expect(field(ic, "load_fallbacks")).toBeGreaterThan(0);

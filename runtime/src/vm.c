@@ -45,19 +45,11 @@ void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
     const MalFunction *function = &vm->definition->functions[function_index];
     i32 property_count = function->property_ic_count;
     if (property_count > 0 && pool->sites == nullptr) {
-        // One zeroed allocation keeps the dense IC row and its sparse compiled-region
-        // pointer row adjacent. The 72-byte site is pointer-aligned, so the trailing
-        // pointer row remains naturally aligned.
-        pool->sites = calloc(
-            (usize) property_count,
-            sizeof(MalInlineCache) + sizeof(MalObjectRegionCache *));
-        pool->regions = (MalObjectRegionCache **) &pool->sites[property_count];
+        pool->sites = calloc((usize) property_count, sizeof(MalInlineCache));
         MAL_PERF_COUNT(function_property_cache_allocations);
         MAL_PERF_ADD(
             function_property_cache_bytes,
-            (u64) property_count
-                * (sizeof(MalInlineCache)
-                   + sizeof(MalObjectRegionCache *)));
+            (u64) property_count * sizeof(MalInlineCache));
     }
     if (function->literal_shape_count > 0
         && vm->literal_shape_cache[function_index] == nullptr) {
@@ -828,14 +820,6 @@ void mal_vm_free(MalVm *vm) {
             if (pool->sites != nullptr) {
                 for (i32 j = 0; j < vm->definition->functions[i].property_ic_count; j++) {
                     mal_object_unregister_prototype_cache(&pool->sites[j]);
-                    if (pool->regions != nullptr) {
-                        MalObjectRegionCache *region = pool->regions[j];
-                        if (region != nullptr) {
-                            free(region->keys);
-                            free(region->slots);
-                            free(region);
-                        }
-                    }
                 }
             }
             free(pool->sites);

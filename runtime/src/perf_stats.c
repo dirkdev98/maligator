@@ -630,8 +630,8 @@ static void mal_perf_stats_print(void) {
     }
     fprintf(
         stderr,
-        "[perf-ic-stats] load_mono_hits=%llu load_region_hits=%llu "
-        "load_inherited_hits=%llu inherited_loop_summaries=%llu "
+        "[perf-ic-stats] load_mono_hits=%llu load_inherited_hits=%llu "
+        "inherited_loop_summaries=%llu "
         "inherited_loop_iterations_elided=%llu load_missing_hits=%llu load_missing_fills=%llu "
         "load_fallbacks=%llu load_slow_mono_hits=%llu "
         "load_poly_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "
@@ -646,14 +646,13 @@ static void mal_perf_stats_print(void) {
         "prototype_epoch_dictionary=%llu prototype_epoch_append=%llu "
         "prototype_epoch_delete=%llu prototype_epoch_reparent=%llu "
         "prototype_epoch_shaped=%llu prototype_epoch_finalize=%llu "
-        "store_mono_hits=%llu store_region_hits=%llu store_fallbacks=%llu "
+        "store_mono_hits=%llu store_fallbacks=%llu "
         "store_slow_mono_hits=%llu store_poly_hits=%llu "
         "store_mega_hits=%llu store_mega_misses=%llu store_shape_hits=%llu "
         "store_shape_fills=%llu store_shape_uncacheable=%llu "
         "store_transition_hits=%llu store_transition_fills=%llu store_plain_generic=%llu "
         "store_other_generic=%llu\n",
         (unsigned long long) mal_perf_stats.ic_load_mono_hits,
-        (unsigned long long) mal_perf_stats.ic_load_region_hits,
         (unsigned long long) mal_perf_stats.ic_load_inherited_hits,
         (unsigned long long) mal_perf_stats.inherited_loop_summaries,
         (unsigned long long) mal_perf_stats.inherited_loop_iterations_elided,
@@ -691,7 +690,6 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.prototype_epoch_shaped_invalidations,
         (unsigned long long) mal_perf_stats.prototype_epoch_finalize_invalidations,
         (unsigned long long) mal_perf_stats.ic_store_mono_hits,
-        (unsigned long long) mal_perf_stats.ic_store_region_hits,
         (unsigned long long) mal_perf_stats.ic_store_fallbacks,
         (unsigned long long) mal_perf_stats.ic_store_slow_mono_hits,
         (unsigned long long) mal_perf_stats.ic_store_poly_hits,

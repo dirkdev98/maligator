@@ -335,7 +335,6 @@ typedef struct MalPerfStats {
     u64 shape_transition_index_builds;
 
     u64 ic_load_mono_hits;
-    u64 ic_load_region_hits;
     u64 ic_load_inherited_hits;
     u64 inherited_loop_summaries;
     u64 inherited_loop_iterations_elided;
@@ -374,7 +373,6 @@ typedef struct MalPerfStats {
     u64 prototype_epoch_finalize_invalidations;
 
     u64 ic_store_mono_hits;
-    u64 ic_store_region_hits;
     u64 ic_store_fallbacks;
     u64 ic_store_slow_mono_hits;
     u64 ic_store_poly_hits;
@@ -445,10 +443,6 @@ static inline void mal_perf_ic_load_mono_hit(void) {
     MAL_PERF_COUNT(ic_load_mono_hits);
 }
 
-static inline void mal_perf_ic_load_region_hit(void) {
-    MAL_PERF_COUNT(ic_load_region_hits);
-}
-
 static inline void mal_perf_ic_load_inherited_hit(void) {
     MAL_PERF_COUNT(ic_load_inherited_hits);
 }
@@ -472,10 +466,6 @@ static inline void mal_perf_ic_load_array_length_hit(void) {
 
 static inline void mal_perf_ic_store_mono_hit(void) {
     MAL_PERF_COUNT(ic_store_mono_hits);
-}
-
-static inline void mal_perf_ic_store_region_hit(void) {
-    MAL_PERF_COUNT(ic_store_region_hits);
 }
 
 static inline void mal_perf_stack_object_init(void) {
