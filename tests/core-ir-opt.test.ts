@@ -109,6 +109,41 @@ describe("Core IR optimizer", () => {
 		});
 	});
 
+	it("erases exact primitive builtin dispatch only with a locked-world proof", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			'function first() { return "alpha,beta".split(",")[0]; }',
+			"core-exact-builtin.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const instructions = optimized!.functions[1]!.blocks.flatMap(
+			({ instructions: blockInstructions }) => blockInstructions,
+		);
+		const builtin = instructions.find(({ opcode }) => opcode === "callBuiltin");
+		expect(builtin).toBeDefined();
+		expect(builtin?.attributes.operation).toBe(
+			"String.prototype.split",
+		);
+		expect(
+			instructions.some(
+				(instruction) => {
+					const index = instruction.attributes.stringIndex;
+					return (
+						instruction.opcode === "loadPropertyStatic" &&
+						typeof index === "number" &&
+						String.fromCharCode(...optimized!.stringConstants[index]!) === "split"
+					);
+				},
+			),
+		).toBe(false);
+	});
+
 	it("inlines an exact linear closure while retaining its source chain", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function outer(value) {

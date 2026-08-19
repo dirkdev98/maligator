@@ -1,4 +1,8 @@
-import { builtinOperations, mathUnaryOperationKeys } from "./builtin-registry.ts";
+import {
+	builtinOperations,
+	exactBuiltinCallDescriptor,
+	mathUnaryOperationKeys,
+} from "./builtin-registry.ts";
 import type {
 	CompilerOptimizationDecision,
 	OptimizationAblation,
@@ -332,6 +336,25 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 								});
 					guardOrdinal++;
 					changed = true;
+					const knownBuiltinCall = {
+						operation: descriptor.id,
+						identity,
+						semantics:
+							identity.kind === "known"
+								? knownFact(
+										{
+											effects: descriptor.effects,
+											result: descriptor.result,
+											lowerings: descriptor.lowerings,
+										},
+										{
+											...identity.proof,
+											origin: `builtin-registry-semantics:${descriptor.id}`,
+										},
+									)
+								: identity,
+						...(site === undefined ? {} : { sourceSite: site }),
+					};
 					const arguments_ = instruction.inputs.slice(2);
 					const mathOpcode = MATH_UNARY_OPERATIONS.has(descriptor.id)
 						? "mathUnaryNumber"
@@ -360,30 +383,49 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 							attributes: { operation: descriptor.id },
 						};
 					}
+					const exact = exactBuiltinCallDescriptor(descriptor.id);
+					const receiver = definitions.get(
+						canonical.get(instruction.inputs[1]!) ?? instruction.inputs[1]!,
+					);
+					const exactReceiver =
+						exact?.receiverProof === "primitive-string"
+							? receiver?.opcode === "createString"
+							: exact?.receiverProof === "intrinsic-object"
+								? receiver?.opcode === "loadIntrinsic" &&
+									receiver.attributes.intrinsic === descriptor.owner
+								: false;
+					if (
+						exact !== undefined &&
+						exactReceiver &&
+						compilerFactIsWorldInvariant(identity) &&
+						property.outputs.length === 1 &&
+						useCounts.get(property.outputs[0]!) === 1
+					) {
+						removedInstructions.add(property.id);
+						for (const output of property.outputs) removedValues.add(output);
+						const forwardedArguments =
+							exact.forwardedArgumentLimit === undefined
+								? arguments_
+								: arguments_.slice(0, exact.forwardedArgumentLimit);
+						return {
+							...instruction,
+							opcode: "callBuiltin",
+							inputs: [instruction.inputs[1]!, ...forwardedArguments],
+							attributes: {
+								operation: exact.id,
+								knownBuiltinCall: coreAttribute(
+									knownBuiltinCall,
+									"knownBuiltinCall",
+								),
+							},
+						};
+					}
 					return {
 						...instruction,
 						attributes: {
 							...instruction.attributes,
 							knownBuiltinCall: coreAttribute(
-								{
-									operation: descriptor.id,
-									identity,
-									semantics:
-										identity.kind === "known"
-											? knownFact(
-													{
-														effects: descriptor.effects,
-														result: descriptor.result,
-														lowerings: descriptor.lowerings,
-													},
-													{
-														...identity.proof,
-														origin: `builtin-registry-semantics:${descriptor.id}`,
-													},
-												)
-											: identity,
-									...(site === undefined ? {} : { sourceSite: site }),
-								},
+								knownBuiltinCall,
 								"knownBuiltinCall",
 							),
 						},
@@ -1980,7 +2022,12 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 		const regions = [...fn.regions];
 		for (const block of fn.blocks) {
 			for (const call of block.instructions) {
-				if (call.opcode !== "call" || call.inputs.length !== 3 || call.outputs.length !== 1) {
+				const dynamic = call.opcode === "call";
+				if (
+					(!dynamic && call.opcode !== "callBuiltin") ||
+					call.inputs.length !== (dynamic ? 3 : 2) ||
+					call.outputs.length !== 1
+				) {
 					continue;
 				}
 				const builtin = coreKnownBuiltinProof(call, "String.prototype.split", {
@@ -1988,31 +2035,35 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 					result: "array-of-strings",
 				});
 				if (builtin === undefined) continue;
-				const property = definitions.get(root(call.inputs[0]!));
-				const separator = definitions.get(root(call.inputs[2]!));
+				const property = dynamic ? definitions.get(root(call.inputs[0]!)) : undefined;
+				const receiver = call.inputs[dynamic ? 1 : 0]!;
+				const separator = definitions.get(root(call.inputs[dynamic ? 2 : 1]!));
 				const separatorStringIndex = separator?.attributes.stringIndex;
 				if (
-					property?.opcode !== "loadPropertyStatic" ||
-					property.inputs.length !== 1 ||
-					property.outputs.length !== 1 ||
-					root(property.inputs[0]!) !== root(call.inputs[1]!) ||
-					typeof property.attributes.stringIndex !== "number" ||
-					decodeString(program, property.attributes.stringIndex) !== "split" ||
+					(dynamic &&
+						(property?.opcode !== "loadPropertyStatic" ||
+							property.inputs.length !== 1 ||
+							property.outputs.length !== 1 ||
+							root(property.inputs[0]!) !== root(receiver) ||
+							typeof property.attributes.stringIndex !== "number" ||
+							decodeString(program, property.attributes.stringIndex) !== "split" ||
+							!instructionDominates(property, call))) ||
 					separator?.opcode !== "createString" ||
 					typeof separatorStringIndex !== "number" ||
 					(decodeString(program, separatorStringIndex)?.length ?? 0) === 0 ||
-					!instructionDominates(property, call) ||
 					!instructionDominates(separator, call)
 				) {
 					continue;
 				}
-				const propertyUses = uses.get(root(property.outputs[0]!));
-				if (
-					propertyUses?.length !== 1 ||
-					propertyUses[0]?.instruction !== call ||
-					propertyUses[0].position !== 0
-				) {
-					continue;
+				if (property !== undefined) {
+					const propertyUses = uses.get(root(property.outputs[0]!));
+					if (
+						propertyUses?.length !== 1 ||
+						propertyUses[0]?.instruction !== call ||
+						propertyUses[0].position !== 0
+					) {
+						continue;
+					}
 				}
 
 				const result = root(call.outputs[0]!);
@@ -2083,7 +2134,12 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 				};
 				aliasMoves.sort((left, right) => order(left) - order(right));
 				loads.sort((left, right) => order(left.instruction) - order(right.instruction));
-				const claimed = [property, call, ...aliasMoves, ...loads.map(({ instruction }) => instruction)];
+				const claimed = [
+					...(property === undefined ? [] : [property]),
+					call,
+					...aliasMoves,
+					...loads.map(({ instruction }) => instruction),
+				];
 				const ordinaryBlocks = [
 					...new Set(claimed.map(({ id }) => locations.get(id)!.block.id)),
 				];
@@ -2124,7 +2180,9 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 								score: projectedIndices.size * 8 + loads.length,
 								metadataOperations: claimedInstructions.length,
 							},
-							property: { $coreInstruction: property.id },
+							...(property === undefined
+								? {}
+								: { property: { $coreInstruction: property.id } }),
 							separatorStringIndex,
 							aliasMoves: aliasMoves.map(({ id }) => ({ $coreInstruction: id })),
 							loads: loads.map((load) => ({
