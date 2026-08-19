@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import type { CoreProgramBridge } from "../src/core-ir-bridge.ts";
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { CoreFunctionBuilder } from "../src/core-ir.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 function programWithConstants(): CoreProgramBridge {
 	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
@@ -52,5 +54,24 @@ describe("Core IR optimizer", () => {
 		});
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 		expect(result.passes.some(({ changed }) => changed)).toBe(true);
+	});
+
+	it("folds exact string property keys on the development Core path", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			"function read(object) { object.answer = 1; return object.answer; }",
+			"core-static-property.js",
+		);
+		let opcodes: Array<string> = [];
+		compileSemanticProgramToVmDefinition(semantic, {
+			optimization: "development",
+			afterOptimization(program) {
+				opcodes = program.functions.flatMap((fn) =>
+					fn.blocks.flatMap((block) => block.instructions.map(({ type }) => type)),
+				);
+			},
+		});
+
+		expect(opcodes).toContain("storePropertyStatic");
+		expect(opcodes).toContain("loadPropertyStatic");
 	});
 });

@@ -21,8 +21,13 @@ export interface CoreOptimizationOptions {
 	readonly simplifyValues?: boolean;
 }
 
+type LegacyRegisterOperand =
+	| { readonly kind: "output"; readonly index: number }
+	| { readonly kind: "input"; readonly index: number }
+	| { readonly kind: "literal"; readonly value: number };
+
 interface LegacyInstructionPayload {
-	readonly registerLayout?: ReadonlyArray<unknown>;
+	readonly registerLayout?: ReadonlyArray<LegacyRegisterOperand>;
 	readonly fields: Readonly<Record<string, unknown>>;
 }
 
@@ -221,6 +226,78 @@ const annotateTerminalYieldSites: CoreFunctionPass = {
 			})),
 			mutationEpoch: fn.mutationEpoch + 1,
 		};
+	},
+};
+
+function removeLegacyInput(
+	payload: LegacyInstructionPayload,
+	removedInput: number,
+): LegacyInstructionPayload["registerLayout"] {
+	if (payload.registerLayout === undefined) return undefined;
+	const result: Array<LegacyRegisterOperand> = [];
+	for (const operand of payload.registerLayout) {
+		if (operand.kind !== "input") {
+			result.push(operand);
+		} else if (operand.index !== removedInput) {
+			result.push(
+				operand.index > removedInput ? { ...operand, index: operand.index - 1 } : operand,
+			);
+		}
+	}
+	return result;
+}
+
+/** Fold an exact string SSA value into the property operation's attributes. */
+const foldStaticPropertyKeys: CoreFunctionPass = {
+	name: "fold-static-property-keys",
+	ablation: "static-properties",
+	run(fn) {
+		const strings = new Map<CoreValueId, number>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const stringIndex = legacyFields(instruction).stringIndex;
+				if (
+					instruction.opcode === "createString" &&
+					instruction.outputs.length === 1 &&
+					typeof stringIndex === "number"
+				) {
+					strings.set(instruction.outputs[0]!, stringIndex);
+				}
+			}
+		}
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (
+						(instruction.opcode !== "loadProperty" &&
+							instruction.opcode !== "storeProperty") ||
+						instruction.inputs.length < 2
+					) {
+						return instruction;
+					}
+					const stringIndex = strings.get(instruction.inputs[1]!);
+					if (stringIndex === undefined) return instruction;
+					const payload = instruction.payload as LegacyInstructionPayload;
+					changed = true;
+					return {
+						...instruction,
+						opcode:
+							instruction.opcode === "loadProperty"
+								? "loadPropertyStatic"
+								: "storePropertyStatic",
+						inputs: instruction.inputs.filter((_, index) => index !== 1),
+						payload: {
+							...payload,
+							registerLayout: removeLegacyInput(payload, 1),
+							fields: { ...payload.fields, stringIndex },
+						},
+					};
+				}),
+			}),
+		);
+		return changed ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
 	},
 };
 
@@ -482,6 +559,7 @@ const deadInstructionElimination: CoreFunctionPass = {
 
 const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
+	foldStaticPropertyKeys,
 	copyAndValueNumber,
 	deadInstructionElimination,
 ];
