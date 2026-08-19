@@ -262,18 +262,33 @@ describe("Core IR lowering", () => {
 		const instructions = lowered.functions.flatMap((fn) =>
 			fn.blocks.flatMap((block) => block.instructions),
 		);
-		const constructIndex = instructions.findIndex(
-			(instruction) => instruction.type === "constructSuperExplicit",
+		const constructIndexes = instructions.flatMap((instruction, index) =>
+			instruction.type === "constructSuperExplicit" ? [index] : [],
 		);
-		const construct = instructions[constructIndex]!;
-		if (construct.type !== "constructSuperExplicit") {
-			throw new Error("missing explicit super construction");
-		}
+		expect(constructIndexes.length).toBeGreaterThan(0);
+		for (const constructIndex of constructIndexes) {
+			const construct = instructions[constructIndex]!;
+			if (construct.type !== "constructSuperExplicit") {
+				throw new Error("missing explicit super construction");
+			}
 
-		expect(construct.registers[0]).toBe(construct.registers[4]);
-		const move = instructions[constructIndex - 1]!;
-		expect(move.type).toBe("move");
-		if (move.type !== "move") throw new Error("missing target-constraint move");
-		expect(move.registers[0]).toBe(construct.registers[0]);
+			const constrained = construct.registers[0];
+			expect(construct.registers[4]).toBe(constrained);
+			expect(construct.registers.slice(1, 4)).not.toContain(constrained);
+
+			const inputMove = instructions[constructIndex - 1]!;
+			expect(inputMove.type).toBe("move");
+			if (inputMove.type !== "move") {
+				throw new Error("missing target-constraint input move");
+			}
+			expect(inputMove.registers[0]).toBe(constrained);
+
+			const resultMove = instructions[constructIndex + 1]!;
+			expect(resultMove.type).toBe("move");
+			if (resultMove.type !== "move") {
+				throw new Error("missing target-constraint result move");
+			}
+			expect(resultMove.registers[1]).toBe(constrained);
+		}
 	});
 });

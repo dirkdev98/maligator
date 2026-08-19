@@ -874,21 +874,33 @@ function lowerFunctionToTarget(
 			const lowered = rebuildInstruction(core, instruction, registerForValue);
 			const compilerSite = instructionSites?.get(instruction);
 			if (compilerSite !== undefined) instructionSites?.set(lowered, compilerSite);
+			let resultMove: CompilerInstruction | undefined;
 			if (lowered.type === "constructSuperExplicit") {
 				// Core models current-this as an ordinary SSA input. The compact VM op is
-				// two-address, so satisfy that target constraint here instead of leaking it
-				// into Core value allocation.
+				// two-address. A fresh register is required when the allocated result and
+				// current-this differ: reusing the result register for the input can clobber
+				// another live operand, such as the parent constructor.
 				const destination = lowered.registers[0];
 				const currentThis = lowered.registers[4];
 				if (destination !== currentThis) {
+					const constrained = nextRegister.value++;
+					registerRepresentations.set(constrained, "boxed");
 					instructions.push({
 						type: "move",
-						registers: [destination, currentThis],
+						registers: [constrained, currentThis],
 					});
+					lowered.registers[0] = constrained;
+					lowered.registers[4] = constrained;
+					resultMove = {
+						type: "move",
+						registers: [destination, constrained],
+					};
+				} else {
+					lowered.registers[4] = destination;
 				}
-				lowered.registers[4] = destination;
 			}
 			instructions.push(lowered);
+			if (resultMove !== undefined) instructions.push(resultMove);
 			loweredInstructions.set(instruction.id, lowered);
 		}
 		instructions.push(...sourcePositionMarker(block.terminator.sourcePosition));
