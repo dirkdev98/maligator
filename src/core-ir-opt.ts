@@ -1,4 +1,8 @@
-import type { OptimizationAblation } from "./compiler-diagnostics.ts";
+import type {
+	OptimizationAblation,
+	OptimizationMetrics,
+	OptimizationPassDelta,
+} from "./compiler-diagnostics.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
@@ -22,6 +26,142 @@ export interface CoreOptimizationOptions {
 	readonly ablations?: ReadonlySet<OptimizationAblation>;
 	/** Run Core's value simplifiers. Disable only while importing an already optimized graph. */
 	readonly simplifyValues?: boolean;
+}
+
+const ALLOCATION_OPCODES = new Set([
+	"createObject",
+	"createObjectShaped",
+	"createArray",
+	"instantiateLiteralTemplate",
+	"createFunction",
+	"createArgumentsObject",
+	"createRestArguments",
+	"createModuleNamespace",
+	"createTemplateObject",
+	"createBigint",
+]);
+
+const DYNAMIC_CALL_OPCODES = new Set([
+	"callSpread",
+	"callSpreadIterable",
+	"constructSpread",
+	"constructSuper",
+	"constructSuperExplicit",
+]);
+
+const BOXED_OPERATION_OPCODES = new Set([
+	"binary",
+	"unary",
+	"toPropertyKey",
+	"requireCoercible",
+]);
+
+const PROPERTY_HELPER_OPCODES = new Set([
+	"loadProperty",
+	"loadPropertyStatic",
+	"storeProperty",
+	"storePropertyStatic",
+	"deleteProperty",
+	"loadSuperProperty",
+	"storeSuperProperty",
+	"loadPrototype",
+	"setPrototype",
+	"loadGlobalProperty",
+	"storeGlobalProperty",
+	"copyDataProperties",
+	"mergeDataProperties",
+	"defineProperty",
+]);
+
+function attributeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Readonly<Record<string, unknown>>)
+		: undefined;
+}
+
+function knownBuiltinIdentity(instruction: CoreInstruction): boolean {
+	const call = attributeObject(instruction.attributes.knownBuiltinCall);
+	const identity = attributeObject(call?.identity);
+	return identity?.kind === "known";
+}
+
+function isDynamicCall(instruction: CoreInstruction): boolean {
+	if (DYNAMIC_CALL_OPCODES.has(instruction.opcode)) return true;
+	if (instruction.opcode === "construct") {
+		return instruction.attributes.directFunctionIndex === undefined;
+	}
+	if (instruction.opcode !== "call") return false;
+	return (
+		instruction.attributes.directFunctionIndex === undefined &&
+		instruction.attributes.directCallTargetFunctionIndex === undefined &&
+		!knownBuiltinIdentity(instruction)
+	);
+}
+
+function carriesWorldGuard(instruction: CoreInstruction): boolean {
+	if (instruction.opcode === "guardFunctionIndex") return true;
+	if (instruction.opcode !== "call") return false;
+	const call = attributeObject(instruction.attributes.knownBuiltinCall);
+	const identity = attributeObject(call?.identity);
+	if (identity?.kind !== "known") return false;
+	const proof = attributeObject(identity.proof);
+	const dependencies = Array.isArray(proof?.dependencies) ? proof.dependencies : [];
+	const obligations = Array.isArray(proof?.obligations) ? proof.obligations : [];
+	return (
+		dependencies.some((dependency) => {
+			const kind = attributeObject(dependency)?.kind;
+			return kind === "epoch" || kind === "guard";
+		}) ||
+		obligations.some((obligation) => attributeObject(obligation)?.kind === "fallback")
+	);
+}
+
+/** Measure the residual Core program itself, never a reconstructed frontend graph. */
+export function coreOptimizationMetrics(program: CoreProgram): OptimizationMetrics {
+	const metrics = {
+		allocationSites: 0,
+		dynamicCalls: 0,
+		boxedOperations: 0,
+		propertyHelpers: 0,
+		worldGuards: 0,
+		safepoints: 0,
+	};
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (ALLOCATION_OPCODES.has(instruction.opcode)) metrics.allocationSites++;
+				if (isDynamicCall(instruction)) metrics.dynamicCalls++;
+				if (BOXED_OPERATION_OPCODES.has(instruction.opcode)) metrics.boxedOperations++;
+				if (PROPERTY_HELPER_OPCODES.has(instruction.opcode)) metrics.propertyHelpers++;
+				if (carriesWorldGuard(instruction)) metrics.worldGuards++;
+				if (coreOpcodeRegistry.require(instruction.opcode).effects.mayGc)
+					metrics.safepoints++;
+			}
+		}
+	}
+	return metrics;
+}
+
+function metricDelta(
+	before: OptimizationMetrics,
+	after: OptimizationMetrics,
+): OptimizationMetrics {
+	return {
+		allocationSites: after.allocationSites - before.allocationSites,
+		dynamicCalls: after.dynamicCalls - before.dynamicCalls,
+		boxedOperations: after.boxedOperations - before.boxedOperations,
+		propertyHelpers: after.propertyHelpers - before.propertyHelpers,
+		worldGuards: after.worldGuards - before.worldGuards,
+		safepoints: after.safepoints - before.safepoints,
+	};
+}
+
+function optimizationPassDelta(
+	pass: Omit<OptimizationPassDelta, "before" | "after" | "delta">,
+	before: OptimizationMetrics,
+	after: OptimizationMetrics,
+): OptimizationPassDelta {
+	return { ...pass, before, after, delta: metricDelta(before, after) };
 }
 
 function origin(
@@ -567,7 +707,12 @@ function foldPrimitiveBinary(
 	if (left.kind === "number" && right.kind === "number") {
 		return foldNumericBinary(operator, left.value, right.value);
 	}
-	if (operator !== "===" && operator !== "!==" && operator !== "==" && operator !== "!=") {
+	if (
+		operator !== "===" &&
+		operator !== "!==" &&
+		operator !== "==" &&
+		operator !== "!="
+	) {
 		return undefined;
 	}
 	const loose = operator === "==" || operator === "!=";
@@ -598,7 +743,12 @@ function foldPrimitiveBinary(
 function foldedInstruction(
 	instruction: CoreInstruction,
 	value: CoreImmediate,
-): { readonly instruction: CoreInstruction; readonly representation: "boxed" | "f64" | "boolean" } | undefined {
+):
+	| {
+			readonly instruction: CoreInstruction;
+			readonly representation: "boxed" | "f64" | "boolean";
+	  }
+	| undefined {
 	const common = {
 		...instruction,
 		inputs: [],
@@ -651,39 +801,41 @@ const foldPrimitiveConstants: CoreFunctionPass = {
 		}
 		const representations = new Map<CoreValueId, "boxed" | "f64" | "boolean">();
 		let changed = false;
-		const blocks = fn.blocks.map((block): CoreBlock => ({
-			...block,
-			instructions: block.instructions.map((instruction) => {
-				if (instruction.outputs.length !== 1) return instruction;
-				let result: CoreImmediate | undefined;
-				if (instruction.opcode === "unary" && instruction.inputs.length === 1) {
-					const operand = constants.get(instruction.inputs[0]!);
-					if (operand !== undefined) {
-						result = foldUnaryPrimitive(
-							instructionAttribute(instruction, "operator"),
-							operand,
-						);
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction) => {
+					if (instruction.outputs.length !== 1) return instruction;
+					let result: CoreImmediate | undefined;
+					if (instruction.opcode === "unary" && instruction.inputs.length === 1) {
+						const operand = constants.get(instruction.inputs[0]!);
+						if (operand !== undefined) {
+							result = foldUnaryPrimitive(
+								instructionAttribute(instruction, "operator"),
+								operand,
+							);
+						}
+					} else if (instruction.opcode === "binary" && instruction.inputs.length === 2) {
+						const left = constants.get(instruction.inputs[0]!);
+						const right = constants.get(instruction.inputs[1]!);
+						if (left !== undefined && right !== undefined) {
+							result = foldPrimitiveBinary(
+								instructionAttribute(instruction, "operator"),
+								left,
+								right,
+							);
+						}
 					}
-				} else if (instruction.opcode === "binary" && instruction.inputs.length === 2) {
-					const left = constants.get(instruction.inputs[0]!);
-					const right = constants.get(instruction.inputs[1]!);
-					if (left !== undefined && right !== undefined) {
-						result = foldPrimitiveBinary(
-							instructionAttribute(instruction, "operator"),
-							left,
-							right,
-						);
-					}
-				}
-				if (result === undefined) return instruction;
-				const replacement = foldedInstruction(instruction, result);
-				if (replacement === undefined) return instruction;
-				changed = true;
-				constants.set(instruction.outputs[0]!, result);
-				representations.set(instruction.outputs[0]!, replacement.representation);
-				return replacement.instruction;
+					if (result === undefined) return instruction;
+					const replacement = foldedInstruction(instruction, result);
+					if (replacement === undefined) return instruction;
+					changed = true;
+					constants.set(instruction.outputs[0]!, result);
+					representations.set(instruction.outputs[0]!, replacement.representation);
+					return replacement.instruction;
+				}),
 			}),
-		}));
+		);
 		if (!changed) return fn;
 		return {
 			...fn,
@@ -732,7 +884,8 @@ function remapEdge(
 	blocks: ReadonlyMap<CoreBlockId, CoreBlockId>,
 ): CoreEdge {
 	const block = blocks.get(edge.block);
-	if (block === undefined) throw new Error(`Cannot retain edge to removed Core block ${edge.block}`);
+	if (block === undefined)
+		throw new Error(`Cannot retain edge to removed Core block ${edge.block}`);
 	return { ...edge, block };
 }
 
@@ -834,8 +987,7 @@ function removeUnreachableBlocks(fn: CoreFunction): CoreFunction {
 		);
 	const entry = blockIds.get(fn.entry);
 	if (entry === undefined) throw new Error("Core entry block became unreachable");
-	const bodyEntry =
-		fn.bodyEntry === undefined ? undefined : blockIds.get(fn.bodyEntry);
+	const bodyEntry = fn.bodyEntry === undefined ? undefined : blockIds.get(fn.bodyEntry);
 	return {
 		...fn,
 		entry,
@@ -865,7 +1017,8 @@ const simplifyControlFlow: CoreFunctionPass = {
 			const terminator = block.terminator;
 			if (terminator.kind === "branch") {
 				const condition = constants.get(terminator.condition);
-				const truthy = condition === undefined ? undefined : immediateTruthiness(condition);
+				const truthy =
+					condition === undefined ? undefined : immediateTruthiness(condition);
 				if (truthy === undefined) return block;
 				changed = true;
 				return {
@@ -1071,10 +1224,7 @@ const combineLinearBlocks: CoreFunctionPass = {
 			}
 			const replacements = new Map<CoreValueId, CoreValueId>();
 			for (const [index, parameter] of target.parameters.entries()) {
-				replacements.set(
-					parameter.value,
-					predecessor.terminator.edge.arguments[index]!,
-				);
+				replacements.set(parameter.value, predecessor.terminator.edge.arguments[index]!);
 			}
 			const merged: CoreBlock = {
 				...predecessor,
@@ -1082,9 +1232,7 @@ const combineLinearBlocks: CoreFunctionPass = {
 					...predecessor.instructions,
 					...target.instructions.map((instruction) => ({
 						...instruction,
-						inputs: instruction.inputs.map((value) =>
-							resolveValue(value, replacements),
-						),
+						inputs: instruction.inputs.map((value) => resolveValue(value, replacements)),
 					})),
 				],
 				terminator: rewriteTerminator(target.terminator, replacements),
@@ -1121,10 +1269,7 @@ function claimedInstructionSnapshots(fn: CoreFunction): ReadonlyMap<number, stri
 	for (const block of fn.blocks) {
 		for (const instruction of [...block.instructions, block.terminator]) {
 			if (!claimed.has(instruction.id)) continue;
-			snapshots.set(
-				instruction.id,
-				`${block.id}\0${stableAttributeValue(instruction)}`,
-			);
+			snapshots.set(instruction.id, `${block.id}\0${stableAttributeValue(instruction)}`);
 		}
 	}
 	return snapshots;
@@ -1153,26 +1298,66 @@ export function executeCoreOptimizations(
 	}
 	const analyses = new CoreAnalysisManager();
 	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
+	const optimizationTrace: Array<OptimizationPassDelta> = [];
+	const collectOptimizationTrace = program.compilation?.optimizationTrace !== undefined;
 	let changed = false;
 	let functions = [...program.functions];
 	for (let round = 0; round < maxRounds; round++) {
 		let roundChanged = false;
 		for (const pass of CORE_PASSES) {
-			if (
+			const featureGated =
 				options.simplifyValues === false &&
-				(pass === copyAndValueNumber || pass === deadInstructionElimination)
-			) {
+				(pass === copyAndValueNumber || pass === deadInstructionElimination);
+			const ablated =
+				pass.ablation !== undefined && options.ablations?.has(pass.ablation) === true;
+			const beforeProgram = { ...program, functions };
+			const before = collectOptimizationTrace
+				? coreOptimizationMetrics(beforeProgram)
+				: undefined;
+			if (featureGated) {
 				for (const _fn of functions) {
 					traces.push({ name: pass.name, round, changed: false });
 				}
-				continue;
-			}
-			if (pass.ablation !== undefined && options.ablations?.has(pass.ablation) === true) {
-				for (const _fn of functions) {
-					traces.push({ name: pass.name, round, changed: false });
+				if (before !== undefined) {
+					optimizationTrace.push(
+						optimizationPassDelta(
+							{
+								pass: pass.name,
+								stage: "fixpoint",
+								round,
+								status: "feature-gated",
+								changed: false,
+							},
+							before,
+							before,
+						),
+					);
 				}
 				continue;
 			}
+			if (ablated) {
+				for (const _fn of functions) {
+					traces.push({ name: pass.name, round, changed: false });
+				}
+				if (before !== undefined) {
+					optimizationTrace.push(
+						optimizationPassDelta(
+							{
+								pass: pass.name,
+								stage: "fixpoint",
+								round,
+								status: "ablated",
+								changed: false,
+								ablation: pass.ablation,
+							},
+							before,
+							before,
+						),
+					);
+				}
+				continue;
+			}
+			let passChanged = false;
 			functions = functions.map((fn) => {
 				if (fn.regions.length > 0 && pass.changesControlFlow === true) {
 					traces.push({ name: pass.name, round, changed: false });
@@ -1181,20 +1366,49 @@ export function executeCoreOptimizations(
 				const claimed = claimedInstructionSnapshots(fn);
 				const candidate = pass.run(fn, analyses);
 				const next = preservesClaimedInstructions(claimed, candidate) ? candidate : fn;
-				const passChanged = next !== fn;
-				traces.push({ name: pass.name, round, changed: passChanged });
-				if (passChanged) {
+				const functionChanged = next !== fn;
+				traces.push({ name: pass.name, round, changed: functionChanged });
+				if (functionChanged) {
 					verifyCoreFunction(next, coreOpcodeRegistry);
+					passChanged = true;
 					roundChanged = true;
 					changed = true;
 				}
 				return next;
 			});
+			if (before !== undefined) {
+				const after = coreOptimizationMetrics({ ...program, functions });
+				optimizationTrace.push(
+					optimizationPassDelta(
+						{
+							pass: pass.name,
+							stage: "fixpoint",
+							round,
+							status: "executed",
+							changed: passChanged,
+							...(pass.ablation === undefined ? {} : { ablation: pass.ablation }),
+						},
+						before,
+						after,
+					),
+				);
+			}
 		}
 		if (!roundChanged) break;
 	}
 	return {
-		program: { ...program, functions },
+		program: {
+			...program,
+			functions,
+			...(program.compilation === undefined
+				? {}
+				: {
+						compilation: {
+							...program.compilation,
+							...(collectOptimizationTrace ? { optimizationTrace } : {}),
+						},
+					}),
+		},
 		changed,
 		passes: traces,
 	};
