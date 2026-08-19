@@ -71,7 +71,6 @@ export function compileSemanticProgramToVmDefinition(
 		constructsCore
 			? intermediateProgramToCore(ir, {
 					verify: true,
-					retainLoweringMetadata: usesCoreLowering,
 				})
 			: undefined,
 	);

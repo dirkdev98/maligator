@@ -73,7 +73,6 @@ interface LegacySegment {
 
 export interface CoreFunctionLowering {
 	readonly legacy: IRFunction;
-	readonly legacyRegisters: ReadonlyMap<CoreValueId, number>;
 }
 
 export interface CoreProgramBridge {
@@ -93,8 +92,6 @@ export interface CoreProgramConstructionOptions {
 	 * verification boundary.
 	 */
 	readonly verify?: boolean;
-	/** Retain origin/register maps needed to lower this Core program back to VM IR. */
-	readonly retainLoweringMetadata?: boolean;
 }
 
 function isControlInstruction(
@@ -707,7 +704,6 @@ function sortedRegisters(registers: ReadonlySet<number>): Array<number> {
 function convertStraightLineFunction(
 	fn: IRFunction,
 	verify: boolean,
-	retainLoweringMetadata: boolean,
 ): ConvertedCoreFunction | undefined {
 	if (fn.blocks.length !== 1) return undefined;
 	const executable = fn.blocks[0]!.instructions.filter(
@@ -764,10 +760,6 @@ function convertStraightLineFunction(
 			.parameters.slice(0, fn.parameterCount)
 			.map(({ value }, index) => [index, value]),
 	);
-	const legacyRegisters = new Map<CoreValueId, number>();
-	if (retainLoweringMetadata) {
-		for (const [register, value] of values) legacyRegisters.set(value, register);
-	}
 	let sourcePosition: number | undefined;
 	for (const instruction of fn.blocks[0]!.instructions) {
 		if (instruction.type === "sourcePos") {
@@ -807,7 +799,6 @@ function convertStraightLineFunction(
 		});
 		for (const [index, register] of destinations.entries()) {
 			values.set(register, outputs[index]!);
-			if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
 		}
 	}
 	const finished = builder.finish(block);
@@ -819,16 +810,14 @@ function convertStraightLineFunction(
 	return {
 		core,
 		legacy: fn,
-		legacyRegisters,
 	};
 }
 
 function convertFunction(
 	fn: IRFunction,
 	verify: boolean,
-	retainLoweringMetadata: boolean,
 ): ConvertedCoreFunction {
-	const straightLine = convertStraightLineFunction(fn, verify, retainLoweringMetadata);
+	const straightLine = convertStraightLineFunction(fn, verify);
 	if (straightLine !== undefined) return straightLine;
 	const { segments: splitSegments, segmentsByOldBlock } = splitLegacyBlocks(fn);
 	establishSegmentTerminators(fn, splitSegments, segmentsByOldBlock);
@@ -845,7 +834,6 @@ function convertFunction(
 		parameterCount: fn.parameterCount,
 		metadata: coreFunctionMetadata(fn),
 	});
-	const legacyRegisters = new Map<CoreValueId, number>();
 	const coreBlocks: Array<CoreBlockId> = [];
 	const blockRegisters: Array<Array<number>> = [];
 	for (const segment of segments) {
@@ -858,20 +846,6 @@ function convertFunction(
 			...liveIn.map(() => ({ representation: "boxed" as const })),
 		]);
 		coreBlocks.push(block);
-		const parameters = builder.block(block).parameters;
-		let parameterIndex = 0;
-		if (segment.catchRegister !== undefined) {
-			if (segment.catchRegister >= 0) {
-				if (retainLoweringMetadata) {
-					legacyRegisters.set(parameters[parameterIndex]!.value, segment.catchRegister);
-				}
-			}
-			parameterIndex++;
-		}
-		for (const register of liveIn) {
-			const parameter = parameters[parameterIndex++]!.value;
-			if (retainLoweringMetadata) legacyRegisters.set(parameter, register);
-		}
 	}
 
 	const requireValue = (
@@ -924,7 +898,6 @@ function convertFunction(
 			}
 			for (const [index, register] of destinations.entries()) {
 				values.set(register, outputs[index]!);
-				if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
 			}
 		}
 
@@ -998,7 +971,6 @@ function convertFunction(
 	return {
 		core,
 		legacy: fn,
-		legacyRegisters,
 	};
 }
 
@@ -1008,10 +980,7 @@ export function intermediateProgramToCore(
 	options: CoreProgramConstructionOptions = {},
 ): CoreProgramBridge {
 	const verify = options.verify ?? true;
-	const retainLoweringMetadata = options.retainLoweringMetadata ?? true;
-	const converted = program.functions.map((fn) =>
-		convertFunction(fn, false, retainLoweringMetadata),
-	);
+	const converted = program.functions.map((fn) => convertFunction(fn, false));
 	const core: CoreProgram = {
 		functions: converted.map(({ core }) => core),
 		stringConstants: program.stringConstants.map((units) => [...units]),
@@ -1118,12 +1087,10 @@ function lowerFunctionBridge(
 	// approximating those proofs during de-SSA would be a correctness bug.
 	if ((legacy.regions?.length ?? 0) > 0) return legacy;
 	const blocks: Array<IRBlock> = core.blocks.map(() => ({ instructions: [] }));
-	const nextRegister = {
-		value:
-			Math.max(legacy.nextRegisterDestination - 1, ...lowering.legacyRegisters.values()) +
-			1,
-	};
-	const allocatedRegisters = new Map(lowering.legacyRegisters);
+	const nextRegister = { value: core.parameters.length };
+	const allocatedRegisters = new Map<CoreValueId, number>(
+		core.parameters.map((value, index) => [value, index]),
+	);
 	const registerForValue = (value: CoreValueId): number => {
 		let register = allocatedRegisters.get(value);
 		if (register === undefined) {
