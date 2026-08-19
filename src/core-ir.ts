@@ -298,6 +298,8 @@ export interface CoreFunction {
 	readonly functionIndex: number;
 	readonly isGenerator: boolean;
 	readonly isAsync: boolean;
+	/** Boxed incoming values in source formal-parameter order. */
+	readonly parameters: ReadonlyArray<CoreValueId>;
 	readonly entry: CoreBlockId;
 	/** Loop header used when proven self-tail calls re-enter the function body. */
 	readonly bodyEntry?: CoreBlockId;
@@ -329,6 +331,7 @@ export interface CoreBlockParameterSpec {
 export interface CoreFunctionOptions {
 	readonly isGenerator?: boolean;
 	readonly isAsync?: boolean;
+	readonly parameterCount?: number;
 }
 
 export interface AppendCoreInstructionOptions {
@@ -361,6 +364,7 @@ export class CoreFunctionBuilder {
 	readonly #registry: CoreOpcodeRegistry;
 	readonly #isGenerator: boolean;
 	readonly #isAsync: boolean;
+	readonly #parameterCount: number;
 	readonly #blocks: Array<MutableCoreBlock> = [];
 	readonly #values: Array<CoreValue> = [];
 	readonly #facts: Array<CoreFact> = [];
@@ -379,6 +383,10 @@ export class CoreFunctionBuilder {
 		this.#registry = registry;
 		this.#isGenerator = options.isGenerator === true;
 		this.#isAsync = options.isAsync === true;
+		this.#parameterCount = options.parameterCount ?? 0;
+		if (!Number.isSafeInteger(this.#parameterCount) || this.#parameterCount < 0) {
+			throw new Error(`Invalid Core parameter count ${this.#parameterCount}`);
+		}
 	}
 
 	createBlock(parameters: ReadonlyArray<CoreBlockParameterSpec> = []): CoreBlockId {
@@ -525,7 +533,20 @@ export class CoreFunctionBuilder {
 	}
 
 	finish(entry: CoreBlockId): CoreFunction {
-		this.#requireBlock(entry);
+		const entryBlock = this.#requireBlock(entry);
+		if (entryBlock.parameters.length < this.#parameterCount) {
+			throw new Error(
+				`Core entry block has ${entryBlock.parameters.length} parameters for a ${this.#parameterCount}-parameter ABI`,
+			);
+		}
+		const parameters = entryBlock.parameters
+			.slice(0, this.#parameterCount)
+			.map(({ value, representation, role }) => {
+				if (role !== "value" || representation !== "boxed") {
+					throw new Error("Core ABI parameters must be boxed value parameters");
+				}
+				return value;
+			});
 		const blocks = this.#blocks.map((block): CoreBlock => {
 			if (block.terminator === undefined) {
 				throw new Error(`Core block ${block.id} has no terminator`);
@@ -553,6 +574,7 @@ export class CoreFunctionBuilder {
 			functionIndex: this.#functionIndex,
 			isGenerator: this.#isGenerator,
 			isAsync: this.#isAsync,
+			parameters,
 			entry,
 			blocks,
 			values: this.#values.map((value) => ({ ...value })),
@@ -615,7 +637,10 @@ function formatTerminator(terminator: CoreTerminator): string {
 
 /** Deterministic textual form used by diagnostics and golden tests. */
 export function formatCoreFunction(fn: CoreFunction): string {
-	const lines = [`core function ${fn.functionIndex} epoch ${fn.mutationEpoch} {`];
+	const signature = fn.parameters.map(formatValue).join(", ");
+	const lines = [
+		`core function ${fn.functionIndex}(${signature}) epoch ${fn.mutationEpoch} {`,
+	];
 	for (const block of fn.blocks) {
 		const parameters = block.parameters
 			.map(

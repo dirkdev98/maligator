@@ -91,8 +91,8 @@ describe("Core IR", () => {
 
 	it("builds, verifies, prints, and analyzes block-parameter SSA", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(3, opcodes);
-		const entry = builder.createBlock([{ representation: "boolean" }]);
+		const builder = new CoreFunctionBuilder(3, opcodes, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const consequent = builder.createBlock();
 		const alternate = builder.createBlock();
 		const merge = builder.createBlock([{ representation: "f64" }]);
@@ -135,8 +135,8 @@ describe("Core IR", () => {
 
 	it("rejects values that do not dominate an incoming edge", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes);
-		const entry = builder.createBlock([{ representation: "boolean" }]);
+		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const leftBlock = builder.createBlock();
 		const rightBlock = builder.createBlock();
 		const merge = builder.createBlock([{ representation: "boxed" }]);
@@ -167,7 +167,7 @@ describe("Core IR", () => {
 
 	it("models exception flow with a block-entry handler contract", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes);
+		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const handler = builder.createBlock([
 			{ role: "exception", representation: "boxed" },
@@ -188,7 +188,7 @@ describe("Core IR", () => {
 			expect.objectContaining({ to: handler, kind: "exceptional" }),
 		]);
 
-		const invalid = new CoreFunctionBuilder(0, opcodes);
+		const invalid = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
 		const invalidEntry = invalid.createBlock([{ representation: "boxed" }]);
 		const invalidHandler = invalid.createBlock([
 			{ role: "exception" },
@@ -215,7 +215,7 @@ describe("Core IR", () => {
 
 	it("requires guarded provenance before asserted facts refine effects", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes);
+		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
 		const fact = builder.addFact({
 			kind: "typescript-type",
@@ -239,9 +239,9 @@ describe("Core IR", () => {
 
 	it("allows a runtime guard to establish a fact on only its success edge", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes);
+		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 2 });
 		const entry = builder.createBlock([
-			{ representation: "boolean" },
+			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
 		const fast = builder.createBlock([{ representation: "boxed" }]);
@@ -277,9 +277,9 @@ describe("Core IR", () => {
 
 	it("rejects a guarded fact after its success and fallback paths merge", () => {
 		const opcodes = registry();
-		const builder = new CoreFunctionBuilder(0, opcodes);
+		const builder = new CoreFunctionBuilder(0, opcodes, { parameterCount: 2 });
 		const entry = builder.createBlock([
-			{ representation: "boolean" },
+			{ representation: "boxed" },
 			{ representation: "boxed" },
 		]);
 		const success = builder.createBlock([{ representation: "boxed" }]);

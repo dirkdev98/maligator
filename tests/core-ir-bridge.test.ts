@@ -6,6 +6,7 @@ import {
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { formatCoreFunction } from "../src/core-ir.ts";
+import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { allocateDevelopmentRegisters } from "../src/register-alloc.ts";
@@ -90,6 +91,43 @@ describe("Core IR semantic bridge", () => {
 		expect(batches[0]?.outputs).toEqual([]);
 		expect(coreOpcodeRegistry.require("createPrivateNames").effects.writes).toContain(
 			"captured-slot",
+		);
+	});
+
+	it("expands optimized call immediates into explicit SSA producers", () => {
+		const program = compileSemanticProgramToIr(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+				function invoke(fn) {
+					return fn(undefined, null, false, 42, "value");
+				}
+				globalThis.invoke = invoke;
+				`,
+				"core-immediates.js",
+			),
+		);
+		executeIROptimizations(program);
+		const converted = intermediateProgramToCore(program);
+		const call = converted.core.functions
+			.flatMap((fn) => fn.blocks)
+			.flatMap((block) => block.instructions)
+			.find((instruction) => instruction.opcode === "call" && instruction.inputs.length > 2);
+
+		expect(call?.inputs).toHaveLength(7);
+		expect(call?.payload).not.toMatchObject({
+			fields: { immediateValues: expect.anything() },
+		});
+		const opcodes = converted.core.functions.flatMap((fn) =>
+			fn.blocks.flatMap((block) => block.instructions.map(({ opcode }) => opcode)),
+		);
+		expect(opcodes).toEqual(
+			expect.arrayContaining([
+				"createUndefined",
+				"createNull",
+				"createBoolean",
+				"createNumber",
+				"createString",
+			]),
 		);
 	});
 });

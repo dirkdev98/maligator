@@ -17,7 +17,13 @@ import {
 	usedRegisters,
 } from "./ir-register-index.ts";
 import { isIrStructuralInstructionType } from "./ir-structure.ts";
-import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
+import type {
+	IntermediateProgram,
+	IRBlock,
+	IRFunction,
+	IRImmediateValue,
+	IRInstruction,
+} from "./ir.ts";
 
 interface LegacyInstructionPayload {
 	readonly registerLayout?: ReadonlyArray<
@@ -129,23 +135,112 @@ function instructionMayThrow(instruction: IRInstruction): boolean {
 function legacyPayload(
 	instruction: IRInstruction,
 	retainLoweringMetadata = true,
+	expandImmediateOperands = false,
 ): LegacyInstructionPayload {
 	const fields: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(instruction)) {
-		if (key !== "type" && key !== "registers" && key !== "blocks") fields[key] = value;
+		if (
+			key !== "type" &&
+			key !== "registers" &&
+			key !== "blocks" &&
+			!(expandImmediateOperands && key === "immediateValues")
+		) {
+			fields[key] = value;
+		}
 	}
 	if (!retainLoweringMetadata || !("registers" in instruction)) return { fields };
 	let outputIndex = 0;
 	let inputIndex = 0;
 	const destinations = destinationCount(instruction);
 	const registerLayout = instruction.registers.map((register, position) => {
-		if (register < 0) return { kind: "literal" as const, value: register };
 		if (position < destinations) {
 			return { kind: "output" as const, index: outputIndex++ };
+		}
+		if (register < 0 && !expandImmediateOperands) {
+			return { kind: "literal" as const, value: register };
 		}
 		return { kind: "input" as const, index: inputIndex++ };
 	});
 	return { registerLayout, fields };
+}
+
+function immediateOperand(
+	instruction: IRInstruction,
+	position: number,
+): IRImmediateValue | undefined {
+	return instruction.type === "call" || instruction.type === "construct"
+		? instruction.immediateValues?.[position]
+		: undefined;
+}
+
+function appendImmediateValue(
+	builder: CoreFunctionBuilder,
+	block: CoreBlockId,
+	value: IRImmediateValue,
+	retainLoweringMetadata: boolean,
+	sourcePosition: number | undefined,
+): CoreValueId {
+	const specification = (() => {
+		switch (value.kind) {
+			case "undefined":
+				return { opcode: "createUndefined", fields: {} } as const;
+			case "null":
+				return { opcode: "createNull", fields: {} } as const;
+			case "boolean":
+				return { opcode: "createBoolean", fields: { value: value.value } } as const;
+			case "number":
+				return { opcode: "createNumber", fields: { value: value.value } } as const;
+			case "string":
+				return {
+					opcode: "createString",
+					fields: { stringIndex: value.index },
+				} as const;
+		}
+	})();
+	const [output] = builder.appendInstruction(block, specification.opcode, [], {
+		payload: {
+			...(retainLoweringMetadata
+				? { registerLayout: [{ kind: "output" as const, index: 0 }] }
+				: {}),
+			fields: specification.fields,
+		},
+		...(sourcePosition === undefined ? {} : { sourcePosition }),
+	});
+	return output!;
+}
+
+function coreInstructionInputs(
+	instruction: IRInstruction,
+	builder: CoreFunctionBuilder,
+	block: CoreBlockId,
+	retainLoweringMetadata: boolean,
+	sourcePosition: number | undefined,
+	requireValue: (register: number, context: string) => CoreValueId,
+): { readonly inputs: ReadonlyArray<CoreValueId>; readonly expandedImmediates: boolean } {
+	if (!("registers" in instruction)) return { inputs: [], expandedImmediates: false };
+	const inputs: Array<CoreValueId> = [];
+	let expandedImmediates = false;
+	const destinations = destinationCount(instruction);
+	for (let position = destinations; position < instruction.registers.length; position++) {
+		const register = instruction.registers[position]!;
+		if (register >= 0) {
+			inputs.push(requireValue(register, `Core bridge ${instruction.type}`));
+			continue;
+		}
+		const immediate = immediateOperand(instruction, position);
+		if (immediate === undefined) continue;
+		inputs.push(
+			appendImmediateValue(
+				builder,
+				block,
+				immediate,
+				retainLoweringMetadata,
+				sourcePosition,
+			),
+		);
+		expandedImmediates = true;
+	}
+	return { inputs, expandedImmediates };
 }
 
 function outputRepresentation(
@@ -184,6 +279,9 @@ function splitLegacyBlocks(fn: IRFunction): {
 	}
 	const localRegisters = new Map<number, number>();
 	let nextLocalRegister = fn.nextRegisterDestination;
+	for (const local of [...storedLocals].sort((left, right) => left - right)) {
+		localRegisters.set(local, nextLocalRegister++);
+	}
 	const normalizeLocal = (instruction: IRInstruction): IRInstruction => {
 		if (instruction.type !== "loadLocal" && instruction.type !== "storeLocal") {
 			return instruction;
@@ -191,11 +289,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 		if (instruction.type === "loadLocal" && !storedLocals.has(instruction.index)) {
 			return { type: "createUndefined", registers: [instruction.registers[0]] };
 		}
-		let register = localRegisters.get(instruction.index);
-		if (register === undefined) {
-			register = nextLocalRegister++;
-			localRegisters.set(instruction.index, register);
-		}
+		const register = localRegisters.get(instruction.index)!;
 		return instruction.type === "loadLocal"
 			? { type: "move", registers: [instruction.registers[0], register] }
 			: { type: "move", registers: [register, instruction.registers[0]] };
@@ -203,7 +297,15 @@ function splitLegacyBlocks(fn: IRFunction): {
 	let sourcePosition: number | undefined;
 
 	for (let oldBlock = 0; oldBlock < fn.blocks.length; oldBlock++) {
-		let tokens: Array<LegacyToken> = [];
+		let tokens: Array<LegacyToken> =
+			oldBlock === 0
+				? [...localRegisters.values()].map((register) => ({
+						instruction: {
+							type: "createUndefined" as const,
+							registers: [register] as [number],
+						},
+					}))
+				: [];
 		let segmentHandler = activeHandlers.at(-1) ?? null;
 		const flush = (force = false): void => {
 			if (!force && tokens.length === 0) return;
@@ -512,7 +614,10 @@ function analyzeSegments(
 			segments[target]!.catchRegister = -1;
 		}
 	}
+	propagateSegmentLiveness(segments);
+}
 
+function propagateSegmentLiveness(segments: Array<LegacySegment>): void {
 	let changed = true;
 	while (changed) {
 		changed = false;
@@ -540,6 +645,37 @@ function analyzeSegments(
 			}
 		}
 	}
+}
+
+/**
+ * The legacy VM initializes non-parameter registers to undefined. Most semantic
+ * IR defines every virtual register before use, but completion/control joins can
+ * deliberately rely on that frame invariant. Make those values explicit before
+ * constructing SSA so they cannot masquerade as ABI inputs.
+ */
+function initializeImplicitEntryValues(
+	segments: Array<LegacySegment>,
+	parameterCount: number,
+): void {
+	const entry = segments[0]!;
+	const registers = [...entry.liveIn]
+		.filter((register) => register >= parameterCount)
+		.sort((left, right) => left - right);
+	if (registers.length === 0) return;
+	entry.tokens.unshift(
+		...registers.map((register) => ({
+			instruction: {
+				type: "createUndefined" as const,
+				registers: [register] as [number],
+			},
+		})),
+	);
+	for (const register of registers) {
+		entry.definitions.add(register);
+		entry.usesBeforeDefinition.delete(register);
+	}
+	for (const segment of segments) segment.liveIn.clear();
+	propagateSegmentLiveness(segments);
 }
 
 function sortedRegisters(registers: ReadonlySet<number>): Array<number> {
@@ -587,7 +723,9 @@ function convertStraightLineFunction(
 		return undefined;
 	}
 
-	const definitions = new Set<number>();
+	const definitions = new Set<number>(
+		Array.from({ length: fn.parameterCount }, (_, index) => index),
+	);
 	for (const instruction of executable) {
 		if (usedRegisters(instruction).some((register) => !definitions.has(register))) {
 			return undefined;
@@ -598,11 +736,22 @@ function convertStraightLineFunction(
 	const builder = new CoreFunctionBuilder(fn.functionIndex, coreOpcodeRegistry, {
 		isGenerator: fn.isGenerator === true,
 		isAsync: fn.isAsync === true,
+		parameterCount: fn.parameterCount,
 	});
-	const block = builder.createBlock();
-	const values = new Map<number, CoreValueId>();
+	const block = builder.createBlock(
+		Array.from({ length: fn.parameterCount }, () => ({ representation: "boxed" as const })),
+	);
+	const values = new Map<number, CoreValueId>(
+		builder
+			.block(block)
+			.parameters.slice(0, fn.parameterCount)
+			.map(({ value }, index) => [index, value]),
+	);
 	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
 	const legacyRegisters = new Map<CoreValueId, number>();
+	if (retainLoweringMetadata) {
+		for (const [register, value] of values) legacyRegisters.set(value, register);
+	}
 	let sourcePosition: number | undefined;
 	for (const instruction of fn.blocks[0]!.instructions) {
 		if (instruction.type === "sourcePos") {
@@ -618,14 +767,31 @@ function convertStraightLineFunction(
 			if (retainLoweringMetadata) instructionOrigins.set(id, instruction);
 			continue;
 		}
-		const inputs = usedRegisters(instruction).map((register) => values.get(register)!);
+		const { inputs, expandedImmediates } = coreInstructionInputs(
+			instruction,
+			builder,
+			block,
+			retainLoweringMetadata,
+			sourcePosition,
+			(register, context) => {
+				const value = values.get(register);
+				if (value === undefined) {
+					throw new Error(`${context} reads uninitialized legacy register ${register}`);
+				}
+				return value;
+			},
+		);
 		const destinations = definedRegisters(instruction);
 		const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 			outputCount: destinations.length,
 			outputRepresentations: destinations.map((_, index) =>
 				outputRepresentation(instruction, index),
 			),
-			payload: legacyPayload(instruction, retainLoweringMetadata),
+			payload: legacyPayload(
+				instruction,
+				retainLoweringMetadata,
+				expandedImmediates,
+			),
 			...(sourcePosition === undefined ? {} : { sourcePosition }),
 		});
 		const appended = builder.block(block).instructions.at(-1)!;
@@ -660,11 +826,16 @@ function convertFunction(
 	const { segments: splitSegments, segmentsByOldBlock } = splitLegacyBlocks(fn);
 	establishSegmentTerminators(fn, splitSegments, segmentsByOldBlock);
 	analyzeSegments(splitSegments, segmentsByOldBlock);
+	initializeImplicitEntryValues(splitSegments, fn.parameterCount);
 	const segments = pruneUnreachableSegments(splitSegments);
+	for (let parameter = 0; parameter < fn.parameterCount; parameter++) {
+		segments[0]!.liveIn.add(parameter);
+	}
 
 	const builder = new CoreFunctionBuilder(fn.functionIndex, coreOpcodeRegistry, {
 		isGenerator: fn.isGenerator === true,
 		isAsync: fn.isAsync === true,
+		parameterCount: fn.parameterCount,
 	});
 	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
 	const legacyRegisters = new Map<CoreValueId, number>();
@@ -725,8 +896,13 @@ function convertFunction(
 		const entryValues = new Map(values);
 
 		for (const { instruction, sourcePosition } of segment.tokens) {
-			const inputs = usedRegisters(instruction).map((register) =>
-				requireValue(values, register, `Core bridge ${instruction.type}`),
+			const { inputs, expandedImmediates } = coreInstructionInputs(
+				instruction,
+				builder,
+				block,
+				retainLoweringMetadata,
+				sourcePosition,
+				(register, context) => requireValue(values, register, context),
 			);
 			const destinations = definedRegisters(instruction);
 			const outputs = builder.appendInstruction(block, instruction.type, inputs, {
@@ -734,7 +910,11 @@ function convertFunction(
 				outputRepresentations: destinations.map((_, index) =>
 					outputRepresentation(instruction, index),
 				),
-				payload: legacyPayload(instruction, retainLoweringMetadata),
+				payload: legacyPayload(
+					instruction,
+					retainLoweringMetadata,
+					expandedImmediates,
+				),
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			});
 			const appended = builder.block(block).instructions.at(-1);

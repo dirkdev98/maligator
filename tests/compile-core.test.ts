@@ -67,4 +67,28 @@ describe("compileSemanticProgramToVmDefinition", () => {
 		expect(definition.functions.length).toBeGreaterThan(0);
 		expect(definition.functionCount).toBe(definition.functions.length);
 	});
+
+	it("continuously verifies that optimized production IR is representable in Core", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`
+			function invoke(fn, C, flag) {
+				try {
+					if (flag) return fn(undefined, null, false, 42, "value");
+					return new C(undefined, "value", 7);
+				} catch (error) {
+					return String(error);
+				}
+			}
+			globalThis.invoke = invoke;
+			`,
+			"production-core-verification.js",
+		);
+
+		expect(() =>
+			compileSemanticProgramToVmDefinition(semantic, {
+				optimization: "full",
+				verifyCoreIr: true,
+			}),
+		).not.toThrow();
+	});
 });

@@ -158,6 +158,22 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 	if (fn.bodyEntry !== undefined && !blocks.has(fn.bodyEntry)) {
 		fail(`unknown body entry block b${fn.bodyEntry}`);
 	}
+	const entryBlock = blocks.get(fn.entry)!;
+	if (entryBlock.parameters.length !== fn.parameters.length) {
+		fail(
+			`entry block has ${entryBlock.parameters.length} parameters for a ${fn.parameters.length}-parameter ABI`,
+		);
+	}
+	for (const [index, parameter] of fn.parameters.entries()) {
+		const blockParameter = entryBlock.parameters[index];
+		if (
+			blockParameter?.value !== parameter ||
+			blockParameter.role !== "value" ||
+			blockParameter.representation !== "boxed"
+		) {
+			fail(`ABI parameter ${index} does not match boxed entry parameter ${parameter}`);
+		}
+	}
 
 	const instructionIds = new Set<CoreInstructionId>();
 	const definitions = new Map<CoreValueId, ValueDefinitionLocation>();
@@ -286,6 +302,9 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 	}
 
 	const cfg = buildCoreControlFlow(fn, registry);
+	if (cfg.predecessors[fn.entry]!.length !== 0) {
+		fail(`entry block b${fn.entry} has predecessors`);
+	}
 	if (cfg.reachable.size !== fn.blocks.length) {
 		const unreachable = fn.blocks.find(({ id }) => !cfg.reachable.has(id));
 		fail(`block b${unreachable?.id} is unreachable`);
