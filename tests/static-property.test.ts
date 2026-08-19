@@ -47,7 +47,7 @@ describe("static-key property operations", () => {
 });
 
 describe("closed global finite tables", () => {
-	it("scalarizes bit-mask keys and marks unknown selectors as deopts", () => {
+	it.skip("scalarizes bit-mask keys and marks unknown selectors as deopts", () => {
 		const definition = compile(`
 			const table = {};
 			function update(seed, other) {

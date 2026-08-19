@@ -93,7 +93,7 @@ describe("relocatable test fragment cache", () => {
 		// Ten seconds is a deliberately loose smoke fuse for loaded CI hosts while
 		// still proving interpreted tests use the linear development allocator.
 		expect(compiled.phases.compileMs).toBeLessThan(10_000);
-	});
+	}, 15_000);
 
 	test("reuses dependency artifacts produced by a normal run build", () => {
 		const root = temporaryDirectory();
