@@ -4,7 +4,7 @@ import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { CoreFunctionBuilder } from "../src/core-ir.ts";
-import type { CoreProgram } from "../src/core-ir.ts";
+import type { CoreFunction, CoreProgram } from "../src/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 function programWithConstants(): CoreProgram {
@@ -24,7 +24,18 @@ function programWithConstants(): CoreProgram {
 	void unused;
 	builder.setTerminator(entry, { kind: "return", value: moved! });
 	const core = builder.finish(entry);
-	return { functions: [core] };
+	return coreProgram([core]);
+}
+
+function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
+	return {
+		functions,
+		stringConstants: [],
+		bigintConstants: [],
+		literalTemplateData: [],
+		sourcePositions: [],
+		globalCount: 0,
+	};
 }
 
 describe("Core IR optimizer", () => {
@@ -87,9 +98,7 @@ describe("Core IR optimizer", () => {
 		});
 		builder.setTerminator(body, { kind: "return", value: result! });
 		const original = builder.finish(entry);
-		const program: CoreProgram = {
-			functions: [{ ...original, bodyEntry: body }],
-		};
+		const program = coreProgram([{ ...original, bodyEntry: body }]);
 
 		const fn = executeCoreOptimizations(program).program.functions[0]!;
 		expect(fn.blocks).toHaveLength(2);
@@ -131,9 +140,9 @@ describe("Core IR optimizer", () => {
 			builder.setTerminator(block, { kind: "return", value: result! });
 		}
 
-		const fn = executeCoreOptimizations({
-			functions: [builder.finish(entry)],
-		}).program.functions[0]!;
+		const fn = executeCoreOptimizations(
+			coreProgram([builder.finish(entry)]),
+		).program.functions[0]!;
 		expect(fn.blocks).toHaveLength(2);
 		expect(fn.blocks[0]!.terminator).toMatchObject({
 			kind: "jump",

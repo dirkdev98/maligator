@@ -1,11 +1,12 @@
 import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
-import { verifyCoreFunction } from "./core-ir-verifier.ts";
+import { verifyCoreFunction, verifyCoreProgram } from "./core-ir-verifier.ts";
 import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
 	CoreFunction,
 	CoreInstructionId,
+	CoreFunctionMetadata,
 	CoreProgram,
 	CoreRepresentation,
 	CoreTerminatorInput,
@@ -262,6 +263,24 @@ function outputRepresentation(
 		return "boolean";
 	}
 	return "boxed";
+}
+
+function coreFunctionMetadata(fn: IRFunction): CoreFunctionMetadata {
+	const isClassConstructor = fn.classContext?.isConstructor ?? false;
+	return {
+		sourcePath: fn.semanticFile.path,
+		sourceStrict: fn.semanticFile.strict,
+		nameStringIndex: fn.nameStringIndex,
+		length: fn.length,
+		mappedArguments: fn.mappedArguments ?? false,
+		mappedArgumentSlots: [...(fn.mappedArgumentSlots ?? [])],
+		capturedCount: fn.nextCapturedIndex,
+		strict: fn.strict ?? fn.semanticFile.strict,
+		isClassConstructor,
+		isDerivedConstructor:
+			isClassConstructor && (fn.classContext?.isDerivedConstructor ?? false),
+		hasPrototype: fn.hasPrototype ?? true,
+	};
 }
 
 function splitLegacyBlocks(fn: IRFunction): {
@@ -737,6 +756,7 @@ function convertStraightLineFunction(
 		isGenerator: fn.isGenerator === true,
 		isAsync: fn.isAsync === true,
 		parameterCount: fn.parameterCount,
+		metadata: coreFunctionMetadata(fn),
 	});
 	const block = builder.createBlock(
 		Array.from({ length: fn.parameterCount }, () => ({ representation: "boxed" as const })),
@@ -836,6 +856,7 @@ function convertFunction(
 		isGenerator: fn.isGenerator === true,
 		isAsync: fn.isAsync === true,
 		parameterCount: fn.parameterCount,
+		metadata: coreFunctionMetadata(fn),
 	});
 	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
 	const legacyRegisters = new Map<CoreValueId, number>();
@@ -1017,11 +1038,20 @@ export function intermediateProgramToCore(
 	const verify = options.verify ?? true;
 	const retainLoweringMetadata = options.retainLoweringMetadata ?? true;
 	const converted = program.functions.map((fn) =>
-		convertFunction(fn, verify, retainLoweringMetadata),
+		convertFunction(fn, false, retainLoweringMetadata),
 	);
+	const core: CoreProgram = {
+		functions: converted.map(({ core }) => core),
+		stringConstants: program.stringConstants.map((units) => [...units]),
+		bigintConstants: [...program.bigintConstants],
+		literalTemplateData: [...program.literalTemplateData],
+		sourcePositions: program.sourcePositions.map((position) => ({ ...position })),
+		globalCount: program.nextGlobalIndex,
+	};
+	if (verify) verifyCoreProgram(core, coreOpcodeRegistry);
 	return {
 		source: program,
-		core: { functions: converted.map(({ core }) => core) },
+		core,
 		lowering: converted.map(({ core: _core, ...lowering }) => lowering),
 	};
 }

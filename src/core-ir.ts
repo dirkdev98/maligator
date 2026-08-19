@@ -294,10 +294,25 @@ export interface CoreBlock {
 	readonly handler?: CoreExceptionHandler;
 }
 
+export interface CoreFunctionMetadata {
+	readonly sourcePath: string;
+	readonly sourceStrict: boolean;
+	readonly nameStringIndex: number;
+	readonly length: number;
+	readonly mappedArguments: boolean;
+	readonly mappedArgumentSlots: ReadonlyArray<number>;
+	readonly capturedCount: number;
+	readonly strict: boolean;
+	readonly isClassConstructor: boolean;
+	readonly isDerivedConstructor: boolean;
+	readonly hasPrototype: boolean;
+}
+
 export interface CoreFunction {
 	readonly functionIndex: number;
 	readonly isGenerator: boolean;
 	readonly isAsync: boolean;
+	readonly metadata: CoreFunctionMetadata;
 	/** Boxed incoming values in source formal-parameter order. */
 	readonly parameters: ReadonlyArray<CoreValueId>;
 	readonly entry: CoreBlockId;
@@ -313,6 +328,16 @@ export interface CoreFunction {
 /** Canonical middle-end program, independent of frontend and backend adapters. */
 export interface CoreProgram {
 	readonly functions: ReadonlyArray<CoreFunction>;
+	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
+	readonly bigintConstants: ReadonlyArray<bigint>;
+	readonly literalTemplateData: ReadonlyArray<number>;
+	readonly sourcePositions: ReadonlyArray<{
+		readonly line: number;
+		readonly column: number;
+		readonly inlinedFunctionIndex?: number;
+		readonly callerPosId?: number;
+	}>;
+	readonly globalCount: number;
 }
 
 interface MutableCoreBlock {
@@ -332,6 +357,7 @@ export interface CoreFunctionOptions {
 	readonly isGenerator?: boolean;
 	readonly isAsync?: boolean;
 	readonly parameterCount?: number;
+	readonly metadata?: Partial<CoreFunctionMetadata>;
 }
 
 export interface AppendCoreInstructionOptions {
@@ -365,6 +391,7 @@ export class CoreFunctionBuilder {
 	readonly #isGenerator: boolean;
 	readonly #isAsync: boolean;
 	readonly #parameterCount: number;
+	readonly #metadata: CoreFunctionMetadata;
 	readonly #blocks: Array<MutableCoreBlock> = [];
 	readonly #values: Array<CoreValue> = [];
 	readonly #facts: Array<CoreFact> = [];
@@ -387,6 +414,19 @@ export class CoreFunctionBuilder {
 		if (!Number.isSafeInteger(this.#parameterCount) || this.#parameterCount < 0) {
 			throw new Error(`Invalid Core parameter count ${this.#parameterCount}`);
 		}
+		this.#metadata = {
+			sourcePath: options.metadata?.sourcePath ?? "<core>",
+			sourceStrict: options.metadata?.sourceStrict ?? false,
+			nameStringIndex: options.metadata?.nameStringIndex ?? 0,
+			length: options.metadata?.length ?? this.#parameterCount,
+			mappedArguments: options.metadata?.mappedArguments ?? false,
+			mappedArgumentSlots: [...(options.metadata?.mappedArgumentSlots ?? [])],
+			capturedCount: options.metadata?.capturedCount ?? 0,
+			strict: options.metadata?.strict ?? false,
+			isClassConstructor: options.metadata?.isClassConstructor ?? false,
+			isDerivedConstructor: options.metadata?.isDerivedConstructor ?? false,
+			hasPrototype: options.metadata?.hasPrototype ?? true,
+		};
 	}
 
 	createBlock(parameters: ReadonlyArray<CoreBlockParameterSpec> = []): CoreBlockId {
@@ -574,6 +614,10 @@ export class CoreFunctionBuilder {
 			functionIndex: this.#functionIndex,
 			isGenerator: this.#isGenerator,
 			isAsync: this.#isAsync,
+			metadata: {
+				...this.#metadata,
+				mappedArgumentSlots: [...this.#metadata.mappedArgumentSlots],
+			},
 			parameters,
 			entry,
 			blocks,

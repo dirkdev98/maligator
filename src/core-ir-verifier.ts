@@ -9,6 +9,7 @@ import type {
 	CoreInstructionEffects,
 	CoreInstructionId,
 	CoreOpcodeRegistry,
+	CoreProgram,
 	CoreTerminator,
 	CoreValue,
 	CoreValueId,
@@ -149,6 +150,35 @@ function requireStableIds<T extends { readonly id: number }>(
 export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistry): void {
 	if (!Number.isSafeInteger(fn.functionIndex) || fn.functionIndex < 0) {
 		fail(`invalid function index ${fn.functionIndex}`);
+	}
+	if (fn.metadata.sourcePath.length === 0) fail("function source path is empty");
+	for (const [name, value] of [
+		["name string index", fn.metadata.nameStringIndex],
+		["length", fn.metadata.length],
+		["captured count", fn.metadata.capturedCount],
+	] as const) {
+		if (!Number.isSafeInteger(value) || value < 0) fail(`invalid ${name} ${value}`);
+	}
+	if (fn.metadata.length > fn.parameters.length) {
+		fail(`function length ${fn.metadata.length} exceeds parameter count ${fn.parameters.length}`);
+	}
+	if (!fn.metadata.mappedArguments && fn.metadata.mappedArgumentSlots.length !== 0) {
+		fail("unmapped function carries mapped argument slots");
+	}
+	if (fn.metadata.mappedArgumentSlots.length > fn.parameters.length) {
+		fail("mapped argument slots exceed parameter count");
+	}
+	for (const slot of fn.metadata.mappedArgumentSlots) {
+		if (
+			!Number.isSafeInteger(slot) ||
+			slot < -1 ||
+			slot >= fn.metadata.capturedCount
+		) {
+			fail(`invalid mapped argument slot ${slot}`);
+		}
+	}
+	if (fn.metadata.isDerivedConstructor && !fn.metadata.isClassConstructor) {
+		fail("derived constructor metadata is missing the class-constructor flag");
 	}
 	requireDenseIds(fn.blocks, "block");
 	requireStableIds(fn.values, "value");
@@ -424,6 +454,70 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 				) {
 					fail(
 						`handler edge from b${block.id} uses ${argument}, which is not available at block entry`,
+					);
+				}
+			}
+		}
+	}
+}
+
+/** Verify function graphs together with the immutable metadata they index. */
+export function verifyCoreProgram(
+	program: CoreProgram,
+	registry: CoreOpcodeRegistry,
+): void {
+	if (!Number.isSafeInteger(program.globalCount) || program.globalCount < 0) {
+		fail(`invalid global count ${program.globalCount}`);
+	}
+	for (const [index, units] of program.stringConstants.entries()) {
+		for (const unit of units) {
+			if (!Number.isSafeInteger(unit) || unit < 0 || unit > 0xffff) {
+				fail(`string constant ${index} contains invalid UTF-16 unit ${unit}`);
+			}
+		}
+	}
+	for (const [index, value] of program.bigintConstants.entries()) {
+		if (typeof value !== "bigint") fail(`bigint constant ${index} is not a bigint`);
+	}
+	for (const [index, value] of program.literalTemplateData.entries()) {
+		if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
+			fail(`literal template word ${index} is invalid`);
+		}
+	}
+	for (const [index, position] of program.sourcePositions.entries()) {
+		if (
+			!Number.isSafeInteger(position.line) ||
+			position.line < 1 ||
+			!Number.isSafeInteger(position.column) ||
+			position.column < 0
+		) {
+			fail(`source position ${index} is invalid`);
+		}
+		if (
+			position.callerPosId !== undefined &&
+			(!Number.isSafeInteger(position.callerPosId) ||
+				position.callerPosId < 0 ||
+				position.callerPosId >= program.sourcePositions.length)
+		) {
+			fail(`source position ${index} has invalid caller position`);
+		}
+	}
+	for (const [index, fn] of program.functions.entries()) {
+		if (fn.functionIndex !== index) {
+			fail(`function index ${fn.functionIndex} is stored at program index ${index}`);
+		}
+		if (fn.metadata.nameStringIndex >= program.stringConstants.length) {
+			fail(`function ${index} has unknown name string ${fn.metadata.nameStringIndex}`);
+		}
+		verifyCoreFunction(fn, registry);
+		for (const block of fn.blocks) {
+			for (const instruction of [...block.instructions, block.terminator]) {
+				if (
+					instruction.sourcePosition !== undefined &&
+					instruction.sourcePosition >= program.sourcePositions.length
+				) {
+					fail(
+						`instruction @${instruction.id} has unknown source position ${instruction.sourcePosition}`,
 					);
 				}
 			}
