@@ -89,6 +89,8 @@ For a fix queue maintained in a separate clone:
 
 - Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `docs/roadmaps/isolate-reactor.md`).
 
+- Internal backwards compatibility is never required. Refactor internal representations and migrate all callers freely; prefer a clean cutover, invalidating or rebuilding internal artifacts where needed, over preserving legacy paths, adapters, shims, dual formats, or staged compatibility.
+
 - Maligator is a user-facing product. Every issue discovered must receive a proper fix at the owning layer; never hide or work around an issue with test-, fixture-, or scenario-specific hacks.
 - Prefer root-cause, correct, performant fixes over narrow test-specific workarounds.
 - Treat `npm run test:check` as the normal local gate. Put unusually slow unit or subprocess integration tests in `tests/test-suite-unit-full-only.txt`; `tests/toolchain.test.ts` is the current example.
