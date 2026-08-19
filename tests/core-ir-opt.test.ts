@@ -8,6 +8,7 @@ import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
 import { CoreFunctionBuilder } from "../src/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { deserializeVmDefinition, serializeVmDefinition } from "../src/serialize-vm.ts";
 
 function programWithConstants(): CoreProgram {
 	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
@@ -242,6 +243,68 @@ describe("Core IR optimizer", () => {
 				code: "optimization.applied.partial-escape-materialization",
 			}),
 		);
+	});
+
+	it("certifies a fully local stack object without a materializer", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function read(value) {
+				const object = { value };
+				return object.value;
+			}`,
+			"core-local-stack-object.js",
+		);
+		let optimized: CoreProgram | undefined;
+		const definition = compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const coreRegion = optimized!.functions[1]!.regions.find(
+			({ kind }) => kind === "stack-object-plan",
+		);
+		expect(coreRegion?.data).toMatchObject({
+			license: {
+				guard: { obligations: [{ kind: "fallback" }] },
+				materialization: "none",
+			},
+			sites: [{ materializations: [] }],
+		});
+
+		const restored = deserializeVmDefinition(serializeVmDefinition(definition));
+		const vmRegion = restored.functions[1]!.regions?.find(
+			({ kind }) => kind === "stack-object-plan",
+		);
+		expect(vmRegion?.kind).toBe("stack-object-plan");
+		if (vmRegion?.kind !== "stack-object-plan") throw new Error("expected stack region");
+		expect(vmRegion.license.materialization).toBe("none");
+		expect(vmRegion.sites).toHaveLength(1);
+		expect(vmRegion.sites[0]!.materializations).toEqual([]);
+	});
+
+	it("preserves every selected region beyond the former fixed VM ceiling", () => {
+		const declarations = Array.from(
+			{ length: 41 },
+			(_, index) =>
+				`const object${index} = { value: values[${index}] };
+				total += object${index}.value;`,
+		).join("\n");
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function many(values) {
+				let total = 0;
+				${declarations}
+				return total;
+			}`,
+			"core-many-regions.js",
+		);
+		const definition = compileSemanticProgramToVmDefinition(semantic);
+		const regions = definition.functions[1]!.regions!;
+
+		expect(regions.length).toBeGreaterThan(40);
+		expect(regions.filter(({ kind }) => kind === "stack-object-plan")).toHaveLength(41);
+		expect(
+			deserializeVmDefinition(serializeVmDefinition(definition)).functions[1]!.regions,
+		).toEqual(regions);
 	});
 
 	it("certifies only closed String.split projections", () => {

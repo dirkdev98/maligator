@@ -497,7 +497,7 @@ export type VmStringSliceNumberRegion = VmRegionEnvelope<
 export type VmStackObjectPlanRegion = VmRegionEnvelope<
 	"stack-object-plan",
 	"activation-local-fixed-shape-objects",
-	"on-demand"
+	"none" | "on-demand"
 > & {
 	readonly sites: ReadonlyArray<{
 		readonly allocationIp: number;
@@ -1882,9 +1882,9 @@ function lowerFunctionToVmFunction(
 	}
 	const regions: Array<VmRegion> = [];
 	const claimedRegionInstructions = new Set<number>();
-	// Core bounds the number of simultaneously selected proof regions.
-	const irRegions = (fn.regions?.length ?? 0) <= 9 ? (fn.regions ?? []) : [];
-	for (const region of irRegions) {
+	const coreRegionError = (kind: string, reason: string): Error =>
+		new Error(`Invalid Core ${kind} region during VM lowering: ${reason}`);
+	for (const region of fn.regions ?? []) {
 		if (region.kind === "numeric-fusion") {
 			const anchors = region.anchors.map((instruction) =>
 				instructionIndexByIrInstruction.get(instruction),
@@ -1916,7 +1916,7 @@ function lowerFunctionToVmFunction(
 				pairs.length > 32 ||
 				pairs.some((pair) => pair.firstIp === undefined || pair.finishIp === undefined)
 			) {
-				continue;
+				throw coreRegionError(region.kind, "structural contract");
 			}
 			const resolvedAnchors = anchors as Array<number>;
 			const resolvedClaimedIps = claimedIps as Array<number>;
@@ -1972,31 +1972,30 @@ function lowerFunctionToVmFunction(
 					valid = false;
 				}
 			}
-			if (valid) {
-				regions.push({
-					kind: "numeric-fusion",
-					license: {
-						guard: { dependencies: [], obligations: ["fallback"] },
-						genericTwin: "retained",
-						materialization: "none",
-					},
-					representation: "binary-pairs-f64",
-					composition: "overlay",
-					anchors: resolvedAnchors,
-					claimedIps: resolvedClaimedIps,
-					controlFlow: {
-						ordinaryBlockIps: ordinaryBlockIps as Array<number>,
-						exceptionalHandlerIps: [],
-					},
-					cost: { ...region.cost },
-					runtimeGuard: "number-operands",
-					pairs: resolvedPairs.map((pair) => ({
-						firstIp: pair.firstIp,
-						finishIp: pair.finishIp,
-						firstUsePosition: pair.firstUsePosition,
-					})),
-				});
-			}
+			if (!valid) throw coreRegionError(region.kind, "instruction or cost contract");
+			regions.push({
+				kind: "numeric-fusion",
+				license: {
+					guard: { dependencies: [], obligations: ["fallback"] },
+					genericTwin: "retained",
+					materialization: "none",
+				},
+				representation: "binary-pairs-f64",
+				composition: "overlay",
+				anchors: resolvedAnchors,
+				claimedIps: resolvedClaimedIps,
+				controlFlow: {
+					ordinaryBlockIps: ordinaryBlockIps as Array<number>,
+					exceptionalHandlerIps: [],
+				},
+				cost: { ...region.cost },
+				runtimeGuard: "number-operands",
+				pairs: resolvedPairs.map((pair) => ({
+					firstIp: pair.firstIp,
+					finishIp: pair.finishIp,
+					firstUsePosition: pair.firstUsePosition,
+				})),
+			});
 			continue;
 		}
 		if (region.kind === "stack-object-plan") {
@@ -2018,19 +2017,40 @@ function lowerFunctionToVmFunction(
 			);
 			const resolvedSites: Array<VmStackObjectPlanRegion["sites"][number]> = [];
 			const payloadIps: Array<number> = [];
-			let valid =
-				guard !== undefined &&
-				guard.obligations.includes("fallback") &&
-				guard.obligations.includes("materialize") &&
-				region.license.genericTwin === "retained" &&
-				region.license.materialization === "on-demand" &&
-				region.representation === "activation-local-fixed-shape-objects" &&
-				region.sites.length > 0 &&
-				region.sites.length <= 256 &&
-				region.anchors.length === 1 &&
-				region.anchors[0] === region.sites[0]!.allocation &&
-				region.controlFlow.exceptionalBlocks.length === 0 &&
-				aggregateClaims.every((ip) => ip !== undefined);
+			if (guard === undefined) throw coreRegionError(region.kind, "unsupported guard");
+			const needsMaterialization = region.sites.some(
+				(site) => site.inheritedAccess !== undefined || site.materializations.length > 0,
+			);
+			if (!guard.obligations.includes("fallback")) {
+				throw coreRegionError(region.kind, "guard obligations");
+			}
+			if (
+				guard.obligations.includes("materialize") !== needsMaterialization ||
+				region.license.materialization !== (needsMaterialization ? "on-demand" : "none")
+			) {
+				throw coreRegionError(region.kind, "materialization contract");
+			}
+			if (
+				region.license.genericTwin !== "retained" ||
+				region.representation !== "activation-local-fixed-shape-objects"
+			) {
+				throw coreRegionError(region.kind, "license or representation");
+			}
+			if (region.sites.length === 0 || region.sites.length > 256) {
+				throw coreRegionError(region.kind, "site count");
+			}
+			if (
+				region.anchors.length !== 1 ||
+				region.anchors[0] !== region.sites[0]!.allocation
+			) {
+				throw coreRegionError(region.kind, "anchor");
+			}
+			if (region.controlFlow.exceptionalBlocks.length !== 0) {
+				throw coreRegionError(region.kind, "exceptional control flow");
+			}
+			if (aggregateClaims.some((ip) => ip === undefined)) {
+				throw coreRegionError(region.kind, "unmapped aggregate claim");
+			}
 			for (const site of region.sites) {
 				const allocationIp = instructionIndexByIrInstruction.get(site.allocation);
 				const allocation =
@@ -2072,8 +2092,7 @@ function lowerFunctionToVmFunction(
 							instructions[materialization.ip]?.opcode !== "RETURN",
 					)
 				) {
-					valid = false;
-					break;
+					throw coreRegionError(region.kind, "site instruction metadata");
 				}
 				const resolvedAccesses = accesses as Array<{ ip: number; slot: number }>;
 				const resolvedMaterializations = materializations as Array<{
@@ -2087,8 +2106,7 @@ function lowerFunctionToVmFunction(
 					...resolvedMaterializations.map((materialization) => materialization.ip),
 				];
 				if (new Set(sitePayload).size !== sitePayload.length || sitePayload.length > 64) {
-					valid = false;
-					break;
+					throw coreRegionError(region.kind, "site claim set");
 				}
 				payloadIps.push(...sitePayload);
 				resolvedSites.push({
@@ -2100,18 +2118,29 @@ function lowerFunctionToVmFunction(
 				});
 			}
 			const resolvedAggregateClaims = aggregateClaims as Array<number>;
+			if (new Set(payloadIps).size !== payloadIps.length) {
+				throw coreRegionError(region.kind, "overlapping site payloads");
+			}
+			if (new Set(resolvedAggregateClaims).size !== resolvedAggregateClaims.length) {
+				throw coreRegionError(region.kind, "duplicate aggregate claims");
+			}
 			if (
-				!valid ||
-				new Set(payloadIps).size !== payloadIps.length ||
-				new Set(resolvedAggregateClaims).size !== resolvedAggregateClaims.length ||
 				payloadIps.length !== resolvedAggregateClaims.length ||
-				payloadIps.some((ip) => !resolvedAggregateClaims.includes(ip)) ||
-				payloadIps.some((ip) => claimedRegionInstructions.has(ip)) ||
-				region.cost.metadataOperations !== payloadIps.length ||
-				region.cost.score !==
-					region.sites.reduce((total, site) => total + Math.max(1, site.slotCount), 0)
+				payloadIps.some((ip) => !resolvedAggregateClaims.includes(ip))
 			) {
-				continue;
+				throw coreRegionError(region.kind, "aggregate claim set");
+			}
+			if (payloadIps.some((ip) => claimedRegionInstructions.has(ip))) {
+				throw coreRegionError(region.kind, "exclusive claims");
+			}
+			if (region.cost.metadataOperations !== payloadIps.length) {
+				throw coreRegionError(region.kind, "metadata cost");
+			}
+			if (
+				region.cost.score !==
+				region.sites.reduce((total, site) => total + Math.max(1, site.slotCount), 0)
+			) {
+				throw coreRegionError(region.kind, "score cost");
 			}
 			const shards: Array<Array<VmStackObjectPlanRegion["sites"][number]>> = [];
 			let shard: Array<VmStackObjectPlanRegion["sites"][number]> = [];
@@ -2131,7 +2160,9 @@ function lowerFunctionToVmFunction(
 				shardClaimCount += claimCount;
 			}
 			if (shard.length > 0) shards.push(shard);
-			if (shards.length > 32 || regions.length + shards.length > 40) continue;
+			if (shards.length > 32) {
+				throw coreRegionError(region.kind, "wire region capacity");
+			}
 			for (const sites of shards) {
 				const claimedIps = sites.flatMap((site) => [
 					site.allocationIp,
@@ -2143,9 +2174,9 @@ function lowerFunctionToVmFunction(
 				regions.push({
 					kind: "stack-object-plan",
 					license: {
-						guard: guard!,
+						guard: guard,
 						genericTwin: "retained",
-						materialization: "on-demand",
+						materialization: region.license.materialization,
 					},
 					representation: "activation-local-fixed-shape-objects",
 					anchors: sites.map((site) => site.allocationIp),
@@ -2197,7 +2228,7 @@ function lowerFunctionToVmFunction(
 			region.controlFlow.ordinaryBlocks.length > 64 ||
 			region.controlFlow.exceptionalBlocks.length > 64
 		) {
-			continue;
+			throw coreRegionError(region.kind, "license, control-flow, or cost contract");
 		}
 		const resolvedAnchors = anchors as Array<number>;
 		const resolvedClaimedIps = claimedIps as Array<number>;
@@ -2238,7 +2269,7 @@ function lowerFunctionToVmFunction(
 			) ||
 			resolvedClaimedIps.some((ip) => claimedRegionInstructions.has(ip))
 		) {
-			continue;
+			throw coreRegionError(region.kind, "lowered control-flow or exclusive claims");
 		}
 
 		switch (region.kind) {
@@ -2350,7 +2381,7 @@ function lowerFunctionToVmFunction(
 					resolvedAnchors.length !== 2 ||
 					region.resultRegisters.length === 0
 				) {
-					continue;
+					throw coreRegionError(region.kind, "projection metadata");
 				}
 				const resolvedPropertyIp = propertyIp;
 				const resolvedNullChecks = nullChecks as Array<{
@@ -2374,8 +2405,7 @@ function lowerFunctionToVmFunction(
 					loweredCall.guardedBuiltinCall?.operation === "RegExp.prototype.exec" &&
 					loweredProperty?.opcode === "LOAD_PROPERTY_STATIC" &&
 					loweredProperty.dst === loweredCall.callee &&
-					loweredProperty.object === loweredCall.thisValue &&
-					resolvedPropertyIp + 1 === callIp;
+					loweredProperty.object === loweredCall.thisValue;
 				for (const check of resolvedNullChecks) {
 					const comparison = instructions[check.comparisonIp];
 					const nullValue = instructions[check.nullIp];
@@ -2494,7 +2524,7 @@ function lowerFunctionToVmFunction(
 					payloadIps.size !== resolvedClaimedIps.length ||
 					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
 				) {
-					continue;
+					throw coreRegionError(region.kind, "instruction, register, or claim contract");
 				}
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
@@ -2556,7 +2586,7 @@ function lowerFunctionToVmFunction(
 							load.numberCallIp === undefined,
 					)
 				) {
-					continue;
+					throw coreRegionError(region.kind, "projection metadata");
 				}
 				const resolvedLoads = loads as Array<
 					VmRegExpIteratorProjectionRegion["loads"][number]
@@ -2622,7 +2652,7 @@ function lowerFunctionToVmFunction(
 					payloadIps.size !== resolvedClaimedIps.length ||
 					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
 				) {
-					continue;
+					throw coreRegionError(region.kind, "instruction, register, or claim contract");
 				}
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
@@ -2670,7 +2700,7 @@ function lowerFunctionToVmFunction(
 					sliceStartIp === undefined ||
 					numberIntrinsicIp === undefined
 				) {
-					continue;
+					throw coreRegionError(region.kind, "fusion metadata");
 				}
 				const property = instructions[propertyIp];
 				const sliceCall = instructions[sliceCallIp!];
@@ -2716,7 +2746,7 @@ function lowerFunctionToVmFunction(
 					payloadIps.size !== resolvedClaimedIps.length ||
 					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
 				) {
-					continue;
+					throw coreRegionError(region.kind, "instruction or claim contract");
 				}
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
@@ -2764,7 +2794,7 @@ function lowerFunctionToVmFunction(
 					propertyIp === undefined ||
 					loads.some((load) => load.ip === undefined)
 				) {
-					continue;
+					throw coreRegionError(region.kind, "projection metadata");
 				}
 				const loweredCall = instructions[callIp!];
 				const loweredProperty = propertyIp < 0 ? undefined : instructions[propertyIp];
@@ -2915,7 +2945,7 @@ function lowerFunctionToVmFunction(
 					payloadIps.length !== resolvedClaimedIps.length ||
 					payloadIps.some((ip) => !resolvedClaimedIps.includes(ip))
 				) {
-					continue;
+					throw coreRegionError(region.kind, "instruction, register, or claim contract");
 				}
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
@@ -2978,7 +3008,7 @@ function lowerFunctionToVmFunction(
 					trimIcIndex === undefined ||
 					primitiveStringLengthIps.some((ip) => ip === undefined)
 				) {
-					continue;
+					throw coreRegionError(region.kind, "cursor metadata");
 				}
 				const loweredCall = instructions[callIp!];
 				const loweredHeaderBranch = instructions[headerBranchIp!];
@@ -3011,7 +3041,7 @@ function lowerFunctionToVmFunction(
 							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
 					)
 				) {
-					continue;
+					throw coreRegionError(region.kind, "instruction or register contract");
 				}
 				const resolvedPrimitiveStringLengthIps =
 					primitiveStringLengthIps as Array<number>;
@@ -3034,7 +3064,7 @@ function lowerFunctionToVmFunction(
 					payloadIps.length !== resolvedClaimedIps.length ||
 					payloadIps.some((ip) => !resolvedClaimedIps.includes(ip))
 				) {
-					continue;
+					throw coreRegionError(region.kind, "claim or cost contract");
 				}
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({

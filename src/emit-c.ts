@@ -2519,16 +2519,22 @@ function emitInstruction(
 				(reps[instruction.key] === "number" ||
 					nativeStringSplitCursorAction?.role === "element")
 			) {
-				const ordinary = [
-					`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-					`MalValue __v_${ip};`,
-					`if (${receiverName} && mal_vm_array_try_load(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
-					`  r${instruction.dst} = __v_${ip};`,
-					`} else {`,
-					`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-					`  ${throwCheck}`,
-					`}`,
-				];
+				const ordinary =
+					reps[instruction.key] === "number"
+						? [
+								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`MalValue __v_${ip};`,
+								`if (${receiverName} && mal_vm_array_try_load(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
+								`  r${instruction.dst} = __v_${ip};`,
+								`} else {`,
+								`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+								`  ${throwCheck}`,
+								`}`,
+							]
+						: [
+								`r${instruction.dst} = mal_vm_array_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
+								throwCheck,
+							];
 				if (nativeStringSplitCursorAction?.role === "element") {
 					const { site } = nativeStringSplitCursorAction;
 					const id = site.callIp;

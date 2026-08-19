@@ -97,6 +97,44 @@ describe("Core IR lowering", () => {
 		).toBeGreaterThan(10);
 	});
 
+	it("rejects a malformed selected Core region instead of dropping it", () => {
+		const optimized = executeCoreOptimizations(
+			lower(`
+				function project(value) {
+					const fields = value.split(";");
+					return fields[1] + fields.length;
+				}
+				project("a;b");
+			`),
+		).program;
+		const functionIndex = optimized.functions.findIndex(({ regions }) =>
+			regions.some(({ kind }) => kind === "string-split-projection"),
+		);
+		const owner = optimized.functions[functionIndex]!;
+		const regionIndex = owner.regions.findIndex(
+			({ kind }) => kind === "string-split-projection",
+		);
+		const region = owner.regions[regionIndex]!;
+		const cost = region.data.cost as { readonly score: number };
+		const malformed = {
+			...optimized,
+			functions: optimized.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions.with(regionIndex, {
+					...region,
+					data: {
+						...region.data,
+						cost: { score: cost.score, metadataOperations: 0 },
+					},
+				}),
+			}),
+		};
+		const allocated = lowerCoreProgramToRegisters(malformed);
+		expect(() => lowerCoreProgramToVmDefinition(allocated)).toThrow(
+			/Invalid Core string-split-projection region during VM lowering/,
+		);
+	});
+
 	it("models captured private-name batches as result-free writes", () => {
 		const converted = lower(`
 			function make() {

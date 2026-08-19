@@ -1440,9 +1440,6 @@ describe("native update-expression representation", () => {
 					fn.regions?.filter((region) => region.kind === "string-split-cursor") ?? [],
 			),
 		).toEqual(cursors);
-		expect(emitVmDefinition(cached, { compiled: true })).toContain(
-			"mal_builtin_string_split_cursor_init(vm,",
-		);
 		const functionIndex = lowered.functions.findIndex((fn) =>
 			fn.regions?.some((region) => region.kind === "string-split-cursor"),
 		);
@@ -1450,6 +1447,19 @@ describe("native update-expression representation", () => {
 		const cursor = owner.regions!.find(
 			(region) => region.kind === "string-split-cursor",
 		)!;
+		const element = owner.instructions[cursor.elementIp]!;
+		expect(element.opcode).toBe("LOAD_PROPERTY");
+		if (element.opcode !== "LOAD_PROPERTY")
+			throw new Error("expected cursor element load");
+		expect(owner.registerRepresentations[element.key]).toBe("boxed");
+		const emitted = emitVmDefinition(cached, { compiled: true });
+		expect(emitted).toContain("mal_builtin_string_split_cursor_init(vm,");
+		expect(emitted).toContain(
+			`mal_vm_array_fast_load(vm, r${element.object}, r${element.key}, &__property_ic[${element.icIndex}])`,
+		);
+		expect(emitted).not.toContain(
+			`mal_vm_array_try_load(__property_receiver_${cursor.elementIp}, r${element.key}`,
+		);
 		const duplicate: VmDefinition = {
 			...lowered,
 			functions: lowered.functions.with(functionIndex, {

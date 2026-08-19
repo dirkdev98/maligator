@@ -227,7 +227,7 @@ export interface CoreAllocatedNumericFusionRegion extends CoreAllocatedRegionEnv
 export interface CoreAllocatedStackObjectPlanRegion extends CoreAllocatedRegionEnvelope<
 	"stack-object-plan",
 	"activation-local-fixed-shape-objects",
-	"on-demand",
+	"none" | "on-demand",
 	readonly [Extract<RegisterInstruction, { type: "createObject" | "createObjectShaped" }>]
 > {
 	readonly sites: ReadonlyArray<{

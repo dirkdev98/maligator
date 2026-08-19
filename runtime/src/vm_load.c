@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 13u
+#define WIRE_VERSION 14u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1819,12 +1819,21 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             }
         }
 
+        const MalFunction *fn = &functions[i];
         u32 compiler_region_count = rd_count(&r, 17);
-        if (compiler_region_count > 40) r.ok = false;
-        i32 claimed_region_ips[3840];
-        u32 claimed_region_count = 0;
+        bool *claimed_region_ips = nullptr;
+        if (compiler_region_count > 0) {
+            if (fn->instruction_count <= 0) {
+                r.ok = false;
+            } else {
+                claimed_region_ips = calloc((usize) fn->instruction_count, sizeof(bool));
+                if (claimed_region_ips == nullptr) {
+                    err = "out of memory";
+                    goto fail;
+                }
+            }
+        }
         for (u32 region = 0; r.ok && region < compiler_region_count; region++) {
-            const MalFunction *fn = &functions[i];
             u8 kind = rd_u8(&r);
 			u8 composition = rd_u8(&r);
 			if (composition > 1) r.ok = false;
@@ -1848,14 +1857,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     if (claims[previous] == claims[claim]) r.ok = false;
                 }
 				if (composition == 0) {
-					for (u32 previous = 0; r.ok && previous < claimed_region_count; previous++) {
-						if (claimed_region_ips[previous] == claims[claim]) r.ok = false;
-					}
-					if (r.ok && claimed_region_count < countof(claimed_region_ips)) {
-						claimed_region_ips[claimed_region_count++] = claims[claim];
-					} else if (r.ok) {
-						r.ok = false;
-					}
+					if (r.ok && claimed_region_ips[claims[claim]]) r.ok = false;
+					if (r.ok) claimed_region_ips[claims[claim]] = true;
 				}
             }
             for (u32 anchor = 0; r.ok && anchor < anchor_count; anchor++) {
@@ -1922,9 +1925,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 materialization == 0 && (dependency_mask == 1 || dependency_mask == 4) &&
                 obligation_mask == 1;
             bool stack_object_plan_contract = kind == 11 && representation == 11 &&
-                materialization == 1 &&
                 (dependency_mask == 0 || dependency_mask == 1 || dependency_mask == 2) &&
-                obligation_mask == 3;
+                ((materialization == 0 && obligation_mask == 1) ||
+                 (materialization == 1 && obligation_mask == 3));
             bool numeric_fusion_contract = kind == 14 && representation == 14 &&
                 materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
@@ -2839,6 +2842,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				if (site_count == 0 || site_count > 8 || anchor_count != site_count ||
 					exceptional_handler_count != 0) r.ok = false;
 				u32 inherited_count = 0;
+				u32 materialization_total = 0;
 				u32 total_slots = 0;
 				for (u32 site = 0; r.ok && site < site_count; site++) {
 					i32 allocation_ip = rd_i32(&r);
@@ -2893,6 +2897,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 					}
 
 					u32 materialization_count = rd_count(&r, 2);
+					materialization_total += materialization_count;
 					for (u32 materialization = 0; r.ok &&
 						 materialization < materialization_count; materialization++) {
 						i32 ip = rd_i32(&r);
@@ -2906,6 +2911,8 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				}
 				if ((inherited_count == 0 && dependency_mask != 0) ||
 					(inherited_count != 0 && dependency_mask == 0) ||
+					((materialization == 1) !=
+					 (materialization_total != 0 || inherited_count != 0)) ||
 					metadata_operations != payload_count) r.ok = false;
 				} else if (r.ok && kind == 14) {
 				u8 runtime_guard = rd_u8(&r);
@@ -2948,6 +2955,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 #undef MAL_REGION_PAYLOAD_CLAIM
 #undef MAL_REGION_PAYLOAD_REFERENCE
         }
+        free(claimed_region_ips);
     }
 
     if (!r.ok || r.pos != r.len) {

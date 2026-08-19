@@ -1316,7 +1316,7 @@ function stackObjectRegion(
 						],
 					},
 					genericTwin: "retained",
-					materialization: "on-demand",
+					materialization: materializations.length === 0 ? "none" : "on-demand",
 				},
 				representation: "activation-local-fixed-shape-objects",
 				cost: {

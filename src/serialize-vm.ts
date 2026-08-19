@@ -33,11 +33,10 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 13;
+export const WIRE_VERSION = 14;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
-const MAX_REGIONS = 40;
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
 const MAX_REGION_ORDINARY_BLOCKS = 64;
@@ -726,9 +725,9 @@ function stackObjectPlanGuardMasks(
 	}
 	if (
 		license.genericTwin !== "retained" ||
-		license.materialization !== "on-demand" ||
+		(license.materialization !== "none" && license.materialization !== "on-demand") ||
 		![0, 1, 2].includes(dependencyMask) ||
-		obligationMask !== 3
+		obligationMask !== (license.materialization === "none" ? 1 : 3)
 	) {
 		throw new RangeError("serialize-vm: invalid stack-object guard plan");
 	}
@@ -1018,9 +1017,6 @@ export function serializeVmDefinition(
 		}
 
 		const regions = [...(fn.regions ?? [])];
-		if (regions.length > MAX_REGIONS) {
-			throw new RangeError("serialize-vm: too many function regions");
-		}
 		w.u32(regions.length);
 		const claimedRegionInstructions = new Set<number>();
 		for (const region of regions) {
@@ -1488,6 +1484,7 @@ function validateStackObjectPlanRegion(
 	const payload = new Set<number>();
 	const allocationIps = new Set<number>();
 	let inheritedAccessCount = 0;
+	let materializationCount = 0;
 	let totalSlots = 0;
 	let valid =
 		region.representation === "activation-local-fixed-shape-objects" &&
@@ -1538,6 +1535,7 @@ function validateStackObjectPlanRegion(
 			payload.add(site.inheritedAccessIp);
 		}
 		for (const materialization of site.materializations) {
+			materializationCount++;
 			const instruction = fn.instructions[materialization.ip];
 			if (
 				materialization.kind !== "return" ||
@@ -1552,6 +1550,8 @@ function validateStackObjectPlanRegion(
 	if (
 		totalSlots > 256 ||
 		(inheritedAccessCount === 0 ? dependencyMask !== 0 : dependencyMask === 0) ||
+		(region.license.materialization === "on-demand") !==
+			(materializationCount > 0 || inheritedAccessCount > 0) ||
 		region.cost.metadataOperations !== payload.size ||
 		payload.size !== region.claimedIps.length ||
 		region.claimedIps.some((ip) => !payload.has(ip)) ||
@@ -2891,9 +2891,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			}
 		}
 		const regionCount = r.count(17);
-		if (regionCount > MAX_REGIONS) {
-			throw new RangeError("serialize-vm: too many function regions");
-		}
 		if (regionCount > 0) {
 			const regions: Array<VmRegion> = [];
 			const claimed = new Set<number>();
@@ -2944,9 +2941,9 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				const stackObjectPlanContract =
 					kindTag === 11 &&
 					representationTag === 11 &&
-					materializationTag === 1 &&
 					[0, 1, 2].includes(dependencyMask) &&
-					obligationMask === 3;
+					((materializationTag === 0 && obligationMask === 1) ||
+						(materializationTag === 1 && obligationMask === 3));
 				const numericFusionContract =
 					kindTag === 14 &&
 					representationTag === 14 &&
@@ -3356,10 +3353,11 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 										: dependencyMask === 1
 											? [{ kind: "world", fact: "primordials.locked" }]
 											: [{ kind: "epoch", family: "primitive-methods" }],
-								obligations: ["fallback", "materialize"],
+								obligations:
+									materializationTag === 0 ? ["fallback"] : ["fallback", "materialize"],
 							},
 							genericTwin: "retained",
-							materialization: "on-demand",
+							materialization: materializationTag === 0 ? "none" : "on-demand",
 						},
 						representation: "activation-local-fixed-shape-objects",
 						anchors,
