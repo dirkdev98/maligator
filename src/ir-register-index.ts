@@ -1,51 +1,9 @@
+import { coreOpcode } from "./core-ir-opcodes.ts";
 import type { IRFunction, IRInstruction } from "./ir.ts";
-
-/** Instructions for which every register operand is a use. */
-const NO_DESTINATION = new Set<IRInstruction["type"]>([
-	"return",
-	"throw",
-	"jump",
-	"jumpIf",
-	"storeLocal",
-	"storeGlobal",
-	"storeCaptured",
-	"storeGlobalProperty",
-	"storeProperty",
-	"storePropertyStatic",
-	"storeSuperProperty",
-	"mergeDataProperties",
-	"defineAccessor",
-	"defineProperty",
-	"definePrivate",
-	"initPrivateFields",
-	"storePrivate",
-	"setPrototype",
-	"setFunctionName",
-	"iteratorClose",
-	"withEnter",
-	"withExit",
-	"checkSuperClass",
-	"requireCoercible",
-	"setThis",
-	"throwIfTdz",
-]);
-
-/** Instructions with two leading destination operands. */
-const TWO_DESTINATIONS = new Set<IRInstruction["type"]>([
-	"getIterator",
-	"getAsyncIterator",
-	"iteratorStep",
-	"yield",
-	"await",
-	"loadStaticArgument",
-]);
 
 /** Number of leading register operands defined by an instruction. */
 export function destinationCount(instruction: IRInstruction): number {
-	if (!("registers" in instruction) || NO_DESTINATION.has(instruction.type)) {
-		return 0;
-	}
-	return TWO_DESTINATIONS.has(instruction.type) ? 2 : 1;
+	return "registers" in instruction ? coreOpcode(instruction.type).outputs.minimum : 0;
 }
 
 /** Every non-sentinel register written by an instruction. */

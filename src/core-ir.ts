@@ -94,6 +94,8 @@ export interface CoreOpcodeDescriptor<Name extends string = string> {
 	readonly inputs: CoreArity;
 	readonly outputs: CoreArity;
 	readonly effects: CoreInstructionEffects;
+	/** Removing an unused result cannot change observable JavaScript behavior. */
+	readonly discardable: boolean;
 }
 
 function validateEffectDomains(

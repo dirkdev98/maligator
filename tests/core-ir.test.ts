@@ -16,12 +16,14 @@ function registry(): CoreOpcodeRegistry {
 		inputs: coreArity(0),
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
+		discardable: true,
 	});
 	registry.define({
 		opcode: "add",
 		inputs: coreArity(2),
 		outputs: coreArity(1),
 		effects: CORE_NO_EFFECTS,
+		discardable: true,
 	});
 	registry.define({
 		opcode: "call",
@@ -35,6 +37,7 @@ function registry(): CoreOpcodeRegistry {
 			mayGc: true,
 			callsUserCode: true,
 		},
+		discardable: false,
 	});
 	return registry;
 }

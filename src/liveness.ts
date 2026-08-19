@@ -21,6 +21,7 @@
  * would drop a live root, so we never risk it.
  */
 
+import { coreOpcode } from "./core-ir-opcodes.ts";
 import { buildIRExceptionHandlers } from "./ir-control-flow.ts";
 import { definedRegisters, usedRegisters } from "./ir-register-index.ts";
 import type { IRFunction, IRInstruction, IntermediateProgram } from "./ir.ts";
@@ -40,43 +41,9 @@ import { log } from "./utils.ts";
  * `await`/`yield` (suspension is a collection point); `throwIfTdz` (allocates
  * the ReferenceError when it fires).
  */
-const GC_FREE_INSTRUCTION_TYPES = new Set<IRInstruction["type"]>([
-	// Control flow / structural markers — no runtime allocation.
-	"jump",
-	"jumpIf",
-	"return",
-	"throw",
-	"tryBegin",
-	"tryEnd",
-	"sourcePos",
-	"generatorStart",
-	"asyncStart",
-	"withExit",
-	// Pure scalar producers (NaN-boxed inline values, no heap cell).
-	"createNumber",
-	"createF64",
-	"createBoolean",
-	"createNull",
-	"createUndefined",
-	"createEmpty",
-	"isEmpty",
-	"typeofCompare",
-	// Slot moves of already-boxed values (no allocation, no user code).
-	"move",
-	"loadLocal",
-	"storeLocal",
-	"loadCaptured",
-	"storeCaptured",
-	"loadGlobal",
-	"storeGlobal",
-	"loadNewTarget",
-	"loadIntrinsic",
-	"setThis",
-]);
-
 /** Whether GC can run at this instruction (so live values must be rooted). */
 export function isSafepoint(instruction: IRInstruction): boolean {
-	return !GC_FREE_INSTRUCTION_TYPES.has(instruction.type);
+	return coreOpcode(instruction.type).effects.mayGc;
 }
 
 /** Block-index targets of a control-flow branch (jump / jumpIf). */
