@@ -27,13 +27,13 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import type {
-	IntermediateProgram,
-	IRBlock,
-	IRFunction,
-	IRImmediateValue,
-	IRInstruction,
-	IRRegion,
-} from "./ir.ts";
+	SemanticLoweringProgram,
+	RegisterBlock,
+	RegisterFunction,
+	RegisterImmediateValue,
+	RegisterInstruction,
+	RegisterRegion,
+} from "./semantic-lowering.ts";
 
 const structuralInstructionTypes: ReadonlySet<string> = new Set([
 	"catch",
@@ -50,21 +50,21 @@ function isStructuralInstruction(type: string): boolean {
 	return structuralInstructionTypes.has(type);
 }
 
-function destinationCount(instruction: IRInstruction): number {
+function destinationCount(instruction: RegisterInstruction): number {
 	if (!("registers" in instruction)) return 0;
 	if (isCoreOpcode(instruction.type)) return coreOpcode(instruction.type).outputs.minimum;
 	if (isStructuralInstruction(instruction.type)) return instruction.type === "catch" ? 1 : 0;
 	throw new Error(`Unknown semantic-lowering instruction ${String(instruction.type)}`);
 }
 
-function definedRegisters(instruction: IRInstruction): Array<number> {
+function definedRegisters(instruction: RegisterInstruction): Array<number> {
 	if (!("registers" in instruction)) return [];
 	return instruction.registers
 		.slice(0, destinationCount(instruction))
 		.filter((register) => register >= 0);
 }
 
-function usedRegisters(instruction: IRInstruction): Array<number> {
+function usedRegisters(instruction: RegisterInstruction): Array<number> {
 	if (!("registers" in instruction)) return [];
 	return instruction.registers
 		.slice(destinationCount(instruction))
@@ -89,7 +89,7 @@ const NUMBER_FROM_NUMBERS = new Set([
 ]);
 
 function importedInstructionRepresentation(
-	instruction: IRInstruction,
+	instruction: RegisterInstruction,
 	representationOf: (register: number) => ImportedRegisterRepresentation | null,
 ): ImportedRegisterRepresentation | null {
 	switch (instruction.type) {
@@ -152,7 +152,7 @@ function importedInstructionRepresentation(
 }
 
 function inferImportedRegisterRepresentations(
-	fn: IRFunction,
+	fn: RegisterFunction,
 ): Map<number, ImportedRegisterRepresentation> {
 	const representations = new Map<number, ImportedRegisterRepresentation | null>();
 	for (const block of fn.blocks) {
@@ -198,8 +198,8 @@ function inferImportedRegisterRepresentations(
 	);
 }
 
-interface LegacyToken {
-	readonly instruction: IRInstruction;
+interface RegisterToken {
+	readonly instruction: RegisterInstruction;
 	readonly sourcePosition?: number;
 }
 
@@ -208,7 +208,7 @@ type SegmentTerminator =
 			readonly kind: "jump";
 			readonly target: number;
 			readonly sourcePosition?: number;
-			readonly origins?: ReadonlyArray<IRInstruction>;
+			readonly origins?: ReadonlyArray<RegisterInstruction>;
 	  }
 	| {
 			readonly kind: "branch";
@@ -216,27 +216,27 @@ type SegmentTerminator =
 			readonly consequent: number;
 			readonly alternate: number;
 			readonly sourcePosition?: number;
-			readonly origins?: ReadonlyArray<IRInstruction>;
+			readonly origins?: ReadonlyArray<RegisterInstruction>;
 	  }
 	| {
 			readonly kind: "return";
 			readonly value: number;
 			readonly sourcePosition?: number;
-			readonly origins?: ReadonlyArray<IRInstruction>;
+			readonly origins?: ReadonlyArray<RegisterInstruction>;
 	  }
 	| {
 			readonly kind: "throw";
 			readonly value: number;
 			readonly sourcePosition?: number;
-			readonly origins?: ReadonlyArray<IRInstruction>;
+			readonly origins?: ReadonlyArray<RegisterInstruction>;
 	  }
 	| { readonly kind: "unreachable"; readonly sourcePosition?: number };
 
-interface LegacySegment {
+interface RegisterSegment {
 	readonly id: number;
 	readonly oldBlock: number;
 	readonly handlerOldBlock: number | null;
-	readonly tokens: Array<LegacyToken>;
+	readonly tokens: Array<RegisterToken>;
 	terminator?: SegmentTerminator;
 	catchRegister?: number;
 	readonly definitions: Set<number>;
@@ -248,7 +248,7 @@ interface LegacySegment {
 
 export interface CoreRegisterProgram {
 	readonly core: CoreProgram;
-	readonly functions: Array<IRFunction>;
+	readonly functions: Array<RegisterFunction>;
 	readonly gcRootRegisters: ReadonlyArray<ReadonlyArray<number> | undefined>;
 }
 
@@ -256,9 +256,9 @@ interface ConvertedCoreFunction {
 	readonly core: CoreFunction;
 }
 
-export interface CoreProgramConstructionOptions {
+export interface CoreImportOptions {
 	/**
-	 * Run the whole-program verifier after construction. Direct bridge users get
+	 * Run the whole-program verifier after construction. Direct importer users get
 	 * this by default; callers may omit it only when another phase owns the same
 	 * verification boundary.
 	 */
@@ -266,9 +266,9 @@ export interface CoreProgramConstructionOptions {
 }
 
 function isControlInstruction(
-	instruction: IRInstruction,
+	instruction: RegisterInstruction,
 ): instruction is Extract<
-	IRInstruction,
+	RegisterInstruction,
 	{ type: "jump" | "jumpIf" | "return" | "throw" }
 > {
 	return (
@@ -279,12 +279,12 @@ function isControlInstruction(
 	);
 }
 
-function instructionMayThrow(instruction: IRInstruction): boolean {
+function instructionMayThrow(instruction: RegisterInstruction): boolean {
 	if (isCoreOpcode(instruction.type)) return coreOpcode(instruction.type).effects.mayThrow;
 	if (isStructuralInstruction(instruction.type)) {
 		return instruction.type === "throw";
 	}
-	throw new Error(`Unknown legacy IR instruction ${String(instruction.type)}`);
+	throw new Error(`Unknown register instruction ${String(instruction.type)}`);
 }
 
 function cloneCoreAttribute(
@@ -324,8 +324,8 @@ function cloneCoreAttribute(
 	return result;
 }
 
-function legacyPayload(
-	instruction: IRInstruction,
+function registerPayload(
+	instruction: RegisterInstruction,
 	expandImmediateOperands = false,
 ): CoreInstructionAttributes {
 	const attributes: Record<string, unknown> = {};
@@ -343,9 +343,9 @@ function legacyPayload(
 }
 
 function immediateOperand(
-	instruction: IRInstruction,
+	instruction: RegisterInstruction,
 	position: number,
-): IRImmediateValue | undefined {
+): RegisterImmediateValue | undefined {
 	return instruction.type === "call" || instruction.type === "construct"
 		? instruction.immediateValues?.[position]
 		: undefined;
@@ -354,7 +354,7 @@ function immediateOperand(
 function appendImmediateValue(
 	builder: CoreFunctionBuilder,
 	block: CoreBlockId,
-	value: IRImmediateValue,
+	value: RegisterImmediateValue,
 	sourcePosition: number | undefined,
 ): CoreValueId {
 	const specification = (() => {
@@ -382,7 +382,7 @@ function appendImmediateValue(
 }
 
 function coreInstructionInputs(
-	instruction: IRInstruction,
+	instruction: RegisterInstruction,
 	builder: CoreFunctionBuilder,
 	block: CoreBlockId,
 	sourcePosition: number | undefined,
@@ -395,7 +395,7 @@ function coreInstructionInputs(
 	for (let position = destinations; position < instruction.registers.length; position++) {
 		const register = instruction.registers[position]!;
 		if (register >= 0) {
-			inputs.push(requireValue(register, `Core bridge ${instruction.type}`));
+			inputs.push(requireValue(register, `Core import ${instruction.type}`));
 			continue;
 		}
 		const immediate = immediateOperand(instruction, position);
@@ -414,7 +414,7 @@ function coreInstructionInputs(
 }
 
 function outputRepresentation(
-	instruction: IRInstruction,
+	instruction: RegisterInstruction,
 	index: number,
 	registerRepresentations: ReadonlyMap<number, ImportedRegisterRepresentation>,
 ): CoreRepresentation {
@@ -454,7 +454,7 @@ function coreRegisterRepresentation(
 	}
 }
 
-function coreFunctionMetadata(fn: IRFunction): CoreFunctionMetadata {
+function coreFunctionMetadata(fn: RegisterFunction): CoreFunctionMetadata {
 	const isClassConstructor = fn.classContext?.isConstructor ?? false;
 	return {
 		sourcePath: fn.semanticFile.path,
@@ -481,15 +481,15 @@ const CORE_REGION_COMMON_FIELDS = new Set([
 
 function coreRegionData(
 	value: unknown,
-	instructionIds: ReadonlyMap<IRInstruction, CoreInstructionId>,
-	coreBlocksByLegacyBlock: ReadonlyMap<number, ReadonlyArray<CoreBlockId>>,
+	instructionIds: ReadonlyMap<RegisterInstruction, CoreInstructionId>,
+	coreBlocksBySourceBlock: ReadonlyMap<number, ReadonlyArray<CoreBlockId>>,
 ): unknown {
 	if (value === undefined || value === null || typeof value !== "object") return value;
-	const instruction = instructionIds.get(value as IRInstruction);
+	const instruction = instructionIds.get(value as RegisterInstruction);
 	if (instruction !== undefined) return { $coreInstruction: instruction };
 	if (Array.isArray(value)) {
 		return value.map((entry) =>
-			coreRegionData(entry, instructionIds, coreBlocksByLegacyBlock),
+			coreRegionData(entry, instructionIds, coreBlocksBySourceBlock),
 		);
 	}
 	if (
@@ -503,7 +503,7 @@ function coreRegionData(
 	const result: Record<string, unknown> = {};
 	for (const [key, entry] of Object.entries(value)) {
 		if (key === "exitBlock" && typeof entry === "number") {
-			const block = coreBlocksByLegacyBlock.get(entry)?.[0];
+			const block = coreBlocksBySourceBlock.get(entry)?.[0];
 			if (block === undefined) {
 				throw new Error(`Core region references unknown exit block ${entry}`);
 			}
@@ -512,7 +512,7 @@ function coreRegionData(
 			result[key] = coreRegionData(
 				entry,
 				instructionIds,
-				coreBlocksByLegacyBlock,
+				coreBlocksBySourceBlock,
 			);
 		}
 	}
@@ -520,31 +520,31 @@ function coreRegionData(
 }
 
 function convertRegions(
-	regions: ReadonlyArray<IRRegion> | undefined,
-	instructionIds: ReadonlyMap<IRInstruction, CoreInstructionId>,
-	coreBlocksByLegacyBlock: ReadonlyMap<number, ReadonlyArray<CoreBlockId>>,
+	regions: ReadonlyArray<RegisterRegion> | undefined,
+	instructionIds: ReadonlyMap<RegisterInstruction, CoreInstructionId>,
+	coreBlocksBySourceBlock: ReadonlyMap<number, ReadonlyArray<CoreBlockId>>,
 ): ReadonlyArray<CoreRegion> {
 	if (regions === undefined) return [];
-	const requireInstruction = (instruction: IRInstruction): CoreInstructionId => {
+	const requireInstruction = (instruction: RegisterInstruction): CoreInstructionId => {
 		const id = instructionIds.get(instruction);
 		if (id === undefined) {
 			throw new Error(`Core region references missing ${instruction.type} instruction`);
 		}
 		return id;
 	};
-	const blocks = (legacyBlocks: ReadonlyArray<number>): Array<CoreBlockId> =>
-		legacyBlocks.flatMap((block) => {
-			const converted = coreBlocksByLegacyBlock.get(block);
+	const blocks = (sourceBlocks: ReadonlyArray<number>): Array<CoreBlockId> =>
+		sourceBlocks.flatMap((block) => {
+			const converted = coreBlocksBySourceBlock.get(block);
 			if (converted === undefined) {
-				throw new Error(`Core region references missing legacy block ${block}`);
+				throw new Error(`Core region references missing template block ${block}`);
 			}
 			return converted;
 		});
-	const handlerBlocks = (legacyBlocks: ReadonlyArray<number>): Array<CoreBlockId> =>
-		legacyBlocks.map((block) => {
-			const converted = coreBlocksByLegacyBlock.get(block)?.[0];
+	const handlerBlocks = (sourceBlocks: ReadonlyArray<number>): Array<CoreBlockId> =>
+		sourceBlocks.map((block) => {
+			const converted = coreBlocksBySourceBlock.get(block)?.[0];
 			if (converted === undefined) {
-				throw new Error(`Core region references missing legacy handler block ${block}`);
+				throw new Error(`Core region references missing template handler block ${block}`);
 			}
 			return converted;
 		});
@@ -553,7 +553,7 @@ function convertRegions(
 		for (const [key, value] of Object.entries(region)) {
 			if (CORE_REGION_COMMON_FIELDS.has(key)) continue;
 			if (key === "exitBlock" && typeof value === "number") {
-				const block = coreBlocksByLegacyBlock.get(value)?.[0];
+				const block = coreBlocksBySourceBlock.get(value)?.[0];
 				if (block === undefined) {
 					throw new Error(`Core region references unknown exit block ${value}`);
 				}
@@ -562,7 +562,7 @@ function convertRegions(
 				data[key] = coreRegionData(
 					value,
 					instructionIds,
-					coreBlocksByLegacyBlock,
+					coreBlocksBySourceBlock,
 				);
 			}
 		}
@@ -577,11 +577,11 @@ function convertRegions(
 	});
 }
 
-function splitLegacyBlocks(fn: IRFunction): {
-	readonly segments: Array<LegacySegment>;
+function splitRegisterBlocks(fn: RegisterFunction): {
+	readonly segments: Array<RegisterSegment>;
 	readonly segmentsByOldBlock: ReadonlyArray<ReadonlyArray<number>>;
 } {
-	const segments: Array<LegacySegment> = [];
+	const segments: Array<RegisterSegment> = [];
 	const segmentsByOldBlock: Array<Array<number>> = fn.blocks.map(() => []);
 	const activeHandlers: Array<number> = [];
 	const storedLocals = new Set<number>();
@@ -595,7 +595,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 	for (const local of [...storedLocals].sort((left, right) => left - right)) {
 		localRegisters.set(local, nextLocalRegister++);
 	}
-	const normalizeLocal = (instruction: IRInstruction): IRInstruction => {
+	const normalizeLocal = (instruction: RegisterInstruction): RegisterInstruction => {
 		if (instruction.type !== "loadLocal" && instruction.type !== "storeLocal") {
 			return instruction;
 		}
@@ -610,7 +610,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 	let sourcePosition: number | undefined;
 
 	for (let oldBlock = 0; oldBlock < fn.blocks.length; oldBlock++) {
-		let tokens: Array<LegacyToken> =
+		let tokens: Array<RegisterToken> =
 			oldBlock === 0
 				? [...localRegisters.values()].map((register) => ({
 						instruction: {
@@ -648,7 +648,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 				flush();
 				const handler = instruction.blocks[0];
 				if (handler < 0 || handler >= fn.blocks.length) {
-					throw new Error(`Unknown Core bridge handler block ${handler}`);
+					throw new Error(`Unknown Core import handler block ${handler}`);
 				}
 				activeHandlers.push(handler);
 				segmentHandler = handler;
@@ -657,7 +657,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 			if (instruction.type === "tryEnd") {
 				flush();
 				if (activeHandlers.pop() === undefined) {
-					throw new Error("Unbalanced tryEnd in Core bridge input");
+					throw new Error("Unbalanced tryEnd in Core import input");
 				}
 				segmentHandler = activeHandlers.at(-1) ?? null;
 				continue;
@@ -666,7 +666,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 			const handler = activeHandlers.at(-1) ?? null;
 			if (handler !== segmentHandler && tokens.length > 0) flush();
 			segmentHandler = handler;
-			const token: LegacyToken = {
+			const token: RegisterToken = {
 				instruction,
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			};
@@ -676,7 +676,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 					(!isControlInstruction(instruction) && instructionMayThrow(instruction)));
 			if (isolatedExceptionalInstruction) flush();
 			tokens.push(token);
-			// Legacy conditional jumps can occur in the middle of a block: their
+			// Register conditional jumps can occur in the middle of a block: their
 			// false edge continues at the next instruction. Core IR makes that edge
 			// explicit, so every control instruction ends a segment. Instructions
 			// following an unconditional control form a dead segment that the CFG
@@ -688,7 +688,7 @@ function splitLegacyBlocks(fn: IRFunction): {
 		flush(segmentsByOldBlock[oldBlock]!.length === 0);
 	}
 	if (activeHandlers.length > 0) {
-		throw new Error("Unbalanced tryBegin in Core bridge input");
+		throw new Error("Unbalanced tryBegin in Core import input");
 	}
 	return { segments, segmentsByOldBlock };
 }
@@ -698,13 +698,13 @@ function firstSegment(
 	oldBlock: number,
 ): number {
 	const segment = segmentsByOldBlock[oldBlock]?.[0];
-	if (segment === undefined) throw new Error(`Unknown legacy target block ${oldBlock}`);
+	if (segment === undefined) throw new Error(`Unknown template target block ${oldBlock}`);
 	return segment;
 }
 
 function establishSegmentTerminators(
-	fn: IRFunction,
-	segments: Array<LegacySegment>,
+	fn: RegisterFunction,
+	segments: Array<RegisterSegment>,
 	segmentsByOldBlock: ReadonlyArray<ReadonlyArray<number>>,
 ): void {
 	for (const segment of segments) {
@@ -721,7 +721,7 @@ function establishSegmentTerminators(
 				.some(({ instruction }) => !isControlInstruction(instruction))
 		) {
 			throw new Error(
-				`Non-control instruction follows a terminator in legacy block ${segment.oldBlock}`,
+				`Non-control instruction follows a terminator in template block ${segment.oldBlock}`,
 			);
 		}
 		if (firstControl >= 0) segment.tokens.splice(firstControl);
@@ -757,7 +757,7 @@ function establishSegmentTerminators(
 					break;
 				case "jumpIf":
 					if (fallthrough === undefined) {
-						throw new Error("Conditional legacy block has no fallthrough");
+						throw new Error("Conditional template block has no fallthrough");
 					}
 					segment.terminator = {
 						kind: "branch",
@@ -800,12 +800,12 @@ function establishSegmentTerminators(
 			continue;
 		}
 		throw new Error(
-			`Unsupported legacy control sequence ${controls.map(({ instruction }) => instruction.type).join(", ")}`,
+			`Unsupported template control sequence ${controls.map(({ instruction }) => instruction.type).join(", ")}`,
 		);
 	}
 }
 
-function pruneUnreachableSegments(segments: Array<LegacySegment>): Array<LegacySegment> {
+function pruneUnreachableSegments(segments: Array<RegisterSegment>): Array<RegisterSegment> {
 	const reachable = new Set<number>();
 	const pending = [0];
 	while (pending.length > 0) {
@@ -873,7 +873,7 @@ function terminatorRegisters(terminator: SegmentTerminator): ReadonlyArray<numbe
 }
 
 function analyzeSegments(
-	segments: Array<LegacySegment>,
+	segments: Array<RegisterSegment>,
 	segmentsByOldBlock: ReadonlyArray<ReadonlyArray<number>>,
 ): void {
 	const handlerTargets = new Set<number>();
@@ -881,7 +881,7 @@ function analyzeSegments(
 		for (const token of segment.tokens) {
 			if (token.instruction.type === "catch") {
 				if (segment.tokens[0] !== token) {
-					throw new Error(`catch must be first in Core bridge segment ${segment.id}`);
+					throw new Error(`catch must be first in Core import segment ${segment.id}`);
 				}
 				segment.catchRegister = definedRegisters(token.instruction)[0];
 				segment.tokens.shift();
@@ -930,7 +930,7 @@ function analyzeSegments(
 	propagateSegmentLiveness(segments);
 }
 
-function propagateSegmentLiveness(segments: Array<LegacySegment>): void {
+function propagateSegmentLiveness(segments: Array<RegisterSegment>): void {
 	let changed = true;
 	while (changed) {
 		changed = false;
@@ -961,13 +961,13 @@ function propagateSegmentLiveness(segments: Array<LegacySegment>): void {
 }
 
 /**
- * The legacy VM initializes non-parameter registers to undefined. Most semantic
- * IR defines every virtual register before use, but completion/control joins can
+ * The template VM initializes non-parameter registers to undefined. Most semantic
+ * The frontend graph defines every virtual register before use, but control joins can
  * deliberately rely on that frame invariant. Make those values explicit before
  * constructing SSA so they cannot masquerade as ABI inputs.
  */
 function initializeImplicitEntryValues(
-	segments: Array<LegacySegment>,
+	segments: Array<RegisterSegment>,
 	parameterCount: number,
 ): void {
 	const entry = segments[0]!;
@@ -1002,7 +1002,7 @@ function sortedRegisters(registers: ReadonlySet<number>): Array<number> {
  * the straight-line proof inapplicable.
  */
 function convertStraightLineFunction(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	verify: boolean,
 	registerRepresentations: ReadonlyMap<number, ImportedRegisterRepresentation>,
 ): ConvertedCoreFunction | undefined {
@@ -1061,7 +1061,7 @@ function convertStraightLineFunction(
 			.parameters.slice(0, fn.parameterCount)
 			.map(({ value }, index) => [index, value]),
 	);
-	const instructionIds = new Map<IRInstruction, CoreInstructionId>();
+	const instructionIds = new Map<RegisterInstruction, CoreInstructionId>();
 	let sourcePosition: number | undefined;
 	for (const instruction of fn.blocks[0]!.instructions) {
 		if (instruction.type === "sourcePos") {
@@ -1085,13 +1085,13 @@ function convertStraightLineFunction(
 			(register, context) => {
 				const value = values.get(register);
 				if (value === undefined) {
-					throw new Error(`${context} reads uninitialized legacy register ${register}`);
+					throw new Error(`${context} reads uninitialized template register ${register}`);
 				}
 				return value;
 			},
 		);
 		const destinations = definedRegisters(instruction);
-		const attributes = legacyPayload(instruction, expandedImmediates);
+		const attributes = registerPayload(instruction, expandedImmediates);
 		const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 			outputCount: destinations.length,
 			outputRepresentations: destinations.map((_, index) =>
@@ -1121,7 +1121,7 @@ function convertStraightLineFunction(
 }
 
 function convertFunction(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	verify: boolean,
 ): ConvertedCoreFunction {
 	const registerRepresentations = inferImportedRegisterRepresentations(fn);
@@ -1131,7 +1131,7 @@ function convertFunction(
 		registerRepresentations,
 	);
 	if (straightLine !== undefined) return straightLine;
-	const { segments: splitSegments, segmentsByOldBlock } = splitLegacyBlocks(fn);
+	const { segments: splitSegments, segmentsByOldBlock } = splitRegisterBlocks(fn);
 	establishSegmentTerminators(fn, splitSegments, segmentsByOldBlock);
 	analyzeSegments(splitSegments, segmentsByOldBlock);
 	initializeImplicitEntryValues(splitSegments, fn.parameterCount);
@@ -1148,7 +1148,7 @@ function convertFunction(
 	});
 	const coreBlocks: Array<CoreBlockId> = [];
 	const blockRegisters: Array<Array<number>> = [];
-	const coreBlocksByLegacyBlock = new Map<number, Array<CoreBlockId>>();
+	const coreBlocksBySourceBlock = new Map<number, Array<CoreBlockId>>();
 	for (const segment of segments) {
 		const liveIn = sortedRegisters(segment.liveIn);
 		blockRegisters.push(liveIn);
@@ -1161,11 +1161,11 @@ function convertFunction(
 			})),
 		]);
 		coreBlocks.push(block);
-		const legacyBlocks = coreBlocksByLegacyBlock.get(segment.oldBlock) ?? [];
-		legacyBlocks.push(block);
-		coreBlocksByLegacyBlock.set(segment.oldBlock, legacyBlocks);
+		const sourceBlocks = coreBlocksBySourceBlock.get(segment.oldBlock) ?? [];
+		sourceBlocks.push(block);
+		coreBlocksBySourceBlock.set(segment.oldBlock, sourceBlocks);
 	}
-	const instructionIds = new Map<IRInstruction, CoreInstructionId>();
+	const instructionIds = new Map<RegisterInstruction, CoreInstructionId>();
 
 	const requireValue = (
 		values: ReadonlyMap<number, CoreValueId>,
@@ -1174,7 +1174,7 @@ function convertFunction(
 	): CoreValueId => {
 		const value = values.get(register);
 		if (value === undefined) {
-			throw new Error(`${context} reads uninitialized legacy register ${register}`);
+			throw new Error(`${context} reads uninitialized template register ${register}`);
 		}
 		return value;
 	};
@@ -1202,7 +1202,7 @@ function convertFunction(
 				(register, context) => requireValue(values, register, context),
 			);
 			const destinations = definedRegisters(instruction);
-			const attributes = legacyPayload(instruction, expandedImmediates);
+			const attributes = registerPayload(instruction, expandedImmediates);
 			const outputs = builder.appendInstruction(block, instruction.type, inputs, {
 				outputCount: destinations.length,
 				outputRepresentations: destinations.map((_, index) =>
@@ -1213,7 +1213,7 @@ function convertFunction(
 			});
 			const appended = builder.block(block).instructions.at(-1);
 			if (appended === undefined) {
-				throw new Error(`Core bridge failed to append ${instruction.type}`);
+				throw new Error(`Core import failed to append ${instruction.type}`);
 			}
 			instructionIds.set(instruction, appended.id);
 			for (const [index, register] of destinations.entries()) {
@@ -1227,41 +1227,41 @@ function convertFunction(
 				requireValue(sourceValues, register, `Core edge b${segment.id} -> b${target}`),
 			),
 		});
-		const legacyTerminator = segment.terminator!;
+		const registerTerminator = segment.terminator!;
 		let terminator: CoreTerminatorInput;
-		switch (legacyTerminator.kind) {
+		switch (registerTerminator.kind) {
 			case "jump":
 				terminator = {
 					kind: "jump",
-					edge: edge(legacyTerminator.target),
-					...(legacyTerminator.sourcePosition === undefined
+					edge: edge(registerTerminator.target),
+					...(registerTerminator.sourcePosition === undefined
 						? {}
-						: { sourcePosition: legacyTerminator.sourcePosition }),
+						: { sourcePosition: registerTerminator.sourcePosition }),
 				};
 				break;
 			case "branch":
 				terminator = {
 					kind: "branch",
-					condition: requireValue(values, legacyTerminator.condition, "Core branch"),
-					consequent: edge(legacyTerminator.consequent),
-					alternate: edge(legacyTerminator.alternate),
-					...(legacyTerminator.sourcePosition === undefined
+					condition: requireValue(values, registerTerminator.condition, "Core branch"),
+					consequent: edge(registerTerminator.consequent),
+					alternate: edge(registerTerminator.alternate),
+					...(registerTerminator.sourcePosition === undefined
 						? {}
-						: { sourcePosition: legacyTerminator.sourcePosition }),
+						: { sourcePosition: registerTerminator.sourcePosition }),
 				};
 				break;
 			case "return":
 			case "throw":
 				terminator = {
-					kind: legacyTerminator.kind,
+					kind: registerTerminator.kind,
 					value: requireValue(
 						values,
-						legacyTerminator.value,
-						`Core ${legacyTerminator.kind}`,
+						registerTerminator.value,
+						`Core ${registerTerminator.kind}`,
 					),
-					...(legacyTerminator.sourcePosition === undefined
+					...(registerTerminator.sourcePosition === undefined
 						? {}
-						: { sourcePosition: legacyTerminator.sourcePosition }),
+						: { sourcePosition: registerTerminator.sourcePosition }),
 				};
 				break;
 			case "unreachable":
@@ -1270,7 +1270,7 @@ function convertFunction(
 		}
 		const terminatorId = builder.setTerminator(block, terminator);
 		for (const origin of
-			"origins" in legacyTerminator ? (legacyTerminator.origins ?? []) : []) {
+			"origins" in registerTerminator ? (registerTerminator.origins ?? []) : []) {
 			instructionIds.set(origin, terminatorId);
 		}
 		if (segment.exceptionalSuccessor !== undefined) {
@@ -1293,7 +1293,7 @@ function convertFunction(
 			: { ...finished, bodyEntry: coreBlockId(bodyEntrySegment.id) };
 	const core = {
 		...graph,
-		regions: convertRegions(fn.regions, instructionIds, coreBlocksByLegacyBlock),
+		regions: convertRegions(fn.regions, instructionIds, coreBlocksBySourceBlock),
 	};
 	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	return {
@@ -1302,9 +1302,9 @@ function convertFunction(
 }
 
 /** Convert normalized semantic-lowering output into canonical block-parameter SSA. */
-export function intermediateProgramToCore(
-	program: IntermediateProgram,
-	options: CoreProgramConstructionOptions = {},
+export function importSemanticRegisterGraph(
+	program: SemanticLoweringProgram,
+	options: CoreImportOptions = {},
 ): CoreProgram {
 	const verify = options.verify ?? true;
 	const converted = program.functions.map((fn) => convertFunction(fn, false));
@@ -1336,7 +1336,7 @@ export function intermediateProgramToCore(
 }
 
 function coreHostInstallCandidates(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 ): Array<CoreHostInstallCandidate> {
 	const candidates = new Map<
 		string,
@@ -1359,11 +1359,11 @@ function coreHostInstallCandidates(
 function parallelMoves(
 	assignments: ReadonlyArray<{ readonly destination: number; readonly source: number }>,
 	nextRegister: { value: number },
-): Array<IRInstruction> {
+): Array<RegisterInstruction> {
 	const pending = assignments
 		.filter(({ destination, source }) => destination !== source)
 		.map((assignment) => ({ ...assignment }));
-	const result: Array<IRInstruction> = [];
+	const result: Array<RegisterInstruction> = [];
 	while (pending.length > 0) {
 		const ready = pending.findIndex(
 			({ destination }) => !pending.some(({ source }) => source === destination),
@@ -1390,9 +1390,9 @@ function rebuildInstruction(
 	core: CoreFunction,
 	instruction: CoreFunction["blocks"][number]["instructions"][number],
 	registerForValue: (value: CoreValueId) => number,
-): IRInstruction {
+): RegisterInstruction {
 	const registers = [...instruction.outputs, ...instruction.inputs].map(registerForValue);
-	const immediateValues: Array<IRImmediateValue | undefined> = [];
+	const immediateValues: Array<RegisterImmediateValue | undefined> = [];
 	if (instruction.opcode === "call" || instruction.opcode === "construct") {
 		for (const [index, input] of instruction.inputs.entries()) {
 			const value = coreImmediateValue(core, input);
@@ -1409,13 +1409,13 @@ function rebuildInstruction(
 		...(["asyncStart", "generatorStart", "initGlobalVars"].includes(instruction.opcode)
 			? {}
 			: { registers }),
-	} as IRInstruction;
+	} as RegisterInstruction;
 }
 
 function coreImmediateValue(
 	core: CoreFunction,
 	value: CoreValueId,
-): IRImmediateValue | undefined {
+): RegisterImmediateValue | undefined {
 	const definition = core.values.find(({ id }) => id === value)?.definition;
 	if (definition?.kind !== "instruction") return undefined;
 	const instruction = core.blocks
@@ -1453,14 +1453,14 @@ function coreImmediateValue(
 	}
 }
 
-function sourcePositionMarker(position: number | undefined): Array<IRInstruction> {
+function sourcePositionMarker(position: number | undefined): Array<RegisterInstruction> {
 	return position === undefined ? [] : [{ type: "sourcePos", pos: position }];
 }
 
 function lowerCoreImmediate(
 	value: CoreImmediate,
 	destination: number,
-): IRInstruction {
+): RegisterInstruction {
 	switch (value.kind) {
 		case "undefined":
 			return { type: "createUndefined", registers: [destination] };
@@ -1489,7 +1489,7 @@ function lowerCoreImmediate(
 
 function lowerCoreRegionData(
 	value: unknown,
-	instructions: ReadonlyMap<CoreInstructionId, IRInstruction>,
+	instructions: ReadonlyMap<CoreInstructionId, RegisterInstruction>,
 	blocks: ReadonlyMap<CoreBlockId, number>,
 ): unknown {
 	if (value === undefined || value === null || typeof value !== "object") return value;
@@ -1522,12 +1522,12 @@ function lowerCoreRegionData(
 
 function lowerCoreRegions(
 	regions: ReadonlyArray<CoreRegion>,
-	instructions: ReadonlyMap<CoreInstructionId, IRInstruction>,
+	instructions: ReadonlyMap<CoreInstructionId, RegisterInstruction>,
 	omittedBlocks: ReadonlySet<CoreBlockId>,
 	blocks: ReadonlyMap<CoreBlockId, number>,
-): ReadonlyArray<IRRegion> | undefined {
+): ReadonlyArray<RegisterRegion> | undefined {
 	if (regions.length === 0) return undefined;
-	const requireInstruction = (id: CoreInstructionId): IRInstruction => {
+	const requireInstruction = (id: CoreInstructionId): RegisterInstruction => {
 		const instruction = instructions.get(id);
 		if (instruction === undefined) {
 			throw new Error(`Core region lowering lost instruction @${id}`);
@@ -1552,7 +1552,7 @@ function lowerCoreRegions(
 				(block) => !omittedBlocks.has(block),
 			).map(requireBlock),
 		},
-	})) as unknown as ReadonlyArray<IRRegion>;
+	})) as unknown as ReadonlyArray<RegisterRegion>;
 }
 
 export function coreRegisterClasses(
@@ -1986,18 +1986,18 @@ function coreBlockLayout(
 }
 
 interface LoweredCoreFunction {
-	readonly fn: IRFunction;
+	readonly fn: RegisterFunction;
 	readonly gcRootRegisters: ReadonlyArray<number>;
 }
 
 function lowerFunctionBridge(
 	core: CoreFunction,
-	legacy: IRFunction,
+	template: RegisterFunction,
 	instructionSites?: WeakMap<object, CompilerSiteFacts>,
 	reuseRegisters = true,
 ): LoweredCoreFunction {
 	verifyCoreFunction(core, coreOpcodeRegistry);
-	const loweredInstructions = new Map<CoreInstructionId, IRInstruction>();
+	const loweredInstructions = new Map<CoreInstructionId, RegisterInstruction>();
 	const protectedInstructions = coreRegionInstructionIds(core);
 	const omittedInstructions = immediateOnlyInstructions(core, protectedInstructions);
 	const predecessorCounts = core.blocks.map(() => 0);
@@ -2033,7 +2033,7 @@ function lowerFunctionBridge(
 	const loweredBlockForCore = new Map<CoreBlockId, number>(
 		blockOrder.map((block, index) => [block, index]),
 	);
-	const blocks: Array<IRBlock> = blockOrder.map(() => ({ instructions: [] }));
+	const blocks: Array<RegisterBlock> = blockOrder.map(() => ({ instructions: [] }));
 	const {
 		roots,
 		registers: allocatedRegisters,
@@ -2170,7 +2170,7 @@ function lowerFunctionBridge(
 					) {
 						break;
 					}
-					const lowered: IRInstruction = {
+					const lowered: RegisterInstruction = {
 						type: "jump",
 						blocks: [target],
 					};
@@ -2181,12 +2181,12 @@ function lowerFunctionBridge(
 			case "branch":
 				{
 					const absorbed = absorbAlternate(block.terminator.alternate);
-					const lowered: IRInstruction = {
+					const lowered: RegisterInstruction = {
 						type: "jumpIf",
 						registers: [registerForValue(block.terminator.condition)],
 						blocks: [edgeBlock(block.terminator.consequent)],
 					};
-					const alternate: IRInstruction = {
+					const alternate: RegisterInstruction = {
 						type: "jump",
 						blocks: [edgeBlock(absorbed?.edge ?? block.terminator.alternate)],
 					};
@@ -2203,12 +2203,12 @@ function lowerFunctionBridge(
 			case "guard":
 				{
 					const absorbed = absorbAlternate(block.terminator.fallback);
-					const lowered: IRInstruction = {
+					const lowered: RegisterInstruction = {
 						type: "jumpIf",
 						registers: [registerForValue(block.terminator.condition)],
 						blocks: [edgeBlock(block.terminator.success)],
 					};
-					const fallback: IRInstruction = {
+					const fallback: RegisterInstruction = {
 						type: "jump",
 						blocks: [edgeBlock(absorbed?.edge ?? block.terminator.fallback)],
 					};
@@ -2225,7 +2225,7 @@ function lowerFunctionBridge(
 			case "return":
 			case "throw":
 				{
-					const lowered: IRInstruction = {
+					const lowered: RegisterInstruction = {
 					type: block.terminator.kind,
 					registers: [registerForValue(block.terminator.value)],
 					};
@@ -2268,7 +2268,7 @@ function lowerFunctionBridge(
 
 	return {
 		fn: {
-			...legacy,
+			...template,
 			blocks,
 			regions: lowerCoreRegions(
 				core.regions,

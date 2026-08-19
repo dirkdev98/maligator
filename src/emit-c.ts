@@ -6,7 +6,10 @@ import {
 	emitTypeofResult,
 	emitUnaryOperator,
 } from "./emit-vm.ts";
-import { NUMERIC_HOF_INPUT_ACCUMULATOR, NUMERIC_HOF_INPUT_ELEMENT } from "./ir.ts";
+import {
+	NUMERIC_HOF_INPUT_ACCUMULATOR,
+	NUMERIC_HOF_INPUT_ELEMENT,
+} from "./semantic-lowering.ts";
 import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
@@ -728,7 +731,7 @@ export function emitCompiledFunction(
 	// spilling is needed; every exit must unlink the frame (gcUnlink).
 	//
 	// Only registers LIVE AT A SAFEPOINT need rooting (C1 liveness minimization):
-	// `gcRootRegisters` (from the liveness pass, attached in lower-vm) is the set of
+	// `gcRootRegisters` (computed on Core SSA before VM lowering) is the set of
 	// registers live at or used by a point where GC can run — every property access,
 	// binary op, iterator step, call, and back-edge, since each can re-enter JS or
 	// allocate. A boxed register absent from this set is dead at every collection
@@ -737,7 +740,7 @@ export function emitCompiledFunction(
 	// values live across it) preserves the invariant the runtime relies on: the
 	// caller keeps an in-flight call's receiver/args reachable for the callee. When
 	// the set is absent (generator/async, which this backend does not compile, or a
-	// future op the liveness pass cannot see), fall back to rooting every boxed
+	// future op without Core effect metadata), fall back to rooting every boxed
 	// register.
 	const rootRegisters =
 		fn.gcRootRegisters !== undefined ? new Set(fn.gcRootRegisters) : null;

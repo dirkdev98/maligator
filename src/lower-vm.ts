@@ -6,22 +6,22 @@ import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
-import type { CoreRegisterProgram } from "./core-ir-bridge.ts";
+import type { CoreRegisterProgram } from "./core-ir-lowering.ts";
 import type { CoreProgram } from "./core-ir.ts";
 import type {
-	IRFunction,
-	IRImmediateValue,
-	IRInstruction,
-	IRNumericHofPlanOperation,
-	IRRegion,
-} from "./ir.ts";
+	RegisterFunction,
+	RegisterImmediateValue,
+	RegisterInstruction,
+	RegisterNumericHofPlanOperation,
+	RegisterRegion,
+} from "./semantic-lowering.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 
-type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
-type IRUnaryOperator = Extract<IRInstruction, { type: "unary" }>["operator"];
-type IRIntrinsic = Extract<IRInstruction, { type: "loadIntrinsic" }>["intrinsic"];
-type IRTypeofResult = Extract<IRInstruction, { type: "typeofCompare" }>["expected"];
+type RegisterBinaryOperator = Extract<RegisterInstruction, { type: "binary" }>["operator"];
+type RegisterUnaryOperator = Extract<RegisterInstruction, { type: "unary" }>["operator"];
+type RegisterIntrinsic = Extract<RegisterInstruction, { type: "loadIntrinsic" }>["intrinsic"];
+type RegisterTypeofResult = Extract<RegisterInstruction, { type: "typeofCompare" }>["expected"];
 
 const VM_VALUE_UNDEFINED = -1;
 const VM_VALUE_NULL = -2;
@@ -43,7 +43,7 @@ export type DecodedVmValueOperand =
 
 export function encodeVmValueOperand(
 	register: number,
-	value: IRImmediateValue | undefined,
+	value: RegisterImmediateValue | undefined,
 ): number {
 	if (value === undefined) return register;
 	switch (value.kind) {
@@ -180,7 +180,7 @@ export const VM_MATH_UNARY_NUMBER_OPERATIONS = [
 
 export const VM_MATH_BINARY_NUMBER_OPERATIONS = ["Math.min", "Math.max"] as const;
 
-/** Exact builtin calls whose dynamic property/callback seam was erased in IR. */
+/** Exact builtin calls whose dynamic property/callback seam was erased in Core. */
 export const VM_DIRECT_BUILTIN_OPERATIONS = directBuiltinOperationIds;
 
 type VmMathUnaryNumberOperation = (typeof VM_MATH_UNARY_NUMBER_OPERATIONS)[number];
@@ -758,7 +758,7 @@ export type VmNumericHofRegion = VmRegionEnvelope<
 	readonly receiver: number;
 	readonly initialValue: number;
 	readonly pollPolicy: "end-only-no-preempt";
-	readonly operations: ReadonlyArray<IRNumericHofPlanOperation>;
+	readonly operations: ReadonlyArray<RegisterNumericHofPlanOperation>;
 	readonly resultOperand: number;
 };
 
@@ -1336,7 +1336,7 @@ export type VmInstruction =
 	| {
 			opcode: "LOAD_INTRINSIC";
 			dst: number;
-			intrinsic: IRIntrinsic;
+			intrinsic: RegisterIntrinsic;
 	  }
 	| {
 			opcode: "LOAD_CAPTURED";
@@ -1666,19 +1666,19 @@ export type VmInstruction =
 			dst: number;
 			left: number;
 			right: number;
-			operator: IRBinaryOperator;
+			operator: RegisterBinaryOperator;
 	  }
 	| {
 			opcode: "UNARY";
 			dst: number;
 			src: number;
-			operator: IRUnaryOperator;
+			operator: RegisterUnaryOperator;
 	  }
 	| {
 			opcode: "TYPEOF_COMPARE";
 			dst: number;
 			src: number;
-			expected: IRTypeofResult;
+			expected: RegisterTypeofResult;
 			negated: boolean;
 	  };
 
@@ -1834,7 +1834,7 @@ export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
 }
 
 /**
- * Lower optimized IR to a VM definition that can then be emitted as C.
+ * Lower the allocated Core register form to a VM definition that can be emitted as C.
  */
 export function lowerCoreProgramToVmDefinition(
 	program: CoreRegisterProgram,
@@ -1960,7 +1960,7 @@ function buildHostInstalls(
  * absolute instructions.
  */
 function lowerFunctionToVmFunction(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	instructionSites?: WeakMap<object, { id: string }>,
@@ -1987,7 +1987,7 @@ function lowerFunctionToVmFunction(
 	const instructions: Array<VmInstruction> = [];
 	const compilerSiteIds: Array<string | undefined> = [];
 	let propertyIcCount = 0;
-	const propertyIcIndexByInstruction = new Map<IRInstruction, number>();
+	const propertyIcIndexByInstruction = new Map<RegisterInstruction, number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (
@@ -2004,7 +2004,7 @@ function lowerFunctionToVmFunction(
 	const handlers: Array<VmExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
-	const instructionIndexByIrInstruction = new Map<IRInstruction, number>();
+	const instructionIndexByIrInstruction = new Map<RegisterInstruction, number>();
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -2053,10 +2053,10 @@ function lowerFunctionToVmFunction(
 	const regions: Array<VmRegion> = [];
 	const claimedRegionInstructions = new Set<number>();
 	const finiteSelectorByAccess = new Map<
-		IRInstruction,
-		Extract<IRRegion, { kind: "finite-property-selector" }>["selectors"][number]
+		RegisterInstruction,
+		Extract<RegisterRegion, { kind: "finite-property-selector" }>["selectors"][number]
 	>();
-	const finiteStringProducers = new Set<IRInstruction>();
+	const finiteStringProducers = new Set<RegisterInstruction>();
 	for (const region of fn.regions ?? []) {
 		if (region.kind === "finite-property-selector") {
 			for (const selector of region.selectors) {
@@ -2466,7 +2466,7 @@ function lowerFunctionToVmFunction(
 			const resolvedAccessIps = accessIps as Array<number>;
 			const payloadIps = [allocationIp, storeIp, ...resolvedAccessIps];
 			const numberGuards = region.anchors[0].registers.slice(1);
-			const finiteKeysMatch = (instruction: IRInstruction): boolean => {
+			const finiteKeysMatch = (instruction: RegisterInstruction): boolean => {
 				const selector = finiteSelectorByAccess.get(instruction);
 				return (
 					selector !== undefined &&
@@ -4110,7 +4110,7 @@ function lowerFunctionToVmFunction(
 }
 
 /**
- * Map the IR to the VM instruction set.
+ * Map the Core register form to the VM instruction set.
  */
 function lowerGuardPlan(plan: CompilerGuardPlan): VmGuardPlan | undefined {
 	const dependencies: Array<VmSemanticDependency> = [];
@@ -4138,7 +4138,7 @@ function lowerGuardPlan(plan: CompilerGuardPlan): VmGuardPlan | undefined {
 }
 
 function lowerGuardedBuiltinCall(
-	instruction: Extract<IRInstruction, { type: "call" }>,
+	instruction: Extract<RegisterInstruction, { type: "call" }>,
 ): VmGuardedBuiltinCall | undefined {
 	const call = instruction.knownBuiltinCall;
 	if (
@@ -4161,7 +4161,7 @@ function lowerGuardedBuiltinCall(
 
 function lowerInstructionToVmInstruction(
 	blockStartIps: Map<number, number>,
-	instruction: IRInstruction,
+	instruction: RegisterInstruction,
 ): VmInstruction {
 	switch (instruction.type) {
 		case "sourcePos":

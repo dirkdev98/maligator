@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
 import {
 	lowerCoreProgramToRegisters,
-} from "../src/core-ir-bridge.ts";
+} from "../src/core-ir-lowering.ts";
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
 import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
@@ -10,15 +10,15 @@ import { formatCoreFunction } from "../src/core-ir.ts";
 import { lowerCoreProgramToVmDefinition } from "../src/lower-vm.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
-function bridge(source: string) {
+function lower(source: string) {
 	return lowerSemanticProgramToCore(
-		analyzeSourceAndRunSemanticAnalysis(source, "core-bridge.js"),
+		analyzeSourceAndRunSemanticAnalysis(source, "core-lowering.js"),
 	);
 }
 
-describe("Core IR semantic bridge", () => {
+describe("Core IR lowering", () => {
 	it("constructs explicit SSA block parameters for mutable control flow", () => {
-		const converted = bridge(`
+		const converted = lower(`
 			function choose(flag) {
 				let value = 1;
 				if (flag) value = 2;
@@ -38,7 +38,7 @@ describe("Core IR semantic bridge", () => {
 	});
 
 	it("makes exceptional control flow explicit and round-trips to VM handlers", () => {
-		const converted = bridge(`
+		const converted = lower(`
 			function read(object) {
 				let before = 4;
 				try { return object.value + before; }
@@ -57,7 +57,7 @@ describe("Core IR semantic bridge", () => {
 	});
 
 	it("round-trips loops, calls, and multiple-result operations to VM form", () => {
-		const converted = bridge(`
+		const converted = lower(`
 			let total = 0;
 			for (const value of [1, 2, 3]) total += value;
 			console.log(total);
@@ -71,7 +71,7 @@ describe("Core IR semantic bridge", () => {
 	});
 
 	it("models captured private-name batches as result-free writes", () => {
-		const converted = bridge(`
+		const converted = lower(`
 			function make() {
 				return class { #value; read() { return this.#value; } };
 			}
@@ -123,7 +123,7 @@ describe("Core IR semantic bridge", () => {
 	});
 
 	it("lowers Core switches with strict-equality case selection", () => {
-		const converted = bridge(`
+		const converted = lower(`
 			function pick(value) {
 				if (value) return 1;
 				return 2;
@@ -178,7 +178,7 @@ describe("Core IR semantic bridge", () => {
 	});
 
 	it("lowers explicit super current-this through the VM two-address constraint", () => {
-		const converted = bridge(`
+		const converted = lower(`
 			class Parent {}
 			class Child extends Parent {
 				constructor() {

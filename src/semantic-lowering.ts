@@ -49,7 +49,7 @@ import type {
 } from "./semantic-analysis.ts";
 import { debugEnabled, log } from "./utils.ts";
 
-export interface IntermediateProgram {
+export interface SemanticLoweringProgram {
 	/**
 	 * The semantic program that we are compiling.
 	 */
@@ -58,7 +58,7 @@ export interface IntermediateProgram {
 	facts: CompilerProgramFacts;
 	/** Profile-only structured decisions recorded while transforms still see candidates. */
 	optimizationDecisions?: Array<CompilerOptimizationDecision>;
-	/** Profile-only stable pass names and selected before/after IR counters. */
+	/** Profile-only stable pass names and selected before/after compiler counters. */
 	optimizationTrace?: Array<OptimizationPassDelta>;
 
 	/**
@@ -89,7 +89,7 @@ export interface IntermediateProgram {
 	 *
 	 * The first function in this list is the initial entrypoint.
 	 */
-	functions: Array<IRFunction>;
+	functions: Array<RegisterFunction>;
 	stringConstants: Array<Array<number>>;
 	stringConstantToIndex: Map<string, number>;
 
@@ -290,7 +290,7 @@ type BindingLocation =
  * the brand marker of the *declaring* class, so access from a nested class
  * brand-checks against the right class.
  */
-interface IRPrivateName {
+interface RegisterPrivateName {
 	static: boolean;
 	brandBinding: Binding;
 	fieldBinding?: Binding;
@@ -305,13 +305,13 @@ interface IRPrivateName {
  * install as ordinary own data properties. Computed public keys are evaluated
  * once at class definition and captured.
  */
-type IRInstanceFieldKey =
+type RegisterInstanceFieldKey =
 	// Non-computed public key, the own-property name.
 	| { kind: "name"; name: string }
 	// Computed key, converted once at class definition and captured.
 	| { kind: "captured"; binding: Binding };
 
-type IRInstanceFieldPlanEntry =
+type RegisterInstanceFieldPlanEntry =
 	| {
 			private: true;
 			fieldBinding: Binding;
@@ -321,7 +321,7 @@ type IRInstanceFieldPlanEntry =
 	  }
 	| {
 			private: false;
-			key: IRInstanceFieldKey;
+			key: RegisterInstanceFieldKey;
 			valueNode: ESTree.Expression | null;
 			initializerNode: ESTree.PropertyDefinition;
 	  };
@@ -330,15 +330,15 @@ type IRInstanceFieldPlanEntry =
  * A static class element in source order, run once by the static initializer
  * with this = the constructor: a static field install or a static block body.
  */
-type IRStaticElement =
-	| { kind: "field"; entry: IRInstanceFieldPlanEntry }
+type RegisterStaticElement =
+	| { kind: "field"; entry: RegisterInstanceFieldPlanEntry }
 	| { kind: "block"; node: ESTree.StaticBlock; body: Array<ESTree.Statement> };
 
 /**
  * Class body context carried by constructor and method functions so super
  * references can reach the parent class through its captured binding.
  */
-interface IRClassContext {
+interface RegisterClassContext {
 	superBinding?: Binding;
 
 	/**
@@ -363,7 +363,7 @@ interface IRClassContext {
 	 * the per-class-evaluation symbols and brand markers are captured so any
 	 * `#x` reference resolves lexically with no dynamic lookup.
 	 */
-	privateNames?: Map<string, IRPrivateName>;
+	privateNames?: Map<string, RegisterPrivateName>;
 	instanceBrandBinding?: Binding;
 	staticBrandBinding?: Binding;
 
@@ -374,7 +374,7 @@ interface IRClassContext {
 	 */
 	isConstructor?: boolean;
 	isDerivedConstructor?: boolean;
-	instanceFieldPlan?: Array<IRInstanceFieldPlanEntry>;
+	instanceFieldPlan?: Array<RegisterInstanceFieldPlanEntry>;
 
 	/** Shared derived-constructor environment used by lexical arrows and eval. */
 	usesSharedSuperState?: boolean;
@@ -383,12 +383,12 @@ interface IRClassContext {
 	instanceInitializerBinding?: Binding;
 }
 
-export interface IRFunction {
+export interface RegisterFunction {
 	semanticFile: SemanticFile;
 	functionIndex: number;
 
 	/**
-	 * Eval-completion register (see IntermediateProgram.evalCompletion). When set,
+	 * Eval-completion register (see SemanticLoweringProgram.evalCompletion). When set,
 	 * this is the Script entry function: statement evaluation maintains its
 	 * completion value here, the function returns it, and it is initialized to
 	 * undefined at entry. Undefined on every other function.
@@ -419,14 +419,14 @@ export interface IRFunction {
 	 */
 	nameStringIndex: number;
 
-	blocks: Array<IRBlock>;
+	blocks: Array<RegisterBlock>;
 	/**
 	 * Function-level speculative-region certificates selected after the ordinary
-	 * IR has reached its optimization fixpoint. Instructions remain the complete
+	 * Core has reached its optimization fixpoint. Instructions remain the complete
 	 * semantic twin; lowering drops an entire certificate when any common anchor,
 	 * claim, scope, license, representation, or cost invariant no longer resolves.
 	 */
-	regions?: ReadonlyArray<IRRegion>;
+	regions?: ReadonlyArray<RegisterRegion>;
 	argumentsObjectRegister?: number;
 	/** Prologue snapshots for statically classified direct arguments reads. */
 	staticArgumentsRegisters?: Map<ESTree.Node, number>;
@@ -434,7 +434,7 @@ export interface IRFunction {
 	staticMappedArgumentBindings?: Map<ESTree.Node, Binding>;
 	/** Register cache for the lazily created missing-index arguments object. */
 	staticArgumentsFallbackRegister?: number;
-	classContext?: IRClassContext;
+	classContext?: RegisterClassContext;
 
 	/**
 	 * Whether this function owns a `prototype` property. Constructors (normal
@@ -524,7 +524,7 @@ export interface IRFunction {
 	 * Stack of enclosing loops, used to patch break and continue jumps once
 	 * the loop exit and continue targets exist.
 	 */
-	loops?: Array<IRLoopContext>;
+	loops?: Array<RegisterLoopContext>;
 
 	/**
 	 * Labels collected by a LabeledStatement, consumed by the immediately
@@ -542,7 +542,7 @@ export const NUMERIC_HOF_INPUT_ELEMENT = -2;
 /** One SSA node in a compiler-proven, capture-free numeric Array HOF callback.
  * Negative operands are the callback inputs (see NUMERIC_HOF_INPUT_*);
  * non-negative operands name an earlier node in the same plan. */
-export type IRNumericHofPlanOperation =
+export type RegisterNumericHofPlanOperation =
 	| { type: "constant"; value: number }
 	| {
 			type: "binary";
@@ -556,7 +556,7 @@ export type IRNumericHofPlanOperation =
 			value: number;
 	  };
 
-interface IRLoopContext {
+interface RegisterLoopContext {
 	/**
 	 * break targets the innermost breakable (loop/switch) or, when labeled, the
 	 * matching labeled scope; continue the innermost / matching loop. "label"
@@ -567,8 +567,8 @@ interface IRLoopContext {
 	 * "iterator" entries track a destructuring iterator across suspension.
 	 */
 	kind: "loop" | "switch" | "finally" | "label" | "with" | "iterator";
-	breakJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
-	continueJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
+	breakJumps: Array<Extract<RegisterInstruction, { type: "jump" }>>;
+	continueJumps: Array<Extract<RegisterInstruction, { type: "jump" }>>;
 
 	/**
 	 * Labels attached to this scope (a single statement may carry several).
@@ -602,7 +602,7 @@ interface IRLoopContext {
 	 * entry block (patched once it exists), plus the registers carrying the
 	 * pending completion kind and value across the finalizer.
 	 */
-	finallyEntryJumps?: Array<Extract<IRInstruction, { type: "jump" }>>;
+	finallyEntryJumps?: Array<Extract<RegisterInstruction, { type: "jump" }>>;
 	completionKindReg?: number;
 	completionValueReg?: number;
 
@@ -613,11 +613,11 @@ interface IRLoopContext {
 	 * carries a unique kind code and the epilogue re-dispatch for it. NORMAL
 	 * needs no arm (it falls through).
 	 */
-	finalizerArms?: Map<string, { kind: number; fill: (block: IRBlock) => void }>;
+	finalizerArms?: Map<string, { kind: number; fill: (block: RegisterBlock) => void }>;
 }
 
-export interface IRBlock {
-	instructions: Array<IRInstruction>;
+export interface RegisterBlock {
+	instructions: Array<RegisterInstruction>;
 }
 
 /**
@@ -626,18 +626,18 @@ export interface IRBlock {
  * Short-circuit expressions create blocks mid-expression and advance the
  * cursor, so instructions following a sub-expression land in the right block.
  */
-interface IRCursor {
-	block: IRBlock;
+interface RegisterCursor {
+	block: RegisterBlock;
 }
 
-export type IRImmediateValue =
+export type RegisterImmediateValue =
 	| { kind: "undefined" }
 	| { kind: "null" }
 	| { kind: "boolean"; value: boolean }
 	| { kind: "number"; value: number }
 	| { kind: "string"; index: number };
 
-export type IRTypeofResult =
+export type RegisterTypeofResult =
 	| "undefined"
 	| "object"
 	| "boolean"
@@ -647,11 +647,11 @@ export type IRTypeofResult =
 	| "bigint"
 	| "function";
 
-export interface IRRegionEnvelope<
+export interface RegisterRegionEnvelope<
 	Kind extends string,
 	Representation extends string,
 	Materialization extends "none" | "on-demand" | "whole-region",
-	Anchors extends ReadonlyArray<IRInstruction>,
+	Anchors extends ReadonlyArray<RegisterInstruction>,
 	Guard = CompilerGuardPlan,
 > {
 	readonly kind: Kind;
@@ -664,7 +664,7 @@ export interface IRRegionEnvelope<
 	/** Overlay regions may share instructions with an exclusive representation. */
 	readonly composition?: "overlay";
 	readonly anchors: Anchors;
-	readonly claimedInstructions: ReadonlyArray<IRInstruction>;
+	readonly claimedInstructions: ReadonlyArray<RegisterInstruction>;
 	readonly controlFlow: {
 		readonly ordinaryBlocks: ReadonlyArray<number>;
 		readonly exceptionalBlocks: ReadonlyArray<number>;
@@ -680,27 +680,27 @@ export interface IRRegionEnvelope<
  * call and first projected load are stable anchors; every retained property
  * twin, result-alias move, and projected load is claimed by the envelope.
  */
-export interface IRStringSplitProjectionRegion extends IRRegionEnvelope<
+export interface RegisterStringSplitProjectionRegion extends RegisterRegionEnvelope<
 	"string-split-projection",
 	"projected-elements",
 	"whole-region",
 	readonly [
-		Extract<IRInstruction, { type: "call" | "callBuiltin" }>,
-		Extract<IRInstruction, { type: "loadProperty" | "loadPropertyStatic" }>,
+		Extract<RegisterInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<RegisterInstruction, { type: "loadProperty" | "loadPropertyStatic" }>,
 	]
 > {
 	/** Ordinary property producer retained by a dynamic-call twin. */
-	readonly property?: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+	readonly property?: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
 	readonly separatorStringIndex: number;
-	readonly aliasMoves: ReadonlyArray<Extract<IRInstruction, { type: "move" }>>;
+	readonly aliasMoves: ReadonlyArray<Extract<RegisterInstruction, { type: "move" }>>;
 	readonly loads: ReadonlyArray<
 		| {
-				readonly instruction: Extract<IRInstruction, { type: "loadProperty" }>;
+				readonly instruction: Extract<RegisterInstruction, { type: "loadProperty" }>;
 				readonly kind: "element";
 				readonly index: number;
 		  }
 		| {
-				readonly instruction: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+				readonly instruction: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
 				readonly kind: "length";
 		  }
 	>;
@@ -712,81 +712,81 @@ export interface IRStringSplitProjectionRegion extends IRRegionEnvelope<
  * `lastIndex`, input coercion, null results, and every guard miss keep their
  * original JavaScript semantics.
  */
-export interface IRRegExpExecProjectionRegion extends IRRegionEnvelope<
+export interface RegisterRegExpExecProjectionRegion extends RegisterRegionEnvelope<
 	"regexp-exec-projection",
 	"regexp-capture-spans",
 	"whole-region",
 	readonly [
-		Extract<IRInstruction, { type: "call" }>,
-		Extract<IRInstruction, { type: "move" }>,
-		Extract<IRInstruction, { type: "loadProperty" }>,
+		Extract<RegisterInstruction, { type: "call" }>,
+		Extract<RegisterInstruction, { type: "move" }>,
+		Extract<RegisterInstruction, { type: "loadProperty" }>,
 	]
 > {
-	readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-	readonly aliasMoves: ReadonlyArray<Extract<IRInstruction, { type: "move" }>>;
+	readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+	readonly aliasMoves: ReadonlyArray<Extract<RegisterInstruction, { type: "move" }>>;
 	readonly nullChecks: ReadonlyArray<{
-		readonly comparison: Extract<IRInstruction, { type: "binary" }>;
-		readonly nullValue: Extract<IRInstruction, { type: "createNull" }>;
+		readonly comparison: Extract<RegisterInstruction, { type: "binary" }>;
+		readonly nullValue: Extract<RegisterInstruction, { type: "createNull" }>;
 	}>;
 	readonly lockedLiteral?: {
-		readonly constructorIntrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>;
-		readonly construct: Extract<IRInstruction, { type: "construct" }>;
+		readonly constructorIntrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
+		readonly construct: Extract<RegisterInstruction, { type: "construct" }>;
 	};
 	readonly lastIndexEffect: "retained-call-twin";
 	readonly loads: ReadonlyArray<{
-		readonly instruction: Extract<IRInstruction, { type: "loadProperty" }>;
-		readonly key: Extract<IRInstruction, { type: "createNumber" }>;
+		readonly instruction: Extract<RegisterInstruction, { type: "loadProperty" }>;
+		readonly key: Extract<RegisterInstruction, { type: "createNumber" }>;
 		readonly captureIndex: number;
 		readonly consumer?:
 			| {
 					readonly kind: "length";
-					readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+					readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
 			  }
 			| {
 					readonly kind: "charCodeAtZero";
-					readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-					readonly call: Extract<IRInstruction, { type: "call" }>;
-					readonly zero?: Extract<IRInstruction, { type: "createNumber" }>;
+					readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+					readonly call: Extract<RegisterInstruction, { type: "call" }>;
+					readonly zero?: Extract<RegisterInstruction, { type: "createNumber" }>;
 			  }
 			| {
 					readonly kind: "number";
-					readonly intrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>;
-					readonly call: Extract<IRInstruction, { type: "call" }>;
+					readonly intrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
+					readonly call: Extract<RegisterInstruction, { type: "call" }>;
 			  }
 			| {
 					readonly kind: "asciiCaseLength";
-					readonly upperProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-					readonly upperCall: Extract<IRInstruction, { type: "call" }>;
-					readonly lowerProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-					readonly lowerCall: Extract<IRInstruction, { type: "call" }>;
-					readonly resultMoves: ReadonlyArray<Extract<IRInstruction, { type: "move" }>>;
-					readonly lengthProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
+					readonly upperProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+					readonly upperCall: Extract<RegisterInstruction, { type: "call" }>;
+					readonly lowerProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+					readonly lowerCall: Extract<RegisterInstruction, { type: "call" }>;
+					readonly resultMoves: ReadonlyArray<Extract<RegisterInstruction, { type: "move" }>>;
+					readonly lengthProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
 			  };
 	}>;
 }
 
 /** Closed capture-span view of one exact RegExp String Iterator step. */
-export interface IRRegExpIteratorProjectionRegion extends IRRegionEnvelope<
+export interface RegisterRegExpIteratorProjectionRegion extends RegisterRegionEnvelope<
 	"regexp-iterator-projection",
 	"regexp-iterator-capture-spans",
 	"on-demand",
 	readonly [
-		Extract<IRInstruction, { type: "iteratorStep" }>,
-		Extract<IRInstruction, { type: "jumpIf" }>,
-		Extract<IRInstruction, { type: "loadProperty" }>,
+		Extract<RegisterInstruction, { type: "iteratorStep" }>,
+		Extract<RegisterInstruction, { type: "jumpIf" }>,
+		Extract<RegisterInstruction, { type: "loadProperty" }>,
 	]
 > {
-	readonly doneBranch: Extract<IRInstruction, { type: "jumpIf" }>;
+	readonly doneBranch: Extract<RegisterInstruction, { type: "jumpIf" }>;
 	readonly exitBlock: number;
-	readonly aliasMoves: ReadonlyArray<Extract<IRInstruction, { type: "move" }>>;
+	readonly aliasMoves: ReadonlyArray<Extract<RegisterInstruction, { type: "move" }>>;
 	readonly statefulEffect: "iterator-last-index-retained-step";
 	readonly runtimeGuard: "exact-brand-next-realm-regexp";
 	readonly loads: ReadonlyArray<{
-		readonly instruction: Extract<IRInstruction, { type: "loadProperty" }>;
-		readonly key: Extract<IRInstruction, { type: "createNumber" }>;
+		readonly instruction: Extract<RegisterInstruction, { type: "loadProperty" }>;
+		readonly key: Extract<RegisterInstruction, { type: "createNumber" }>;
 		readonly captureIndex: number;
-		readonly numberIntrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>;
-		readonly numberCall: Extract<IRInstruction, { type: "call" }>;
+		readonly numberIntrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
+		readonly numberCall: Extract<RegisterInstruction, { type: "call" }>;
 	}>;
 }
 
@@ -796,41 +796,41 @@ export interface IRRegExpIteratorProjectionRegion extends IRRegionEnvelope<
  * slice, and Number calls remain the generic twin; native emission may compute
  * the numeric result directly only while the retained license admits it.
  */
-export interface IRStringSliceNumberRegion extends IRRegionEnvelope<
+export interface RegisterStringSliceNumberRegion extends RegisterRegionEnvelope<
 	"string-slice-number",
 	"primitive-string-span-number",
 	"none",
 	readonly [
-		Extract<IRInstruction, { type: "call" }>,
-		Extract<IRInstruction, { type: "call" }>,
+		Extract<RegisterInstruction, { type: "call" }>,
+		Extract<RegisterInstruction, { type: "call" }>,
 	]
 > {
-	readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-	readonly numberIntrinsic: Extract<IRInstruction, { type: "loadIntrinsic" }>;
-	readonly numberCall: Extract<IRInstruction, { type: "call" }>;
+	readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+	readonly numberIntrinsic: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
+	readonly numberCall: Extract<RegisterInstruction, { type: "call" }>;
 	readonly sliceStart: number;
 }
 
 /** Backend-neutral contract for one closed indexed String#split consumer loop. */
-export interface IRStringSplitCursor extends IRRegionEnvelope<
+export interface RegisterStringSplitCursor extends RegisterRegionEnvelope<
 	"string-split-cursor",
 	"split-cursor-spans",
 	"on-demand",
 	readonly [
-		Extract<IRInstruction, { type: "call" | "callBuiltin" }>,
-		Extract<IRInstruction, { type: "move" }>,
-		Extract<IRInstruction, { type: "loadPropertyStatic" }>,
-		Extract<IRInstruction, { type: "jump" }>,
+		Extract<RegisterInstruction, { type: "call" | "callBuiltin" }>,
+		Extract<RegisterInstruction, { type: "move" }>,
+		Extract<RegisterInstruction, { type: "loadPropertyStatic" }>,
+		Extract<RegisterInstruction, { type: "jump" }>,
 	]
 > {
 	/** Ordinary property producer retained by a dynamic-call twin. */
-	readonly property?: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-	readonly compare: Extract<IRInstruction, { type: "binary" }>;
-	readonly element: Extract<IRInstruction, { type: "loadProperty" }>;
-	readonly trimProperty: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-	readonly trimCall: Extract<IRInstruction, { type: "call" }>;
+	readonly property?: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+	readonly compare: Extract<RegisterInstruction, { type: "binary" }>;
+	readonly element: Extract<RegisterInstruction, { type: "loadProperty" }>;
+	readonly trimProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+	readonly trimCall: Extract<RegisterInstruction, { type: "call" }>;
 	readonly primitiveStringLengths: ReadonlyArray<
-		Extract<IRInstruction, { type: "loadPropertyStatic" }>
+		Extract<RegisterInstruction, { type: "loadPropertyStatic" }>
 	>;
 	readonly exitBlock: number;
 }
@@ -841,20 +841,20 @@ export interface IRStringSplitCursor extends IRRegionEnvelope<
  * backedge, and explicit loop exit. A final canonical CFG/def-use audit refreshes
  * the envelope after the optimization fixpoint or drops the entire certificate.
  */
-export interface IRNumericHofRegion extends IRRegionEnvelope<
+export interface RegisterNumericHofRegion extends RegisterRegionEnvelope<
 	"numeric-hof",
 	"numeric-reduce-f64",
 	"none",
 	readonly [
-		Extract<IRInstruction, { type: "move" }>,
-		Extract<IRInstruction, { type: "loadProperty" }>,
-		Extract<IRInstruction, { type: "jump" }>,
-		Extract<IRInstruction, { type: "jump" }>,
+		Extract<RegisterInstruction, { type: "move" }>,
+		Extract<RegisterInstruction, { type: "loadProperty" }>,
+		Extract<RegisterInstruction, { type: "jump" }>,
+		Extract<RegisterInstruction, { type: "jump" }>,
 	]
 > {
 	readonly method: "reduce";
 	readonly callbackFunctionIndex: number;
-	readonly operations: ReadonlyArray<IRNumericHofPlanOperation>;
+	readonly operations: ReadonlyArray<RegisterNumericHofPlanOperation>;
 	readonly resultOperand: number;
 	/** Exact numeric initial accumulator proven before the loop transform. */
 	readonly initialValue: number;
@@ -862,12 +862,12 @@ export interface IRNumericHofRegion extends IRRegionEnvelope<
 	readonly dispatch:
 		| {
 				readonly kind: "guarded";
-				readonly eligibility: Extract<IRInstruction, { type: "call" }>;
-				readonly slowCall: Extract<IRInstruction, { type: "call" }>;
+				readonly eligibility: Extract<RegisterInstruction, { type: "call" }>;
+				readonly slowCall: Extract<RegisterInstruction, { type: "call" }>;
 		  }
 		| {
 				readonly kind: "closed";
-				readonly receiverAllocation: Extract<IRInstruction, { type: "createArray" }>;
+				readonly receiverAllocation: Extract<RegisterInstruction, { type: "createArray" }>;
 		  };
 }
 
@@ -877,20 +877,20 @@ export interface IRNumericHofRegion extends IRRegionEnvelope<
  * provenance are intact; lowering must resolve every instruction anchor or
  * discard the whole region.
  */
-export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
+export interface RegisterClosedRecordArrayRegion extends RegisterRegionEnvelope<
 	"closed-record-array",
 	"dense-record-elements-known-slots",
 	"none",
 	readonly [
-		Extract<IRInstruction, { type: "createArray" }>,
-		Extract<IRInstruction, { type: "createObjectShaped" }>,
+		Extract<RegisterInstruction, { type: "createArray" }>,
+		Extract<RegisterInstruction, { type: "createObjectShaped" }>,
 	]
 > {
 	readonly length: number;
-	readonly elementLoads: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
+	readonly elementLoads: ReadonlyArray<Extract<RegisterInstruction, { type: "loadProperty" }>>;
 	readonly accesses: ReadonlyArray<{
 		readonly instruction: Extract<
-			IRInstruction,
+			RegisterInstruction,
 			{ type: "loadPropertyStatic" | "storePropertyStatic" }
 		>;
 		readonly kind: "load" | "store";
@@ -904,11 +904,11 @@ export interface IRClosedRecordArrayRegion extends IRRegionEnvelope<
  * cross-function identity while this function-local region owns every dynamic
  * access that can use the synthetic value table.
  */
-export interface IRClosedGlobalTableRegion extends IRRegionEnvelope<
+export interface RegisterClosedGlobalTableRegion extends RegisterRegionEnvelope<
 	"closed-global-table",
 	"synthetic-global-value-table",
 	"on-demand",
-	readonly [Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>]
+	readonly [Extract<RegisterInstruction, { type: "loadProperty" | "storeProperty" }>]
 > {
 	readonly composition: "overlay";
 	readonly sourceGlobalIndex: number;
@@ -917,7 +917,7 @@ export interface IRClosedGlobalTableRegion extends IRRegionEnvelope<
 	readonly mask: number;
 	readonly accesses: ReadonlyArray<{
 		readonly instruction: Extract<
-			IRInstruction,
+			RegisterInstruction,
 			{ type: "loadProperty" | "storeProperty" }
 		>;
 		readonly direct: boolean;
@@ -925,18 +925,18 @@ export interface IRClosedGlobalTableRegion extends IRRegionEnvelope<
 }
 
 /** Aggregate producer-consumer graph for canonical intrinsic method calls. */
-export interface IRKnownBuiltinProducerRegion extends IRRegionEnvelope<
+export interface RegisterKnownBuiltinProducerRegion extends RegisterRegionEnvelope<
 	"known-builtin-producers",
 	"exact-intrinsic-property-call-twins",
 	"none",
-	readonly [Extract<IRInstruction, { type: "call" }>],
+	readonly [Extract<RegisterInstruction, { type: "call" }>],
 	"structural"
 > {
 	readonly composition: "overlay";
 	readonly sites: ReadonlyArray<{
-		readonly receiver: Extract<IRInstruction, { type: "loadIntrinsic" }>;
-		readonly property: Extract<IRInstruction, { type: "loadPropertyStatic" }>;
-		readonly call: Extract<IRInstruction, { type: "call" }>;
+		readonly receiver: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
+		readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
+		readonly call: Extract<RegisterInstruction, { type: "call" }>;
 	}>;
 }
 
@@ -945,14 +945,14 @@ export interface IRKnownBuiltinProducerRegion extends IRRegionEnvelope<
  * records. The ordinary Array, push, and property instructions remain the
  * semantic twin; native lowering may replace the whole region or none of it.
  */
-export interface IRCardinalityArrayRegion extends IRRegionEnvelope<
+export interface RegisterCardinalityArrayRegion extends RegisterRegionEnvelope<
 	"cardinality-array",
 	"bounded-record-history",
 	"whole-region",
 	readonly [
-		Extract<IRInstruction, { type: "createArray" }>,
-		Extract<IRInstruction, { type: "call" }>,
-		Extract<IRInstruction, { type: "createObjectShaped" }>,
+		Extract<RegisterInstruction, { type: "createArray" }>,
+		Extract<RegisterInstruction, { type: "call" }>,
+		Extract<RegisterInstruction, { type: "createObjectShaped" }>,
 	]
 > {
 	readonly maximumLength: number;
@@ -960,7 +960,7 @@ export interface IRCardinalityArrayRegion extends IRRegionEnvelope<
 	readonly itemStackObjectProof?: "closed-fixed-shape";
 	readonly accesses: ReadonlyArray<{
 		readonly instruction: Extract<
-			IRInstruction,
+			RegisterInstruction,
 			{ type: "loadProperty" | "loadPropertyStatic" }
 		>;
 		readonly role: "push" | "length" | "element" | "field";
@@ -972,21 +972,21 @@ export interface IRCardinalityArrayRegion extends IRRegionEnvelope<
  * Structural certificate for a one-use binary pair. Its runtime license is the
  * ordinary per-operand Number check, so it needs no mutable-world dependency.
  */
-export interface IRNumericFusionRegion extends IRRegionEnvelope<
+export interface RegisterNumericFusionRegion extends RegisterRegionEnvelope<
 	"numeric-fusion",
 	"binary-pairs-f64",
 	"none",
 	readonly [
-		Extract<IRInstruction, { type: "binary" }>,
-		Extract<IRInstruction, { type: "binary" }>,
+		Extract<RegisterInstruction, { type: "binary" }>,
+		Extract<RegisterInstruction, { type: "binary" }>,
 	],
 	"structural"
 > {
 	readonly composition: "overlay";
 	readonly runtimeGuard: "number-operands";
 	readonly pairs: ReadonlyArray<{
-		readonly first: Extract<IRInstruction, { type: "binary" }>;
-		readonly finish: Extract<IRInstruction, { type: "binary" }>;
+		readonly first: Extract<RegisterInstruction, { type: "binary" }>;
+		readonly finish: Extract<RegisterInstruction, { type: "binary" }>;
 		readonly firstUsePosition: 1 | 2;
 	}>;
 }
@@ -996,33 +996,33 @@ export interface IRNumericFusionRegion extends IRRegionEnvelope<
  * property consumers. The region is the sole owner of each finite string domain;
  * a producer may have no property consumers and still use its precomputed table.
  */
-export interface IRFinitePropertySelectorRegion extends IRRegionEnvelope<
+export interface RegisterFinitePropertySelectorRegion extends RegisterRegionEnvelope<
 	"finite-property-selector",
 	"finite-property-domain",
 	"none",
-	readonly [Extract<IRInstruction, { type: "binary" }>],
+	readonly [Extract<RegisterInstruction, { type: "binary" }>],
 	"structural"
 > {
 	readonly composition: "overlay";
 	readonly runtimeGuard: "integer-domain-and-shape-or-generic-access";
 	readonly selectors: ReadonlyArray<{
-		readonly source: Extract<IRInstruction, { type: "binary" }>;
+		readonly source: Extract<RegisterInstruction, { type: "binary" }>;
 		readonly minimum: number;
 		readonly stringIndices: ReadonlyArray<number>;
 		readonly accesses: ReadonlyArray<
-			Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>
+			Extract<RegisterInstruction, { type: "loadProperty" | "storeProperty" }>
 		>;
 	}>;
 }
 
 /** Structural proof for a canonical finite-key object construction loop. */
-export interface IRFiniteObjectConstructionRegion extends IRRegionEnvelope<
+export interface RegisterFiniteObjectConstructionRegion extends RegisterRegionEnvelope<
 	"finite-object-construction",
 	"finite-key-object-slots",
 	"on-demand",
 	readonly [
-		Extract<IRInstruction, { type: "createObject" }>,
-		Extract<IRInstruction, { type: "storeProperty" }>,
+		Extract<RegisterInstruction, { type: "createObject" }>,
+		Extract<RegisterInstruction, { type: "storeProperty" }>,
 	],
 	"structural"
 > {
@@ -1030,7 +1030,7 @@ export interface IRFiniteObjectConstructionRegion extends IRRegionEnvelope<
 	readonly keyStringIndices: ReadonlyArray<number>;
 	readonly numberGuardCount: number;
 	readonly virtualRecord: boolean;
-	readonly accesses: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
+	readonly accesses: ReadonlyArray<Extract<RegisterInstruction, { type: "loadProperty" }>>;
 }
 
 /**
@@ -1038,19 +1038,19 @@ export interface IRFiniteObjectConstructionRegion extends IRRegionEnvelope<
  * Array. This overlays the surrounding inlined loop (and, for numeric reduce,
  * its numeric region) because it changes only the selected load representation.
  */
-export interface IRExactFreshArrayRegion extends IRRegionEnvelope<
+export interface RegisterExactFreshArrayRegion extends RegisterRegionEnvelope<
 	"exact-fresh-array",
 	"exact-fresh-dense-elements",
 	"none",
 	readonly [
-		Extract<IRInstruction, { type: "createArray" }>,
-		Extract<IRInstruction, { type: "loadProperty" }>,
+		Extract<RegisterInstruction, { type: "createArray" }>,
+		Extract<RegisterInstruction, { type: "loadProperty" }>,
 	],
 	"structural"
 > {
 	readonly composition: "overlay";
 	readonly runtimeGuard: "dense-storage-or-generic-load";
-	readonly accesses: ReadonlyArray<Extract<IRInstruction, { type: "loadProperty" }>>;
+	readonly accesses: ReadonlyArray<Extract<RegisterInstruction, { type: "loadProperty" }>>;
 }
 
 /**
@@ -1059,21 +1059,21 @@ export interface IRExactFreshArrayRegion extends IRRegionEnvelope<
  * twin; lowering may shard the table into bounded VM regions without recovering
  * producer/consumer relationships from instruction-local annotations.
  */
-export interface IRStackObjectPlanRegion extends IRRegionEnvelope<
+export interface RegisterStackObjectPlanRegion extends RegisterRegionEnvelope<
 	"stack-object-plan",
 	"activation-local-fixed-shape-objects",
 	"on-demand",
-	readonly [Extract<IRInstruction, { type: "createObject" | "createObjectShaped" }>]
+	readonly [Extract<RegisterInstruction, { type: "createObject" | "createObjectShaped" }>]
 > {
 	readonly sites: ReadonlyArray<{
 		readonly allocation: Extract<
-			IRInstruction,
+			RegisterInstruction,
 			{ type: "createObject" | "createObjectShaped" }
 		>;
 		readonly slotCount: number;
 		readonly accesses: ReadonlyArray<{
 			readonly instruction: Extract<
-				IRInstruction,
+				RegisterInstruction,
 				{
 					type:
 						| "loadProperty"
@@ -1085,35 +1085,35 @@ export interface IRStackObjectPlanRegion extends IRRegionEnvelope<
 			readonly slot: number;
 		}>;
 		readonly inheritedAccess?: Extract<
-			IRInstruction,
+			RegisterInstruction,
 			{ type: "loadProperty" | "loadPropertyStatic" }
 		>;
 		readonly materializations: ReadonlyArray<{
-			readonly instruction: Extract<IRInstruction, { type: "return" }>;
+			readonly instruction: Extract<RegisterInstruction, { type: "return" }>;
 			readonly kind: "return";
 		}>;
 	}>;
 }
 
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
-export type IRRegion =
-	| IRCardinalityArrayRegion
-	| IRClosedGlobalTableRegion
-	| IRClosedRecordArrayRegion
-	| IRExactFreshArrayRegion
-	| IRFiniteObjectConstructionRegion
-	| IRFinitePropertySelectorRegion
-	| IRKnownBuiltinProducerRegion
-	| IRNumericFusionRegion
-	| IRRegExpExecProjectionRegion
-	| IRRegExpIteratorProjectionRegion
-	| IRStackObjectPlanRegion
-	| IRStringSliceNumberRegion
-	| IRStringSplitProjectionRegion
-	| IRStringSplitCursor
-	| IRNumericHofRegion;
+export type RegisterRegion =
+	| RegisterCardinalityArrayRegion
+	| RegisterClosedGlobalTableRegion
+	| RegisterClosedRecordArrayRegion
+	| RegisterExactFreshArrayRegion
+	| RegisterFiniteObjectConstructionRegion
+	| RegisterFinitePropertySelectorRegion
+	| RegisterKnownBuiltinProducerRegion
+	| RegisterNumericFusionRegion
+	| RegisterRegExpExecProjectionRegion
+	| RegisterRegExpIteratorProjectionRegion
+	| RegisterStackObjectPlanRegion
+	| RegisterStringSliceNumberRegion
+	| RegisterStringSplitProjectionRegion
+	| RegisterStringSplitCursor
+	| RegisterNumericHofRegion;
 
-export type IRInstruction =
+export type RegisterInstruction =
 	| {
 			/**
 			 * Source-position marker — carries no runtime opcode. Records the
@@ -1121,9 +1121,8 @@ export type IRInstruction =
 			 * the statement that follows. lowerFunctionToVmFunction consumes these
 			 * into the per-function position table (which drives VM stack traces and
 			 * the native backend's `pos` writes) and strips them from the bytecode,
-			 * so the VM never dispatches one. Modeled on the tryBegin/tryEnd markers;
-			 * register-allocation and the optimizer skip it since it has no
-			 * `registers` and is not a jump/return type.
+			 * so the VM never dispatches one. Core import strips it into source
+			 * metadata before optimization and allocation.
 			 */
 			type: "sourcePos";
 			pos: number;
@@ -1231,7 +1230,7 @@ export type IRInstruction =
 			// [destination]
 			registers: [number];
 
-			// Offset into IntermediateProgram.literalTemplateData.
+			// Offset into SemanticLoweringProgram.literalTemplateData.
 			templateOffset: number;
 	  }
 	| {
@@ -1312,7 +1311,7 @@ export type IRInstruction =
 			type: "loadStaticArgument";
 			// [destination, updated fallback cache, mapped value or -1,
 			// previous fallback cache]. The duplicated cache operand makes its
-			// read/write contract explicit to liveness and register allocation.
+			// read/write contract explicit to Core dataflow and allocation.
 			registers: [number, number, number, number];
 			index: number;
 	  }
@@ -1375,7 +1374,7 @@ export type IRInstruction =
 			 */
 			directStringCharCodeAtPosition?: "inBounds";
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
-			immediateValues?: Array<IRImmediateValue | undefined>;
+			immediateValues?: Array<RegisterImmediateValue | undefined>;
 	  }
 	| {
 			/**
@@ -1399,7 +1398,7 @@ export type IRInstruction =
 	| {
 			/**
 			 * Exact locked builtin invocation after property resolution and callback
-			 * identity have both been proved. Argument evaluation remains in ordinary IR;
+			 * identity have both been proved. Argument evaluation remains explicit;
 			 * this operation may still allocate, call user code, or throw according to its
 			 * registry effects, but it has no dynamic property/call fallback edge.
 			 */
@@ -1422,7 +1421,7 @@ export type IRInstruction =
 			 */
 			directFunctionIndex?: number;
 			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
-			immediateValues?: Array<IRImmediateValue | undefined>;
+			immediateValues?: Array<RegisterImmediateValue | undefined>;
 	  }
 	| {
 			type: "throw";
@@ -1456,7 +1455,7 @@ export type IRInstruction =
 			// [destination]
 			registers: [number];
 
-			intrinsic: IRIntrinsic;
+			intrinsic: RegisterIntrinsic;
 	  }
 	| {
 			type: `load${"Local" | "Captured" | "Global"}`;
@@ -1658,7 +1657,7 @@ export type IRInstruction =
 
 			// [destination, parent, arguments_array, new_target, current_this]. The
 			// final operand aliases destination: the packed VM op is two-address, while
-			// the duplicate keeps its read-before-write dependency explicit in IR.
+			// the duplicate keeps its read-before-write dependency explicit.
 			registers: [number, number, number, number, number];
 	  }
 	| {
@@ -1985,12 +1984,12 @@ export type IRInstruction =
 			// [destination, operand]
 			registers: [number, number];
 
-			expected: IRTypeofResult;
+			expected: RegisterTypeofResult;
 			negated: boolean;
 	  };
 
-type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
-type IRIntrinsic =
+type RegisterBinaryOperator = Extract<RegisterInstruction, { type: "binary" }>["operator"];
+type RegisterIntrinsic =
 	| "Object"
 	| "Array"
 	| "Function"
@@ -2135,7 +2134,7 @@ const irIntrinsics = new Set<string>([
 	"__dynamicImport",
 ]);
 
-function isIRIntrinsic(name: string): name is IRIntrinsic {
+function isIRIntrinsic(name: string): name is RegisterIntrinsic {
 	return irIntrinsics.has(name);
 }
 
@@ -2164,11 +2163,11 @@ const irBinaryOperators = new Set<string>([
 	"instanceof",
 ]);
 
-function isIRBinaryOperator(operator: string): operator is IRBinaryOperator {
+function isRegisterBinaryOperator(operator: string): operator is RegisterBinaryOperator {
 	return irBinaryOperators.has(operator);
 }
 
-export function debugIntermediateProgram(program: IntermediateProgram) {
+export function debugSemanticLoweringProgram(program: SemanticLoweringProgram) {
 	let output = "";
 	const indent = "  ";
 
@@ -2187,7 +2186,7 @@ export function debugIntermediateProgram(program: IntermediateProgram) {
 }
 
 /**
- * Tracing compiler from a SemanticProgram to our intermediate representation (IR).
+ * Frontend lowering from a SemanticProgram to an ephemeral register graph.
  *
  * Choosing a tracing compiler might bite us in the back later, as we might drop things like
  * functions that are used in dynamic `eval`. But for now it has some advantages:
@@ -2197,7 +2196,7 @@ export function debugIntermediateProgram(program: IntermediateProgram) {
  *
  * We might never support dynamic eval tho, so in that case we are all setup ;)
  */
-export function compileSemanticProgramToIr(
+export function lowerSemanticProgramToRegisterGraph(
 	semantic: SemanticProgram,
 	options: {
 		evalCompletion?: boolean;
@@ -2207,7 +2206,7 @@ export function compileSemanticProgramToIr(
 		collectOptimizationDiagnostics?: boolean;
 	} = {},
 ) {
-	const program: IntermediateProgram = {
+	const program: SemanticLoweringProgram = {
 		semantic,
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
 		optimizationDecisions:
@@ -2265,7 +2264,7 @@ export function compileSemanticProgramToIr(
 	};
 
 	// Cross-module linking: aliases imported names to their exporter bindings (a
-	// no-op for a single-module program). Must run before any IR compilation so
+	// no-op for a single-module program). Must run before frontend lowering so
 	// identifier resolution sees the aliased bindings.
 	const linkage = linkModules(semantic);
 	for (const [path, binding] of linkage.moduleDefaultBinding) {
@@ -2318,7 +2317,7 @@ export function compileSemanticProgramToIr(
 		compileCjsWrappers(program);
 	}
 
-	if (debugEnabled) debugIntermediateProgram(program);
+	if (debugEnabled) debugSemanticLoweringProgram(program);
 
 	return program;
 }
@@ -2332,7 +2331,7 @@ export function compileSemanticProgramToIr(
  * with live bindings, and there is no per-module init function or orchestrator.
  */
 function compileMergedModuleInit(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 	evaluationOrder: Array<string>,
 	cjsEntryId?: number,
 ) {
@@ -2345,7 +2344,7 @@ function compileMergedModuleInit(
 		program.compiledModuleInitForPaths.set(modulePath, null);
 	}
 
-	const fn: IRFunction = {
+	const fn: RegisterFunction = {
 		// Switched to each module in turn so identifier resolution uses the right
 		// file's bindings while compiling that module's segment.
 		semanticFile: program.semantic.files[0]!,
@@ -2361,17 +2360,17 @@ function compileMergedModuleInit(
 	};
 	program.functions.push(fn);
 
-	let tail: IRBlock | null = null;
+	let tail: RegisterBlock | null = null;
 
 	// Pure-data CommonJS modules are built once up front, before any module body.
 	if (program.cjsEagerSlot.size > 0) {
-		const eagerBlock: IRBlock = { instructions: [] };
+		const eagerBlock: RegisterBlock = { instructions: [] };
 		fn.blocks.push(eagerBlock);
 		emitCjsEagerInits(program, fn, { block: eagerBlock });
 		tail = eagerBlock;
 	}
 	if (program.cjsHostSlot.size > 0) {
-		const hostBlock: IRBlock = { instructions: [] };
+		const hostBlock: RegisterBlock = { instructions: [] };
 		fn.blocks.push(hostBlock);
 		if (tail) {
 			tail.instructions.push({ type: "jump", blocks: [fn.blocks.length - 1] });
@@ -2392,7 +2391,7 @@ function compileMergedModuleInit(
 		}
 		fn.semanticFile = file;
 
-		const prologue: IRBlock = { instructions: [] };
+		const prologue: RegisterBlock = { instructions: [] };
 		const prologueIndex = fn.blocks.push(prologue) - 1;
 		// Chain the previous module's tail into this module's segment.
 		if (tail) {
@@ -2409,12 +2408,12 @@ function compileMergedModuleInit(
 	}
 
 	if (cjsEntryId !== undefined) {
-		const entryBlock: IRBlock = { instructions: [] };
+		const entryBlock: RegisterBlock = { instructions: [] };
 		const entryBlockIndex = fn.blocks.push(entryBlock) - 1;
 		if (tail) {
 			tail.instructions.push({ type: "jump", blocks: [entryBlockIndex] });
 		}
-		const cursor: IRCursor = { block: entryBlock };
+		const cursor: RegisterCursor = { block: entryBlock };
 		emitRequiredEsmNamespaceInits(program, fn, entryBlock);
 		emitCjsRequire(program, fn, cursor, cjsEntryId);
 	}
@@ -2429,9 +2428,9 @@ function compileMergedModuleInit(
 
 /** Materialize each synchronously-required ESM namespace after ESM evaluation. */
 function emitRequiredEsmNamespaceInits(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 ) {
 	for (const [modulePath, slot] of program.cjsEsmNamespaceSlot) {
 		const namespace = emitNamespaceObjectRegister(
@@ -2448,12 +2447,12 @@ function emitRequiredEsmNamespaceInits(
  * Compile the top-level statements of a single-module program (or the
  * entrypoint when there is only one module) into its own init function.
  */
-function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
+function compileFileInit(program: SemanticLoweringProgram, initFile: SemanticFile) {
 	if (program.compiledModuleInitForPaths.has(initFile.path)) {
 		return program.compiledModuleInitForPaths.get(initFile.path) ?? -1;
 	}
 
-	const fn: IRFunction = {
+	const fn: RegisterFunction = {
 		semanticFile: initFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -2481,7 +2480,7 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	// A prologue block (TDZ inits + namespace objects) only when needed, so a
 	// module with only var/function top-levels compiles exactly as before.
 	if (moduleNeedsPrologue(program, initFile) || program.evalDirect) {
-		const prologue: IRBlock = { instructions: [] };
+		const prologue: RegisterBlock = { instructions: [] };
 		fn.blocks.push(prologue);
 		if (moduleNeedsPrologue(program, initFile)) {
 			emitModulePrologue(program, fn, prologue, initFile);
@@ -2524,9 +2523,9 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 
 /** EvalDeclarationInstantiation for sloppy direct-eval vars not already present. */
 function emitDirectEvalVarDeclarations(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	file: SemanticFile,
 ): void {
 	if (
@@ -2570,12 +2569,12 @@ function emitDirectEvalVarDeclarations(
 			registers: [alreadyPersistent, base, persistent],
 			operator: "===",
 		});
-		const skip: Extract<IRInstruction, { type: "jumpIf" }> = {
+		const skip: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 			type: "jumpIf",
 			registers: [alreadyPersistent],
 			blocks: [-1],
 		};
-		const createJump: Extract<IRInstruction, { type: "jump" }> = {
+		const createJump: Extract<RegisterInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -2596,7 +2595,7 @@ function emitDirectEvalVarDeclarations(
 			name,
 			undefinedValue,
 		);
-		const createJoin: Extract<IRInstruction, { type: "jump" }> = {
+		const createJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -2616,8 +2615,8 @@ interface DirectEvalContextBinding {
 }
 
 function prepareDirectEvalClassContext(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 ): Array<DirectEvalContextBinding> {
 	const inherited = program.directEvalContext;
 	const bindings: Array<DirectEvalContextBinding> = [];
@@ -2675,7 +2674,7 @@ function prepareDirectEvalClassContext(
 		}
 	}
 
-	const privateNames = new Map<string, IRPrivateName>();
+	const privateNames = new Map<string, RegisterPrivateName>();
 	for (let index = 0; index < inherited.privateNames.length; index++) {
 		const inheritedName = inherited.privateNames[index]!;
 		const makeBinding = (slot: DirectEvalPrivateSlot): Binding => {
@@ -2687,7 +2686,7 @@ function prepareDirectEvalClassContext(
 			bindings.push({ key: directEvalPrivateScopeKey(index, slot), binding });
 			return binding;
 		};
-		const entry: IRPrivateName = {
+		const entry: RegisterPrivateName = {
 			static: (inheritedName.flags & DIRECT_EVAL_PRIVATE_STATIC) !== 0,
 			brandBinding: makeBinding("brand"),
 		};
@@ -2719,9 +2718,9 @@ function prepareDirectEvalClassContext(
 }
 
 function emitDirectEvalContextBindings(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	bindings: Array<DirectEvalContextBinding>,
 ): void {
 	for (const { key, binding } of bindings) {
@@ -2745,7 +2744,7 @@ function emitDirectEvalContextBindings(
  * graph off by requiring the entrypoint. Eligible ESM dependencies are
  * evaluated first and exposed to require as stable namespace objects.
  */
-function compileCjsProgram(program: IntermediateProgram, initFile: SemanticFile) {
+function compileCjsProgram(program: SemanticLoweringProgram, initFile: SemanticFile) {
 	assignCjsModuleIds(program);
 	classifyPureDataCjsModules(program);
 	classifyCommonJsHostModules(program);
@@ -2764,7 +2763,7 @@ function compileCjsProgram(program: IntermediateProgram, initFile: SemanticFile)
 }
 
 /** Allocate one stable namespace slot for every ESM target of CommonJS require. */
-function classifyCommonJsEsmModules(program: IntermediateProgram) {
+function classifyCommonJsEsmModules(program: SemanticLoweringProgram) {
 	const graph = program.semantic.graph;
 	if (!graph) {
 		return;
@@ -2790,7 +2789,7 @@ function classifyCommonJsEsmModules(program: IntermediateProgram) {
 }
 
 /** Reject mixed graphs that cannot be evaluated synchronously by scope hoisting. */
-function validateSynchronousCommonJsEsm(program: IntermediateProgram) {
+function validateSynchronousCommonJsEsm(program: SemanticLoweringProgram) {
 	if (program.cjsEsmNamespaceSlot.size === 0) {
 		return;
 	}
@@ -2834,7 +2833,7 @@ function validateSynchronousCommonJsEsm(program: IntermediateProgram) {
 }
 
 /** Assign a registry id to every CommonJS module in the graph. */
-function assignCjsModuleIds(program: IntermediateProgram) {
+function assignCjsModuleIds(program: SemanticLoweringProgram) {
 	for (const file of program.semantic.files) {
 		if (file.commonjs && !program.cjsModuleId.has(file.path)) {
 			program.cjsModuleId.set(file.path, program.cjsModuleId.size);
@@ -2843,7 +2842,7 @@ function assignCjsModuleIds(program: IntermediateProgram) {
 }
 
 /** Give each side-effect-free pure-data CommonJS module an eager exports slot. */
-function classifyPureDataCjsModules(program: IntermediateProgram) {
+function classifyPureDataCjsModules(program: SemanticLoweringProgram) {
 	for (const file of program.semantic.files) {
 		if (
 			file.commonjs &&
@@ -2856,7 +2855,7 @@ function classifyPureDataCjsModules(program: IntermediateProgram) {
 }
 
 /** Allocate one stable exports slot for each host built-in reached by require. */
-function classifyCommonJsHostModules(program: IntermediateProgram) {
+function classifyCommonJsHostModules(program: SemanticLoweringProgram) {
 	const graph = program.semantic.graph;
 	if (!graph) {
 		return;
@@ -2881,9 +2880,9 @@ function classifyCommonJsHostModules(program: IntermediateProgram) {
  * a pure-data module (built once at init), else a lazy `require()` call.
  */
 function emitCjsModuleExports(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	cjsPath: string,
 ): number {
 	const esmNamespaceSlot = program.cjsEsmNamespaceSlot.get(cjsPath);
@@ -2921,9 +2920,9 @@ function emitCjsModuleExports(
 
 /** Build host CommonJS exports once, preserving the ESM default object's identity. */
 function emitCommonJsHostInits(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 ) {
 	for (const [specifier, slot] of program.cjsHostSlot) {
 		const hostModule = program.hostModules.find(
@@ -2971,9 +2970,9 @@ function emitCommonJsHostInits(
  * effects.
  */
 function emitCjsEagerInits(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 ) {
 	for (const [cjsPath, slot] of program.cjsEagerSlot) {
 		const value = emitCjsRequire(program, fn, cursor, program.cjsModuleId.get(cjsPath)!);
@@ -2986,7 +2985,7 @@ function emitCjsEagerInits(
 }
 
 /** Compile every CommonJS module's wrapper, recording its index by id. */
-function compileCjsWrappers(program: IntermediateProgram) {
+function compileCjsWrappers(program: SemanticLoweringProgram) {
 	for (const file of program.semantic.files) {
 		if (file.commonjs) {
 			const id = program.cjsModuleId.get(file.path)!;
@@ -3001,9 +3000,9 @@ function compileCjsWrappers(program: IntermediateProgram) {
  * it. Emitted into the module's init prologue, before its body runs.
  */
 function emitCjsImportInits(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	file: SemanticFile,
 ) {
 	for (const cjsImport of program.cjsImports.get(file.path) ?? []) {
@@ -3041,9 +3040,9 @@ function emitCjsImportInits(
 
 /** `object.name` → a fresh register holding the loaded value. */
 function emitLoadProperty(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	objectRegister: number,
 	name: string,
 ): number {
@@ -3058,9 +3057,9 @@ function emitLoadProperty(
 
 /** `object.name = value` (data store). */
 function emitStoreProperty(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	objectRegister: number,
 	name: string,
 	valueRegister: number,
@@ -3073,8 +3072,8 @@ function emitStoreProperty(
 }
 
 /** The synthetic CJS program entry (function 0): `require(entryId)`. */
-function compileCjsEntryDriver(program: IntermediateProgram, entryId: number) {
-	const fn: IRFunction = {
+function compileCjsEntryDriver(program: SemanticLoweringProgram, entryId: number) {
+	const fn: RegisterFunction = {
 		semanticFile: program.semantic.files[0]!,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -3088,9 +3087,9 @@ function compileCjsEntryDriver(program: IntermediateProgram, entryId: number) {
 	};
 	program.functions.push(fn);
 
-	const block: IRBlock = { instructions: [] };
+	const block: RegisterBlock = { instructions: [] };
 	fn.blocks.push(block);
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	emitCommonJsHostInits(program, fn, cursor);
 	emitCjsEagerInits(program, fn, cursor);
 	emitCjsRequire(program, fn, cursor, entryId);
@@ -3105,12 +3104,12 @@ function compileCjsEntryDriver(program: IntermediateProgram, entryId: number) {
  * `this` resolves correctly with no special handling.
  */
 function compileCjsModuleWrapper(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 	file: SemanticFile,
 ): number {
 	program.compiledModuleInitForPaths.set(file.path, null);
 
-	const fn: IRFunction = {
+	const fn: RegisterFunction = {
 		semanticFile: file,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -3124,7 +3123,7 @@ function compileCjsModuleWrapper(
 	};
 	program.functions.push(fn);
 
-	const paramsBlock: IRBlock = { instructions: [] };
+	const paramsBlock: RegisterBlock = { instructions: [] };
 	fn.blocks.push(paramsBlock);
 
 	// Bind the wrapper parameters to the incoming argument registers [0..5), in
@@ -3185,9 +3184,9 @@ function commonJsDirname(filePath: string): string {
 
 /** Emit a call to the CJS `require` intrinsic with a numeric module id. */
 function emitCjsRequire(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	moduleId: number,
 ): number {
 	const callee = nextRegisterDestination(fn);
@@ -3218,9 +3217,9 @@ function emitCjsRequire(
  * shadowed require, which throws at runtime).
  */
 function tryCompileCjsRequireCall(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	callExpression: ESTree.CallExpression,
 ): number | undefined {
 	const callee = callExpression.callee as unknown as ESTree.Node;
@@ -3265,9 +3264,9 @@ function tryCompileCjsRequireCall(
 }
 
 function emitMissingCjsModuleThrow(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	specifier: string,
 	requesterPath: string,
 ): number {
@@ -3299,7 +3298,7 @@ function emitMissingCjsModuleThrow(
  * module was retained specifically so its Node-shaped error can be caught.
  */
 function resolveCjsModulePath(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 	file: SemanticFile,
 	specifier: string,
 ): string | null | undefined {
@@ -3320,9 +3319,9 @@ function resolveCjsModulePath(
  * runs throws ReferenceError. Skips functions (hoisted) and imports (aliased).
  */
 function emitTdzHoleInits(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	bindings: Array<Binding>,
 ) {
 	for (const binding of bindings) {
@@ -3342,9 +3341,9 @@ function emitTdzHoleInits(
  * parameters already have their entry value and must not be reset.
  */
 function emitVarDeclarationInits(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	scope: Scope,
 	functionNames: ReadonlySet<string>,
 ) {
@@ -3439,9 +3438,9 @@ function emitVarDeclarationInits(
 }
 
 function emitGlobalDeclarationChecks(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	scope: Scope,
 	functionDeclarations: ReadonlyArray<ESTree.FunctionDeclaration>,
 	functionNames: ReadonlySet<string>,
@@ -3503,9 +3502,9 @@ function emitGlobalDeclarationChecks(
  * all function kinds.
  */
 function emitFunctionBodyTdz(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	functionNode:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -3524,7 +3523,7 @@ function emitFunctionBodyTdz(
  * Whether a module needs an init prologue: it has top-level TDZ bindings
  * (let/const/class) or `import * as ns` namespace objects to build.
  */
-function moduleNeedsPrologue(program: IntermediateProgram, file: SemanticFile): boolean {
+function moduleNeedsPrologue(program: SemanticLoweringProgram, file: SemanticFile): boolean {
 	return (
 		(file.scopes[0]?.bindings ?? []).some(isTdzBinding) ||
 		(program.namespaceImports.get(file.path)?.length ?? 0) > 0 ||
@@ -3548,7 +3547,7 @@ function fileUsesImportMeta(file: SemanticFile): boolean {
 	);
 }
 
-function importMetaSlot(program: IntermediateProgram, file: SemanticFile): number {
+function importMetaSlot(program: SemanticLoweringProgram, file: SemanticFile): number {
 	const key = `\0import-meta:${file.path}`;
 	let slot = program.dynamicModuleStatusSlot.get(key);
 	if (slot === undefined) {
@@ -3568,9 +3567,9 @@ function importMetaUrl(filePath: string): string {
 }
 
 function emitImportMetaInit(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	file: SemanticFile,
 ): void {
 	if (!fileUsesImportMeta(file)) return;
@@ -3623,9 +3622,9 @@ function emitImportMetaInit(
  * any `import * as ns` namespace objects.
  */
 function emitModulePrologue(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	file: SemanticFile,
 ) {
 	emitTdzHoleInits(program, fn, block, file.scopes[0]?.bindings ?? []);
@@ -3648,7 +3647,7 @@ function emitModulePrologue(
  * top-levels sequentially in evaluation order, a suspended await holds up the
  * dependents that follow it — the spec ordering falls out for free.
  */
-function makeInitAsyncIfTopLevelAwait(fn: IRFunction, modules: Array<SemanticFile>) {
+function makeInitAsyncIfTopLevelAwait(fn: RegisterFunction, modules: Array<SemanticFile>) {
 	if (modules.some((file) => hasTopLevelAwait(file.ast))) {
 		fn.isAsync = true;
 		fn.blocks[0]!.instructions.unshift({ type: "asyncStart" });
@@ -3742,9 +3741,9 @@ function referencesSuper(node: unknown): boolean {
  * and, unless an arrow, has its own this/super).
  */
 function inheritedPrivateEnvironment(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	isArrow: boolean,
-): IRClassContext | undefined {
+): RegisterClassContext | undefined {
 	const context = fn.classContext;
 	if (!context) {
 		return undefined;
@@ -3782,10 +3781,10 @@ function inheritedPrivateEnvironment(
 }
 
 function compileNewFunction(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 	binding: Binding,
 	functionNode: ESTree.Node,
-	classContext?: IRClassContext,
+	classContext?: RegisterClassContext,
 ) {
 	if (
 		functionNode.type !== "FunctionDeclaration" &&
@@ -3812,7 +3811,7 @@ function compileNewFunction(
 	}
 
 	const fnFile = foundFile ?? program.semantic.files[0]!;
-	const fn: IRFunction = {
+	const fn: RegisterFunction = {
 		semanticFile: fnFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(
@@ -3875,10 +3874,10 @@ function compileNewFunction(
 }
 
 function compileNewFunctionExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	functionNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
-	classContext?: IRClassContext,
+	classContext?: RegisterClassContext,
 	nameOverride?: string,
 	isMethod?: boolean,
 ) {
@@ -3894,7 +3893,7 @@ function compileNewFunctionExpression(
 	// and class constructors keep it (default true); async is excluded at runtime.
 	const hasPrototype = isGenerator ? true : !(isArrow || isMethod);
 
-	const compiledFn: IRFunction = {
+	const compiledFn: RegisterFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(
@@ -3987,8 +3986,8 @@ function compileNewFunctionExpression(
  * resolve the slot through the enclosing frame's environment.
  */
 function createCapturedBinding(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	name: string,
 ): Binding {
 	const binding: Binding = { kind: "const", name, usageNodes: [], scopedTo: "captured" };
@@ -4017,9 +4016,9 @@ function classFieldKeyName(key: ESTree.Expression | ESTree.PrivateIdentifier): s
  * two evaluations of the same class source are not brand compatible.
  */
 function mintPrivateNames(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	bindings: Array<Binding | undefined>,
 ) {
 	const capturedIndices: Array<number> = [];
@@ -4047,10 +4046,10 @@ function mintPrivateNames(
  * (CreateDataProperty). `this` is the receiver being initialized.
  */
 function emitFieldInstall(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
-	entry: IRInstanceFieldPlanEntry,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
+	entry: RegisterInstanceFieldPlanEntry,
 ) {
 	emitLexicalProviderCaptures(program, fn, cursor, entry.initializerNode, true);
 	const nameHint = entry.private
@@ -4109,9 +4108,9 @@ function emitFieldInstall(
 
 /** Snapshot a field/static-block provider for arrows that capture its context. */
 function emitLexicalProviderCaptures(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	node: ESTree.PropertyDefinition | ESTree.StaticBlock | ESTree.Program,
 	newTargetIsUndefined: boolean,
 ): void {
@@ -4154,10 +4153,10 @@ function emitLexicalProviderCaptures(
  * field initializers in source order. No-op when the class has none.
  */
 function emitInstanceElementInit(
-	program: IntermediateProgram,
-	ctorFn: IRFunction,
-	cursor: IRCursor,
-	classContext: IRClassContext,
+	program: SemanticLoweringProgram,
+	ctorFn: RegisterFunction,
+	cursor: RegisterCursor,
+	classContext: RegisterClassContext,
 ) {
 	const brand = classContext.instanceBrandBinding;
 	const plan = classContext.instanceFieldPlan ?? [];
@@ -4223,13 +4222,13 @@ function emitInstanceElementInit(
  * initializers in source order.
  */
 function buildStaticInitializer(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	staticContext: IRClassContext,
-	staticElements: Array<IRStaticElement>,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	staticContext: RegisterClassContext,
+	staticElements: Array<RegisterStaticElement>,
 	staticBrandBinding: Binding | undefined,
 ): number {
-	const initFn: IRFunction = {
+	const initFn: RegisterFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -4245,9 +4244,9 @@ function buildStaticInitializer(
 	};
 	program.functions.push(initFn);
 
-	const block: IRBlock = { instructions: [] };
+	const block: RegisterBlock = { instructions: [] };
 	initFn.blocks.push(block);
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 
 	if (staticBrandBinding) {
 		const thisRegister = nextRegisterDestination(initFn);
@@ -4289,11 +4288,11 @@ function buildStaticInitializer(
 
 /** Build the caller-owned InitializeInstanceElements closure used by eval/arrow super(). */
 function buildInstanceInitializer(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	constructorContext: IRClassContext,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	constructorContext: RegisterClassContext,
 ): number {
-	const initFn: IRFunction = {
+	const initFn: RegisterFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, ""),
@@ -4317,7 +4316,7 @@ function buildInstanceInitializer(
 	};
 	program.functions.push(initFn);
 
-	const block: IRBlock = { instructions: [] };
+	const block: RegisterBlock = { instructions: [] };
 	initFn.blocks.push(block);
 	emitInstanceElementInit(program, initFn, { block }, constructorContext);
 	endFunction(initFn);
@@ -4335,9 +4334,9 @@ function buildInstanceInitializer(
  * install through the constructor's InitializeInstanceElements sequence.
  */
 function compileClass(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
 	nameHint?: string,
 ): number {
@@ -4388,14 +4387,14 @@ function compileClass(
 	// captured bindings that will hold them. ownNames holds this class's own
 	// declarations; they are layered over the enclosing class's private
 	// environment so a nested class can still reach an outer class's privates.
-	const ownNames = new Map<string, IRPrivateName>();
+	const ownNames = new Map<string, RegisterPrivateName>();
 	let instanceBrandBinding: Binding | undefined;
 	let staticBrandBinding: Binding | undefined;
-	const instanceFieldPlan: Array<IRInstanceFieldPlanEntry> = [];
-	const staticElements: Array<IRStaticElement> = [];
+	const instanceFieldPlan: Array<RegisterInstanceFieldPlanEntry> = [];
+	const staticElements: Array<RegisterStaticElement> = [];
 	const computedFieldKeys = new Map<ESTree.PropertyDefinition, Binding>();
 
-	const ensurePrivateEntry = (name: string, isStatic: boolean): IRPrivateName => {
+	const ensurePrivateEntry = (name: string, isStatic: boolean): RegisterPrivateName => {
 		const brandBinding = isStatic
 			? (staticBrandBinding ??= createCapturedBinding(program, fn, `__sbrand_${classId}`))
 			: (instanceBrandBinding ??= createCapturedBinding(
@@ -4426,7 +4425,7 @@ function compileClass(
 				throw new SyntaxError("'arguments' is not allowed in a class field initializer");
 			}
 			const valueNode = (member.value ?? null) as ESTree.Expression | null;
-			let entry: IRInstanceFieldPlanEntry;
+			let entry: RegisterInstanceFieldPlanEntry;
 			if (member.key.type === "PrivateIdentifier") {
 				const name = `#${member.key.name}`;
 				const privateEntry = ensurePrivateEntry(name, member.static);
@@ -4509,7 +4508,7 @@ function compileClass(
 
 	// Layer this class's own private names over the enclosing private
 	// environment so nested classes resolve outer privates (with shadowing).
-	const privateNames = new Map<string, IRPrivateName>([
+	const privateNames = new Map<string, RegisterPrivateName>([
 		...(fn.classContext?.privateNames ?? []),
 		...ownNames,
 	]);
@@ -4577,7 +4576,7 @@ function compileClass(
 			: undefined;
 	// NamedEvaluation: anonymous class expressions take the binding name.
 	const className = classNode.id?.name ?? nameHint ?? "";
-	const constructorContext: IRClassContext = {
+	const constructorContext: RegisterClassContext = {
 		...sharedContext,
 		isStatic: false,
 		isConstructor: true,
@@ -4861,9 +4860,9 @@ function compileClass(
 }
 
 function compileClassMemberKey(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	member: ESTree.MethodDefinition,
 ): number {
 	if (!member.key) {
@@ -4886,9 +4885,9 @@ function compileClassMemberKey(
 }
 
 function loadCapturedBinding(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	binding: Binding,
 ): number {
 	return loadRegisterFromLocation(
@@ -4903,7 +4902,7 @@ function loadCapturedBinding(
  * brand, carried on the entry so access from a nested class brand-checks
  * against the class that declared the member rather than the current one.
  */
-function privateBrandBinding(_fn: IRFunction, entry: IRPrivateName): Binding | undefined {
+function privateBrandBinding(_fn: RegisterFunction, entry: RegisterPrivateName): Binding | undefined {
 	return entry.brandBinding;
 }
 
@@ -4913,11 +4912,11 @@ function privateBrandBinding(_fn: IRFunction, entry: IRPrivateName): Binding | u
  * not branded by the declaring class. The loaded value is discarded.
  */
 function emitPrivateBrandCheck(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	objectReg: number,
-	entry: IRPrivateName,
+	entry: RegisterPrivateName,
 ) {
 	const brand = privateBrandBinding(fn, entry);
 	if (!brand) {
@@ -4938,9 +4937,9 @@ function emitPrivateBrandCheck(
  * placeholder for expression-position callers.
  */
 function emitThrowTypeError(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	message: string,
 ): number {
 	const constructor = nextRegisterDestination(fn);
@@ -4966,9 +4965,9 @@ interface CompiledPrivateMemberReference {
 
 /** Evaluate a private member reference without performing its later GetValue/PutValue. */
 function compilePrivateMemberReference(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	member: ESTree.MemberExpression,
 ): CompiledPrivateMemberReference {
 	if (member.property.type !== "PrivateIdentifier") {
@@ -4985,9 +4984,9 @@ function compilePrivateMemberReference(
  * shared function for methods, or a brand-checked getter call for accessors.
  */
 function compilePrivateMemberLoad(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	objectReg: number,
 	name: string,
 ): number {
@@ -5038,9 +5037,9 @@ function compilePrivateMemberLoad(
  * brand-checked setter call for accessors.
  */
 function compilePrivateMemberStore(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	objectReg: number,
 	name: string,
 	valueReg: number,
@@ -5083,13 +5082,13 @@ function compilePrivateMemberStore(
  * arguments to the parent constructor on the same this for derived ones.
  */
 function compileDefaultConstructor(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	superBinding: Binding | undefined,
 	name: string,
-	classContext: IRClassContext,
+	classContext: RegisterClassContext,
 ): number {
-	const ctorFn: IRFunction = {
+	const ctorFn: RegisterFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, name),
@@ -5106,9 +5105,9 @@ function compileDefaultConstructor(
 	};
 	program.functions.push(ctorFn);
 
-	const block: IRBlock = { instructions: [] };
+	const block: RegisterBlock = { instructions: [] };
 	ctorFn.blocks.push(block);
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 
 	if (superBinding) {
 		const location = getOrCreateBindingLocation(program, ctorFn, superBinding);
@@ -5142,7 +5141,7 @@ function compileDefaultConstructor(
 /**
  * Return 'undefined' from all blocks that don't unconditionally jump yet.
  */
-function endFunction(fn: IRFunction) {
+function endFunction(fn: RegisterFunction) {
 	for (const block of fn.blocks) {
 		const lastInstruction = block.instructions.at(-1);
 		if (
@@ -5182,9 +5181,9 @@ function superThisStateKey(): string {
 }
 
 function loadSharedSuperThis(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	checkInitialized: boolean,
 ): number {
 	const binding = fn.classContext?.superThisStateBinding;
@@ -5213,9 +5212,9 @@ function loadSharedSuperThis(
 }
 
 function storeSharedSuperThis(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	value: number,
 ): void {
 	const binding = fn.classContext?.superThisStateBinding;
@@ -5235,11 +5234,11 @@ function storeSharedSuperThis(
 }
 
 function synchronizeSharedConstructorReturns(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 ): void {
 	for (const block of fn.blocks) {
-		const rewritten: IRBlock = { instructions: [] };
+		const rewritten: RegisterBlock = { instructions: [] };
 		for (const instruction of block.instructions) {
 			if (instruction.type === "return") {
 				const value = loadSharedSuperThis(program, fn, { block: rewritten }, false);
@@ -5275,7 +5274,7 @@ function functionStrict(
 }
 
 /** Whether code in this function runs sloppy (non-strict). */
-function isSloppyFunction(fn: IRFunction): boolean {
+function isSloppyFunction(fn: RegisterFunction): boolean {
 	return !(fn.strict ?? fn.semanticFile.strict);
 }
 
@@ -5297,9 +5296,9 @@ function isScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
 
 /** SetMutableBinding through the global object's Object Environment Record. */
 function emitGlobalPropertyStore(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	name: string,
 	value: number,
 ) {
@@ -5343,18 +5342,18 @@ function computeFunctionLength(
  * index is known.
  */
 function compileFunctionParams(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
 		| ESTree.ArrowFunctionExpression,
-): IRCursor {
-	const block: IRBlock = {
+): RegisterCursor {
+	const block: RegisterBlock = {
 		instructions: [],
 	};
 	fn.blocks.push(block);
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 
 	// Claim the pinned parameter registers up front: destructuring and default
 	// expressions allocate registers of their own, so allocating per-parameter
@@ -5560,8 +5559,8 @@ function compileFunctionParams(
 	}
 
 	// A direct eval anywhere in these parameter expressions is in a
-	// parameter-expression context (see IRFunction.inParameterExpression). Nested
-	// function/arrow bodies get their own IRFunction, so the flag does not leak
+	// parameter-expression context (see RegisterFunction.inParameterExpression). Nested
+	// function/arrow bodies get their own RegisterFunction, so the flag does not leak
 	// into them.
 	const savedInParams = fn.inParameterExpression;
 	fn.inParameterExpression = true;
@@ -5594,9 +5593,9 @@ function compileFunctionParams(
  * patterns, where targets may also be member expressions.
  */
 function compilePatternTarget(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	target: ESTree.Node,
 	value: number,
 	// Forwarded to the leaf: true for a destructuring *assignment* target (so a
@@ -5672,9 +5671,9 @@ function compilePatternTarget(
  * reference semantics as identifier assignment.
  */
 function compileIdentifierTarget(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	isAssign = false,
@@ -5692,9 +5691,9 @@ function compileIdentifierTarget(
  * static store.
  */
 function compileWithDynamicWrite(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	isAssign = false,
@@ -5706,12 +5705,12 @@ function compileWithDynamicWrite(
 		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 	});
 
-	const skipJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const skipJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [found],
 		blocks: [-1],
 	};
-	const fallbackJump: Extract<IRInstruction, { type: "jump" }> = {
+	const fallbackJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5720,7 +5719,7 @@ function compileWithDynamicWrite(
 	const fallbackIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[fallbackIdx]!;
 	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, isAssign);
-	const fallbackJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const fallbackJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5742,9 +5741,9 @@ function compileWithDynamicWrite(
  * the withSet-after-RHS path in `compileWithDynamicWrite` gets wrong.
  */
 function compileWithDynamicAssignment(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 	left: ESTree.Identifier,
 ): number {
@@ -5763,19 +5762,19 @@ function compileWithDynamicAssignment(
 	});
 	const empty = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [empty, base] });
-	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [empty],
 		blocks: [-1],
 	};
-	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
 	cursor.block.instructions.push(missJump, foundJump);
 	const result = nextRegisterDestination(fn);
 
-	const compileValue = (branch: IRCursor, current?: number): number => {
+	const compileValue = (branch: RegisterCursor, current?: number): number => {
 		const right = compileExpression(
 			program,
 			fn,
@@ -5806,7 +5805,7 @@ function compileWithDynamicAssignment(
 	const foundValue = compileValue(foundCursor, foundCurrent);
 	compileWithBaseStore(program, fn, foundCursor, base, key, left, foundValue);
 	foundCursor.block.instructions.push({ type: "move", registers: [result, foundValue] });
-	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5821,7 +5820,7 @@ function compileWithDynamicAssignment(
 	const missValue = compileValue(missCursor, missCurrent);
 	compileStaticIdentifierTarget(program, fn, missCursor, left, missValue, true);
 	missCursor.block.instructions.push({ type: "move", registers: [result, missValue] });
-	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5842,9 +5841,9 @@ function compileWithDynamicAssignment(
  * resolve the static binding. Both paths join into one result register.
  */
 function compileWithBaseRead(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	base: number,
 	key: number,
 	identifier: ESTree.Identifier,
@@ -5853,12 +5852,12 @@ function compileWithBaseRead(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
 
-	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5871,7 +5870,7 @@ function compileWithBaseRead(
 		type: "loadProperty",
 		registers: [result, base, key],
 	});
-	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5882,7 +5881,7 @@ function compileWithBaseRead(
 	cursor.block = fn.blocks[missIdx]!;
 	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
 	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
-	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5904,9 +5903,9 @@ function compileWithBaseRead(
  * `with` environment even though the `with` statement itself is sloppy-only.
  */
 function compileWithBaseStore(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	base: number,
 	key: number,
 	identifier: ESTree.Identifier,
@@ -5915,12 +5914,12 @@ function compileWithBaseStore(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
 
-	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5938,14 +5937,14 @@ function compileWithBaseStore(
 		registers: [stillExists, key, base],
 		operator: "in",
 	});
-	let throwJoin: Extract<IRInstruction, { type: "jump" }> | undefined;
+	let throwJoin: Extract<RegisterInstruction, { type: "jump" }> | undefined;
 	if (!isSloppyFunction(fn)) {
-		const storeJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		const storeJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 			type: "jumpIf",
 			registers: [stillExists],
 			blocks: [-1],
 		};
-		const throwJump: Extract<IRInstruction, { type: "jump" }> = {
+		const throwJump: Extract<RegisterInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -5972,7 +5971,7 @@ function compileWithBaseStore(
 		registers: [base, key, value],
 	});
 	emitDirectEvalDirtyMark(program, fn, cursor, base, key);
-	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -5982,7 +5981,7 @@ function compileWithBaseStore(
 	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
 	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, true);
-	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -6001,9 +6000,9 @@ function compileWithBaseStore(
 
 /** Record a Set only when a captured with-reference targets the injected eval scope. */
 function emitDirectEvalDirtyMark(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	base: number,
 	key: number,
 ): void {
@@ -6018,12 +6017,12 @@ function emitDirectEvalDirtyMark(
 		registers: [isEvalScope, base, evalScope],
 		operator: "===",
 	});
-	const markJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const markJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [isEvalScope],
 		blocks: [-1],
 	};
-	const skipJump: Extract<IRInstruction, { type: "jump" }> = {
+	const skipJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -6037,7 +6036,7 @@ function emitDirectEvalDirtyMark(
 		{ type: "createBoolean", registers: [assigned], value: true },
 		{ type: "storeProperty", registers: [dirtyTracker, key, assigned] },
 	);
-	const markJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const markJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -6051,9 +6050,9 @@ function emitDirectEvalDirtyMark(
 }
 
 function compileStaticIdentifierTarget(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 	value: number,
 	// True when this identifier is an assignment target (a destructuring
@@ -6099,9 +6098,9 @@ function compileStaticIdentifierTarget(
  * value is undefined. Same branch-and-join structure as ternaries.
  */
 function compileDefaultedValue(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	value: number,
 	defaultExpression: ESTree.Expression,
 	nameHint?: string,
@@ -6120,12 +6119,12 @@ function compileDefaultedValue(
 		operator: "===",
 	});
 
-	const defaultJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const defaultJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [-1],
 	};
-	const skipJump: Extract<IRInstruction, { type: "jump" }> = {
+	const skipJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -6144,7 +6143,7 @@ function compileDefaultedValue(
 		type: "move",
 		registers: [result, defaultValue],
 	});
-	const joinJump: Extract<IRInstruction, { type: "jump" }> = {
+	const joinJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -6160,9 +6159,9 @@ function compileDefaultedValue(
 }
 
 function compileObjectPatternTarget(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	pattern: ESTree.ObjectPattern,
 	value: number,
 	isAssign = false,
@@ -6282,8 +6281,8 @@ function privateAssignmentMemberTarget(
  * freed by the allocator.
  */
 function compileIteratorDrainInto(
-	fn: IRFunction,
-	cursor: IRCursor,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	array: number,
 	index: number,
 	one: number,
@@ -6303,7 +6302,7 @@ function compileIteratorDrainInto(
 		type: "iteratorStep",
 		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
 	});
-	const exitJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const exitJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [doneRegister],
 		blocks: [-1],
@@ -6340,8 +6339,8 @@ function compileIteratorDrainInto(
  * Drain the rest of an iterator into a fresh array.
  */
 function compileIteratorRest(
-	fn: IRFunction,
-	cursor: IRCursor,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	iteratorRegister: number,
 	nextRegister: number,
 	doneRegister?: number,
@@ -6373,14 +6372,14 @@ function compileIteratorRest(
  * outside this helper: a throw from next() must not close the iterator.
  */
 function compileWithIteratorCloseOnThrow(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	iteratorRegister: number,
 	compileTarget: () => void,
 	doneRegister?: number,
 ): void {
-	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
@@ -6388,12 +6387,12 @@ function compileWithIteratorCloseOnThrow(
 
 	compileTarget();
 
-	const tryExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
 	tryBegin.blocks[1] = tryExitIdx;
 	cursor.block.instructions.push({ type: "jump", blocks: [tryExitIdx] });
 
-	const handler: IRBlock = { instructions: [] };
+	const handler: RegisterBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handler) - 1;
 	const caught = nextRegisterDestination(fn);
 	handler.instructions.push({ type: "catch", registers: [caught] });
@@ -6419,9 +6418,9 @@ function compileWithIteratorCloseOnThrow(
  * ToPropertyKey later. Locals carry the reference across tryEnd's invisible edge.
  */
 function compileCapturedMemberReference(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	target: ESTree.MemberExpression,
 	iteratorRegister: number,
 	doneRegister?: number,
@@ -6515,9 +6514,9 @@ function compileCapturedMemberReference(
 }
 
 function compileCapturedMemberStore(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	reference: CompiledMemberReference | CompiledPrivateMemberReference,
 	value: number,
 ): void {
@@ -6536,9 +6535,9 @@ function compileCapturedMemberStore(
 }
 
 function compileArrayPatternTarget(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	pattern: ESTree.ArrayPattern,
 	value: number,
 	isAssign = false,
@@ -6557,7 +6556,7 @@ function compileArrayPatternTarget(
 		registers: [doneRegister],
 		value: false,
 	});
-	const iteratorScope: IRLoopContext = {
+	const iteratorScope: RegisterLoopContext = {
 		kind: "iterator",
 		breakJumps: [],
 		continueJumps: [],
@@ -6698,13 +6697,13 @@ function compileArrayPatternTarget(
 }
 
 /**
- * Compile any list of statements in to an IR block.
+ * Lower any list of statements into a frontend register block.
  *
  * It adds the block to the function and returns the block index.
  */
 function compileStatementsToBlock(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	statements: Array<ESTree.Statement>,
 	/**
 	 * Hoist top-level function declarations in this list to the start of the
@@ -6720,7 +6719,7 @@ function compileStatementsToBlock(
 	 */
 	hoistFunctions = false,
 ): number {
-	let block: IRBlock = {
+	let block: RegisterBlock = {
 		instructions: [],
 	};
 	// Store the first block index so we can return that to allow jumping to that block.
@@ -6798,7 +6797,7 @@ function compileStatementsToBlock(
 
 		// Reserve this function's own captured-binding slots before compiling any
 		// hoisted function body. getOrCreateBindingLocation charges a captured slot
-		// to whichever IR function first *requests* it; hoisting lets a nested
+		// to whichever function first *requests* it; hoisting lets a nested
 		// closure's body run before the owning declaration, so without this the
 		// closure would wrongly claim ownership (wrong owner functionIndex + slot)
 		// of a binding that actually lives in this activation. Touching them here
@@ -7002,9 +7001,9 @@ function compileStatementsToBlock(
 }
 
 function compileClassDeclaration(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ClassDeclaration,
 ) {
 	const binding = fn.semanticFile.nodeToBinding.get(statement);
@@ -7012,7 +7011,7 @@ function compileClassDeclaration(
 		return;
 	}
 
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	const ctor = compileClass(program, fn, cursor, statement);
 	if (ctor === -1) {
 		return;
@@ -7030,9 +7029,9 @@ function compileClassDeclaration(
  * synthetic default binding (created by the linker).
  */
 function compileExportDefault(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ExportDefaultDeclaration,
 ) {
 	const declaration = statement.declaration;
@@ -7046,7 +7045,7 @@ function compileExportDefault(
 		return;
 	}
 
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	let value: number;
 	if (declaration.type === "FunctionDeclaration") {
 		const functionIndex = compileNewFunctionExpression(
@@ -7082,12 +7081,12 @@ function compileExportDefault(
 }
 
 function compileExpressionStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ExpressionStatement,
 ) {
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	const result = compileExpression(program, fn, cursor, statement.expression);
 	// Eval completion: record this statement's value as the running completion.
 	// Use cursor.block (the expression's final block after any control flow), so
@@ -7102,7 +7101,7 @@ function compileExpressionStatement(
 }
 
 /** Initialize a compound statement's spec-level completion value. */
-function resetEvalCompletion(fn: IRFunction, block: IRBlock) {
+function resetEvalCompletion(fn: RegisterFunction, block: RegisterBlock) {
 	if (fn.completionRegister !== undefined) {
 		block.instructions.push({
 			type: "createUndefined",
@@ -7112,9 +7111,9 @@ function resetEvalCompletion(fn: IRFunction, block: IRBlock) {
 }
 
 function compileFunctionDeclaration(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.FunctionDeclaration,
 ) {
 	const binding = fn.semanticFile.nodeToBinding.get(statement);
@@ -7196,12 +7195,12 @@ function compileFunctionDeclaration(
  * fall-through blocks, and break jumps are patched to the exit.
  */
 function compileSwitchStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.SwitchStatement,
 ) {
-	const switchContext: IRLoopContext = {
+	const switchContext: RegisterLoopContext = {
 		kind: "switch",
 		breakJumps: [],
 		continueJumps: [],
@@ -7209,14 +7208,14 @@ function compileSwitchStatement(
 	};
 	(fn.loops ??= []).push(switchContext);
 
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	const discriminant = compileExpression(program, fn, cursor, statement.discriminant);
 	resetEvalCompletion(fn, cursor.block);
 
 	// Case bodies first, chained for fall-through, so the dispatch tests can
 	// reference their block indexes.
 	const bodyStarts: Array<number> = [];
-	let previousTail: IRBlock | undefined;
+	let previousTail: RegisterBlock | undefined;
 	for (const switchCase of statement.cases) {
 		const start = compileStatementsToBlock(program, fn, switchCase.consequent);
 		if (previousTail) {
@@ -7231,7 +7230,7 @@ function compileSwitchStatement(
 	}
 
 	// The last body and the all-misses path both continue at the exit.
-	const lastBodyExitJump: Extract<IRInstruction, { type: "jump" }> = {
+	const lastBodyExitJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -7259,7 +7258,7 @@ function compileSwitchStatement(
 		});
 	}
 
-	const missJump: Extract<IRInstruction, { type: "jump" }> = {
+	const missJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [defaultCase >= 0 ? bodyStarts[defaultCase]! : -1],
 	};
@@ -7281,9 +7280,9 @@ function compileSwitchStatement(
  * condition, conditionally enters the body, and falls through to the exit.
  */
 function compileWhileStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.WhileStatement,
 ) {
 	resetEvalCompletion(fn, block);
@@ -7293,7 +7292,7 @@ function compileWhileStatement(
 		blocks: [headerIdx],
 	});
 
-	const loop: IRLoopContext = {
+	const loop: RegisterLoopContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -7301,7 +7300,7 @@ function compileWhileStatement(
 	};
 	(fn.loops ??= []).push(loop);
 
-	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
+	const headerCursor: RegisterCursor = { block: fn.blocks[headerIdx]! };
 	const condition = compileExpression(program, fn, headerCursor, statement.test);
 
 	const bodyIdx = compileStatementsToBlock(
@@ -7314,7 +7313,7 @@ function compileWhileStatement(
 		registers: [condition],
 		blocks: [bodyIdx],
 	});
-	const exitJump: Extract<IRInstruction, { type: "jump" }> = {
+	const exitJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		// Patched below, once the exit block exists.
 		blocks: [-1],
@@ -7343,13 +7342,13 @@ function compileWhileStatement(
  * bottom decides on re-entry.
  */
 function compileDoWhileStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.DoWhileStatement,
 ) {
 	resetEvalCompletion(fn, block);
-	const loop: IRLoopContext = {
+	const loop: RegisterLoopContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -7374,14 +7373,14 @@ function compileDoWhileStatement(
 		blocks: [conditionIdx],
 	});
 
-	const conditionCursor: IRCursor = { block: fn.blocks[conditionIdx]! };
+	const conditionCursor: RegisterCursor = { block: fn.blocks[conditionIdx]! };
 	const condition = compileExpression(program, fn, conditionCursor, statement.test);
 	conditionCursor.block.instructions.push({
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [bodyIdx],
 	});
-	const exitJump: Extract<IRInstruction, { type: "jump" }> = {
+	const exitJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -7406,8 +7405,8 @@ function compileDoWhileStatement(
  * Returns null when no such binding is captured (the common case — zero overhead).
  */
 function setupPerIterationScope(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	loopNode: ESTree.ForStatement | ESTree.ForInStatement | ESTree.ForOfStatement,
 ): { scopeId: number; slotCount: number } | null {
 	const loopScope = fn.semanticFile.nodeToScope.get(loopNode);
@@ -7440,9 +7439,9 @@ function setupPerIterationScope(
  * loop with the update block as the continue target.
  */
 function compileForStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ForStatement,
 ) {
 	// Per-iteration env, if head or direct body bindings are captured. ENV_PUSH enters scope
@@ -7459,7 +7458,7 @@ function compileForStatement(
 		});
 	}
 
-	const initCursor: IRCursor = { block };
+	const initCursor: RegisterCursor = { block };
 	if (statement.init?.type === "VariableDeclaration") {
 		compileVariableDeclaration(program, fn, block, statement.init);
 		// The declaration manages its own cursor; re-resolve the tail block.
@@ -7483,7 +7482,7 @@ function compileForStatement(
 		blocks: [headerIdx],
 	});
 
-	const loop: IRLoopContext = {
+	const loop: RegisterLoopContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -7493,7 +7492,7 @@ function compileForStatement(
 	};
 	(fn.loops ??= []).push(loop);
 
-	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
+	const headerCursor: RegisterCursor = { block: fn.blocks[headerIdx]! };
 	let condition: number;
 	if (statement.test) {
 		condition = compileExpression(program, fn, headerCursor, statement.test);
@@ -7512,7 +7511,7 @@ function compileForStatement(
 		registers: [condition],
 		blocks: [bodyIdx],
 	});
-	const exitJump: Extract<IRInstruction, { type: "jump" }> = {
+	const exitJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -7526,7 +7525,7 @@ function compileForStatement(
 		blocks: [updateIdx],
 	});
 
-	const updateCursor: IRCursor = { block: fn.blocks[updateIdx]! };
+	const updateCursor: RegisterCursor = { block: fn.blocks[updateIdx]! };
 	// CreatePerIterationEnvironment: copy the bindings forward (Li→Li+1) before the
 	// increment, so the increment and next test/body run in the fresh env.
 	if (perIter) {
@@ -7568,12 +7567,12 @@ function compileForStatement(
  * straight back to the step header (no close, per spec).
  */
 function compileForOfStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ForOfStatement,
 ) {
-	const entryCursor: IRCursor = { block };
+	const entryCursor: RegisterCursor = { block };
 	const perIter = setupPerIterationScope(program, fn, statement);
 	const lexicalHead =
 		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
@@ -7630,12 +7629,12 @@ function compileForOfStatement(
  * rather than throwing, which the key-collection op handles.
  */
 function compileForInStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ForInStatement,
 ) {
-	const entryCursor: IRCursor = { block };
+	const entryCursor: RegisterCursor = { block };
 	const perIter = setupPerIterationScope(program, fn, statement);
 	const lexicalHead =
 		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
@@ -7682,9 +7681,9 @@ function compileForInStatement(
  * protected range that closes the iterator on a throw.
  */
 function compileForInOfLoop(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	entryCursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	entryCursor: RegisterCursor,
 	iterable: number,
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
@@ -7712,7 +7711,7 @@ function compileForInOfLoop(
 		blocks: [headerIdx],
 	});
 
-	const loop: IRLoopContext = {
+	const loop: RegisterLoopContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -7732,7 +7731,7 @@ function compileForInOfLoop(
 		type: "iteratorStep",
 		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
 	});
-	const exitJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const exitJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [doneRegister],
 		// Patched below, once the exit block exists.
@@ -7742,7 +7741,7 @@ function compileForInOfLoop(
 
 	// Binding and body run inside a protected range; a throw closes the
 	// iterator and propagates. The step itself stays unprotected, as specced.
-	const bindBlock: IRBlock = { instructions: [] };
+	const bindBlock: RegisterBlock = { instructions: [] };
 	const bindIdx = fn.blocks.push(bindBlock) - 1;
 	header.instructions.push({
 		type: "jump",
@@ -7760,14 +7759,14 @@ function compileForInOfLoop(
 		});
 	}
 
-	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		// Patched below: [handler, end].
 		blocks: [-1, -1],
 	};
 	bindBlock.instructions.push(tryBegin);
 
-	const bindCursor: IRCursor = { block: bindBlock };
+	const bindCursor: RegisterCursor = { block: bindBlock };
 	if (left.type === "VariableDeclaration") {
 		const declaration = left.declarations[0];
 		if (declaration) {
@@ -7796,7 +7795,7 @@ function compileForInOfLoop(
 	tryBegin.blocks[1] = backIdx;
 
 	// Handler: close the iterator, rethrow the original completion.
-	const handlerBlock: IRBlock = { instructions: [] };
+	const handlerBlock: RegisterBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 	const caughtRegister = nextRegisterDestination(fn);
 	handlerBlock.instructions.push({
@@ -7842,9 +7841,9 @@ function compileForInOfLoop(
  * is the async-iterator get and the await-driven header step.
  */
 function compileForAwaitOfLoop(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	entryCursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	entryCursor: RegisterCursor,
 	iterable: number,
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
@@ -7875,7 +7874,7 @@ function compileForAwaitOfLoop(
 	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
 	entryCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
 
-	const loop: IRLoopContext = {
+	const loop: RegisterLoopContext = {
 		kind: "loop",
 		breakJumps: [],
 		continueJumps: [],
@@ -7892,7 +7891,7 @@ function compileForAwaitOfLoop(
 	// Header: raw = next.call(iterator); result = await raw; unpack done/value.
 	// The await splits the header — emitResumeDispatch moves the cursor onto a
 	// continuation block, where the unpack and exit test live.
-	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
+	const headerCursor: RegisterCursor = { block: fn.blocks[headerIdx]! };
 	const rawRegister = nextRegisterDestination(fn);
 	headerCursor.block.instructions.push({
 		type: "iteratorNext",
@@ -7910,7 +7909,7 @@ function compileForAwaitOfLoop(
 		type: "loadProperty",
 		registers: [doneRegister, resultRegister, doneKey],
 	});
-	const exitJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const exitJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [doneRegister],
 		blocks: [-1],
@@ -7930,7 +7929,7 @@ function compileForAwaitOfLoop(
 	});
 
 	// Binding and body run inside a protected range; a throw closes the iterator.
-	const bindBlock: IRBlock = { instructions: [] };
+	const bindBlock: RegisterBlock = { instructions: [] };
 	const bindIdx = fn.blocks.push(bindBlock) - 1;
 	headerCursor.block.instructions.push({ type: "jump", blocks: [bindIdx] });
 
@@ -7942,13 +7941,13 @@ function compileForAwaitOfLoop(
 		});
 	}
 
-	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
 	bindBlock.instructions.push(tryBegin);
 
-	const bindCursor: IRCursor = { block: bindBlock };
+	const bindCursor: RegisterCursor = { block: bindBlock };
 	if (left.type === "VariableDeclaration") {
 		const declaration = left.declarations[0];
 		if (declaration) {
@@ -7971,7 +7970,7 @@ function compileForAwaitOfLoop(
 
 	// Handler: await the close, but preserve the original throw over every close
 	// failure as required by AsyncIteratorClose.
-	const handlerBlock: IRBlock = { instructions: [] };
+	const handlerBlock: RegisterBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 	const caughtRegister = nextRegisterDestination(fn);
 	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
@@ -8004,7 +8003,7 @@ function compileForAwaitOfLoop(
  * Consume the labels a LabeledStatement stashed for the loop/switch it
  * immediately precedes, clearing them so nested statements don't inherit them.
  */
-function takePendingLabels(fn: IRFunction): Set<string> | undefined {
+function takePendingLabels(fn: RegisterFunction): Set<string> | undefined {
 	const labels = fn.pendingLabels;
 	fn.pendingLabels = undefined;
 	return labels && labels.length > 0 ? new Set(labels) : undefined;
@@ -8024,9 +8023,9 @@ const LOOP_STATEMENT_TYPES = new Set<string>([
  * statement makes a break-only target whose break jumps to the join after it.
  */
 function compileLabeledStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.LabeledStatement,
 ) {
 	// Peel stacked labels (`a: b: for ...`) down to the labeled statement.
@@ -8046,7 +8045,7 @@ function compileLabeledStatement(
 	}
 
 	// Labeled non-loop statement: a break-only target.
-	const labelContext: IRLoopContext = {
+	const labelContext: RegisterLoopContext = {
 		kind: "label",
 		breakJumps: [],
 		continueJumps: [],
@@ -8070,9 +8069,9 @@ function compileLabeledStatement(
 }
 
 function compileBreakStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.BreakStatement,
 ) {
 	const label = statement.label?.name;
@@ -8089,9 +8088,9 @@ function compileBreakStatement(
 }
 
 function compileContinueStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ContinueStatement,
 ) {
 	const label = statement.label?.name;
@@ -8111,12 +8110,12 @@ function compileContinueStatement(
  * the VM based on the statically known handler ranges.
  */
 function compileThrowStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ThrowStatement,
 ) {
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	const value = compileExpression(program, fn, cursor, statement.argument);
 	cursor.block.instructions.push({
 		type: "throw",
@@ -8130,9 +8129,9 @@ function compileThrowStatement(
  * model in compileTryFinally.
  */
 function compileTryStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.TryStatement,
 ) {
 	if (statement.finalizer) {
@@ -8151,12 +8150,12 @@ function compileTryStatement(
  * Values that cross the try/catch boundary go through bindings.
  */
 function compileTryCatch(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.TryStatement,
 ) {
-	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		// Patched below, once the handler and exit blocks exist.
 		blocks: [-1, -1],
@@ -8176,7 +8175,7 @@ function compileTryCatch(
 	// The end marker lives directly after the try body, so the protected range
 	// ends before the handler.
 	const tryBodyLastBlock = fn.blocks.at(-1)!;
-	const tryExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
 	tryBegin.blocks[1] = tryExitIdx;
 	tryBodyLastBlock.instructions.push({
@@ -8186,7 +8185,7 @@ function compileTryCatch(
 
 	// The handler block must start with the catch instruction, which consumes
 	// the throw completion the unwinder left in place.
-	const handlerBlock: IRBlock = { instructions: [] };
+	const handlerBlock: RegisterBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 
 	const caughtRegister = nextRegisterDestination(fn);
@@ -8198,7 +8197,7 @@ function compileTryCatch(
 	if (statement.handler) {
 		// Catch parameter destructuring can branch; throws inside it happen
 		// past the protected range and so propagate outward, as specced.
-		const handlerCursor: IRCursor = { block: handlerBlock };
+		const handlerCursor: RegisterCursor = { block: handlerBlock };
 		if (statement.handler.param) {
 			compilePatternTarget(
 				program,
@@ -8242,14 +8241,14 @@ function compileTryCatch(
  * route through the finalizer via emitReturn/emitBreak/emitContinue.
  */
 function compileTryFinally(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.TryStatement,
 ) {
 	const kindReg = nextRegisterDestination(fn);
 	const valueReg = nextRegisterDestination(fn);
-	const finallyCtx: IRLoopContext = {
+	const finallyCtx: RegisterLoopContext = {
 		kind: "finally",
 		breakJumps: [],
 		continueJumps: [],
@@ -8261,10 +8260,10 @@ function compileTryFinally(
 	const entryJumps = finallyCtx.finallyEntryJumps!;
 
 	// Route a normal completion into the finalizer (falls through afterward).
-	const routeNormal = (target: IRBlock) =>
+	const routeNormal = (target: RegisterBlock) =>
 		routeThroughFinalizer(target, finallyCtx, "normal", null);
 	// Route a thrown completion in: the epilogue re-throws the stashed value.
-	const routeThrow = (target: IRBlock, value: number) =>
+	const routeThrow = (target: RegisterBlock, value: number) =>
 		routeThroughFinalizer(
 			target,
 			finallyCtx,
@@ -8274,7 +8273,7 @@ function compileTryFinally(
 		);
 
 	// --- protected try body ---
-	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		blocks: [-1, -1],
 	};
@@ -8293,14 +8292,14 @@ function compileTryFinally(
 
 	// Normal completion of the try body ends the protected range and enters the
 	// finalizer with a NORMAL completion.
-	const tryNormalExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryNormalExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
 	const tryNormalExitIdx = fn.blocks.push(tryNormalExit) - 1;
 	tryBegin.blocks[1] = tryNormalExitIdx;
 	tryBodyLastBlock.instructions.push({ type: "jump", blocks: [tryNormalExitIdx] });
 	routeNormal(tryNormalExit);
 
 	// --- handler for the try body ---
-	const handlerBlock: IRBlock = { instructions: [] };
+	const handlerBlock: RegisterBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 	const caughtRegister = nextRegisterDestination(fn);
 	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
@@ -8308,7 +8307,7 @@ function compileTryFinally(
 	if (statement.handler) {
 		// Bind the catch parameter, then run the catch body in its own protected
 		// range so a throw out of it still runs the finalizer.
-		const handlerCursor: IRCursor = { block: handlerBlock };
+		const handlerCursor: RegisterCursor = { block: handlerBlock };
 		if (statement.handler.param) {
 			compilePatternTarget(
 				program,
@@ -8319,7 +8318,7 @@ function compileTryFinally(
 			);
 		}
 
-		const catchTryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+		const catchTryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> = {
 			type: "tryBegin",
 			blocks: [-1, -1],
 		};
@@ -8335,13 +8334,13 @@ function compileTryFinally(
 		const catchBodyLastBlock = fn.blocks.at(-1)!;
 		fn.loops.pop();
 
-		const catchNormalExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+		const catchNormalExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
 		const catchNormalExitIdx = fn.blocks.push(catchNormalExit) - 1;
 		catchTryBegin.blocks[1] = catchNormalExitIdx;
 		catchBodyLastBlock.instructions.push({ type: "jump", blocks: [catchNormalExitIdx] });
 		routeNormal(catchNormalExit);
 
-		const catchHandler: IRBlock = { instructions: [] };
+		const catchHandler: RegisterBlock = { instructions: [] };
 		catchTryBegin.blocks[0] = fn.blocks.push(catchHandler) - 1;
 		const caught2 = nextRegisterDestination(fn);
 		catchHandler.instructions.push({ type: "catch", registers: [caught2] });
@@ -8374,13 +8373,13 @@ function compileTryFinally(
 	// which routes through any *enclosing* finalizers (finallyCtx is popped).
 	const dispatchBlocks: Array<{ kind: number; idx: number }> = [];
 	for (const { kind, fill } of finallyCtx.finalizerArms!.values()) {
-		const armBlock: IRBlock = { instructions: [] };
+		const armBlock: RegisterBlock = { instructions: [] };
 		const idx = fn.blocks.push(armBlock) - 1;
 		fill(armBlock);
 		dispatchBlocks.push({ kind, idx });
 	}
 
-	const epilogue: IRBlock = { instructions: [] };
+	const epilogue: RegisterBlock = { instructions: [] };
 	const epilogueIdx = fn.blocks.push(epilogue) - 1;
 	finalizerLastBlock.instructions.push({ type: "jump", blocks: [epilogueIdx] });
 
@@ -8408,9 +8407,9 @@ function compileTryFinally(
  * skipped, since the statement switch had no BlockStatement case.
  */
 function compileBlockStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.BlockStatement,
 ) {
 	// Block-scoped let/const/class start uninitialized (TDZ) at block entry.
@@ -8433,17 +8432,17 @@ function compileBlockStatement(
  * `with` is a strict-mode SyntaxError, so this only runs for sloppy code.
  */
 function compileWithStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.WithStatement,
 ) {
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	const object = compileExpression(program, fn, cursor, statement.object);
 	cursor.block.instructions.push({ type: "withEnter", registers: [object] });
 	resetEvalCompletion(fn, cursor.block);
 
-	const withContext: IRLoopContext = {
+	const withContext: RegisterLoopContext = {
 		kind: "with",
 		breakJumps: [],
 		continueJumps: [],
@@ -8472,12 +8471,12 @@ function compileWithStatement(
  * block.
  */
 function compileIfStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.IfStatement,
 ) {
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	const condition = compileExpression(program, fn, cursor, statement.test);
 	resetEvalCompletion(fn, cursor.block);
 	const consequentBlock = compileStatementsToBlock(
@@ -8516,14 +8515,14 @@ const COMPLETION_NORMAL = 0;
 
 /** Throw unless value is an ECMAScript Object, returning the success block. */
 function emitIteratorResultObjectCheck(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	value: number,
-): IRBlock {
-	const valid: IRBlock = { instructions: [] };
+): RegisterBlock {
+	const valid: RegisterBlock = { instructions: [] };
 	const validIdx = fn.blocks.push(valid) - 1;
-	const invalid: IRBlock = { instructions: [] };
+	const invalid: RegisterBlock = { instructions: [] };
 	const invalidIdx = fn.blocks.push(invalid) - 1;
 	const typeName = nextRegisterDestination(fn);
 	const isFunction = nextRegisterDestination(fn);
@@ -8583,13 +8582,13 @@ function emitIteratorResultObjectCheck(
  * and rejects a fulfilled primitive.
  */
 function emitAsyncIteratorClose(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	iteratorRegister: number,
 	normal: boolean,
-): IRBlock {
-	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> | undefined = normal
+): RegisterBlock {
+	const tryBegin: Extract<RegisterInstruction, { type: "tryBegin" }> | undefined = normal
 		? undefined
 		: { type: "tryBegin", blocks: [-1, -1] };
 	if (tryBegin) block.instructions.push(tryBegin);
@@ -8612,7 +8611,7 @@ function emitAsyncIteratorClose(
 			operator: "==",
 		},
 	);
-	const noReturnJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const noReturnJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [noReturn],
 		blocks: [-1],
@@ -8634,7 +8633,7 @@ function emitAsyncIteratorClose(
 		closingScopeIndex === undefined || closingScopeIndex < 0
 			? undefined
 			: fn.loops!.splice(closingScopeIndex, 1)[0];
-	const closeCursor: IRCursor = { block };
+	const closeCursor: RegisterCursor = { block };
 	const awaited = compileAwaitRegister(program, fn, closeCursor, result);
 	if (closingScope && closingScopeIndex !== undefined) {
 		fn.loops!.splice(closingScopeIndex, 0, closingScope);
@@ -8647,25 +8646,25 @@ function emitAsyncIteratorClose(
 			closeCursor.block,
 			awaited,
 		);
-		const continuation: IRBlock = { instructions: [] };
+		const continuation: RegisterBlock = { instructions: [] };
 		const continuationIdx = fn.blocks.push(continuation) - 1;
 		noReturnJump.blocks[0] = continuationIdx;
 		closeCursor.block.instructions.push({ type: "jump", blocks: [continuationIdx] });
 		return continuation;
 	}
 
-	const tryExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExit: RegisterBlock = { instructions: [{ type: "tryEnd" }] };
 	const tryExitIdx = fn.blocks.push(tryExit) - 1;
 	tryBegin!.blocks[1] = tryExitIdx;
 	noReturnJump.blocks[0] = tryExitIdx;
 	closeCursor.block.instructions.push({ type: "jump", blocks: [tryExitIdx] });
 
-	const handler: IRBlock = { instructions: [] };
+	const handler: RegisterBlock = { instructions: [] };
 	tryBegin!.blocks[0] = fn.blocks.push(handler) - 1;
 	const ignored = nextRegisterDestination(fn);
 	handler.instructions.push({ type: "catch", registers: [ignored] });
 
-	const continuation: IRBlock = { instructions: [] };
+	const continuation: RegisterBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 	tryExit.instructions.push({ type: "jump", blocks: [continuationIdx] });
 	handler.instructions.push({ type: "jump", blocks: [continuationIdx] });
@@ -8678,15 +8677,15 @@ function emitAsyncIteratorClose(
  * cause an enclosing handler to close the same iterator again.
  */
 function emitIteratorCloseForCompletion(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	iteratorRegister: number,
 	normal: boolean,
 	doneRegister?: number,
 	async = false,
-): IRBlock {
-	const emitClose = (target: IRBlock) => {
+): RegisterBlock {
+	const emitClose = (target: RegisterBlock) => {
 		if (async) {
 			return emitAsyncIteratorClose(program, fn, target, iteratorRegister, normal);
 		}
@@ -8702,14 +8701,14 @@ function emitIteratorCloseForCompletion(
 		return emitClose(block);
 	}
 
-	const skipJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const skipJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [doneRegister],
 		blocks: [-1],
 	};
 	block.instructions.push(skipJump);
 
-	const closeBlock: IRBlock = { instructions: [] };
+	const closeBlock: RegisterBlock = { instructions: [] };
 	const closeIdx = fn.blocks.push(closeBlock) - 1;
 	block.instructions.push({ type: "jump", blocks: [closeIdx] });
 	closeBlock.instructions.push({
@@ -8719,7 +8718,7 @@ function emitIteratorCloseForCompletion(
 	});
 	const closeEnd = emitClose(closeBlock);
 
-	const continuation: IRBlock = { instructions: [] };
+	const continuation: RegisterBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 	skipJump.blocks[0] = continuationIdx;
 	closeEnd.instructions.push({ type: "jump", blocks: [continuationIdx] });
@@ -8733,10 +8732,10 @@ function emitIteratorCloseForCompletion(
  * and falls through. Kind codes are local to one finalizer's kind register.
  */
 function routeThroughFinalizer(
-	block: IRBlock,
-	scope: IRLoopContext,
+	block: RegisterBlock,
+	scope: RegisterLoopContext,
 	key: string,
-	fill: ((block: IRBlock) => void) | null,
+	fill: ((block: RegisterBlock) => void) | null,
 	valueRegister?: number,
 ) {
 	const arms = scope.finalizerArms!;
@@ -8764,7 +8763,7 @@ function routeThroughFinalizer(
 			registers: [scope.completionValueReg!, valueRegister],
 		});
 	}
-	const jump: Extract<IRInstruction, { type: "jump" }> = {
+	const jump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -8779,9 +8778,9 @@ function routeThroughFinalizer(
  * once the finally body has run.
  */
 function emitReturn(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	valueRegister: number,
 ) {
 	const scopes = fn.loops ?? [];
@@ -8829,9 +8828,9 @@ function emitReturn(
  * out (including the target) are closed.
  */
 function emitBreak(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	label?: string,
 ) {
 	const scopes = fn.loops ?? [];
@@ -8878,7 +8877,7 @@ function emitBreak(
 		}
 
 		if (isTarget) {
-			const jump: Extract<IRInstruction, { type: "jump" }> = {
+			const jump: Extract<RegisterInstruction, { type: "jump" }> = {
 				type: "jump",
 				blocks: [-1],
 			};
@@ -8896,9 +8895,9 @@ function emitBreak(
  * iterators; the target loop's iterator stays open (it re-steps from the header).
  */
 function emitContinue(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	label?: string,
 ) {
 	const scopes = fn.loops ?? [];
@@ -8959,7 +8958,7 @@ function emitContinue(
 			continue;
 		}
 
-		const jump: Extract<IRInstruction, { type: "jump" }> = {
+		const jump: Extract<RegisterInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -9009,7 +9008,7 @@ function containsTailCallBlocker(node: unknown): boolean {
  * is about to push, and compileReturnStatement can see the eligibility.
  */
 function prepareTailCallLoop(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	functionNode:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -9035,9 +9034,9 @@ function prepareTailCallLoop(
  * to an ordinary return.
  */
 function tryEmitSelfTailCall(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	call: ESTree.CallExpression,
 ): boolean {
 	if (fn.bodyEntryBlock === undefined || fn.tailCallNode === undefined) {
@@ -9113,12 +9112,12 @@ function tryEmitSelfTailCall(
  * Naively compile a return statement.
  */
 function compileReturnStatement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.ReturnStatement,
 ) {
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 
 	if (
 		fn.tcoEligible &&
@@ -9142,12 +9141,12 @@ function compileReturnStatement(
  * Naively compile variable declarations.
  */
 function compileVariableDeclaration(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	statement: ESTree.VariableDeclaration,
 ) {
-	const cursor: IRCursor = { block };
+	const cursor: RegisterCursor = { block };
 	for (const decl of statement.declarations) {
 		// Link `const f = <function>` so a self-recursive tail call reached through
 		// f is recognizable. Recorded before the initializer compiles, since that
@@ -9257,9 +9256,9 @@ const RESUME_MODE_RETURN = 2;
  * and throws a TypeError.
  */
 function compileYieldStarExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.YieldExpression,
 ) {
 	const operand = compileExpression(program, fn, cursor, expression.argument!);
@@ -9285,30 +9284,30 @@ function compileYieldStarExpression(
 	cursor.block.instructions.push({ type: "createUndefined", registers: [sentValue] });
 	cursor.block.instructions.push({ type: "createNumber", registers: [mode], value: 0 });
 
-	const header: IRBlock = { instructions: [] };
+	const header: RegisterBlock = { instructions: [] };
 	const headerIdx = fn.blocks.push(header) - 1;
-	const nextMode: IRBlock = { instructions: [] };
+	const nextMode: RegisterBlock = { instructions: [] };
 	const nextModeIdx = fn.blocks.push(nextMode) - 1;
-	const throwMode: IRBlock = { instructions: [] };
+	const throwMode: RegisterBlock = { instructions: [] };
 	const throwModeIdx = fn.blocks.push(throwMode) - 1;
-	const noThrow: IRBlock = { instructions: [] };
+	const noThrow: RegisterBlock = { instructions: [] };
 	const noThrowIdx = fn.blocks.push(noThrow) - 1;
-	const returnMode: IRBlock = { instructions: [] };
+	const returnMode: RegisterBlock = { instructions: [] };
 	const returnModeIdx = fn.blocks.push(returnMode) - 1;
-	const noReturn: IRBlock = { instructions: [] };
+	const noReturn: RegisterBlock = { instructions: [] };
 	const noReturnIdx = fn.blocks.push(noReturn) - 1;
-	const check: IRBlock = { instructions: [] };
+	const check: RegisterBlock = { instructions: [] };
 	const checkIdx = fn.blocks.push(check) - 1;
-	const doneBlock: IRBlock = { instructions: [] };
+	const doneBlock: RegisterBlock = { instructions: [] };
 	const doneIdx = fn.blocks.push(doneBlock) - 1;
-	const doneReturn: IRBlock = { instructions: [] };
+	const doneReturn: RegisterBlock = { instructions: [] };
 	const doneReturnIdx = fn.blocks.push(doneReturn) - 1;
-	const continuation: IRBlock = { instructions: [] };
+	const continuation: RegisterBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 
 	cursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
 
-	const stringRegister = (block: IRBlock, value: string) => {
+	const stringRegister = (block: RegisterBlock, value: string) => {
 		const reg = nextRegisterDestination(fn);
 		block.instructions.push({
 			type: "createString",
@@ -9317,7 +9316,7 @@ function compileYieldStarExpression(
 		});
 		return reg;
 	};
-	const nullishGuard = (block: IRBlock, valueReg: number, target: number) => {
+	const nullishGuard = (block: RegisterBlock, valueReg: number, target: number) => {
 		const undef = nextRegisterDestination(fn);
 		const isNullish = nextRegisterDestination(fn);
 		block.instructions.push({ type: "createUndefined", registers: [undef] });
@@ -9328,7 +9327,7 @@ function compileYieldStarExpression(
 		});
 		block.instructions.push({ type: "jumpIf", registers: [isNullish], blocks: [target] });
 	};
-	const modeEquals = (block: IRBlock, modeValue: number, target: number) => {
+	const modeEquals = (block: RegisterBlock, modeValue: number, target: number) => {
 		const constReg = nextRegisterDestination(fn);
 		const matchReg = nextRegisterDestination(fn);
 		block.instructions.push({
@@ -9345,9 +9344,9 @@ function compileYieldStarExpression(
 	};
 	// After an inner next/throw/return call leaves its result in `result`, await
 	// it (async delegation) and continue to the done/value check.
-	const stepAndContinue = (block: IRBlock) => {
+	const stepAndContinue = (block: RegisterBlock) => {
 		if (isAsync) {
-			const stepCursor: IRCursor = { block };
+			const stepCursor: RegisterCursor = { block };
 			const awaited = compileAwaitRegister(program, fn, stepCursor, result);
 			stepCursor.block.instructions.push({ type: "move", registers: [result, awaited] });
 			stepCursor.block.instructions.push({ type: "jump", blocks: [checkIdx] });
@@ -9420,7 +9419,7 @@ function compileYieldStarExpression(
 	// delegation awaits it first (spec: "If generatorKind is async, set value to
 	// ? Await(value)"), so a returned promise resolves before it leaves yield*.
 	if (isAsync) {
-		const noReturnCursor: IRCursor = { block: noReturn };
+		const noReturnCursor: RegisterCursor = { block: noReturn };
 		const awaited = compileAwaitRegister(program, fn, noReturnCursor, sentValue);
 		emitReturn(program, fn, noReturnCursor.block, awaited);
 	} else {
@@ -9434,9 +9433,9 @@ function compileYieldStarExpression(
 	// (e.g. `next()` returning 42) is a TypeError, not a silently-swallowed
 	// `{ done: undefined }`. All three resume modes reach here, so this covers
 	// them for both sync and async delegation.
-	const checkBody: IRBlock = { instructions: [] };
+	const checkBody: RegisterBlock = { instructions: [] };
 	const checkBodyIdx = fn.blocks.push(checkBody) - 1;
-	const notObject: IRBlock = { instructions: [] };
+	const notObject: RegisterBlock = { instructions: [] };
 	const notObjectIdx = fn.blocks.push(notObject) - 1;
 	{
 		const typeName = nextRegisterDestination(fn);
@@ -9531,11 +9530,11 @@ function compileYieldStarExpression(
 		// next()/throw() resumption is used as-is (not awaited). The awaited value
 		// replaces `sentValue` so returnMode forwards the unwrapped value.
 		if (isAsync) {
-			const unwrapAwait: IRBlock = { instructions: [] };
+			const unwrapAwait: RegisterBlock = { instructions: [] };
 			const unwrapAwaitIdx = fn.blocks.push(unwrapAwait) - 1;
 			modeEquals(checkBody, RESUME_MODE_RETURN, unwrapAwaitIdx);
 			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
-			const unwrapCursor: IRCursor = { block: unwrapAwait };
+			const unwrapCursor: RegisterCursor = { block: unwrapAwait };
 			const awaited = compileAwaitRegister(program, fn, unwrapCursor, sentValue);
 			unwrapCursor.block.instructions.push({
 				type: "move",
@@ -9574,9 +9573,9 @@ function compileYieldStarExpression(
  * range); a return() returns it, routed through enclosing finalizers.
  */
 function compileYieldExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.YieldExpression,
 ) {
 	if (expression.delegate) {
@@ -9619,9 +9618,9 @@ function compileYieldExpression(
  * return() unwinds.
  */
 function emitResumeDispatch(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	valueDst: number,
 	modeDst: number,
 	// AsyncGeneratorUnwrapYieldResumption: an async generator's `yield` awaits a
@@ -9630,22 +9629,22 @@ function emitResumeDispatch(
 	awaitReturnValue = false,
 ): number {
 	// throw() resumption: throw the sent value at the suspend point.
-	const throwBlock: IRBlock = { instructions: [] };
+	const throwBlock: RegisterBlock = { instructions: [] };
 	const throwIdx = fn.blocks.push(throwBlock) - 1;
 	throwBlock.instructions.push({ type: "throw", registers: [valueDst] });
 
 	// return() resumption: return the sent value, through enclosing finalizers.
-	const returnBlock: IRBlock = { instructions: [] };
+	const returnBlock: RegisterBlock = { instructions: [] };
 	const returnIdx = fn.blocks.push(returnBlock) - 1;
 	if (awaitReturnValue) {
-		const returnCursor: IRCursor = { block: returnBlock };
+		const returnCursor: RegisterCursor = { block: returnBlock };
 		const awaited = compileAwaitRegister(program, fn, returnCursor, valueDst);
 		emitReturn(program, fn, returnCursor.block, awaited);
 	} else {
 		emitReturn(program, fn, returnBlock, valueDst);
 	}
 
-	const continuation: IRBlock = { instructions: [] };
+	const continuation: RegisterBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 
 	const throwConst = nextRegisterDestination(fn);
@@ -9692,9 +9691,9 @@ function emitResumeDispatch(
 }
 
 function compileAwaitExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.AwaitExpression,
 ): number {
 	const awaitedSrc = compileExpression(program, fn, cursor, expression.argument);
@@ -9703,9 +9702,9 @@ function compileAwaitExpression(
 
 /** Suspend on the value in awaitedSrc and continue with the settled value. */
 function compileAwaitRegister(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	awaitedSrc: number,
 ): number {
 	const valueDst = nextRegisterDestination(fn);
@@ -9727,9 +9726,9 @@ function compileAwaitRegister(
  * expressions: the binding or property name the value is assigned to.
  */
 function compileExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.Expression | ESTree.PrivateIdentifier,
 	nameHint?: string,
 ) {
@@ -9912,13 +9911,13 @@ function compileExpression(
  * undefined.
  */
 function compileOptionalChain(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	node: ESTree.Expression,
 ): number {
 	const result = nextRegisterDestination(fn);
-	const shortCircuits: Array<Extract<IRInstruction, { type: "jumpIf" }>> = [];
+	const shortCircuits: Array<Extract<RegisterInstruction, { type: "jumpIf" }>> = [];
 	const value = compileChainElement(program, fn, cursor, node, shortCircuits);
 	if (value === -1) {
 		return -1;
@@ -9929,7 +9928,7 @@ function compileOptionalChain(
 		return result;
 	}
 
-	const successJump: Extract<IRInstruction, { type: "jump" }> = {
+	const successJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -9938,10 +9937,10 @@ function compileOptionalChain(
 	// Short-circuit landing block: the chain result is undefined.
 	const shortIdx = fn.blocks.push({ instructions: [] }) - 1;
 	const shortBlock = fn.blocks[shortIdx]!;
-	const shortCursor: IRCursor = { block: shortBlock };
+	const shortCursor: RegisterCursor = { block: shortBlock };
 	const undefinedRegister = compileUndefined(fn, shortCursor);
 	shortBlock.instructions.push({ type: "move", registers: [result, undefinedRegister] });
-	const shortJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+	const shortJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -9964,10 +9963,10 @@ function compileOptionalChain(
  * compileOptionalChain.
  */
 function emitOptionalGuard(
-	fn: IRFunction,
-	cursor: IRCursor,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	base: number,
-	shortCircuits: Array<Extract<IRInstruction, { type: "jumpIf" }>>,
+	shortCircuits: Array<Extract<RegisterInstruction, { type: "jumpIf" }>>,
 ) {
 	const undefinedRegister = compileUndefined(fn, cursor);
 	const isNil = nextRegisterDestination(fn);
@@ -9977,12 +9976,12 @@ function emitOptionalGuard(
 		operator: "==",
 	});
 
-	const shortJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const shortJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [isNil],
 		blocks: [-1],
 	};
-	const continueJump: Extract<IRInstruction, { type: "jump" }> = {
+	const continueJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -9999,11 +9998,11 @@ function emitOptionalGuard(
  * circuit jump list through nested member accesses and calls.
  */
 function compileChainElement(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	node: ESTree.Expression,
-	shortCircuits: Array<Extract<IRInstruction, { type: "jumpIf" }>>,
+	shortCircuits: Array<Extract<RegisterInstruction, { type: "jumpIf" }>>,
 ): number {
 	if (node.type === "MemberExpression") {
 		if (node.object.type === "Super") {
@@ -10165,9 +10164,9 @@ function compileChainElement(
 }
 
 function compileFunctionExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 	nameHint?: string,
 ) {
@@ -10192,9 +10191,9 @@ function compileFunctionExpression(
 }
 
 function compileAssignment(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	if (
@@ -10304,9 +10303,9 @@ function compileAssignment(
 }
 
 function compileIdentifierAssignment(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	if (
@@ -10364,12 +10363,12 @@ function compileIdentifierAssignment(
 			}
 			const value = compileExpression(program, fn, cursor, assignmentExpression.right);
 			if (initiallyPresent !== undefined) {
-				const storeJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+				const storeJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 					type: "jumpIf",
 					registers: [initiallyPresent],
 					blocks: [-1],
 				};
-				const throwJump: Extract<IRInstruction, { type: "jump" }> = {
+				const throwJump: Extract<RegisterInstruction, { type: "jump" }> = {
 					type: "jump",
 					blocks: [-1],
 				};
@@ -10378,7 +10377,7 @@ function compileIdentifierAssignment(
 				const storeIndex = fn.blocks.push({ instructions: [] }) - 1;
 				cursor.block = fn.blocks[storeIndex]!;
 				emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
-				const storeJoin: Extract<IRInstruction, { type: "jump" }> = {
+				const storeJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 					type: "jump",
 					blocks: [-1],
 				};
@@ -10392,7 +10391,7 @@ function compileIdentifierAssignment(
 					registers: [undeclared],
 					nameStringIndex: getOrCreateStringConstant(program, binding.name),
 				});
-				const throwJoin: Extract<IRInstruction, { type: "jump" }> = {
+				const throwJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 					type: "jump",
 					blocks: [-1],
 				};
@@ -10521,9 +10520,9 @@ function compileIdentifierAssignment(
  * value when it short-circuits, otherwise the assigned value.
  */
 function compileLogicalAssignment(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	const left = assignmentExpression.left;
@@ -10608,12 +10607,12 @@ function compileLogicalAssignment(
 		});
 	}
 
-	const conditionalJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const conditionalJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [-1],
 	};
-	const fallthroughJump: Extract<IRInstruction, { type: "jump" }> = {
+	const fallthroughJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10663,7 +10662,7 @@ function compileLogicalAssignment(
 		compileMemberStore(cursor, member, right);
 	}
 
-	const assignJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+	const assignJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10690,9 +10689,9 @@ function compileLogicalAssignment(
  * hand side, with both sides writing the shared result register.
  */
 function compileLogicalExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.LogicalExpression,
 ): number {
 	const result = nextRegisterDestination(fn);
@@ -10715,12 +10714,12 @@ function compileLogicalExpression(
 		});
 	}
 
-	const conditionalJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const conditionalJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [-1],
 	};
-	const fallthroughJump: Extract<IRInstruction, { type: "jump" }> = {
+	const fallthroughJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10733,7 +10732,7 @@ function compileLogicalExpression(
 		type: "move",
 		registers: [result, right],
 	});
-	const rightJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+	const rightJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10760,20 +10759,20 @@ function compileLogicalExpression(
  * expressions.
  */
 function compileConditionalExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.ConditionalExpression,
 ): number {
 	const result = nextRegisterDestination(fn);
 	const condition = compileExpression(program, fn, cursor, expression.test);
 
-	const consequentJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const consequentJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [-1],
 	};
-	const alternateJump: Extract<IRInstruction, { type: "jump" }> = {
+	const alternateJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10786,7 +10785,7 @@ function compileConditionalExpression(
 		type: "move",
 		registers: [result, consequent],
 	});
-	const consequentJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+	const consequentJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10799,7 +10798,7 @@ function compileConditionalExpression(
 		type: "move",
 		registers: [result, alternate],
 	});
-	const alternateJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+	const alternateJoinJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -10820,9 +10819,9 @@ function compileConditionalExpression(
  * leading quasi keeps the chain string-typed so + coerces the expressions.
  */
 function compileTemplateLiteral(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.TemplateLiteral,
 ): number {
 	let result = compileStaticString(
@@ -10872,9 +10871,9 @@ function compileTemplateLiteral(
  * (required by the spec — tags routinely use it as a cache key / WeakMap key).
  */
 function compileTaggedTemplate(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.TaggedTemplateExpression,
 ): number {
 	const tagNode = expression.tag as unknown as ESTree.Node;
@@ -10937,9 +10936,9 @@ function compileTaggedTemplate(
 }
 
 function compileUnaryExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.UnaryExpression,
 ): number {
 	if (expression.operator === "void") {
@@ -11017,9 +11016,9 @@ function compileUnaryExpression(
  * cannot reach this point: the parser rejects it in (implied) strict mode.
  */
 function compileDeleteExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.UnaryExpression,
 ): number {
 	if (expression.argument.type === "MemberExpression") {
@@ -11067,9 +11066,9 @@ function compileDeleteExpression(
  * configurable); a resolvable binding cannot be deleted (`delete x` is false).
  */
 function compileStaticIdentifierDelete(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
@@ -11105,9 +11104,9 @@ function compileStaticIdentifierDelete(
  * paths join with the boolean result in one register.
  */
 function compileWithDynamicDelete(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const nameStringIndex = getOrCreateStringConstant(program, identifier.name);
@@ -11121,12 +11120,12 @@ function compileWithDynamicDelete(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
 
-	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -11145,7 +11144,7 @@ function compileWithDynamicDelete(
 		type: "deleteProperty",
 		registers: [result, base, key],
 	});
-	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -11156,7 +11155,7 @@ function compileWithDynamicDelete(
 	cursor.block = fn.blocks[missIdx]!;
 	const staticResult = compileStaticIdentifierDelete(program, fn, cursor, identifier);
 	cursor.block.instructions.push({ type: "move", registers: [result, staticResult] });
-	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -11176,9 +11175,9 @@ function compileWithDynamicDelete(
  * ToNumber (unary plus) so the postfix result is the numeric old value.
  */
 function compileUpdateExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.UpdateExpression,
 ): number {
 	// UpdateExpression coerces with ToNumeric (not ToNumber): a BigInt operand
@@ -11318,7 +11317,7 @@ function assignmentOperatorToBinaryOperator(operator: string) {
 	}
 
 	const binaryOperator = operator.slice(0, -1);
-	if (!isIRBinaryOperator(binaryOperator)) {
+	if (!isRegisterBinaryOperator(binaryOperator)) {
 		throw new Error(`Unsupported assignment operator ${operator}`);
 	}
 
@@ -11326,9 +11325,9 @@ function assignmentOperatorToBinaryOperator(operator: string) {
 }
 
 function compileBinary(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	binaryExpression: ESTree.BinaryExpression,
 ): number {
 	// Ergonomic brand check `#x in obj`: present iff obj carries the declaring
@@ -11354,7 +11353,7 @@ function compileBinary(
 		return destination;
 	}
 
-	if (!isIRBinaryOperator(binaryExpression.operator)) {
+	if (!isRegisterBinaryOperator(binaryExpression.operator)) {
 		throw new Error(`Unsupported binary operator ${binaryExpression.operator}`);
 	}
 
@@ -11511,9 +11510,9 @@ function appendTemplateNumber(out: Array<number>, value: number): void {
 }
 
 function compileLiteralTemplate(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	root: ESTree.ArrayExpression | ESTree.ObjectExpression,
 ): number | null {
 	if (!isStaticLiteralTemplate(root)) return null;
@@ -11580,7 +11579,7 @@ function compileLiteralTemplate(
 		}
 	}
 
-	// Small literals are cheaper on the ordinary IR path and remain visible to
+	// Small literals are cheaper on the ordinary Core path and remain visible to
 	// scalar replacement. Templates target data large enough to reduce code size.
 	if (encoded.length < MIN_LITERAL_TEMPLATE_WORDS) return null;
 
@@ -11654,15 +11653,15 @@ function isAnonymousFunctionDefinition(node: ESTree.Node | null | undefined): bo
  * the erroneous `prototype` that a plain function value would carry.
  */
 function compileObjectMemberFunction(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	valueNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 	homeObjectBinding: Binding | undefined,
 	nameHint: string | undefined,
 ): number {
 	const inherited = inheritedPrivateEnvironment(fn, false);
-	const classContext: IRClassContext = {
+	const classContext: RegisterClassContext = {
 		isStatic: false,
 		privateNames: inherited?.privateNames,
 		homeObjectBinding,
@@ -11685,9 +11684,9 @@ function compileObjectMemberFunction(
 }
 
 function compileObjectExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	objectExpression: ESTree.ObjectExpression,
 ): number {
 	const template = compileLiteralTemplate(program, fn, cursor, objectExpression);
@@ -11846,9 +11845,9 @@ function compileObjectExpression(
 }
 
 function compileArrayExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	arrayExpression: ESTree.ArrayExpression,
 ): number {
 	const template = compileLiteralTemplate(program, fn, cursor, arrayExpression);
@@ -11954,9 +11953,9 @@ function compileArrayExpression(
 }
 
 function compileMemberExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number {
 	const staticArgumentsResult = compileStaticArgumentsMember(
@@ -11983,9 +11982,9 @@ function compileMemberExpression(
 }
 
 function compileStaticArgumentsMember(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number | undefined {
 	if (memberExpression.object.type !== "Identifier") return undefined;
@@ -12024,8 +12023,8 @@ interface CompiledMemberReference {
 }
 
 function compileMemberLoad(
-	fn: IRFunction,
-	cursor: IRCursor,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	member: CompiledMemberReference,
 ): number {
 	const destination = nextRegisterDestination(fn);
@@ -12044,8 +12043,8 @@ function compileMemberLoad(
 }
 
 function compileMemberKeyOnce(
-	fn: IRFunction,
-	cursor: IRCursor,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	member: CompiledMemberReference,
 ): number {
 	let coercibleBase = member.object;
@@ -12069,7 +12068,7 @@ function compileMemberKeyOnce(
 }
 
 function compileMemberStore(
-	cursor: IRCursor,
+	cursor: RegisterCursor,
 	member: CompiledMemberReference,
 	value: number,
 ): void {
@@ -12084,9 +12083,9 @@ function compileMemberStore(
 }
 
 function compileMemberObjectAndKey(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	memberExpression: ESTree.MemberExpression,
 ): CompiledMemberReference {
 	let object = -1;
@@ -12132,9 +12131,9 @@ function compileMemberObjectAndKey(
  * the parent itself in static ones.
  */
 function compileSuperObject(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 ): number {
 	const classContext = fn.classContext;
 	if (!classContext) {
@@ -12204,9 +12203,9 @@ function compileSuperObject(
 }
 
 function compilePropertyKey(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	property: ESTree.Property,
 ) {
 	if (property.computed) {
@@ -12225,9 +12224,9 @@ function compilePropertyKey(
 }
 
 function compileStaticString(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	value: string,
 ) {
 	const destination = nextRegisterDestination(fn);
@@ -12245,9 +12244,9 @@ function compileStaticString(
  * arguments appended directly and spreads drained through their iterators.
  */
 function compileSpreadArgumentsArray(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	args: Array<ESTree.Expression | ESTree.SpreadElement>,
 ): number {
 	const array = nextRegisterDestination(fn);
@@ -12304,7 +12303,7 @@ function compileSpreadArgumentsArray(
  * and globals backed by internal slots can be marshaled too.
  */
 function visibleBindingsForDirectEval(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	callNode: ESTree.Node,
 ): Map<string, Binding> {
 	const result = new Map<string, Binding>();
@@ -12335,8 +12334,8 @@ function visibleBindingsForDirectEval(
 }
 
 function inheritedContextForDirectEval(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	callNode: ESTree.CallExpression,
 ): DirectEvalContext {
 	const classContext = fn.classContext;
@@ -12457,9 +12456,9 @@ function inheritedContextForDirectEval(
 }
 
 function storeDirectEvalScopeValue(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	scopeObject: number,
 	keyName: string,
 	value: number,
@@ -12472,9 +12471,9 @@ function storeDirectEvalScopeValue(
 }
 
 function loadDirectEvalHomeObject(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 ): number {
 	const classContext = fn.classContext;
 	if (classContext?.homeObjectBinding) {
@@ -12493,9 +12492,9 @@ function loadDirectEvalHomeObject(
 }
 
 function marshalDirectEvalInheritedContext(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	scopeObject: number,
 	context: DirectEvalContext,
 ): void {
@@ -12559,9 +12558,9 @@ function marshalDirectEvalInheritedContext(
 }
 
 function ensureDirectEvalPersistentScope(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 ): number {
 	if (program.evalDirect && program.directEvalPersistentScopeBinding) {
 		return loadCapturedBinding(
@@ -12599,9 +12598,9 @@ function ensureDirectEvalPersistentScope(
  * and would skip an actual same-value Set through an accessor's setter.
  */
 function compileDirectEval(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const bindings = visibleBindingsForDirectEval(fn, callExpression);
@@ -12841,21 +12840,21 @@ function compileDirectEval(
 				type: "loadProperty",
 				registers: [dirty, dirtyTracker, key],
 			});
-			const dirtyJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+			const dirtyJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 				type: "jumpIf",
 				registers: [dirty],
 				blocks: [-1],
 			};
-			const skipJump: Extract<IRInstruction, { type: "jump" }> = {
+			const skipJump: Extract<RegisterInstruction, { type: "jump" }> = {
 				type: "jump",
 				blocks: [-1],
 			};
 			cursor.block.instructions.push(dirtyJump, skipJump);
 
-			const writeBlock: IRBlock = { instructions: [] };
+			const writeBlock: RegisterBlock = { instructions: [] };
 			const writeIndex = fn.blocks.push(writeBlock) - 1;
 			storeRegisterAtLocation(writeBlock, location, value);
-			const joinJump: Extract<IRInstruction, { type: "jump" }> = {
+			const joinJump: Extract<RegisterInstruction, { type: "jump" }> = {
 				type: "jump",
 				blocks: [-1],
 			};
@@ -12875,9 +12874,9 @@ function compileDirectEval(
 }
 
 function compileImportExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	source: ESTree.Expression,
 	options?: ESTree.Expression | null,
 ): number {
@@ -12906,7 +12905,7 @@ function compileImportExpression(
 		.map((file) => file.path)
 		.sort();
 	const result = nextRegisterDestination(fn);
-	const joinJumps: Array<Extract<IRInstruction, { type: "jump" }>> = [];
+	const joinJumps: Array<Extract<RegisterInstruction, { type: "jump" }>> = [];
 
 	for (const candidate of candidates) {
 		const candidateSpecifier = compileStaticString(program, fn, cursor, candidate);
@@ -12916,12 +12915,12 @@ function compileImportExpression(
 			registers: [matches, specifier, candidateSpecifier],
 			operator: "===",
 		});
-		const matchJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		const matchJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 			type: "jumpIf",
 			registers: [matches],
 			blocks: [-1],
 		};
-		const nextJump: Extract<IRInstruction, { type: "jump" }> = {
+		const nextJump: Extract<RegisterInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -12932,7 +12931,7 @@ function compileImportExpression(
 		cursor.block = fn.blocks[matchIndex]!;
 		const imported = emitDynamicImportCall(program, fn, cursor, specifier, candidate);
 		cursor.block.instructions.push({ type: "move", registers: [result, imported] });
-		const joinJump: Extract<IRInstruction, { type: "jump" }> = {
+		const joinJump: Extract<RegisterInstruction, { type: "jump" }> = {
 			type: "jump",
 			blocks: [-1],
 		};
@@ -12954,9 +12953,9 @@ function compileImportExpression(
 }
 
 function emitDynamicImportCall(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	specifier: number,
 	targetPath?: string,
 ): number {
@@ -13013,8 +13012,8 @@ function emitDynamicImportCall(
 }
 
 function dynamicImportTargetPath(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	source: ESTree.Expression,
 ): string | undefined {
 	if (source.type !== "Literal" || typeof source.value !== "string") {
@@ -13030,7 +13029,7 @@ function dynamicImportTargetPath(
 }
 
 function getDynamicModuleStatusSlot(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 	modulePath: string,
 ): number {
 	let slot = program.dynamicModuleStatusSlot.get(modulePath);
@@ -13042,9 +13041,9 @@ function getDynamicModuleStatusSlot(
 }
 
 function compileDynamicImport(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const source = callExpression.arguments[0];
@@ -13057,9 +13056,9 @@ function compileDynamicImport(
 }
 
 function compileCall(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const calleeNode = callExpression.callee as unknown as ESTree.Node;
@@ -13175,9 +13174,9 @@ function compileCall(
 
 /** Compile SuperCall with the active derived-constructor environment. */
 function compileSuperCall(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const superBinding = fn.classContext?.superBinding;
@@ -13263,9 +13262,9 @@ function compileSuperCall(
  * prototype property and substitutes non-object return values.
  */
 function compileNewExpression(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	expression: ESTree.NewExpression,
 ): number {
 	const calleeNode = expression.callee as unknown as ESTree.Node;
@@ -13324,9 +13323,9 @@ function compileNewExpression(
  * Statements that store the a variable internally handle the store instructions.
  */
 function compileIdentifier(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	if (identifierUsesDynamicEnvironment(program, fn, identifier)) {
@@ -13340,14 +13339,14 @@ function compileIdentifier(
  * compiled. In direct-eval mode these are routed through the with-dynamic path
  * so they probe the caller scope object before the global.
  */
-function identifierIsFree(fn: IRFunction, identifier: ESTree.Identifier): boolean {
+function identifierIsFree(fn: RegisterFunction, identifier: ESTree.Identifier): boolean {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	return !binding || binding.undeclared === true;
 }
 
 function isDirectEvalVarBinding(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	if (
@@ -13365,8 +13364,8 @@ function isDirectEvalVarBinding(
 }
 
 function isNewDirectEvalVarBinding(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	return (
@@ -13376,8 +13375,8 @@ function isNewDirectEvalVarBinding(
 }
 
 function identifierUsesDynamicEnvironment(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	identifier: ESTree.Identifier,
 ): boolean {
 	return (
@@ -13393,9 +13392,9 @@ function identifierUsesDynamicEnvironment(
  * paths join with the value in a single register.
  */
 function compileWithDynamicRead(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const result = nextRegisterDestination(fn);
@@ -13408,12 +13407,12 @@ function compileWithDynamicRead(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, result] });
 
-	const fallbackJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const fallbackJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+	const foundJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -13424,7 +13423,7 @@ function compileWithDynamicRead(
 	cursor.block = fn.blocks[fallbackIdx]!;
 	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
 	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
-	const fallbackJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const fallbackJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -13445,9 +13444,9 @@ function compileWithDynamicRead(
  * (never a ReferenceError — typeof of an unresolvable name does not throw).
  */
 function compileWithDynamicTypeof(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	const result = nextRegisterDestination(fn);
@@ -13460,12 +13459,12 @@ function compileWithDynamicTypeof(
 	const emptyFlag = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, probe] });
 
-	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+	const missJump: Extract<RegisterInstruction, { type: "jumpIf" }> = {
 		type: "jumpIf",
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const hitJump: Extract<IRInstruction, { type: "jump" }> = {
+	const hitJump: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -13479,7 +13478,7 @@ function compileWithDynamicTypeof(
 		registers: [result, probe],
 		operator: "typeof",
 	});
-	const hitJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const hitJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -13490,7 +13489,7 @@ function compileWithDynamicTypeof(
 	cursor.block = fn.blocks[missIdx]!;
 	const undefinedString = compileStaticString(program, fn, cursor, "undefined");
 	cursor.block.instructions.push({ type: "move", registers: [result, undefinedString] });
-	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+	const missJoin: Extract<RegisterInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
 	};
@@ -13507,9 +13506,9 @@ function compileWithDynamicTypeof(
 }
 
 function compileStaticIdentifier(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	if (identifier.name === "undefined") {
@@ -13566,7 +13565,7 @@ function compileStaticIdentifier(
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */
-function retainHostGlobal(program: IntermediateProgram, binding: Binding): boolean {
+function retainHostGlobal(program: SemanticLoweringProgram, binding: Binding): boolean {
 	if (
 		program.hostProcess &&
 		binding.undeclared &&
@@ -13586,7 +13585,7 @@ function retainHostGlobal(program: IntermediateProgram, binding: Binding): boole
 }
 
 function globalPropertyLocation(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 	name: string,
 ): BindingLocation {
 	return {
@@ -13617,7 +13616,7 @@ function isTdzBinding(binding: Binding): boolean {
  * parameter default (an earlier-declared parameter is initialized, a later one
  * is not, and only the runtime EMPTY check can tell them apart).
  */
-function bindingNeedsTdzGuard(fn: IRFunction, binding: Binding): boolean {
+function bindingNeedsTdzGuard(fn: RegisterFunction, binding: Binding): boolean {
 	return (
 		!binding.undeclared && (isTdzBinding(binding) || (fn.inParameterExpression ?? false))
 	);
@@ -13631,9 +13630,9 @@ function bindingNeedsTdzGuard(fn: IRFunction, binding: Binding): boolean {
  * A no-op once the slot holds a real value.
  */
 function emitTdzGuard(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	binding: Binding,
 	current: number,
 ) {
@@ -13654,9 +13653,9 @@ function emitTdzGuard(
  * the predicate so an undeclared binding never allocates a slot.
  */
 function emitWriteTdzGuard(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	binding: Binding,
 	hostGlobalLocation: BindingLocation | null,
 ) {
@@ -13681,9 +13680,9 @@ function emitWriteTdzGuard(
  * bindings; any that somehow are not are skipped.
  */
 function emitNamespaceObject(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	binding: Binding,
 	exports: Array<{ name: string; exporter: Binding }>,
 ) {
@@ -13693,9 +13692,9 @@ function emitNamespaceObject(
 }
 
 function emitNamespaceObjectRegister(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	exports: Array<{ name: string; exporter: Binding }>,
 ): number {
 	const entries: Array<{ nameStringIndex: number; slot: number }> = [];
@@ -13721,8 +13720,8 @@ function emitNamespaceObjectRegister(
 }
 
 function loadRegisterFromLocation(
-	fn: IRFunction,
-	block: IRBlock,
+	fn: RegisterFunction,
+	block: RegisterBlock,
 	location: BindingLocation,
 ) {
 	const destination = nextRegisterDestination(fn);
@@ -13767,7 +13766,7 @@ function loadRegisterFromLocation(
 }
 
 function getArgumentsBinding(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -13821,7 +13820,7 @@ function getArgumentsBinding(
  * arrows to capture, or undefined. Arrows never own one (they inherit `this`).
  */
 function getLexicalThisBinding(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -13840,7 +13839,7 @@ function getLexicalThisBinding(
  * nested arrows to capture, or undefined. Arrows never own one.
  */
 function getLexicalNewTargetBinding(
-	fn: IRFunction,
+	fn: RegisterFunction,
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
@@ -13855,9 +13854,9 @@ function getLexicalNewTargetBinding(
 }
 
 function compileLiteral(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	cursor: IRCursor,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
+	cursor: RegisterCursor,
 	literal: ESTree.Literal,
 ): number {
 	if (
@@ -13954,7 +13953,7 @@ function compileLiteral(
 	return -1;
 }
 
-function compileUndefined(fn: IRFunction, cursor: IRCursor) {
+function compileUndefined(fn: RegisterFunction, cursor: RegisterCursor) {
 	const destination = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "createUndefined",
@@ -13964,7 +13963,7 @@ function compileUndefined(fn: IRFunction, cursor: IRCursor) {
 	return destination;
 }
 
-function compileNumberLiteral(fn: IRFunction, cursor: IRCursor, value: number) {
+function compileNumberLiteral(fn: RegisterFunction, cursor: RegisterCursor, value: number) {
 	const destination = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "createNumber",
@@ -13976,7 +13975,7 @@ function compileNumberLiteral(fn: IRFunction, cursor: IRCursor, value: number) {
 	return destination;
 }
 
-export function getOrCreateStringConstant(program: IntermediateProgram, value: string) {
+export function getOrCreateStringConstant(program: SemanticLoweringProgram, value: string) {
 	const existing = program.stringConstantToIndex.get(value);
 	if (existing !== undefined) {
 		return existing;
@@ -13993,7 +13992,7 @@ export function getOrCreateStringConstant(program: IntermediateProgram, value: s
 }
 
 function getOrCreateSourcePosition(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 	line: number,
 	column: number,
 ): number {
@@ -14015,7 +14014,7 @@ function getOrCreateSourcePosition(
  * `callerPosId` chain, emitting one frame per inline level. Used by the inliner.
  */
 export function addInlineSourcePosition(
-	program: IntermediateProgram,
+	program: SemanticLoweringProgram,
 	line: number,
 	column: number,
 	inlinedFunctionIndex: number,
@@ -14032,8 +14031,8 @@ export function addInlineSourcePosition(
  * inherited by every following instruction until the next marker.
  */
 function emitSourcePos(
-	program: IntermediateProgram,
-	block: IRBlock,
+	program: SemanticLoweringProgram,
+	block: RegisterBlock,
 	node: ESTree.Node,
 ): void {
 	const loc = node.loc;
@@ -14047,7 +14046,7 @@ function emitSourcePos(
 	});
 }
 
-function getOrCreateBigintConstant(program: IntermediateProgram, value: bigint) {
+function getOrCreateBigintConstant(program: SemanticLoweringProgram, value: bigint) {
 	const existing = program.bigintConstantToIndex.get(value);
 	if (existing !== undefined) {
 		return existing;
@@ -14064,7 +14063,7 @@ function getOrCreateBigintConstant(program: IntermediateProgram, value: bigint) 
  * At a later compiler stage these should be optimized to reduce the number of registers needed
  * with things like live-ness checking.
  */
-function nextRegisterDestination(fn: IRFunction) {
+function nextRegisterDestination(fn: RegisterFunction) {
 	return fn.nextRegisterDestination++;
 }
 
@@ -14074,8 +14073,8 @@ function nextRegisterDestination(fn: IRFunction) {
  * per binding.
  */
 function getOrCreateBindingLocation(
-	program: IntermediateProgram,
-	fn: IRFunction,
+	program: SemanticLoweringProgram,
+	fn: RegisterFunction,
 	binding: Binding,
 ) {
 	let location = program.bindingToStorage.get(binding);
@@ -14126,7 +14125,7 @@ function getOrCreateBindingLocation(
  * Store register at a binding location.
  */
 function storeRegisterAtLocation(
-	block: IRBlock,
+	block: RegisterBlock,
 	location: BindingLocation,
 	register: number,
 ) {

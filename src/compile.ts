@@ -1,6 +1,6 @@
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { decodeDirectEvalContext } from "./direct-eval-context.ts";
-import { referencesArguments } from "./ir.ts";
+import { referencesArguments } from "./semantic-lowering.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";

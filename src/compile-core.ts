@@ -3,7 +3,7 @@ import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
 import { attachCoreCompilerSiteFacts } from "./compiler-site-facts.ts";
 import { lowerSemanticProgramToCore } from "./core-frontend.ts";
-import { lowerCoreProgramToRegisters } from "./core-ir-bridge.ts";
+import { lowerCoreProgramToRegisters } from "./core-ir-lowering.ts";
 import { executeCoreOptimizations } from "./core-ir-opt.ts";
 import type { CoreProgram } from "./core-ir.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
