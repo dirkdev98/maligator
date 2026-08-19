@@ -893,14 +893,35 @@ export class DirectCoreFunctionConstruction {
 	}
 
 	#propagateEntryVariables(): void {
-		let changed = true;
-		while (changed) {
-			changed = false;
-			for (const { target, environment } of this.#allEdgeDrafts()) {
-				for (const variable of target.parameterVariables) {
-					const before = environment.state.parameterVariables.length;
+		const incoming = new Map<ConstructionState, Array<ValueEnvironment>>();
+		for (const edge of this.#allEdgeDrafts()) {
+			const environments = incoming.get(edge.target) ?? [];
+			environments.push(edge.environment);
+			incoming.set(edge.target, environments);
+		}
+		const queue: Array<ConstructionState> = [];
+		const queued = new Set<ConstructionState>();
+		const processedVariables = new Map<ConstructionState, number>();
+		const enqueue = (state: ConstructionState): void => {
+			if (queued.has(state)) return;
+			queued.add(state);
+			queue.push(state);
+		};
+		for (const state of this.#states) {
+			if (state.parameterVariables.length > 0) enqueue(state);
+		}
+		for (let index = 0; index < queue.length; index++) {
+			const target = queue[index]!;
+			queued.delete(target);
+			const processed = processedVariables.get(target) ?? 0;
+			const variables = target.parameterVariables.slice(processed);
+			processedVariables.set(target, target.parameterVariables.length);
+			for (const environment of incoming.get(target) ?? []) {
+				for (const variable of variables) {
+					const source = environment.state;
+					const before = source.parameterVariables.length;
 					this.#resolveEnvironment(environment, variable);
-					if (environment.state.parameterVariables.length !== before) changed = true;
+					if (source.parameterVariables.length !== before) enqueue(source);
 				}
 			}
 		}
