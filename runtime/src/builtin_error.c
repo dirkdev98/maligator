@@ -840,6 +840,94 @@ static void mal_builtin_error_define_stack_accessor(MalVm *vm, MalObject *protot
         MAL_PROPERTY_CONFIGURABLE);
 }
 
+#if MAL_NODE && MAL_PRIMORDIALS_LOCKED
+static MalValue mal_builtin_error_node_hook_set(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalIntrinsic slot, const byte *name
+) {
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Node Error stack hook setter called on non-object");
+        return mal_value_new_undefined();
+    }
+
+    MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (this_value == vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR]) {
+        mal_gc_write_barrier(vm->intrinsics[slot]);
+        vm->intrinsics[slot] = value;
+        return mal_value_new_undefined();
+    }
+
+    // Preserve ordinary inherited-assignment behavior for a distinct receiver:
+    // the host setter is special only on its home Error constructor.
+    MalKey key = mal_intrinsic_string_key(vm, name);
+    bool present;
+    MalPropertyDesc desc;
+    if (!mal_vm_get_own_property(vm, this_value, key, &present, &desc)) {
+        return mal_value_new_undefined();
+    }
+    if (!present) {
+        mal_vm_op_define_property(
+            vm, this_value, key.value, value, true, true, true);
+        return mal_value_new_undefined();
+    }
+    if (!mal_vm_set_property(vm, this_value, key, value, this_value) &&
+        vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot set Node Error stack hook");
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_builtin_error_prepare_stack_trace_getter(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    return vm->intrinsics[MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE];
+}
+
+static MalValue mal_builtin_error_prepare_stack_trace_setter(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target;
+    (void) callee;
+    return mal_builtin_error_node_hook_set(
+        vm, this_value, args, arg_count,
+        MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE, "prepareStackTrace");
+}
+
+static MalValue mal_builtin_error_stack_trace_limit_getter(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    return vm->intrinsics[MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE];
+}
+
+static MalValue mal_builtin_error_stack_trace_limit_setter(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target;
+    (void) callee;
+    return mal_builtin_error_node_hook_set(
+        vm, this_value, args, arg_count,
+        MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE, "stackTraceLimit");
+}
+#endif
+
 void mal_vm_throw_error(MalVm *vm, MalIntrinsic prototype_slot, const byte *message) {
     mal_vm_throw_error_value(vm, prototype_slot, mal_value_from_string(mal_intrinsic_ascii(vm, message)));
 }
@@ -947,18 +1035,39 @@ void mal_builtin_error_install(MalVm *vm) {
         2,
         mal_builtin_error_capture_stack_trace
     );
+    MalObject *error_constructor =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR]);
+#if MAL_NODE && MAL_PRIMORDIALS_LOCKED
+    vm->intrinsics[MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE] =
+        mal_value_new_undefined();
+    vm->intrinsics[MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE] =
+        mal_value_from_i32(10);
+    mal_intrinsic_define_accessor_n(
+        vm, error_constructor,
+        mal_intrinsic_string_key(vm, "prepareStackTrace"),
+        "get prepareStackTrace", 0,
+        mal_builtin_error_prepare_stack_trace_getter,
+        "set prepareStackTrace", 1,
+        mal_builtin_error_prepare_stack_trace_setter,
+        MAL_PROPERTY_CONFIGURABLE | MAL_PROPERTY_LOCKED_SETTER);
+    mal_intrinsic_define_accessor_n(
+        vm, error_constructor,
+        mal_intrinsic_string_key(vm, "stackTraceLimit"),
+        "get stackTraceLimit", 0,
+        mal_builtin_error_stack_trace_limit_getter,
+        "set stackTraceLimit", 1,
+        mal_builtin_error_stack_trace_limit_setter,
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE |
+            MAL_PROPERTY_LOCKED_SETTER);
+#else
     mal_intrinsic_define_data(
-        vm,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR]),
-        "stackTraceLimit",
-        mal_value_from_i32(10),
-        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
-    );
+        vm, error_constructor, "stackTraceLimit", mal_value_from_i32(10),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+            MAL_PROPERTY_CONFIGURABLE);
+#endif
 
     // NativeError / AggregateError constructors have [[Prototype]] === %Error%
     // (the Error constructor), not %Function.prototype%.
-    MalObject *error_constructor = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR]);
-
     mal_builtin_error_install_kind(vm, "TypeError", MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, error_prototype, error_constructor, 1, mal_builtin_type_error_constructor);
     mal_builtin_error_install_kind(vm, "RangeError", MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, error_prototype, error_constructor, 1, mal_builtin_range_error_constructor);
     mal_builtin_error_install_kind(vm, "ReferenceError", MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, error_prototype, error_constructor, 1, mal_builtin_reference_error_constructor);

@@ -456,6 +456,9 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_SHADOW_REALM_CONSTRUCTOR,
     MAL_INTRINSIC_SHADOW_REALM_PROTOTYPE,
 #endif
+    /* Per-realm Node Error stack customization state. */
+    MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE,
+    MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 

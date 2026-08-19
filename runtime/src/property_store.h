@@ -20,8 +20,11 @@ typedef enum MalPropertyFlags {
      * receiver while direct writes to the primordial remain forbidden.
      */
     MAL_PROPERTY_SHADOW_WRITABLE = 1 << 5,
+    /** A physically locked host accessor whose setter remains callable. */
+    MAL_PROPERTY_LOCKED_SETTER = 1 << 6,
     MAL_PROPERTY_INTERNAL_FLAGS =
-        MAL_PROPERTY_PRIMORDIAL | MAL_PROPERTY_SHADOW_WRITABLE,
+        MAL_PROPERTY_PRIMORDIAL | MAL_PROPERTY_SHADOW_WRITABLE |
+        MAL_PROPERTY_LOCKED_SETTER,
 } MalPropertyFlags;
 
 /**

@@ -3404,6 +3404,17 @@ static bool mal_vm_array_set_length(MalVm *vm, MalArrayObject *array, MalValue v
     return mal_array_object_length(array) == new_length;
 }
 
+static bool mal_vm_locked_primordial_allows_set(
+    MalValue target, MalKey key
+) {
+    MalPropertyLookup own =
+        mal_object_get_own(mal_value_to_object(target), key);
+    return own.present &&
+        (own.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+        (own.desc.flags & MAL_PROPERTY_LOCKED_SETTER) &&
+        mal_value_is_callable(own.desc.setter);
+}
+
 /**
  * Spec [[Set]] returning the boolean success (never throwing on a plain
  * rejection) used by Reflect.set: an accessor invokes its setter with the
@@ -3418,9 +3429,11 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
 
     if (target == receiver && mal_value_is_object(target) &&
         mal_object_is_locked_primordial(mal_value_to_object(target))) {
-        mal_primordials_throw_property_mutation(
-            vm, "Cannot assign locked primordial property '", key);
-        return false;
+        if (!mal_vm_locked_primordial_allows_set(target, key)) {
+            mal_primordials_throw_property_mutation(
+                vm, "Cannot assign locked primordial property '", key);
+            return false;
+        }
     }
 
     // IntegerIndexedElementSet coerces the value before checking index validity.
@@ -4713,7 +4726,8 @@ static void mal_vm_op_store_property_keyed(
         return;
     }
 
-    if (mal_object_is_locked_primordial(mal_value_to_object(object_value))) {
+    if (mal_object_is_locked_primordial(mal_value_to_object(object_value)) &&
+        !mal_vm_locked_primordial_allows_set(object_value, key)) {
         mal_primordials_throw_property_mutation(
             vm, "Cannot assign locked primordial property '", key);
         return;
