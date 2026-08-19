@@ -547,16 +547,22 @@ function coreCanonicalValues(
 				continue;
 			}
 			for (const [index, parameter] of block.parameters.entries()) {
-				const first = incoming[0]!.arguments[index];
-				if (first === undefined) continue;
-				const source = root(first);
-				if (
-					incoming.every((edge) => {
-						const argument = edge.arguments[index];
-						return argument !== undefined && root(argument) === source;
-					}) &&
-					root(parameter.value) !== source
-				) {
+				const current = root(parameter.value);
+				const externalSources = new Set<CoreValueId>();
+				let complete = true;
+				for (const edge of incoming) {
+					const argument = edge.arguments[index];
+					if (argument === undefined) {
+						complete = false;
+						break;
+					}
+					const source = root(argument);
+					// A loop-carried copy cycle contributes no new value. Collapse the
+					// cycle only when every value entering it from outside has one root.
+					if (source !== current) externalSources.add(source);
+				}
+				if (complete && externalSources.size === 1) {
+					const source = externalSources.values().next().value!;
 					canonical.set(parameter.value, source);
 					changed = true;
 				}
@@ -1949,6 +1955,29 @@ function coreProofIsWorldInvariant(proof: CoreKnownBuiltinProof["proof"]): boole
 	);
 }
 
+function mergeCoreBuiltinProofs(
+	proofs: ReadonlyArray<CoreKnownBuiltinProof["proof"]>,
+): CoreKnownBuiltinProof["proof"] {
+	const dependencies = new Map<string, unknown>();
+	const obligations = new Map<string, unknown>();
+	for (const proof of proofs) {
+		for (const dependency of proof.dependencies) {
+			dependencies.set(stableAttributeValue(dependency), dependency);
+		}
+		for (const obligation of proof.obligations) {
+			obligations.set(stableAttributeValue(obligation), obligation);
+		}
+	}
+	return {
+		dependencies: [...dependencies.entries()]
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([, dependency]) => dependency),
+		obligations: [...obligations.entries()]
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([, obligation]) => obligation),
+	};
+}
+
 /** Select closed capture projections from an exact `RegExp.prototype.exec`. */
 const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 	name: "select-regexp-exec-projection-regions",
@@ -2685,6 +2714,408 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 			});
 			for (const id of claimedInstructions) occupied.add(id);
 			if (regions.filter(({ kind }) => kind === "regexp-iterator-projection").length >= 8) {
+				break;
+			}
+		}
+		return regions.length === fn.regions.length
+			? fn
+			: { ...fn, regions, mutationEpoch: fn.mutationEpoch + 1 };
+	},
+};
+
+/** Select one-shot indexed consumers of an exact `String.prototype.split`. */
+const selectStringSplitCursorRegions: CoreFunctionPass = {
+	name: "select-string-split-cursor-regions",
+	run(fn, analyses, program) {
+		if (fn.regions.filter(({ kind }) => kind === "string-split-cursor").length >= 8) {
+			return fn;
+		}
+		const cfg = analyses.controlFlow(fn);
+		const canonical = coreCanonicalValues(fn, cfg);
+		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
+		const definitions = functionDefinitions(fn);
+		const locations = new Map<
+			CoreInstructionId,
+			{ readonly block: CoreBlock; readonly index: number }
+		>();
+		const uses = new Map<
+			CoreValueId,
+			Array<{ readonly instruction: CoreInstruction; readonly position: number }>
+		>();
+		for (const block of fn.blocks) {
+			for (const [index, instruction] of block.instructions.entries()) {
+				locations.set(instruction.id, { block, index });
+				for (const [position, input] of instruction.inputs.entries()) {
+					const entries = uses.get(root(input)) ?? [];
+					entries.push({ instruction, position });
+					uses.set(root(input), entries);
+				}
+			}
+			locations.set(block.terminator.id, {
+				block,
+				index: block.instructions.length,
+			});
+		}
+		const instructionDominates = (
+			producer: CoreInstruction,
+			consumer: CoreInstruction,
+		): boolean => {
+			const producerLocation = locations.get(producer.id);
+			const consumerLocation = locations.get(consumer.id);
+			if (producerLocation === undefined || consumerLocation === undefined) return false;
+			return producerLocation.block.id === consumerLocation.block.id
+				? producerLocation.index < consumerLocation.index
+				: cfg.dominates(producerLocation.block.id, consumerLocation.block.id);
+		};
+		const exactUses = (
+			value: CoreValueId,
+			expected: ReadonlyArray<{
+				readonly instruction: CoreInstruction;
+				readonly position: number;
+			}>,
+		): boolean => {
+			const actual = uses.get(root(value)) ?? [];
+			return (
+				actual.length === expected.length &&
+				expected.every(({ instruction, position }) =>
+					actual.some(
+						(use) => use.instruction === instruction && use.position === position,
+					),
+				)
+			);
+		};
+		const canReachWithout = (
+			from: CoreBlockId,
+			to: CoreBlockId,
+			blocked: CoreBlockId,
+		): boolean => {
+			if (from === blocked) return false;
+			const seen = new Set<CoreBlockId>([blocked]);
+			const pending = [from];
+			while (pending.length > 0) {
+				const block = pending.pop()!;
+				if (block === to) return true;
+				if (seen.has(block)) continue;
+				seen.add(block);
+				for (const edge of cfg.successors[block]!) {
+					if (edge.kind === "ordinary" && !seen.has(edge.to)) pending.push(edge.to);
+				}
+			}
+			return false;
+		};
+		const staticProperty = (
+			instruction: CoreInstruction | undefined,
+			name: string,
+		): instruction is CoreInstruction =>
+			instruction?.opcode === "loadPropertyStatic" &&
+			typeof instruction.attributes.stringIndex === "number" &&
+			decodeString(program, instruction.attributes.stringIndex) === name;
+		const occupied = new Set(
+			fn.regions
+				.filter(({ kind }) => kind !== "numeric-fusion")
+				.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const handlerTargets = new Set(
+			fn.blocks.flatMap(({ handler }) =>
+				handler === undefined ? [] : [handler.block],
+			),
+		);
+		const regions = [...fn.regions];
+		for (const loop of cfg.loops) {
+			const header = fn.blocks[loop.header]!;
+			const backedgeBlock = fn.blocks[loop.backedge]!;
+			const branch = header.terminator;
+			if (
+				branch.kind !== "branch" ||
+				backedgeBlock.terminator.kind !== "jump" ||
+				backedgeBlock.terminator.edge.block !== header.id ||
+				branch.consequent.block !== backedgeBlock.id ||
+				loop.blocks.size !== 2 ||
+				!loop.blocks.has(header.id) ||
+				!loop.blocks.has(backedgeBlock.id)
+			) {
+				continue;
+			}
+			const containedLoops = cfg.loops.filter(
+				(candidate) =>
+					loop.blocks.has(candidate.header) && loop.blocks.has(candidate.backedge),
+			);
+			const headerPredecessors = cfg.predecessors[header.id]!.filter(
+				({ kind }) => kind === "ordinary",
+			);
+			const insidePredecessors = headerPredecessors.filter(({ from }) =>
+				loop.blocks.has(from),
+			);
+			const outsidePredecessors = headerPredecessors.filter(
+				({ from }) => !loop.blocks.has(from),
+			);
+			if (
+				containedLoops.length !== 1 ||
+				insidePredecessors.length !== 1 ||
+				insidePredecessors[0]!.from !== backedgeBlock.id ||
+				outsidePredecessors.length !== 1
+			) {
+				continue;
+			}
+			let exactLoopControl = true;
+			for (const blockId of loop.blocks) {
+				for (const edge of cfg.predecessors[blockId]!) {
+					if (edge.kind !== "ordinary" || (!loop.blocks.has(edge.from) && blockId !== header.id)) {
+						exactLoopControl = false;
+					}
+				}
+				for (const edge of cfg.successors[blockId]!) {
+					if (
+						edge.kind !== "ordinary" ||
+						(!loop.blocks.has(edge.to) &&
+							(blockId !== header.id || edge.to !== branch.alternate.block))
+					) {
+						exactLoopControl = false;
+					}
+				}
+			}
+			if (!exactLoopControl) continue;
+
+			const compare = definitions.get(root(branch.condition));
+			if (
+				compare?.opcode !== "binary" ||
+				compare.attributes.operator !== "<" ||
+				compare.inputs.length !== 2 ||
+				compare.outputs.length !== 1 ||
+				header.instructions.at(-1) !== compare
+			) {
+				continue;
+			}
+			const index = compare.inputs[0]!;
+			const length = definitions.get(root(compare.inputs[1]!));
+			if (
+				!staticProperty(length, "length") ||
+				length.inputs.length !== 1 ||
+				length.outputs.length !== 1 ||
+				header.instructions.at(-2) !== length
+			) {
+				continue;
+			}
+			const splitResult = root(length.inputs[0]!);
+			const splitCall = definitions.get(splitResult);
+			if (
+				(splitCall?.opcode !== "call" && splitCall?.opcode !== "callBuiltin") ||
+				splitCall.outputs.length !== 1
+			) {
+				continue;
+			}
+			const dynamicSplit = splitCall.opcode === "call";
+			if (splitCall.inputs.length !== (dynamicSplit ? 3 : 2)) continue;
+			const splitProof = coreKnownBuiltinProof(
+				splitCall,
+				"String.prototype.split",
+				{ lowering: "closed-string-split", result: "array-of-strings" },
+			);
+			if (splitProof === undefined) continue;
+			const splitProperty = dynamicSplit
+				? definitions.get(root(splitCall.inputs[0]!))
+				: undefined;
+			const receiver = splitCall.inputs[dynamicSplit ? 1 : 0]!;
+			if (
+				(dynamicSplit &&
+					(!staticProperty(splitProperty, "split") ||
+						splitProperty.inputs.length !== 1 ||
+						splitProperty.outputs.length !== 1 ||
+						root(splitProperty.inputs[0]!) !== root(receiver) ||
+						!instructionDominates(splitProperty, splitCall) ||
+						!exactUses(splitProperty.outputs[0]!, [
+							{ instruction: splitCall, position: 0 },
+						]))) ||
+				!cfg.dominates(locations.get(splitCall.id)!.block.id, header.id)
+			) {
+				continue;
+			}
+
+			const element = backedgeBlock.instructions[0];
+			const trimProperty = backedgeBlock.instructions[1];
+			const trimCall = backedgeBlock.instructions[2];
+			if (
+				element?.opcode !== "loadProperty" ||
+				element.inputs.length !== 2 ||
+				element.outputs.length !== 1 ||
+				root(element.inputs[0]!) !== splitResult ||
+				root(element.inputs[1]!) !== root(index) ||
+				!staticProperty(trimProperty, "trim") ||
+				trimProperty.inputs.length !== 1 ||
+				trimProperty.outputs.length !== 1 ||
+				root(trimProperty.inputs[0]!) !== root(element.outputs[0]!) ||
+				trimCall?.opcode !== "call" ||
+				trimCall.inputs.length !== 2 ||
+				trimCall.outputs.length !== 1 ||
+				root(trimCall.inputs[0]!) !== root(trimProperty.outputs[0]!) ||
+				root(trimCall.inputs[1]!) !== root(element.outputs[0]!)
+			) {
+				continue;
+			}
+			const trimProof = coreKnownBuiltinProof(trimCall, "String.prototype.trim", {
+				lowering: "split-cursor-span",
+				result: "string",
+			});
+			if (trimProof === undefined) continue;
+
+			const indexParameter = header.parameters.findIndex(
+				(parameter) => root(parameter.value) === root(index),
+			);
+			if (indexParameter < 0) continue;
+			const initialIndex = outsidePredecessors[0]!.arguments[indexParameter];
+			const nextIndex = insidePredecessors[0]!.arguments[indexParameter];
+			if (initialIndex === undefined || nextIndex === undefined) continue;
+			const zero = definitions.get(root(initialIndex));
+			const increment = definitions.get(root(nextIndex));
+			if (
+				zero?.opcode !== "createNumber" ||
+				!Object.is(zero.attributes.value, 0) ||
+				loop.blocks.has(locations.get(zero.id)!.block.id) ||
+				!cfg.dominates(locations.get(zero.id)!.block.id, header.id) ||
+				increment?.opcode !== "unary" ||
+				increment.attributes.operator !== "increment" ||
+				increment.inputs.length !== 1 ||
+				increment.outputs.length !== 1 ||
+				backedgeBlock.instructions.at(-1) !== increment
+			) {
+				continue;
+			}
+			const incrementInput = definitions.get(root(increment.inputs[0]!));
+			const indexAdvanceInput =
+				incrementInput?.opcode === "unary" &&
+				incrementInput.attributes.operator === "tonumeric" &&
+				incrementInput.inputs.length === 1
+					? incrementInput.inputs[0]
+					: increment.inputs[0];
+			if (root(indexAdvanceInput!) !== root(index)) continue;
+
+			const primitiveStringLengths: Array<CoreInstruction> = [];
+			let trimResultSafe = true;
+			for (const use of uses.get(root(trimCall.outputs[0]!)) ?? []) {
+				if (
+					use.position === 0 &&
+					staticProperty(use.instruction, "length") &&
+					instructionDominates(trimCall, use.instruction)
+				) {
+					primitiveStringLengths.push(use.instruction);
+				} else {
+					trimResultSafe = false;
+				}
+			}
+			if (
+				!trimResultSafe ||
+				primitiveStringLengths.length > 64 ||
+				!exactUses(splitCall.outputs[0]!, [
+					{ instruction: length, position: 0 },
+					{ instruction: element, position: 0 },
+				]) ||
+				!exactUses(index, [
+					{ instruction: compare, position: 0 },
+					{ instruction: element, position: 1 },
+					{ instruction: incrementInput ?? increment, position: 0 },
+				]) ||
+				!exactUses(element.outputs[0]!, [
+					{ instruction: trimProperty, position: 0 },
+					{ instruction: trimCall, position: 1 },
+				]) ||
+				!exactUses(trimProperty.outputs[0]!, [
+					{ instruction: trimCall, position: 0 },
+				])
+			) {
+				continue;
+			}
+
+			const callBlock = locations.get(splitCall.id)!.block.id;
+			if (canReachWithout(branch.alternate.block, header.id, callBlock)) continue;
+			const ordinaryBlocks = [
+				...new Set([
+					...(splitProperty === undefined
+						? []
+						: [locations.get(splitProperty.id)!.block.id]),
+					callBlock,
+					...loop.blocks,
+				]),
+			];
+			if (
+				ordinaryBlocks.some(
+					(blockId) => fn.blocks[blockId]!.handler !== undefined || handlerTargets.has(blockId),
+				)
+			) {
+				continue;
+			}
+			const proof = mergeCoreBuiltinProofs([splitProof.proof, trimProof.proof]);
+			const materialization = {
+				kind: "materialize",
+				id: `string-split-cursor:${splitProof.sourceSite ?? fn.functionIndex}`,
+			};
+			const obligations = [...proof.obligations, materialization];
+			if (
+				!obligations.some(
+					(obligation) => attributeObject(obligation)?.kind === "fallback",
+				)
+			) {
+				continue;
+			}
+			const claimed = [
+				...(splitProperty === undefined ? [] : [splitProperty]),
+				splitCall,
+				length,
+				compare,
+				branch,
+				element,
+				trimProperty,
+				trimCall,
+				...primitiveStringLengths,
+				increment,
+				backedgeBlock.terminator,
+			];
+			if (
+				new Set(claimed.map(({ id }) => id)).size !== claimed.length ||
+				claimed.some(({ id }) => occupied.has(id))
+			) {
+				continue;
+			}
+			const claimedInstructions = claimed.map(({ id }) => id);
+			const resultValues = fn.values
+				.map(({ id }) => id)
+				.filter((value) => root(value) === splitResult);
+			regions.push({
+				kind: "string-split-cursor",
+				anchors: [splitCall.id, branch.id, length.id, backedgeBlock.terminator.id],
+				claimedInstructions,
+				ordinaryBlocks,
+				exceptionalBlocks: [],
+				data: coreAttributeObject(
+					{
+						license: {
+							guard: { dependencies: proof.dependencies, obligations },
+							genericTwin: "retained",
+							materialization: "on-demand",
+						},
+						representation: "split-cursor-spans",
+						cost: {
+							score: 4 + primitiveStringLengths.length,
+							metadataOperations: claimedInstructions.length,
+						},
+						...(splitProperty === undefined
+							? {}
+							: { property: { $coreInstruction: splitProperty.id } }),
+						compare: { $coreInstruction: compare.id },
+						element: { $coreInstruction: element.id },
+						trimProperty: { $coreInstruction: trimProperty.id },
+						trimCall: { $coreInstruction: trimCall.id },
+						increment: { $coreInstruction: increment.id },
+						resultRegisters: resultValues.map((value) => ({ $coreValue: value })),
+						primitiveStringLengths: primitiveStringLengths.map(({ id }) => ({
+							$coreInstruction: id,
+						})),
+						exitBlock: { $coreBlock: branch.alternate.block },
+					},
+					"string-split-cursor",
+				),
+			});
+			for (const { id } of claimed) occupied.add(id);
+			if (regions.filter(({ kind }) => kind === "string-split-cursor").length >= 8) {
 				break;
 			}
 		}
@@ -4544,6 +4975,7 @@ const CORE_FINALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectStackObjectRegions,
 	selectRegExpExecProjectionRegions,
 	selectRegExpIteratorProjectionRegions,
+	selectStringSplitCursorRegions,
 	selectStringSplitProjectionRegions,
 	selectStringSliceNumberRegions,
 	selectNumericFusionRegions,

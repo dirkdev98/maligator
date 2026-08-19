@@ -40,7 +40,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Pre-1.0 compatibility starts from this format baseline.
-export const WIRE_VERSION = 5;
+export const WIRE_VERSION = 6;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1410,7 +1410,7 @@ export function serializeVmDefinition(
 					w.i32(region.callee);
 					w.i32(region.receiver);
 					w.i32(region.separator);
-					w.i32(region.result);
+					w.i32Array([...region.resultRegisters]);
 					w.i32(region.index);
 					w.i32(region.elementIp);
 					w.i32(region.trimPropertyIp);
@@ -3620,16 +3620,15 @@ function validateStringSplitCursorRegion(
 ): void {
 	stringSplitCursorGuardMasks(region.license);
 	const callIp = region.anchors[0]!;
-	const resultAliasIp = region.anchors[1]!;
+	const headerBranchIp = region.anchors[1]!;
 	const lengthIp = region.anchors[2]!;
 	const backedgeIp = region.anchors[3]!;
 	const call = fn.instructions[callIp];
-	const resultAlias = fn.instructions[resultAliasIp];
+	const headerBranch = fn.instructions[headerBranchIp];
 	const property = region.propertyIp < 0 ? undefined : fn.instructions[region.propertyIp];
 	const length = fn.instructions[lengthIp];
 	const compare = fn.instructions[lengthIp + 1];
-	const bodyBranch = fn.instructions[lengthIp + 2];
-	const exitJump = fn.instructions[lengthIp + 3];
+	const exitJump = fn.instructions[headerBranchIp + 1];
 	const element = fn.instructions[region.elementIp];
 	const trimProperty = fn.instructions[region.trimPropertyIp];
 	const trimCall = fn.instructions[region.trimCallIp];
@@ -3638,11 +3637,9 @@ function validateStringSplitCursorRegion(
 	const operationIps = [
 		...(region.propertyIp < 0 ? [] : [region.propertyIp]),
 		callIp,
-		resultAliasIp,
 		lengthIp,
 		lengthIp + 1,
-		lengthIp + 2,
-		lengthIp + 3,
+		headerBranchIp,
 		region.elementIp,
 		region.trimPropertyIp,
 		region.trimCallIp,
@@ -3652,6 +3649,7 @@ function validateStringSplitCursorRegion(
 	];
 	const registerValid = (value: number) =>
 		Number.isInteger(value) && value >= 0 && value < fn.registerCount;
+	const resultRegisters = new Set(region.resultRegisters);
 	const callMatches =
 		call?.opcode === "CALL"
 			? region.propertyIp >= 0 &&
@@ -3695,25 +3693,26 @@ function validateStringSplitCursorRegion(
 		call.thisValue !== region.receiver ||
 		call.argumentCount !== 1 ||
 		call.arguments[0] !== region.separator ||
-		call.dst !== region.result ||
-		resultAlias?.opcode !== "MOVE" ||
-		resultAlias.src !== call.dst ||
-		!registerValid(region.result) ||
+		region.resultRegisters.length === 0 ||
+		resultRegisters.size !== region.resultRegisters.length ||
+		region.resultRegisters.some((register) => !registerValid(register)) ||
+		!resultRegisters.has(call.dst) ||
 		!registerValid(region.index) ||
 		length?.opcode !== "LOAD_PROPERTY_STATIC" ||
-		length.object !== resultAlias.dst ||
+		!resultRegisters.has(length.object) ||
 		compare?.opcode !== "BINARY" ||
 		compare.operator !== "<" ||
 		compare.right !== length.dst ||
 		compare.left !== region.index ||
-		bodyBranch?.opcode !== "JUMP_IF" ||
-		bodyBranch.cond !== compare.dst ||
-		bodyBranch.targetIp !== region.elementIp ||
+		headerBranchIp !== lengthIp + 2 ||
+		headerBranch?.opcode !== "JUMP_IF" ||
+		headerBranch.cond !== compare.dst ||
+		headerBranch.targetIp !== region.elementIp ||
 		exitJump?.opcode !== "JUMP" ||
 		exitJump.targetIp !== region.exitIp ||
-		region.elementIp !== lengthIp + 4 ||
+		region.elementIp !== headerBranchIp + 2 ||
 		element?.opcode !== "LOAD_PROPERTY" ||
-		element.object !== resultAlias.dst ||
+		!resultRegisters.has(element.object) ||
 		element.key !== region.index ||
 		region.trimPropertyIp !== region.elementIp + 1 ||
 		trimProperty?.opcode !== "LOAD_PROPERTY_STATIC" ||
@@ -4681,7 +4680,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					const callee = r.i32();
 					const receiver = r.i32();
 					const separator = r.i32();
-					const result = r.i32();
+					const resultRegisters = r.i32Array();
 					const index = r.i32();
 					const elementIp = r.i32();
 					const trimPropertyIp = r.i32();
@@ -4724,7 +4723,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						callee,
 						receiver,
 						separator,
-						result,
+						resultRegisters,
 						index,
 						elementIp,
 						trimPropertyIp,

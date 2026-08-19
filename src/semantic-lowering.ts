@@ -823,7 +823,7 @@ export interface RegisterStringSplitCursor extends RegisterRegionEnvelope<
 	"on-demand",
 	readonly [
 		Extract<RegisterInstruction, { type: "call" | "callBuiltin" }>,
-		Extract<RegisterInstruction, { type: "move" }>,
+		Extract<RegisterInstruction, { type: "jumpIf" }>,
 		Extract<RegisterInstruction, { type: "loadPropertyStatic" }>,
 		Extract<RegisterInstruction, { type: "jump" }>,
 	]
@@ -834,6 +834,8 @@ export interface RegisterStringSplitCursor extends RegisterRegionEnvelope<
 	readonly element: Extract<RegisterInstruction, { type: "loadProperty" }>;
 	readonly trimProperty: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
 	readonly trimCall: Extract<RegisterInstruction, { type: "call" }>;
+	readonly increment: Extract<RegisterInstruction, { type: "unary" }>;
+	readonly resultRegisters: ReadonlyArray<number>;
 	readonly primitiveStringLengths: ReadonlyArray<
 		Extract<RegisterInstruction, { type: "loadPropertyStatic" }>
 	>;

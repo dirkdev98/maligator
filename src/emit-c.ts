@@ -5569,7 +5569,10 @@ function emitInstruction(
 					`r${instruction.dst} = ${reg.name}_o->slots[${reg.closedSlot}];`,
 				];
 			}
-			if (reg.kind === "array" && instruction.opcode === "LOAD_PROPERTY") {
+			if (
+				instruction.opcode === "LOAD_PROPERTY" &&
+				(reg.kind === "array" || nativeStringSplitCursorAction?.role === "element")
+			) {
 				const ordinary = [
 					...(reg.declare
 						? [

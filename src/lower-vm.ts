@@ -463,7 +463,7 @@ export type VmStringSplitCursorRegion = VmRegionEnvelope<
 	readonly callee: number;
 	readonly receiver: number;
 	readonly separator: number;
-	readonly result: number;
+	readonly resultRegisters: ReadonlyArray<number>;
 	readonly index: number;
 	readonly elementIp: number;
 	readonly trimPropertyIp: number;
@@ -3814,7 +3814,7 @@ function lowerFunctionToVmFunction(
 			}
 			case "string-split-cursor": {
 				const callIp = resolvedAnchors[0];
-				const resultAliasIp = resolvedAnchors[1];
+				const headerBranchIp = resolvedAnchors[1];
 				const lengthIp = resolvedAnchors[2];
 				const backedgeIp = resolvedAnchors[3];
 				const propertyIp =
@@ -3824,6 +3824,8 @@ function lowerFunctionToVmFunction(
 				const elementIp = instructionIndexByIrInstruction.get(region.element);
 				const trimPropertyIp = instructionIndexByIrInstruction.get(region.trimProperty);
 				const trimCallIp = instructionIndexByIrInstruction.get(region.trimCall);
+				const compareIp = instructionIndexByIrInstruction.get(region.compare);
+				const incrementIp = instructionIndexByIrInstruction.get(region.increment);
 				const exitIp = blockStartIps.get(region.exitBlock);
 				const trimIcIndex = propertyIcIndexByInstruction.get(region.trimProperty);
 				const primitiveStringLengthIps = region.primitiveStringLengths.map((load) =>
@@ -3839,6 +3841,8 @@ function lowerFunctionToVmFunction(
 					elementIp === undefined ||
 					trimPropertyIp === undefined ||
 					trimCallIp === undefined ||
+					compareIp === undefined ||
+					incrementIp === undefined ||
 					exitIp === undefined ||
 					trimIcIndex === undefined ||
 					primitiveStringLengthIps.some((ip) => ip === undefined)
@@ -3846,18 +3850,35 @@ function lowerFunctionToVmFunction(
 					continue;
 				}
 				const loweredCall = instructions[callIp!];
-				const loweredResultAlias = instructions[resultAliasIp!];
+				const loweredHeaderBranch = instructions[headerBranchIp!];
 				const loweredLength = instructions[lengthIp!];
+				const loweredCompare = instructions[compareIp];
 				const loweredElement = instructions[elementIp];
+				const loweredIncrement = instructions[incrementIp];
+				const resultRegisters = [...new Set(region.resultRegisters)];
 				if (
 					(loweredCall?.opcode !== "CALL" && loweredCall?.opcode !== "CALL_BUILTIN") ||
 					loweredCall.arguments.length !== 1 ||
-					loweredResultAlias?.opcode !== "MOVE" ||
-					loweredResultAlias.src !== loweredCall.dst ||
+					loweredHeaderBranch?.opcode !== "JUMP_IF" ||
 					loweredLength?.opcode !== "LOAD_PROPERTY_STATIC" ||
-					loweredLength.object !== loweredResultAlias.dst ||
+					!resultRegisters.includes(loweredLength.object) ||
+					loweredCompare?.opcode !== "BINARY" ||
+					loweredCompare.operator !== "<" ||
+					loweredCompare.right !== loweredLength.dst ||
+					loweredHeaderBranch.cond !== loweredCompare.dst ||
 					loweredElement?.opcode !== "LOAD_PROPERTY" ||
-					loweredElement.object !== loweredResultAlias.dst
+					!resultRegisters.includes(loweredElement.object) ||
+					loweredElement.key !== loweredCompare.left ||
+					loweredIncrement?.opcode !== "UNARY" ||
+					loweredIncrement.operator !== "increment" ||
+					loweredIncrement.src !== loweredCompare.left ||
+					loweredIncrement.dst !== loweredCompare.left ||
+					resultRegisters.length === 0 ||
+					!resultRegisters.includes(loweredCall.dst) ||
+					resultRegisters.some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					)
 				) {
 					continue;
 				}
@@ -3866,16 +3887,14 @@ function lowerFunctionToVmFunction(
 				const payloadIps = [
 					...(propertyIp < 0 ? [] : [propertyIp]),
 					callIp!,
-					resultAliasIp!,
 					lengthIp!,
-					lengthIp! + 1,
-					lengthIp! + 2,
-					lengthIp! + 3,
+					compareIp,
+					headerBranchIp!,
 					elementIp,
 					trimPropertyIp,
 					trimCallIp,
 					...resolvedPrimitiveStringLengthIps,
-					backedgeIp! - 1,
+					incrementIp,
 					backedgeIp!,
 				];
 				if (
@@ -3906,8 +3925,8 @@ function lowerFunctionToVmFunction(
 					callee: loweredCall.opcode === "CALL" ? loweredCall.callee : -1,
 					receiver: loweredCall.thisValue,
 					separator: loweredCall.arguments[0]!,
-					result: loweredCall.dst,
-					index: region.compare.registers[1],
+					resultRegisters,
+					index: loweredCompare.left,
 					elementIp,
 					trimPropertyIp,
 					trimIcIndex,
