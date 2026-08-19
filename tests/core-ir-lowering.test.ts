@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
 import {
+	coreRegisterClasses,
 	lowerCoreProgramToRegisters,
 } from "../src/core-ir-lowering.ts";
 import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
@@ -54,6 +55,34 @@ describe("Core IR lowering", () => {
 		const lowered = lowerCoreProgramToRegisters(converted);
 		const vm = lowerCoreProgramToVmDefinition(lowered);
 		expect(vm.functions.some(({ handlers }) => handlers.length > 0)).toBe(true);
+	});
+
+	it("keeps preloaded handler values live and rooted across protected blocks", () => {
+		const converted = lower(`
+			function preserve(object, callback) {
+				try {
+					callback();
+					return 0;
+				} catch (error) {
+					return object.value + String(error).length;
+				}
+			}
+			preserve({ value: 2 }, () => { throw new Error("x"); });
+		`);
+		const fn = converted.functions.find((candidate) =>
+			candidate.blocks.some(({ handler }) => handler !== undefined),
+		)!;
+		const protectedBlock = fn.blocks.find(({ handler }) => handler !== undefined)!;
+		const target = fn.blocks[protectedBlock.handler!.block]!;
+		const handlerValue = target.parameters[1]!.value;
+		const allocation = coreRegisterClasses(fn, true);
+		const register = (value: typeof handlerValue): number =>
+			allocation.registers.get(allocation.roots.get(value)!)!;
+		const handlerRegister = register(handlerValue);
+		const clobbers = protectedBlock.instructions.flatMap(({ outputs }) => outputs);
+
+		expect(clobbers.map(register)).not.toContain(handlerRegister);
+		expect(allocation.gcRootRegisters).toContain(handlerRegister);
 	});
 
 	it("round-trips loops, calls, and multiple-result operations to VM form", () => {

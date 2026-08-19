@@ -1588,6 +1588,22 @@ export function coreRegisterClasses(
 	const uses = core.blocks.map(() => new Set<CoreValueId>());
 	const definitions = core.blocks.map(() => new Set<CoreValueId>());
 	const successors = core.blocks.map(() => new Set<CoreBlockId>());
+	const handlerParameters = (
+		block: CoreFunction["blocks"][number],
+	): ReadonlyArray<CoreValueId> => {
+		if (block.handler === undefined) return [];
+		const target = core.blocks[block.handler.block];
+		if (target === undefined || target.parameters[0]?.role !== "exception") {
+			throw new Error(`Core handler b${block.handler.block} has no exception parameter`);
+		}
+		const parameters = target.parameters.slice(1).map(({ value }) => value);
+		if (parameters.length !== block.handler.arguments.length) {
+			throw new Error(
+				`Core handler b${block.handler.block} expects ${parameters.length} explicit arguments, received ${block.handler.arguments.length}`,
+			);
+		}
+		return parameters;
+	};
 	const terminatorValues = (block: CoreFunction["blocks"][number]): Array<CoreValueId> => {
 		const edgeArguments = coreTerminatorEdges(block.terminator).flatMap(
 			(edge) => edge.arguments,
@@ -1662,7 +1678,11 @@ export function coreRegisterClasses(
 	for (const block of core.blocks) {
 		const live = new Set(liveOut[block.id]);
 		for (const value of terminatorValues(block)) live.add(value);
-		for (const argument of block.handler?.arguments ?? []) live.add(argument);
+		// Register lowering materializes the exceptional edge before entering the
+		// protected block: handler arguments are copied into the handler's explicit
+		// parameter registers immediately after tryBegin. Those destination values
+		// must then survive every instruction that may transfer to the handler.
+		for (const parameter of handlerParameters(block)) live.add(parameter);
 		for (let index = block.instructions.length - 1; index >= 0; index--) {
 			const instruction = block.instructions[index]!;
 			for (const output of instruction.outputs) {
@@ -1810,6 +1830,7 @@ export function coreRegisterClasses(
 	);
 	for (const block of core.blocks) {
 		const live = new Set(liveOut[block.id]);
+		for (const parameter of handlerParameters(block)) live.add(parameter);
 		if (loopBackedges.has(block.id)) {
 			for (const value of live) gcRootValues.add(value);
 			for (const value of terminatorValues(block)) gcRootValues.add(value);
