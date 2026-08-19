@@ -558,14 +558,14 @@ describe("native update-expression representation", () => {
 		});
 	}
 
-	it("keeps proven numeric loop updates on dense array paths", () => {
+	it("keeps loop updates generic until Core proves their representation", () => {
 		const output = emit(
 			`"use strict"; function sum(array) { let total = 0; for (let i = 0; i < array.length; i++) total += array[i]; return total; } globalThis.sum = sum;`,
 		);
-		expect(output).toContain("mal_vm_array_try_load");
-		expect(output).toContain("+= 1.0;");
-		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
-		expect(output).not.toContain("MAL_UNARY_INCREMENT");
+		expect(output).toContain("mal_vm_object_try_load(");
+		expect(output).toContain("MAL_UNARY_TO_NUMERIC");
+		expect(output).toContain("MAL_UNARY_INCREMENT");
+		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
 	});
 
 	it("rejects a tagged region when its common control-flow envelope is incomplete", () => {
@@ -612,7 +612,7 @@ describe("native update-expression representation", () => {
 		);
 		expect(output).toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
 		expect(output).toContain(", 1000);");
-		expect(output).toContain("mal_vm_array_try_store");
+		expect(output).toContain("mal_vm_object_try_store(");
 		expect(output).toContain("if (mal_gc_poll) mal_gc_safepoint(vm);");
 	});
 
@@ -654,25 +654,16 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
 	});
 
-	it("validates a dense Array-values iterator once per iterator record", () => {
+	it("keeps iterator execution generic until Core owns a cursor region", () => {
 		const source = `"use strict"; function sum(values) { let total = 0; for (const value of values) total += value; return total; } globalThis.sum = sum;`;
 		const definition = lower(source);
-		const cursorFunction = definition.functions.find(
-			(fn) => (fn.nativeDenseIteratorCursors?.length ?? 0) > 0,
+		expect(deserializeVmDefinition(serializeVmDefinition(definition))).toEqual(
+			definition,
 		);
-		expect(cursorFunction?.nativeDenseIteratorCursors).toHaveLength(1);
-		expect(
-			deserializeVmDefinition(serializeVmDefinition(definition)).functions.find(
-				(fn) => (fn.nativeDenseIteratorCursors?.length ?? 0) > 0,
-			)?.nativeDenseIteratorCursors,
-		).toEqual(cursorFunction?.nativeDenseIteratorCursors);
 		const output = emitVmDefinition(definition, { compiled: true });
-		expect(output).toContain("MalIteratorObject *__dense_iter_0 = nullptr;");
-		expect(output).toContain("mal_vm_iterator_dense_array_cursor(&iter_rec_");
-		expect(output).toContain(
-			"mal_vm_iterator_step_dense_array_cursor(vm, __dense_iter_0",
-		);
-		expect(output).toContain(": mal_vm_iterator_step_fast(vm,");
+		expect(output).not.toContain("MalIteratorObject *__dense_iter_");
+		expect(output).not.toContain("mal_vm_iterator_step_dense_array_cursor(vm,");
+		expect(output).toContain("mal_vm_iterator_step_fast(vm,");
 	});
 
 	it("does not retain raw dense iterator cursors across generator suspension", () => {
@@ -690,36 +681,37 @@ describe("native update-expression representation", () => {
 		);
 		expect(output).toContain("MAL_UNARY_TO_NUMERIC");
 		expect(output).toContain("MAL_UNARY_INCREMENT");
-		expect(output).toContain("+ 1.0;");
+		expect(output).not.toContain("+= 1.0;");
 	});
 
-	it("guards numeric property-key parameters before using dense array access", () => {
+	it("keeps unknown property-key parameters boxed", () => {
 		const output = emit(
 			`"use strict"; function load(array, index) { return array[index]; } globalThis.load = load;`,
 		);
-		expect(output).toContain("MalValue p1 = arg_count > 1 ? args[1]");
-		expect(output).toContain("if (!mal_ops_is_number(p1))");
-		expect(output).toContain("return mal_compiled_1_boxed");
-		expect(output).toContain("mal_vm_array_try_load");
+		expect(output).not.toContain("mal_compiled_1_boxed");
+		expect(output).not.toContain("mal_compiled_1_native_numbers");
+		expect(output).toContain("mal_vm_object_try_load(");
+		expect(output).toContain("mal_vm_op_load_property_ic(");
 	});
 
-	it("guards numeric property-key stores before dense array access", () => {
+	it("keeps unknown property-key stores boxed", () => {
 		const output = emit(
 			`"use strict"; function store(array, index, value) { array[index] = value; } globalThis.store = store;`,
 		);
-		expect(output).toContain("MalValue p1 = arg_count > 1 ? args[1]");
-		expect(output).toContain("if (!mal_ops_is_number(p1))");
-		expect(output).toContain("mal_vm_array_try_store");
+		expect(output).not.toContain("mal_compiled_1_boxed");
+		expect(output).not.toContain("mal_compiled_1_native_numbers");
+		expect(output).toContain("mal_vm_object_try_store(");
+		expect(output).toContain("mal_vm_op_store_property_ic(");
 	});
 
-	it("retains boxed recursive re-entry for promoted numeric parameters", () => {
+	it("does not invent a recursive numeric ABI from VM use sites", () => {
 		const output = emit(
 			`"use strict"; function recurse(value, depth, callback) { if (depth === 0) return value * value; return callback(value - 1, depth - 1, callback); } globalThis.recurse = recurse;`,
 		);
-		expect(output).toContain("static MalValue mal_compiled_1_boxed(");
-		expect(output).toContain("return mal_compiled_1_boxed");
-		expect(output).not.toContain("!mal_ops_is_number(p0)");
-		expect(output).toContain("!mal_ops_is_number(p1)");
+		expect(output).toContain("static MalValue mal_compiled_1(");
+		expect(output).not.toContain("mal_compiled_1_boxed");
+		expect(output).not.toContain("mal_compiled_1_native_numbers");
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_SUB");
 	});
 
 	it("keeps one-use numeric arithmetic intermediates unboxed", () => {
@@ -750,11 +742,12 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
 	});
 
-	it("uses compound assignments for in-place numeric updates", () => {
+	it("keeps in-place updates boxed until Core proves the loop value", () => {
 		const output = emit(
 			`"use strict"; function count(limit) { let value = 0; while (value < limit) value++; return value; } globalThis.count = count;`,
 		);
-		expect(output).toMatch(/r\d+ \+= 1\.0;/);
+		expect(output).toContain("MAL_UNARY_TO_NUMERIC");
+		expect(output).toContain("MAL_UNARY_INCREMENT");
 	});
 
 	it("takes a dense own-element fast path for the in operator", () => {
@@ -765,34 +758,29 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_IN");
 	});
 
-	it("keeps initialized numeric locals native across exception edges", () => {
+	it("keeps initialized locals correct across exception edges", () => {
 		const output = emit(
 			`"use strict"; function classify(value) { let errors = 0; try { value.x; } catch { errors = errors + 1; } return errors + 1; } globalThis.classify = classify;`,
 		);
 		expect(output).toContain("static MalValue mal_compiled_1(");
 		expect(output).not.toContain("mal_vm_op_throw_if_tdz");
-		expect(output).toMatch(/double r\d+;/);
-		expect(output).not.toContain("mal_vm_binary_op");
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_ADD");
 	});
 
-	it("omits consolidated key guards only for static property sites", () => {
+	it("emits independent per-site property guards without backend regions", () => {
 		const staticOutput = emit(
 			`"use strict"; function read(object) { object.a = object.a + 1; return object.a + object.b; } globalThis.read = read;`,
 		);
-		expect(staticOutput).not.toContain("static MalInlineCache");
-		expect(staticOutput).toContain("vm->property_cache[");
-		expect(staticOutput).toMatch(/\.property_ic_count = [1-9]/);
-		expect(staticOutput).toContain("mal_perf_ic_load_region_hit");
-		expect(staticOutput).toContain("mal_perf_ic_store_region_hit");
-		expect(staticOutput).toMatch(
-			/else if \(!\(__rg\d+_o && mal_vm_object_try_store_static/,
-		);
-		expect(staticOutput).not.toMatch(/&& .* == __rg\d+_key\[/);
+		expect(staticOutput).toContain("mal_vm_object_try_load_static(");
+		expect(staticOutput).toContain("mal_vm_object_try_store_static(");
+		expect(staticOutput).not.toContain("mal_perf_ic_load_region_hit");
+		expect(staticOutput).not.toContain("mal_perf_ic_store_region_hit");
 
 		const dynamicOutput = emit(
 			`"use strict"; function read(object, key) { return object.a + object[key]; } globalThis.read = read;`,
 		);
-		expect(dynamicOutput).toMatch(/&& .* == __rg\d+_c->keys\[/);
+		expect(dynamicOutput).toContain("mal_vm_object_try_load(");
+		expect(dynamicOutput).not.toMatch(/__rg\d+_c->keys\[/);
 	});
 
 	it("uses key-free probes only for non-consolidated static property sites", () => {
@@ -808,82 +796,15 @@ describe("native update-expression representation", () => {
 		);
 
 		const loopSource = `"use strict"; function load(object, count, initial) { let value = initial; for (let i = 0; i < count; i++) value = object.value; return value; } globalThis.load = load;`;
-		const loopSemantic = analyzeSourceAndRunSemanticAnalysis(
-			loopSource,
-			"native-inherited-loop-plan.js",
-			parseScript(loopSource, { strict: false }),
-		);
-		const loopDefinition = compileSemanticProgramToVmDefinition(loopSemantic);
-		const loopFunction = loopDefinition.functions.find(
-			(fn) => (fn.nativeInheritedLoadLoops?.length ?? 0) > 0,
-		);
-		expect(loopFunction?.nativeInheritedLoadLoops).toHaveLength(1);
-		const restoredLoopFunction = deserializeVmDefinition(
-			serializeVmDefinition(loopDefinition),
-		).functions.find((fn) => (fn.nativeInheritedLoadLoops?.length ?? 0) > 0);
-		expect(restoredLoopFunction?.nativeInheritedLoadLoops).toEqual(
-			loopFunction?.nativeInheritedLoadLoops,
-		);
-		expect(restoredLoopFunction?.nativePropertyRegions).toEqual(
-			loopFunction?.nativePropertyRegions,
+		const loopDefinition = lower(loopSource);
+		expect(deserializeVmDefinition(serializeVmDefinition(loopDefinition))).toEqual(
+			loopDefinition,
 		);
 		const loopOutput = emitVmDefinition(loopDefinition, { compiled: true });
-		expect(loopOutput).toContain("mal_vm_local_inherited_value_try_load_static(");
-		expect(loopOutput).toContain("mal_vm_local_watched_inherited_value_try_load_static(");
-		expect(loopOutput).toContain(
-			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS, nullptr) ? vm->semantic_epochs.watched_methods : 0",
-		);
-		expect(loopOutput).not.toContain("mal_primitive_method_protector ?");
-
-		const lockedLoopOutput = emitLocked(loopSource);
-		expect(lockedLoopOutput).toContain(
-			"u64 __watched_methods_epoch = vm->semantic_epochs.watched_methods;",
-		);
-		expect(lockedLoopOutput).not.toContain(
-			"mal_vm_semantic_dependencies_admit(vm, MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS",
-		);
-		expect(lockedLoopOutput).not.toContain("mal_primitive_method_protector ?");
-		// Target lowering certifies the clone; emission consumes that plan without
-		// rediscovering the natural loop from VM instructions.
-		expect(loopOutput).toContain("__inherited_loop_");
-		expect(loopOutput).toContain("mal_perf_inherited_loop_summary");
-		expect(loopOutput).toMatch(/goto LF\d+/);
-		expect(loopOutput).toMatch(/goto LG\d+/);
-		expect(loopOutput).toContain("if (mal_gc_poll) {");
-		expect(loopOutput).toMatch(/trunc\(r\d+\) == r\d+/);
+		expect(loopOutput).not.toContain("__inherited_loop_");
+		expect(loopOutput).not.toContain("mal_perf_inherited_loop_summary");
 		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
-
-		const inheritedPlans = (source: string) => {
-			const semantic = analyzeSourceAndRunSemanticAnalysis(
-				source,
-				"native-inherited-loop-negative.js",
-				parseScript(source, { strict: false }),
-			);
-			return compileSemanticProgramToVmDefinition(semantic).functions.flatMap(
-				(fn) => fn.nativeInheritedLoadLoops ?? [],
-			);
-		};
-		expect(
-			inheritedPlans(
-				`"use strict"; function load(object, count, mutate) { let value; for (let i = 0; i < count; i++) { value = object.value; mutate(); } return value; } globalThis.load = load;`,
-			),
-		).toEqual([]);
-		const nonCanonicalPlans = inheritedPlans(
-			`"use strict"; function load(object, count) { let value; for (let i = 1; i < count; i++) value = object.value; return value; } globalThis.load = load;`,
-		);
-		expect(nonCanonicalPlans).toHaveLength(1);
-		expect(nonCanonicalPlans[0]?.summary).toBeUndefined();
-		const observableBodyPlans = inheritedPlans(
-			`"use strict"; function load(object, count) { let value; let sum = 0; for (let i = 0; i < count; i++) { value = object.value; sum += i; } return [value, sum]; } globalThis.load = load;`,
-		);
-		expect(observableBodyPlans).toHaveLength(1);
-		expect(observableBodyPlans[0]?.summary).toBeUndefined();
-		const wrongInductionPlans = inheritedPlans(
-			`"use strict"; function load(object, count) { let value; let other = 0; for (let i = 0; other < count; i++) value = object.value; return value; } globalThis.load = load;`,
-		);
-		expect(wrongInductionPlans).toHaveLength(1);
-		expect(wrongInductionPlans[0]?.summary).toBeUndefined();
 
 		const dynamicOutput = emit(
 			`"use strict"; function load(object, key) { return object[key]; } function store(object, key, value) { object[key] = value; } globalThis.keep = [load, store];`,
@@ -897,27 +818,26 @@ describe("native update-expression representation", () => {
 		);
 	});
 
-	it("reacquires watched-method epochs before resumable dispatch", () => {
+	it("does not synthesize watched epochs for ordinary resumable property loads", () => {
 		const output = emit(
 			`"use strict"; async function read(object) { for (let i = 0; i < 2; i++) { await 0; object.value; } } globalThis.read = read;`,
 		);
-		const epoch = output.indexOf("u64 __watched_methods_epoch = ");
 		const dispatch = output.indexOf("switch (resume_state->frame.instruction_pointer)");
-		expect(epoch).toBeGreaterThanOrEqual(0);
-		expect(dispatch).toBeGreaterThan(epoch);
+		expect(dispatch).toBeGreaterThanOrEqual(0);
+		expect(output).not.toContain("u64 __watched_methods_epoch = ");
 	});
 
-	it("revalidates consolidated regions only after observable gaps", () => {
+	it("does not consolidate property regions in the backend", () => {
 		const pureOutput = emit(
 			`"use strict"; function read(object) { return object.a + object.b; } globalThis.read = read;`,
 		);
-		expect(pureOutput).toContain("mal_perf_ic_load_region_hit");
+		expect(pureOutput).not.toContain("mal_perf_ic_load_region_hit");
 		expect(pureOutput).not.toMatch(/__rg\d+_ok = __rg\d+_slp != nullptr &&/);
 
 		const effectfulOutput = emit(
 			`"use strict"; function read(object, callback) { const first = object.a; callback(); return first + object.b; } globalThis.read = read;`,
 		);
-		expect(effectfulOutput).toMatch(/__rg\d+_ok = __rg\d+_slp != nullptr &&/);
+		expect(effectfulOutput).not.toMatch(/__rg\d+_ok = __rg\d+_slp != nullptr &&/);
 	});
 
 	it("checks completion only inside speculative numeric slow paths", () => {
@@ -949,15 +869,9 @@ describe("native update-expression representation", () => {
 	it("guards direct unary and binary Math calls by exact callbacks", () => {
 		const source = `"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } function constants() { const a = 1.25; const b = -0; return Math.floor(a) + Math.max(a, b); } globalThis.keep = [calculate, constants];`;
 		const definition = lower(source);
-		const mathPlans = definition.functions
-			.map((fn) => fn.nativeMathCalls)
-			.filter((plan) => plan !== undefined);
-		expect(mathPlans.length).toBeGreaterThan(0);
-		expect(
-			deserializeVmDefinition(serializeVmDefinition(definition))
-				.functions.map((fn) => fn.nativeMathCalls)
-				.filter((plan) => plan !== undefined),
-		).toEqual(mathPlans);
+		expect(deserializeVmDefinition(serializeVmDefinition(definition))).toEqual(
+			definition,
+		);
 		const output = emitVmDefinition(definition, { compiled: true });
 		expect(output).toContain("mal_builtin_math_unary_fast");
 		expect(output).toContain("mal_builtin_math_binary_fast");
@@ -1062,7 +976,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain(", 3, nullptr);");
 	});
 
-	it("emits guarded primitive String charCodeAt dispatch from call metadata", () => {
+	it("emits the generic String charCodeAt dispatch until Core owns a fusion", () => {
 		const code = `
 			function codeUnit(value, index) {
 				return value.charCodeAt(index);
@@ -1070,22 +984,12 @@ describe("native update-expression representation", () => {
 			globalThis.codeUnit = codeUnit;
 		`;
 		const definition = lower(code);
-		const fusionFunction = definition.functions.find(
-			(fn) => (fn.nativeStringCharCodeAtFusions?.specialized.length ?? 0) > 0,
+		expect(deserializeVmDefinition(serializeVmDefinition(definition))).toEqual(
+			definition,
 		);
-		expect(fusionFunction?.nativeStringCharCodeAtFusions?.specialized).toHaveLength(1);
-		expect(
-			deserializeVmDefinition(serializeVmDefinition(definition)).functions.find(
-				(fn) => (fn.nativeStringCharCodeAtFusions?.specialized.length ?? 0) > 0,
-			)?.nativeStringCharCodeAtFusions,
-		).toEqual(fusionFunction?.nativeStringCharCodeAtFusions);
 		const output = emitVmDefinition(definition, { compiled: true });
-		expect(output).toContain(
-			"mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING",
-		);
-		expect(output).toContain("mal_builtin_string_char_code_at_number(");
-		// The original Get+Call remains in the cold arm for non-String receivers,
-		// coercible arguments, cold ICs, and invalidated watched-method epochs.
+		expect(output).not.toContain("mal_vm_local_watched_primitive_value_try_load_static");
+		expect(output).not.toContain("mal_builtin_string_char_code_at_number(");
 		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
 		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
 		expect(output).toContain(", 1);");
@@ -1104,13 +1008,12 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).not.toContain(
 			"mal_vm_local_watched_primitive_value_try_load_static",
 		);
-		expect(lockedOutput).toContain("if (mal_value_is_string(");
-		// Non-String receivers and coercible positions retain the exact Get+Call twin.
+		expect(lockedOutput).not.toContain("mal_builtin_string_char_code_at_number(");
 		expect(lockedOutput).toContain("mal_vm_op_load_property_ic(vm,");
 		expect(lockedOutput).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
 	});
 
-	it("uses a relational loop proof for bounded primitive String charCodeAt", () => {
+	it("does not rediscover a bounded String charCodeAt loop in the backend", () => {
 		const output = emit(`
 			function checksum(value) {
 				let result = 0;
@@ -1121,7 +1024,8 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.checksum = checksum;
 		`);
-		expect(output).toContain("mal_builtin_string_char_code_at_in_bounds(");
+		expect(output).not.toContain("mal_builtin_string_char_code_at_in_bounds(");
+		expect(output).toContain("mal_builtin_string_char_code_at_direct(");
 		expect(output).toContain(
 			"mal_value_from_i32((i32) mal_string_length(mal_value_to_string(",
 		);
@@ -1930,7 +1834,7 @@ describe("native static typeof facts", () => {
 		expect(output).toContain("MAL_TYPEOF_NUMBER");
 	});
 
-	it("uses a source typeof guard in a numeric parameter specialization", () => {
+	it("keeps source typeof narrowing local without inventing a numeric ABI", () => {
 		const output = emit(`
 			"use strict";
 			function square(value) {
@@ -1940,9 +1844,10 @@ describe("native static typeof facts", () => {
 			globalThis.square = square;
 		`);
 
-		expect(output).toContain("static MalValue mal_compiled_1_boxed(");
-		expect(output).toContain("if (!mal_ops_is_number(p0))");
+		expect(output).toContain("static MalValue mal_compiled_1(");
+		expect(output).not.toContain("mal_compiled_1_boxed");
+		expect(output).not.toContain("mal_compiled_1_native_numbers");
 		expect(output.match(/mal_vm_typeof_compare/g)).toHaveLength(1);
-		expect(output).toMatch(/r\d+ \*= r\d+;/);
+		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_MUL");
 	});
 });

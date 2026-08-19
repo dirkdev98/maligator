@@ -10,18 +10,13 @@ import {
 	vmCallProvesBuiltin,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
 	vmGuardIsWorldInvariant,
-	vmInstructionWriteRegisters,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
 import type {
-	VmNativeDenseIteratorCursorPlan,
 	VmFunction,
 	VmGuardPlan,
 	VmInstruction,
-	VmNativeInheritedLoadLoopPlan,
-	VmNativePropertyRegionPlan,
-	VmNativeStringCharCodeAtFusionPlan,
 	VmRegion,
 	VmRegionLicense,
 	VmRegisterRepresentation,
@@ -540,21 +535,6 @@ export function emitCompiledFunction(
 		const call = fn.instructions[callIp];
 		const trimCall = fn.instructions[cursor.trimCallIp];
 		const lockedLicense = vmGuardIsWorldInvariant(cursor.license.guard);
-		const cursorOperations = new Set([
-			lengthIp,
-			cursor.elementIp,
-			cursor.trimPropertyIp,
-			cursor.trimCallIp,
-			...cursor.primitiveStringLengthIps,
-		]);
-		let semanticEpochStable = true;
-		for (let ip = callIp + 1; ip <= backedgeIp; ip++) {
-			if (cursorOperations.has(ip)) continue;
-			if (nativeInstructionMayInvalidateSemanticEpoch(fn.instructions[ip]!, reps)) {
-				semanticEpochStable = false;
-				break;
-			}
-		}
 		const hoistTrimIdentity = !lockedLicense;
 		stringSplitCursorSites.set(callIp, {
 			cursor,
@@ -564,7 +544,9 @@ export function emitCompiledFunction(
 			subjectSlot: nextStackSlot,
 			separatorSlot: nextStackSlot + 1,
 			...(hoistTrimIdentity ? { trimCalleeSlot: nextStackSlot + 2 } : {}),
-			semanticEpochStable,
+			// Semantic-epoch stability is a Core obligation. Until Core provides it,
+			// validate at each guarded use instead of rediscovering it from VM adjacency.
+			semanticEpochStable: false,
 			epochName: `__string_split_cursor_${callIp}_semantic_epoch`,
 			lockedIdentity:
 				call?.opcode === "CALL_BUILTIN" ||
@@ -659,15 +641,6 @@ export function emitCompiledFunction(
 		gcUnlink,
 		thisSlot,
 		null,
-		override === undefined ? (fn.nativeInheritedLoadLoops ?? []) : [],
-		override === undefined
-			? (fn.nativePropertyRegions?.specialized ?? [])
-			: (fn.nativePropertyRegions?.generic ?? []),
-		fn.nativeDenseIteratorCursors ?? [],
-		override === undefined
-			? (fn.nativeStringCharCodeAtFusions?.specialized ?? [])
-			: (fn.nativeStringCharCodeAtFusions?.generic ?? []),
-		fn.nativeMathCalls,
 		stackObjectSites,
 		stackObjectAccesses,
 		stackObjectMaterializations,
@@ -1017,11 +990,6 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
-		[],
-		fn.nativePropertyRegions?.generic ?? [],
-		fn.nativeDenseIteratorCursors ?? [],
-		fn.nativeStringCharCodeAtFusions?.generic ?? [],
-		fn.nativeMathCalls,
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1207,30 +1175,6 @@ function zeroOf(rep: RegisterRep): string {
  * Allocation and GC are safe: this runtime's collector does not run finalizers or
  * jobs inside a safepoint. Unknown instructions fail closed.
  */
-function nativeInstructionMayInvalidateSemanticEpoch(
-	instruction: VmInstruction,
-	reps: Array<RegisterRep>,
-): boolean {
-	switch (instruction.opcode) {
-		case "CREATE_OBJECT":
-		case "CREATE_OBJECT_SHAPED":
-		case "CREATE_ARRAY":
-		case "MATH_UNARY_NUMBER":
-		case "MATH_BINARY_NUMBER":
-			return false;
-		case "LOAD_PROPERTY":
-		case "STORE_PROPERTY":
-			return true;
-		case "LOAD_PROPERTY_STATIC":
-			// The local String-brand fast path retains a generic property fallback. A
-			// non-String receiver may therefore run JavaScript even when this operation
-			// carries the hint; only a region-wide admission proof could suppress it.
-			return true;
-		default:
-			return nativeInstructionMayCaptureStack(instruction, reps);
-	}
-}
-
 /**
  * A property-access instruction's membership in a guarded region (see the region
  * detection in emitBody). `name` is the region's base identifier; `declare` marks the
@@ -1251,48 +1195,6 @@ interface RegionAccess {
 	icIndices: Array<number>;
 	commit: boolean;
 	loopStaticPropertyFastPath: boolean;
-}
-
-interface NativeInheritedLoadLoop extends VmNativeInheritedLoadLoopPlan {
-	readonly probeName: string;
-	readonly loadedName: string;
-	readonly deferredMoveIpSet: ReadonlySet<number>;
-}
-
-interface LoopTwinEmission {
-	readonly twin: NativeInheritedLoadLoop;
-	readonly kind: "fast" | "generic";
-	readonly publishPosition: boolean;
-}
-
-function inheritedLoopValidation(twin: NativeInheritedLoadLoop): string {
-	const receiver = `r${twin.receiver}`;
-	const ic = `&__property_ic[${twin.icIndex}]`;
-	return `(mal_vm_local_inherited_value_try_load_static(mal_vm_as_object(${receiver}), ${ic}, &${twin.probeName}) || mal_vm_local_watched_inherited_value_try_load_static(vm, __watched_methods_epoch, ${receiver}, ${ic}, &${twin.probeName}))`;
-}
-
-function materializeDeferredInheritedValue(twin: NativeInheritedLoadLoop): Array<string> {
-	if (twin.deferredRegisters.length === 0) return [];
-	return [
-		`if (${twin.loadedName}) {`,
-		...twin.deferredRegisters.map(
-			(register) => `  r${register} = __property_ic[${twin.icIndex}].value;`,
-		),
-		`}`,
-	];
-}
-
-/**
- * One adjacent static Get + direct String#charCodeAt call. No instruction can
- * observe or invalidate state between the two operations, so native emission may
- * keep the complete pair behind one watched-method license while retaining the
- * original Get+Call in a cold fallback.
- */
-interface StringCharCodeAtFusion {
-	loadIp: number;
-	callIp: number;
-	load: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
-	call: Extract<VmInstruction, { opcode: "CALL" }>;
 }
 
 type NativeStringSplitProjection = Extract<
@@ -1394,17 +1296,6 @@ interface NativeStringSliceNumberFusionAction {
 	role: "property" | "slice" | "number";
 	lockedIdentity: boolean;
 	propertyLoad?: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
-}
-
-interface DenseIteratorCursor {
-	name: string;
-	iterator: number;
-	next: number;
-}
-
-interface DenseIteratorCursorAction {
-	cursor: DenseIteratorCursor;
-	kind: "capture" | "step";
 }
 
 interface StackObjectSite {
@@ -1560,11 +1451,6 @@ function emitBody(
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
-	inheritedLoadLoopPlans: ReadonlyArray<VmNativeInheritedLoadLoopPlan>,
-	propertyRegionPlans: ReadonlyArray<VmNativePropertyRegionPlan>,
-	denseIteratorCursorPlans: ReadonlyArray<VmNativeDenseIteratorCursorPlan>,
-	stringCharCodeAtFusionPlans: ReadonlyArray<VmNativeStringCharCodeAtFusionPlan>,
-	mathCallPlan: VmFunction["nativeMathCalls"],
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
@@ -1621,259 +1507,27 @@ function emitBody(
 		jumpTargets.add(handler.handlerIp);
 	}
 	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
-	const inheritedLoadLoops: Array<NativeInheritedLoadLoop> = inheritedLoadLoopPlans.map(
-		(plan) => {
-			const property = fn.instructions[plan.propertyIp];
-			const backedge = fn.instructions[plan.backedgeIp];
-			const orderedUnique = (values: ReadonlyArray<number>): boolean =>
-				values.every(
-					(value, index) =>
-						Number.isInteger(value) && (index === 0 || values[index - 1]! < value),
-				);
-			if (
-				!Number.isInteger(plan.headerIp) ||
-				!Number.isInteger(plan.backedgeIp) ||
-				plan.headerIp <= 0 ||
-				plan.backedgeIp <= plan.headerIp ||
-				property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				property.object !== plan.receiver ||
-				property.icIndex !== plan.icIndex ||
-				plan.propertyIp < plan.headerIp ||
-				plan.propertyIp > plan.backedgeIp ||
-				backedge?.opcode !== "JUMP" ||
-				backedge.targetIp !== plan.headerIp ||
-				!orderedUnique(plan.deferredRegisters) ||
-				plan.deferredRegisters.some(
-					(register) =>
-						register < 0 || register >= fn.registerCount || reps[register] !== "boxed",
-				) ||
-				!orderedUnique(plan.deferredMoveIps) ||
-				plan.deferredMoveIps.some(
-					(ip) =>
-						ip < plan.headerIp ||
-						ip > plan.backedgeIp ||
-						fn.instructions[ip]?.opcode !== "MOVE",
-				)
-			) {
-				throw new Error(`Invalid native inherited-load loop plan at ${plan.headerIp}`);
-			}
-			const summary = plan.summary;
-			if (
-				summary !== undefined &&
-				(summary.index < 0 ||
-					summary.index >= fn.registerCount ||
-					summary.bound < 0 ||
-					summary.bound >= fn.registerCount ||
-					summary.condition < 0 ||
-					summary.condition >= fn.registerCount ||
-					summary.exitIp <= plan.backedgeIp ||
-					summary.exitIp >= fn.instructions.length ||
-					reps[summary.index] !== "number" ||
-					reps[summary.bound] !== "number" ||
-					reps[summary.condition] !== "boolean")
-			) {
-				throw new Error(`Invalid native inherited-load loop summary at ${plan.headerIp}`);
-			}
-			return {
-				...plan,
-				probeName: `__inherited_loop_${plan.headerIp}_probe`,
-				loadedName: `__inherited_loop_${plan.headerIp}_loaded`,
-				deferredMoveIpSet: new Set(plan.deferredMoveIps),
-			};
-		},
-	);
-	const inheritedLoadLoopByHeader = new Map(
-		inheritedLoadLoops.map((loop) => [loop.headerIp, loop] as const),
-	);
-	const inheritedLoadLoopByBackedge = new Map(
-		inheritedLoadLoops.map((loop) => [loop.backedgeIp, loop] as const),
-	);
-	const mathUnaryCalls = new Set(mathCallPlan?.unaryCallIps ?? []);
-	const mathBinaryCalls = new Set(mathCallPlan?.binaryCallIps ?? []);
-	for (const [ip, arity] of [
-		...[...mathUnaryCalls].map((ip) => [ip, 1] as const),
-		...[...mathBinaryCalls].map((ip) => [ip, 2] as const),
-	]) {
-		const instruction = fn.instructions[ip];
-		const operation =
-			instruction?.opcode === "CALL"
-				? instruction.guardedBuiltinCall?.operation
-				: undefined;
+	const mathUnaryCalls = new Set<number>();
+	const mathBinaryCalls = new Set<number>();
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode !== "CALL") continue;
+		const operation = instruction.guardedBuiltinCall?.operation;
 		if (
-			instruction?.opcode !== "CALL" ||
-			operation?.startsWith("Math.") !== true ||
-			instruction.arguments.length !== arity ||
-			(arity === 2 && operation !== "Math.min" && operation !== "Math.max") ||
-			(arity === 1 && (operation === "Math.min" || operation === "Math.max")) ||
-			(mathUnaryCalls.has(ip) && mathBinaryCalls.has(ip))
+			operation !== undefined &&
+			instruction.arguments.length === 1 &&
+			MATH_UNARY_NATIVE_OP.has(operation)
 		) {
-			throw new Error(`Invalid native Math call plan at ${ip}`);
+			mathUnaryCalls.add(ip);
+		} else if (
+			operation !== undefined &&
+			instruction.arguments.length === 2 &&
+			MATH_BINARY_NATIVE_OP.has(operation)
+		) {
+			mathBinaryCalls.add(ip);
 		}
 	}
-	const denseIteratorCursorActions = new Map<number, DenseIteratorCursorAction>();
-	const denseIteratorCursorResets = new Map<number, Array<DenseIteratorCursor>>();
-	const denseIteratorCursors = denseIteratorCursorPlans.map((plan, index) => ({
-		name: `__dense_iter_${index}`,
-		iterator: plan.iterator,
-		next: plan.next,
-	}));
-	const orderedUnique = (values: ReadonlyArray<number>): boolean =>
-		values.every(
-			(value, index) =>
-				Number.isInteger(value) && (index === 0 || values[index - 1]! < value),
-		);
-	const denseIteratorPairs = new Set<string>();
-	for (
-		let cursorIndex = 0;
-		cursorIndex < denseIteratorCursorPlans.length;
-		cursorIndex++
-	) {
-		const plan = denseIteratorCursorPlans[cursorIndex]!;
-		const cursor = denseIteratorCursors[cursorIndex]!;
-		const pair = `${plan.iterator}:${plan.next}`;
-		const expectedResetIps = fn.instructions.flatMap((instruction, ip) => {
-			const writes = vmInstructionWriteRegisters(instruction);
-			return writes.includes(plan.iterator) || writes.includes(plan.next) ? [ip] : [];
-		});
-		if (
-			plan.iterator < 0 ||
-			plan.iterator >= fn.registerCount ||
-			plan.next < 0 ||
-			plan.next >= fn.registerCount ||
-			plan.iterator === plan.next ||
-			denseIteratorPairs.has(pair) ||
-			plan.captureIps.length === 0 ||
-			plan.stepIps.length === 0 ||
-			!orderedUnique(plan.captureIps) ||
-			!orderedUnique(plan.stepIps) ||
-			!orderedUnique(plan.resetIps) ||
-			plan.resetIps.join(",") !== expectedResetIps.join(",")
-		) {
-			throw new Error(`Invalid native dense-iterator cursor ${cursorIndex}`);
-		}
-		denseIteratorPairs.add(pair);
-		for (const ip of plan.captureIps) {
-			const instruction = fn.instructions[ip];
-			if (
-				instruction?.opcode !== "GET_ITERATOR" ||
-				instruction.iteratorDst !== plan.iterator ||
-				instruction.nextDst !== plan.next ||
-				denseIteratorCursorActions.has(ip)
-			) {
-				throw new Error(`Invalid native dense-iterator capture at ${ip}`);
-			}
-			denseIteratorCursorActions.set(ip, { cursor, kind: "capture" });
-		}
-		for (const ip of plan.stepIps) {
-			const instruction = fn.instructions[ip];
-			const writes =
-				instruction === undefined ? [] : vmInstructionWriteRegisters(instruction);
-			if (
-				instruction?.opcode !== "ITERATOR_STEP" ||
-				instruction.iterator !== plan.iterator ||
-				instruction.next !== plan.next ||
-				writes.includes(plan.iterator) ||
-				writes.includes(plan.next) ||
-				denseIteratorCursorActions.has(ip)
-			) {
-				throw new Error(`Invalid native dense-iterator step at ${ip}`);
-			}
-			denseIteratorCursorActions.set(ip, { cursor, kind: "step" });
-		}
-		for (const ip of plan.resetIps) {
-			const instruction = fn.instructions[ip];
-			const writes =
-				instruction === undefined ? [] : vmInstructionWriteRegisters(instruction);
-			if (!writes.includes(plan.iterator) && !writes.includes(plan.next)) {
-				throw new Error(`Invalid native dense-iterator reset at ${ip}`);
-			}
-			const resets = denseIteratorCursorResets.get(ip) ?? [];
-			resets.push(cursor);
-			denseIteratorCursorResets.set(ip, resets);
-		}
-	}
-
 	const regionGuard = new Map<number, RegionAccess>();
-	for (let regionIndex = 0; regionIndex < propertyRegionPlans.length; regionIndex++) {
-		const plan = propertyRegionPlans[regionIndex]!;
-		if (
-			plan.object < 0 ||
-			plan.object >= fn.registerCount ||
-			plan.sites.length === 0 ||
-			plan.sites.length !== plan.icIndices.length ||
-			plan.consolidated !== (plan.kind === "object" && plan.sites.length >= 2)
-		) {
-			throw new Error(`Invalid native property region ${regionIndex}`);
-		}
-		for (let siteIndex = 0; siteIndex < plan.sites.length; siteIndex++) {
-			const site = plan.sites[siteIndex]!;
-			const instruction = fn.instructions[site.ip];
-			if (
-				(instruction?.opcode !== "LOAD_PROPERTY" &&
-					instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
-					instruction?.opcode !== "STORE_PROPERTY" &&
-					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
-				instruction.object !== plan.object ||
-				instruction.icIndex !== plan.icIndices[siteIndex] ||
-				(siteIndex > 0 && plan.sites[siteIndex - 1]!.ip >= site.ip) ||
-				(site.revalidate && (!plan.consolidated || siteIndex === 0)) ||
-				(site.loopStaticPropertyFastPath && instruction.opcode !== "LOAD_PROPERTY_STATIC")
-			) {
-				throw new Error(`Invalid native property region site ${site.ip}`);
-			}
-			const expectedKind =
-				(instruction.opcode === "LOAD_PROPERTY" ||
-					instruction.opcode === "STORE_PROPERTY") &&
-				reps[instruction.key] === "number"
-					? "array"
-					: "object";
-			if (expectedKind !== plan.kind || regionGuard.has(site.ip)) {
-				throw new Error(`Invalid native property region kind at ${site.ip}`);
-			}
-			regionGuard.set(site.ip, {
-				name: `__rg${regionIndex}`,
-				kind: plan.kind,
-				declare: siteIndex === 0,
-				consolidated: plan.consolidated,
-				revalidate: site.revalidate,
-				slotIndex: siteIndex,
-				size: plan.sites.length,
-				leadingIcIndex: plan.icIndices[0]!,
-				icIndices: [...plan.icIndices],
-				commit: plan.consolidated && siteIndex === plan.sites.length - 1,
-				loopStaticPropertyFastPath: site.loopStaticPropertyFastPath,
-			});
-		}
-	}
-
-	const stringCharCodeAtFusionByIp = new Map<number, StringCharCodeAtFusion>();
-	for (const plan of stringCharCodeAtFusionPlans) {
-		const load = fn.instructions[plan.loadIp];
-		const call = fn.instructions[plan.callIp];
-		if (
-			load?.opcode !== "LOAD_PROPERTY_STATIC" ||
-			call?.opcode !== "CALL" ||
-			plan.callIp !== plan.loadIp + 1 ||
-			!vmCallProvesBuiltin(call, "String.prototype.charCodeAt") ||
-			call.callee !== load.dst ||
-			call.thisValue !== load.object ||
-			jumpTargets.has(plan.callIp) ||
-			handlerTargets[plan.loadIp] !== handlerTargets[plan.callIp] ||
-			regionGuard.get(plan.loadIp)?.consolidated === true ||
-			stringCharCodeAtFusionByIp.has(plan.loadIp) ||
-			stringCharCodeAtFusionByIp.has(plan.callIp)
-		) {
-			throw new Error(`Invalid native String#charCodeAt fusion at ${plan.loadIp}`);
-		}
-		const fusion: StringCharCodeAtFusion = {
-			loadIp: plan.loadIp,
-			callIp: plan.callIp,
-			load,
-			call,
-		};
-		stringCharCodeAtFusionByIp.set(plan.loadIp, fusion);
-		stringCharCodeAtFusionByIp.set(plan.callIp, fusion);
-	}
 	const nativeStringSplitProjectionActionByIp = new Map<
 		number,
 		NativeStringSplitProjectionAction
@@ -2075,15 +1729,7 @@ function emitBody(
 		});
 	}
 
-	const lines: Array<string> = denseIteratorCursors.map(
-		(cursor) => `MalIteratorObject *${cursor.name} = nullptr;`,
-	);
-	for (const loop of inheritedLoadLoops) {
-		lines.push(`MalValue ${loop.probeName} = MAL_VALUE_UNDEFINED;`);
-		if (loop.deferredRegisters.length > 0) {
-			lines.push(`bool ${loop.loadedName} = false;`);
-		}
-	}
+	const lines: Array<string> = [];
 	for (const site of stringSplitProjectionSites.values()) {
 		lines.push(
 			`bool __string_split_${site.projection.callIp}_fast = false;`,
@@ -2138,7 +1784,6 @@ function emitBody(
 		);
 	}
 	if (
-		stringCharCodeAtFusionByIp.size > 0 ||
 		[...stringSplitCursorSites.values()].some((site) => !site.lockedIdentity) ||
 		[...regexpExecProjectionSites.values()].some((site) =>
 			site.loads.some(
@@ -2146,8 +1791,7 @@ function emitBody(
 					load.consumer?.kind === "charCodeAtZero" ||
 					load.consumer?.kind === "asciiCaseLength",
 			),
-		) ||
-		[...regionGuard.values()].some((region) => region.loopStaticPropertyFastPath)
+		)
 	) {
 		const watchedMethodsAdmission =
 			watchedMethodsGuard === undefined
@@ -2188,106 +1832,6 @@ function emitBody(
 			lastPublishedPos = -1;
 			lastPublishedSite = -1;
 		}
-		const inheritedLoadLoop = inheritedLoadLoopByHeader.get(ip);
-		if (inheritedLoadLoop !== undefined) {
-			if (inheritedLoadLoop.deferredRegisters.length > 0) {
-				lines.push(`    ${inheritedLoadLoop.loadedName} = false;`);
-			}
-			const summary = inheritedLoadLoop.summary;
-			if (summary === undefined) {
-				lines.push(
-					`    if (${inheritedLoopValidation(inheritedLoadLoop)}) goto LF${inheritedLoadLoop.headerIp};`,
-					`    goto LG${inheritedLoadLoop.headerIp};`,
-				);
-			} else {
-				const bound = `r${summary.bound}`;
-				lines.push(
-					`    if (${inheritedLoopValidation(inheritedLoadLoop)}) {`,
-					`      if (mal_gc_preempt_hook == nullptr && ${bound} > 0.0 && isfinite(${bound}) && trunc(${bound}) == ${bound} && ${bound} <= 9007199254740992.0) {`,
-					...inheritedLoadLoop.deferredRegisters.map(
-						(register) => `        r${register} = ${inheritedLoadLoop.probeName};`,
-					),
-					`        r${summary.index} = 1.0;`,
-					"        if (mal_gc_poll) {",
-					...(debug && inheritedLoadLoop.position !== -1
-						? [
-								`          vm->native_frames[vm->native_frame_count - 1].pos_id = ${inheritedLoadLoop.position};`,
-							]
-						: []),
-					"          mal_gc_safepoint(vm);",
-					`          if (${bound} > 1.0) {`,
-					`            if (!${inheritedLoopValidation(inheritedLoadLoop)}) goto LG${inheritedLoadLoop.headerIp};`,
-					...inheritedLoadLoop.deferredRegisters.map(
-						(register) => `            r${register} = ${inheritedLoadLoop.probeName};`,
-					),
-					"          }",
-					"        }",
-					`        mal_perf_inherited_loop_summary((u64) ${bound});`,
-					`        r${summary.condition} = false;`,
-					`        r${summary.index} = ${bound};`,
-					`        goto L${summary.exitIp};`,
-					"      }",
-					`      goto LF${inheritedLoadLoop.headerIp};`,
-					"    }",
-					`    goto LG${inheritedLoadLoop.headerIp};`,
-				);
-			}
-			const fastJumpTargets = new Set<number>([inheritedLoadLoop.headerIp]);
-			for (
-				let fastIp = inheritedLoadLoop.headerIp;
-				fastIp <= inheritedLoadLoop.backedgeIp;
-				fastIp++
-			) {
-				const instruction = fn.instructions[fastIp]!;
-				if (
-					(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-					instruction.targetIp >= inheritedLoadLoop.headerIp &&
-					instruction.targetIp <= inheritedLoadLoop.backedgeIp
-				) {
-					fastJumpTargets.add(instruction.targetIp);
-				}
-			}
-			for (
-				let fastIp = inheritedLoadLoop.headerIp;
-				fastIp <= inheritedLoadLoop.backedgeIp;
-				fastIp++
-			) {
-				if (fastJumpTargets.has(fastIp)) lines.push(`LF${fastIp}:;`);
-				const fast = emitInstruction(
-					fn.instructions[fastIp]!,
-					fastIp,
-					suffix,
-					reps,
-					fn.strict,
-					undefined,
-					gcUnlink,
-					thisSlot,
-					coro,
-					{
-						directCompiledTargets,
-						mathUnaryCall: false,
-						mathBinaryCall: false,
-						loopStaticPropertyFastPath: true,
-						mappedArguments: fn.mappedArguments,
-						mappedArgumentSlots: fn.mappedArgumentSlots,
-						hasPrototype: fn.hasPrototype,
-						loopTwinEmission: {
-							twin: inheritedLoadLoop,
-							kind: "fast",
-							publishPosition: debug,
-						},
-					},
-				);
-				if (fast === null) return null;
-				for (const line of fast) lines.push(`    ${line}`);
-			}
-			lines.push(`LG${inheritedLoadLoop.headerIp}:;`);
-			lastPublishedPos = -1;
-			lastPublishedSite = -1;
-		}
-		for (const cursor of denseIteratorCursorResets.get(ip) ?? []) {
-			lines.push(`    ${cursor.name} = nullptr;`);
-		}
 		let emitted = emitInstruction(
 			fn.instructions[ip]!,
 			ip,
@@ -2299,7 +1843,6 @@ function emitBody(
 			thisSlot,
 			coro,
 			{
-				denseIteratorCursor: denseIteratorCursorActions.get(ip),
 				region: regionGuard.get(ip),
 				stackObjectSite: stackObjectSites.get(ip),
 				stackObjectAccess: stackObjectAccesses.get(ip),
@@ -2313,14 +1856,6 @@ function emitBody(
 				mappedArguments: fn.mappedArguments,
 				mappedArgumentSlots: fn.mappedArgumentSlots,
 				hasPrototype: fn.hasPrototype,
-				loopTwinEmission: inheritedLoadLoopByBackedge.has(ip)
-					? {
-							twin: inheritedLoadLoopByBackedge.get(ip)!,
-							kind: "generic",
-							publishPosition: debug,
-						}
-					: undefined,
-				stringCharCodeAtFusion: stringCharCodeAtFusionByIp.get(ip),
 				nativeStringSplitProjectionAction: nativeStringSplitProjectionActionByIp.get(ip),
 				nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
 				nativeRegExpExecProjectionAction: nativeRegExpExecProjectionActionByIp.get(ip),
@@ -2639,7 +2174,6 @@ function instrumentProfileExpressions(
  * forms) is the main way this backend grows.
  */
 interface NativeInstructionContext {
-	readonly denseIteratorCursor?: DenseIteratorCursorAction;
 	readonly region?: RegionAccess;
 	readonly stackObjectSite?: StackObjectSite;
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
@@ -2652,8 +2186,6 @@ interface NativeInstructionContext {
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
-	readonly loopTwinEmission?: LoopTwinEmission;
-	readonly stringCharCodeAtFusion?: StringCharCodeAtFusion;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
@@ -2675,7 +2207,6 @@ function emitInstruction(
 	context: NativeInstructionContext,
 ): Array<string> | null {
 	const {
-		denseIteratorCursor,
 		region,
 		stackObjectSite,
 		stackObjectAccess,
@@ -2688,8 +2219,6 @@ function emitInstruction(
 		mappedArguments,
 		mappedArgumentSlots,
 		hasPrototype,
-		loopTwinEmission,
-		stringCharCodeAtFusion,
 		nativeStringSplitProjectionAction,
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
@@ -2793,12 +2322,6 @@ function emitInstruction(
 
 	switch (instruction.opcode) {
 		case "MOVE": {
-			if (
-				loopTwinEmission?.kind === "fast" &&
-				loopTwinEmission.twin.deferredMoveIpSet.has(ip)
-			) {
-				return [];
-			}
 			// The dst and src share a rep (a MOVE produces its src's rep, so the
 			// dst's join can only differ by being boxed). Read src in the dst's rep.
 			const dst = instruction.dst;
@@ -3164,9 +2687,6 @@ function emitInstruction(
 					];
 				}
 			}
-			if (stringCharCodeAtFusion !== undefined && stringCharCodeAtFusion.loadIp === ip) {
-				return [];
-			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
 				nativeRegExpExecProjectionAction?.role === "capture"
@@ -3183,22 +2703,6 @@ function emitInstruction(
 						`}`,
 					];
 				}
-			}
-			if (
-				loopTwinEmission?.kind === "fast" &&
-				ip === loopTwinEmission.twin.propertyIp &&
-				instruction.opcode === "LOAD_PROPERTY_STATIC"
-			) {
-				if (loopTwinEmission.twin.deferredRegisters.length > 0) {
-					return [
-						"mal_perf_ic_load_inherited_hit();",
-						`${loopTwinEmission.twin.loadedName} = true;`,
-					];
-				}
-				return [
-					"mal_perf_ic_load_inherited_hit();",
-					`r${instruction.dst} = __property_ic[${instruction.icIndex}].value;`,
-				];
 			}
 			if (stackObjectInheritedAccess !== undefined) {
 				const fallback = emitGenericInstruction();
@@ -4286,42 +3790,6 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			if (stringCharCodeAtFusion !== undefined && stringCharCodeAtFusion.callIp === ip) {
-				const fusion = stringCharCodeAtFusion;
-				const receiver = boxedOperand(instruction.thisValue);
-				const firstNumber = args.length === 0 ? "0.0" : nativeNumberOperand(args[0]!);
-				const numberGuard =
-					firstNumber !== null ? "true" : `mal_ops_is_number(${boxedOperand(args[0]!)})`;
-				const position =
-					firstNumber ?? `mal_ops_number_as_f64(${boxedOperand(args[0]!)})`;
-				const boundedPosition =
-					instruction.directStringCharCodeAtPosition === "inBounds" &&
-					firstNumber !== null
-						? `(usize) (${firstNumber})`
-						: null;
-				const callee = `r${fusion.load.dst}`;
-				const lockedIdentity =
-					instruction.guardedBuiltinCall !== undefined &&
-					vmGuardIsWorldInvariant(instruction.guardedBuiltinCall.guard);
-				const identityGuard = lockedIdentity
-					? ""
-					: `mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &__property_ic[${fusion.load.icIndex}], &${callee}) && `;
-				return [
-					`static MalCallCache __cc_${ip};`,
-					`if (${identityGuard}mal_value_is_string(${receiver}) && ${numberGuard}) {`,
-					boundedPosition === null
-						? `  r${instruction.dst} = mal_builtin_string_char_code_at_number(${receiver}, ${position});`
-						: `  r${instruction.dst} = mal_builtin_string_char_code_at_in_bounds(${receiver}, ${boundedPosition});`,
-					`} else {`,
-					`  ${callee} = mal_vm_op_load_property_ic(vm, ${boxedOperand(fusion.load.object)}, mal_value_from_string(vm->string_constant_atoms[${fusion.load.stringIndex}]), &__property_ic[${fusion.load.icIndex}]);`,
-					`  ${throwCheck}`,
-					`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${callee}, ${receiver}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
-					`  ${poll}`,
-					`}`,
-				];
-			}
 			const guardedBuiltinOperation = instruction.guardedBuiltinCall?.operation;
 			if (
 				guardedBuiltinOperation === "Map.prototype.get" ||
@@ -4540,11 +4008,6 @@ function emitInstruction(
 				`if (!mal_vm_get_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow}`,
 				`r${instruction.iteratorDst} = ${rec}.iterator;`,
 				`r${instruction.nextDst} = ${rec}.next_method;`,
-				...(denseIteratorCursor?.kind === "capture"
-					? [
-							`${denseIteratorCursor.cursor.name} = mal_vm_iterator_dense_array_cursor(&${rec});`,
-						]
-					: []),
 			];
 		}
 		case "GET_ASYNC_ITERATOR": {
@@ -4562,10 +4025,7 @@ function emitInstruction(
 			const rec = `iter_rec_${ip}`;
 			const val = `iter_val_${ip}`;
 			const done = `iter_done_${ip}`;
-			const step =
-				denseIteratorCursor?.kind === "step"
-					? `${denseIteratorCursor.cursor.name} != nullptr ? mal_vm_iterator_step_dense_array_cursor(vm, ${denseIteratorCursor.cursor.name}, &${rec}, &${val}, &${done}) : mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`
-					: `mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`;
+			const step = `mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})`;
 			if (nativeRegExpIteratorProjectionAction?.role === "step") {
 				const site = nativeRegExpIteratorProjectionAction.site;
 				const admission = regionAdmissionGuard(site.projection.license);
@@ -4617,43 +4077,6 @@ function emitInstruction(
 		case "JUMP":
 			// A back-edge (target <= current ip) is a loop edge: poll there so an
 			// allocation-free loop is still interruptible for collection.
-			if (
-				loopTwinEmission !== undefined &&
-				ip === loopTwinEmission.twin.backedgeIp &&
-				instruction.targetIp === loopTwinEmission.twin.headerIp
-			) {
-				if (loopTwinEmission.kind === "generic") {
-					return [poll, `goto LG${instruction.targetIp};`];
-				}
-				return [
-					"if (mal_gc_poll) {",
-					...materializeDeferredInheritedValue(loopTwinEmission.twin).map(
-						(line) => `  ${line}`,
-					),
-					...(loopTwinEmission.publishPosition && loopTwinEmission.twin.position !== -1
-						? [
-								`  vm->native_frames[vm->native_frame_count - 1].pos_id = ${loopTwinEmission.twin.position};`,
-							]
-						: []),
-					"  mal_gc_safepoint(vm);",
-					`  if (!${inheritedLoopValidation(loopTwinEmission.twin)}) goto LG${instruction.targetIp};`,
-					"}",
-					`goto LF${instruction.targetIp};`,
-				];
-			}
-			if (
-				loopTwinEmission?.kind === "fast" &&
-				instruction.targetIp >= loopTwinEmission.twin.headerIp &&
-				instruction.targetIp <= loopTwinEmission.twin.backedgeIp
-			) {
-				return [`goto LF${instruction.targetIp};`];
-			}
-			if (loopTwinEmission?.kind === "fast") {
-				return [
-					...materializeDeferredInheritedValue(loopTwinEmission.twin),
-					`goto L${instruction.targetIp};`,
-				];
-			}
 			return instruction.targetIp <= ip
 				? [poll, `goto L${instruction.targetIp};`]
 				: [`goto L${instruction.targetIp};`];
@@ -4661,23 +4084,6 @@ function emitInstruction(
 			// Branch on a raw bool / native truthiness test — no boxing when the
 			// condition is already a boolean-rep (typically a comparison result).
 			// Poll on a taken back-edge only.
-			if (
-				loopTwinEmission?.kind === "fast" &&
-				instruction.targetIp >= loopTwinEmission.twin.headerIp &&
-				instruction.targetIp <= loopTwinEmission.twin.backedgeIp
-			) {
-				return [`if (${truthy(instruction.cond)}) goto LF${instruction.targetIp};`];
-			}
-			if (loopTwinEmission?.kind === "fast") {
-				return [
-					`if (${truthy(instruction.cond)}) {`,
-					...materializeDeferredInheritedValue(loopTwinEmission.twin).map(
-						(line) => `  ${line}`,
-					),
-					`  goto L${instruction.targetIp};`,
-					"}",
-				];
-			}
 			return instruction.targetIp <= ip
 				? [`if (${truthy(instruction.cond)}) { ${poll} goto L${instruction.targetIp}; }`]
 				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];

@@ -468,52 +468,6 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 									...fn.nativeRepresentationPlan.promotedNumericParameters,
 								],
 							},
-				nativeInheritedLoadLoops: fn.nativeInheritedLoadLoops?.map((loop) => ({
-					...loop,
-					position: shifted(loop.position, base.position),
-					deferredRegisters: [...loop.deferredRegisters],
-					deferredMoveIps: [...loop.deferredMoveIps],
-					summary: loop.summary === undefined ? undefined : { ...loop.summary },
-				})),
-				nativePropertyRegions:
-					fn.nativePropertyRegions === undefined
-						? undefined
-						: {
-								generic: fn.nativePropertyRegions.generic.map((region) => ({
-									...region,
-									icIndices: [...region.icIndices],
-									sites: region.sites.map((site) => ({ ...site })),
-								})),
-								specialized: fn.nativePropertyRegions.specialized.map((region) => ({
-									...region,
-									icIndices: [...region.icIndices],
-									sites: region.sites.map((site) => ({ ...site })),
-								})),
-							},
-				nativeDenseIteratorCursors: fn.nativeDenseIteratorCursors?.map((cursor) => ({
-					...cursor,
-					captureIps: [...cursor.captureIps],
-					stepIps: [...cursor.stepIps],
-					resetIps: [...cursor.resetIps],
-				})),
-				nativeStringCharCodeAtFusions:
-					fn.nativeStringCharCodeAtFusions === undefined
-						? undefined
-						: {
-								generic: fn.nativeStringCharCodeAtFusions.generic.map((fusion) => ({
-									...fusion,
-								})),
-								specialized: fn.nativeStringCharCodeAtFusions.specialized.map(
-									(fusion) => ({ ...fusion }),
-								),
-							},
-				nativeMathCalls:
-					fn.nativeMathCalls === undefined
-						? undefined
-						: {
-								unaryCallIps: [...fn.nativeMathCalls.unaryCallIps],
-								binaryCallIps: [...fn.nativeMathCalls.binaryCallIps],
-							},
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
 				regions: fn.regions?.map((region) => cloneRegion(region, base)),
 			})),

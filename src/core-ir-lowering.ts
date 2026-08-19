@@ -258,6 +258,8 @@ export interface CoreRegisterFunction {
 	readonly mappedArguments: boolean;
 	readonly length: number;
 	readonly registerCount: number;
+	/** Physical register classes selected from canonical Core value representations. */
+	readonly registerRepresentations: ReadonlyArray<"boxed" | "number" | "boolean">;
 	readonly capturedCount: number;
 	readonly strict: boolean;
 	readonly isClassConstructor: boolean;
@@ -1357,6 +1359,7 @@ function coreHostInstallCandidates(
 function parallelMoves(
 	assignments: ReadonlyArray<{ readonly destination: number; readonly source: number }>,
 	nextRegister: { value: number },
+	registerRepresentations: Map<number, CoreRepresentation>,
 ): Array<RegisterInstruction> {
 	const pending = assignments
 		.filter(({ destination, source }) => destination !== source)
@@ -1376,6 +1379,11 @@ function parallelMoves(
 		}
 		const saved = pending[0]!.destination;
 		const temporary = nextRegister.value++;
+		const representation = registerRepresentations.get(saved);
+		if (representation === undefined) {
+			throw new Error(`Parallel move has no Core representation for r${saved}`);
+		}
+		registerRepresentations.set(temporary, representation);
 		result.push({ type: "move", registers: [temporary, saved] });
 		for (const assignment of pending) {
 			if (assignment.source === saved) assignment.source = temporary;
@@ -1569,6 +1577,7 @@ export function coreRegisterClasses(
 	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
 	readonly registers: Map<CoreValueId, number>;
 	readonly gcRootRegisters: ReadonlyArray<number>;
+	readonly registerRepresentations: Map<number, CoreRepresentation>;
 } {
 	const representations = new Map(
 		core.values.map(({ id, representation }) => [id, representation]),
@@ -1842,7 +1851,12 @@ export function coreRegisterClasses(
 	const gcRootRegisters = [
 		...new Set([...gcRootValues].map((value) => registers.get(find(value))!)),
 	].sort((left, right) => left - right);
-	return { roots, registers, gcRootRegisters };
+	return {
+		roots,
+		registers,
+		gcRootRegisters,
+		registerRepresentations: colorRepresentations,
+	};
 }
 
 function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructionId> {
@@ -2062,6 +2076,7 @@ function lowerFunctionBridge(
 		roots,
 		registers: allocatedRegisters,
 		gcRootRegisters,
+		registerRepresentations,
 	} = coreRegisterClasses(core, reuseRegisters);
 	const nextRegister = {
 		value: Math.max(-1, ...allocatedRegisters.values()) + 1,
@@ -2072,6 +2087,7 @@ function lowerFunctionBridge(
 		if (register === undefined) {
 			register = nextRegister.value++;
 			allocatedRegisters.set(root, register);
+			registerRepresentations.set(register, core.values[root]!.representation);
 		}
 		return register;
 	};
@@ -2091,6 +2107,7 @@ function lowerFunctionBridge(
 				source: registerForValue(edge.arguments[index]!),
 			})),
 			nextRegister,
+			registerRepresentations,
 		);
 		if (instructions.length === 0) return loweredTarget;
 		const index = blocks.length;
@@ -2150,6 +2167,7 @@ function lowerFunctionBridge(
 						source: registerForValue(block.handler!.arguments[index]!),
 					})),
 					nextRegister,
+					registerRepresentations,
 				),
 			);
 		}
@@ -2255,6 +2273,15 @@ function lowerFunctionBridge(
 				for (const switchCase of block.terminator.cases) {
 					const immediate = nextRegister.value++;
 					const matches = nextRegister.value++;
+					registerRepresentations.set(
+						immediate,
+						switchCase.value.kind === "number"
+							? "f64"
+							: switchCase.value.kind === "boolean"
+								? "boolean"
+								: "boxed",
+					);
+					registerRepresentations.set(matches, "boolean");
 					instructions.push(
 						lowerCoreImmediate(switchCase.value, immediate),
 						{
@@ -2284,6 +2311,20 @@ function lowerFunctionBridge(
 		if (block.handler !== undefined) instructions.push({ type: "tryEnd" });
 	}
 
+	const physicalRepresentations = Array.from(
+		{ length: nextRegister.value },
+		(_, register): "boxed" | "number" | "boolean" => {
+			const representation = registerRepresentations.get(register);
+			if (representation === undefined) {
+				throw new Error(`Core allocation left r${register} without a representation`);
+			}
+			return representation === "f64" || representation === "i32"
+				? "number"
+				: representation === "boolean"
+					? "boolean"
+					: "boxed";
+		},
+	);
 	return {
 		fn: {
 			sourcePath: core.metadata.sourcePath,
@@ -2304,6 +2345,7 @@ function lowerFunctionBridge(
 			mappedArguments: core.metadata.mappedArguments,
 			length: core.metadata.length,
 			registerCount: nextRegister.value,
+			registerRepresentations: physicalRepresentations,
 			capturedCount: core.metadata.capturedCount,
 			strict: core.metadata.strict,
 			isClassConstructor: core.metadata.isClassConstructor,
