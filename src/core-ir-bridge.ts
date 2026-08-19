@@ -5,6 +5,7 @@ import type {
 	CoreBlockId,
 	CoreEdge,
 	CoreFunction,
+	CoreImmediate,
 	CoreInstructionId,
 	CoreInstructionAttributes,
 	CoreFunctionMetadata,
@@ -1178,6 +1179,36 @@ function sourcePositionMarker(position: number | undefined): Array<IRInstruction
 	return position === undefined ? [] : [{ type: "sourcePos", pos: position }];
 }
 
+function lowerCoreImmediate(
+	value: CoreImmediate,
+	destination: number,
+): IRInstruction {
+	switch (value.kind) {
+		case "undefined":
+			return { type: "createUndefined", registers: [destination] };
+		case "null":
+			return { type: "createNull", registers: [destination] };
+		case "boolean":
+			return {
+				type: "createBoolean",
+				registers: [destination],
+				value: value.value,
+			};
+		case "number":
+			return {
+				type: "createNumber",
+				registers: [destination],
+				value: value.value,
+			};
+		case "string":
+			return {
+				type: "createString",
+				registers: [destination],
+				stringIndex: value.index,
+			};
+	}
+}
+
 function lowerFunctionBridge(
 	core: CoreFunction,
 	lowering: CoreFunctionLowering,
@@ -1324,7 +1355,32 @@ function lowerFunctionBridge(
 				);
 				break;
 			case "switch":
-				throw new Error("Core switch lowering is not implemented yet");
+				for (const switchCase of block.terminator.cases) {
+					const immediate = nextRegister.value++;
+					const matches = nextRegister.value++;
+					instructions.push(
+						lowerCoreImmediate(switchCase.value, immediate),
+						{
+							type: "binary",
+							registers: [
+								matches,
+								registerForValue(block.terminator.discriminant),
+								immediate,
+							],
+							operator: "===",
+						},
+						{
+							type: "jumpIf",
+							registers: [matches],
+							blocks: [edgeBlock(switchCase.edge)],
+						},
+					);
+				}
+				instructions.push({
+					type: "jump",
+					blocks: [edgeBlock(block.terminator.default)],
+				});
+				break;
 			case "unreachable":
 				throw new Error(`Reachable Core block ${block.id} ends in unreachable`);
 		}

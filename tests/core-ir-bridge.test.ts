@@ -128,4 +128,62 @@ describe("Core IR semantic bridge", () => {
 			]),
 		);
 	});
+
+	it("lowers Core switches with strict-equality case selection", () => {
+		const converted = bridge(`
+			function pick(value) {
+				if (value) return 1;
+				return 2;
+			}
+			pick(true);
+		`);
+		const functionIndex = converted.core.functions.findIndex((fn) =>
+			fn.blocks.some(({ terminator }) => terminator.kind === "branch"),
+		);
+		const fn = converted.core.functions[functionIndex]!;
+		const blockIndex = fn.blocks.findIndex(
+			({ terminator }) => terminator.kind === "branch",
+		);
+		const block = fn.blocks[blockIndex]!;
+		if (block.terminator.kind !== "branch") throw new Error("missing branch fixture");
+		const switchBlock = {
+			...block,
+			terminator: {
+				id: block.terminator.id,
+				kind: "switch" as const,
+				discriminant: block.terminator.condition,
+				cases: [
+					{ value: { kind: "boolean" as const, value: true }, edge: block.terminator.consequent },
+				],
+				default: block.terminator.alternate,
+			},
+		};
+		const switched = {
+			...converted,
+			core: {
+			...converted.core,
+			functions: converted.core.functions.map((candidate, index) =>
+				index === functionIndex
+					? {
+							...candidate,
+							blocks: candidate.blocks.map((candidateBlock, index) =>
+								index === blockIndex ? switchBlock : candidateBlock,
+							),
+						}
+					: candidate,
+			),
+			},
+		};
+
+		const lowered = coreProgramToIntermediate(switched);
+		const instructions = lowered.functions[functionIndex]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		);
+		expect(instructions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ type: "createBoolean", value: true }),
+				expect.objectContaining({ type: "binary", operator: "===" }),
+			]),
+		);
+	});
 });
