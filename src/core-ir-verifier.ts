@@ -206,7 +206,9 @@ function verifyRegionReferences(
 			fail(`${path} references unknown instruction @${object.$coreInstruction}`);
 		}
 		if (!claimedInstructions.has(object.$coreInstruction as CoreInstructionId)) {
-			fail(`${path} references instruction @${object.$coreInstruction} that is not claimed`);
+			fail(
+				`${path} references instruction @${object.$coreInstruction} that is not claimed`,
+			);
 		}
 		return;
 	}
@@ -247,11 +249,7 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 		fail("mapped argument slots exceed parameter count");
 	}
 	for (const slot of fn.metadata.mappedArgumentSlots) {
-		if (
-			!Number.isSafeInteger(slot) ||
-			slot < -1 ||
-			slot >= fn.metadata.capturedCount
-		) {
+		if (!Number.isSafeInteger(slot) || slot < -1 || slot >= fn.metadata.capturedCount) {
 			fail(`invalid mapped argument slot ${slot}`);
 		}
 	}
@@ -440,7 +438,8 @@ export function verifyCoreFunction(fn: CoreFunction, registry: CoreOpcodeRegistr
 				fail(`region ${region.kind} repeats an ${kind} block`);
 			}
 			for (const block of regionBlocks) {
-				if (!blocks.has(block)) fail(`region ${region.kind} has unknown ${kind} block b${block}`);
+				if (!blocks.has(block))
+					fail(`region ${region.kind} has unknown ${kind} block b${block}`);
 			}
 		}
 		verifyAttributeValue(region.data, `region ${region.kind}.data`);

@@ -128,40 +128,11 @@ interface LanguageMetrics {
 	shapedObjects: number;
 	stackObjects: number;
 	stackMaterializations: number;
-	invariantJsonParseCandidates: number;
-	invariantJsonParseFills: number;
-	invariantJsonParseHits: number;
-	invariantJsonParseMisses: number;
-	invariantJsonParseCallsElided: number;
-	invariantJsonMapCandidates: number;
-	invariantJsonMapFills: number;
-	invariantJsonMapHits: number;
-	invariantJsonMapMisses: number;
-	invariantJsonMapGuardFallbacks: number;
-	invariantJsonMapParseCallsElided: number;
-	invariantJsonMapMapCallsElided: number;
-	invariantJsonMapCallbackCallsElided: number;
-	invariantJsonMapRowsCloned: number;
-	invariantJsonMapIntermediateContainersElided: number;
-	invariantJsonMapPropertyLoadsElided: number;
-	invariantJsonMapExclusionChecksElided: number;
-	privateAggregateMemoCandidates: number;
-	privateAggregateMemoFills: number;
-	privateAggregateMemoHits: number;
-	privateAggregateMemoMisses: number;
-	privateAggregateMemoCallsElided: number;
-	privateAggregateMemoGuardFallbacks: number;
 	indexedFillReserves: number;
 	indexedFillReservedSlots: number;
 	indexedFillAllocationsAvoided: number;
 	indexedFillRawBytesAvoided: number;
 	indexedFillGuardFallbacks: number;
-	affineRangeCandidates: number;
-	affineRangeVirtualizations: number;
-	affineRangeGuardFallbacks: number;
-	affineRangeAllocationsElided: number;
-	affineRangeStoresElided: number;
-	affineRangeLoadsElided: number;
 	callProbes: number;
 	callMisses: number;
 	loadMonoHits: number;
@@ -804,9 +775,7 @@ function benchSelfCompile(runs: number): SelfCompileMetrics {
 			maligatorPhases: {
 				graphMs: median(maligatorPhases.map((phases) => phases.graphMs)),
 				semanticMs: median(maligatorPhases.map((phases) => phases.semanticMs)),
-				lowerSemanticMs: median(
-					maligatorPhases.map((phases) => phases.lowerSemanticMs),
-				),
+				lowerSemanticMs: median(maligatorPhases.map((phases) => phases.lowerSemanticMs)),
 				optimizeMs: median(maligatorPhases.map((phases) => phases.optimizeMs)),
 				regallocMs: median(maligatorPhases.map((phases) => phases.regallocMs)),
 				lowerMs: median(maligatorPhases.map((phases) => phases.lowerMs)),
@@ -869,126 +838,6 @@ function benchLanguage(runs: number): LanguageMetrics {
 	});
 	const gcStderr = gcResult.stderr ?? "";
 	const perfStderr = perfResult.stderr ?? "";
-	const invariantJsonParseCandidates = parsePerfStat(
-		perfStderr,
-		"perf-invariant-json-parse-stats",
-		"candidates",
-	);
-	const invariantJsonParseFills = parsePerfStat(
-		perfStderr,
-		"perf-invariant-json-parse-stats",
-		"fills",
-	);
-	const invariantJsonParseHits = parsePerfStat(
-		perfStderr,
-		"perf-invariant-json-parse-stats",
-		"hits",
-	);
-	const invariantJsonParseMisses = parsePerfStat(
-		perfStderr,
-		"perf-invariant-json-parse-stats",
-		"misses",
-	);
-	const invariantJsonParseCallsElided = parsePerfStat(
-		perfStderr,
-		"perf-invariant-json-parse-stats",
-		"parse_calls_elided",
-	);
-	if (
-		invariantJsonParseCandidates !== 180 ||
-		invariantJsonParseFills !== 1 ||
-		invariantJsonParseHits !== 179 ||
-		invariantJsonParseMisses !== 1 ||
-		invariantJsonParseCallsElided !== 179
-	) {
-		throw new Error(
-			`language invariant JSON parse cache counters were ${invariantJsonParseCandidates}/${invariantJsonParseFills}/${invariantJsonParseHits}/${invariantJsonParseMisses}/${invariantJsonParseCallsElided}, expected 180/1/179/1/179`,
-		);
-	}
-	const jsonMapStat = (field: string) =>
-		parsePerfStat(perfStderr, "perf-invariant-json-map-stats", field);
-	const invariantJsonMapCandidates = jsonMapStat("candidates");
-	const invariantJsonMapFills = jsonMapStat("fills");
-	const invariantJsonMapHits = jsonMapStat("hits");
-	const invariantJsonMapMisses = jsonMapStat("misses");
-	const invariantJsonMapGuardFallbacks = jsonMapStat("guard_fallbacks");
-	const invariantJsonMapParseCallsElided = jsonMapStat("parse_calls_elided");
-	const invariantJsonMapMapCallsElided = jsonMapStat("map_calls_elided");
-	const invariantJsonMapCallbackCallsElided = jsonMapStat("callback_calls_elided");
-	const invariantJsonMapRowsCloned = jsonMapStat("rows_cloned");
-	const invariantJsonMapIntermediateContainersElided = jsonMapStat(
-		"intermediate_containers_elided",
-	);
-	const invariantJsonMapPropertyLoadsElided = jsonMapStat("property_loads_elided");
-	const invariantJsonMapExclusionChecksElided = jsonMapStat("exclusion_checks_elided");
-	const invariantJsonMapActual = [
-		invariantJsonMapCandidates,
-		invariantJsonMapFills,
-		invariantJsonMapHits,
-		invariantJsonMapMisses,
-		invariantJsonMapGuardFallbacks,
-		invariantJsonMapParseCallsElided,
-		invariantJsonMapMapCallsElided,
-		invariantJsonMapCallbackCallsElided,
-		invariantJsonMapRowsCloned,
-		invariantJsonMapIntermediateContainersElided,
-		invariantJsonMapPropertyLoadsElided,
-		invariantJsonMapExclusionChecksElided,
-	];
-	const invariantJsonMapExpected = [
-		180, 1, 179, 1, 0, 179, 179, 17184, 17184, 33115, 136219, 463968,
-	];
-	if (
-		invariantJsonMapActual.some(
-			(value, index) => value !== invariantJsonMapExpected[index],
-		)
-	) {
-		throw new Error(
-			`language invariant JSON map counters were ${invariantJsonMapActual.join("/")}, expected ${invariantJsonMapExpected.join("/")}`,
-		);
-	}
-	const privateAggregateMemoCandidates = parsePerfStat(
-		perfStderr,
-		"perf-private-aggregate-memo-stats",
-		"candidates",
-	);
-	const privateAggregateMemoFills = parsePerfStat(
-		perfStderr,
-		"perf-private-aggregate-memo-stats",
-		"fills",
-	);
-	const privateAggregateMemoHits = parsePerfStat(
-		perfStderr,
-		"perf-private-aggregate-memo-stats",
-		"hits",
-	);
-	const privateAggregateMemoMisses = parsePerfStat(
-		perfStderr,
-		"perf-private-aggregate-memo-stats",
-		"misses",
-	);
-	const privateAggregateMemoCallsElided = parsePerfStat(
-		perfStderr,
-		"perf-private-aggregate-memo-stats",
-		"calls_elided",
-	);
-	const privateAggregateMemoGuardFallbacks = parsePerfStat(
-		perfStderr,
-		"perf-private-aggregate-memo-stats",
-		"guard_fallbacks",
-	);
-	if (
-		privateAggregateMemoCandidates !== 1500 ||
-		privateAggregateMemoFills !== 1 ||
-		privateAggregateMemoHits !== 1499 ||
-		privateAggregateMemoMisses !== 1 ||
-		privateAggregateMemoCallsElided !== 1499 ||
-		privateAggregateMemoGuardFallbacks !== 0
-	) {
-		throw new Error(
-			`language private aggregate memo counters were ${privateAggregateMemoCandidates}/${privateAggregateMemoFills}/${privateAggregateMemoHits}/${privateAggregateMemoMisses}/${privateAggregateMemoCallsElided}/${privateAggregateMemoGuardFallbacks}, expected 1500/1/1499/1/1499/0`,
-		);
-	}
 	const indexedFillReserves = parsePerfArrayStat(perfStderr, "indexed_fill_reserves");
 	const indexedFillReservedSlots = parsePerfArrayStat(
 		perfStderr,
@@ -1006,50 +855,6 @@ function benchLanguage(runs: number): LanguageMetrics {
 		perfStderr,
 		"indexed_fill_guard_fallbacks",
 	);
-	if (
-		indexedFillReserves !== 0 ||
-		indexedFillReservedSlots !== 0 ||
-		indexedFillAllocationsAvoided !== 0 ||
-		indexedFillRawBytesAvoided !== 0 ||
-		indexedFillGuardFallbacks !== 0
-	) {
-		throw new Error(
-			`language indexed fill reserve counters were ${indexedFillReserves}/${indexedFillReservedSlots}/${indexedFillAllocationsAvoided}/${indexedFillRawBytesAvoided}/${indexedFillGuardFallbacks}, expected 0/0/0/0/0 after affine range virtualization`,
-		);
-	}
-	const affineRangeCandidates = parsePerfArrayStat(perfStderr, "affine_range_candidates");
-	const affineRangeVirtualizations = parsePerfArrayStat(
-		perfStderr,
-		"affine_range_virtualizations",
-	);
-	const affineRangeGuardFallbacks = parsePerfArrayStat(
-		perfStderr,
-		"affine_range_guard_fallbacks",
-	);
-	const affineRangeAllocationsElided = parsePerfArrayStat(
-		perfStderr,
-		"affine_range_allocations_elided",
-	);
-	const affineRangeStoresElided = parsePerfArrayStat(
-		perfStderr,
-		"affine_range_stores_elided",
-	);
-	const affineRangeLoadsElided = parsePerfArrayStat(
-		perfStderr,
-		"affine_range_loads_elided",
-	);
-	if (
-		affineRangeCandidates !== 800 ||
-		affineRangeVirtualizations !== 800 ||
-		affineRangeGuardFallbacks !== 0 ||
-		affineRangeAllocationsElided !== 800 ||
-		affineRangeStoresElided !== 800_000 ||
-		affineRangeLoadsElided !== 1_600_000
-	) {
-		throw new Error(
-			`language affine range counters were ${affineRangeCandidates}/${affineRangeVirtualizations}/${affineRangeGuardFallbacks}/${affineRangeAllocationsElided}/${affineRangeStoresElided}/${affineRangeLoadsElided}, expected 800/800/0/800/800000/1600000`,
-		);
-	}
 	return {
 		malMs,
 		nodeMs,
@@ -1064,40 +869,11 @@ function benchLanguage(runs: number): LanguageMetrics {
 			"perf-allocation-stats",
 			"stack_materializations",
 		),
-		invariantJsonParseCandidates,
-		invariantJsonParseFills,
-		invariantJsonParseHits,
-		invariantJsonParseMisses,
-		invariantJsonParseCallsElided,
-		invariantJsonMapCandidates,
-		invariantJsonMapFills,
-		invariantJsonMapHits,
-		invariantJsonMapMisses,
-		invariantJsonMapGuardFallbacks,
-		invariantJsonMapParseCallsElided,
-		invariantJsonMapMapCallsElided,
-		invariantJsonMapCallbackCallsElided,
-		invariantJsonMapRowsCloned,
-		invariantJsonMapIntermediateContainersElided,
-		invariantJsonMapPropertyLoadsElided,
-		invariantJsonMapExclusionChecksElided,
-		privateAggregateMemoCandidates,
-		privateAggregateMemoFills,
-		privateAggregateMemoHits,
-		privateAggregateMemoMisses,
-		privateAggregateMemoCallsElided,
-		privateAggregateMemoGuardFallbacks,
 		indexedFillReserves,
 		indexedFillReservedSlots,
 		indexedFillAllocationsAvoided,
 		indexedFillRawBytesAvoided,
 		indexedFillGuardFallbacks,
-		affineRangeCandidates,
-		affineRangeVirtualizations,
-		affineRangeGuardFallbacks,
-		affineRangeAllocationsElided,
-		affineRangeStoresElided,
-		affineRangeLoadsElided,
 		callProbes: parsePerfStat(perfStderr, "perf-call-cache-stats", "probes"),
 		callMisses: parsePerfStat(perfStderr, "perf-call-cache-stats", "dispatch_misses"),
 		loadMonoHits: parsePerfStat(perfStderr, "perf-ic-stats", "load_mono_hits"),
@@ -2607,19 +2383,7 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  objects   ${entry.language.emptyObjects} empty, ${entry.language.shapedObjects} shaped, ${entry.language.stackObjects} stack, ${entry.language.stackMaterializations} materialized`,
 		);
 		console.log(
-			`  json      ${entry.language.invariantJsonParseHits}/${entry.language.invariantJsonParseCandidates} template hits, ${entry.language.invariantJsonParseCallsElided} parses elided`,
-		);
-		console.log(
-			`  json-map  ${entry.language.invariantJsonMapHits}/${entry.language.invariantJsonMapCandidates} final-row hits, ${entry.language.invariantJsonMapCallbackCallsElided} callbacks elided`,
-		);
-		console.log(
-			`  aggregate ${entry.language.privateAggregateMemoHits}/${entry.language.privateAggregateMemoCandidates} memo hits, ${entry.language.privateAggregateMemoCallsElided} calls elided`,
-		);
-		console.log(
 			`  arrays    ${entry.language.indexedFillReserves} exact reserves, ${entry.language.indexedFillAllocationsAvoided} growth allocations and ${humanBytes(entry.language.indexedFillRawBytesAvoided)} avoided`,
-		);
-		console.log(
-			`  ranges    ${entry.language.affineRangeVirtualizations}/${entry.language.affineRangeCandidates} virtualized, ${entry.language.affineRangeAllocationsElided} allocations, ${entry.language.affineRangeStoresElided} stores, and ${entry.language.affineRangeLoadsElided} loads elided (${entry.language.affineRangeGuardFallbacks} guard fallbacks)`,
 		);
 		console.log(
 			`  calls     ${entry.language.callProbes} cache probes, ${entry.language.callMisses} misses`,

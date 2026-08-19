@@ -49,78 +49,11 @@ function cloneRegionEnvelope<T extends VmRegion>(region: T): T {
 
 function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 	switch (region.kind) {
-		case "string-search-regexp":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				...(region.literalPatternStringIndex === undefined
-					? {}
-					: {
-							literalPatternStringIndex: region.literalPatternStringIndex + base.string,
-						}),
-			};
-		case "invariant-json-parse-cache":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-			};
-		case "affine-range-virtualization":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				loadIps: [...region.loadIps],
-			};
-		case "known-builtin-producers":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				sites: region.sites.map((site) => ({ ...site })),
-			};
-		case "closed-global-table":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				sourceGlobalIndex: region.sourceGlobalIndex + base.global,
-				baseIndex: region.baseIndex + base.global,
-				stateIndex: region.stateIndex + base.global,
-				accesses: region.accesses.map((access) => ({ ...access })),
-			};
-		case "finite-property-selector":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				selectors: region.selectors.map((selector) => ({
-					...selector,
-					stringIndices: selector.stringIndices.map((index) => index + base.string),
-					accesses: selector.accesses.map((access) => ({ ...access })),
-				})),
-			};
-		case "finite-object-construction":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				numberGuards: [...region.numberGuards],
-				keyStringIndices: region.keyStringIndices.map((index) => index + base.string),
-				accessIps: [...region.accessIps],
-			};
 		case "numeric-fusion":
 			return {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
 				pairs: region.pairs.map((pair) => ({ ...pair })),
-			};
-		case "exact-fresh-array":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				accessIps: [...region.accessIps],
-			};
-		case "closed-record-array":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				elementLoadIps: [...region.elementLoadIps],
-				accesses: region.accesses.map((access) => ({ ...access })),
 			};
 		case "string-split-cursor":
 			return {
@@ -171,36 +104,6 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,
 			};
-		case "string-scan-summary":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-			};
-		case "private-aggregate-memo":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				constructionPushIps: [...region.constructionPushIps],
-				targetFunctionIndex: region.targetFunctionIndex + base.function,
-			};
-		case "invariant-json-map-template":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				targetFunctionIndex: region.targetFunctionIndex + base.function,
-				captures: region.captures.map((capture) => ({
-					ownerFunctionIndex: shifted(capture.ownerFunctionIndex, base.function),
-					index: capture.index,
-				})),
-				primitiveRowStringIndices: region.primitiveRowStringIndices.map(
-					(index) => index + base.string,
-				),
-				nestedBaseStringIndex: region.nestedBaseStringIndex + base.string,
-				nestedValueStringIndex: region.nestedValueStringIndex + base.string,
-				excludedStringIndices: region.excludedStringIndices.map(
-					(index) => index + base.string,
-				),
-			};
 		case "stack-object-plan":
 			return {
 				...cloneRegionEnvelope(region),
@@ -212,20 +115,6 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 						...materialization,
 					})),
 				})),
-			};
-		case "cardinality-array":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				accesses: region.accesses.map((access) => ({ ...access })),
-			};
-		case "numeric-hof":
-			return {
-				...cloneRegionEnvelope(region),
-				kind: region.kind,
-				dispatch: { ...region.dispatch },
-				callbackFunctionIndex: region.callbackFunctionIndex + base.function,
-				operations: region.operations.map((operation) => ({ ...operation })),
 			};
 	}
 }

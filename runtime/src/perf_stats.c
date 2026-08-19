@@ -395,59 +395,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.argument_snapshot_destination_writes,
         (unsigned long long) mal_perf_stats.argument_snapshot_temporary_copies
     );
-    fprintf(
-        stderr,
-        "[perf-invariant-json-parse-stats] candidates=%llu fills=%llu hits=%llu "
-        "misses=%llu parse_calls_elided=%llu\n",
-        (unsigned long long) mal_perf_stats.invariant_json_parse_candidates,
-        (unsigned long long) mal_perf_stats.invariant_json_parse_fills,
-        (unsigned long long) mal_perf_stats.invariant_json_parse_hits,
-        (unsigned long long) mal_perf_stats.invariant_json_parse_misses,
-        (unsigned long long) mal_perf_stats.invariant_json_parse_calls_elided
-    );
-    fprintf(
-        stderr,
-        "[perf-private-aggregate-memo-stats] candidates=%llu fills=%llu hits=%llu "
-        "misses=%llu calls_elided=%llu guard_fallbacks=%llu\n",
-        (unsigned long long) mal_perf_stats.private_aggregate_memo_candidates,
-        (unsigned long long) mal_perf_stats.private_aggregate_memo_fills,
-        (unsigned long long) mal_perf_stats.private_aggregate_memo_hits,
-        (unsigned long long) mal_perf_stats.private_aggregate_memo_misses,
-        (unsigned long long) mal_perf_stats.private_aggregate_memo_calls_elided,
-        (unsigned long long) mal_perf_stats.private_aggregate_memo_guard_fallbacks
-    );
-    fprintf(
-        stderr,
-        "[perf-numeric-fold-stats] candidates=%llu regions=%llu guard_fallbacks=%llu "
-        "element_fallbacks=%llu callback_calls_elided=%llu math_calls_elided=%llu\n",
-        (unsigned long long) mal_perf_stats.numeric_fold_candidates,
-        (unsigned long long) mal_perf_stats.numeric_fold_regions,
-        (unsigned long long) mal_perf_stats.numeric_fold_guard_fallbacks,
-        (unsigned long long) mal_perf_stats.numeric_fold_element_fallbacks,
-        (unsigned long long) mal_perf_stats.numeric_fold_callback_calls_elided,
-        (unsigned long long) mal_perf_stats.numeric_fold_math_calls_elided
-    );
-    fprintf(
-        stderr,
-        "[perf-invariant-json-map-stats] candidates=%llu fills=%llu hits=%llu "
-        "misses=%llu guard_fallbacks=%llu parse_calls_elided=%llu "
-        "map_calls_elided=%llu callback_calls_elided=%llu rows_cloned=%llu "
-        "intermediate_containers_elided=%llu property_loads_elided=%llu "
-        "exclusion_checks_elided=%llu\n",
-        (unsigned long long) mal_perf_stats.invariant_json_map_candidates,
-        (unsigned long long) mal_perf_stats.invariant_json_map_fills,
-        (unsigned long long) mal_perf_stats.invariant_json_map_hits,
-        (unsigned long long) mal_perf_stats.invariant_json_map_misses,
-        (unsigned long long) mal_perf_stats.invariant_json_map_guard_fallbacks,
-        (unsigned long long) mal_perf_stats.invariant_json_map_parse_calls_elided,
-        (unsigned long long) mal_perf_stats.invariant_json_map_map_calls_elided,
-        (unsigned long long) mal_perf_stats.invariant_json_map_callback_calls_elided,
-        (unsigned long long) mal_perf_stats.invariant_json_map_rows_cloned,
-        (unsigned long long) mal_perf_stats.invariant_json_map_intermediate_containers_elided,
-        (unsigned long long) mal_perf_stats.invariant_json_map_property_loads_elided,
-        (unsigned long long) mal_perf_stats.invariant_json_map_exclusion_checks_elided
-    );
-    fprintf(
+	fprintf(
         stderr,
         "[perf-coroutine-stats] release_clear_slots=%llu allocation_init_slots=%llu\n",
         (unsigned long long) mal_perf_stats.coroutine_buffer_release_clear_slots,
@@ -458,13 +406,10 @@ static void mal_perf_stats_print(void) {
         "[perf-array-stats] fresh_dense_stores=%llu fresh_dense_growths=%llu "
         "fresh_dense_fallbacks=%llu fresh_dense_exact_reserves=%llu "
         "fresh_dense_reserved_slots=%llu fresh_dense_growths_avoided=%llu "
-        "indexed_fill_reserves=%llu indexed_fill_reserved_slots=%llu "
-        "indexed_fill_allocations_avoided=%llu indexed_fill_raw_bytes_avoided=%llu "
-        "indexed_fill_guard_fallbacks=%llu "
-        "affine_range_candidates=%llu affine_range_virtualizations=%llu "
-        "affine_range_guard_fallbacks=%llu affine_range_allocations_elided=%llu "
-        "affine_range_stores_elided=%llu affine_range_loads_elided=%llu "
-        "push_direct_hits=%llu push_direct_fallbacks=%llu\n",
+		"indexed_fill_reserves=%llu indexed_fill_reserved_slots=%llu "
+		"indexed_fill_allocations_avoided=%llu indexed_fill_raw_bytes_avoided=%llu "
+		"indexed_fill_guard_fallbacks=%llu "
+		"push_direct_hits=%llu push_direct_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
         (unsigned long long) mal_perf_stats.array_fresh_dense_fallbacks,
@@ -473,16 +418,10 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths_avoided,
         (unsigned long long) mal_perf_stats.array_indexed_fill_reserves,
         (unsigned long long) mal_perf_stats.array_indexed_fill_reserved_slots,
-        (unsigned long long) mal_perf_stats.array_indexed_fill_allocations_avoided,
-        (unsigned long long) mal_perf_stats.array_indexed_fill_raw_bytes_avoided,
-        (unsigned long long) mal_perf_stats.array_indexed_fill_guard_fallbacks,
-        (unsigned long long) mal_perf_stats.array_affine_range_candidates,
-        (unsigned long long) mal_perf_stats.array_affine_range_virtualizations,
-        (unsigned long long) mal_perf_stats.array_affine_range_guard_fallbacks,
-        (unsigned long long) mal_perf_stats.array_affine_range_allocations_elided,
-        (unsigned long long) mal_perf_stats.array_affine_range_stores_elided,
-        (unsigned long long) mal_perf_stats.array_affine_range_loads_elided,
-        (unsigned long long) mal_perf_stats.array_push_direct_hits,
+		(unsigned long long) mal_perf_stats.array_indexed_fill_allocations_avoided,
+		(unsigned long long) mal_perf_stats.array_indexed_fill_raw_bytes_avoided,
+		(unsigned long long) mal_perf_stats.array_indexed_fill_guard_fallbacks,
+		(unsigned long long) mal_perf_stats.array_push_direct_hits,
         (unsigned long long) mal_perf_stats.array_push_direct_fallbacks
     );
     fprintf(

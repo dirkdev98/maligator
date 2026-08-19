@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 2u
+#define WIRE_VERSION 8u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1898,83 +1898,35 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             u8 materialization = rd_u8(&r);
             u8 dependency_mask = rd_u8(&r);
             u8 obligation_mask = rd_u8(&r);
-            bool closed_record_contract = kind == 1 && representation == 1 &&
-                materialization == 0 && dependency_mask == 1 && obligation_mask == 1;
             bool split_cursor_contract = kind == 2 && representation == 2 &&
                 materialization == 1 && (dependency_mask == 1 || dependency_mask == 4) &&
                 obligation_mask == 3;
-            bool numeric_hof_contract = kind == 3 && representation == 3 &&
-                materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
-                obligation_mask == 1;
             bool split_projection_contract = kind == 4 && representation == 4 &&
                 materialization == 2 && (dependency_mask == 1 || dependency_mask == 4) &&
                 obligation_mask == 3;
             bool regexp_exec_projection_contract = kind == 5 && representation == 5 &&
                 materialization == 2 && (dependency_mask == 1 || dependency_mask == 4) &&
                 obligation_mask == 3;
-			bool regexp_iterator_projection_contract = kind == 6 && representation == 6 &&
-				materialization == 1 && (dependency_mask == 1 || dependency_mask == 4) &&
-				obligation_mask == 3;
-			bool string_slice_number_contract = kind == 7 && representation == 7 &&
-				materialization == 0 && (dependency_mask == 1 || dependency_mask == 4) &&
-				obligation_mask == 1;
-			bool string_scan_contract = kind == 8 && representation == 8 &&
-				materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
-				obligation_mask == 1;
-			bool private_aggregate_memo_contract = kind == 9 && representation == 9 &&
-				materialization == 0 && (dependency_mask == 1 || dependency_mask == 14) &&
-				obligation_mask == 1;
-			bool invariant_json_map_template_contract = kind == 10 && representation == 10 &&
-				materialization == 2 && (dependency_mask == 1 || dependency_mask == 14) &&
-				obligation_mask == 3;
-			bool stack_object_plan_contract = kind == 11 && representation == 11 &&
-				materialization == 1 &&
-				(dependency_mask == 0 || dependency_mask == 1 || dependency_mask == 2) &&
-				obligation_mask == 3;
-			bool cardinality_array_contract = kind == 12 && representation == 12 &&
-				materialization == 2 && (dependency_mask == 1 || dependency_mask == 14) &&
-				obligation_mask == 3;
-			bool exact_fresh_array_contract = kind == 13 && representation == 13 &&
-				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
-			bool numeric_fusion_contract = kind == 14 && representation == 14 &&
-				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
-			bool finite_object_construction_contract = kind == 15 && representation == 15 &&
-				materialization == 1 && dependency_mask == 0 && obligation_mask == 3;
-			bool finite_property_selector_contract = kind == 16 && representation == 16 &&
-				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
-			bool closed_global_table_contract = kind == 17 && representation == 17 &&
-				materialization == 1 && (dependency_mask == 1 || dependency_mask == 8) &&
-				obligation_mask == 3;
-			bool known_builtin_producer_contract = kind == 18 && representation == 18 &&
-				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
-			bool affine_range_contract = kind == 19 && representation == 19 &&
-				materialization == 0 && (dependency_mask == 1 || dependency_mask == 8) &&
-				obligation_mask == 1;
-			bool invariant_json_parse_cache_contract = kind == 20 && representation == 20 &&
-				materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
-			bool string_search_regexp_contract = kind == 21 && representation == 21 &&
-				dependency_mask == 0 &&
-				((materialization == 0 && obligation_mask == 1) ||
-				 (materialization == 1 && obligation_mask == 3));
+            bool regexp_iterator_projection_contract = kind == 6 && representation == 6 &&
+                materialization == 1 && (dependency_mask == 1 || dependency_mask == 4) &&
+                obligation_mask == 3;
+            bool string_slice_number_contract = kind == 7 && representation == 7 &&
+                materialization == 0 && (dependency_mask == 1 || dependency_mask == 4) &&
+                obligation_mask == 1;
+            bool stack_object_plan_contract = kind == 11 && representation == 11 &&
+                materialization == 1 &&
+                (dependency_mask == 0 || dependency_mask == 1 || dependency_mask == 2) &&
+                obligation_mask == 3;
+            bool numeric_fusion_contract = kind == 14 && representation == 14 &&
+                materialization == 0 && dependency_mask == 0 && obligation_mask == 1;
             if (generic_twin != 1 || score == 0 || metadata_operations == 0 ||
                 metadata_operations > 96 ||
-				(composition == 1) !=
-					(exact_fresh_array_contract || numeric_fusion_contract ||
-					 finite_property_selector_contract || closed_global_table_contract ||
-					 known_builtin_producer_contract || affine_range_contract ||
-					 invariant_json_parse_cache_contract || string_search_regexp_contract) ||
-                (!closed_record_contract && !split_cursor_contract && !numeric_hof_contract &&
-				 !split_projection_contract && !regexp_exec_projection_contract &&
-				 !regexp_iterator_projection_contract && !string_slice_number_contract &&
-				 !string_scan_contract && !private_aggregate_memo_contract &&
-				 !invariant_json_map_template_contract && !stack_object_plan_contract &&
-				 !cardinality_array_contract && !exact_fresh_array_contract &&
-				 !numeric_fusion_contract && !finite_object_construction_contract &&
-				 !finite_property_selector_contract && !closed_global_table_contract &&
-					 !known_builtin_producer_contract && !affine_range_contract &&
-					 !invariant_json_parse_cache_contract && !string_search_regexp_contract)) {
+                (composition == 1) != numeric_fusion_contract ||
+                (!split_cursor_contract && !split_projection_contract &&
+                 !regexp_exec_projection_contract && !regexp_iterator_projection_contract &&
+                 !string_slice_number_contract && !stack_object_plan_contract &&
+                 !numeric_fusion_contract)) {
                 r.ok = false;
-				if (kind == 18) err = "invalid known-builtin producer region contract";
             }
 
             i32 payload_ips[96];
@@ -2014,68 +1966,23 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     r.ok = false; \
                 } \
             } while (0)
-            if (r.ok && kind == 1) {
-                i32 length = rd_i32(&r);
-                u32 element_count = rd_count(&r, 1);
-                if (element_count == 0 || element_count > 64) r.ok = false;
-                i32 element_ips[64];
-                for (u32 element = 0; r.ok && element < element_count; element++) {
-                    element_ips[element] = rd_i32(&r);
-                }
-                u32 access_count = rd_count(&r, 3);
-                if (access_count < 2 || access_count > 64 ||
-                    element_count + access_count > 64) {
-                    r.ok = false;
-                }
-                i32 access_ips[64];
-                u8 access_kinds[64];
-                i32 access_slots[64];
-                for (u32 access = 0; r.ok && access < access_count; access++) {
-                    access_ips[access] = rd_i32(&r);
-                    access_kinds[access] = rd_u8(&r);
-                    access_slots[access] = rd_i32(&r);
-                }
-                i32 allocation_ip = anchor_count > 0 ? anchors[0] : -1;
-                i32 producer_object_ip = anchor_count > 1 ? anchors[1] : -1;
-                bool header_ok = r.ok && anchor_count == 2 &&
-                    fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_ARRAY &&
-                    fn->instructions[allocation_ip].as.create_array.length == 0 &&
-                    fn->instructions[producer_object_ip].opcode == MAL_OP_CREATE_OBJECT_SHAPED &&
-                    length > 0 && length <= 65536 &&
-                    metadata_operations == element_count + access_count;
-                if (!header_ok) r.ok = false;
-                if (claim_count != 2 + element_count + access_count) r.ok = false;
-                MAL_REGION_PAYLOAD_CLAIM(allocation_ip);
-                MAL_REGION_PAYLOAD_CLAIM(producer_object_ip);
-                for (u32 element = 0; r.ok && element < element_count; element++) {
-                    i32 ip = element_ips[element];
-                    if (ip < 0 || ip >= fn->instruction_count ||
-                        fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY) {
-                        r.ok = false;
-                        break;
-                    }
-                    MAL_REGION_PAYLOAD_CLAIM(ip);
-                }
-                for (u32 access = 0; r.ok && access < access_count; access++) {
-                    i32 ip = access_ips[access];
-                    u8 access_kind = access_kinds[access];
-                    bool opcode_ok = ip >= 0 && ip < fn->instruction_count &&
-                        ((access_kind == 1 &&
-                          fn->instructions[ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC) ||
-                         (access_kind == 2 &&
-                          fn->instructions[ip].opcode == MAL_OP_STORE_PROPERTY_STATIC));
-                    if (!opcode_ok || access_slots[access] < 0 || access_slots[access] >= 64) {
-                        r.ok = false;
-                        break;
-                    }
-                    MAL_REGION_PAYLOAD_CLAIM(ip);
-                }
-            } else if (r.ok && kind == 2) {
+            if (r.ok && kind == 2) {
                 i32 property_ip = rd_i32(&r);
                 i32 callee = rd_i32(&r);
                 i32 receiver = rd_i32(&r);
                 i32 separator = rd_i32(&r);
-                i32 result = rd_i32(&r);
+                u32 result_register_count = rd_count(&r, 1);
+                if (result_register_count == 0 || result_register_count > 96) r.ok = false;
+                i32 result_registers[96];
+                for (u32 result_index = 0; r.ok && result_index < result_register_count;
+                     result_index++) {
+                    i32 result_register = rd_i32(&r);
+                    result_registers[result_index] = result_register;
+                    if (result_register < 0 || result_register >= fn->register_count) r.ok = false;
+                    for (u32 previous = 0; r.ok && previous < result_index; previous++) {
+                        if (result_registers[previous] == result_register) r.ok = false;
+                    }
+                }
                 i32 index = rd_i32(&r);
                 i32 element_ip = rd_i32(&r);
                 i32 trim_property_ip = rd_i32(&r);
@@ -2089,7 +1996,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
                 i32 exit_ip = rd_i32(&r);
                 i32 call_ip = anchor_count > 0 ? anchors[0] : -1;
-                i32 result_alias_ip = anchor_count > 1 ? anchors[1] : -1;
+                i32 header_branch_ip = anchor_count > 1 ? anchors[1] : -1;
                 i32 length_ip = anchor_count > 2 ? anchors[2] : -1;
                 i32 backedge_ip = anchor_count > 3 ? anchors[3] : -1;
                 bool call_ip_ok = call_ip >= 0 && call_ip < fn->instruction_count;
@@ -2099,7 +2006,15 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     fn->instructions[call_ip].opcode == MAL_OP_CALL_BUILTIN;
                 bool property_ok = property_ip >= 0 && property_ip < fn->instruction_count &&
                     fn->instructions[property_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC;
-                bool fixed_ips_ok = length_ip >= 0 && length_ip + 4 == element_ip &&
+                i32 call_result = call_is_generic
+                    ? fn->instructions[call_ip].as.call.dst
+                    : call_is_builtin ? fn->instructions[call_ip].as.call_builtin.dst : -1;
+                bool call_result_found = false;
+                for (u32 result_index = 0; result_index < result_register_count; result_index++) {
+                    if (result_registers[result_index] == call_result) call_result_found = true;
+                }
+                bool fixed_ips_ok = length_ip >= 0 && header_branch_ip == length_ip + 2 &&
+                    element_ip == header_branch_ip + 2 &&
                     trim_property_ip == element_ip + 1 &&
                     trim_call_ip == trim_property_ip + 1 && trim_call_ip < backedge_ip &&
                     exit_ip == backedge_ip + 1 && exit_ip <= fn->instruction_count &&
@@ -2108,26 +2023,32 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     (!call_is_generic && !call_is_builtin) ||
                     (call_is_generic && !property_ok) ||
                     (call_is_builtin && (property_ip != -1 || callee != -1)) ||
-                    result < 0 || result >= fn->register_count ||
-                    index < 0 || index >= fn->register_count || !fixed_ips_ok) {
+                    !call_result_found || index < 0 || index >= fn->register_count ||
+                    !fixed_ips_ok) {
                     r.ok = false;
                 }
                 if (r.ok) {
                     const MalInstruction *call = &fn->instructions[call_ip];
-                    const MalInstruction *result_alias = &fn->instructions[result_alias_ip];
                     const MalInstruction *length = &fn->instructions[length_ip];
                     const MalInstruction *compare = &fn->instructions[length_ip + 1];
-                    const MalInstruction *body_branch = &fn->instructions[length_ip + 2];
-                    const MalInstruction *exit_jump = &fn->instructions[length_ip + 3];
+                    const MalInstruction *body_branch = &fn->instructions[header_branch_ip];
+                    const MalInstruction *exit_jump = &fn->instructions[header_branch_ip + 1];
                     const MalInstruction *element = &fn->instructions[element_ip];
                     const MalInstruction *trim_property = &fn->instructions[trim_property_ip];
                     const MalInstruction *trim_call = &fn->instructions[trim_call_ip];
                     const MalInstruction *increment = &fn->instructions[backedge_ip - 1];
                     const MalInstruction *backedge = &fn->instructions[backedge_ip];
-                    bool structure_ok = result_alias->opcode == MAL_OP_MOVE &&
-                        result_alias->as.move.src == result &&
-                        length->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
-                        length->as.load_property_static.object == result_alias->as.move.dst &&
+                    bool length_object_found = false;
+                    bool element_object_found = false;
+                    for (u32 result_index = 0; result_index < result_register_count;
+                         result_index++) {
+                        if (result_registers[result_index] ==
+                            length->as.load_property_static.object) length_object_found = true;
+                        if (result_registers[result_index] ==
+                            element->as.load_property.object) element_object_found = true;
+                    }
+                    bool structure_ok = length->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                        length_object_found &&
                         compare->opcode == MAL_OP_BINARY && compare->as.binary.op == MAL_BIN_LT &&
                         compare->as.binary.left == index &&
                         compare->as.binary.right == length->as.load_property_static.dst &&
@@ -2137,7 +2058,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         exit_jump->opcode == MAL_OP_JUMP &&
                         exit_jump->as.jump.target_ip == exit_ip &&
                         element->opcode == MAL_OP_LOAD_PROPERTY &&
-                        element->as.load_property.object == result_alias->as.move.dst &&
+                        element_object_found &&
                         element->as.load_property.key == index &&
                         trim_property->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
                         trim_property->as.load_property_static.object ==
@@ -2153,24 +2074,84 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         backedge->opcode == MAL_OP_JUMP &&
                         backedge->as.jump.target_ip == length_ip;
                     if (call_is_generic) {
-                        structure_ok = structure_ok && call->as.call.dst == result &&
-                            call->as.call.callee == callee &&
+                        structure_ok = structure_ok && call->as.call.callee == callee &&
                             call->as.call.this_value == receiver &&
                             fn->instructions[property_ip].as.load_property_static.dst == callee &&
                             fn->instructions[property_ip].as.load_property_static.object == receiver;
                     } else {
-                        structure_ok = structure_ok && call->as.call_builtin.dst == result &&
-                            call->as.call_builtin.this_value == receiver;
+                        structure_ok = structure_ok && call->as.call_builtin.this_value == receiver &&
+                            call->as.call_builtin.operation == MAL_DIRECT_BUILTIN_STRING_SPLIT;
                     }
-                    (void) separator;
+                    i32 call_data = call_is_generic
+                        ? call->as.call.data_offset
+                        : call->as.call_builtin.data_offset;
+                    structure_ok = structure_ok && call_data >= 0 &&
+                        call_data + 1 < fn->instruction_data_count &&
+                        fn->instruction_data[call_data] == 1 &&
+                        fn->instruction_data[call_data + 1] == separator;
                     if (!structure_ok) r.ok = false;
+                }
+                i32 trim_aliases[96];
+                u32 trim_alias_count = 1;
+                if (trim_call_ip >= 0 && trim_call_ip < fn->instruction_count &&
+                    fn->instructions[trim_call_ip].opcode == MAL_OP_CALL) {
+                    trim_aliases[0] = fn->instructions[trim_call_ip].as.call.dst;
+                } else {
+                    r.ok = false;
+                }
+                for (i32 ip = trim_call_ip + 1; r.ok && ip <= backedge_ip; ip++) {
+                    const MalInstruction *instruction = &fn->instructions[ip];
+                    bool primitive_length = false;
+                    for (u32 load = 0; load < primitive_length_count; load++) {
+                        if (primitive_length_ips[load] == ip) primitive_length = true;
+                    }
+                    if (primitive_length) {
+                        bool object_found = false;
+                        if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC) {
+                            for (u32 alias = 0; alias < trim_alias_count; alias++) {
+                                if (trim_aliases[alias] ==
+                                    instruction->as.load_property_static.object) {
+                                    object_found = true;
+                                }
+                            }
+                        }
+                        if (!object_found) r.ok = false;
+                    }
+                    bool move_alias = false;
+                    i32 move_dst = -1;
+                    if (instruction->opcode == MAL_OP_MOVE) {
+                        move_dst = instruction->as.move.dst;
+                        for (u32 alias = 0; alias < trim_alias_count; alias++) {
+                            if (trim_aliases[alias] == instruction->as.move.src) move_alias = true;
+                        }
+                    }
+                    for (u32 alias = 0; alias < trim_alias_count;) {
+                        if (mal_loaded_instruction_writes_register(instruction, trim_aliases[alias])) {
+                            trim_aliases[alias] = trim_aliases[--trim_alias_count];
+                        } else {
+                            alias++;
+                        }
+                    }
+                    if (move_alias) {
+                        bool duplicate = false;
+                        for (u32 alias = 0; alias < trim_alias_count; alias++) {
+                            if (trim_aliases[alias] == move_dst) duplicate = true;
+                        }
+                        if (!duplicate && trim_alias_count < countof(trim_aliases)) {
+                            trim_aliases[trim_alias_count++] = move_dst;
+                        } else if (!duplicate) {
+                            r.ok = false;
+                        }
+                    }
                 }
                 if (property_ip >= 0) MAL_REGION_PAYLOAD_CLAIM(property_ip);
                 MAL_REGION_PAYLOAD_CLAIM(call_ip);
-                MAL_REGION_PAYLOAD_CLAIM(result_alias_ip);
-                for (i32 ip = length_ip; r.ok && ip <= trim_call_ip; ip++) {
-                    MAL_REGION_PAYLOAD_CLAIM(ip);
-                }
+                MAL_REGION_PAYLOAD_CLAIM(length_ip);
+                MAL_REGION_PAYLOAD_CLAIM(length_ip + 1);
+                MAL_REGION_PAYLOAD_CLAIM(header_branch_ip);
+                MAL_REGION_PAYLOAD_CLAIM(element_ip);
+                MAL_REGION_PAYLOAD_CLAIM(trim_property_ip);
+                MAL_REGION_PAYLOAD_CLAIM(trim_call_ip);
                 for (u32 load = 0; r.ok && load < primitive_length_count; load++) {
                     i32 ip = primitive_length_ips[load];
                     if (ip < 0 || ip >= fn->instruction_count ||
@@ -2183,102 +2164,23 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 MAL_REGION_PAYLOAD_CLAIM(backedge_ip - 1);
                 MAL_REGION_PAYLOAD_CLAIM(backedge_ip);
                 if (metadata_operations != payload_count) r.ok = false;
-            } else if (r.ok && kind == 3) {
-                u8 dispatch_tag = rd_u8(&r);
-                i32 dispatch_primary_ip = rd_i32(&r);
-                i32 dispatch_secondary_ip = rd_i32(&r);
-                i32 callback_function = rd_i32(&r);
-                i32 receiver = rd_i32(&r);
-                (void) rd_u64(&r); // exact numeric initial accumulator
-                u8 poll_policy = rd_u8(&r);
-                i32 result_operand = rd_i32(&r);
-                u32 operation_count = rd_count(&r, 2);
-                i32 initial_ip = anchor_count > 0 ? anchors[0] : -1;
-                i32 element_ip = anchor_count > 1 ? anchors[1] : -1;
-                i32 backedge_ip = anchor_count > 2 ? anchors[2] : -1;
-                i32 loop_exit_ip = anchor_count > 3 ? anchors[3] : -1;
-#define MAL_HOF_IP_OPCODE(ip, op) \
-                ((ip) >= 0 && (ip) < fn->instruction_count && \
-                 fn->instructions[(ip)].opcode == (op))
-                bool anchors_ok = anchor_count == 4 &&
-                    MAL_HOF_IP_OPCODE(initial_ip, MAL_OP_MOVE) &&
-                    MAL_HOF_IP_OPCODE(element_ip, MAL_OP_LOAD_PROPERTY) &&
-                    MAL_HOF_IP_OPCODE(backedge_ip, MAL_OP_JUMP) &&
-                    MAL_HOF_IP_OPCODE(loop_exit_ip, MAL_OP_JUMP);
-                i32 completion_ip = anchors_ok
-                    ? fn->instructions[loop_exit_ip].as.jump.target_ip
-                    : -1;
-                bool completion_ok = completion_ip >= 0 &&
-                    completion_ip < fn->instruction_count;
-                bool dispatch_ok =
-                    (dispatch_tag == 1 &&
-                     MAL_HOF_IP_OPCODE(dispatch_primary_ip, MAL_OP_CALL) &&
-                     MAL_HOF_IP_OPCODE(dispatch_secondary_ip, MAL_OP_CALL)) ||
-                    (dispatch_tag == 2 && dispatch_secondary_ip == -1 &&
-                     dependency_mask == 1 &&
-                     MAL_HOF_IP_OPCODE(dispatch_primary_ip, MAL_OP_CREATE_ARRAY) &&
-                     fn->instructions[dispatch_primary_ip].as.create_array.dst == receiver &&
-                     dispatch_primary_ip < initial_ip);
-                if (!anchors_ok || !completion_ok || !dispatch_ok ||
-                    callback_function < 0 || callback_function >= function_count ||
-                    receiver < 0 || receiver >= fn->register_count ||
-                    fn->instructions[element_ip].as.load_property.object != receiver ||
-                    poll_policy != 1 || operation_count == 0 || operation_count > 32 ||
-                    metadata_operations != claim_count) {
-                    r.ok = false;
-                }
-#undef MAL_HOF_IP_OPCODE
-                if (!(result_operand == -1 || result_operand == -2 ||
-                      (result_operand >= 0 && (u32) result_operand < operation_count))) {
-                    r.ok = false;
-                }
-                for (u32 operation = 0; r.ok && operation < operation_count; operation++) {
-                    u8 tag = rd_u8(&r);
-                    if (tag == 1) {
-                        (void) rd_u64(&r);
-                    } else if (tag == 2) {
-                        u8 binary = rd_u8(&r);
-                        i32 left = rd_i32(&r);
-                        i32 right = rd_i32(&r);
-                        bool left_ok = left == -1 || left == -2 ||
-                            (left >= 0 && (u32) left < operation);
-                        bool right_ok = right == -1 || right == -2 ||
-                            (right >= 0 && (u32) right < operation);
-                        if (binary >= 5 || !left_ok || !right_ok) r.ok = false;
-                    } else if (tag == 3) {
-                        u8 math = rd_u8(&r);
-                        i32 value = rd_i32(&r);
-                        bool value_ok = value == -1 || value == -2 ||
-                            (value >= 0 && (u32) value < operation);
-                        if (math >= 27 || !value_ok) r.ok = false;
-                    } else {
-                        r.ok = false;
-                    }
-                }
-                if (r.ok) {
-                    MAL_REGION_PAYLOAD_CLAIM(initial_ip);
-                    MAL_REGION_PAYLOAD_CLAIM(element_ip);
-                    MAL_REGION_PAYLOAD_CLAIM(backedge_ip);
-                    MAL_REGION_PAYLOAD_CLAIM(loop_exit_ip);
-                    MAL_REGION_PAYLOAD_CLAIM(dispatch_primary_ip);
-                    if (dispatch_tag == 1) MAL_REGION_PAYLOAD_CLAIM(dispatch_secondary_ip);
-                    // Numeric regions claim the complete canonical loop corridor, not
-                    // only payload-bearing anchors. Bounds/uniqueness were checked by
-                    // the common envelope above; known payload anchors were checked here.
-                    payload_count = claim_count;
-                }
             } else if (r.ok && kind == 4) {
                 i32 property_ip = rd_i32(&r);
                 i32 call_ip = rd_i32(&r);
                 i32 callee = rd_i32(&r);
                 i32 receiver = rd_i32(&r);
                 i32 separator_string_index = rd_i32(&r);
-                i32 result = rd_i32(&r);
-                u32 alias_count = rd_count(&r, 1);
-                if (alias_count > 94) r.ok = false;
-                i32 alias_ips[94];
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    alias_ips[alias] = rd_i32(&r);
+                u32 result_register_count = rd_count(&r, 1);
+                if (result_register_count == 0 || result_register_count > 96) r.ok = false;
+                i32 result_registers[96];
+                for (u32 result_index = 0; r.ok && result_index < result_register_count;
+                     result_index++) {
+                    i32 result_register = rd_i32(&r);
+                    result_registers[result_index] = result_register;
+                    if (result_register < 0 || result_register >= fn->register_count) r.ok = false;
+                    for (u32 previous = 0; r.ok && previous < result_index; previous++) {
+                        if (result_registers[previous] == result_register) r.ok = false;
+                    }
                 }
                 u32 load_count = rd_count(&r, 4);
                 if (load_count == 0 || load_count > 9) r.ok = false;
@@ -2298,14 +2200,20 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     fn->instructions[call_ip].opcode == MAL_OP_CALL_BUILTIN;
                 bool property_ok = property_ip >= 0 && property_ip < fn->instruction_count &&
                     fn->instructions[property_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC;
+                i32 call_result = generic
+                    ? fn->instructions[call_ip].as.call.dst
+                    : direct ? fn->instructions[call_ip].as.call_builtin.dst : -1;
+                bool call_result_found = false;
+                for (u32 result_index = 0; result_index < result_register_count; result_index++) {
+                    if (result_registers[result_index] == call_result) call_result_found = true;
+                }
                 bool header_ok = anchor_count == 2 && anchors[0] == call_ip &&
                     load_count > 0 && anchors[1] == load_ips[0] &&
-                    (generic || direct) &&
+                    (generic || direct) && call_result_found &&
                     separator_string_index >= 0 &&
                     separator_string_index < (i32) string_count &&
                     strings[separator_string_index].length > 0 &&
-                    receiver >= 0 && receiver < fn->register_count &&
-                    result >= 0 && result < fn->register_count;
+                    receiver >= 0 && receiver < fn->register_count;
                 if (header_ok && generic) {
                     const MalInstruction *call = &fn->instructions[call_ip];
                     const MalInstruction *property = property_ok
@@ -2322,12 +2230,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         strings[property->as.load_property_static.string_index].code_units[2] == 'l' &&
                         strings[property->as.load_property_static.string_index].code_units[3] == 'i' &&
                         strings[property->as.load_property_static.string_index].code_units[4] == 't' &&
-                        call->as.call.dst == result && call->as.call.callee == callee &&
-                        call->as.call.this_value == receiver;
+                        call->as.call.callee == callee && call->as.call.this_value == receiver;
                 } else if (header_ok && direct) {
                     const MalInstruction *call = &fn->instructions[call_ip];
                     header_ok = dependency_mask == 1 && property_ip == -1 && callee == -1 &&
-                        call->as.call_builtin.dst == result &&
                         call->as.call_builtin.this_value == receiver &&
                         call->as.call_builtin.operation == MAL_DIRECT_BUILTIN_STRING_SPLIT;
                 }
@@ -2357,35 +2263,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
                 if (!header_ok) r.ok = false;
 
-                i32 aliases[95];
-                u32 aliases_seen = 1;
-                aliases[0] = result;
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    i32 ip = alias_ips[alias];
-                    if (ip <= call_ip || ip >= fn->instruction_count ||
-                        (alias > 0 && alias_ips[alias - 1] >= ip) ||
-                        fn->instructions[ip].opcode != MAL_OP_MOVE) {
-                        r.ok = false;
-                        break;
-                    }
-                    const MalInstruction *move = &fn->instructions[ip];
-                    bool source_found = false;
-                    for (u32 previous = 0; previous < aliases_seen; previous++) {
-                        i32 definition_ip = previous == 0
-                            ? call_ip
-                            : alias_ips[previous - 1];
-                        if (aliases[previous] == move->as.move.src &&
-                            mal_loaded_latest_definition(fn, move->as.move.src, ip) ==
-                                &fn->instructions[definition_ip]) {
-                            source_found = true;
-                        }
-                    }
-                    if (!source_found) {
-                        r.ok = false;
-                        break;
-                    }
-                    aliases[aliases_seen++] = move->as.move.dst;
-                }
                 u32 element_count = 0;
                 u32 length_count = 0;
                 for (u32 load = 0; r.ok && load < load_count; load++) {
@@ -2403,15 +2280,9 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         : instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC
                             ? instruction->as.load_property_static.object
                             : -1;
-                    for (u32 alias = 0; alias < aliases_seen; alias++) {
-                        i32 definition_ip = alias == 0 ? call_ip : alias_ips[alias - 1];
-                        const MalInstruction *latest = object >= 0
-                            ? mal_loaded_latest_definition(fn, object, ip)
-                            : nullptr;
-                        if (aliases[alias] == object && definition_ip < ip &&
-                            latest == &fn->instructions[definition_ip]) {
-                            object_found = true;
-                        }
+                    for (u32 result_index = 0; result_index < result_register_count;
+                         result_index++) {
+                        if (result_registers[result_index] == object) object_found = true;
                     }
                     if (load_kinds[load] == 1) {
                         element_count++;
@@ -2457,15 +2328,11 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     }
                 }
                 if (element_count == 0 || element_count > 8 || length_count > 1 ||
-                    metadata_operations != 1 + (property_ip >= 0 ? 1 : 0) +
-                        alias_count + load_count) {
+                    metadata_operations != 1 + (property_ip >= 0 ? 1 : 0) + load_count) {
                     r.ok = false;
                 }
                 if (property_ip >= 0) MAL_REGION_PAYLOAD_CLAIM(property_ip);
                 MAL_REGION_PAYLOAD_CLAIM(call_ip);
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    MAL_REGION_PAYLOAD_CLAIM(alias_ips[alias]);
-                }
                 for (u32 load = 0; r.ok && load < load_count; load++) {
                     MAL_REGION_PAYLOAD_CLAIM(load_ips[load]);
                 }
@@ -2479,11 +2346,19 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 i32 receiver = rd_i32(&r);
                 i32 input = rd_i32(&r);
                 i32 result = rd_i32(&r);
-                u32 alias_count = rd_count(&r, 1);
-                if (alias_count == 0 || alias_count > 94) r.ok = false;
-                i32 alias_ips[94];
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    alias_ips[alias] = rd_i32(&r);
+                u32 result_register_count = rd_count(&r, 1);
+                if (result_register_count == 0 || result_register_count > 96) r.ok = false;
+                i32 result_registers[96];
+                bool result_register_found = false;
+                for (u32 result_index = 0; r.ok && result_index < result_register_count;
+                     result_index++) {
+                    i32 result_register = rd_i32(&r);
+                    result_registers[result_index] = result_register;
+                    if (result_register == result) result_register_found = true;
+                    if (result_register < 0 || result_register >= fn->register_count) r.ok = false;
+                    for (u32 previous = 0; r.ok && previous < result_index; previous++) {
+                        if (result_registers[previous] == result_register) r.ok = false;
+                    }
                 }
                 u32 null_count = rd_count(&r, 5);
                 if (null_count > 47) r.ok = false;
@@ -2542,11 +2417,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     fn->instructions[property_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC;
                 bool call_ok = call_ip >= 0 && call_ip < fn->instruction_count &&
                     fn->instructions[call_ip].opcode == MAL_OP_CALL;
-                bool header_ok = anchor_count == 3 && anchors[0] == call_ip &&
-                    anchors[1] == (alias_count > 0 ? alias_ips[0] : -1) &&
-                    anchors[2] == (load_count > 0 ? load_ips[0] : -1) &&
+                bool header_ok = anchor_count == 2 && anchors[0] == call_ip &&
+                    anchors[1] == (load_count > 0 ? load_ips[0] : -1) &&
                     property_ok && call_ok && property_ip + 1 == call_ip &&
-                    locked <= 1 && last_index_effect == 1;
+                    locked <= 1 && last_index_effect == 1 && result_register_found;
                 if (header_ok) {
                     const MalInstruction *property = &fn->instructions[property_ip];
                     const MalInstruction *call = &fn->instructions[call_ip];
@@ -2581,28 +2455,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 }
                 if (!header_ok) r.ok = false;
 
-                i32 aliases[95];
-                u32 aliases_seen = 1;
-                aliases[0] = result;
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    i32 ip = alias_ips[alias];
-                    if (ip < 0 || ip >= fn->instruction_count ||
-                        fn->instructions[ip].opcode != MAL_OP_MOVE) {
-                        r.ok = false;
-                        break;
-                    }
-                    bool source_found = false;
-                    for (u32 previous = 0; previous < aliases_seen; previous++) {
-                        if (aliases[previous] == fn->instructions[ip].as.move.src) {
-                            source_found = true;
-                        }
-                    }
-                    if (!source_found) {
-                        r.ok = false;
-                        break;
-                    }
-                    aliases[aliases_seen++] = fn->instructions[ip].as.move.dst;
-                }
                 for (u32 check = 0; r.ok && check < null_count; check++) {
                     i32 comparison_ip = comparison_ips[check];
                     i32 null_ip = null_ips[check];
@@ -2628,8 +2480,11 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     }
                     const MalInstruction *capture = &fn->instructions[ip];
                     const MalInstruction *key = &fn->instructions[key_ip];
-                    for (u32 alias = 0; alias < aliases_seen; alias++) {
-                        if (aliases[alias] == capture->as.load_property.object) object_found = true;
+                    for (u32 result_index = 0; result_index < result_register_count;
+                         result_index++) {
+                        if (result_registers[result_index] == capture->as.load_property.object) {
+                            object_found = true;
+                        }
                     }
                     bool duplicate = false;
                     for (u32 previous = 0; previous < load; previous++) {
@@ -2688,9 +2543,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 
                 MAL_REGION_PAYLOAD_REFERENCE(property_ip);
                 MAL_REGION_PAYLOAD_REFERENCE(call_ip);
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    MAL_REGION_PAYLOAD_REFERENCE(alias_ips[alias]);
-                }
                 for (u32 check = 0; r.ok && check < null_count; check++) {
                     MAL_REGION_PAYLOAD_REFERENCE(comparison_ips[check]);
                     MAL_REGION_PAYLOAD_REFERENCE(null_ips[check]);
@@ -2734,11 +2586,19 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                 i32 next = rd_i32(&r);
                 i32 value = rd_i32(&r);
                 i32 done = rd_i32(&r);
-                u32 alias_count = rd_count(&r, 1);
-                if (alias_count > 94) r.ok = false;
-                i32 alias_ips[94];
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    alias_ips[alias] = rd_i32(&r);
+                u32 result_register_count = rd_count(&r, 1);
+                if (result_register_count == 0 || result_register_count > 96) r.ok = false;
+                i32 result_registers[96];
+                bool value_register_found = false;
+                for (u32 result_index = 0; r.ok && result_index < result_register_count;
+                     result_index++) {
+                    i32 result_register = rd_i32(&r);
+                    result_registers[result_index] = result_register;
+                    if (result_register == value) value_register_found = true;
+                    if (result_register < 0 || result_register >= fn->register_count) r.ok = false;
+                    for (u32 previous = 0; r.ok && previous < result_index; previous++) {
+                        if (result_registers[previous] == result_register) r.ok = false;
+                    }
                 }
                 u8 stateful_effect = rd_u8(&r);
                 u8 runtime_guard = rd_u8(&r);
@@ -2773,32 +2633,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     fn->instructions[step_ip].as.iterator_step.done_dst == done &&
                     fn->instructions[done_branch_ip].as.jump_if.cond == done &&
                     fn->instructions[done_branch_ip].as.jump_if.target_ip == exit_ip &&
-                    stateful_effect == 1 && runtime_guard == 1 &&
+                    stateful_effect == 1 && runtime_guard == 1 && value_register_found &&
                     exceptional_handler_count > 0;
                 if (!header_ok) r.ok = false;
 
-                i32 aliases[95];
-                u32 aliases_seen = 1;
-                aliases[0] = value;
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    i32 ip = alias_ips[alias];
-                    if (ip < 0 || ip >= fn->instruction_count ||
-                        fn->instructions[ip].opcode != MAL_OP_MOVE) {
-                        r.ok = false;
-                        break;
-                    }
-                    bool source_found = false;
-                    for (u32 previous = 0; previous < aliases_seen; previous++) {
-                        if (aliases[previous] == fn->instructions[ip].as.move.src) {
-                            source_found = true;
-                        }
-                    }
-                    if (!source_found) {
-                        r.ok = false;
-                        break;
-                    }
-                    aliases[aliases_seen++] = fn->instructions[ip].as.move.dst;
-                }
                 for (u32 load = 0; r.ok && load < load_count; load++) {
                     i32 ip = load_ips[load];
                     i32 key_ip = key_ips[load];
@@ -2820,8 +2658,11 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     const MalInstruction *intrinsic = &fn->instructions[intrinsic_ip];
                     const MalInstruction *number_call = &fn->instructions[number_call_ip];
                     bool object_found = false;
-                    for (u32 alias = 0; alias < aliases_seen; alias++) {
-                        if (aliases[alias] == capture->as.load_property.object) object_found = true;
+                    for (u32 result_index = 0; result_index < result_register_count;
+                         result_index++) {
+                        if (result_registers[result_index] == capture->as.load_property.object) {
+                            object_found = true;
+                        }
                     }
                     bool duplicate = false;
                     for (u32 previous = 0; previous < load; previous++) {
@@ -2872,9 +2713,6 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 
                 MAL_REGION_PAYLOAD_REFERENCE(step_ip);
                 MAL_REGION_PAYLOAD_REFERENCE(done_branch_ip);
-                for (u32 alias = 0; r.ok && alias < alias_count; alias++) {
-                    MAL_REGION_PAYLOAD_REFERENCE(alias_ips[alias]);
-                }
                 for (u32 load = 0; r.ok && load < load_count; load++) {
                     MAL_REGION_PAYLOAD_REFERENCE(load_ips[load]);
                     MAL_REGION_PAYLOAD_REFERENCE(key_ips[load]);
@@ -2885,16 +2723,33 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             } else if (r.ok && kind == 7) {
                 i32 property_ip = rd_i32(&r);
                 i32 slice_call_ip = rd_i32(&r);
+                i32 slice_start_ip = rd_i32(&r);
                 i32 number_intrinsic_ip = rd_i32(&r);
                 i32 number_call_ip = rd_i32(&r);
                 i32 number_callee = rd_i32(&r);
                 i32 receiver = rd_i32(&r);
-                (void) rd_u64(&r); // exact finite slice start, validated by the TS codec
+                u64 slice_start_bits = rd_u64(&r);
                 i32 result = rd_i32(&r);
+                bool slice_start_ok = slice_start_ip >= 0 &&
+                    slice_start_ip < fn->instruction_count;
+                if (slice_start_ok) {
+                    const MalInstruction *slice_start = &fn->instructions[slice_start_ip];
+                    if (slice_start->opcode == MAL_OP_CREATE_NUMBER) {
+                        union { f64 value; u64 bits; } exact = {
+                            .value = (f64) slice_start->as.create_number.value,
+                        };
+                        slice_start_ok = exact.bits == slice_start_bits;
+                    } else if (slice_start->opcode == MAL_OP_CREATE_F64) {
+                        u64 instruction_bits = slice_start->as.create_f64.bits_low |
+                            ((u64) slice_start->as.create_f64.bits_high << 32);
+                        slice_start_ok = instruction_bits == slice_start_bits;
+                    } else {
+                        slice_start_ok = false;
+                    }
+                }
                 bool header_ok = anchor_count == 2 && anchors[0] == slice_call_ip &&
                     anchors[1] == number_call_ip && property_ip >= 0 &&
-                    property_ip < fn->instruction_count && slice_call_ip == property_ip + 1 &&
-                    number_call_ip == slice_call_ip + 1 &&
+                    property_ip < fn->instruction_count && slice_start_ok &&
                     number_call_ip < fn->instruction_count && number_intrinsic_ip >= 0 &&
                     number_intrinsic_ip < fn->instruction_count &&
                     fn->instructions[property_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
@@ -2933,7 +2788,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                         fn->instruction_data[number_data + 1] == slice_call->as.call.dst &&
                         number_call->as.call.dst == result;
                 }
-                if (!header_ok || metadata_operations != 4 || claim_count != 4) r.ok = false;
+                if (!header_ok || metadata_operations != 5 || claim_count != 5) r.ok = false;
 
                 for (u32 claim = 0; r.ok && claim < claim_count; claim++) {
                     for (i32 handler = 0; handler < fn->handler_count; handler++) {
@@ -2968,226 +2823,10 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 
                 MAL_REGION_PAYLOAD_REFERENCE(property_ip);
                 MAL_REGION_PAYLOAD_REFERENCE(slice_call_ip);
+                MAL_REGION_PAYLOAD_REFERENCE(slice_start_ip);
                 MAL_REGION_PAYLOAD_REFERENCE(number_intrinsic_ip);
                 MAL_REGION_PAYLOAD_REFERENCE(number_call_ip);
-            } else if (r.ok && kind == 8) {
-                i32 entry_ip = rd_i32(&r);
-                i32 exit_ip = rd_i32(&r);
-                i32 input = rd_i32(&r);
-                i32 length_load_ip = rd_i32(&r);
-                i32 length_result = rd_i32(&r);
-                i32 match_result = rd_i32(&r);
-                i32 match_code_unit = rd_i32(&r);
-                bool header_ok = anchor_count == 2 && anchors[0] == entry_ip &&
-                    anchors[1] == length_load_ip && entry_ip >= 0 &&
-                    exit_ip > entry_ip && exit_ip <= fn->instruction_count &&
-                    length_load_ip >= exit_ip && length_load_ip < fn->instruction_count &&
-                    input >= 0 && input < fn->register_count && length_result >= 0 &&
-                    length_result < fn->register_count && match_result >= 0 &&
-                    match_result < fn->register_count && match_code_unit >= 0 &&
-                    match_code_unit <= 65535 &&
-                    fn->instructions[entry_ip].opcode == MAL_OP_CREATE_ARRAY &&
-                    fn->instructions[entry_ip].as.create_array.length == 0 &&
-                    fn->instructions[length_load_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
-                    fn->instructions[length_load_ip].as.load_property_static.dst ==
-                        length_result && exceptional_handler_count == 0;
-                bool entry_is_block = false;
-                for (u32 block = 0; block < ordinary_block_count; block++) {
-                    if (ordinary_block_ips[block] == entry_ip) entry_is_block = true;
-                }
-                if (!entry_is_block) header_ok = false;
-                if (header_ok) {
-                    i32 name_index =
-                        fn->instructions[length_load_ip].as.load_property_static.string_index;
-                    bool length_name = name_index >= 0 && name_index < (i32) string_count;
-                    if (length_name) {
-                        const MalString *name = &strings[name_index];
-                        length_name = name->length == 6 && name->code_units[0] == 'l' &&
-                            name->code_units[1] == 'e' && name->code_units[2] == 'n' &&
-                            name->code_units[3] == 'g' && name->code_units[4] == 't' &&
-                            name->code_units[5] == 'h';
-                    }
-                    if (!length_name) header_ok = false;
-                }
-                bool exit_jump = false;
-                for (i32 ip = entry_ip; header_ok && ip < exit_ip; ip++) {
-                    MalOpcode opcode = fn->instructions[ip].opcode;
-                    bool allowed = opcode == MAL_OP_CREATE_ARRAY || opcode == MAL_OP_MOVE ||
-                        opcode == MAL_OP_CREATE_NUMBER || opcode == MAL_OP_JUMP ||
-                        opcode == MAL_OP_LOAD_PROPERTY_STATIC || opcode == MAL_OP_BINARY ||
-                        opcode == MAL_OP_JUMP_IF || opcode == MAL_OP_CALL ||
-                        opcode == MAL_OP_CREATE_STRING ||
-                        opcode == MAL_OP_CREATE_OBJECT_SHAPED || opcode == MAL_OP_UNARY;
-                    if (!allowed) header_ok = false;
-                    if (opcode == MAL_OP_JUMP &&
-                        fn->instructions[ip].as.jump.target_ip == exit_ip) exit_jump = true;
-                }
-                i32 span_count = exit_ip - entry_ip;
-                if (!header_ok || !exit_jump || span_count <= 0 ||
-                    claim_count != (u32) span_count + 1 ||
-                    metadata_operations != claim_count) r.ok = false;
-                for (i32 ip = entry_ip; r.ok && ip < exit_ip; ip++) {
-                    MAL_REGION_PAYLOAD_REFERENCE(ip);
-                }
-                MAL_REGION_PAYLOAD_REFERENCE(length_load_ip);
-            } else if (r.ok && kind == 9) {
-                i32 allocation_ip = rd_i32(&r);
-                u32 push_count = rd_count(&r, 1);
-                if (push_count == 0 || push_count > 94) r.ok = false;
-                i32 push_ips[94];
-                for (u32 push = 0; r.ok && push < push_count; push++) {
-                    push_ips[push] = rd_i32(&r);
-                }
-                i32 call_ip = rd_i32(&r);
-                i32 target_function_index = rd_i32(&r);
-                i32 callee = rd_i32(&r);
-                i32 input = rd_i32(&r);
-                i32 result = rd_i32(&r);
-                bool header_ok = anchor_count == 2 && anchors[0] == allocation_ip &&
-                    anchors[1] == call_ip && allocation_ip >= 0 &&
-                    allocation_ip < call_ip && call_ip < fn->instruction_count &&
-                    target_function_index >= 0 &&
-                    target_function_index < (i32) function_count && callee >= 0 &&
-                    callee < fn->register_count && input >= 0 &&
-                    input < fn->register_count && result >= 0 &&
-                    result < fn->register_count &&
-                    fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_ARRAY &&
-                    fn->instructions[allocation_ip].as.create_array.length == 0 &&
-                    fn->instructions[call_ip].opcode == MAL_OP_CALL &&
-                    fn->instructions[call_ip].as.call.dst == result &&
-                    fn->instructions[call_ip].as.call.callee == callee &&
-                    fn->instructions[call_ip].as.call.this_value ==
-                        MAL_VALUE_OPERAND_UNDEFINED && exceptional_handler_count == 0;
-                if (header_ok) {
-                    i32 data = fn->instructions[call_ip].as.call.data_offset;
-                    header_ok = data >= 0 && data + 1 < fn->instruction_data_count &&
-                        fn->instruction_data[data] == 1 &&
-                        fn->instruction_data[data + 1] == input;
-                }
-                bool allocation_block = false;
-                bool call_block = false;
-                for (u32 block = 0; block < ordinary_block_count; block++) {
-                    if (ordinary_block_ips[block] == allocation_ip) allocation_block = true;
-                    if (ordinary_block_ips[block] == call_ip) call_block = true;
-                }
-                if (!allocation_block || !call_block) header_ok = false;
-                for (u32 push = 0; header_ok && push < push_count; push++) {
-                    i32 ip = push_ips[push];
-                    if (ip <= allocation_ip || ip >= call_ip ||
-                        fn->instructions[ip].opcode != MAL_OP_CALL) header_ok = false;
-                }
-                if (!header_ok || metadata_operations != push_count + 2 ||
-                    claim_count != push_count + 2) r.ok = false;
-                MAL_REGION_PAYLOAD_REFERENCE(allocation_ip);
-                for (u32 push = 0; r.ok && push < push_count; push++) {
-                    MAL_REGION_PAYLOAD_REFERENCE(push_ips[push]);
-                }
-                MAL_REGION_PAYLOAD_REFERENCE(call_ip);
-			} else if (r.ok && kind == 10) {
-				i32 parse_call_ip = rd_i32(&r);
-				i32 map_load_ip = rd_i32(&r);
-				i32 map_call_ip = rd_i32(&r);
-				i32 json_object = rd_i32(&r);
-				i32 parse_callee = rd_i32(&r);
-				i32 text = rd_i32(&r);
-				i32 parse_result = rd_i32(&r);
-				i32 map_callee = rd_i32(&r);
-				i32 callback = rd_i32(&r);
-				i32 map_result = rd_i32(&r);
-				i32 target_function_index = rd_i32(&r);
-				u32 capture_count = rd_count(&r, 2);
-				if (capture_count == 0 || capture_count > 8) r.ok = false;
-				i32 capture_owners[8];
-				i32 capture_indices[8];
-				for (u32 capture = 0; r.ok && capture < capture_count; capture++) {
-					capture_owners[capture] = rd_i32(&r);
-					capture_indices[capture] = rd_i32(&r);
-					if (capture_owners[capture] < 0 ||
-						capture_owners[capture] >= (i32) function_count ||
-						capture_indices[capture] < 0) r.ok = false;
-					for (u32 previous = 0; r.ok && previous < capture; previous++) {
-						if (capture_owners[previous] == capture_owners[capture] &&
-							capture_indices[previous] == capture_indices[capture]) r.ok = false;
-					}
-				}
-				i32 row_property_loads = rd_i32(&r);
-				u32 primitive_key_count = rd_count(&r, 1);
-				if (primitive_key_count == 0 || primitive_key_count > 64) r.ok = false;
-				for (u32 key = 0; r.ok && key < primitive_key_count; key++) {
-					i32 string_index = rd_i32(&r);
-					if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
-				}
-				i32 nested_base_string_index = rd_i32(&r);
-				i32 nested_value_string_index = rd_i32(&r);
-				u32 excluded_key_count = rd_count(&r, 1);
-				if (excluded_key_count == 0 || excluded_key_count > 64) r.ok = false;
-				for (u32 key = 0; r.ok && key < excluded_key_count; key++) {
-					i32 string_index = rd_i32(&r);
-					if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
-				}
-
-				bool header_ok = anchor_count == 2 && anchors[0] == parse_call_ip &&
-					anchors[1] == map_call_ip && map_load_ip == parse_call_ip + 1 &&
-					map_call_ip == parse_call_ip + 2 && parse_call_ip >= 0 &&
-					map_call_ip < fn->instruction_count && json_object >= 0 &&
-					json_object < fn->register_count && parse_callee >= 0 &&
-					parse_callee < fn->register_count && text >= 0 &&
-					text < fn->register_count && parse_result >= 0 &&
-					parse_result < fn->register_count && map_callee >= 0 &&
-					map_callee < fn->register_count && callback >= 0 &&
-					callback < fn->register_count && map_result >= 0 &&
-					map_result < fn->register_count && target_function_index >= 0 &&
-					target_function_index < (i32) function_count && row_property_loads > 0 &&
-					row_property_loads <= 65535 && nested_base_string_index >= 0 &&
-					nested_base_string_index < (i32) string_count &&
-					nested_value_string_index >= 0 &&
-					nested_value_string_index < (i32) string_count &&
-					fn->instructions[parse_call_ip].opcode == MAL_OP_CALL &&
-					fn->instructions[map_load_ip].opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
-					fn->instructions[map_call_ip].opcode == MAL_OP_CALL &&
-					exceptional_handler_count == 0;
-				if (header_ok) {
-					const MalInstruction *parse = &fn->instructions[parse_call_ip];
-					const MalInstruction *map_load = &fn->instructions[map_load_ip];
-					const MalInstruction *map_call = &fn->instructions[map_call_ip];
-					i32 parse_data = parse->as.call.data_offset;
-					i32 map_data = map_call->as.call.data_offset;
-					i32 name_index = map_load->as.load_property_static.string_index;
-					bool map_name = name_index >= 0 && name_index < (i32) string_count;
-					if (map_name) {
-						const MalString *name = &strings[name_index];
-						map_name = name->length == 3 && name->code_units[0] == 'm' &&
-							name->code_units[1] == 'a' && name->code_units[2] == 'p';
-					}
-					header_ok = map_name && parse->as.call.callee == parse_callee &&
-						parse->as.call.this_value == json_object &&
-						parse->as.call.dst == parse_result && parse_data >= 0 &&
-						parse_data + 1 < fn->instruction_data_count &&
-						fn->instruction_data[parse_data] == 1 &&
-						fn->instruction_data[parse_data + 1] == text &&
-						map_load->as.load_property_static.object == parse_result &&
-						map_load->as.load_property_static.dst == map_callee &&
-						map_call->as.call.callee == map_callee &&
-						map_call->as.call.this_value == parse_result &&
-						map_call->as.call.dst == map_result && map_data >= 0 &&
-						map_data + 1 < fn->instruction_data_count &&
-						fn->instruction_data[map_data] == 1 &&
-						fn->instruction_data[map_data + 1] == callback;
-				}
-				bool parse_block = false;
-				bool load_block = false;
-				bool map_block = false;
-				for (u32 block = 0; block < ordinary_block_count; block++) {
-					if (ordinary_block_ips[block] == parse_call_ip) parse_block = true;
-					if (ordinary_block_ips[block] == map_load_ip) load_block = true;
-					if (ordinary_block_ips[block] == map_call_ip) map_block = true;
-				}
-				if (!parse_block || !load_block || !map_block) header_ok = false;
-				if (!header_ok || metadata_operations != 3 || claim_count != 3) r.ok = false;
-				MAL_REGION_PAYLOAD_REFERENCE(parse_call_ip);
-				MAL_REGION_PAYLOAD_REFERENCE(map_load_ip);
-				MAL_REGION_PAYLOAD_REFERENCE(map_call_ip);
-			} else if (r.ok && kind == 11) {
+				} else if (r.ok && kind == 11) {
 				u32 site_count = rd_count(&r, 5);
 				if (site_count == 0 || site_count > 8 || anchor_count != site_count ||
 					exceptional_handler_count != 0) r.ok = false;
@@ -3260,97 +2899,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 				if ((inherited_count == 0 && dependency_mask != 0) ||
 					(inherited_count != 0 && dependency_mask == 0) ||
 					metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 12) {
-				i32 allocation_ip = rd_i32(&r);
-				i32 push_call_ip = rd_i32(&r);
-				i32 item_allocation_ip = rd_i32(&r);
-				i32 maximum_length = rd_i32(&r);
-				bool header_ok = anchor_count == 3 && anchors[0] == allocation_ip &&
-					anchors[1] == push_call_ip && anchors[2] == item_allocation_ip &&
-					allocation_ip >= 0 && allocation_ip < fn->instruction_count &&
-					push_call_ip >= 0 && push_call_ip < fn->instruction_count &&
-					item_allocation_ip >= 0 && item_allocation_ip < fn->instruction_count &&
-					maximum_length > 0 && maximum_length <= 32 &&
-					exceptional_handler_count == 0 &&
-					fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_ARRAY &&
-					fn->instructions[allocation_ip].as.create_array.length == 0 &&
-					fn->instructions[push_call_ip].opcode == MAL_OP_CALL &&
-					fn->instructions[item_allocation_ip].opcode == MAL_OP_CREATE_OBJECT_SHAPED;
-				if (header_ok) {
-					i32 data = fn->instructions[push_call_ip].as.call.data_offset;
-					i32 shaped_data =
-						fn->instructions[item_allocation_ip].as.create_object_shaped.data_offset;
-					header_ok = data >= 0 && data + 1 < fn->instruction_data_count &&
-						fn->instruction_data[data] == 1 &&
-						fn->instruction_data[data + 1] ==
-							fn->instructions[item_allocation_ip].as.create_object_shaped.dst &&
-						shaped_data >= 0 &&
-						shaped_data < fn->instruction_data_count &&
-						fn->instruction_data[shaped_data] > 0 &&
-						fn->instruction_data[shaped_data] <= 8;
-				}
-				if (!header_ok) r.ok = false;
-				MAL_REGION_PAYLOAD_REFERENCE(allocation_ip);
-				MAL_REGION_PAYLOAD_REFERENCE(push_call_ip);
-				MAL_REGION_PAYLOAD_REFERENCE(item_allocation_ip);
-				u32 access_count = rd_count(&r, 2);
-				if (access_count == 0 || access_count > 32) r.ok = false;
-				u32 push_access_count = 0;
-				for (u32 access = 0; r.ok && access < access_count; access++) {
-					i32 ip = rd_i32(&r);
-					u8 role = rd_u8(&r);
-					i32 field_slot = rd_i32(&r);
-					if (ip < 0 || ip >= fn->instruction_count || role < 1 || role > 4 ||
-						(fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY &&
-						 fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY_STATIC) ||
-						(role == 4 ? field_slot < 0 || field_slot >= 8 : field_slot != -1)) {
-						r.ok = false;
-					}
-					if (role == 1) push_access_count++;
-					MAL_REGION_PAYLOAD_REFERENCE(ip);
-				}
-				for (u32 claim = 0; r.ok && claim < claim_count; claim++) {
-					i32 ip = claims[claim];
-					bool recorded = false;
-					for (u32 payload = 0; payload < payload_count; payload++) {
-						if (payload_ips[payload] == ip) recorded = true;
-					}
-					if (recorded) continue;
-					const MalInstruction *instruction = &fn->instructions[ip];
-					i32 item_dst = fn->instructions[item_allocation_ip]
-						.as.create_object_shaped.dst;
-					if ((instruction->opcode != MAL_OP_LOAD_PROPERTY_STATIC ||
-						 instruction->as.load_property_static.object != item_dst) &&
-						(instruction->opcode != MAL_OP_STORE_PROPERTY_STATIC ||
-						 instruction->as.store_property_static.object != item_dst)) {
-						r.ok = false;
-					}
-					MAL_REGION_PAYLOAD_REFERENCE(ip);
-				}
-				if (push_access_count != 1 || metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 13) {
-				i32 allocation_ip = rd_i32(&r);
-				u8 runtime_guard = rd_u8(&r);
-				u32 access_count = rd_count(&r, 1);
-				bool header_ok = anchor_count == 2 && anchors[0] == allocation_ip &&
-					access_count > 0 && access_count <= 64 && runtime_guard == 1 &&
-					allocation_ip >= 0 && allocation_ip < fn->instruction_count &&
-					fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_ARRAY;
-				if (!header_ok) r.ok = false;
-				MAL_REGION_PAYLOAD_REFERENCE(allocation_ip);
-				for (u32 access = 0; r.ok && access < access_count; access++) {
-					i32 ip = rd_i32(&r);
-					if (access == 0 && anchors[1] != ip) r.ok = false;
-					if (ip < 0 || ip >= fn->instruction_count ||
-						fn->instructions[ip].opcode != MAL_OP_LOAD_PROPERTY ||
-						fn->instructions[ip].as.load_property.object !=
-							fn->instructions[allocation_ip].as.create_array.dst) {
-						r.ok = false;
-					}
-					MAL_REGION_PAYLOAD_REFERENCE(ip);
-				}
-				if (score != access_count || metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 14) {
+				} else if (r.ok && kind == 14) {
 				u8 runtime_guard = rd_u8(&r);
 				u32 pair_count = rd_count(&r, 2);
 				if (runtime_guard != 1 || pair_count == 0 || pair_count > 32 ||
@@ -3386,359 +2935,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
 					MAL_REGION_PAYLOAD_REFERENCE(finish_ip);
 				}
 				if (score != pair_count || metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 15) {
-				i32 allocation_ip = rd_i32(&r);
-				i32 store_ip = rd_i32(&r);
-				i32 ic_index = rd_i32(&r);
-				u32 guard_count = rd_count(&r, sizeof(i32));
-				if (guard_count > 4) r.ok = false;
-				for (u32 guard = 0; r.ok && guard < guard_count; guard++) {
-					i32 guard_register = rd_i32(&r);
-					if (guard_register < 0 || guard_register >= fn->register_count) r.ok = false;
 				}
-				u32 key_count = rd_count(&r, sizeof(i32));
-				if (key_count == 0 || key_count > 8) r.ok = false;
-				for (u32 key = 0; r.ok && key < key_count; key++) {
-					i32 string_index = rd_i32(&r);
-					if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
-				}
-				u8 virtual_record = rd_u8(&r);
-				u32 access_count = rd_count(&r, sizeof(i32));
-				bool header_ok = anchor_count == 2 && anchors[0] == allocation_ip &&
-					anchors[1] == store_ip && allocation_ip >= 0 &&
-					allocation_ip < fn->instruction_count && store_ip >= 0 &&
-					store_ip < fn->instruction_count &&
-					fn->instructions[allocation_ip].opcode == MAL_OP_CREATE_OBJECT &&
-					fn->instructions[store_ip].opcode == MAL_OP_STORE_PROPERTY &&
-					ic_index == fn->instructions[store_ip].as.store_property.ic_index &&
-					virtual_record <= 1 && access_count <= 32 &&
-					(virtual_record != 0) == (access_count > 0);
-				if (!header_ok) r.ok = false;
-				MAL_REGION_PAYLOAD_REFERENCE(allocation_ip);
-				MAL_REGION_PAYLOAD_REFERENCE(store_ip);
-				for (u32 access = 0; r.ok && access < access_count; access++) {
-					i32 access_ip = rd_i32(&r);
-					if (access_ip < 0 || access_ip >= fn->instruction_count ||
-						fn->instructions[access_ip].opcode != MAL_OP_LOAD_PROPERTY) {
-						r.ok = false;
-					}
-					MAL_REGION_PAYLOAD_REFERENCE(access_ip);
-				}
-				u8 runtime_guard = rd_u8(&r);
-				if (runtime_guard != 1 || score != key_count + access_count ||
-					metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 16) {
-				u8 runtime_guard = rd_u8(&r);
-				u32 selector_count = rd_count(&r, 2);
-				u32 selector_score = 0;
-				i32 first_producer_ip = -1;
-				if (runtime_guard != 1 || selector_count == 0 || selector_count > 32 ||
-					anchor_count != 1) r.ok = false;
-				for (u32 selector = 0; r.ok && selector < selector_count; selector++) {
-					i32 producer_ip = rd_i32(&r);
-					i32 ordinal = rd_i32(&r);
-					(void) rd_i32(&r); // minimum
-					u32 key_count = rd_count(&r, sizeof(i32));
-					if (key_count == 0 || key_count > 32) r.ok = false;
-					for (u32 key = 0; r.ok && key < key_count; key++) {
-						i32 string_index = rd_i32(&r);
-						if (string_index < 0 || string_index >= (i32) string_count) r.ok = false;
-					}
-					u32 access_count = rd_count(&r, 2);
-					bool producer_ok = producer_ip >= 0 && producer_ip < fn->instruction_count &&
-						ordinal >= 0 && ordinal < fn->register_count &&
-						fn->instructions[producer_ip].opcode == MAL_OP_BINARY &&
-						fn->instructions[producer_ip].as.binary.op == MAL_BIN_ADD &&
-						fn->instructions[producer_ip].as.binary.right == ordinal;
-					if (!producer_ok) r.ok = false;
-					if (selector == 0) first_producer_ip = producer_ip;
-					MAL_REGION_PAYLOAD_REFERENCE(producer_ip);
-					for (u32 access = 0; r.ok && access < access_count; access++) {
-						i32 access_ip = rd_i32(&r);
-						u8 access_kind = rd_u8(&r);
-						bool access_ok = access_ip >= 0 && access_ip < fn->instruction_count &&
-							(access_kind == 1 || access_kind == 2);
-						if (access_ok && access_kind == 1) {
-							access_ok = fn->instructions[access_ip].opcode == MAL_OP_LOAD_PROPERTY &&
-								fn->instructions[access_ip].as.load_property.key ==
-									fn->instructions[producer_ip].as.binary.dst;
-						} else if (access_ok) {
-							access_ok = fn->instructions[access_ip].opcode == MAL_OP_STORE_PROPERTY &&
-								fn->instructions[access_ip].as.store_property.key ==
-									fn->instructions[producer_ip].as.binary.dst;
-						}
-						if (!access_ok) r.ok = false;
-						MAL_REGION_PAYLOAD_REFERENCE(access_ip);
-					}
-					selector_score += key_count + access_count;
-				}
-				if (anchors[0] != first_producer_ip ||
-					score != selector_score || metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 17) {
-				i32 source_global = rd_i32(&r);
-				i32 base = rd_i32(&r);
-				i32 state = rd_i32(&r);
-				i32 mask = rd_i32(&r);
-				u32 access_count = rd_count(&r, 3);
-				bool header_ok = anchor_count == 1 && source_global >= 0 &&
-					source_global < def->global_count && base >= 0 &&
-					mask >= 0 && mask <= 1023 && (mask & (mask + 1)) == 0 &&
-					state == base + mask + 1 && state < def->global_count &&
-					access_count > 0 && access_count <= 96;
-				if (!header_ok) r.ok = false;
-				for (u32 access = 0; r.ok && access < access_count; access++) {
-					i32 ip = rd_i32(&r);
-					u8 access_kind = rd_u8(&r);
-					u8 direct = rd_u8(&r);
-					bool access_ok = ip >= 0 && ip < fn->instruction_count &&
-						(access_kind == 1 || access_kind == 2) && direct <= 1;
-					if (access_ok && access_kind == 1) {
-						access_ok = fn->instructions[ip].opcode == MAL_OP_LOAD_PROPERTY;
-					} else if (access_ok) {
-						access_ok = fn->instructions[ip].opcode == MAL_OP_STORE_PROPERTY;
-					}
-					if (!access_ok || (access == 0 && anchors[0] != ip)) r.ok = false;
-					MAL_REGION_PAYLOAD_REFERENCE(ip);
-				}
-				if (score != (u32) (mask + 1) + access_count ||
-					metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 18) {
-				u32 site_count = rd_count(&r, 3);
-				i32 first_call_ip = -1;
-				if (anchor_count != 1) {
-					r.ok = false;
-					err = "invalid known-builtin producer anchor count";
-				} else if (site_count == 0) {
-					r.ok = false;
-					err = "empty known-builtin producer region";
-				} else if (site_count > 32) {
-					r.ok = false;
-					err = "oversized known-builtin producer region";
-				}
-				for (u32 site = 0; r.ok && site < site_count; site++) {
-					i32 receiver_ip = rd_i32(&r);
-					i32 property_ip = rd_i32(&r);
-					i32 call_ip = rd_i32(&r);
-					bool ips_ok = receiver_ip >= 0 && receiver_ip < fn->instruction_count &&
-						property_ip >= 0 && property_ip < fn->instruction_count &&
-						call_ip >= 0 && call_ip < fn->instruction_count;
-					if (ips_ok) {
-						const MalInstruction *receiver = &fn->instructions[receiver_ip];
-						const MalInstruction *property = &fn->instructions[property_ip];
-						const MalInstruction *call = &fn->instructions[call_ip];
-						ips_ok = receiver->opcode == MAL_OP_LOAD_INTRINSIC &&
-							property->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
-							call->opcode == MAL_OP_CALL &&
-							property->as.load_property_static.object == receiver->as.load_intrinsic.dst &&
-							call->as.call.callee == property->as.load_property_static.dst &&
-							call->as.call.this_value == receiver->as.load_intrinsic.dst;
-					}
-					if (!ips_ok) {
-						r.ok = false;
-						err = "invalid known-builtin producer instruction graph";
-					}
-					if (site == 0) first_call_ip = call_ip;
-					MAL_REGION_PAYLOAD_CLAIM(receiver_ip);
-					if (!r.ok) err = "invalid known-builtin receiver claim";
-					MAL_REGION_PAYLOAD_CLAIM(property_ip);
-					if (!r.ok) err = "invalid known-builtin property claim";
-					MAL_REGION_PAYLOAD_CLAIM(call_ip);
-					if (!r.ok) err = "invalid known-builtin call claim";
-				}
-				if (r.ok && (anchors[0] != first_call_ip || score != site_count ||
-					metadata_operations != payload_count)) {
-					r.ok = false;
-					err = "invalid known-builtin producer region metadata";
-				}
-			} else if (r.ok && kind == 19) {
-				i32 allocation_ip = rd_i32(&r);
-				i32 store_ip = rd_i32(&r);
-				i32 length = rd_i32(&r);
-				u32 load_count = rd_count(&r, 1);
-				bool header_ok = anchor_count == 1 && anchors[0] == allocation_ip &&
-					allocation_ip >= 0 && allocation_ip < fn->instruction_count &&
-					store_ip >= 0 && store_ip < fn->instruction_count &&
-					length >= 1 && length <= 65536 && load_count >= 1 && load_count <= 8;
-				if (header_ok) {
-					const MalInstruction *allocation = &fn->instructions[allocation_ip];
-					const MalInstruction *store = &fn->instructions[store_ip];
-					header_ok = allocation->opcode == MAL_OP_CREATE_ARRAY &&
-						allocation->as.create_array.length == 0 &&
-						store->opcode == MAL_OP_STORE_PROPERTY &&
-						store->as.store_property.key == store->as.store_property.value;
-				}
-				if (!header_ok) r.ok = false;
-				MAL_REGION_PAYLOAD_CLAIM(allocation_ip);
-				MAL_REGION_PAYLOAD_CLAIM(store_ip);
-				for (u32 load = 0; r.ok && load < load_count; load++) {
-					i32 load_ip = rd_i32(&r);
-					if (load_ip < 0 || load_ip >= fn->instruction_count ||
-						fn->instructions[load_ip].opcode != MAL_OP_LOAD_PROPERTY) r.ok = false;
-					MAL_REGION_PAYLOAD_CLAIM(load_ip);
-				}
-				if (score != (u32) length * (load_count + 1) ||
-					metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 20) {
-				i32 json_intrinsic_ip = rd_i32(&r);
-				i32 parse_property_ip = rd_i32(&r);
-				i32 parse_key_ip = rd_i32(&r);
-				i32 parse_call_ip = rd_i32(&r);
-				i32 json_object = rd_i32(&r);
-				i32 parse_callee = rd_i32(&r);
-				i32 text = rd_i32(&r);
-				i32 result = rd_i32(&r);
-				bool header_ok = anchor_count == 1 && anchors[0] == parse_call_ip &&
-					json_intrinsic_ip >= 0 && json_intrinsic_ip < fn->instruction_count &&
-					parse_property_ip >= 0 && parse_property_ip < fn->instruction_count &&
-					parse_call_ip >= 0 && parse_call_ip < fn->instruction_count &&
-					json_object >= 0 && json_object < fn->register_count &&
-					parse_callee >= 0 && parse_callee < fn->register_count &&
-					text >= 0 && text < fn->register_count &&
-					result >= 0 && result < fn->register_count;
-				if (header_ok) {
-					const MalInstruction *json = &fn->instructions[json_intrinsic_ip];
-					const MalInstruction *property = &fn->instructions[parse_property_ip];
-					const MalInstruction *call = &fn->instructions[parse_call_ip];
-					i32 name_index = -1;
-					bool property_ok = false;
-					if (property->opcode == MAL_OP_LOAD_PROPERTY_STATIC && parse_key_ip == -1) {
-						name_index = property->as.load_property_static.string_index;
-						property_ok = property->as.load_property_static.object == json_object &&
-							property->as.load_property_static.dst == parse_callee;
-					} else if (property->opcode == MAL_OP_LOAD_PROPERTY && parse_key_ip >= 0 &&
-						parse_key_ip < fn->instruction_count) {
-						const MalInstruction *key = &fn->instructions[parse_key_ip];
-						if (key->opcode == MAL_OP_CREATE_STRING) {
-							name_index = key->as.create_string.string_index;
-							property_ok = property->as.load_property.object == json_object &&
-								property->as.load_property.key == key->as.create_string.dst &&
-								property->as.load_property.dst == parse_callee;
-						}
-					}
-					bool parse_name = name_index >= 0 && name_index < (i32) string_count;
-					if (parse_name) {
-						const MalString *name = &strings[name_index];
-						parse_name = name->length == 5 && name->code_units[0] == 'p' &&
-							name->code_units[1] == 'a' && name->code_units[2] == 'r' &&
-							name->code_units[3] == 's' && name->code_units[4] == 'e';
-					}
-					i32 data = call->opcode == MAL_OP_CALL ? call->as.call.data_offset : -1;
-					header_ok = json->opcode == MAL_OP_LOAD_INTRINSIC &&
-						json->as.load_intrinsic.intrinsic == MAL_INTRINSIC_JSON &&
-						json->as.load_intrinsic.dst == json_object && property_ok && parse_name &&
-						call->opcode == MAL_OP_CALL && call->as.call.callee == parse_callee &&
-						call->as.call.this_value == json_object && call->as.call.dst == result &&
-						data >= 0 && data + 1 < fn->instruction_data_count &&
-						fn->instruction_data[data] == 1 && fn->instruction_data[data + 1] == text;
-				}
-				if (!header_ok || score != 1) r.ok = false;
-				MAL_REGION_PAYLOAD_CLAIM(json_intrinsic_ip);
-				if (parse_key_ip >= 0) MAL_REGION_PAYLOAD_CLAIM(parse_key_ip);
-				MAL_REGION_PAYLOAD_CLAIM(parse_property_ip);
-				MAL_REGION_PAYLOAD_CLAIM(parse_call_ip);
-				if (metadata_operations != payload_count) r.ok = false;
-			} else if (r.ok && kind == 21) {
-				i32 property_ip = rd_i32(&r);
-				i32 regexp_intrinsic_ip = rd_i32(&r);
-				i32 regexp_construct_ip = rd_i32(&r);
-				i32 search_call_ip = rd_i32(&r);
-				i32 search_callee = rd_i32(&r);
-				i32 receiver = rd_i32(&r);
-				i32 regexp = rd_i32(&r);
-				i32 result = rd_i32(&r);
-				i32 literal_pattern_index = rd_i32(&r);
-				bool literal = literal_pattern_index >= 0;
-				bool header_ok = anchor_count == 2 && anchors[0] == regexp_construct_ip &&
-					anchors[1] == search_call_ip && ordinary_block_count == 1 &&
-					ordinary_block_ips[0] == property_ip && exceptional_handler_count == 0 &&
-					property_ip >= 0 && search_call_ip < fn->instruction_count &&
-					regexp_intrinsic_ip == property_ip + 1 &&
-					regexp_construct_ip == property_ip + 2 && search_call_ip == property_ip + 3 &&
-					search_callee >= 0 && search_callee < fn->register_count && receiver >= 0 &&
-					receiver < fn->register_count && regexp >= 0 && regexp < fn->register_count &&
-					result >= 0 && result < fn->register_count &&
-					(literal_pattern_index == -1 ||
-					 (literal_pattern_index >= 0 && literal_pattern_index < (i32) string_count)) &&
-					literal == (materialization == 1);
-				if (header_ok) {
-					const MalInstruction *property = &fn->instructions[property_ip];
-					const MalInstruction *intrinsic = &fn->instructions[regexp_intrinsic_ip];
-					const MalInstruction *construct = &fn->instructions[regexp_construct_ip];
-					const MalInstruction *call = &fn->instructions[search_call_ip];
-					i32 property_name_index = property->opcode == MAL_OP_LOAD_PROPERTY_STATIC
-						? property->as.load_property_static.string_index : -1;
-					bool search_name = property_name_index >= 0 &&
-						property_name_index < (i32) string_count;
-					if (search_name) {
-						const MalString *name = &strings[property_name_index];
-						search_name = name->length == 6 && name->code_units[0] == 's' &&
-							name->code_units[1] == 'e' && name->code_units[2] == 'a' &&
-							name->code_units[3] == 'r' && name->code_units[4] == 'c' &&
-							name->code_units[5] == 'h';
-					}
-					i32 construct_data = construct->opcode == MAL_OP_CONSTRUCT
-						? construct->as.construct.data_offset : -1;
-					i32 call_data = call->opcode == MAL_OP_CALL ? call->as.call.data_offset : -1;
-					bool side_data_ok = construct_data >= 0 &&
-						construct_data + 2 < fn->instruction_data_count &&
-						fn->instruction_data[construct_data] == 2 && call_data >= 0 &&
-						call_data + 1 < fn->instruction_data_count &&
-						fn->instruction_data[call_data] == 1;
-					i32 pattern_operand = side_data_ok
-						? fn->instruction_data[construct_data + 1] : 0;
-					i32 flags_operand = side_data_ok
-						? fn->instruction_data[construct_data + 2] : 0;
-					i32 pattern_index = pattern_operand <= MAL_VALUE_OPERAND_STRING_BASE &&
-						pattern_operand >= MAL_VALUE_OPERAND_STRING_MIN
-						? MAL_VALUE_OPERAND_STRING_BASE - pattern_operand : -1;
-					i32 flags_index = flags_operand <= MAL_VALUE_OPERAND_STRING_BASE &&
-						flags_operand >= MAL_VALUE_OPERAND_STRING_MIN
-						? MAL_VALUE_OPERAND_STRING_BASE - flags_operand : -1;
-					bool flags_ok = flags_index >= 0 && flags_index < (i32) string_count;
-					if (flags_ok) {
-						const MalString *flags = &strings[flags_index];
-						for (u32 unit = 0; flags_ok && unit < flags->length; unit++) {
-							if (flags->code_units[unit] == 'g' || flags->code_units[unit] == 'y') {
-								flags_ok = false;
-							}
-						}
-					}
-					bool literal_ok = true;
-					if (literal) {
-						literal_ok = pattern_index == literal_pattern_index && flags_index >= 0 &&
-							strings[flags_index].length == 0;
-						if (literal_ok) {
-							const MalString *pattern = &strings[literal_pattern_index];
-							literal_ok = pattern->length > 0;
-							for (u32 unit = 0; literal_ok && unit < pattern->length; unit++) {
-								c16 ch = pattern->code_units[unit];
-								if (ch > 0x7f || ch == '\\' || ch == '^' || ch == '$' || ch == '.' ||
-									ch == '*' || ch == '+' || ch == '?' || ch == '{' || ch == '}' ||
-									ch == '[' || ch == ']' || ch == '(' || ch == ')' || ch == '|') {
-									literal_ok = false;
-								}
-							}
-						}
-					}
-					header_ok = search_name && side_data_ok && pattern_index >= 0 &&
-						pattern_index < (i32) string_count && flags_ok && literal_ok &&
-						property->as.load_property_static.dst == search_callee &&
-						property->as.load_property_static.object == receiver &&
-						intrinsic->opcode == MAL_OP_LOAD_INTRINSIC &&
-						intrinsic->as.load_intrinsic.intrinsic == MAL_INTRINSIC_REGEXP_CONSTRUCTOR &&
-						construct->opcode == MAL_OP_CONSTRUCT &&
-						construct->as.construct.callee == intrinsic->as.load_intrinsic.dst &&
-						construct->as.construct.dst == regexp && call->opcode == MAL_OP_CALL &&
-						call->as.call.callee == search_callee && call->as.call.this_value == receiver &&
-						call->as.call.dst == result && fn->instruction_data[call_data + 1] == regexp;
-				}
-				if (!header_ok || score != (literal ? 2u : 1u)) r.ok = false;
-				MAL_REGION_PAYLOAD_CLAIM(property_ip);
-				MAL_REGION_PAYLOAD_CLAIM(regexp_intrinsic_ip);
-				MAL_REGION_PAYLOAD_CLAIM(regexp_construct_ip);
-				MAL_REGION_PAYLOAD_CLAIM(search_call_ip);
-				if (metadata_operations != payload_count) r.ok = false;
-            }
             if (payload_count != claim_count) r.ok = false;
 #undef MAL_REGION_PAYLOAD_CLAIM
 #undef MAL_REGION_PAYLOAD_REFERENCE

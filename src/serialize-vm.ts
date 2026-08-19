@@ -1,13 +1,7 @@
-import { mathUnaryOperationKeys } from "./builtin-registry.ts";
-import type { MathUnaryOperationKey } from "./builtin-registry.ts";
 import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
-	countPropertyIcSites,
 	decodeVmValueOperand,
-	vmCallProvesBuiltin,
-	vmInstructionDefinesRegister,
-	vmInstructionUsesRegister,
 	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_GUARDED_BUILTIN_OPERATIONS,
@@ -17,7 +11,6 @@ import {
 import type {
 	VmDefinition,
 	VmFunction,
-	VmGuardPlan,
 	VmInstruction,
 	VmRegion,
 	VmSemanticProtectorFact,
@@ -40,30 +33,15 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 7;
+export const WIRE_VERSION = 8;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
-const NUMERIC_HOF_BINOPS = ["+", "-", "*", "/", "%"] as const;
-const MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS = 64;
-const MAX_CLOSED_RECORD_SHAPE_SLOTS = 64;
 const MAX_REGIONS = 40;
 const MAX_REGION_ANCHORS = 8;
 const MAX_REGION_CLAIMS = 96;
 const MAX_REGION_ORDINARY_BLOCKS = 64;
 const MAX_STRING_SPLIT_CURSOR_LENGTH_LOADS = 64;
-// Preserve the original three wire tags; append the rest of the registry surface.
-const NUMERIC_HOF_MATH_OPS: ReadonlyArray<MathUnaryOperationKey> = [
-	"abs",
-	"sqrt",
-	"sin",
-	...mathUnaryOperationKeys
-		.map(([, operation]) => operation)
-		.filter(
-			(operation) => operation !== "abs" && operation !== "sqrt" && operation !== "sin",
-		),
-];
-
 const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"Map.prototype.get",
 	"Map.prototype.set",
@@ -585,80 +563,6 @@ function utf8Decode(bytes: Array<number>): string {
 	return out;
 }
 
-function cardinalityGuardMasks(guard: VmGuardPlan): {
-	dependencyMask: number;
-	obligationMask: number;
-} {
-	let dependencyMask = 0;
-	for (const dependency of guard.dependencies) {
-		if (dependency.kind === "world") dependencyMask |= 1;
-		else if (dependency.family === "primitive-methods") dependencyMask |= 2;
-		else if (dependency.family === "watched-methods") dependencyMask |= 4;
-		else if (dependency.family === "array-elements") dependencyMask |= 8;
-		else throw new RangeError("serialize-vm: unsupported cardinality dependency");
-	}
-	let obligationMask = 0;
-	for (const obligation of guard.obligations) {
-		obligationMask |= obligation === "fallback" ? 1 : 2;
-	}
-	if ((dependencyMask !== 1 && dependencyMask !== 14) || obligationMask !== 3) {
-		throw new RangeError("serialize-vm: invalid cardinality guard plan");
-	}
-	return { dependencyMask, obligationMask };
-}
-
-function numericHofGuardMasks(
-	license: Extract<VmRegion, { kind: "numeric-hof" }>["license"],
-): { dependencyMask: number; obligationMask: number } {
-	let dependencyMask = 0;
-	for (const dependency of license.guard.dependencies) {
-		if (dependency.kind === "world") dependencyMask |= 1;
-		else if (dependency.family === "primitive-methods") dependencyMask |= 2;
-		else if (dependency.family === "watched-methods") dependencyMask |= 4;
-		else if (dependency.family === "array-elements") dependencyMask |= 8;
-		else throw new RangeError("serialize-vm: unsupported numeric-HOF dependency");
-	}
-	let obligationMask = 0;
-	for (const obligation of license.guard.obligations) {
-		obligationMask |= obligation === "fallback" ? 1 : 2;
-	}
-	if (
-		license.genericTwin !== "retained" ||
-		license.materialization !== "none" ||
-		(dependencyMask !== 1 && dependencyMask !== 14) ||
-		obligationMask !== 1
-	) {
-		throw new RangeError("serialize-vm: invalid numeric-HOF guard plan");
-	}
-	return { dependencyMask, obligationMask };
-}
-
-function closedRecordArrayGuardMasks(
-	license: Extract<VmRegion, { kind: "closed-record-array" }>["license"],
-): { dependencyMask: number; obligationMask: number } {
-	let dependencyMask = 0;
-	for (const dependency of license.guard.dependencies) {
-		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
-			dependencyMask |= 1;
-		} else {
-			throw new RangeError("serialize-vm: unsupported closed record-Array dependency");
-		}
-	}
-	let obligationMask = 0;
-	for (const obligation of license.guard.obligations) {
-		obligationMask |= obligation === "fallback" ? 1 : 2;
-	}
-	if (
-		license.genericTwin !== "retained" ||
-		license.materialization !== "none" ||
-		dependencyMask !== 1 ||
-		obligationMask !== 1
-	) {
-		throw new RangeError("serialize-vm: invalid closed record-Array guard plan");
-	}
-	return { dependencyMask, obligationMask };
-}
-
 function stringSplitCursorGuardMasks(
 	license: Extract<VmRegion, { kind: "string-split-cursor" }>["license"],
 ): { dependencyMask: number; obligationMask: number } {
@@ -803,102 +707,6 @@ function stringSliceNumberGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
-function stringScanGuardMasks(
-	license: Extract<VmRegion, { kind: "string-scan-summary" }>["license"],
-): { dependencyMask: number; obligationMask: number } {
-	let dependencyMask = 0;
-	for (const dependency of license.guard.dependencies) {
-		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
-			dependencyMask |= 1;
-		} else if (dependency.kind === "epoch" && dependency.family === "primitive-methods") {
-			dependencyMask |= 2;
-		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
-			dependencyMask |= 4;
-		} else if (dependency.kind === "epoch" && dependency.family === "array-elements") {
-			dependencyMask |= 8;
-		} else {
-			throw new RangeError("serialize-vm: unsupported String scan dependency");
-		}
-	}
-	let obligationMask = 0;
-	for (const obligation of license.guard.obligations) {
-		obligationMask |= obligation === "fallback" ? 1 : 2;
-	}
-	if (
-		license.genericTwin !== "retained" ||
-		license.materialization !== "none" ||
-		(dependencyMask !== 1 && dependencyMask !== 14) ||
-		obligationMask !== 1
-	) {
-		throw new RangeError("serialize-vm: invalid String scan guard plan");
-	}
-	return { dependencyMask, obligationMask };
-}
-
-function privateAggregateMemoGuardMasks(
-	license: Extract<VmRegion, { kind: "private-aggregate-memo" }>["license"],
-): { dependencyMask: number; obligationMask: number } {
-	let dependencyMask = 0;
-	for (const dependency of license.guard.dependencies) {
-		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
-			dependencyMask |= 1;
-		} else if (dependency.kind === "epoch" && dependency.family === "primitive-methods") {
-			dependencyMask |= 2;
-		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
-			dependencyMask |= 4;
-		} else if (dependency.kind === "epoch" && dependency.family === "array-elements") {
-			dependencyMask |= 8;
-		} else {
-			throw new RangeError("serialize-vm: unsupported private aggregate dependency");
-		}
-	}
-	let obligationMask = 0;
-	for (const obligation of license.guard.obligations) {
-		obligationMask |= obligation === "fallback" ? 1 : 2;
-	}
-	if (
-		license.genericTwin !== "retained" ||
-		license.materialization !== "none" ||
-		(dependencyMask !== 1 && dependencyMask !== 14) ||
-		obligationMask !== 1
-	) {
-		throw new RangeError("serialize-vm: invalid private aggregate guard plan");
-	}
-	return { dependencyMask, obligationMask };
-}
-
-function invariantJsonMapTemplateGuardMasks(
-	license: Extract<VmRegion, { kind: "invariant-json-map-template" }>["license"],
-): { dependencyMask: number; obligationMask: number } {
-	let dependencyMask = 0;
-	for (const dependency of license.guard.dependencies) {
-		if (dependency.kind === "world" && dependency.fact === "primordials.locked") {
-			dependencyMask |= 1;
-		} else if (dependency.kind === "epoch" && dependency.family === "primitive-methods") {
-			dependencyMask |= 2;
-		} else if (dependency.kind === "epoch" && dependency.family === "watched-methods") {
-			dependencyMask |= 4;
-		} else if (dependency.kind === "epoch" && dependency.family === "array-elements") {
-			dependencyMask |= 8;
-		} else {
-			throw new RangeError("serialize-vm: unsupported invariant JSON map dependency");
-		}
-	}
-	let obligationMask = 0;
-	for (const obligation of license.guard.obligations) {
-		obligationMask |= obligation === "fallback" ? 1 : 2;
-	}
-	if (
-		license.genericTwin !== "retained" ||
-		license.materialization !== "whole-region" ||
-		(dependencyMask !== 1 && dependencyMask !== 14) ||
-		obligationMask !== 3
-	) {
-		throw new RangeError("serialize-vm: invalid invariant JSON map guard plan");
-	}
-	return { dependencyMask, obligationMask };
-}
-
 function stackObjectPlanGuardMasks(
 	license: Extract<VmRegion, { kind: "stack-object-plan" }>["license"],
 ): { dependencyMask: number; obligationMask: number } {
@@ -923,47 +731,6 @@ function stackObjectPlanGuardMasks(
 		obligationMask !== 3
 	) {
 		throw new RangeError("serialize-vm: invalid stack-object guard plan");
-	}
-	return { dependencyMask, obligationMask };
-}
-
-function closedGlobalTableGuardMasks(guard: VmGuardPlan): {
-	dependencyMask: number;
-	obligationMask: number;
-} {
-	let dependencyMask = 0;
-	for (const dependency of guard.dependencies) {
-		if (dependency.kind === "world") dependencyMask |= 1;
-		else if (dependency.family === "array-elements") dependencyMask |= 8;
-		else throw new RangeError("serialize-vm: unsupported closed-global dependency");
-	}
-	let obligationMask = 0;
-	for (const obligation of guard.obligations) {
-		obligationMask |= obligation === "fallback" ? 1 : 2;
-	}
-	if ((dependencyMask !== 1 && dependencyMask !== 8) || obligationMask !== 3) {
-		throw new RangeError("serialize-vm: invalid closed-global guard plan");
-	}
-	return { dependencyMask, obligationMask };
-}
-
-function affineRangeGuardMasks(guard: VmGuardPlan): {
-	dependencyMask: number;
-	obligationMask: number;
-} {
-	let dependencyMask = 0;
-	for (const dependency of guard.dependencies) {
-		if (dependency.kind === "world") dependencyMask |= 1;
-		else if (dependency.family === "array-elements") dependencyMask |= 8;
-		else throw new RangeError("serialize-vm: invalid affine-range dependency");
-	}
-	let obligationMask = 0;
-	for (const obligation of guard.obligations) {
-		if (obligation === "fallback") obligationMask |= 1;
-		else throw new RangeError("serialize-vm: invalid affine-range obligation");
-	}
-	if ((dependencyMask !== 1 && dependencyMask !== 8) || obligationMask !== 1) {
-		throw new RangeError("serialize-vm: invalid affine-range guard");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -1231,62 +998,24 @@ export function serializeVmDefinition(
 		if (regions.length > MAX_REGIONS) {
 			throw new RangeError("serialize-vm: too many function regions");
 		}
-		validateFiniteObjectSelectorLinks(fn);
 		w.u32(regions.length);
 		const claimedRegionInstructions = new Set<number>();
 		for (const region of regions) {
-			validateRegion(
-				fn,
-				region,
-				claimedRegionInstructions,
-				def.functions.length,
-				def.globalCount,
-				def.stringConstants,
-			);
+			validateRegion(fn, region, claimedRegionInstructions, def.stringConstants);
 			const kindTag =
-				region.kind === "closed-record-array"
-					? 1
-					: region.kind === "string-split-cursor"
-						? 2
-						: region.kind === "numeric-hof"
-							? 3
-							: region.kind === "string-split-projection"
-								? 4
-								: region.kind === "regexp-exec-projection"
-									? 5
-									: region.kind === "regexp-iterator-projection"
-										? 6
-										: region.kind === "string-slice-number"
-											? 7
-											: region.kind === "string-scan-summary"
-												? 8
-												: region.kind === "private-aggregate-memo"
-													? 9
-													: region.kind === "invariant-json-map-template"
-														? 10
-														: region.kind === "stack-object-plan"
-															? 11
-															: region.kind === "cardinality-array"
-																? 12
-																: region.kind === "exact-fresh-array"
-																	? 13
-																	: region.kind === "numeric-fusion"
-																		? 14
-																		: region.kind === "finite-object-construction"
-																			? 15
-																			: region.kind === "finite-property-selector"
-																				? 16
-																				: region.kind === "closed-global-table"
-																					? 17
-																					: region.kind === "known-builtin-producers"
-																						? 18
-																						: region.kind ===
-																							  "affine-range-virtualization"
-																							? 19
-																							: region.kind ===
-																								  "invariant-json-parse-cache"
-																								? 20
-																								: 21;
+				region.kind === "string-split-cursor"
+					? 2
+					: region.kind === "string-split-projection"
+						? 4
+						: region.kind === "regexp-exec-projection"
+							? 5
+							: region.kind === "regexp-iterator-projection"
+								? 6
+								: region.kind === "string-slice-number"
+									? 7
+									: region.kind === "stack-object-plan"
+										? 11
+										: 14;
 			const representationTag = kindTag;
 			const materializationTag =
 				region.license.materialization === "none"
@@ -1295,45 +1024,19 @@ export function serializeVmDefinition(
 						? 1
 						: 2;
 			const { dependencyMask, obligationMask } =
-				region.kind === "affine-range-virtualization"
-					? affineRangeGuardMasks(region.license.guard)
-					: region.kind === "closed-global-table"
-						? closedGlobalTableGuardMasks(region.license.guard)
-						: region.kind === "closed-record-array"
-							? closedRecordArrayGuardMasks(region.license)
-							: region.kind === "string-split-cursor"
-								? stringSplitCursorGuardMasks(region.license)
-								: region.kind === "numeric-hof"
-									? numericHofGuardMasks(region.license)
-									: region.kind === "string-split-projection"
-										? stringSplitProjectionGuardMasks(region.license)
-										: region.kind === "regexp-exec-projection"
-											? regexpExecProjectionGuardMasks(region.license)
-											: region.kind === "regexp-iterator-projection"
-												? regexpIteratorProjectionGuardMasks(region.license)
-												: region.kind === "string-slice-number"
-													? stringSliceNumberGuardMasks(region.license)
-													: region.kind === "string-scan-summary"
-														? stringScanGuardMasks(region.license)
-														: region.kind === "private-aggregate-memo"
-															? privateAggregateMemoGuardMasks(region.license)
-															: region.kind === "invariant-json-map-template"
-																? invariantJsonMapTemplateGuardMasks(region.license)
-																: region.kind === "stack-object-plan"
-																	? stackObjectPlanGuardMasks(region.license)
-																	: region.kind === "cardinality-array"
-																		? cardinalityGuardMasks(region.license.guard)
-																		: region.kind === "string-search-regexp"
-																			? {
-																					dependencyMask: 0,
-																					obligationMask:
-																						region.literalPatternStringIndex === undefined
-																							? 1
-																							: 3,
-																				}
-																			: region.kind === "finite-object-construction"
-																				? { dependencyMask: 0, obligationMask: 3 }
-																				: { dependencyMask: 0, obligationMask: 1 };
+				region.kind === "string-split-cursor"
+					? stringSplitCursorGuardMasks(region.license)
+					: region.kind === "string-split-projection"
+						? stringSplitProjectionGuardMasks(region.license)
+						: region.kind === "regexp-exec-projection"
+							? regexpExecProjectionGuardMasks(region.license)
+							: region.kind === "regexp-iterator-projection"
+								? regexpIteratorProjectionGuardMasks(region.license)
+								: region.kind === "string-slice-number"
+									? stringSliceNumberGuardMasks(region.license)
+									: region.kind === "stack-object-plan"
+										? stackObjectPlanGuardMasks(region.license)
+										: { dependencyMask: 0, obligationMask: 1 };
 			w.u8(kindTag);
 			w.u8(region.composition === "overlay" ? 1 : 0);
 			w.i32Array([...region.anchors]);
@@ -1348,63 +1051,6 @@ export function serializeVmDefinition(
 			w.u8(dependencyMask);
 			w.u8(obligationMask);
 			switch (region.kind) {
-				case "string-search-regexp":
-					w.i32(region.propertyIp);
-					w.i32(region.regexpIntrinsicIp);
-					w.i32(region.regexpConstructIp);
-					w.i32(region.searchCallIp);
-					w.i32(region.searchCallee);
-					w.i32(region.receiver);
-					w.i32(region.regexp);
-					w.i32(region.result);
-					w.i32(region.literalPatternStringIndex ?? -1);
-					break;
-				case "invariant-json-parse-cache":
-					w.i32(region.jsonIntrinsicIp);
-					w.i32(region.parsePropertyIp);
-					w.i32(region.parseKeyIp ?? -1);
-					w.i32(region.parseCallIp);
-					w.i32(region.jsonObject);
-					w.i32(region.parseCallee);
-					w.i32(region.text);
-					w.i32(region.result);
-					break;
-				case "affine-range-virtualization":
-					w.i32(region.allocationIp);
-					w.i32(region.storeIp);
-					w.i32(region.length);
-					w.i32Array([...region.loadIps]);
-					break;
-				case "known-builtin-producers":
-					w.u32(region.sites.length);
-					for (const site of region.sites) {
-						w.i32(site.receiverIp);
-						w.i32(site.propertyIp);
-						w.i32(site.callIp);
-					}
-					break;
-				case "closed-global-table":
-					w.i32(region.sourceGlobalIndex);
-					w.i32(region.baseIndex);
-					w.i32(region.stateIndex);
-					w.i32(region.mask);
-					w.u32(region.accesses.length);
-					for (const access of region.accesses) {
-						w.i32(access.ip);
-						w.u8(access.kind === "load" ? 1 : 2);
-						w.u8(access.direct ? 1 : 0);
-					}
-					break;
-				case "closed-record-array":
-					w.i32(region.length);
-					w.i32Array([...region.elementLoadIps]);
-					w.u32(region.accesses.length);
-					for (const access of region.accesses) {
-						w.i32(access.ip);
-						w.u8(access.kind === "load" ? 1 : 2);
-						w.i32(access.slot);
-					}
-					break;
 				case "string-split-cursor":
 					w.i32(region.propertyIp);
 					w.i32(region.callee);
@@ -1434,41 +1080,6 @@ export function serializeVmDefinition(
 						w.i32(load.dst);
 					}
 					break;
-				case "numeric-hof":
-					w.u8(region.dispatch.kind === "guarded" ? 1 : 2);
-					w.i32(
-						region.dispatch.kind === "guarded"
-							? region.dispatch.guardCallIp
-							: region.dispatch.receiverAllocationIp,
-					);
-					w.i32(region.dispatch.kind === "guarded" ? region.dispatch.slowCallIp : -1);
-					w.i32(region.callbackFunctionIndex);
-					w.i32(region.receiver);
-					w.f64(region.initialValue);
-					w.u8(1); // end-only-no-preempt
-					w.i32(region.resultOperand);
-					w.u32(region.operations.length);
-					for (const operation of region.operations) {
-						if (operation.type === "constant") {
-							w.u8(1);
-							w.f64(operation.value);
-						} else if (operation.type === "binary") {
-							w.u8(2);
-							w.u8(NUMERIC_HOF_BINOPS.indexOf(operation.operator));
-							w.i32(operation.left);
-							w.i32(operation.right);
-						} else {
-							w.u8(3);
-							w.u8(NUMERIC_HOF_MATH_OPS.indexOf(operation.operation));
-							w.i32(operation.value);
-						}
-					}
-					break;
-				case "exact-fresh-array":
-					w.i32(region.allocationIp);
-					w.u8(region.runtimeGuard === "dense-storage-or-generic-load" ? 1 : 0);
-					w.i32Array([...region.accessIps]);
-					break;
 				case "numeric-fusion":
 					w.u8(region.runtimeGuard === "number-operands" ? 1 : 0);
 					w.u32(region.pairs.length);
@@ -1476,33 +1087,6 @@ export function serializeVmDefinition(
 						w.i32(pair.firstIp);
 						w.i32(pair.finishIp);
 						w.u8(pair.firstUsePosition);
-					}
-					break;
-				case "finite-object-construction":
-					w.i32(region.allocationIp);
-					w.i32(region.storeIp);
-					w.i32(region.icIndex);
-					w.i32Array([...region.numberGuards]);
-					w.i32Array([...region.keyStringIndices]);
-					w.u8(region.virtualRecord ? 1 : 0);
-					w.i32Array([...region.accessIps]);
-					w.u8(region.runtimeGuard === "number-leaves-and-prototype-shape" ? 1 : 0);
-					break;
-				case "finite-property-selector":
-					w.u8(
-						region.runtimeGuard === "integer-domain-and-shape-or-generic-access" ? 1 : 0,
-					);
-					w.u32(region.selectors.length);
-					for (const selector of region.selectors) {
-						w.i32(selector.producerIp);
-						w.i32(selector.ordinal);
-						w.i32(selector.minimum);
-						w.i32Array([...selector.stringIndices]);
-						w.u32(selector.accesses.length);
-						for (const access of selector.accesses) {
-							w.i32(access.ip);
-							w.u8(access.kind === "load" ? 1 : 2);
-						}
 					}
 					break;
 				case "regexp-exec-projection":
@@ -1592,47 +1176,6 @@ export function serializeVmDefinition(
 					w.f64(region.sliceStart);
 					w.i32(region.result);
 					break;
-				case "string-scan-summary":
-					w.i32(region.entryIp);
-					w.i32(region.exitIp);
-					w.i32(region.input);
-					w.i32(region.lengthLoadIp);
-					w.i32(region.lengthResult);
-					w.i32(region.matchResult);
-					w.i32(region.matchCodeUnit);
-					break;
-				case "private-aggregate-memo":
-					w.i32(region.allocationIp);
-					w.i32Array([...region.constructionPushIps]);
-					w.i32(region.callIp);
-					w.i32(region.targetFunctionIndex);
-					w.i32(region.callee);
-					w.i32(region.input);
-					w.i32(region.result);
-					break;
-				case "invariant-json-map-template":
-					w.i32(region.parseCallIp);
-					w.i32(region.mapLoadIp);
-					w.i32(region.mapCallIp);
-					w.i32(region.jsonObject);
-					w.i32(region.parseCallee);
-					w.i32(region.text);
-					w.i32(region.parseResult);
-					w.i32(region.mapCallee);
-					w.i32(region.callback);
-					w.i32(region.mapResult);
-					w.i32(region.targetFunctionIndex);
-					w.u32(region.captures.length);
-					for (const capture of region.captures) {
-						w.i32(capture.ownerFunctionIndex);
-						w.i32(capture.index);
-					}
-					w.i32(region.rowPropertyLoads);
-					w.i32Array([...region.primitiveRowStringIndices]);
-					w.i32(region.nestedBaseStringIndex);
-					w.i32(region.nestedValueStringIndex);
-					w.i32Array([...region.excludedStringIndices]);
-					break;
 				case "stack-object-plan":
 					w.u32(region.sites.length);
 					for (const site of region.sites) {
@@ -1649,26 +1192,6 @@ export function serializeVmDefinition(
 							w.i32(materialization.ip);
 							w.u8(1);
 						}
-					}
-					break;
-				case "cardinality-array":
-					w.i32(region.allocationIp);
-					w.i32(region.pushCallIp);
-					w.i32(region.itemAllocationIp);
-					w.i32(region.maximumLength);
-					w.u32(region.accesses.length);
-					for (const access of region.accesses) {
-						w.i32(access.ip);
-						w.u8(
-							access.role === "push"
-								? 1
-								: access.role === "length"
-									? 2
-									: access.role === "element"
-										? 3
-										: 4,
-						);
-						w.i32(access.fieldSlot ?? -1);
 					}
 					break;
 			}
@@ -1783,181 +1306,6 @@ function validatePropertyIcIndices(fn: VmFunction): void {
 				break;
 		}
 	}
-	const finiteConstructionIndices = (fn.regions ?? [])
-		.filter((region) => region.kind === "finite-object-construction")
-		.map((region) => region.icIndex);
-	if (finiteConstructionIndices.some((index) => index < 0 || index >= expected)) {
-		throw new RangeError("serialize-vm: finite construction property IC out of range");
-	}
-}
-
-function validateNumericHofRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "numeric-hof" }>,
-	functionCount: number,
-): void {
-	const { dependencyMask } = numericHofGuardMasks(region.license);
-	const registerValid = (value: number) =>
-		Number.isInteger(value) && value >= 0 && value < fn.registerCount;
-	const operandValid = (value: number, before: number) =>
-		value === -1 ||
-		value === -2 ||
-		(Number.isInteger(value) && value >= 0 && value < before);
-	const initialMoveIp = region.anchors[0]!;
-	const elementIp = region.anchors[1]!;
-	const backedgeIp = region.anchors[2]!;
-	const loopExitIp = region.anchors[3]!;
-	const initialMove = fn.instructions[initialMoveIp];
-	const element = fn.instructions[elementIp];
-	const backedge = fn.instructions[backedgeIp];
-	const loopExit = fn.instructions[loopExitIp];
-	const completionIp = loopExit?.opcode === "JUMP" ? loopExit.targetIp : -1;
-	const completion = fn.instructions[completionIp];
-	const initial = initialMove?.opcode === "MOVE" ? initialMove.src : -1;
-	const accumulator = initialMove?.opcode === "MOVE" ? initialMove.dst : -1;
-	const completionMove =
-		completion?.opcode === "MOVE" && completion.src === accumulator
-			? completion
-			: undefined;
-	const completionExit =
-		completionMove === undefined ? undefined : fn.instructions[completionIp + 1];
-	const result = completionMove?.dst ?? accumulator;
-	if (
-		region.representation !== "numeric-reduce-f64" ||
-		region.anchors.length !== 4 ||
-		region.method !== "reduce" ||
-		region.pollPolicy !== "end-only-no-preempt" ||
-		typeof region.initialValue !== "number" ||
-		initialMove?.opcode !== "MOVE" ||
-		element?.opcode !== "LOAD_PROPERTY" ||
-		element.object !== region.receiver ||
-		backedge?.opcode !== "JUMP" ||
-		loopExit?.opcode !== "JUMP" ||
-		completion === undefined ||
-		region.callbackFunctionIndex < 0 ||
-		region.callbackFunctionIndex >= functionCount ||
-		!registerValid(region.receiver) ||
-		!registerValid(initial) ||
-		!registerValid(accumulator) ||
-		!registerValid(result) ||
-		region.operations.length === 0 ||
-		region.operations.length > 32 ||
-		!operandValid(region.resultOperand, region.operations.length) ||
-		region.cost.metadataOperations !== region.claimedIps.length
-	) {
-		throw new RangeError("serialize-vm: invalid numeric-HOF region metadata");
-	}
-	if (region.dispatch.kind === "guarded") {
-		const { guardCallIp, slowCallIp } = region.dispatch;
-		const guard = fn.instructions[guardCallIp];
-		const intrinsic = fn.instructions[guardCallIp - 1];
-		const guardBranch = fn.instructions[guardCallIp + 1];
-		const slowBranch = fn.instructions[guardCallIp + 2];
-		const callbackCreate = fn.instructions[slowCallIp - 1];
-		const slowCall = fn.instructions[slowCallIp];
-		const slowExit = fn.instructions[slowCallIp + 1];
-		const guardCallee =
-			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[0]!) : undefined;
-		const guardReceiver =
-			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[1]!) : undefined;
-		const guardMethod =
-			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.arguments[2]!) : undefined;
-		const guardThis =
-			guard?.opcode === "CALL" ? decodeVmValueOperand(guard.thisValue) : undefined;
-		const slowThis =
-			slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.thisValue) : undefined;
-		const slowCallee =
-			slowCall?.opcode === "CALL" ? decodeVmValueOperand(slowCall.callee) : undefined;
-		const slowCallback =
-			slowCall?.opcode === "CALL"
-				? decodeVmValueOperand(slowCall.arguments[0]!)
-				: undefined;
-		const slowInitial =
-			slowCall?.opcode === "CALL"
-				? decodeVmValueOperand(slowCall.arguments[1]!)
-				: undefined;
-		if (
-			guard?.opcode !== "CALL" ||
-			intrinsic?.opcode !== "LOAD_INTRINSIC" ||
-			intrinsic.intrinsic !== "__arrayIterationEligible" ||
-			guard.callee !== intrinsic.dst ||
-			guardThis?.kind !== "undefined" ||
-			guard.argumentCount !== 3 ||
-			guardCallee?.kind !== "register" ||
-			slowCallee?.kind !== "register" ||
-			guardCallee.register !== slowCallee.register ||
-			guardReceiver?.kind !== "register" ||
-			guardReceiver.register !== region.receiver ||
-			guardMethod?.kind !== "number" ||
-			guardMethod.value !== 7 ||
-			guardBranch?.opcode !== "JUMP_IF" ||
-			guardBranch.cond !== guard.dst ||
-			slowBranch?.opcode !== "JUMP" ||
-			callbackCreate?.opcode !== "CREATE_FUNCTION" ||
-			callbackCreate.functionIndex !== region.callbackFunctionIndex ||
-			slowBranch.targetIp !== slowCallIp - 1 ||
-			slowCall?.opcode !== "CALL" ||
-			slowCall.dst !== result ||
-			slowThis?.kind !== "register" ||
-			slowThis.register !== region.receiver ||
-			slowCall.argumentCount !== 2 ||
-			slowCallback?.kind !== "register" ||
-			slowCallback.register !== callbackCreate.dst ||
-			!(
-				(slowInitial?.kind === "number" &&
-					Object.is(slowInitial.value, region.initialValue)) ||
-				(slowInitial?.kind === "register" && slowInitial.register === initial)
-			) ||
-			slowExit?.opcode !== "JUMP" ||
-			(completionMove === undefined
-				? slowExit.targetIp !== completionIp
-				: completionExit?.opcode !== "JUMP" ||
-					completionExit.targetIp !== slowExit.targetIp) ||
-			guardCallIp >= initialMoveIp ||
-			!region.claimedIps.includes(guardCallIp) ||
-			!region.claimedIps.includes(slowCallIp)
-		) {
-			throw new RangeError("serialize-vm: invalid guarded numeric-HOF dispatch");
-		}
-	} else {
-		const allocation = fn.instructions[region.dispatch.receiverAllocationIp];
-		if (
-			dependencyMask !== 1 ||
-			allocation?.opcode !== "CREATE_ARRAY" ||
-			allocation.dst !== region.receiver ||
-			region.dispatch.receiverAllocationIp >= initialMoveIp ||
-			!region.claimedIps.includes(region.dispatch.receiverAllocationIp)
-		) {
-			throw new RangeError("serialize-vm: invalid closed numeric-HOF dispatch");
-		}
-	}
-	for (let index = 0; index < region.operations.length; index++) {
-		const operation = region.operations[index]!;
-		switch (operation.type) {
-			case "constant":
-				if (typeof operation.value !== "number") {
-					throw new RangeError("serialize-vm: invalid numeric-HOF constant");
-				}
-				break;
-			case "binary":
-				if (
-					!NUMERIC_HOF_BINOPS.includes(operation.operator) ||
-					!operandValid(operation.left, index) ||
-					!operandValid(operation.right, index)
-				)
-					throw new RangeError("serialize-vm: invalid numeric-HOF expression plan");
-				break;
-			case "math":
-				if (
-					!NUMERIC_HOF_MATH_OPS.includes(operation.operation) ||
-					!operandValid(operation.value, index)
-				)
-					throw new RangeError("serialize-vm: invalid numeric-HOF expression plan");
-				break;
-			default:
-				throw new RangeError("serialize-vm: invalid numeric-HOF expression plan");
-		}
-	}
 }
 
 function validateRegionEnvelope(
@@ -2012,30 +1360,10 @@ function validateRegion(
 	fn: VmFunction,
 	region: VmRegion,
 	claimed: Set<number>,
-	functionCount: number,
-	globalCount: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 ): void {
 	validateRegionEnvelope(fn, region, claimed);
 	switch (region.kind) {
-		case "string-search-regexp":
-			validateStringSearchRegExpRegion(fn, region, stringConstants);
-			break;
-		case "invariant-json-parse-cache":
-			validateInvariantJsonParseCacheRegion(fn, region, stringConstants);
-			break;
-		case "affine-range-virtualization":
-			validateAffineRangeRegion(fn, region);
-			break;
-		case "known-builtin-producers":
-			validateKnownBuiltinProducerRegion(fn, region);
-			break;
-		case "closed-global-table":
-			validateClosedGlobalTableRegion(fn, region, globalCount);
-			break;
-		case "closed-record-array":
-			validateClosedRecordArrayRegion(fn, region);
-			break;
 		case "string-split-cursor":
 			validateStringSplitCursorRegion(fn, region);
 			break;
@@ -2051,180 +1379,15 @@ function validateRegion(
 		case "string-slice-number":
 			validateStringSliceNumberRegion(fn, region, stringConstants);
 			break;
-		case "string-scan-summary":
-			validateStringScanRegion(fn, region, stringConstants);
-			break;
-		case "private-aggregate-memo":
-			validatePrivateAggregateMemoRegion(fn, region, functionCount);
-			break;
-		case "invariant-json-map-template":
-			validateInvariantJsonMapTemplateRegion(fn, region, functionCount, stringConstants);
-			break;
 		case "stack-object-plan":
 			validateStackObjectPlanRegion(fn, region);
-			break;
-		case "cardinality-array":
-			validateCardinalityArrayRegion(fn, region);
-			break;
-		case "numeric-hof":
-			validateNumericHofRegion(fn, region, functionCount);
-			break;
-		case "exact-fresh-array":
-			validateExactFreshArrayRegion(fn, region);
 			break;
 		case "numeric-fusion":
 			validateNumericFusionRegion(fn, region);
 			break;
-		case "finite-object-construction":
-			validateFiniteObjectConstructionRegion(fn, region, stringConstants);
-			break;
-		case "finite-property-selector":
-			validateFinitePropertySelectorRegion(fn, region, stringConstants);
-			break;
 	}
 	if (region.composition !== "overlay") {
 		for (const ip of region.claimedIps) claimed.add(ip);
-	}
-}
-
-function validateFinitePropertySelectorRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "finite-property-selector" }>,
-	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-): void {
-	const payloadIps = region.selectors.flatMap((selector) => [
-		selector.producerIp,
-		...selector.accesses.map((access) => access.ip),
-	]);
-	if (
-		region.composition !== "overlay" ||
-		region.license.guard.dependencies.length !== 0 ||
-		region.license.guard.obligations.length !== 1 ||
-		region.license.guard.obligations[0] !== "fallback" ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== "none" ||
-		region.representation !== "finite-property-domain" ||
-		region.runtimeGuard !== "integer-domain-and-shape-or-generic-access" ||
-		region.selectors.length === 0 ||
-		region.selectors.length > 32 ||
-		region.anchors.length !== 1 ||
-		region.anchors[0] !== region.selectors[0]!.producerIp ||
-		region.selectors.some((selector) => {
-			const producer = fn.instructions[selector.producerIp];
-			return (
-				producer?.opcode !== "BINARY" ||
-				producer.operator !== "+" ||
-				producer.right !== selector.ordinal ||
-				selector.ordinal < 0 ||
-				selector.ordinal >= fn.registerCount ||
-				selector.stringIndices.length === 0 ||
-				selector.stringIndices.length > 32 ||
-				selector.stringIndices.some(
-					(index) => index < 0 || index >= stringConstants.length,
-				) ||
-				selector.accesses.some((access) => {
-					const instruction = fn.instructions[access.ip];
-					return access.kind === "load"
-						? instruction?.opcode !== "LOAD_PROPERTY" || instruction.key !== producer.dst
-						: instruction?.opcode !== "STORE_PROPERTY" ||
-								instruction.key !== producer.dst;
-				})
-			);
-		}) ||
-		new Set(payloadIps).size !== payloadIps.length ||
-		payloadIps.length !== region.claimedIps.length ||
-		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		region.cost.score !==
-			region.selectors.reduce(
-				(total, selector) =>
-					total + selector.stringIndices.length + selector.accesses.length,
-				0,
-			) ||
-		region.cost.metadataOperations !== payloadIps.length
-	) {
-		throw new RangeError("serialize-vm: invalid finite-property selector region");
-	}
-}
-
-function validateFiniteObjectConstructionRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "finite-object-construction" }>,
-	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-): void {
-	const allocation = fn.instructions[region.allocationIp];
-	const store = fn.instructions[region.storeIp];
-	const payloadIps = [region.allocationIp, region.storeIp, ...region.accessIps];
-	if (
-		region.composition !== undefined ||
-		region.license.guard.dependencies.length !== 0 ||
-		region.license.guard.obligations.length !== 2 ||
-		!region.license.guard.obligations.includes("fallback") ||
-		!region.license.guard.obligations.includes("materialize") ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== "on-demand" ||
-		region.representation !== "finite-key-object-slots" ||
-		region.runtimeGuard !== "number-leaves-and-prototype-shape" ||
-		allocation?.opcode !== "CREATE_OBJECT" ||
-		store?.opcode !== "STORE_PROPERTY" ||
-		store.icIndex !== region.icIndex ||
-		region.icIndex < 0 ||
-		region.icIndex >= countPropertyIcSites(fn.instructions) ||
-		region.numberGuards.length > 4 ||
-		region.numberGuards.some(
-			(register) =>
-				!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
-		) ||
-		region.keyStringIndices.length === 0 ||
-		region.keyStringIndices.length > 8 ||
-		region.keyStringIndices.some(
-			(index) => !Number.isInteger(index) || index < 0 || index >= stringConstants.length,
-		) ||
-		region.virtualRecord !== region.accessIps.length > 0 ||
-		region.accessIps.length > 32 ||
-		region.accessIps.some((ip) => fn.instructions[ip]?.opcode !== "LOAD_PROPERTY") ||
-		region.anchors.length !== 2 ||
-		region.anchors[0] !== region.allocationIp ||
-		region.anchors[1] !== region.storeIp ||
-		new Set(payloadIps).size !== payloadIps.length ||
-		payloadIps.length !== region.claimedIps.length ||
-		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		region.cost.score !== region.keyStringIndices.length + region.accessIps.length ||
-		region.cost.metadataOperations !== payloadIps.length
-	) {
-		throw new RangeError("serialize-vm: invalid finite-object construction region");
-	}
-}
-
-function validateFiniteObjectSelectorLinks(fn: VmFunction): void {
-	const selectorByAccess = new Map<
-		number,
-		Extract<VmRegion, { kind: "finite-property-selector" }>["selectors"][number]
-	>();
-	for (const region of fn.regions ?? []) {
-		if (region.kind !== "finite-property-selector") continue;
-		for (const selector of region.selectors) {
-			for (const access of selector.accesses) {
-				if (selectorByAccess.has(access.ip)) {
-					throw new RangeError("serialize-vm: duplicate finite-property selector access");
-				}
-				selectorByAccess.set(access.ip, selector);
-			}
-		}
-	}
-	for (const region of fn.regions ?? []) {
-		if (region.kind !== "finite-object-construction") continue;
-		for (const ip of [region.storeIp, ...region.accessIps]) {
-			const selector = selectorByAccess.get(ip);
-			if (
-				selector === undefined ||
-				selector.stringIndices.length !== region.keyStringIndices.length ||
-				selector.stringIndices.some(
-					(index, ordinal) => index !== region.keyStringIndices[ordinal],
-				)
-			) {
-				throw new RangeError("serialize-vm: finite object lacks its selector region");
-			}
-		}
 	}
 }
 
@@ -2233,11 +1396,6 @@ function validateNumericFusionRegion(
 	region: Extract<VmRegion, { kind: "numeric-fusion" }>,
 ): void {
 	const payloadIps = region.pairs.flatMap((pair) => [pair.firstIp, pair.finishIp]);
-	const finiteStringProducerIps = new Set(
-		(fn.regions ?? [])
-			.filter((candidate) => candidate.kind === "finite-property-selector")
-			.flatMap((candidate) => candidate.selectors.map((selector) => selector.producerIp)),
-	);
 	const startOperators = new Set([
 		"+",
 		"-",
@@ -2289,7 +1447,6 @@ function validateNumericFusionRegion(
 				finish?.opcode !== "BINARY" ||
 				!startOperators.has(first.operator) ||
 				!finishOperators.has(finish.operator) ||
-				finiteStringProducerIps.has(pair.finishIp) ||
 				(pair.firstUsePosition !== 1 && pair.firstUsePosition !== 2) ||
 				(pair.firstUsePosition === 1 ? finish.left : finish.right) !== first.dst ||
 				pair.firstIp >= pair.finishIp
@@ -2297,41 +1454,6 @@ function validateNumericFusionRegion(
 		})
 	) {
 		throw new RangeError("serialize-vm: invalid numeric-fusion region");
-	}
-}
-
-function validateExactFreshArrayRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "exact-fresh-array" }>,
-): void {
-	const allocation = fn.instructions[region.allocationIp];
-	const payloadIps = [region.allocationIp, ...region.accessIps];
-	if (
-		region.composition !== "overlay" ||
-		region.license.guard.dependencies.length !== 0 ||
-		region.license.guard.obligations.length !== 1 ||
-		region.license.guard.obligations[0] !== "fallback" ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== "none" ||
-		region.representation !== "exact-fresh-dense-elements" ||
-		region.runtimeGuard !== "dense-storage-or-generic-load" ||
-		allocation?.opcode !== "CREATE_ARRAY" ||
-		region.anchors.length !== 2 ||
-		region.anchors[0] !== region.allocationIp ||
-		region.anchors[1] !== region.accessIps[0] ||
-		region.accessIps.length === 0 ||
-		region.accessIps.length > 64 ||
-		region.accessIps.some((ip) => {
-			const access = fn.instructions[ip];
-			return access?.opcode !== "LOAD_PROPERTY" || access.object !== allocation.dst;
-		}) ||
-		new Set(payloadIps).size !== payloadIps.length ||
-		payloadIps.length !== region.claimedIps.length ||
-		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		region.cost.score !== region.accessIps.length ||
-		region.cost.metadataOperations !== payloadIps.length
-	) {
-		throw new RangeError("serialize-vm: invalid exact fresh-Array region");
 	}
 }
 
@@ -2415,341 +1537,6 @@ function validateStackObjectPlanRegion(
 		valid = false;
 	}
 	if (!valid) throw new RangeError("serialize-vm: invalid stack-object plan region");
-}
-
-function validateCardinalityArrayRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "cardinality-array" }>,
-): void {
-	cardinalityGuardMasks(region.license.guard);
-	const allocation = fn.instructions[region.allocationIp];
-	const push = fn.instructions[region.pushCallIp];
-	const item = fn.instructions[region.itemAllocationIp];
-	const itemSlotCount = item?.opcode === "CREATE_OBJECT_SHAPED" ? item.count : -1;
-	const pushedValue =
-		push?.opcode === "CALL" && push.arguments.length === 1
-			? decodeVmValueOperand(push.arguments[0]!)
-			: undefined;
-	const payload = new Set<number>([
-		region.allocationIp,
-		region.pushCallIp,
-		region.itemAllocationIp,
-	]);
-	let pushAccesses = 0;
-	let valid =
-		region.license.genericTwin === "retained" &&
-		region.license.materialization === "whole-region" &&
-		region.representation === "bounded-record-history" &&
-		region.anchors.length === 3 &&
-		region.anchors[0] === region.allocationIp &&
-		region.anchors[1] === region.pushCallIp &&
-		region.anchors[2] === region.itemAllocationIp &&
-		region.controlFlow.exceptionalHandlerIps.length === 0 &&
-		allocation?.opcode === "CREATE_ARRAY" &&
-		allocation.length === 0 &&
-		push?.opcode === "CALL" &&
-		push.arguments.length === 1 &&
-		itemSlotCount > 0 &&
-		pushedValue?.kind === "register" &&
-		pushedValue.register === (item?.opcode === "CREATE_OBJECT_SHAPED" ? item.dst : -1) &&
-		itemSlotCount <= 8 &&
-		region.maximumLength > 0 &&
-		region.maximumLength <= 32 &&
-		region.accesses.length > 0 &&
-		region.accesses.length <= 32;
-	for (const access of region.accesses) {
-		const instruction = fn.instructions[access.ip];
-		if (
-			(instruction?.opcode !== "LOAD_PROPERTY" &&
-				instruction?.opcode !== "LOAD_PROPERTY_STATIC") ||
-			payload.has(access.ip) ||
-			(access.role === "field"
-				? access.fieldSlot === undefined ||
-					access.fieldSlot < 0 ||
-					access.fieldSlot >= itemSlotCount
-				: access.fieldSlot !== undefined)
-		) {
-			valid = false;
-		}
-		if (access.role === "push") pushAccesses++;
-		payload.add(access.ip);
-	}
-	const itemProofIps = region.claimedIps.filter((ip) => !payload.has(ip));
-	if (
-		pushAccesses !== 1 ||
-		region.cost.metadataOperations !== region.claimedIps.length ||
-		[...payload].some((ip) => !region.claimedIps.includes(ip)) ||
-		itemProofIps.some((ip) => {
-			const instruction = fn.instructions[ip];
-			return (
-				(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
-					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
-				instruction.object !== (item?.opcode === "CREATE_OBJECT_SHAPED" ? item.dst : -1)
-			);
-		})
-	) {
-		valid = false;
-	}
-	if (!valid) throw new RangeError("serialize-vm: invalid cardinality-array region");
-}
-
-function validateInvariantJsonMapTemplateRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "invariant-json-map-template" }>,
-	functionCount: number,
-	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-): void {
-	invariantJsonMapTemplateGuardMasks(region.license);
-	const parse = fn.instructions[region.parseCallIp];
-	const mapLoad = fn.instructions[region.mapLoadIp];
-	const mapCall = fn.instructions[region.mapCallIp];
-	const text =
-		parse?.opcode === "CALL" && parse.arguments.length === 1
-			? decodeVmValueOperand(parse.arguments[0]!)
-			: undefined;
-	const callback =
-		mapCall?.opcode === "CALL" && mapCall.arguments.length === 1
-			? decodeVmValueOperand(mapCall.arguments[0]!)
-			: undefined;
-	const stringIndexValid = (index: number) =>
-		Number.isInteger(index) && index >= 0 && index < stringConstants.length;
-	const stringConstantEquals = (index: number, value: string): boolean => {
-		const codeUnits = stringConstants[index];
-		return (
-			codeUnits?.length === value.length &&
-			codeUnits.every((codeUnit, offset) => codeUnit === value.charCodeAt(offset))
-		);
-	};
-	const payload = new Set([region.parseCallIp, region.mapLoadIp, region.mapCallIp]);
-	const captures = new Set(
-		region.captures.map((capture) => `${capture.ownerFunctionIndex}:${capture.index}`),
-	);
-	const valid =
-		region.representation === "activation-local-json-map-template" &&
-		region.anchors.length === 2 &&
-		region.anchors[0] === region.parseCallIp &&
-		region.anchors[1] === region.mapCallIp &&
-		region.mapLoadIp === region.parseCallIp + 1 &&
-		region.mapCallIp === region.parseCallIp + 2 &&
-		parse?.opcode === "CALL" &&
-		parse.callee === region.parseCallee &&
-		parse.thisValue === region.jsonObject &&
-		parse.dst === region.parseResult &&
-		text?.kind === "register" &&
-		text.register === region.text &&
-		mapLoad?.opcode === "LOAD_PROPERTY_STATIC" &&
-		mapLoad.object === region.parseResult &&
-		mapLoad.dst === region.mapCallee &&
-		stringConstantEquals(mapLoad.stringIndex, "map") &&
-		mapCall?.opcode === "CALL" &&
-		mapCall.callee === region.mapCallee &&
-		mapCall.thisValue === region.parseResult &&
-		mapCall.dst === region.mapResult &&
-		callback?.kind === "register" &&
-		callback.register === region.callback &&
-		region.targetFunctionIndex >= 0 &&
-		region.targetFunctionIndex < functionCount &&
-		region.captures.length > 0 &&
-		region.captures.length <= 8 &&
-		captures.size === region.captures.length &&
-		region.captures.every(
-			(capture) =>
-				capture.ownerFunctionIndex >= 0 &&
-				capture.ownerFunctionIndex < functionCount &&
-				capture.index >= 0,
-		) &&
-		region.rowPropertyLoads > 0 &&
-		region.rowPropertyLoads <= 0xffff &&
-		region.primitiveRowStringIndices.length > 0 &&
-		region.primitiveRowStringIndices.length <= 64 &&
-		region.primitiveRowStringIndices.every(stringIndexValid) &&
-		stringIndexValid(region.nestedBaseStringIndex) &&
-		stringIndexValid(region.nestedValueStringIndex) &&
-		region.excludedStringIndices.length > 0 &&
-		region.excludedStringIndices.length <= 64 &&
-		region.excludedStringIndices.every(stringIndexValid) &&
-		region.controlFlow.exceptionalHandlerIps.length === 0 &&
-		region.controlFlow.ordinaryBlockIps.includes(region.parseCallIp) &&
-		region.controlFlow.ordinaryBlockIps.includes(region.mapLoadIp) &&
-		region.controlFlow.ordinaryBlockIps.includes(region.mapCallIp) &&
-		region.cost.metadataOperations === payload.size &&
-		payload.size === region.claimedIps.length &&
-		region.claimedIps.every((ip) => payload.has(ip));
-	if (!valid) {
-		throw new RangeError("serialize-vm: invalid invariant JSON map template region");
-	}
-}
-
-function validatePrivateAggregateMemoRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "private-aggregate-memo" }>,
-	functionCount: number,
-): void {
-	privateAggregateMemoGuardMasks(region.license);
-	const allocation = fn.instructions[region.allocationIp];
-	const call = fn.instructions[region.callIp];
-	const callee = call?.opcode === "CALL" ? decodeVmValueOperand(call.callee) : undefined;
-	const thisValue =
-		call?.opcode === "CALL" ? decodeVmValueOperand(call.thisValue) : undefined;
-	const input =
-		call?.opcode === "CALL" && call.arguments.length === 1
-			? decodeVmValueOperand(call.arguments[0]!)
-			: undefined;
-	const aliases = new Set<number>([
-		allocation?.opcode === "CREATE_ARRAY" ? allocation.dst : -1,
-	]);
-	for (let ip = region.allocationIp + 1; ip < region.callIp; ip++) {
-		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode === "MOVE" && aliases.has(instruction.src)) {
-			aliases.add(instruction.dst);
-		}
-	}
-	const payload = new Set<number>([
-		region.allocationIp,
-		...region.constructionPushIps,
-		region.callIp,
-	]);
-	let valid =
-		region.representation === "private-dense-number-array-result-memo" &&
-		region.anchors.length === 2 &&
-		region.anchors[0] === region.allocationIp &&
-		region.anchors[1] === region.callIp &&
-		allocation?.opcode === "CREATE_ARRAY" &&
-		allocation.length === 0 &&
-		call?.opcode === "CALL" &&
-		call.directFunctionIndex === region.targetFunctionIndex &&
-		region.targetFunctionIndex >= 0 &&
-		region.targetFunctionIndex < functionCount &&
-		callee?.kind === "register" &&
-		callee.register === region.callee &&
-		thisValue?.kind === "undefined" &&
-		input?.kind === "register" &&
-		input.register === region.input &&
-		aliases.has(region.input) &&
-		call.dst === region.result &&
-		region.constructionPushIps.length > 0 &&
-		region.controlFlow.exceptionalHandlerIps.length === 0 &&
-		region.controlFlow.ordinaryBlockIps.includes(region.allocationIp) &&
-		region.controlFlow.ordinaryBlockIps.includes(region.callIp);
-	for (const ip of region.constructionPushIps) {
-		const push = fn.instructions[ip];
-		const receiver =
-			push?.opcode === "CALL" ? decodeVmValueOperand(push.thisValue) : undefined;
-		if (
-			ip <= region.allocationIp ||
-			ip >= region.callIp ||
-			push?.opcode !== "CALL" ||
-			!vmCallProvesBuiltin(push, "Array.prototype.push") ||
-			push.arguments.length !== 1 ||
-			receiver?.kind !== "register" ||
-			!aliases.has(receiver.register)
-		) {
-			valid = false;
-		}
-	}
-	if (
-		!valid ||
-		region.cost.metadataOperations !== payload.size ||
-		payload.size !== region.claimedIps.length ||
-		region.claimedIps.some((ip) => !payload.has(ip))
-	) {
-		throw new RangeError("serialize-vm: invalid private aggregate memo region");
-	}
-}
-
-function validateStringScanRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "string-scan-summary" }>,
-	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-): void {
-	stringScanGuardMasks(region.license);
-	const registerValid = (register: number) =>
-		Number.isInteger(register) && register >= 0 && register < fn.registerCount;
-	const entry = fn.instructions[region.entryIp];
-	const lengthLoad = fn.instructions[region.lengthLoadIp];
-	const span = fn.instructions.slice(region.entryIp, region.exitIp);
-	const allowedOpcodes = new Set<VmInstruction["opcode"]>([
-		"CREATE_ARRAY",
-		"MOVE",
-		"CREATE_NUMBER",
-		"JUMP",
-		"LOAD_PROPERTY_STATIC",
-		"BINARY",
-		"JUMP_IF",
-		"CALL",
-		"CREATE_STRING",
-		"CREATE_OBJECT_SHAPED",
-		"UNARY",
-	]);
-	const boundedCalls = span.filter(
-		(instruction): instruction is Extract<VmInstruction, { opcode: "CALL" }> =>
-			instruction.opcode === "CALL" &&
-			instruction.directStringCharCodeAtPosition === "inBounds",
-	);
-	const pushes = span.filter(
-		(instruction): instruction is Extract<VmInstruction, { opcode: "CALL" }> =>
-			instruction.opcode === "CALL" &&
-			vmCallProvesBuiltin(instruction, "Array.prototype.push"),
-	);
-	const matchUpdates = span.filter(
-		(instruction): instruction is Extract<VmInstruction, { opcode: "UNARY" }> =>
-			instruction.opcode === "UNARY" &&
-			instruction.operator === "increment" &&
-			instruction.src === region.matchResult &&
-			instruction.dst === region.matchResult,
-	);
-	const arrayAliases = new Set<number>([
-		entry?.opcode === "CREATE_ARRAY" ? entry.dst : -1,
-	]);
-	for (const instruction of span) {
-		if (instruction.opcode === "MOVE" && arrayAliases.has(instruction.src)) {
-			arrayAliases.add(instruction.dst);
-		}
-	}
-	const expectedClaims = new Set<number>();
-	for (let ip = region.entryIp; ip < region.exitIp; ip++) expectedClaims.add(ip);
-	expectedClaims.add(region.lengthLoadIp);
-	if (
-		region.representation !== "primitive-string-scan-summary" ||
-		region.anchors.length !== 2 ||
-		region.anchors[0] !== region.entryIp ||
-		region.anchors[1] !== region.lengthLoadIp ||
-		region.entryIp < 0 ||
-		region.exitIp <= region.entryIp ||
-		region.exitIp > fn.instructions.length ||
-		region.lengthLoadIp < region.exitIp ||
-		entry?.opcode !== "CREATE_ARRAY" ||
-		entry.length !== 0 ||
-		lengthLoad?.opcode !== "LOAD_PROPERTY_STATIC" ||
-		String.fromCharCode(...(stringConstants[lengthLoad.stringIndex] ?? [])) !==
-			"length" ||
-		!arrayAliases.has(lengthLoad.object) ||
-		lengthLoad.dst !== region.lengthResult ||
-		!registerValid(region.input) ||
-		!registerValid(region.lengthResult) ||
-		!registerValid(region.matchResult) ||
-		!Number.isInteger(region.matchCodeUnit) ||
-		region.matchCodeUnit < 0 ||
-		region.matchCodeUnit > 0xffff ||
-		span.some((instruction) => !allowedOpcodes.has(instruction.opcode)) ||
-		boundedCalls.length !== 1 ||
-		boundedCalls[0]!.thisValue !== region.input ||
-		boundedCalls[0]!.arguments.length !== 1 ||
-		pushes.length !== 2 ||
-		span.filter((instruction) => instruction.opcode === "CALL").length !== 3 ||
-		matchUpdates.length !== 1 ||
-		!span.some(
-			(instruction) =>
-				instruction.opcode === "JUMP" && instruction.targetIp === region.exitIp,
-		) ||
-		region.controlFlow.exceptionalHandlerIps.length !== 0 ||
-		!region.controlFlow.ordinaryBlockIps.includes(region.entryIp) ||
-		region.cost.metadataOperations !== expectedClaims.size ||
-		expectedClaims.size !== region.claimedIps.length ||
-		region.claimedIps.some((ip) => !expectedClaims.has(ip))
-	) {
-		throw new RangeError("serialize-vm: invalid String scan region");
-	}
 }
 
 function validateStringSliceNumberRegion(
@@ -2847,6 +1634,7 @@ function validateRegExpExecProjectionRegion(
 		region.result === call.dst &&
 		aliases.has(call.dst) &&
 		region.resultRegisters.length > 0 &&
+		region.resultRegisters.length <= MAX_REGION_CLAIMS &&
 		new Set(region.resultRegisters).size === region.resultRegisters.length &&
 		region.resultRegisters.every(
 			(register) =>
@@ -3006,6 +1794,7 @@ function validateRegExpIteratorProjectionRegion(
 		region.done === step.doneDst &&
 		aliases.has(step.valueDst) &&
 		region.resultRegisters.length > 0 &&
+		region.resultRegisters.length <= MAX_REGION_CLAIMS &&
 		new Set(region.resultRegisters).size === region.resultRegisters.length &&
 		region.resultRegisters.every(
 			(register) =>
@@ -3069,369 +1858,6 @@ function validateRegExpIteratorProjectionRegion(
 		region.claimedIps.some((ip) => !payload.has(ip))
 	) {
 		throw new RangeError("serialize-vm: invalid RegExp iterator projection region");
-	}
-}
-
-function validateClosedRecordArrayRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "closed-record-array" }>,
-): void {
-	closedRecordArrayGuardMasks(region.license);
-	const allocationIp = region.anchors[0];
-	const producerObjectIp = region.anchors[1];
-	const allocation = fn.instructions[allocationIp!];
-	const producer = fn.instructions[producerObjectIp!];
-	const operationIps = [
-		allocationIp!,
-		producerObjectIp!,
-		...region.elementLoadIps,
-		...region.accesses.map((access) => access.ip),
-	];
-	if (
-		region.representation !== "dense-record-elements-known-slots" ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== "none" ||
-		region.anchors.length !== 2 ||
-		allocation?.opcode !== "CREATE_ARRAY" ||
-		allocation.length !== 0 ||
-		producer?.opcode !== "CREATE_OBJECT_SHAPED" ||
-		producer.count === 0 ||
-		producer.count > MAX_CLOSED_RECORD_SHAPE_SLOTS ||
-		producer.count !== producer.keyStringIndices.length ||
-		!Number.isSafeInteger(region.length) ||
-		region.length <= 0 ||
-		region.length > 65_536 ||
-		region.elementLoadIps.length === 0 ||
-		region.elementLoadIps.length > MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS ||
-		region.accesses.length < 2 ||
-		region.accesses.length > MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS ||
-		region.elementLoadIps.length + region.accesses.length >
-			MAX_CLOSED_RECORD_ARRAY_METADATA_OPERATIONS ||
-		region.cost.metadataOperations !==
-			region.elementLoadIps.length + region.accesses.length ||
-		new Set(operationIps).size !== operationIps.length ||
-		operationIps.length !== region.claimedIps.length ||
-		operationIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		region.elementLoadIps.some((ip) => fn.instructions[ip]?.opcode !== "LOAD_PROPERTY") ||
-		region.accesses.some((access) => {
-			const instruction = fn.instructions[access.ip];
-			return (
-				!Number.isSafeInteger(access.slot) ||
-				access.slot < 0 ||
-				access.slot >= producer.count ||
-				(access.kind === "load"
-					? instruction?.opcode !== "LOAD_PROPERTY_STATIC"
-					: instruction?.opcode !== "STORE_PROPERTY_STATIC")
-			);
-		})
-	) {
-		throw new RangeError("serialize-vm: invalid closed record-Array region metadata");
-	}
-}
-
-function validateStringSearchRegExpRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "string-search-regexp" }>,
-	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-): void {
-	const stringEquals = (index: number, value: string): boolean => {
-		const constant = stringConstants[index];
-		return (
-			constant?.length === value.length &&
-			constant.every((unit, offset) => unit === value.charCodeAt(offset))
-		);
-	};
-	const property = fn.instructions[region.propertyIp];
-	const intrinsic = fn.instructions[region.regexpIntrinsicIp];
-	const construct = fn.instructions[region.regexpConstructIp];
-	const call = fn.instructions[region.searchCallIp];
-	const pattern =
-		construct?.opcode === "CONSTRUCT" && construct.arguments.length === 2
-			? decodeVmValueOperand(construct.arguments[0]!)
-			: undefined;
-	const flags =
-		construct?.opcode === "CONSTRUCT" && construct.arguments.length === 2
-			? decodeVmValueOperand(construct.arguments[1]!)
-			: undefined;
-	const regexp =
-		call?.opcode === "CALL" && call.arguments.length === 1
-			? decodeVmValueOperand(call.arguments[0]!)
-			: undefined;
-	const flagUnits = flags?.kind === "string" ? stringConstants[flags.index] : undefined;
-	const payloadIps = [
-		region.propertyIp,
-		region.regexpIntrinsicIp,
-		region.regexpConstructIp,
-		region.searchCallIp,
-	];
-	const literal = region.literalPatternStringIndex;
-	const literalUnits = literal === undefined ? undefined : stringConstants[literal];
-	let literalHasOtherUse = false;
-	if (literal !== undefined) {
-		for (let ip = region.searchCallIp; ip < fn.instructions.length; ip++) {
-			const instruction = fn.instructions[ip]!;
-			if (
-				vmInstructionUsesRegister(instruction, region.regexp) &&
-				ip !== region.searchCallIp
-			) {
-				literalHasOtherUse = true;
-				break;
-			}
-			if (vmInstructionDefinesRegister(instruction, region.regexp)) break;
-		}
-	}
-	const expectedMaterialization = literal === undefined ? "none" : "on-demand";
-	const expectedObligations =
-		literal === undefined ? ["fallback"] : ["fallback", "materialize"];
-	if (
-		region.representation !== "fresh-regexp-string-search" ||
-		region.composition !== "overlay" ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== expectedMaterialization ||
-		region.license.guard.dependencies.length !== 0 ||
-		region.license.guard.obligations.length !== expectedObligations.length ||
-		region.license.guard.obligations.some(
-			(obligation, index) => obligation !== expectedObligations[index],
-		) ||
-		region.anchors.length !== 2 ||
-		region.anchors[0] !== region.regexpConstructIp ||
-		region.anchors[1] !== region.searchCallIp ||
-		region.controlFlow.ordinaryBlockIps.length !== 1 ||
-		region.controlFlow.ordinaryBlockIps[0] !== region.propertyIp ||
-		region.controlFlow.exceptionalHandlerIps.length !== 0 ||
-		region.regexpIntrinsicIp !== region.propertyIp + 1 ||
-		region.regexpConstructIp !== region.propertyIp + 2 ||
-		region.searchCallIp !== region.propertyIp + 3 ||
-		new Set(payloadIps).size !== payloadIps.length ||
-		payloadIps.length !== region.claimedIps.length ||
-		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-		property.dst !== region.searchCallee ||
-		property.object !== region.receiver ||
-		!stringEquals(property.stringIndex, "search") ||
-		intrinsic?.opcode !== "LOAD_INTRINSIC" ||
-		intrinsic.intrinsic !== "RegExp" ||
-		construct?.opcode !== "CONSTRUCT" ||
-		construct.callee !== intrinsic.dst ||
-		construct.dst !== region.regexp ||
-		pattern?.kind !== "string" ||
-		flags?.kind !== "string" ||
-		flagUnits === undefined ||
-		flagUnits.some((unit) => unit === "g".charCodeAt(0) || unit === "y".charCodeAt(0)) ||
-		call?.opcode !== "CALL" ||
-		call.callee !== region.searchCallee ||
-		call.thisValue !== region.receiver ||
-		call.dst !== region.result ||
-		regexp?.kind !== "register" ||
-		regexp.register !== region.regexp ||
-		(literal !== undefined &&
-			(pattern.index !== literal ||
-				literalUnits === undefined ||
-				literalUnits.length === 0 ||
-				literalUnits.some(
-					(unit) =>
-						unit > 0x7f || "\\\\^$.*+?{}[]()|".includes(String.fromCharCode(unit)),
-				) ||
-				flagUnits.length !== 0 ||
-				literalHasOtherUse)) ||
-		region.cost.score !== (literal === undefined ? 1 : 2) ||
-		region.cost.metadataOperations !== payloadIps.length
-	) {
-		throw new RangeError("serialize-vm: invalid fresh-RegExp String search region");
-	}
-}
-
-function validateInvariantJsonParseCacheRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "invariant-json-parse-cache" }>,
-	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-): void {
-	const stringEquals = (index: number, value: string): boolean => {
-		const constant = stringConstants[index];
-		return (
-			constant?.length === value.length &&
-			constant.every((unit, offset) => unit === value.charCodeAt(offset))
-		);
-	};
-	const payloadIps = [
-		region.jsonIntrinsicIp,
-		...(region.parseKeyIp === undefined ? [] : [region.parseKeyIp]),
-		region.parsePropertyIp,
-		region.parseCallIp,
-	];
-	const json = fn.instructions[region.jsonIntrinsicIp];
-	const property = fn.instructions[region.parsePropertyIp];
-	const key =
-		region.parseKeyIp === undefined ? undefined : fn.instructions[region.parseKeyIp];
-	const call = fn.instructions[region.parseCallIp];
-	const text =
-		call?.opcode === "CALL" && call.arguments.length === 1
-			? decodeVmValueOperand(call.arguments[0]!)
-			: undefined;
-	const propertyMatches =
-		property?.opcode === "LOAD_PROPERTY_STATIC"
-			? region.parseKeyIp === undefined &&
-				property.object === region.jsonObject &&
-				stringEquals(property.stringIndex, "parse")
-			: property?.opcode === "LOAD_PROPERTY"
-				? key?.opcode === "CREATE_STRING" &&
-					property.object === region.jsonObject &&
-					property.key === key.dst &&
-					stringEquals(key.stringIndex, "parse")
-				: false;
-	if (
-		region.representation !== "activation-local-json-parse-template" ||
-		region.composition !== "overlay" ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== "none" ||
-		region.license.guard.dependencies.length !== 0 ||
-		region.license.guard.obligations.length !== 1 ||
-		region.license.guard.obligations[0] !== "fallback" ||
-		region.anchors.length !== 1 ||
-		region.anchors[0] !== region.parseCallIp ||
-		new Set(payloadIps).size !== payloadIps.length ||
-		payloadIps.length !== region.claimedIps.length ||
-		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		json?.opcode !== "LOAD_INTRINSIC" ||
-		json.intrinsic !== "JSON" ||
-		json.dst !== region.jsonObject ||
-		!propertyMatches ||
-		(property?.opcode !== "LOAD_PROPERTY_STATIC" &&
-			property?.opcode !== "LOAD_PROPERTY") ||
-		property.dst !== region.parseCallee ||
-		call?.opcode !== "CALL" ||
-		call.callee !== region.parseCallee ||
-		call.thisValue !== region.jsonObject ||
-		call.dst !== region.result ||
-		text?.kind !== "register" ||
-		text.register !== region.text ||
-		region.cost.score !== 1 ||
-		region.cost.metadataOperations !== payloadIps.length
-	) {
-		throw new RangeError("serialize-vm: invalid invariant JSON.parse cache region");
-	}
-}
-
-function validateAffineRangeRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "affine-range-virtualization" }>,
-): void {
-	affineRangeGuardMasks(region.license.guard);
-	const payloadIps = [region.allocationIp, region.storeIp, ...region.loadIps];
-	const allocation = fn.instructions[region.allocationIp];
-	const store = fn.instructions[region.storeIp];
-	if (
-		region.representation !== "private-identity-index-range" ||
-		region.composition !== "overlay" ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== "none" ||
-		region.anchors.length !== 1 ||
-		region.anchors[0] !== region.allocationIp ||
-		!Number.isSafeInteger(region.length) ||
-		region.length < 1 ||
-		region.length > 65_536 ||
-		region.loadIps.length === 0 ||
-		region.loadIps.length > 8 ||
-		new Set(payloadIps).size !== payloadIps.length ||
-		payloadIps.length !== region.claimedIps.length ||
-		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		allocation?.opcode !== "CREATE_ARRAY" ||
-		allocation.length !== 0 ||
-		store?.opcode !== "STORE_PROPERTY" ||
-		store.key !== store.value ||
-		region.loadIps.some((ip) => fn.instructions[ip]?.opcode !== "LOAD_PROPERTY") ||
-		region.cost.score !== region.length * (region.loadIps.length + 1) ||
-		region.cost.metadataOperations !== payloadIps.length
-	) {
-		throw new RangeError("serialize-vm: invalid affine-range virtualization region");
-	}
-}
-
-function validateClosedGlobalTableRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "closed-global-table" }>,
-	globalCount: number,
-): void {
-	closedGlobalTableGuardMasks(region.license.guard);
-	const operationIps = region.accesses.map((access) => access.ip);
-	if (
-		region.representation !== "synthetic-global-value-table" ||
-		region.composition !== "overlay" ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== "on-demand" ||
-		region.anchors.length !== 1 ||
-		region.anchors[0] !== operationIps[0] ||
-		!Number.isSafeInteger(region.sourceGlobalIndex) ||
-		region.sourceGlobalIndex < 0 ||
-		region.sourceGlobalIndex >= globalCount ||
-		!Number.isSafeInteger(region.baseIndex) ||
-		region.baseIndex < 0 ||
-		!Number.isSafeInteger(region.mask) ||
-		region.mask < 0 ||
-		region.mask > 1023 ||
-		(region.mask & (region.mask + 1)) !== 0 ||
-		region.stateIndex !== region.baseIndex + region.mask + 1 ||
-		region.stateIndex >= globalCount ||
-		region.accesses.length === 0 ||
-		region.accesses.length > MAX_REGION_CLAIMS ||
-		new Set(operationIps).size !== operationIps.length ||
-		operationIps.length !== region.claimedIps.length ||
-		operationIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		region.accesses.some((access) => {
-			const instruction = fn.instructions[access.ip];
-			return access.kind === "load"
-				? instruction?.opcode !== "LOAD_PROPERTY"
-				: instruction?.opcode !== "STORE_PROPERTY";
-		}) ||
-		region.cost.score !== region.mask + 1 + region.accesses.length ||
-		region.cost.metadataOperations !== region.accesses.length
-	) {
-		throw new RangeError("serialize-vm: invalid closed-global table region metadata");
-	}
-}
-
-function validateKnownBuiltinProducerRegion(
-	fn: VmFunction,
-	region: Extract<VmRegion, { kind: "known-builtin-producers" }>,
-): void {
-	const payloadIps = region.sites.flatMap((site) => [
-		site.receiverIp,
-		site.propertyIp,
-		site.callIp,
-	]);
-	if (
-		region.representation !== "exact-intrinsic-property-call-twins" ||
-		region.composition !== "overlay" ||
-		region.license.genericTwin !== "retained" ||
-		region.license.materialization !== "none" ||
-		region.license.guard.dependencies.length !== 0 ||
-		region.license.guard.obligations.length !== 1 ||
-		region.license.guard.obligations[0] !== "fallback" ||
-		region.anchors.length !== 1 ||
-		region.anchors[0] !== region.sites[0]?.callIp ||
-		region.sites.length === 0 ||
-		region.sites.length > 32 ||
-		new Set(payloadIps).size !== payloadIps.length ||
-		payloadIps.length !== region.claimedIps.length ||
-		payloadIps.some((ip) => !region.claimedIps.includes(ip)) ||
-		region.sites.some((site) => {
-			const receiver = fn.instructions[site.receiverIp];
-			const property = fn.instructions[site.propertyIp];
-			const call = fn.instructions[site.callIp];
-			return (
-				receiver?.opcode !== "LOAD_INTRINSIC" ||
-				property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				call?.opcode !== "CALL" ||
-				call.guardedBuiltinCall === undefined ||
-				property.object !== receiver.dst ||
-				call.callee !== property.dst ||
-				call.thisValue !== receiver.dst
-			);
-		}) ||
-		region.cost.score !== region.sites.length ||
-		region.cost.metadataOperations !== payloadIps.length
-	) {
-		throw new RangeError("serialize-vm: invalid known-builtin producer region");
 	}
 }
 
@@ -3564,6 +1990,7 @@ function validateStringSplitProjectionRegion(
 		call.arguments.length !== 1 ||
 		!registerValid(region.receiver) ||
 		region.resultRegisters.length === 0 ||
+		region.resultRegisters.length > MAX_REGION_CLAIMS ||
 		resultRegisters.size !== region.resultRegisters.length ||
 		region.resultRegisters.some((register) => !registerValid(register)) ||
 		!resultRegisters.has(call.dst) ||
@@ -3670,6 +2097,7 @@ function validateStringSplitCursorRegion(
 		call.argumentCount !== 1 ||
 		call.arguments[0] !== region.separator ||
 		region.resultRegisters.length === 0 ||
+		region.resultRegisters.length > MAX_REGION_CLAIMS ||
 		resultRegisters.size !== region.resultRegisters.length ||
 		region.resultRegisters.some((register) => !registerValid(register)) ||
 		!resultRegisters.has(call.dst) ||
@@ -4443,24 +2871,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				const materializationTag = r.u8();
 				const dependencyMask = r.u8();
 				const obligationMask = r.u8();
-				const closedRecordContract =
-					kindTag === 1 &&
-					representationTag === 1 &&
-					materializationTag === 0 &&
-					dependencyMask === 1 &&
-					obligationMask === 1;
 				const stringSplitCursorContract =
 					kindTag === 2 &&
 					representationTag === 2 &&
 					materializationTag === 1 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 3;
-				const numericHofContract =
-					kindTag === 3 &&
-					representationTag === 3 &&
-					materializationTag === 0 &&
-					(dependencyMask === 1 || dependencyMask === 14) &&
-					obligationMask === 1;
 				const stringSplitProjectionContract =
 					kindTag === 4 &&
 					representationTag === 4 &&
@@ -4485,173 +2901,34 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 					materializationTag === 0 &&
 					(dependencyMask === 1 || dependencyMask === 4) &&
 					obligationMask === 1;
-				const stringScanContract =
-					kindTag === 8 &&
-					representationTag === 8 &&
-					materializationTag === 0 &&
-					(dependencyMask === 1 || dependencyMask === 14) &&
-					obligationMask === 1;
-				const privateAggregateMemoContract =
-					kindTag === 9 &&
-					representationTag === 9 &&
-					materializationTag === 0 &&
-					(dependencyMask === 1 || dependencyMask === 14) &&
-					obligationMask === 1;
-				const invariantJsonMapTemplateContract =
-					kindTag === 10 &&
-					representationTag === 10 &&
-					materializationTag === 2 &&
-					(dependencyMask === 1 || dependencyMask === 14) &&
-					obligationMask === 3;
 				const stackObjectPlanContract =
 					kindTag === 11 &&
 					representationTag === 11 &&
 					materializationTag === 1 &&
 					[0, 1, 2].includes(dependencyMask) &&
 					obligationMask === 3;
-				const cardinalityArrayContract =
-					kindTag === 12 &&
-					representationTag === 12 &&
-					materializationTag === 2 &&
-					(dependencyMask === 1 || dependencyMask === 14) &&
-					obligationMask === 3;
-				const exactFreshArrayContract =
-					kindTag === 13 &&
-					representationTag === 13 &&
-					materializationTag === 0 &&
-					dependencyMask === 0 &&
-					obligationMask === 1;
 				const numericFusionContract =
 					kindTag === 14 &&
 					representationTag === 14 &&
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
-				const finiteObjectConstructionContract =
-					kindTag === 15 &&
-					representationTag === 15 &&
-					materializationTag === 1 &&
-					dependencyMask === 0 &&
-					obligationMask === 3;
-				const finitePropertySelectorContract =
-					kindTag === 16 &&
-					representationTag === 16 &&
-					materializationTag === 0 &&
-					dependencyMask === 0 &&
-					obligationMask === 1;
-				const closedGlobalTableContract =
-					kindTag === 17 &&
-					representationTag === 17 &&
-					materializationTag === 1 &&
-					(dependencyMask === 1 || dependencyMask === 8) &&
-					obligationMask === 3;
-				const knownBuiltinProducerContract =
-					kindTag === 18 &&
-					representationTag === 18 &&
-					materializationTag === 0 &&
-					dependencyMask === 0 &&
-					obligationMask === 1;
-				const affineRangeContract =
-					kindTag === 19 &&
-					representationTag === 19 &&
-					materializationTag === 0 &&
-					(dependencyMask === 1 || dependencyMask === 8) &&
-					obligationMask === 1;
-				const invariantJsonParseCacheContract =
-					kindTag === 20 &&
-					representationTag === 20 &&
-					materializationTag === 0 &&
-					dependencyMask === 0 &&
-					obligationMask === 1;
-				const stringSearchRegExpContract =
-					kindTag === 21 &&
-					representationTag === 21 &&
-					dependencyMask === 0 &&
-					((materializationTag === 0 && obligationMask === 1) ||
-						(materializationTag === 1 && obligationMask === 3));
 				if (
 					compositionTag > 1 ||
-					(compositionTag === 1) !==
-						(exactFreshArrayContract ||
-							numericFusionContract ||
-							finitePropertySelectorContract ||
-							closedGlobalTableContract ||
-							knownBuiltinProducerContract ||
-							affineRangeContract ||
-							invariantJsonParseCacheContract ||
-							stringSearchRegExpContract) ||
+					(compositionTag === 1) !== numericFusionContract ||
 					genericTwinTag !== 1 ||
-					(!closedRecordContract &&
-						!stringSplitCursorContract &&
-						!numericHofContract &&
+					(!stringSplitCursorContract &&
 						!stringSplitProjectionContract &&
 						!regexpExecProjectionContract &&
 						!regexpIteratorProjectionContract &&
 						!stringSliceNumberContract &&
-						!stringScanContract &&
-						!privateAggregateMemoContract &&
-						!invariantJsonMapTemplateContract &&
 						!stackObjectPlanContract &&
-						!cardinalityArrayContract &&
-						!exactFreshArrayContract &&
-						!numericFusionContract &&
-						!finiteObjectConstructionContract &&
-						!finitePropertySelectorContract &&
-						!closedGlobalTableContract &&
-						!knownBuiltinProducerContract &&
-						!affineRangeContract &&
-						!invariantJsonParseCacheContract &&
-						!stringSearchRegExpContract)
+						!numericFusionContract)
 				) {
 					throw new RangeError("serialize-vm: invalid function region contract");
 				}
 				let region: VmRegion;
-				if (kindTag === 1) {
-					const length = r.i32();
-					const elementLoadIps = r.i32Array();
-					const accessCount = r.count(3);
-					const accesses: Array<{
-						ip: number;
-						kind: "load" | "store";
-						slot: number;
-					}> = [];
-					for (let accessIndex = 0; accessIndex < accessCount; accessIndex++) {
-						const ip = r.i32();
-						const accessKindTag = r.u8();
-						const slot = r.i32();
-						if (accessKindTag !== 1 && accessKindTag !== 2) {
-							throw new RangeError(
-								"serialize-vm: invalid closed record-Array access kind",
-							);
-						}
-						accesses.push({
-							ip,
-							kind: accessKindTag === 1 ? "load" : "store",
-							slot,
-						});
-					}
-					region = {
-						kind: "closed-record-array",
-						license: {
-							guard: {
-								dependencies: [
-									{ kind: "world" as const, fact: "primordials.locked" as const },
-								],
-								obligations: ["fallback" as const],
-							},
-							genericTwin: "retained" as const,
-							materialization: "none" as const,
-						},
-						representation: "dense-record-elements-known-slots",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						length,
-						elementLoadIps,
-						accesses,
-					};
-				} else if (kindTag === 2) {
+				if (kindTag === 2) {
 					const propertyIp = r.i32();
 					const callee = r.i32();
 					const receiver = r.i32();
@@ -4707,109 +2984,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						trimCallIp,
 						primitiveStringLengthIps,
 						exitIp,
-					};
-				} else if (kindTag === 3) {
-					const dispatchTag = r.u8();
-					const dispatchPrimaryIp = r.i32();
-					const dispatchSecondaryIp = r.i32();
-					const callbackFunctionIndex = r.i32();
-					const receiver = r.i32();
-					const initialValue = r.f64();
-					const pollPolicy = r.u8();
-					const resultOperand = r.i32();
-					const operationCount = r.count(2);
-					if (
-						(dispatchTag !== 1 && dispatchTag !== 2) ||
-						(dispatchTag === 2 && dispatchSecondaryIp !== -1) ||
-						pollPolicy !== 1 ||
-						operationCount === 0 ||
-						operationCount > 32
-					) {
-						throw new RangeError("serialize-vm: invalid numeric-HOF plan header");
-					}
-					const operations: Array<
-						Extract<VmRegion, { kind: "numeric-hof" }>["operations"][number]
-					> = [];
-					for (
-						let operationIndex = 0;
-						operationIndex < operationCount;
-						operationIndex++
-					) {
-						const tag = r.u8();
-						if (tag === 1) {
-							operations.push({ type: "constant", value: r.f64() });
-						} else if (tag === 2) {
-							const operator = NUMERIC_HOF_BINOPS[r.u8()];
-							if (operator === undefined) {
-								throw new RangeError("serialize-vm: invalid numeric-HOF binary opcode");
-							}
-							operations.push({
-								type: "binary",
-								operator,
-								left: r.i32(),
-								right: r.i32(),
-							});
-						} else if (tag === 3) {
-							const operation = NUMERIC_HOF_MATH_OPS[r.u8()];
-							if (operation === undefined) {
-								throw new RangeError("serialize-vm: invalid numeric-HOF Math opcode");
-							}
-							operations.push({ type: "math", operation, value: r.i32() });
-						} else {
-							throw new RangeError("serialize-vm: invalid numeric-HOF plan opcode");
-						}
-					}
-					region = {
-						kind: "numeric-hof",
-						license: {
-							guard: {
-								dependencies:
-									dependencyMask === 1
-										? [
-												{
-													kind: "world" as const,
-													fact: "primordials.locked" as const,
-												},
-											]
-										: [
-												{ kind: "epoch" as const, family: "array-elements" as const },
-												{
-													kind: "epoch" as const,
-													family: "primitive-methods" as const,
-												},
-												{
-													kind: "epoch" as const,
-													family: "watched-methods" as const,
-												},
-											],
-								obligations: ["fallback" as const],
-							},
-							genericTwin: "retained",
-							materialization: "none",
-						},
-						representation: "numeric-reduce-f64",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						method: "reduce",
-						dispatch:
-							dispatchTag === 1
-								? {
-										kind: "guarded",
-										guardCallIp: dispatchPrimaryIp,
-										slowCallIp: dispatchSecondaryIp,
-									}
-								: {
-										kind: "closed",
-										receiverAllocationIp: dispatchPrimaryIp,
-									},
-						callbackFunctionIndex,
-						receiver,
-						initialValue,
-						pollPolicy: "end-only-no-preempt",
-						operations,
-						resultOperand,
 					};
 				} else if (kindTag === 4) {
 					const propertyIp = r.i32();
@@ -5088,147 +3262,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						sliceStart,
 						result,
 					};
-				} else if (kindTag === 8) {
-					const entryIp = r.i32();
-					const exitIp = r.i32();
-					const input = r.i32();
-					const lengthLoadIp = r.i32();
-					const lengthResult = r.i32();
-					const matchResult = r.i32();
-					const matchCodeUnit = r.i32();
-					region = {
-						kind: "string-scan-summary",
-						license: {
-							guard: {
-								dependencies:
-									dependencyMask === 1
-										? [{ kind: "world", fact: "primordials.locked" }]
-										: [
-												{ kind: "epoch", family: "array-elements" },
-												{ kind: "epoch", family: "primitive-methods" },
-												{ kind: "epoch", family: "watched-methods" },
-											],
-								obligations: ["fallback"],
-							},
-							genericTwin: "retained",
-							materialization: "none",
-						},
-						representation: "primitive-string-scan-summary",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						entryIp,
-						exitIp,
-						input,
-						lengthLoadIp,
-						lengthResult,
-						matchResult,
-						matchCodeUnit,
-					};
-				} else if (kindTag === 9) {
-					const allocationIp = r.i32();
-					const constructionPushIps = r.i32Array();
-					const callIp = r.i32();
-					const targetFunctionIndex = r.i32();
-					const callee = r.i32();
-					const input = r.i32();
-					const result = r.i32();
-					region = {
-						kind: "private-aggregate-memo",
-						license: {
-							guard: {
-								dependencies:
-									dependencyMask === 1
-										? [{ kind: "world", fact: "primordials.locked" }]
-										: [
-												{ kind: "epoch", family: "array-elements" },
-												{ kind: "epoch", family: "primitive-methods" },
-												{ kind: "epoch", family: "watched-methods" },
-											],
-								obligations: ["fallback"],
-							},
-							genericTwin: "retained",
-							materialization: "none",
-						},
-						representation: "private-dense-number-array-result-memo",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						allocationIp,
-						constructionPushIps,
-						callIp,
-						targetFunctionIndex,
-						callee,
-						input,
-						result,
-					};
-				} else if (kindTag === 10) {
-					const parseCallIp = r.i32();
-					const mapLoadIp = r.i32();
-					const mapCallIp = r.i32();
-					const jsonObject = r.i32();
-					const parseCallee = r.i32();
-					const text = r.i32();
-					const parseResult = r.i32();
-					const mapCallee = r.i32();
-					const callback = r.i32();
-					const mapResult = r.i32();
-					const targetFunctionIndex = r.i32();
-					const captureCount = r.count(2);
-					if (captureCount > 8) {
-						throw new RangeError("serialize-vm: too many invariant JSON map captures");
-					}
-					const captures: Array<{ ownerFunctionIndex: number; index: number }> = [];
-					for (let capture = 0; capture < captureCount; capture++) {
-						captures.push({ ownerFunctionIndex: r.i32(), index: r.i32() });
-					}
-					const rowPropertyLoads = r.i32();
-					const primitiveRowStringIndices = r.i32Array();
-					const nestedBaseStringIndex = r.i32();
-					const nestedValueStringIndex = r.i32();
-					const excludedStringIndices = r.i32Array();
-					region = {
-						kind: "invariant-json-map-template",
-						license: {
-							guard: {
-								dependencies:
-									dependencyMask === 1
-										? [{ kind: "world", fact: "primordials.locked" }]
-										: [
-												{ kind: "epoch", family: "array-elements" },
-												{ kind: "epoch", family: "primitive-methods" },
-												{ kind: "epoch", family: "watched-methods" },
-											],
-								obligations: ["fallback", "materialize"],
-							},
-							genericTwin: "retained",
-							materialization: "whole-region",
-						},
-						representation: "activation-local-json-map-template",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						parseCallIp,
-						mapLoadIp,
-						mapCallIp,
-						jsonObject,
-						parseCallee,
-						text,
-						parseResult,
-						mapCallee,
-						callback,
-						mapResult,
-						targetFunctionIndex,
-						captures,
-						rowPropertyLoads,
-						primitiveRowStringIndices,
-						nestedBaseStringIndex,
-						nestedValueStringIndex,
-						excludedStringIndices,
-					};
 				} else if (kindTag === 11) {
 					const siteCount = r.count(5);
 					if (siteCount === 0 || siteCount > 8) {
@@ -5295,87 +3328,6 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						cost: { score, metadataOperations },
 						sites,
 					};
-				} else if (kindTag === 12) {
-					const allocationIp = r.i32();
-					const pushCallIp = r.i32();
-					const itemAllocationIp = r.i32();
-					const maximumLength = r.i32();
-					const accessCount = r.count(2);
-					const accesses: Array<
-						Extract<VmRegion, { kind: "cardinality-array" }>["accesses"][number]
-					> = [];
-					for (let access = 0; access < accessCount; access++) {
-						const ip = r.i32();
-						const roleTag = r.u8();
-						const fieldSlot = r.i32();
-						if (roleTag < 1 || roleTag > 4 || (roleTag !== 4 && fieldSlot !== -1)) {
-							throw new RangeError("serialize-vm: invalid cardinality access");
-						}
-						accesses.push({
-							ip,
-							role:
-								roleTag === 1
-									? "push"
-									: roleTag === 2
-										? "length"
-										: roleTag === 3
-											? "element"
-											: "field",
-							...(fieldSlot < 0 ? {} : { fieldSlot }),
-						});
-					}
-					region = {
-						kind: "cardinality-array",
-						license: {
-							guard: {
-								dependencies:
-									dependencyMask === 1
-										? [{ kind: "world", fact: "primordials.locked" }]
-										: [
-												{ kind: "epoch", family: "array-elements" },
-												{ kind: "epoch", family: "primitive-methods" },
-												{ kind: "epoch", family: "watched-methods" },
-											],
-								obligations: ["fallback", "materialize"],
-							},
-							genericTwin: "retained",
-							materialization: "whole-region",
-						},
-						representation: "bounded-record-history",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						allocationIp,
-						pushCallIp,
-						itemAllocationIp,
-						maximumLength,
-						accesses,
-					};
-				} else if (kindTag === 13) {
-					const allocationIp = r.i32();
-					const runtimeGuardTag = r.u8();
-					const accessIps = r.i32Array();
-					if (runtimeGuardTag !== 1) {
-						throw new RangeError("serialize-vm: invalid exact fresh-Array guard");
-					}
-					region = {
-						kind: "exact-fresh-array",
-						license: {
-							guard: { dependencies: [], obligations: ["fallback"] },
-							genericTwin: "retained",
-							materialization: "none",
-						},
-						representation: "exact-fresh-dense-elements",
-						composition: "overlay",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						allocationIp,
-						runtimeGuard: "dense-storage-or-generic-load",
-						accessIps,
-					};
 				} else if (kindTag === 14) {
 					const runtimeGuardTag = r.u8();
 					const pairCount = r.count(2);
@@ -5410,274 +3362,13 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 						runtimeGuard: "number-operands",
 						pairs,
 					};
-				} else if (kindTag === 15) {
-					const allocationIp = r.i32();
-					const storeIp = r.i32();
-					const icIndex = r.i32();
-					const numberGuards = r.i32Array();
-					const keyStringIndices = r.i32Array();
-					const virtualRecordTag = r.u8();
-					const accessIps = r.i32Array();
-					const runtimeGuardTag = r.u8();
-					if (virtualRecordTag > 1 || runtimeGuardTag !== 1) {
-						throw new RangeError("serialize-vm: invalid finite-object region flags");
-					}
-					region = {
-						kind: "finite-object-construction",
-						license: {
-							guard: {
-								dependencies: [],
-								obligations: ["fallback", "materialize"],
-							},
-							genericTwin: "retained",
-							materialization: "on-demand",
-						},
-						representation: "finite-key-object-slots",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						allocationIp,
-						storeIp,
-						icIndex,
-						numberGuards,
-						keyStringIndices,
-						virtualRecord: virtualRecordTag === 1,
-						accessIps,
-						runtimeGuard: "number-leaves-and-prototype-shape",
-					};
-				} else if (kindTag === 16) {
-					const runtimeGuardTag = r.u8();
-					const selectorCount = r.count(2);
-					const selectors: Array<
-						Extract<VmRegion, { kind: "finite-property-selector" }>["selectors"][number]
-					> = [];
-					for (let selectorIndex = 0; selectorIndex < selectorCount; selectorIndex++) {
-						const producerIp = r.i32();
-						const ordinal = r.i32();
-						const minimum = r.i32();
-						const stringIndices = r.i32Array();
-						const accessCount = r.count(2);
-						const accesses: Array<{ ip: number; kind: "load" | "store" }> = [];
-						for (let accessIndex = 0; accessIndex < accessCount; accessIndex++) {
-							const ip = r.i32();
-							const kindTag = r.u8();
-							if (kindTag !== 1 && kindTag !== 2) {
-								throw new RangeError("serialize-vm: invalid finite-property access kind");
-							}
-							accesses.push({ ip, kind: kindTag === 1 ? "load" : "store" });
-						}
-						selectors.push({
-							producerIp,
-							ordinal,
-							minimum,
-							stringIndices,
-							accesses,
-						});
-					}
-					if (runtimeGuardTag !== 1) {
-						throw new RangeError("serialize-vm: invalid finite-property selector guard");
-					}
-					region = {
-						kind: "finite-property-selector",
-						license: {
-							guard: { dependencies: [], obligations: ["fallback"] },
-							genericTwin: "retained",
-							materialization: "none",
-						},
-						representation: "finite-property-domain",
-						composition: "overlay",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						runtimeGuard: "integer-domain-and-shape-or-generic-access",
-						selectors,
-					};
-				} else if (kindTag === 17) {
-					const sourceGlobalIndex = r.i32();
-					const baseIndex = r.i32();
-					const stateIndex = r.i32();
-					const mask = r.i32();
-					const accessCount = r.count(3);
-					const accesses: Array<
-						Extract<VmRegion, { kind: "closed-global-table" }>["accesses"][number]
-					> = [];
-					for (let accessIndex = 0; accessIndex < accessCount; accessIndex++) {
-						const ip = r.i32();
-						const accessKindTag = r.u8();
-						const directTag = r.u8();
-						if ((accessKindTag !== 1 && accessKindTag !== 2) || directTag > 1) {
-							throw new RangeError("serialize-vm: invalid closed-global table access");
-						}
-						accesses.push({
-							ip,
-							kind: accessKindTag === 1 ? "load" : "store",
-							direct: directTag === 1,
-						});
-					}
-					region = {
-						kind: "closed-global-table",
-						license: {
-							guard: {
-								dependencies:
-									dependencyMask === 1
-										? [{ kind: "world", fact: "primordials.locked" }]
-										: [{ kind: "epoch", family: "array-elements" }],
-								obligations: ["fallback", "materialize"],
-							},
-							genericTwin: "retained",
-							materialization: "on-demand",
-						},
-						representation: "synthetic-global-value-table",
-						composition: "overlay",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						sourceGlobalIndex,
-						baseIndex,
-						stateIndex,
-						mask,
-						accesses,
-					};
-				} else if (kindTag === 18) {
-					const siteCount = r.count(3);
-					const sites: Array<
-						Extract<VmRegion, { kind: "known-builtin-producers" }>["sites"][number]
-					> = [];
-					for (let siteIndex = 0; siteIndex < siteCount; siteIndex++) {
-						sites.push({
-							receiverIp: r.i32(),
-							propertyIp: r.i32(),
-							callIp: r.i32(),
-						});
-					}
-					region = {
-						kind: "known-builtin-producers",
-						license: {
-							guard: { dependencies: [], obligations: ["fallback"] },
-							genericTwin: "retained",
-							materialization: "none",
-						},
-						representation: "exact-intrinsic-property-call-twins",
-						composition: "overlay",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						sites,
-					};
-				} else if (kindTag === 19) {
-					const allocationIp = r.i32();
-					const storeIp = r.i32();
-					const length = r.i32();
-					const loadIps = r.i32Array();
-					region = {
-						kind: "affine-range-virtualization",
-						license: {
-							guard: {
-								dependencies:
-									dependencyMask === 1
-										? [{ kind: "world", fact: "primordials.locked" }]
-										: [{ kind: "epoch", family: "array-elements" }],
-								obligations: ["fallback"],
-							},
-							genericTwin: "retained",
-							materialization: "none",
-						},
-						representation: "private-identity-index-range",
-						composition: "overlay",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						allocationIp,
-						storeIp,
-						length,
-						loadIps,
-					};
-				} else if (kindTag === 20) {
-					const jsonIntrinsicIp = r.i32();
-					const parsePropertyIp = r.i32();
-					const parseKeyIp = r.i32();
-					const parseCallIp = r.i32();
-					const jsonObject = r.i32();
-					const parseCallee = r.i32();
-					const text = r.i32();
-					const result = r.i32();
-					region = {
-						kind: "invariant-json-parse-cache",
-						license: {
-							guard: { dependencies: [], obligations: ["fallback"] },
-							genericTwin: "retained",
-							materialization: "none",
-						},
-						representation: "activation-local-json-parse-template",
-						composition: "overlay",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						jsonIntrinsicIp,
-						parsePropertyIp,
-						...(parseKeyIp < 0 ? {} : { parseKeyIp }),
-						parseCallIp,
-						jsonObject,
-						parseCallee,
-						text,
-						result,
-					};
 				} else {
-					const propertyIp = r.i32();
-					const regexpIntrinsicIp = r.i32();
-					const regexpConstructIp = r.i32();
-					const searchCallIp = r.i32();
-					const searchCallee = r.i32();
-					const receiver = r.i32();
-					const regexp = r.i32();
-					const result = r.i32();
-					const literalPatternStringIndex = r.i32();
-					const literal = literalPatternStringIndex >= 0;
-					region = {
-						kind: "string-search-regexp",
-						license: {
-							guard: {
-								dependencies: [],
-								obligations: literal ? ["fallback", "materialize"] : ["fallback"],
-							},
-							genericTwin: "retained",
-							materialization: literal ? "on-demand" : "none",
-						},
-						representation: "fresh-regexp-string-search",
-						composition: "overlay",
-						anchors,
-						claimedIps,
-						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
-						cost: { score, metadataOperations },
-						propertyIp,
-						regexpIntrinsicIp,
-						regexpConstructIp,
-						searchCallIp,
-						searchCallee,
-						receiver,
-						regexp,
-						result,
-						...(literal ? { literalPatternStringIndex } : {}),
-					};
+					throw new RangeError("serialize-vm: invalid function region kind");
 				}
-				validateRegion(
-					fn,
-					region,
-					claimed,
-					functions.length,
-					globalCount,
-					stringConstants,
-				);
+				validateRegion(fn, region, claimed, stringConstants);
 				regions.push(region);
 			}
 			fn.regions = regions;
-			validateFiniteObjectSelectorLinks(fn);
 		}
 	}
 	if (r.remaining() !== 0) {

@@ -45,6 +45,44 @@ facts remain invariant, while reachability and DCE become conservative only at t
 scopes eval can observe. A mutable build can still reach the proof-specialized level
 through local facts and guarded generic twins.
 
+## Core SSA hard cut-over
+
+Core SSA is the only optimizing middle end. Production builds, development builds,
+the test harness, Test262, frontend-cache misses, and frontend-cache hits all run the
+same verified Core pipeline. Internal formats have no compatibility contract: a
+schema change increments its wire identity and stale artifacts rebuild.
+
+Optimization ownership is strict:
+
+- Core instructions and terminators have stable function-local identities, explicit
+  block arguments, effect descriptors, representations, and proof-backed facts.
+- A speculative multi-instruction optimization is selected as one atomic Core region.
+  Its certificate names Core values, instructions, blocks, dependencies, fallback or
+  materialization obligations, and the complete claimed instruction set.
+- Register allocation and VM lowering may validate and consume a certificate, but
+  may not rediscover it from instruction order, source positions, register reuse,
+  adjacency, or a second CFG/dataflow analysis.
+- Native emission consumes validated target metadata only. It does not mutate the VM
+  definition or infer new optimization regions.
+- There are no legacy readers, adapters, dual formats, or best-effort compatibility
+  paths. A failed proof retains the ordinary JavaScript-semantic twin.
+
+The current Core-native optimization set includes direct-call proofs, small-function
+inlining, exact builtin dispatch, primitive folding, TDZ cleanup, copy/value
+numbering, dead-instruction elimination, stack objects, numeric binary fusion,
+RegExp capture and iterator projections, String split projection/cursors,
+slice-to-Number fusion, and bounded `charCodeAt` reads.
+
+The following performance families are deliberately deferred until they have
+Core-owned analyses and certificates: exact dense Array loops, closed record Arrays,
+closed global tables, affine-range virtualization, finite-string/property domains,
+finite-key construction, numeric Array HOF plans, recursive numeric representation,
+private aggregate memoization, inlined String scan summaries, String-search/RegExp
+fusion, and invariant JSON parse/map templates. These remain roadmap items until a
+Core-owned pass can prove them. The retired region schemas, wire payloads,
+runtime-only helpers, and implementation-specific tests are deleted; none may return
+as backend pattern matching or a compatibility path.
+
 ## Semantic world contract
 
 Add `engine.primordials: "locked" | "mutable"` to `maligator.build.ts`, defaulting

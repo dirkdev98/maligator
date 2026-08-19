@@ -67,24 +67,6 @@ MalValue mal_builtin_string_char_code_at_known(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
 );
 
-/** Closed native path for `primitiveString.search(/literal/)`. */
-bool mal_builtin_string_search_regexp_direct(
-    MalVm *vm,
-    MalValue callee,
-    MalValue receiver,
-    MalValue regexp,
-    MalValue *out
-);
-
-/** Allocation-free fixed-literal search used before constructing a closed RegExp. */
-bool mal_builtin_string_search_literal_direct(
-    MalVm *vm,
-    MalValue callee,
-    MalValue receiver,
-    MalString *pattern,
-    MalValue *out
-);
-
 /** Allocation-free summary of a closed ASCII upper/lower-case capture chain. */
 bool mal_builtin_string_ascii_case_chain_length_span(
     MalVm *vm,

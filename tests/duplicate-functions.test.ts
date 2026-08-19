@@ -20,7 +20,8 @@ function instructionsOf(fn: CoreFunction): Array<CoreInstruction> {
 function functionsNamed(program: CoreProgram, name: string): Array<CoreFunction> {
 	return program.functions.filter(
 		(fn) =>
-			String.fromCharCode(...program.stringConstants[fn.metadata.nameStringIndex]!) === name,
+			String.fromCharCode(...program.stringConstants[fn.metadata.nameStringIndex]!) ===
+			name,
 	);
 }
 

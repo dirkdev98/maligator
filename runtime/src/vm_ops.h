@@ -88,24 +88,6 @@ static inline bool mal_vm_callee_has_index(MalVm *vm, MalValue callee, i32 funct
  */
 bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
 
-/**
- * Guarded aggregate summary for a compiler-proven String scan whose ordinary
- * body appends one inert shaped record per code unit and observes only the final
- * Array length plus a count of one code unit. Returns false without observable
- * side effects when any method/protector/epoch proof does not hold.
- */
-bool mal_vm_try_string_scan_summary(
-    MalVm *vm, MalValue input, c16 match_code_unit,
-    u32 *length_out, u32 *match_count_out
-);
-
-/**
- * Spec ToPropertyKey (7.1.19): ToPrimitive(value, string) — running the object's
- * @@toPrimitive / valueOf / toString exactly once — then ToString unless the
- * result is a Symbol. For reflective builtins that convert a key a single time;
- * the bytecode access path keeps mal_vm_value_to_property_key. Returns false on
- * an abrupt completion.
- */
 bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
 
 /**
@@ -777,8 +759,6 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_INHERITED_TABLE 6u
 #define MAL_IC_MODE_MISSING 7u
 #define MAL_IC_MODE_TRANSITION 8u
-#define MAL_IC_MODE_FINITE_KEYS 9u
-#define MAL_IC_MODE_FINITE_CONSTRUCTION 10u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -985,79 +965,6 @@ static inline bool mal_vm_object_try_load_static(const MalObject *object,
     return mal_vm_object_try_load(object, ic->key, ic, out);
 }
 
-/** Exact-shape load for a compiler-proven finite selector domain. The cache row
- * stores one slot byte per ordinal in poly_data; its slow path installs the
- * vector only after proving every known key is an own shaped property. */
-static inline bool mal_vm_finite_property_try_load(
-    const MalObject *object, i32 ordinal, const MalInlineCache *ic, MalValue *out
-) {
-    if (object == nullptr || ic->mode != MAL_IC_MODE_FINITE_KEYS ||
-        object->shape != ic->shape || ordinal < 0 || ordinal >= ic->poly_count) {
-        return false;
-    }
-    *out = object->slots[ic->poly_data[ordinal]];
-    mal_perf_ic_load_mono_hit();
-    return true;
-}
-
-/** Exact-shape overwrite for a compiler-proven finite selector domain. A
- * construction row also owns the same slot vector, so the first and every
- * later fill of a fast-constructed object need no key conversion or lookup. */
-static inline bool mal_vm_finite_property_try_store(
-    MalObject *object, i32 ordinal, MalValue value, const MalInlineCache *ic
-) {
-    if (object == nullptr ||
-        (ic->mode != MAL_IC_MODE_FINITE_KEYS &&
-         ic->mode != MAL_IC_MODE_FINITE_CONSTRUCTION) ||
-        object->shape != ic->shape || ordinal < 0 || ordinal >= ic->poly_count) {
-        return false;
-    }
-    u8 slot = ic->poly_data[ordinal];
-    if (mal_object_note_prototype_mutation(object)) {
-        MAL_PERF_COUNT(prototype_epoch_define_invalidations);
-    }
-    mal_gc_write_barrier(object->slots[slot]);
-    object->slots[slot] = value;
-    mal_gc_card(&object->header, value);
-    mal_perf_ic_store_mono_hit();
-    return true;
-}
-
-MalValue mal_vm_finite_property_load(
-    MalVm *vm, MalValue receiver, MalValue evaluated_key, i32 ordinal,
-    const i32 *string_indices, u8 count, MalInlineCache *ic);
-void mal_vm_finite_property_store(
-    MalVm *vm, MalValue receiver, MalValue evaluated_key, MalValue value,
-    i32 ordinal, const i32 *string_indices, u8 count, bool strict,
-    MalInlineCache *ic);
-
-/** Materialize a compiler-owned finite global table into its private `{}` and
- * permanently mark the table deoptimized. Synthetic slots use EMPTY for an
- * absent own property and are ordinary VM globals, hence already GC roots. */
-void mal_vm_closed_global_table_deopt(
-    MalVm *vm, MalValue receiver, i32 base_index, i32 count, i32 state_index);
-
-/** Prepare the dependency-backed final shape without allocating an object. */
-bool mal_vm_prepare_object_finite_construction(
-    MalVm *vm, const i32 *string_indices, u8 count, MalInlineCache *ic);
-
-/** Native-only guarded allocation for a proven closed construction loop. */
-MalValue mal_vm_create_object_finite_construction(
-    MalVm *vm, const i32 *string_indices, u8 count, bool number_guards_ok,
-    MalInlineCache *ic);
-
-/**
- * Static-name native probe for the common dependency-registered inherited-value
- * path. Keeping this subset separate from mal_vm_inherited_try_load lets the C
- * compiler inline the stable local-chain guards without cloning that larger
- * helper's missing/slot/table mode dispatch into every generated property site.
- *
- * A positive inherited row is invalidated eagerly when any registered chain
- * member changes. The remaining guards prove that the receiver still has no own
- * property and still starts at the exact registered prototype chain. Runtime-owned
- * watched values, other inherited modes, exotics, and cold/invalid rows return
- * false and retain the existing general probe unchanged.
- */
 static inline bool mal_vm_local_inherited_value_try_load_static(
     const MalObject *object, const MalInlineCache *ic, MalValue *out
 ) {
@@ -1736,16 +1643,6 @@ MalValue mal_vm_op_create_object(MalVm *vm);
  * it escapes through a return. On OOM, leaves an allocation-error completion.
  */
 MalValue mal_vm_materialize_stack_object(MalVm *vm, const struct MalObject *source);
-
-/** Materialize the prior rows of a native cardinality-only region. `values` is
- * row-major rooted storage with `count * slot_count` entries. */
-MalValue mal_vm_materialize_virtual_record_array(
-    MalVm *vm,
-    struct MalShape *shape,
-    const MalValue *values,
-    u32 count,
-    u32 slot_count
-);
 
 /** Successful stack-object return materializations (benchmark telemetry). */
 u64 mal_vm_stack_object_materialization_count(void);

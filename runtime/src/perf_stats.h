@@ -8,7 +8,7 @@
 
 #define MAL_PERF_TABLE_ROLE_COUNT 4
 #define MAL_PERF_SHAPE_CALLER_COUNT 6
-#define MAL_PERF_IC_MODE_COUNT 11
+#define MAL_PERF_IC_MODE_COUNT 9
 
 typedef struct MalPerfTableStats {
     u64 lookups;
@@ -212,40 +212,7 @@ typedef struct MalPerfStats {
     u64 argument_snapshot_destination_writes;
     u64 argument_snapshot_temporary_copies;
 
-    u64 invariant_json_parse_candidates;
-    u64 invariant_json_parse_fills;
-    u64 invariant_json_parse_hits;
-    u64 invariant_json_parse_misses;
-    u64 invariant_json_parse_calls_elided;
-
-    u64 invariant_json_map_candidates;
-    u64 invariant_json_map_fills;
-    u64 invariant_json_map_hits;
-    u64 invariant_json_map_misses;
-    u64 invariant_json_map_guard_fallbacks;
-    u64 invariant_json_map_parse_calls_elided;
-    u64 invariant_json_map_map_calls_elided;
-    u64 invariant_json_map_callback_calls_elided;
-    u64 invariant_json_map_rows_cloned;
-    u64 invariant_json_map_intermediate_containers_elided;
-    u64 invariant_json_map_property_loads_elided;
-    u64 invariant_json_map_exclusion_checks_elided;
-
-    u64 private_aggregate_memo_candidates;
-    u64 private_aggregate_memo_fills;
-    u64 private_aggregate_memo_hits;
-    u64 private_aggregate_memo_misses;
-    u64 private_aggregate_memo_calls_elided;
-    u64 private_aggregate_memo_guard_fallbacks;
-
-    u64 numeric_fold_candidates;
-    u64 numeric_fold_regions;
-    u64 numeric_fold_guard_fallbacks;
-    u64 numeric_fold_element_fallbacks;
-    u64 numeric_fold_callback_calls_elided;
-    u64 numeric_fold_math_calls_elided;
-
-    u64 call_cache_probes;
+	u64 call_cache_probes;
     u64 call_cache_exact_identity_hits;
     u64 call_cache_compiled_exact_hits;
     u64 call_cache_compiled_family_hits;
@@ -286,13 +253,7 @@ typedef struct MalPerfStats {
     u64 array_indexed_fill_allocations_avoided;
     u64 array_indexed_fill_raw_bytes_avoided;
     u64 array_indexed_fill_guard_fallbacks;
-    u64 array_affine_range_candidates;
-    u64 array_affine_range_virtualizations;
-    u64 array_affine_range_guard_fallbacks;
-    u64 array_affine_range_allocations_elided;
-    u64 array_affine_range_stores_elided;
-    u64 array_affine_range_loads_elided;
-    u64 array_push_direct_hits;
+	u64 array_push_direct_hits;
     u64 array_push_direct_fallbacks;
 
     u64 node_event_singleton_inserts;
@@ -495,23 +456,6 @@ static inline void mal_perf_ic_load_inherited_hit(void) {
 static inline void mal_perf_inherited_loop_summary(u64 iterations) {
     MAL_PERF_COUNT(inherited_loop_summaries);
     MAL_PERF_ADD(inherited_loop_iterations_elided, iterations);
-}
-
-/**
- * One admitted native numeric fold. `folded` is the number of elements the
- * region consumed before it either completed or hit a non-Number and abandoned
- * the attempt, leaving the ordinary guarded loop to produce the result.
- */
-static inline void mal_perf_numeric_fold_region(
-    u64 folded, u64 length, u64 math_calls_per_element
-) {
-    if (folded != length) {
-        MAL_PERF_COUNT(numeric_fold_element_fallbacks);
-        return;
-    }
-    MAL_PERF_COUNT(numeric_fold_regions);
-    MAL_PERF_ADD(numeric_fold_callback_calls_elided, folded);
-    MAL_PERF_ADD(numeric_fold_math_calls_elided, folded * math_calls_per_element);
 }
 
 static inline void mal_perf_ic_load_primitive_hit(void) {

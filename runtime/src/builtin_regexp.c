@@ -750,31 +750,7 @@ static MalValue regexp_exec_abstract(MalVm *vm, MalValue r, MalString *s, bool m
     return result;
 }
 
-bool mal_regexp_try_search_index_direct(
-    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
-) {
-    MalRegExpObject *canonical;
-    if (!mal_value_is_string(string) ||
-        !regexp_canonical_instance(vm, regexp, &canonical) ||
-        (canonical->flag_bits & (MAL_REGEXP_JS_GLOBAL | MAL_REGEXP_JS_STICKY)) != 0) {
-        return false;
-    }
-    // Exact canonical shape proves slot zero is the ordinary writable data
-    // property. The direct caller already captured the native String#search
-    // method, so checking the slot is equivalent to both observable lastIndex
-    // reads without repeating generic lookup and ToLength machinery.
-    MalObject *object = (MalObject *) canonical;
-    if (!mal_ops_same_value(object->slots[0], mal_value_from_i32(0))) {
-        return false;
-    }
-    MalValue result = regexp_builtin_exec(
-        vm, canonical, regexp, mal_value_to_string(string),
-        REGEXP_BUILTIN_EXEC_INDEX_ONLY, true, nullptr);
-    *out = mal_value_is_null(result) ? mal_value_from_i32(-1) : result;
-    return true;
-}
-
-// IsRegExp(argument): @@match overrides the [[RegExpMatcher]] brand.
+// IsRegExp(argument):
 static bool regexp_is_regexp(MalVm *vm, MalValue arg, bool *out) {
     if (!mal_value_is_object(arg)) {
         *out = false;
@@ -2592,16 +2568,6 @@ bool mal_regexp_try_exact_string_dispatch(
 }
 
 bool mal_regexp_try_canonical_match_all(
-    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
-) {
-    (void) vm;
-    (void) regexp;
-    (void) string;
-    (void) out;
-    return false;
-}
-
-bool mal_regexp_try_search_index_direct(
     MalVm *vm, MalValue regexp, MalValue string, MalValue *out
 ) {
     (void) vm;

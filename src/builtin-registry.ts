@@ -31,8 +31,8 @@ export interface BuiltinOperationDescriptor {
 }
 
 export type ExactBuiltinReceiverProof =
-	| "exact-fresh-array"
-	| "exact-fresh-map"
+	| "fresh-array"
+	| "fresh-map"
 	| "intrinsic-object"
 	| "primitive-string";
 
@@ -57,7 +57,7 @@ export const exactBuiltinCallDescriptors = {
 		cOperation: "MAL_DIRECT_BUILTIN_STRING_SPLIT",
 	},
 	"Array.prototype.push": {
-		receiverProof: "exact-fresh-array",
+		receiverProof: "fresh-array",
 		cOperation: "MAL_DIRECT_BUILTIN_ARRAY_PUSH",
 	},
 	"Object.hasOwn": {
@@ -71,12 +71,12 @@ export const exactBuiltinCallDescriptors = {
 		cOperation: "MAL_DIRECT_BUILTIN_STRING_CHAR_CODE_AT",
 	},
 	"Map.prototype.get": {
-		receiverProof: "exact-fresh-map",
+		receiverProof: "fresh-map",
 		forwardedArgumentLimit: 1,
 		cOperation: "MAL_DIRECT_BUILTIN_MAP_GET",
 	},
 	"Map.prototype.set": {
-		receiverProof: "exact-fresh-map",
+		receiverProof: "fresh-map",
 		forwardedArgumentLimit: 2,
 		cOperation: "MAL_DIRECT_BUILTIN_MAP_SET",
 	},

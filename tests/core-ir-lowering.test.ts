@@ -31,9 +31,7 @@ describe("Core IR lowering", () => {
 		for (const fn of converted.functions) {
 			expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 		}
-		const printed = converted.functions
-			.map((fn) => formatCoreFunction(fn))
-			.join("\n");
+		const printed = converted.functions.map((fn) => formatCoreFunction(fn)).join("\n");
 		expect(printed).toMatch(/b\d+\(%\d+: boxed/);
 		expect(printed).toContain("branch");
 	});
@@ -133,7 +131,9 @@ describe("Core IR lowering", () => {
 		const call = converted.functions
 			.flatMap((fn) => fn.blocks)
 			.flatMap((block) => block.instructions)
-			.find((instruction) => instruction.opcode === "call" && instruction.inputs.length > 2);
+			.find(
+				(instruction) => instruction.opcode === "call" && instruction.inputs.length > 2,
+			);
 
 		expect(call?.inputs).toHaveLength(7);
 		expect(call?.attributes).not.toHaveProperty("immediateValues");
@@ -175,7 +175,10 @@ describe("Core IR lowering", () => {
 				kind: "switch" as const,
 				discriminant: block.terminator.condition,
 				cases: [
-					{ value: { kind: "boolean" as const, value: true }, edge: block.terminator.consequent },
+					{
+						value: { kind: "boolean" as const, value: true },
+						edge: block.terminator.consequent,
+					},
 				],
 				default: block.terminator.alternate,
 			},

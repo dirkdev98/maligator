@@ -4,20 +4,13 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
-import { compileSemanticProgramToVmDefinition } from "../../src/compile-core.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../../src/compile-program.ts";
-import { emitVmDefinition } from "../../src/emit-vm.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
 import type { VmDefinition, VmFunction } from "../../src/lower-vm.ts";
-import { parseScript } from "../../src/parser.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../../src/semantic-analysis.ts";
-import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
-} from "../../src/serialize-vm.ts";
+import { serializeVmDefinition } from "../../src/serialize-vm.ts";
 import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
 const fn: VmFunction = {
@@ -343,288 +336,6 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("indexed-fill-reserve-zero", wire);
 	});
 
-	it("loads and validates exact fresh-Array access metadata", () => {
-		const accessDefinition: VmDefinition = {
-			...definition,
-			functions: [
-				{
-					...fn,
-					registerCount: 3,
-					instructions: [
-						{ opcode: "CREATE_ARRAY", dst: 0, length: 1 },
-						{ opcode: "CREATE_NUMBER", dst: 1, value: 0 },
-						{
-							opcode: "LOAD_PROPERTY",
-							dst: 2,
-							object: 0,
-							key: 1,
-							icIndex: 0,
-						},
-						{ opcode: "RETURN", value: 2 },
-					],
-					regions: [
-						{
-							kind: "exact-fresh-array",
-							license: {
-								guard: { dependencies: [], obligations: ["fallback"] },
-								genericTwin: "retained",
-								materialization: "none",
-							},
-							representation: "exact-fresh-dense-elements",
-							composition: "overlay",
-							anchors: [0, 2],
-							claimedIps: [0, 2],
-							controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
-							cost: { score: 1, metadataOperations: 2 },
-							allocationIp: 0,
-							runtimeGuard: "dense-storage-or-generic-load",
-							accessIps: [2],
-						},
-					],
-				},
-			],
-		};
-		const wire = serializeVmDefinition(accessDefinition, { debugInfo: false });
-		const wirePath = path.join(directory, "exact-fresh-array-access.malw");
-		writeFileSync(wirePath, wire);
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-
-		wire[wire.length - 1] = 2; // ZigZag(1): CREATE_NUMBER, not the certified load
-		rejectsWire("exact-fresh-array-access-ip", wire);
-	});
-
-	it("loads a nonempty numeric HOF proof region payload", () => {
-		const entrypoint = path.join(directory, "numeric-hof-region.mjs");
-		writeFileSync(
-			entrypoint,
-			`function run() {
-				const values = [];
-				for (let index = 0; index < 20; index++) values.push(index / 20);
-				let result = 0;
-				for (let round = 0; round < 4; round++) {
-						result += values.reduce(
-							(sum, value) => sum + Math.sqrt(value) * Math.sin(value) + Math.abs(value - 0.5) + Math.cos(value),
-						0,
-					);
-				}
-				return result;
-			}
-			globalThis.result = run();\n`,
-		);
-		const numericDefinition = compileEntrypoint(entrypoint, {
-			stripTypes: stripTypesWithTypeScript,
-		});
-		expect(
-			numericDefinition.functions.flatMap(
-				(fn) => fn.regions?.filter((region) => region.kind === "numeric-hof") ?? [],
-			),
-		).toHaveLength(1);
-		const wirePath = path.join(directory, "numeric-hof-region.malw");
-		writeFileSync(
-			wirePath,
-			serializeVmDefinition(numericDefinition, { debugInfo: false }),
-		);
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads a nonempty closed-global table proof region payload", () => {
-		const entrypoint = path.join(directory, "closed-global-table-region.js");
-		const source = `const table = {};
-			function update(seed, other) {
-				const key = seed & 7;
-				const previous = table[key];
-				table[key] = seed;
-				if (other !== undefined) table[other] = seed + 1;
-				return previous;
-			}
-			globalThis.result = update(3, undefined);\n`;
-		writeFileSync(entrypoint, source);
-		const closedDefinition = compileSemanticProgramToVmDefinition(
-			analyzeSourceAndRunSemanticAnalysis(
-				source,
-				entrypoint,
-				parseScript(source, { strict: false }),
-			),
-		);
-		expect(
-			closedDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "closed-global-table") ?? [],
-			),
-		).toHaveLength(1);
-		const wirePath = path.join(directory, "closed-global-table-region.malw");
-		writeFileSync(
-			wirePath,
-			serializeVmDefinition(closedDefinition, { debugInfo: false }),
-		);
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads a nonempty known-builtin producer region payload", () => {
-		const entrypoint = path.join(directory, "known-builtin-producer-region.js");
-		const source = `function calculate(value) {
-			return Math.floor(value);
-		}
-		globalThis.result = calculate(3.75);\n`;
-		writeFileSync(entrypoint, source);
-		const producerDefinition = compileSemanticProgramToVmDefinition(
-			analyzeSourceAndRunSemanticAnalysis(
-				source,
-				entrypoint,
-				parseScript(source, { strict: false }),
-			),
-		);
-		expect(
-			producerDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "known-builtin-producers") ?? [],
-			),
-		).toHaveLength(1);
-		const wirePath = path.join(directory, "known-builtin-producer-region.malw");
-		const wire = serializeVmDefinition(producerDefinition, { debugInfo: false });
-		expect(
-			deserializeVmDefinition(wire).functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "known-builtin-producers") ?? [],
-			),
-		).toHaveLength(1);
-		writeFileSync(wirePath, wire);
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads a nonempty affine-range virtualization region payload", () => {
-		const entrypoint = path.join(directory, "affine-range-region.js");
-		const source = `function rangeKernel() {
-			const array = [];
-			for (let index = 0; index < 8; index++) array[index] = index;
-			let total = 0;
-			for (let index = 0; index < 8; index++) total += array[index];
-			return total;
-		}
-		globalThis.rangeKernel = rangeKernel;\n`;
-		writeFileSync(entrypoint, source);
-		const affineDefinition = compileSemanticProgramToVmDefinition(
-			analyzeSourceAndRunSemanticAnalysis(
-				source,
-				entrypoint,
-				parseScript(source, { strict: false }),
-			),
-		);
-		emitVmDefinition(affineDefinition, { compiled: true });
-		expect(
-			affineDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "affine-range-virtualization") ??
-					[],
-			),
-		).toHaveLength(1);
-		const wirePath = path.join(directory, "affine-range-region.malw");
-		writeFileSync(
-			wirePath,
-			serializeVmDefinition(affineDefinition, { debugInfo: false }),
-		);
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads a nonempty invariant JSON.parse cache region payload", () => {
-		const entrypoint = path.join(directory, "invariant-json-parse-cache-region.js");
-		const source = `function repeated(text) {
-			let total = 0;
-			for (let index = 0; index < 4; index++) total += JSON.parse(text)[0].id;
-			return total;
-		}
-		globalThis.repeated = repeated;\n`;
-		writeFileSync(entrypoint, source);
-		const cacheDefinition = compileSemanticProgramToVmDefinition(
-			analyzeSourceAndRunSemanticAnalysis(
-				source,
-				entrypoint,
-				parseScript(source, { strict: false }),
-			),
-		);
-		emitVmDefinition(cacheDefinition, { compiled: true });
-		expect(
-			cacheDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "invariant-json-parse-cache") ??
-					[],
-			),
-		).toHaveLength(1);
-		const wirePath = path.join(directory, "invariant-json-parse-cache-region.malw");
-		writeFileSync(wirePath, serializeVmDefinition(cacheDefinition, { debugInfo: false }));
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads a nonempty fresh-RegExp String search region payload", () => {
-		const entrypoint = path.join(directory, "string-search-regexp-region.js");
-		const source = `function locate(value) { return value.search(/needle=/); }
-		globalThis.locate = locate;\n`;
-		writeFileSync(entrypoint, source);
-		const searchDefinition = compileSemanticProgramToVmDefinition(
-			analyzeSourceAndRunSemanticAnalysis(
-				source,
-				entrypoint,
-				parseScript(source, { strict: false }),
-			),
-		);
-		emitVmDefinition(searchDefinition, { compiled: true });
-		expect(
-			searchDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "string-search-regexp") ?? [],
-			),
-		).toHaveLength(1);
-		const wirePath = path.join(directory, "string-search-regexp-region.malw");
-		writeFileSync(
-			wirePath,
-			serializeVmDefinition(searchDefinition, { debugInfo: false }),
-		);
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads a nonempty closed record-Array proof region payload", () => {
-		const entrypoint = path.join(directory, "closed-record-array-region.mjs");
-		writeFileSync(
-			entrypoint,
-			`function run() {
-				const rows = [];
-				for (let index = 0; index < 8; index++) rows.push({ x: index, y: index + 1 });
-				let total = 0;
-				for (let index = 0; index < 8; index++) {
-					const row = rows[index];
-					row.y = row.x + row.y;
-					total += row.y;
-				}
-				return total;
-			}
-			globalThis.result = run();\n`,
-		);
-		const closedDefinition = compileEntrypoint(entrypoint, {
-			buildConfig: resolveBuildConfig({ engine: { primordials: "locked" } }),
-			stripTypes: stripTypesWithTypeScript,
-		});
-		expect(
-			closedDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "closed-record-array") ?? [],
-			),
-		).not.toHaveLength(0);
-		const wirePath = path.join(directory, "closed-record-array-region.malw");
-		writeFileSync(
-			wirePath,
-			serializeVmDefinition(closedDefinition, { debugInfo: false }),
-		);
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
 	it("loads a nonempty String.split cursor proof region payload", () => {
 		const entrypoint = path.join(directory, "string-split-cursor-region.mjs");
 		writeFileSync(
@@ -661,11 +372,11 @@ describe("wire loader side-data validation", () => {
 		const entrypoint = path.join(directory, "string-split-projection-region.mjs");
 		writeFileSync(
 			entrypoint,
-			`function project(value) {
-				const fields = value.split(";");
+			`function project() {
+				const fields = "alpha;beta".split(";");
 				return fields[1] + fields[0] + fields.length;
 			}
-			globalThis.result = project("alpha;beta");\n`,
+			globalThis.result = project();\n`,
 		);
 		const projectionDefinition = compileEntrypoint(entrypoint, {
 			stripTypes: stripTypesWithTypeScript,
@@ -784,67 +495,6 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
-	it("loads and executes persisted closed String scan regions", () => {
-		const scanDefinition = compileEntrypoint(path.resolve("bench/gc/cli.js"), {
-			stripTypes: stripTypesWithTypeScript,
-			buildConfig: resolveBuildConfig({}),
-		});
-		emitVmDefinition(scanDefinition, { compiled: true });
-		expect(
-			scanDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "string-scan-summary") ?? [],
-			),
-		).not.toHaveLength(0);
-		const wirePath = path.join(directory, "string-scan-region.malw");
-		writeFileSync(wirePath, serializeVmDefinition(scanDefinition, { debugInfo: false }));
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads and executes persisted private aggregate memo regions", () => {
-		const memoDefinition = compileEntrypoint(
-			path.resolve("tests/local/private-aggregate-memo-small.js"),
-			{
-				stripTypes: stripTypesWithTypeScript,
-				buildConfig: resolveBuildConfig({}),
-			},
-		);
-		emitVmDefinition(memoDefinition, { compiled: true });
-		expect(
-			memoDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "private-aggregate-memo") ?? [],
-			),
-		).not.toHaveLength(0);
-		const wirePath = path.join(directory, "private-aggregate-memo-region.malw");
-		writeFileSync(wirePath, serializeVmDefinition(memoDefinition, { debugInfo: false }));
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads and executes persisted invariant JSON map template regions", () => {
-		const mapDefinition = compileEntrypoint(
-			path.resolve("tests/local/invariant-json-map-template.js"),
-			{
-				stripTypes: stripTypesWithTypeScript,
-				buildConfig: resolveBuildConfig({}),
-			},
-		);
-		emitVmDefinition(mapDefinition, { compiled: true });
-		expect(
-			mapDefinition.functions.flatMap(
-				(fn) =>
-					fn.regions?.filter((region) => region.kind === "invariant-json-map-template") ??
-					[],
-			),
-		).not.toHaveLength(0);
-		const wirePath = path.join(directory, "invariant-json-map-template-region.malw");
-		writeFileSync(wirePath, serializeVmDefinition(mapDefinition, { debugInfo: false }));
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
 	it("loads and executes persisted stack-object plan regions", () => {
 		const entrypoint = path.join(directory, "stack-object-plan-region.mjs");
 		writeFileSync(
@@ -867,35 +517,6 @@ describe("wire loader side-data validation", () => {
 		).not.toHaveLength(0);
 		const wirePath = path.join(directory, "stack-object-plan-region.malw");
 		writeFileSync(wirePath, serializeVmDefinition(stackDefinition, { debugInfo: false }));
-		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-	});
-
-	it("loads and executes persisted cardinality-array regions", () => {
-		const entrypoint = path.join(directory, "cardinality-array-region.mjs");
-		writeFileSync(
-			entrypoint,
-			`function collect(seed) {
-				const rows = [];
-				for (let i = 0; i < 4; i++) rows.push({ idx: i, value: seed + i });
-				return rows[seed % 4].value + rows.length;
-			}
-			if (collect(2) !== 8) throw new Error("bad cardinality region");\n`,
-		);
-		const cardinalityDefinition = compileEntrypoint(entrypoint, {
-			stripTypes: stripTypesWithTypeScript,
-			buildConfig: resolveBuildConfig({}),
-		});
-		expect(
-			cardinalityDefinition.functions.flatMap(
-				(fn) => fn.regions?.filter((region) => region.kind === "cardinality-array") ?? [],
-			),
-		).not.toHaveLength(0);
-		const wirePath = path.join(directory, "cardinality-array-region.malw");
-		writeFileSync(
-			wirePath,
-			serializeVmDefinition(cardinalityDefinition, { debugInfo: false }),
-		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});

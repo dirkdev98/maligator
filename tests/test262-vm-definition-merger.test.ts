@@ -182,78 +182,6 @@ describe("Test262 VM definition merger", () => {
 			},
 		];
 		const secondFunction = vmFunction(indexed);
-		secondFunction.regions = [
-			{
-				kind: "closed-global-table",
-				license: {
-					guard: {
-						dependencies: [{ kind: "epoch", family: "array-elements" }],
-						obligations: ["fallback", "materialize"],
-					},
-					genericTwin: "retained",
-					materialization: "on-demand",
-				},
-				representation: "synthetic-global-value-table",
-				composition: "overlay",
-				anchors: [22],
-				claimedIps: [22],
-				controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
-				cost: { score: 5, metadataOperations: 1 },
-				sourceGlobalIndex: 0,
-				baseIndex: 0,
-				stateIndex: 4,
-				mask: 3,
-				accesses: [{ ip: 22, kind: "load", direct: true }],
-			},
-			{
-				kind: "finite-property-selector",
-				license: {
-					guard: { dependencies: [], obligations: ["fallback"] },
-					genericTwin: "retained",
-					materialization: "none",
-				},
-				representation: "finite-property-domain",
-				composition: "overlay",
-				anchors: [18],
-				claimedIps: [18, 19, 21],
-				controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
-				cost: { score: 3, metadataOperations: 3 },
-				runtimeGuard: "integer-domain-and-shape-or-generic-access",
-				selectors: [
-					{
-						producerIp: 18,
-						ordinal: 2,
-						minimum: 0,
-						stringIndices: [0],
-						accesses: [
-							{ ip: 19, kind: "load" },
-							{ ip: 21, kind: "store" },
-						],
-					},
-				],
-			},
-			{
-				kind: "finite-object-construction",
-				license: {
-					guard: { dependencies: [], obligations: ["fallback", "materialize"] },
-					genericTwin: "retained",
-					materialization: "on-demand",
-				},
-				representation: "finite-key-object-slots",
-				anchors: [20, 21],
-				claimedIps: [20, 21],
-				controlFlow: { ordinaryBlockIps: [0], exceptionalHandlerIps: [] },
-				cost: { score: 1, metadataOperations: 2 },
-				allocationIp: 20,
-				storeIp: 21,
-				icIndex: 1,
-				numberGuards: [2],
-				keyStringIndices: [0],
-				virtualRecord: false,
-				accessIps: [],
-				runtimeGuard: "number-leaves-and-prototype-shape",
-			},
-		];
 		const second = definition({
 			functions: [secondFunction],
 			globalCount: 5,
@@ -317,30 +245,6 @@ describe("Test262 VM definition merger", () => {
 		});
 		expect(rebased[17]).toMatchObject({ directFunctionIndex: 2 });
 		expect(rebased[18]).toMatchObject({ opcode: "BINARY", operator: "+" });
-		expect(merged.functions[2]!.regions?.[1]).toMatchObject({
-			kind: "finite-property-selector",
-			selectors: [
-				{
-					producerIp: 18,
-					ordinal: 2,
-					stringIndices: [2],
-				},
-			],
-		});
-		expect(merged.functions[2]!.regions?.[2]).toMatchObject({
-			kind: "finite-object-construction",
-			icIndex: 1,
-			numberGuards: [2],
-			keyStringIndices: [2],
-		});
-		expect(merged.functions[2]!.regions?.[0]).toMatchObject({
-			kind: "closed-global-table",
-			sourceGlobalIndex: 3,
-			baseIndex: 3,
-			stateIndex: 7,
-			mask: 3,
-			accesses: [{ ip: 22, kind: "load", direct: true }],
-		});
 		expect(second.functions[0]!.instructions).toEqual(indexed);
 	});
 

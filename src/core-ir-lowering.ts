@@ -3,13 +3,10 @@ import {
 	compilerFactIsWorldInvariant,
 	knownBuiltinCallProves,
 } from "./compiler-facts.ts";
-import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
-import {
-	buildCoreControlFlow,
-	coreTerminatorEdges,
-} from "./core-ir-control-flow.ts";
-import { verifyCoreFunction, verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CompilerSiteFacts } from "./compiler-facts.ts";
+import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
+import { verifyCoreFunction, verifyCoreProgram } from "./core-ir-verifier.ts";
 import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
@@ -52,7 +49,8 @@ function isStructuralInstruction(type: string): boolean {
 function destinationCount(instruction: RegisterInstruction): number {
 	if (!("registers" in instruction)) return 0;
 	if (isCoreOpcode(instruction.type)) return coreOpcode(instruction.type).outputs.minimum;
-	if (isStructuralInstruction(instruction.type)) return instruction.type === "catch" ? 1 : 0;
+	if (isStructuralInstruction(instruction.type))
+		return instruction.type === "catch" ? 1 : 0;
 	throw new Error(`Unknown semantic-lowering instruction ${String(instruction.type)}`);
 }
 
@@ -163,24 +161,20 @@ function inferImportedRegisterRepresentations(
 			}
 		}
 	}
-	const representationOf = (
-		register: number,
-	): ImportedRegisterRepresentation | null =>
+	const representationOf = (register: number): ImportedRegisterRepresentation | null =>
 		representations.has(register) ? representations.get(register)! : "boxed";
 	let changed = true;
 	while (changed) {
 		changed = false;
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				const produced = importedInstructionRepresentation(
-					instruction,
-					representationOf,
-				);
+				const produced = importedInstructionRepresentation(instruction, representationOf);
 				if (produced === null) continue;
 				for (const destination of definedRegisters(instruction)) {
 					if (destination < fn.parameterCount) continue;
 					const current = representations.get(destination) ?? null;
-					const joined = current === null ? produced : current === produced ? current : "boxed";
+					const joined =
+						current === null ? produced : current === produced ? current : "boxed";
 					if (joined !== current) {
 						representations.set(destination, joined);
 						changed = true;
@@ -299,7 +293,8 @@ function isControlInstruction(
 }
 
 function instructionMayThrow(instruction: RegisterInstruction): boolean {
-	if (isCoreOpcode(instruction.type)) return coreOpcode(instruction.type).effects.mayThrow;
+	if (isCoreOpcode(instruction.type))
+		return coreOpcode(instruction.type).effects.mayThrow;
 	if (isStructuralInstruction(instruction.type)) {
 		return instruction.type === "throw";
 	}
@@ -419,14 +414,7 @@ function coreInstructionInputs(
 		}
 		const immediate = immediateOperand(instruction, position);
 		if (immediate === undefined) continue;
-		inputs.push(
-			appendImmediateValue(
-				builder,
-				block,
-				immediate,
-				sourcePosition,
-			),
-		);
+		inputs.push(appendImmediateValue(builder, block, immediate, sourcePosition));
 		expandedImmediates = true;
 	}
 	return { inputs, expandedImmediates };
@@ -437,7 +425,8 @@ function outputRepresentation(
 	index: number,
 	registerRepresentations: ReadonlyMap<number, ImportedRegisterRepresentation>,
 ): CoreRepresentation {
-	if (instruction.type === "createNumber" || instruction.type === "createF64") return "f64";
+	if (instruction.type === "createNumber" || instruction.type === "createF64")
+		return "f64";
 	if (instruction.type === "mathUnaryNumber" || instruction.type === "mathBinaryNumber") {
 		return "f64";
 	}
@@ -452,7 +441,8 @@ function outputRepresentation(
 		return "boolean";
 	}
 	const register = definedRegisters(instruction)[index];
-	const inferred = register === undefined ? undefined : registerRepresentations.get(register);
+	const inferred =
+		register === undefined ? undefined : registerRepresentations.get(register);
 	if (inferred === "number") return "f64";
 	if (inferred === "boolean") return "boolean";
 	return "boxed";
@@ -528,11 +518,7 @@ function coreRegionData(
 			}
 			result[key] = { $coreBlock: block };
 		} else {
-			result[key] = coreRegionData(
-				entry,
-				instructionIds,
-				coreBlocksBySourceBlock,
-			);
+			result[key] = coreRegionData(entry, instructionIds, coreBlocksBySourceBlock);
 		}
 	}
 	return result;
@@ -578,11 +564,7 @@ function convertRegions(
 				}
 				data[key] = { $coreBlock: block };
 			} else {
-				data[key] = coreRegionData(
-					value,
-					instructionIds,
-					coreBlocksBySourceBlock,
-				);
+				data[key] = coreRegionData(value, instructionIds, coreBlocksBySourceBlock);
 			}
 		}
 		return {
@@ -824,7 +806,9 @@ function establishSegmentTerminators(
 	}
 }
 
-function pruneUnreachableSegments(segments: Array<RegisterSegment>): Array<RegisterSegment> {
+function pruneUnreachableSegments(
+	segments: Array<RegisterSegment>,
+): Array<RegisterSegment> {
 	const reachable = new Set<number>();
 	const pending = [0];
 	while (pending.length > 0) {
@@ -1072,7 +1056,9 @@ function convertStraightLineFunction(
 		metadata: coreFunctionMetadata(fn),
 	});
 	const block = builder.createBlock(
-		Array.from({ length: fn.parameterCount }, () => ({ representation: "boxed" as const })),
+		Array.from({ length: fn.parameterCount }, () => ({
+			representation: "boxed" as const,
+		})),
 	);
 	const values = new Map<number, CoreValueId>(
 		builder
@@ -1125,10 +1111,7 @@ function convertStraightLineFunction(
 		}
 	}
 	const finished = builder.finish(block);
-	const graph =
-		fn.bodyEntryBlock === 0
-			? { ...finished, bodyEntry: block }
-			: finished;
+	const graph = fn.bodyEntryBlock === 0 ? { ...finished, bodyEntry: block } : finished;
 	const core = {
 		...graph,
 		regions: convertRegions(fn.regions, instructionIds, new Map([[0, [block]]])),
@@ -1139,16 +1122,9 @@ function convertStraightLineFunction(
 	};
 }
 
-function convertFunction(
-	fn: RegisterFunction,
-	verify: boolean,
-): ConvertedCoreFunction {
+function convertFunction(fn: RegisterFunction, verify: boolean): ConvertedCoreFunction {
 	const registerRepresentations = inferImportedRegisterRepresentations(fn);
-	const straightLine = convertStraightLineFunction(
-		fn,
-		verify,
-		registerRepresentations,
-	);
+	const straightLine = convertStraightLineFunction(fn, verify, registerRepresentations);
 	if (straightLine !== undefined) return straightLine;
 	const { segments: splitSegments, segmentsByOldBlock } = splitRegisterBlocks(fn);
 	establishSegmentTerminators(fn, splitSegments, segmentsByOldBlock);
@@ -1288,8 +1264,9 @@ function convertFunction(
 				break;
 		}
 		const terminatorId = builder.setTerminator(block, terminator);
-		for (const origin of
-			"origins" in registerTerminator ? (registerTerminator.origins ?? []) : []) {
+		for (const origin of "origins" in registerTerminator
+			? (registerTerminator.origins ?? [])
+			: []) {
 			instructionIds.set(origin, terminatorId);
 		}
 		if (segment.exceptionalSuccessor !== undefined) {
@@ -1347,7 +1324,9 @@ export function importSemanticRegisterGraph(
 			hostInstallCandidates: coreHostInstallCandidates(program),
 			retainedHostInstallers: [program.hostProcess, program.hostBuffer]
 				.flatMap((host) => (host?.retained === true ? [host.installer] : []))
-				.filter((installer, index, installers) => installers.indexOf(installer) === index),
+				.filter(
+					(installer, index, installers) => installers.indexOf(installer) === index,
+				),
 		},
 	};
 	if (verify) verifyCoreProgram(core, coreOpcodeRegistry);
@@ -1576,9 +1555,9 @@ function lowerCoreRegions(
 			ordinaryBlocks: region.ordinaryBlocks
 				.filter((block) => !omittedBlocks.has(block))
 				.map(requireBlock),
-			exceptionalBlocks: region.exceptionalBlocks.filter(
-				(block) => !omittedBlocks.has(block),
-			).map(requireBlock),
+			exceptionalBlocks: region.exceptionalBlocks
+				.filter((block) => !omittedBlocks.has(block))
+				.map(requireBlock),
 		},
 	})) as unknown as ReadonlyArray<RegisterRegion>;
 }
@@ -1613,7 +1592,9 @@ export function coreRegisterClasses(
 		}
 		return parameters;
 	};
-	const terminatorValues = (block: CoreFunction["blocks"][number]): Array<CoreValueId> => {
+	const terminatorValues = (
+		block: CoreFunction["blocks"][number],
+	): Array<CoreValueId> => {
 		const edgeArguments = coreTerminatorEdges(block.terminator).flatMap(
 			(edge) => edge.arguments,
 		);
@@ -1708,9 +1689,7 @@ export function coreRegisterClasses(
 			for (const { value: other } of block.parameters) interfere(value, other);
 		}
 	}
-	const parent = new Map<CoreValueId, CoreValueId>(
-		core.values.map(({ id }) => [id, id]),
-	);
+	const parent = new Map<CoreValueId, CoreValueId>(core.values.map(({ id }) => [id, id]));
 	const members = new Map<CoreValueId, Set<CoreValueId>>(
 		core.values.map(({ id }) => [id, new Set([id])]),
 	);
@@ -1803,8 +1782,7 @@ export function coreRegisterClasses(
 	const orderedRoots = [...rootInterference.keys()].sort(
 		(left, right) =>
 			(rootInterference.get(right)?.size ?? 0) -
-				(rootInterference.get(left)?.size ?? 0) ||
-			left - right,
+				(rootInterference.get(left)?.size ?? 0) || left - right,
 	);
 	for (const root of orderedRoots) {
 		if (registers.has(root)) continue;
@@ -1862,9 +1840,7 @@ export function coreRegisterClasses(
 		}
 	}
 	const gcRootRegisters = [
-		...new Set(
-			[...gcRootValues].map((value) => registers.get(find(value))!),
-		),
+		...new Set([...gcRootValues].map((value) => registers.get(find(value))!)),
 	].sort((left, right) => left - right);
 	return { roots, registers, gcRootRegisters };
 }
@@ -1878,10 +1854,7 @@ function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructi
 			return;
 		}
 		const object = value as Readonly<Record<string, unknown>>;
-		if (
-			Object.keys(object).length === 1 &&
-			typeof object.$coreInstruction === "number"
-		) {
+		if (Object.keys(object).length === 1 && typeof object.$coreInstruction === "number") {
 			result.add(object.$coreInstruction as CoreInstructionId);
 			return;
 		}
@@ -1936,7 +1909,8 @@ function immediateOnlyInstructions(
 		for (const edge of coreTerminatorEdges(block.terminator)) {
 			for (const argument of edge.arguments) ordinaryTerminatorUse(argument);
 		}
-		for (const argument of block.handler?.arguments ?? []) ordinaryTerminatorUse(argument);
+		for (const argument of block.handler?.arguments ?? [])
+			ordinaryTerminatorUse(argument);
 	}
 	return new Set(
 		core.blocks.flatMap((block) =>
@@ -2240,14 +2214,11 @@ function lowerFunctionBridge(
 						type: "jump",
 						blocks: [edgeBlock(absorbed?.edge ?? block.terminator.alternate)],
 					};
-				instructions.push(
-					lowered,
-					alternate,
-				);
-				loweredInstructions.set(block.terminator.id, lowered);
-				if (absorbed !== undefined) {
-					loweredInstructions.set(absorbed.terminator, alternate);
-				}
+					instructions.push(lowered, alternate);
+					loweredInstructions.set(block.terminator.id, lowered);
+					if (absorbed !== undefined) {
+						loweredInstructions.set(absorbed.terminator, alternate);
+					}
 				}
 				break;
 			case "guard":
@@ -2262,22 +2233,19 @@ function lowerFunctionBridge(
 						type: "jump",
 						blocks: [edgeBlock(absorbed?.edge ?? block.terminator.fallback)],
 					};
-				instructions.push(
-					lowered,
-					fallback,
-				);
-				loweredInstructions.set(block.terminator.id, lowered);
-				if (absorbed !== undefined) {
-					loweredInstructions.set(absorbed.terminator, fallback);
-				}
+					instructions.push(lowered, fallback);
+					loweredInstructions.set(block.terminator.id, lowered);
+					if (absorbed !== undefined) {
+						loweredInstructions.set(absorbed.terminator, fallback);
+					}
 				}
 				break;
 			case "return":
 			case "throw":
 				{
 					const lowered: RegisterInstruction = {
-					type: block.terminator.kind,
-					registers: [registerForValue(block.terminator.value)],
+						type: block.terminator.kind,
+						registers: [registerForValue(block.terminator.value)],
 					};
 					instructions.push(lowered);
 					loweredInstructions.set(block.terminator.id, lowered);

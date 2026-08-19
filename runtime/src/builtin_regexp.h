@@ -41,15 +41,6 @@ bool mal_regexp_try_canonical_match_all(
 );
 
 /**
- * Execute a canonical, non-global/non-sticky RegExp for a closed search
- * consumer. Returns false without side effects when observable customization
- * requires the full String/RegExp protocol path.
- */
-bool mal_regexp_try_search_index_direct(
-    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
-);
-
-/**
  * Execute an exact built-in RegExp.prototype.exec call whose result is proven
  * closed over selected constant capture-index reads. A guarded hit returns null
  * or true when projection is possible. If an index is not an own match-result

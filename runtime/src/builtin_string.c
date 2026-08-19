@@ -1538,62 +1538,6 @@ static MalValue mal_builtin_string_prototype_search(MalVm *vm, MalValue this_val
     return mal_builtin_string_match_like(vm, this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), MAL_INTRINSIC_SYMBOL_SEARCH);
 }
 
-bool mal_builtin_string_search_regexp_direct(
-    MalVm *vm,
-    MalValue callee,
-    MalValue receiver,
-    MalValue regexp,
-    MalValue *out
-) {
-    if (!mal_value_is_string(receiver) ||
-        !mal_value_is_native_function_object(callee) ||
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(callee)) !=
-            mal_builtin_string_prototype_search) {
-        return false;
-    }
-#if MAL_REALMS
-    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) {
-        return false;
-    }
-#endif
-    return mal_regexp_try_search_index_direct(vm, regexp, receiver, out);
-}
-
-bool mal_builtin_string_search_literal_direct(
-    MalVm *vm,
-    MalValue callee,
-    MalValue receiver,
-    MalString *pattern,
-    MalValue *out
-) {
-#if MAL_REGEXP
-    if (!mal_primitive_method_protector ||
-        !mal_value_is_string(receiver) ||
-        !mal_value_is_native_function_object(callee) ||
-        mal_native_function_object_callback(
-            mal_value_to_native_function_object(callee)) !=
-            mal_builtin_string_prototype_search) {
-        return false;
-    }
-#if MAL_REALMS
-    if (mal_vm_callee_realm(vm, callee) != vm->current_realm) {
-        return false;
-    }
-#endif
-    MalString *subject = mal_value_to_string(receiver);
-    *out = mal_value_from_i32((i32) mal_builtin_string_find(subject, pattern, 0));
-    return true;
-#else
-    (void) vm;
-    (void) callee;
-    (void) receiver;
-    (void) pattern;
-    (void) out;
-    return false;
-#endif
-}
-
 static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;

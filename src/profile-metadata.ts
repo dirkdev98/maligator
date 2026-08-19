@@ -442,14 +442,10 @@ export function buildProfileMetadata(
 	if (compilation === undefined) {
 		throw new Error("Core program is missing product compilation metadata");
 	}
-	const sourcePaths = compilation.semantic.files.map((file) =>
-		normalizedPath(file.path),
-	);
+	const sourcePaths = compilation.semantic.files.map((file) => normalizedPath(file.path));
 	const root = commonDirectory(sourcePaths);
 	const fileByPath = new Map(
-		compilation.semantic.files.map(
-			(file) => [normalizedPath(file.path), file] as const,
-		),
+		compilation.semantic.files.map((file) => [normalizedPath(file.path), file] as const),
 	);
 	const sites: Array<ProfileSite> = [];
 	const remarks: Array<CompilerRemark> = [];

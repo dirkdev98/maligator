@@ -93,41 +93,6 @@ bool mal_vm_try_fresh_dense_indexed_fill_reserve(
     return true;
 }
 
-bool mal_vm_try_string_scan_summary(
-    MalVm *vm, MalValue input, c16 match_code_unit,
-    u32 *length_out, u32 *match_count_out
-) {
-    if (!mal_value_is_string(input) || !mal_primitive_method_protector ||
-        !mal_array_elements_protector || !mal_builtin_array_push_virtual_guard(vm)) {
-        return false;
-    }
-    u64 watched_epoch = vm->semantic_epochs.watched_methods;
-    u64 array_epoch = vm->semantic_epochs.array_elements;
-    if (watched_epoch == 0 || array_epoch == 0) return false;
-
-    MalString *string = mal_value_to_string(input);
-    usize length = string->length;
-    const c16 *code_units = mal_string_code_units(string);
-    if (watched_epoch != vm->semantic_epochs.watched_methods ||
-        array_epoch != vm->semantic_epochs.array_elements) {
-        return false;
-    }
-    u32 matches = 0;
-    for (usize index = 0; index < length; index++) {
-        if (mal_gc_poll) {
-            mal_gc_safepoint(vm);
-            if (watched_epoch != vm->semantic_epochs.watched_methods ||
-                array_epoch != vm->semantic_epochs.array_elements) {
-                return false;
-            }
-        }
-        matches += code_units[index] == match_code_unit;
-    }
-    *length_out = (u32) length;
-    *match_count_out = matches;
-    return true;
-}
-
 static const i32 *mal_op_instruction_data(MalCallable *callable, i32 offset) {
     return callable->function->instruction_data + offset;
 }
@@ -665,42 +630,6 @@ MalValue mal_vm_materialize_stack_object(MalVm *vm, const MalObject *source) {
     g_stack_object_materializations++;
     MAL_PERF_COUNT(stack_object_materializations);
     return mal_value_from_object(object);
-}
-
-MalValue mal_vm_materialize_virtual_record_array(
-    MalVm *vm,
-    MalShape *shape,
-    const MalValue *values,
-    u32 count,
-    u32 slot_count
-) {
-    assert(shape != nullptr);
-    assert(slot_count >= 1 && slot_count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    assert(shape->inline_count == slot_count);
-    assert(count == 0 || values != nullptr);
-
-    MalValue roots[2] = { mal_vm_op_create_array(vm, 0), MAL_VALUE_UNDEFINED };
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return MAL_VALUE_UNDEFINED;
-    }
-    MalRootSpan span;
-    mal_gc_root(&span, roots, 2);
-    MalArrayObject *array = mal_value_to_array_object(roots[0]);
-    for (u32 i = 0; i < count; i++) {
-        roots[1] = mal_vm_create_object_shaped(
-            vm, shape, values + ((size_t) i * slot_count), slot_count);
-        if (vm->completion.kind == MAL_COMPLETION_THROW ||
-            !mal_array_object_dense_append_many(array, &roots[1], 1)) {
-            if (vm->completion.kind != MAL_COMPLETION_THROW) {
-                mal_vm_throw_allocation_error(vm);
-            }
-            roots[0] = MAL_VALUE_UNDEFINED;
-            break;
-        }
-    }
-    MalValue result = roots[0];
-    mal_gc_unroot(&span);
-    return result;
 }
 
 MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue *values, u32 count) {
@@ -3914,146 +3843,14 @@ static void mal_perf_ic_note_replacement(const MalInlineCache *ic, u8 next_mode)
 
 static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
     if ((ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0) ||
-        ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
-        ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
-        (ic->mode == MAL_IC_MODE_TRANSITION && ic->obj != nullptr) ||
-        ic->mode == MAL_IC_MODE_FINITE_CONSTRUCTION ||
-        (ic->mode == MAL_IC_MODE_MISSING &&
+		ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
+		ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
+		(ic->mode == MAL_IC_MODE_TRANSITION && ic->obj != nullptr) ||
+		(ic->mode == MAL_IC_MODE_MISSING &&
          ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
          ic->poly_count > 0)) {
         mal_object_unregister_prototype_cache(ic);
     }
-}
-
-MalValue mal_vm_finite_property_load(
-    MalVm *vm, MalValue receiver, MalValue evaluated_key, i32 ordinal,
-    const i32 *string_indices, u8 count, MalInlineCache *ic
-) {
-    MalValue key = evaluated_key;
-    if (ordinal >= 0 && ordinal < count) {
-        key = mal_value_from_string(vm->string_constant_atoms[string_indices[ordinal]]);
-    }
-    MalValue result = mal_vm_op_load_property_ic(vm, receiver, key, ic);
-    if (vm->completion.kind == MAL_COMPLETION_THROW || count == 0 || count > 8) {
-        return result;
-    }
-
-    MalObject *object = mal_vm_as_object(receiver);
-    if (object == nullptr || object->shape->inline_count == 0) {
-        return result;
-    }
-
-    byte slots[8];
-    for (u8 index = 0; index < count; index++) {
-        MalValue known_key =
-            mal_value_from_string(vm->string_constant_atoms[string_indices[index]]);
-        i32 property_index = mal_shape_find(
-            object->shape, mal_key_from_value(known_key), MAL_SHAPE_FIND_LOAD_IC);
-        if (property_index < 0) {
-            return result;
-        }
-        u32 slot = object->shape->props[property_index].slot;
-        if (slot >= UINT8_MAX) {
-            return result;
-        }
-        slots[index] = (byte) slot;
-    }
-
-    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_FINITE_KEYS);
-    mal_ic_detach_prototype_cache(ic);
-    ic->shape = object->shape;
-    ic->key = mal_value_from_string(vm->string_constant_atoms[string_indices[0]]);
-    ic->value = MAL_VALUE_UNDEFINED;
-    ic->obj = nullptr;
-    memcpy(ic->poly_data, slots, count);
-    ic->slot = 0;
-    ic->prim_kind = 0;
-    ic->poly_count = count;
-    ic->megamorphic = false;
-    ic->mode = MAL_IC_MODE_FINITE_KEYS;
-    ic->receiver_type = 0;
-    return result;
-}
-
-void mal_vm_finite_property_store(
-    MalVm *vm, MalValue receiver, MalValue evaluated_key, MalValue value,
-    i32 ordinal, const i32 *string_indices, u8 count, bool strict,
-    MalInlineCache *ic
-) {
-    MalValue key = evaluated_key;
-    if (ordinal >= 0 && ordinal < count) {
-        key = mal_value_from_string(vm->string_constant_atoms[string_indices[ordinal]]);
-    }
-    mal_vm_op_store_property_ic(vm, receiver, key, value, strict, ic);
-    if (vm->completion.kind == MAL_COMPLETION_THROW || count == 0 || count > 8) {
-        return;
-    }
-
-    MalObject *object = mal_vm_as_object(receiver);
-    if (object == nullptr || object->shape->inline_count == 0) {
-        return;
-    }
-
-    byte slots[8];
-    for (u8 index = 0; index < count; index++) {
-        MalValue known_key =
-            mal_value_from_string(vm->string_constant_atoms[string_indices[index]]);
-        i32 property_index = mal_shape_find(
-            object->shape, mal_key_from_value(known_key), MAL_SHAPE_FIND_STORE_IC);
-        if (property_index < 0 ||
-            !mal_shape_attrs_are_default(object->shape->props[property_index].attrs)) {
-            return;
-        }
-        u32 slot = object->shape->props[property_index].slot;
-        if (slot >= UINT8_MAX) {
-            return;
-        }
-        slots[index] = (byte) slot;
-    }
-
-    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_FINITE_KEYS);
-    mal_ic_detach_prototype_cache(ic);
-    ic->shape = object->shape;
-    ic->key = mal_value_from_string(vm->string_constant_atoms[string_indices[0]]);
-    ic->value = MAL_VALUE_UNDEFINED;
-    ic->obj = nullptr;
-    memcpy(ic->poly_data, slots, count);
-    ic->slot = 0;
-    ic->prim_kind = 0;
-    ic->poly_count = count;
-    ic->megamorphic = false;
-    ic->mode = MAL_IC_MODE_FINITE_KEYS;
-    ic->receiver_type = 0;
-}
-
-void mal_vm_closed_global_table_deopt(
-    MalVm *vm, MalValue receiver, i32 base_index, i32 count, i32 state_index
-) {
-    MalValue state = vm->globals[state_index];
-    if (state == MAL_VALUE_TRUE) {
-        return;
-    }
-    if (state == MAL_VALUE_FALSE && mal_value_is_object(receiver)) {
-        MalObject *object = mal_value_to_object(receiver);
-        for (i32 index = 0; index < count; index++) {
-            MalValue value = vm->globals[base_index + index];
-            if (mal_value_is_empty(value)) {
-                continue;
-            }
-            MalPropertyDesc desc = mal_intrinsic_data_desc(
-                value,
-                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
-                    MAL_PROPERTY_CONFIGURABLE);
-            if (mal_object_define_own(object, mal_key_index(index), &desc) !=
-                MAL_DEFINE_OWN_APPLIED) {
-                mal_vm_throw_error(
-                    vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                    "Cannot materialize closed global table");
-                break;
-            }
-        }
-    }
-    vm->globals[state_index] = MAL_VALUE_TRUE;
 }
 
 static void mal_ic_record_special(
@@ -4238,76 +4035,6 @@ static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey ke
             (lookup.desc.flags & MAL_PROPERTY_WRITABLE);
     }
     return true;
-}
-
-bool mal_vm_prepare_object_finite_construction(
-    MalVm *vm, const i32 *string_indices, u8 count, MalInlineCache *ic
-) {
-    if (count == 0 || count > 8) {
-        return false;
-    }
-    MalObject *prototype =
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-    if (ic->mode == MAL_IC_MODE_FINITE_CONSTRUCTION &&
-        ic->obj == prototype && ic->shape != nullptr && ic->poly_count == count) {
-        return true;
-    }
-
-    MalObject receiver = {0};
-    receiver.prototype = prototype;
-    MalString *keys[8];
-    for (u8 index = 0; index < count; index++) {
-        MalString *key = vm->string_constant_atoms[string_indices[index]];
-        keys[index] = key;
-        if (!mal_ic_can_apply_transition_store(
-                &receiver, mal_key_from_value(mal_value_from_string(key)))) {
-            return false;
-        }
-    }
-
-    MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, count);
-    if (!mal_object_register_prototype_cache(&receiver, nullptr, ic)) {
-        return false;
-    }
-
-    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_FINITE_CONSTRUCTION);
-    ic->shape = shape;
-    ic->key = mal_value_from_string(keys[0]);
-    ic->value = MAL_VALUE_UNDEFINED;
-    ic->obj = prototype;
-    for (u8 index = 0; index < count; index++) {
-        u32 slot = shape->props[index].slot;
-        if (slot >= UINT8_MAX) {
-            mal_vm_property_cache_invalidate(ic);
-            mal_object_unregister_prototype_cache(ic);
-            return false;
-        }
-        ic->poly_data[index] = (byte) slot;
-    }
-    ic->slot = 0;
-    ic->prim_kind = 0;
-    ic->poly_count = count;
-    ic->megamorphic = false;
-    ic->mode = MAL_IC_MODE_FINITE_CONSTRUCTION;
-    ic->receiver_type = 0;
-
-    return true;
-}
-
-MalValue mal_vm_create_object_finite_construction(
-    MalVm *vm, const i32 *string_indices, u8 count, bool number_guards_ok,
-    MalInlineCache *ic
-) {
-    if (!number_guards_ok ||
-        !mal_vm_prepare_object_finite_construction(vm, string_indices, count, ic)) {
-        return mal_vm_op_create_object(vm);
-    }
-
-    MalValue values[8];
-    for (u8 index = 0; index < count; index++) {
-        values[index] = MAL_VALUE_UNDEFINED;
-    }
-    return mal_vm_create_object_shaped(vm, ic->shape, values, count);
 }
 
 static bool mal_ic_try_record_inherited_slot(

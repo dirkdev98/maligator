@@ -43,9 +43,9 @@ import type {
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
+import { formatCoreFunction } from "./core-ir.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
-import { formatCoreFunction } from "./core-ir.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { cacheFrontendWire, FrontendCompilationSession } from "./frontend-cache.ts";

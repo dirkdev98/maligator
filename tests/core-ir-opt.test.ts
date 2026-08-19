@@ -127,20 +127,16 @@ describe("Core IR optimizer", () => {
 		);
 		const builtin = instructions.find(({ opcode }) => opcode === "callBuiltin");
 		expect(builtin).toBeDefined();
-		expect(builtin?.attributes.operation).toBe(
-			"String.prototype.split",
-		);
+		expect(builtin?.attributes.operation).toBe("String.prototype.split");
 		expect(
-			instructions.some(
-				(instruction) => {
-					const index = instruction.attributes.stringIndex;
-					return (
-						instruction.opcode === "loadPropertyStatic" &&
-						typeof index === "number" &&
-						String.fromCharCode(...optimized!.stringConstants[index]!) === "split"
-					);
-				},
-			),
+			instructions.some((instruction) => {
+				const index = instruction.attributes.stringIndex;
+				return (
+					instruction.opcode === "loadPropertyStatic" &&
+					typeof index === "number" &&
+					String.fromCharCode(...optimized!.stringConstants[index]!) === "split"
+				);
+			}),
 		).toBe(false);
 	});
 
@@ -309,9 +305,7 @@ describe("Core IR optimizer", () => {
 			compileSemanticProgramToVmDefinition(semantic, {
 				afterCoreOptimization(program) {
 					opcodes = program.functions.flatMap((fn) =>
-						fn.blocks.flatMap((block) =>
-							block.instructions.map(({ opcode }) => opcode),
-						),
+						fn.blocks.flatMap((block) => block.instructions.map(({ opcode }) => opcode)),
 					);
 				},
 			});

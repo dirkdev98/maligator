@@ -1,15 +1,10 @@
 import { builtinOperationDescriptor } from "./builtin-registry.ts";
-import type { MathUnaryOperationKey } from "./builtin-registry.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
 	emitTypeofResult,
 	emitUnaryOperator,
 } from "./emit-vm.ts";
-import {
-	NUMERIC_HOF_INPUT_ACCUMULATOR,
-	NUMERIC_HOF_INPUT_ELEMENT,
-} from "./semantic-lowering.ts";
 import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
@@ -19,14 +14,9 @@ import {
 	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
 import type {
-	VmCardinalityArrayRegion,
-	VmClosedGlobalTableRegion,
 	VmExceptionHandler,
-	VmFiniteObjectConstructionRegion,
-	VmFinitePropertySelectorRegion,
 	VmFunction,
 	VmGuardPlan,
-	VmInvariantJsonMapTemplateRegion,
 	VmInstruction,
 	VmRegion,
 	VmRegionLicense,
@@ -79,27 +69,6 @@ import { profileOperationForInstruction } from "./profile-metadata.ts";
  * values of different reps joins to `boxed` (see inferReps).
  */
 type RegisterRep = "boxed" | "number" | "boolean";
-
-interface ClosedGlobalTableAccess {
-	readonly region: VmClosedGlobalTableRegion;
-	readonly access: VmClosedGlobalTableRegion["accesses"][number];
-}
-
-function closedGlobalTableAccesses(
-	fn: VmFunction,
-): ReadonlyMap<number, ClosedGlobalTableAccess> {
-	const accesses = new Map<number, ClosedGlobalTableAccess>();
-	for (const region of fn.regions ?? []) {
-		if (region.kind !== "closed-global-table") continue;
-		for (const access of region.accesses) {
-			if (accesses.has(access.ip)) {
-				throw new Error(`Overlapping closed-global table access at ${access.ip}`);
-			}
-			accesses.set(access.ip, { region, access });
-		}
-	}
-	return accesses;
-}
 
 export interface BackendProfileDecision {
 	instructionIndex: number;
@@ -602,104 +571,7 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 		}
 	}
 
-	// Exception edges would need their own predecessor states. Declining the new
-	// region-derived promotion preserves the legacy result for such functions.
-	if (fn.handlers.length > 0 || fn.instructions.length === 0) return legacyPromotable;
-
-	type ParamState = Map<number, bigint>;
-	const entryStates: Array<ParamState | undefined> = Array.from(
-		{ length: fn.instructions.length },
-		() => undefined,
-	);
-	const entry = new Map<number, bigint>();
-	for (let p = 0; p < paramCount; p++) entry.set(p, 1n << BigInt(p));
-	entryStates[0] = entry;
-	const worklist = [0];
-	const queued = new Set(worklist);
-	let numericMask = 0n;
-	let disqualifyingMask = 0n;
-	let finiteConstructionMask = 0n;
-	const finiteConstructionNumberGuards = new Map<number, ReadonlyArray<number>>(
-		(fn.regions ?? [])
-			.filter(
-				(region): region is VmFiniteObjectConstructionRegion =>
-					region.kind === "finite-object-construction",
-			)
-			.map((region) => [region.allocationIp, region.numberGuards]),
-	);
-
-	const enqueueMerge = (target: number, incoming: ParamState): void => {
-		if (target < 0 || target >= fn.instructions.length) return;
-		const current = entryStates[target];
-		if (current === undefined) {
-			entryStates[target] = new Map(incoming);
-			if (!queued.has(target)) {
-				queued.add(target);
-				worklist.push(target);
-			}
-			return;
-		}
-		let changed = false;
-		for (const [register, mask] of incoming) {
-			const merged = (current.get(register) ?? 0n) | mask;
-			if (merged !== current.get(register)) {
-				current.set(register, merged);
-				changed = true;
-			}
-		}
-		if (changed && !queued.has(target)) {
-			queued.add(target);
-			worklist.push(target);
-		}
-	};
-
-	while (worklist.length > 0) {
-		const ip = worklist.shift()!;
-		queued.delete(ip);
-		const state = entryStates[ip]!;
-		for (const register of numericReads[ip]!) {
-			numericMask |= state.get(register) ?? 0n;
-		}
-		for (const register of disqualifyingReads[ip]!) {
-			disqualifyingMask |= state.get(register) ?? 0n;
-		}
-
-		const instruction = fn.instructions[ip]!;
-		for (const register of finiteConstructionNumberGuards.get(ip) ?? []) {
-			finiteConstructionMask |= state.get(register) ?? 0n;
-		}
-		const outgoing = new Map(state);
-		const moveMask =
-			instruction.opcode === "MOVE" ? (state.get(instruction.src) ?? 0n) : 0n;
-		for (const register of vmInstructionWriteRegisters(instruction)) {
-			outgoing.delete(register);
-		}
-		if (instruction.opcode === "MOVE" && moveMask !== 0n) {
-			outgoing.set(instruction.dst, moveMask);
-		}
-
-		if (instruction.opcode === "JUMP") {
-			enqueueMerge(instruction.targetIp, outgoing);
-		} else if (instruction.opcode === "JUMP_IF") {
-			enqueueMerge(instruction.targetIp, outgoing);
-			enqueueMerge(ip + 1, outgoing);
-		} else if (instruction.opcode !== "RETURN" && instruction.opcode !== "THROW") {
-			enqueueMerge(ip + 1, outgoing);
-		}
-	}
-
-	const promotable = new Set(legacyPromotable);
-	for (let p = 0; p < paramCount; p++) {
-		const bit = 1n << BigInt(p);
-		if (
-			(finiteConstructionMask & bit) !== 0n &&
-			(numericMask & bit) !== 0n &&
-			(disqualifyingMask & bit) === 0n
-		) {
-			promotable.add(p);
-		}
-	}
-	return promotable;
+	return legacyPromotable;
 }
 
 /**
@@ -737,7 +609,6 @@ export function emitCompiledFunction(
 
 	const promotableParams = override?.promotable ?? numericParamCandidates(fn);
 	const reps = inferReps(fn, promotableParams);
-	const closedGlobalTableAccessByIp = closedGlobalTableAccesses(fn);
 
 	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
 	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
@@ -860,266 +731,6 @@ export function emitCompiledFunction(
 			stackObjectInheritedAccesses.set(planSite.inheritedAccessIp, site);
 		}
 	}
-	const finiteRecordRegions = new Map<number, FiniteRecordRegion>();
-	const finiteRecordStores = new Map<number, FiniteRecordRegion>();
-	const finiteRecordAccesses = new Map<number, FiniteRecordRegion>();
-	type FinitePropertySelector = VmFinitePropertySelectorRegion["selectors"][number];
-	const finitePropertySelectors = new Map<number, FinitePropertySelector>();
-	const finiteStringProducers = new Map<number, FinitePropertySelector>();
-	for (const region of (fn.regions ?? []).filter(
-		(candidate): candidate is VmFinitePropertySelectorRegion =>
-			candidate.kind === "finite-property-selector",
-	)) {
-		for (const selector of region.selectors) {
-			const producer = fn.instructions[selector.producerIp];
-			if (
-				producer?.opcode !== "BINARY" ||
-				producer.operator !== "+" ||
-				producer.right !== selector.ordinal ||
-				selector.stringIndices.length === 0 ||
-				selector.stringIndices.length > 32 ||
-				finiteStringProducers.has(selector.producerIp)
-			) {
-				throw new Error(
-					`Invalid finite-property selector at instruction ${selector.producerIp}`,
-				);
-			}
-			finiteStringProducers.set(selector.producerIp, selector);
-			for (const access of selector.accesses) {
-				const instruction = fn.instructions[access.ip];
-				if (
-					(access.kind === "load"
-						? instruction?.opcode !== "LOAD_PROPERTY" || instruction.key !== producer.dst
-						: instruction?.opcode !== "STORE_PROPERTY" ||
-							instruction.key !== producer.dst) ||
-					finitePropertySelectors.has(access.ip)
-				) {
-					throw new Error(
-						`Invalid finite-property selector access at instruction ${access.ip}`,
-					);
-				}
-				finitePropertySelectors.set(access.ip, selector);
-			}
-		}
-	}
-	const finiteConstructionRegions = new Map<number, VmFiniteObjectConstructionRegion>();
-	for (const finite of (fn.regions ?? []).filter(
-		(region): region is VmFiniteObjectConstructionRegion =>
-			region.kind === "finite-object-construction",
-	)) {
-		const allocation = fn.instructions[finite.allocationIp];
-		const store = fn.instructions[finite.storeIp];
-		const selectorMatches = (ip: number): boolean => {
-			const selector = finitePropertySelectors.get(ip);
-			return (
-				selector !== undefined &&
-				selector.stringIndices.length === finite.keyStringIndices.length &&
-				selector.stringIndices.every(
-					(index, ordinal) => index === finite.keyStringIndices[ordinal],
-				)
-			);
-		};
-		if (
-			allocation?.opcode !== "CREATE_OBJECT" ||
-			store?.opcode !== "STORE_PROPERTY" ||
-			store.icIndex !== finite.icIndex ||
-			!selectorMatches(finite.storeIp) ||
-			finite.keyStringIndices.length === 0 ||
-			finite.keyStringIndices.length > 8 ||
-			finite.numberGuards.some(
-				(register) => register < 0 || register >= fn.registerCount,
-			) ||
-			finite.accessIps.some((ip) => {
-				const access = fn.instructions[ip];
-				return access?.opcode !== "LOAD_PROPERTY" || !selectorMatches(ip);
-			}) ||
-			finiteConstructionRegions.has(finite.allocationIp)
-		) {
-			throw new Error(
-				`Invalid finite-object construction region at instruction ${finite.allocationIp}`,
-			);
-		}
-		finiteConstructionRegions.set(finite.allocationIp, finite);
-		if (!finite.virtualRecord) continue;
-		const region: FiniteRecordRegion = {
-			allocationInstructionIndex: finite.allocationIp,
-			slotsOffset: nextStackSlot,
-			slotCount: finite.keyStringIndices.length,
-			fastName: `__finite_record_${finite.allocationIp}_fast`,
-		};
-		nextStackSlot += region.slotCount;
-		finiteRecordRegions.set(finite.allocationIp, region);
-		finiteRecordStores.set(finite.storeIp, region);
-		for (const ip of finite.accessIps) {
-			finiteRecordAccesses.set(ip, region);
-		}
-	}
-	const cardinalityRegions = new Map<number, CardinalityRegion>();
-	const cardinalityAccesses = new Map<
-		number,
-		{
-			region: CardinalityRegion;
-			role: "push" | "length" | "element" | "field";
-			fieldSlot?: number;
-		}
-	>();
-	const cardinalityPushes = new Map<number, CardinalityRegion>();
-	const cardinalityHistorySlotLimit = stackSlotsBase + 512;
-	const cardinalityPlanRegions = (fn.regions ?? []).filter(
-		(region): region is VmCardinalityArrayRegion => region.kind === "cardinality-array",
-	);
-	for (const plan of cardinalityPlanRegions) {
-		const instruction = fn.instructions[plan.allocationIp];
-		const push = fn.instructions[plan.pushCallIp];
-		const pushedInstruction = fn.instructions[plan.itemAllocationIp];
-		if (
-			instruction?.opcode !== "CREATE_ARRAY" ||
-			push?.opcode !== "CALL" ||
-			push.arguments.length !== 1 ||
-			pushedInstruction?.opcode !== "CREATE_OBJECT_SHAPED"
-		) {
-			continue;
-		}
-		const receiver = decodeVmValueOperand(push.thisValue);
-		const pushedValue = decodeVmValueOperand(push.arguments[0]!);
-		if (receiver.kind !== "register" || pushedValue.kind !== "register") continue;
-		if (pushedInstruction.count === 0 || stackObjectSites.has(plan.itemAllocationIp)) {
-			continue;
-		}
-		const historySlotCount = plan.maximumLength * pushedInstruction.count;
-		if (
-			plan.maximumLength <= 0 ||
-			nextStackSlot + pushedInstruction.count + historySlotCount >
-				cardinalityHistorySlotLimit
-		) {
-			continue;
-		}
-		const pushedSite: StackObjectSite = {
-			objectName: `__stack_object_${plan.itemAllocationIp}`,
-			slotsOffset: nextStackSlot,
-			slotCount: pushedInstruction.count,
-		};
-		stackObjectSites.set(plan.itemAllocationIp, pushedSite);
-		nextStackSlot += pushedInstruction.count;
-		const region: CardinalityRegion = {
-			allocationInstructionIndex: plan.allocationIp,
-			arrayRegister: receiver.register,
-			maximumLength: plan.maximumLength,
-			license: plan.license,
-			semanticEpochStable: false,
-			epochName: `__cardinality_${plan.allocationIp}_semantic_epoch`,
-			itemSite: pushedSite,
-			itemRegister: pushedValue.register,
-			itemShapeCacheIndex: pushedInstruction.shapeCacheIndex,
-			itemKeyStringIndices: [...pushedInstruction.keyStringIndices],
-			historySlotsOffset: nextStackSlot,
-			fastName: `__cardinality_${plan.allocationIp}_fast`,
-			countName: `__cardinality_${plan.allocationIp}_count`,
-			shapeName: `__cardinality_${plan.allocationIp}_shape`,
-			currentMaterializedName: `__cardinality_${plan.allocationIp}_current_materialized`,
-			elementIndexName: `__cardinality_${plan.allocationIp}_element_index`,
-		};
-		pushedSite.cardinalityRegion = region;
-		nextStackSlot += historySlotCount;
-		cardinalityRegions.set(plan.allocationIp, region);
-		cardinalityPushes.set(plan.pushCallIp, region);
-		for (const access of plan.accesses) {
-			cardinalityAccesses.set(access.ip, {
-				region,
-				role: access.role,
-				fieldSlot: access.fieldSlot,
-			});
-		}
-	}
-	for (const region of cardinalityRegions.values()) {
-		const operationIps = new Set<number>([region.allocationInstructionIndex]);
-		for (const [ip, access] of cardinalityAccesses) {
-			if (access.region === region) operationIps.add(ip);
-		}
-		for (const [ip, pushRegion] of cardinalityPushes) {
-			if (pushRegion === region) operationIps.add(ip);
-		}
-		const lastIp = Math.max(...operationIps);
-		let stable = true;
-		for (let ip = region.allocationInstructionIndex + 1; ip <= lastIp; ip++) {
-			if (operationIps.has(ip)) continue;
-			if (
-				nativeInstructionMayInvalidateSemanticEpoch(
-					fn.instructions[ip]!,
-					reps,
-					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
-					finiteStringProducers.get(ip),
-				)
-			) {
-				stable = false;
-				break;
-			}
-		}
-		if (stable) {
-			const blockStarts = new Set<number>([0]);
-			for (let ip = 0; ip < fn.instructions.length; ip++) {
-				const instruction = fn.instructions[ip]!;
-				if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
-					blockStarts.add(instruction.targetIp);
-				}
-				if (
-					instruction.opcode === "JUMP" ||
-					instruction.opcode === "RETURN" ||
-					instruction.opcode === "THROW"
-				) {
-					if (ip + 1 < fn.instructions.length) blockStarts.add(ip + 1);
-				}
-			}
-			const orderedBlockStarts = [...blockStarts].sort((left, right) => left - right);
-			const internalTransfer = (sourceIp: number, visiting = new Set<number>()): boolean => {
-				const start = orderedBlockStarts.findLast((candidate) => candidate <= sourceIp);
-				if (start === undefined || visiting.has(start)) return false;
-				if (
-					fn.instructions[sourceIp]?.opcode !== "JUMP" ||
-					fn.instructions
-						.slice(start, sourceIp)
-						.some(({ opcode }) => opcode !== "MOVE")
-				) {
-					return false;
-				}
-				const predecessors: Array<number> = [];
-				for (let ip = 0; ip < fn.instructions.length; ip++) {
-					const instruction = fn.instructions[ip]!;
-					if (
-						(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-						instruction.targetIp === start
-					) {
-						predecessors.push(ip);
-					}
-				}
-				if (predecessors.length === 0) return false;
-				const nextVisiting = new Set(visiting).add(start);
-				return predecessors.every(
-					(predecessor) =>
-						(predecessor >= region.allocationInstructionIndex && predecessor <= lastIp) ||
-						internalTransfer(predecessor, nextVisiting),
-				);
-			};
-			const externalEntryIps = new Set<number>();
-			for (let sourceIp = 0; sourceIp < fn.instructions.length; sourceIp++) {
-				const instruction = fn.instructions[sourceIp]!;
-				if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
-					if (
-						(sourceIp < region.allocationInstructionIndex || sourceIp > lastIp) &&
-						!internalTransfer(sourceIp)
-					) {
-						externalEntryIps.add(instruction.targetIp);
-					}
-				}
-			}
-			// Exception handlers are implicit CFG entries rather than JUMP opcodes.
-			for (const handler of fn.handlers) externalEntryIps.add(handler.handlerIp);
-			stable = ![...externalEntryIps].some(
-				(targetIp) => targetIp > region.allocationInstructionIndex && targetIp <= lastIp,
-			);
-		}
-		region.semanticEpochStable = stable;
-	}
 	const stringSplitProjectionSites = new Map<number, NativeStringSplitProjectionSite>();
 	for (const projection of (fn.regions ?? []).filter(
 		(region): region is NativeStringSplitProjection =>
@@ -1175,14 +786,7 @@ export function emitCompiledFunction(
 		let semanticEpochStable = true;
 		for (let ip = callIp + 1; ip <= backedgeIp; ip++) {
 			if (cursorOperations.has(ip)) continue;
-			if (
-				nativeInstructionMayInvalidateSemanticEpoch(
-					fn.instructions[ip]!,
-					reps,
-					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
-					finiteStringProducers.get(ip),
-				)
-			) {
+			if (nativeInstructionMayInvalidateSemanticEpoch(fn.instructions[ip]!, reps)) {
 				semanticEpochStable = false;
 				break;
 			}
@@ -1269,173 +873,6 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += loads.length + 1;
 	}
-	const invariantJsonParseCaches = new Map<number, NativeInvariantJsonParseCacheSite>();
-	const invariantJsonMapTemplates = new Map<
-		number,
-		VmInvariantJsonMapTemplateRegion & { rootsOffset: number }
-	>();
-	for (const template of (fn.regions ?? []).filter(
-		(region): region is VmInvariantJsonMapTemplateRegion =>
-			region.kind === "invariant-json-map-template",
-	)) {
-		const parse = fn.instructions[template.parseCallIp];
-		const load = fn.instructions[template.mapLoadIp];
-		const call = fn.instructions[template.mapCallIp];
-		if (
-			parse?.opcode !== "CALL" ||
-			parse.dst !== template.parseResult ||
-			parse.callee !== template.parseCallee ||
-			parse.thisValue !== template.jsonObject ||
-			load?.opcode !== "LOAD_PROPERTY_STATIC" ||
-			load.object !== template.parseResult ||
-			load.dst !== template.mapCallee ||
-			call?.opcode !== "CALL" ||
-			call.callee !== template.mapCallee ||
-			call.thisValue !== template.parseResult ||
-			call.dst !== template.mapResult ||
-			template.mapLoadIp !== template.parseCallIp + 1 ||
-			template.mapCallIp !== template.parseCallIp + 2 ||
-			template.captures.length === 0 ||
-			template.captures.length > 8 ||
-			invariantJsonMapTemplates.has(template.parseCallIp)
-		) {
-			throw new Error(
-				`Invalid invariant JSON map template at instruction ${template.parseCallIp}`,
-			);
-		}
-		invariantJsonMapTemplates.set(template.parseCallIp, {
-			...template,
-			rootsOffset: nextStackSlot,
-		});
-		nextStackSlot += 4 + template.captures.length;
-	}
-	for (const region of (fn.regions ?? []).filter(
-		(candidate) => candidate.kind === "invariant-json-parse-cache",
-	)) {
-		const json = fn.instructions[region.jsonIntrinsicIp];
-		const property = fn.instructions[region.parsePropertyIp];
-		const key =
-			region.parseKeyIp === undefined ? undefined : fn.instructions[region.parseKeyIp];
-		const call = fn.instructions[region.parseCallIp];
-		const text =
-			call?.opcode === "CALL" && call.arguments.length === 1
-				? decodeVmValueOperand(call.arguments[0]!)
-				: undefined;
-		const propertyMatches =
-			property?.opcode === "LOAD_PROPERTY_STATIC"
-				? region.parseKeyIp === undefined && property.object === region.jsonObject
-				: property?.opcode === "LOAD_PROPERTY"
-					? key?.opcode === "CREATE_STRING" &&
-						property.key === key.dst &&
-						property.object === region.jsonObject
-					: false;
-		if (
-			json?.opcode !== "LOAD_INTRINSIC" ||
-			json.intrinsic !== "JSON" ||
-			json.dst !== region.jsonObject ||
-			!propertyMatches ||
-			(property?.opcode !== "LOAD_PROPERTY_STATIC" &&
-				property?.opcode !== "LOAD_PROPERTY") ||
-			property.dst !== region.parseCallee ||
-			call?.opcode !== "CALL" ||
-			call.callee !== region.parseCallee ||
-			call.thisValue !== region.jsonObject ||
-			call.dst !== region.result ||
-			text?.kind !== "register" ||
-			text.register !== region.text ||
-			invariantJsonMapTemplates.has(region.parseCallIp) ||
-			invariantJsonParseCaches.has(region.parseCallIp)
-		) {
-			throw new Error(`Invalid invariant JSON parse cache at ${region.parseCallIp}`);
-		}
-		invariantJsonParseCaches.set(region.parseCallIp, {
-			callIp: region.parseCallIp,
-			rootsOffset: nextStackSlot,
-		});
-		nextStackSlot += 2;
-	}
-	const privateAggregateMemos = new Map<
-		number,
-		NativePrivateAggregateMemoRegion & {
-			rootsOffset: number;
-		}
-	>();
-	for (const memo of (fn.regions ?? []).filter(
-		(region): region is NativePrivateAggregateMemoRegion =>
-			region.kind === "private-aggregate-memo",
-	)) {
-		const instruction = fn.instructions[memo.callIp];
-		const allocation = fn.instructions[memo.allocationIp];
-		const callee =
-			instruction?.opcode === "CALL"
-				? decodeVmValueOperand(instruction.callee)
-				: undefined;
-		const input =
-			instruction?.opcode === "CALL" && instruction.arguments.length === 1
-				? decodeVmValueOperand(instruction.arguments[0]!)
-				: undefined;
-		if (
-			instruction?.opcode !== "CALL" ||
-			instruction.dst !== memo.result ||
-			callee?.kind !== "register" ||
-			callee.register !== memo.callee ||
-			instruction.arguments.length !== 1 ||
-			input?.kind !== "register" ||
-			input.register !== memo.input ||
-			instruction.directFunctionIndex !== memo.targetFunctionIndex ||
-			allocation?.opcode !== "CREATE_ARRAY" ||
-			privateAggregateMemos.has(memo.callIp)
-		) {
-			throw new Error(`Invalid private aggregate memo at instruction ${memo.callIp}`);
-		}
-		privateAggregateMemos.set(memo.callIp, {
-			...memo,
-			rootsOffset: nextStackSlot,
-		});
-		nextStackSlot += 2;
-	}
-	const numericHofRegions = new Map<number, NumericHofRegionSite>();
-	for (const region of (fn.regions ?? []).filter(
-		(region): region is Extract<VmRegion, { kind: "numeric-hof" }> =>
-			region.kind === "numeric-hof",
-	)) {
-		const initialMoveIp = region.anchors[0]!;
-		const loopExitIp = region.anchors[3]!;
-		const entryIp =
-			region.dispatch.kind === "guarded" ? region.dispatch.guardCallIp : initialMoveIp;
-		const initialMove = fn.instructions[initialMoveIp];
-		const loopExit = fn.instructions[loopExitIp];
-		const completionIp = loopExit?.opcode === "JUMP" ? loopExit.targetIp : -1;
-		const completion = fn.instructions[completionIp];
-		const entry = fn.instructions[entryIp];
-		if (
-			initialMove?.opcode !== "MOVE" ||
-			loopExit?.opcode !== "JUMP" ||
-			completion === undefined ||
-			(completion.opcode === "MOVE" && completion.src !== initialMove.dst) ||
-			(region.dispatch.kind === "guarded"
-				? entry?.opcode !== "CALL"
-				: entry?.opcode !== "MOVE") ||
-			numericHofRegions.has(entryIp)
-		) {
-			throw new Error(`Invalid numeric HOF region at instruction ${entryIp}`);
-		}
-		numericHofRegions.set(entryIp, {
-			...region,
-			entryIp,
-			initialMoveIp,
-			completionIp,
-			initial: initialMove.src,
-			accumulator: initialMove.dst,
-			result:
-				completion.opcode === "MOVE" && completion.src === initialMove.dst
-					? completion.dst
-					: initialMove.dst,
-		});
-	}
-	const affineRangeRegions = (fn.regions ?? []).filter(
-		(region) => region.kind === "affine-range-virtualization",
-	);
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -1462,23 +899,10 @@ export function emitCompiledFunction(
 		stackObjectAccesses,
 		stackObjectMaterializations,
 		stackObjectInheritedAccesses,
-		finiteRecordRegions,
-		finiteRecordStores,
-		finiteRecordAccesses,
-		finiteConstructionRegions,
-		finitePropertySelectors,
-		finiteStringProducers,
-		cardinalityRegions,
-		cardinalityAccesses,
-		cardinalityPushes,
 		stringSplitProjectionSites,
 		stringSplitCursorSites,
 		regexpExecProjectionSites,
 		regexpIteratorProjectionSites,
-		invariantJsonParseCaches,
-		invariantJsonMapTemplates,
-		privateAggregateMemos,
-		numericHofRegions,
 		directCompiledTargets,
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
@@ -1616,38 +1040,6 @@ export function emitCompiledFunction(
 			lines.push(`    bool ${site.inheritedFastName} = false;`);
 			lines.push(`    MalValue ${site.inheritedValueName} = MAL_VALUE_UNDEFINED;`);
 		}
-	}
-	for (const region of finiteRecordRegions.values()) {
-		lines.push(`    bool ${region.fastName} = false;`);
-	}
-	for (const region of cardinalityRegions.values()) {
-		lines.push(`    bool ${region.fastName} = false;`);
-		if (!region.semanticEpochStable) {
-			lines.push(`    u64 ${region.epochName} = 0;`);
-		}
-		lines.push(`    u32 ${region.countName} = 0;`);
-		lines.push(`    MalShape *${region.shapeName} = nullptr;`);
-		lines.push(`    bool ${region.currentMaterializedName} = false;`);
-		lines.push(`    i32 ${region.elementIndexName} = -1;`);
-	}
-	for (const cache of invariantJsonParseCaches.values()) {
-		lines.push(
-			`    MalInvariantJsonParseCache __invariant_json_parse_${cache.callIp} = { .roots = &__gc_slots[${cache.rootsOffset}], .filled = false };`,
-		);
-	}
-	for (const template of invariantJsonMapTemplates.values()) {
-		lines.push(
-			`    MalInvariantJsonMapTemplate __invariant_json_map_${template.parseCallIp} = { .roots = &__gc_slots[${template.rootsOffset}], .state = MAL_INVARIANT_JSON_MAP_EMPTY };`,
-			`    bool __invariant_json_map_${template.parseCallIp}_hit = false;`,
-		);
-	}
-	for (const memo of privateAggregateMemos.values()) {
-		lines.push(
-			`    MalPrivateAggregateMemo __private_aggregate_memo_${memo.callIp} = { .roots = &__gc_slots[${memo.rootsOffset}], .state = MAL_PRIVATE_AGGREGATE_MEMO_EMPTY, .private_ok = false, .admitted = false };`,
-		);
-	}
-	for (const region of affineRangeRegions) {
-		lines.push(`    bool __affine_range_${region.allocationIp} = false;`);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
@@ -1852,19 +1244,6 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
-		new Map(),
 		new Map(),
 		new Map(),
 		new Map(),
@@ -2154,16 +1533,14 @@ function nativeInstructionMayCaptureStack(
 }
 
 /**
- * Whether an instruction outside a cardinality region's own fast operations may
- * synchronously run JavaScript and therefore mutate a watched semantic family.
+ * Whether an instruction may synchronously run JavaScript and therefore mutate
+ * a watched semantic family.
  * Allocation and GC are safe: this runtime's collector does not run finalizers or
  * jobs inside a safepoint. Unknown instructions fail closed.
  */
 function nativeInstructionMayInvalidateSemanticEpoch(
 	instruction: VmInstruction,
 	reps: Array<RegisterRep>,
-	directClosedGlobalAccess = false,
-	finiteStringProducer?: VmFinitePropertySelectorRegion["selectors"][number],
 ): boolean {
 	switch (instruction.opcode) {
 		case "CREATE_OBJECT":
@@ -2174,22 +1551,12 @@ function nativeInstructionMayInvalidateSemanticEpoch(
 			return false;
 		case "LOAD_PROPERTY":
 		case "STORE_PROPERTY":
-			if (directClosedGlobalAccess) return false;
 			return true;
 		case "LOAD_PROPERTY_STATIC":
 			// The local String-brand fast path retains a generic property fallback. A
 			// non-String receiver may therefore run JavaScript even when this operation
 			// carries the hint; only a region-wide admission proof could suppress it.
 			return true;
-		case "BINARY":
-			if (
-				instruction.operator === "+" &&
-				finiteStringProducer !== undefined &&
-				reps[instruction.right] === "number"
-			) {
-				return false;
-			}
-			return nativeInstructionMayCaptureStack(instruction, reps);
 		default:
 			return nativeInstructionMayCaptureStack(instruction, reps);
 	}
@@ -2298,8 +1665,6 @@ interface RegionAccess {
 	leadingIcIndex: number;
 	icIndices: Array<number>;
 	commit: boolean;
-	/** Exact own data slot licensed by a closed record-Array region. */
-	closedSlot?: number;
 }
 
 /**
@@ -2314,30 +1679,6 @@ interface StringCharCodeAtFusion {
 	load: Extract<VmInstruction, { opcode: "LOAD_PROPERTY_STATIC" }>;
 	call: Extract<VmInstruction, { opcode: "CALL" }>;
 }
-
-type NativeStringScanRegion = Extract<VmRegion, { kind: "string-scan-summary" }>;
-
-interface NativeStringScanRegionAction {
-	region: NativeStringScanRegion;
-	role: "entry" | "length";
-}
-
-type NativeStringSearchRegExpRegion = Extract<VmRegion, { kind: "string-search-regexp" }>;
-
-interface NativeStringSearchRegExpAction {
-	region: NativeStringSearchRegExpRegion;
-	role: "construct" | "call";
-}
-
-interface NativeInvariantJsonParseCacheSite {
-	callIp: number;
-	rootsOffset: number;
-}
-
-type NativePrivateAggregateMemoRegion = Extract<
-	VmRegion,
-	{ kind: "private-aggregate-memo" }
->;
 
 type NativeStringSplitProjection = Extract<
 	NonNullable<VmFunction["regions"]>[number],
@@ -2674,11 +2015,6 @@ function findInheritedLoadLoopTwins(
 	fn: VmFunction,
 	reps: Array<RegisterRep>,
 	coro: CoroutineContext | null,
-	closedGlobalTableAccessByIp: ReadonlyMap<number, ClosedGlobalTableAccess>,
-	finiteStringProducers: ReadonlyMap<
-		number,
-		VmFinitePropertySelectorRegion["selectors"][number]
-	>,
 ): Array<InheritedLoadLoopTwin> {
 	if (coro !== null) return [];
 
@@ -2743,12 +2079,7 @@ function findInheritedLoadLoopTwins(
 			}
 			if (
 				!LOOP_TWIN_SCALAR_OPCODES.has(instruction.opcode) ||
-				nativeInstructionMayInvalidateSemanticEpoch(
-					instruction,
-					reps,
-					closedGlobalTableAccessByIp.get(ip)?.access.direct === true,
-					finiteStringProducers.get(ip),
-				)
+				nativeInstructionMayInvalidateSemanticEpoch(instruction, reps)
 			) {
 				scalarOnly = false;
 				break;
@@ -2757,11 +2088,6 @@ function findInheritedLoadLoopTwins(
 		if (!scalarOnly || loads.length !== 1) continue;
 		const load = loads[0]!;
 		if (
-			(fn.regions ?? []).some(
-				(region) =>
-					region.kind === "cardinality-array" &&
-					region.accesses.some((access) => access.ip === load.ip),
-			) ||
 			(fn.regions ?? []).some(
 				(region) =>
 					region.kind === "stack-object-plan" &&
@@ -2849,7 +2175,6 @@ interface StackObjectSite {
 	inheritedFastName?: string;
 	inheritedValueName?: string;
 	inheritedGuard?: VmGuardPlan;
-	cardinalityRegion?: CardinalityRegion;
 }
 
 function semanticDependencyMask(
@@ -2932,206 +2257,6 @@ function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
 	return semanticDependencyAdmissionGuard(guard);
 }
 
-function closedGlobalTableAdmissionGuard(guard: VmGuardPlan): string {
-	if (
-		!guard.obligations.includes("fallback") ||
-		!guard.obligations.includes("materialize")
-	) {
-		throw new Error("Closed-global table lacks its fallback contract");
-	}
-	return semanticDependencyAdmissionGuard(guard);
-}
-
-interface FiniteRecordRegion {
-	allocationInstructionIndex: number;
-	slotsOffset: number;
-	slotCount: number;
-	fastName: string;
-}
-
-/** A serialized numeric reduce plan anchored where its ordinary loop initializes
- * the accumulator. A local miss emits that move and continues unchanged. */
-type NumericHofRegionSite = Extract<VmRegion, { kind: "numeric-hof" }> & {
-	readonly entryIp: number;
-	readonly initialMoveIp: number;
-	readonly completionIp: number;
-	readonly initial: number;
-	readonly accumulator: number;
-	readonly result: number;
-};
-
-/** The C expression each proven Math operation lowers to, and the bit that proves
- * the corresponding builtin is still installed. Every expression must stay
- * identical to that builtin's own (MAL_BUILTIN_MATH_UNARY in builtin_math.c);
- * the fold's whole claim is that it computes what the call would have. */
-const NUMERIC_FOLD_MATH_OPS: ReadonlyMap<
-	MathUnaryOperationKey,
-	{ expression: (value: string) => string }
-> = new Map([
-	["abs", { expression: (value) => `fabs(${value})` }],
-	["floor", { expression: (value) => `floor(${value})` }],
-	["ceil", { expression: (value) => `ceil(${value})` }],
-	[
-		"round",
-		{
-			expression: (value) =>
-				`mal_builtin_math_unary_number_known(MAL_MATH_UNARY_ROUND, ${value})`,
-		},
-	],
-	["trunc", { expression: (value) => `trunc(${value})` }],
-	["sqrt", { expression: (value) => `sqrt(${value})` }],
-	["cbrt", { expression: (value) => `cbrt(${value})` }],
-	[
-		"sign",
-		{
-			expression: (value) =>
-				`(isnan(${value}) ? NAN : (${value} > 0 ? 1 : (${value} < 0 ? -1 : ${value})))`,
-		},
-	],
-	["log", { expression: (value) => `log(${value})` }],
-	["log2", { expression: (value) => `log2(${value})` }],
-	["log10", { expression: (value) => `log10(${value})` }],
-	["exp", { expression: (value) => `exp(${value})` }],
-	["sin", { expression: (value) => `sin(${value})` }],
-	["cos", { expression: (value) => `cos(${value})` }],
-	["tan", { expression: (value) => `tan(${value})` }],
-	["asin", { expression: (value) => `asin(${value})` }],
-	["acos", { expression: (value) => `acos(${value})` }],
-	["atan", { expression: (value) => `atan(${value})` }],
-	["sinh", { expression: (value) => `sinh(${value})` }],
-	["cosh", { expression: (value) => `cosh(${value})` }],
-	["tanh", { expression: (value) => `tanh(${value})` }],
-	["asinh", { expression: (value) => `asinh(${value})` }],
-	["acosh", { expression: (value) => `acosh(${value})` }],
-	["atanh", { expression: (value) => `atanh(${value})` }],
-	["log1p", { expression: (value) => `log1p(${value})` }],
-	["expm1", { expression: (value) => `expm1(${value})` }],
-	["fround", { expression: (value) => `(f64) (float) (${value})` }],
-]);
-
-/**
- * Straight-line native arithmetic for one proven numeric `reduce` region. The
- * ordinary guarded loop this replaces reads every element through HasProperty +
- * Get and calls the callback, whose Math operations each re-resolve an
- * inline-cached property and re-prove the native callback; the plan is exactly
- * that callback as f64 code.
- *
- * Nothing is written and nothing is observable until the fold completes, so a
- * non-Number element simply abandons the attempt and lets the untouched region
- * produce the result. A completed fold writes the accumulator and rejoins the
- * region at its accumulator read, leaving the result register, the source
- * position, and every later instruction exactly as they were.
- *
- * Returns null when a register representation leaves nothing to prove — the
- * region then emits as if it had never been admitted.
- */
-function emitNumericFoldRegion(
-	region: NumericHofRegionSite,
-	reps: Array<RegisterRep>,
-): Array<string> | null {
-	if (reps[region.receiver] !== "boxed" || reps[region.accumulator] === "boolean") {
-		return null;
-	}
-	const prefix = `__fold_${region.entryIp}`;
-	const accumulator = `${prefix}_accumulator`;
-	const element = `${prefix}_element`;
-	const operand = (value: number): string =>
-		value === NUMERIC_HOF_INPUT_ACCUMULATOR
-			? accumulator
-			: value === NUMERIC_HOF_INPUT_ELEMENT
-				? element
-				: `${prefix}_op${value}`;
-	const plan: Array<string> = [];
-	for (const [index, operation] of region.operations.entries()) {
-		const name = `${prefix}_op${index}`;
-		if (operation.type === "constant") {
-			plan.push(`f64 ${name} = ${cF64Literal(operation.value)};`);
-		} else if (operation.type === "binary") {
-			const expression = nativeNumberExpr(
-				operation.operator,
-				operand(operation.left),
-				operand(operation.right),
-			);
-			if (expression === null) return null;
-			plan.push(`f64 ${name} = ${expression};`);
-		} else {
-			const math = NUMERIC_FOLD_MATH_OPS.get(operation.operation);
-			if (math === undefined) return null;
-			plan.push(`f64 ${name} = ${math.expression(operand(operation.value))};`);
-		}
-	}
-	const mathCalls = region.operations.filter(
-		(operation) => operation.type === "math",
-	).length;
-	const initialValue = cF64Literal(region.initialValue);
-	const foldedResult =
-		reps[region.accumulator] === "number"
-			? accumulator
-			: `mal_ops_number_value(${accumulator})`;
-	return [
-		`{`,
-		`  const MalValue *${prefix}_elements;`,
-		`  u32 ${prefix}_length;`,
-		`  if (${regionAdmissionGuard(region.license)} && mal_builtin_array_numeric_fold_local_admit(vm, r${region.receiver}, &${prefix}_elements, &${prefix}_length)) {`,
-		`    f64 ${accumulator} = ${initialValue};`,
-		`    u32 ${prefix}_index = 0;`,
-		`    for (; ${prefix}_index < ${prefix}_length; ${prefix}_index++) {`,
-		`      MalValue ${prefix}_boxed = ${prefix}_elements[${prefix}_index];`,
-		`      if (!mal_ops_is_number(${prefix}_boxed)) break;`,
-		`      f64 ${element} = mal_ops_number_as_f64(${prefix}_boxed);`,
-		...plan.map((line) => `      ${line}`),
-		`      ${accumulator} = ${operand(region.resultOperand)};`,
-		`    }`,
-		`    mal_perf_numeric_fold_region(${prefix}_index, ${prefix}_length, ${mathCalls});`,
-		`    if (${prefix}_index == ${prefix}_length) {`,
-		`      r${region.accumulator} = ${foldedResult};`,
-		`      if (mal_gc_poll) mal_gc_safepoint(vm);`,
-		`      goto L${region.completionIp};`,
-		`    }`,
-		`  }`,
-		`}`,
-	];
-}
-
-interface CardinalityRegion {
-	allocationInstructionIndex: number;
-	arrayRegister: number;
-	maximumLength: number;
-	license: VmRegionLicense;
-	/** Every instruction in the complete virtual lifetime is unable to run JS or
-	 * invalidate either semantic family, so admission licenses all later uses. */
-	semanticEpochStable: boolean;
-	epochName: string;
-	itemSite: StackObjectSite;
-	itemRegister: number;
-	itemShapeCacheIndex: number;
-	itemKeyStringIndices: Array<number>;
-	historySlotsOffset: number;
-	fastName: string;
-	countName: string;
-	shapeName: string;
-	currentMaterializedName: string;
-	elementIndexName: string;
-}
-
-function cardinalityAdmissionGuard(region: CardinalityRegion): string {
-	const semantic = regionAdmissionGuard(
-		region.license,
-		region.semanticEpochStable ? undefined : region.epochName,
-	);
-	return vmGuardIsWorldInvariant(region.license.guard)
-		? semantic
-		: `${semantic} && mal_builtin_array_push_virtual_guard(vm)`;
-}
-
-/**
- * Hoisted state for a consolidated (polymorphic) object region: up to
- * MAL_OBJECT_REGION_MAX_SHAPES cached variant shapes, the shared per-access keys, and the
- * per-variant slot table (statics, so they persist across calls like an IC), plus the object
- * pointer, the matched variant index `_v` (-1 = miss), and the `_ok` flag. Emitted once, at
- * the run's first access. Real code is often polymorphic at a site; caching a few shapes lets
- * the run stay consolidated instead of deopting to the per-access ICs on every other shape.
- */
 function consolidatedRegionDeclare(reg: RegionAccess, objExpr: string): Array<string> {
 	return [
 		`MalObjectRegionCache *${reg.name}_c = vm->property_cache[__property_function_index].regions[${reg.leadingIcIndex}];`,
@@ -3211,11 +2336,6 @@ interface NativeNumericFusionAction {
 	readonly first: Extract<VmInstruction, { opcode: "BINARY" }>;
 }
 
-interface NativeAffineRangeAction {
-	readonly region: Extract<VmRegion, { kind: "affine-range-virtualization" }>;
-	readonly role: "allocation" | "store" | "load";
-}
-
 /**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
@@ -3232,94 +2352,14 @@ function emitBody(
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
 	stackObjectInheritedAccesses: ReadonlyMap<number, StackObjectSite>,
-	finiteRecordRegions: ReadonlyMap<number, FiniteRecordRegion>,
-	finiteRecordStores: ReadonlyMap<number, FiniteRecordRegion>,
-	finiteRecordAccesses: ReadonlyMap<number, FiniteRecordRegion>,
-	finiteConstructionRegions: ReadonlyMap<number, VmFiniteObjectConstructionRegion>,
-	finitePropertySelectors: ReadonlyMap<
-		number,
-		VmFinitePropertySelectorRegion["selectors"][number]
-	>,
-	finiteStringProducers: ReadonlyMap<
-		number,
-		VmFinitePropertySelectorRegion["selectors"][number]
-	>,
-	cardinalityRegions: ReadonlyMap<number, CardinalityRegion>,
-	cardinalityAccesses: ReadonlyMap<
-		number,
-		{
-			region: CardinalityRegion;
-			role: "push" | "length" | "element" | "field";
-			fieldSlot?: number;
-		}
-	>,
-	cardinalityPushes: ReadonlyMap<number, CardinalityRegion>,
 	stringSplitProjectionSites: ReadonlyMap<number, NativeStringSplitProjectionSite>,
 	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
-	invariantJsonParseCaches: ReadonlyMap<number, NativeInvariantJsonParseCacheSite>,
-	invariantJsonMapTemplates: ReadonlyMap<
-		number,
-		VmInvariantJsonMapTemplateRegion & { rootsOffset: number }
-	>,
-	privateAggregateMemos: ReadonlyMap<
-		number,
-		NativePrivateAggregateMemoRegion & {
-			rootsOffset: number;
-		}
-	>,
-	numericHofRegions: ReadonlyMap<number, NumericHofRegionSite>,
 	directCompiledTargets: ReadonlyMap<number, number>,
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
 ): Array<string> | null {
-	const affineRangeAllocationByIp = new Map<
-		number,
-		Extract<VmRegion, { kind: "affine-range-virtualization" }>
-	>();
-	const affineRangeStoreByIp = new Map<
-		number,
-		Extract<VmRegion, { kind: "affine-range-virtualization" }>
-	>();
-	const affineRangeLoadByIp = new Map<
-		number,
-		Extract<VmRegion, { kind: "affine-range-virtualization" }>
-	>();
-	for (const region of fn.regions ?? []) {
-		if (region.kind !== "affine-range-virtualization") continue;
-		const allocation = fn.instructions[region.allocationIp];
-		const store = fn.instructions[region.storeIp];
-		if (
-			allocation?.opcode !== "CREATE_ARRAY" ||
-			store?.opcode !== "STORE_PROPERTY" ||
-			affineRangeAllocationByIp.has(region.allocationIp) ||
-			affineRangeStoreByIp.has(region.storeIp) ||
-			region.loadIps.some(
-				(loadIp) =>
-					fn.instructions[loadIp]?.opcode !== "LOAD_PROPERTY" ||
-					affineRangeLoadByIp.has(loadIp),
-			)
-		) {
-			throw new Error("Invalid affine-range virtualization region");
-		}
-		affineRangeAllocationByIp.set(region.allocationIp, region);
-		affineRangeStoreByIp.set(region.storeIp, region);
-		for (const loadIp of region.loadIps) affineRangeLoadByIp.set(loadIp, region);
-	}
-	const affineRangeAction = (ip: number): NativeAffineRangeAction | undefined => {
-		const allocation = affineRangeAllocationByIp.get(ip);
-		if (allocation !== undefined) return { region: allocation, role: "allocation" };
-		const store = affineRangeStoreByIp.get(ip);
-		if (store !== undefined) return { region: store, role: "store" };
-		const load = affineRangeLoadByIp.get(ip);
-		return load === undefined ? undefined : { region: load, role: "load" };
-	};
-	const exactFreshArrayAccessIps = new Set(
-		(fn.regions ?? [])
-			.filter((region) => region.kind === "exact-fresh-array")
-			.flatMap((region) => [...region.accessIps]),
-	);
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
 	for (const region of (fn.regions ?? []).filter(
 		(candidate) => candidate.kind === "numeric-fusion",
@@ -3345,34 +2385,6 @@ function emitBody(
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
 			jumpTargets.add(instruction.targetIp);
 		}
-	}
-	// A completed native fold rejoins the ordinary region at its loop-exit target,
-	// which is a jump target already unless a later pass straightened that edge.
-	for (const region of numericHofRegions.values()) {
-		jumpTargets.add(region.completionIp);
-	}
-	type PrivateAggregateMemoSite =
-		typeof privateAggregateMemos extends ReadonlyMap<number, infer Site> ? Site : never;
-	const privateAggregateAllocationByIp = new Map<number, PrivateAggregateMemoSite>();
-	const privateAggregatePushByIp = new Map<number, PrivateAggregateMemoSite>();
-	for (const memo of privateAggregateMemos.values()) {
-		privateAggregateAllocationByIp.set(memo.allocationIp, memo);
-		for (const pushIp of memo.constructionPushIps) {
-			privateAggregatePushByIp.set(pushIp, memo);
-		}
-	}
-	type InvariantJsonMapSite =
-		typeof invariantJsonMapTemplates extends ReadonlyMap<number, infer Site>
-			? Site
-			: never;
-	const invariantJsonMapActions = new Map<
-		number,
-		{ site: InvariantJsonMapSite; role: "parse" | "mapLoad" | "mapCall" }
-	>();
-	for (const site of invariantJsonMapTemplates.values()) {
-		invariantJsonMapActions.set(site.parseCallIp, { site, role: "parse" });
-		invariantJsonMapActions.set(site.mapLoadIp, { site, role: "mapLoad" });
-		invariantJsonMapActions.set(site.mapCallIp, { site, role: "mapCall" });
 	}
 	// Static property sites inside a natural flattened loop are the ones where
 	// cloning the dependency-registered inherited-value fast path pays for its
@@ -3414,54 +2426,13 @@ function emitBody(
 		jumpTargets.add(handler.handlerIp);
 	}
 	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
-	const closedGlobalTableAccessByIp = closedGlobalTableAccesses(fn);
-	const inheritedLoadLoopTwins = findInheritedLoadLoopTwins(
-		fn,
-		reps,
-		coro,
-		closedGlobalTableAccessByIp,
-		finiteStringProducers,
-	);
+	const inheritedLoadLoopTwins = findInheritedLoadLoopTwins(fn, reps, coro);
 	const inheritedLoadLoopTwinByHeader = new Map(
 		inheritedLoadLoopTwins.map((twin) => [twin.headerIp, twin] as const),
 	);
 	const inheritedLoadLoopTwinByBackedge = new Map(
 		inheritedLoadLoopTwins.map((twin) => [twin.backedgeIp, twin] as const),
 	);
-	const closedRecordAccessByIp = new Map<number, { regionId: number; slot: number }>();
-	const closedRecordElementLoadIps = new Set<number>();
-	const closedRecordRegions = (fn.regions ?? []).filter(
-		(region) => region.kind === "closed-record-array",
-	);
-	for (const [regionId, region] of closedRecordRegions.entries()) {
-		const allocationIp = region.anchors[0]!;
-		const producerObjectIp = region.anchors[1]!;
-		if (!vmGuardIsWorldInvariant(region.license.guard)) {
-			throw new Error("Closed record-Array region lacks a world-invariant license");
-		}
-		if (
-			fn.instructions[allocationIp]?.opcode !== "CREATE_ARRAY" ||
-			fn.instructions[producerObjectIp]?.opcode !== "CREATE_OBJECT_SHAPED"
-		) {
-			throw new Error(`Invalid closed record-Array region ${regionId}`);
-		}
-		for (const ip of region.elementLoadIps) {
-			if (
-				fn.instructions[ip]?.opcode !== "LOAD_PROPERTY" ||
-				closedRecordElementLoadIps.has(ip)
-			) {
-				throw new Error(`Overlapping closed record-Array element load at ${ip}`);
-			}
-			closedRecordElementLoadIps.add(ip);
-		}
-		for (const access of region.accesses) {
-			if (closedRecordAccessByIp.has(access.ip)) {
-				throw new Error(`Overlapping closed record-Array access at ${access.ip}`);
-			}
-			closedRecordAccessByIp.set(access.ip, { regionId, slot: access.slot });
-		}
-	}
-
 	// Canonical Math calls arrive through the shared builtin-call fact path. The
 	// property Get and argument evaluation remain ordinary instructions; this only
 	// selects the numeric consumer after identity/effect/result validation in IR.
@@ -3478,53 +2449,6 @@ function emitBody(
 			mathBinaryCalls.add(ip);
 		}
 	}
-	const knownBuiltinProducerByCallIp = new Map<
-		number,
-		Extract<VmRegion, { kind: "known-builtin-producers" }>["sites"][number]
-	>();
-	for (const region of fn.regions ?? []) {
-		if (region.kind !== "known-builtin-producers") continue;
-		for (const site of region.sites) {
-			if (knownBuiltinProducerByCallIp.has(site.callIp)) {
-				throw new Error(`Overlapping known-builtin producer site at ${site.callIp}`);
-			}
-			knownBuiltinProducerByCallIp.set(site.callIp, site);
-		}
-	}
-	const elidedLockedMathGenericTwinIps = new Set<number>();
-	for (let callIp = 0; callIp < fn.instructions.length; callIp++) {
-		const call = fn.instructions[callIp];
-		const site = knownBuiltinProducerByCallIp.get(callIp);
-		if (site === undefined) continue;
-		const property = fn.instructions[site.propertyIp];
-		if (
-			call?.opcode !== "CALL" ||
-			property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-			call.guardedBuiltinCall === undefined ||
-			!vmGuardIsWorldInvariant(call.guardedBuiltinCall.guard) ||
-			reps[call.dst] !== "number"
-		) {
-			continue;
-		}
-		const operation = call.guardedBuiltinCall.operation;
-		const nativeOperation =
-			call.arguments.length === 1
-				? MATH_UNARY_NATIVE_OP.get(operation)
-				: MATH_BINARY_NATIVE_OP.get(operation);
-		if (nativeOperation === undefined) continue;
-		const argumentsAreNative = call.arguments.every((operand) => {
-			const decoded = decodeVmValueOperand(operand);
-			return (
-				decoded.kind === "number" ||
-				(decoded.kind === "register" && reps[decoded.register] === "number")
-			);
-		});
-		if (argumentsAreNative) {
-			elidedLockedMathGenericTwinIps.add(site.receiverIp);
-			elidedLockedMathGenericTwinIps.add(site.propertyIp);
-		}
-	}
-
 	// A synchronous iterator record captures its `next` method exactly once. When
 	// GET_ITERATOR and ITERATOR_STEP retain the same allocated register pair, keep
 	// the validated dense Array-values iterator pointer in a native local instead
@@ -3612,7 +2536,6 @@ function emitBody(
 			reg: number;
 			kind: "array" | "object";
 			ips: Array<number>;
-			closedRegionId?: number;
 		}
 		const runs: Array<Run> = [];
 		let cur: Run | null = null;
@@ -3628,8 +2551,8 @@ function emitBody(
 				flush();
 			}
 			if (
-				(instr.opcode === "LOAD_PROPERTY" && !closedGlobalTableAccessByIp.has(ip)) ||
-				(instr.opcode === "STORE_PROPERTY" && !closedGlobalTableAccessByIp.has(ip)) ||
+				instr.opcode === "LOAD_PROPERTY" ||
+				instr.opcode === "STORE_PROPERTY" ||
 				instr.opcode === "LOAD_PROPERTY_STATIC" ||
 				instr.opcode === "STORE_PROPERTY_STATIC"
 			) {
@@ -3639,17 +2562,11 @@ function emitBody(
 						? "array"
 						: "object";
 				const obj = instr.object;
-				const closedRegionId = closedRecordAccessByIp.get(ip)?.regionId;
-				if (
-					cur !== null &&
-					cur.reg === obj &&
-					cur.kind === kind &&
-					cur.closedRegionId === closedRegionId
-				) {
+				if (cur !== null && cur.reg === obj && cur.kind === kind) {
 					cur.ips.push(ip);
 				} else {
 					flush();
-					cur = { reg: obj, kind, ips: [ip], closedRegionId };
+					cur = { reg: obj, kind, ips: [ip] };
 				}
 			}
 			// The current access (if any) already read the live guard above; a redefinition
@@ -3670,11 +2587,10 @@ function emitBody(
 
 		let guardId = 0;
 		for (const run of runs) {
-			const name = `${run.closedRegionId === undefined ? "__rg" : "__closed_record_"}${guardId++}`;
+			const name = `__rg${guardId++}`;
 			// A ≥2-access object run consolidates onto ONE shape guard + a cached-slot array;
 			// arrays and single object accesses keep the per-access guarded form.
-			const consolidated =
-				run.closedRegionId === undefined && run.kind === "object" && run.ips.length >= 2;
+			const consolidated = run.kind === "object" && run.ips.length >= 2;
 			const icIndices = run.ips.map((ip) => {
 				const instruction = fn.instructions[ip]!;
 				if (
@@ -3688,7 +2604,6 @@ function emitBody(
 				return instruction.icIndex;
 			});
 			run.ips.forEach((ip, i) => {
-				const closed = closedRecordAccessByIp.get(ip);
 				const previousIp = run.ips[i - 1];
 				const revalidate =
 					consolidated &&
@@ -3707,7 +2622,6 @@ function emitBody(
 					leadingIcIndex: icIndices[0]!,
 					icIndices,
 					commit: consolidated && i === run.ips.length - 1,
-					closedSlot: closed?.slot,
 				});
 			});
 		}
@@ -3737,41 +2651,6 @@ function emitBody(
 		};
 		stringCharCodeAtFusionByIp.set(loadIp, fusion);
 		stringCharCodeAtFusionByIp.set(loadIp + 1, fusion);
-	}
-	const nativeStringScanRegionActionByIp = new Map<
-		number,
-		NativeStringScanRegionAction
-	>();
-	const stringScanRegions = (fn.regions ?? []).filter(
-		(region): region is NativeStringScanRegion => region.kind === "string-scan-summary",
-	);
-	for (const region of stringScanRegions) {
-		nativeStringScanRegionActionByIp.set(region.entryIp, { region, role: "entry" });
-		nativeStringScanRegionActionByIp.set(region.lengthLoadIp, { region, role: "length" });
-	}
-	const nativeStringSearchRegExpActionByIp = new Map<
-		number,
-		NativeStringSearchRegExpAction
-	>();
-	const stringSearchRegExpRegions = (fn.regions ?? []).filter(
-		(region): region is NativeStringSearchRegExpRegion =>
-			region.kind === "string-search-regexp",
-	);
-	for (const region of stringSearchRegExpRegions) {
-		if (
-			nativeStringSearchRegExpActionByIp.has(region.regexpConstructIp) ||
-			nativeStringSearchRegExpActionByIp.has(region.searchCallIp)
-		) {
-			throw new Error(`Overlapping String search region at ${region.searchCallIp}`);
-		}
-		nativeStringSearchRegExpActionByIp.set(region.regexpConstructIp, {
-			region,
-			role: "construct",
-		});
-		nativeStringSearchRegExpActionByIp.set(region.searchCallIp, {
-			region,
-			role: "call",
-		});
 	}
 	const nativeStringSplitProjectionActionByIp = new Map<
 		number,
@@ -3983,20 +2862,6 @@ function emitBody(
 			lines.push(`bool ${twin.loadedName} = false;`);
 		}
 	}
-	for (const region of stringScanRegions) {
-		lines.push(
-			`bool __string_scan_${region.entryIp}_fast = false;`,
-			`u32 __string_scan_${region.entryIp}_length = 0;`,
-			`u32 __string_scan_${region.entryIp}_matches = 0;`,
-		);
-	}
-	for (const region of stringSearchRegExpRegions) {
-		if (region.literalPatternStringIndex === undefined) continue;
-		lines.push(
-			`bool __string_search_literal_${region.searchCallIp}_fast = false;`,
-			`MalValue __string_search_literal_${region.searchCallIp}_result = MAL_VALUE_UNDEFINED;`,
-		);
-	}
 	for (const site of stringSplitProjectionSites.values()) {
 		lines.push(
 			`bool __string_split_${site.projection.callIp}_fast = false;`,
@@ -4164,38 +3029,31 @@ function emitBody(
 			}
 			for (let fastIp = loopTwin.headerIp; fastIp <= loopTwin.backedgeIp; fastIp++) {
 				if (fastJumpTargets.has(fastIp)) lines.push(`LF${fastIp}:;`);
-				const fast = elidedLockedMathGenericTwinIps.has(fastIp)
-					? []
-					: emitInstruction(
-							fn.instructions[fastIp]!,
-							fastIp,
-							suffix,
-							reps,
-							fn.strict,
-							undefined,
-							gcUnlink,
-							thisSlot,
-							coro,
-							{
-								directCompiledTargets,
-								mathUnaryCall: false,
-								mathBinaryCall: false,
-								loopStaticPropertyFastPath: true,
-								mappedArguments: fn.mappedArguments,
-								mappedArgumentSlots: fn.mappedArgumentSlots,
-								hasPrototype: fn.hasPrototype,
-								loopTwinEmission: {
-									twin: loopTwin,
-									kind: "fast",
-									publishPosition: debug,
-								},
-								closedGlobalTableAccess: closedGlobalTableAccessByIp.get(fastIp),
-								nativeStringSearchRegExpAction:
-									nativeStringSearchRegExpActionByIp.get(fastIp),
-								finiteStringProducer: finiteStringProducers.get(fastIp),
-								affineRangeAction: affineRangeAction(fastIp),
-							},
-						);
+				const fast = emitInstruction(
+					fn.instructions[fastIp]!,
+					fastIp,
+					suffix,
+					reps,
+					fn.strict,
+					undefined,
+					gcUnlink,
+					thisSlot,
+					coro,
+					{
+						directCompiledTargets,
+						mathUnaryCall: false,
+						mathBinaryCall: false,
+						loopStaticPropertyFastPath: true,
+						mappedArguments: fn.mappedArguments,
+						mappedArgumentSlots: fn.mappedArgumentSlots,
+						hasPrototype: fn.hasPrototype,
+						loopTwinEmission: {
+							twin: loopTwin,
+							kind: "fast",
+							publishPosition: debug,
+						},
+					},
+				);
 				if (fast === null) return null;
 				for (const line of fast) lines.push(`    ${line}`);
 			}
@@ -4206,92 +3064,52 @@ function emitBody(
 		for (const cursor of denseIteratorCursorResets.get(ip) ?? []) {
 			lines.push(`    ${cursor.name} = nullptr;`);
 		}
-		const numericHofRegion = numericHofRegions.get(ip);
-		if (numericHofRegion !== undefined) {
-			for (const line of emitNumericFoldRegion(numericHofRegion, reps) ?? []) {
-				lines.push(`    ${line}`);
-			}
-		}
-
-		const elidedLockedMathGenericTwin = elidedLockedMathGenericTwinIps.has(ip);
-		let emitted = elidedLockedMathGenericTwin
-			? []
-			: emitInstruction(
-					fn.instructions[ip]!,
-					ip,
-					suffix,
-					reps,
-					fn.strict,
-					handlerTargets[ip],
-					gcUnlink,
-					thisSlot,
-					coro,
-					{
-						denseIteratorCursor: denseIteratorCursorActions.get(ip),
-						region: regionGuard.get(ip),
-						stackObjectSite: stackObjectSites.get(ip),
-						stackObjectAccess: stackObjectAccesses.get(ip),
-						stackObjectMaterialization: stackObjectMaterializations.get(ip),
-						stackObjectInheritedAccess: stackObjectInheritedAccesses.get(ip),
-						finiteRecordRegion: finiteRecordRegions.get(ip),
-						finiteRecordStore: finiteRecordStores.get(ip),
-						finiteRecordAccess: finiteRecordAccesses.get(ip),
-						cardinalityRegion: cardinalityRegions.get(ip),
-						cardinalityAccess: cardinalityAccesses.get(ip),
-						cardinalityPush: cardinalityPushes.get(ip),
-						directCompiledTargets,
-						mathUnaryCall: mathUnaryCalls.has(ip),
-						mathBinaryCall: mathBinaryCalls.has(ip),
-						loopStaticPropertyFastPath: loopBody.has(ip),
-						mappedArguments: fn.mappedArguments,
-						mappedArgumentSlots: fn.mappedArgumentSlots,
-						hasPrototype: fn.hasPrototype,
-						loopTwinEmission: inheritedLoadLoopTwinByBackedge.has(ip)
-							? {
-									twin: inheritedLoadLoopTwinByBackedge.get(ip)!,
-									kind: "generic",
-									publishPosition: debug,
-								}
-							: undefined,
-						closedGlobalTableAccess: closedGlobalTableAccessByIp.get(ip),
-						stringCharCodeAtFusion: stringCharCodeAtFusionByIp.get(ip),
-						nativeStringScanRegionAction: nativeStringScanRegionActionByIp.get(ip),
-						nativeStringSearchRegExpAction: nativeStringSearchRegExpActionByIp.get(ip),
-						nativeStringSplitProjectionAction:
-							nativeStringSplitProjectionActionByIp.get(ip),
-						nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
-						nativeRegExpExecProjectionAction:
-							nativeRegExpExecProjectionActionByIp.get(ip),
-						nativeRegExpIteratorProjectionAction:
-							nativeRegExpIteratorProjectionActionByIp.get(ip),
-						nativeStringSliceNumberFusionAction:
-							nativeStringSliceNumberFusionActionByIp.get(ip),
-						invariantJsonParseCache: invariantJsonParseCaches.get(ip),
-						invariantJsonMapAction: invariantJsonMapActions.get(ip),
-						privateAggregateMemo: privateAggregateMemos.get(ip),
-						privateAggregatePushMemo: privateAggregatePushByIp.get(ip),
-						exactArrayElementAccess:
-							exactFreshArrayAccessIps.has(ip) || closedRecordElementLoadIps.has(ip),
-						numericFusionAction: numericFusionActionByIp.get(ip),
-						finiteConstruction: finiteConstructionRegions.get(ip),
-						finitePropertySelector: finitePropertySelectors.get(ip),
-						finiteStringProducer: finiteStringProducers.get(ip),
-						affineRangeAction: affineRangeAction(ip),
-					},
-				);
+		let emitted = emitInstruction(
+			fn.instructions[ip]!,
+			ip,
+			suffix,
+			reps,
+			fn.strict,
+			handlerTargets[ip],
+			gcUnlink,
+			thisSlot,
+			coro,
+			{
+				denseIteratorCursor: denseIteratorCursorActions.get(ip),
+				region: regionGuard.get(ip),
+				stackObjectSite: stackObjectSites.get(ip),
+				stackObjectAccess: stackObjectAccesses.get(ip),
+				stackObjectMaterialization: stackObjectMaterializations.get(ip),
+				stackObjectInheritedAccess: stackObjectInheritedAccesses.get(ip),
+				directCompiledTargets,
+				mathUnaryCall: mathUnaryCalls.has(ip),
+				mathBinaryCall: mathBinaryCalls.has(ip),
+				loopStaticPropertyFastPath: loopBody.has(ip),
+				mappedArguments: fn.mappedArguments,
+				mappedArgumentSlots: fn.mappedArgumentSlots,
+				hasPrototype: fn.hasPrototype,
+				loopTwinEmission: inheritedLoadLoopTwinByBackedge.has(ip)
+					? {
+							twin: inheritedLoadLoopTwinByBackedge.get(ip)!,
+							kind: "generic",
+							publishPosition: debug,
+						}
+					: undefined,
+				stringCharCodeAtFusion: stringCharCodeAtFusionByIp.get(ip),
+				nativeStringSplitProjectionAction: nativeStringSplitProjectionActionByIp.get(ip),
+				nativeStringSplitCursorAction: nativeStringSplitCursorActionByIp.get(ip),
+				nativeRegExpExecProjectionAction: nativeRegExpExecProjectionActionByIp.get(ip),
+				nativeRegExpIteratorProjectionAction:
+					nativeRegExpIteratorProjectionActionByIp.get(ip),
+				nativeStringSliceNumberFusionAction:
+					nativeStringSliceNumberFusionActionByIp.get(ip),
+				numericFusionAction: numericFusionActionByIp.get(ip),
+			},
+		);
 		if (emitted === null) {
 			return null;
 		}
-		const jsonMapAction = invariantJsonMapActions.get(ip);
-		if (jsonMapAction?.role === "mapLoad") {
-			const hit = `__invariant_json_map_${jsonMapAction.site.parseCallIp}_hit`;
-			emitted = [`if (!${hit}) {`, ...emitted.map((line) => `  ${line}`), `}`];
-		}
-		if (
-			debug &&
-			!elidedLockedMathGenericTwin &&
-			nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)
-		) {
+		if (debug && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
 			const pos = fn.positions[ip] ?? -1;
 			if (pos !== -1 && pos !== lastPublishedPos) {
 				lines.push(`    vm->native_frames[vm->native_frame_count - 1].pos_id = ${pos};`);
@@ -4332,14 +3150,6 @@ function emitBody(
 		}
 		for (const line of emitted) {
 			lines.push(`    ${line}`);
-		}
-		const allocationMemo = privateAggregateAllocationByIp.get(ip);
-		if (allocationMemo !== undefined) {
-			const allocation = fn.instructions[ip];
-			if (allocation?.opcode !== "CREATE_ARRAY") return null;
-			lines.push(
-				`    mal_builtin_array_private_aggregate_memo_init(vm, &__private_aggregate_memo_${allocationMemo.callIp}, r${allocation.dst});`,
-			);
 		}
 	}
 
@@ -4399,9 +3209,7 @@ function profileDecisionsForInstruction(
 				),
 			);
 		} else if (
-			/__string_split_|__regexp_exec_|__invariant_json_|__private_aggregate_|mal_builtin_string_search_regexp_direct|mal_builtin_string_slice_to_number/.test(
-				source,
-			)
+			/__string_split_|__regexp_exec_|mal_builtin_string_slice_to_number/.test(source)
 		) {
 			decisions.push(
 				decision(`${operation}.projected`, "guarded", "guarded-semantic-fallback"),
@@ -4428,16 +3236,10 @@ function profileDecisionsForInstruction(
 			);
 		}
 	} else if (operation === "property") {
-		if (
-			/__stack_object_|__finite_record_|__cardinality_|__regexp_exec_|__string_split_|__affine_range_/.test(
-				source,
-			)
-		) {
+		if (/__stack_object_|__regexp_exec_|__string_split_/.test(source)) {
 			decisions.push(
 				decision("property.projected", "guarded", "guarded-semantic-fallback"),
 			);
-		} else if (source.includes("mal_vm_finite_property_")) {
-			decisions.push(decision("property.finite-key", "guarded", "finite-key-guard"));
 		} else if (source.includes("mal_vm_local_watched_")) {
 			decisions.push(decision("property.watched", "guarded", "invalidatable-epoch"));
 		} else if (/mal_vm_array_fast_(load_index|store_index)\(/.test(source)) {
@@ -4464,18 +3266,6 @@ function profileDecisionsForInstruction(
 	} else if (operation === "allocation") {
 		if (source.includes("__stack_object_")) {
 			decisions.push(decision("allocation.stack", "elided"));
-		} else if (/__affine_range_|__finite_record_|__cardinality_/.test(source)) {
-			decisions.push(
-				decision("allocation.virtualized", "guarded", "guarded-materialization"),
-			);
-		} else if (source.includes("mal_vm_create_object_finite_construction")) {
-			decisions.push(
-				decision(
-					"allocation.finite-shape",
-					"retained",
-					"runtime-helper-owned-materialization",
-				),
-			);
 		} else {
 			decisions.push(decision("allocation.heap", "retained", "heap-identity-retained"));
 		}
@@ -4517,8 +3307,6 @@ function profileFallbackFunctions(instruction: VmInstruction): Array<string> {
 			"mal_vm_array_fast_store_index(",
 			"mal_vm_op_load_property_ic(",
 			"mal_vm_op_store_property_ic(",
-			"mal_vm_finite_property_load(",
-			"mal_vm_finite_property_store(",
 		];
 	}
 	if (operation === "allocation") {
@@ -4632,16 +3420,6 @@ interface NativeInstructionContext {
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;
 	readonly stackObjectInheritedAccess?: StackObjectSite;
-	readonly finiteRecordRegion?: FiniteRecordRegion;
-	readonly finiteRecordStore?: FiniteRecordRegion;
-	readonly finiteRecordAccess?: FiniteRecordRegion;
-	readonly cardinalityRegion?: CardinalityRegion;
-	readonly cardinalityAccess?: {
-		readonly region: CardinalityRegion;
-		readonly role: "push" | "length" | "element" | "field";
-		readonly fieldSlot?: number;
-	};
-	readonly cardinalityPush?: CardinalityRegion;
 	readonly directCompiledTargets: ReadonlyMap<number, number>;
 	readonly mathUnaryCall: boolean;
 	readonly mathBinaryCall: boolean;
@@ -4650,32 +3428,13 @@ interface NativeInstructionContext {
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
 	readonly loopTwinEmission?: LoopTwinEmission;
-	readonly closedGlobalTableAccess?: ClosedGlobalTableAccess;
 	readonly stringCharCodeAtFusion?: StringCharCodeAtFusion;
-	readonly nativeStringScanRegionAction?: NativeStringScanRegionAction;
-	readonly nativeStringSearchRegExpAction?: NativeStringSearchRegExpAction;
 	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
 	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
 	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
 	readonly nativeStringSliceNumberFusionAction?: NativeStringSliceNumberFusionAction;
-	readonly invariantJsonParseCache?: NativeInvariantJsonParseCacheSite;
-	readonly invariantJsonMapAction?: {
-		readonly site: VmInvariantJsonMapTemplateRegion & { rootsOffset: number };
-		readonly role: "parse" | "mapLoad" | "mapCall";
-	};
-	readonly privateAggregateMemo?: NativePrivateAggregateMemoRegion & {
-		rootsOffset: number;
-	};
-	readonly privateAggregatePushMemo?: NativePrivateAggregateMemoRegion & {
-		rootsOffset: number;
-	};
-	readonly exactArrayElementAccess?: boolean;
 	readonly numericFusionAction?: NativeNumericFusionAction;
-	readonly finiteConstruction?: VmFiniteObjectConstructionRegion;
-	readonly finitePropertySelector?: VmFinitePropertySelectorRegion["selectors"][number];
-	readonly finiteStringProducer?: VmFinitePropertySelectorRegion["selectors"][number];
-	readonly affineRangeAction?: NativeAffineRangeAction;
 }
 
 function emitInstruction(
@@ -4697,12 +3456,6 @@ function emitInstruction(
 		stackObjectAccess,
 		stackObjectMaterialization,
 		stackObjectInheritedAccess,
-		finiteRecordRegion,
-		finiteRecordStore,
-		finiteRecordAccess,
-		cardinalityRegion,
-		cardinalityAccess,
-		cardinalityPush,
 		directCompiledTargets,
 		mathUnaryCall,
 		mathBinaryCall,
@@ -4711,25 +3464,13 @@ function emitInstruction(
 		mappedArgumentSlots,
 		hasPrototype,
 		loopTwinEmission,
-		closedGlobalTableAccess,
 		stringCharCodeAtFusion,
-		nativeStringScanRegionAction,
-		nativeStringSearchRegExpAction,
 		nativeStringSplitProjectionAction,
 		nativeStringSplitCursorAction,
 		nativeRegExpExecProjectionAction,
 		nativeRegExpIteratorProjectionAction,
 		nativeStringSliceNumberFusionAction,
-		invariantJsonParseCache,
-		invariantJsonMapAction,
-		privateAggregateMemo,
-		privateAggregatePushMemo,
-		exactArrayElementAccess,
 		numericFusionAction,
-		finiteConstruction,
-		finitePropertySelector,
-		finiteStringProducer,
-		affineRangeAction,
 	} = context;
 	const genericContext: NativeInstructionContext = {
 		directCompiledTargets,
@@ -4816,17 +3557,6 @@ function emitInstruction(
 			: "MAL_VALUE_UNDEFINED";
 	const onThrow = handlerIp !== undefined ? `goto L${handlerIp};` : "goto __throw_exit;";
 	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
-	const materializeCardinalityRegion = (target: CardinalityRegion): Array<string> => [
-		`r${target.arrayRegister} = mal_vm_materialize_virtual_record_array(vm, ${target.shapeName}, &__gc_slots[${target.historySlotsOffset}], ${target.countName}, ${target.itemSite.slotCount});`,
-		throwCheck,
-		`${target.fastName} = false;`,
-		`${target.elementIndexName} = -1;`,
-	];
-	const cardinalityEpochGuard = (target: CardinalityRegion): string =>
-		target.semanticEpochStable
-			? ""
-			: ` && ${semanticDependencyValidationGuard(target.license.guard, target.epochName)}`;
-
 	// GC safepoint poll. Emitted at call returns and loop
 	// back-edges so a compiled function is interruptible for collection. Near-free
 	// until the collector raises mal_gc_poll (always false until Phase 3).
@@ -4907,30 +3637,6 @@ function emitInstruction(
 				`r${instruction.dst} = mal_value_from_bigint(&mal_bigints${suffix}[${instruction.bigintIndex}]);`,
 			];
 		case "CREATE_OBJECT":
-			if (stackObjectSite === undefined && finiteConstruction !== undefined) {
-				const finite = finiteConstruction;
-				const table = `__finite_construction_keys_${ip}`;
-				const guards = finite.numberGuards.map((register) =>
-					reps[register] === "number" ? "true" : `mal_ops_is_number(${boxed(register)})`,
-				);
-				if (finiteRecordRegion !== undefined) {
-					return [
-						`static const i32 ${table}[] = { ${finite.keyStringIndices.join(", ")} };`,
-						`${finiteRecordRegion.fastName} = (${guards.length === 0 ? "true" : guards.join(" && ")}) && mal_vm_prepare_object_finite_construction(vm, ${table}, ${finite.keyStringIndices.length}, &__property_ic[${finite.icIndex}]);`,
-						`if (${finiteRecordRegion.fastName}) {`,
-						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-						`} else {`,
-						`  r${instruction.dst} = mal_vm_op_create_object(vm);`,
-						`  ${throwCheck}`,
-						`}`,
-					];
-				}
-				return [
-					`static const i32 ${table}[] = { ${finite.keyStringIndices.join(", ")} };`,
-					`r${instruction.dst} = mal_vm_create_object_finite_construction(vm, ${table}, ${finite.keyStringIndices.length}, ${guards.length === 0 ? "true" : guards.join(" && ")}, &__property_ic[${finite.icIndex}]);`,
-					throwCheck,
-				];
-			}
 			if (stackObjectSite === undefined) {
 				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`, throwCheck];
 			}
@@ -4957,10 +3663,6 @@ function emitInstruction(
 				];
 			}
 			const { objectName, slotsOffset } = stackObjectSite;
-			const cardinalityReset =
-				stackObjectSite.cardinalityRegion === undefined
-					? []
-					: [`${stackObjectSite.cardinalityRegion.currentMaterializedName} = false;`];
 			if (stackObjectSite.inheritedLoadInstructionIndex !== undefined) {
 				const fastName = stackObjectSite.inheritedFastName!;
 				const inheritedValue = stackObjectSite.inheritedValueName!;
@@ -4968,7 +3670,6 @@ function emitInstruction(
 				const prototypeName = `${objectName}_prototype`;
 				return [
 					...shape,
-					...cardinalityReset,
 					`MalInlineCache *${icName} = &__property_ic[${stackObjectSite.inheritedIcIndex}];`,
 					`MalObject *${prototypeName} = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);`,
 					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape == __oshape_${ip} && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && ${inheritedStackObjectProtectorGuard(stackObjectSite)} && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
@@ -4990,7 +3691,6 @@ function emitInstruction(
 			}
 			return [
 				...shape,
-				...cardinalityReset,
 				// Direct initialization is essential: this storage never enters the heap,
 				// and IMMORTAL+WHITE makes tracing/finalization/remembering skip the header.
 				"mal_perf_stack_object_init();",
@@ -5002,72 +3702,6 @@ function emitInstruction(
 			];
 		}
 		case "CREATE_ARRAY":
-			if (nativeStringScanRegionAction?.role === "entry") {
-				const region = nativeStringScanRegionAction.region;
-				const fast = `__string_scan_${region.entryIp}_fast`;
-				return [
-					`${fast} = mal_vm_try_string_scan_summary(vm, ${boxed(region.input)}, (c16) ${region.matchCodeUnit}, &__string_scan_${region.entryIp}_length, &__string_scan_${region.entryIp}_matches);`,
-					`if (${fast}) {`,
-					`  r${region.matchResult} = ${reps[region.matchResult] === "number" ? `(f64) __string_scan_${region.entryIp}_matches` : `mal_value_from_i32((i32) __string_scan_${region.entryIp}_matches)`};`,
-					`  if (mal_gc_poll) mal_gc_safepoint(vm);`,
-					`  goto L${region.exitIp};`,
-					`}`,
-					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
-				];
-			}
-			if (cardinalityRegion !== undefined) {
-				const keys = cardinalityRegion.itemKeyStringIndices
-					.map((key) => `vm->string_constant_atoms[${key}]`)
-					.join(", ");
-				return [
-					`${cardinalityRegion.shapeName} = __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}];`,
-					`if (${cardinalityRegion.shapeName} == nullptr) { ${cardinalityRegion.shapeName} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${cardinalityRegion.itemSite.slotCount}); __literal_shapes[${cardinalityRegion.itemShapeCacheIndex}] = ${cardinalityRegion.shapeName}; }`,
-					`${cardinalityRegion.fastName} = ${cardinalityAdmissionGuard(cardinalityRegion)};`,
-					`${cardinalityRegion.countName} = 0;`,
-					`${cardinalityRegion.elementIndexName} = -1;`,
-					`if (${cardinalityRegion.fastName}) {`,
-					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-					`} else {`,
-					`  r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
-					`  ${throwCheck}`,
-					`}`,
-				];
-			}
-			{
-				const affineRange =
-					affineRangeAction?.role === "allocation" ? affineRangeAction.region : undefined;
-				if (affineRange !== undefined) {
-					const { allocationIp } = affineRange;
-					if (!affineRange.license.guard.obligations.includes("fallback")) {
-						throw new Error("Affine range virtualization lacks its generic twin");
-					}
-					const semanticAdmission = regionAdmissionGuard(affineRange.license);
-					// A future scheduler-enabled version must snapshot array_elements and,
-					// after a taken producer poll invalidates it, materialize dense own
-					// elements [0, index) before resuming the unchanged next [[Set]].
-					// This first slice instead admits only activations that cannot preempt.
-					const ordinary = [
-						`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
-						...(instruction.freshDenseReserveLength === undefined
-							? []
-							: [
-									`(void) mal_vm_try_fresh_dense_indexed_fill_reserve(vm, r${instruction.dst}, ${instruction.freshDenseReserveLength});`,
-								]),
-					];
-					return [
-						"MAL_PERF_COUNT(array_affine_range_candidates);",
-						`__affine_range_${allocationIp} = mal_gc_preempt_hook == nullptr${semanticAdmission === "true" ? "" : ` && ${semanticAdmission}`};`,
-						`if (__affine_range_${allocationIp}) {`,
-						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-						"  MAL_PERF_COUNT(array_affine_range_virtualizations);",
-						"  MAL_PERF_COUNT(array_affine_range_allocations_elided);",
-						`} else {`,
-						"  MAL_PERF_COUNT(array_affine_range_guard_fallbacks);",
-						...ordinary.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
-			}
 			if (instruction.freshDenseReserveLength !== undefined) {
 				return [
 					`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`,
@@ -5341,112 +3975,6 @@ function emitInstruction(
 					`r${instruction.dst} = __property_ic[${instruction.icIndex}].value;`,
 				];
 			}
-			if (
-				instruction.opcode === "LOAD_PROPERTY" &&
-				closedGlobalTableAccess !== undefined
-			) {
-				const { region: table, access } = closedGlobalTableAccess;
-				const fallback = emitGenericInstruction();
-				if (fallback === null) return null;
-				const state = `vm->globals[${table.stateIndex}]`;
-				const deopt = `mal_vm_closed_global_table_deopt(vm, ${boxed(instruction.object)}, ${table.baseIndex}, ${table.mask + 1}, ${table.stateIndex});`;
-				if (!access.direct) {
-					return [deopt, throwCheck, ...fallback];
-				}
-				const value = `__closed_global_value_${ip}`;
-				const semanticAdmission = closedGlobalTableAdmissionGuard(table.license.guard);
-				return [
-					`if (mal_value_is_undefined(${state}) && ${semanticAdmission}) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
-					`if (${state} == MAL_VALUE_FALSE && ${semanticAdmission}) {`,
-					`  MalValue ${value} = vm->globals[${table.baseIndex} + (i32) ${num(instruction.key)}];`,
-					`  r${instruction.dst} = mal_value_is_empty(${value}) ? MAL_VALUE_UNDEFINED : ${value};`,
-					`} else {`,
-					`  ${deopt}`,
-					`  ${throwCheck}`,
-					...fallback.map((line) => `  ${line}`),
-					`}`,
-				];
-			}
-			if (instruction.opcode === "LOAD_PROPERTY" && exactArrayElementAccess === true) {
-				if (reps[instruction.key] !== "number") return null;
-				const array = `__exact_fresh_array_${ip}`;
-				return [
-					`MalArrayObject *${array} = mal_value_to_array_object(${boxed(instruction.object)});`,
-					`if (${array}->elements != nullptr) {`,
-					`  r${instruction.dst} = ${array}->elements[(u32) ${num(instruction.key)}];`,
-					`} else {`,
-					`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__property_ic[${instruction.icIndex}]);`,
-					`  ${throwCheck}`,
-					`}`,
-				];
-			}
-			if (cardinalityAccess !== undefined) {
-				const target = cardinalityAccess.region;
-				const fallback = emitGenericInstruction();
-				if (fallback === null) return null;
-				if (cardinalityAccess.role === "length") {
-					const countValue =
-						reps[instruction.dst] === "number"
-							? `(f64) ${target.countName}`
-							: `mal_value_from_i32((i32) ${target.countName})`;
-					return [
-						`if (${target.fastName}) {`,
-						`  r${instruction.dst} = ${countValue};`,
-						`} else {`,
-						...fallback.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
-				if (cardinalityAccess.role === "field") {
-					const slot = cardinalityAccess.fieldSlot;
-					if (slot === undefined || slot < 0 || slot >= target.itemSite.slotCount) {
-						return null;
-					}
-					return [
-						`if (${target.elementIndexName} >= 0) {`,
-						`  r${instruction.dst} = __gc_slots[${target.historySlotsOffset} + ${target.elementIndexName} * ${target.itemSite.slotCount} + ${slot}];`,
-						`} else {`,
-						...fallback.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
-				if (cardinalityAccess.role === "element") {
-					if (instruction.opcode !== "LOAD_PROPERTY") return null;
-					const key = instruction.key;
-					const keyIsNumber =
-						reps[key] === "number" ? "true" : `mal_ops_is_number(${boxed(key)})`;
-					const index = `__cardinality_${ip}_index`;
-					const valid = `__cardinality_${ip}_index_valid`;
-					return [
-						`f64 ${index} = 0;`,
-						`bool ${valid} = ${target.fastName}${cardinalityEpochGuard(target)} && ${keyIsNumber};`,
-						`if (${valid}) { ${index} = ${num(key)}; ${valid} = ${index} >= 0 && ${index} < (f64) ${target.countName} && ${index} == trunc(${index}); }`,
-						`if (${valid}) {`,
-						`  ${target.elementIndexName} = (i32) ${index};`,
-						`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-						`} else {`,
-						`  if (${target.fastName}) {`,
-						...materializeCardinalityRegion(target).map((line) => `    ${line}`),
-						...(instruction.object === target.arrayRegister
-							? []
-							: [`    r${instruction.object} = r${target.arrayRegister};`]),
-						`  }`,
-						`  ${target.elementIndexName} = -1;`,
-						...fallback.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
-				return [
-					`if (${target.fastName}${cardinalityEpochGuard(target)}) {`,
-					`  r${instruction.dst} = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH];`,
-					`} else {`,
-					`  if (${target.fastName}) {`,
-					...materializeCardinalityRegion(target).map((line) => `    ${line}`),
-					`  }`,
-					...fallback.map((line) => `  ${line}`),
-					`}`,
-				];
-			}
 			if (stackObjectInheritedAccess !== undefined) {
 				const fallback = emitGenericInstruction();
 				if (fallback === null) return null;
@@ -5462,17 +3990,6 @@ function emitInstruction(
 			}
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
-				if (site.cardinalityRegion !== undefined) {
-					const fallback = emitGenericInstruction();
-					if (fallback === null) return null;
-					return [
-						`if (!${site.cardinalityRegion.currentMaterializedName}) {`,
-						`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
-						`} else {`,
-						...fallback.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
 				if (site.inheritedLoadInstructionIndex === undefined) {
 					return [`r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`];
 				}
@@ -5483,50 +4000,6 @@ function emitInstruction(
 					`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
 					`} else {`,
 					...fallback.map((line) => `  ${line}`),
-					`}`,
-				];
-			}
-			if (
-				instruction.opcode === "LOAD_PROPERTY" &&
-				finitePropertySelector !== undefined
-			) {
-				const finite = finitePropertySelector;
-				const table = `__finite_property_keys_${ip}`;
-				const ordinalNumber =
-					reps[finite.ordinal] === "number"
-						? num(finite.ordinal)
-						: `mal_ops_number_as_f64(${boxed(finite.ordinal)})`;
-				const ordinal = `__finite_property_ordinal_${ip}`;
-				const object = `__finite_property_object_${ip}`;
-				const value = `__v_${ip}`;
-				if (finiteRecordAccess !== undefined) {
-					return [
-						`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
-						`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
-						`if (${finiteRecordAccess.fastName} && ${ordinal} >= 0 && ${ordinal} < ${finiteRecordAccess.slotCount}) {`,
-						`  r${instruction.dst} = __gc_slots[${finiteRecordAccess.slotsOffset} + ${ordinal}];`,
-						`} else {`,
-						`  MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
-						`  MalValue ${value};`,
-						`  if (mal_vm_finite_property_try_load(${object}, ${ordinal}, &__property_ic[${instruction.icIndex}], &${value})) {`,
-						`    r${instruction.dst} = ${value};`,
-						`  } else {`,
-						`    r${instruction.dst} = mal_vm_finite_property_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${ordinal}, ${table}, ${finite.stringIndices.length}, &__property_ic[${instruction.icIndex}]);`,
-						`    ${throwCheck}`,
-						`  }`,
-						`}`,
-					];
-				}
-				return [
-					`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
-					`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
-					`MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
-					`MalValue ${value};`,
-					`if (mal_vm_finite_property_try_load(${object}, ${ordinal}, &__property_ic[${instruction.icIndex}], &${value})) {`,
-					`  r${instruction.dst} = ${value};`,
-					`} else {`,
-					`  r${instruction.dst} = mal_vm_finite_property_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${ordinal}, ${table}, ${finite.stringIndices.length}, &__property_ic[${instruction.icIndex}]);`,
-					`  ${throwCheck}`,
 					`}`,
 				];
 			}
@@ -5558,17 +4031,6 @@ function emitInstruction(
 				icIndices: [instruction.icIndex],
 				commit: false,
 			};
-			if (reg.closedSlot !== undefined) {
-				if (instruction.opcode !== "LOAD_PROPERTY_STATIC") return null;
-				return [
-					...(reg.declare
-						? [
-								`MalObject *${reg.name}_o = mal_value_to_object(${boxed(instruction.object)});`,
-							]
-						: []),
-					`r${instruction.dst} = ${reg.name}_o->slots[${reg.closedSlot}];`,
-				];
-			}
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
 				(reg.kind === "array" || nativeStringSplitCursorAction?.role === "element")
@@ -5626,25 +4088,6 @@ function emitInstruction(
 							`}`,
 						];
 					}
-				}
-				const affineRange =
-					affineRangeAction?.role === "load" ? affineRangeAction.region : undefined;
-				if (affineRange !== undefined) {
-					const { allocationIp } = affineRange;
-					const direct =
-						reps[instruction.dst] === "number"
-							? reps[instruction.key] === "number"
-								? num(instruction.key)
-								: `mal_ops_number_as_f64(${boxed(instruction.key)})`
-							: boxed(instruction.key);
-					return [
-						`if (__affine_range_${allocationIp}) {`,
-						`  r${instruction.dst} = ${direct};`,
-						`  MAL_PERF_COUNT(array_affine_range_loads_elided);`,
-						`} else {`,
-						...ordinary.map((line) => `  ${line}`),
-						`}`,
-					];
 				}
 				return ordinary;
 			}
@@ -5723,16 +4166,6 @@ function emitInstruction(
 						];
 					}
 				}
-				if (nativeStringScanRegionAction?.role === "length") {
-					const scan = nativeStringScanRegionAction.region;
-					return [
-						`if (__string_scan_${scan.entryIp}_fast) {`,
-						`  r${scan.lengthResult} = ${reps[scan.lengthResult] === "number" ? `(f64) __string_scan_${scan.entryIp}_length` : `mal_value_from_i32((i32) __string_scan_${scan.entryIp}_length)`};`,
-						`} else {`,
-						...ordinary.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
 				if (
 					instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 					instruction.primitiveStringLength === true
@@ -5774,81 +4207,9 @@ function emitInstruction(
 		}
 		case "STORE_PROPERTY":
 		case "STORE_PROPERTY_STATIC": {
-			if (
-				instruction.opcode === "STORE_PROPERTY" &&
-				closedGlobalTableAccess !== undefined
-			) {
-				const { region: table, access } = closedGlobalTableAccess;
-				const fallback = emitGenericInstruction();
-				if (fallback === null) return null;
-				const state = `vm->globals[${table.stateIndex}]`;
-				const deopt = `mal_vm_closed_global_table_deopt(vm, ${boxed(instruction.object)}, ${table.baseIndex}, ${table.mask + 1}, ${table.stateIndex});`;
-				if (!access.direct) {
-					return [deopt, throwCheck, ...fallback];
-				}
-				const semanticAdmission = closedGlobalTableAdmissionGuard(table.license.guard);
-				return [
-					`if (mal_value_is_undefined(${state}) && ${semanticAdmission}) { for (i32 __i = 0; __i < ${table.mask + 1}; __i++) vm->globals[${table.baseIndex} + __i] = MAL_VALUE_EMPTY; ${state} = MAL_VALUE_FALSE; }`,
-					`if (${state} == MAL_VALUE_FALSE && ${semanticAdmission}) {`,
-					`  vm->globals[${table.baseIndex} + (i32) ${num(instruction.key)}] = ${boxed(instruction.value)};`,
-					`} else {`,
-					`  ${deopt}`,
-					`  ${throwCheck}`,
-					...fallback.map((line) => `  ${line}`),
-					`}`,
-				];
-			}
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
-				if (site.cardinalityRegion !== undefined) {
-					const fallback = emitGenericInstruction();
-					if (fallback === null) return null;
-					return [
-						`if (!${site.cardinalityRegion.currentMaterializedName}) {`,
-						`  __gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`,
-						`} else {`,
-						...fallback.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
 				return [`__gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`];
-			}
-			if (
-				instruction.opcode === "STORE_PROPERTY" &&
-				finitePropertySelector !== undefined
-			) {
-				const finite = finitePropertySelector;
-				const table = `__finite_store_keys_${ip}`;
-				const ordinalNumber =
-					reps[finite.ordinal] === "number"
-						? num(finite.ordinal)
-						: `mal_ops_number_as_f64(${boxed(finite.ordinal)})`;
-				const ordinal = `__finite_store_ordinal_${ip}`;
-				const object = `__finite_store_object_${ip}`;
-				if (finiteRecordStore !== undefined) {
-					return [
-						`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
-						`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
-						`if (${finiteRecordStore.fastName}) {`,
-						`  __gc_slots[${finiteRecordStore.slotsOffset} + ${ordinal}] = ${boxed(instruction.value)};`,
-						`} else {`,
-						`  MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
-						`  if (!mal_vm_finite_property_try_store(${object}, ${ordinal}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])) {`,
-						`    mal_vm_finite_property_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${ordinal}, ${table}, ${finite.stringIndices.length}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-						`    ${throwCheck}`,
-						`  }`,
-						`}`,
-					];
-				}
-				return [
-					`static const i32 ${table}[] = { ${finite.stringIndices.join(", ")} };`,
-					`i32 ${ordinal} = (i32) ${ordinalNumber} - (${finite.minimum});`,
-					`MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
-					`if (!mal_vm_finite_property_try_store(${object}, ${ordinal}, ${boxed(instruction.value)}, &__property_ic[${instruction.icIndex}])) {`,
-					`  mal_vm_finite_property_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${ordinal}, ${table}, ${finite.stringIndices.length}, ${strict}, &__property_ic[${instruction.icIndex}]);`,
-					`  ${throwCheck}`,
-					`}`,
-				];
 			}
 			const key =
 				instruction.opcode === "STORE_PROPERTY_STATIC"
@@ -5872,17 +4233,6 @@ function emitInstruction(
 				icIndices: [instruction.icIndex],
 				commit: false,
 			};
-			if (reg.closedSlot !== undefined) {
-				if (instruction.opcode !== "STORE_PROPERTY_STATIC") return null;
-				return [
-					...(reg.declare
-						? [
-								`MalObject *${reg.name}_o = mal_value_to_object(${boxed(instruction.object)});`,
-							]
-						: []),
-					`mal_vm_object_slot_store(${reg.name}_o, ${reg.closedSlot}, ${boxed(instruction.value)});`,
-				];
-			}
 			if (reg.kind === "array" && instruction.opcode === "STORE_PROPERTY") {
 				const ordinary = [
 					...(reg.declare
@@ -5895,18 +4245,6 @@ function emitInstruction(
 					`  ${throwCheck}`,
 					`}`,
 				];
-				const affineRange =
-					affineRangeAction?.role === "store" ? affineRangeAction.region : undefined;
-				if (affineRange !== undefined) {
-					const { allocationIp } = affineRange;
-					return [
-						`if (__affine_range_${allocationIp}) {`,
-						`  MAL_PERF_COUNT(array_affine_range_stores_elided);`,
-						`} else {`,
-						...ordinary.map((line) => `  ${line}`),
-						`}`,
-					];
-				}
 				return ordinary;
 			}
 			if (!reg.consolidated) {
@@ -6025,25 +4363,6 @@ function emitInstruction(
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			const fusion = numericFusionAction;
-			const finiteString = finiteStringProducer;
-			if (
-				operator === "+" &&
-				finiteString !== undefined &&
-				finiteString.stringIndices.length > 0
-			) {
-				const table = `__finite_string_${ip}`;
-				const finiteNumber = rightIsNum
-					? num(right)
-					: `mal_ops_number_as_f64(${boxed(right)})`;
-				const offset =
-					finiteString.minimum === 0
-						? `(i32) ${finiteNumber}`
-						: `(i32) ${finiteNumber} - (${finiteString.minimum})`;
-				return [
-					`static const i32 ${table}[] = { ${finiteString.stringIndices.join(", ")} };`,
-					`r${dst} = mal_value_from_string(&mal_strings${suffix}[${table}[${offset}]]);`,
-				];
-			}
 			if (operator === "in") {
 				const numberGuard = leftIsNum ? "" : `mal_ops_is_number(${boxed(left)}) && `;
 				return [
@@ -6486,93 +4805,6 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
-			if (invariantJsonMapAction?.role === "parse") {
-				const site = invariantJsonMapAction.site;
-				const cache = `__invariant_json_map_${site.parseCallIp}`;
-				const hit = `${cache}_hit`;
-				const text = boxed(site.text);
-				const captures = `((MalJsonProjectionCapture[]){ ${site.captures.map((capture) => `{ .owner_function_index = ${capture.ownerFunctionIndex}, .index = ${capture.index} }`).join(", ")} })`;
-				return [
-					`static MalCallCache __cc_${ip};`,
-					`${hit} = mal_builtin_json_map_template_try_clone(vm, &${cache}, ${boxed(site.parseCallee)}, ${boxed(site.jsonObject)}, ${text}, ${boxed(site.callback)}, ${site.targetFunctionIndex}, ${captures}, ${site.captures.length}, &r${site.mapResult});`,
-					`if (${hit}) {`,
-					`  r${site.parseResult} = MAL_VALUE_UNDEFINED;`,
-					`} else {`,
-					`  ${throwCheck}`,
-					`  if (${cache}.state == MAL_INVARIANT_JSON_MAP_EMPTY) { ${cache}.roots[1] = ${text}; ${cache}.roots[2] = ${boxed(site.callback)}; ${cache}.roots[3] = ${boxed(site.parseCallee)}; }`,
-					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
-					`}`,
-					poll,
-				];
-			}
-			if (invariantJsonMapAction?.role === "mapCall") {
-				const site = invariantJsonMapAction.site;
-				const cache = `__invariant_json_map_${site.parseCallIp}`;
-				const hit = `${cache}_hit`;
-				const captures = `((MalJsonProjectionCapture[]){ ${site.captures.map((capture) => `{ .owner_function_index = ${capture.ownerFunctionIndex}, .index = ${capture.index} }`).join(", ")} })`;
-				const values = (indices: ReadonlyArray<number>) =>
-					`((MalValue[]){ ${indices.map((index) => `mal_value_from_string(vm->string_constant_atoms[${index}])`).join(", ")} })`;
-				return [
-					`if (!${hit}) {`,
-					`  static MalCallCache __cc_${ip};`,
-					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
-					`  ${poll}`,
-					`  (void) mal_builtin_json_map_template_fill(vm, &${cache}, ${cache}.roots[3], vm->intrinsics[MAL_INTRINSIC_JSON], ${cache}.roots[1], ${boxed(site.mapCallee)}, ${boxed(site.parseResult)}, ${cache}.roots[2], ${site.targetFunctionIndex}, ${captures}, ${site.captures.length}, r${site.mapResult}, ${values(site.primitiveRowStringIndices)}, ${site.primitiveRowStringIndices.length}, mal_value_from_string(vm->string_constant_atoms[${site.nestedBaseStringIndex}]), mal_value_from_string(vm->string_constant_atoms[${site.nestedValueStringIndex}]), ${values(site.excludedStringIndices)}, ${site.excludedStringIndices.length}, ${site.rowPropertyLoads});`,
-					`  ${throwCheck}`,
-					`} else {`,
-					`  ${poll}`,
-					`}`,
-				];
-			}
-			if (privateAggregateMemo !== undefined) {
-				const memo = `__private_aggregate_memo_${ip}`;
-				const callee = `__private_aggregate_callee_${ip}`;
-				const input = boxedOperand(instruction.arguments[0]!);
-				return [
-					`MalValue ${callee} = ${boxedOperand(instruction.callee)};`,
-					`if (!mal_builtin_array_private_aggregate_memo_probe(vm, &${memo}, ${callee}, ${boxedOperand(instruction.thisValue)}, ${input}, ${privateAggregateMemo.targetFunctionIndex}, &r${instruction.dst})) {`,
-					`  if (mal_vm_callee_has_index(vm, ${callee}, ${privateAggregateMemo.targetFunctionIndex})) {`,
-					`    if (!mal_vm_enter_compiled(vm, ${privateAggregateMemo.targetFunctionIndex})) ${onThrow}`,
-					`    const MalFunction *__private_aggregate_function_${ip} = &vm->definition->functions[${privateAggregateMemo.targetFunctionIndex}];`,
-					`    MalValue __private_aggregate_value_${ip} = mal_compiled_${privateAggregateMemo.targetFunctionIndex}${suffix}(vm, mal_vm_callee_this(vm, __private_aggregate_function_${ip}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${callee})->creation_env, ${callee}, nullptr);`,
-					`    mal_vm_leave_compiled(vm);`,
-					`    if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`    r${instruction.dst} = __private_aggregate_value_${ip};`,
-					`  } else {`,
-					`    static MalCallCache __cc_${ip};`,
-					`    MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${privateAggregateMemo.targetFunctionIndex}, ${callee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`    if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`    r${instruction.dst} = ${tmp}.value;`,
-					`  }`,
-					`  ${poll}`,
-					`  mal_builtin_array_private_aggregate_memo_fill(vm, &${memo}, ${callee}, ${boxedOperand(instruction.thisValue)}, ${input}, ${privateAggregateMemo.targetFunctionIndex}, r${instruction.dst});`,
-					`} else {`,
-					`  ${poll}`,
-					`}`,
-				];
-			}
-			if (invariantJsonParseCache !== undefined) {
-				const cache = `__invariant_json_parse_${ip}`;
-				const text = boxedOperand(instruction.arguments[0]!);
-				return [
-					`static MalCallCache __cc_${ip};`,
-					`if (mal_builtin_json_parse_cache_try_clone(vm, &${cache}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${text}, &r${instruction.dst})) {`,
-					`  ${throwCheck}`,
-					`} else {`,
-					`  ${throwCheck}`,
-					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
-					`  (void) mal_builtin_json_parse_cache_fill(vm, &${cache}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${text}, r${instruction.dst});`,
-					`  ${throwCheck}`,
-					`}`,
-					poll,
-				];
-			}
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitCursorAction;
 				const id = site.callIp;
@@ -6754,47 +4986,6 @@ function emitInstruction(
 					poll,
 				];
 			}
-			if (
-				nativeStringSearchRegExpAction?.role === "call" &&
-				nativeStringSearchRegExpAction.region.literalPatternStringIndex !== undefined
-			) {
-				const fast = `__string_search_literal_${ip}_fast`;
-				const direct = `__string_search_literal_${ip}_result`;
-				const regexpDirect = `__string_search_${ip}_result`;
-				return [
-					`static MalCallCache __cc_${ip};`,
-					`if (${fast}) {`,
-					`  r${instruction.dst} = ${direct};`,
-					`} else {`,
-					`  MalValue ${regexpDirect};`,
-					`  if (mal_builtin_string_search_regexp_direct(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &${regexpDirect})) {`,
-					`    ${throwCheck}`,
-					`    r${instruction.dst} = ${regexpDirect};`,
-					`  } else {`,
-					`    MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`    if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`    r${instruction.dst} = ${tmp}.value;`,
-					`  }`,
-					`}`,
-					poll,
-				];
-			}
-			if (nativeStringSearchRegExpAction?.role === "call") {
-				const direct = `__string_search_${ip}_result`;
-				return [
-					`static MalCallCache __cc_${ip};`,
-					`MalValue ${direct};`,
-					`if (mal_builtin_string_search_regexp_direct(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, &${direct})) {`,
-					`  ${throwCheck}`,
-					`  r${instruction.dst} = ${direct};`,
-					`} else {`,
-					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
-					`}`,
-					poll,
-				];
-			}
 			if (nativeStringSliceNumberFusionAction !== undefined) {
 				const { fusion, lockedIdentity, propertyLoad } =
 					nativeStringSliceNumberFusionAction;
@@ -6904,38 +5095,6 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			if (cardinalityPush !== undefined) {
-				const target = cardinalityPush;
-				const fastResult =
-					reps[instruction.dst] === "number"
-						? `(f64) ${target.countName}`
-						: `mal_value_from_i32((i32) ${target.countName})`;
-				const current = `__cardinality_${ip}_current`;
-				return [
-					`if (${target.fastName} && ${target.countName} < ${target.maximumLength}${cardinalityEpochGuard(target)}) {`,
-					...Array.from(
-						{ length: target.itemSite.slotCount },
-						(_, slot) =>
-							`  __gc_slots[${target.historySlotsOffset} + ${target.countName} * ${target.itemSite.slotCount} + ${slot}] = __gc_slots[${target.itemSite.slotsOffset + slot}];`,
-					),
-					`  ${target.countName}++;`,
-					`  r${instruction.dst} = ${fastResult};`,
-					`} else {`,
-					`  if (${target.fastName}) {`,
-					...materializeCardinalityRegion(target).map((line) => `    ${line}`),
-					`  }`,
-					`  MalValue ${current} = mal_vm_materialize_stack_object(vm, &${target.itemSite.objectName});`,
-					`  ${throwCheck}`,
-					`  r${target.itemRegister} = ${current};`,
-					`  ${target.currentMaterializedName} = true;`,
-					`  static MalCallCache __cc_${ip};`,
-					`  MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, &${current}, 1, nullptr);`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
-					`  ${poll}`,
-					`}`,
-				];
-			}
 			const guardedBuiltinOperation = instruction.guardedBuiltinCall?.operation;
 			if (
 				guardedBuiltinOperation === "Map.prototype.get" ||
@@ -6956,19 +5115,11 @@ function emitInstruction(
 				];
 			}
 			if (vmCallProvesBuiltin(instruction, "Array.prototype.push")) {
-				const exact = `__private_aggregate_push_exact_${ip}`;
-				const memo = privateAggregatePushMemo;
 				return [
 					`static MalCallCache __cc_${ip};`,
-					...(memo === undefined ? [] : [`bool ${exact} = false;`]),
-					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, ${memo === undefined ? "nullptr" : `&${exact}`});`,
+					`MalCompletion ${tmp} = mal_builtin_array_push_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, nullptr);`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 					`r${instruction.dst} = ${tmp}.value;`,
-					...(memo === undefined
-						? []
-						: [
-								`mal_builtin_array_private_aggregate_memo_note_push(vm, &__private_aggregate_memo_${memo.callIp}, ${exact});`,
-							]),
 					poll,
 				];
 			}
@@ -7121,25 +5272,6 @@ function emitInstruction(
 				instruction.directFunctionIndex === undefined
 					? `mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`
 					: `mal_vm_construct_direct(vm, ${instruction.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length})`;
-			if (
-				nativeStringSearchRegExpAction?.role === "construct" &&
-				nativeStringSearchRegExpAction.region.literalPatternStringIndex !== undefined
-			) {
-				const site = nativeStringSearchRegExpAction.region;
-				const fast = `__string_search_literal_${site.searchCallIp}_fast`;
-				const direct = `__string_search_literal_${site.searchCallIp}_result`;
-				return [
-					`${fast} = mal_builtin_string_search_literal_direct(vm, ${boxedOperand(site.searchCallee)}, ${boxedOperand(site.receiver)}, &mal_strings${suffix}[${site.literalPatternStringIndex}], &${direct});`,
-					`if (${fast}) {`,
-					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-					`} else {`,
-					`  MalCompletion ${tmp} = ${construct};`,
-					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
-					`}`,
-					poll,
-				];
-			}
 			return [
 				`MalCompletion ${tmp} = ${construct};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,

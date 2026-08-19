@@ -1,8 +1,5 @@
 import type { ESTree } from "meriyah";
-import type {
-	DirectBuiltinOperationId,
-	MathUnaryOperationKey,
-} from "./builtin-registry.ts";
+import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
 import type {
 	CompilerOptimizationDecision,
@@ -534,28 +531,6 @@ export interface RegisterFunction {
 	pendingLabels?: Array<string>;
 }
 
-/** The two callback inputs a plan operand can name; every other operand is the
- * index of an earlier node in the same plan. */
-export const NUMERIC_HOF_INPUT_ACCUMULATOR = -1;
-export const NUMERIC_HOF_INPUT_ELEMENT = -2;
-
-/** One SSA node in a compiler-proven, capture-free numeric Array HOF callback.
- * Negative operands are the callback inputs (see NUMERIC_HOF_INPUT_*);
- * non-negative operands name an earlier node in the same plan. */
-export type RegisterNumericHofPlanOperation =
-	| { type: "constant"; value: number }
-	| {
-			type: "binary";
-			operator: "+" | "-" | "*" | "/" | "%";
-			left: number;
-			right: number;
-	  }
-	| {
-			type: "math";
-			operation: MathUnaryOperationKey;
-			value: number;
-	  };
-
 interface RegisterLoopContext {
 	/**
 	 * break targets the innermost breakable (loop/switch) or, when labeled, the
@@ -861,144 +836,6 @@ export interface RegisterStringSplitCursor extends RegisterRegionEnvelope<
 }
 
 /**
- * Backend-neutral certificate for one inlined numeric `Array.prototype.reduce`
- * loop. The four anchors retain the accumulator entry, element read, natural
- * backedge, and explicit loop exit. A final canonical CFG/def-use audit refreshes
- * the envelope after the optimization fixpoint or drops the entire certificate.
- */
-export interface RegisterNumericHofRegion extends RegisterRegionEnvelope<
-	"numeric-hof",
-	"numeric-reduce-f64",
-	"none",
-	readonly [
-		Extract<RegisterInstruction, { type: "move" }>,
-		Extract<RegisterInstruction, { type: "loadProperty" }>,
-		Extract<RegisterInstruction, { type: "jump" }>,
-		Extract<RegisterInstruction, { type: "jump" }>,
-	]
-> {
-	readonly method: "reduce";
-	readonly callbackFunctionIndex: number;
-	readonly operations: ReadonlyArray<RegisterNumericHofPlanOperation>;
-	readonly resultOperand: number;
-	/** Exact numeric initial accumulator proven before the loop transform. */
-	readonly initialValue: number;
-	readonly pollPolicy: "end-only-no-preempt";
-	readonly dispatch:
-		| {
-				readonly kind: "guarded";
-				readonly eligibility: Extract<RegisterInstruction, { type: "call" }>;
-				readonly slowCall: Extract<RegisterInstruction, { type: "call" }>;
-		  }
-		| {
-				readonly kind: "closed";
-				readonly receiverAllocation: Extract<
-					RegisterInstruction,
-					{ type: "createArray" }
-				>;
-		  };
-}
-
-/**
- * Backend-neutral certificate for a private, fixed-length Array of same-shape
- * records. The proof is selected while block identity and virtual-register
- * provenance are intact; lowering must resolve every instruction anchor or
- * discard the whole region.
- */
-export interface RegisterClosedRecordArrayRegion extends RegisterRegionEnvelope<
-	"closed-record-array",
-	"dense-record-elements-known-slots",
-	"none",
-	readonly [
-		Extract<RegisterInstruction, { type: "createArray" }>,
-		Extract<RegisterInstruction, { type: "createObjectShaped" }>,
-	]
-> {
-	readonly length: number;
-	readonly elementLoads: ReadonlyArray<
-		Extract<RegisterInstruction, { type: "loadProperty" }>
-	>;
-	readonly accesses: ReadonlyArray<{
-		readonly instruction: Extract<
-			RegisterInstruction,
-			{ type: "loadPropertyStatic" | "storePropertyStatic" }
-		>;
-		readonly kind: "load" | "store";
-		readonly slot: number;
-	}>;
-}
-
-/**
- * Program-dictionary representation for one non-escaping global object. The
- * initializer may live in another function, so the source global slot is the
- * cross-function identity while this function-local region owns every dynamic
- * access that can use the synthetic value table.
- */
-export interface RegisterClosedGlobalTableRegion extends RegisterRegionEnvelope<
-	"closed-global-table",
-	"synthetic-global-value-table",
-	"on-demand",
-	readonly [Extract<RegisterInstruction, { type: "loadProperty" | "storeProperty" }>]
-> {
-	readonly composition: "overlay";
-	readonly sourceGlobalIndex: number;
-	readonly baseIndex: number;
-	readonly stateIndex: number;
-	readonly mask: number;
-	readonly accesses: ReadonlyArray<{
-		readonly instruction: Extract<
-			RegisterInstruction,
-			{ type: "loadProperty" | "storeProperty" }
-		>;
-		readonly direct: boolean;
-	}>;
-}
-
-/** Aggregate producer-consumer graph for canonical intrinsic method calls. */
-export interface RegisterKnownBuiltinProducerRegion extends RegisterRegionEnvelope<
-	"known-builtin-producers",
-	"exact-intrinsic-property-call-twins",
-	"none",
-	readonly [Extract<RegisterInstruction, { type: "call" }>],
-	"structural"
-> {
-	readonly composition: "overlay";
-	readonly sites: ReadonlyArray<{
-		readonly receiver: Extract<RegisterInstruction, { type: "loadIntrinsic" }>;
-		readonly property: Extract<RegisterInstruction, { type: "loadPropertyStatic" }>;
-		readonly call: Extract<RegisterInstruction, { type: "call" }>;
-	}>;
-}
-
-/**
- * Backend-neutral certificate for one bounded push-only Array of same-shape
- * records. The ordinary Array, push, and property instructions remain the
- * semantic twin; native lowering may replace the whole region or none of it.
- */
-export interface RegisterCardinalityArrayRegion extends RegisterRegionEnvelope<
-	"cardinality-array",
-	"bounded-record-history",
-	"whole-region",
-	readonly [
-		Extract<RegisterInstruction, { type: "createArray" }>,
-		Extract<RegisterInstruction, { type: "call" }>,
-		Extract<RegisterInstruction, { type: "createObjectShaped" }>,
-	]
-> {
-	readonly maximumLength: number;
-	/** The pushed record passed the closed fixed-shape/non-escape proof. */
-	readonly itemStackObjectProof?: "closed-fixed-shape";
-	readonly accesses: ReadonlyArray<{
-		readonly instruction: Extract<
-			RegisterInstruction,
-			{ type: "loadProperty" | "loadPropertyStatic" }
-		>;
-		readonly role: "push" | "length" | "element" | "field";
-		readonly fieldSlot?: number;
-	}>;
-}
-
-/**
  * Structural certificate for a one-use binary pair. Its runtime license is the
  * ordinary per-operand Number check, so it needs no mutable-world dependency.
  */
@@ -1019,72 +856,6 @@ export interface RegisterNumericFusionRegion extends RegisterRegionEnvelope<
 		readonly finish: Extract<RegisterInstruction, { type: "binary" }>;
 		readonly firstUsePosition: 1 | 2;
 	}>;
-}
-
-/**
- * Structural proof table for bounded string concatenations and their computed
- * property consumers. The region is the sole owner of each finite string domain;
- * a producer may have no property consumers and still use its precomputed table.
- */
-export interface RegisterFinitePropertySelectorRegion extends RegisterRegionEnvelope<
-	"finite-property-selector",
-	"finite-property-domain",
-	"none",
-	readonly [Extract<RegisterInstruction, { type: "binary" }>],
-	"structural"
-> {
-	readonly composition: "overlay";
-	readonly runtimeGuard: "integer-domain-and-shape-or-generic-access";
-	readonly selectors: ReadonlyArray<{
-		readonly source: Extract<RegisterInstruction, { type: "binary" }>;
-		readonly minimum: number;
-		readonly stringIndices: ReadonlyArray<number>;
-		readonly accesses: ReadonlyArray<
-			Extract<RegisterInstruction, { type: "loadProperty" | "storeProperty" }>
-		>;
-	}>;
-}
-
-/** Structural proof for a canonical finite-key object construction loop. */
-export interface RegisterFiniteObjectConstructionRegion extends RegisterRegionEnvelope<
-	"finite-object-construction",
-	"finite-key-object-slots",
-	"on-demand",
-	readonly [
-		Extract<RegisterInstruction, { type: "createObject" }>,
-		Extract<RegisterInstruction, { type: "storeProperty" }>,
-	],
-	"structural"
-> {
-	readonly runtimeGuard: "number-leaves-and-prototype-shape";
-	readonly keyStringIndices: ReadonlyArray<number>;
-	readonly numberGuardCount: number;
-	readonly virtualRecord: boolean;
-	readonly accesses: ReadonlyArray<
-		Extract<RegisterInstruction, { type: "loadProperty" }>
-	>;
-}
-
-/**
- * Structural certificate for a dense indexed read from a complete exact fresh
- * Array. This overlays the surrounding inlined loop (and, for numeric reduce,
- * its numeric region) because it changes only the selected load representation.
- */
-export interface RegisterExactFreshArrayRegion extends RegisterRegionEnvelope<
-	"exact-fresh-array",
-	"exact-fresh-dense-elements",
-	"none",
-	readonly [
-		Extract<RegisterInstruction, { type: "createArray" }>,
-		Extract<RegisterInstruction, { type: "loadProperty" }>,
-	],
-	"structural"
-> {
-	readonly composition: "overlay";
-	readonly runtimeGuard: "dense-storage-or-generic-load";
-	readonly accesses: ReadonlyArray<
-		Extract<RegisterInstruction, { type: "loadProperty" }>
-	>;
 }
 
 /**
@@ -1131,21 +902,13 @@ export interface RegisterStackObjectPlanRegion extends RegisterRegionEnvelope<
 
 /** Tagged function-level proof table; add region kinds only with common-envelope validation. */
 export type RegisterRegion =
-	| RegisterCardinalityArrayRegion
-	| RegisterClosedGlobalTableRegion
-	| RegisterClosedRecordArrayRegion
-	| RegisterExactFreshArrayRegion
-	| RegisterFiniteObjectConstructionRegion
-	| RegisterFinitePropertySelectorRegion
-	| RegisterKnownBuiltinProducerRegion
 	| RegisterNumericFusionRegion
 	| RegisterRegExpExecProjectionRegion
 	| RegisterRegExpIteratorProjectionRegion
 	| RegisterStackObjectPlanRegion
 	| RegisterStringSliceNumberRegion
 	| RegisterStringSplitProjectionRegion
-	| RegisterStringSplitCursor
-	| RegisterNumericHofRegion;
+	| RegisterStringSplitCursor;
 
 export type RegisterInstruction =
 	| {

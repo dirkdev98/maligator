@@ -1,12 +1,12 @@
 import type { ESTree } from "meriyah";
 import { expect, test } from "vitest";
 import { compileSourceToBuffer } from "../src/compile.ts";
+import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
 import type { DirectEvalContext } from "../src/direct-eval-context.ts";
 import {
 	decodeDirectEvalContext,
 	encodeDirectEvalContext,
 } from "../src/direct-eval-context.ts";
-import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
 import { parseScript } from "../src/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
@@ -52,8 +52,7 @@ function generatedDirectEvalContext(source: string): DirectEvalContext {
 	}
 	const encodedContext = instructions.find(
 		(instruction) =>
-			instruction.opcode === "createString" &&
-			instruction.outputs[0] === call.inputs[9],
+			instruction.opcode === "createString" && instruction.outputs[0] === call.inputs[9],
 	);
 	expect(encodedContext?.opcode).toBe("createString");
 	if (encodedContext?.opcode !== "createString") {
