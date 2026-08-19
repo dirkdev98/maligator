@@ -122,6 +122,7 @@ export type CoreOpcode = (typeof CORE_OPCODES)[number];
 const NO_OUTPUT = new Set<CoreOpcode>([
 	"asyncStart",
 	"checkSuperClass",
+	"createPrivateNames",
 	"defineAccessor",
 	"definePrivate",
 	"defineProperty",
@@ -322,6 +323,9 @@ function domainsFor(
 	const domains = new Set<CoreEffectDomain>();
 	if (kind === "reads" && opcode === "loadCaptured") domains.add("captured-slot");
 	if (kind === "writes" && opcode === "storeCaptured") domains.add("captured-slot");
+	if (kind === "writes" && opcode === "createPrivateNames") {
+		domains.add("captured-slot");
+	}
 	if (kind === "reads" && opcode === "loadGlobal") domains.add("global-slot");
 	if (kind === "writes" && (opcode === "storeGlobal" || opcode === "initGlobalVars")) {
 		domains.add("global-slot");

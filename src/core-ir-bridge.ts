@@ -88,13 +88,15 @@ export interface CoreProgramBridge {
 	readonly functions: ReadonlyArray<CoreFunctionBridge>;
 }
 
-export interface CoreProgramLoweringOptions {
+export interface CoreProgramConstructionOptions {
 	/**
-	 * Retain an already optimized lowering graph while Core becomes the owner of
-	 * its proof families. This is an explicit migration mode, not a wire-format
-	 * compatibility path.
+	 * Run the whole-program verifier after construction. Direct bridge users get
+	 * this by default; callers may omit it only when another phase owns the same
+	 * verification boundary.
 	 */
-	readonly preserveOptimizedSource?: boolean;
+	readonly verify?: boolean;
+	/** Retain origin/register maps needed to lower this Core program back to VM IR. */
+	readonly retainLoweringMetadata?: boolean;
 }
 
 function isControlInstruction(
@@ -111,12 +113,15 @@ function isControlInstruction(
 	);
 }
 
-function legacyPayload(instruction: IRInstruction): LegacyInstructionPayload {
+function legacyPayload(
+	instruction: IRInstruction,
+	retainLoweringMetadata = true,
+): LegacyInstructionPayload {
 	const fields: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(instruction)) {
 		if (key !== "type" && key !== "registers" && key !== "blocks") fields[key] = value;
 	}
-	if (!("registers" in instruction)) return { fields };
+	if (!retainLoweringMetadata || !("registers" in instruction)) return { fields };
 	let outputIndex = 0;
 	let inputIndex = 0;
 	const destinations = destinationCount(instruction);
@@ -506,7 +511,108 @@ function sortedRegisters(registers: ReadonlySet<number>): Array<number> {
 	return [...registers].sort((left, right) => left - right);
 }
 
-function convertFunction(fn: IRFunction): CoreFunctionBridge {
+/**
+ * The optimized graph is overwhelmingly made of closed, single-block
+ * functions. Import those without allocating the generic segmentation and
+ * liveness machinery; fall back as soon as control or an implicit live-in makes
+ * the straight-line proof inapplicable.
+ */
+function convertStraightLineFunction(
+	fn: IRFunction,
+	verify: boolean,
+	retainLoweringMetadata: boolean,
+): CoreFunctionBridge | undefined {
+	if (fn.blocks.length !== 1) return undefined;
+	const executable = fn.blocks[0]!.instructions.filter(
+		(instruction) => instruction.type !== "sourcePos",
+	);
+	const terminator = executable.at(-1);
+	if (terminator?.type !== "return" && terminator?.type !== "throw") {
+		return undefined;
+	}
+	if (
+		executable
+			.slice(0, -1)
+			.some(
+				(instruction) =>
+					isControlInstruction(instruction) ||
+					instruction.type === "tryBegin" ||
+					instruction.type === "tryEnd" ||
+					instruction.type === "catch",
+			)
+	) {
+		return undefined;
+	}
+
+	const definitions = new Set<number>();
+	for (const instruction of executable) {
+		if (usedRegisters(instruction).some((register) => !definitions.has(register))) {
+			return undefined;
+		}
+		for (const register of definedRegisters(instruction)) definitions.add(register);
+	}
+
+	const builder = new CoreFunctionBuilder(fn.functionIndex, coreOpcodeRegistry, {
+		isGenerator: fn.isGenerator === true,
+		isAsync: fn.isAsync === true,
+	});
+	const block = builder.createBlock();
+	const values = new Map<number, CoreValueId>();
+	const instructionOrigins = new Map<CoreInstructionId, IRInstruction>();
+	const legacyRegisters = new Map<CoreValueId, number>();
+	let sourcePosition: number | undefined;
+	for (const instruction of fn.blocks[0]!.instructions) {
+		if (instruction.type === "sourcePos") {
+			sourcePosition = instruction.pos;
+			continue;
+		}
+		if (instruction === terminator) {
+			const id = builder.setTerminator(block, {
+				kind: instruction.type,
+				value: values.get(instruction.registers[0])!,
+				...(sourcePosition === undefined ? {} : { sourcePosition }),
+			});
+			if (retainLoweringMetadata) instructionOrigins.set(id, instruction);
+			continue;
+		}
+		const inputs = usedRegisters(instruction).map((register) => values.get(register)!);
+		const destinations = definedRegisters(instruction);
+		const outputs = builder.appendInstruction(block, instruction.type, inputs, {
+			outputCount: destinations.length,
+			outputRepresentations: destinations.map((_, index) =>
+				outputRepresentation(instruction, index),
+			),
+			payload: legacyPayload(instruction, retainLoweringMetadata),
+			...(sourcePosition === undefined ? {} : { sourcePosition }),
+		});
+		const appended = builder.block(block).instructions.at(-1)!;
+		if (retainLoweringMetadata) instructionOrigins.set(appended.id, instruction);
+		for (const [index, register] of destinations.entries()) {
+			values.set(register, outputs[index]!);
+			if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
+		}
+	}
+	const core = builder.finish(block);
+	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
+	return {
+		core,
+		legacy: fn,
+		instructionOrigins,
+		legacyRegisters,
+		legacyBlockByCoreBlock: retainLoweringMetadata ? new Map([[block, 0]]) : new Map(),
+		...(retainLoweringMetadata && fn.bodyEntryBlock === 0
+			? { bodyEntryBlock: block }
+			: {}),
+	};
+}
+
+function convertFunction(
+	fn: IRFunction,
+	verify: boolean,
+	retainLoweringMetadata: boolean,
+): CoreFunctionBridge {
+	const straightLine = convertStraightLineFunction(fn, verify, retainLoweringMetadata);
+	if (straightLine !== undefined) return straightLine;
 	const { segments: splitSegments, segmentsByOldBlock } = splitLegacyBlocks(fn);
 	establishSegmentTerminators(fn, splitSegments, segmentsByOldBlock);
 	analyzeSegments(splitSegments, segmentsByOldBlock);
@@ -531,17 +637,20 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 			...liveIn.map(() => ({ representation: "boxed" as const })),
 		]);
 		coreBlocks.push(block);
-		legacyBlockByCoreBlock.set(block, segment.oldBlock);
+		if (retainLoweringMetadata) legacyBlockByCoreBlock.set(block, segment.oldBlock);
 		const parameters = builder.block(block).parameters;
 		let parameterIndex = 0;
 		if (segment.catchRegister !== undefined) {
 			if (segment.catchRegister >= 0) {
-				legacyRegisters.set(parameters[parameterIndex]!.value, segment.catchRegister);
+				if (retainLoweringMetadata) {
+					legacyRegisters.set(parameters[parameterIndex]!.value, segment.catchRegister);
+				}
 			}
 			parameterIndex++;
 		}
 		for (const register of liveIn) {
-			legacyRegisters.set(parameters[parameterIndex++]!.value, register);
+			const parameter = parameters[parameterIndex++]!.value;
+			if (retainLoweringMetadata) legacyRegisters.set(parameter, register);
 		}
 	}
 
@@ -581,17 +690,17 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 				outputRepresentations: destinations.map((_, index) =>
 					outputRepresentation(instruction, index),
 				),
-				payload: legacyPayload(instruction),
+				payload: legacyPayload(instruction, retainLoweringMetadata),
 				...(sourcePosition === undefined ? {} : { sourcePosition }),
 			});
 			const appended = builder.block(block).instructions.at(-1);
 			if (appended === undefined) {
 				throw new Error(`Core bridge failed to append ${instruction.type}`);
 			}
-			instructionOrigins.set(appended.id, instruction);
+			if (retainLoweringMetadata) instructionOrigins.set(appended.id, instruction);
 			for (const [index, register] of destinations.entries()) {
 				values.set(register, outputs[index]!);
-				legacyRegisters.set(outputs[index]!, register);
+				if (retainLoweringMetadata) legacyRegisters.set(outputs[index]!, register);
 			}
 		}
 
@@ -644,7 +753,9 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 		}
 		const terminatorId = builder.setTerminator(block, terminator);
 		if ("origin" in legacyTerminator && legacyTerminator.origin !== undefined) {
-			instructionOrigins.set(terminatorId, legacyTerminator.origin);
+			if (retainLoweringMetadata) {
+				instructionOrigins.set(terminatorId, legacyTerminator.origin);
+			}
 		}
 		if (segment.exceptionalSuccessor !== undefined) {
 			builder.setHandler(
@@ -656,7 +767,7 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 	}
 
 	const core = builder.finish(coreBlocks[0]!);
-	verifyCoreFunction(core, coreOpcodeRegistry);
+	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	const bodyEntrySegment =
 		fn.bodyEntryBlock === undefined
 			? undefined
@@ -667,7 +778,7 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 		instructionOrigins,
 		legacyRegisters,
 		legacyBlockByCoreBlock,
-		...(bodyEntrySegment === undefined
+		...(!retainLoweringMetadata || bodyEntrySegment === undefined
 			? {}
 			: { bodyEntryBlock: coreBlockId(bodyEntrySegment.id) }),
 	};
@@ -676,10 +787,15 @@ function convertFunction(fn: IRFunction): CoreFunctionBridge {
 /** Convert normalized semantic-lowering output into canonical block-parameter SSA. */
 export function intermediateProgramToCore(
 	program: IntermediateProgram,
+	options: CoreProgramConstructionOptions = {},
 ): CoreProgramBridge {
+	const verify = options.verify ?? true;
+	const retainLoweringMetadata = options.retainLoweringMetadata ?? true;
 	return {
 		source: program,
-		functions: program.functions.map(convertFunction),
+		functions: program.functions.map((fn) =>
+			convertFunction(fn, verify, retainLoweringMetadata),
+		),
 	};
 }
 
@@ -916,14 +1032,7 @@ function lowerFunctionBridge(bridge: CoreFunctionBridge): IRFunction {
 /** Lower canonical SSA back into the existing VM-facing register form. */
 export function coreProgramToIntermediate(
 	bridge: CoreProgramBridge,
-	options: CoreProgramLoweringOptions = {},
 ): IntermediateProgram {
-	if (options.preserveOptimizedSource === true) {
-		for (const { core } of bridge.functions) {
-			verifyCoreFunction(core, coreOpcodeRegistry);
-		}
-		return bridge.source;
-	}
 	return {
 		...bridge.source,
 		functions: bridge.functions.map(lowerFunctionBridge),

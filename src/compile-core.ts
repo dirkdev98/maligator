@@ -32,6 +32,8 @@ export interface CompileCoreOptions {
 	profile?: boolean;
 	/** Bounded pass groups disabled only for controlled attribution builds. */
 	optimizationAblations?: ReadonlySet<OptimizationAblation>;
+	/** Verify the read-only production Core import as an explicit diagnostic. */
+	verifyCoreIr?: boolean;
 	ir?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
@@ -63,19 +65,27 @@ export function compileSemanticProgramToVmDefinition(
 			? executeIRDevelopmentOptimizations(ir)
 			: executeIROptimizations(ir, { ablations: options.optimizationAblations }),
 	);
-	const core = runPhase("construct core ir", () => intermediateProgramToCore(ir));
-	const optimized = runPhase(
-		"core ir optimizations",
-		() =>
-			executeCoreOptimizations(core, {
-				ablations: options.optimizationAblations,
-				simplifyValues: options.optimization === "development",
-			}).program,
+	const usesCoreLowering = options.optimization === "development";
+	const constructsCore = usesCoreLowering || options.verifyCoreIr === true;
+	const core = runPhase("construct core ir", () =>
+		constructsCore
+			? intermediateProgramToCore(ir, {
+					verify: true,
+					retainLoweringMetadata: usesCoreLowering,
+				})
+			: undefined,
+	);
+	const optimized = runPhase("core ir optimizations", () =>
+		usesCoreLowering && core !== undefined
+			? executeCoreOptimizations(core, {
+					ablations: options.optimizationAblations,
+				}).program
+			: core,
 	);
 	const lowered = runPhase("lower core ir", () =>
-		coreProgramToIntermediate(optimized, {
-			preserveOptimizedSource: options.optimization !== "development",
-		}),
+		usesCoreLowering && optimized !== undefined
+			? coreProgramToIntermediate(optimized)
+			: ir,
 	);
 	if (options.profile === true) ensureCompilerSiteFacts(lowered);
 	options.afterOptimization?.(lowered);

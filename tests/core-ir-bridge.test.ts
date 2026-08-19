@@ -75,4 +75,23 @@ describe("Core IR semantic bridge", () => {
 			vm.functions.flatMap(({ instructions }) => instructions).length,
 		).toBeGreaterThan(10);
 	});
+
+	it("models captured private-name batches as result-free writes", () => {
+		const converted = bridge(`
+			function make() {
+				return class { #value; read() { return this.#value; } };
+			}
+			make();
+		`);
+		const batches = converted.functions.flatMap(({ core }) =>
+			core.blocks.flatMap((block) =>
+				block.instructions.filter(({ opcode }) => opcode === "createPrivateNames"),
+			),
+		);
+		expect(batches).toHaveLength(1);
+		expect(batches[0]?.outputs).toEqual([]);
+		expect(coreOpcodeRegistry.require("createPrivateNames").effects.writes).toContain(
+			"captured-slot",
+		);
+	});
 });
