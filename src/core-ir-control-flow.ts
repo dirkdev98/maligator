@@ -3,6 +3,7 @@ import type {
 	CoreEdge,
 	CoreFunction,
 	CoreOpcodeRegistry,
+	CoreValueId,
 } from "./core-ir.ts";
 
 export type CoreControlEdgeKind = "ordinary" | "exceptional";
@@ -11,7 +12,7 @@ export interface CoreControlEdge {
 	readonly from: CoreBlockId;
 	readonly to: CoreBlockId;
 	readonly kind: CoreControlEdgeKind;
-	readonly arguments: ReadonlyArray<number>;
+	readonly arguments: ReadonlyArray<CoreValueId>;
 }
 
 export interface CoreNaturalLoop {

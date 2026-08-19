@@ -812,7 +812,7 @@ function stackObjectRegion(
 					incoming.length > 0 &&
 					incoming.every((edge) => {
 						const argument = edge.arguments[index];
-						return argument !== undefined && aliases.has(argument as CoreValueId);
+						return argument !== undefined && aliases.has(argument);
 					}) &&
 					!aliases.has(parameter.value)
 				) {
@@ -1147,6 +1147,129 @@ const annotateTerminalYieldSites: CoreFunctionPass = {
 			})),
 			mutationEpoch: fn.mutationEpoch + 1,
 		};
+	},
+};
+
+function exactStringConstantIndex(
+	program: CoreProgram,
+	value: string,
+): number | undefined {
+	const index = program.stringConstants.findIndex(
+		(units) =>
+			units.length === value.length &&
+			units.every((unit, offset) => unit === value.charCodeAt(offset)),
+	);
+	return index < 0 ? undefined : index;
+}
+
+/**
+ * Preserve object identity as an SSA fact instead of rediscovering it in every
+ * escape optimization. A fresh ordinary object has stable `typeof` and identity
+ * semantics even when its allocation must remain observable for OOM behavior.
+ */
+const foldExactObjectObservations: CoreFunctionPass = {
+	name: "fold-exact-object-observations",
+	ablation: "constant-folding",
+	run(fn, analyses, program) {
+		const origins = new Map<CoreValueId, CoreInstructionId>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (
+					(instruction.opcode === "createObject" ||
+						instruction.opcode === "createObjectShaped") &&
+					instruction.outputs.length === 1
+				) {
+					origins.set(instruction.outputs[0]!, instruction.id);
+				}
+			}
+		}
+		const cfg = analyses.controlFlow(fn);
+		let propagated = true;
+		while (propagated) {
+			propagated = false;
+			for (const block of fn.blocks) {
+				for (const instruction of block.instructions) {
+					if (
+						instruction.opcode !== "move" ||
+						instruction.inputs.length !== 1 ||
+						instruction.outputs.length !== 1
+					) {
+						continue;
+					}
+					const allocation = origins.get(instruction.inputs[0]!);
+					if (allocation !== undefined && !origins.has(instruction.outputs[0]!)) {
+						origins.set(instruction.outputs[0]!, allocation);
+						propagated = true;
+					}
+				}
+				const incoming = cfg.predecessors[block.id]!;
+				if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
+					continue;
+				}
+				for (const [index, parameter] of block.parameters.entries()) {
+					if (origins.has(parameter.value)) continue;
+					const first = origins.get(incoming[0]!.arguments[index]!);
+					if (
+						first !== undefined &&
+						incoming.every((edge) => origins.get(edge.arguments[index]!) === first)
+					) {
+						origins.set(parameter.value, first);
+						propagated = true;
+					}
+				}
+			}
+		}
+
+		const objectStringIndex = exactStringConstantIndex(program, "object");
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (
+						objectStringIndex !== undefined &&
+						instruction.opcode === "unary" &&
+						instructionAttribute(instruction, "operator") === "typeof" &&
+						instruction.inputs.length === 1 &&
+						origins.has(instruction.inputs[0]!)
+					) {
+						changed = true;
+						return {
+							...instruction,
+							opcode: "createString",
+							inputs: [],
+							attributes: { stringIndex: objectStringIndex },
+						};
+					}
+					if (instruction.opcode !== "binary" || instruction.inputs.length !== 2) {
+						return instruction;
+					}
+					const operator = instructionAttribute(instruction, "operator");
+					if (
+						operator !== "===" &&
+						operator !== "!==" &&
+						operator !== "==" &&
+						operator !== "!="
+					) {
+						return instruction;
+					}
+					const left = origins.get(instruction.inputs[0]!);
+					const right = origins.get(instruction.inputs[1]!);
+					if (left === undefined || right === undefined) return instruction;
+					const equal = left === right;
+					changed = true;
+					return {
+						...instruction,
+						opcode: "createBoolean",
+						inputs: [],
+						attributes: {
+							value: operator === "!==" || operator === "!=" ? !equal : equal,
+						},
+					};
+				}),
+			}),
+		);
+		return changed ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
 	},
 };
 
@@ -2054,6 +2177,7 @@ const combineLinearBlocks: CoreFunctionPass = {
 const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	annotateKnownBuiltinCalls,
+	foldExactObjectObservations,
 	selectStackObjectRegions,
 	foldPrimitiveConstants,
 	simplifyControlFlow,

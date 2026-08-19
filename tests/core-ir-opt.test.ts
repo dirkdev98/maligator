@@ -179,6 +179,42 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("folds exact object observations before selecting partial escape regions", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function choose(value, escape) {
+				const object = { value };
+				const alias = object;
+				if (escape) return alias;
+				return typeof object === "object" && object === alias
+					? object.value
+					: -1;
+			}`,
+			"core-stack-object-observations.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const fn = optimized!.functions[1]!;
+		expect(
+			fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(
+					(instruction) =>
+						instruction.opcode === "unary" &&
+						instruction.attributes.operator === "typeof",
+				),
+		).toBe(false);
+		const region = fn.regions.find(({ kind }) => kind === "stack-object-plan");
+		expect(region).toBeDefined();
+		expect(region!.data).toMatchObject({
+			sites: [expect.objectContaining({ materializations: [expect.any(Object)] })],
+		});
+	});
+
 	it("folds primitive arithmetic with exact f64 edge semantics", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const entry = builder.createBlock();
