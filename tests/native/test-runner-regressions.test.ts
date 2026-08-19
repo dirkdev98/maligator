@@ -6,10 +6,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import { buildDerivationFromConfig } from "../../src/build-config.ts";
 import { compileBuildFrontend } from "../../src/build-frontend-cache.ts";
+import { stripCompactTypes } from "../../src/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { compileRelocatableTestImage } from "../../src/testing/fragment-cache.ts";
-import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const root = mkdtempSync(path.join(os.tmpdir(), "mal-test-runner-regression-"));
@@ -26,7 +26,7 @@ function compileSupportWire(file: string): Array<Uint8Array> {
 	const frontend = compileBuildFrontend({
 		entrypoint: file,
 		config,
-		stripTypes: stripTypesWithTypeScript,
+		stripTypes: stripCompactTypes,
 		stripperIdentity: "test-runner-regression-stripper",
 		cacheDirectory,
 		optimization: "development",
@@ -39,7 +39,7 @@ function runTestFile(testFile: string, stress = false) {
 	const testImage = compileRelocatableTestImage({
 		files: [testFile],
 		config,
-		stripTypes: stripTypesWithTypeScript,
+		stripTypes: stripCompactTypes,
 		stripperIdentity: "test-runner-regression-stripper",
 		testModuleSource: readFileSyncForFixture("src/testing/runtime.mjs"),
 		cacheDirectory,

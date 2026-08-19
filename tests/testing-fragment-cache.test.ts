@@ -16,12 +16,12 @@ import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { TestCompilationSession } from "../src/testing/cache.ts";
 import {
 	compileRelocatableTestImage,
 	UnsupportedRelocatableTestImageError,
 } from "../src/testing/fragment-cache.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const temporaryDirectories: Array<string> = [];
 
@@ -59,7 +59,7 @@ describe("relocatable test fragment cache", () => {
 				path.resolve("tests/fixtures/node-fetch.test.ts"),
 			],
 			config: resolveBuildConfig({ surface: { node: true } }),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "node-globals-regression",
 			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
 			nodeGlobalsSource: readFileSync(path.resolve("src/node-globals.mjs"), "utf-8"),
@@ -80,7 +80,7 @@ describe("relocatable test fragment cache", () => {
 		const compiled = compileRelocatableTestImage({
 			files: [path.resolve("tests/fixtures/drizzle-simple-table.test.ts")],
 			config: resolveBuildConfig({ surface: { node: true } }),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "drizzle-cold-regression",
 			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
 			cacheDirectory: path.join(root, "cache"),
@@ -117,7 +117,7 @@ describe("relocatable test fragment cache", () => {
 		const build = compileBuildFrontend({
 			entrypoint: application,
 			config,
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "cross-command-dependency-test",
 			cacheDirectory,
 			session: new BuildCompilationSession(),
@@ -129,7 +129,7 @@ describe("relocatable test fragment cache", () => {
 		const compiledTest = compileRelocatableTestImage({
 			files: [testEntry],
 			config,
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "cross-command-dependency-test",
 			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
 			cacheDirectory,
@@ -159,7 +159,7 @@ describe("relocatable test fragment cache", () => {
 		const options = {
 			files: [second, first],
 			config: resolveBuildConfig({ engine: { regexp: false } }),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "fragment-test-stripper",
 			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
 			cacheDirectory,
@@ -221,7 +221,7 @@ test("namespace", () => shared.answer);
 			compileRelocatableTestImage({
 				files: [entry],
 				config: resolveBuildConfig({}),
-				stripTypes: stripTypesWithTypeScript,
+				stripTypes: stripCompactTypes,
 				stripperIdentity: "fragment-test-stripper",
 				testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
 				cacheDirectory: path.join(root, "cache"),
@@ -246,7 +246,7 @@ test("missing", () => answer);
 			compileRelocatableTestImage({
 				files: [entry],
 				config: resolveBuildConfig({}),
-				stripTypes: stripTypesWithTypeScript,
+				stripTypes: stripCompactTypes,
 				stripperIdentity: "fragment-test-stripper",
 				testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
 				cacheDirectory: path.join(root, "cache"),

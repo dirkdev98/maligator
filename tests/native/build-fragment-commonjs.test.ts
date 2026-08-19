@@ -6,9 +6,9 @@ import { afterAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import { buildDerivationFromConfig } from "../../src/build-config.ts";
 import { compileBuildFrontend } from "../../src/build-frontend-cache.ts";
+import { stripCompactTypes } from "../../src/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
-import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
 const roots: Array<string> = [];
 
@@ -52,7 +52,7 @@ describe("relocatable build CommonJS boundary", () => {
 		const frontend = compileBuildFrontend({
 			entrypoint,
 			config,
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-cjs-fragment-regression",
 			cacheDirectory: path.join(root, "cache"),
 			optimization: "development",

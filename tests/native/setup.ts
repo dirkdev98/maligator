@@ -5,11 +5,11 @@
 
 import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
+import { stripCompactTypes } from "../../src/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "../../src/compile-program.ts";
 import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
-import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
 const compilerSourceDirectory = path.resolve("src");
 const compilerEntrypoint = path.resolve("src/eval-compiler-entry.mts");
@@ -20,11 +20,11 @@ const compilerBake = {
 	sourceFiles: compilerEntrypointSourceFiles(
 		compilerSourceDirectory,
 		compilerEntrypoint,
-		stripTypesWithTypeScript,
+		stripCompactTypes,
 	),
 	bake: () =>
 		compileEntrypointToBuffer(compilerEntrypoint, {
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 		}),
 };
 

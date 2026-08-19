@@ -41,6 +41,7 @@ import type {
 	TestCommand,
 } from "./cli.ts";
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
+import { TYPE_STRIPPER_IDENTITY } from "./compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { formatCoreFunction } from "./core-ir.ts";
@@ -148,7 +149,7 @@ export function developmentCompilerInstallation(
 		licensePath: path.resolve(sourceDirectory, "../LICENSE"),
 		testModulePath: path.join(sourceDirectory, "testing/runtime.mjs"),
 		nodeGlobalsPath: path.join(sourceDirectory, "node-globals.mjs"),
-		frontendIdentity: "typescript-strip-v1",
+		frontendIdentity: TYPE_STRIPPER_IDENTITY,
 		evalCompiler: {
 			kind: "source",
 			sourceDirectory,
@@ -172,7 +173,7 @@ export function productCompilerInstallation(
 		nodeGlobalsPath: path.resolve(
 			nodeGlobalsPath ?? path.join(path.dirname(testModulePath), "node-globals.mjs"),
 		),
-		frontendIdentity: "compact-type-strip-v1",
+		frontendIdentity: TYPE_STRIPPER_IDENTITY,
 		...(developmentRunnerPath === undefined
 			? {}
 			: {

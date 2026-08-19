@@ -1,10 +1,9 @@
 import type { ESTree } from "meriyah";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { forEachEstreeChild, traverseEstree } from "./estree-traversal.ts";
-// Type-only: ts-blank-space strips this, so the module-graph (and its
-// ts-blank-space → typescript chain) is NOT pulled into the self-hostable
-// compiler cone. The buildModuleGraph value-using entry lives in
-// semantic-program.ts so this file stays runnable on MalVm.
+// Type-only: erasure removes this import, so the module graph is NOT pulled into
+// the self-hostable compiler cone. The buildModuleGraph value-using entry lives
+// in semantic-program.ts so this file stays runnable on MalVm.
 import type { ModuleGraph } from "./module-graph.ts";
 import { parseScript } from "./parser.ts";
 import { debugEnabled, log } from "./utils.ts";

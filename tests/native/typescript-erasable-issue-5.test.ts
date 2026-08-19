@@ -2,7 +2,6 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { stripCompactTypes } from "../../src/compact-type-strip.ts";
 import { buildNativeBinary, runToStdout } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-typescript-erasable-"));
@@ -22,7 +21,6 @@ describe("compact TypeScript application erasure", () => {
 				intlEnabled: false,
 				regexpEnabled: false,
 				webPlatformEnabled: false,
-				stripTypes: stripCompactTypes,
 			}),
 		);
 	}, 300_000);

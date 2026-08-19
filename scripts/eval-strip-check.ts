@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 /**
- * Build-time TypeScript support via ts-blank-space (eval Phase 1). Each fixture
- * is a `.ts` file compiled through the normal pipeline (`node src/index.ts`) and
- * run; we assert the program output AND — because blank-space replaces type
- * spans with whitespace in place, preserving every byte offset and newline —
- * that a thrown error's stack trace reports the ORIGINAL `.ts` line/column.
+ * Build-time TypeScript support via the homegrown blank-in-place stripper (eval
+ * Phase 1). Each fixture is a `.ts` file compiled through the normal pipeline
+ * (`node src/index.ts`) and run; we assert the program output AND — because
+ * erasure replaces type spans with whitespace in place, preserving every byte
+ * offset and newline — that a thrown error's stack trace reports the ORIGINAL
+ * `.ts` line/column.
  */
 
 interface RunResult {
@@ -87,7 +88,7 @@ console.log(f({ x: 21 } as Id<P>), xs.map((n: number): number => n + 1).join(","
 	}
 }
 
-// 2. Blank-space preserves positions: the stack reports the original .ts lines
+// 2. Blank-in-place erasure preserves positions: the stack reports the original .ts lines
 //    (the throw is line 2, the call site is line 5).
 {
 	const ts = `function boom(n: number): never {
@@ -115,8 +116,6 @@ try {
 }
 
 console.log(
-	failures === 0
-		? "\nall ts-blank-space fixtures pass"
-		: `\n${failures} fixture(s) FAILED`,
+	failures === 0 ? "\nall type-strip fixtures pass" : `\n${failures} fixture(s) FAILED`,
 );
 process.exit(failures === 0 ? 0 : 1);

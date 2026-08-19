@@ -7,10 +7,10 @@ import {
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 import {
 	classifyWptResults,
 	createWptExecutionEnvironment,
@@ -224,7 +224,7 @@ for (const entry of tests) {
 					const wireFrontend = compileBuildFrontend({
 						entrypoint: generatedPath,
 						config: wireConfig,
-						stripTypes: stripTypesWithTypeScript,
+						stripTypes: stripCompactTypes,
 						stripperIdentity: "wpt-wire-v1",
 						optimization: "development",
 						session: wireSession,

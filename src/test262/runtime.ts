@@ -23,6 +23,7 @@ import {
 } from "../build-flags.ts";
 import { touchCacheEntry } from "../cache-management.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
+import { stripCompactTypes } from "../compact-type-strip.ts";
 import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
 import { compileEntrypointToBuffer } from "../compile-program.ts";
 import { compilerEntrypointSourceFiles } from "../compiler-bake.ts";
@@ -38,7 +39,6 @@ import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-program.ts";
 import { deserializeVmDefinition, serializeVmDefinition } from "../serialize-vm.ts";
 import { requireToolchain } from "../toolchain.ts";
 import type { Toolchain } from "../toolchain.ts";
-import { stripTypesWithTypeScript } from "../typescript-strip.ts";
 import {
 	batchCacheKey,
 	buildFingerprint,
@@ -322,11 +322,11 @@ export function test262PrepareBuild() {
 			sourceFiles: compilerEntrypointSourceFiles(
 				compilerSourceDirectory,
 				compilerEntrypoint,
-				stripTypesWithTypeScript,
+				stripCompactTypes,
 			),
 			bake: () =>
 				compileEntrypointToBuffer(compilerEntrypoint, {
-					stripTypes: stripTypesWithTypeScript,
+					stripTypes: stripCompactTypes,
 				}),
 		},
 	});

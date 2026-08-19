@@ -1,11 +1,25 @@
 /**
- * A blank-in-place TypeScript stripper for the native front-end bootstrap.
+ * The TypeScript stripper for every Maligator front end: the Node CLI, the
+ * self-hosted CLI, the native bootstrap, and the test harnesses.
  *
  * This follows Node's strip-only contract: syntax whose types can be erased
  * without changing runtime behavior is accepted, while constructs that require
  * JavaScript generation are rejected. Keeping this implementation independent
  * of the TypeScript compiler avoids carrying a multi-megabyte parser in every
  * native product.
+ */
+
+/**
+ * Cache identity of this stripper's erasure behavior. Bump it whenever a change
+ * can produce different output for source that already stripped successfully;
+ * frontend, fragment, and test image caches key their stripped input on it.
+ */
+export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v1";
+
+/**
+ * Erase types in place: every type span becomes spaces, so the result has the
+ * same byte length, line count, and column positions as the input and needs no
+ * source map. Throws on syntax outside the strip-only contract.
  */
 export function stripCompactTypes(source: string, filePath = "<typescript>"): string {
 	const code = lexicalCodeMask(source, filePath);
@@ -21,6 +35,7 @@ export function stripCompactTypes(source: string, filePath = "<typescript>"): st
 	blankGenericSyntax(source, code, output, words, filePath);
 	blankVariableAnnotations(source, code, output, words, filePath);
 	blankFunctionAnnotations(source, code, output, words, filePath);
+	blankCatchAnnotations(source, code, output, words, filePath);
 	blankMethodAnnotations(source, code, output, filePath);
 	blankArrowAnnotations(source, code, output, filePath);
 	blankTypeAssertions(source, code, output, words, filePath);
@@ -255,6 +270,11 @@ function lexicalCodeMask(source: string, filePath: string): Array<boolean> {
 		fail(filePath, start, "unterminated templates");
 	}
 	let i = 0;
+	// A leading hashbang is host trivia, not code; `#!/usr/bin/env node` would
+	// otherwise lex as a regular expression.
+	if (source.startsWith("#!")) {
+		while (i < source.length && source[i] !== "\n") code[i++] = false;
+	}
 	while (i < source.length) {
 		const char = source[i]!;
 		const next = source[i + 1];
@@ -705,8 +725,8 @@ function blankTopLevelTypeDeclarations(
 		) {
 			const name = wordAt(source, code, nextCodeIndex(source, code, next.end));
 			if (!name) fail(filePath, word.start, "malformed interface declarations");
-			const open = findCodeChar(source, code, "{", name.end);
-			if (source[open] !== "{") {
+			const open = findInterfaceBody(source, code, name.end);
+			if (open < 0) {
 				fail(filePath, word.start, "malformed interface declarations");
 			}
 			const close = matching(source, code, open, "{", "}", filePath);
@@ -738,8 +758,8 @@ function blankTopLevelTypeDeclarations(
 		if (word.text === "interface") {
 			const name = wordAt(source, code, nextCodeIndex(source, code, word.end));
 			if (!name) continue;
-			const open = findCodeChar(source, code, "{", name.end);
-			if (source[open] !== "{") continue;
+			const open = findInterfaceBody(source, code, name.end);
+			if (open < 0) continue;
 			const close = matching(source, code, open, "{", "}", filePath);
 			const semicolon = nextCodeIndex(source, code, close + 1);
 			blankTypeDeclaration(
@@ -751,6 +771,36 @@ function blankTopLevelTypeDeclarations(
 			);
 		}
 	}
+}
+
+/**
+ * Locate an interface body. It is the first `{` outside type parameters and
+ * heritage type arguments, which may themselves contain object types — as in
+ * `interface R extends Envelope<{ type: "call" }> { ... }`.
+ */
+function findInterfaceBody(source: string, code: Array<boolean>, start: number): number {
+	let angles = 0;
+	let brackets = 0;
+	let parentheses = 0;
+	let braces = 0;
+	const balanced = (): boolean =>
+		angles === 0 && brackets === 0 && parentheses === 0 && braces === 0;
+	for (let i = start; i < source.length; i++) {
+		if (!code[i]) continue;
+		const char = source[i]!;
+		if (char === "{") {
+			if (balanced()) return i;
+			braces++;
+		} else if (char === "}" && braces > 0) braces--;
+		else if (char === "[") brackets++;
+		else if (char === "]" && brackets > 0) brackets--;
+		else if (char === "(") parentheses++;
+		else if (char === ")" && parentheses > 0) parentheses--;
+		else if (char === "<") angles++;
+		else if (char === ">" && angles > 0 && source[i - 1] !== "=") angles--;
+		else if (char === ";" && balanced()) return -1;
+	}
+	return -1;
 }
 
 function blankTypeDeclaration(
@@ -1307,6 +1357,8 @@ function blankFunctionAnnotations(
 		if (word.text !== "function") continue;
 		const immediate = nextCodeIndex(source, code, word.end);
 		if (":=;?!<,".includes(source[immediate]!)) continue;
+		// `base.function` is a member name, not a declaration.
+		if (source[previousCodeIndex(source, code, word.start - 1)] === ".") continue;
 		if (source[immediate] === "(") {
 			const previous = previousCodeIndex(source, code, word.start - 1);
 			if ("{,;}".includes(source[previous]!)) continue;
@@ -1329,10 +1381,57 @@ function blankFunctionAnnotations(
 		const close = matching(source, code, open, "(", ")", filePath);
 		blankParameterAnnotations(source, code, output, open, close, filePath);
 		const after = nextCodeIndex(source, code, close + 1);
+		let end = after;
 		if (source[after] === ":") {
-			const end = findTypeEnd(source, code, after + 1, ["{"], filePath);
+			end = findTypeEnd(source, code, after + 1, ["{", ";"], filePath);
 			blank(output, source, after, end);
 		}
+		// A body-less `function` is an overload or ambient signature. It must be erased
+		// whole: keeping its header would rebind the implementation's parameter list.
+		if (source[end] === ";") {
+			blankTypeDeclaration(
+				output,
+				source,
+				code,
+				declarationModifierStart(source, code, word.start),
+				end + 1,
+			);
+		}
+	}
+}
+
+/** Erase the optional type annotation on a catch-clause binding. */
+function blankCatchAnnotations(
+	source: string,
+	code: Array<boolean>,
+	output: Array<string>,
+	words: Array<Word>,
+	filePath: string,
+): void {
+	for (const word of words) {
+		if (word.text !== "catch") continue;
+		const previous = previousCodeIndex(source, code, word.start - 1);
+		if (source[previous] !== "}") continue;
+		const open = nextCodeIndex(source, code, word.end);
+		if (source[open] !== "(") continue;
+		const close = matching(source, code, open, "(", ")", filePath);
+		blankParameterAnnotations(source, code, output, open, close, filePath);
+	}
+}
+
+const declarationModifiers = new Set(["export", "default", "async", "declare"]);
+
+/** Start of a declaration including the modifier keywords erased along with it. */
+function declarationModifierStart(
+	source: string,
+	code: Array<boolean>,
+	start: number,
+): number {
+	let result = start;
+	for (;;) {
+		const previous = wordAtPreviousCode(source, code, result);
+		if (previous === undefined || !declarationModifiers.has(previous.text)) return result;
+		result = previous.start;
 	}
 }
 
@@ -1378,14 +1477,16 @@ function blankMethodAnnotations(
 			source[beforeParameters] === ">" &&
 			source[beforeParameters - 1] !== "="
 		) {
-			const genericOpen = matchingBackward(
+			// A relational `>` before a parenthesized operand has no opening `<`; it is
+			// an expression, not a generic method head.
+			const genericOpen = matchingBackwardOrMinusOne(
 				source,
 				code,
 				beforeParameters,
 				"<",
 				">",
-				filePath,
 			);
+			if (genericOpen < 0) continue;
 			preceding = wordAtPreviousCode(source, code, genericOpen);
 		}
 		if (preceding === undefined || controlWords.has(preceding.text)) continue;
@@ -2006,6 +2107,18 @@ function matchingBackward(
 	close: string,
 	filePath: string,
 ): number {
+	const match = matchingBackwardOrMinusOne(source, code, start, open, close);
+	if (match < 0) fail(filePath, start, `unbalanced '${close}' syntax`);
+	return match;
+}
+
+function matchingBackwardOrMinusOne(
+	source: string,
+	code: Array<boolean>,
+	start: number,
+	open: string,
+	close: string,
+): number {
 	let depth = 0;
 	for (let i = start; i >= 0; i--) {
 		if (!code[i]) continue;
@@ -2013,5 +2126,5 @@ function matchingBackward(
 			depth++;
 		if (source[i] === open && --depth === 0) return i;
 	}
-	fail(filePath, start, `unbalanced '${close}' syntax`);
+	return -1;
 }

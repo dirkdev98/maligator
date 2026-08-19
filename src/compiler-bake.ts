@@ -17,6 +17,15 @@ import { buildModuleGraph } from "./module-graph.ts";
 const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
 const SOURCE_MANIFEST = "artifact.json";
 
+/**
+ * Type erasure runs over every compiler source before a bake, so the stripper is
+ * part of the bake identity even though the compiler entrypoint never imports it.
+ */
+const TYPE_STRIPPER_MODULE = "compact-type-strip.ts";
+
+/** Third-party packages whose pinned version can change the baked wire. */
+const PINNED_COMPILER_DEPENDENCIES = ["meriyah"];
+
 interface CompilerBakeCacheInput {
 	/** Compiler-wire cache root. Defaults to the compiler project's cache. */
 	cacheRoot?: string;
@@ -73,7 +82,7 @@ function compilerDependencyIdentity(sourceDirectory: string): string {
 		dependencies?: Record<string, unknown>;
 	};
 	const parts: Array<string> = [];
-	for (const name of ["meriyah", "ts-blank-space"]) {
+	for (const name of PINNED_COMPILER_DEPENDENCIES) {
 		const version = manifest.dependencies?.[name];
 		if (typeof version !== "string" || version.length === 0) {
 			throw new Error(`compiler package does not pin ${name}: ${packagePath}`);
@@ -101,10 +110,22 @@ export function compilerEntrypointSourceFiles(
 ): Array<string> {
 	const root = requireAbsolute("compiler source directory", sourceDirectory);
 	const entry = requireAbsolute("compiler source entrypoint", entrypoint);
-	return [...buildModuleGraph(entry, { stripTypes }).modules.values()]
-		.filter((module) => !module.host && !module.virtual && isWithin(root, module.path))
-		.map((module) => module.path)
-		.sort(compareNames);
+	const graphs = [
+		buildModuleGraph(entry, { stripTypes }),
+		// Compiler-owned ESM, so its goal must not depend on a package.json lookup.
+		buildModuleGraph(path.join(root, TYPE_STRIPPER_MODULE), {
+			stripTypes,
+			entryGoal: "module",
+		}),
+	];
+	const files = new Set<string>();
+	for (const graph of graphs) {
+		for (const module of graph.modules.values()) {
+			if (module.host || module.virtual || !isWithin(root, module.path)) continue;
+			files.add(module.path);
+		}
+	}
+	return [...files].sort(compareNames);
 }
 
 function compilerSourceHash(

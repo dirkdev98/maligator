@@ -10,10 +10,10 @@ import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../../src/build-frontend-cache.ts";
+import { stripCompactTypes } from "../../src/compact-type-strip.ts";
 import { cacheDevelopmentAssets } from "../../src/development-assets.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
-import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "mal-development-assets-"));
 
@@ -50,7 +50,7 @@ console.log(readFileSync(mal.assets.materialize("hello"), "utf-8"));
 		const frontend = compileBuildFrontend({
 			entrypoint,
 			config,
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "development-assets-test",
 			cacheDirectory,
 			session,

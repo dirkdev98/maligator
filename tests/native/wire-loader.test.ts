@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { stripCompactTypes } from "../../src/compact-type-strip.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
@@ -11,7 +12,6 @@ import {
 import { buildLoadDriver } from "../../src/local-build.ts";
 import type { VmDefinition, VmFunction } from "../../src/lower-vm.ts";
 import { serializeVmDefinition } from "../../src/serialize-vm.ts";
-import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
 const fn: VmFunction = {
 	nameStringIndex: -1,
@@ -75,7 +75,7 @@ describe("wire loader side-data validation", () => {
 			entrypoint: path.resolve("src/eval-compiler-entry.mts"),
 			bake: () =>
 				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-					stripTypes: stripTypesWithTypeScript,
+					stripTypes: stripCompactTypes,
 				}),
 		});
 		directory = mkdtempSync(path.join(tmpdir(), "mal-wire-loader-"));
@@ -356,7 +356,7 @@ describe("wire loader side-data validation", () => {
 			globalThis.result = run(" alpha, beta ", ",");\n`,
 		);
 		const cursorDefinition = compileEntrypoint(entrypoint, {
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 		});
 		expect(
 			cursorDefinition.functions.flatMap(
@@ -384,7 +384,7 @@ describe("wire loader side-data validation", () => {
 			globalThis.result = project();\n`,
 		);
 		const projectionDefinition = compileEntrypoint(entrypoint, {
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			buildConfig: resolveBuildConfig({}),
 		});
 		const projectionSites = projectionDefinition.functions.flatMap((fn) =>
@@ -419,7 +419,7 @@ describe("wire loader side-data validation", () => {
 			globalThis.result = parse(/([0-9]+)/, "42");\n`,
 		);
 		const projectionDefinition = compileEntrypoint(entrypoint, {
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
@@ -449,7 +449,7 @@ describe("wire loader side-data validation", () => {
 			globalThis.result = total("1 2 3", /([0-9]+)/g);\n`,
 		);
 		const projectionDefinition = compileEntrypoint(entrypoint, {
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
@@ -482,7 +482,7 @@ describe("wire loader side-data validation", () => {
 			globalThis.result = parse("x42");\n`,
 		);
 		const regionDefinition = compileEntrypoint(entrypoint, {
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
@@ -512,7 +512,7 @@ describe("wire loader side-data validation", () => {
 			if (read(false) !== 42 || read(true).tag !== "stack") throw new Error("bad stack plan");\n`,
 		);
 		const stackDefinition = compileEntrypoint(entrypoint, {
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			buildConfig: resolveBuildConfig({}),
 		});
 		expect(

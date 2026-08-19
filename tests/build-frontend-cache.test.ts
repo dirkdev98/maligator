@@ -15,8 +15,8 @@ import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { emitVmTranslationUnits } from "../src/emit-vm.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 function temporaryDirectory(): string {
 	return mkdtempSync(path.join(tmpdir(), "mal-build-frontend-cache-"));
@@ -34,7 +34,7 @@ function compile(
 	return compileBuildFrontend({
 		entrypoint,
 		config: resolveBuildConfig({}),
-		stripTypes: stripTypesWithTypeScript,
+		stripTypes: stripCompactTypes,
 		stripperIdentity: "build-frontend-cache-test",
 		cacheDirectory,
 		session,
@@ -81,7 +81,7 @@ describe("normal build frontend cache", () => {
 				config: resolveBuildConfig({
 					modules: { aliases: { answer: target } },
 				}),
-				stripTypes: stripTypesWithTypeScript,
+				stripTypes: stripCompactTypes,
 				stripperIdentity: "build-frontend-cache-test",
 				cacheDirectory,
 			});
@@ -356,7 +356,7 @@ describe("normal build frontend cache", () => {
 		const options = {
 			entrypoint,
 			config: resolveBuildConfig({}),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-frontend-cache-test",
 			cacheDirectory,
 			session,
@@ -395,7 +395,7 @@ describe("normal build frontend cache", () => {
 		const options = {
 			entrypoint,
 			config: resolveBuildConfig({}),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-fragment-cache-test",
 			cacheDirectory,
 			session,
@@ -459,7 +459,7 @@ describe("normal build frontend cache", () => {
 		const options = (entrypoint: string) => ({
 			entrypoint,
 			config: resolveBuildConfig({}),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-fragment-island-test",
 			cacheDirectory,
 			session,
@@ -512,7 +512,7 @@ describe("normal build frontend cache", () => {
 		const options = {
 			entrypoint,
 			config: resolveBuildConfig({}),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-fragment-linkage-test",
 			cacheDirectory,
 			session,
@@ -559,7 +559,7 @@ describe("normal build frontend cache", () => {
 		const compiled = compileBuildFrontend({
 			entrypoint,
 			config: resolveBuildConfig({}),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-fragment-fallback-test",
 			cacheDirectory,
 			optimization: "development",
@@ -593,7 +593,7 @@ describe("normal build frontend cache", () => {
 		const compiled = compileBuildFrontend({
 			entrypoint,
 			config: resolveBuildConfig({}),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-fragment-live-binding-test",
 			cacheDirectory,
 			optimization: "development",
@@ -616,7 +616,7 @@ describe("normal build frontend cache", () => {
 		const options = {
 			entrypoint,
 			config: resolveBuildConfig({ engine: { eval: "compile-check" } }),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-frontend-cache-test",
 			cacheDirectory,
 		};
@@ -635,7 +635,7 @@ describe("normal build frontend cache", () => {
 		const options = {
 			entrypoint,
 			config: resolveBuildConfig({}),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-frontend-cache-test",
 			cacheDirectory,
 		};
@@ -663,7 +663,7 @@ describe("normal build frontend cache", () => {
 		const options = {
 			entrypoint,
 			config: resolveBuildConfig({}),
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 			stripperIdentity: "build-frontend-cache-test",
 			cacheDirectory,
 			optimization: "full" as const,

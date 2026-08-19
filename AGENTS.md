@@ -46,7 +46,7 @@ create or wait on a global performance lock.
 
 - `node scripts/eval-phase2-check.ts` - wire-format loader differential
 - `node scripts/eval-selfhost-check.ts` - self-hosted compiler differential (slow: AOT-compiles the whole compiler)
-- `node scripts/eval-strip-check.ts` - ts-blank-space strip + source-position fidelity
+- `node scripts/eval-strip-check.ts` - homegrown type strip + source-position fidelity
 
 ### Test / runtime flags
 

@@ -90,13 +90,13 @@ import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { compileSourceToBuffer } from "../src/compile.ts";
 import {
 	buildNativeBinary,
 	buildNativeBinaryResult,
 	HOST_MAIN,
 } from "../src/test-harness.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 import { persistBenchmarkBaseline, readBenchmarkBaseline } from "./bench-baseline.ts";
 import { runBenchmarkComparison, selectChangedBenchmarkLanes } from "./bench-compare.ts";
 import {
@@ -700,7 +700,7 @@ function copyStrippedTree(source: string, destination: string): void {
 		if (entry.isDirectory()) {
 			copyStrippedTree(from, to);
 		} else if (/\.(?:ts|mts|cts)$/.test(entry.name)) {
-			writeFileSync(to, stripTypesWithTypeScript(readFileSync(from, "utf8"), from));
+			writeFileSync(to, stripCompactTypes(readFileSync(from, "utf8"), from));
 		} else if (entry.isFile()) {
 			copyFileSync(from, to);
 		}
@@ -715,7 +715,7 @@ function prepareSelfCompileSource(root: string): string {
 	const fixture = path.resolve("bench/self-compile.mts");
 	writeFileSync(
 		path.join(root, "bench/self-compile.mts"),
-		stripTypesWithTypeScript(readFileSync(fixture, "utf8"), fixture),
+		stripCompactTypes(readFileSync(fixture, "utf8"), fixture),
 	);
 	symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "dir");
 	return path.join(root, "bench/self-compile.mts");

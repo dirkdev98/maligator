@@ -12,6 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { deserializeVmDefinition } from "../src/serialize-vm.ts";
 import {
 	compileIsolatedTestImage,
@@ -20,7 +21,6 @@ import {
 	TestCompilationSession,
 } from "../src/testing/cache.ts";
 import { discoverTestFiles } from "../src/testing/discovery.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const temporaryDirectories: Array<string> = [];
 
@@ -74,8 +74,8 @@ describe("test frontend artifact cache", () => {
 			{
 				files: [entry],
 				config: resolveBuildConfig({}),
-				stripTypes: stripTypesWithTypeScript,
-				stripperIdentity: "isolated-test-typescript-strip",
+				stripTypes: stripCompactTypes,
+				stripperIdentity: "isolated-test-type-strip",
 				testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
 			},
 			{ repeat: 1, bail: false, timeoutMs: 1000 },
@@ -116,8 +116,8 @@ test("answer", () => {
 		const options = {
 			file: entry,
 			config: resolveBuildConfig({ engine: { regexp: false } }),
-			stripTypes: stripTypesWithTypeScript,
-			stripperIdentity: "test-typescript-strip",
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "test-type-strip",
 			testModuleSource,
 			cacheDirectory,
 		};
@@ -161,8 +161,8 @@ test(${JSON.stringify(name)}, () => expect(answer).toBe(42));
 		const options = {
 			files: [second, first],
 			config: resolveBuildConfig({ engine: { regexp: false } }),
-			stripTypes: stripTypesWithTypeScript,
-			stripperIdentity: "test-typescript-strip",
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "test-type-strip",
 			testModuleSource: readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8"),
 			cacheDirectory,
 			session,

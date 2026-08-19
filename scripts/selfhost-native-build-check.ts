@@ -3,10 +3,10 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const root = path.resolve(".cache/selfhost-native");
 const tools = path.join(root, "tools");
@@ -102,7 +102,7 @@ const prebuiltWire = path.join(root, "compiler.malw");
 writeFileSync(
 	prebuiltWire,
 	compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-		stripTypes: stripTypesWithTypeScript,
+		stripTypes: stripCompactTypes,
 	}),
 );
 const evalConfig = resolveBuildConfig({

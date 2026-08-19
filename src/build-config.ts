@@ -510,8 +510,7 @@ function evaluateBuildConfig(
  * otherwise `maligator.build.ts` in `cwd` is used if present. When no config
  * exists at all, the product defaults apply (eval OFF). Throws
  * {@link BuildConfigError} on a missing explicit path, invalid source, an unknown
- * key, or a wrong value type. The compact stripper default keeps this loader
- * self-hostable; the Node CLI supplies its full blank-space stripper.
+ * key, or a wrong value type.
  */
 export function loadBuildConfig(
 	configPath?: string,

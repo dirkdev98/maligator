@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { normalizeNativeFeatures } from "../src/build-flags.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { emitVmDefinition } from "../src/emit-vm.ts";
@@ -18,7 +19,6 @@ import { buildLocalBinary } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const fixture = process.argv[2];
 if (fixture === undefined) {
@@ -38,7 +38,7 @@ const context = resolveNativeBuildContext({
 		entrypoint: path.resolve("src/eval-compiler-entry.mts"),
 		bake: () =>
 			compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-				stripTypes: stripTypesWithTypeScript,
+				stripTypes: stripCompactTypes,
 			}),
 	},
 });

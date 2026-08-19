@@ -17,10 +17,10 @@ import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
-import type { BuildConfigTypeStripper } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
+import { stripCompactTypes, TYPE_STRIPPER_IDENTITY } from "./compact-type-strip.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
@@ -33,7 +33,6 @@ import type { ModuleGoal } from "./module-graph.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
-import { stripTypesWithTypeScript } from "./typescript-strip.ts";
 
 /** Entry-point C drivers linked with the emitted definition. */
 export const HOST_MAIN = "runtime/host_main.c";
@@ -57,7 +56,7 @@ function defaultCompilerBake(): CompilerBakeInput {
 	compilerSourceFiles ??= compilerEntrypointSourceFiles(
 		compilerSourceDirectory,
 		compilerEntrypoint,
-		stripTypesWithTypeScript,
+		stripCompactTypes,
 	);
 	return {
 		kind: "source",
@@ -66,7 +65,7 @@ function defaultCompilerBake(): CompilerBakeInput {
 		sourceFiles: compilerSourceFiles,
 		bake: () =>
 			compileEntrypointToBuffer(compilerEntrypoint, {
-				stripTypes: stripTypesWithTypeScript,
+				stripTypes: stripCompactTypes,
 			}),
 	};
 }
@@ -143,8 +142,6 @@ export interface BuildOptions {
 	compilerBake?: CompilerBakeInput;
 	/** Override native build environment, primarily for compile-time instrument tests. */
 	environment?: NodeJS.ProcessEnv;
-	/** Override application type erasure, primarily for compact product-stripper tests. */
-	stripTypes?: BuildConfigTypeStripper;
 	/** Observe persistent frontend-cache reuse in focused harness tests. */
 	onFrontendCacheEvent?: (event: { cache: "hit" | "miss"; entrypoint: string }) => void;
 }
@@ -183,18 +180,15 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 			},
 		});
 	const entrypoint = path.resolve(options.fixture);
-	const stripTypes = options.stripTypes ?? stripTypesWithTypeScript;
 	const canReuseFrontend =
-		options.entryGoal === undefined &&
-		options.profileEnabled !== true &&
-		stripTypes === stripTypesWithTypeScript;
+		options.entryGoal === undefined && options.profileEnabled !== true;
 	const definition = canReuseFrontend
 		? (() => {
 				const frontend = compileBuildFrontend({
 					entrypoint,
 					config,
-					stripTypes,
-					stripperIdentity: "typescript-strip-v1",
+					stripTypes: stripCompactTypes,
+					stripperIdentity: TYPE_STRIPPER_IDENTITY,
 					enforcePolicies: false,
 				});
 				options.onFrontendCacheEvent?.({
@@ -206,7 +200,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 		: (() => {
 				const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypoint, {
 					buildConfig: config,
-					stripTypes,
+					stripTypes: stripCompactTypes,
 					entryGoal: options.entryGoal,
 				});
 				// Tests intentionally bypass build policy so disabled-feature fixtures can

@@ -6,7 +6,6 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { buildModuleGraph, ModuleParseCache } from "../src/module-graph.ts";
 import type { ModuleGraph } from "../src/module-graph.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 /** A resolved config with the node host surface enabled. */
 const nodeOn = resolveBuildConfig({ surface: { node: true } });
@@ -232,7 +231,7 @@ test("requires an explicit stripper for TypeScript and applies it across the gra
 		dependencyGoalOverride: "module",
 		stripTypes(source, filePath) {
 			seen.push(path.basename(filePath));
-			return stripTypesWithTypeScript(source, filePath);
+			return stripCompactTypes(source, filePath);
 		},
 	});
 	expect(seen).toEqual(["typed-entry.mts", "typed-dep.ts"]);

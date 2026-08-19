@@ -12,11 +12,11 @@ import {
 import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
 import { executeBinary, executeBinaryCaptured } from "../src/cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import {
 	PRODUCT_RUNTIME_ASSET_INCLUDE,
 	productCliConfig,
 } from "../src/product-builder.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliEntry = path.join(repoRoot, "src/index.ts");
@@ -267,7 +267,7 @@ describe("command shell", () => {
 			licensePath: path.join(repoRoot, "LICENSE"),
 			testModulePath: path.join(repoRoot, "src/testing/runtime.mjs"),
 			nodeGlobalsPath: path.join(repoRoot, "src/node-globals.mjs"),
-			frontendIdentity: "typescript-strip-v1",
+			frontendIdentity: "compact-type-strip-v1",
 			evalCompiler: {
 				kind: "source",
 				sourceDirectory: path.join(repoRoot, "src"),
@@ -288,6 +288,10 @@ describe("command shell", () => {
 		expect(installation.runtimeDirectory).toBe(path.resolve("relative-runtime"));
 		expect(installation.testModulePath).toBe(path.resolve("test-runtime.mjs"));
 		expect(installation.nodeGlobalsPath).toBe(path.resolve("node-globals.mjs"));
+		// One stripper means the development and product front ends share cache entries.
+		expect(installation.frontendIdentity).toBe(
+			developmentCompilerInstallation(path.join(repoRoot, "src")).frontendIdentity,
+		);
 		expect(installation.frontendIdentity).toBe("compact-type-strip-v1");
 		expect(installation.evalCompiler).toEqual({
 			kind: "prebuilt",
@@ -510,7 +514,7 @@ describe("development coordinator", () => {
 		await devCommand(
 			{ kind: "dev", entry, verbose: false, profile: false, programArgs: [] },
 			{
-				stripTypes: stripTypesWithTypeScript,
+				stripTypes: stripCompactTypes,
 				installation,
 				developmentProcesses: processHost,
 			},
@@ -561,7 +565,7 @@ describe("development coordinator", () => {
 		await devCommand(
 			{ kind: "dev", entry, verbose: false, profile: false, programArgs: [] },
 			{
-				stripTypes: stripTypesWithTypeScript,
+				stripTypes: stripCompactTypes,
 				installation,
 				developmentProcesses: processHost,
 			},

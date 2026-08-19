@@ -2,9 +2,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { buildLoadDriver } from "../src/local-build.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 /**
  * Differential validation for the definition wire format + C loader (eval Phase
@@ -121,7 +121,7 @@ const driver = buildLoadDriver(false, {
 	entrypoint: path.resolve("src/eval-compiler-entry.mts"),
 	bake: () =>
 		compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-			stripTypes: stripTypesWithTypeScript,
+			stripTypes: stripCompactTypes,
 		}),
 });
 const dir = mkdtempSync(path.join(tmpdir(), "mal-eval-"));

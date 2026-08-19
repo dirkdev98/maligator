@@ -3,9 +3,9 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const fixture = path.resolve("tests/fixtures/selfhost-frontend/entry.mts");
 const outDir = path.resolve(".cache/selfhost-frontend");
@@ -23,7 +23,7 @@ const config = resolveBuildConfig({
 progress.stage(1, 3, "compile Node reference");
 const reference = compileEntrypointToBuffer(fixture, {
 	buildConfig: config,
-	stripTypes: stripTypesWithTypeScript,
+	stripTypes: stripCompactTypes,
 });
 progress.stagePassed(1, 3, "compile Node reference");
 progress.stage(2, 3, "build native compiler");

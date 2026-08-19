@@ -10,28 +10,37 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import {
 	compilerEntrypointSourceFiles,
 	ensureCompilerWire,
 } from "../src/compiler-bake.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
+
+/**
+ * The stripper module is keyed by name, not by import: it erases every compiler
+ * source before a bake without the entrypoint ever importing it.
+ */
+const stripperModule = "compact-type-strip.ts";
 
 function compilerFixture(meriyah = "7.1.0"): {
 	root: string;
 	sourceDirectory: string;
 	entrypoint: string;
+	stripper: string;
 } {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-compiler-source-"));
 	const sourceDirectory = path.join(root, "src");
 	const entrypoint = path.join(sourceDirectory, "entry.mts");
+	const stripper = path.join(sourceDirectory, stripperModule);
 	mkdirSync(sourceDirectory);
 	writeFileSync(entrypoint, "export const compiler = 1;\n");
 	writeFileSync(path.join(sourceDirectory, "helper.ts"), "export const helper = 1;\n");
+	writeFileSync(stripper, "export const stripCompactTypes = (source) => source;\n");
 	writeFileSync(
 		path.join(root, "package.json"),
-		JSON.stringify({ dependencies: { meriyah, "ts-blank-space": "0.9.0" } }),
+		JSON.stringify({ dependencies: { meriyah } }),
 	);
-	return { root, sourceDirectory, entrypoint };
+	return { root, sourceDirectory, entrypoint, stripper };
 }
 
 describe("compiler wire provisioning", () => {
@@ -87,19 +96,15 @@ describe("compiler wire provisioning", () => {
 
 		writeFileSync(
 			path.join(fixture.root, "package.json"),
-			JSON.stringify({
-				dependencies: { meriyah: "7.2.0", "ts-blank-space": "0.9.0" },
-			}),
+			JSON.stringify({ dependencies: { meriyah: "7.2.0" } }),
 		);
 		const dependencyChanged = ensureCompilerWire(sourceInput());
 		expect(dependencyChanged).not.toBe(first);
 		expect(bakeCount).toBe(2);
 
 		writeFileSync(
-			path.join(fixture.root, "package.json"),
-			JSON.stringify({
-				dependencies: { meriyah: "7.2.0", "ts-blank-space": "0.10.0" },
-			}),
+			fixture.stripper,
+			"export const stripCompactTypes = (source) => source.trim();\n",
 		);
 		const stripperChanged = ensureCompilerWire(sourceInput());
 		expect(stripperChanged).not.toBe(dependencyChanged);
@@ -141,8 +146,9 @@ describe("compiler wire provisioning", () => {
 		const sourceFiles = compilerEntrypointSourceFiles(
 			fixture.sourceDirectory,
 			fixture.entrypoint,
-			stripTypesWithTypeScript,
+			stripCompactTypes,
 		);
+		expect(sourceFiles).toContain(fixture.stripper);
 		let bakeCount = 0;
 		const sourceInput = () => ({
 			kind: "source" as const,
@@ -159,8 +165,16 @@ describe("compiler wire provisioning", () => {
 		expect(bakeCount).toBe(1);
 
 		writeFileSync(helper, "export const helper = 2;\n");
-		expect(ensureCompilerWire(sourceInput())).not.toBe(first);
+		const helperChanged = ensureCompilerWire(sourceInput());
+		expect(helperChanged).not.toBe(first);
 		expect(bakeCount).toBe(2);
+
+		writeFileSync(
+			fixture.stripper,
+			"export const stripCompactTypes = (source) => source.trim();\n",
+		);
+		expect(ensureCompilerWire(sourceInput())).not.toBe(helperChanged);
+		expect(bakeCount).toBe(3);
 	});
 
 	it("deduplicates equivalent bytes and prebuilt content", () => {

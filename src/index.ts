@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 import { developmentCompilerInstallation, runCli } from "./cli-commands.ts";
+import { stripCompactTypes } from "./compact-type-strip.ts";
 import { nodeDevelopmentProcessHost } from "./node-development-process.ts";
 import { nodeDevelopmentWatchHost } from "./node-development-watch.ts";
-import { stripTypesWithTypeScript } from "./typescript-strip.ts";
 
 await runCli(process.argv.slice(2), {
-	stripTypes: stripTypesWithTypeScript,
+	stripTypes: stripCompactTypes,
 	installation: developmentCompilerInstallation(import.meta.dirname),
 	developmentProcesses: nodeDevelopmentProcessHost,
 	developmentWatcher: nodeDevelopmentWatchHost,
