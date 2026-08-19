@@ -71,17 +71,12 @@ interface LegacySegment {
 	exceptionalSuccessor?: number;
 }
 
-export interface CoreFunctionLowering {
-	readonly legacy: IRFunction;
-}
-
 export interface CoreProgramBridge {
 	readonly source: IntermediateProgram;
 	readonly core: CoreProgram;
-	readonly lowering: ReadonlyArray<CoreFunctionLowering>;
 }
 
-interface ConvertedCoreFunction extends CoreFunctionLowering {
+interface ConvertedCoreFunction {
 	readonly core: CoreFunction;
 }
 
@@ -809,7 +804,6 @@ function convertStraightLineFunction(
 	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	return {
 		core,
-		legacy: fn,
 	};
 }
 
@@ -970,7 +964,6 @@ function convertFunction(
 	if (verify) verifyCoreFunction(core, coreOpcodeRegistry);
 	return {
 		core,
-		legacy: fn,
 	};
 }
 
@@ -993,7 +986,6 @@ export function intermediateProgramToCore(
 	return {
 		source: program,
 		core,
-		lowering: converted.map(({ core: _core, ...lowering }) => lowering),
 	};
 }
 
@@ -1077,9 +1069,8 @@ function lowerCoreImmediate(
 
 function lowerFunctionBridge(
 	core: CoreFunction,
-	lowering: CoreFunctionLowering,
+	legacy: IRFunction,
 ): IRFunction {
-	const { legacy } = lowering;
 	verifyCoreFunction(core, coreOpcodeRegistry);
 	// Legacy region certificates contain a graph of instruction identities and
 	// exact control-flow envelopes. They stay on their already optimized lowering
@@ -1233,7 +1224,7 @@ export function coreProgramToIntermediate(
 	return {
 		...bridge.source,
 		functions: bridge.core.functions.map((fn, index) =>
-			lowerFunctionBridge(fn, bridge.lowering[index]!),
+			lowerFunctionBridge(fn, bridge.source.functions[index]!),
 		),
 	};
 }
