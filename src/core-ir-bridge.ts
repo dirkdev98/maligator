@@ -4,7 +4,10 @@ import {
 	knownBuiltinCallProves,
 } from "./compiler-facts.ts";
 import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
-import { coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreTerminatorEdges,
+} from "./core-ir-control-flow.ts";
 import { verifyCoreFunction, verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CompilerSiteFacts } from "./compiler-facts.ts";
 import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
@@ -216,6 +219,7 @@ interface LegacySegment {
 export interface CoreRegisterProgram {
 	readonly core: CoreProgram;
 	readonly functions: Array<IRFunction>;
+	readonly gcRootRegisters: ReadonlyArray<ReadonlyArray<number> | undefined>;
 }
 
 interface ConvertedCoreFunction {
@@ -1527,6 +1531,7 @@ export function coreRegisterClasses(
 ): {
 	readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
 	readonly registers: Map<CoreValueId, number>;
+	readonly gcRootRegisters: ReadonlyArray<number>;
 } {
 	const representations = new Map(
 		core.values.map(({ id, representation }) => [id, representation]),
@@ -1750,7 +1755,39 @@ export function coreRegisterClasses(
 		colorRepresentations.set(color, representation);
 		nextUniqueColor = Math.max(nextUniqueColor, color + 1);
 	}
-	return { roots, registers };
+	const gcRootValues = new Set<CoreValueId>();
+	const loopBackedges = new Set(
+		buildCoreControlFlow(core, coreOpcodeRegistry).loops.map(({ backedge }) => backedge),
+	);
+	for (const block of core.blocks) {
+		const live = new Set(liveOut[block.id]);
+		if (loopBackedges.has(block.id)) {
+			for (const value of live) gcRootValues.add(value);
+			for (const value of terminatorValues(block)) gcRootValues.add(value);
+		}
+		for (let index = block.instructions.length - 1; index >= 0; index--) {
+			const instruction = block.instructions[index]!;
+			const effects =
+				instruction.effectRefinement?.effects ??
+				coreOpcodeRegistry.require(instruction.opcode).effects;
+			if (effects.mayGc) {
+				for (const value of live) gcRootValues.add(value);
+				for (const value of instruction.inputs) gcRootValues.add(value);
+			}
+			for (const output of instruction.outputs) live.delete(output);
+			for (const input of instruction.inputs) live.add(input);
+		}
+		if (block.parameters[0]?.role === "exception") {
+			for (const value of live) gcRootValues.add(value);
+			gcRootValues.add(block.parameters[0].value);
+		}
+	}
+	const gcRootRegisters = [
+		...new Set(
+			[...gcRootValues].map((value) => registers.get(find(value))!),
+		),
+	].sort((left, right) => left - right);
+	return { roots, registers, gcRootRegisters };
 }
 
 function coreRegionInstructionIds(core: CoreFunction): ReadonlySet<CoreInstructionId> {
@@ -1918,12 +1955,17 @@ function coreBlockLayout(
 	return order;
 }
 
+interface LoweredCoreFunction {
+	readonly fn: IRFunction;
+	readonly gcRootRegisters: ReadonlyArray<number>;
+}
+
 function lowerFunctionBridge(
 	core: CoreFunction,
 	legacy: IRFunction,
 	instructionSites?: WeakMap<object, CompilerSiteFacts>,
 	reuseRegisters = true,
-): IRFunction {
+): LoweredCoreFunction {
 	verifyCoreFunction(core, coreOpcodeRegistry);
 	const loweredInstructions = new Map<CoreInstructionId, IRInstruction>();
 	const protectedInstructions = coreRegionInstructionIds(core);
@@ -1962,10 +2004,11 @@ function lowerFunctionBridge(
 		blockOrder.map((block, index) => [block, index]),
 	);
 	const blocks: Array<IRBlock> = blockOrder.map(() => ({ instructions: [] }));
-	const { roots, registers: allocatedRegisters } = coreRegisterClasses(
-		core,
-		reuseRegisters,
-	);
+	const {
+		roots,
+		registers: allocatedRegisters,
+		gcRootRegisters,
+	} = coreRegisterClasses(core, reuseRegisters);
 	const nextRegister = {
 		value: Math.max(-1, ...allocatedRegisters.values()) + 1,
 	};
@@ -2194,19 +2237,22 @@ function lowerFunctionBridge(
 	}
 
 	return {
-		...legacy,
-		blocks,
-		regions: lowerCoreRegions(
-			core.regions,
-			loweredInstructions,
-			absorbedAlternateBlocks,
-			loweredBlockForCore,
-		),
-		nextRegisterDestination: nextRegister.value,
-		bodyEntryBlock:
-			core.bodyEntry === undefined
-				? undefined
-				: loweredBlockForCore.get(core.bodyEntry),
+		fn: {
+			...legacy,
+			blocks,
+			regions: lowerCoreRegions(
+				core.regions,
+				loweredInstructions,
+				absorbedAlternateBlocks,
+				loweredBlockForCore,
+			),
+			nextRegisterDestination: nextRegister.value,
+			bodyEntryBlock:
+				core.bodyEntry === undefined
+					? undefined
+					: loweredBlockForCore.get(core.bodyEntry),
+		},
+		gcRootRegisters,
 	};
 }
 
@@ -2223,9 +2269,7 @@ export function lowerCoreProgramToRegisters(
 	if (compilation === undefined) {
 		throw new Error("Core program is missing product compilation metadata");
 	}
-	return {
-		core,
-		functions: core.functions.map((fn) => {
+	const lowered = core.functions.map((fn) => {
 			const semanticFile = compilation.semantic.files.find(
 				(file) => file.path === fn.metadata.sourcePath,
 			);
@@ -2265,6 +2309,14 @@ export function lowerCoreProgramToRegisters(
 				compilation.facts.instructionSites,
 				options.reuseRegisters ?? true,
 			);
-		}),
+		});
+	return {
+		core,
+		functions: lowered.map(({ fn }) => fn),
+		gcRootRegisters: lowered.map(({ gcRootRegisters }, index) =>
+			core.functions[index]!.isGenerator || core.functions[index]!.isAsync
+				? undefined
+				: gcRootRegisters,
+		),
 	};
 }

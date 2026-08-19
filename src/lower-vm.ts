@@ -15,7 +15,6 @@ import type {
 	IRNumericHofPlanOperation,
 	IRRegion,
 } from "./ir.ts";
-import { computeSafepointRoots } from "./liveness.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 
@@ -1858,12 +1857,13 @@ export function lowerCoreProgramToVmDefinition(
 		fileToIndex.set(path, index);
 		return index;
 	};
-	const functions = program.functions.map((fn) =>
+	const functions = program.functions.map((fn, index) =>
 		lowerFunctionToVmFunction(
 			fn,
 			fileIndexFor(fn.semanticFile.path),
 			core.stringConstants,
 			profile ? compilation.facts.instructionSites : undefined,
+			program.gcRootRegisters[index],
 		),
 	);
 
@@ -1964,6 +1964,7 @@ function lowerFunctionToVmFunction(
 	fileIndex: number,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	instructionSites?: WeakMap<object, { id: string }>,
+	gcRootRegisters?: ReadonlyArray<number>,
 ): VmFunction {
 	// Source-position and exception-range markers carry no executable opcode, so
 	// block start IPs count only instructions that survive flattening.
@@ -4076,16 +4077,6 @@ function lowerFunctionToVmFunction(
 		parameterCount: fn.parameterCount,
 		registerCount: fn.nextRegisterDestination,
 	});
-
-	// GC root-frame minimization (C1): the native backend spills only registers
-	// live at a safepoint, not every boxed register. The aggregate-only API avoids
-	// constructing diagnostic per-safepoint Sets. This runs post-allocation, so a
-	// complexity fallback safely returns every physical register. Skipped for
-	// generator/async functions, which the native backend does not compile.
-	const isResumable = (fn.isGenerator ?? false) || (fn.isAsync ?? false);
-	const gcRootRegisters = isResumable
-		? undefined
-		: [...computeSafepointRoots(fn).registers];
 
 	return {
 		nameStringIndex: fn.nameStringIndex,
