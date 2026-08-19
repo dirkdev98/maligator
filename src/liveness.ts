@@ -24,6 +24,7 @@
 import { coreOpcode, isCoreOpcode } from "./core-ir-opcodes.ts";
 import { buildIRExceptionHandlers } from "./ir-control-flow.ts";
 import { definedRegisters, usedRegisters } from "./ir-register-index.ts";
+import { isIrStructuralInstructionType } from "./ir-structure.ts";
 import type { IRFunction, IRInstruction, IntermediateProgram } from "./ir.ts";
 import { log } from "./utils.ts";
 
@@ -43,7 +44,16 @@ import { log } from "./utils.ts";
  */
 /** Whether GC can run at this instruction (so live values must be rooted). */
 export function isSafepoint(instruction: IRInstruction): boolean {
-	return isCoreOpcode(instruction.type) && coreOpcode(instruction.type).effects.mayGc;
+	if (isCoreOpcode(instruction.type)) {
+		return coreOpcode(instruction.type).effects.mayGc;
+	}
+	if (isIrStructuralInstructionType(instruction.type)) {
+		// Acquiring the pending exception has historically been rooted as a
+		// conservative collection boundary.
+		return instruction.type === "catch";
+	}
+	// Runtime-created or stale IR must fail safe for root liveness.
+	return true;
 }
 
 /** Block-index targets of a control-flow branch (jump / jumpIf). */

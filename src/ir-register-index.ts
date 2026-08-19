@@ -1,13 +1,17 @@
 import { coreOpcode, isCoreOpcode } from "./core-ir-opcodes.ts";
+import { isIrStructuralInstructionType } from "./ir-structure.ts";
 import type { IRFunction, IRInstruction } from "./ir.ts";
 
 /** Number of leading register operands defined by an instruction. */
 export function destinationCount(instruction: IRInstruction): number {
 	if (!("registers" in instruction)) return 0;
-	if (instruction.type === "catch") return 1;
-	return isCoreOpcode(instruction.type)
-		? coreOpcode(instruction.type).outputs.minimum
-		: 0;
+	if (isCoreOpcode(instruction.type)) {
+		return coreOpcode(instruction.type).outputs.minimum;
+	}
+	if (isIrStructuralInstructionType(instruction.type)) {
+		return instruction.type === "catch" ? 1 : 0;
+	}
+	throw new Error(`Unknown legacy IR instruction ${String(instruction.type)}`);
 }
 
 /** Every non-sentinel register written by an instruction. */

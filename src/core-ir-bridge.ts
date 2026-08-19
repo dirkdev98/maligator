@@ -16,6 +16,7 @@ import {
 	definedRegisters,
 	usedRegisters,
 } from "./ir-register-index.ts";
+import { isIrStructuralInstructionType } from "./ir-structure.ts";
 import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
 
 interface LegacyInstructionPayload {
@@ -118,7 +119,11 @@ function isControlInstruction(
 }
 
 function instructionMayThrow(instruction: IRInstruction): boolean {
-	return isCoreOpcode(instruction.type) && coreOpcode(instruction.type).effects.mayThrow;
+	if (isCoreOpcode(instruction.type)) return coreOpcode(instruction.type).effects.mayThrow;
+	if (isIrStructuralInstructionType(instruction.type)) {
+		return instruction.type === "throw";
+	}
+	throw new Error(`Unknown legacy IR instruction ${String(instruction.type)}`);
 }
 
 function legacyPayload(

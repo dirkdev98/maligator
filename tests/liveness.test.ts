@@ -66,6 +66,7 @@ test("isSafepoint: allocations and calls are safepoints, scalar/moves are not", 
 		} as never),
 	).toBe(false);
 	expect(isSafepoint({ type: "jump", blocks: [0] } as never)).toBe(false);
+	expect(isSafepoint({ type: "catch", registers: [0] } as never)).toBe(true);
 	expect(isSafepoint({ type: "loadLocal", registers: [0, 1] } as never)).toBe(false);
 	// Construction and suspension are collection points too.
 	expect(isSafepoint({ type: "construct", registers: [0, 1] } as never)).toBe(true);
@@ -228,6 +229,11 @@ test("exception edges keep a try-body value live for the handler (soundness)", (
 	);
 	expect(callSafepoint).toBeDefined();
 	expect(callSafepoint!.live.has(5)).toBe(true);
+	const catchSafepoint = liveness.safepoints.find(
+		(sp) => sp.kind === "alloc-call" && sp.blockIndex === 2 && sp.instructionIndex === 0,
+	);
+	expect(catchSafepoint).toBeDefined();
+	expect(catchSafepoint!.live.has(5)).toBe(true);
 });
 
 test("exception ranges use only the handler target and respect same-block markers", () => {

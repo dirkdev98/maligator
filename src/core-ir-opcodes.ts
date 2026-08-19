@@ -161,6 +161,8 @@ const GC_FREE = new Set<CoreOpcode>([
 	"loadIntrinsic",
 	"loadLocal",
 	"loadNewTarget",
+	"mathBinaryNumber",
+	"mathUnaryNumber",
 	"move",
 	"setThis",
 	"storeCaptured",
