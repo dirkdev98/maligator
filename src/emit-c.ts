@@ -117,17 +117,9 @@ const MATH_BINARY_NATIVE_OP: ReadonlyMap<string, string> = new Map([
 export interface CompiledFunction {
 	/** The C symbol to install as MalFunction.compiled. */
 	symbol: string;
-	/** Fully promoted leading numeric parameters eligible for a register ABI. */
-	nativeNumberArgumentCount: number;
-	/** Exact targets this body actually invokes through their numeric entry. */
-	nativeNumberCallTargets: ReadonlySet<number>;
 	/** Final decisions from the exact emitted variant, never an exploratory pass. */
 	profileDecisions: Array<BackendProfileDecision>;
-	/**
-	 * The full `static MalValue ...(...) { ... }` definition — plus, for a function
-	 * that speculatively unboxes params, its fully-boxed fallback variant emitted
-	 * ahead of it (the entry guard jumps there instead of the interpreter).
-	 */
+	/** The full `static MalValue ...(...) { ... }` definition. */
 	source: string;
 }
 
@@ -319,18 +311,13 @@ export function emitCompiledFunction(
 	index: number,
 	suffix: string,
 	debug: boolean,
-	// Set when emitting the generic fallback variant (see below): a fixed symbol,
-	// the generic target-lowering representation plan, and no further fallback.
-	override?: { symbol: string },
 	linkage: "static" | "external" = "static",
-	directCompiledTargets: ReadonlyMap<number, number> = new Map(),
+	directCompiledTargets: ReadonlySet<number> = new Set(),
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
-	// rather than the straight-line shape below (see emitResumableFunction). (override
-	// is only ever set for the boxed fallback of a promoting normal function, never a
-	// coroutine.)
+	// rather than the straight-line shape below (see emitResumableFunction).
 	if (fn.isGenerator || fn.isAsync) {
 		return emitResumableFunction(fn, index, suffix, debug, linkage, semanticProtectors);
 	}
@@ -343,31 +330,19 @@ export function emitCompiledFunction(
 	// access and CREATE_FUNCTION see this activation's slots.
 	const capturesEnv = fn.capturedCount > 0;
 
-	const plan = fn.nativeRepresentationPlan;
 	if (
-		plan !== undefined &&
-		(plan.generic.length !== fn.registerCount ||
-			plan.specialized.length !== fn.registerCount ||
-			plan.promotedNumericParameters.some(
-				(parameter) =>
-					!Number.isInteger(parameter) ||
-					parameter < 0 ||
-					parameter >= fn.parameterCount ||
-					plan.specialized[parameter] !== "number",
-			))
+		fn.registerRepresentations.length !== fn.registerCount ||
+		fn.registerRepresentations.some(
+			(representation, register) =>
+				(representation !== "boxed" &&
+					representation !== "number" &&
+					representation !== "boolean") ||
+				(register < fn.parameterCount && representation !== "boxed"),
+		)
 	) {
-		throw new Error(`Invalid native representation plan for function ${index}`);
+		throw new Error(`Invalid register representations for function ${index}`);
 	}
-	const boxedRepresentations = (): Array<RegisterRep> =>
-		Array.from({ length: fn.registerCount }, () => "boxed");
-	const reps = [
-		...(override === undefined
-			? (plan?.specialized ?? boxedRepresentations())
-			: (plan?.generic ?? boxedRepresentations())),
-	];
-	const promotableParams = new Set(
-		override === undefined ? (plan?.promotedNumericParameters ?? []) : [],
-	);
+	const reps = [...fn.registerRepresentations];
 
 	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
 	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
@@ -656,16 +631,6 @@ export function emitCompiledFunction(
 	if (body === null) {
 		return null;
 	}
-	const nativeNumberCallTargets = new Set<number>();
-	for (const target of directCompiledTargets.keys()) {
-		if (
-			body.some((line) =>
-				line.includes(`mal_compiled_${target}${suffix}_native_numbers(`),
-			)
-		) {
-			nativeNumberCallTargets.add(target);
-		}
-	}
 
 	// Defensive: a register operand of -1 (a "no register" sentinel beyond the
 	// RETURN case handled below) would emit invalid C like `r-1`. Bail to the
@@ -674,84 +639,17 @@ export function emitCompiledFunction(
 		return null;
 	}
 
-	// Parameters selected by target lowering and represented as
-	// number-rep (i.e. were not reassigned to a non-number) are unboxed once at
-	// entry behind a speculative guard.
-	const promotedParams = Array.from({ length: fn.parameterCount }, (_, i) => i).filter(
-		(i) => promotableParams.has(i) && reps[i] === "number",
-	);
-	const isPromoted = new Set(promotedParams);
-	const observesRawArguments = fn.instructions.some(
-		(instruction) =>
-			instruction.opcode === "LOAD_ARGUMENT_COUNT" ||
-			instruction.opcode === "LOAD_ARGUMENT" ||
-			instruction.opcode === "LOAD_STATIC_ARGUMENT" ||
-			instruction.opcode === "CREATE_REST_ARGUMENTS",
-	);
-	const nativeNumberArgumentCount =
-		fn.parameterCount > 0 &&
-		fn.parameterCount <= 4 &&
-		// A wrapper/secondary entry can perturb the layout of a large hot body more
-		// than one saved box/unbox is worth. Keep this ABI seam for compact callees;
-		// larger proof regions need a native result ABI or call-region versioning.
-		body.length <= 256 &&
-		promotedParams.length === fn.parameterCount &&
-		!fn.needsArguments &&
-		!fn.mappedArguments &&
-		fn.argumentSnapshotCount === 0 &&
-		!observesRawArguments
-			? fn.parameterCount
-			: 0;
-
-	const symbol = override?.symbol ?? `mal_compiled_${index}${suffix}`;
-	const useNativeNumberEntry =
-		override === undefined &&
-		nativeNumberArgumentCount > 0 &&
-		directCompiledTargets.get(index) === nativeNumberArgumentCount;
-	const implementationSymbol = useNativeNumberEntry ? `${symbol}_native_numbers` : symbol;
-
-	// PARAM-BAIL FALLBACK: when this variant speculatively unboxes params, its
-	// entry guard must have somewhere to go when an argument is not a number.
-	// Rather than re-enter the bytecode interpreter (which would keep the whole
-	// interpreter live), emit a second, fully-boxed variant of this same function
-	// and jump there. That variant promotes nothing, so it never bails — no
-	// compiled function depends on the interpreter, and the bytecode overlay can
-	// be dropped for every compiled function.
-	let fallbackSource = "";
-	let bailTarget = "";
-	const fallbackNativeNumberCallTargets = new Set<number>();
-	if (promotedParams.length > 0) {
-		const boxedSymbol = `mal_compiled_${index}_boxed${suffix}`;
-		const boxed = emitCompiledFunction(
-			fn,
-			index,
-			suffix,
-			debug,
-			{ symbol: boxedSymbol },
-			linkage,
-			directCompiledTargets,
-			semanticProtectors,
-		);
-		if (boxed === null) {
-			return null; // the promoting variant lowered, so this cannot happen
-		}
-		fallbackSource = `${boxed.source}\n\n`;
-		bailTarget = `${boxedSymbol}(vm, this_value, args, arg_count, new_target, env, callee, entry_state)`;
-		for (const target of boxed.nativeNumberCallTargets) {
-			fallbackNativeNumberCallTargets.add(target);
-		}
-	}
-
+	const symbol = `mal_compiled_${index}${suffix}`;
 	const lines: Array<string> = [];
 
 	lines.push(
-		`${useNativeNumberEntry ? "static __attribute__((aligned(64))) " : linkage === "static" ? "static " : ""}MalValue ${implementationSymbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state${useNativeNumberEntry ? ", f64 native_arg0, f64 native_arg1, f64 native_arg2, f64 native_arg3" : ""}) {`,
+		`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
-	if (!useNativeNumberEntry) lines.push(`    (void) entry_state;`);
+	lines.push(`    (void) entry_state;`);
 	if (
 		body.some(
 			(line) =>
@@ -796,44 +694,9 @@ export function emitCompiledFunction(
 		}
 	}
 
-	// Promoted parameters: load each boxed, guard that every one is a number, and
-	// fall back to the fully-boxed variant when any is not. undefined (incl. a
-	// missing argument) is not a number, so under-application takes the boxed path
-	// and behaves identically. Past the guard the fast body runs fully unboxed with
-	// no per-op number checks.
-	if (promotedParams.length > 0) {
-		if (useNativeNumberEntry) {
-			lines.push(`    if (entry_state != nullptr) {`);
-			for (const i of promotedParams) {
-				lines.push(`        r${i} = native_arg${i};`);
-			}
-			lines.push(`    } else {`);
-		}
-		for (const i of promotedParams) {
-			lines.push(
-				`${useNativeNumberEntry ? "    " : ""}    MalValue p${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`,
-			);
-		}
-		const guard = promotedParams.map((i) => `!mal_ops_is_number(p${i})`).join(" || ");
-		lines.push(
-			`${useNativeNumberEntry ? "    " : ""}    if (${guard}) {`,
-			`${useNativeNumberEntry ? "    " : ""}        return ${bailTarget};`,
-			`${useNativeNumberEntry ? "    " : ""}    }`,
-		);
-		for (const i of promotedParams) {
-			lines.push(
-				`${useNativeNumberEntry ? "    " : ""}    r${i} = mal_ops_number_as_f64(p${i});`,
-			);
-		}
-		if (useNativeNumberEntry) lines.push(`    }`);
-	}
-
-	// Remaining parameters adopt the incoming arguments boxed; non-parameter
+	// Parameters adopt the incoming arguments boxed; non-parameter
 	// registers start at a rep-appropriate zero.
 	for (let i = 0; i < fn.parameterCount; i++) {
-		if (isPromoted.has(i)) {
-			continue;
-		}
 		lines.push(`    r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`);
 	}
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
@@ -860,7 +723,6 @@ export function emitCompiledFunction(
 	// so the collector can scan them before any allocation. mal_env_new is now a GC
 	// allocation (MalEnv is a cell), so the env is built and linked into the
 	// already-published frame afterwards — never held unrooted across a safepoint.
-	// The promoted-param guard above returns before this point (no unlink).
 	if (needsRootFrame) {
 		lines.push(
 			`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${totalSlots} };`,
@@ -905,23 +767,9 @@ export function emitCompiledFunction(
 	for (const i of valueRegs) {
 		lines.push(`#undef r${i}`);
 	}
-	if (useNativeNumberEntry) {
-		lines.push(
-			"",
-			`${linkage === "static" ? "static " : ""}MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
-			`    return ${implementationSymbol}(vm, this_value, args, arg_count, new_target, env, callee, entry_state, 0.0, 0.0, 0.0, 0.0);`,
-			`}`,
-		);
-	}
-
 	return {
 		symbol,
-		source: fallbackSource + lines.join("\n"),
-		nativeNumberArgumentCount,
-		nativeNumberCallTargets: new Set([
-			...fallbackNativeNumberCallTargets,
-			...nativeNumberCallTargets,
-		]),
+		source: lines.join("\n"),
 		profileDecisions,
 	};
 }
@@ -998,7 +846,7 @@ function emitResumableFunction(
 		new Map(),
 		new Map(),
 		new Map(),
-		new Map(),
+		new Set(),
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
 	);
@@ -1144,8 +992,6 @@ function emitResumableFunction(
 	return {
 		symbol,
 		source: lines.join("\n"),
-		nativeNumberArgumentCount: 0,
-		nativeNumberCallTargets: new Set(),
 		profileDecisions,
 	};
 }
@@ -1459,7 +1305,7 @@ function emitBody(
 	stringSplitCursorSites: ReadonlyMap<number, NativeStringSplitCursorSite>,
 	regexpExecProjectionSites: ReadonlyMap<number, NativeRegExpExecProjectionSite>,
 	regexpIteratorProjectionSites: ReadonlyMap<number, NativeRegExpIteratorProjectionSite>,
-	directCompiledTargets: ReadonlyMap<number, number>,
+	directCompiledTargets: ReadonlySet<number>,
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
 ): Array<string> | null {
@@ -1952,15 +1798,7 @@ function profileDecisionsForInstruction(
 	const decisions: Array<BackendProfileDecision> = [];
 
 	if (operation === "call" || operation === "construct") {
-		if (/mal_compiled_\d+.*_native_numbers\(/.test(source)) {
-			decisions.push(
-				decision(
-					`${operation}.direct-native`,
-					source.includes("mal_vm_call_direct(") ? "guarded" : "applied",
-					source.includes("mal_vm_call_direct(") ? "callee-identity-guard" : undefined,
-				),
-			);
-		} else if (/mal_compiled_\d+/.test(source)) {
+		if (/mal_compiled_\d+/.test(source)) {
 			decisions.push(
 				decision(
 					`${operation}.direct-compiled`,
@@ -2179,7 +2017,7 @@ interface NativeInstructionContext {
 	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
 	readonly stackObjectMaterialization?: StackObjectSite;
 	readonly stackObjectInheritedAccess?: StackObjectSite;
-	readonly directCompiledTargets: ReadonlyMap<number, number>;
+	readonly directCompiledTargets: ReadonlySet<number>;
 	readonly mathUnaryCall: boolean;
 	readonly mathBinaryCall: boolean;
 	readonly loopStaticPropertyFastPath: boolean;
@@ -3842,23 +3680,12 @@ function emitInstruction(
 					const directCallee = `__direct_callee_${ip}`;
 					const directFunction = `__direct_function_${ip}`;
 					const directValue = `__direct_value_${ip}`;
-					const nativeArgumentCount = directCompiledTargets.get(target) ?? 0;
-					const nativeArguments = instruction.arguments
-						.slice(0, nativeArgumentCount)
-						.map(nativeNumberOperand);
-					const useNativeArguments =
-						nativeArgumentCount > 0 &&
-						instruction.arguments.length >= nativeArgumentCount &&
-						nativeArguments.every((argument) => argument !== null);
-					const nativeArgumentExpressions = Array.from({ length: 4 }, (_, i) =>
-						i < nativeArgumentCount ? nativeArguments[i]! : "0.0",
-					).join(", ");
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`if (mal_vm_callee_has_index(vm, ${directCallee}, ${target})) {`,
 						`  if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow}`,
 						`  const MalFunction *${directFunction} = &vm->definition->functions[${target}];`,
-						`  MalValue ${directValue} = ${useNativeArguments ? `mal_compiled_${target}${suffix}_native_numbers` : `mal_compiled_${target}${suffix}`}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${useNativeArguments ? "nullptr" : argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, ${useNativeArguments ? `(void *) vm, ${nativeArgumentExpressions}` : "nullptr"});`,
+						`  MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
 						`  mal_vm_leave_compiled(vm);`,
 						`  if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 						`  r${instruction.dst} = ${directValue};`,

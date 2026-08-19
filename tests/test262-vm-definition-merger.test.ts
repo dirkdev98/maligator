@@ -25,6 +25,7 @@ function vmFunction(instructions: Array<VmInstruction>): VmFunction {
 		fileIndex: 0,
 		positions: instructions.map(() => 0),
 		gcRootRegisters: [0, 2],
+		registerRepresentations: Array.from({ length: 8 }, () => "boxed"),
 	};
 }
 

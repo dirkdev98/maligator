@@ -81,6 +81,7 @@ const fn: VmFunction = {
 	handlers: [],
 	fileIndex: 0,
 	positions: [],
+	registerRepresentations: Array.from({ length: 12 }, () => "boxed"),
 };
 
 const definition: VmDefinition = {
@@ -468,7 +469,15 @@ describe("emit-vm instruction packing", () => {
 		const units = emitVmTranslationUnits(
 			{
 				...definition,
-				functions: [{ ...fn, capturedCount: 0, registerCount: 3, instructions }],
+				functions: [
+					{
+						...fn,
+						capturedCount: 0,
+						registerCount: 3,
+						registerRepresentations: Array.from({ length: 3 }, () => "boxed"),
+						instructions,
+					},
+				],
 			},
 			{},
 			20_000,
@@ -688,8 +697,6 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function load(array, index) { return array[index]; } globalThis.load = load;`,
 		);
-		expect(output).not.toContain("mal_compiled_1_boxed");
-		expect(output).not.toContain("mal_compiled_1_native_numbers");
 		expect(output).toContain("mal_vm_object_try_load(");
 		expect(output).toContain("mal_vm_op_load_property_ic(");
 	});
@@ -698,8 +705,6 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; function store(array, index, value) { array[index] = value; } globalThis.store = store;`,
 		);
-		expect(output).not.toContain("mal_compiled_1_boxed");
-		expect(output).not.toContain("mal_compiled_1_native_numbers");
 		expect(output).toContain("mal_vm_object_try_store(");
 		expect(output).toContain("mal_vm_op_store_property_ic(");
 	});
@@ -709,8 +714,6 @@ describe("native update-expression representation", () => {
 			`"use strict"; function recurse(value, depth, callback) { if (depth === 0) return value * value; return callback(value - 1, depth - 1, callback); } globalThis.recurse = recurse;`,
 		);
 		expect(output).toContain("static MalValue mal_compiled_1(");
-		expect(output).not.toContain("mal_compiled_1_boxed");
-		expect(output).not.toContain("mal_compiled_1_native_numbers");
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_SUB");
 	});
 
@@ -924,7 +927,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_leave_compiled(vm)");
 	});
 
-	it("keeps argument-observing exact targets on the boxed ABI", () => {
+	it("uses the canonical boxed ABI for exact script calls", () => {
 		const output = emit(`
 			"use strict";
 			const values = [3, 5];
@@ -936,7 +939,6 @@ describe("native update-expression representation", () => {
 			globalThis.result = large(1);
 		`);
 		expect(output).toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
-		expect(output).not.toContain("mal_compiled_1_native_numbers");
 	});
 
 	it("emits guarded Function.prototype.call flattening with a shifted exact target", () => {
@@ -1845,8 +1847,6 @@ describe("native static typeof facts", () => {
 		`);
 
 		expect(output).toContain("static MalValue mal_compiled_1(");
-		expect(output).not.toContain("mal_compiled_1_boxed");
-		expect(output).not.toContain("mal_compiled_1_native_numbers");
 		expect(output.match(/mal_vm_typeof_compare/g)).toHaveLength(1);
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_MUL");
 	});

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 12u
+#define WIRE_VERSION 13u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1751,29 +1751,13 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
             (void) rd_i32(&r);
         }
 
-        u8 has_native_representation_plan = rd_u8(&r);
-        if (has_native_representation_plan > 1) r.ok = false;
-        if (has_native_representation_plan == 1) {
-            u32 generic_count = rd_count(&r, 1);
-            if (generic_count != (u32) functions[i].register_count) r.ok = false;
-            for (u32 reg = 0; r.ok && reg < generic_count; reg++) {
-                if (rd_u8(&r) > 2) r.ok = false;
-            }
-            u32 specialized_count = rd_count(&r, 1);
-            if (specialized_count != (u32) functions[i].register_count) r.ok = false;
-            for (u32 reg = 0; r.ok && reg < specialized_count; reg++) {
-                if (rd_u8(&r) > 2) r.ok = false;
-            }
-            u32 promoted_count = rd_count(&r, 1);
-            i32 previous_parameter = -1;
-            for (u32 parameter = 0; r.ok && parameter < promoted_count; parameter++) {
-                i32 index = rd_i32(&r);
-                if (index <= previous_parameter || index >= functions[i].parameter_count) {
-                    r.ok = false;
-                }
-                previous_parameter = index;
-            }
-        }
+		u32 representation_count = rd_count(&r, 1);
+		if (representation_count != (u32) functions[i].register_count) r.ok = false;
+		for (u32 reg = 0; r.ok && reg < representation_count; reg++) {
+			u8 representation = rd_u8(&r);
+			if (representation > 2 ||
+				(reg < (u32) functions[i].parameter_count && representation != 0)) r.ok = false;
+		}
 
         u32 instruction_metadata_count = rd_count(&r, 2);
         i32 previous_instruction_metadata_index = -1;

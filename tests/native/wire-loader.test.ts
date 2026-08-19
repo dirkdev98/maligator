@@ -43,6 +43,7 @@ const fn: VmFunction = {
 	handlers: [],
 	fileIndex: 0,
 	positions: [],
+	registerRepresentations: ["boxed"],
 };
 
 const definition: VmDefinition = {
@@ -125,6 +126,7 @@ describe("wire loader side-data validation", () => {
 						{ destination: 0, source: -2 },
 					],
 					registerCount: 2,
+					registerRepresentations: ["boxed", "boxed"],
 					instructions: [
 						{ opcode: "LOAD_ARGUMENT", dst: 0, index: 1 },
 						{ opcode: "LOAD_ARGUMENT", dst: 1, index: 0 },
@@ -192,6 +194,7 @@ describe("wire loader side-data validation", () => {
 				{
 					...fn,
 					registerCount: 3,
+					registerRepresentations: ["boxed", "boxed", "boxed"],
 					instructions: [
 						{ opcode: "CREATE_STRING", dst: 1, stringIndex: 0 },
 						{ opcode: "CREATE_STRING", dst: 2, stringIndex: 1 },
@@ -234,6 +237,7 @@ describe("wire loader side-data validation", () => {
 				{
 					...fn,
 					registerCount: 3,
+					registerRepresentations: ["boxed", "boxed", "boxed"],
 					capturedCount: 2,
 					instructions: [
 						{
@@ -260,6 +264,7 @@ describe("wire loader side-data validation", () => {
 				{
 					...fn,
 					registerCount: 2,
+					registerRepresentations: ["boxed", "boxed"],
 					instructions: [
 						{ opcode: "CREATE_UNDEFINED", dst: 1 },
 						{
@@ -533,6 +538,7 @@ describe("wire loader side-data validation", () => {
 						{ destination: 1, source: 4 },
 					],
 					registerCount: 2,
+					registerRepresentations: ["boxed", "boxed"],
 					instructions: [
 						{ opcode: "LOAD_ARGUMENT_COUNT", dst: 0 },
 						{ opcode: "LOAD_ARGUMENT", dst: 1, index: 4 },
@@ -563,6 +569,7 @@ describe("wire loader side-data validation", () => {
 				{
 					...fn,
 					registerCount: 2,
+					registerRepresentations: ["boxed", "boxed"],
 					instructions: [
 						{ opcode: "CREATE_F64", dst: 0, value: 6.25 },
 						{ opcode: "CREATE_F64", dst: 1, value: -0 },

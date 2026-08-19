@@ -202,6 +202,7 @@ const mainFn: VmFunction = {
 	fileIndex: 0,
 	// Canonical (compress→expand fixed-point) per-instruction positions.
 	positions: instructions.map((_, ip) => (ip < 11 ? 0 : ip < 20 ? 1 : 2)),
+	registerRepresentations: Array.from({ length: 15 }, () => "boxed"),
 };
 
 const genFn: VmFunction = {
@@ -231,6 +232,7 @@ const genFn: VmFunction = {
 	handlers: [],
 	fileIndex: 1,
 	positions: [0, 0, 0, 0, 0],
+	registerRepresentations: Array.from({ length: 3 }, () => "boxed"),
 };
 
 const definition: VmDefinition = {
@@ -297,6 +299,33 @@ describe("serialize-vm", () => {
 			serializeVmDefinition(definition, { debugInfo: true }),
 		);
 		expect(restored).toEqual(definition);
+	});
+
+	it("requires one Core-selected physical representation per register", () => {
+		expect(() =>
+			serializeVmDefinition({
+				...definition,
+				functions: [
+					{
+						...mainFn,
+						registerRepresentations: mainFn.registerRepresentations.slice(1),
+					},
+					genFn,
+				],
+			}),
+		).toThrow(/invalid register representations/);
+		expect(() =>
+			serializeVmDefinition({
+				...definition,
+				functions: [
+					{
+						...mainFn,
+						registerRepresentations: mainFn.registerRepresentations.with(0, "number"),
+					},
+					genFn,
+				],
+			}),
+		).toThrow(/invalid register representations/);
 	});
 
 	it("round-trips every guarded builtin with world and epoch dependencies", () => {
@@ -436,6 +465,7 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					registerCount: 1,
+					registerRepresentations: ["boxed"],
 					instructions: [
 						{
 							opcode: "CREATE_ARRAY",
@@ -476,6 +506,7 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					registerCount: 4,
+					registerRepresentations: Array.from({ length: 4 }, () => "boxed"),
 					instructions: [instruction],
 					positions: [0],
 					handlers: [],
@@ -568,6 +599,7 @@ describe("serialize-vm", () => {
 						{ destination: 2, source: 4 },
 					],
 					registerCount: 3,
+					registerRepresentations: Array.from({ length: 3 }, () => "boxed"),
 					instructions: snapshotInstructions,
 					handlers: [],
 					positions: snapshotInstructions.map(() => 0),

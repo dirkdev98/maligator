@@ -33,7 +33,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 12;
+export const WIRE_VERSION = 13;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -883,47 +883,27 @@ export function serializeVmDefinition(
 		w.u8(fn.gcRootRegisters === undefined ? 0 : 1);
 		w.i32Array([...(fn.gcRootRegisters ?? [])]);
 
-		const representationPlan = fn.nativeRepresentationPlan;
-		w.u8(representationPlan === undefined ? 0 : 1);
-		if (representationPlan !== undefined) {
-			const representationTag = (representation: string): number =>
-				representation === "boxed"
-					? 0
-					: representation === "number"
-						? 1
-						: representation === "boolean"
-							? 2
-							: -1;
-			if (
-				representationPlan.generic.length !== fn.registerCount ||
-				representationPlan.specialized.length !== fn.registerCount ||
-				representationPlan.generic.some(
-					(representation) => representationTag(representation) < 0,
-				) ||
-				representationPlan.specialized.some(
-					(representation) => representationTag(representation) < 0,
-				) ||
-				representationPlan.promotedNumericParameters.some(
-					(parameter, index, parameters) =>
-						!Number.isInteger(parameter) ||
-						parameter < 0 ||
-						parameter >= fn.parameterCount ||
-						(index > 0 && parameters[index - 1]! >= parameter) ||
-						representationPlan.specialized[parameter] !== "number" ||
-						representationPlan.generic[parameter] !== "boxed",
-				)
-			) {
-				throw new RangeError("serialize-vm: invalid native representation plan");
-			}
-			w.u32(representationPlan.generic.length);
-			for (const representation of representationPlan.generic) {
-				w.u8(representationTag(representation));
-			}
-			w.u32(representationPlan.specialized.length);
-			for (const representation of representationPlan.specialized) {
-				w.u8(representationTag(representation));
-			}
-			w.i32Array([...representationPlan.promotedNumericParameters]);
+		const representationTag = (representation: string): number =>
+			representation === "boxed"
+				? 0
+				: representation === "number"
+					? 1
+					: representation === "boolean"
+						? 2
+						: -1;
+		if (
+			fn.registerRepresentations.length !== fn.registerCount ||
+			fn.registerRepresentations.some(
+				(representation, register) =>
+					representationTag(representation) < 0 ||
+					(register < fn.parameterCount && representation !== "boxed"),
+			)
+		) {
+			throw new RangeError("serialize-vm: invalid register representations");
+		}
+		w.u32(fn.registerRepresentations.length);
+		for (const representation of fn.registerRepresentations) {
+			w.u8(representationTag(representation));
 		}
 
 		const instructionMetadata = fn.instructions
@@ -2797,45 +2777,23 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		}
 		if (hasGcRootRegisters === 1) fn.gcRootRegisters = gcRootRegisters;
 
-		const hasNativeRepresentationPlan = r.u8();
-		if (hasNativeRepresentationPlan > 1) {
-			throw new Error("serialize-vm: invalid native representation metadata");
+		const representationCount = r.count(1);
+		if (representationCount !== fn.registerCount) {
+			throw new Error("serialize-vm: register representation count mismatch");
 		}
-		if (hasNativeRepresentationPlan === 1) {
-			const readRepresentations = (): Array<"boxed" | "number" | "boolean"> => {
-				const count = r.count(1);
-				if (count !== fn.registerCount) {
-					throw new Error("serialize-vm: native representation count mismatch");
+		fn.registerRepresentations = Array.from(
+			{ length: representationCount },
+			(_, register) => {
+				const tag = r.u8();
+				if (tag === 0) return "boxed" as const;
+				if (register < fn.parameterCount) {
+					throw new Error("serialize-vm: non-boxed parameter representation");
 				}
-				return Array.from({ length: count }, () => {
-					const tag = r.u8();
-					if (tag === 0) return "boxed";
-					if (tag === 1) return "number";
-					if (tag === 2) return "boolean";
-					throw new Error("serialize-vm: invalid native representation tag");
-				});
-			};
-			const generic = readRepresentations();
-			const specialized = readRepresentations();
-			const promotedNumericParameters = r.i32Array();
-			if (
-				promotedNumericParameters.some(
-					(parameter, index) =>
-						parameter < 0 ||
-						parameter >= fn.parameterCount ||
-						(index > 0 && promotedNumericParameters[index - 1]! >= parameter) ||
-						specialized[parameter] !== "number" ||
-						generic[parameter] !== "boxed",
-				)
-			) {
-				throw new Error("serialize-vm: invalid native representation plan");
-			}
-			fn.nativeRepresentationPlan = {
-				generic,
-				specialized,
-				promotedNumericParameters,
-			};
-		}
+				if (tag === 1) return "number" as const;
+				if (tag === 2) return "boolean" as const;
+				throw new Error("serialize-vm: invalid register representation tag");
+			},
+		);
 
 		const instructionMetadataCount = r.count(2);
 		let previousInstructionMetadataIndex = -1;
@@ -3551,6 +3509,7 @@ function readFunction(r: Reader): VmFunction {
 		handlers,
 		fileIndex,
 		positions,
+		registerRepresentations: Array.from({ length: registerCount }, () => "boxed"),
 	};
 	validateArgumentSnapshotPrefix(fn);
 	validateMappedArguments(fn);

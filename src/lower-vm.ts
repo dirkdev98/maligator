@@ -537,19 +537,6 @@ export type VmRegion =
 /** Physical storage selected by Core target lowering for native emission. */
 export type VmRegisterRepresentation = "boxed" | "number" | "boolean";
 
-/**
- * Complete native representation contract for one allocated function. The
- * generic plan accepts every JavaScript argument. The specialized plan may
- * unbox only the listed parameters after its entry guards have succeeded.
- * Emitters consume this contract verbatim and never recover representations
- * from VM instruction patterns.
- */
-export interface VmNativeRepresentationPlan {
-	readonly generic: ReadonlyArray<VmRegisterRepresentation>;
-	readonly specialized: ReadonlyArray<VmRegisterRepresentation>;
-	readonly promotedNumericParameters: ReadonlyArray<number>;
-}
-
 export interface VmGuardedBuiltinCall {
 	readonly operation: VmGuardedBuiltinOperation;
 	/** The shared semantic facts and fallback contract for this specialization. */
@@ -767,8 +754,8 @@ export interface VmFunction {
 	 */
 	gcRootRegisters?: ReadonlyArray<number>;
 
-	/** Compile-only representation/versioning decision produced by target lowering. */
-	nativeRepresentationPlan?: VmNativeRepresentationPlan;
+	/** Physical register storage selected by Core allocation. */
+	registerRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 }
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
@@ -3130,29 +3117,23 @@ function lowerFunctionToVmFunction(
 			: undefined,
 		gcRootRegisters,
 		regions: regions.length > 0 ? regions : undefined,
+		registerRepresentations: [...fn.registerRepresentations],
 	};
 	if (
 		fn.registerRepresentations.length !== fn.registerCount ||
 		fn.registerRepresentations.some(
-			(representation) =>
-				representation !== "boxed" &&
-				representation !== "number" &&
-				representation !== "boolean",
+			(representation, register) =>
+				(representation !== "boxed" &&
+					representation !== "number" &&
+					representation !== "boolean") ||
+				(register < fn.parameterCount && representation !== "boxed"),
 		)
 	) {
 		throw new Error(
 			`Invalid Core register representation plan for function ${fileIndex}`,
 		);
 	}
-	const representationPlan: VmNativeRepresentationPlan = {
-		generic: [...fn.registerRepresentations],
-		specialized: [...fn.registerRepresentations],
-		promotedNumericParameters: [],
-	};
-	return {
-		...lowered,
-		nativeRepresentationPlan: representationPlan,
-	};
+	return lowered;
 }
 
 /**

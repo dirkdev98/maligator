@@ -497,9 +497,8 @@ function emitVmDefinitionSource(
 			i,
 			suffix,
 			debug,
-			undefined,
 			splitCompiledFunctions ? "external" : "static",
-			new Map(),
+			new Set(),
 			definition.semanticProtectors ?? [],
 		);
 		if (emitted === null) return null;
@@ -521,7 +520,7 @@ function emitVmDefinitionSource(
 		compiled.forEach((fn, index) => {
 			if (fn !== null) compiledTargets.add(index);
 		});
-		const directCompiledTargets = new Map<number, number>();
+		const directCompiledTargets = new Set<number>();
 		for (const fn of definition.functions) {
 			for (const instruction of fn.instructions) {
 				if (
@@ -529,13 +528,7 @@ function emitVmDefinitionSource(
 					instruction.directFunctionIndex !== undefined &&
 					compiledTargets.has(instruction.directFunctionIndex)
 				) {
-					const target = compiled[instruction.directFunctionIndex];
-					if (target !== undefined && target !== null) {
-						directCompiledTargets.set(
-							instruction.directFunctionIndex,
-							target.nativeNumberArgumentCount,
-						);
-					}
+					directCompiledTargets.add(instruction.directFunctionIndex);
 				}
 			}
 		}
@@ -546,51 +539,16 @@ function emitVmDefinitionSource(
 				i,
 				suffix,
 				debug,
-				undefined,
 				"static",
 				directCompiledTargets,
 				definition.semanticProtectors ?? [],
 			);
 		});
-		const usedNativeNumberTargets = new Set<number>();
-		for (const fn of compiled) {
-			if (fn === null) continue;
-			for (const target of fn.nativeNumberCallTargets) {
-				usedNativeNumberTargets.add(target);
-			}
-		}
-		let refinedNativeTargets = false;
-		for (const [target, count] of directCompiledTargets) {
-			if (count > 0 && !usedNativeNumberTargets.has(target)) {
-				directCompiledTargets.set(target, 0);
-				refinedNativeTargets = true;
-			}
-		}
-		if (refinedNativeTargets) {
-			compiled = definition.functions.map((fn, i) => {
-				if (!compiledTargets.has(i)) return null;
-				return emitCompiledFunction(
-					fn,
-					i,
-					suffix,
-					debug,
-					undefined,
-					"static",
-					directCompiledTargets,
-					definition.semanticProtectors ?? [],
-				);
-			});
-		}
 		if (directCompiledTargets.size > 0) {
 			for (let index = 0; index < compiled.length; index++) {
 				const fn = compiled[index];
 				if (fn !== undefined && fn !== null && directCompiledTargets.has(index)) {
 					lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
-					if ((directCompiledTargets.get(index) ?? 0) > 0) {
-						lines.push(
-							`static MalValue ${fn.symbol}_native_numbers(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state, f64 native_arg0, f64 native_arg1, f64 native_arg2, f64 native_arg3);`,
-						);
-					}
 				}
 			}
 			lines.push("");
@@ -1127,9 +1085,8 @@ export function emitBatch(
 						i,
 						suffix,
 						false,
-						undefined,
 						"static",
-						new Map(),
+						new Set(),
 						definition.semanticProtectors ?? [],
 					)
 				: null,
@@ -1140,8 +1097,8 @@ export function emitBatch(
 			}
 		}
 
-		// Compiled functions never re-enter the interpreter (a param guard falls
-		// back to a boxed compiled variant), so they need no bytecode tables.
+		// Successfully compiled functions never re-enter the interpreter, so they
+		// need no bytecode tables.
 		const omitBytecode = compiled.map((c) => c !== null);
 
 		const instructionSymbols: Array<string> = [];
