@@ -3,9 +3,12 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { buildModuleGraph, ModuleParseCache } from "../src/module-graph.ts";
-import type { ModuleGraph } from "../src/module-graph.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import {
+	buildModuleGraph,
+	ModuleParseCache,
+} from "../src/compiler/frontend/module-graph.ts";
+import type { ModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 
 /** A resolved config with the node host surface enabled. */
 const nodeOn = resolveBuildConfig({ surface: { node: true } });

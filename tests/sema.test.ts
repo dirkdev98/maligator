@@ -1,11 +1,11 @@
 import * as path from "node:path";
 import { expect, test } from "vitest";
-import { parseScript } from "../src/parser.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
 	debugSemanticProgram,
-} from "../src/semantic-analysis.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
+} from "../src/compiler/frontend/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 
 test("snapshot sema changes", () => {
 	const fixturePath = path.join(import.meta.dirname, "./local/semantic-analysis.js");

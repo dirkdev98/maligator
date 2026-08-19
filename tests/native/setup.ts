@@ -5,14 +5,14 @@
 
 import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
-import { stripCompactTypes } from "../../src/compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "../../src/compile-program.ts";
 import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
+import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
+import { compileEntrypointToBuffer } from "../../src/compiler/pipeline/compile-program.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
 
 const compilerSourceDirectory = path.resolve("src");
-const compilerEntrypoint = path.resolve("src/eval-compiler-entry.mts");
+const compilerEntrypoint = path.resolve("src/compiler/pipeline/eval-compiler-entry.mts");
 const compilerBake = {
 	kind: "source" as const,
 	sourceDirectory: compilerSourceDirectory,

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { compileSourceToBuffer } from "../src/compile.ts";
+import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
 
 /**
  * Self-host validation (eval Phase 3). maligator compiles its own trimmed
@@ -38,7 +38,7 @@ let out = "";
 try {
 	writeFileSync(
 		entry,
-		`import { compileSourceToBuffer } from "../src/compile.ts";
+		`import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
 const buf = compileSourceToBuffer(${JSON.stringify(SRC)});
 let a = 1, b = 0;
 for (let i = 0; i < buf.length; i++) { a = (a + buf[i]) % 65521; b = (b + a) % 65521; }

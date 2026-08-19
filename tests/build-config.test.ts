@@ -17,12 +17,12 @@ import {
 } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { featureDefines } from "../src/build-flags.ts";
-import { parseScript } from "../src/parser.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
-} from "../src/semantic-analysis.ts";
+} from "../src/compiler/frontend/semantic-analysis.ts";
 
 function tmpdir(): string {
 	return mkdtempSync(path.join(os.tmpdir(), "mal-cfg-"));

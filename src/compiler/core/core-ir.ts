@@ -7,12 +7,12 @@
  * deliberately outside this module.
  */
 
+import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type {
 	CompilerOptimizationDecision,
 	OptimizationPassDelta,
-} from "./compiler-diagnostics.ts";
-import type { CompilerProgramFacts } from "./compiler-facts.ts";
-import type { SemanticProgram } from "./semantic-analysis.ts";
+} from "../shared/compiler-diagnostics.ts";
+import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 
 declare const coreBlockIdBrand: unique symbol;
 declare const coreInstructionIdBrand: unique symbol;

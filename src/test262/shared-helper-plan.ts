@@ -1,6 +1,6 @@
 import type { ESTree } from "meriyah";
-import { ESTREE_SKIP, traverseEstree } from "../estree-traversal.ts";
-import { parseScript } from "../parser.ts";
+import { ESTREE_SKIP, traverseEstree } from "../compiler/frontend/estree-traversal.ts";
+import { parseScript } from "../compiler/frontend/parser.ts";
 import type { Test262File } from "./types.ts";
 
 export const TEST262_SHARED_INCLUDE_NAMES = new Set([

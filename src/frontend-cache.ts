@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "./cache-root.ts";
-import { ModuleParseCache } from "./module-graph.ts";
+import { ModuleParseCache } from "./compiler/frontend/module-graph.ts";
 
 export const FRONTEND_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "frontend");
 

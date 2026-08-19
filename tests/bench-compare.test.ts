@@ -8,7 +8,7 @@ test("changed source files select transparent benchmark lanes", () => {
 		"string",
 		"http",
 	]);
-	expect(lanesForChangedFiles(["src/core-ir-opt.ts"], lanes)).toEqual([
+	expect(lanesForChangedFiles(["src/compiler/core/core-ir-opt.ts"], lanes)).toEqual([
 		"compiler",
 		"language",
 	]);

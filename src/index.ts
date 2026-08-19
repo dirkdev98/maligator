@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { developmentCompilerInstallation, runCli } from "./cli-commands.ts";
-import { stripCompactTypes } from "./compact-type-strip.ts";
+import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { nodeDevelopmentProcessHost } from "./node-development-process.ts";
 import { nodeDevelopmentWatchHost } from "./node-development-watch.ts";
 

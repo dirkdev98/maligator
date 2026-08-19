@@ -1,12 +1,13 @@
-import { builtinOperationDescriptor } from "./builtin-registry.ts";
+import type { SemanticFile } from "../frontend/semantic-analysis.ts";
+import { builtinOperationDescriptor } from "../shared/builtin-registry.ts";
 import {
 	compilerFactIsWorldInvariant,
 	knownBuiltinCallProves,
-} from "./compiler-facts.ts";
+} from "../shared/compiler-facts.ts";
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
-} from "./compiler-instruction.ts";
+} from "../shared/compiler-instruction.ts";
 import { coreOpcode, coreOpcodeRegistry, isCoreOpcode } from "./core-ir-opcodes.ts";
 import { CoreFunctionBuilder, coreBlockId } from "./core-ir.ts";
 import type {
@@ -18,7 +19,6 @@ import type {
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
-import type { SemanticFile } from "./semantic-analysis.ts";
 
 type ValueRepresentation = "boxed" | "f64" | "boolean";
 

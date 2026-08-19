@@ -16,7 +16,7 @@ import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { TestCompilationSession } from "../src/testing/cache.ts";
 import {
 	compileRelocatableTestImage,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { compileSourceToBuffer } from "../src/compile.ts";
-import { deserializeVmDefinition } from "../src/serialize-vm.ts";
+import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
+import { deserializeVmDefinition } from "../src/compiler/target/serialize-vm.ts";
 
 // The trimmed compiler entry composes parse → sema → ir → opt → regalloc →
 // lower → serialize for a script source, producing a loadable wire buffer. End-

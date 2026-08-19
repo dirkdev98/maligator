@@ -2,16 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
-} from "../src/core-ir-control-flow.ts";
-import { CORE_OPCODES, coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
-import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
+} from "../src/compiler/core/core-ir-control-flow.ts";
+import {
+	CORE_OPCODES,
+	coreOpcodeRegistry,
+} from "../src/compiler/core/core-ir-opcodes.ts";
+import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreFunctionBuilder,
 	CoreOpcodeRegistry,
 	coreArity,
 	formatCoreFunction,
-} from "../src/core-ir.ts";
+} from "../src/compiler/core/core-ir.ts";
 
 function registry(): CoreOpcodeRegistry {
 	const registry = new CoreOpcodeRegistry();

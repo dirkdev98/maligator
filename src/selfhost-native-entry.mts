@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
-import { stripCompactTypes } from "./compact-type-strip.ts";
-import { compileEntrypoint } from "./compile-program.ts";
-import { emitVmTranslationUnits } from "./emit-vm.ts";
+import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
+import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
+import { emitVmTranslationUnits } from "./compiler/target/emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 

@@ -2,20 +2,20 @@ import {
 	builtinOperations,
 	exactBuiltinCallDescriptor,
 	mathUnaryOperationKeys,
-} from "./builtin-registry.ts";
+} from "../shared/builtin-registry.ts";
 import type {
 	CompilerOptimizationDecision,
 	OptimizationAblation,
 	OptimizationDecisionReason,
 	OptimizationMetrics,
 	OptimizationPassDelta,
-} from "./compiler-diagnostics.ts";
+} from "../shared/compiler-diagnostics.ts";
 import {
 	compilerGuardPlan,
 	compilerFactIsWorldInvariant,
 	knownFact,
 	sourceSiteId,
-} from "./compiler-facts.ts";
+} from "../shared/compiler-facts.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,

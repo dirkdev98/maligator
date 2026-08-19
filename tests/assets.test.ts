@@ -10,8 +10,8 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ASSET_FORMAT_VERSION, includeConfiguredAssets } from "../src/assets.ts";
 import { BuildConfigError } from "../src/build-config.ts";
-import { compileEntrypoint } from "../src/compile-program.ts";
-import { emitVmDefinition } from "../src/emit-vm.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
+import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
 import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 
 function fixture(): string {

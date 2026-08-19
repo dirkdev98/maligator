@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 
 describe("compileSemanticProgramToVmDefinition", () => {
 	it("runs phases in order and inspects optimized IR before allocation", () => {

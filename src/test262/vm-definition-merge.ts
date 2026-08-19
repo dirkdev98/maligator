@@ -1,5 +1,9 @@
-import { rebaseVmValueOperand } from "../lower-vm.ts";
-import type { VmDefinition, VmInstruction, VmRegion } from "../lower-vm.ts";
+import { rebaseVmValueOperand } from "../compiler/target/lower-vm.ts";
+import type {
+	VmDefinition,
+	VmInstruction,
+	VmRegion,
+} from "../compiler/target/lower-vm.ts";
 
 export interface MergedVmDefinition {
 	definition: VmDefinition;

@@ -1,4 +1,4 @@
-import type { ResolvedBuildConfig } from "./build-config.ts";
+import type { ResolvedBuildConfig } from "../../build-config.ts";
 import { builtinOperations, primordialGlobalBindings } from "./builtin-registry.ts";
 
 /** Stable identifiers used by proofs instead of pass-local object identity. */

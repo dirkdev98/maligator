@@ -90,8 +90,8 @@ import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { compileSourceToBuffer } from "../src/compile.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
 import {
 	buildNativeBinary,
 	buildNativeBinaryResult,

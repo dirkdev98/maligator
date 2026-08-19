@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
 import { productCompilerInstallation, runCli } from "./cli-commands.ts";
-import { stripCompactTypes } from "./compact-type-strip.ts";
+import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 
 const { assets } = Reflect.get(globalThis, "mal") as {
 	assets: { materialize(name: string): string };

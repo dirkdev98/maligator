@@ -1,6 +1,6 @@
 import path from "node:path";
-import type { IncludedAsset } from "./assets.ts";
-import { exactBuiltinCallDescriptor } from "./builtin-registry.ts";
+import type { IncludedAsset } from "../../assets.ts";
+import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import { emitCompiledFunction } from "./emit-c.ts";
 import type { CompiledFunction } from "./emit-c.ts";
 import {

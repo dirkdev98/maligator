@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
-import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
-import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
-import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
-import { CoreFunctionBuilder } from "../src/core-ir.ts";
-import type { CoreFunction, CoreProgram } from "../src/core-ir.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
-import { deserializeVmDefinition, serializeVmDefinition } from "../src/serialize-vm.ts";
+import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
+import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
+import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	deserializeVmDefinition,
+	serializeVmDefinition,
+} from "../src/compiler/target/serialize-vm.ts";
 
 function programWithConstants(): CoreProgram {
 	const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);

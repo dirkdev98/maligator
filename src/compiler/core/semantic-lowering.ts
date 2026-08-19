@@ -1,30 +1,6 @@
 import type { ESTree } from "meriyah";
-import { isPureDataCjsModule } from "./cjs-exports.ts";
-import type {
-	CompilerOptimizationDecision,
-	OptimizationPassDelta,
-} from "./compiler-diagnostics.ts";
-import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
-import type { CompilerProgramFacts } from "./compiler-facts.ts";
-import type {
-	CompilerBinaryOperator,
-	CompilerInstruction,
-	CompilerIntrinsic,
-} from "./compiler-instruction.ts";
-import {
-	emitCoreEntryInstructions,
-	finishDirectCoreFunction,
-	initializeDirectCoreFunction,
-} from "./core-frontend-construction.ts";
-import type {
-	CoreConstructionBlock,
-	CoreInstructionEmitter,
-} from "./core-frontend-construction.ts";
-import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
-import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import { verifyCoreProgram } from "./core-ir-verifier.ts";
-import { formatCoreFunction } from "./core-ir.ts";
-import type { CoreHostInstallCandidate, CoreProgram } from "./core-ir.ts";
+import { debugEnabled, log } from "../../utils.ts";
+import { isPureDataCjsModule } from "../frontend/cjs-exports.ts";
 import {
 	DIRECT_EVAL_PRIVATE_FIELD,
 	DIRECT_EVAL_PRIVATE_GETTER,
@@ -41,24 +17,52 @@ import {
 	directEvalSuperNewTargetScopeKey,
 	directEvalSuperThisStateScopeKey,
 	encodeDirectEvalContext,
-} from "./direct-eval-context.ts";
+} from "../frontend/direct-eval-context.ts";
 import type {
 	DirectEvalContext,
 	DirectEvalPrivateNameContext,
 	DirectEvalPrivateSlot,
-} from "./direct-eval-context.ts";
-import { ESTREE_SKIP, ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
-import { linkModules } from "./linker.ts";
-import { COMMONJS_BINDINGS } from "./semantic-analysis.ts";
-import { FUNCTION_UNIT_NODE_TYPES } from "./semantic-analysis.ts";
+} from "../frontend/direct-eval-context.ts";
+import {
+	ESTREE_SKIP,
+	ESTREE_STOP,
+	traverseEstree,
+} from "../frontend/estree-traversal.ts";
+import { linkModules } from "../frontend/linker.ts";
+import { COMMONJS_BINDINGS } from "../frontend/semantic-analysis.ts";
+import { FUNCTION_UNIT_NODE_TYPES } from "../frontend/semantic-analysis.ts";
 import type {
 	Binding,
 	Scope,
 	SemanticFile,
 	SemanticProgram,
 	StaticArgumentsAccess,
-} from "./semantic-analysis.ts";
-import { debugEnabled, log } from "./utils.ts";
+} from "../frontend/semantic-analysis.ts";
+import type {
+	CompilerOptimizationDecision,
+	OptimizationPassDelta,
+} from "../shared/compiler-diagnostics.ts";
+import { conservativeCompilerProgramFacts } from "../shared/compiler-facts.ts";
+import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import type {
+	CompilerBinaryOperator,
+	CompilerInstruction,
+	CompilerIntrinsic,
+} from "../shared/compiler-instruction.ts";
+import {
+	emitCoreEntryInstructions,
+	finishDirectCoreFunction,
+	initializeDirectCoreFunction,
+} from "./core-frontend-construction.ts";
+import type {
+	CoreConstructionBlock,
+	CoreInstructionEmitter,
+} from "./core-frontend-construction.ts";
+import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
+import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
+import { verifyCoreProgram } from "./core-ir-verifier.ts";
+import { formatCoreFunction } from "./core-ir.ts";
+import type { CoreHostInstallCandidate, CoreProgram } from "./core-ir.ts";
 
 interface CoreFrontendContext {
 	/**
@@ -193,13 +197,15 @@ interface CoreFrontendContext {
 
 	/**
 	 * ES module linkage. Synthetic bindings holding each module's anonymous
-	 * `export default` value, keyed by module path (see src/linker.ts).
+	 * `export default` value, keyed by module path (see
+	 * src/compiler/frontend/linker.ts).
 	 */
 	moduleDefaultBinding: Map<string, Binding>;
 
 	/**
 	 * `import * as ns` namespace objects to build per importing module path (see
-	 * src/linker.ts): the local binding plus the exported names and the exporter
+	 * src/compiler/frontend/linker.ts): the local binding plus the exported names
+	 * and the exporter
 	 * binding each property reads live.
 	 */
 	namespaceImports: Map<
@@ -224,7 +230,7 @@ interface CoreFrontendContext {
 
 	/**
 	 * ESM → CJS interop: per importing module path, the local bindings to
-	 * initialize from `require(cjsPath)` (see src/linker.ts).
+	 * initialize from `require(cjsPath)` (see src/compiler/frontend/linker.ts).
 	 */
 	cjsImports: Map<
 		string,
@@ -253,7 +259,8 @@ interface CoreFrontendContext {
 
 	/**
 	 * Host built-in (`node:*`) modules reachable in the graph, each with the
-	 * synthetic global bindings backing its exports (see src/linker.ts). After
+	 * synthetic global bindings backing its exports (see
+	 * src/compiler/frontend/linker.ts). After
 	 * compilation lower-vm resolves the bindings that got a global slot to build the
 	 * install manifest; an imported-but-unused export never gets a slot and drops
 	 * out (dead-code elimination). Empty unless a `node:*` module is imported.
@@ -265,7 +272,8 @@ interface CoreFrontendContext {
 	}>;
 
 	/**
-	 * Free Node globals installed with `process` (see src/linker.ts).
+	 * Free Node globals installed with `process` (see
+	 * src/compiler/frontend/linker.ts).
 	 * `retained` becomes true when reachable compilation encounters it; lower-vm
 	 * then emits its slot-free installer manifest. Null otherwise.
 	 */

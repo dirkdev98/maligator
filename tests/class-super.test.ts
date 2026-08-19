@@ -1,9 +1,12 @@
 import { expect, test } from "vitest";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
-import { parseScript } from "../src/parser.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
-import { deserializeVmDefinition, serializeVmDefinition } from "../src/serialize-vm.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	deserializeVmDefinition,
+	serializeVmDefinition,
+} from "../src/compiler/target/serialize-vm.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(

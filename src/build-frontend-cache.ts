@@ -16,16 +16,38 @@ import {
 	UnsupportedBuildFragmentsError,
 } from "./build-fragment-cache.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
-import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
-import type { CompileCorePhase } from "./compile-core.ts";
 import {
 	compilerConfigurationIdentity,
 	compilerProducerIdentity,
 } from "./compiler-cache-identity.ts";
-import type { CompilerDiagnostic, OptimizationAblation } from "./compiler-diagnostics.ts";
-import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
-import type { CompilerProgramFacts } from "./compiler-facts.ts";
-import type { CoreProgram } from "./core-ir.ts";
+import type { CoreProgram } from "./compiler/core/core-ir.ts";
+import type {
+	BuildModuleGraphOptions,
+	ModuleGraph,
+} from "./compiler/frontend/module-graph.ts";
+import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
+import { collectPrimordialMutationDiagnostics } from "./compiler/frontend/primordial-diagnostics.ts";
+import {
+	collectDisallowedEvalUsage,
+	collectDisallowedRegexpUsage,
+} from "./compiler/frontend/semantic-analysis.ts";
+import { runSemanticAnalysisForGraph } from "./compiler/frontend/semantic-program.ts";
+import { compileSemanticProgramToVmDefinition } from "./compiler/pipeline/compile-core.ts";
+import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
+import type {
+	CompilerDiagnostic,
+	OptimizationAblation,
+} from "./compiler/shared/compiler-diagnostics.ts";
+import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
+import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
+import type { VmDefinition } from "./compiler/target/lower-vm.ts";
+import { vmDefinitionStats } from "./compiler/target/lower-vm.ts";
+import type { VmDefinitionStats } from "./compiler/target/lower-vm.ts";
+import {
+	deserializeVmDefinition,
+	serializeVmDefinition,
+	WIRE_VERSION,
+} from "./compiler/target/serialize-vm.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -35,22 +57,6 @@ import {
 	frontendWirePath,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
-import type { VmDefinition } from "./lower-vm.ts";
-import { vmDefinitionStats } from "./lower-vm.ts";
-import type { VmDefinitionStats } from "./lower-vm.ts";
-import type { BuildModuleGraphOptions, ModuleGraph } from "./module-graph.ts";
-import { buildModuleGraph } from "./module-graph.ts";
-import { collectPrimordialMutationDiagnostics } from "./primordial-diagnostics.ts";
-import {
-	collectDisallowedEvalUsage,
-	collectDisallowedRegexpUsage,
-} from "./semantic-analysis.ts";
-import { runSemanticAnalysisForGraph } from "./semantic-program.ts";
-import {
-	deserializeVmDefinition,
-	serializeVmDefinition,
-	WIRE_VERSION,
-} from "./serialize-vm.ts";
 
 const BUILD_FRONTEND_CACHE_SCHEMA = 1;
 const BUILD_FRONTEND_PIPELINE_VERSION = 1;

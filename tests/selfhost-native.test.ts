@@ -2,8 +2,8 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { cEscapeString } from "../src/emit-vm.ts";
-import { hostInstallerSymbol } from "../src/host-modules.ts";
+import { hostInstallerSymbol } from "../src/compiler/frontend/host-modules.ts";
+import { cEscapeString } from "../src/compiler/target/emit-vm.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
 
 const roots: Array<string> = [];

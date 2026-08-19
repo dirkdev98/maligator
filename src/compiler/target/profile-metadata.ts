@@ -1,5 +1,5 @@
-import type { CompilerSiteFacts, FactDependency } from "./compiler-facts.ts";
-import type { CoreProgram } from "./core-ir.ts";
+import type { CoreProgram } from "../core/core-ir.ts";
+import type { CompilerSiteFacts, FactDependency } from "../shared/compiler-facts.ts";
 import type { VmDefinition, VmInstruction } from "./lower-vm.ts";
 
 export interface ProfileSite {

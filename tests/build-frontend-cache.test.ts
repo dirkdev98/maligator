@@ -15,8 +15,8 @@ import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { emitVmTranslationUnits } from "../src/emit-vm.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { emitVmTranslationUnits } from "../src/compiler/target/emit-vm.ts";
 
 function temporaryDirectory(): string {
 	return mkdtempSync(path.join(tmpdir(), "mal-build-frontend-cache-"));

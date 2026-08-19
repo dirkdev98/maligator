@@ -12,8 +12,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { deserializeVmDefinition } from "../src/serialize-vm.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { deserializeVmDefinition } from "../src/compiler/target/serialize-vm.ts";
 import {
 	compileIsolatedTestImage,
 	compileTestFile,

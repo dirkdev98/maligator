@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { parseScript } from "../src/parser.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 
 function compile(source: string) {
 	return compileSemanticProgramToVmDefinition(

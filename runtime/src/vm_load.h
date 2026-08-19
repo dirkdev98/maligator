@@ -5,8 +5,9 @@
 
 /**
  * Runtime loader for the binary definition wire format produced by
- * `serializeVmDefinition` (src/serialize-vm.ts). It materializes the same
- * `MalVmDefinition` that `emit-vm.ts` bakes into C literals — functions,
+ * `serializeVmDefinition` (src/compiler/target/serialize-vm.ts). It materializes
+ * the same `MalVmDefinition` that src/compiler/target/emit-vm.ts bakes into C
+ * literals — functions,
  * instructions, immortal string/bigint constant cells, handlers, and debug
  * tables — but from a buffer the running VM can ingest without a C compile. This
  * is the bridge that runtime `eval` (and a future bytecode cache) runs over.

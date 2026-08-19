@@ -1,9 +1,9 @@
 import { hash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
-import type { VmDefinition } from "./lower-vm.ts";
-import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
+import type { OptimizationPassDelta } from "./compiler/shared/compiler-diagnostics.ts";
+import type { VmDefinition } from "./compiler/target/lower-vm.ts";
+import type { CompilerRemark, ProfileSite } from "./compiler/target/profile-metadata.ts";
 import { profilePhaseName } from "./profile-phases.ts";
 
 const CAPTURE_LEGACY_HEADER_BYTES = 40;

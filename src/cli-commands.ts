@@ -41,14 +41,14 @@ import type {
 	TestCommand,
 } from "./cli.ts";
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
-import { TYPE_STRIPPER_IDENTITY } from "./compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
-import { formatCoreFunction } from "./core-ir.ts";
+import { formatCoreFunction } from "./compiler/core/core-ir.ts";
+import { TYPE_STRIPPER_IDENTITY } from "./compiler/frontend/compact-type-strip.ts";
+import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
+import { emitVmTranslationUnits } from "./compiler/target/emit-vm.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
-import { emitVmTranslationUnits } from "./emit-vm.ts";
 import { cacheFrontendWire, FrontendCompilationSession } from "./frontend-cache.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
@@ -153,7 +153,7 @@ export function developmentCompilerInstallation(
 		evalCompiler: {
 			kind: "source",
 			sourceDirectory,
-			entrypoint: path.join(sourceDirectory, "eval-compiler-entry.mts"),
+			entrypoint: path.join(sourceDirectory, "compiler/pipeline/eval-compiler-entry.mts"),
 		},
 	};
 }

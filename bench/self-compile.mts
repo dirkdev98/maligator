@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
-import { compileEntrypoint } from "../src/compile-program.ts";
-import { emitVmTranslationUnits } from "../src/emit-vm.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
+import { emitVmTranslationUnits } from "../src/compiler/target/emit-vm.ts";
 
 const inputPath = process.argv[2];
 const outputDirectory = process.argv[3];

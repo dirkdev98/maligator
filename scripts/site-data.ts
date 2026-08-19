@@ -3,7 +3,7 @@ import { readFileSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CommandProgress } from "../src/command-progress.ts";
-import { HOST_MODULES } from "../src/host-modules.ts";
+import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
 
 const TEST262_FILE = "scripts/test262.json";
 const BENCH_FILE = "bench/baseline.json";

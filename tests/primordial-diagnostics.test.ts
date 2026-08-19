@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { worldFactsFromConfig } from "../src/compiler-facts.ts";
-import { collectPrimordialMutationDiagnostics } from "../src/primordial-diagnostics.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { collectPrimordialMutationDiagnostics } from "../src/compiler/frontend/primordial-diagnostics.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { worldFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 
 function diagnostics(source: string, policy: "locked" | "mutable" = "locked") {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "diagnostic.js");

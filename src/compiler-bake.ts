@@ -11,8 +11,8 @@ import {
 import * as path from "node:path";
 import type { BuildConfigTypeStripper } from "./build-config.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
+import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
-import { buildModuleGraph } from "./module-graph.ts";
 
 const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
 const SOURCE_MANIFEST = "artifact.json";
@@ -21,7 +21,7 @@ const SOURCE_MANIFEST = "artifact.json";
  * Type erasure runs over every compiler source before a bake, so the stripper is
  * part of the bake identity even though the compiler entrypoint never imports it.
  */
-const TYPE_STRIPPER_MODULE = "compact-type-strip.ts";
+const TYPE_STRIPPER_MODULE = "compiler/frontend/compact-type-strip.ts";
 
 /** Third-party packages whose pinned version can change the baked wire. */
 const PINNED_COMPILER_DEPENDENCIES = ["meriyah"];

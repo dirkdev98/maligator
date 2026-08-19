@@ -1070,7 +1070,7 @@ exit 7
 			compilerBake: {
 				kind: "source",
 				sourceDirectory: path.resolve("src"),
-				entrypoint: path.resolve("src/eval-compiler-entry.mts"),
+				entrypoint: path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 				bake: () => {
 					throw new Error("eval-off build baked the compiler wire");
 				},

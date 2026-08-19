@@ -3,9 +3,13 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { linkModules } from "../src/linker.ts";
-import type { Binding, SemanticFile, SemanticProgram } from "../src/semantic-analysis.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
+import { linkModules } from "../src/compiler/frontend/linker.ts";
+import type {
+	Binding,
+	SemanticFile,
+	SemanticProgram,
+} from "../src/compiler/frontend/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 
 /** A resolved config with the node host surface enabled. */
 const nodeOn = resolveBuildConfig({ surface: { node: true } });

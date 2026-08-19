@@ -9,8 +9,9 @@
 #include "heap_string.h"
 
 /*
- * Inverse of src/emit-vm.ts + src/serialize-vm.ts: decode the flat wire buffer
- * into the runtime structs. The per-opcode operand layout, the opcode tag
+ * Inverse of src/compiler/target/emit-vm.ts plus
+ * src/compiler/target/serialize-vm.ts: decode the flat wire buffer into the
+ * runtime structs. The per-opcode operand layout, the opcode tag
  * ordering (WireOp below), and the operator/intrinsic tables mirror
  * serialize-vm.ts exactly. Existing tags/layouts are immutable and new opcodes
  * append where possible; WIRE_VERSION guards incompatible changes.
@@ -20,7 +21,8 @@
 #define WIRE_VERSION 14u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
-/* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
+/* Wire opcode tags. MUST match WIRE_OPCODES in
+ * src/compiler/target/serialize-vm.ts (index order). */
 typedef enum WireOp {
     WIRE_MOVE,
     WIRE_RETURN,

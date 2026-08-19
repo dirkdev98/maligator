@@ -3,8 +3,8 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "../src/compile-program.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";
 
 const fixture = path.resolve("tests/fixtures/selfhost-frontend/entry.mts");

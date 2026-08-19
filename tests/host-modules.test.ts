@@ -3,15 +3,15 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { emitVmDefinition } from "../src/emit-vm.ts";
-import type { VmDefinition } from "../src/lower-vm.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
+import type { VmDefinition } from "../src/compiler/target/lower-vm.ts";
 import {
 	deserializeVmDefinition,
 	serializeVmDefinition,
 	WIRE_OPCODES,
-} from "../src/serialize-vm.ts";
+} from "../src/compiler/target/serialize-vm.ts";
 
 /**
  * End-to-end coverage of the `node:*` host-built-in / `process` install manifest:

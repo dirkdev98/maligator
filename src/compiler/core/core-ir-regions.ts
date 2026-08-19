@@ -1,5 +1,5 @@
-import type { CompilerGuardPlan } from "./compiler-facts.ts";
-import type { CompilerInstruction } from "./compiler-instruction.ts";
+import type { CompilerGuardPlan } from "../shared/compiler-facts.ts";
+import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 
 /**
  * Post-allocation form of a Core speculative-region certificate. Core owns the

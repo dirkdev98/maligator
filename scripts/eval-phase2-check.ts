@@ -2,8 +2,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "../src/compile-program.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
 import { buildLoadDriver } from "../src/local-build.ts";
 
 /**
@@ -118,11 +118,14 @@ function build(jsPath: string, name: string): string {
 const driver = buildLoadDriver(false, {
 	kind: "source",
 	sourceDirectory: path.resolve("src"),
-	entrypoint: path.resolve("src/eval-compiler-entry.mts"),
+	entrypoint: path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 	bake: () =>
-		compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-			stripTypes: stripCompactTypes,
-		}),
+		compileEntrypointToBuffer(
+			path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
+			{
+				stripTypes: stripCompactTypes,
+			},
+		),
 });
 const dir = mkdtempSync(path.join(tmpdir(), "mal-eval-"));
 

@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import { debugEnabled, log } from "../../utils.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { forEachEstreeChild, traverseEstree } from "./estree-traversal.ts";
 // Type-only: erasure removes this import, so the module graph is NOT pulled into
@@ -6,7 +7,6 @@ import { forEachEstreeChild, traverseEstree } from "./estree-traversal.ts";
 // in semantic-program.ts so this file stays runnable on MalVm.
 import type { ModuleGraph } from "./module-graph.ts";
 import { parseScript } from "./parser.ts";
-import { debugEnabled, log } from "./utils.ts";
 
 export interface SemanticProgram {
 	entrypointPath: string;

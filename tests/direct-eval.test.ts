@@ -1,17 +1,17 @@
 import type { ESTree } from "meriyah";
 import { expect, test } from "vitest";
-import { compileSourceToBuffer } from "../src/compile.ts";
-import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
-import type { DirectEvalContext } from "../src/direct-eval-context.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import type { DirectEvalContext } from "../src/compiler/frontend/direct-eval-context.ts";
 import {
 	decodeDirectEvalContext,
 	encodeDirectEvalContext,
-} from "../src/direct-eval-context.ts";
-import { parseScript } from "../src/parser.ts";
+} from "../src/compiler/frontend/direct-eval-context.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
 	functionHasDirectEval,
-} from "../src/semantic-analysis.ts";
+} from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSourceToBuffer } from "../src/compiler/pipeline/compile.ts";
 
 /** Analyze a script and return its single SemanticFile. */
 function analyze(source: string, strict = true) {

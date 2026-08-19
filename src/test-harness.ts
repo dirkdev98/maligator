@@ -20,19 +20,22 @@ import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
-import { stripCompactTypes, TYPE_STRIPPER_IDENTITY } from "./compact-type-strip.ts";
-import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
-import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
-import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
-import { emitVmDefinition } from "./emit-vm.ts";
+import {
+	stripCompactTypes,
+	TYPE_STRIPPER_IDENTITY,
+} from "./compiler/frontend/compact-type-strip.ts";
+import type { ModuleGoal } from "./compiler/frontend/module-graph.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
+import { compileSemanticProgramToVmDefinition } from "./compiler/pipeline/compile-core.ts";
+import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
+import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
+import { emitVmDefinition } from "./compiler/target/emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
-import type { ModuleGoal } from "./module-graph.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 
 /** Entry-point C drivers linked with the emitted definition. */
 export const HOST_MAIN = "runtime/host_main.c";
@@ -48,7 +51,7 @@ export const SECRET_BUFFER_MAIN = "runtime/secret_buffer_test_main.c";
 export const CRYPTO_START_FAILURE_MAIN = "runtime/crypto_start_failure_test_main.c";
 
 const compilerSourceDirectory = path.resolve("src");
-const compilerEntrypoint = path.resolve("src/eval-compiler-entry.mts");
+const compilerEntrypoint = path.resolve("src/compiler/pipeline/eval-compiler-entry.mts");
 let compilerSourceFiles: Array<string> | undefined;
 
 function defaultCompilerBake(): CompilerBakeInput {

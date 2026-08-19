@@ -7,7 +7,7 @@ import {
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import { buildNativeBinary } from "../src/test-harness.ts";

@@ -1,16 +1,11 @@
-import type { CompilerSiteFacts } from "./compiler-facts.ts";
-import type {
-	CompilerImmediateValue,
-	CompilerInstruction,
-} from "./compiler-instruction.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
 	coreTerminatorEdges,
-} from "./core-ir-control-flow.ts";
-import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import type { CoreAllocatedRegion } from "./core-ir-regions.ts";
-import { verifyCoreFunction } from "./core-ir-verifier.ts";
+} from "../core/core-ir-control-flow.ts";
+import { coreOpcodeRegistry } from "../core/core-ir-opcodes.ts";
+import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
+import { verifyCoreFunction } from "../core/core-ir-verifier.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
@@ -21,7 +16,12 @@ import type {
 	CoreRegion,
 	CoreRepresentation,
 	CoreValueId,
-} from "./core-ir.ts";
+} from "../core/core-ir.ts";
+import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
+import type {
+	CompilerImmediateValue,
+	CompilerInstruction,
+} from "../shared/compiler-instruction.ts";
 
 export interface CoreTargetProgram {
 	readonly core: CoreProgram;

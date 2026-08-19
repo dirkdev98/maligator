@@ -1,5 +1,5 @@
-import { OPTIMIZATION_ABLATIONS } from "./compiler-diagnostics.ts";
-import type { OptimizationAblation } from "./compiler-diagnostics.ts";
+import { OPTIMIZATION_ABLATIONS } from "./compiler/shared/compiler-diagnostics.ts";
+import type { OptimizationAblation } from "./compiler/shared/compiler-diagnostics.ts";
 
 export { MALIGATOR_VERSION } from "./version.ts";
 

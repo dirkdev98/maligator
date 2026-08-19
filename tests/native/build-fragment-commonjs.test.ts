@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import { buildDerivationFromConfig } from "../../src/build-config.ts";
 import { compileBuildFrontend } from "../../src/build-frontend-cache.ts";
-import { stripCompactTypes } from "../../src/compact-type-strip.ts";
+import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 

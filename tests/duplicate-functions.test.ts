@@ -1,8 +1,12 @@
 import { expect, test } from "vitest";
-import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
-import type { CoreFunction, CoreInstruction, CoreProgram } from "../src/core-ir.ts";
-import { parseScript } from "../src/parser.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import type {
+	CoreFunction,
+	CoreInstruction,
+	CoreProgram,
+} from "../src/compiler/core/core-ir.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 
 function compileScript(source: string, evalCompletion = false) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(

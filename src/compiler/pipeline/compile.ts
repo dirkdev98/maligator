@@ -1,9 +1,9 @@
+import { referencesArguments } from "../core/semantic-lowering.ts";
+import { decodeDirectEvalContext } from "../frontend/direct-eval-context.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../frontend/semantic-analysis.ts";
+import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
+import { serializeVmDefinition } from "../target/serialize-vm.ts";
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
-import { decodeDirectEvalContext } from "./direct-eval-context.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "./semantic-analysis.ts";
-import type { SemanticProgram } from "./semantic-analysis.ts";
-import { referencesArguments } from "./semantic-lowering.ts";
-import { serializeVmDefinition } from "./serialize-vm.ts";
 
 /** VarDeclaredNames of the eval script, represented by its hoisted Program bindings. */
 function varDeclaredNames(semantic: SemanticProgram): Set<string> {

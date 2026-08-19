@@ -1,15 +1,15 @@
-import type { OptimizationAblation } from "./compiler-diagnostics.ts";
-import { conservativeCompilerProgramFacts } from "./compiler-facts.ts";
-import type { CompilerProgramFacts } from "./compiler-facts.ts";
-import { attachCoreCompilerSiteFacts } from "./compiler-site-facts.ts";
-import { lowerSemanticProgramToCore } from "./core-frontend.ts";
-import { executeCoreOptimizations } from "./core-ir-opt.ts";
-import type { CoreProgram } from "./core-ir.ts";
-import { lowerCoreProgramToTarget } from "./core-target-lowering.ts";
-import type { DirectEvalContext } from "./direct-eval-context.ts";
-import { lowerCoreProgramToVmDefinition } from "./lower-vm.ts";
-import type { VmDefinition } from "./lower-vm.ts";
-import type { SemanticProgram } from "./semantic-analysis.ts";
+import { attachCoreCompilerSiteFacts } from "../core/compiler-site-facts.ts";
+import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
+import { executeCoreOptimizations } from "../core/core-ir-opt.ts";
+import type { CoreProgram } from "../core/core-ir.ts";
+import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
+import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
+import type { OptimizationAblation } from "../shared/compiler-diagnostics.ts";
+import { conservativeCompilerProgramFacts } from "../shared/compiler-facts.ts";
+import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import { lowerCoreProgramToTarget } from "../target/core-target-lowering.ts";
+import { lowerCoreProgramToVmDefinition } from "../target/lower-vm.ts";
+import type { VmDefinition } from "../target/lower-vm.ts";
 
 export type CompileCorePhase =
 	| "construct core ir"

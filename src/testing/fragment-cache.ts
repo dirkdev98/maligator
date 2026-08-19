@@ -4,12 +4,21 @@ import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
-import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
 import {
 	compilerConfigurationIdentity,
 	compilerProducerIdentity,
 } from "../compiler-cache-identity.ts";
-import { compilerProgramFactsFromConfig } from "../compiler-facts.ts";
+import { linkModules } from "../compiler/frontend/linker.ts";
+import type { ModuleGraph, ModuleParseCache } from "../compiler/frontend/module-graph.ts";
+import { buildModuleGraph } from "../compiler/frontend/module-graph.ts";
+import {
+	collectDisallowedEvalUsage,
+	collectDisallowedRegexpUsage,
+} from "../compiler/frontend/semantic-analysis.ts";
+import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
+import { compileSemanticProgramToVmDefinition } from "../compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../compiler/shared/compiler-facts.ts";
+import { serializeVmDefinition, WIRE_VERSION } from "../compiler/target/serialize-vm.ts";
 import {
 	compileDependencyFragments,
 	DEVELOPMENT_LINKED_MODULES_GLOBAL,
@@ -25,15 +34,6 @@ import {
 } from "../frontend-cache.ts";
 import type { FrontendCompilationSession } from "../frontend-cache.ts";
 import type { FrontendArtifactIdentity } from "../frontend-cache.ts";
-import { linkModules } from "../linker.ts";
-import type { ModuleGraph, ModuleParseCache } from "../module-graph.ts";
-import { buildModuleGraph } from "../module-graph.ts";
-import {
-	collectDisallowedEvalUsage,
-	collectDisallowedRegexpUsage,
-} from "../semantic-analysis.ts";
-import { runSemanticAnalysisForGraph } from "../semantic-program.ts";
-import { serializeVmDefinition, WIRE_VERSION } from "../serialize-vm.ts";
 import type {
 	CompileTestImageOptions,
 	DependencyIdentity,

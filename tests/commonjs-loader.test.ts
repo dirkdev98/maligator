@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 
 const nodeOn = resolveBuildConfig({ surface: { node: true } });
 const roots: Array<string> = [];

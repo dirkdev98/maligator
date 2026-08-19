@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
-import type { ResolvedBuildConfig } from "./build-config.ts";
+import type { ResolvedBuildConfig } from "../../build-config.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import type { HostModuleSpec } from "./host-modules.ts";
 import {

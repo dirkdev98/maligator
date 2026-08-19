@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
-import { traverseEstree } from "../src/estree-traversal.ts";
-import { parseScript } from "../src/parser.ts";
+import { traverseEstree } from "../src/compiler/frontend/estree-traversal.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
 	functionHasDirectEval,
 	semanticAnalysisTestHooks,
-} from "../src/semantic-analysis.ts";
+} from "../src/compiler/frontend/semantic-analysis.ts";
 
 function analyze(source: string, strict = true) {
 	return analyzeSourceAndRunSemanticAnalysis(

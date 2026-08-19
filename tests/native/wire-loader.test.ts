@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
-import { stripCompactTypes } from "../../src/compact-type-strip.ts";
+import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
-} from "../../src/compile-program.ts";
+} from "../../src/compiler/pipeline/compile-program.ts";
+import type { VmDefinition, VmFunction } from "../../src/compiler/target/lower-vm.ts";
+import { serializeVmDefinition } from "../../src/compiler/target/serialize-vm.ts";
 import { buildLoadDriver } from "../../src/local-build.ts";
-import type { VmDefinition, VmFunction } from "../../src/lower-vm.ts";
-import { serializeVmDefinition } from "../../src/serialize-vm.ts";
 
 const fn: VmFunction = {
 	nameStringIndex: -1,
@@ -72,11 +72,14 @@ describe("wire loader side-data validation", () => {
 		driver = buildLoadDriver(false, {
 			kind: "source",
 			sourceDirectory: path.resolve("src"),
-			entrypoint: path.resolve("src/eval-compiler-entry.mts"),
+			entrypoint: path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 			bake: () =>
-				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-					stripTypes: stripCompactTypes,
-				}),
+				compileEntrypointToBuffer(
+					path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
+					{
+						stripTypes: stripCompactTypes,
+					},
+				),
 		});
 		directory = mkdtempSync(path.join(tmpdir(), "mal-wire-loader-"));
 	});

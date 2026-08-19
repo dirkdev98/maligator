@@ -3,7 +3,7 @@ import * as path from "node:path";
 import {
 	generatePrimordialRegistryInclude,
 	validateBuiltinRegistry,
-} from "../src/builtin-registry.ts";
+} from "../src/compiler/shared/builtin-registry.ts";
 
 validateBuiltinRegistry();
 writeFileSync(

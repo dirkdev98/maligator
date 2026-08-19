@@ -11,14 +11,14 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { normalizeNativeFeatures } from "../src/build-flags.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { compileEntrypointToBuffer } from "../src/compile-program.ts";
-import { emitVmDefinition } from "../src/emit-vm.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
+import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
-import { parseScript } from "../src/parser.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 const fixture = process.argv[2];
 if (fixture === undefined) {
@@ -35,11 +35,14 @@ const context = resolveNativeBuildContext({
 	compilerBake: {
 		kind: "source",
 		sourceDirectory: path.resolve("src"),
-		entrypoint: path.resolve("src/eval-compiler-entry.mts"),
+		entrypoint: path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 		bake: () =>
-			compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-				stripTypes: stripCompactTypes,
-			}),
+			compileEntrypointToBuffer(
+				path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
+				{
+					stripTypes: stripCompactTypes,
+				},
+			),
 	},
 });
 

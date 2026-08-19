@@ -1,17 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 import {
 	directBuiltinOperationIds,
 	exactBuiltinCallDescriptor,
-} from "../src/builtin-registry.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
-import { emitBatch, emitVmDefinition, emitVmTranslationUnits } from "../src/emit-vm.ts";
-import { vmRegionLicense, vmSemanticProtectorGuard } from "../src/lower-vm.ts";
-import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
-import { parseScript } from "../src/parser.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
-import { deserializeVmDefinition, serializeVmDefinition } from "../src/serialize-vm.ts";
+} from "../src/compiler/shared/builtin-registry.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	emitBatch,
+	emitVmDefinition,
+	emitVmTranslationUnits,
+} from "../src/compiler/target/emit-vm.ts";
+import {
+	vmRegionLicense,
+	vmSemanticProtectorGuard,
+} from "../src/compiler/target/lower-vm.ts";
+import type {
+	VmDefinition,
+	VmFunction,
+	VmInstruction,
+} from "../src/compiler/target/lower-vm.ts";
+import {
+	deserializeVmDefinition,
+	serializeVmDefinition,
+} from "../src/compiler/target/serialize-vm.ts";
 
 const instructions: Array<VmInstruction> = [
 	{ opcode: "CREATE_F64", dst: 0, value: -0 },

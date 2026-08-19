@@ -3,11 +3,23 @@ import * as path from "node:path";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "../build-config.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
-import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
 import {
 	compilerConfigurationIdentity,
 	compilerProducerIdentity,
 } from "../compiler-cache-identity.ts";
+import type {
+	BuildModuleGraphOptions,
+	ModuleGraph,
+} from "../compiler/frontend/module-graph.ts";
+import { buildModuleGraph } from "../compiler/frontend/module-graph.ts";
+import {
+	collectDisallowedEvalUsage,
+	collectDisallowedRegexpUsage,
+} from "../compiler/frontend/semantic-analysis.ts";
+import { runSemanticAnalysisForGraph } from "../compiler/frontend/semantic-program.ts";
+import { compileSemanticProgramToVmDefinition } from "../compiler/pipeline/compile-core.ts";
+import type { VmDefinition } from "../compiler/target/lower-vm.ts";
+import { serializeVmDefinition, WIRE_VERSION } from "../compiler/target/serialize-vm.ts";
 import type { DependencyFragmentWorker } from "../dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -17,15 +29,6 @@ import {
 	frontendWirePath,
 } from "../frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
-import type { VmDefinition } from "../lower-vm.ts";
-import type { BuildModuleGraphOptions, ModuleGraph } from "../module-graph.ts";
-import { buildModuleGraph } from "../module-graph.ts";
-import {
-	collectDisallowedEvalUsage,
-	collectDisallowedRegexpUsage,
-} from "../semantic-analysis.ts";
-import { runSemanticAnalysisForGraph } from "../semantic-program.ts";
-import { serializeVmDefinition, WIRE_VERSION } from "../serialize-vm.ts";
 
 const TEST_CACHE_SCHEMA = 1;
 const TEST_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");

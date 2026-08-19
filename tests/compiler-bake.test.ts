@@ -10,17 +10,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
 import {
 	compilerEntrypointSourceFiles,
 	ensureCompilerWire,
 } from "../src/compiler-bake.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 
 /**
  * The stripper module is keyed by name, not by import: it erases every compiler
  * source before a bake without the entrypoint ever importing it.
  */
-const stripperModule = "compact-type-strip.ts";
+const stripperModule = "compiler/frontend/compact-type-strip.ts";
 
 function compilerFixture(meriyah = "7.1.0"): {
 	root: string;
@@ -32,7 +32,7 @@ function compilerFixture(meriyah = "7.1.0"): {
 	const sourceDirectory = path.join(root, "src");
 	const entrypoint = path.join(sourceDirectory, "entry.mts");
 	const stripper = path.join(sourceDirectory, stripperModule);
-	mkdirSync(sourceDirectory);
+	mkdirSync(path.dirname(stripper), { recursive: true });
 	writeFileSync(entrypoint, "export const compiler = 1;\n");
 	writeFileSync(path.join(sourceDirectory, "helper.ts"), "export const helper = 1;\n");
 	writeFileSync(stripper, "export const stripCompactTypes = (source) => source;\n");

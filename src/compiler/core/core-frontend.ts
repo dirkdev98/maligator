@@ -1,7 +1,7 @@
-import type { CompilerProgramFacts } from "./compiler-facts.ts";
+import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
+import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
+import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { CoreProgram } from "./core-ir.ts";
-import type { DirectEvalContext } from "./direct-eval-context.ts";
-import type { SemanticProgram } from "./semantic-analysis.ts";
 import { constructSemanticProgramCore } from "./semantic-lowering.ts";
 
 export interface CoreFrontendOptions {

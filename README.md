@@ -540,8 +540,8 @@ performance investigation.
 
 - `docs/decisions`: architecture decisions
 - `runtime`: C runtime and Rust FFI shim
-- `src/compile-core.ts`: host-independent semantic-program to VM-definition compiler core
-- `src/compile-program.ts`: module loading and compiler entrypoint orchestration
+- `src/compiler/pipeline/compile-core.ts`: host-independent semantic-program to VM-definition compiler core
+- `src/compiler/pipeline/compile-program.ts`: module loading and compiler entrypoint orchestration
 - `src/native-build-context.ts`, `src/runtime-build.ts`, `src/local-build.ts`: explicit native context, atomic reusable artifacts, and final linking
 - `src/cli-commands.ts`: installation-aware command orchestration and web/non-web driver selection
 - `src`: remaining compiler, CLI, and build tooling

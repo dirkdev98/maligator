@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { compileEntrypoint, compileEntrypointToBuffer } from "../src/compile-program.ts";
+import {
+	compileEntrypoint,
+	compileEntrypointToBuffer,
+} from "../src/compiler/pipeline/compile-program.ts";
 
 const directories: Array<string> = [];
 

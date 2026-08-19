@@ -5,7 +5,7 @@ import {
 	ESTREE_SKIP,
 	ESTREE_STOP,
 	traverseEstree,
-} from "../src/estree-traversal.ts";
+} from "../src/compiler/frontend/estree-traversal.ts";
 
 function identifier(name: string): ESTree.Identifier {
 	return { type: "Identifier", name };

@@ -20,7 +20,7 @@ export const BENCHMARK_LANE_RULES: ReadonlyArray<{
 	{ pattern: /^(scripts\/bench|bench\/)/, lanes: ["*"] },
 	{
 		pattern:
-			/^src\/(core-frontend|core-ir|compile-core|semantic-lowering|emit-c|lower-vm)/,
+			/^src\/compiler\/(core\/(core-frontend|core-ir|semantic-lowering)|pipeline\/compile-core|target\/(emit-c|lower-vm))/,
 		lanes: ["compiler", "language", "module", "stack-object"],
 	},
 	{

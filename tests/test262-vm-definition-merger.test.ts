@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
+import type {
+	VmDefinition,
+	VmFunction,
+	VmInstruction,
+} from "../src/compiler/target/lower-vm.ts";
 import { mergeVmDefinitions } from "../src/test262/vm-definition-merge.ts";
 
 function vmFunction(instructions: Array<VmInstruction>): VmFunction {

@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, test } from "vitest";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
-import { parseModule, parseScript } from "../src/parser.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { parseModule, parseScript } from "../src/compiler/frontend/parser.ts";
 
 function blank(length: number): string {
 	return " ".repeat(length);

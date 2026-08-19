@@ -12,7 +12,7 @@ import {
 import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
 import { executeBinary, executeBinaryCaptured } from "../src/cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
-import { stripCompactTypes } from "../src/compact-type-strip.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import {
 	PRODUCT_RUNTIME_ASSET_INCLUDE,
 	productCliConfig,
@@ -271,7 +271,7 @@ describe("command shell", () => {
 			evalCompiler: {
 				kind: "source",
 				sourceDirectory: path.join(repoRoot, "src"),
-				entrypoint: path.join(repoRoot, "src/eval-compiler-entry.mts"),
+				entrypoint: path.join(repoRoot, "src/compiler/pipeline/eval-compiler-entry.mts"),
 			},
 		});
 		expect(path.isAbsolute(installation.runtimeDirectory)).toBe(true);

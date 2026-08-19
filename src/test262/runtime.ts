@@ -23,20 +23,23 @@ import {
 } from "../build-flags.ts";
 import { touchCacheEntry } from "../cache-management.ts";
 import { maligatorCacheDirectory } from "../cache-root.ts";
-import { stripCompactTypes } from "../compact-type-strip.ts";
-import { compileSemanticProgramToVmDefinition } from "../compile-core.ts";
-import { compileEntrypointToBuffer } from "../compile-program.ts";
 import { compilerEntrypointSourceFiles } from "../compiler-bake.ts";
-import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
+import { stripCompactTypes } from "../compiler/frontend/compact-type-strip.ts";
+import { parseModule, parseScript } from "../compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
+import { compileSemanticProgramToVmDefinition } from "../compiler/pipeline/compile-core.ts";
+import { compileEntrypointToBuffer } from "../compiler/pipeline/compile-program.ts";
+import { emitBatch, emitVmDefinition } from "../compiler/target/emit-vm.ts";
+import type { VmDefinition } from "../compiler/target/lower-vm.ts";
+import {
+	deserializeVmDefinition,
+	serializeVmDefinition,
+} from "../compiler/target/serialize-vm.ts";
 import { buildLocalBinary } from "../local-build.ts";
-import type { VmDefinition } from "../lower-vm.ts";
 import { resolveNativeBuildContext } from "../native-build-context.ts";
-import { parseModule, parseScript } from "../parser.ts";
 import { ensureNativeArtifacts } from "../runtime-build.ts";
 import type { NativeArtifacts } from "../runtime-build.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-program.ts";
-import { deserializeVmDefinition, serializeVmDefinition } from "../serialize-vm.ts";
 import { requireToolchain } from "../toolchain.ts";
 import type { Toolchain } from "../toolchain.ts";
 import {
@@ -311,7 +314,9 @@ export function test262PrepareBuild() {
 		surface: { webPlatform: true, node: false },
 	});
 	const compilerSourceDirectory = path.resolve("src");
-	const compilerEntrypoint = path.resolve("src/eval-compiler-entry.mts");
+	const compilerEntrypoint = path.resolve(
+		"src/compiler/pipeline/eval-compiler-entry.mts",
+	);
 	const nativeContext = resolveNativeBuildContext({
 		toolchain,
 		features: buildDerivationFromConfig(config).features,

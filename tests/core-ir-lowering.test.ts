@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { lowerSemanticProgramToCore } from "../src/core-frontend.ts";
-import { coreOpcodeRegistry } from "../src/core-ir-opcodes.ts";
-import { executeCoreOptimizations } from "../src/core-ir-opt.ts";
-import { verifyCoreFunction } from "../src/core-ir-verifier.ts";
-import { formatCoreFunction } from "../src/core-ir.ts";
+import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
+import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
+import { formatCoreFunction } from "../src/compiler/core/core-ir.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import {
 	coreRegisterClasses,
 	lowerCoreProgramToTarget,
-} from "../src/core-target-lowering.ts";
-import { lowerCoreProgramToVmDefinition } from "../src/lower-vm.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+} from "../src/compiler/target/core-target-lowering.ts";
+import { lowerCoreProgramToVmDefinition } from "../src/compiler/target/lower-vm.ts";
 
 function lower(source: string) {
 	return lowerSemanticProgramToCore(

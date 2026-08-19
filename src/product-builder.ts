@@ -5,14 +5,14 @@ import { createBuildArtifact } from "./build-artifact.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { selectNativeBuildPlan } from "./build-flags.ts";
-import { stripCompactTypes } from "./compact-type-strip.ts";
-import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
-import { compileEntrypointToBuffer } from "./compile-program.ts";
-import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
-import { emitVmTranslationUnits } from "./emit-vm.ts";
+import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
+import { compileSemanticProgramToVmDefinition } from "./compiler/pipeline/compile-core.ts";
+import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
+import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
+import { emitVmTranslationUnits } from "./compiler/target/emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { requireToolchain } from "./toolchain.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
@@ -79,9 +79,10 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	progress("compiling the embedded eval compiler");
 	writeFileSync(
 		compilerWirePath,
-		compileEntrypointToBuffer(path.join(repositoryRoot, "src/eval-compiler-entry.mts"), {
-			stripTypes: stripCompactTypes,
-		}),
+		compileEntrypointToBuffer(
+			path.join(repositoryRoot, "src/compiler/pipeline/eval-compiler-entry.mts"),
+			{ stripTypes: stripCompactTypes },
+		),
 	);
 
 	const config = productCliConfig(repositoryRoot, compilerWirePath);

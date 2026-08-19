@@ -1,16 +1,16 @@
+import type { CoreProgram } from "../core/core-ir.ts";
 import {
 	builtinOperationDescriptor,
 	directBuiltinOperationIds,
-} from "./builtin-registry.ts";
-import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
-import type { OptimizationPassDelta } from "./compiler-diagnostics.ts";
-import { compilerGuardPlan, knownBuiltinCallProves } from "./compiler-facts.ts";
-import type { CompilerGuardPlan, EffectKind } from "./compiler-facts.ts";
+} from "../shared/builtin-registry.ts";
+import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
+import type { OptimizationPassDelta } from "../shared/compiler-diagnostics.ts";
+import { compilerGuardPlan, knownBuiltinCallProves } from "../shared/compiler-facts.ts";
+import type { CompilerGuardPlan, EffectKind } from "../shared/compiler-facts.ts";
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
-} from "./compiler-instruction.ts";
-import type { CoreProgram } from "./core-ir.ts";
+} from "../shared/compiler-instruction.ts";
 import type { CoreTargetFunction, CoreTargetProgram } from "./core-target-lowering.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";

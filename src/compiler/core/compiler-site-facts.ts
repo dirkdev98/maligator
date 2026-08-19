@@ -7,8 +7,8 @@ import type {
 	KnownBuiltinCall,
 	ShapeFact,
 	SourceSiteId,
-} from "./compiler-facts.ts";
-import { knownFact, sourceSiteId } from "./compiler-facts.ts";
+} from "../shared/compiler-facts.ts";
+import { knownFact, sourceSiteId } from "../shared/compiler-facts.ts";
 import type { CoreFunction, CoreInstruction, CoreProgram } from "./core-ir.ts";
 
 const allocationOpcodes = new Set([

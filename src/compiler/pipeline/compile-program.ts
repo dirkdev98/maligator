@@ -1,18 +1,18 @@
-import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
-import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
-import type { CompileCorePhase } from "./compile-core.ts";
-import type { CompilerDiagnostic } from "./compiler-diagnostics.ts";
-import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
-import type { VmDefinition } from "./lower-vm.ts";
-import type { BuildModuleGraphOptions } from "./module-graph.ts";
-import { buildModuleGraph } from "./module-graph.ts";
-import { collectPrimordialMutationDiagnostics } from "./primordial-diagnostics.ts";
+import { assertEvalPolicy, assertRegexpPolicy } from "../../build-config.ts";
+import type { BuildModuleGraphOptions } from "../frontend/module-graph.ts";
+import { buildModuleGraph } from "../frontend/module-graph.ts";
+import { collectPrimordialMutationDiagnostics } from "../frontend/primordial-diagnostics.ts";
 import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
-} from "./semantic-analysis.ts";
-import { runSemanticAnalysisForGraph } from "./semantic-program.ts";
-import { serializeVmDefinition } from "./serialize-vm.ts";
+} from "../frontend/semantic-analysis.ts";
+import { runSemanticAnalysisForGraph } from "../frontend/semantic-program.ts";
+import type { CompilerDiagnostic } from "../shared/compiler-diagnostics.ts";
+import { compilerProgramFactsFromConfig } from "../shared/compiler-facts.ts";
+import type { VmDefinition } from "../target/lower-vm.ts";
+import { serializeVmDefinition } from "../target/serialize-vm.ts";
+import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
+import type { CompileCorePhase } from "./compile-core.ts";
 
 export type CompileEntrypointPhase = "graph" | "semantic" | CompileCorePhase;
 export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize";

@@ -939,7 +939,7 @@ void mal_vm_free(MalVm *vm) {
 // table sizes; register operands and IP-relative fields are function-local and
 // untouched. Side data lives in the loaded arena (mutable); static definitions
 // never pass through this splice path. Mirrors the reference list in
-// src/serialize-vm.ts.
+// src/compiler/target/serialize-vm.ts.
 static i32 mal_vm_rebase_value_operand(i32 operand, i32 string_base) {
     if (operand >= 0) return operand;
     if (operand > MAL_VALUE_OPERAND_STRING_BASE || operand < MAL_VALUE_OPERAND_STRING_MIN) {

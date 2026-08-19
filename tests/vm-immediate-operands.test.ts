@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { decodeVmValueOperand, encodeVmValueOperand } from "../src/lower-vm.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	decodeVmValueOperand,
+	encodeVmValueOperand,
+} from "../src/compiler/target/lower-vm.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "immediate-operands.js");

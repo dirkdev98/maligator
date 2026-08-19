@@ -5,10 +5,13 @@ import type { ESTree } from "meriyah";
 import { INTL_SERVICE_FEATURES, normalizeNativeFeatures } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
 import { defineBuild as defineBuildIdentity } from "./build.ts";
-import { stripCompactTypes } from "./compact-type-strip.ts";
-import { parseModule } from "./parser.ts";
+import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
+import { parseModule } from "./compiler/frontend/parser.ts";
+import type {
+	DisallowedEvalUsage,
+	DisallowedRegexpUsage,
+} from "./compiler/frontend/semantic-analysis.ts";
 import type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
-import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-analysis.ts";
 
 export type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
 

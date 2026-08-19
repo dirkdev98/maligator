@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
-import { stripCompactTypes } from "./compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "./compile-program.ts";
+import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
+import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { profilePhaseId } from "./profile-phases.ts";
 import type { ProfilePhaseName } from "./profile-phases.ts";
 

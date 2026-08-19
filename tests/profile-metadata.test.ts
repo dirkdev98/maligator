@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { compilerProgramFactsFromConfig } from "../src/compiler-facts.ts";
-import { emitVmDefinition } from "../src/emit-vm.ts";
-import { parseScript } from "../src/parser.ts";
-import { matchProfileSites } from "../src/profile-metadata.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
+import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
 
 function compile(source: string) {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(

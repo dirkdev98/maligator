@@ -1,9 +1,9 @@
 import type { ESTree } from "meriyah";
-import { primordialGlobalBindings } from "./builtin-registry.ts";
-import type { CompilerDiagnostic } from "./compiler-diagnostics.ts";
-import { compareCompilerDiagnostics } from "./compiler-diagnostics.ts";
-import { sourceSiteId } from "./compiler-facts.ts";
-import type { WorldFacts } from "./compiler-facts.ts";
+import { primordialGlobalBindings } from "../shared/builtin-registry.ts";
+import type { CompilerDiagnostic } from "../shared/compiler-diagnostics.ts";
+import { compareCompilerDiagnostics } from "../shared/compiler-diagnostics.ts";
+import { sourceSiteId } from "../shared/compiler-facts.ts";
+import type { WorldFacts } from "../shared/compiler-facts.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import type { SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 
