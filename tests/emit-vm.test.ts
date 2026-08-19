@@ -3044,7 +3044,7 @@ describe("native static typeof facts", () => {
 		expect(output).toContain("static MalValue mal_compiled_1_boxed(");
 		expect(output).toContain("if (!mal_ops_is_number(p0))");
 		expect(output.match(/mal_vm_typeof_compare/g)).toHaveLength(1);
-		expect(output).toMatch(/r\d+ = r\d+ \* r\d+;/);
+		expect(output).toMatch(/r\d+ \*= r\d+;/);
 	});
 });
 

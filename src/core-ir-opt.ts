@@ -1227,6 +1227,21 @@ const foldExactObjectObservations: CoreFunctionPass = {
 				...block,
 				instructions: block.instructions.map((instruction): CoreInstruction => {
 					if (
+						instruction.opcode === "typeofCompare" &&
+						instruction.inputs.length === 1 &&
+						origins.has(instruction.inputs[0]!)
+					) {
+						const expected = instructionAttribute(instruction, "expected");
+						const negated = instructionAttribute(instruction, "negated") === true;
+						changed = true;
+						return {
+							...instruction,
+							opcode: "createBoolean",
+							inputs: [],
+							attributes: { value: (expected === "object") !== negated },
+						};
+					}
+					if (
 						objectStringIndex !== undefined &&
 						instruction.opcode === "unary" &&
 						instructionAttribute(instruction, "operator") === "typeof" &&
@@ -1264,6 +1279,89 @@ const foldExactObjectObservations: CoreFunctionPass = {
 						inputs: [],
 						attributes: {
 							value: operator === "!==" || operator === "!=" ? !equal : equal,
+						},
+					};
+				}),
+			}),
+		);
+		return changed ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	},
+};
+
+const TYPEOF_RESULTS = new Set([
+	"undefined",
+	"object",
+	"boolean",
+	"number",
+	"string",
+	"symbol",
+	"bigint",
+	"function",
+]);
+
+/** Collapse the allocating `typeof` string corridor into Core's exact predicate. */
+const foldTypeofComparisons: CoreFunctionPass = {
+	name: "fold-typeof-comparisons",
+	ablation: "constant-folding",
+	run(fn, _analyses, program) {
+		const definitions = new Map<CoreValueId, CoreInstruction>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) definitions.set(output, instruction);
+			}
+		}
+		const stringValue = (instruction: CoreInstruction): string | undefined => {
+			if (instruction.opcode !== "createString") return undefined;
+			const index = instructionAttribute(instruction, "stringIndex");
+			if (typeof index !== "number") return undefined;
+			const units = program.stringConstants[index];
+			return units === undefined ? undefined : String.fromCharCode(...units);
+		};
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (instruction.opcode !== "binary" || instruction.inputs.length !== 2) {
+						return instruction;
+					}
+					const operator = instructionAttribute(instruction, "operator");
+					if (
+						operator !== "===" &&
+						operator !== "!==" &&
+						operator !== "==" &&
+						operator !== "!="
+					) {
+						return instruction;
+					}
+					const left = definitions.get(instruction.inputs[0]!);
+					const right = definitions.get(instruction.inputs[1]!);
+					const unary =
+						left?.opcode === "unary" &&
+						instructionAttribute(left, "operator") === "typeof"
+							? left
+							: right?.opcode === "unary" &&
+								instructionAttribute(right, "operator") === "typeof"
+								? right
+								: undefined;
+					const constant = unary === left ? right : unary === right ? left : undefined;
+					const expected = constant === undefined ? undefined : stringValue(constant);
+					if (
+						unary === undefined ||
+						unary.inputs.length !== 1 ||
+						expected === undefined ||
+						!TYPEOF_RESULTS.has(expected)
+					) {
+						return instruction;
+					}
+					changed = true;
+					return {
+						...instruction,
+						opcode: "typeofCompare",
+						inputs: [unary.inputs[0]!],
+						attributes: {
+							expected,
+							negated: operator === "!==" || operator === "!=",
 						},
 					};
 				}),
@@ -2097,7 +2195,9 @@ const deadInstructionElimination: CoreFunctionPass = {
 				if (
 					instruction.outputs.length > 0 &&
 					instruction.outputs.every((output) => !uses.has(output)) &&
-					coreOpcodeRegistry.require(instruction.opcode).discardable
+					(coreOpcodeRegistry.require(instruction.opcode).discardable ||
+						(instruction.opcode === "unary" &&
+							instructionAttribute(instruction, "operator") === "typeof"))
 				) {
 					removedInstructions.add(instruction.id);
 					for (const output of instruction.outputs) removedValues.set(output, output);
@@ -2177,6 +2277,7 @@ const combineLinearBlocks: CoreFunctionPass = {
 const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	annotateKnownBuiltinCalls,
+	foldTypeofComparisons,
 	foldExactObjectObservations,
 	selectStackObjectRegions,
 	foldPrimitiveConstants,
