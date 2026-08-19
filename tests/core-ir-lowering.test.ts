@@ -83,6 +83,35 @@ describe("Core IR lowering", () => {
 		expect(allocation.gcRootRegisters).toContain(handlerRegister);
 	});
 
+	it("roots values consumed by outgoing edges after a GC safepoint", () => {
+		const converted = lower(`
+			function preserve(value, callback) {
+				callback();
+				if (Date.now()) return value;
+				return value;
+			}
+			preserve({ tag: "held" }, () => 0);
+		`);
+		const fn = converted.functions.find(
+			(candidate) => candidate.parameters.length === 2,
+		)!;
+		const protectedBlock = fn.blocks.find(
+			(block) =>
+				block.terminator.kind === "branch" &&
+				block.instructions.some(
+					(instruction) => coreOpcodeRegistry.require(instruction.opcode).effects.mayGc,
+				),
+		)!;
+		if (protectedBlock.terminator.kind !== "branch") {
+			throw new Error("expected branch terminator");
+		}
+		const edgeValue = protectedBlock.terminator.consequent.arguments[0]!;
+		const allocation = coreRegisterClasses(fn, true);
+		const edgeRegister = allocation.registers.get(allocation.roots.get(edgeValue)!)!;
+
+		expect(allocation.gcRootRegisters).toContain(edgeRegister);
+	});
+
 	it("round-trips loops, calls, and multiple-result operations to VM form", () => {
 		const converted = lower(`
 			let total = 0;

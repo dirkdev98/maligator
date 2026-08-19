@@ -30,6 +30,72 @@ export interface CoreControlFlow {
 	dominates(dominator: CoreBlockId, block: CoreBlockId): boolean;
 }
 
+/** Canonical producer identity through moves and all-ordinary single-value phis. */
+export function coreCanonicalValueRoots(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+): ReadonlyMap<CoreValueId, CoreValueId> {
+	const canonical = new Map(fn.values.map(({ id }) => [id, id] as const));
+	const root = (value: CoreValueId): CoreValueId => {
+		let current = value;
+		const seen = new Set<CoreValueId>();
+		while (!seen.has(current)) {
+			seen.add(current);
+			const next = canonical.get(current);
+			if (next === undefined || next === current) break;
+			current = next;
+		}
+		return current;
+	};
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (
+					instruction.opcode !== "move" ||
+					instruction.inputs.length !== 1 ||
+					instruction.outputs.length !== 1
+				) {
+					continue;
+				}
+				const output = instruction.outputs[0]!;
+				const source = root(instruction.inputs[0]!);
+				if (root(output) !== source) {
+					canonical.set(output, source);
+					changed = true;
+				}
+			}
+			const incoming = cfg.predecessors[block.id]!;
+			if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
+				continue;
+			}
+			for (const [index, parameter] of block.parameters.entries()) {
+				const current = root(parameter.value);
+				const externalSources = new Set<CoreValueId>();
+				let complete = true;
+				for (const edge of incoming) {
+					const argument = edge.arguments[index];
+					if (argument === undefined) {
+						complete = false;
+						break;
+					}
+					const source = root(argument);
+					// A loop-carried copy cycle contributes no new value. Collapse the
+					// cycle only when every value entering it from outside has one root.
+					if (source !== current) externalSources.add(source);
+				}
+				if (complete && externalSources.size === 1) {
+					const source = externalSources.values().next().value!;
+					canonical.set(parameter.value, source);
+					changed = true;
+				}
+			}
+		}
+	}
+	return new Map([...canonical].map(([value]) => [value, root(value)]));
+}
+
 export function coreTerminatorEdges(
 	terminator: CoreFunction["blocks"][number]["terminator"],
 ): ReadonlyArray<CoreEdge> {

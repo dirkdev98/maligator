@@ -3,7 +3,11 @@ import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
 } from "./compiler-instruction.ts";
-import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreCanonicalValueRoots,
+	coreTerminatorEdges,
+} from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import type { CoreAllocatedRegion } from "./core-ir-regions.ts";
 import { verifyCoreFunction } from "./core-ir-verifier.ts";
@@ -313,6 +317,7 @@ export function coreRegisterClasses(
 				return [];
 		}
 	};
+	const blockTerminatorValues = core.blocks.map(terminatorValues);
 	for (const block of core.blocks) {
 		const blockUses = uses[block.id]!;
 		const blockDefinitions = definitions[block.id]!;
@@ -324,7 +329,7 @@ export function coreRegisterClasses(
 			for (const input of instruction.inputs) addUse(input);
 			for (const output of instruction.outputs) blockDefinitions.add(output);
 		}
-		for (const value of terminatorValues(block)) addUse(value);
+		for (const value of blockTerminatorValues[block.id]!) addUse(value);
 		for (const argument of block.handler?.arguments ?? []) addUse(argument);
 		for (const edge of coreTerminatorEdges(block.terminator)) {
 			successors[block.id]!.add(edge.block);
@@ -357,42 +362,80 @@ export function coreRegisterClasses(
 			}
 		}
 	}
-	const interference = new Map<CoreValueId, Set<CoreValueId>>(
-		core.values.map(({ id }) => [id, new Set()]),
+	// Target edge lowering emits parallel copies for distinct block arguments. Moves
+	// and single-source ordinary phis are semantic aliases, however, and must retain
+	// one register both to erase their redundant copies and to preserve region
+	// contracts selected over canonical values. Allocate those canonical classes as
+	// conservative live intervals. This avoids the dense pairwise interference graph
+	// that made large self-hosted functions quadratic while preserving the safety
+	// rule that unrelated values whose lifetimes can overlap never share a register.
+	interface LiveInterval {
+		readonly value: CoreValueId;
+		start: number;
+		end: number;
+	}
+	const intervals = new Map<CoreValueId, LiveInterval>(
+		core.values.map(({ id }) => [
+			id,
+			{ value: id, start: Number.POSITIVE_INFINITY, end: Number.NEGATIVE_INFINITY },
+		]),
 	);
-	const interfere = (left: CoreValueId, right: CoreValueId): void => {
-		if (left === right) return;
-		interference.get(left)!.add(right);
-		interference.get(right)!.add(left);
+	const touch = (value: CoreValueId, position: number): void => {
+		const interval = intervals.get(value);
+		if (interval === undefined) throw new Error(`Core allocation lost value %${value}`);
+		interval.start = Math.min(interval.start, position);
+		interval.end = Math.max(interval.end, position);
 	};
+	let nextPosition = 0;
 	for (const block of core.blocks) {
-		const live = new Set(liveOut[block.id]);
-		for (const value of terminatorValues(block)) live.add(value);
-		// Register lowering materializes the exceptional edge before entering the
-		// protected block: handler arguments are copied into the handler's explicit
-		// parameter registers immediately after tryBegin. Those destination values
-		// must then survive every instruction that may transfer to the handler.
-		for (const parameter of handlerParameters(block)) live.add(parameter);
-		for (let index = block.instructions.length - 1; index >= 0; index--) {
-			const instruction = block.instructions[index]!;
-			for (const output of instruction.outputs) {
-				for (const value of live) interfere(output, value);
-			}
-			for (const left of instruction.outputs) {
-				for (const right of instruction.outputs) interfere(left, right);
-				live.delete(left);
-			}
-			for (const input of instruction.inputs) live.add(input);
+		const blockStart = nextPosition++;
+		for (const { value } of block.parameters) touch(value, blockStart);
+		for (const value of liveIn[block.id]!) touch(value, blockStart);
+		for (const instruction of block.instructions) {
+			const position = nextPosition++;
+			for (const input of instruction.inputs) touch(input, position);
+			for (const output of instruction.outputs) touch(output, position);
 		}
-		for (const { value } of block.parameters) {
-			for (const liveValue of live) interfere(value, liveValue);
-			for (const { value: other } of block.parameters) interfere(value, other);
+		const blockEnd = nextPosition++;
+		for (const value of blockTerminatorValues[block.id]!) touch(value, blockEnd);
+		for (const argument of block.handler?.arguments ?? []) touch(argument, blockEnd);
+		for (const value of liveOut[block.id]!) touch(value, blockEnd);
+		// Handler parameters are initialized before the protected block executes and
+		// must remain intact at every instruction that can transfer to the handler.
+		for (const parameter of handlerParameters(block)) {
+			touch(parameter, blockStart);
+			touch(parameter, blockEnd);
 		}
 	}
-	const parent = new Map<CoreValueId, CoreValueId>(core.values.map(({ id }) => [id, id]));
-	const members = new Map<CoreValueId, Set<CoreValueId>>(
-		core.values.map(({ id }) => [id, new Set([id])]),
-	);
+	for (const interval of intervals.values()) {
+		if (!Number.isFinite(interval.start)) {
+			throw new Error(`Core allocation found unused value %${interval.value}`);
+		}
+	}
+	const controlFlow = buildCoreControlFlow(core, coreOpcodeRegistry);
+	const semanticRoots = coreCanonicalValueRoots(core, controlFlow);
+	const classRootByKey = new Map<string, CoreValueId>();
+	const roots = new Map<CoreValueId, CoreValueId>();
+	for (const { id, representation } of core.values) {
+		const key = `${semanticRoots.get(id)!}:${representation}`;
+		let root = classRootByKey.get(key);
+		if (root === undefined) {
+			root = id;
+			classRootByKey.set(key, root);
+		}
+		roots.set(id, root);
+	}
+	const classIntervals = new Map<CoreValueId, LiveInterval>();
+	for (const interval of intervals.values()) {
+		const root = roots.get(interval.value)!;
+		const existing = classIntervals.get(root);
+		if (existing === undefined) {
+			classIntervals.set(root, { ...interval, value: root });
+		} else {
+			existing.start = Math.min(existing.start, interval.start);
+			existing.end = Math.max(existing.end, interval.end);
+		}
+	}
 	const abi = new Map<CoreValueId, number>(
 		core.parameters.map((value, index) => [value, index]),
 	);
@@ -409,118 +452,210 @@ export function coreRegisterClasses(
 			abi.set(output, core.parameters.length + snapshotIndex++);
 		}
 	}
-	const find = (value: CoreValueId): CoreValueId => {
-		const direct = parent.get(value)!;
-		if (direct === value) return value;
-		const root = find(direct);
-		parent.set(value, root);
-		return root;
-	};
-	const union = (left: CoreValueId, right: CoreValueId): boolean => {
-		const leftRoot = find(left);
-		const rightRoot = find(right);
-		if (leftRoot === rightRoot) return true;
-		if (representations.get(leftRoot) !== representations.get(rightRoot)) return false;
-		const leftAbi = [...members.get(leftRoot)!].flatMap((value) =>
-			abi.has(value) ? [abi.get(value)!] : [],
-		);
-		const rightAbi = [...members.get(rightRoot)!].flatMap((value) =>
-			abi.has(value) ? [abi.get(value)!] : [],
-		);
-		if (leftAbi.length > 0 && rightAbi.length > 0 && leftAbi[0] !== rightAbi[0]) {
-			return false;
+	const abiRoots = new Map<CoreValueId, number>();
+	for (const [value, color] of abi) {
+		const root = roots.get(value)!;
+		const existing = abiRoots.get(root);
+		if (existing !== undefined && existing !== color) {
+			throw new Error(`Core canonical class %${root} spans ABI registers`);
 		}
-		if (
-			[...members.get(leftRoot)!].some((leftValue) =>
-				[...members.get(rightRoot)!].some((rightValue) =>
-					interference.get(leftValue)!.has(rightValue),
-				),
-			)
-		) {
-			return false;
-		}
-		parent.set(rightRoot, leftRoot);
-		for (const value of members.get(rightRoot)!) members.get(leftRoot)!.add(value);
-		members.delete(rightRoot);
-		return true;
+		abiRoots.set(root, color);
+	}
+	const copyPartners = new Map<CoreValueId, Set<CoreValueId>>();
+	const copyPairKey = (left: CoreValueId, right: CoreValueId): string =>
+		left < right ? `${left}:${right}` : `${right}:${left}`;
+	const addCopyCandidate = (leftValue: CoreValueId, rightValue: CoreValueId): void => {
+		const left = roots.get(leftValue)!;
+		const right = roots.get(rightValue)!;
+		if (left === right || representations.get(left) !== representations.get(right))
+			return;
+		const leftPartners = copyPartners.get(left) ?? new Set<CoreValueId>();
+		leftPartners.add(right);
+		copyPartners.set(left, leftPartners);
+		const rightPartners = copyPartners.get(right) ?? new Set<CoreValueId>();
+		rightPartners.add(left);
+		copyPartners.set(right, rightPartners);
 	};
 	for (const block of core.blocks) {
-		if (block.id === core.entry || block.parameters[0]?.role === "exception") continue;
-		for (const [index, parameter] of block.parameters.entries()) {
-			const arguments_ = core.blocks.flatMap((predecessor) =>
-				coreTerminatorEdges(predecessor.terminator)
-					.filter((edge) => edge.block === block.id)
-					.map((edge) => edge.arguments[index]!),
-			);
-			for (const argument of arguments_) union(parameter.value, argument);
+		for (const edge of controlFlow.predecessors[block.id]!) {
+			if (edge.kind !== "ordinary") continue;
+			for (const [index, parameter] of block.parameters.entries()) {
+				const argument = edge.arguments[index];
+				if (argument !== undefined) addCopyCandidate(parameter.value, argument);
+			}
+		}
+		for (const instruction of block.instructions) {
+			const output = instruction.outputs[0];
+			if (
+				output === undefined ||
+				instruction.outputs.length !== 1 ||
+				(instruction.opcode !== "unary" && instruction.opcode !== "binary")
+			) {
+				continue;
+			}
+			for (const input of instruction.inputs) addCopyCandidate(output, input);
 		}
 	}
-	const roots = new Map<CoreValueId, CoreValueId>(
-		core.values.map(({ id }) => [id, find(id)]),
-	);
-	const rootInterference = new Map<CoreValueId, Set<CoreValueId>>();
-	for (const root of new Set(roots.values())) rootInterference.set(root, new Set());
-	for (const [value, neighbors] of interference) {
-		const root = find(value);
-		for (const neighbor of neighbors) {
-			const neighborRoot = find(neighbor);
-			if (neighborRoot !== root) rootInterference.get(root)!.add(neighborRoot);
+	// Interference is only needed for optional edge-copy preferences. Check that
+	// sparse candidate set against exact reverse liveness instead of materializing
+	// every pair in the function.
+	const conflictingCopyPairs = new Set<string>();
+	for (const block of core.blocks) {
+		const live = new Set<CoreValueId>();
+		const liveRootCounts = new Map<CoreValueId, number>();
+		const addLive = (value: CoreValueId): void => {
+			if (live.has(value)) return;
+			live.add(value);
+			const root = roots.get(value)!;
+			liveRootCounts.set(root, (liveRootCounts.get(root) ?? 0) + 1);
+		};
+		const removeLive = (value: CoreValueId): void => {
+			if (!live.delete(value)) return;
+			const root = roots.get(value)!;
+			const remaining = liveRootCounts.get(root)! - 1;
+			if (remaining === 0) liveRootCounts.delete(root);
+			else liveRootCounts.set(root, remaining);
+		};
+		const markLiveConflicts = (value: CoreValueId): void => {
+			const root = roots.get(value)!;
+			for (const partner of copyPartners.get(root) ?? []) {
+				if ((liveRootCounts.get(partner) ?? 0) > 0) {
+					conflictingCopyPairs.add(copyPairKey(root, partner));
+				}
+			}
+		};
+		for (const value of liveOut[block.id]!) addLive(value);
+		for (const value of blockTerminatorValues[block.id]!) addLive(value);
+		for (const parameter of handlerParameters(block)) addLive(parameter);
+		for (let index = block.instructions.length - 1; index >= 0; index--) {
+			const instruction = block.instructions[index]!;
+			for (const output of instruction.outputs) markLiveConflicts(output);
+			for (const [outputIndex, output] of instruction.outputs.entries()) {
+				for (const other of instruction.outputs.slice(outputIndex + 1)) {
+					const left = roots.get(output)!;
+					const right = roots.get(other)!;
+					if (copyPartners.get(left)?.has(right) === true) {
+						conflictingCopyPairs.add(copyPairKey(left, right));
+					}
+				}
+				removeLive(output);
+			}
+			for (const input of instruction.inputs) addLive(input);
+		}
+		for (const { value } of block.parameters) markLiveConflicts(value);
+		for (const [parameterIndex, parameter] of block.parameters.entries()) {
+			for (const other of block.parameters.slice(parameterIndex + 1)) {
+				const left = roots.get(parameter.value)!;
+				const right = roots.get(other.value)!;
+				if (copyPartners.get(left)?.has(right) === true) {
+					conflictingCopyPairs.add(copyPairKey(left, right));
+				}
+			}
 		}
 	}
+	const copyCompatible = (left: CoreValueId, right: CoreValueId): boolean =>
+		left === right ||
+		(copyPartners.get(left)?.has(right) === true &&
+			!conflictingCopyPairs.has(copyPairKey(left, right)));
 	const registers = new Map<CoreValueId, number>();
 	const colorRepresentations = new Map<number, CoreRepresentation>();
-	for (const [value, color] of abi) {
-		const root = find(value);
-		const existing = registers.get(root);
-		if (existing !== undefined && existing !== color) {
-			throw new Error(`Core ABI values with distinct slots merged at %${root}`);
-		}
+	for (const [root, color] of abiRoots) {
 		registers.set(root, color);
 		colorRepresentations.set(color, representations.get(root)!);
 	}
 	let nextUniqueColor = Math.max(-1, ...registers.values()) + 1;
-	const orderedRoots = [...rootInterference.keys()].sort(
+	const orderedIntervals = [...classIntervals.values()].sort(
 		(left, right) =>
-			(rootInterference.get(right)?.size ?? 0) -
-				(rootInterference.get(left)?.size ?? 0) || left - right,
+			left.start - right.start || left.end - right.end || left.value - right.value,
 	);
-	for (const root of orderedRoots) {
-		if (registers.has(root)) continue;
-		const representation = representations.get(root)!;
+	const abiIntervals = new Map<number, LiveInterval>();
+	const abiRootByColor = new Map<number, CoreValueId>();
+	for (const [root, color] of abiRoots)
+		abiIntervals.set(color, classIntervals.get(root)!);
+	for (const [root, color] of abiRoots) abiRootByColor.set(color, root);
+	let active: Array<LiveInterval> = [];
+	for (const interval of orderedIntervals) {
+		active = active.filter((candidate) => candidate.end >= interval.start);
+		const fixedColor = abiRoots.get(interval.value);
+		if (fixedColor !== undefined) {
+			if (
+				active.some(
+					(candidate) =>
+						registers.get(candidate.value) === fixedColor &&
+						!copyCompatible(candidate.value, interval.value),
+				)
+			) {
+				throw new Error(`Core ABI register r${fixedColor} overlaps another live value`);
+			}
+			active.push(interval);
+			continue;
+		}
+		const representation = representations.get(interval.value)!;
 		if (!reuseRegisters) {
-			registers.set(root, nextUniqueColor);
+			registers.set(interval.value, nextUniqueColor);
 			colorRepresentations.set(nextUniqueColor, representation);
 			nextUniqueColor++;
+			active.push(interval);
 			continue;
 		}
 		const unavailable = new Set(
-			[...(rootInterference.get(root) ?? [])].flatMap((neighbor) => {
-				const color = registers.get(neighbor);
-				return color === undefined ? [] : [color];
-			}),
+			active.map((candidate) => registers.get(candidate.value)!),
 		);
-		let color = 0;
-		while (
-			unavailable.has(color) ||
-			(colorRepresentations.has(color) &&
-				colorRepresentations.get(color) !== representation)
-		) {
-			color++;
+		const preferredColor = [...(copyPartners.get(interval.value) ?? [])]
+			.map((partner) => registers.get(partner))
+			.find((candidate): candidate is number => {
+				if (candidate === undefined) return false;
+				if (colorRepresentations.get(candidate) !== representation) return false;
+				if (
+					active.some(
+						(activeInterval) =>
+							registers.get(activeInterval.value) === candidate &&
+							!copyCompatible(interval.value, activeInterval.value),
+					)
+				) {
+					return false;
+				}
+				const abiInterval = abiIntervals.get(candidate);
+				const abiRoot = abiRootByColor.get(candidate);
+				return (
+					abiInterval === undefined ||
+					abiInterval.end < interval.start ||
+					interval.end < abiInterval.start ||
+					(abiRoot !== undefined && copyCompatible(interval.value, abiRoot))
+				);
+			});
+		let color = preferredColor ?? 0;
+		if (preferredColor === undefined) {
+			while (
+				unavailable.has(color) ||
+				(colorRepresentations.has(color) &&
+					colorRepresentations.get(color) !== representation) ||
+				(abiIntervals.has(color) &&
+					abiIntervals.get(color)!.start <= interval.end &&
+					interval.start <= abiIntervals.get(color)!.end)
+			) {
+				color++;
+			}
 		}
-		registers.set(root, color);
+		registers.set(interval.value, color);
 		colorRepresentations.set(color, representation);
 		nextUniqueColor = Math.max(nextUniqueColor, color + 1);
+		active.push(interval);
 	}
 	const gcRootValues = new Set<CoreValueId>();
-	const loopBackedges = new Set(
-		buildCoreControlFlow(core, coreOpcodeRegistry).loops.map(({ backedge }) => backedge),
-	);
+	const loopBackedges = new Set(controlFlow.loops.map(({ backedge }) => backedge));
 	for (const block of core.blocks) {
 		const live = new Set(liveOut[block.id]);
+		// Successor liveness is expressed in the successor's SSA parameters, while
+		// values consumed by this block's outgoing edges and exceptional edge are
+		// local operands. Seed the reverse walk with those operands so a preceding
+		// safepoint roots values whose only later use is an edge copy or handler copy.
+		for (const value of blockTerminatorValues[block.id]!) live.add(value);
+		for (const value of block.handler?.arguments ?? []) live.add(value);
 		for (const parameter of handlerParameters(block)) live.add(parameter);
 		if (loopBackedges.has(block.id)) {
 			for (const value of live) gcRootValues.add(value);
-			for (const value of terminatorValues(block)) gcRootValues.add(value);
+			for (const value of blockTerminatorValues[block.id]!) gcRootValues.add(value);
 		}
 		for (let index = block.instructions.length - 1; index >= 0; index--) {
 			const instruction = block.instructions[index]!;
@@ -540,7 +675,7 @@ export function coreRegisterClasses(
 		}
 	}
 	const gcRootRegisters = [
-		...new Set([...gcRootValues].map((value) => registers.get(find(value))!)),
+		...new Set([...gcRootValues].map((value) => registers.get(roots.get(value)!)!)),
 	].sort((left, right) => left - right);
 	return {
 		roots,

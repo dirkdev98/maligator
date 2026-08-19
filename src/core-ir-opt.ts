@@ -16,7 +16,11 @@ import {
 	knownFact,
 	sourceSiteId,
 } from "./compiler-facts.ts";
-import { buildCoreControlFlow, coreTerminatorEdges } from "./core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreCanonicalValueRoots,
+	coreTerminatorEdges,
+} from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { removeUnreachableCoreBlocks } from "./core-ir-normalize.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
@@ -258,7 +262,7 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 		const compilation = program.compilation;
 		if (compilation === undefined) return fn;
 		const definitions = new Map<CoreValueId, CoreInstruction>();
-		const canonical = coreCanonicalValues(fn, analyses.controlFlow(fn));
+		const canonical = coreCanonicalValueRoots(fn, analyses.controlFlow(fn));
 		const representations = new Map(
 			fn.values.map(({ id, representation }) => [id, representation]),
 		);
@@ -492,72 +496,6 @@ function functionDefinitions(fn: CoreFunction): Map<CoreValueId, CoreInstruction
 		}
 	}
 	return definitions;
-}
-
-/** Canonical producer identity through moves and all-ordinary single-value phis. */
-function coreCanonicalValues(
-	fn: CoreFunction,
-	cfg: CoreControlFlow,
-): ReadonlyMap<CoreValueId, CoreValueId> {
-	const canonical = new Map(fn.values.map(({ id }) => [id, id] as const));
-	const root = (value: CoreValueId): CoreValueId => {
-		let current = value;
-		const seen = new Set<CoreValueId>();
-		while (!seen.has(current)) {
-			seen.add(current);
-			const next = canonical.get(current);
-			if (next === undefined || next === current) break;
-			current = next;
-		}
-		return current;
-	};
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (
-					instruction.opcode !== "move" ||
-					instruction.inputs.length !== 1 ||
-					instruction.outputs.length !== 1
-				) {
-					continue;
-				}
-				const output = instruction.outputs[0]!;
-				const source = root(instruction.inputs[0]!);
-				if (root(output) !== source) {
-					canonical.set(output, source);
-					changed = true;
-				}
-			}
-			const incoming = cfg.predecessors[block.id]!;
-			if (incoming.length === 0 || incoming.some(({ kind }) => kind !== "ordinary")) {
-				continue;
-			}
-			for (const [index, parameter] of block.parameters.entries()) {
-				const current = root(parameter.value);
-				const externalSources = new Set<CoreValueId>();
-				let complete = true;
-				for (const edge of incoming) {
-					const argument = edge.arguments[index];
-					if (argument === undefined) {
-						complete = false;
-						break;
-					}
-					const source = root(argument);
-					// A loop-carried copy cycle contributes no new value. Collapse the
-					// cycle only when every value entering it from outside has one root.
-					if (source !== current) externalSources.add(source);
-				}
-				if (complete && externalSources.size === 1) {
-					const source = externalSources.values().next().value!;
-					canonical.set(parameter.value, source);
-					changed = true;
-				}
-			}
-		}
-	}
-	return new Map([...canonical].map(([value]) => [value, root(value)]));
 }
 
 function capturedStoreValues(fn: CoreFunction): Map<string, CoreValueId> {
@@ -2085,7 +2023,7 @@ const annotateBoundedStringCharCodeAtPositions: CoreFunctionPass = {
 	name: "annotate-bounded-string-char-code-at-positions",
 	run(fn, analyses, program) {
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValues(fn, cfg);
+		const canonical = coreCanonicalValueRoots(fn, cfg);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -2242,7 +2180,7 @@ const selectRegExpExecProjectionRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValues(fn, cfg);
+		const canonical = coreCanonicalValueRoots(fn, cfg);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -2774,7 +2712,7 @@ const selectRegExpIteratorProjectionRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValues(fn, cfg);
+		const canonical = coreCanonicalValueRoots(fn, cfg);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -3001,7 +2939,7 @@ const selectStringSplitCursorRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValues(fn, cfg);
+		const canonical = coreCanonicalValueRoots(fn, cfg);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -3402,7 +3340,7 @@ const selectStringSplitProjectionRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const cfg = analyses.controlFlow(fn);
-		const canonical = coreCanonicalValues(fn, cfg);
+		const canonical = coreCanonicalValueRoots(fn, cfg);
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const definitions = functionDefinitions(fn);
 		const locations = new Map<
@@ -3668,7 +3606,7 @@ const selectStringSliceNumberRegions: CoreFunctionPass = {
 			return fn;
 		}
 		const definitions = functionDefinitions(fn);
-		const canonical = coreCanonicalValues(fn, analyses.controlFlow(fn));
+		const canonical = coreCanonicalValueRoots(fn, analyses.controlFlow(fn));
 		const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 		const uses = new Map<
 			CoreValueId,
@@ -4323,7 +4261,7 @@ const foldStaticPropertyKeys: CoreFunctionPass = {
 	name: "fold-static-property-keys",
 	ablation: "static-properties",
 	run(fn, analyses) {
-		const canonical = coreCanonicalValues(fn, analyses.controlFlow(fn));
+		const canonical = coreCanonicalValueRoots(fn, analyses.controlFlow(fn));
 		const strings = new Map<CoreValueId, number>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
