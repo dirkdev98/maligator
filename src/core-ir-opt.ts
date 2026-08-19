@@ -393,8 +393,33 @@ function rewriteFunction(
 	};
 }
 
+function stableAttributeValue(value: unknown): string {
+	if (value === undefined) return "u";
+	if (value === null) return "n";
+	if (typeof value === "boolean") return value ? "b1" : "b0";
+	if (typeof value === "number") {
+		if (Number.isNaN(value)) return "dNaN";
+		if (Object.is(value, -0)) return "d-0";
+		if (value === Number.POSITIVE_INFINITY) return "d+Inf";
+		if (value === Number.NEGATIVE_INFINITY) return "d-Inf";
+		return `d${value}`;
+	}
+	if (typeof value === "string") return `s${JSON.stringify(value)}`;
+	if (Array.isArray(value)) {
+		const arrayValue: ReadonlyArray<unknown> = value;
+		return `[${arrayValue.map(stableAttributeValue).join(",")}]`;
+	}
+	if (typeof value === "object") {
+		return `{${Object.entries(value)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, entry]) => `${JSON.stringify(key)}:${stableAttributeValue(entry)}`)
+			.join(",")}}`;
+	}
+	throw new Error(`Unsupported Core attribute key value ${typeof value}`);
+}
+
 function stableAttributes(instruction: CoreInstruction): string {
-	return JSON.stringify(instruction.attributes);
+	return stableAttributeValue(instruction.attributes);
 }
 
 function constantImmediate(instruction: CoreInstruction): CoreImmediate | undefined {
@@ -429,6 +454,246 @@ function constantImmediate(instruction: CoreInstruction): CoreImmediate | undefi
 			return undefined;
 	}
 }
+
+function primitiveTruthy(value: CoreImmediate): boolean | undefined {
+	switch (value.kind) {
+		case "undefined":
+		case "null":
+			return false;
+		case "boolean":
+			return value.value;
+		case "number":
+			return value.value !== 0 && !Number.isNaN(value.value);
+		case "string":
+			return undefined;
+	}
+}
+
+function primitiveNumber(value: CoreImmediate): number | undefined {
+	switch (value.kind) {
+		case "undefined":
+			return Number.NaN;
+		case "null":
+			return 0;
+		case "boolean":
+			return value.value ? 1 : 0;
+		case "number":
+			return value.value;
+		case "string":
+			return undefined;
+	}
+}
+
+function foldUnaryPrimitive(
+	operator: unknown,
+	operand: CoreImmediate,
+): CoreImmediate | undefined {
+	switch (operator) {
+		case "!": {
+			const truthy = primitiveTruthy(operand);
+			return truthy === undefined ? undefined : { kind: "boolean", value: !truthy };
+		}
+		case "+":
+		case "-":
+		case "~": {
+			const numeric = primitiveNumber(operand);
+			if (numeric === undefined) return undefined;
+			return {
+				kind: "number",
+				value: operator === "+" ? numeric : operator === "-" ? -numeric : ~numeric,
+			};
+		}
+		default:
+			return undefined;
+	}
+}
+
+function foldNumericBinary(
+	operator: unknown,
+	left: number,
+	right: number,
+): CoreImmediate | undefined {
+	switch (operator) {
+		case "+":
+			return { kind: "number", value: left + right };
+		case "-":
+			return { kind: "number", value: left - right };
+		case "*":
+			return { kind: "number", value: left * right };
+		case "/":
+			return { kind: "number", value: left / right };
+		case "%":
+			return { kind: "number", value: left % right };
+		case "&":
+			return { kind: "number", value: left & right };
+		case "|":
+			return { kind: "number", value: left | right };
+		case "^":
+			return { kind: "number", value: left ^ right };
+		case "<<":
+			return { kind: "number", value: left << right };
+		case ">>":
+			return { kind: "number", value: left >> right };
+		case ">>>":
+			return { kind: "number", value: left >>> right };
+		case "<":
+			return { kind: "boolean", value: left < right };
+		case "<=":
+			return { kind: "boolean", value: left <= right };
+		case ">":
+			return { kind: "boolean", value: left > right };
+		case ">=":
+			return { kind: "boolean", value: left >= right };
+		case "==":
+		case "===":
+			return { kind: "boolean", value: left === right };
+		case "!=":
+		case "!==":
+			return { kind: "boolean", value: left !== right };
+		default:
+			// Exponentiation remains runtime-evaluated so host/self-host compilers
+			// cannot disagree on serialized transcendental f64 bits.
+			return undefined;
+	}
+}
+
+function foldPrimitiveBinary(
+	operator: unknown,
+	left: CoreImmediate,
+	right: CoreImmediate,
+): CoreImmediate | undefined {
+	if (left.kind === "number" && right.kind === "number") {
+		return foldNumericBinary(operator, left.value, right.value);
+	}
+	if (operator !== "===" && operator !== "!==" && operator !== "==" && operator !== "!=") {
+		return undefined;
+	}
+	const loose = operator === "==" || operator === "!=";
+	let equal = false;
+	if (left.kind === right.kind) {
+		equal = immediateStrictEquals(left, right);
+	} else if (loose) {
+		if (
+			(left.kind === "null" && right.kind === "undefined") ||
+			(left.kind === "undefined" && right.kind === "null")
+		) {
+			equal = true;
+		} else {
+			const leftNumber = primitiveNumber(left);
+			const rightNumber = primitiveNumber(right);
+			equal =
+				leftNumber !== undefined &&
+				rightNumber !== undefined &&
+				leftNumber === rightNumber;
+		}
+	}
+	return {
+		kind: "boolean",
+		value: operator === "!==" || operator === "!=" ? !equal : equal,
+	};
+}
+
+function foldedInstruction(
+	instruction: CoreInstruction,
+	value: CoreImmediate,
+): { readonly instruction: CoreInstruction; readonly representation: "boxed" | "f64" | "boolean" } | undefined {
+	const common = {
+		...instruction,
+		inputs: [],
+	};
+	switch (value.kind) {
+		case "undefined":
+			return {
+				instruction: { ...common, opcode: "createUndefined", attributes: {} },
+				representation: "boxed",
+			};
+		case "null":
+			return {
+				instruction: { ...common, opcode: "createNull", attributes: {} },
+				representation: "boxed",
+			};
+		case "boolean":
+			return {
+				instruction: {
+					...common,
+					opcode: "createBoolean",
+					attributes: { value: value.value },
+				},
+				representation: "boolean",
+			};
+		case "number":
+			return {
+				instruction: {
+					...common,
+					opcode: "createF64",
+					attributes: { value: value.value },
+				},
+				representation: "f64",
+			};
+		case "string":
+			return undefined;
+	}
+}
+
+const foldPrimitiveConstants: CoreFunctionPass = {
+	name: "fold-primitive-constants",
+	ablation: "constant-folding",
+	run(fn) {
+		const constants = new Map<CoreValueId, CoreImmediate>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.outputs.length !== 1) continue;
+				const value = constantImmediate(instruction);
+				if (value !== undefined) constants.set(instruction.outputs[0]!, value);
+			}
+		}
+		const representations = new Map<CoreValueId, "boxed" | "f64" | "boolean">();
+		let changed = false;
+		const blocks = fn.blocks.map((block): CoreBlock => ({
+			...block,
+			instructions: block.instructions.map((instruction) => {
+				if (instruction.outputs.length !== 1) return instruction;
+				let result: CoreImmediate | undefined;
+				if (instruction.opcode === "unary" && instruction.inputs.length === 1) {
+					const operand = constants.get(instruction.inputs[0]!);
+					if (operand !== undefined) {
+						result = foldUnaryPrimitive(
+							instructionAttribute(instruction, "operator"),
+							operand,
+						);
+					}
+				} else if (instruction.opcode === "binary" && instruction.inputs.length === 2) {
+					const left = constants.get(instruction.inputs[0]!);
+					const right = constants.get(instruction.inputs[1]!);
+					if (left !== undefined && right !== undefined) {
+						result = foldPrimitiveBinary(
+							instructionAttribute(instruction, "operator"),
+							left,
+							right,
+						);
+					}
+				}
+				if (result === undefined) return instruction;
+				const replacement = foldedInstruction(instruction, result);
+				if (replacement === undefined) return instruction;
+				changed = true;
+				constants.set(instruction.outputs[0]!, result);
+				representations.set(instruction.outputs[0]!, replacement.representation);
+				return replacement.instruction;
+			}),
+		}));
+		if (!changed) return fn;
+		return {
+			...fn,
+			blocks,
+			values: fn.values.map((value) => {
+				const representation = representations.get(value.id);
+				return representation === undefined ? value : { ...value, representation };
+			}),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
 
 function immediateTruthiness(value: CoreImmediate): boolean | undefined {
 	switch (value.kind) {
@@ -775,6 +1040,7 @@ const deadInstructionElimination: CoreFunctionPass = {
 
 const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
+	foldPrimitiveConstants,
 	simplifyControlFlow,
 	foldStaticPropertyKeys,
 	copyAndValueNumber,

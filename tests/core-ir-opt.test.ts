@@ -75,6 +75,40 @@ describe("Core IR optimizer", () => {
 		expect(opcodes).toContain("loadPropertyStatic");
 	});
 
+	it("folds primitive arithmetic with exact f64 edge semantics", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [zero] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 0 },
+			outputRepresentations: ["f64"],
+		});
+		const [one] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 1 },
+			outputRepresentations: ["f64"],
+		});
+		const [nan] = builder.appendInstruction(entry, "binary", [zero!, zero!], {
+			attributes: { operator: "/" },
+		});
+		const [infinity] = builder.appendInstruction(entry, "binary", [one!, zero!], {
+			attributes: { operator: "/" },
+		});
+		const [equal] = builder.appendInstruction(entry, "binary", [nan!, infinity!], {
+			attributes: { operator: "===" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: equal! });
+
+		const fn = executeCoreOptimizations(
+			coreProgram([builder.finish(entry)]),
+		).program.functions[0]!;
+		expect(fn.blocks[0]!.instructions).toHaveLength(1);
+		expect(fn.blocks[0]!.instructions[0]).toMatchObject({
+			opcode: "createBoolean",
+			attributes: { value: false },
+		});
+		expect(fn.values.find(({ id }) => id === equal)?.representation).toBe("boolean");
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
 	it("folds primitive control and removes unreachable blocks", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const entry = builder.createBlock();
