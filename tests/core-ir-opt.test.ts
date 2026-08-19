@@ -177,6 +177,40 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("does not inline an activation whose bindings escape into an inner closure", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function outer(input) {
+				function valuesOf(value) {
+					return Object.keys(value).map((key) => value[key]);
+				}
+				return valuesOf(input);
+			}`,
+			"core-inline-captured-activation.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			profile: true,
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const outer = optimized!.functions[1]!;
+		expect(
+			outer.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(({ opcode }) => opcode === "call"),
+		).toBe(true);
+		expect(optimized!.compilation?.optimizationDecisions).toContainEqual(
+			expect.objectContaining({
+				functionIndex: 1,
+				code: "optimization.declined.inner-closure",
+				outcome: "declined",
+				reason: "inner-closure",
+			}),
+		);
+	});
+
 	it("selects a fixed-shape Core stack object with explicit materialization", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function choose(value, escape) {

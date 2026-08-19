@@ -449,6 +449,7 @@ const INLINE_DISQUALIFYING_OPCODES = new Set([
 	"loadThis",
 	"loadNewTarget",
 	"loadCallee",
+	"createFunction",
 	"createArgumentsObject",
 	"createRestArguments",
 	"withEnter",
@@ -847,7 +848,14 @@ function annotateCoreDirectCallTargets(program: CoreProgram): InlineProgramResul
 }
 
 function linearInlineTarget(target: CoreFunction): LinearInlineTarget | undefined {
-	if (target.isGenerator || target.isAsync || target.regions.length > 0) return undefined;
+	if (
+		target.isGenerator ||
+		target.isAsync ||
+		target.metadata.capturedCount > 0 ||
+		target.regions.length > 0
+	) {
+		return undefined;
+	}
 	const blocks: Array<CoreBlock> = [];
 	const visited = new Set<CoreBlockId>();
 	let block = target.blocks[target.entry];
