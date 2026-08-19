@@ -211,14 +211,14 @@ describe("parseCliArgs", () => {
 			"--serialize",
 			"fixture.malw",
 			"--no-compiled",
-			"--dump-escape",
+			"--dump-core",
 		]);
 		expect(command).toMatchObject({
 			kind: "build",
 			internal: {
 				serializePath: "fixture.malw",
 				compiled: false,
-				dumpEscape: true,
+				dumpCore: true,
 			},
 		});
 	});

@@ -7,9 +7,9 @@ import {
 	intermediateProgramToCore,
 } from "./core-ir-bridge.ts";
 import { executeCoreOptimizations } from "./core-ir-opt.ts";
+import type { CoreProgram } from "./core-ir.ts";
 import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
-import type { IntermediateProgram } from "./ir.ts";
 import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import { allocateDevelopmentRegisters, allocateRegisters } from "./register-alloc.ts";
@@ -30,12 +30,12 @@ export interface CompileCoreOptions {
 	profile?: boolean;
 	/** Bounded pass groups disabled only for controlled attribution builds. */
 	optimizationAblations?: ReadonlySet<OptimizationAblation>;
-	ir?: {
+	semanticLowering?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
 	};
-	afterOptimization?: (program: IntermediateProgram) => void;
+	afterCoreOptimization?: (program: CoreProgram) => void;
 	runPhase?: <T>(phase: CompileCorePhase, run: () => T) => T;
 }
 
@@ -48,7 +48,7 @@ export function compileSemanticProgramToVmDefinition(
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
 	const ir = runPhase("lower semantic program", () =>
 		compileSemanticProgramToIr(semantic, {
-			...options.ir,
+			...options.semanticLowering,
 			collectOptimizationDiagnostics: options.profile === true,
 			facts: {
 				...(options.facts ?? conservativeCompilerProgramFacts()),
@@ -67,11 +67,11 @@ export function compileSemanticProgramToVmDefinition(
 			}).program,
 		}),
 	);
+	options.afterCoreOptimization?.(optimized.core);
 	const lowered = runPhase("lower core ir", () =>
 		coreProgramToIntermediate(optimized),
 	);
 	if (options.profile === true) ensureCompilerSiteFacts(lowered);
-	options.afterOptimization?.(lowered);
 	runPhase("register allocation", () =>
 		options.optimization === "development"
 			? allocateDevelopmentRegisters(lowered)

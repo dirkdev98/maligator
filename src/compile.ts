@@ -84,7 +84,7 @@ export function compileSourceToBuffer(
 		throw new SyntaxError("'arguments' is not allowed in a class field initializer");
 	}
 	const definition = compileSemanticProgramToVmDefinition(semantic, {
-		ir: {
+		semanticLowering: {
 			evalCompletion: options.completionValue,
 			evalDirect: options.direct,
 			directEvalContext,

@@ -64,9 +64,9 @@ describe("Core IR optimizer", () => {
 		let opcodes: Array<string> = [];
 		compileSemanticProgramToVmDefinition(semantic, {
 			optimization: "development",
-			afterOptimization(program) {
+			afterCoreOptimization(program) {
 				opcodes = program.functions.flatMap((fn) =>
-					fn.blocks.flatMap((block) => block.instructions.map(({ type }) => type)),
+					fn.blocks.flatMap((block) => block.instructions.map(({ opcode }) => opcode)),
 				);
 			},
 		});

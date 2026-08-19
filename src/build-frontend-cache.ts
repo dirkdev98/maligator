@@ -25,6 +25,7 @@ import {
 import type { CompilerDiagnostic, OptimizationAblation } from "./compiler-diagnostics.ts";
 import { compilerProgramFactsFromConfig } from "./compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler-facts.ts";
+import type { CoreProgram } from "./core-ir.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
 	cacheFrontendWire,
@@ -34,7 +35,6 @@ import {
 	frontendWirePath,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
-import type { IntermediateProgram } from "./ir.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import { vmDefinitionStats } from "./lower-vm.ts";
 import type { VmDefinitionStats } from "./lower-vm.ts";
@@ -136,7 +136,7 @@ export interface CompileBuildFrontendOptions {
 	forceCompile?: boolean;
 	/** Split stable package dependencies into a separately cached development image. */
 	relocatable?: boolean;
-	afterOptimization?: (program: IntermediateProgram) => void;
+	afterCoreOptimization?: (program: CoreProgram) => void;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	/** Optional self-hosted worker command for independent dependency islands. */
 	dependencyWorker?: DependencyFragmentWorker;
@@ -643,7 +643,7 @@ function compileDefinition(
 		optimization: options.optimization,
 		optimizationAblations: options.optimizationAblations,
 		profile: options.profile,
-		afterOptimization: options.afterOptimization,
+		afterCoreOptimization: options.afterCoreOptimization,
 		runPhase(phase, run) {
 			const phaseStartedAt = Date.now();
 			try {

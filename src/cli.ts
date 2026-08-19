@@ -9,13 +9,7 @@ export interface InternalBuildOptions {
 	emitC: boolean;
 	verbose: boolean;
 	compiled: boolean;
-	dumpLiveness: boolean;
-	dumpInline: boolean;
-	dumpHof: boolean;
-	dumpSpeculative: boolean;
-	dumpMethods: boolean;
-	dumpEscape: boolean;
-	dumpStackAlloc: boolean;
+	dumpCore: boolean;
 	optimizationAblations: Array<OptimizationAblation>;
 }
 
@@ -175,13 +169,7 @@ function parseBuild(args: Array<string>): CliCommand {
 			emitC: false,
 			verbose: false,
 			compiled: true,
-			dumpLiveness: false,
-			dumpInline: false,
-			dumpHof: false,
-			dumpSpeculative: false,
-			dumpMethods: false,
-			dumpEscape: false,
-			dumpStackAlloc: false,
+			dumpCore: false,
 			optimizationAblations: [],
 		},
 	};
@@ -246,32 +234,8 @@ function parseBuild(args: Array<string>): CliCommand {
 			command.internal.compiled = false;
 			continue;
 		}
-		if (argument === "--dump-liveness") {
-			command.internal.dumpLiveness = true;
-			continue;
-		}
-		if (argument === "--dump-inline") {
-			command.internal.dumpInline = true;
-			continue;
-		}
-		if (argument === "--dump-hof") {
-			command.internal.dumpHof = true;
-			continue;
-		}
-		if (argument === "--dump-speculative") {
-			command.internal.dumpSpeculative = true;
-			continue;
-		}
-		if (argument === "--dump-methods") {
-			command.internal.dumpMethods = true;
-			continue;
-		}
-		if (argument === "--dump-escape") {
-			command.internal.dumpEscape = true;
-			continue;
-		}
-		if (argument === "--dump-stack-alloc") {
-			command.internal.dumpStackAlloc = true;
+		if (argument === "--dump-core") {
+			command.internal.dumpCore = true;
 			continue;
 		}
 		if (argument === "--ablate-optimization") {

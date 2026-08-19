@@ -45,17 +45,10 @@ import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
+import { formatCoreFunction } from "./core-ir.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
 import { emitVmTranslationUnits } from "./emit-vm.ts";
-import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
 import { cacheFrontendWire, FrontendCompilationSession } from "./frontend-cache.ts";
-import {
-	debugHofInlineSites,
-	debugInlinableCalls,
-	debugMethodInlineSites,
-	debugSpeculativeInlineSites,
-} from "./inline.ts";
-import { debugProgramLiveness } from "./liveness.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
@@ -432,15 +425,7 @@ function compileAndBuild(
 	}
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 
-	const compilerDiagnostics =
-		command.kind === "build" &&
-		(command.internal.dumpLiveness ||
-			command.internal.dumpInline ||
-			command.internal.dumpHof ||
-			command.internal.dumpSpeculative ||
-			command.internal.dumpMethods ||
-			command.internal.dumpEscape ||
-			command.internal.dumpStackAlloc);
+	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontend = reporter.phase(
 		"Compile modules",
@@ -480,27 +465,9 @@ function compileAndBuild(
 						compilerPhases.push({ phase, durationMs });
 					},
 					dependencyWorker: context.dependencyWorker,
-					afterOptimization: (irProgram) => {
-						if (command.kind === "build" && command.internal.dumpLiveness) {
-							log.info(debugProgramLiveness(irProgram));
-						}
-						if (command.kind === "build" && command.internal.dumpInline) {
-							debugInlinableCalls(irProgram);
-						}
-						if (command.kind === "build" && command.internal.dumpHof) {
-							debugHofInlineSites(irProgram);
-						}
-						if (command.kind === "build" && command.internal.dumpSpeculative) {
-							debugSpeculativeInlineSites(irProgram);
-						}
-						if (command.kind === "build" && command.internal.dumpMethods) {
-							debugMethodInlineSites(irProgram);
-						}
-						if (command.kind === "build" && command.internal.dumpEscape) {
-							dumpProgramEscape(irProgram);
-						}
-						if (command.kind === "build" && command.internal.dumpStackAlloc) {
-							dumpStackAlloc(irProgram);
+					afterCoreOptimization: (core) => {
+						if (command.kind === "build" && compilerDiagnostics) {
+							log.info(core.functions.map(formatCoreFunction).join("\n"));
 						}
 					},
 				});

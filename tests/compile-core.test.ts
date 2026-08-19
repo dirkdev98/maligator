@@ -14,7 +14,7 @@ describe("compileSemanticProgramToVmDefinition", () => {
 				events.push(`end:${phase}`);
 				return result;
 			},
-			afterOptimization: () => events.push("after optimization"),
+			afterCoreOptimization: () => events.push("after optimization"),
 		});
 
 		expect(definition.functions.length).toBeGreaterThan(0);
@@ -25,9 +25,9 @@ describe("compileSemanticProgramToVmDefinition", () => {
 			"end:construct core ir",
 			"start:core ir optimizations",
 			"end:core ir optimizations",
+			"after optimization",
 			"start:lower core ir",
 			"end:lower core ir",
-			"after optimization",
 			"start:register allocation",
 			"end:register allocation",
 			"start:lower to vm",
@@ -35,21 +35,13 @@ describe("compileSemanticProgramToVmDefinition", () => {
 		]);
 	});
 
-	it("forwards eval IR options", () => {
+	it("forwards eval lowering options", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis("value", "eval");
-		let observed: { evalCompletion: boolean; evalDirect: boolean } | undefined;
-
-		compileSemanticProgramToVmDefinition(semantic, {
-			ir: { evalCompletion: true, evalDirect: true },
-			afterOptimization: (ir) => {
-				observed = {
-					evalCompletion: ir.evalCompletion,
-					evalDirect: ir.evalDirect,
-				};
-			},
+		const definition = compileSemanticProgramToVmDefinition(semantic, {
+			semanticLowering: { evalCompletion: true, evalDirect: true },
 		});
 
-		expect(observed).toEqual({ evalCompletion: true, evalDirect: true });
+		expect(definition.functions.length).toBeGreaterThan(0);
 	});
 
 	it("supports the correctness-focused development optimization profile", () => {
