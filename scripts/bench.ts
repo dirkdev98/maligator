@@ -392,8 +392,6 @@ interface PrototypeCacheMetrics {
 	userlandEightLinkRatio: number;
 	postMutationRatio: number;
 	inheritedHits: number;
-	inheritedLoopSummaries: number;
-	inheritedLoopIterationsElided: number;
 	inheritedFills: number;
 	inheritedRejectChain: number;
 }
@@ -1724,21 +1722,7 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 		throw new Error(`instrumented prototype-cache run failed: ${stats.stderr ?? ""}`);
 	}
 	const stderr = stats.stderr ?? "";
-	const instrumentedMetrics = parsePrototypeCacheResult(
-		stats.stdout ?? "",
-		`${instrumented} (instrumented)`,
-	);
-	const inheritedLoopIterationsElided = parsePerfIcStat(
-		stderr,
-		"inherited_loop_iterations_elided",
-	);
-	const expectedElided =
-		instrumentedMetrics.measuredCalls * instrumentedMetrics.iterations;
-	if (inheritedLoopIterationsElided !== expectedElided) {
-		throw new Error(
-			`prototype-cache summarized ${inheritedLoopIterationsElided} iterations, expected ${expectedElided}`,
-		);
-	}
+	parsePrototypeCacheResult(stats.stdout ?? "", `${instrumented} (instrumented)`);
 	return {
 		iterations: mal.iterations,
 		mal,
@@ -1750,8 +1734,6 @@ function benchPrototypeCache(runs: number): PrototypeCacheMetrics {
 		userlandEightLinkRatio: mal.userlandEightLinkMs / node.userlandEightLinkMs,
 		postMutationRatio: mal.postMutationMs / node.postMutationMs,
 		inheritedHits: parsePerfIcStat(stderr, "load_inherited_hits"),
-		inheritedLoopSummaries: parsePerfIcStat(stderr, "inherited_loop_summaries"),
-		inheritedLoopIterationsElided,
 		inheritedFills: parsePerfIcStat(stderr, "inherited_fills"),
 		inheritedRejectChain: parsePerfIcStat(stderr, "inherited_reject_chain"),
 	};
@@ -2706,7 +2688,7 @@ function report(entry: BenchmarkSnapshot, previous: BenchmarkSnapshot | undefine
 			`  mutated   maligator ${phaseTime(current.mal.postMutationMs)}${delta(current.mal.postMutationMs, prior?.mal.postMutationMs)}  node ${phaseTime(current.node.postMutationMs)}  ratio ${phaseRatio(current.postMutationRatio)}x`,
 		);
 		console.log(
-			`  IC        ${current.inheritedHits} inherited hits, ${current.inheritedLoopSummaries} loop summaries / ${current.inheritedLoopIterationsElided} iterations elided, ${current.inheritedFills} fills, ${current.inheritedRejectChain} chain rejects`,
+			`  IC        ${current.inheritedHits} inherited hits, ${current.inheritedFills} fills, ${current.inheritedRejectChain} chain rejects`,
 		);
 	}
 	if (entry.gc) {

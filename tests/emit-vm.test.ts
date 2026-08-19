@@ -808,8 +808,6 @@ describe("native update-expression representation", () => {
 			loopDefinition,
 		);
 		const loopOutput = emitVmDefinition(loopDefinition, { compiled: true });
-		expect(loopOutput).not.toContain("__inherited_loop_");
-		expect(loopOutput).not.toContain("mal_perf_inherited_loop_summary");
 		expect(loopOutput).toContain("mal_vm_object_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_inherited_try_load_static(");
 

@@ -363,8 +363,6 @@
     "userlandEightLinkRatio": 0.000007595144181280293,
     "postMutationRatio": 0.000007703418985338005,
     "inheritedHits": 2811283,
-    "inheritedLoopSummaries": 2691289,
-    "inheritedLoopIterationsElided": 53825780000000,
     "inheritedFills": 10,
     "inheritedRejectChain": 0
   },
