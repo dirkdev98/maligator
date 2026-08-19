@@ -2,6 +2,7 @@ import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
 	decodeVmValueOperand,
+	vmCallProvesBuiltin,
 	vmInstructionWriteRegisters,
 	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_GUARDED_BUILTIN_OPERATIONS,
@@ -34,7 +35,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 10;
+export const WIRE_VERSION = 11;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -1053,6 +1054,146 @@ export function serializeVmDefinition(
 			fn.nativePropertyRegions?.specialized ?? [],
 			fn.nativeRepresentationPlan?.specialized ?? [],
 		);
+
+		const orderedUniqueIps = (values: ReadonlyArray<number>): boolean =>
+			values.every(
+				(value, index) =>
+					Number.isInteger(value) &&
+					value >= 0 &&
+					value < fn.instructions.length &&
+					(index === 0 || values[index - 1]! < value),
+			);
+		const denseIteratorCursors = fn.nativeDenseIteratorCursors ?? [];
+		const denseIteratorPairs = new Set<string>();
+		w.u32(denseIteratorCursors.length);
+		for (const cursor of denseIteratorCursors) {
+			const pair = `${cursor.iterator}:${cursor.next}`;
+			const expectedResetIps = fn.instructions.flatMap((instruction, ip) => {
+				const writes = vmInstructionWriteRegisters(instruction);
+				return writes.includes(cursor.iterator) || writes.includes(cursor.next)
+					? [ip]
+					: [];
+			});
+			if (
+				cursor.iterator < 0 ||
+				cursor.iterator >= fn.registerCount ||
+				cursor.next < 0 ||
+				cursor.next >= fn.registerCount ||
+				cursor.iterator === cursor.next ||
+				denseIteratorPairs.has(pair) ||
+				cursor.captureIps.length === 0 ||
+				cursor.stepIps.length === 0 ||
+				!orderedUniqueIps(cursor.captureIps) ||
+				!orderedUniqueIps(cursor.stepIps) ||
+				!orderedUniqueIps(cursor.resetIps) ||
+				cursor.resetIps.join(",") !== expectedResetIps.join(",") ||
+				cursor.captureIps.some((ip) => {
+					const instruction = fn.instructions[ip];
+					return (
+						instruction?.opcode !== "GET_ITERATOR" ||
+						instruction.iteratorDst !== cursor.iterator ||
+						instruction.nextDst !== cursor.next
+					);
+				}) ||
+				cursor.stepIps.some((ip) => {
+					const instruction = fn.instructions[ip];
+					const writes =
+						instruction === undefined ? [] : vmInstructionWriteRegisters(instruction);
+					return (
+						instruction?.opcode !== "ITERATOR_STEP" ||
+						instruction.iterator !== cursor.iterator ||
+						instruction.next !== cursor.next ||
+						writes.includes(cursor.iterator) ||
+						writes.includes(cursor.next)
+					);
+				})
+			) {
+				throw new RangeError("serialize-vm: invalid native dense-iterator cursor plan");
+			}
+			denseIteratorPairs.add(pair);
+			w.i32(cursor.iterator);
+			w.i32(cursor.next);
+			w.i32Array([...cursor.captureIps]);
+			w.i32Array([...cursor.stepIps]);
+			w.i32Array([...cursor.resetIps]);
+		}
+
+		const writeStringCharCodeAtFusions = (
+			fusions: NonNullable<typeof fn.nativeStringCharCodeAtFusions>["generic"],
+			propertyRegions: NonNullable<typeof fn.nativePropertyRegions>["generic"],
+		): void => {
+			const consolidatedIps = new Set(
+				propertyRegions
+					.filter((region) => region.consolidated)
+					.flatMap((region) => region.sites.map((site) => site.ip)),
+			);
+			w.u32(fusions.length);
+			let previousCallIp = -1;
+			for (const fusion of fusions) {
+				const load = fn.instructions[fusion.loadIp];
+				const call = fn.instructions[fusion.callIp];
+				if (
+					fusion.loadIp <= previousCallIp ||
+					fusion.callIp !== fusion.loadIp + 1 ||
+					load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					call?.opcode !== "CALL" ||
+					!vmCallProvesBuiltin(call, "String.prototype.charCodeAt") ||
+					call.callee !== load.dst ||
+					call.thisValue !== load.object ||
+					consolidatedIps.has(fusion.loadIp)
+				) {
+					throw new RangeError("serialize-vm: invalid native String#charCodeAt fusion");
+				}
+				previousCallIp = fusion.callIp;
+				w.i32(fusion.loadIp);
+				w.i32(fusion.callIp);
+			}
+		};
+		writeStringCharCodeAtFusions(
+			fn.nativeStringCharCodeAtFusions?.generic ?? [],
+			fn.nativePropertyRegions?.generic ?? [],
+		);
+		writeStringCharCodeAtFusions(
+			fn.nativeStringCharCodeAtFusions?.specialized ?? [],
+			fn.nativePropertyRegions?.specialized ?? [],
+		);
+
+		const mathCalls = fn.nativeMathCalls ?? { unaryCallIps: [], binaryCallIps: [] };
+		if (
+			!orderedUniqueIps(mathCalls.unaryCallIps) ||
+			!orderedUniqueIps(mathCalls.binaryCallIps) ||
+			mathCalls.unaryCallIps.some((ip) => {
+				const instruction = fn.instructions[ip];
+				const operation =
+					instruction?.opcode === "CALL"
+						? instruction.guardedBuiltinCall?.operation
+						: undefined;
+				return (
+					instruction?.opcode !== "CALL" ||
+					operation?.startsWith("Math.") !== true ||
+					operation === "Math.min" ||
+					operation === "Math.max" ||
+					instruction.arguments.length !== 1
+				);
+			}) ||
+			mathCalls.binaryCallIps.some((ip) => {
+				const instruction = fn.instructions[ip];
+				const operation =
+					instruction?.opcode === "CALL"
+						? instruction.guardedBuiltinCall?.operation
+						: undefined;
+				return (
+					instruction?.opcode !== "CALL" ||
+					(operation !== "Math.min" && operation !== "Math.max") ||
+					instruction.arguments.length !== 2 ||
+					mathCalls.unaryCallIps.includes(ip)
+				);
+			})
+		) {
+			throw new RangeError("serialize-vm: invalid native Math call plan");
+		}
+		w.i32Array([...mathCalls.unaryCallIps]);
+		w.i32Array([...mathCalls.binaryCallIps]);
 
 		const instructionMetadata = fn.instructions
 			.map((instruction, instructionIndex) => ({ instruction, instructionIndex }))
@@ -3133,6 +3274,127 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 			};
 		}
 
+		const orderedUniqueIps = (values: ReadonlyArray<number>): boolean =>
+			values.every(
+				(value, index) =>
+					value >= 0 &&
+					value < fn.instructions.length &&
+					(index === 0 || values[index - 1]! < value),
+			);
+		const denseIteratorCursorCount = r.count(5);
+		const denseIteratorPairs = new Set<string>();
+		const nativeDenseIteratorCursors = Array.from(
+			{ length: denseIteratorCursorCount },
+			() => {
+				const iterator = r.i32();
+				const next = r.i32();
+				const captureIps = r.i32Array();
+				const stepIps = r.i32Array();
+				const resetIps = r.i32Array();
+				const pair = `${iterator}:${next}`;
+				const expectedResetIps = fn.instructions.flatMap((instruction, ip) => {
+					const writes = vmInstructionWriteRegisters(instruction);
+					return writes.includes(iterator) || writes.includes(next) ? [ip] : [];
+				});
+				if (
+					iterator < 0 ||
+					iterator >= fn.registerCount ||
+					next < 0 ||
+					next >= fn.registerCount ||
+					iterator === next ||
+					denseIteratorPairs.has(pair) ||
+					captureIps.length === 0 ||
+					stepIps.length === 0 ||
+					!orderedUniqueIps(captureIps) ||
+					!orderedUniqueIps(stepIps) ||
+					!orderedUniqueIps(resetIps) ||
+					resetIps.join(",") !== expectedResetIps.join(",") ||
+					captureIps.some((ip) => {
+						const instruction = fn.instructions[ip];
+						return (
+							instruction?.opcode !== "GET_ITERATOR" ||
+							instruction.iteratorDst !== iterator ||
+							instruction.nextDst !== next
+						);
+					}) ||
+					stepIps.some((ip) => {
+						const instruction = fn.instructions[ip];
+						const writes =
+							instruction === undefined ? [] : vmInstructionWriteRegisters(instruction);
+						return (
+							instruction?.opcode !== "ITERATOR_STEP" ||
+							instruction.iterator !== iterator ||
+							instruction.next !== next ||
+							writes.includes(iterator) ||
+							writes.includes(next)
+						);
+					})
+				) {
+					throw new Error("serialize-vm: invalid native dense-iterator cursor plan");
+				}
+				denseIteratorPairs.add(pair);
+				return { iterator, next, captureIps, stepIps, resetIps };
+			},
+		);
+		if (nativeDenseIteratorCursors.length > 0) {
+			fn.nativeDenseIteratorCursors = nativeDenseIteratorCursors;
+		}
+
+		const readStringCharCodeAtFusions = (
+			propertyRegions: ReadonlyArray<VmNativePropertyRegionPlan>,
+		) => {
+			const fusionCount = r.count(2);
+			const consolidatedIps = new Set(
+				propertyRegions
+					.filter((region) => region.consolidated)
+					.flatMap((region) => region.sites.map((site) => site.ip)),
+			);
+			let previousCallIp = -1;
+			return Array.from({ length: fusionCount }, () => {
+				const loadIp = r.i32();
+				const callIp = r.i32();
+				const load = fn.instructions[loadIp];
+				const call = fn.instructions[callIp];
+				if (
+					loadIp <= previousCallIp ||
+					callIp !== loadIp + 1 ||
+					load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+					call?.opcode !== "CALL" ||
+					call.callee !== load.dst ||
+					call.thisValue !== load.object ||
+					consolidatedIps.has(loadIp)
+				) {
+					throw new Error("serialize-vm: invalid native String#charCodeAt fusion");
+				}
+				previousCallIp = callIp;
+				return { loadIp, callIp };
+			});
+		};
+		const genericStringCharCodeAtFusions = readStringCharCodeAtFusions(
+			fn.nativePropertyRegions?.generic ?? [],
+		);
+		const specializedStringCharCodeAtFusions = readStringCharCodeAtFusions(
+			fn.nativePropertyRegions?.specialized ?? [],
+		);
+		if (
+			genericStringCharCodeAtFusions.length > 0 ||
+			specializedStringCharCodeAtFusions.length > 0
+		) {
+			fn.nativeStringCharCodeAtFusions = {
+				generic: genericStringCharCodeAtFusions,
+				specialized: specializedStringCharCodeAtFusions,
+			};
+		}
+
+		const unaryCallIps = r.i32Array();
+		const binaryCallIps = r.i32Array();
+		if (!orderedUniqueIps(unaryCallIps) || !orderedUniqueIps(binaryCallIps)) {
+			throw new Error("serialize-vm: invalid native Math call plan");
+		}
+		if (unaryCallIps.length > 0 || binaryCallIps.length > 0) {
+			fn.nativeMathCalls = { unaryCallIps, binaryCallIps };
+		}
+
 		const instructionMetadataCount = r.count(2);
 		let previousInstructionMetadataIndex = -1;
 		for (
@@ -3226,6 +3488,39 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 				throw new RangeError(
 					"serialize-vm: compiler instruction metadata opcode mismatch",
 				);
+			}
+		}
+		for (const fusion of [
+			...(fn.nativeStringCharCodeAtFusions?.generic ?? []),
+			...(fn.nativeStringCharCodeAtFusions?.specialized ?? []),
+		]) {
+			const call = fn.instructions[fusion.callIp];
+			if (
+				call?.opcode !== "CALL" ||
+				!vmCallProvesBuiltin(call, "String.prototype.charCodeAt")
+			) {
+				throw new Error("serialize-vm: native String#charCodeAt fact mismatch");
+			}
+		}
+		for (const [ip, arity] of [
+			...(fn.nativeMathCalls?.unaryCallIps ?? []).map((ip) => [ip, 1] as const),
+			...(fn.nativeMathCalls?.binaryCallIps ?? []).map((ip) => [ip, 2] as const),
+		]) {
+			const instruction = fn.instructions[ip];
+			const operation =
+				instruction?.opcode === "CALL"
+					? instruction.guardedBuiltinCall?.operation
+					: undefined;
+			if (
+				instruction?.opcode !== "CALL" ||
+				operation?.startsWith("Math.") !== true ||
+				instruction.arguments.length !== arity ||
+				(arity === 2 && operation !== "Math.min" && operation !== "Math.max") ||
+				(arity === 1 && (operation === "Math.min" || operation === "Math.max")) ||
+				(fn.nativeMathCalls?.unaryCallIps.includes(ip) === true &&
+					fn.nativeMathCalls.binaryCallIps.includes(ip))
+			) {
+				throw new Error("serialize-vm: native Math call fact mismatch");
 			}
 		}
 

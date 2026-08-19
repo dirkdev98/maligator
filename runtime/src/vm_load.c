@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 10u
+#define WIRE_VERSION 11u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1897,6 +1897,113 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     previous_site_ip = site_ip;
                 }
                 previous_final_ip = previous_site_ip;
+            }
+        }
+
+        u32 dense_cursor_count = rd_count(&r, 5);
+        for (u32 cursor = 0; r.ok && cursor < dense_cursor_count; cursor++) {
+            i32 iterator = rd_i32(&r);
+            i32 next_register = rd_i32(&r);
+            if (iterator < 0 || iterator >= functions[i].register_count || next_register < 0 ||
+                next_register >= functions[i].register_count || iterator == next_register) {
+                r.ok = false;
+            }
+            u32 capture_count = rd_count(&r, 1);
+            if (capture_count == 0) r.ok = false;
+            i32 previous_capture_ip = -1;
+            for (u32 capture = 0; r.ok && capture < capture_count; capture++) {
+                i32 ip = rd_i32(&r);
+                if (ip <= previous_capture_ip || ip < 0 ||
+                    ip >= functions[i].instruction_count) {
+                    r.ok = false;
+                    continue;
+                }
+                const MalInstruction *instruction = &functions[i].instructions[ip];
+                if (instruction->opcode != MAL_OP_GET_ITERATOR ||
+                    instruction->as.get_iterator.iterator_dst != iterator ||
+                    instruction->as.get_iterator.next_dst != next_register) {
+                    r.ok = false;
+                }
+                previous_capture_ip = ip;
+            }
+            u32 step_count = rd_count(&r, 1);
+            if (step_count == 0) r.ok = false;
+            i32 previous_step_ip = -1;
+            for (u32 step = 0; r.ok && step < step_count; step++) {
+                i32 ip = rd_i32(&r);
+                if (ip <= previous_step_ip || ip < 0 || ip >= functions[i].instruction_count) {
+                    r.ok = false;
+                    continue;
+                }
+                const MalInstruction *instruction = &functions[i].instructions[ip];
+                if (instruction->opcode != MAL_OP_ITERATOR_STEP ||
+                    instruction->as.iterator_step.iterator != iterator ||
+                    instruction->as.iterator_step.next != next_register ||
+                    mal_loaded_instruction_writes_register(instruction, iterator) ||
+                    mal_loaded_instruction_writes_register(instruction, next_register)) {
+                    r.ok = false;
+                }
+                previous_step_ip = ip;
+            }
+            u32 reset_count = rd_count(&r, 1);
+            u32 expected_reset_count = 0;
+            for (i32 ip = 0; ip < functions[i].instruction_count; ip++) {
+                const MalInstruction *instruction = &functions[i].instructions[ip];
+                if (mal_loaded_instruction_writes_register(instruction, iterator) ||
+                    mal_loaded_instruction_writes_register(instruction, next_register)) {
+                    expected_reset_count++;
+                }
+            }
+            if (reset_count != expected_reset_count) r.ok = false;
+            i32 expected_reset_ip = -1;
+            for (u32 reset = 0; r.ok && reset < reset_count; reset++) {
+                i32 ip = rd_i32(&r);
+                do {
+                    expected_reset_ip++;
+                } while (expected_reset_ip < functions[i].instruction_count &&
+                         !mal_loaded_instruction_writes_register(
+                             &functions[i].instructions[expected_reset_ip], iterator
+                         ) &&
+                         !mal_loaded_instruction_writes_register(
+                             &functions[i].instructions[expected_reset_ip], next_register
+                         ));
+                if (ip != expected_reset_ip) r.ok = false;
+            }
+        }
+
+        for (u32 variant = 0; r.ok && variant < 2; variant++) {
+            u32 string_fusion_count = rd_count(&r, 2);
+            i32 previous_call_ip = -1;
+            for (u32 fusion = 0; r.ok && fusion < string_fusion_count; fusion++) {
+                i32 load_ip = rd_i32(&r);
+                i32 call_ip = rd_i32(&r);
+                if (load_ip <= previous_call_ip || load_ip < 0 ||
+                    call_ip != load_ip + 1 || call_ip >= functions[i].instruction_count) {
+                    r.ok = false;
+                    continue;
+                }
+                const MalInstruction *load = &functions[i].instructions[load_ip];
+                const MalInstruction *call = &functions[i].instructions[call_ip];
+                if (load->opcode != MAL_OP_LOAD_PROPERTY_STATIC || call->opcode != MAL_OP_CALL ||
+                    call->as.call.callee != load->as.load_property_static.dst ||
+                    call->as.call.this_value != load->as.load_property_static.object) {
+                    r.ok = false;
+                }
+                previous_call_ip = call_ip;
+            }
+        }
+
+        for (u32 arity = 1; r.ok && arity <= 2; arity++) {
+            u32 math_call_count = rd_count(&r, 1);
+            i32 previous_call_ip = -1;
+            for (u32 call_index = 0; r.ok && call_index < math_call_count; call_index++) {
+                i32 call_ip = rd_i32(&r);
+                if (call_ip <= previous_call_ip || call_ip < 0 ||
+                    call_ip >= functions[i].instruction_count ||
+                    functions[i].instructions[call_ip].opcode != MAL_OP_CALL) {
+                    r.ok = false;
+                }
+                previous_call_ip = call_ip;
             }
         }
 

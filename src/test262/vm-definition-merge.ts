@@ -490,6 +490,30 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 									sites: region.sites.map((site) => ({ ...site })),
 								})),
 							},
+				nativeDenseIteratorCursors: fn.nativeDenseIteratorCursors?.map((cursor) => ({
+					...cursor,
+					captureIps: [...cursor.captureIps],
+					stepIps: [...cursor.stepIps],
+					resetIps: [...cursor.resetIps],
+				})),
+				nativeStringCharCodeAtFusions:
+					fn.nativeStringCharCodeAtFusions === undefined
+						? undefined
+						: {
+								generic: fn.nativeStringCharCodeAtFusions.generic.map((fusion) => ({
+									...fusion,
+								})),
+								specialized: fn.nativeStringCharCodeAtFusions.specialized.map(
+									(fusion) => ({ ...fusion }),
+								),
+							},
+				nativeMathCalls:
+					fn.nativeMathCalls === undefined
+						? undefined
+						: {
+								unaryCallIps: [...fn.nativeMathCalls.unaryCallIps],
+								binaryCallIps: [...fn.nativeMathCalls.binaryCallIps],
+							},
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
 				regions: fn.regions?.map((region) => cloneRegion(region, base)),
 			})),

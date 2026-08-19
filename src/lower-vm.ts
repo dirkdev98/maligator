@@ -586,6 +586,27 @@ export interface VmNativePropertyRegionPlan {
 	}>;
 }
 
+/** One synchronous iterator record retained in a native nonmoving cursor. */
+export interface VmNativeDenseIteratorCursorPlan {
+	readonly iterator: number;
+	readonly next: number;
+	readonly captureIps: ReadonlyArray<number>;
+	readonly stepIps: ReadonlyArray<number>;
+	readonly resetIps: ReadonlyArray<number>;
+}
+
+/** One adjacent static Get + direct String#charCodeAt call selected by lowering. */
+export interface VmNativeStringCharCodeAtFusionPlan {
+	readonly loadIp: number;
+	readonly callIp: number;
+}
+
+/** Native numeric consumers selected from final guarded builtin facts. */
+export interface VmNativeMathCallPlan {
+	readonly unaryCallIps: ReadonlyArray<number>;
+	readonly binaryCallIps: ReadonlyArray<number>;
+}
+
 export interface VmGuardedBuiltinCall {
 	readonly operation: VmGuardedBuiltinOperation;
 	/** The shared semantic facts and fallback contract for this specialization. */
@@ -680,6 +701,32 @@ export interface VmExceptionHandler {
 	startIp: number;
 	endIp: number;
 	handlerIp: number;
+}
+
+/** Resolve the innermost active handler for every VM instruction. */
+export function vmExceptionHandlerTargets(
+	instructionCount: number,
+	handlers: ReadonlyArray<VmExceptionHandler>,
+): Array<number | undefined> {
+	const ordered = [...handlers].sort(
+		(left, right) => left.startIp - right.startIp || right.endIp - left.endIp,
+	);
+	const active: Array<VmExceptionHandler> = [];
+	const targets = new Array<number | undefined>(instructionCount);
+	let next = 0;
+	for (let ip = 0; ip < instructionCount; ip++) {
+		while (active.length > 0 && active[active.length - 1]!.endIp <= ip) active.pop();
+		while (next < ordered.length && ordered[next]!.startIp <= ip) {
+			const handler = ordered[next++]!;
+			const parent = active[active.length - 1];
+			if (parent !== undefined && handler.endIp > parent.endIp) {
+				throw new Error("Crossing exception-handler ranges");
+			}
+			active.push(handler);
+		}
+		targets[ip] = active[active.length - 1]?.handlerIp;
+	}
+	return targets;
 }
 
 export const ARGUMENT_SNAPSHOT_SOURCE_COUNT = -1;
@@ -788,6 +835,18 @@ export interface VmFunction {
 		readonly generic: ReadonlyArray<VmNativePropertyRegionPlan>;
 		readonly specialized: ReadonlyArray<VmNativePropertyRegionPlan>;
 	};
+
+	/** Compile-only native cursor lifetimes produced by target lowering. */
+	nativeDenseIteratorCursors?: ReadonlyArray<VmNativeDenseIteratorCursorPlan>;
+
+	/** Compile-only adjacent String#charCodeAt fusions for each representation version. */
+	nativeStringCharCodeAtFusions?: {
+		readonly generic: ReadonlyArray<VmNativeStringCharCodeAtFusionPlan>;
+		readonly specialized: ReadonlyArray<VmNativeStringCharCodeAtFusionPlan>;
+	};
+
+	/** Compile-only guarded Math consumer selection. */
+	nativeMathCalls?: VmNativeMathCallPlan;
 }
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
@@ -2411,6 +2470,119 @@ function nativePropertyRegionPlans(
 	});
 }
 
+function nativeDenseIteratorCursorPlans(
+	fn: VmFunction,
+): Array<VmNativeDenseIteratorCursorPlan> {
+	if (fn.isGenerator || fn.isAsync) return [];
+	const pairKey = (iterator: number, next: number): string => `${iterator}:${next}`;
+	const getPairs = new Set<string>();
+	const stepPairs = new Set<string>();
+	for (const instruction of fn.instructions) {
+		if (instruction.opcode === "GET_ITERATOR") {
+			getPairs.add(pairKey(instruction.iteratorDst, instruction.nextDst));
+		} else if (instruction.opcode === "ITERATOR_STEP") {
+			stepPairs.add(pairKey(instruction.iterator, instruction.next));
+		}
+	}
+	const plans: Array<VmNativeDenseIteratorCursorPlan> = [];
+	for (const key of getPairs) {
+		if (!stepPairs.has(key)) continue;
+		const [iteratorText, nextText] = key.split(":");
+		const iterator = Number(iteratorText);
+		const next = Number(nextText);
+		const captureIps: Array<number> = [];
+		const stepIps: Array<number> = [];
+		const resetIps: Array<number> = [];
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			const instruction = fn.instructions[ip]!;
+			const writes = new Set(vmInstructionWriteRegisters(instruction));
+			if (
+				instruction.opcode === "GET_ITERATOR" &&
+				instruction.iteratorDst === iterator &&
+				instruction.nextDst === next
+			) {
+				captureIps.push(ip);
+			} else if (
+				instruction.opcode === "ITERATOR_STEP" &&
+				instruction.iterator === iterator &&
+				instruction.next === next &&
+				!writes.has(iterator) &&
+				!writes.has(next)
+			) {
+				stepIps.push(ip);
+			}
+			if (writes.has(iterator) || writes.has(next)) resetIps.push(ip);
+		}
+		if (captureIps.length === 0 || stepIps.length === 0) continue;
+		plans.push({ iterator, next, captureIps, stepIps, resetIps });
+	}
+	return plans;
+}
+
+function nativeMathCallPlan(fn: VmFunction): VmNativeMathCallPlan {
+	const unaryCallIps: Array<number> = [];
+	const binaryCallIps: Array<number> = [];
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode !== "CALL") continue;
+		const operation = instruction.guardedBuiltinCall?.operation;
+		if (operation?.startsWith("Math.") !== true) continue;
+		if (operation !== "Math.min" && operation !== "Math.max") {
+			if (instruction.arguments.length === 1) unaryCallIps.push(ip);
+		} else if (instruction.arguments.length === 2) {
+			binaryCallIps.push(ip);
+		}
+	}
+	return { unaryCallIps, binaryCallIps };
+}
+
+function nativeStringCharCodeAtFusionPlans(
+	fn: VmFunction,
+	propertyRegions: ReadonlyArray<VmNativePropertyRegionPlan>,
+): Array<VmNativeStringCharCodeAtFusionPlan> {
+	const jumpTargets = new Set<number>();
+	for (const instruction of fn.instructions) {
+		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+			jumpTargets.add(instruction.targetIp);
+		}
+	}
+	if (fn.isGenerator || fn.isAsync) {
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			const opcode = fn.instructions[ip]!.opcode;
+			if (opcode === "GENERATOR_START" || opcode === "YIELD" || opcode === "AWAIT") {
+				jumpTargets.add(ip + 1);
+			}
+		}
+	}
+	for (const handler of fn.handlers) jumpTargets.add(handler.handlerIp);
+	const handlerTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	const consolidatedPropertyIps = new Set(
+		propertyRegions
+			.filter((region) => region.consolidated)
+			.flatMap((region) => region.sites.map((site) => site.ip)),
+	);
+	const result: Array<VmNativeStringCharCodeAtFusionPlan> = [];
+	for (let loadIp = 0; loadIp + 1 < fn.instructions.length; loadIp++) {
+		const load = fn.instructions[loadIp]!;
+		const callIp = loadIp + 1;
+		const call = fn.instructions[callIp]!;
+		if (
+			load.opcode !== "LOAD_PROPERTY_STATIC" ||
+			call.opcode !== "CALL" ||
+			!vmCallProvesBuiltin(call, "String.prototype.charCodeAt") ||
+			call.callee !== load.dst ||
+			call.thisValue !== load.object ||
+			jumpTargets.has(callIp) ||
+			handlerTargets[loadIp] !== handlerTargets[callIp] ||
+			consolidatedPropertyIps.has(loadIp)
+		) {
+			continue;
+		}
+		result.push({ loadIp, callIp });
+	}
+	return result;
+}
+
 const VM_REGISTER_USE_FIELDS = [
 	"src",
 	"value",
@@ -4006,6 +4178,16 @@ function lowerFunctionToVmFunction(
 		lowered,
 		representationPlan.specialized,
 	);
+	const denseIteratorCursors = nativeDenseIteratorCursorPlans(lowered);
+	const genericStringCharCodeAtFusions = nativeStringCharCodeAtFusionPlans(
+		lowered,
+		genericPropertyRegions,
+	);
+	const specializedStringCharCodeAtFusions = nativeStringCharCodeAtFusionPlans(
+		lowered,
+		specializedPropertyRegions,
+	);
+	const mathCalls = nativeMathCallPlan(lowered);
 	return {
 		...lowered,
 		nativeRepresentationPlan: representationPlan,
@@ -4018,6 +4200,20 @@ function lowerFunctionToVmFunction(
 						generic: genericPropertyRegions,
 						specialized: specializedPropertyRegions,
 					},
+		nativeDenseIteratorCursors:
+			denseIteratorCursors.length === 0 ? undefined : denseIteratorCursors,
+		nativeStringCharCodeAtFusions:
+			genericStringCharCodeAtFusions.length === 0 &&
+			specializedStringCharCodeAtFusions.length === 0
+				? undefined
+				: {
+						generic: genericStringCharCodeAtFusions,
+						specialized: specializedStringCharCodeAtFusions,
+					},
+		nativeMathCalls:
+			mathCalls.unaryCallIps.length === 0 && mathCalls.binaryCallIps.length === 0
+				? undefined
+				: mathCalls,
 	};
 }
 

@@ -530,15 +530,17 @@ describe("emit-vm instruction packing", () => {
 });
 
 describe("native update-expression representation", () => {
-	function emit(source: string): string {
+	function lower(source: string): VmDefinition {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			source,
 			"update-expression-representation.js",
 			parseScript(source, { strict: false }),
 		);
-		return emitVmDefinition(compileSemanticProgramToVmDefinition(semantic), {
-			compiled: true,
-		});
+		return compileSemanticProgramToVmDefinition(semantic);
+	}
+
+	function emit(source: string): string {
+		return emitVmDefinition(lower(source), { compiled: true });
 	}
 
 	function emitLocked(source: string): string {
@@ -653,9 +655,18 @@ describe("native update-expression representation", () => {
 	});
 
 	it("validates a dense Array-values iterator once per iterator record", () => {
-		const output = emit(
-			`"use strict"; function sum(values) { let total = 0; for (const value of values) total += value; return total; } globalThis.sum = sum;`,
+		const source = `"use strict"; function sum(values) { let total = 0; for (const value of values) total += value; return total; } globalThis.sum = sum;`;
+		const definition = lower(source);
+		const cursorFunction = definition.functions.find(
+			(fn) => (fn.nativeDenseIteratorCursors?.length ?? 0) > 0,
 		);
+		expect(cursorFunction?.nativeDenseIteratorCursors).toHaveLength(1);
+		expect(
+			deserializeVmDefinition(serializeVmDefinition(definition)).functions.find(
+				(fn) => (fn.nativeDenseIteratorCursors?.length ?? 0) > 0,
+			)?.nativeDenseIteratorCursors,
+		).toEqual(cursorFunction?.nativeDenseIteratorCursors);
+		const output = emitVmDefinition(definition, { compiled: true });
 		expect(output).toContain("MalIteratorObject *__dense_iter_0 = nullptr;");
 		expect(output).toContain("mal_vm_iterator_dense_array_cursor(&iter_rec_");
 		expect(output).toContain(
@@ -937,7 +948,17 @@ describe("native update-expression representation", () => {
 
 	it("guards direct unary and binary Math calls by exact callbacks", () => {
 		const source = `"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } function constants() { const a = 1.25; const b = -0; return Math.floor(a) + Math.max(a, b); } globalThis.keep = [calculate, constants];`;
-		const output = emit(source);
+		const definition = lower(source);
+		const mathPlans = definition.functions
+			.map((fn) => fn.nativeMathCalls)
+			.filter((plan) => plan !== undefined);
+		expect(mathPlans.length).toBeGreaterThan(0);
+		expect(
+			deserializeVmDefinition(serializeVmDefinition(definition))
+				.functions.map((fn) => fn.nativeMathCalls)
+				.filter((plan) => plan !== undefined),
+		).toEqual(mathPlans);
+		const output = emitVmDefinition(definition, { compiled: true });
 		expect(output).toContain("mal_builtin_math_unary_fast");
 		expect(output).toContain("mal_builtin_math_binary_fast");
 		expect(output).not.toContain("mal_builtin_math_unary_number_known");
@@ -1048,7 +1069,17 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.codeUnit = codeUnit;
 		`;
-		const output = emit(code);
+		const definition = lower(code);
+		const fusionFunction = definition.functions.find(
+			(fn) => (fn.nativeStringCharCodeAtFusions?.specialized.length ?? 0) > 0,
+		);
+		expect(fusionFunction?.nativeStringCharCodeAtFusions?.specialized).toHaveLength(1);
+		expect(
+			deserializeVmDefinition(serializeVmDefinition(definition)).functions.find(
+				(fn) => (fn.nativeStringCharCodeAtFusions?.specialized.length ?? 0) > 0,
+			)?.nativeStringCharCodeAtFusions,
+		).toEqual(fusionFunction?.nativeStringCharCodeAtFusions);
+		const output = emitVmDefinition(definition, { compiled: true });
 		expect(output).toContain(
 			"mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING",
 		);

@@ -8,18 +8,20 @@ import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
 	vmCallProvesBuiltin,
+	vmExceptionHandlerTargets as exceptionHandlerTargets,
 	vmGuardIsWorldInvariant,
 	vmInstructionWriteRegisters,
 	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
 import type {
-	VmExceptionHandler,
+	VmNativeDenseIteratorCursorPlan,
 	VmFunction,
 	VmGuardPlan,
 	VmInstruction,
 	VmNativeInheritedLoadLoopPlan,
 	VmNativePropertyRegionPlan,
+	VmNativeStringCharCodeAtFusionPlan,
 	VmRegion,
 	VmRegionLicense,
 	VmRegisterRepresentation,
@@ -661,6 +663,11 @@ export function emitCompiledFunction(
 		override === undefined
 			? (fn.nativePropertyRegions?.specialized ?? [])
 			: (fn.nativePropertyRegions?.generic ?? []),
+		fn.nativeDenseIteratorCursors ?? [],
+		override === undefined
+			? (fn.nativeStringCharCodeAtFusions?.specialized ?? [])
+			: (fn.nativeStringCharCodeAtFusions?.generic ?? []),
+		fn.nativeMathCalls,
 		stackObjectSites,
 		stackObjectAccesses,
 		stackObjectMaterializations,
@@ -1012,6 +1019,9 @@ function emitResumableFunction(
 		coro,
 		[],
 		fn.nativePropertyRegions?.generic ?? [],
+		fn.nativeDenseIteratorCursors ?? [],
+		fn.nativeStringCharCodeAtFusions?.generic ?? [],
+		fn.nativeMathCalls,
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1532,35 +1542,6 @@ function consolidatedRegionCommit(reg: RegionAccess): Array<string> {
 	];
 }
 
-/**
- * Resolve each instruction's innermost exception handler in one sweep. Handler
- * ranges come from balanced TRY markers, so they are disjoint or properly nested.
- */
-function exceptionHandlerTargets(
-	instructionCount: number,
-	handlers: ReadonlyArray<VmExceptionHandler>,
-): Array<number | undefined> {
-	const ordered = [...handlers].sort(
-		(left, right) => left.startIp - right.startIp || right.endIp - left.endIp,
-	);
-	const active: Array<VmExceptionHandler> = [];
-	const targets = new Array<number | undefined>(instructionCount);
-	let next = 0;
-	for (let ip = 0; ip < instructionCount; ip++) {
-		while (active.length > 0 && active[active.length - 1]!.endIp <= ip) active.pop();
-		while (next < ordered.length && ordered[next]!.startIp <= ip) {
-			const handler = ordered[next++]!;
-			const parent = active[active.length - 1];
-			if (parent !== undefined && handler.endIp > parent.endIp) {
-				throw new Error("Crossing exception-handler ranges");
-			}
-			active.push(handler);
-		}
-		targets[ip] = active[active.length - 1]?.handlerIp;
-	}
-	return targets;
-}
-
 interface NativeNumericFusionAction {
 	readonly role: "start" | "finish";
 	readonly id: number;
@@ -1581,6 +1562,9 @@ function emitBody(
 	coro: CoroutineContext | null,
 	inheritedLoadLoopPlans: ReadonlyArray<VmNativeInheritedLoadLoopPlan>,
 	propertyRegionPlans: ReadonlyArray<VmNativePropertyRegionPlan>,
+	denseIteratorCursorPlans: ReadonlyArray<VmNativeDenseIteratorCursorPlan>,
+	stringCharCodeAtFusionPlans: ReadonlyArray<VmNativeStringCharCodeAtFusionPlan>,
+	mathCallPlan: VmFunction["nativeMathCalls"],
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
@@ -1704,86 +1688,108 @@ function emitBody(
 	const inheritedLoadLoopByBackedge = new Map(
 		inheritedLoadLoops.map((loop) => [loop.backedgeIp, loop] as const),
 	);
-	// Canonical Math calls arrive through the shared builtin-call fact path. The
-	// property Get and argument evaluation remain ordinary instructions; this only
-	// selects the numeric consumer after identity/effect/result validation in IR.
-	const mathUnaryCalls = new Set<number>();
-	const mathBinaryCalls = new Set<number>();
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode !== "CALL") continue;
-		const operation = instruction.guardedBuiltinCall?.operation;
-		if (operation?.startsWith("Math.") !== true) continue;
-		if (operation !== "Math.min" && operation !== "Math.max") {
-			if (instruction.arguments.length === 1) mathUnaryCalls.add(ip);
-		} else if (instruction.arguments.length === 2) {
-			mathBinaryCalls.add(ip);
+	const mathUnaryCalls = new Set(mathCallPlan?.unaryCallIps ?? []);
+	const mathBinaryCalls = new Set(mathCallPlan?.binaryCallIps ?? []);
+	for (const [ip, arity] of [
+		...[...mathUnaryCalls].map((ip) => [ip, 1] as const),
+		...[...mathBinaryCalls].map((ip) => [ip, 2] as const),
+	]) {
+		const instruction = fn.instructions[ip];
+		const operation =
+			instruction?.opcode === "CALL"
+				? instruction.guardedBuiltinCall?.operation
+				: undefined;
+		if (
+			instruction?.opcode !== "CALL" ||
+			operation?.startsWith("Math.") !== true ||
+			instruction.arguments.length !== arity ||
+			(arity === 2 && operation !== "Math.min" && operation !== "Math.max") ||
+			(arity === 1 && (operation === "Math.min" || operation === "Math.max")) ||
+			(mathUnaryCalls.has(ip) && mathBinaryCalls.has(ip))
+		) {
+			throw new Error(`Invalid native Math call plan at ${ip}`);
 		}
 	}
-	// A synchronous iterator record captures its `next` method exactly once. When
-	// GET_ITERATOR and ITERATOR_STEP retain the same allocated register pair, keep
-	// the validated dense Array-values iterator pointer in a native local instead
-	// of rechecking object classes, callback identity, kind, and target on every
-	// element. The boxed pair remains the GC root; any register overwrite clears
-	// the raw nonmoving cursor before it can be reused.
 	const denseIteratorCursorActions = new Map<number, DenseIteratorCursorAction>();
 	const denseIteratorCursorResets = new Map<number, Array<DenseIteratorCursor>>();
-	const denseIteratorCursors: Array<DenseIteratorCursor> = [];
-	// A resumable function re-enters through a label after C-local declarations,
-	// so a raw cursor local cannot survive suspension. Its boxed iterator record
-	// does survive in the coroutine frame; use the regular validated step there.
-	if (coro === null) {
-		const pairKey = (iterator: number, next: number): string => `${iterator}:${next}`;
-		const getPairs = new Set<string>();
-		const stepPairs = new Set<string>();
-		for (const instruction of fn.instructions) {
-			if (instruction.opcode === "GET_ITERATOR") {
-				getPairs.add(pairKey(instruction.iteratorDst, instruction.nextDst));
-			} else if (instruction.opcode === "ITERATOR_STEP") {
-				stepPairs.add(pairKey(instruction.iterator, instruction.next));
-			}
+	const denseIteratorCursors = denseIteratorCursorPlans.map((plan, index) => ({
+		name: `__dense_iter_${index}`,
+		iterator: plan.iterator,
+		next: plan.next,
+	}));
+	const orderedUnique = (values: ReadonlyArray<number>): boolean =>
+		values.every(
+			(value, index) =>
+				Number.isInteger(value) && (index === 0 || values[index - 1]! < value),
+		);
+	const denseIteratorPairs = new Set<string>();
+	for (
+		let cursorIndex = 0;
+		cursorIndex < denseIteratorCursorPlans.length;
+		cursorIndex++
+	) {
+		const plan = denseIteratorCursorPlans[cursorIndex]!;
+		const cursor = denseIteratorCursors[cursorIndex]!;
+		const pair = `${plan.iterator}:${plan.next}`;
+		const expectedResetIps = fn.instructions.flatMap((instruction, ip) => {
+			const writes = vmInstructionWriteRegisters(instruction);
+			return writes.includes(plan.iterator) || writes.includes(plan.next) ? [ip] : [];
+		});
+		if (
+			plan.iterator < 0 ||
+			plan.iterator >= fn.registerCount ||
+			plan.next < 0 ||
+			plan.next >= fn.registerCount ||
+			plan.iterator === plan.next ||
+			denseIteratorPairs.has(pair) ||
+			plan.captureIps.length === 0 ||
+			plan.stepIps.length === 0 ||
+			!orderedUnique(plan.captureIps) ||
+			!orderedUnique(plan.stepIps) ||
+			!orderedUnique(plan.resetIps) ||
+			plan.resetIps.join(",") !== expectedResetIps.join(",")
+		) {
+			throw new Error(`Invalid native dense-iterator cursor ${cursorIndex}`);
 		}
-		const cursorsByPair = new Map<string, DenseIteratorCursor>();
-		for (const key of getPairs) {
-			if (!stepPairs.has(key)) continue;
-			const [iteratorText, nextText] = key.split(":");
-			const cursor: DenseIteratorCursor = {
-				name: `__dense_iter_${denseIteratorCursors.length}`,
-				iterator: Number(iteratorText),
-				next: Number(nextText),
-			};
-			denseIteratorCursors.push(cursor);
-			cursorsByPair.set(key, cursor);
-		}
-
-		for (let ip = 0; ip < fn.instructions.length; ip++) {
-			const instruction = fn.instructions[ip]!;
-			const writes = new Set(vmInstructionWriteRegisters(instruction));
-			let action: DenseIteratorCursorAction | undefined;
-			if (instruction.opcode === "GET_ITERATOR") {
-				const cursor = cursorsByPair.get(
-					pairKey(instruction.iteratorDst, instruction.nextDst),
-				);
-				if (cursor !== undefined) action = { cursor, kind: "capture" };
-			} else if (instruction.opcode === "ITERATOR_STEP") {
-				const cursor = cursorsByPair.get(pairKey(instruction.iterator, instruction.next));
-				// If register allocation reuses an iterator/next register for a step
-				// result, clear the cursor before the potentially-throwing operation and
-				// use the ordinary step path for that site.
-				if (
-					cursor !== undefined &&
-					!writes.has(cursor.iterator) &&
-					!writes.has(cursor.next)
-				) {
-					action = { cursor, kind: "step" };
-				}
+		denseIteratorPairs.add(pair);
+		for (const ip of plan.captureIps) {
+			const instruction = fn.instructions[ip];
+			if (
+				instruction?.opcode !== "GET_ITERATOR" ||
+				instruction.iteratorDst !== plan.iterator ||
+				instruction.nextDst !== plan.next ||
+				denseIteratorCursorActions.has(ip)
+			) {
+				throw new Error(`Invalid native dense-iterator capture at ${ip}`);
 			}
-			if (action !== undefined) denseIteratorCursorActions.set(ip, action);
-
-			const resets = denseIteratorCursors.filter(
-				(cursor) => writes.has(cursor.iterator) || writes.has(cursor.next),
-			);
-			if (resets.length > 0) denseIteratorCursorResets.set(ip, resets);
+			denseIteratorCursorActions.set(ip, { cursor, kind: "capture" });
+		}
+		for (const ip of plan.stepIps) {
+			const instruction = fn.instructions[ip];
+			const writes =
+				instruction === undefined ? [] : vmInstructionWriteRegisters(instruction);
+			if (
+				instruction?.opcode !== "ITERATOR_STEP" ||
+				instruction.iterator !== plan.iterator ||
+				instruction.next !== plan.next ||
+				writes.includes(plan.iterator) ||
+				writes.includes(plan.next) ||
+				denseIteratorCursorActions.has(ip)
+			) {
+				throw new Error(`Invalid native dense-iterator step at ${ip}`);
+			}
+			denseIteratorCursorActions.set(ip, { cursor, kind: "step" });
+		}
+		for (const ip of plan.resetIps) {
+			const instruction = fn.instructions[ip];
+			const writes =
+				instruction === undefined ? [] : vmInstructionWriteRegisters(instruction);
+			if (!writes.includes(plan.iterator) && !writes.includes(plan.next)) {
+				throw new Error(`Invalid native dense-iterator reset at ${ip}`);
+			}
+			const resets = denseIteratorCursorResets.get(ip) ?? [];
+			resets.push(cursor);
+			denseIteratorCursorResets.set(ip, resets);
 		}
 	}
 
@@ -1841,29 +1847,32 @@ function emitBody(
 	}
 
 	const stringCharCodeAtFusionByIp = new Map<number, StringCharCodeAtFusion>();
-	for (let loadIp = 0; loadIp + 1 < fn.instructions.length; loadIp++) {
-		const load = fn.instructions[loadIp]!;
-		const call = fn.instructions[loadIp + 1]!;
+	for (const plan of stringCharCodeAtFusionPlans) {
+		const load = fn.instructions[plan.loadIp];
+		const call = fn.instructions[plan.callIp];
 		if (
-			load.opcode !== "LOAD_PROPERTY_STATIC" ||
-			call.opcode !== "CALL" ||
+			load?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			call?.opcode !== "CALL" ||
+			plan.callIp !== plan.loadIp + 1 ||
 			!vmCallProvesBuiltin(call, "String.prototype.charCodeAt") ||
 			call.callee !== load.dst ||
 			call.thisValue !== load.object ||
-			jumpTargets.has(loadIp + 1) ||
-			handlerTargets[loadIp] !== handlerTargets[loadIp + 1] ||
-			regionGuard.get(loadIp)?.consolidated === true
+			jumpTargets.has(plan.callIp) ||
+			handlerTargets[plan.loadIp] !== handlerTargets[plan.callIp] ||
+			regionGuard.get(plan.loadIp)?.consolidated === true ||
+			stringCharCodeAtFusionByIp.has(plan.loadIp) ||
+			stringCharCodeAtFusionByIp.has(plan.callIp)
 		) {
-			continue;
+			throw new Error(`Invalid native String#charCodeAt fusion at ${plan.loadIp}`);
 		}
 		const fusion: StringCharCodeAtFusion = {
-			loadIp,
-			callIp: loadIp + 1,
+			loadIp: plan.loadIp,
+			callIp: plan.callIp,
 			load,
 			call,
 		};
-		stringCharCodeAtFusionByIp.set(loadIp, fusion);
-		stringCharCodeAtFusionByIp.set(loadIp + 1, fusion);
+		stringCharCodeAtFusionByIp.set(plan.loadIp, fusion);
+		stringCharCodeAtFusionByIp.set(plan.callIp, fusion);
 	}
 	const nativeStringSplitProjectionActionByIp = new Map<
 		number,
