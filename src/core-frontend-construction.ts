@@ -371,7 +371,12 @@ export class DirectCoreFunctionConstruction {
 				value: "boxed",
 			});
 		}
-		if (fn.isAsync === true) this.#emitInstruction(this.#prelude, { type: "asyncStart" });
+		// Async generators use GENERATOR_START at their body entry. ASYNC_START is
+		// exclusively the promise-producing prologue for ordinary async functions;
+		// emitting both would make an async generator adopt the same frame twice.
+		if (fn.isAsync === true && fn.isGenerator !== true) {
+			this.#emitInstruction(this.#prelude, { type: "asyncStart" });
+		}
 		fn.blocks = new ConstructionBlockList(this);
 	}
 
