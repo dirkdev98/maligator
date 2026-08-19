@@ -1,16 +1,21 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+// The child resolves its own cwd through symlinks, so the fixture directory has
+// to be compared in its real form.
+const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "mal-dev-runner-")));
+
+afterAll(() => {
+	rmSync(directory, { recursive: true, force: true });
+});
 
 describe("development wire runner", () => {
 	it("runs Node host modules and preserves the source entry without generated C", () => {
-		const directory = mkdtempSync(path.join(tmpdir(), "mal-dev-runner-"));
 		const entrypoint = path.join(directory, "entry.mjs");
-		const config = path.join(directory, "maligator.build.mjs");
 		const dependencyDirectory = path.join(directory, "node_modules/example-dependency");
 		mkdirSync(dependencyDirectory, { recursive: true });
 		writeFileSync(
@@ -25,25 +30,36 @@ describe("development wire runner", () => {
 			entrypoint,
 			'import process from "node:process";\n' +
 				'import { answer } from "example-dependency";\n' +
-				"setTimeout(() => console.log(answer, JSON.stringify(process.argv.slice(1))), 1);\n",
+				"setTimeout(\n" +
+				"	() =>\n" +
+				"		console.log(\n" +
+				"			JSON.stringify({ answer, cwd: process.cwd(), argv: process.argv.slice(1) }),\n" +
+				"		),\n" +
+				"	1,\n" +
+				");\n",
 		);
-		writeFileSync(config, "export default { surface: { node: true } };\n");
+		writeFileSync(
+			path.join(directory, "maligator.build.mjs"),
+			"export default { surface: { node: true } };\n",
+		);
 
 		const result = spawnSync(
 			process.execPath,
 			[
 				path.join(repositoryRoot, "src/index.ts"),
 				"run",
-				entrypoint,
+				"entry.mjs",
 				"--config",
-				config,
+				"maligator.build.mjs",
 				"--verbose",
 				"--",
 				"two words",
 				"--flag",
 			],
 			{
-				cwd: repositoryRoot,
+				// The project is the cwd a user would run from; the shared cache is
+				// deliberately not isolated so this stays a warm smoke measurement.
+				cwd: directory,
 				env: process.env,
 				encoding: "utf-8",
 				timeout: 300_000,
@@ -51,12 +67,13 @@ describe("development wire runner", () => {
 		);
 
 		expect(result.status, result.stderr || result.stdout).toBe(0);
-		expect(result.stdout.trim()).toBe(
-			`42 ${JSON.stringify([entrypoint, "two words", "--flag"])}`,
-		);
+		expect(JSON.parse(result.stdout)).toEqual({
+			answer: 42,
+			cwd: directory,
+			argv: [entrypoint, "two words", "--flag"],
+		});
 		expect(result.stderr).toContain("Execution backend: interpreted development image");
 		expect(result.stderr).toContain("Prepare development runtime completed");
-		expect(result.stderr).toContain("Development fragments: 0 reused, 2 compiled");
 		expect(result.stderr).not.toContain("Generate native code");
 	}, 300_000);
 });

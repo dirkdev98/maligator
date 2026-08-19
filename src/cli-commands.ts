@@ -1426,10 +1426,12 @@ export async function runCli(
 			let result: Awaited<ReturnType<typeof executeTestCommand>>;
 			try {
 				const config = loadCommandConfig(command, context.stripTypes);
+				// In-process interpretation only exists when this CLI is already hosted by a
+				// development runner matching the project policy; every other installation,
+				// including the Node-hosted source CLI, needs an isolated child runner.
 				result = command.profile
 					? executeProfiledTests(command, context, config)
-					: context.installation.developmentRunner !== undefined &&
-						  compatibleDevelopmentRunner(config, context) === undefined
+					: compatibleDevelopmentRunner(config, context) === undefined
 						? executeIsolatedTests(command, context, config)
 						: await executeTestCommand(command, context, config);
 			} catch (error) {
