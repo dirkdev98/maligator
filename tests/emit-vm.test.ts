@@ -807,11 +807,15 @@ describe("native update-expression representation", () => {
 			(fn) => (fn.nativeInheritedLoadLoops?.length ?? 0) > 0,
 		);
 		expect(loopFunction?.nativeInheritedLoadLoops).toHaveLength(1);
-		expect(
-			deserializeVmDefinition(serializeVmDefinition(loopDefinition)).functions.find(
-				(fn) => (fn.nativeInheritedLoadLoops?.length ?? 0) > 0,
-			)?.nativeInheritedLoadLoops,
-		).toEqual(loopFunction?.nativeInheritedLoadLoops);
+		const restoredLoopFunction = deserializeVmDefinition(
+			serializeVmDefinition(loopDefinition),
+		).functions.find((fn) => (fn.nativeInheritedLoadLoops?.length ?? 0) > 0);
+		expect(restoredLoopFunction?.nativeInheritedLoadLoops).toEqual(
+			loopFunction?.nativeInheritedLoadLoops,
+		);
+		expect(restoredLoopFunction?.nativePropertyRegions).toEqual(
+			loopFunction?.nativePropertyRegions,
+		);
 		const loopOutput = emitVmDefinition(loopDefinition, { compiled: true });
 		expect(loopOutput).toContain("mal_vm_local_inherited_value_try_load_static(");
 		expect(loopOutput).toContain("mal_vm_local_watched_inherited_value_try_load_static(");

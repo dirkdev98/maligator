@@ -573,6 +573,19 @@ export interface VmNativeInheritedLoadLoopPlan {
 	};
 }
 
+/** One target-selected receiver guard shared by a straight-line property run. */
+export interface VmNativePropertyRegionPlan {
+	readonly object: number;
+	readonly kind: "array" | "object";
+	readonly consolidated: boolean;
+	readonly icIndices: ReadonlyArray<number>;
+	readonly sites: ReadonlyArray<{
+		readonly ip: number;
+		readonly revalidate: boolean;
+		readonly loopStaticPropertyFastPath: boolean;
+	}>;
+}
+
 export interface VmGuardedBuiltinCall {
 	readonly operation: VmGuardedBuiltinOperation;
 	/** The shared semantic facts and fallback contract for this specialization. */
@@ -769,6 +782,12 @@ export interface VmFunction {
 
 	/** Compile-only inherited-load loop certificates produced by target lowering. */
 	nativeInheritedLoadLoops?: ReadonlyArray<VmNativeInheritedLoadLoopPlan>;
+
+	/** Compile-only receiver-guard regions for generic and specialized emission. */
+	nativePropertyRegions?: {
+		readonly generic: ReadonlyArray<VmNativePropertyRegionPlan>;
+		readonly specialized: ReadonlyArray<VmNativePropertyRegionPlan>;
+	};
 }
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
@@ -1876,23 +1895,8 @@ function nativeRepresentationPlan(fn: VmFunction): VmNativeRepresentationPlan {
 	return { generic, specialized, promotedNumericParameters };
 }
 
-const VM_INHERITED_LOOP_SCALAR_OPCODES = new Set<VmInstruction["opcode"]>([
-	"MOVE",
-	"CREATE_UNDEFINED",
-	"CREATE_NULL",
-	"CREATE_EMPTY",
-	"CREATE_BOOLEAN",
-	"CREATE_NUMBER",
-	"CREATE_F64",
-	"IS_EMPTY",
-	"TYPEOF_COMPARE",
-	"BINARY",
-	"UNARY",
-	"JUMP",
-	"JUMP_IF",
-]);
-
-function nativeScalarInstructionMayRunUserCode(
+/** Whether native execution of an instruction can synchronously capture/re-enter JS. */
+export function vmNativeInstructionMayCaptureStack(
 	instruction: VmInstruction,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 ): boolean {
@@ -1904,10 +1908,25 @@ function nativeScalarInstructionMayRunUserCode(
 		case "CREATE_BOOLEAN":
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
+		case "CREATE_STRING":
+		case "CREATE_BIGINT":
+		case "LOAD_ARGUMENT_COUNT":
+		case "LOAD_ARGUMENT":
+		case "LOAD_NEW_TARGET":
+		case "LOAD_CALLEE":
+		case "GUARD_FUNCTION_INDEX":
+		case "LOAD_CAPTURED":
+		case "STORE_CAPTURED":
+		case "LOAD_GLOBAL":
+		case "STORE_GLOBAL":
+		case "LOAD_INTRINSIC":
 		case "IS_EMPTY":
 		case "TYPEOF_COMPARE":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
 		case "JUMP":
 		case "JUMP_IF":
+		case "CATCH":
 			return false;
 		case "BINARY":
 			return !(
@@ -1924,6 +1943,22 @@ function nativeScalarInstructionMayRunUserCode(
 			return true;
 	}
 }
+
+const VM_INHERITED_LOOP_SCALAR_OPCODES = new Set<VmInstruction["opcode"]>([
+	"MOVE",
+	"CREATE_UNDEFINED",
+	"CREATE_NULL",
+	"CREATE_EMPTY",
+	"CREATE_BOOLEAN",
+	"CREATE_NUMBER",
+	"CREATE_F64",
+	"IS_EMPTY",
+	"TYPEOF_COMPARE",
+	"BINARY",
+	"UNARY",
+	"JUMP",
+	"JUMP_IF",
+]);
 
 function inheritedLoopReadRegisters(instruction: VmInstruction): Array<number> {
 	switch (instruction.opcode) {
@@ -2176,7 +2211,7 @@ function nativeInheritedLoadLoopPlans(
 			}
 			if (
 				!VM_INHERITED_LOOP_SCALAR_OPCODES.has(instruction.opcode) ||
-				nativeScalarInstructionMayRunUserCode(instruction, representations)
+				vmNativeInstructionMayCaptureStack(instruction, representations)
 			) {
 				scalarOnly = false;
 				break;
@@ -2245,6 +2280,135 @@ function nativeInheritedLoadLoopPlans(
 						Math.min(candidate.backedgeIp, other.backedgeIp),
 			),
 	);
+}
+
+/** Select property receiver guards and loop-hot static probes before emission. */
+function nativePropertyRegionPlans(
+	fn: VmFunction,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+): Array<VmNativePropertyRegionPlan> {
+	const jumpTargets = new Set<number>();
+	for (const instruction of fn.instructions) {
+		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
+			jumpTargets.add(instruction.targetIp);
+		}
+	}
+	if (fn.isGenerator || fn.isAsync) {
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			const opcode = fn.instructions[ip]!.opcode;
+			if (opcode === "GENERATOR_START" || opcode === "YIELD" || opcode === "AWAIT") {
+				jumpTargets.add(ip + 1);
+			}
+		}
+	}
+	for (const handler of fn.handlers) jumpTargets.add(handler.handlerIp);
+
+	const loopBody = new Set<number>();
+	const loopDeltas = new Int32Array(fn.instructions.length + 1);
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (
+			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+			instruction.targetIp <= ip
+		) {
+			loopDeltas[instruction.targetIp] = (loopDeltas[instruction.targetIp] ?? 0) + 1;
+			loopDeltas[ip + 1] = (loopDeltas[ip + 1] ?? 0) - 1;
+		}
+	}
+	let loopDepth = 0;
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		loopDepth += loopDeltas[ip]!;
+		if (loopDepth > 0) loopBody.add(ip);
+	}
+
+	interface PropertyRun {
+		readonly object: number;
+		readonly kind: "array" | "object";
+		readonly ips: Array<number>;
+	}
+	const runs: Array<PropertyRun> = [];
+	let current: PropertyRun | undefined;
+	const flush = (): void => {
+		if (current === undefined) return;
+		runs.push(current);
+		current = undefined;
+	};
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const instruction = fn.instructions[ip]!;
+		if (jumpTargets.has(ip)) flush();
+		if (
+			instruction.opcode === "LOAD_PROPERTY" ||
+			instruction.opcode === "STORE_PROPERTY" ||
+			instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC"
+		) {
+			const kind =
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY") &&
+				representations[instruction.key] === "number"
+					? "array"
+					: "object";
+			if (current?.object === instruction.object && current.kind === kind) {
+				current.ips.push(ip);
+			} else {
+				flush();
+				current = { object: instruction.object, kind, ips: [ip] };
+			}
+		}
+		if (
+			current !== undefined &&
+			vmInstructionWriteRegisters(instruction).includes(current.object)
+		) {
+			flush();
+		}
+		if (
+			instruction.opcode === "JUMP" ||
+			instruction.opcode === "JUMP_IF" ||
+			instruction.opcode === "RETURN" ||
+			instruction.opcode === "THROW"
+		) {
+			flush();
+		}
+	}
+	flush();
+
+	return runs.map((run) => {
+		const consolidated = run.kind === "object" && run.ips.length >= 2;
+		const icIndices = run.ips.map((ip) => {
+			const instruction = fn.instructions[ip]!;
+			if (
+				instruction.opcode !== "LOAD_PROPERTY" &&
+				instruction.opcode !== "STORE_PROPERTY" &&
+				instruction.opcode !== "LOAD_PROPERTY_STATIC" &&
+				instruction.opcode !== "STORE_PROPERTY_STATIC"
+			) {
+				throw new Error(`Invalid property region instruction ${instruction.opcode}`);
+			}
+			return instruction.icIndex;
+		});
+		return {
+			object: run.object,
+			kind: run.kind,
+			consolidated,
+			icIndices,
+			sites: run.ips.map((ip, index) => {
+				const previousIp = run.ips[index - 1];
+				return {
+					ip,
+					revalidate:
+						consolidated &&
+						previousIp !== undefined &&
+						fn.instructions
+							.slice(previousIp + 1, ip)
+							.some((instruction) =>
+								vmNativeInstructionMayCaptureStack(instruction, representations),
+							),
+					loopStaticPropertyFastPath:
+						loopBody.has(ip) && fn.instructions[ip]?.opcode === "LOAD_PROPERTY_STATIC",
+				};
+			}),
+		};
+	});
 }
 
 const VM_REGISTER_USE_FIELDS = [
@@ -3834,11 +3998,26 @@ function lowerFunctionToVmFunction(
 		lowered,
 		representationPlan.specialized,
 	);
+	const genericPropertyRegions = nativePropertyRegionPlans(
+		lowered,
+		representationPlan.generic,
+	);
+	const specializedPropertyRegions = nativePropertyRegionPlans(
+		lowered,
+		representationPlan.specialized,
+	);
 	return {
 		...lowered,
 		nativeRepresentationPlan: representationPlan,
 		nativeInheritedLoadLoops:
 			inheritedLoadLoops.length === 0 ? undefined : inheritedLoadLoops,
+		nativePropertyRegions:
+			genericPropertyRegions.length === 0 && specializedPropertyRegions.length === 0
+				? undefined
+				: {
+						generic: genericPropertyRegions,
+						specialized: specializedPropertyRegions,
+					},
 	};
 }
 

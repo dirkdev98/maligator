@@ -12,6 +12,7 @@ import type {
 	VmDefinition,
 	VmFunction,
 	VmInstruction,
+	VmNativePropertyRegionPlan,
 	VmRegion,
 	VmSemanticProtectorFact,
 } from "./lower-vm.ts";
@@ -33,7 +34,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Internal wire formats are hard cut-overs: stale artifacts must rebuild.
-export const WIRE_VERSION = 9;
+export const WIRE_VERSION = 10;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -990,6 +991,68 @@ export function serializeVmDefinition(
 				w.i32(loop.summary.exitIp);
 			}
 		}
+
+		const writePropertyRegions = (
+			regions: NonNullable<typeof fn.nativePropertyRegions>["generic"],
+			representations: ReadonlyArray<string>,
+		): void => {
+			w.u32(regions.length);
+			let previousFinalIp = -1;
+			for (const region of regions) {
+				if (
+					region.object < 0 ||
+					region.object >= fn.registerCount ||
+					region.sites.length === 0 ||
+					region.sites.length !== region.icIndices.length ||
+					region.consolidated !==
+						(region.kind === "object" && region.sites.length >= 2) ||
+					region.sites.some((site, index) => {
+						const instruction = fn.instructions[site.ip];
+						const expectedKind =
+							(instruction?.opcode === "LOAD_PROPERTY" ||
+								instruction?.opcode === "STORE_PROPERTY") &&
+							representations[instruction.key] === "number"
+								? "array"
+								: "object";
+						return (
+							site.ip <= previousFinalIp ||
+							(index > 0 && region.sites[index - 1]!.ip >= site.ip) ||
+							(instruction?.opcode !== "LOAD_PROPERTY" &&
+								instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+								instruction?.opcode !== "STORE_PROPERTY" &&
+								instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+							instruction.object !== region.object ||
+							instruction.icIndex !== region.icIndices[index] ||
+							expectedKind !== region.kind ||
+							(site.revalidate && (!region.consolidated || index === 0)) ||
+							(site.loopStaticPropertyFastPath &&
+								instruction.opcode !== "LOAD_PROPERTY_STATIC")
+						);
+					})
+				) {
+					throw new RangeError("serialize-vm: invalid native property region plan");
+				}
+				previousFinalIp = region.sites[region.sites.length - 1]!.ip;
+				w.i32(region.object);
+				w.u8(region.kind === "array" ? 0 : 1);
+				w.u8(region.consolidated ? 1 : 0);
+				w.u32(region.sites.length);
+				for (let siteIndex = 0; siteIndex < region.sites.length; siteIndex++) {
+					const site = region.sites[siteIndex]!;
+					w.i32(site.ip);
+					w.i32(region.icIndices[siteIndex]!);
+					w.u8((site.revalidate ? 1 : 0) | (site.loopStaticPropertyFastPath ? 2 : 0));
+				}
+			}
+		};
+		writePropertyRegions(
+			fn.nativePropertyRegions?.generic ?? [],
+			fn.nativeRepresentationPlan?.generic ?? [],
+		);
+		writePropertyRegions(
+			fn.nativePropertyRegions?.specialized ?? [],
+			fn.nativeRepresentationPlan?.specialized ?? [],
+		);
 
 		const instructionMetadata = fn.instructions
 			.map((instruction, instructionIndex) => ({ instruction, instructionIndex }))
@@ -2989,6 +3052,85 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		}
 		if (nativeInheritedLoadLoops.length > 0) {
 			fn.nativeInheritedLoadLoops = nativeInheritedLoadLoops;
+		}
+
+		const readPropertyRegions = (
+			representations: ReadonlyArray<"boxed" | "number" | "boolean">,
+		): Array<VmNativePropertyRegionPlan> => {
+			const regionCount = r.count(7);
+			let previousFinalIp = -1;
+			return Array.from({ length: regionCount }, () => {
+				const object = r.i32();
+				const kindTag = r.u8();
+				const consolidatedTag = r.u8();
+				const siteCount = r.count(2);
+				const icIndices: Array<number> = [];
+				const sites = Array.from({ length: siteCount }, () => {
+					const ip = r.i32();
+					icIndices.push(r.i32());
+					const flags = r.u8();
+					if (flags > 3) {
+						throw new Error("serialize-vm: invalid native property site flags");
+					}
+					return {
+						ip,
+						revalidate: (flags & 1) !== 0,
+						loopStaticPropertyFastPath: (flags & 2) !== 0,
+					};
+				});
+				const kind = kindTag === 0 ? "array" : kindTag === 1 ? "object" : undefined;
+				const consolidated = consolidatedTag === 1;
+				if (
+					kind === undefined ||
+					consolidatedTag > 1 ||
+					object < 0 ||
+					object >= fn.registerCount ||
+					sites.length === 0 ||
+					sites.length !== icIndices.length ||
+					consolidated !== (kind === "object" && sites.length >= 2) ||
+					sites.some((site, index) => {
+						const instruction = fn.instructions[site.ip];
+						const expectedKind =
+							(instruction?.opcode === "LOAD_PROPERTY" ||
+								instruction?.opcode === "STORE_PROPERTY") &&
+							representations[instruction.key] === "number"
+								? "array"
+								: "object";
+						return (
+							site.ip <= previousFinalIp ||
+							(index > 0 && sites[index - 1]!.ip >= site.ip) ||
+							(instruction?.opcode !== "LOAD_PROPERTY" &&
+								instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+								instruction?.opcode !== "STORE_PROPERTY" &&
+								instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+							instruction.object !== object ||
+							instruction.icIndex !== icIndices[index] ||
+							expectedKind !== kind ||
+							(site.revalidate && (!consolidated || index === 0)) ||
+							(site.loopStaticPropertyFastPath &&
+								instruction.opcode !== "LOAD_PROPERTY_STATIC")
+						);
+					})
+				) {
+					throw new Error("serialize-vm: invalid native property region plan");
+				}
+				previousFinalIp = sites[sites.length - 1]!.ip;
+				return { object, kind, consolidated, icIndices, sites };
+			});
+		};
+		const genericPropertyRegions = readPropertyRegions(
+			fn.nativeRepresentationPlan?.generic ??
+				Array.from({ length: fn.registerCount }, () => "boxed" as const),
+		);
+		const specializedPropertyRegions = readPropertyRegions(
+			fn.nativeRepresentationPlan?.specialized ??
+				Array.from({ length: fn.registerCount }, () => "boxed" as const),
+		);
+		if (genericPropertyRegions.length > 0 || specializedPropertyRegions.length > 0) {
+			fn.nativePropertyRegions = {
+				generic: genericPropertyRegions,
+				specialized: specializedPropertyRegions,
+			};
 		}
 
 		const instructionMetadataCount = r.count(2);

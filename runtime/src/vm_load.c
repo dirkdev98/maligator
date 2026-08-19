@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 9u
+#define WIRE_VERSION 10u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1837,6 +1837,66 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
                     exit_ip >= functions[i].instruction_count) {
                     r.ok = false;
                 }
+            }
+        }
+
+        for (u32 variant = 0; r.ok && variant < 2; variant++) {
+            u32 property_region_count = rd_count(&r, 7);
+            i32 previous_final_ip = -1;
+            for (u32 region = 0; r.ok && region < property_region_count; region++) {
+                i32 object = rd_i32(&r);
+                u8 kind = rd_u8(&r);
+                u8 consolidated = rd_u8(&r);
+                u32 site_count = rd_count(&r, 2);
+                if (object < 0 || object >= functions[i].register_count || kind > 1 ||
+                    consolidated > 1 || site_count == 0 ||
+                    (consolidated == 1) != (kind == 1 && site_count >= 2)) {
+                    r.ok = false;
+                }
+                i32 previous_site_ip = -1;
+                for (u32 site = 0; r.ok && site < site_count; site++) {
+                    i32 site_ip = rd_i32(&r);
+                    i32 ic_index = rd_i32(&r);
+                    u8 flags = rd_u8(&r);
+                    if (site_ip <= previous_final_ip || site_ip <= previous_site_ip ||
+                        site_ip < 0 || site_ip >= functions[i].instruction_count ||
+                        ic_index < 0 || ic_index >= functions[i].property_ic_count ||
+                        flags > 3 || ((flags & 1) != 0 && (consolidated == 0 || site == 0))) {
+                        r.ok = false;
+                        continue;
+                    }
+                    const MalInstruction *instruction = &functions[i].instructions[site_ip];
+                    i32 instruction_object = -1;
+                    i32 instruction_ic_index = -1;
+                    switch (instruction->opcode) {
+                        case MAL_OP_LOAD_PROPERTY:
+                            instruction_object = instruction->as.load_property.object;
+                            instruction_ic_index = instruction->as.load_property.ic_index;
+                            break;
+                        case MAL_OP_STORE_PROPERTY:
+                            instruction_object = instruction->as.store_property.object;
+                            instruction_ic_index = instruction->as.store_property.ic_index;
+                            break;
+                        case MAL_OP_LOAD_PROPERTY_STATIC:
+                            instruction_object = instruction->as.load_property_static.object;
+                            instruction_ic_index = instruction->as.load_property_static.ic_index;
+                            break;
+                        case MAL_OP_STORE_PROPERTY_STATIC:
+                            instruction_object = instruction->as.store_property_static.object;
+                            instruction_ic_index = instruction->as.store_property_static.ic_index;
+                            break;
+                        default:
+                            r.ok = false;
+                            break;
+                    }
+                    if (instruction_object != object || instruction_ic_index != ic_index ||
+                        ((flags & 2) != 0 &&
+                         instruction->opcode != MAL_OP_LOAD_PROPERTY_STATIC)) {
+                        r.ok = false;
+                    }
+                    previous_site_ip = site_ip;
+                }
+                previous_final_ip = previous_site_ip;
             }
         }
 

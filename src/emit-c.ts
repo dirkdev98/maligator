@@ -10,6 +10,7 @@ import {
 	vmCallProvesBuiltin,
 	vmGuardIsWorldInvariant,
 	vmInstructionWriteRegisters,
+	vmNativeInstructionMayCaptureStack as nativeInstructionMayCaptureStack,
 	vmSemanticProtectorGuard,
 } from "./lower-vm.ts";
 import type {
@@ -18,6 +19,7 @@ import type {
 	VmGuardPlan,
 	VmInstruction,
 	VmNativeInheritedLoadLoopPlan,
+	VmNativePropertyRegionPlan,
 	VmRegion,
 	VmRegionLicense,
 	VmRegisterRepresentation,
@@ -656,6 +658,9 @@ export function emitCompiledFunction(
 		thisSlot,
 		null,
 		override === undefined ? (fn.nativeInheritedLoadLoops ?? []) : [],
+		override === undefined
+			? (fn.nativePropertyRegions?.specialized ?? [])
+			: (fn.nativePropertyRegions?.generic ?? []),
 		stackObjectSites,
 		stackObjectAccesses,
 		stackObjectMaterializations,
@@ -1006,6 +1011,7 @@ function emitResumableFunction(
 		-1,
 		coro,
 		[],
+		fn.nativePropertyRegions?.generic ?? [],
 		new Map(),
 		new Map(),
 		new Map(),
@@ -1185,54 +1191,6 @@ function zeroOf(rep: RegisterRep): string {
 	return rep === "number" ? "0.0" : rep === "boolean" ? "false" : "MAL_VALUE_UNDEFINED";
 }
 
-/** Whether this instruction can synchronously capture the current JS stack,
- * directly or by re-entering user code. The whitelist is intentionally narrow;
- * unknown/helper operations publish the pending source position. */
-function nativeInstructionMayCaptureStack(
-	instruction: VmInstruction,
-	reps: Array<RegisterRep>,
-): boolean {
-	switch (instruction.opcode) {
-		case "MOVE":
-		case "CREATE_UNDEFINED":
-		case "CREATE_NULL":
-		case "CREATE_EMPTY":
-		case "CREATE_BOOLEAN":
-		case "CREATE_NUMBER":
-		case "CREATE_F64":
-		case "CREATE_STRING":
-		case "CREATE_BIGINT":
-		case "LOAD_ARGUMENT_COUNT":
-		case "LOAD_ARGUMENT":
-		case "LOAD_NEW_TARGET":
-		case "LOAD_CALLEE":
-		case "GUARD_FUNCTION_INDEX":
-		case "LOAD_CAPTURED":
-		case "STORE_CAPTURED":
-		case "LOAD_GLOBAL":
-		case "STORE_GLOBAL":
-		case "LOAD_INTRINSIC":
-		case "IS_EMPTY":
-		case "TYPEOF_COMPARE":
-		case "MATH_UNARY_NUMBER":
-		case "MATH_BINARY_NUMBER":
-		case "JUMP":
-		case "JUMP_IF":
-		case "CATCH":
-			return false;
-		case "BINARY":
-			return !(
-				(reps[instruction.left] === "number" && reps[instruction.right] === "number") ||
-				instruction.operator === "===" ||
-				instruction.operator === "!=="
-			);
-		case "UNARY":
-			return !(reps[instruction.src] === "number" || instruction.operator === "!");
-		default:
-			return true;
-	}
-}
-
 /**
  * Whether an instruction may synchronously run JavaScript and therefore mutate
  * a watched semantic family.
@@ -1282,6 +1240,7 @@ interface RegionAccess {
 	leadingIcIndex: number;
 	icIndices: Array<number>;
 	commit: boolean;
+	loopStaticPropertyFastPath: boolean;
 }
 
 interface NativeInheritedLoadLoop extends VmNativeInheritedLoadLoopPlan {
@@ -1621,6 +1580,7 @@ function emitBody(
 	thisSlot: number,
 	coro: CoroutineContext | null,
 	inheritedLoadLoopPlans: ReadonlyArray<VmNativeInheritedLoadLoopPlan>,
+	propertyRegionPlans: ReadonlyArray<VmNativePropertyRegionPlan>,
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
 	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
@@ -1658,28 +1618,6 @@ function emitBody(
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
 			jumpTargets.add(instruction.targetIp);
 		}
-	}
-	// Static property sites inside a natural flattened loop are the ones where
-	// cloning the dependency-registered inherited-value fast path pays for its
-	// code size. Mark the union of backward-jump intervals; straight-line and
-	// one-shot sites retain the smaller ordinary probe and outlined inherited
-	// fallback.
-	const loopBody = new Set<number>();
-	const loopDeltas = new Int32Array(fn.instructions.length + 1);
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		const instruction = fn.instructions[ip]!;
-		if (
-			(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-			instruction.targetIp <= ip
-		) {
-			loopDeltas[instruction.targetIp] = (loopDeltas[instruction.targetIp] ?? 0) + 1;
-			loopDeltas[ip + 1] = (loopDeltas[ip + 1] ?? 0) - 1;
-		}
-	}
-	let loopDepth = 0;
-	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		loopDepth += loopDeltas[ip]!;
-		if (loopDepth > 0) loopBody.add(ip);
 	}
 	// A coroutine resumes at the instruction after each suspend (GENERATOR_START/
 	// YIELD/AWAIT), so those need labels for the entry dispatch to jump to.
@@ -1849,113 +1787,55 @@ function emitBody(
 		}
 	}
 
-	// Guarded property-access regions. Group consecutive LOAD/STORE_PROPERTY on the same
-	// object register within a straight-line window under one shared receiver guard: an
-	// index-form (number-rep key) run guards a dense array (`mal_vm_as_array`), a string-key
-	// run guards a plain object (`mal_vm_as_object`). The first access declares the guard
-	// local, the rest reuse it, and each access omits the per-access throwCheck on a fast hit
-	// (a dense element / a monomorphic data-slot access runs no user code). A run is
-	// homogeneous in kind (array vs object need different guards) and bounded by a label
-	// (control could enter without passing the guard), a redefinition of the guarded
-	// register, or a control-flow terminator. Consolidated object accesses revalidate the
-	// selected shape before each later direct slot access, because intervening coercion or
-	// calls may reshape/dictionarize the receiver while its identity stays stable.
 	const regionGuard = new Map<number, RegionAccess>();
-	{
-		// First collect maximal runs of same-kind, same-register accesses, then assign each
-		// run its region info. A run ends at a label, a redefinition of the accessed
-		// register, or a control-flow terminator.
-		interface Run {
-			reg: number;
-			kind: "array" | "object";
-			ips: Array<number>;
+	for (let regionIndex = 0; regionIndex < propertyRegionPlans.length; regionIndex++) {
+		const plan = propertyRegionPlans[regionIndex]!;
+		if (
+			plan.object < 0 ||
+			plan.object >= fn.registerCount ||
+			plan.sites.length === 0 ||
+			plan.sites.length !== plan.icIndices.length ||
+			plan.consolidated !== (plan.kind === "object" && plan.sites.length >= 2)
+		) {
+			throw new Error(`Invalid native property region ${regionIndex}`);
 		}
-		const runs: Array<Run> = [];
-		let cur: Run | null = null;
-		const flush = (): void => {
-			if (cur !== null) {
-				runs.push(cur);
-				cur = null;
-			}
-		};
-		for (let ip = 0; ip < fn.instructions.length; ip++) {
-			const instr = fn.instructions[ip]!;
-			if (jumpTargets.has(ip)) {
-				flush();
-			}
+		for (let siteIndex = 0; siteIndex < plan.sites.length; siteIndex++) {
+			const site = plan.sites[siteIndex]!;
+			const instruction = fn.instructions[site.ip];
 			if (
-				instr.opcode === "LOAD_PROPERTY" ||
-				instr.opcode === "STORE_PROPERTY" ||
-				instr.opcode === "LOAD_PROPERTY_STATIC" ||
-				instr.opcode === "STORE_PROPERTY_STATIC"
+				(instruction?.opcode !== "LOAD_PROPERTY" &&
+					instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+					instruction?.opcode !== "STORE_PROPERTY" &&
+					instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+				instruction.object !== plan.object ||
+				instruction.icIndex !== plan.icIndices[siteIndex] ||
+				(siteIndex > 0 && plan.sites[siteIndex - 1]!.ip >= site.ip) ||
+				(site.revalidate && (!plan.consolidated || siteIndex === 0)) ||
+				(site.loopStaticPropertyFastPath && instruction.opcode !== "LOAD_PROPERTY_STATIC")
 			) {
-				const kind =
-					(instr.opcode === "LOAD_PROPERTY" || instr.opcode === "STORE_PROPERTY") &&
-					reps[instr.key] === "number"
-						? "array"
-						: "object";
-				const obj = instr.object;
-				if (cur !== null && cur.reg === obj && cur.kind === kind) {
-					cur.ips.push(ip);
-				} else {
-					flush();
-					cur = { reg: obj, kind, ips: [ip] };
-				}
+				throw new Error(`Invalid native property region site ${site.ip}`);
 			}
-			// The current access (if any) already read the live guard above; a redefinition
-			// of the accessed register now ends the run so later accesses re-guard.
-			if (cur !== null && vmInstructionWriteRegisters(instr).includes(cur.reg)) {
-				flush();
+			const expectedKind =
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY") &&
+				reps[instruction.key] === "number"
+					? "array"
+					: "object";
+			if (expectedKind !== plan.kind || regionGuard.has(site.ip)) {
+				throw new Error(`Invalid native property region kind at ${site.ip}`);
 			}
-			if (
-				instr.opcode === "JUMP" ||
-				instr.opcode === "JUMP_IF" ||
-				instr.opcode === "RETURN" ||
-				instr.opcode === "THROW"
-			) {
-				flush();
-			}
-		}
-		flush();
-
-		let guardId = 0;
-		for (const run of runs) {
-			const name = `__rg${guardId++}`;
-			// A ≥2-access object run consolidates onto ONE shape guard + a cached-slot array;
-			// arrays and single object accesses keep the per-access guarded form.
-			const consolidated = run.kind === "object" && run.ips.length >= 2;
-			const icIndices = run.ips.map((ip) => {
-				const instruction = fn.instructions[ip]!;
-				if (
-					instruction.opcode !== "LOAD_PROPERTY" &&
-					instruction.opcode !== "LOAD_PROPERTY_STATIC" &&
-					instruction.opcode !== "STORE_PROPERTY" &&
-					instruction.opcode !== "STORE_PROPERTY_STATIC"
-				) {
-					throw new Error(`Invalid property region instruction ${instruction.opcode}`);
-				}
-				return instruction.icIndex;
-			});
-			run.ips.forEach((ip, i) => {
-				const previousIp = run.ips[i - 1];
-				const revalidate =
-					consolidated &&
-					previousIp !== undefined &&
-					fn.instructions
-						.slice(previousIp + 1, ip)
-						.some((instruction) => nativeInstructionMayCaptureStack(instruction, reps));
-				regionGuard.set(ip, {
-					name,
-					kind: run.kind,
-					declare: i === 0,
-					consolidated,
-					revalidate,
-					slotIndex: i,
-					size: run.ips.length,
-					leadingIcIndex: icIndices[0]!,
-					icIndices,
-					commit: consolidated && i === run.ips.length - 1,
-				});
+			regionGuard.set(site.ip, {
+				name: `__rg${regionIndex}`,
+				kind: plan.kind,
+				declare: siteIndex === 0,
+				consolidated: plan.consolidated,
+				revalidate: site.revalidate,
+				slotIndex: siteIndex,
+				size: plan.sites.length,
+				leadingIcIndex: plan.icIndices[0]!,
+				icIndices: [...plan.icIndices],
+				commit: plan.consolidated && siteIndex === plan.sites.length - 1,
+				loopStaticPropertyFastPath: site.loopStaticPropertyFastPath,
 			});
 		}
 	}
@@ -2258,10 +2138,7 @@ function emitBody(
 					load.consumer?.kind === "asciiCaseLength",
 			),
 		) ||
-		fn.instructions.some(
-			(instruction, ip) =>
-				loopBody.has(ip) && instruction.opcode === "LOAD_PROPERTY_STATIC",
-		)
+		[...regionGuard.values()].some((region) => region.loopStaticPropertyFastPath)
 	) {
 		const watchedMethodsAdmission =
 			watchedMethodsGuard === undefined
@@ -2422,7 +2299,8 @@ function emitBody(
 				directCompiledTargets,
 				mathUnaryCall: mathUnaryCalls.has(ip),
 				mathBinaryCall: mathBinaryCalls.has(ip),
-				loopStaticPropertyFastPath: loopBody.has(ip),
+				loopStaticPropertyFastPath:
+					regionGuard.get(ip)?.loopStaticPropertyFastPath ?? false,
 				mappedArguments: fn.mappedArguments,
 				mappedArgumentSlots: fn.mappedArgumentSlots,
 				hasPrototype: fn.hasPrototype,
@@ -3368,6 +3246,7 @@ function emitInstruction(
 				leadingIcIndex: instruction.icIndex,
 				icIndices: [instruction.icIndex],
 				commit: false,
+				loopStaticPropertyFastPath: false,
 			};
 			if (
 				instruction.opcode === "LOAD_PROPERTY" &&
@@ -3570,6 +3449,7 @@ function emitInstruction(
 				leadingIcIndex: instruction.icIndex,
 				icIndices: [instruction.icIndex],
 				commit: false,
+				loopStaticPropertyFastPath: false,
 			};
 			if (reg.kind === "array" && instruction.opcode === "STORE_PROPERTY") {
 				const ordinary = [

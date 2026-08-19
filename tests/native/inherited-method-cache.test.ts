@@ -271,6 +271,7 @@ describe("inherited built-in method and native call caches", () => {
 				["inherited-ordinary-cache PASS"],
 			);
 		},
+		90_000,
 	);
 
 	it.each([

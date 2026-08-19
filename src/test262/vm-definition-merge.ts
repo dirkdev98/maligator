@@ -475,6 +475,21 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 					deferredMoveIps: [...loop.deferredMoveIps],
 					summary: loop.summary === undefined ? undefined : { ...loop.summary },
 				})),
+				nativePropertyRegions:
+					fn.nativePropertyRegions === undefined
+						? undefined
+						: {
+								generic: fn.nativePropertyRegions.generic.map((region) => ({
+									...region,
+									icIndices: [...region.icIndices],
+									sites: region.sites.map((site) => ({ ...site })),
+								})),
+								specialized: fn.nativePropertyRegions.specialized.map((region) => ({
+									...region,
+									icIndices: [...region.icIndices],
+									sites: region.sites.map((site) => ({ ...site })),
+								})),
+							},
 				mappedArgumentSlots: [...fn.mappedArgumentSlots],
 				regions: fn.regions?.map((region) => cloneRegion(region, base)),
 			})),
