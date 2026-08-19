@@ -1,4 +1,4 @@
-import { builtinOperations } from "./builtin-registry.ts";
+import { builtinOperations, mathUnaryOperationKeys } from "./builtin-registry.ts";
 import type {
 	CompilerOptimizationDecision,
 	OptimizationAblation,
@@ -6,7 +6,11 @@ import type {
 	OptimizationMetrics,
 	OptimizationPassDelta,
 } from "./compiler-diagnostics.ts";
-import { knownFact, sourceSiteId } from "./compiler-facts.ts";
+import {
+	compilerFactIsWorldInvariant,
+	knownFact,
+	sourceSiteId,
+} from "./compiler-facts.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
@@ -203,6 +207,9 @@ function optimizationPassDelta(
 const BUILTIN_OPERATION_BY_KEY = new Map(
 	builtinOperations.map((operation) => [operation.key, operation] as const),
 );
+const MATH_UNARY_OPERATIONS: ReadonlySet<string> = new Set(
+	mathUnaryOperationKeys.map(([operation]) => operation),
+);
 
 function decodeString(program: CoreProgram, index: number): string | undefined {
 	const units = program.stringConstants[index];
@@ -246,17 +253,27 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 		const compilation = program.compilation;
 		if (compilation === undefined) return fn;
 		const definitions = new Map<CoreValueId, CoreInstruction>();
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation]),
+		);
+		const useCounts = new Map<CoreValueId, number>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				for (const output of instruction.outputs) definitions.set(output, instruction);
+				for (const input of instruction.inputs) {
+					useCounts.set(input, (useCounts.get(input) ?? 0) + 1);
+				}
 			}
 		}
 		let changed = false;
 		let guardOrdinal = 0;
+		const removedInstructions = new Set<CoreInstructionId>();
+		const removedValues = new Set<CoreValueId>();
+		const numericOutputs = new Set<CoreValueId>();
 		const blocks = fn.blocks.map(
 			(block): CoreBlock => ({
 				...block,
-				instructions: block.instructions.map((instruction) => {
+				instructions: block.instructions.map((instruction): CoreInstruction => {
 					if (
 						instruction.opcode !== "call" ||
 						instruction.attributes.knownBuiltinCall !== undefined ||
@@ -308,6 +325,34 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 								});
 					guardOrdinal++;
 					changed = true;
+					const arguments_ = instruction.inputs.slice(2);
+					const mathOpcode = MATH_UNARY_OPERATIONS.has(descriptor.id)
+						? "mathUnaryNumber"
+						: descriptor.id === "Math.min" || descriptor.id === "Math.max"
+							? "mathBinaryNumber"
+							: undefined;
+					if (
+						mathOpcode !== undefined &&
+						compilerFactIsWorldInvariant(identity) &&
+						descriptor.nativeNumberArity === arguments_.length &&
+						arguments_.every((argument) => representations.get(argument) === "f64") &&
+						instruction.outputs.length === 1
+					) {
+						if (
+							property.outputs.length === 1 &&
+							useCounts.get(property.outputs[0]!) === 1
+						) {
+							removedInstructions.add(property.id);
+							for (const output of property.outputs) removedValues.add(output);
+						}
+						numericOutputs.add(instruction.outputs[0]!);
+						return {
+							...instruction,
+							opcode: mathOpcode,
+							inputs: arguments_,
+							attributes: { operation: descriptor.id },
+						};
+					}
 					return {
 						...instruction,
 						attributes: {
@@ -339,7 +384,26 @@ const annotateKnownBuiltinCalls: CoreFunctionPass = {
 				}),
 			}),
 		);
-		return changed ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+		const filteredBlocks = blocks.map((block) => ({
+			...block,
+			instructions: block.instructions.filter(
+				({ id }) => !removedInstructions.has(id),
+			),
+		}));
+		return changed
+			? {
+					...fn,
+					blocks: filteredBlocks,
+					values: fn.values
+						.filter(({ id }) => !removedValues.has(id))
+						.map((value) =>
+							numericOutputs.has(value.id)
+								? { ...value, representation: "f64" }
+								: value,
+						),
+					mutationEpoch: fn.mutationEpoch + 1,
+				}
+			: fn;
 	},
 };
 

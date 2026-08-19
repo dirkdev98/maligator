@@ -501,7 +501,23 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				break;
 			case "CALL":
 				disqualifying.push(instruction.callee, instruction.thisValue);
-				// arguments are neutral boundary reads
+				{
+					const guarded = instruction.guardedBuiltinCall;
+					const descriptor =
+						guarded === undefined
+							? undefined
+							: builtinOperationDescriptor(guarded.operation);
+					if (
+						guarded !== undefined &&
+						vmGuardIsWorldInvariant(guarded.guard) &&
+						descriptor?.nativeNumberArity === instruction.arguments.length
+					) {
+						for (const operand of instruction.arguments) {
+							const decoded = decodeVmValueOperand(operand);
+							if (decoded.kind === "register") numeric.push(decoded.register);
+						}
+					}
+				}
 				break;
 			case "CALL_BUILTIN":
 				disqualifying.push(instruction.thisValue);
