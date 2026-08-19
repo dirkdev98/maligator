@@ -486,7 +486,9 @@ export function emitCompiledFunction(
 			elementLoads.length > 8 ||
 			stringSplitProjectionSites.has(projection.callIp)
 		) {
-			continue;
+			throw new Error(
+				`Invalid Core string-split projection at instruction ${projection.callIp}`,
+			);
 		}
 		stringSplitProjectionSites.set(projection.callIp, {
 			projection,
@@ -506,7 +508,9 @@ export function emitCompiledFunction(
 		const callIp = cursor.anchors[0]!;
 		const lengthIp = cursor.anchors[2]!;
 		const backedgeIp = cursor.anchors[3]!;
-		if (stringSplitCursorSites.has(callIp)) continue;
+		if (stringSplitCursorSites.has(callIp)) {
+			throw new Error(`Duplicate Core string-split cursor at instruction ${callIp}`);
+		}
 		const call = fn.instructions[callIp];
 		const trimCall = fn.instructions[cursor.trimCallIp];
 		const lockedLicense = vmGuardIsWorldInvariant(cursor.license.guard);
@@ -553,7 +557,9 @@ export function emitCompiledFunction(
 					(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
 			)
 		) {
-			continue;
+			throw new Error(
+				`Invalid Core RegExp.exec projection at instruction ${projection.callIp}`,
+			);
 		}
 		regexpExecProjectionSites.set(projection.callIp, {
 			projection,
@@ -584,7 +590,9 @@ export function emitCompiledFunction(
 					(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
 			)
 		) {
-			continue;
+			throw new Error(
+				`Invalid Core RegExp iterator projection at instruction ${projection.stepIp}`,
+			);
 		}
 		regexpIteratorProjectionSites.set(projection.stepIp, {
 			projection,

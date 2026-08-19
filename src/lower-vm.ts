@@ -575,7 +575,7 @@ export interface VmDefinition {
 	bigintConstants: Array<bigint>;
 	literalTemplateData: Array<number>;
 	globalCount: number;
-	/** Runtime-backed facts retained for post-wire native analyses. Hand-built
+	/** Runtime-backed facts retained for native emission. Hand-built
 	 * definitions may omit them and conservatively decline those transforms. */
 	semanticProtectors?: ReadonlyArray<VmSemanticProtectorFact>;
 

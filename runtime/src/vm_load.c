@@ -1711,7 +1711,7 @@ MalLoadedDefinition *mal_vm_load_definition_with_host_resolver(
         }
     }
 
-    /* Program-level compiler facts consumed only by post-wire native analyses. */
+    /* Program-level compiler facts consumed only by native emission. */
     u32 semantic_protector_count = rd_count(&r, 3);
     u8 semantic_protector_tags = 0;
     if (semantic_protector_count > 3) {

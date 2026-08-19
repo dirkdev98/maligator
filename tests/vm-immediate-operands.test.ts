@@ -8,7 +8,7 @@ function compile(source: string) {
 	return compileSemanticProgramToVmDefinition(semantic);
 }
 
-describe("tagged call operands", () => {
+describe("tagged VM call operands", () => {
 	it("uses self-host-stable negative arithmetic tags", () => {
 		expect(encodeVmValueOperand(-1, { kind: "undefined" })).toBe(-1);
 		expect(encodeVmValueOperand(-1, { kind: "null" })).toBe(-2);

@@ -138,7 +138,7 @@ typedef enum MalDirectBuiltinOp {
 #include "generated/primordial_registry.inc"
 } MalDirectBuiltinOp;
 
-/** Packed literal-template stream tags; mirrored by src/ir.ts. */
+/** Packed literal-template stream tags; mirrored by src/semantic-lowering.ts. */
 typedef enum MalLiteralTemplateTag {
     MAL_LITERAL_NULL,
     MAL_LITERAL_FALSE,

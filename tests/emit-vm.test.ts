@@ -1076,7 +1076,7 @@ describe("native update-expression representation", () => {
 		);
 	});
 
-	it("carries IR-selected split projection licenses through lowering", () => {
+	it("carries Core-selected split projection licenses through lowering", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.project = function project(value) {
 				const fields = value.split(";");
@@ -1147,9 +1147,19 @@ describe("native update-expression representation", () => {
 		expect(() => serializeVmDefinition(malformed)).toThrow(
 			/invalid String\.split projection region metadata/,
 		);
+		const invalidForEmission: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, { ...region, loads: [] }),
+			}),
+		};
+		expect(() => emitVmDefinition(invalidForEmission, { compiled: true })).toThrow(
+			/Invalid Core string-split projection/,
+		);
 	});
 
-	it("carries IR-selected RegExp.exec projections through lowering and wire", () => {
+	it("carries Core-selected RegExp.exec projections through lowering and wire", () => {
 		const source = `globalThis.parse = function parse(regexp, value) {
 			const match = regexp.exec(value);
 			if (match === null) return -1;
@@ -1219,9 +1229,19 @@ describe("native update-expression representation", () => {
 		expect(() => serializeVmDefinition(malformed)).toThrow(
 			/invalid RegExp\.exec projection region/,
 		);
+		const invalidForEmission: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, { ...region, loads: [] }),
+			}),
+		};
+		expect(() => emitVmDefinition(invalidForEmission, { compiled: true })).toThrow(
+			/Invalid Core RegExp\.exec projection/,
+		);
 	});
 
-	it("carries IR-selected String.slice Number regions through lowering and wire", () => {
+	it("carries Core-selected String.slice Number regions through lowering and wire", () => {
 		const source = `globalThis.parse = function parse(value) {
 			try {
 				return Number(value.slice(1));
@@ -1293,7 +1313,7 @@ describe("native update-expression representation", () => {
 		);
 	});
 
-	it("carries IR-selected RegExp iterator projections through lowering and wire", () => {
+	it("carries Core-selected RegExp iterator projections through lowering and wire", () => {
 		const source = `globalThis.total = function total(value, regexp) {
 			let sum = 0;
 			for (const match of value.matchAll(regexp)) sum += Number(match[1]);
@@ -1365,9 +1385,19 @@ describe("native update-expression representation", () => {
 		expect(() => serializeVmDefinition(malformed)).toThrow(
 			/invalid RegExp iterator projection region/,
 		);
+		const invalidForEmission: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: owner.regions!.with(regionIndex, { ...region, loads: [] }),
+			}),
+		};
+		expect(() => emitVmDefinition(invalidForEmission, { compiled: true })).toThrow(
+			/Invalid Core RegExp iterator projection/,
+		);
 	});
 
-	it("carries IR-selected split cursor licenses through lowering", () => {
+	it("carries Core-selected split cursor licenses through lowering", () => {
 		const source = `globalThis.sum = function sum(value, separator) {
 			const parts = value.split(separator);
 			let total = 0;
@@ -1413,6 +1443,23 @@ describe("native update-expression representation", () => {
 		expect(emitVmDefinition(cached, { compiled: true })).toContain(
 			"mal_builtin_string_split_cursor_init(vm,",
 		);
+		const functionIndex = lowered.functions.findIndex((fn) =>
+			fn.regions?.some((region) => region.kind === "string-split-cursor"),
+		);
+		const owner = lowered.functions[functionIndex]!;
+		const cursor = owner.regions!.find(
+			(region) => region.kind === "string-split-cursor",
+		)!;
+		const duplicate: VmDefinition = {
+			...lowered,
+			functions: lowered.functions.with(functionIndex, {
+				...owner,
+				regions: [...owner.regions!, cursor],
+			}),
+		};
+		expect(() => emitVmDefinition(duplicate, { compiled: true })).toThrow(
+			/Duplicate Core string-split cursor/,
+		);
 	});
 
 	it("emits exact locked primitive String split calls without dynamic dispatch", () => {
@@ -1430,7 +1477,7 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).not.toContain("mal_vm_call_cached(vm,");
 	});
 
-	it("projects exact locked primitive String split calls after IR dispatch erasure", () => {
+	it("projects exact locked primitive String split calls after Core dispatch erasure", () => {
 		const code = `
 			function first() {
 				return "alpha,beta".split(",")[0];

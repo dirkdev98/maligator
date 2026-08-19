@@ -19,13 +19,13 @@ const TS_EXTENSIONS = new Set([".ts", ".mts", ".cts"]);
 
 /**
  * The loader/graph phase: the bundler front-end that sits *above* semantic
- * analysis and IR lowering. Starting from an entrypoint it resolves the module
+ * analysis and Core lowering. Starting from an entrypoint it resolves the module
  * graph (goal detection -> specifier extraction -> resolution), recursing into
  * every dependency, and computes a deterministic evaluation order with cycles
  * identified.
  *
  * This phase only builds the graph; it does
- * not lower imports/exports to IR (that is a later milestone). A program with
+ * not lower imports/exports to Core (that is a later milestone). A program with
  * no imports is simply a single-node graph, so the existing single-file path is
  * unchanged.
  */
