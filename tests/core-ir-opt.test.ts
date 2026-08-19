@@ -245,6 +245,65 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("rejects a stack object that enters a mixed-value join", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function choose(value, useObject) {
+				let result = value;
+				if (useObject) result = { kind: "chosen", value };
+				return result;
+			}`,
+			"core-stack-object-mixed-join.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		expect(
+			optimized!.functions[1]!.regions.some(({ kind }) => kind === "stack-object-plan"),
+		).toBe(false);
+	});
+
+	it("guards one inherited read before using activation-local object slots", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function read(value) {
+				const object = { value };
+				const inherited = object.toString;
+				return object.value + (typeof inherited === "function" ? 1 : 0);
+			}`,
+			"core-stack-object-inherited.js",
+		);
+		let optimized: CoreProgram | undefined;
+		const definition = compileSemanticProgramToVmDefinition(semantic, {
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+
+		const coreRegion = optimized!.functions[1]!.regions.find(
+			({ kind }) => kind === "stack-object-plan",
+		);
+		expect(coreRegion?.data).toMatchObject({
+			license: {
+				guard: {
+					dependencies: [expect.objectContaining({ kind: "epoch" })],
+				},
+				materialization: "on-demand",
+			},
+		});
+		expect(JSON.stringify(coreRegion?.data)).toMatch(
+			/"inheritedAccess":\{"\$coreInstruction":\d+\}/,
+		);
+		const vmRegion = definition.functions[1]!.regions?.find(
+			({ kind }) => kind === "stack-object-plan",
+		);
+		expect(vmRegion?.license.materialization).toBe("on-demand");
+		if (vmRegion?.kind !== "stack-object-plan") throw new Error("expected stack region");
+		expect(typeof vmRegion.sites[0]!.inheritedAccessIp).toBe("number");
+	});
+
 	it("certifies a fully local stack object without a materializer", () => {
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
 			`function read(value) {

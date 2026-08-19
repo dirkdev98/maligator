@@ -1181,6 +1181,7 @@ function stackObjectRegion(
 	fn: CoreFunction,
 	allocation: CoreInstruction,
 	analyses: CoreAnalysisManager,
+	program: CoreProgram,
 ): CoreFunction["regions"][number] | undefined {
 	if (allocation.opcode !== "createObjectShaped" || allocation.outputs.length !== 1) {
 		return undefined;
@@ -1232,11 +1233,33 @@ function stackObjectRegion(
 			}
 		}
 	}
+	// An alias that enters a block parameter alongside any non-alias value no
+	// longer has an exact stack-object identity after the join. Treat that edge
+	// as an escape. Otherwise a later return of the mixed parameter can bypass
+	// materialization and leak the activation-local object into its caller.
+	for (const block of fn.blocks) {
+		const incoming = cfg.predecessors[block.id]!.filter(
+			(edge) => edge.kind === "ordinary",
+		);
+		for (const [index, parameter] of block.parameters.entries()) {
+			if (
+				!aliases.has(parameter.value) &&
+				incoming.some((edge) => {
+					const argument = edge.arguments[index];
+					return argument !== undefined && aliases.has(argument);
+				})
+			) {
+				return undefined;
+			}
+		}
+	}
 
 	const accesses: Array<{
 		readonly instruction: CoreInstruction;
 		readonly slot: number;
 	}> = [];
+	let inheritedAccess: CoreInstruction | undefined;
+	let hasOwnStore = false;
 	const materializations: Array<CoreTerminator & { readonly kind: "return" }> = [];
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -1254,8 +1277,34 @@ function stackObjectRegion(
 						typeof stringIndex === "number"
 							? slotByStringIndex.get(stringIndex)
 							: undefined;
-					if (slot === undefined) return undefined;
+					if (slot === undefined) {
+						if (
+							instruction.opcode !== "loadPropertyStatic" ||
+							inheritedAccess !== undefined
+						) {
+							return undefined;
+						}
+						inheritedAccess = instruction;
+						continue;
+					}
 					accesses.push({ instruction, slot });
+					hasOwnStore ||= instruction.opcode === "storePropertyStatic";
+					continue;
+				}
+				if (
+					instruction.opcode === "binary" &&
+					(instruction.attributes.operator === "===" ||
+						instruction.attributes.operator === "!==")
+				) {
+					continue;
+				}
+				if (
+					(instruction.opcode === "loadPrototype" ||
+						instruction.opcode === "typeofCompare" ||
+						(instruction.opcode === "unary" &&
+							instruction.attributes.operator === "typeof")) &&
+					position === 0
+				) {
 					continue;
 				}
 				return undefined;
@@ -1277,9 +1326,69 @@ function stackObjectRegion(
 		}
 	}
 
+	let inheritedGuard: ReturnType<typeof compilerGuardPlan>;
+	if (inheritedAccess !== undefined) {
+		if (materializations.length > 0 || hasOwnStore || accesses.length === 0) {
+			return undefined;
+		}
+		const allocationLocation = fn.blocks
+			.flatMap((block) =>
+				block.instructions.map((instruction, index) => ({ block, instruction, index })),
+			)
+			.find(({ instruction }) => instruction === allocation);
+		const inheritedLocation = fn.blocks
+			.flatMap((block) =>
+				block.instructions.map((instruction, index) => ({ block, instruction, index })),
+			)
+			.find(({ instruction }) => instruction === inheritedAccess);
+		if (
+			allocationLocation === undefined ||
+			inheritedLocation === undefined ||
+			allocationLocation.block !== inheritedLocation.block ||
+			allocationLocation.index >= inheritedLocation.index
+		) {
+			return undefined;
+		}
+		for (const instruction of allocationLocation.block.instructions.slice(
+			allocationLocation.index + 1,
+			inheritedLocation.index,
+		)) {
+			const strictIdentity =
+				instruction.opcode === "binary" &&
+				(instruction.attributes.operator === "===" ||
+					instruction.attributes.operator === "!==");
+			const directOwnAccess = accesses.some(
+				(access) => access.instruction === instruction,
+			);
+			const effects = coreOpcodeRegistry.require(instruction.opcode).effects;
+			if (
+				!strictIdentity &&
+				!directOwnAccess &&
+				(effects.mayGc || effects.maySuspend || effects.callsUserCode)
+			) {
+				return undefined;
+			}
+		}
+		inheritedGuard = compilerGuardPlan(
+			[program.compilation?.facts.protectors.get("primitive-methods")],
+			[
+				{
+					kind: "fallback",
+					id: `stack-object:${fn.functionIndex}:${allocation.id}`,
+				},
+				{
+					kind: "materialize",
+					id: `stack-object-inherited:${fn.functionIndex}:${allocation.id}`,
+				},
+			],
+		);
+		if (inheritedGuard === undefined) return undefined;
+	}
+
 	const claimedInstructions = [
 		allocation.id,
 		...accesses.map(({ instruction }) => instruction.id),
+		...(inheritedAccess === undefined ? [] : [inheritedAccess.id]),
 		...materializations.map(({ id }) => id),
 	];
 	if (new Set(claimedInstructions).size !== claimedInstructions.length) return undefined;
@@ -1296,6 +1405,7 @@ function stackObjectRegion(
 		kind: "materialize" as const,
 		id: `stack-object-return:${fn.functionIndex}:${id}`,
 	}));
+	const materializes = inheritedAccess !== undefined || materializations.length > 0;
 	return {
 		kind: "stack-object-plan",
 		anchors: [allocation.id],
@@ -1305,7 +1415,7 @@ function stackObjectRegion(
 		data: coreAttributeObject(
 			{
 				license: {
-					guard: {
+					guard: inheritedGuard ?? {
 						dependencies: [],
 						obligations: [
 							{
@@ -1316,7 +1426,7 @@ function stackObjectRegion(
 						],
 					},
 					genericTwin: "retained",
-					materialization: materializations.length === 0 ? "none" : "on-demand",
+					materialization: materializes ? "on-demand" : "none",
 				},
 				representation: "activation-local-fixed-shape-objects",
 				cost: {
@@ -1331,6 +1441,13 @@ function stackObjectRegion(
 							instruction: { $coreInstruction: instruction.id },
 							slot,
 						})),
+						...(inheritedAccess === undefined
+							? {}
+							: {
+									inheritedAccess: {
+										$coreInstruction: inheritedAccess.id,
+									},
+								}),
 						materializations: materializations.map(({ id }) => ({
 							instruction: { $coreInstruction: id },
 							kind: "return",
@@ -1346,7 +1463,7 @@ function stackObjectRegion(
 const selectStackObjectRegions: CoreFunctionPass = {
 	name: "select-stack-object-regions",
 	ablation: "escape",
-	run(fn, analyses) {
+	run(fn, analyses, program) {
 		const existingAllocations = new Set(
 			fn.regions
 				.filter(({ kind }) => kind === "stack-object-plan")
@@ -1361,7 +1478,7 @@ const selectStackObjectRegions: CoreFunctionPass = {
 				) {
 					continue;
 				}
-				const region = stackObjectRegion(fn, instruction, analyses);
+				const region = stackObjectRegion(fn, instruction, analyses, program);
 				if (region !== undefined) regions.push(region);
 			}
 		}

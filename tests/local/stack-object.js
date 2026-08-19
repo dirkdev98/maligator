@@ -141,6 +141,12 @@ function callEscape(seed) {
 	receiveEscape(o);
 }
 
+function mixedJoinEscape(seed, useObject) {
+	let result = seed;
+	if (useObject) result = { value: seed, text: "mixed:" + seed };
+	return result;
+}
+
 let inheritedIslandCaptured = null;
 function inheritedIsland(seed, expected) {
 	const object = { value: seed, next: seed + 1, tag: 17 };
@@ -226,6 +232,13 @@ check(
 	"passed object stays heap-live",
 	globalEscape.value === 14 && globalEscape.text === "call:14",
 );
+const mixedJoin = mixedJoinEscape(16, true);
+allocateNoise(305);
+check(
+	"mixed join object stays heap-live",
+	mixedJoin.value === 16 && mixedJoin.text === "mixed:16",
+);
+check("mixed join scalar stays scalar", mixedJoinEscape(17, false) === 17);
 
 const toStringDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, "toString");
 const originalToString = toStringDescriptor.value;
