@@ -1943,6 +1943,41 @@ describe("Core IR optimizer", () => {
 		expect(loop.blocks.has(lengthLoads[0]!.block)).toBe(false);
 	});
 
+	it("carries the loop range proof into guarded String bounds metadata", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`function checksum(value) {
+				let total = 0;
+				for (let index = 0; index < value.length; index++) {
+					total += value.charCodeAt(index);
+				}
+				return total;
+			}`,
+			"core-loop-string-bounds.js",
+		);
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToVmDefinition(semantic, {
+			facts: compilerProgramFactsFromConfig(resolveBuildConfig({})),
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		const instructions = optimized!.functions[1]!.blocks.flatMap(
+			({ instructions }) => instructions,
+		);
+		expect(
+			instructions.some(
+				({ opcode, attributes }) =>
+					opcode === "call" && attributes.directStringCharCodeAtPosition === "inBounds",
+			),
+		).toBe(true);
+		expect(
+			instructions.some(
+				({ opcode, attributes }) =>
+					opcode === "loadPropertyStatic" && attributes.primitiveStringLength === true,
+			),
+		).toBe(true);
+	});
+
 	it("hoists only effect-qualified loads whose exact partition is invariant", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
 		const entry = builder.createBlock([{}]);
@@ -2057,6 +2092,12 @@ describe("Core IR optimizer", () => {
 		expect(loops[0]!.latches.size).toBe(1);
 		expect(loops[0]!.exits.every(({ dedicated }) => dedicated)).toBe(true);
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+
+		const fixedPoint = executeCoreOptimizations(outcome.program, {
+			verification: "per-pass",
+		});
+		expect(fixedPoint.changed).toBe(false);
+		expect(fixedPoint.program).toEqual(outcome.program);
 	});
 
 	it("derives exact ranges only for safe additive block-argument inductions", () => {
@@ -2112,7 +2153,10 @@ describe("Core IR optimizer", () => {
 			range: {
 				minimum: 0,
 				maximum: 9,
-				iterations: 10,
+				first: 0,
+				last: 9,
+				finalUpdate: 10,
+				maximumIterations: 10,
 				exactSafeIntegers: true,
 				excludesNegativeZero: true,
 			},
@@ -2123,6 +2167,269 @@ describe("Core IR optimizer", () => {
 				.loopInductions(negativeZero.fn)
 				.induction(negativeZero.counter)?.range,
 		).toBeUndefined();
+	});
+
+	it("uses exact loop ranges for comparisons and remainder strength reduction", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const header = builder.createBlock([{ representation: "f64" }]);
+		const body = builder.createBlock();
+		const nonnegative = builder.createBlock();
+		const impossible = builder.createBlock();
+		const latch = builder.createBlock();
+		const exit = builder.createBlock([{ representation: "f64" }]);
+		const [zero] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 0 },
+			outputRepresentations: ["f64"],
+		});
+		const [bound] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 10 },
+			outputRepresentations: ["f64"],
+		});
+		const [divisor] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 16 },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [zero!] },
+		});
+		const index = builder.block(header).parameters[0]!.value;
+		const [continues] = builder.appendInstruction(header, "binary", [index, bound!], {
+			attributes: { operator: "<" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition: continues!,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [index] },
+		});
+		const [remainder] = builder.appendInstruction(body, "binary", [index, divisor!], {
+			attributes: { operator: "%" },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(body, "storeGlobal", [remainder!], {
+			attributes: { index: 0 },
+		});
+		const [rangeCheck] = builder.appendInstruction(body, "binary", [index, zero!], {
+			attributes: { operator: ">=" },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(body, {
+			kind: "branch",
+			condition: rangeCheck!,
+			consequent: { block: nonnegative, arguments: [] },
+			alternate: { block: impossible, arguments: [] },
+		});
+		builder.setTerminator(nonnegative, {
+			kind: "jump",
+			edge: { block: latch, arguments: [] },
+		});
+		builder.appendInstruction(impossible, "storeGlobal", [bound!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(impossible, {
+			kind: "jump",
+			edge: { block: latch, arguments: [] },
+		});
+		const [next] = builder.appendInstruction(latch, "unary", [index], {
+			attributes: { operator: "increment" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(latch, {
+			kind: "jump",
+			edge: { block: header, arguments: [next!] },
+		});
+		builder.setTerminator(exit, {
+			kind: "return",
+			value: builder.block(exit).parameters[0]!.value,
+		});
+
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), globalCount: 1 },
+			{ verification: "per-pass" },
+		);
+		const fn = outcome.program.functions[0]!;
+		const binaries = fn.blocks.flatMap(({ instructions }) =>
+			instructions.filter(({ opcode }) => opcode === "binary"),
+		);
+		expect(binaries).not.toContainEqual(
+			expect.objectContaining({ attributes: { operator: "%" } }),
+		);
+		expect(binaries).not.toContainEqual(
+			expect.objectContaining({ attributes: { operator: ">=" } }),
+		);
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "optimize-loop-ranges" && changed,
+			),
+		).toBe(true);
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("eliminates profitable partial redundancy without adding expressions or roots", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "f64" }]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftOperand] = builder.appendInstruction(left, "createF64", [], {
+			attributes: { value: 0.5 },
+			outputRepresentations: ["f64"],
+		});
+		const [leftSine] = builder.appendInstruction(left, "mathUnaryNumber", [leftOperand!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(left, "storeGlobal", [leftSine!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftOperand!] },
+		});
+		const [rightOperand] = builder.appendInstruction(right, "createF64", [], {
+			attributes: { value: 0.25 },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(right, "storeGlobal", [condition], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightOperand!] },
+		});
+		const operand = builder.block(join).parameters[0]!.value;
+		const [result] = builder.appendInstruction(join, "mathUnaryNumber", [operand], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(join, { kind: "return", value: result! });
+
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), globalCount: 1 },
+			{ verification: "per-pass" },
+		);
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "partial-redundancy-elimination" && changed,
+			),
+		).toBe(true);
+		expect(
+			fn.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "mathUnaryNumber"),
+			),
+		).toHaveLength(2);
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("removes a merge expression already available on every incoming path", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock();
+		const condition = builder.block(entry).parameters[0]!.value;
+		const [operand] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 0.5 },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		for (const branch of [left, right]) {
+			const [sine] = builder.appendInstruction(branch, "mathUnaryNumber", [operand!], {
+				attributes: { operation: "Math.sin" },
+				outputRepresentations: ["f64"],
+			});
+			builder.appendInstruction(branch, "storeGlobal", [sine!], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(branch, { kind: "jump", edge: { block: join, arguments: [] } });
+		}
+		const [result] = builder.appendInstruction(join, "mathUnaryNumber", [operand!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(join, { kind: "return", value: result! });
+
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), globalCount: 1 },
+			{ maxRounds: 1, verification: "per-pass" },
+		);
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "partial-redundancy-elimination" && changed,
+			),
+		).toBe(true);
+		expect(
+			fn.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "mathUnaryNumber"),
+			),
+		).toHaveLength(2);
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("does not resurrect a dead predecessor expression for PRE", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock();
+		const condition = builder.block(entry).parameters[0]!.value;
+		const [operand] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 0.5 },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.appendInstruction(left, "mathUnaryNumber", [operand!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(left, { kind: "jump", edge: { block: join, arguments: [] } });
+		builder.appendInstruction(right, "storeGlobal", [condition], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(right, { kind: "jump", edge: { block: join, arguments: [] } });
+		const [result] = builder.appendInstruction(join, "mathUnaryNumber", [operand!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(join, { kind: "return", value: result! });
+
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), globalCount: 1 },
+			{ maxRounds: 1, verification: "per-pass" },
+		);
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "partial-redundancy-elimination" && changed,
+			),
+		).toBe(false);
+		expect(
+			fn.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ opcode }) => opcode === "mathUnaryNumber"),
+			),
+		).toHaveLength(1);
 	});
 
 	it("eliminates a deep dead value graph in one liveness pass", () => {

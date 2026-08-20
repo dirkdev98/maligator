@@ -1031,7 +1031,7 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).toContain("mal_builtin_string_char_code_at_direct(vm, &__cc_");
 	});
 
-	it("does not rediscover a bounded String charCodeAt loop in the backend", () => {
+	it("consumes the Core-certified bounded String relation in the backend", () => {
 		const output = emit(`
 			function checksum(value) {
 				let result = 0;
@@ -1042,8 +1042,8 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.checksum = checksum;
 		`);
-		expect(output).not.toContain("mal_builtin_string_char_code_at_in_bounds(");
-		expect(output).toContain("mal_builtin_string_char_code_at_direct(");
+		expect(output).toContain("mal_builtin_string_char_code_at_direct_in_bounds(");
+		expect(output).not.toContain("mal_builtin_string_char_code_at_direct(vm,");
 		expect(output).toContain(
 			"mal_value_from_i32((i32) mal_string_length(mal_value_to_string(",
 		);
@@ -1060,7 +1060,10 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.checksum = checksum;
 		`);
-		expect(output).not.toContain("mal_builtin_string_char_code_at_in_bounds(");
+		expect(output).not.toContain(
+			"mal_builtin_string_char_code_at_direct_in_bounds(",
+		);
+		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm,");
 	});
 
 	it("projects closed String split results and fuses slice into Number", () => {

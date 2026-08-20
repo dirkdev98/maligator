@@ -20,6 +20,7 @@ export interface CoreNaturalLoop {
 	readonly header: CoreBlockId;
 	/** Ordinary predecessors whose edge closes the loop at `header`. */
 	readonly latches: ReadonlySet<CoreBlockId>;
+	/** Blocks in the natural loop's ordinary-edge body. */
 	readonly blocks: ReadonlySet<CoreBlockId>;
 	/** Unique ordinary entry block when the loop already has canonical form. */
 	readonly preheader?: CoreBlockId;
@@ -385,8 +386,9 @@ function buildDominatorPredicate(
 
 /**
  * Find cyclic ordinary SCCs that cannot be represented by one natural-loop
- * header. Two iterative Kosaraju walks keep the analysis linear without putting
- * a source-sized CFG on the JavaScript call stack.
+ * header. Reducible headers are peeled and their induced subgraphs are analyzed
+ * again, so a nested multi-entry cycle cannot hide inside a larger single-entry
+ * SCC. Every traversal is iterative to keep source-sized CFGs off the JS stack.
  */
 function findIrreducibleCycles(
 	entry: CoreBlockId,
@@ -395,75 +397,104 @@ function findIrreducibleCycles(
 	reachable: ReadonlySet<CoreBlockId>,
 	dominates: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
 ): ReadonlyArray<CoreIrreducibleCycle> {
-	const visited = new Uint8Array(successors.length);
-	const postorder: Array<CoreBlockId> = [];
-	for (const start of reachable) {
-		if (visited[start] !== 0) continue;
-		visited[start] = 1;
-		const stack: Array<{ readonly block: CoreBlockId; next: number }> = [
-			{ block: start, next: 0 },
-		];
-		while (stack.length > 0) {
-			const frame = stack[stack.length - 1]!;
-			const outgoing = successors[frame.block]!;
-			let advanced = false;
-			while (frame.next < outgoing.length) {
-				const edge = outgoing[frame.next++]!;
-				if (
-					edge.kind !== "ordinary" ||
-					!reachable.has(edge.to) ||
-					visited[edge.to] !== 0
-				) {
-					continue;
+	const componentsWithin = (
+		allowed: ReadonlySet<CoreBlockId>,
+	): Array<ReadonlySet<CoreBlockId>> => {
+		const visited = new Uint8Array(successors.length);
+		const postorder: Array<CoreBlockId> = [];
+		for (const start of allowed) {
+			if (visited[start] !== 0) continue;
+			visited[start] = 1;
+			const stack: Array<{ readonly block: CoreBlockId; next: number }> = [
+				{ block: start, next: 0 },
+			];
+			while (stack.length > 0) {
+				const frame = stack[stack.length - 1]!;
+				const outgoing = successors[frame.block]!;
+				let advanced = false;
+				while (frame.next < outgoing.length) {
+					const edge = outgoing[frame.next++]!;
+					if (
+						edge.kind !== "ordinary" ||
+						!allowed.has(edge.to) ||
+						visited[edge.to] !== 0
+					) {
+						continue;
+					}
+					visited[edge.to] = 1;
+					stack.push({ block: edge.to, next: 0 });
+					advanced = true;
+					break;
 				}
-				visited[edge.to] = 1;
-				stack.push({ block: edge.to, next: 0 });
-				advanced = true;
-				break;
+				if (advanced) continue;
+				postorder.push(frame.block);
+				stack.pop();
 			}
-			if (advanced) continue;
-			postorder.push(frame.block);
-			stack.pop();
 		}
-	}
+		const assigned = new Uint8Array(successors.length);
+		const components: Array<ReadonlySet<CoreBlockId>> = [];
+		for (let order = postorder.length - 1; order >= 0; order -= 1) {
+			const start = postorder[order]!;
+			if (assigned[start] !== 0) continue;
+			assigned[start] = 1;
+			const blocks = new Set<CoreBlockId>();
+			const pending: Array<CoreBlockId> = [start];
+			while (pending.length > 0) {
+				const block = pending.pop()!;
+				blocks.add(block);
+				for (const edge of predecessors[block]!) {
+					if (
+						edge.kind !== "ordinary" ||
+						!allowed.has(edge.from) ||
+						assigned[edge.from] !== 0
+					) {
+						continue;
+					}
+					assigned[edge.from] = 1;
+					pending.push(edge.from);
+				}
+			}
+			components.push(blocks);
+		}
+		return components;
+	};
+	const isCyclic = (blocks: ReadonlySet<CoreBlockId>): boolean => {
+		if (blocks.size > 1) return true;
+		const block = [...blocks][0];
+		return (
+			block !== undefined &&
+			successors[block]!.some(
+				(edge) => edge.kind === "ordinary" && edge.to === block,
+			)
+		);
+	};
 
-	const assigned = new Uint8Array(successors.length);
+	const pending = componentsWithin(reachable).filter(isCyclic);
 	const irreducible: Array<CoreIrreducibleCycle> = [];
-	for (let order = postorder.length - 1; order >= 0; order -= 1) {
-		const start = postorder[order]!;
-		if (assigned[start] !== 0) continue;
-		assigned[start] = 1;
-		const blocks = new Set<CoreBlockId>();
-		const pending: Array<CoreBlockId> = [start];
-		while (pending.length > 0) {
-			const block = pending.pop()!;
-			blocks.add(block);
-			for (const edge of predecessors[block]!) {
-				if (
-					edge.kind !== "ordinary" ||
-					!reachable.has(edge.from) ||
-					assigned[edge.from] !== 0
-				) {
-					continue;
-				}
-				assigned[edge.from] = 1;
-				pending.push(edge.from);
-			}
-		}
-		const cyclic =
-			blocks.size > 1 ||
-			successors[start]!.some((edge) => edge.kind === "ordinary" && edge.to === start);
-		if (!cyclic) continue;
+	while (pending.length > 0) {
+		const blocks = pending.pop()!;
 		const entries = new Set<CoreBlockId>();
 		if (blocks.has(entry)) entries.add(entry);
 		for (const block of blocks) {
 			for (const edge of predecessors[block]!) {
-				if (!blocks.has(edge.from)) entries.add(block);
+				if (
+					edge.kind === "ordinary" &&
+					reachable.has(edge.from) &&
+					!blocks.has(edge.from)
+				) {
+					entries.add(block);
+				}
 			}
 		}
 		const header = entries.size === 1 ? [...entries][0]! : undefined;
 		if (header === undefined || [...blocks].some((block) => !dominates(header, block))) {
 			irreducible.push({ blocks, entries });
+			continue;
+		}
+		const nested = new Set(blocks);
+		nested.delete(header);
+		for (const component of componentsWithin(nested)) {
+			if (isCyclic(component)) pending.push(component);
 		}
 	}
 	const firstBlock = (cycle: CoreIrreducibleCycle): number => {
@@ -637,6 +668,11 @@ export function buildCoreControlFlow(
 			latchTerminator?.kind === "jump" &&
 			latchTerminator.edge.block === header &&
 			successors[latch]!.length === 1;
+		const hasExceptionalControl = [...blocks].some(
+			(block) =>
+				fn.blocks[block]!.handler !== undefined ||
+				predecessors[block]!.some(({ kind }) => kind === "exceptional"),
+		);
 		loops.push({
 			header,
 			latches,
@@ -646,6 +682,7 @@ export function buildCoreControlFlow(
 			canonical:
 				preheader !== undefined &&
 				canonicalLatch &&
+				!hasExceptionalControl &&
 				exits.every(({ dedicated }) => dedicated),
 		});
 	}

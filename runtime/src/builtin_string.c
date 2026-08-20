@@ -1,5 +1,6 @@
 #include "builtin_string.h"
 
+#include <assert.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -634,6 +635,35 @@ MalCompletion mal_builtin_string_char_code_at_direct(
             ? 0
             : mal_ops_number_as_f64(args[0]);
         MalValue result = mal_builtin_string_char_code_at_number(this_value, position);
+        return (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = result,
+        };
+    }
+
+    MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);
+    return mal_vm_call_cached(
+        vm, fallback_cache, callee, this_value, args, arg_count);
+}
+
+MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    f64 position
+) {
+    if (arg_count == 1 && mal_value_is_string(this_value) &&
+        mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) ==
+            mal_builtin_string_prototype_char_code_at) {
+        assert(position >= 0 &&
+               position < (f64) mal_string_length(mal_value_to_string(this_value)) &&
+               trunc(position) == position);
+        MalValue result = mal_builtin_string_char_code_at_in_bounds(
+            this_value, (usize) position);
         return (MalCompletion) {
             .kind = MAL_COMPLETION_NORMAL,
             .value = result,

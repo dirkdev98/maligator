@@ -376,6 +376,42 @@ describe("adversarial Core graphs", () => {
 		});
 	});
 
+	it("detects a nested multi-entry cycle inside a single-entry SCC", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 2 });
+		const entry = builder.createBlock([
+			{ representation: "boxed" },
+			{ representation: "boxed" },
+		]);
+		const first = builder.createBlock();
+		const second = builder.createBlock();
+		const exit = builder.createBlock();
+		const [left, right] = builder.block(entry).parameters.map(({ value }) => value);
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: left!,
+			consequent: { block: first, arguments: [] },
+			alternate: { block: second, arguments: [] },
+		});
+		builder.setTerminator(first, {
+			kind: "branch",
+			condition: left!,
+			consequent: { block: second, arguments: [] },
+			alternate: { block: entry, arguments: [left!, right!] },
+		});
+		builder.setTerminator(second, {
+			kind: "branch",
+			condition: right!,
+			consequent: { block: first, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: left! });
+
+		const cfg = buildCoreControlFlow(builder.finish(entry), coreOpcodeRegistry);
+		expect(cfg.irreducibleCycles).toHaveLength(1);
+		expect(cfg.irreducibleCycles[0]!.blocks).toEqual(new Set([first, second]));
+		expect(cfg.irreducibleCycles[0]!.entries).toEqual(new Set([first, second]));
+	});
+
 	it("keeps handler inputs that are available at every protected block entry", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);

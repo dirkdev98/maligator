@@ -3519,6 +3519,23 @@ function emitInstruction(
 				];
 			}
 			if (vmCallProvesBuiltin(instruction, "String.prototype.charCodeAt")) {
+				const boundedArgument =
+					args.length === 1 ? decodeVmValueOperand(args[0]!) : undefined;
+				const boundedPosition =
+					instruction.directStringCharCodeAtPosition === "inBounds" &&
+					boundedArgument?.kind === "register" &&
+					reps[boundedArgument.register] === "number"
+						? `r${boundedArgument.register}`
+						: null;
+				if (boundedPosition !== null) {
+					return [
+						`static MalCallCache __cc_${ip};`,
+						`MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct_in_bounds(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, ${boundedPosition});`,
+						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+						`r${instruction.dst} = ${tmp}.value;`,
+						poll,
+					];
+				}
 				return [
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,

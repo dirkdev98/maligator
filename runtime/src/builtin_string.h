@@ -60,6 +60,19 @@ MalCompletion mal_builtin_string_char_code_at_direct(
     i32 arg_count
 );
 
+/** Guarded direct dispatch whose Core certificate proves the raw f64 position is
+ * an exact non-negative integer below the same primitive String receiver length.
+ * The cast happens only after the live receiver and builtin identity guards pass. */
+MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
+    MalVm *vm,
+    MalCallCache *fallback_cache,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    f64 position
+);
+
 /** Exact %String.prototype.charCodeAt% invocation after locked primitive-String
  * property resolution was erased. Numeric positions use the semantic kernel;
  * coercive positions retain the complete builtin algorithm. */

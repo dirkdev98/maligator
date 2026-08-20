@@ -21,7 +21,14 @@ export type CoreLoopComparison = "<" | "<=" | ">" | ">=";
 export interface CoreInductionRange {
 	readonly minimum: number;
 	readonly maximum: number;
-	readonly iterations: number;
+	/** First value for which the controlling comparison succeeds. */
+	readonly first: number;
+	/** Last value for which the controlling comparison succeeds. */
+	readonly last: number;
+	/** Value produced by the final recurrence update before the bound rejects it. */
+	readonly finalUpdate: number;
+	/** Upper bound when another exit can leave the loop earlier. */
+	readonly maximumIterations: number;
 	readonly exactSafeIntegers: true;
 	readonly excludesNegativeZero: true;
 }
@@ -35,10 +42,16 @@ export interface CoreInductionVariable {
 	readonly updateInstruction: CoreInstructionId;
 	readonly step: number;
 	readonly representation: "f64";
+	/**
+	 * Header relation normalized with the induction on the left. When the bound is
+	 * not loop-invariant, consumers may use it only within the same iteration on
+	 * blocks dominated by `body`; it proves no trip count or cross-iteration fact.
+	 */
 	readonly comparison?: {
 		readonly instruction: CoreInstructionId;
 		readonly operator: CoreLoopComparison;
 		readonly bound: CoreValueId;
+		readonly boundLoopInvariant: boolean;
 		readonly body: CoreBlockId;
 		readonly exit: CoreBlockId;
 	};
@@ -151,7 +164,10 @@ function concreteRange(
 	return {
 		minimum: Math.min(firstNumber, lastNumber),
 		maximum: Math.max(firstNumber, lastNumber),
-		iterations: Number(iterations),
+		first: firstNumber,
+		last: lastNumber,
+		finalUpdate: Number(finalUpdate),
+		maximumIterations: Number(iterations),
 		exactSafeIntegers: true,
 		excludesNegativeZero: true,
 	};
@@ -267,7 +283,6 @@ export function analyzeCoreLoopInductions(
 					if (
 						inductionOnLeft &&
 						boundBlock !== undefined &&
-						!loop.blocks.has(boundBlock) &&
 						consequentInside !== alternateInside
 					) {
 						if (!consequentInside) operator = negateComparison(operator);
@@ -275,6 +290,7 @@ export function analyzeCoreLoopInductions(
 							instruction: test.id,
 							operator,
 							bound,
+							boundLoopInvariant: !loop.blocks.has(boundBlock),
 							body: consequentInside
 								? terminator.consequent.block
 								: terminator.alternate.block,
@@ -286,7 +302,7 @@ export function analyzeCoreLoopInductions(
 				}
 			}
 			const range =
-				comparison === undefined
+				comparison === undefined || !comparison.boundLoopInvariant
 					? undefined
 					: concreteRange(
 							exactNumber(initial, definitions, canonical),

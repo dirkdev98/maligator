@@ -3484,7 +3484,8 @@ function lowerInstructionToVmInstruction(
 				opcode: "LOAD_CALLEE",
 				dst: instruction.registers[0],
 			};
-		case "call":
+		case "call": {
+			const guardedBuiltinCall = lowerGuardedBuiltinCall(instruction);
 			return {
 				opcode: "CALL",
 				dst: instruction.registers[0],
@@ -3505,9 +3506,13 @@ function lowerInstructionToVmInstruction(
 				directFunctionIndex: instruction.directFunctionIndex,
 				directFunctionCall: instruction.directFunctionCall,
 				directCallTargetFunctionIndex: instruction.directCallTargetFunctionIndex,
-				guardedBuiltinCall: lowerGuardedBuiltinCall(instruction),
-				directStringCharCodeAtPosition: instruction.directStringCharCodeAtPosition,
+				guardedBuiltinCall,
+				directStringCharCodeAtPosition:
+					guardedBuiltinCall === undefined
+						? undefined
+						: instruction.directStringCharCodeAtPosition,
 			};
+		}
 		case "mathUnaryNumber":
 			return {
 				opcode: "MATH_UNARY_NUMBER",
