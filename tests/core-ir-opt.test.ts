@@ -686,6 +686,66 @@ describe("Core IR optimizer", () => {
 		);
 	});
 
+	it("hoists speculatable loop invariants but keeps identity creation in the loop", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const header = builder.createBlock();
+		const body = builder.createBlock();
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(header, {
+			kind: "branch",
+			condition,
+			consequent: { block: body, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		const [constant] = builder.appendInstruction(body, "createF64", [], {
+			attributes: { value: 0.5 },
+			outputRepresentations: ["f64"],
+		});
+		const [sine] = builder.appendInstruction(body, "mathUnaryNumber", [constant!], {
+			attributes: { operation: "Math.sin" },
+			outputRepresentations: ["f64"],
+		});
+		builder.appendInstruction(body, "storeGlobal", [sine!], {
+			attributes: { index: 0 },
+		});
+		const [object] = builder.appendInstruction(body, "createObject", []);
+		builder.appendInstruction(body, "storeGlobal", [object!], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(body, {
+			kind: "jump",
+			edge: { block: header, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: condition });
+
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([builder.finish(entry)]), globalCount: 1 },
+			{ verification: "per-pass" },
+		);
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "loop-invariant-code-motion" && changed,
+			),
+		).toBe(true);
+		expect(fn.blocks[entry]!.instructions.map(({ opcode }) => opcode)).toEqual([
+			"createF64",
+			"mathUnaryNumber",
+		]);
+		expect(fn.blocks[body]!.instructions.map(({ opcode }) => opcode)).toEqual([
+			"storeGlobal",
+			"createObject",
+			"storeGlobal",
+		]);
+		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
+	});
+
 	it("eliminates a deep dead value graph in one liveness pass", () => {
 		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
 		const entry = builder.createBlock();

@@ -6567,6 +6567,146 @@ function mayCopyOrValueNumber(fn: CoreFunction): boolean {
 	return false;
 }
 
+function isLoopInvariantCandidate(instruction: CoreInstruction): boolean {
+	if (
+		instruction.outputs.length === 0 ||
+		!IMMUTABLE_VALUE_NUMBERING_OPCODES.has(instruction.opcode) ||
+		IDENTITY_PRODUCING_OPCODES.has(instruction.opcode) ||
+		!coreOpcodeRegistry.require(instruction.opcode).discardable
+	) {
+		return false;
+	}
+	const effects = effectiveInstructionEffects(instruction);
+	return (
+		effects.reads.length === 0 &&
+		effects.writes.length === 0 &&
+		!effects.mayThrow &&
+		!effects.maySuspend &&
+		!effects.mayGc &&
+		!effects.callsUserCode
+	);
+}
+
+/**
+ * Hoist speculatable SSA expressions from reducible loops with an existing
+ * preheader. The sparse dependency worklist visits each candidate input once;
+ * cyclic phis and values produced by effectful instructions remain variant.
+ */
+const loopInvariantCodeMotion: CoreFunctionPass = {
+	name: "loop-invariant-code-motion",
+	run(fn, analyses) {
+		if (fn.blocks.length <= 1) return fn;
+		const cfg = analyses.controlFlow(fn);
+		if (cfg.loops.length === 0) return fn;
+		const loopsPerHeader = new Map<CoreBlockId, number>();
+		for (const loop of cfg.loops) {
+			loopsPerHeader.set(loop.header, (loopsPerHeader.get(loop.header) ?? 0) + 1);
+		}
+		const protectedInstructions = new Set(
+			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const definitionBlocks = new Map<CoreValueId, CoreBlockId>();
+		for (const block of fn.blocks) {
+			for (const parameter of block.parameters)
+				definitionBlocks.set(parameter.value, block.id);
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) definitionBlocks.set(output, block.id);
+			}
+		}
+
+		let changed = false;
+		const blocks = [...fn.blocks];
+		const loops = [...cfg.loops]
+			.filter((loop) => loopsPerHeader.get(loop.header) === 1)
+			.sort((left, right) => left.blocks.size - right.blocks.size);
+		for (const loop of loops) {
+			if (
+				[...loop.blocks].some(
+					(block) =>
+						blocks[block]!.handler !== undefined ||
+						cfg.predecessors[block]!.some(({ kind }) => kind === "exceptional"),
+				)
+			) {
+				continue;
+			}
+			const headerPredecessors = cfg.predecessors[loop.header]!;
+			if (headerPredecessors.some(({ kind }) => kind !== "ordinary")) continue;
+			const outside = headerPredecessors.filter(({ from }) => !loop.blocks.has(from));
+			if (outside.length !== 1) continue;
+			const preheader = blocks[outside[0]!.from]!;
+			if (
+				preheader.terminator.kind !== "jump" ||
+				preheader.terminator.edge.block !== loop.header
+			) {
+				continue;
+			}
+
+			const candidates: Array<CoreInstruction> = [];
+			for (const blockId of cfg.reversePostorder) {
+				if (!loop.blocks.has(blockId)) continue;
+				for (const instruction of blocks[blockId]!.instructions) {
+					if (
+						!protectedInstructions.has(instruction.id) &&
+						isLoopInvariantCandidate(instruction)
+					) {
+						candidates.push(instruction);
+					}
+				}
+			}
+			if (candidates.length === 0) continue;
+			const remaining = new Map<CoreInstructionId, Set<CoreValueId>>();
+			const users = new Map<CoreValueId, Array<CoreInstruction>>();
+			const ready: Array<CoreInstruction> = [];
+			for (const instruction of candidates) {
+				const dependencies = new Set(
+					instruction.inputs.filter((input) => {
+						const definitionBlock = definitionBlocks.get(input);
+						return definitionBlock !== undefined && loop.blocks.has(definitionBlock);
+					}),
+				);
+				remaining.set(instruction.id, dependencies);
+				if (dependencies.size === 0) ready.push(instruction);
+				for (const dependency of dependencies) {
+					const dependentUsers = users.get(dependency) ?? [];
+					dependentUsers.push(instruction);
+					users.set(dependency, dependentUsers);
+				}
+			}
+
+			const hoisted: Array<CoreInstruction> = [];
+			const hoistedIds = new Set<CoreInstructionId>();
+			for (let index = 0; index < ready.length; index++) {
+				const instruction = ready[index]!;
+				if (hoistedIds.has(instruction.id)) continue;
+				hoistedIds.add(instruction.id);
+				hoisted.push(instruction);
+				for (const output of instruction.outputs) {
+					definitionBlocks.set(output, preheader.id);
+					for (const user of users.get(output) ?? []) {
+						const dependencies = remaining.get(user.id)!;
+						dependencies.delete(output);
+						if (dependencies.size === 0) ready.push(user);
+					}
+				}
+			}
+			if (hoisted.length === 0) continue;
+			for (const blockId of loop.blocks) {
+				const block = blocks[blockId]!;
+				blocks[blockId] = {
+					...block,
+					instructions: block.instructions.filter(({ id }) => !hoistedIds.has(id)),
+				};
+			}
+			blocks[preheader.id] = {
+				...blocks[preheader.id]!,
+				instructions: [...blocks[preheader.id]!.instructions, ...hoisted],
+			};
+			changed = true;
+		}
+		return changed ? { ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 } : fn;
+	},
+};
+
 /** Use the local form when every candidate shares one block and reads no memory. */
 function localCopyAndValueNumber(fn: CoreFunction): CoreFunction | undefined {
 	if (fn.regions.length > 0) return undefined;
@@ -7368,6 +7508,7 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldEmptyForwardingBlocks,
 	combineLinearBlocks,
 	foldStaticPropertyKeys,
+	loopInvariantCodeMotion,
 	copyAndValueNumber,
 	deadInstructionElimination,
 ];
