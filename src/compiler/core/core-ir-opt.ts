@@ -7939,9 +7939,7 @@ const optimizeLoopRanges: CoreFunctionPass = {
 						instruction.opcode !== "binary" ||
 						instruction.inputs.length !== 2 ||
 						instruction.outputs.length !== 1 ||
-						instruction.inputs.some(
-							(value) => representations.get(value) !== "f64",
-						)
+						instruction.inputs.some((value) => representations.get(value) !== "f64")
 					) {
 						return instruction;
 					}
@@ -8238,8 +8236,7 @@ function coreLiveness(fn: CoreFunction): CoreLiveness {
 	const parameterSources = new Map<CoreValueId, Array<CoreValueId>>();
 	const hasNonEntryParameters = fn.blocks.some(
 		(block) =>
-			block.id !== fn.entry &&
-			block.parameters.some(({ role }) => role !== "exception"),
+			block.id !== fn.entry && block.parameters.some(({ role }) => role !== "exception"),
 	);
 	if (hasNonEntryParameters) {
 		const addParameterSource = (
@@ -8330,8 +8327,7 @@ interface PreAvailableExpression {
 
 function isPreExpressionOpcode(instruction: CoreInstruction): boolean {
 	return (
-		instruction.opcode === "mathUnaryNumber" ||
-		instruction.opcode === "mathBinaryNumber"
+		instruction.opcode === "mathUnaryNumber" || instruction.opcode === "mathBinaryNumber"
 	);
 }
 
@@ -8356,264 +8352,259 @@ function eliminateOnePartialRedundancy(
 	fn: CoreFunction,
 	analyses: CoreAnalysisManager,
 ): CoreFunction | undefined {
-		if (fn.blocks.length < 3) return undefined;
-		const cfg = analyses.controlFlow(fn);
-		const loopHeaders = new Set(cfg.loops.map(({ header }) => header));
-		const representations = new Map(
-			fn.values.map(({ id, representation }) => [id, representation] as const),
-		);
-		const definitionBlocks = new Map<CoreValueId, CoreBlockId>();
-		for (const current of fn.blocks) {
-			for (const parameter of current.parameters) {
-				definitionBlocks.set(parameter.value, current.id);
-			}
-			for (const instruction of current.instructions) {
-				for (const output of instruction.outputs) {
-					definitionBlocks.set(output, current.id);
-				}
+	if (fn.blocks.length < 3) return undefined;
+	const cfg = analyses.controlFlow(fn);
+	const loopHeaders = new Set(cfg.loops.map(({ header }) => header));
+	const representations = new Map(
+		fn.values.map(({ id, representation }) => [id, representation] as const),
+	);
+	const definitionBlocks = new Map<CoreValueId, CoreBlockId>();
+	for (const current of fn.blocks) {
+		for (const parameter of current.parameters) {
+			definitionBlocks.set(parameter.value, current.id);
+		}
+		for (const instruction of current.instructions) {
+			for (const output of instruction.outputs) {
+				definitionBlocks.set(output, current.id);
 			}
 		}
-		const { instructions: protectedInstructions, inputs: protectedInputs } =
-			regionProtectedValues(fn);
-		let liveBeforeDce: ReadonlySet<CoreInstructionId> | undefined;
-		const availableByKey = new Map<string, Array<PreAvailableExpression>>();
-		for (const block of fn.blocks) {
-			if (block.handler !== undefined) continue;
-			for (const instruction of block.instructions) {
-				if (
-					!isPreExpressionOpcode(instruction) ||
-					protectedInstructions.has(instruction.id) ||
-					instruction.outputs.length !== 1 ||
-					!LOOP_UNROOTED_REPRESENTATIONS.has(
-						representations.get(instruction.outputs[0]!) ?? "",
-					)
-				) {
-					continue;
-				}
-				const effects = coreInstructionEffects(instruction);
-				if (
-					effects.reads.length > 0 ||
-					effects.writes.length > 0 ||
-					effects.mayThrow ||
-					effects.mayGc ||
-					effects.maySuspend ||
-					effects.callsUserCode
-				) {
-					continue;
-				}
-				const key = valueNumberingKey(instruction, "");
-				if (key === undefined) continue;
-				const entries = availableByKey.get(key) ?? [];
-				entries.push({ block: block.id, instruction, output: instruction.outputs[0]! });
-				availableByKey.set(key, entries);
-			}
-		}
-
-		for (const block of fn.blocks) {
+	}
+	const { instructions: protectedInstructions, inputs: protectedInputs } =
+		regionProtectedValues(fn);
+	let liveBeforeDce: ReadonlySet<CoreInstructionId> | undefined;
+	const availableByKey = new Map<string, Array<PreAvailableExpression>>();
+	for (const block of fn.blocks) {
+		if (block.handler !== undefined) continue;
+		for (const instruction of block.instructions) {
 			if (
-				block.id === fn.entry ||
-				block.id === fn.bodyEntry ||
-				block.handler !== undefined ||
-				block.parameters.some(({ role }) => role === "exception") ||
-				loopHeaders.has(block.id)
+				!isPreExpressionOpcode(instruction) ||
+				protectedInstructions.has(instruction.id) ||
+				instruction.outputs.length !== 1 ||
+				!LOOP_UNROOTED_REPRESENTATIONS.has(
+					representations.get(instruction.outputs[0]!) ?? "",
+				)
 			) {
 				continue;
 			}
-			const incoming = cfg.predecessors[block.id]!;
+			const effects = coreInstructionEffects(instruction);
 			if (
-				incoming.length < 2 ||
-				incoming.some(({ kind }) => kind !== "ordinary") ||
-				incoming.some(({ from }) => {
-					const predecessor = fn.blocks[from]!;
+				effects.reads.length > 0 ||
+				effects.writes.length > 0 ||
+				effects.mayThrow ||
+				effects.mayGc ||
+				effects.maySuspend ||
+				effects.callsUserCode
+			) {
+				continue;
+			}
+			const key = valueNumberingKey(instruction, "");
+			if (key === undefined) continue;
+			const entries = availableByKey.get(key) ?? [];
+			entries.push({ block: block.id, instruction, output: instruction.outputs[0]! });
+			availableByKey.set(key, entries);
+		}
+	}
+
+	for (const block of fn.blocks) {
+		if (
+			block.id === fn.entry ||
+			block.id === fn.bodyEntry ||
+			block.handler !== undefined ||
+			block.parameters.some(({ role }) => role === "exception") ||
+			loopHeaders.has(block.id)
+		) {
+			continue;
+		}
+		const incoming = cfg.predecessors[block.id]!;
+		if (
+			incoming.length < 2 ||
+			incoming.some(({ kind }) => kind !== "ordinary") ||
+			incoming.some(({ from }) => {
+				const predecessor = fn.blocks[from]!;
+				return (
+					predecessor.handler !== undefined ||
+					protectedInstructions.has(predecessor.terminator.id) ||
+					predecessor.terminator.kind !== "jump" ||
+					predecessor.terminator.edge.block !== block.id
+				);
+			})
+		) {
+			continue;
+		}
+		const parameterIndices = new Map(
+			block.parameters.map(({ value }, index) => [value, index] as const),
+		);
+		let followsSuspension = false;
+		for (const candidate of block.instructions) {
+			const candidateFollowsSuspension = followsSuspension;
+			followsSuspension ||= coreInstructionEffects(candidate).maySuspend;
+			const output = candidate.outputs[0];
+			if (
+				output === undefined ||
+				!isPreExpressionOpcode(candidate) ||
+				candidateFollowsSuspension ||
+				candidate.outputs.length !== 1 ||
+				protectedInstructions.has(candidate.id) ||
+				protectedInputs.has(output) ||
+				!LOOP_UNROOTED_REPRESENTATIONS.has(representations.get(output) ?? "")
+			) {
+				continue;
+			}
+			if (
+				candidate.inputs.some((input) => {
+					if (parameterIndices.has(input)) return false;
+					const definitionBlock = definitionBlocks.get(input);
 					return (
-						predecessor.handler !== undefined ||
-						protectedInstructions.has(predecessor.terminator.id) ||
-						predecessor.terminator.kind !== "jump" ||
-						predecessor.terminator.edge.block !== block.id
+						definitionBlock === undefined ||
+						definitionBlock === block.id ||
+						!cfg.instructionDominatesBlock(definitionBlock, block.id)
 					);
 				})
 			) {
 				continue;
 			}
-			const parameterIndices = new Map(
-				block.parameters.map(({ value }, index) => [value, index] as const),
-			);
-			let followsSuspension = false;
-			for (const candidate of block.instructions) {
-				const candidateFollowsSuspension = followsSuspension;
-				followsSuspension ||= coreInstructionEffects(candidate).maySuspend;
-				const output = candidate.outputs[0];
-				if (
-					output === undefined ||
-					!isPreExpressionOpcode(candidate) ||
-					candidateFollowsSuspension ||
-					candidate.outputs.length !== 1 ||
-					protectedInstructions.has(candidate.id) ||
-					protectedInputs.has(output) ||
-					!LOOP_UNROOTED_REPRESENTATIONS.has(representations.get(output) ?? "")
-				) {
-					continue;
+			const effects = coreInstructionEffects(candidate);
+			if (
+				effects.reads.length > 0 ||
+				effects.writes.length > 0 ||
+				effects.mayThrow ||
+				effects.mayGc ||
+				effects.maySuspend ||
+				effects.callsUserCode ||
+				valueNumberingKey(candidate, "") === undefined
+			) {
+				continue;
+			}
+			const valuesByPredecessor = new Map<CoreBlockId, CoreValueId>();
+			let missing:
+				| {
+						readonly block: CoreBlockId;
+						readonly inputs: ReadonlyArray<CoreValueId>;
+				  }
+				| undefined;
+			let valid = true;
+			for (const edge of incoming) {
+				if (edge.kind !== "ordinary") {
+					valid = false;
+					break;
 				}
-				if (
-					candidate.inputs.some((input) => {
-						if (parameterIndices.has(input)) return false;
-						const definitionBlock = definitionBlocks.get(input);
-						return (
-							definitionBlock === undefined ||
-							definitionBlock === block.id ||
-							!cfg.instructionDominatesBlock(definitionBlock, block.id)
-						);
-					})
-				) {
-					continue;
+				const translated = candidate.inputs.map((input) => {
+					const parameter = parameterIndices.get(input);
+					return parameter === undefined ? input : edge.arguments[parameter]!;
+				});
+				if (translated.some((value) => value === undefined)) {
+					valid = false;
+					break;
 				}
-				const effects = coreInstructionEffects(candidate);
-				if (
-					effects.reads.length > 0 ||
-					effects.writes.length > 0 ||
-					effects.mayThrow ||
-					effects.mayGc ||
-					effects.maySuspend ||
-					effects.callsUserCode ||
-					valueNumberingKey(candidate, "") === undefined
-				) {
-					continue;
+				const key = valueNumberingKey({ ...candidate, inputs: translated }, "")!;
+				const structurallyAvailable = (availableByKey.get(key) ?? []).filter(
+					(entry) =>
+						entry.instruction.id !== candidate.id &&
+						representations.get(entry.output) === representations.get(output) &&
+						(entry.block === edge.from ||
+							cfg.instructionDominatesBlock(entry.block, edge.from)),
+				);
+				if (structurallyAvailable.length > 0 && liveBeforeDce === undefined) {
+					liveBeforeDce = coreLiveness(fn).instructions;
 				}
-				const valuesByPredecessor = new Map<CoreBlockId, CoreValueId>();
-				let missing:
-					| {
-							readonly block: CoreBlockId;
-							readonly inputs: ReadonlyArray<CoreValueId>;
-					  }
-					| undefined;
-				let valid = true;
-				for (const edge of incoming) {
-					if (edge.kind !== "ordinary") {
-						valid = false;
-						break;
-					}
-					const translated = candidate.inputs.map((input) => {
-						const parameter = parameterIndices.get(input);
-						return parameter === undefined ? input : edge.arguments[parameter]!;
-					});
-					if (translated.some((value) => value === undefined)) {
-						valid = false;
-						break;
-					}
-					const key = valueNumberingKey({ ...candidate, inputs: translated }, "")!;
-					const structurallyAvailable = (availableByKey.get(key) ?? []).filter(
-						(entry) =>
-							entry.instruction.id !== candidate.id &&
-							representations.get(entry.output) === representations.get(output) &&
-							(entry.block === edge.from ||
-								cfg.instructionDominatesBlock(entry.block, edge.from)),
-					);
-					if (structurallyAvailable.length > 0 && liveBeforeDce === undefined) {
-						liveBeforeDce = coreLiveness(fn).instructions;
-					}
-					if (liveBeforeDce !== undefined && !liveBeforeDce.has(candidate.id)) {
-						valid = false;
-						break;
-					}
-					const available = structurallyAvailable.find((entry) =>
-						liveBeforeDce!.has(entry.instruction.id),
-					);
-					if (available !== undefined) {
-						valuesByPredecessor.set(edge.from, available.output);
-					} else if (missing === undefined) {
-						missing = { block: edge.from, inputs: translated };
-					} else {
-						valid = false;
-						break;
-					}
+				if (liveBeforeDce !== undefined && !liveBeforeDce.has(candidate.id)) {
+					valid = false;
+					break;
 				}
-				if (
-					!valid ||
-					valuesByPredecessor.size === 0 ||
-					(missing !== undefined &&
-						preExpressionCost(candidate) * valuesByPredecessor.size <= incoming.length)
-				) {
-					continue;
+				const available = structurallyAvailable.find((entry) =>
+					liveBeforeDce!.has(entry.instruction.id),
+				);
+				if (available !== undefined) {
+					valuesByPredecessor.set(edge.from, available.output);
+				} else if (missing === undefined) {
+					missing = { block: edge.from, inputs: translated };
+				} else {
+					valid = false;
+					break;
 				}
+			}
+			if (
+				!valid ||
+				valuesByPredecessor.size === 0 ||
+				(missing !== undefined &&
+					preExpressionCost(candidate) * valuesByPredecessor.size <= incoming.length)
+			) {
+				continue;
+			}
 
-				const instructionId =
-					missing === undefined
-						? undefined
-						: coreInstructionId(nextInstructionId(fn));
-				const valueId =
-					missing === undefined
-						? undefined
-						: coreValueId((fn.values.at(-1)?.id ?? -1) + 1);
-				const clone: CoreInstruction | undefined =
-					missing === undefined
-						? undefined
-						: {
-								...candidate,
-								id: instructionId!,
-								inputs: missing.inputs,
-								outputs: [valueId!],
-							};
-				if (missing !== undefined) valuesByPredecessor.set(missing.block, valueId!);
-				const parameterIndex = block.parameters.length;
-				const blocks = fn.blocks.map((current): CoreBlock => {
-					if (current.id === block.id) {
-						return {
-							...current,
-							parameters: [
-								...current.parameters,
-								{
-									value: output,
-									representation: representations.get(output)!,
-									role: "value",
-								},
-							],
-							instructions: current.instructions.filter(({ id }) => id !== candidate.id),
+			const instructionId =
+				missing === undefined ? undefined : coreInstructionId(nextInstructionId(fn));
+			const valueId =
+				missing === undefined ? undefined : coreValueId((fn.values.at(-1)?.id ?? -1) + 1);
+			const clone: CoreInstruction | undefined =
+				missing === undefined
+					? undefined
+					: {
+							...candidate,
+							id: instructionId!,
+							inputs: missing.inputs,
+							outputs: [valueId!],
 						};
-					}
-					if (!valuesByPredecessor.has(current.id)) return current;
-					if (current.terminator.kind !== "jump") return current;
+			if (missing !== undefined) valuesByPredecessor.set(missing.block, valueId!);
+			const parameterIndex = block.parameters.length;
+			const blocks = fn.blocks.map((current): CoreBlock => {
+				if (current.id === block.id) {
 					return {
 						...current,
-						instructions:
-							clone !== undefined && current.id === missing?.block
-								? [...current.instructions, clone]
-								: current.instructions,
-						terminator: {
-							...current.terminator,
-							edge: {
-								...current.terminator.edge,
-								arguments: [
-									...current.terminator.edge.arguments,
-									valuesByPredecessor.get(current.id)!,
-								],
+						parameters: [
+							...current.parameters,
+							{
+								value: output,
+								representation: representations.get(output)!,
+								role: "value",
 							},
-						},
+						],
+						instructions: current.instructions.filter(({ id }) => id !== candidate.id),
 					};
-				});
-				let values = fn.values
-					.map((value) =>
-						value.id === output
-							? {
-									...value,
-									definition: {
-										kind: "block-parameter" as const,
-										block: block.id,
-										index: parameterIndex,
-									},
-								}
-							: value,
-					);
-				if (instructionId !== undefined && valueId !== undefined) {
-					values = values.concat({
-						id: valueId,
-						representation: representations.get(output)!,
-						definition: { kind: "instruction", instruction: instructionId, index: 0 },
-					});
 				}
-				return { ...fn, blocks, values, mutationEpoch: fn.mutationEpoch + 1 };
+				if (!valuesByPredecessor.has(current.id)) return current;
+				if (current.terminator.kind !== "jump") return current;
+				return {
+					...current,
+					instructions:
+						clone !== undefined && current.id === missing?.block
+							? [...current.instructions, clone]
+							: current.instructions,
+					terminator: {
+						...current.terminator,
+						edge: {
+							...current.terminator.edge,
+							arguments: [
+								...current.terminator.edge.arguments,
+								valuesByPredecessor.get(current.id)!,
+							],
+						},
+					},
+				};
+			});
+			let values = fn.values.map((value) =>
+				value.id === output
+					? {
+							...value,
+							definition: {
+								kind: "block-parameter" as const,
+								block: block.id,
+								index: parameterIndex,
+							},
+						}
+					: value,
+			);
+			if (instructionId !== undefined && valueId !== undefined) {
+				values = values.concat({
+					id: valueId,
+					representation: representations.get(output)!,
+					definition: { kind: "instruction", instruction: instructionId, index: 0 },
+				});
 			}
+			return { ...fn, blocks, values, mutationEpoch: fn.mutationEpoch + 1 };
 		}
-		return undefined;
+	}
+	return undefined;
 }
 
 const partialRedundancyElimination: CoreFunctionPass = {

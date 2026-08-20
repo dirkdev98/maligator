@@ -2285,10 +2285,15 @@ describe("Core IR optimizer", () => {
 			attributes: { value: 0.5 },
 			outputRepresentations: ["f64"],
 		});
-		const [leftSine] = builder.appendInstruction(left, "mathUnaryNumber", [leftOperand!], {
-			attributes: { operation: "Math.sin" },
-			outputRepresentations: ["f64"],
-		});
+		const [leftSine] = builder.appendInstruction(
+			left,
+			"mathUnaryNumber",
+			[leftOperand!],
+			{
+				attributes: { operation: "Math.sin" },
+				outputRepresentations: ["f64"],
+			},
+		);
 		builder.appendInstruction(left, "storeGlobal", [leftSine!], {
 			attributes: { index: 0 },
 		});
@@ -2357,7 +2362,10 @@ describe("Core IR optimizer", () => {
 			builder.appendInstruction(branch, "storeGlobal", [sine!], {
 				attributes: { index: 0 },
 			});
-			builder.setTerminator(branch, { kind: "jump", edge: { block: join, arguments: [] } });
+			builder.setTerminator(branch, {
+				kind: "jump",
+				edge: { block: join, arguments: [] },
+			});
 		}
 		const [result] = builder.appendInstruction(join, "mathUnaryNumber", [operand!], {
 			attributes: { operation: "Math.sin" },

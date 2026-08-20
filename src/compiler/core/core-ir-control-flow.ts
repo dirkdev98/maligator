@@ -463,9 +463,7 @@ function findIrreducibleCycles(
 		const block = [...blocks][0];
 		return (
 			block !== undefined &&
-			successors[block]!.some(
-				(edge) => edge.kind === "ordinary" && edge.to === block,
-			)
+			successors[block]!.some((edge) => edge.kind === "ordinary" && edge.to === block)
 		);
 	};
 

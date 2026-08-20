@@ -1060,9 +1060,7 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.checksum = checksum;
 		`);
-		expect(output).not.toContain(
-			"mal_builtin_string_char_code_at_direct_in_bounds(",
-		);
+		expect(output).not.toContain("mal_builtin_string_char_code_at_direct_in_bounds(");
 		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm,");
 	});
 
