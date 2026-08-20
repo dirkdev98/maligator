@@ -49,6 +49,8 @@ export function coreFactId(value: number): CoreFactId {
 
 export const CORE_EFFECT_DOMAINS = [
 	"captured-slot",
+	"local-slot",
+	"activation-this",
 	"global-slot",
 	"global-property",
 	"object-property",

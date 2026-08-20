@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import {
+	coreOptimizationMetrics,
+	executeCoreOptimizations,
+} from "../src/compiler/core/core-ir-opt.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
-import { CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
+import { CORE_NO_EFFECTS, CoreFunctionBuilder } from "../src/compiler/core/core-ir.ts";
 import type { CoreFunction, CoreProgram } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { coreRegisterClasses } from "../src/compiler/target/core-target-lowering.ts";
 import {
 	deserializeVmDefinition,
 	serializeVmDefinition,
@@ -45,6 +49,287 @@ function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 }
 
 describe("Core IR optimizer", () => {
+	it("counts refined safepoints, boxed roots, and guard terminators in traces", () => {
+		const rooted = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const rootedEntry = rooted.createBlock([{}]);
+		const parameter = rooted.block(rootedEntry).parameters[0]!.value;
+		rooted.appendInstruction(rootedEntry, "createObject", []);
+		rooted.setTerminator(rootedEntry, { kind: "return", value: parameter });
+
+		const refined = new CoreFunctionBuilder(1, coreOpcodeRegistry, { parameterCount: 1 });
+		const refinedEntry = refined.createBlock([{}]);
+		const refinedParameter = refined.block(refinedEntry).parameters[0]!.value;
+		const proof = refined.addFact({
+			kind: "no-gc",
+			value: true,
+			validity: { kind: "summary", digest: "metrics-no-gc" },
+			obligations: [],
+			origin: "metrics-test",
+		});
+		refined.appendInstruction(refinedEntry, "createObject", [], {
+			effectRefinement: { effects: CORE_NO_EFFECTS, proof },
+		});
+		refined.setTerminator(refinedEntry, {
+			kind: "return",
+			value: refinedParameter,
+		});
+
+		const guarded = new CoreFunctionBuilder(2, coreOpcodeRegistry, { parameterCount: 1 });
+		const guardedEntry = guarded.createBlock([{}]);
+		const condition = guarded.block(guardedEntry).parameters[0]!.value;
+		const success = guarded.createBlock();
+		const fallback = guarded.createBlock();
+		guarded.setGuardTerminator(guardedEntry, {
+			condition,
+			success: { block: success, arguments: [] },
+			fallback: { block: fallback, arguments: [] },
+			fact: { kind: "metrics-guard", value: true, origin: "metrics-test" },
+		});
+		guarded.setTerminator(success, { kind: "return", value: condition });
+		guarded.setTerminator(fallback, { kind: "return", value: condition });
+
+		const metrics = coreOptimizationMetrics(
+			coreProgram([
+				rooted.finish(rootedEntry),
+				refined.finish(refinedEntry),
+				guarded.finish(guardedEntry),
+			]),
+		);
+		expect(metrics.safepoints).toBe(1);
+		expect(metrics.rootedValues).toBe(1);
+		expect(metrics.worldGuards).toBe(1);
+	});
+
+	it("propagates one constant across executable join edges and removes the dead branch", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{ representation: "boolean" }]);
+		const success = builder.createBlock();
+		const failure = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftTrue] = builder.appendInstruction(left, "createBoolean", [], {
+			attributes: { value: true },
+			outputRepresentations: ["boolean"],
+		});
+		const [rightTrue] = builder.appendInstruction(right, "createBoolean", [], {
+			attributes: { value: true },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftTrue!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightTrue!] },
+		});
+		builder.setTerminator(join, {
+			kind: "branch",
+			condition: builder.block(join).parameters[0]!.value,
+			consequent: { block: success, arguments: [] },
+			alternate: { block: failure, arguments: [] },
+		});
+		const [one] = builder.appendInstruction(success, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [zero] = builder.appendInstruction(failure, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		builder.setTerminator(success, { kind: "return", value: one! });
+		builder.setTerminator(failure, { kind: "return", value: zero! });
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]));
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) =>
+					name === "sparse-conditional-constant-propagation" && changed,
+			),
+		).toBe(true);
+		expect(fn.blocks.flatMap(({ terminator }) => terminator.kind)).not.toContain(
+			"branch",
+		);
+		const terminator = fn.blocks[0]!.terminator;
+		expect(terminator.kind).toBe("return");
+		if (terminator.kind !== "return") throw new Error("expected folded return");
+		expect(
+			fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.find(({ outputs }) => outputs.includes(terminator.value))?.attributes.value,
+		).toBe(1);
+	});
+
+	it("preserves coercions, BigInt mixing, NaN, and signed-zero behavior", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [negativeZero] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: -0 },
+			outputRepresentations: ["f64"],
+		});
+		const [positiveZero] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 0 },
+			outputRepresentations: ["f64"],
+		});
+		const [sum] = builder.appendInstruction(
+			entry,
+			"binary",
+			[negativeZero!, positiveZero!],
+			{
+				attributes: { operator: "+" },
+				outputRepresentations: ["f64"],
+			},
+		);
+		const [nan] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: Number.NaN },
+			outputRepresentations: ["f64"],
+		});
+		const [nanEquals] = builder.appendInstruction(entry, "binary", [nan!, nan!], {
+			attributes: { operator: "===" },
+			outputRepresentations: ["boolean"],
+		});
+		const [bigint] = builder.appendInstruction(entry, "createBigint", [], {
+			attributes: { constantIndex: 0 },
+		});
+		builder.appendInstruction(entry, "binary", [bigint!, positiveZero!], {
+			attributes: { operator: "+" },
+		});
+		builder.setTerminator(entry, { kind: "return", value: sum! });
+		const comparisonBuilder = new CoreFunctionBuilder(1, coreOpcodeRegistry);
+		const comparisonEntry = comparisonBuilder.createBlock();
+		const [comparisonNan] = comparisonBuilder.appendInstruction(
+			comparisonEntry,
+			"createF64",
+			[],
+			{
+				attributes: { value: Number.NaN },
+				outputRepresentations: ["f64"],
+			},
+		);
+		const [comparisonResult] = comparisonBuilder.appendInstruction(
+			comparisonEntry,
+			"binary",
+			[comparisonNan!, comparisonNan!],
+			{
+				attributes: { operator: "===" },
+				outputRepresentations: ["boolean"],
+			},
+		);
+		comparisonBuilder.setTerminator(comparisonEntry, {
+			kind: "return",
+			value: comparisonResult!,
+		});
+
+		const outcome = executeCoreOptimizations({
+			...coreProgram([builder.finish(entry), comparisonBuilder.finish(comparisonEntry)]),
+			bigintConstants: [1n],
+		});
+		const instructions = outcome.program.functions[0]!.blocks[0]!.instructions;
+		const sumTerminator = outcome.program.functions[0]!.blocks[0]!.terminator;
+		expect(sumTerminator.kind).toBe("return");
+		if (sumTerminator.kind !== "return") throw new Error("expected numeric return");
+		const foldedSum = instructions.find(({ outputs }) =>
+			outputs.includes(sumTerminator.value),
+		);
+		expect(foldedSum?.opcode).toBe("createF64");
+		expect(Object.is(foldedSum?.attributes.value, 0)).toBe(true);
+		expect(
+			instructions.find(({ outputs }) => outputs.includes(nanEquals!)),
+		).toBeUndefined();
+		expect(outcome.program.functions[1]!.blocks[0]!.instructions).toContainEqual(
+			expect.objectContaining({
+				opcode: "createBoolean",
+				attributes: { value: false },
+			}),
+		);
+		const mixedBigint = instructions.find(
+			({ opcode, inputs }) => opcode === "binary" && inputs.includes(bigint!),
+		);
+		expect(mixedBigint?.attributes.operator).toBe("+");
+	});
+
+	it("folds primitive loose equality with the exact ECMAScript coercion rules", () => {
+		type Literal =
+			| { readonly kind: "null" }
+			| { readonly kind: "undefined" }
+			| { readonly kind: "boolean"; readonly value: boolean }
+			| { readonly kind: "number"; readonly value: number }
+			| { readonly kind: "string"; readonly index: number };
+		const build = (
+			functionIndex: number,
+			left: Literal,
+			operator: "==" | "!=",
+			right: Literal,
+		): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+			const entry = builder.createBlock();
+			const append = (literal: Literal) => {
+				switch (literal.kind) {
+					case "null":
+						return builder.appendInstruction(entry, "createNull", [])[0]!;
+					case "undefined":
+						return builder.appendInstruction(entry, "createUndefined", [])[0]!;
+					case "boolean":
+						return builder.appendInstruction(entry, "createBoolean", [], {
+							attributes: { value: literal.value },
+							outputRepresentations: ["boolean"],
+						})[0]!;
+					case "number":
+						return builder.appendInstruction(entry, "createF64", [], {
+							attributes: { value: literal.value },
+							outputRepresentations: ["f64"],
+						})[0]!;
+					case "string":
+						return builder.appendInstruction(entry, "createString", [], {
+							attributes: { stringIndex: literal.index },
+						})[0]!;
+				}
+			};
+			const [result] = builder.appendInstruction(
+				entry,
+				"binary",
+				[append(left), append(right)],
+				{ attributes: { operator }, outputRepresentations: ["boolean"] },
+			);
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			return builder.finish(entry);
+		};
+		const cases = [
+			[{ kind: "null" }, "==", { kind: "number", value: 0 }, false],
+			[{ kind: "null" }, "!=", { kind: "boolean", value: false }, true],
+			[{ kind: "string", index: 1 }, "==", { kind: "number", value: 0 }, true],
+			[{ kind: "string", index: 0 }, "==", { kind: "boolean", value: false }, true],
+			[{ kind: "string", index: 2 }, "==", { kind: "boolean", value: true }, true],
+		] as const satisfies ReadonlyArray<readonly [Literal, "==" | "!=", Literal, boolean]>;
+		const outcome = executeCoreOptimizations({
+			...coreProgram(
+				cases.map(([left, operator, right], index) =>
+					build(index, left, operator, right),
+				),
+			),
+			stringConstants: [[], [48], [49]],
+		});
+		for (const [index, equalityCase] of cases.entries()) {
+			const expected = equalityCase[3];
+			const fn = outcome.program.functions[index]!;
+			const terminator = fn.blocks[0]!.terminator;
+			expect(terminator.kind).toBe("return");
+			if (terminator.kind !== "return") throw new Error("expected equality return");
+			expect(
+				fn.blocks[0]!.instructions.find(({ outputs }) =>
+					outputs.includes(terminator.value),
+				),
+			).toMatchObject({ opcode: "createBoolean", attributes: { value: expected } });
+		}
+	});
+
 	it("eliminates copies, locally numbers values, and removes dead producers", () => {
 		const result = executeCoreOptimizations(programWithConstants());
 		const fn = result.program.functions[0]!;
@@ -60,6 +345,418 @@ describe("Core IR optimizer", () => {
 		});
 		expect(() => verifyCoreFunction(fn, coreOpcodeRegistry)).not.toThrow();
 		expect(result.passes.some(({ changed }) => changed)).toBe(true);
+	});
+
+	it("numbers pure values through the dominator tree", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const [dominating] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 42 },
+		});
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		for (const block of [left, right]) {
+			const [duplicate] = builder.appendInstruction(block, "createNumber", [], {
+				attributes: { value: 42 },
+			});
+			builder.setTerminator(block, { kind: "return", value: duplicate! });
+		}
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]));
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "copy-and-value-number" && changed,
+			),
+		).toBe(true);
+		expect(
+			fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.filter(
+					({ opcode, attributes }) =>
+						opcode === "createNumber" && attributes.value === 42,
+				),
+		).toHaveLength(1);
+		expect(
+			fn.blocks
+				.filter(({ id }) => id !== fn.entry)
+				.every(
+					({ terminator }) =>
+						terminator.kind === "return" && terminator.value === dominating,
+				),
+		).toBe(true);
+	});
+
+	it("reuses partitioned loads only when every path preserves their effect domain", () => {
+		const build = (writeOnLeft: boolean, functionIndex: number): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const condition = builder.block(entry).parameters[0]!.value;
+			const [before] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const left = builder.createBlock();
+			const right = builder.createBlock();
+			const join = builder.createBlock();
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition,
+				consequent: { block: left, arguments: [] },
+				alternate: { block: right, arguments: [] },
+			});
+			if (writeOnLeft) {
+				const [replacement] = builder.appendInstruction(left, "createUndefined", []);
+				builder.appendInstruction(left, "storeGlobal", [replacement!], {
+					attributes: { index: 0 },
+				});
+			}
+			builder.setTerminator(left, { kind: "jump", edge: { block: join, arguments: [] } });
+			builder.setTerminator(right, {
+				kind: "jump",
+				edge: { block: join, arguments: [] },
+			});
+			const [after] = builder.appendInstruction(join, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const [same] = builder.appendInstruction(join, "binary", [before!, after!], {
+				attributes: { operator: "===" },
+				outputRepresentations: ["boolean"],
+			});
+			builder.setTerminator(join, { kind: "return", value: same! });
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations({
+			...coreProgram([build(false, 0), build(true, 1)]),
+			globalCount: 1,
+		});
+		const loadCount = (fn: CoreFunction) =>
+			fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.filter(({ opcode }) => opcode === "loadGlobal").length;
+		expect(loadCount(outcome.program.functions[0]!)).toBe(1);
+		expect(loadCount(outcome.program.functions[1]!)).toBe(2);
+	});
+
+	it("invalidates GVN across environment and derived-this rebinding", () => {
+		const captured = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const capturedEntry = captured.createBlock();
+		const [beforeCaptured] = captured.appendInstruction(
+			capturedEntry,
+			"loadCaptured",
+			[],
+			{ attributes: { level: -1, index: 0 } },
+		);
+		captured.appendInstruction(capturedEntry, "envCopy", []);
+		const [afterCaptured] = captured.appendInstruction(
+			capturedEntry,
+			"loadCaptured",
+			[],
+			{ attributes: { level: -1, index: 0 } },
+		);
+		const [capturedSame] = captured.appendInstruction(
+			capturedEntry,
+			"binary",
+			[beforeCaptured!, afterCaptured!],
+			{ attributes: { operator: "===" }, outputRepresentations: ["boolean"] },
+		);
+		captured.setTerminator(capturedEntry, { kind: "return", value: capturedSame! });
+
+		const derived = new CoreFunctionBuilder(1, coreOpcodeRegistry, { parameterCount: 2 });
+		const derivedEntry = derived.createBlock([{}, {}]);
+		const [parent, argumentsArray] = derived
+			.block(derivedEntry)
+			.parameters.map(({ value }) => value);
+		const [beforeThis] = derived.appendInstruction(derivedEntry, "loadThis", []);
+		derived.appendInstruction(derivedEntry, "constructSuper", [parent!, argumentsArray!]);
+		const [afterThis] = derived.appendInstruction(derivedEntry, "loadThis", []);
+		const [thisSame] = derived.appendInstruction(
+			derivedEntry,
+			"binary",
+			[beforeThis!, afterThis!],
+			{ attributes: { operator: "===" }, outputRepresentations: ["boolean"] },
+		);
+		derived.setTerminator(derivedEntry, { kind: "return", value: thisSame! });
+
+		const outcome = executeCoreOptimizations(
+			coreProgram([captured.finish(capturedEntry), derived.finish(derivedEntry)]),
+		);
+		const count = (functionIndex: number, opcode: string) =>
+			outcome.program.functions[functionIndex]!.blocks.flatMap(
+				({ instructions }) => instructions,
+			).filter((instruction) => instruction.opcode === opcode).length;
+		expect(count(0, "loadCaptured")).toBe(2);
+		expect(count(1, "loadThis")).toBe(2);
+	});
+
+	it("prunes an exceptional edge as soon as a value pass removes its last throw", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }]);
+		const [left] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 20 },
+			outputRepresentations: ["f64"],
+		});
+		const [right] = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 22 },
+			outputRepresentations: ["f64"],
+		});
+		const [sum] = builder.appendInstruction(entry, "binary", [left!, right!], {
+			attributes: { operator: "+" },
+			outputRepresentations: ["f64"],
+		});
+		builder.setHandler(entry, handler);
+		builder.setTerminator(entry, { kind: "return", value: sum! });
+		builder.setTerminator(handler, {
+			kind: "throw",
+			value: builder.block(handler).parameters[0]!.value,
+		});
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			verification: "per-pass",
+		});
+		expect(outcome.program.functions[0]!.blocks).toHaveLength(1);
+		expect(outcome.program.functions[0]!.blocks[0]!.handler).toBeUndefined();
+	});
+
+	it("applies only representation-proven algebraic identities", () => {
+		const buildNumeric = (
+			functionIndex: number,
+			operator: string,
+			constantValue: number | undefined,
+			options: { readonly self?: boolean; readonly constantLeft?: boolean } = {},
+		): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const condition = builder.block(entry).parameters[0]!.value;
+			const left = builder.createBlock();
+			const right = builder.createBlock();
+			const join = builder.createBlock([{ representation: "f64" }]);
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition,
+				consequent: { block: left, arguments: [] },
+				alternate: { block: right, arguments: [] },
+			});
+			const [leftValue] = builder.appendInstruction(left, "createF64", [], {
+				attributes: { value: -2 },
+				outputRepresentations: ["f64"],
+			});
+			const [rightValue] = builder.appendInstruction(right, "createF64", [], {
+				attributes: { value: 3 },
+				outputRepresentations: ["f64"],
+			});
+			builder.setTerminator(left, {
+				kind: "jump",
+				edge: { block: join, arguments: [leftValue!] },
+			});
+			builder.setTerminator(right, {
+				kind: "jump",
+				edge: { block: join, arguments: [rightValue!] },
+			});
+			const dynamic = builder.block(join).parameters[0]!.value;
+			let constant = dynamic;
+			if (constantValue !== undefined) {
+				const [created] = builder.appendInstruction(join, "createF64", [], {
+					attributes: { value: constantValue },
+					outputRepresentations: ["f64"],
+				});
+				constant = created!;
+			}
+			const comparison = ["<", "<=", ">", ">="].includes(operator);
+			const inputs = options.self
+				? [dynamic, dynamic]
+				: options.constantLeft
+					? [constant, dynamic]
+					: [dynamic, constant];
+			const [result] = builder.appendInstruction(join, "binary", inputs, {
+				attributes: { operator },
+				outputRepresentations: [comparison ? "boolean" : "f64"],
+			});
+			builder.setTerminator(join, { kind: "return", value: result! });
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations(
+			coreProgram([
+				buildNumeric(0, "+", -0),
+				// +0 is intentionally not an additive identity because -0 + +0 is +0.
+				buildNumeric(1, "+", 0),
+				buildNumeric(2, "*", 1),
+				buildNumeric(3, "&", 0),
+				buildNumeric(4, "<", undefined, { self: true }),
+				buildNumeric(5, "<", 5, { constantLeft: true }),
+			]),
+		);
+		const binaries = (functionIndex: number) =>
+			outcome.program.functions[functionIndex]!.blocks.flatMap(
+				({ instructions }) => instructions,
+			).filter(({ opcode }) => opcode === "binary");
+		expect(binaries(0)).toHaveLength(0);
+		expect(binaries(1)).toHaveLength(1);
+		expect(binaries(2)).toHaveLength(0);
+		expect(binaries(3)).toHaveLength(0);
+		expect(binaries(4)).toHaveLength(0);
+		expect(binaries(5)).toContainEqual(
+			expect.objectContaining({ attributes: { operator: ">" } }),
+		);
+		const returnConstant = (functionIndex: number) => {
+			const fn = outcome.program.functions[functionIndex]!;
+			const terminator = fn.blocks.find(
+				({ terminator }) => terminator.kind === "return",
+			)!.terminator;
+			if (terminator.kind !== "return") throw new Error("expected algebraic return");
+			return fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.find(({ outputs }) => outputs.includes(terminator.value));
+		};
+		expect(returnConstant(3)).toMatchObject({
+			opcode: "createF64",
+			attributes: { value: 0 },
+		});
+		expect(returnConstant(4)).toMatchObject({
+			opcode: "createBoolean",
+			attributes: { value: false },
+		});
+	});
+
+	it("re-infers numeric joins exposed by optimization before algebraic rewriting", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [leftValue] = builder.appendInstruction(left, "createF64", [], {
+			attributes: { value: -2 },
+			outputRepresentations: ["f64"],
+		});
+		const [rightValue] = builder.appendInstruction(right, "createF64", [], {
+			attributes: { value: 3 },
+			outputRepresentations: ["f64"],
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [leftValue!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [rightValue!] },
+		});
+		const joined = builder.appendBlockParameter(join);
+		const [negativeZero] = builder.appendInstruction(join, "createF64", [], {
+			attributes: { value: -0 },
+			outputRepresentations: ["f64"],
+		});
+		const [sum] = builder.appendInstruction(join, "binary", [joined, negativeZero!], {
+			attributes: { operator: "+" },
+		});
+		builder.setTerminator(join, { kind: "return", value: sum! });
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			verification: "per-pass",
+		});
+		const fn = outcome.program.functions[0]!;
+		expect(fn.values.find(({ id }) => id === joined)?.representation).toBe("f64");
+		expect(
+			fn.blocks
+				.flatMap(({ instructions }) => instructions)
+				.some(
+					({ opcode, attributes }) => opcode === "binary" && attributes.operator === "+",
+				),
+		).toBe(false);
+		expect([...coreRegisterClasses(fn).registerRepresentations.values()]).toContain(
+			"f64",
+		);
+	});
+
+	it("eliminates a deep dead value graph in one liveness pass", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [returned] = builder.appendInstruction(entry, "createUndefined", []);
+		let dead = builder.appendInstruction(entry, "createF64", [], {
+			attributes: { value: 0.5 },
+			outputRepresentations: ["f64"],
+		})[0]!;
+		for (let index = 0; index < 32; index++) {
+			dead = builder.appendInstruction(entry, "mathUnaryNumber", [dead], {
+				attributes: { operation: index % 2 === 0 ? "Math.sin" : "Math.cos" },
+				outputRepresentations: ["f64"],
+			})[0]!;
+		}
+		builder.setTerminator(entry, { kind: "return", value: returned! });
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			maxRounds: 1,
+		});
+		const fn = outcome.program.functions[0]!;
+		expect(
+			outcome.passes.some(
+				({ name, changed }) => name === "dead-instruction-elimination" && changed,
+			),
+		).toBe(true);
+		expect(fn.blocks[0]!.instructions).toEqual([
+			expect.objectContaining({ opcode: "createUndefined", outputs: [returned] }),
+		]);
+		expect(fn.values.some(({ id }) => id === dead)).toBe(false);
+	});
+
+	it("retains observable allocation and call effects when their results are unused", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [callee] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.appendInstruction(entry, "createObject", []);
+		builder.appendInstruction(entry, "call", [callee!, callee!]);
+		builder.setTerminator(entry, { kind: "return", value: callee! });
+
+		const fn = executeCoreOptimizations(coreProgram([builder.finish(entry)])).program
+			.functions[0]!;
+		expect(fn.blocks[0]!.instructions.map(({ opcode }) => opcode)).toEqual([
+			"createUndefined",
+			"createObject",
+			"call",
+		]);
+	});
+
+	it("removes a dead guard and its proof after pure arms reconverge", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const condition = builder.block(entry).parameters[0]!.value;
+		const exit = builder.createBlock();
+		builder.setGuardTerminator(entry, {
+			condition,
+			success: { block: exit, arguments: [] },
+			fallback: { block: exit, arguments: [] },
+			fact: { kind: "unused-proof", value: true, origin: "dce-test" },
+		});
+		builder.addFact({
+			kind: "unused-summary",
+			value: true,
+			validity: { kind: "summary", digest: "unused-dce-test" },
+			obligations: [],
+			origin: "dce-test",
+		});
+		builder.setTerminator(exit, { kind: "return", value: condition });
+
+		const fn = executeCoreOptimizations(coreProgram([builder.finish(entry)])).program
+			.functions[0]!;
+		expect(fn.blocks.flatMap(({ terminator }) => terminator.kind)).not.toContain("guard");
+		expect(fn.facts).toEqual([]);
 	});
 
 	it("folds exact string property keys on the development Core path", () => {

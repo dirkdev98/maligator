@@ -832,9 +832,11 @@ describe("generated valid Core graph variations", () => {
 				expect(definesValue(fn, built.deadValue)).toBe(false);
 			}
 			if (built.joinParameter !== undefined) {
-				expect(definesValue(fn, built.joinParameter)).toBe(
-					variation.branch === "dynamic",
-				);
+				expect(
+					fn.blocks.some(({ parameters }) =>
+						parameters.some(({ value }) => value === built.joinParameter),
+					),
+				).toBe(variation.branch === "dynamic");
 			}
 			const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
 			if (built.header === undefined) {

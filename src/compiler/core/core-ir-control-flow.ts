@@ -26,6 +26,7 @@ export interface CoreControlFlow {
 	readonly successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
 	readonly predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
 	readonly reachable: ReadonlySet<CoreBlockId>;
+	readonly reversePostorder: ReadonlyArray<CoreBlockId>;
 	readonly immediateDominators: ReadonlyArray<CoreBlockId | null>;
 	readonly loops: ReadonlyArray<CoreNaturalLoop>;
 	dominates(dominator: CoreBlockId, block: CoreBlockId): boolean;
@@ -147,6 +148,7 @@ function buildImmediateDominators(
 ): {
 	readonly parents: Array<CoreBlockId | null>;
 	readonly reachable: Set<CoreBlockId>;
+	readonly reversePostorder: ReadonlyArray<CoreBlockId>;
 } {
 	const visited = new Uint8Array(successors.length);
 	const postorder: Array<CoreBlockId> = [];
@@ -207,7 +209,7 @@ function buildImmediateDominators(
 			}
 		}
 	}
-	return { parents, reachable };
+	return { parents, reachable, reversePostorder };
 }
 
 export interface BuildCoreControlFlowOptions {
@@ -250,21 +252,47 @@ export function buildCoreControlFlow(
 	for (const outgoing of successors) {
 		for (const edge of outgoing) predecessors[edge.to]?.push(edge);
 	}
-	const { parents, reachable } = buildImmediateDominators(
+	const { parents, reachable, reversePostorder } = buildImmediateDominators(
 		fn.entry,
 		successors,
 		predecessors,
 	);
-	const dominates = (dominator: CoreBlockId, block: CoreBlockId): boolean => {
-		if (!reachable.has(dominator) || !reachable.has(block)) return false;
-		let current = block;
-		for (let steps = 0; steps <= fn.blocks.length; steps++) {
-			if (current === dominator) return true;
-			const parent = parents[current] ?? null;
-			if (parent === null || parent === current) return false;
-			current = parent;
+	const dominatorChildren = fn.blocks.map(() => new Array<CoreBlockId>());
+	for (const block of reachable) {
+		const parent = parents[block];
+		if (parent !== undefined && parent !== null && parent !== block) {
+			dominatorChildren[parent]!.push(block);
 		}
-		return false;
+	}
+	const dominatorEntry = new Int32Array(fn.blocks.length);
+	const dominatorExit = new Int32Array(fn.blocks.length);
+	dominatorEntry.fill(-1);
+	dominatorExit.fill(-1);
+	let clock = 0;
+	const dominatorStack: Array<{ readonly block: CoreBlockId; next: number }> = [
+		{ block: fn.entry, next: 0 },
+	];
+	dominatorEntry[fn.entry] = clock++;
+	while (dominatorStack.length > 0) {
+		const frame = dominatorStack[dominatorStack.length - 1]!;
+		const children = dominatorChildren[frame.block]!;
+		if (frame.next < children.length) {
+			const child = children[frame.next++]!;
+			dominatorEntry[child] = clock++;
+			dominatorStack.push({ block: child, next: 0 });
+			continue;
+		}
+		dominatorExit[frame.block] = clock++;
+		dominatorStack.pop();
+	}
+	const dominates = (dominator: CoreBlockId, block: CoreBlockId): boolean => {
+		const entry = dominatorEntry[dominator] ?? -1;
+		const candidate = dominatorEntry[block] ?? -1;
+		return (
+			entry >= 0 &&
+			candidate >= entry &&
+			(dominatorExit[block] ?? -1) <= (dominatorExit[dominator] ?? -1)
+		);
 	};
 
 	const loops: Array<CoreNaturalLoop> = [];
@@ -295,6 +323,7 @@ export function buildCoreControlFlow(
 		successors,
 		predecessors,
 		reachable,
+		reversePostorder,
 		immediateDominators: parents,
 		loops,
 		dominates,

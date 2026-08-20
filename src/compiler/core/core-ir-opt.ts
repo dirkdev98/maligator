@@ -38,6 +38,7 @@ import type {
 	CoreBlock,
 	CoreBlockId,
 	CoreAttributeValue,
+	CoreEffectDomain,
 	CoreEdge,
 	CoreFunction,
 	CoreImmediate,
@@ -47,7 +48,7 @@ import type {
 	CoreTerminator,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreInstructionId, coreValueId } from "./core-ir.ts";
+import { CORE_EFFECT_DOMAINS, coreInstructionId, coreValueId } from "./core-ir.ts";
 
 export interface CoreOptimizationOptions {
 	readonly maxRounds?: number;
@@ -101,6 +102,41 @@ const PROPERTY_HELPER_OPCODES = new Set([
 	"copyDataProperties",
 	"mergeDataProperties",
 	"defineProperty",
+]);
+
+const IDEMPOTENT_MATH_UNARY_OPERATIONS = new Set([
+	"Math.abs",
+	"Math.ceil",
+	"Math.floor",
+	"Math.fround",
+	"Math.round",
+	"Math.sign",
+	"Math.trunc",
+]);
+
+const NUMERIC_BINARY_REPRESENTATION_OPERATORS = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"%",
+]);
+
+const COMPARISON_REPRESENTATION_OPERATORS = new Set([
+	"<",
+	"<=",
+	">",
+	">=",
+	"==",
+	"!=",
+	"===",
+	"!==",
 ]);
 
 function attributeObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
@@ -176,6 +212,116 @@ function carriesWorldGuard(instruction: CoreInstruction): boolean {
 	);
 }
 
+function coreRootedValueCount(fn: CoreFunction): number {
+	const uses = fn.blocks.map(() => new Set<CoreValueId>());
+	const definitions = fn.blocks.map(() => new Set<CoreValueId>());
+	const successors = fn.blocks.map(() => new Set<CoreBlockId>());
+	const terminatorValues = fn.blocks.map((block): ReadonlyArray<CoreValueId> => {
+		const edgeArguments = coreTerminatorEdges(block.terminator).flatMap(
+			(edge) => edge.arguments,
+		);
+		switch (block.terminator.kind) {
+			case "branch":
+			case "guard":
+				return [block.terminator.condition, ...edgeArguments];
+			case "switch":
+				return [block.terminator.discriminant, ...edgeArguments];
+			case "return":
+			case "throw":
+				return [block.terminator.value];
+			case "jump":
+				return edgeArguments;
+			case "unreachable":
+				return [];
+		}
+	});
+	const handlerParameters = fn.blocks.map((block): ReadonlyArray<CoreValueId> => {
+		if (block.handler === undefined) return [];
+		const target = fn.blocks[block.handler.block];
+		return target?.parameters[0]?.role === "exception"
+			? target.parameters.slice(1).map(({ value }) => value)
+			: [];
+	});
+	for (const block of fn.blocks) {
+		const blockUses = uses[block.id]!;
+		const blockDefinitions = definitions[block.id]!;
+		for (const { value } of block.parameters) blockDefinitions.add(value);
+		const addUse = (value: CoreValueId): void => {
+			if (!blockDefinitions.has(value)) blockUses.add(value);
+		};
+		for (const instruction of block.instructions) {
+			for (const input of instruction.inputs) addUse(input);
+			for (const output of instruction.outputs) blockDefinitions.add(output);
+		}
+		for (const value of terminatorValues[block.id]!) addUse(value);
+		for (const argument of block.handler?.arguments ?? []) addUse(argument);
+		for (const edge of coreTerminatorEdges(block.terminator)) {
+			successors[block.id]!.add(edge.block);
+		}
+		if (block.handler !== undefined) successors[block.id]!.add(block.handler.block);
+	}
+	const liveIn = fn.blocks.map((_, index) => new Set(uses[index]));
+	const liveOut = fn.blocks.map(() => new Set<CoreValueId>());
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let index = fn.blocks.length - 1; index >= 0; index--) {
+			const nextOut = new Set<CoreValueId>();
+			for (const successor of successors[index]!) {
+				for (const value of liveIn[successor]!) nextOut.add(value);
+			}
+			const nextIn = new Set(uses[index]);
+			for (const value of nextOut) {
+				if (!definitions[index]!.has(value)) nextIn.add(value);
+			}
+			if (
+				nextOut.size !== liveOut[index]!.size ||
+				[...nextOut].some((value) => !liveOut[index]!.has(value)) ||
+				nextIn.size !== liveIn[index]!.size ||
+				[...nextIn].some((value) => !liveIn[index]!.has(value))
+			) {
+				liveOut[index] = nextOut;
+				liveIn[index] = nextIn;
+				changed = true;
+			}
+		}
+	}
+	const cfg = buildCoreControlFlow(fn, coreOpcodeRegistry);
+	const loopBackedges = new Set(cfg.loops.map(({ backedge }) => backedge));
+	const rooted = new Set<CoreValueId>();
+	for (const block of fn.blocks) {
+		const live = new Set(liveOut[block.id]);
+		for (const value of terminatorValues[block.id]!) live.add(value);
+		for (const value of block.handler?.arguments ?? []) live.add(value);
+		for (const value of handlerParameters[block.id]!) live.add(value);
+		if (loopBackedges.has(block.id)) {
+			for (const value of live) rooted.add(value);
+		}
+		for (let index = block.instructions.length - 1; index >= 0; index--) {
+			const instruction = block.instructions[index]!;
+			if (
+				(
+					instruction.effectRefinement?.effects ??
+					coreOpcodeRegistry.require(instruction.opcode).effects
+				).mayGc
+			) {
+				for (const value of live) rooted.add(value);
+				for (const value of instruction.inputs) rooted.add(value);
+			}
+			for (const output of instruction.outputs) live.delete(output);
+			for (const input of instruction.inputs) live.add(input);
+		}
+		if (block.parameters[0]?.role === "exception") {
+			for (const value of live) rooted.add(value);
+			rooted.add(block.parameters[0].value);
+		}
+	}
+	const representations = new Map(
+		fn.values.map(({ id, representation }) => [id, representation] as const),
+	);
+	return [...rooted].filter((value) => representations.get(value) === "boxed").length;
+}
+
 /** Measure the residual Core program itself, never a reconstructed frontend graph. */
 export function coreOptimizationMetrics(program: CoreProgram): OptimizationMetrics {
 	const metrics = {
@@ -189,6 +335,7 @@ export function coreOptimizationMetrics(program: CoreProgram): OptimizationMetri
 		boxedOperations: 0,
 		propertyHelpers: 0,
 		worldGuards: 0,
+		rootedValues: 0,
 		safepoints: 0,
 	};
 	for (const fn of program.functions) {
@@ -196,16 +343,23 @@ export function coreOptimizationMetrics(program: CoreProgram): OptimizationMetri
 		metrics.values += fn.values.length;
 		metrics.facts += fn.facts.length;
 		metrics.regions += fn.regions.length;
+		metrics.rootedValues += coreRootedValueCount(fn);
 		for (const block of fn.blocks) {
 			// Terminators are instructions with stable Core instruction identities too.
 			metrics.instructions += block.instructions.length + 1;
+			if (block.terminator.kind === "guard") metrics.worldGuards++;
 			for (const instruction of block.instructions) {
 				if (ALLOCATION_OPCODES.has(instruction.opcode)) metrics.allocationSites++;
 				if (isDynamicCall(instruction)) metrics.dynamicCalls++;
 				if (BOXED_OPERATION_OPCODES.has(instruction.opcode)) metrics.boxedOperations++;
 				if (PROPERTY_HELPER_OPCODES.has(instruction.opcode)) metrics.propertyHelpers++;
 				if (carriesWorldGuard(instruction)) metrics.worldGuards++;
-				if (coreOpcodeRegistry.require(instruction.opcode).effects.mayGc)
+				if (
+					(
+						instruction.effectRefinement?.effects ??
+						coreOpcodeRegistry.require(instruction.opcode).effects
+					).mayGc
+				)
 					metrics.safepoints++;
 			}
 		}
@@ -228,6 +382,7 @@ function metricDelta(
 		boxedOperations: after.boxedOperations - before.boxedOperations,
 		propertyHelpers: after.propertyHelpers - before.propertyHelpers,
 		worldGuards: after.worldGuards - before.worldGuards,
+		rootedValues: after.rootedValues - before.rootedValues,
 		safepoints: after.safepoints - before.safepoints,
 	};
 }
@@ -4252,6 +4407,7 @@ const MAY_PRODUCE_EMPTY_OPCODES = new Set([
  */
 const eliminateRedundantTdzChecks: CoreFunctionPass = {
 	name: "eliminate-redundant-tdz-checks",
+	changesControlFlow: true,
 	run(fn, analyses) {
 		const cfg = analyses.controlFlow(fn);
 		const maybeEmpty = new Set<CoreValueId>();
@@ -4668,6 +4824,13 @@ function removeBlockParameters(
 	fn: CoreFunction,
 	removedIndices: ReadonlyMap<CoreBlockId, ReadonlySet<number>>,
 	replacements: ReadonlyMap<CoreValueId, CoreValueId> = new Map(),
+	retainedDefinitions: ReadonlyMap<
+		CoreValueId,
+		{
+			readonly instruction: CoreInstructionId;
+			readonly representation: CoreFunction["values"][number]["representation"];
+		}
+	> = new Map(),
 ): CoreFunction {
 	const removedValues = new Set<CoreValueId>();
 	for (const [blockId, indices] of removedIndices) {
@@ -4720,8 +4883,20 @@ function removeBlockParameters(
 		...fn,
 		blocks,
 		values: fn.values
-			.filter(({ id }) => !removedValues.has(id))
+			.filter(({ id }) => !removedValues.has(id) || retainedDefinitions.has(id))
 			.map((value) => {
+				const retained = retainedDefinitions.get(value.id);
+				if (retained !== undefined) {
+					return {
+						...value,
+						representation: retained.representation,
+						definition: {
+							kind: "instruction" as const,
+							instruction: retained.instruction,
+							index: 0,
+						},
+					};
+				}
 				if (value.definition.kind !== "block-parameter") return value;
 				const parameters = blocks[value.definition.block]!.parameters;
 				const index = parameters.findIndex(({ value: id }) => id === value.id);
@@ -4798,21 +4973,10 @@ function constantImmediate(instruction: CoreInstruction): CoreImmediate | undefi
 	}
 }
 
-function primitiveTruthy(value: CoreImmediate): boolean | undefined {
-	switch (value.kind) {
-		case "undefined":
-		case "null":
-			return false;
-		case "boolean":
-			return value.value;
-		case "number":
-			return value.value !== 0 && !Number.isNaN(value.value);
-		case "string":
-			return undefined;
-	}
-}
-
-function primitiveNumber(value: CoreImmediate): number | undefined {
+function primitiveNumber(
+	value: CoreImmediate,
+	program?: CoreProgram,
+): number | undefined {
 	switch (value.kind) {
 		case "undefined":
 			return Number.NaN;
@@ -4822,24 +4986,28 @@ function primitiveNumber(value: CoreImmediate): number | undefined {
 			return value.value ? 1 : 0;
 		case "number":
 			return value.value;
-		case "string":
-			return undefined;
+		case "string": {
+			const decoded =
+				program === undefined ? undefined : decodeString(program, value.index);
+			return decoded === undefined ? undefined : Number(decoded);
+		}
 	}
 }
 
 function foldUnaryPrimitive(
 	operator: unknown,
 	operand: CoreImmediate,
+	program?: CoreProgram,
 ): CoreImmediate | undefined {
 	switch (operator) {
 		case "!": {
-			const truthy = primitiveTruthy(operand);
+			const truthy = immediateTruthiness(operand, program);
 			return truthy === undefined ? undefined : { kind: "boolean", value: !truthy };
 		}
 		case "+":
 		case "-":
 		case "~": {
-			const numeric = primitiveNumber(operand);
+			const numeric = primitiveNumber(operand, program);
 			if (numeric === undefined) return undefined;
 			return {
 				kind: "number",
@@ -4904,6 +5072,7 @@ function foldPrimitiveBinary(
 	operator: unknown,
 	left: CoreImmediate,
 	right: CoreImmediate,
+	program?: CoreProgram,
 ): CoreImmediate | undefined {
 	if (left.kind === "number" && right.kind === "number") {
 		return foldNumericBinary(operator, left.value, right.value);
@@ -4916,25 +5085,72 @@ function foldPrimitiveBinary(
 	) {
 		return undefined;
 	}
-	const loose = operator === "==" || operator === "!=";
-	let equal = false;
-	if (left.kind === right.kind) {
-		equal = immediateStrictEquals(left, right);
-	} else if (loose) {
-		if (
-			(left.kind === "null" && right.kind === "undefined") ||
-			(left.kind === "undefined" && right.kind === "null")
-		) {
-			equal = true;
-		} else {
-			const leftNumber = primitiveNumber(left);
-			const rightNumber = primitiveNumber(right);
-			equal =
-				leftNumber !== undefined &&
-				rightNumber !== undefined &&
-				leftNumber === rightNumber;
+	const strictEqual = (
+		leftValue: CoreImmediate,
+		rightValue: CoreImmediate,
+	): boolean | undefined => {
+		if (leftValue.kind !== rightValue.kind) return false;
+		if (leftValue.kind !== "string") return immediateStrictEquals(leftValue, rightValue);
+		if (program === undefined) {
+			return leftValue.index ===
+				(rightValue as Extract<CoreImmediate, { kind: "string" }>).index
+				? true
+				: undefined;
 		}
-	}
+		const leftString = decodeString(program, leftValue.index);
+		const rightString = decodeString(
+			program,
+			(rightValue as Extract<CoreImmediate, { kind: "string" }>).index,
+		);
+		return leftString === undefined || rightString === undefined
+			? undefined
+			: leftString === rightString;
+	};
+	const looselyEqual = (
+		leftValue: CoreImmediate,
+		rightValue: CoreImmediate,
+	): boolean | undefined => {
+		if (leftValue.kind === rightValue.kind) return strictEqual(leftValue, rightValue);
+		if (
+			(leftValue.kind === "null" && rightValue.kind === "undefined") ||
+			(leftValue.kind === "undefined" && rightValue.kind === "null")
+		) {
+			return true;
+		}
+		if (
+			leftValue.kind === "null" ||
+			leftValue.kind === "undefined" ||
+			rightValue.kind === "null" ||
+			rightValue.kind === "undefined"
+		) {
+			return false;
+		}
+		if (leftValue.kind === "boolean") {
+			return looselyEqual({ kind: "number", value: leftValue.value ? 1 : 0 }, rightValue);
+		}
+		if (rightValue.kind === "boolean") {
+			return looselyEqual(leftValue, {
+				kind: "number",
+				value: rightValue.value ? 1 : 0,
+			});
+		}
+		if (
+			(leftValue.kind === "number" && rightValue.kind === "string") ||
+			(leftValue.kind === "string" && rightValue.kind === "number")
+		) {
+			const leftNumber = primitiveNumber(leftValue, program);
+			const rightNumber = primitiveNumber(rightValue, program);
+			return leftNumber === undefined || rightNumber === undefined
+				? undefined
+				: leftNumber === rightNumber;
+		}
+		return false;
+	};
+	const equal =
+		operator === "==" || operator === "!="
+			? looselyEqual(left, right)
+			: strictEqual(left, right);
+	if (equal === undefined) return undefined;
 	return {
 		kind: "boolean",
 		value: operator === "!==" || operator === "!=" ? !equal : equal,
@@ -4988,69 +5204,413 @@ function foldedInstruction(
 	}
 }
 
-const foldPrimitiveConstants: CoreFunctionPass = {
-	name: "fold-primitive-constants",
+type ConstantLattice =
+	| { readonly kind: "unknown" }
+	| { readonly kind: "constant"; readonly value: CoreImmediate }
+	| { readonly kind: "overdefined" };
+
+const UNKNOWN_CONSTANT: ConstantLattice = { kind: "unknown" };
+const OVERDEFINED_CONSTANT: ConstantLattice = { kind: "overdefined" };
+
+function sameImmediate(left: CoreImmediate, right: CoreImmediate): boolean {
+	if (left.kind !== right.kind) return false;
+	switch (left.kind) {
+		case "undefined":
+		case "null":
+			return true;
+		case "boolean":
+			return left.value === (right as Extract<CoreImmediate, { kind: "boolean" }>).value;
+		case "number":
+			return Object.is(
+				left.value,
+				(right as Extract<CoreImmediate, { kind: "number" }>).value,
+			);
+		case "string":
+			return left.index === (right as Extract<CoreImmediate, { kind: "string" }>).index;
+	}
+}
+
+function mergeConstantLattice(
+	current: ConstantLattice,
+	incoming: ConstantLattice,
+): ConstantLattice {
+	if (current.kind === "overdefined" || incoming.kind === "unknown") return current;
+	if (incoming.kind === "overdefined") return OVERDEFINED_CONSTANT;
+	if (current.kind === "unknown") return incoming;
+	return sameImmediate(current.value, incoming.value) ? current : OVERDEFINED_CONSTANT;
+}
+
+function evaluateConstantInstruction(
+	instruction: CoreInstruction,
+	states: ReadonlyMap<CoreValueId, ConstantLattice>,
+	program?: CoreProgram,
+): ConstantLattice {
+	if (instruction.outputs.length !== 1) return OVERDEFINED_CONSTANT;
+	const immediate = constantImmediate(instruction);
+	if (immediate !== undefined) return { kind: "constant", value: immediate };
+	if (instruction.opcode === "move" && instruction.inputs.length === 1) {
+		return states.get(instruction.inputs[0]!) ?? UNKNOWN_CONSTANT;
+	}
+	if (instruction.opcode === "unary" && instruction.inputs.length === 1) {
+		const operand = states.get(instruction.inputs[0]!) ?? UNKNOWN_CONSTANT;
+		if (operand.kind !== "constant") return operand;
+		const value = foldUnaryPrimitive(
+			instructionAttribute(instruction, "operator"),
+			operand.value,
+			program,
+		);
+		return value === undefined ? OVERDEFINED_CONSTANT : { kind: "constant", value };
+	}
+	if (instruction.opcode === "binary" && instruction.inputs.length === 2) {
+		const left = states.get(instruction.inputs[0]!) ?? UNKNOWN_CONSTANT;
+		const right = states.get(instruction.inputs[1]!) ?? UNKNOWN_CONSTANT;
+		if (left.kind === "overdefined" || right.kind === "overdefined") {
+			return OVERDEFINED_CONSTANT;
+		}
+		if (left.kind !== "constant" || right.kind !== "constant") {
+			return UNKNOWN_CONSTANT;
+		}
+		const value = foldPrimitiveBinary(
+			instructionAttribute(instruction, "operator"),
+			left.value,
+			right.value,
+			program,
+		);
+		return value === undefined ? OVERDEFINED_CONSTANT : { kind: "constant", value };
+	}
+	return OVERDEFINED_CONSTANT;
+}
+
+function constantInstruction(
+	id: CoreInstructionId,
+	output: CoreValueId,
+	value: CoreImmediate,
+):
+	| {
+			readonly instruction: CoreInstruction;
+			readonly representation: CoreFunction["values"][number]["representation"];
+	  }
+	| undefined {
+	const prototype: CoreInstruction = {
+		id,
+		opcode: "createUndefined",
+		inputs: [],
+		outputs: [output],
+		attributes: {},
+	};
+	if (value.kind === "string") {
+		return {
+			instruction: {
+				...prototype,
+				opcode: "createString",
+				attributes: { stringIndex: value.index },
+			},
+			representation: "boxed",
+		};
+	}
+	return foldedInstruction(prototype, value);
+}
+
+/** Sparse conditional constant propagation over executable ordinary and exceptional edges. */
+const sparseConditionalConstantPropagation: CoreFunctionPass = {
+	name: "sparse-conditional-constant-propagation",
 	ablation: "constant-folding",
-	run(fn) {
-		const constants = new Map<CoreValueId, CoreImmediate>();
+	run(fn, analyses, program) {
+		const protectedInstructions = new Set(
+			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const cfg = analyses.controlFlow(fn);
+		const states = new Map<CoreValueId, ConstantLattice>(
+			fn.values.map(({ id }) => [id, UNKNOWN_CONSTANT] as const),
+		);
+		const executableBlocks = new Set<CoreBlockId>([fn.entry]);
+		const executableEdges = new Set<CoreEdge>();
+		const executableExceptionalSources = new Set<CoreBlockId>();
+		const incoming = new Map<
+			CoreBlockId,
+			Array<
+				| { readonly kind: "ordinary"; readonly arguments: ReadonlyArray<CoreValueId> }
+				| { readonly kind: "exceptional"; readonly arguments: ReadonlyArray<CoreValueId> }
+			>
+		>();
+		for (const parameter of fn.blocks[fn.entry]!.parameters) {
+			states.set(parameter.value, OVERDEFINED_CONSTANT);
+		}
+		const dependentBlocks = new Map<CoreValueId, Set<CoreBlockId>>();
+		const addDependency = (value: CoreValueId, block: CoreBlockId): void => {
+			const blocks = dependentBlocks.get(value) ?? new Set<CoreBlockId>();
+			blocks.add(block);
+			dependentBlocks.set(value, blocks);
+		};
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				if (instruction.outputs.length !== 1) continue;
-				const value = constantImmediate(instruction);
-				if (value !== undefined) constants.set(instruction.outputs[0]!, value);
+				for (const input of instruction.inputs) addDependency(input, block.id);
+			}
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				for (const argument of edge.arguments) addDependency(argument, edge.block);
+			}
+			for (const argument of block.handler?.arguments ?? []) {
+				addDependency(argument, block.handler!.block);
+			}
+			switch (block.terminator.kind) {
+				case "branch":
+				case "guard":
+					addDependency(block.terminator.condition, block.id);
+					break;
+				case "switch":
+					addDependency(block.terminator.discriminant, block.id);
+					break;
+				case "jump":
+				case "return":
+				case "throw":
+				case "unreachable":
+					break;
 			}
 		}
-		const representations = new Map<CoreValueId, "boxed" | "f64" | "boolean">();
-		let changed = false;
-		const blocks = fn.blocks.map(
-			(block): CoreBlock => ({
-				...block,
-				instructions: block.instructions.map((instruction) => {
-					if (instruction.outputs.length !== 1) return instruction;
-					let result: CoreImmediate | undefined;
-					if (instruction.opcode === "unary" && instruction.inputs.length === 1) {
-						const operand = constants.get(instruction.inputs[0]!);
-						if (operand !== undefined) {
-							result = foldUnaryPrimitive(
-								instructionAttribute(instruction, "operator"),
-								operand,
-							);
-						}
-					} else if (instruction.opcode === "binary" && instruction.inputs.length === 2) {
-						const left = constants.get(instruction.inputs[0]!);
-						const right = constants.get(instruction.inputs[1]!);
-						if (left !== undefined && right !== undefined) {
-							result = foldPrimitiveBinary(
-								instructionAttribute(instruction, "operator"),
-								left,
-								right,
-							);
+		const pendingBlocks: Array<CoreBlockId> = [];
+		const scheduled = new Set<CoreBlockId>();
+		const enqueue = (block: CoreBlockId): void => {
+			if (!executableBlocks.has(block) || scheduled.has(block)) return;
+			scheduled.add(block);
+			pendingBlocks.push(block);
+		};
+		const mergeValue = (value: CoreValueId, state: ConstantLattice): boolean => {
+			const current = states.get(value) ?? UNKNOWN_CONSTANT;
+			const merged = mergeConstantLattice(current, state);
+			if (merged === current) return false;
+			states.set(value, merged);
+			for (const block of dependentBlocks.get(value) ?? []) enqueue(block);
+			return true;
+		};
+		const markOrdinary = (edge: CoreEdge): boolean => {
+			if (executableEdges.has(edge)) return false;
+			executableEdges.add(edge);
+			executableBlocks.add(edge.block);
+			let values = incoming.get(edge.block);
+			if (values === undefined) incoming.set(edge.block, (values = []));
+			values.push({ kind: "ordinary", arguments: edge.arguments });
+			enqueue(edge.block);
+			return true;
+		};
+		const markExceptional = (
+			from: CoreBlockId,
+			to: CoreBlockId,
+			arguments_: ReadonlyArray<CoreValueId>,
+		): boolean => {
+			if (executableExceptionalSources.has(from)) return false;
+			executableExceptionalSources.add(from);
+			executableBlocks.add(to);
+			let values = incoming.get(to);
+			if (values === undefined) incoming.set(to, (values = []));
+			values.push({ kind: "exceptional", arguments: arguments_ });
+			enqueue(to);
+			return true;
+		};
+
+		enqueue(fn.entry);
+		while (pendingBlocks.length > 0) {
+			const blockId = pendingBlocks.pop()!;
+			scheduled.delete(blockId);
+			const block = fn.blocks[blockId]!;
+			for (const edge of incoming.get(blockId) ?? []) {
+				if (edge.kind === "exceptional") {
+					if (block.parameters[0]?.role === "exception") {
+						mergeValue(block.parameters[0].value, OVERDEFINED_CONSTANT);
+					}
+					const offset = block.parameters[0]?.role === "exception" ? 1 : 0;
+					for (const [index, argument] of edge.arguments.entries()) {
+						const parameter = block.parameters[index + offset];
+						if (parameter !== undefined) {
+							mergeValue(parameter.value, states.get(argument) ?? UNKNOWN_CONSTANT);
 						}
 					}
-					if (result === undefined) return instruction;
-					const replacement = foldedInstruction(instruction, result);
-					if (replacement === undefined) return instruction;
-					changed = true;
-					constants.set(instruction.outputs[0]!, result);
-					representations.set(instruction.outputs[0]!, replacement.representation);
-					return replacement.instruction;
-				}),
-			}),
-		);
-		if (!changed) return fn;
-		return {
-			...fn,
-			blocks,
-			values: fn.values.map((value) => {
-				const representation = representations.get(value.id);
-				return representation === undefined ? value : { ...value, representation };
-			}),
-			mutationEpoch: fn.mutationEpoch + 1,
-		};
+					continue;
+				}
+				for (const [index, argument] of edge.arguments.entries()) {
+					const parameter = block.parameters[index];
+					if (parameter !== undefined) {
+						mergeValue(parameter.value, states.get(argument) ?? UNKNOWN_CONSTANT);
+					}
+				}
+			}
+			for (const instruction of block.instructions) {
+				const state = evaluateConstantInstruction(instruction, states, program);
+				for (const output of instruction.outputs) mergeValue(output, state);
+			}
+			const terminator = block.terminator;
+			switch (terminator.kind) {
+				case "jump":
+					markOrdinary(terminator.edge);
+					break;
+				case "branch": {
+					const condition = states.get(terminator.condition) ?? UNKNOWN_CONSTANT;
+					if (condition.kind === "constant") {
+						const truthy = immediateTruthiness(condition.value, program);
+						if (truthy === undefined) {
+							markOrdinary(terminator.consequent);
+							markOrdinary(terminator.alternate);
+						} else {
+							markOrdinary(truthy ? terminator.consequent : terminator.alternate);
+						}
+					} else if (condition.kind === "overdefined") {
+						markOrdinary(terminator.consequent);
+						markOrdinary(terminator.alternate);
+					}
+					break;
+				}
+				case "guard":
+					// A guard establishes more than the truthiness of its condition.
+					markOrdinary(terminator.success);
+					markOrdinary(terminator.fallback);
+					break;
+				case "switch": {
+					const discriminant = states.get(terminator.discriminant) ?? UNKNOWN_CONSTANT;
+					if (discriminant.kind === "constant") {
+						const matched = terminator.cases.find(({ value }) =>
+							immediateStrictEquals(discriminant.value, value),
+						);
+						markOrdinary(matched?.edge ?? terminator.default);
+					} else if (discriminant.kind === "overdefined") {
+						for (const { edge } of terminator.cases) markOrdinary(edge);
+						markOrdinary(terminator.default);
+					}
+					break;
+				}
+				case "return":
+				case "throw":
+				case "unreachable":
+					break;
+			}
+			for (const edge of cfg.successors[block.id]!) {
+				if (edge.kind === "exceptional") {
+					markExceptional(block.id, edge.to, edge.arguments);
+				}
+			}
+		}
+
+		const representations = new Map<
+			CoreValueId,
+			CoreFunction["values"][number]["representation"]
+		>();
+		let changed = false;
+		const blocks = fn.blocks.map((block): CoreBlock => {
+			const instructions = block.instructions.map((instruction) => {
+				if (
+					protectedInstructions.has(instruction.id) ||
+					instruction.outputs.length !== 1 ||
+					(instruction.opcode !== "unary" && instruction.opcode !== "binary")
+				) {
+					return instruction;
+				}
+				const state = states.get(instruction.outputs[0]!);
+				if (state?.kind !== "constant") return instruction;
+				const replacement = foldedInstruction(instruction, state.value);
+				if (replacement === undefined) return instruction;
+				changed = true;
+				representations.set(instruction.outputs[0]!, replacement.representation);
+				return replacement.instruction;
+			});
+			const terminator = block.terminator;
+			let selected: CoreEdge | undefined;
+			if (fn.regions.length === 0 && terminator.kind === "branch") {
+				const condition = states.get(terminator.condition);
+				const truthy =
+					condition?.kind === "constant"
+						? immediateTruthiness(condition.value, program)
+						: undefined;
+				if (truthy !== undefined) {
+					selected = truthy ? terminator.consequent : terminator.alternate;
+				}
+			} else if (fn.regions.length === 0 && terminator.kind === "switch") {
+				const discriminant = states.get(terminator.discriminant);
+				if (discriminant?.kind === "constant") {
+					selected =
+						terminator.cases.find(({ value }) =>
+							immediateStrictEquals(discriminant.value, value),
+						)?.edge ?? terminator.default;
+				}
+			}
+			if (selected === undefined) return { ...block, instructions };
+			changed = true;
+			return {
+				...block,
+				instructions,
+				terminator: {
+					kind: "jump",
+					id: terminator.id,
+					edge: selected,
+					...(terminator.sourcePosition === undefined
+						? {}
+						: { sourcePosition: terminator.sourcePosition }),
+				},
+			};
+		});
+		let result: CoreFunction = changed
+			? {
+					...fn,
+					blocks,
+					values: fn.values.map((value) => {
+						const representation = representations.get(value.id);
+						return representation === undefined ? value : { ...value, representation };
+					}),
+					mutationEpoch: fn.mutationEpoch + 1,
+				}
+			: fn;
+		if (changed && fn.regions.length === 0) result = removeUnreachableCoreBlocks(result);
+		if (changed) result = pruneVacuousHandlers(result);
+		if (fn.regions.length > 0) return result;
+
+		const removedIndices = new Map<CoreBlockId, Set<number>>();
+		const retainedDefinitions = new Map<
+			CoreValueId,
+			{
+				readonly instruction: CoreInstructionId;
+				readonly representation: CoreFunction["values"][number]["representation"];
+			}
+		>();
+		let instructionNumber = nextInstructionId(result);
+		const materializedBlocks = result.blocks.map((block): CoreBlock => {
+			if (block.id === result.entry) return block;
+			const constants: Array<CoreInstruction> = [];
+			for (const [index, parameter] of block.parameters.entries()) {
+				if (parameter.role === "exception") continue;
+				const state = states.get(parameter.value);
+				if (state?.kind !== "constant") continue;
+				const replacement = constantInstruction(
+					coreInstructionId(instructionNumber++),
+					parameter.value,
+					state.value,
+				);
+				if (replacement === undefined) continue;
+				constants.push(replacement.instruction);
+				let indices = removedIndices.get(block.id);
+				if (indices === undefined) removedIndices.set(block.id, (indices = new Set()));
+				indices.add(index);
+				retainedDefinitions.set(parameter.value, {
+					instruction: replacement.instruction.id,
+					representation: replacement.representation,
+				});
+			}
+			return constants.length === 0
+				? block
+				: { ...block, instructions: [...constants, ...block.instructions] };
+		});
+		if (removedIndices.size > 0) {
+			result = removeBlockParameters(
+				{ ...result, blocks: materializedBlocks },
+				removedIndices,
+				new Map(),
+				retainedDefinitions,
+			);
+		}
+		return result;
 	},
 };
 
-function immediateTruthiness(value: CoreImmediate): boolean | undefined {
+function immediateTruthiness(
+	value: CoreImmediate,
+	program?: CoreProgram,
+): boolean | undefined {
 	switch (value.kind) {
 		case "undefined":
 		case "null":
@@ -5059,9 +5619,11 @@ function immediateTruthiness(value: CoreImmediate): boolean | undefined {
 			return value.value;
 		case "number":
 			return value.value !== 0 && !Number.isNaN(value.value);
-		case "string":
-			// The canonical string table does not yet expose contents to Core.
-			return undefined;
+		case "string": {
+			if (program === undefined) return undefined;
+			const units = program.stringConstants[value.index];
+			return units === undefined ? undefined : units.length > 0;
+		}
 	}
 }
 
@@ -5079,6 +5641,320 @@ function immediateStrictEquals(left: CoreImmediate, right: CoreImmediate): boole
 			return left.index === (right as Extract<CoreImmediate, { kind: "string" }>).index;
 	}
 }
+
+function immediateForValue(
+	value: CoreValueId,
+	definitions: ReadonlyMap<CoreValueId, CoreInstruction>,
+): CoreImmediate | undefined {
+	const instruction = definitions.get(value);
+	return instruction === undefined ? undefined : constantImmediate(instruction);
+}
+
+/** Re-solve the narrow representation facts exposed by SCCP and copy cleanup. */
+const refineValueRepresentations: CoreFunctionPass = {
+	name: "refine-value-representations",
+	run(fn, analyses) {
+		const cfg = analyses.controlFlow(fn);
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		let changed = false;
+		let progress = true;
+		const narrow = (
+			value: CoreValueId,
+			representation: "f64" | "boolean" | undefined,
+		): void => {
+			if (representation !== undefined && representations.get(value) === "boxed") {
+				representations.set(value, representation);
+				progress = true;
+				changed = true;
+			}
+		};
+		while (progress) {
+			progress = false;
+			for (const block of fn.blocks) {
+				if (
+					block.id !== fn.entry &&
+					!block.parameters.some(({ role }) => role === "exception")
+				) {
+					const incoming = cfg.predecessors[block.id]!.filter(
+						({ kind }) => kind === "ordinary",
+					);
+					if (incoming.length === cfg.predecessors[block.id]!.length) {
+						for (const [index, parameter] of block.parameters.entries()) {
+							const candidates = new Set(
+								incoming.map(({ arguments: arguments_ }) =>
+									representations.get(arguments_[index]!),
+								),
+							);
+							if (candidates.size === 1) {
+								const candidate = [...candidates][0];
+								narrow(
+									parameter.value,
+									candidate === "f64" || candidate === "boolean" ? candidate : undefined,
+								);
+							}
+						}
+					}
+				}
+				for (const instruction of block.instructions) {
+					for (const [index, output] of instruction.outputs.entries()) {
+						let candidate: "f64" | "boolean" | undefined;
+						const operator = instructionAttribute(instruction, "operator");
+						if (
+							instruction.opcode === "createF64" ||
+							instruction.opcode === "createNumber" ||
+							instruction.opcode === "mathUnaryNumber" ||
+							instruction.opcode === "mathBinaryNumber"
+						) {
+							candidate = "f64";
+						} else if (
+							index === 0 &&
+							(instruction.opcode === "createBoolean" ||
+								instruction.opcode === "guardFunctionIndex" ||
+								instruction.opcode === "hasPrivate" ||
+								instruction.opcode === "isEmpty" ||
+								instruction.opcode === "typeofCompare" ||
+								(instruction.opcode === "binary" &&
+									COMPARISON_REPRESENTATION_OPERATORS.has(String(operator))) ||
+								(instruction.opcode === "unary" && operator === "!"))
+						) {
+							candidate = "boolean";
+						} else if (
+							index === 0 &&
+							instruction.opcode === "move" &&
+							instruction.inputs.length === 1
+						) {
+							const input = representations.get(instruction.inputs[0]!);
+							candidate = input === "f64" || input === "boolean" ? input : undefined;
+						} else if (
+							index === 0 &&
+							((instruction.opcode === "binary" &&
+								NUMERIC_BINARY_REPRESENTATION_OPERATORS.has(String(operator))) ||
+								(instruction.opcode === "unary" &&
+									["-", "+", "~", "tonumeric", "increment", "decrement"].includes(
+										String(operator),
+									))) &&
+							instruction.inputs.length > 0 &&
+							instruction.inputs.every((input) => representations.get(input) === "f64")
+						) {
+							candidate = "f64";
+						}
+						narrow(output, candidate);
+					}
+				}
+			}
+		}
+		if (!changed) return fn;
+		return {
+			...fn,
+			blocks: fn.blocks.map((block) => ({
+				...block,
+				parameters: block.parameters.map((parameter) => ({
+					...parameter,
+					representation: representations.get(parameter.value)!,
+				})),
+			})),
+			values: fn.values.map((value) => ({
+				...value,
+				representation: representations.get(value.id)!,
+			})),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
+/**
+ * Representation-proven algebraic identities only. Boxed operations retain
+ * their original coercion order, and f64 rewrites explicitly account for NaN
+ * and signed zero rather than importing integer-ring identities into JavaScript.
+ */
+const simplifyAlgebraicValues: CoreFunctionPass = {
+	name: "simplify-algebraic-values",
+	ablation: "constant-folding",
+	run(fn) {
+		const definitions = new Map<CoreValueId, CoreInstruction>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) definitions.set(output, instruction);
+			}
+		}
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		const protectedInstructions = new Set(
+			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (
+						protectedInstructions.has(instruction.id) ||
+						instruction.outputs.length !== 1
+					) {
+						return instruction;
+					}
+					const output = instruction.outputs[0]!;
+					const outputRepresentation = representations.get(output);
+					const move = (value: CoreValueId): CoreInstruction | undefined => {
+						if (representations.get(value) !== outputRepresentation) return undefined;
+						return { ...instruction, opcode: "move", inputs: [value], attributes: {} };
+					};
+					const constant = (value: CoreImmediate): CoreInstruction | undefined => {
+						const replacement = foldedInstruction(instruction, value);
+						return replacement !== undefined &&
+							replacement.representation === outputRepresentation
+							? replacement.instruction
+							: undefined;
+					};
+					let replacement: CoreInstruction | undefined;
+					if (
+						instruction.opcode === "mathBinaryNumber" &&
+						instruction.inputs.length === 2
+					) {
+						const operation = instructionAttribute(instruction, "operation");
+						if (
+							(operation === "Math.min" || operation === "Math.max") &&
+							instruction.inputs[0] === instruction.inputs[1]
+						) {
+							replacement = move(instruction.inputs[0]!);
+						}
+					} else if (
+						instruction.opcode === "mathUnaryNumber" &&
+						instruction.inputs.length === 1
+					) {
+						const operation = instructionAttribute(instruction, "operation");
+						const producer = definitions.get(instruction.inputs[0]!);
+						if (
+							typeof operation === "string" &&
+							IDEMPOTENT_MATH_UNARY_OPERATIONS.has(operation) &&
+							producer?.opcode === "mathUnaryNumber" &&
+							instructionAttribute(producer, "operation") === operation
+						) {
+							replacement = move(instruction.inputs[0]!);
+						}
+					} else if (instruction.opcode === "binary" && instruction.inputs.length === 2) {
+						let [left, right] = instruction.inputs;
+						const leftRepresentation = representations.get(left!);
+						const rightRepresentation = representations.get(right!);
+						const operator = instructionAttribute(instruction, "operator");
+						const leftConstant = immediateForValue(left!, definitions);
+						const rightConstant = immediateForValue(right!, definitions);
+						if (
+							leftRepresentation === "boolean" &&
+							rightRepresentation === "boolean" &&
+							outputRepresentation === "boolean" &&
+							["==", "!=", "===", "!=="].includes(String(operator))
+						) {
+							const boolean =
+								leftConstant?.kind === "boolean"
+									? { value: leftConstant.value, variable: right! }
+									: rightConstant?.kind === "boolean"
+										? { value: rightConstant.value, variable: left! }
+										: undefined;
+							if (boolean !== undefined) {
+								const equal = operator === "==" || operator === "===";
+								const identity = equal === boolean.value;
+								replacement = identity
+									? move(boolean.variable)
+									: {
+											...instruction,
+											opcode: "unary",
+											inputs: [boolean.variable],
+											attributes: { operator: "!" },
+										};
+							}
+						} else if (leftRepresentation === "f64" && rightRepresentation === "f64") {
+							if (
+								outputRepresentation === "f64" &&
+								operator === "+" &&
+								leftConstant?.kind === "number" &&
+								Object.is(leftConstant.value, -0)
+							) {
+								replacement = move(right!);
+							} else if (
+								outputRepresentation === "f64" &&
+								operator === "+" &&
+								rightConstant?.kind === "number" &&
+								Object.is(rightConstant.value, -0)
+							) {
+								replacement = move(left!);
+							} else if (
+								outputRepresentation === "f64" &&
+								operator === "-" &&
+								rightConstant?.kind === "number" &&
+								Object.is(rightConstant.value, 0)
+							) {
+								replacement = move(left!);
+							} else if (
+								outputRepresentation === "f64" &&
+								(operator === "*" || operator === "/") &&
+								rightConstant?.kind === "number" &&
+								rightConstant.value === 1
+							) {
+								replacement = move(left!);
+							} else if (
+								outputRepresentation === "f64" &&
+								operator === "*" &&
+								leftConstant?.kind === "number" &&
+								leftConstant.value === 1
+							) {
+								replacement = move(right!);
+							} else if (
+								outputRepresentation === "f64" &&
+								operator === "&" &&
+								((leftConstant?.kind === "number" && leftConstant.value === 0) ||
+									(rightConstant?.kind === "number" && rightConstant.value === 0))
+							) {
+								replacement = constant({ kind: "number", value: 0 });
+							} else if (
+								outputRepresentation === "f64" &&
+								operator === "^" &&
+								left === right
+							) {
+								replacement = constant({ kind: "number", value: 0 });
+							} else if (
+								outputRepresentation === "boolean" &&
+								(operator === "<" || operator === ">") &&
+								left === right
+							) {
+								replacement = constant({ kind: "boolean", value: false });
+							} else if (
+								outputRepresentation === "boolean" &&
+								leftConstant !== undefined &&
+								rightConstant === undefined &&
+								["<", "<=", ">", ">="].includes(String(operator))
+							) {
+								const reversed = new Map([
+									["<", ">"],
+									["<=", ">="],
+									[">", "<"],
+									[">=", "<="],
+								]).get(String(operator));
+								if (reversed !== undefined) {
+									[left, right] = [right, left];
+									replacement = {
+										...instruction,
+										inputs: [left!, right!],
+										attributes: { ...instruction.attributes, operator: reversed },
+									};
+								}
+							}
+						}
+					}
+					if (replacement === undefined) return instruction;
+					changed = true;
+					return replacement;
+				}),
+			}),
+		);
+		return changed
+			? pruneVacuousHandlers({ ...fn, blocks, mutationEpoch: fn.mutationEpoch + 1 })
+			: fn;
+	},
+};
 
 /** Resolve primitive branches and switches, then restore Core's dense reachable CFG. */
 const simplifyControlFlow: CoreFunctionPass = {
@@ -5180,6 +6056,41 @@ const simplifyControlFlow: CoreFunctionPass = {
 					},
 				};
 			}
+			if (
+				terminator.kind === "guard" &&
+				sameEdge(terminator.success, terminator.fallback)
+			) {
+				const factUsed = fn.blocks.some((candidate) =>
+					candidate.instructions.some(
+						({ effectRefinement }) => effectRefinement?.proof === terminator.fact,
+					),
+				);
+				const guardRequiredByAnotherFact = fn.facts.some(
+					(fact) =>
+						fact.id !== terminator.fact &&
+						((fact.validity.kind === "guard" &&
+							fact.validity.instruction === terminator.id) ||
+							fact.obligations.some(
+								(obligation) =>
+									obligation.kind === "guard" && obligation.instruction === terminator.id,
+							)),
+				);
+				if (!factUsed && !guardRequiredByAnotherFact) {
+					changed = true;
+					return {
+						...block,
+						...(handler === undefined ? { handler: undefined } : { handler }),
+						terminator: {
+							kind: "jump",
+							id: terminator.id,
+							edge: terminator.success,
+							...(terminator.sourcePosition === undefined
+								? {}
+								: { sourcePosition: terminator.sourcePosition }),
+						},
+					};
+				}
+			}
 			return handler === block.handler
 				? block
 				: { ...block, ...(handler === undefined ? { handler: undefined } : { handler }) };
@@ -5193,7 +6104,25 @@ const simplifyControlFlow: CoreFunctionPass = {
 	},
 };
 
-const VALUE_NUMBERED_OPCODES = new Set([
+const IDENTITY_PRODUCING_OPCODES = new Set([
+	"createArgumentsObject",
+	"createArray",
+	// A function has fresh identity and captures the current environment pointer.
+	"createFunction",
+	"createModuleNamespace",
+	"createObject",
+	"createObjectShaped",
+	"createPrivateName",
+	"createPrivateNames",
+	"createRestArguments",
+	"createTemplateObject",
+	"instantiateLiteralTemplate",
+]);
+
+// Empty read domains are not themselves proof of immutability. Keep this list
+// explicit so a newly added resource load is never commoned until its effect
+// partition (or immutable producer semantics) has been reviewed.
+const IMMUTABLE_VALUE_NUMBERING_OPCODES = new Set([
 	"createBigint",
 	"createBoolean",
 	"createEmpty",
@@ -5202,51 +6131,376 @@ const VALUE_NUMBERED_OPCODES = new Set([
 	"createNumber",
 	"createString",
 	"createUndefined",
+	"guardFunctionIndex",
+	"isEmpty",
+	"loadIntrinsic",
+	"loadNewTarget",
 	"mathBinaryNumber",
 	"mathUnaryNumber",
+	"move",
+	"typeofCompare",
 ]);
+
+function effectiveInstructionEffects(instruction: CoreInstruction) {
+	return (
+		instruction.effectRefinement?.effects ??
+		coreOpcodeRegistry.require(instruction.opcode).effects
+	);
+}
+
+function pruneVacuousHandlers(fn: CoreFunction): CoreFunction {
+	let changed = false;
+	const blocks = fn.blocks.map((block): CoreBlock => {
+		if (
+			block.handler === undefined ||
+			block.terminator.kind === "throw" ||
+			block.instructions.some(
+				(instruction) => effectiveInstructionEffects(instruction).mayThrow,
+			)
+		) {
+			return block;
+		}
+		changed = true;
+		return { ...block, handler: undefined };
+	});
+	if (!changed) return fn;
+	return removeUnreachableCoreBlocks({
+		...fn,
+		blocks,
+		mutationEpoch: fn.mutationEpoch + 1,
+	});
+}
+
+function invalidatedEffectDomains(
+	instruction: CoreInstruction,
+): ReadonlySet<CoreEffectDomain> {
+	const effects = effectiveInstructionEffects(instruction);
+	const invalidated = new Set(effects.writes);
+	if (effects.callsUserCode || effects.maySuspend) {
+		for (const domain of CORE_EFFECT_DOMAINS) invalidated.add(domain);
+	}
+	return invalidated;
+}
+
+function sameVersionSet(left: ReadonlySet<number>, right: ReadonlySet<number>): boolean {
+	return left.size === right.size && [...left].every((version) => right.has(version));
+}
+
+function sameMemoryState(
+	left: ReadonlyMap<CoreEffectDomain, ReadonlySet<number>> | undefined,
+	right: ReadonlyMap<CoreEffectDomain, ReadonlySet<number>>,
+	domains: ReadonlyArray<CoreEffectDomain>,
+): boolean {
+	return (
+		left !== undefined &&
+		domains.every((domain) =>
+			sameVersionSet(left.get(domain) ?? new Set(), right.get(domain) ?? new Set()),
+		)
+	);
+}
+
+function cloneMemoryState(
+	state: ReadonlyMap<CoreEffectDomain, ReadonlySet<number>>,
+	domains: ReadonlyArray<CoreEffectDomain>,
+): Map<CoreEffectDomain, Set<number>> {
+	return new Map(domains.map((domain) => [domain, new Set(state.get(domain) ?? [])]));
+}
+
+/**
+ * Give each instruction the set of writes that can reach it in every effect
+ * partition. Union at joins is deliberately conservative; a loop write remains
+ * visible beside the entry version, so a preheader load cannot leak into a
+ * mutating iteration.
+ */
+function reachingMemoryVersions(
+	fn: CoreFunction,
+	cfg: CoreControlFlow,
+): ReadonlyMap<CoreInstructionId, string> {
+	const domains = [
+		...new Set(
+			fn.blocks.flatMap(({ instructions }) =>
+				instructions.flatMap(
+					(instruction) => effectiveInstructionEffects(instruction).reads,
+				),
+			),
+		),
+	];
+	if (domains.length === 0) return new Map();
+	const domainSet = new Set(domains);
+	const entry = new Map<CoreEffectDomain, ReadonlySet<number>>(
+		domains.map((domain) => [domain, new Set([0])]),
+	);
+	const entries = new Array<
+		ReadonlyMap<CoreEffectDomain, ReadonlySet<number>> | undefined
+	>(fn.blocks.length);
+	const exits = new Array<ReadonlyMap<CoreEffectDomain, ReadonlySet<number>> | undefined>(
+		fn.blocks.length,
+	);
+	let progress = true;
+	while (progress) {
+		progress = false;
+		for (const blockId of cfg.reversePostorder) {
+			const block = fn.blocks[blockId]!;
+			let incoming: Map<CoreEffectDomain, Set<number>> | undefined;
+			if (block.id === fn.entry) incoming = cloneMemoryState(entry, domains);
+			const mergeIncoming = (
+				state: ReadonlyMap<CoreEffectDomain, ReadonlySet<number>> | undefined,
+			): void => {
+				if (state === undefined) return;
+				if (incoming === undefined) incoming = cloneMemoryState(state, domains);
+				else {
+					for (const domain of domains) {
+						const versions = incoming.get(domain)!;
+						for (const version of state.get(domain) ?? []) versions.add(version);
+					}
+				}
+			};
+			for (const predecessor of cfg.predecessors[block.id]!) {
+				mergeIncoming(exits[predecessor.from]);
+				if (predecessor.kind !== "exceptional") continue;
+				// A protected instruction may throw before any later write in its block.
+				// Retain the entry version and every possible write event, not just the
+				// ordinary block exit's final version.
+				mergeIncoming(entries[predecessor.from]);
+				if (incoming === undefined) continue;
+				for (const instruction of fn.blocks[predecessor.from]!.instructions) {
+					for (const domain of invalidatedEffectDomains(instruction)) {
+						if (domainSet.has(domain)) incoming.get(domain)!.add(instruction.id + 1);
+					}
+				}
+			}
+			if (incoming === undefined) continue;
+			if (!sameMemoryState(entries[block.id], incoming, domains)) {
+				entries[block.id] = incoming;
+				progress = true;
+			}
+			const outgoing = cloneMemoryState(incoming, domains);
+			for (const instruction of block.instructions) {
+				for (const domain of invalidatedEffectDomains(instruction)) {
+					if (domainSet.has(domain)) outgoing.set(domain, new Set([instruction.id + 1]));
+				}
+			}
+			if (!sameMemoryState(exits[block.id], outgoing, domains)) {
+				exits[block.id] = outgoing;
+				progress = true;
+			}
+		}
+	}
+
+	const versions = new Map<CoreInstructionId, string>();
+	for (const block of fn.blocks) {
+		const initial =
+			entries[block.id] ??
+			new Map<CoreEffectDomain, ReadonlySet<number>>(
+				domains.map((domain) => [domain, new Set([-(block.id + 1)])]),
+			);
+		const state = cloneMemoryState(initial, domains);
+		for (const instruction of block.instructions) {
+			const reads = effectiveInstructionEffects(instruction).reads;
+			if (reads.length > 0) {
+				versions.set(
+					instruction.id,
+					reads
+						.map(
+							(domain) =>
+								`${domain}:${[...(state.get(domain) ?? [])].sort((a, b) => a - b).join(",")}`,
+						)
+						.join("|"),
+				);
+			}
+			for (const domain of invalidatedEffectDomains(instruction)) {
+				if (domainSet.has(domain)) state.set(domain, new Set([instruction.id + 1]));
+			}
+		}
+	}
+	return versions;
+}
+
+function valueNumberingKey(
+	instruction: CoreInstruction,
+	memoryVersion: string,
+): string | undefined {
+	const descriptor = coreOpcodeRegistry.require(instruction.opcode);
+	const effects = effectiveInstructionEffects(instruction);
+	if (
+		instruction.outputs.length === 0 ||
+		!descriptor.discardable ||
+		IDENTITY_PRODUCING_OPCODES.has(instruction.opcode) ||
+		(effects.reads.length === 0 &&
+			!IMMUTABLE_VALUE_NUMBERING_OPCODES.has(instruction.opcode)) ||
+		effects.writes.length > 0 ||
+		effects.callsUserCode ||
+		effects.maySuspend
+	) {
+		return undefined;
+	}
+	return `${instruction.opcode}\0${instruction.inputs.join(",")}\0${stableAttributes(instruction)}\0${memoryVersion}`;
+}
 
 const copyAndValueNumber: CoreFunctionPass = {
 	name: "copy-and-value-number",
 	ablation: "constant-folding",
-	run(fn) {
+	run(fn, analyses) {
+		const cfg = analyses.controlFlow(fn);
+		const memoryVersions = reachingMemoryVersions(fn, cfg);
 		const replacements = new Map<CoreValueId, CoreValueId>();
 		const removedInstructions = new Set<number>();
-		const blocks = fn.blocks.map((block): CoreBlock => {
-			const available = new Map<string, ReadonlyArray<CoreValueId>>();
-			const instructions: Array<CoreInstruction> = [];
-			for (const original of block.instructions) {
-				const instruction: CoreInstruction = {
-					...original,
-					inputs: original.inputs.map((value) => resolveValue(value, replacements)),
+		const protectedInstructions = new Set(
+			fn.regions.flatMap(({ claimedInstructions }) => claimedInstructions),
+		);
+		const protectedInputs = new Set<CoreValueId>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (!protectedInstructions.has(instruction.id)) continue;
+				for (const input of instruction.inputs) protectedInputs.add(input);
+			}
+			if (protectedInstructions.has(block.terminator.id)) {
+				const addEdge = (edge: CoreEdge) => {
+					for (const argument of edge.arguments) protectedInputs.add(argument);
 				};
-				if (
-					instruction.opcode === "move" &&
-					instruction.inputs.length === 1 &&
-					instruction.outputs.length === 1
-				) {
-					replacements.set(instruction.outputs[0]!, instruction.inputs[0]!);
-					removedInstructions.add(instruction.id);
+				switch (block.terminator.kind) {
+					case "jump":
+						addEdge(block.terminator.edge);
+						break;
+					case "branch":
+						protectedInputs.add(block.terminator.condition);
+						addEdge(block.terminator.consequent);
+						addEdge(block.terminator.alternate);
+						break;
+					case "guard":
+						protectedInputs.add(block.terminator.condition);
+						addEdge(block.terminator.success);
+						addEdge(block.terminator.fallback);
+						break;
+					case "switch":
+						protectedInputs.add(block.terminator.discriminant);
+						for (const { edge } of block.terminator.cases) addEdge(edge);
+						addEdge(block.terminator.default);
+						break;
+					case "return":
+					case "throw":
+						protectedInputs.add(block.terminator.value);
+						break;
+					case "unreachable":
+						break;
+				}
+			}
+		}
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		const blocks = [...fn.blocks];
+		const children = fn.blocks.map(() => new Array<CoreBlockId>());
+		for (const block of fn.blocks) {
+			const parent = cfg.immediateDominators[block.id];
+			if (parent !== undefined && parent !== null && parent !== block.id) {
+				children[parent]!.push(block.id);
+			}
+		}
+		const visited = new Set<CoreBlockId>();
+		type Available = Map<string, ReadonlyArray<CoreValueId>>;
+		type Undo = {
+			readonly available: Available;
+			readonly key: string;
+			readonly previous: ReadonlyArray<CoreValueId> | undefined;
+			readonly existed: boolean;
+		};
+		type Frame =
+			| {
+					readonly kind: "enter";
+					readonly block: CoreBlockId;
+					readonly available: Available;
+			  }
+			| { readonly kind: "exit"; readonly marker: number };
+		const processTree = (root: CoreBlockId): void => {
+			const undo: Array<Undo> = [];
+			const stack: Array<Frame> = [{ kind: "enter", block: root, available: new Map() }];
+			while (stack.length > 0) {
+				const frame = stack.pop()!;
+				if (frame.kind === "exit") {
+					while (undo.length > frame.marker) {
+						const entry = undo.pop()!;
+						if (entry.existed) entry.available.set(entry.key, entry.previous!);
+						else entry.available.delete(entry.key);
+					}
 					continue;
 				}
-				if (VALUE_NUMBERED_OPCODES.has(instruction.opcode)) {
-					const key = `${instruction.opcode}\0${instruction.inputs.join(",")}\0${stableAttributes(instruction)}`;
-					const previous = available.get(key);
-					if (previous !== undefined && previous.length === instruction.outputs.length) {
-						for (const [index, output] of instruction.outputs.entries()) {
-							replacements.set(output, previous[index]!);
-						}
+				if (visited.has(frame.block)) continue;
+				visited.add(frame.block);
+				const marker = undo.length;
+				const block = fn.blocks[frame.block]!;
+				const instructions: Array<CoreInstruction> = [];
+				for (const original of block.instructions) {
+					if (protectedInstructions.has(original.id)) {
+						instructions.push(original);
+						continue;
+					}
+					const instruction: CoreInstruction = {
+						...original,
+						inputs: original.inputs.map((value) => resolveValue(value, replacements)),
+					};
+					if (
+						instruction.opcode === "move" &&
+						instruction.inputs.length === 1 &&
+						instruction.outputs.length === 1 &&
+						!protectedInputs.has(instruction.outputs[0]!)
+					) {
+						replacements.set(instruction.outputs[0]!, instruction.inputs[0]!);
 						removedInstructions.add(instruction.id);
 						continue;
 					}
-					available.set(key, instruction.outputs);
+					const key = valueNumberingKey(
+						instruction,
+						memoryVersions.get(instruction.id) ?? "",
+					);
+					if (key !== undefined) {
+						const previous = frame.available.get(key);
+						if (
+							previous !== undefined &&
+							previous.length === instruction.outputs.length &&
+							instruction.outputs.every(
+								(output, index) =>
+									representations.get(output) === representations.get(previous[index]!),
+							) &&
+							instruction.outputs.every((output) => !protectedInputs.has(output))
+						) {
+							for (const [index, output] of instruction.outputs.entries()) {
+								replacements.set(output, previous[index]!);
+							}
+							removedInstructions.add(instruction.id);
+							continue;
+						}
+						undo.push({
+							available: frame.available,
+							key,
+							previous,
+							existed: frame.available.has(key),
+						});
+						frame.available.set(key, instruction.outputs);
+					}
+					instructions.push(instruction);
 				}
-				instructions.push(instruction);
+				blocks[frame.block] = { ...block, instructions };
+				stack.push({ kind: "exit", marker });
+				for (const child of [...children[frame.block]!].reverse()) {
+					stack.push({
+						kind: "enter",
+						block: child,
+						available: cfg.predecessors[child]!.some(({ kind }) => kind === "exceptional")
+							? new Map<string, ReadonlyArray<CoreValueId>>()
+							: frame.available,
+					});
+				}
 			}
-			return { ...block, instructions };
-		});
+		};
+		processTree(fn.entry);
+		for (const block of fn.blocks) {
+			if (!visited.has(block.id)) processTree(block.id);
+		}
 		if (removedInstructions.size === 0) return fn;
-		return rewriteFunction(fn, blocks, replacements, removedInstructions);
+		return pruneVacuousHandlers(
+			rewriteFunction(fn, blocks, replacements, removedInstructions),
+		);
 	},
 };
 
@@ -5312,6 +6566,7 @@ const eliminateTrivialBlockArguments: CoreFunctionPass = {
 		for (const block of fn.blocks) {
 			if (
 				block.id === fn.entry ||
+				block.id === fn.bodyEntry ||
 				block.parameters.some(({ role }) => role === "exception")
 			) {
 				continue;
@@ -5351,54 +6606,181 @@ const eliminateTrivialBlockArguments: CoreFunctionPass = {
 const deadInstructionElimination: CoreFunctionPass = {
 	name: "dead-instruction-elimination",
 	run(fn) {
-		const uses = collectUses(fn);
-		const removedInstructions = new Set<number>();
-		const removedValues = new Map<CoreValueId, CoreValueId>();
+		const definitions = new Map<CoreValueId, CoreInstruction>();
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				if (
-					instruction.outputs.length > 0 &&
-					instruction.outputs.every((output) => !uses.has(output)) &&
-					(coreOpcodeRegistry.require(instruction.opcode).discardable ||
-						(instruction.opcode === "unary" &&
-							instructionAttribute(instruction, "operator") === "typeof"))
-				) {
+				for (const output of instruction.outputs) definitions.set(output, instruction);
+			}
+		}
+		const liveInstructions = new Set<CoreInstructionId>();
+		const liveValues = new Set<CoreValueId>();
+		const pending: Array<CoreValueId> = [];
+		const markValue = (value: CoreValueId): void => {
+			if (liveValues.has(value)) return;
+			liveValues.add(value);
+			pending.push(value);
+		};
+		const markInstruction = (instruction: CoreInstruction): void => {
+			if (liveInstructions.has(instruction.id)) return;
+			liveInstructions.add(instruction.id);
+			for (const input of instruction.inputs) markValue(input);
+		};
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				const descriptor = coreOpcodeRegistry.require(instruction.opcode);
+				const discardable =
+					descriptor.discardable ||
+					(instruction.opcode === "unary" &&
+						instructionAttribute(instruction, "operator") === "typeof");
+				if (!discardable) markInstruction(instruction);
+			}
+			if (block.handler !== undefined) {
+				for (const value of block.handler.arguments) markValue(value);
+			}
+			const markEdge = (edge: CoreEdge) => {
+				for (const value of edge.arguments) markValue(value);
+			};
+			switch (block.terminator.kind) {
+				case "jump":
+					markEdge(block.terminator.edge);
+					break;
+				case "branch":
+					markValue(block.terminator.condition);
+					markEdge(block.terminator.consequent);
+					markEdge(block.terminator.alternate);
+					break;
+				case "guard":
+					markValue(block.terminator.condition);
+					markEdge(block.terminator.success);
+					markEdge(block.terminator.fallback);
+					break;
+				case "switch":
+					markValue(block.terminator.discriminant);
+					for (const { edge } of block.terminator.cases) markEdge(edge);
+					markEdge(block.terminator.default);
+					break;
+				case "return":
+				case "throw":
+					markValue(block.terminator.value);
+					break;
+				case "unreachable":
+					break;
+			}
+		}
+		while (pending.length > 0) {
+			const producer = definitions.get(pending.pop()!);
+			if (producer !== undefined) markInstruction(producer);
+		}
+		const removedInstructions = new Set<number>();
+		const removedValues = new Set<CoreValueId>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (!liveInstructions.has(instruction.id)) {
 					removedInstructions.add(instruction.id);
-					for (const output of instruction.outputs) removedValues.set(output, output);
+					for (const output of instruction.outputs) removedValues.add(output);
 				}
 			}
 		}
-		if (removedInstructions.size === 0) return fn;
-		const removed = new Set(removedValues.keys());
-		return {
+		const liveGuardInstructionIds = new Set<number>();
+		for (const block of fn.blocks) {
+			if (block.terminator.kind === "guard") {
+				liveGuardInstructionIds.add(block.terminator.id);
+			}
+		}
+		const liveFacts = new Set(
+			fn.blocks.flatMap((block) => [
+				...(block.terminator.kind === "guard" ? [block.terminator.fact] : []),
+				...block.instructions.flatMap(({ id, effectRefinement }) =>
+					removedInstructions.has(id) || effectRefinement === undefined
+						? []
+						: [effectRefinement.proof],
+				),
+			]),
+		);
+		const facts = fn.facts.filter((fact) => {
+			if (
+				fact.validity.kind === "guard" &&
+				!liveGuardInstructionIds.has(fact.validity.instruction)
+			) {
+				return false;
+			}
+			if (
+				fact.obligations.some(
+					(obligation) =>
+						obligation.kind === "guard" &&
+						!liveGuardInstructionIds.has(obligation.instruction),
+				)
+			) {
+				return false;
+			}
+			return (
+				liveFacts.has(fact.id) || fact.obligations.some(({ kind }) => kind !== "guard")
+			);
+		});
+		if (removedInstructions.size === 0 && facts.length === fn.facts.length) return fn;
+		return pruneVacuousHandlers({
 			...fn,
 			blocks: fn.blocks.map((block) => ({
 				...block,
 				instructions: block.instructions.filter(({ id }) => !removedInstructions.has(id)),
 			})),
-			values: fn.values.filter(({ id }) => !removed.has(id)),
+			values: fn.values.filter(({ id }) => !removedValues.has(id)),
+			facts,
 			mutationEpoch: fn.mutationEpoch + 1,
-		};
+		});
 	},
 };
 
 /**
- * Retarget every edge that lands on a parameter-only block whose whole body is a
- * jump. Core owns empty-block forwarding so no later stage has to rediscover it:
- * target lowering would otherwise have to read the emitted block layout to notice
- * that a branch arm does nothing but jump on.
+ * Retarget edges through empty jumps and through empty branch/switch blocks when
+ * the incoming edge makes their choice constant. Core owns this threading so no
+ * later stage has to rediscover it from emitted block layout.
  *
- * A forwarded jump argument is either one of the block's parameters, substituted
- * with the incoming edge's argument, or a value that dominates the empty block.
- * The block holds no definition, so such a value also dominates every predecessor
- * and stays available on the retargeted edge.
+ * A forwarded argument is either one of the block's parameters, substituted with
+ * the incoming edge's argument, or a value that dominates the empty block. Since
+ * retargeting deletes parameter definitions, candidates are rejected when one of
+ * those parameters is also used by a dominated instruction outside the terminator.
  */
 const foldEmptyForwardingBlocks: CoreFunctionPass = {
 	name: "fold-empty-forwarding-blocks",
 	changesControlFlow: true,
-	run(fn) {
-		const forwarding = new Map<CoreBlockId, CoreBlock>();
+	run(fn, _analyses, program) {
+		const useSites = new Map<CoreValueId, Set<string>>();
+		const addUse = (value: CoreValueId, site: string): void => {
+			const sites = useSites.get(value) ?? new Set<string>();
+			sites.add(site);
+			useSites.set(value, sites);
+		};
 		for (const block of fn.blocks) {
+			const bodySite = `body:${block.id}`;
+			const terminatorSite = `terminator:${block.id}`;
+			for (const instruction of block.instructions) {
+				for (const input of instruction.inputs) addUse(input, bodySite);
+			}
+			for (const argument of block.handler?.arguments ?? []) addUse(argument, bodySite);
+			for (const edge of coreTerminatorEdges(block.terminator)) {
+				for (const argument of edge.arguments) addUse(argument, terminatorSite);
+			}
+			switch (block.terminator.kind) {
+				case "branch":
+				case "guard":
+					addUse(block.terminator.condition, terminatorSite);
+					break;
+				case "switch":
+					addUse(block.terminator.discriminant, terminatorSite);
+					break;
+				case "return":
+				case "throw":
+					addUse(block.terminator.value, terminatorSite);
+					break;
+				case "jump":
+				case "unreachable":
+					break;
+			}
+		}
+		const emptyControlBlocks = new Map<CoreBlockId, CoreBlock>();
+		for (const block of fn.blocks) {
+			const ownTerminator = `terminator:${block.id}`;
 			if (
 				block.id === fn.entry ||
 				block.id === fn.bodyEntry ||
@@ -5406,33 +6788,85 @@ const foldEmptyForwardingBlocks: CoreFunctionPass = {
 				block.handler !== undefined ||
 				// An exception parameter is bound by the unwinder, not by an edge.
 				block.parameters.some(({ role }) => role === "exception") ||
-				block.terminator.kind !== "jump" ||
-				block.terminator.edge.block === block.id
+				// Retargeting deletes this block. A parameter used by a dominated
+				// instruction would otherwise survive without its defining phi.
+				block.parameters.some((parameter) =>
+					[...(useSites.get(parameter.value) ?? [])].some(
+						(site) => site !== ownTerminator,
+					),
+				) ||
+				(block.terminator.kind !== "jump" &&
+					block.terminator.kind !== "branch" &&
+					block.terminator.kind !== "switch") ||
+				(block.terminator.kind === "jump" && block.terminator.edge.block === block.id)
 			) {
 				continue;
 			}
-			forwarding.set(block.id, block);
+			emptyControlBlocks.set(block.id, block);
 		}
-		if (forwarding.size === 0) return fn;
+		if (emptyControlBlocks.size === 0) return fn;
+		const definitions = new Map<CoreValueId, CoreInstruction>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				for (const output of instruction.outputs) definitions.set(output, instruction);
+			}
+		}
 		// A chain that closes into a cycle has no non-forwarding target, so the walk
-		// gives the edge back unchanged and the pass reaches its fixpoint.
+		// gives the current edge back unchanged and the pass reaches its fixpoint.
+		// Branches and switches are threaded only when this particular incoming edge
+		// supplies a primitive constant for their discriminant; other predecessors can
+		// continue to enter the original block.
 		const forwardEdge = (edge: CoreEdge): CoreEdge => {
 			const seen = new Set<CoreBlockId>();
 			let current = edge;
 			for (;;) {
-				const block = forwarding.get(current.block);
+				const block = emptyControlBlocks.get(current.block);
 				if (block === undefined || seen.has(current.block)) return current;
 				seen.add(current.block);
-				if (block.terminator.kind !== "jump") return current;
 				const substitutions = new Map<CoreValueId, CoreValueId>(
 					block.parameters.map((parameter, index) => [
 						parameter.value,
 						current.arguments[index]!,
 					]),
 				);
+				let outgoing: CoreEdge;
+				switch (block.terminator.kind) {
+					case "jump":
+						outgoing = block.terminator.edge;
+						break;
+					case "branch": {
+						const condition =
+							substitutions.get(block.terminator.condition) ?? block.terminator.condition;
+						const immediate = immediateForValue(condition, definitions);
+						const truthy =
+							immediate === undefined
+								? undefined
+								: immediateTruthiness(immediate, program);
+						if (truthy === undefined) return current;
+						outgoing = truthy ? block.terminator.consequent : block.terminator.alternate;
+						break;
+					}
+					case "switch": {
+						const discriminant =
+							substitutions.get(block.terminator.discriminant) ??
+							block.terminator.discriminant;
+						const immediate = immediateForValue(discriminant, definitions);
+						if (immediate === undefined) return current;
+						outgoing =
+							block.terminator.cases.find(({ value }) =>
+								immediateStrictEquals(immediate, value),
+							)?.edge ?? block.terminator.default;
+						break;
+					}
+					case "guard":
+					case "return":
+					case "throw":
+					case "unreachable":
+						return current;
+				}
 				current = {
-					block: block.terminator.edge.block,
-					arguments: block.terminator.edge.arguments.map(
+					block: outgoing.block,
+					arguments: outgoing.arguments.map(
 						(argument) => substitutions.get(argument) ?? argument,
 					),
 				};
@@ -5444,7 +6878,6 @@ const foldEmptyForwardingBlocks: CoreFunctionPass = {
 			left.arguments.every((argument, index) => argument === right.arguments[index]);
 		let changed = false;
 		const blocks = fn.blocks.map((block): CoreBlock => {
-			if (forwarding.has(block.id)) return block;
 			let blockChanged = false;
 			const terminator = remapTerminatorEdges(block.terminator, (edge) => {
 				const forwarded = forwardEdge(edge);
@@ -5465,59 +6898,70 @@ const foldEmptyForwardingBlocks: CoreFunctionPass = {
 	},
 };
 
-/** Merge one dominance-safe linear edge at a time, substituting block arguments. */
+/** Merge dominance-safe linear chains to a true local fixpoint. */
 const combineLinearBlocks: CoreFunctionPass = {
 	name: "combine-linear-blocks",
 	changesControlFlow: true,
-	run(fn, analyses) {
-		const cfg = analyses.controlFlow(fn);
-		for (const predecessor of fn.blocks) {
-			if (predecessor.handler !== undefined || predecessor.terminator.kind !== "jump") {
-				continue;
+	run(fn) {
+		let result = fn;
+		for (;;) {
+			const cfg = buildCoreControlFlow(result, coreOpcodeRegistry);
+			let mergedFunction: CoreFunction | undefined;
+			for (const predecessor of result.blocks) {
+				if (predecessor.handler !== undefined || predecessor.terminator.kind !== "jump") {
+					continue;
+				}
+				const targetId = predecessor.terminator.edge.block;
+				if (
+					targetId === predecessor.id ||
+					targetId === result.entry ||
+					targetId === result.bodyEntry
+				) {
+					continue;
+				}
+				const target = result.blocks[targetId];
+				if (target === undefined || target.handler !== undefined) continue;
+				const incoming = cfg.predecessors[targetId]!;
+				if (
+					incoming.length !== 1 ||
+					incoming[0]!.kind !== "ordinary" ||
+					incoming[0]!.from !== predecessor.id
+				) {
+					continue;
+				}
+				const replacements = new Map<CoreValueId, CoreValueId>();
+				for (const [index, parameter] of target.parameters.entries()) {
+					replacements.set(
+						parameter.value,
+						predecessor.terminator.edge.arguments[index]!,
+					);
+				}
+				const merged: CoreBlock = {
+					...predecessor,
+					instructions: [
+						...predecessor.instructions,
+						...target.instructions.map((instruction) => ({
+							...instruction,
+							inputs: instruction.inputs.map((value) =>
+								resolveValue(value, replacements),
+							),
+						})),
+					],
+					terminator: rewriteTerminator(target.terminator, replacements),
+				};
+				const blocks = result.blocks.map((block) =>
+					block.id === predecessor.id ? merged : block,
+				);
+				mergedFunction = removeUnreachableCoreBlocks({
+					...result,
+					blocks,
+					mutationEpoch: result.mutationEpoch + 1,
+				});
+				break;
 			}
-			const targetId = predecessor.terminator.edge.block;
-			if (
-				targetId === predecessor.id ||
-				targetId === fn.entry ||
-				targetId === fn.bodyEntry
-			) {
-				continue;
-			}
-			const target = fn.blocks[targetId];
-			if (target === undefined || target.handler !== undefined) continue;
-			const incoming = cfg.predecessors[targetId]!;
-			if (
-				incoming.length !== 1 ||
-				incoming[0]!.kind !== "ordinary" ||
-				incoming[0]!.from !== predecessor.id
-			) {
-				continue;
-			}
-			const replacements = new Map<CoreValueId, CoreValueId>();
-			for (const [index, parameter] of target.parameters.entries()) {
-				replacements.set(parameter.value, predecessor.terminator.edge.arguments[index]!);
-			}
-			const merged: CoreBlock = {
-				...predecessor,
-				instructions: [
-					...predecessor.instructions,
-					...target.instructions.map((instruction) => ({
-						...instruction,
-						inputs: instruction.inputs.map((value) => resolveValue(value, replacements)),
-					})),
-				],
-				terminator: rewriteTerminator(target.terminator, replacements),
-			};
-			const blocks = fn.blocks.map((block) =>
-				block.id === predecessor.id ? merged : block,
-			);
-			return removeUnreachableCoreBlocks({
-				...fn,
-				blocks,
-				mutationEpoch: fn.mutationEpoch + 1,
-			});
+			if (mergedFunction === undefined) return result;
+			result = mergedFunction;
 		}
-		return fn;
 	},
 };
 
@@ -5528,7 +6972,9 @@ const CORE_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	foldExactObjectObservations,
 	eliminateRedundantTdzChecks,
 	eliminateTrivialBlockArguments,
-	foldPrimitiveConstants,
+	sparseConditionalConstantPropagation,
+	refineValueRepresentations,
+	simplifyAlgebraicValues,
 	simplifyControlFlow,
 	foldEmptyForwardingBlocks,
 	combineLinearBlocks,
@@ -5640,9 +7086,10 @@ export function executeCoreOptimizations(
 	const traces: Array<{ name: string; round: number; changed: boolean }> = [];
 	const optimizationTrace: Array<OptimizationPassDelta> = [];
 	const collectOptimizationTrace = program.compilation?.optimizationTrace !== undefined;
-	const inlineBefore = collectOptimizationTrace
+	let tracedMetrics = collectOptimizationTrace
 		? coreOptimizationMetrics(program)
 		: undefined;
+	const inlineBefore = tracedMetrics;
 	const inlineAblated = options.ablations?.has("inlining") === true;
 	const inlineResult = inlineAblated
 		? { program, changed: false }
@@ -5653,9 +7100,12 @@ export function executeCoreOptimizations(
 			pass: "inline-small-functions",
 		});
 	}
-	const directBefore = collectOptimizationTrace
-		? coreOptimizationMetrics(inlineResult.program)
-		: undefined;
+	const inlineAfter =
+		inlineBefore === undefined
+			? undefined
+			: coreOptimizationMetrics(inlineResult.program);
+	if (inlineAfter !== undefined) tracedMetrics = inlineAfter;
+	const directBefore = tracedMetrics;
 	const directResult = annotateCoreDirectCallTargets(inlineResult.program);
 	if (directResult.changed) {
 		verifyMutatedProgram(directResult.program, {
@@ -5681,7 +7131,6 @@ export function executeCoreOptimizations(
 		});
 	}
 	if (inlineBefore !== undefined) {
-		const inlineAfter = coreOptimizationMetrics(inlineResult.program);
 		optimizationTrace.push(
 			optimizationPassDelta(
 				{
@@ -5692,12 +7141,13 @@ export function executeCoreOptimizations(
 					ablation: "inlining",
 				},
 				inlineBefore,
-				inlineAfter,
+				inlineAfter!,
 			),
 		);
 	}
 	if (directBefore !== undefined) {
 		const directAfter = coreOptimizationMetrics(workingProgram);
+		tracedMetrics = directAfter;
 		optimizationTrace.push(
 			optimizationPassDelta(
 				{
@@ -5720,9 +7170,7 @@ export function executeCoreOptimizations(
 			const ablated =
 				pass.ablation !== undefined && options.ablations?.has(pass.ablation) === true;
 			const beforeProgram = { ...workingProgram, functions };
-			const before = collectOptimizationTrace
-				? coreOptimizationMetrics(beforeProgram)
-				: undefined;
+			const before = tracedMetrics;
 			if (featureGated) {
 				for (const _fn of functions) {
 					traces.push({ name: pass.name, round, changed: false });
@@ -5767,8 +7215,10 @@ export function executeCoreOptimizations(
 				continue;
 			}
 			let passChanged = false;
+			let regionBlockedFunctions = 0;
 			functions = functions.map((fn) => {
 				if (fn.regions.length > 0 && pass.changesControlFlow === true) {
+					regionBlockedFunctions++;
 					traces.push({ name: pass.name, round, changed: false });
 					return fn;
 				}
@@ -5795,14 +7245,21 @@ export function executeCoreOptimizations(
 			}
 			if (before !== undefined) {
 				const after = coreOptimizationMetrics({ ...workingProgram, functions });
+				tracedMetrics = after;
 				optimizationTrace.push(
 					optimizationPassDelta(
 						{
 							pass: pass.name,
 							stage: "fixpoint",
 							round,
-							status: "executed",
+							status:
+								regionBlockedFunctions === 0
+									? "executed"
+									: regionBlockedFunctions === functions.length
+										? "region-blocked"
+										: "partially-region-blocked",
 							changed: passChanged,
+							...(regionBlockedFunctions === 0 ? {} : { regionBlockedFunctions }),
 							...(pass.ablation === undefined ? {} : { ablation: pass.ablation }),
 						},
 						before,
@@ -5815,9 +7272,7 @@ export function executeCoreOptimizations(
 	}
 	for (const pass of CORE_FINALIZATION_PASSES) {
 		const beforeProgram = { ...workingProgram, functions };
-		const before = collectOptimizationTrace
-			? coreOptimizationMetrics(beforeProgram)
-			: undefined;
+		const before = tracedMetrics;
 		const ablated =
 			pass.ablation !== undefined && options.ablations?.has(pass.ablation) === true;
 		let passChanged = false;
@@ -5850,6 +7305,7 @@ export function executeCoreOptimizations(
 		}
 		if (before !== undefined) {
 			const after = coreOptimizationMetrics({ ...workingProgram, functions });
+			tracedMetrics = after;
 			optimizationTrace.push(
 				optimizationPassDelta(
 					{

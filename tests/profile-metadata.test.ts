@@ -75,6 +75,7 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 				"boxedOperations",
 				"propertyHelpers",
 				"worldGuards",
+				"rootedValues",
 				"safepoints",
 			] as const) {
 				if (after[metric] - before[metric] !== delta[metric]) return false;

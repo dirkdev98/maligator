@@ -222,6 +222,135 @@ describe("Core empty forwarding blocks", () => {
 		expect(handlerEntry.instructions).toHaveLength(0);
 	});
 
+	it("retains a forwarding phi used by a dominated block", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const flag = blockParameters(builder, entry)[0]!;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const forward = builder.createBlock([{}]);
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: flag,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [one] = builder.appendInstruction(left, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [two] = builder.appendInstruction(right, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: forward, arguments: [one!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: forward, arguments: [two!] },
+		});
+		builder.setTerminator(forward, {
+			kind: "jump",
+			edge: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, {
+			kind: "return",
+			value: blockParameters(builder, forward)[0]!,
+		});
+
+		const fn = builder.finish(entry);
+		const phi = fn.blocks[forward]!.parameters[0]!.value;
+		const outcome = executeCoreOptimizations(coreProgram([fn]), {
+			verification: "per-pass",
+		});
+		const result = outcome.program.functions[0]!;
+		expect(result.values.some(({ id }) => id === phi)).toBe(true);
+		expect(() => verifyCoreProgram(outcome.program, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("threads edge-specific constants through an empty branch", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const flag = blockParameters(builder, entry)[0]!;
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const decision = builder.createBlock([{ representation: "boolean" }]);
+		const success = builder.createBlock();
+		const failure = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: flag,
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		const [truthy] = builder.appendInstruction(left, "createBoolean", [], {
+			attributes: { value: true },
+			outputRepresentations: ["boolean"],
+		});
+		const [falsy] = builder.appendInstruction(right, "createBoolean", [], {
+			attributes: { value: false },
+			outputRepresentations: ["boolean"],
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: decision, arguments: [truthy!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: decision, arguments: [falsy!] },
+		});
+		builder.setTerminator(decision, {
+			kind: "branch",
+			condition: blockParameters(builder, decision)[0]!,
+			consequent: { block: success, arguments: [] },
+			alternate: { block: failure, arguments: [] },
+		});
+		const [one] = builder.appendInstruction(success, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [zero] = builder.appendInstruction(failure, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		builder.setTerminator(success, { kind: "return", value: one! });
+		builder.setTerminator(failure, { kind: "return", value: zero! });
+
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			verification: "per-pass",
+		});
+		const branches = outcome.program.functions[0]!.blocks.filter(
+			({ terminator }) => terminator.kind === "branch",
+		);
+		expect(branches).toHaveLength(1);
+		expect(() => verifyCoreProgram(outcome.program, coreOpcodeRegistry)).not.toThrow();
+	});
+
+	it("combines long observable linear chains within one optimization round", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry);
+		const entry = builder.createBlock();
+		const [returned] = builder.appendInstruction(entry, "createUndefined", []);
+		let current = entry;
+		for (let index = 0; index < 20; index++) {
+			const next = builder.createBlock();
+			builder.setTerminator(current, {
+				kind: "jump",
+				edge: { block: next, arguments: [] },
+			});
+			builder.appendInstruction(next, "createObject", []);
+			current = next;
+		}
+		builder.setTerminator(current, { kind: "return", value: returned! });
+		const outcome = executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+			maxRounds: 1,
+			verification: "per-pass",
+		});
+		const fn = outcome.program.functions[0]!;
+		expect(fn.blocks).toHaveLength(1);
+		expect(
+			fn.blocks[0]!.instructions.filter(({ opcode }) => opcode === "createObject"),
+		).toHaveLength(20);
+	});
+
 	it("reaches a stable fixpoint on a second optimization run", () => {
 		const first = optimize(functionWithForwardedArguments());
 		const second = executeCoreOptimizations(first.program);

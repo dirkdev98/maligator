@@ -47,6 +47,8 @@ export interface OptimizationMetrics {
 	readonly boxedOperations: number;
 	readonly propertyHelpers: number;
 	readonly worldGuards: number;
+	/** Boxed Core SSA values that must remain rooted across collection points. */
+	readonly rootedValues: number;
 	readonly safepoints: number;
 }
 
@@ -54,7 +56,14 @@ export interface OptimizationPassDelta {
 	readonly pass: string;
 	readonly stage: "normalization" | "fixpoint" | "finalization";
 	readonly round?: number;
-	readonly status: "executed" | "feature-gated" | "ablated";
+	readonly status:
+		| "executed"
+		| "feature-gated"
+		| "ablated"
+		| "region-blocked"
+		| "partially-region-blocked";
+	/** Functions skipped because a control-flow pass cannot mutate a selected region. */
+	readonly regionBlockedFunctions?: number;
 	readonly changed: boolean;
 	readonly before: OptimizationMetrics;
 	readonly after: OptimizationMetrics;

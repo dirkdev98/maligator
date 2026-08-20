@@ -155,6 +155,7 @@ const GC_FREE = new Set<CoreOpcode>([
 	"createNumber",
 	"createUndefined",
 	"generatorStart",
+	"guardFunctionIndex",
 	"isEmpty",
 	"loadCaptured",
 	"loadGlobal",
@@ -249,6 +250,8 @@ const DISCARDABLE = new Set<CoreOpcode>([
 	"createNumber",
 	"createString",
 	"createUndefined",
+	"guardFunctionIndex",
+	"isEmpty",
 	"loadCaptured",
 	"loadGlobal",
 	"loadIntrinsic",
@@ -395,8 +398,25 @@ function domainsFor(
 	const domains = new Set<CoreEffectDomain>();
 	if (kind === "reads" && opcode === "loadCaptured") domains.add("captured-slot");
 	if (kind === "writes" && opcode === "storeCaptured") domains.add("captured-slot");
-	if (kind === "writes" && opcode === "createPrivateNames") {
+	if (
+		kind === "writes" &&
+		(opcode === "createPrivateNames" ||
+			opcode === "envPush" ||
+			opcode === "envCopy" ||
+			opcode === "envPop")
+	) {
 		domains.add("captured-slot");
+	}
+	if (kind === "reads" && opcode === "loadLocal") domains.add("local-slot");
+	if (kind === "writes" && opcode === "storeLocal") domains.add("local-slot");
+	if (kind === "reads" && opcode === "loadThis") domains.add("activation-this");
+	if (
+		kind === "writes" &&
+		(opcode === "setThis" ||
+			opcode === "constructSuper" ||
+			opcode === "constructSuperExplicit")
+	) {
+		domains.add("activation-this");
 	}
 	if (kind === "reads" && opcode === "loadGlobal") domains.add("global-slot");
 	if (kind === "writes" && (opcode === "storeGlobal" || opcode === "initGlobalVars")) {

@@ -227,7 +227,7 @@ describe("Core region property placement", () => {
 			perturbed.functions.some(({ blocks }) =>
 				blocks.some(({ terminator }) => terminator.kind === "branch"),
 			),
-		).toBe(true);
+		).toBe(false);
 		expect(emptyForwardingBlocks(perturbed)).toEqual([]);
 		expect(corePlacements(perturbed)).toEqual(corePlacements(baseline));
 		expect(
