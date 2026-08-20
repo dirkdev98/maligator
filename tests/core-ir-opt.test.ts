@@ -41,6 +41,12 @@ function programWithConstants(): CoreProgram {
 	return coreProgram([core]);
 }
 
+function globalLoadCount(fn: CoreFunction): number {
+	return fn.blocks
+		.flatMap(({ instructions }) => instructions)
+		.filter(({ opcode }) => opcode === "loadGlobal").length;
+}
+
 function coreProgram(functions: ReadonlyArray<CoreFunction>): CoreProgram {
 	return {
 		functions,
@@ -577,6 +583,184 @@ describe("Core IR optimizer", () => {
 				.flatMap(({ instructions }) => instructions)
 				.filter(({ opcode }) => opcode === "loadGlobal"),
 		).toHaveLength(2);
+	});
+
+	it("keeps memory versions distinct across a loop with two backedges", () => {
+		const build = (functionIndex: number, writeInLoop: boolean): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 2,
+			});
+			const entry = builder.createBlock([{}, {}]);
+			const [armCondition, repeatCondition] = builder
+				.block(entry)
+				.parameters.map(({ value }) => value);
+			const header = builder.createBlock();
+			const left = builder.createBlock();
+			const right = builder.createBlock();
+			const exit = builder.createBlock();
+			const [replacement] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			builder.setTerminator(entry, {
+				kind: "jump",
+				edge: { block: header, arguments: [] },
+			});
+			const [before] = builder.appendInstruction(header, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			builder.appendInstruction(header, "storeLocal", [before!], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(header, {
+				kind: "branch",
+				condition: armCondition!,
+				consequent: { block: left, arguments: [] },
+				alternate: { block: right, arguments: [] },
+			});
+			if (writeInLoop) {
+				builder.appendInstruction(left, "storeGlobal", [replacement!], {
+					attributes: { index: 0 },
+				});
+			}
+			for (const arm of [left, right]) {
+				builder.setTerminator(arm, {
+					kind: "branch",
+					condition: repeatCondition!,
+					consequent: { block: header, arguments: [] },
+					alternate: { block: exit, arguments: [] },
+				});
+			}
+			const [after] = builder.appendInstruction(exit, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(exit, { kind: "return", value: after! });
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([build(0, false), build(1, true)]), globalCount: 1 },
+			{ verification: "per-pass" },
+		);
+		expect(globalLoadCount(outcome.program.functions[0]!)).toBe(1);
+		expect(globalLoadCount(outcome.program.functions[1]!)).toBe(2);
+	});
+
+	it("versions a slot through a chain of joins without inventing a phi", () => {
+		const build = (functionIndex: number, writeInChain: boolean): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			const condition = builder.block(entry).parameters[0]!.value;
+			const [replacement] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			const [before] = builder.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			builder.appendInstruction(entry, "storeLocal", [before!], {
+				attributes: { index: 0 },
+			});
+			let current = entry;
+			for (const diamond of [0, 1, 2]) {
+				const left = builder.createBlock();
+				const right = builder.createBlock();
+				const join = builder.createBlock();
+				builder.setTerminator(current, {
+					kind: "branch",
+					condition,
+					consequent: { block: left, arguments: [] },
+					alternate: { block: right, arguments: [] },
+				});
+				if (writeInChain && diamond === 1) {
+					builder.appendInstruction(left, "storeGlobal", [replacement!], {
+						attributes: { index: 0 },
+					});
+				}
+				builder.setTerminator(left, {
+					kind: "jump",
+					edge: { block: join, arguments: [] },
+				});
+				builder.setTerminator(right, {
+					kind: "jump",
+					edge: { block: join, arguments: [] },
+				});
+				current = join;
+			}
+			const [after] = builder.appendInstruction(current, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			builder.setTerminator(current, { kind: "return", value: after! });
+			return builder.finish(entry);
+		};
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([build(0, false), build(1, true)]), globalCount: 1 },
+			{ verification: "per-pass" },
+		);
+		expect(globalLoadCount(outcome.program.functions[0]!)).toBe(1);
+		expect(globalLoadCount(outcome.program.functions[1]!)).toBe(2);
+	});
+
+	it("spends the memory family precision bound only on exactly read slots", () => {
+		const writeOnlySlots = 300;
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const stored = builder.block(entry).parameters[0]!.value;
+		builder.appendInstruction(entry, "storeGlobal", [stored], {
+			attributes: { index: 0 },
+		});
+		// Slots nothing reads never reach the solver, so they must not push the
+		// family past the bound and cost slot 0 its exact partition.
+		for (let slot = 1; slot <= writeOnlySlots; slot += 1) {
+			builder.appendInstruction(entry, "storeGlobal", [stored], {
+				attributes: { index: slot },
+			});
+		}
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const fn = executeCoreOptimizations(
+			{
+				...coreProgram([builder.finish(entry)]),
+				globalCount: writeOnlySlots + 1,
+			},
+			{ verification: "per-pass" },
+		).program.functions[0]!;
+		expect(globalLoadCount(fn)).toBe(0);
+		expect(fn.blocks.at(-1)!.terminator).toMatchObject({
+			kind: "return",
+			value: fn.parameters[0],
+		});
+	});
+
+	it("falls back to the domain once a family exceeds its exactly read bound", () => {
+		const build = (functionIndex: number, slots: number): CoreFunction => {
+			const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry, {
+				parameterCount: 1,
+			});
+			const entry = builder.createBlock([{}]);
+			let carried = builder.block(entry).parameters[0]!.value;
+			for (let slot = 0; slot < slots; slot += 1) {
+				builder.appendInstruction(entry, "storeGlobal", [carried], {
+					attributes: { index: slot },
+				});
+				const [reloaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+					attributes: { index: slot },
+				});
+				carried = reloaded!;
+			}
+			builder.setTerminator(entry, { kind: "return", value: carried });
+			return builder.finish(entry);
+		};
+		const overBound = 300;
+		const outcome = executeCoreOptimizations(
+			{ ...coreProgram([build(0, 8), build(1, overBound)]), globalCount: overBound },
+			{ verification: "per-pass" },
+		);
+		expect(globalLoadCount(outcome.program.functions[0]!)).toBe(0);
+		expect(globalLoadCount(outcome.program.functions[1]!)).toBe(overBound);
 	});
 
 	it("forwards a compiler-slot store to a dominated load", () => {

@@ -6919,16 +6919,15 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 					// A fresh literal's own slots start out holding its operands, so the
 					// allocation is a definition every dominated read of those slots can
 					// use, without the allocation being a write to anyone else's memory.
-					const initialized = memory.initializations.get(instruction.id);
 					const layout = initialValues.get(instruction.id);
-					if (initialized !== undefined && layout !== undefined) {
+					if (layout !== undefined) {
 						for (const [index, key] of layout.keys.entries()) {
 							const partition = coreMemoryPartition({
 								kind: "object-slot",
 								allocation: instruction.id,
 								key,
 							});
-							const version = initialized.get(partition);
+							const version = memory.initializationVersion(instruction.id, partition);
 							const initial = layout.initialValues[index];
 							if (version === undefined || initial === undefined) continue;
 							record(`${partition}\0${version}`, {
@@ -6952,16 +6951,20 @@ const forwardMemoryAccesses: CoreFunctionPass = {
 					) {
 						continue;
 					}
-					const readVersions = memory.reads.get(instruction.id)?.exact;
 					for (const access of accesses) {
 						if (access.mode === "write") {
-							record(
-								`${access.partition}\0${memory.writeVersion(instruction.id, access.partition)}`,
-								{ value: access.value, block: frame.block },
-							);
+							// No reader tracks a partition nothing reads, so its store has no
+							// version to record a forwarding candidate under.
+							const written = memory.writeVersion(instruction.id, access.partition);
+							if (written !== undefined) {
+								record(`${access.partition}\0${written}`, {
+									value: access.value,
+									block: frame.block,
+								});
+							}
 							continue;
 						}
-						const version = readVersions?.get(access.partition);
+						const version = memory.readVersion(instruction.id, access.partition);
 						if (version === undefined) continue;
 						const key = `${access.partition}\0${version}`;
 						const hit = available.get(key);
@@ -7464,7 +7467,7 @@ const copyAndValueNumber: CoreFunctionPass = {
 					}
 					const key = valueNumberingKey(
 						instruction,
-						memoryVersions?.reads.get(instruction.id)?.key ?? "",
+						memoryVersions?.readKey(instruction.id) ?? "",
 					);
 					if (key !== undefined) {
 						const previous = frame.available.get(key);
