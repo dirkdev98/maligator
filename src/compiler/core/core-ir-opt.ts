@@ -7012,11 +7012,15 @@ const copyAndValueNumber: CoreFunctionPass = {
 			}
 		}
 		const visited = new Set<CoreBlockId>();
-		type Available = Map<string, ReadonlyArray<CoreValueId>>;
+		interface AvailableValue {
+			readonly outputs: ReadonlyArray<CoreValueId>;
+			readonly block: CoreBlockId;
+		}
+		type Available = Map<string, AvailableValue>;
 		type Undo = {
 			readonly available: Available;
 			readonly key: string;
-			readonly previous: ReadonlyArray<CoreValueId> | undefined;
+			readonly previous: AvailableValue | undefined;
 			readonly existed: boolean;
 		};
 		type Frame =
@@ -7071,15 +7075,18 @@ const copyAndValueNumber: CoreFunctionPass = {
 						const previous = frame.available.get(key);
 						if (
 							previous !== undefined &&
-							previous.length === instruction.outputs.length &&
+							(previous.block === frame.block ||
+								cfg.instructionDominatesBlock(previous.block, frame.block)) &&
+							previous.outputs.length === instruction.outputs.length &&
 							instruction.outputs.every(
 								(output, index) =>
-									representations.get(output) === representations.get(previous[index]!),
+									representations.get(output) ===
+									representations.get(previous.outputs[index]!),
 							) &&
 							instruction.outputs.every((output) => !protectedInputs.has(output))
 						) {
 							for (const [index, output] of instruction.outputs.entries()) {
-								replacements.set(output, previous[index]!);
+								replacements.set(output, previous.outputs[index]!);
 							}
 							removedInstructions.add(instruction.id);
 							continue;
@@ -7090,7 +7097,10 @@ const copyAndValueNumber: CoreFunctionPass = {
 							previous,
 							existed: frame.available.has(key),
 						});
-						frame.available.set(key, instruction.outputs);
+						frame.available.set(key, {
+							outputs: instruction.outputs,
+							block: frame.block,
+						});
 					}
 					instructions.push(instruction);
 				}
@@ -7101,7 +7111,7 @@ const copyAndValueNumber: CoreFunctionPass = {
 						kind: "enter",
 						block: child,
 						available: cfg.predecessors[child]!.some(({ kind }) => kind === "exceptional")
-							? new Map<string, ReadonlyArray<CoreValueId>>()
+							? new Map<string, AvailableValue>()
 							: frame.available,
 					});
 				}

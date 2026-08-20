@@ -896,6 +896,36 @@ describe("Core IR optimizer", () => {
 		expect(outcome.program.functions[0]!.blocks[0]!.handler).toBeUndefined();
 	});
 
+	it("does not reuse a protected-block value after an exceptional join", () => {
+		const builder = new CoreFunctionBuilder(0, coreOpcodeRegistry, {
+			parameterCount: 1,
+		});
+		const entry = builder.createBlock([{}]);
+		const handler = builder.createBlock([{ role: "exception" }]);
+		const join = builder.createBlock();
+		const callee = builder.block(entry).parameters[0]!.value;
+		builder.appendInstruction(entry, "call", [callee, callee]);
+		builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		builder.setHandler(entry, handler);
+		builder.setTerminator(entry, { kind: "jump", edge: { block: join, arguments: [] } });
+		builder.setTerminator(handler, {
+			kind: "jump",
+			edge: { block: join, arguments: [] },
+		});
+		const [result] = builder.appendInstruction(join, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		builder.setTerminator(join, { kind: "return", value: result! });
+
+		expect(() =>
+			executeCoreOptimizations(coreProgram([builder.finish(entry)]), {
+				verification: "per-pass",
+			}),
+		).not.toThrow();
+	});
+
 	it("applies only representation-proven algebraic identities", () => {
 		const buildNumeric = (
 			functionIndex: number,

@@ -690,26 +690,6 @@ function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry)
 		}
 	};
 
-	const exceptionalReachability = new Map<CoreBlockId, ReadonlySet<CoreBlockId>>();
-	const blocksReachableFromExceptionalExit = (
-		blockId: CoreBlockId,
-	): ReadonlySet<CoreBlockId> => {
-		const cached = exceptionalReachability.get(blockId);
-		if (cached !== undefined) return cached;
-		const pending = cfg.successors[blockId]!
-			.filter(({ kind }) => kind === "exceptional")
-			.map(({ to }) => to);
-		const reachable = new Set<CoreBlockId>();
-		while (pending.length > 0) {
-			const candidate = pending.pop()!;
-			if (candidate === blockId || reachable.has(candidate)) continue;
-			reachable.add(candidate);
-			for (const successor of cfg.successors[candidate]!) pending.push(successor.to);
-		}
-		exceptionalReachability.set(blockId, reachable);
-		return reachable;
-	};
-
 	const verifyUse = (
 		valueId: CoreValueId,
 		block: CoreBlock,
@@ -729,7 +709,7 @@ function verifyCoreFunctionGraph(fn: CoreFunction, registry: CoreOpcodeRegistry)
 		}
 		if (
 			definition.instructionIndex !== -1 &&
-			blocksReachableFromExceptionalExit(definition.block).has(block.id)
+			!cfg.instructionDominatesBlock(definition.block, block.id)
 		) {
 			fail(
 				`${context} uses ${valueId}, which is not available on exceptional flow from b${definition.block}`,

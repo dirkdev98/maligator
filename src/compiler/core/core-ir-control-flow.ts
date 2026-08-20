@@ -5,7 +5,7 @@ import type {
 	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreValueId } from "./core-ir.ts";
+import { coreBlockId, coreValueId } from "./core-ir.ts";
 
 export type CoreControlEdgeKind = "ordinary" | "exceptional";
 
@@ -30,6 +30,15 @@ export interface CoreControlFlow {
 	readonly immediateDominators: ReadonlyArray<CoreBlockId | null>;
 	readonly loops: ReadonlyArray<CoreNaturalLoop>;
 	dominates(dominator: CoreBlockId, block: CoreBlockId): boolean;
+	/**
+	 * Whether a value produced inside `dominator` is available at `block` entry.
+	 * Exceptional edges leave a protected block before any instruction-defined
+	 * value, so ordinary block dominance alone is insufficient.
+	 */
+	instructionDominatesBlock(
+		dominator: CoreBlockId,
+		block: CoreBlockId,
+	): boolean;
 }
 
 /**
@@ -317,6 +326,50 @@ function buildImmediateDominators(
 	return { parents, reachable, reversePostorder };
 }
 
+function buildDominatorPredicate(
+	entryBlock: CoreBlockId,
+	parents: ReadonlyArray<CoreBlockId | null>,
+	reachable: ReadonlySet<CoreBlockId>,
+): (dominator: CoreBlockId, block: CoreBlockId) => boolean {
+	const children = parents.map(() => new Array<CoreBlockId>());
+	for (const block of reachable) {
+		const parent = parents[block];
+		if (parent !== undefined && parent !== null && parent !== block) {
+			children[parent]!.push(block);
+		}
+	}
+	const entries = new Int32Array(parents.length);
+	const exits = new Int32Array(parents.length);
+	entries.fill(-1);
+	exits.fill(-1);
+	let clock = 0;
+	const stack: Array<{ readonly block: CoreBlockId; next: number }> = [
+		{ block: entryBlock, next: 0 },
+	];
+	entries[entryBlock] = clock++;
+	while (stack.length > 0) {
+		const frame = stack[stack.length - 1]!;
+		const descendants = children[frame.block]!;
+		if (frame.next < descendants.length) {
+			const child = descendants[frame.next++]!;
+			entries[child] = clock++;
+			stack.push({ block: child, next: 0 });
+			continue;
+		}
+		exits[frame.block] = clock++;
+		stack.pop();
+	}
+	return (dominator, block) => {
+		const entry = entries[dominator] ?? -1;
+		const candidate = entries[block] ?? -1;
+		return (
+			entry >= 0 &&
+			candidate >= entry &&
+			(exits[block] ?? -1) <= (exits[dominator] ?? -1)
+		);
+	};
+}
+
 export interface BuildCoreControlFlowOptions {
 	readonly exceptions?: boolean;
 }
@@ -362,43 +415,56 @@ export function buildCoreControlFlow(
 		successors,
 		predecessors,
 	);
-	const dominatorChildren = fn.blocks.map(() => new Array<CoreBlockId>());
-	for (const block of reachable) {
-		const parent = parents[block];
-		if (parent !== undefined && parent !== null && parent !== block) {
-			dominatorChildren[parent]!.push(block);
-		}
-	}
-	const dominatorEntry = new Int32Array(fn.blocks.length);
-	const dominatorExit = new Int32Array(fn.blocks.length);
-	dominatorEntry.fill(-1);
-	dominatorExit.fill(-1);
-	let clock = 0;
-	const dominatorStack: Array<{ readonly block: CoreBlockId; next: number }> = [
-		{ block: fn.entry, next: 0 },
-	];
-	dominatorEntry[fn.entry] = clock++;
-	while (dominatorStack.length > 0) {
-		const frame = dominatorStack[dominatorStack.length - 1]!;
-		const children = dominatorChildren[frame.block]!;
-		if (frame.next < children.length) {
-			const child = children[frame.next++]!;
-			dominatorEntry[child] = clock++;
-			dominatorStack.push({ block: child, next: 0 });
-			continue;
-		}
-		dominatorExit[frame.block] = clock++;
-		dominatorStack.pop();
-	}
-	const dominates = (dominator: CoreBlockId, block: CoreBlockId): boolean => {
-		const entry = dominatorEntry[dominator] ?? -1;
-		const candidate = dominatorEntry[block] ?? -1;
-		return (
-			entry >= 0 &&
-			candidate >= entry &&
-			(dominatorExit[block] ?? -1) <= (dominatorExit[dominator] ?? -1)
+	const dominates = buildDominatorPredicate(fn.entry, parents, reachable);
+
+	// Split each block into entry and exit nodes. Ordinary edges leave the exit;
+	// exceptional edges leave the entry because any throwing prefix can take them.
+	// Dominance from source exit to destination entry is therefore the exact
+	// cross-block availability rule for instruction results.
+	let instructionDominatesBlock = dominates;
+	if (successors.some((outgoing) => outgoing.some(({ kind }) => kind === "exceptional"))) {
+		const entryNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2);
+		const exitNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2 + 1);
+		const splitSuccessors = Array.from(
+			{ length: fn.blocks.length * 2 },
+			() => new Array<CoreControlEdge>(),
 		);
-	};
+		const addSplitEdge = (
+			from: CoreBlockId,
+			to: CoreBlockId,
+			kind: CoreControlEdgeKind,
+		): void => {
+			splitSuccessors[from]!.push({ from, to, kind, arguments: [] });
+		};
+		for (const block of fn.blocks) {
+			addSplitEdge(entryNode(block.id), exitNode(block.id), "ordinary");
+			for (const edge of successors[block.id]!) {
+				addSplitEdge(
+					edge.kind === "ordinary" ? exitNode(block.id) : entryNode(block.id),
+					entryNode(edge.to),
+					edge.kind,
+				);
+			}
+		}
+		const splitPredecessors = splitSuccessors.map(
+			() => new Array<CoreControlEdge>(),
+		);
+		for (const outgoing of splitSuccessors) {
+			for (const edge of outgoing) splitPredecessors[edge.to]!.push(edge);
+		}
+		const split = buildImmediateDominators(
+			entryNode(fn.entry),
+			splitSuccessors,
+			splitPredecessors,
+		);
+		const splitDominates = buildDominatorPredicate(
+			entryNode(fn.entry),
+			split.parents,
+			split.reachable,
+		);
+		instructionDominatesBlock = (dominator, block) =>
+			splitDominates(exitNode(dominator), entryNode(block));
+	}
 
 	const backedgesByHeader = new Map<CoreBlockId, Set<CoreBlockId>>();
 	for (const from of reachable) {
@@ -438,5 +504,6 @@ export function buildCoreControlFlow(
 		immediateDominators: parents,
 		loops,
 		dominates,
+		instructionDominatesBlock,
 	};
 }
