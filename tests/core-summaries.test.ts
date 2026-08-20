@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { executeCoreOptimizations } from "../src/compiler/core/core-ir-opt.ts";
+import {
+	coreOptimizationMetrics,
+	executeCoreOptimizations,
+} from "../src/compiler/core/core-ir-opt.ts";
 import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
 	analyzeCoreProgramSummaries,
@@ -19,6 +22,8 @@ import type {
 } from "../src/compiler/core/core-ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToVmDefinition } from "../src/compiler/pipeline/compile-core.ts";
+import { lowerCoreProgramToTarget } from "../src/compiler/target/core-target-lowering.ts";
+import { emitVmDefinition } from "../src/compiler/target/emit-vm.ts";
 
 function coreProgram(
 	functions: ReadonlyArray<CoreFunction>,
@@ -50,6 +55,17 @@ function returnF64(functionIndex: number): CoreFunction {
 	const [value] = builder.appendInstruction(entry, "createF64", [], {
 		attributes: { value: 1.5 },
 		outputRepresentations: ["f64"],
+	});
+	builder.setTerminator(entry, { kind: "return", value: value! });
+	return builder.finish(entry);
+}
+
+function returnBoolean(functionIndex: number): CoreFunction {
+	const builder = new CoreFunctionBuilder(functionIndex, coreOpcodeRegistry);
+	const entry = builder.createBlock();
+	const [value] = builder.appendInstruction(entry, "createBoolean", [], {
+		attributes: { value: true },
+		outputRepresentations: ["boolean"],
 	});
 	builder.setTerminator(entry, { kind: "return", value: value! });
 	return builder.finish(entry);
@@ -319,6 +335,62 @@ describe("summary consumers and proof boundary", () => {
 		});
 	});
 
+	it("unboxes closed script results at the boxed ABI boundary and removes roots", () => {
+		const program = coreProgram([
+			returnF64(0),
+			directCaller(1, 0),
+			returnBoolean(2),
+			directCaller(3, 2),
+		]);
+		const boxed = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining", "interprocedural"]),
+			verification: "per-pass",
+		}).program;
+		const optimized = executeCoreOptimizations(program, {
+			ablations: new Set(["inlining"]),
+			verification: "per-pass",
+		}).program;
+		const resultRepresentation = (functionIndex: number) => {
+			const fn = optimized.functions[functionIndex]!;
+			const call = callInstructions(fn)[0]!;
+			return fn.values[call.outputs[0]!]!.representation;
+		};
+		expect(resultRepresentation(1)).toBe("f64");
+		expect(resultRepresentation(3)).toBe("boolean");
+		expect(coreOptimizationMetrics(optimized).rootedValues).toBeLessThan(
+			coreOptimizationMetrics(boxed).rootedValues,
+		);
+
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`{
+			 const numeric = () => 1.5;
+			 const truth = () => true;
+			 globalThis.__summaryResult = numeric() + (truth() ? 1 : 0);
+			 }`,
+			"summary-unboxing.js",
+		);
+		let productCore: CoreProgram | undefined;
+		const vm = compileSemanticProgramToVmDefinition(semantic, {
+			optimizationAblations: new Set(["inlining"]),
+			afterCoreOptimization(program) {
+				productCore = program;
+			},
+		});
+		const target = lowerCoreProgramToTarget(productCore!);
+		const emitted = emitVmDefinition(vm, { compiled: true });
+		expect(emitted).toMatch(/mal_ops_number_as_f64\(call_result_\d+\.value\)/);
+		expect(emitted).toMatch(/mal_value_to_boolean\(call_result_\d+\.value\)/);
+		expect(
+			target.functions
+				.flatMap(({ blocks }) =>
+					blocks.flatMap(({ instructions }) =>
+						instructions.filter(({ type }) => type === "call"),
+					),
+				)
+				.some((instruction) => "calleeSummary" in instruction),
+		).toBe(false);
+	});
+
 	it("propagates a pure effect summary transitively to memory consumers", () => {
 		const caller = new CoreFunctionBuilder(2, coreOpcodeRegistry, {
 			parameterCount: 1,
@@ -411,6 +483,22 @@ describe("summary consumers and proof boundary", () => {
 		};
 		expect(() => verifyCoreProgram(stale, coreOpcodeRegistry)).toThrow(
 			/callee summary|callee-summary|targets/,
+		);
+	});
+
+	it("rejects an unboxed call result after the callee widens to boxed", () => {
+		const optimized = executeCoreOptimizations(
+			coreProgram([returnF64(0), directCaller(1, 0)]),
+			{ ablations: new Set(["inlining"]), verification: "per-pass" },
+		).program;
+		const call = callInstructions(optimized.functions[1]!)[0]!;
+		expect(optimized.functions[1]!.values[call.outputs[0]!]!.representation).toBe("f64");
+		const stale: CoreProgram = {
+			...optimized,
+			functions: [returnParameter(0), optimized.functions[1]!],
+		};
+		expect(() => verifyCoreProgram(stale, coreOpcodeRegistry)).toThrow(
+			/callee value facts|licenses boxed/,
 		);
 	});
 

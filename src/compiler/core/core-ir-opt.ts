@@ -70,7 +70,10 @@ import type { CoreOwnCell, CoreProvenance } from "./core-ir-provenance.ts";
 import type { CorePropertyPlacement } from "./core-ir-regions.ts";
 import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
+	CORE_CALL_SUMMARY_ATTRIBUTE,
 	analyzeCoreProgramSummaries,
+	coreCallResultRepresentation,
+	coreCallSummaryAttribute,
 	coreCallSummaryDigest,
 	coreCallSummaryFactValue,
 	coreFunctionEffectSummaries,
@@ -7140,6 +7143,96 @@ const refineDirectCallEffects: CoreFunctionPass = {
 	},
 };
 
+/**
+ * Select a scalar storage class for a proven primitive script-call result.
+ *
+ * The JavaScript call ABI remains boxed: compiled callees return `MalValue`, and
+ * native emission performs the checked-by-verifier conversion at the assignment
+ * into this value. This pass intentionally runs once after the optimization
+ * fixed point. No later value transform can propagate the narrowing and then be
+ * left stale if a call target changes; region selection only records exact
+ * instruction snapshots, and target lowering consumes the final representation.
+ */
+const refineDirectCallResultRepresentations: CoreFunctionPass = {
+	name: "refine-direct-call-result-representations",
+	ablation: "interprocedural",
+	run(fn, analyses, program) {
+		const summaries = analyses.summaries(program);
+		const { instructions: protectedInstructions } = regionProtectedValues(fn);
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
+		let changed = false;
+		const blocks = fn.blocks.map(
+			(block): CoreBlock => ({
+				...block,
+				instructions: block.instructions.map((instruction): CoreInstruction => {
+					if (
+						instruction.opcode !== "call" ||
+						protectedInstructions.has(instruction.id)
+					) {
+						return instruction;
+					}
+					const output = instruction.outputs[0];
+					if (output === undefined) return instruction;
+					const claim = summaries.callSite(fn.functionIndex, instruction.id);
+					const representation =
+						claim === undefined ? "boxed" : coreCallResultRepresentation(claim);
+					const ownsCurrent = CORE_CALL_SUMMARY_ATTRIBUTE in instruction.attributes;
+					if (representation === "boxed") {
+						if (!ownsCurrent) return instruction;
+						representations.set(output, "boxed");
+						changed = true;
+						return withoutInstructionAttribute(instruction, CORE_CALL_SUMMARY_ATTRIBUTE);
+					}
+					if (claim === undefined) return instruction;
+					const attribute = coreCallSummaryAttribute(claim);
+					if (representations.get(output) !== representation) {
+						representations.set(output, representation);
+						changed = true;
+					}
+					if (
+						stableAttributeValue(instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE]) ===
+						stableAttributeValue(attribute)
+					) {
+						return instruction;
+					}
+					changed = true;
+					return {
+						...instruction,
+						attributes: {
+							...instruction.attributes,
+							[CORE_CALL_SUMMARY_ATTRIBUTE]: attribute,
+						},
+					};
+				}),
+			}),
+		);
+		if (!changed) return fn;
+		return {
+			...fn,
+			blocks,
+			values: fn.values.map((value) => ({
+				...value,
+				representation: representations.get(value.id)!,
+			})),
+			mutationEpoch: fn.mutationEpoch + 1,
+		};
+	},
+};
+
+function withoutInstructionAttribute(
+	instruction: CoreInstruction,
+	attribute: string,
+): CoreInstruction {
+	return {
+		...instruction,
+		attributes: Object.fromEntries(
+			Object.entries(instruction.attributes).filter(([key]) => key !== attribute),
+		),
+	};
+}
+
 function withoutEffectRefinement(instruction: CoreInstruction): CoreInstruction {
 	return {
 		id: instruction.id,
@@ -9677,6 +9770,63 @@ export function executeCoreOptimizations(
 					},
 					refreshBefore,
 					refreshAfter,
+				),
+			);
+		}
+
+		const representationBefore = tracedMetrics;
+		const representationProgram = { ...workingProgram, functions };
+		let representationChanged = false;
+		functions = functions.map((fn) => {
+			const candidate = acceptPassResult(
+				fn,
+				refineDirectCallResultRepresentations.run(fn, analyses, representationProgram),
+				verification,
+				{
+					stage: "fixpoint",
+					pass: refineDirectCallResultRepresentations.name,
+					round: maxRounds,
+					functionIndex: fn.functionIndex,
+				},
+			);
+			const functionChanged = candidate !== fn;
+			traces.push({
+				name: refineDirectCallResultRepresentations.name,
+				round: maxRounds,
+				changed: functionChanged,
+			});
+			if (functionChanged) representationChanged = true;
+			return candidate;
+		});
+		if (representationChanged) {
+			changed = true;
+			verifyMutatedProgram(
+				{ ...workingProgram, functions },
+				{
+					stage: "fixpoint",
+					pass: refineDirectCallResultRepresentations.name,
+					round: maxRounds,
+				},
+			);
+		}
+		if (representationBefore !== undefined) {
+			const representationAfter = coreOptimizationMetrics({
+				...workingProgram,
+				functions,
+			});
+			tracedMetrics = representationAfter;
+			optimizationTrace.push(
+				optimizationPassDelta(
+					{
+						pass: refineDirectCallResultRepresentations.name,
+						stage: "fixpoint",
+						round: maxRounds,
+						status: "executed",
+						changed: representationChanged,
+						ablation: "interprocedural",
+					},
+					representationBefore,
+					representationAfter,
 				),
 			);
 		}

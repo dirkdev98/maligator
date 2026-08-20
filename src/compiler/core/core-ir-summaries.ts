@@ -81,6 +81,7 @@ import {
 import type { CoreCalleeTargetAnalysis } from "./core-ir-call-targets.ts";
 import { coreInstructionEffects, coreOpcodeRegistry } from "./core-ir-opcodes.ts";
 import type {
+	CoreAttributeObject,
 	CoreBlock,
 	CoreFunction,
 	CoreInstruction,
@@ -93,6 +94,14 @@ import type {
 
 /** Fact kind a call site's summary-derived effect refinement names as its proof. */
 export const CORE_CALL_EFFECT_SUMMARY_FACT = "callee-effect-summary";
+
+/** Proof-carrying call value facts consumed only inside Core. */
+export const CORE_CALL_SUMMARY_ATTRIBUTE = "calleeSummary";
+
+/** Summary metadata that must not cross the Core-to-target boundary. */
+export const CORE_INTERNAL_SUMMARY_ATTRIBUTES: ReadonlySet<string> = new Set([
+	CORE_CALL_SUMMARY_ATTRIBUTE,
+]);
 
 /**
  * Transfer evaluations one strongly connected component may spend per member
@@ -216,7 +225,22 @@ export interface CoreCallSummaryClaim {
 	readonly targets: ReadonlyArray<number>;
 	/** Joined transitive callee effects, including the call's own frame cost. */
 	readonly effects: EffectSummary;
+	/** Escape of the ordinary call's receiver and each supplied argument. */
+	readonly receiverEscape: ValueEscapeFact;
+	readonly argumentEscape: ReadonlyArray<ValueEscapeFact>;
+	/** Joined result facts before substituting the caller's actual operands. */
+	readonly returnProvenance: ReturnProvenance;
+	readonly returnRepresentation: ReturnRepresentation;
 }
+
+/** Effect-only claim persisted in a Core fact. */
+export type CoreCallEffectSummaryClaim = Pick<
+	CoreCallSummaryClaim,
+	"targets" | "effects"
+>;
+
+/** Value-only claim attached to an instruction. */
+export type CoreCallValueSummaryClaim = Omit<CoreCallSummaryClaim, "effects">;
 
 export interface CoreSummaryStatistics {
 	readonly functions: number;
@@ -260,6 +284,7 @@ interface CallSite {
 	readonly opcode: string;
 	/** Sorted, finite, and closed; an open site is not recorded at all. */
 	readonly targets: ReadonlyArray<number>;
+	readonly inputs: ReadonlyArray<CoreValueId>;
 	readonly result: CoreValueId | undefined;
 }
 
@@ -488,6 +513,7 @@ function collectLocalFacts(
 						instruction: instruction.id,
 						opcode: instruction.opcode,
 						targets: resolved.functions,
+						inputs: instruction.inputs,
 						result: instruction.outputs[0],
 					};
 					if (instruction.opcode === "call") effectSites.push(site);
@@ -751,6 +777,46 @@ function joinedCalleeEffects(
 	return effects;
 }
 
+function joinedCallEscape(
+	site: CallSite,
+	state: ReadonlyArray<MutableSummary | undefined>,
+	position: ArgumentPosition,
+): ValueEscapeFact {
+	let escape: ValueEscapeFact = "none";
+	for (const target of site.targets) {
+		escape = joinValueEscape(escape, calleeEscape(state[target], position));
+	}
+	return escape;
+}
+
+function joinedCallProvenance(
+	site: CallSite,
+	state: ReadonlyArray<MutableSummary | undefined>,
+): ReturnProvenance {
+	let provenance = RETURN_PROVENANCE_NONE;
+	for (const target of site.targets) {
+		provenance = joinReturnProvenance(
+			provenance,
+			state[target]?.returnProvenance ?? RETURN_PROVENANCE_UNKNOWN,
+		);
+	}
+	return provenance;
+}
+
+function joinedCallRepresentation(
+	site: CallSite,
+	state: ReadonlyArray<MutableSummary | undefined>,
+): ReturnRepresentation {
+	let representation: ReturnRepresentation = "none";
+	for (const target of site.targets) {
+		representation = joinReturnRepresentation(
+			representation,
+			state[target]?.returnRepresentation ?? "boxed",
+		);
+	}
+	return representation;
+}
+
 interface Condensation {
 	readonly componentOf: Int32Array;
 	readonly components: ReadonlyArray<ReadonlyArray<number>>;
@@ -850,8 +916,43 @@ function condenseCallGraph(
 }
 
 /** Digest binding a recorded claim to its contents; never parsed back. */
-export function coreCallSummaryDigest(claim: CoreCallSummaryClaim): string {
+export function coreCallSummaryDigest(claim: CoreCallEffectSummaryClaim): string {
 	return `callee-effects:v1:[${claim.targets.join(",")}]:${effectSummaryKey(claim.effects)}`;
+}
+
+/** Digest for value facts, independent of effect precision. */
+export function coreCallValueSummaryDigest(claim: CoreCallValueSummaryClaim): string {
+	return [
+		"callee-values:v1",
+		`[${claim.targets.join(",")}]`,
+		claim.receiverEscape,
+		`[${claim.argumentEscape.join(",")}]`,
+		returnProvenanceKey(claim.returnProvenance),
+		claim.returnRepresentation,
+	].join(":");
+}
+
+/** Plain Core attribute carrying the exact value claim the verifier re-proves. */
+export function coreCallSummaryAttribute(
+	claim: CoreCallSummaryClaim,
+): CoreAttributeObject {
+	return {
+		digest: coreCallValueSummaryDigest(claim),
+		targets: [...claim.targets],
+		receiverEscape: claim.receiverEscape,
+		argumentEscape: [...claim.argumentEscape],
+		returnProvenance: { ...claim.returnProvenance },
+		returnRepresentation: claim.returnRepresentation,
+	};
+}
+
+/** The Core result representation a call claim licenses, or boxed by default. */
+export function coreCallResultRepresentation(
+	claim: Pick<CoreCallSummaryClaim, "returnRepresentation">,
+): CoreRepresentation {
+	return claim.returnRepresentation === "f64" || claim.returnRepresentation === "boolean"
+		? claim.returnRepresentation
+		: "boxed";
 }
 
 /**
@@ -875,7 +976,7 @@ export function coreCallSummaryDigest(claim: CoreCallSummaryClaim): string {
  */
 export function deriveCoreCallEffectRefinement(
 	baseline: EffectSummary,
-	claim: CoreCallSummaryClaim,
+	claim: CoreCallEffectSummaryClaim,
 ): EffectSummary | undefined {
 	if (claim.effects.callsUserCode) return undefined;
 	const refined: EffectSummary = {
@@ -899,7 +1000,7 @@ export function deriveCoreCallEffectRefinement(
  * more precise, and still rejects a claim whose callee has grown new effects.
  */
 export function coreCallSummaryClaimHolds(
-	claim: CoreCallSummaryClaim,
+	claim: CoreCallEffectSummaryClaim,
 	current: CoreCallSummaryClaim,
 ): boolean {
 	return (
@@ -1125,6 +1226,14 @@ export function analyzeCoreProgramSummaries(
 			claims.set(`${fn.functionIndex}\0${site.instruction}`, {
 				targets: site.targets,
 				effects: joinedCalleeEffects(site, state),
+				receiverEscape: joinedCallEscape(site, state, { kind: "receiver" }),
+				argumentEscape: site.inputs
+					.slice(2)
+					.map((_input, index) =>
+						joinedCallEscape(site, state, { kind: "parameter", index }),
+					),
+				returnProvenance: joinedCallProvenance(site, state),
+				returnRepresentation: joinedCallRepresentation(site, state),
 			});
 		}
 	}
@@ -1228,7 +1337,7 @@ export function coreModuleEffectSummaries(
  * refinement from it rather than trusting the refinement it finds attached, so
  * this is the whole of what a summary-derived proof asserts.
  */
-export function coreCallSummaryFactValue(claim: CoreCallSummaryClaim): {
+export function coreCallSummaryFactValue(claim: CoreCallEffectSummaryClaim): {
 	readonly targets: ReadonlyArray<number>;
 	readonly effects: EffectSummary;
 } {
@@ -1249,7 +1358,7 @@ function domainList(value: unknown): ReadonlyArray<EffectDomain> | undefined {
 /** Decode a fact value without trusting it; undefined rejects the refinement. */
 export function coreCallSummaryClaimFromFactValue(
 	value: unknown,
-): CoreCallSummaryClaim | undefined {
+): CoreCallEffectSummaryClaim | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const record = value as Record<string, unknown>;
 	if (
@@ -1283,5 +1392,79 @@ export function coreCallSummaryClaimFromFactValue(
 			mayGc: effects.mayGc,
 			callsUserCode: effects.callsUserCode,
 		},
+	};
+}
+
+function valueEscapeFact(value: unknown): ValueEscapeFact | undefined {
+	return value === "none" ||
+		value === "invoked" ||
+		value === "returned" ||
+		value === "retained"
+		? value
+		: undefined;
+}
+
+function returnRepresentationFact(value: unknown): ReturnRepresentation | undefined {
+	return value === "none" ||
+		value === "boxed" ||
+		value === "f64" ||
+		value === "i32" ||
+		value === "boolean"
+		? value
+		: undefined;
+}
+
+function returnProvenanceFact(value: unknown): ReturnProvenance | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const record = value as Record<string, unknown>;
+	if (
+		record.kind === "none" ||
+		record.kind === "fresh" ||
+		record.kind === "primitive" ||
+		record.kind === "receiver" ||
+		record.kind === "unknown"
+	) {
+		return { kind: record.kind };
+	}
+	return record.kind === "parameter" &&
+		Number.isSafeInteger(record.index) &&
+		(record.index as number) >= 0
+		? { kind: "parameter", index: record.index as number }
+		: undefined;
+}
+
+/** Decode proof-carrying value metadata without trusting its shape or digest. */
+export function coreCallSummaryClaimFromAttribute(
+	value: unknown,
+): (CoreCallValueSummaryClaim & { readonly digest: string }) | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const record = value as Record<string, unknown>;
+	if (
+		typeof record.digest !== "string" ||
+		!Array.isArray(record.targets) ||
+		record.targets.some((target) => !Number.isSafeInteger(target) || target < 0) ||
+		!Array.isArray(record.argumentEscape)
+	) {
+		return undefined;
+	}
+	const receiverEscape = valueEscapeFact(record.receiverEscape);
+	const argumentEscape = record.argumentEscape.map(valueEscapeFact);
+	const returnProvenance = returnProvenanceFact(record.returnProvenance);
+	const returnRepresentation = returnRepresentationFact(record.returnRepresentation);
+	if (
+		receiverEscape === undefined ||
+		argumentEscape.some((escape) => escape === undefined) ||
+		returnProvenance === undefined ||
+		returnRepresentation === undefined
+	) {
+		return undefined;
+	}
+	return {
+		digest: record.digest,
+		targets: record.targets as ReadonlyArray<number>,
+		receiverEscape,
+		argumentEscape: argumentEscape as ReadonlyArray<ValueEscapeFact>,
+		returnProvenance,
+		returnRepresentation,
 	};
 }

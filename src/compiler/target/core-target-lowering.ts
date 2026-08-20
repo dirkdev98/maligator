@@ -6,6 +6,7 @@ import {
 } from "../core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../core/core-ir-opcodes.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
+import { CORE_INTERNAL_SUMMARY_ATTRIBUTES } from "../core/core-ir-summaries.ts";
 import { verifyCoreProgram } from "../core/core-ir-verifier.ts";
 import type {
 	CoreBlockId,
@@ -26,6 +27,11 @@ import type {
 	CompilerInstruction,
 } from "../shared/compiler-instruction.ts";
 import { verifyCoreTargetProgram } from "./core-target-verifier.ts";
+
+const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
+	...CORE_INTERNAL_TARGET_ATTRIBUTES,
+	...CORE_INTERNAL_SUMMARY_ATTRIBUTES,
+]);
 
 export interface CoreTargetProgram {
 	readonly core: CoreProgram;
@@ -150,11 +156,11 @@ function physicalRegisterClass(
 function targetAttributes(
 	attributes: CoreInstructionAttributes,
 ): CoreInstructionAttributes {
-	for (const key of CORE_INTERNAL_TARGET_ATTRIBUTES) {
+	for (const key of CORE_INTERNAL_ATTRIBUTES) {
 		if (!(key in attributes)) continue;
 		return Object.fromEntries(
 			Object.entries(attributes).filter(
-				([entry]) => !CORE_INTERNAL_TARGET_ATTRIBUTES.has(entry),
+				([entry]) => !CORE_INTERNAL_ATTRIBUTES.has(entry),
 			),
 		);
 	}

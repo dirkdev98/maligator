@@ -12,10 +12,14 @@ import {
 } from "./core-ir-provenance.ts";
 import {
 	CORE_CALL_EFFECT_SUMMARY_FACT,
+	CORE_CALL_SUMMARY_ATTRIBUTE,
 	analyzeCoreProgramSummaries,
+	coreCallResultRepresentation,
+	coreCallSummaryClaimFromAttribute,
 	coreCallSummaryClaimFromFactValue,
 	coreCallSummaryClaimHolds,
 	coreCallSummaryDigest,
+	coreCallValueSummaryDigest,
 	deriveCoreCallEffectRefinement,
 } from "./core-ir-summaries.ts";
 import type {
@@ -909,19 +913,50 @@ function verifyCoreFunctionGraph(
  * a callee more precise must not invalidate a sound refinement derived from the
  * older, wider claim.
  */
-function verifySummaryEffectRefinements(
-	program: CoreProgram,
-	registry: CoreOpcodeRegistry,
-): void {
+function verifySummaryClaims(program: CoreProgram, registry: CoreOpcodeRegistry): void {
 	const refined: Array<{
 		readonly functionIndex: number;
 		readonly instruction: CoreInstruction;
 		readonly fact: CoreFact;
 	}> = [];
+	const valueClaims: Array<{
+		readonly functionIndex: number;
+		readonly instruction: CoreInstruction;
+		readonly representation: CoreValue["representation"];
+		readonly attribute: unknown;
+	}> = [];
 	for (const fn of program.functions) {
 		const facts = new Map(fn.facts.map((fact) => [fact.id, fact] as const));
+		const representations = new Map(
+			fn.values.map(({ id, representation }) => [id, representation] as const),
+		);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
+				const attribute = instruction.attributes[CORE_CALL_SUMMARY_ATTRIBUTE];
+				const output = instruction.outputs[0];
+				const representation =
+					output === undefined ? undefined : representations.get(output);
+				if (attribute !== undefined) {
+					if (representation === undefined) {
+						fail(
+							`instruction @${instruction.id} in function ${fn.functionIndex} carries a callee summary without a result`,
+						);
+					}
+					valueClaims.push({
+						functionIndex: fn.functionIndex,
+						instruction,
+						representation,
+						attribute,
+					});
+				} else if (
+					instruction.opcode === "call" &&
+					representation !== undefined &&
+					representation !== "boxed"
+				) {
+					fail(
+						`instruction @${instruction.id} in function ${fn.functionIndex} has an unproved ${representation} call result`,
+					);
+				}
 				const refinement = instruction.effectRefinement;
 				if (refinement === undefined) continue;
 				const fact = facts.get(refinement.proof);
@@ -930,7 +965,7 @@ function verifySummaryEffectRefinements(
 			}
 		}
 	}
-	if (refined.length === 0) return;
+	if (refined.length === 0 && valueClaims.length === 0) return;
 	const summaries = analyzeCoreProgramSummaries(program, registry);
 	for (const { functionIndex, instruction, fact } of refined) {
 		const where = `instruction @${instruction.id} in function ${functionIndex}`;
@@ -965,6 +1000,30 @@ function verifySummaryEffectRefinements(
 			!effectSummariesEqual(instruction.effectRefinement!.effects, licensed)
 		) {
 			fail(`${where} refines further than its callee summary licenses`);
+		}
+	}
+	for (const { functionIndex, instruction, representation, attribute } of valueClaims) {
+		const where = `instruction @${instruction.id} in function ${functionIndex}`;
+		if (instruction.opcode !== "call") {
+			fail(`${where} carries callee value facts on ${instruction.opcode}`);
+		}
+		const claim = coreCallSummaryClaimFromAttribute(attribute);
+		if (claim === undefined) fail(`${where} carries unreadable callee value facts`);
+		if (claim.digest !== coreCallValueSummaryDigest(claim)) {
+			fail(`${where} carries callee value facts whose digest does not match`);
+		}
+		const current = summaries.callSite(functionIndex, instruction.id);
+		if (current === undefined) {
+			fail(`${where} carries callee value facts for a call that is no longer closed`);
+		}
+		if (claim.digest !== coreCallValueSummaryDigest(current)) {
+			fail(`${where} carries callee value facts the current graph no longer proves`);
+		}
+		const licensed = coreCallResultRepresentation(current);
+		if (representation !== licensed) {
+			fail(
+				`${where} uses ${representation} for a result whose callee summary licenses ${licensed}`,
+			);
 		}
 	}
 }
@@ -1047,5 +1106,5 @@ function verifyCoreProgramGraph(
 			},
 		);
 	}
-	verifySummaryEffectRefinements(program, registry);
+	verifySummaryClaims(program, registry);
 }

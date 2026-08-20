@@ -3236,6 +3236,12 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			const callResult = (value: string): string =>
+				reps[instruction.dst] === "number"
+					? `mal_ops_number_as_f64(${value})`
+					: reps[instruction.dst] === "boolean"
+						? `mal_value_to_boolean(${value})`
+						: value;
 			if (nativeStringSplitCursorAction?.role === "call") {
 				const { site, propertyLoad } = nativeStringSplitCursorAction;
 				const id = site.callIp;
@@ -3549,7 +3555,7 @@ function emitInstruction(
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_function_call_direct(vm, &__cc_${ip}, ${instruction.directCallTargetFunctionIndex ?? -1}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`r${instruction.dst} = ${tmp}.value;`,
+					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
 			}
@@ -3567,12 +3573,12 @@ function emitInstruction(
 						`  MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, mal_vm_callee_this(vm, ${directFunction}, ${boxedOperand(instruction.thisValue)}), ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
 						`  mal_vm_leave_compiled(vm);`,
 						`  if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-						`  r${instruction.dst} = ${directValue};`,
+						`  r${instruction.dst} = ${callResult(directValue)};`,
 						`} else {`,
 						`  static MalCallCache __cc_${ip};`,
 						`  MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${target}, ${directCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-						`  r${instruction.dst} = ${tmp}.value;`,
+						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
 						poll,
 					];
@@ -3581,7 +3587,7 @@ function emitInstruction(
 					`static MalCallCache __cc_${ip};`,
 					`MalCompletion ${tmp} = mal_vm_call_direct(vm, &__cc_${ip}, ${instruction.directFunctionIndex}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-					`r${instruction.dst} = ${tmp}.value;`,
+					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll,
 				];
 			}
@@ -3655,7 +3661,7 @@ function emitInstruction(
 				`static MalCallCache __cc_${ip};`,
 				`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
-				`r${instruction.dst} = ${tmp}.value;`,
+				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 				poll, // call-return safepoint
 			];
 		}
