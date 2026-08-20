@@ -151,10 +151,121 @@ export function sourceSiteId(
 	return `${encodeURIComponent(path)}:${line}:${column}:${encodeURIComponent(kind)}` as SourceSiteId;
 }
 
+/** How a module becomes an independently entered root of the program. */
+export type ClosureRootKind =
+	| "entry-module"
+	| "static-module"
+	| "dynamic-module"
+	| "host-module"
+	| "virtual-module";
+
+export interface ClosureRoot {
+	readonly kind: ClosureRootKind;
+	/** Absolute path, host specifier (`node:path`), or virtual module specifier. */
+	readonly module: string;
+}
+
+export type ClosureOpeningKind =
+	| "not-analyzed"
+	| "dynamic-code"
+	| "host-wire-splicing"
+	| "relocatable-artifact"
+	| "computed-module-specifier"
+	| "unresolved-module-target"
+	| "unresolved-runtime-load";
+
+export interface ClosureOpening {
+	readonly kind: ClosureOpeningKind;
+	/** Module the edge was observed in; absent for whole-artifact openings. */
+	readonly module?: string;
+	readonly detail: string;
+}
+
+/**
+ * Whether an opening lets source the compiler never saw enter the running program.
+ * `computed-module-specifier` and `unresolved-module-target` do not: both lower to
+ * a bounded candidate set over graph modules plus a deterministic rejection, so
+ * they cost reachability precision rather than source closure.
+ */
+export function closureOpeningBreaksSourceClosure(kind: ClosureOpeningKind): boolean {
+	switch (kind) {
+		case "not-analyzed":
+		case "dynamic-code":
+		case "host-wire-splicing":
+		case "relocatable-artifact":
+		case "unresolved-runtime-load":
+			return true;
+		case "computed-module-specifier":
+		case "unresolved-module-target":
+			return false;
+	}
+}
+
+export type ClosureScope =
+	| { readonly kind: "unanalyzed" }
+	| { readonly kind: "whole-program"; readonly entry: string }
+	| { readonly kind: "fragment"; readonly entry: string };
+
+/**
+ * Source-closure evidence for one compiled artifact. `sourceClosure` is known only
+ * when a real module graph was inspected as a whole program and every enumerated
+ * opening is modelled; a build configuration alone can never certify closure.
+ */
+export interface ProgramClosureCertificate {
+	readonly scope: ClosureScope;
+	readonly roots: ReadonlyArray<ClosureRoot>;
+	readonly openings: ReadonlyArray<ClosureOpening>;
+	readonly sourceClosure: CompilerFact<"closed">;
+}
+
+/** The certificate every compiler entry point without a module graph must carry. */
+export function unanalyzedProgramClosure(detail: string): ProgramClosureCertificate {
+	return {
+		scope: { kind: "unanalyzed" },
+		roots: [],
+		openings: [{ kind: "not-analyzed", detail }],
+		sourceClosure: unknownFact("open-world-reachability"),
+	};
+}
+
+/** Assemble a certificate from enumerated roots and openings. */
+export function programClosureCertificate(
+	scope: ClosureScope,
+	roots: ReadonlyArray<ClosureRoot>,
+	openings: ReadonlyArray<ClosureOpening>,
+): ProgramClosureCertificate {
+	const breaking = openings.filter((opening) =>
+		closureOpeningBreaksSourceClosure(opening.kind),
+	);
+	if (scope.kind === "whole-program" && breaking.length === 0) {
+		return {
+			scope,
+			roots,
+			openings,
+			sourceClosure: knownFact("closed", {
+				scope: { kind: "program", entrypoint: scope.entry },
+				dependencies: [{ kind: "world", fact: "source.closed" }],
+				obligations: [],
+				origin: "module-graph-closure-certificate",
+			}),
+		};
+	}
+	return {
+		scope,
+		roots,
+		openings,
+		sourceClosure: unknownFact(
+			breaking.some((opening) => opening.kind === "dynamic-code")
+				? "eval-visible"
+				: "open-world-reachability",
+		),
+	};
+}
+
 export interface WorldFacts {
 	readonly primordialPolicy: "locked" | "mutable";
+	/** Independent of source closure: runtime eval never unlocks host authority. */
 	readonly authorityClosure: "closed";
-	readonly sourceClosure: CompilerFact<"closed">;
 	readonly eval: "disabled" | "runtime" | "compile-check";
 	readonly realms: boolean;
 	readonly ecmaFeatures: {
@@ -174,19 +285,9 @@ export function worldFactsFromConfig(config: ResolvedBuildConfig): WorldFacts {
 			: config.engine.eval === "compile-check"
 				? "compile-check"
 				: "disabled";
-	const worldProof: FactProof = {
-		scope: { kind: "world" },
-		dependencies: [{ kind: "world", fact: "eval.disabled" }],
-		obligations: [],
-		origin: "resolved-build-config",
-	};
 	return {
 		primordialPolicy: config.engine.primordials,
 		authorityClosure: "closed",
-		sourceClosure:
-			evalMode === "disabled"
-				? knownFact("closed", worldProof)
-				: unknownFact("eval-visible"),
 		eval: evalMode,
 		realms: config.engine.realms,
 		ecmaFeatures: {
@@ -382,6 +483,8 @@ export interface CompilerSiteFacts {
 export interface CompilerProgramFacts {
 	readonly world: WorldFacts;
 	readonly compilationMode: "development" | "full";
+	/** Graph-derived source-closure evidence. Open until a producer inspects one. */
+	readonly closure: ProgramClosureCertificate;
 	/** Current runtime protector state expressed independently of its consumers. */
 	readonly protectors: ReadonlyMap<SemanticEpochFamily, CompilerFact<"valid">>;
 	/** Semantic builtin identities; lowering may still retain guards and fallbacks. */
@@ -469,10 +572,14 @@ function sharedSemanticFacts(
 	return { protectors, builtinIdentities, immutableGlobalBindings };
 }
 
-function compilerProgramFacts(world: WorldFacts): CompilerProgramFacts {
+function compilerProgramFacts(
+	world: WorldFacts,
+	closure: ProgramClosureCertificate,
+): CompilerProgramFacts {
 	return {
 		world,
 		compilationMode: "full",
+		closure,
 		...sharedSemanticFacts(world),
 		sites: new Map(),
 		instructionSites: new WeakMap(),
@@ -483,19 +590,41 @@ function compilerProgramFacts(world: WorldFacts): CompilerProgramFacts {
 
 /** Conservative seed for compiler entry points that do not yet carry a build config. */
 export function conservativeCompilerProgramFacts(): CompilerProgramFacts {
-	return compilerProgramFacts({
-		primordialPolicy: "mutable",
-		authorityClosure: "closed",
-		sourceClosure: unknownFact("open-world-reachability"),
-		eval: "runtime",
-		realms: true,
-		ecmaFeatures: { regexp: true, temporal: true, intl: true },
-		protectedSurface: "ecmascript",
-	});
+	return compilerProgramFacts(
+		{
+			primordialPolicy: "mutable",
+			authorityClosure: "closed",
+			eval: "runtime",
+			realms: true,
+			ecmaFeatures: { regexp: true, temporal: true, intl: true },
+			protectedSurface: "ecmascript",
+		},
+		unanalyzedProgramClosure(
+			"compiler entry point without a build configuration or module graph",
+		),
+	);
 }
 
+/**
+ * Config-derived facts only. Closure stays open: `engine.eval` bounds what the
+ * runtime can compile, but it says nothing about which modules and entry points
+ * the program actually contains, so only a module-graph producer may certify it.
+ */
 export function compilerProgramFactsFromConfig(
 	config: ResolvedBuildConfig,
 ): CompilerProgramFacts {
-	return compilerProgramFacts(worldFactsFromConfig(config));
+	return compilerProgramFacts(
+		worldFactsFromConfig(config),
+		unanalyzedProgramClosure(
+			"a build configuration alone cannot certify program closure",
+		),
+	);
+}
+
+/** Attach a module-graph certificate to otherwise config-derived program facts. */
+export function withProgramClosure(
+	facts: CompilerProgramFacts,
+	closure: ProgramClosureCertificate,
+): CompilerProgramFacts {
+	return { ...facts, closure };
 }

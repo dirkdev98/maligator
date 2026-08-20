@@ -22,6 +22,7 @@ import {
 } from "./compiler-cache-identity.ts";
 import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.ts";
 import type { CoreProgram } from "./compiler/core/core-ir.ts";
+import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import type {
 	BuildModuleGraphOptions,
 	ModuleGraph,
@@ -39,8 +40,15 @@ import type {
 	CompilerDiagnostic,
 	OptimizationAblation,
 } from "./compiler/shared/compiler-diagnostics.ts";
-import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
-import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	unanalyzedProgramClosure,
+	withProgramClosure,
+} from "./compiler/shared/compiler-facts.ts";
+import type {
+	CompilerProgramFacts,
+	ProgramClosureCertificate,
+} from "./compiler/shared/compiler-facts.ts";
 import type { VmDefinition } from "./compiler/target/lower-vm.ts";
 import { vmDefinitionStats } from "./compiler/target/lower-vm.ts";
 import type { VmDefinitionStats } from "./compiler/target/lower-vm.ts";
@@ -116,6 +124,8 @@ export interface CompiledBuildFrontend {
 	artifacts: Array<BuildFrontendArtifact>;
 	definitionStats: VmDefinitionStats;
 	diagnostics: Array<CompilerDiagnostic>;
+	/** Open on a cache hit: a restored definition is returned without a graph. */
+	closure: ProgramClosureCertificate;
 	wires?: Array<Uint8Array>;
 	fragmentArtifacts?: { hits: number; misses: number };
 	fragmentFallback?: string;
@@ -488,6 +498,9 @@ export function compileBuildFrontend(
 					return cached.artifacts.length > 1 ? cached.wires : undefined;
 				},
 				cache: "hit",
+				closure: unanalyzedProgramClosure(
+					"a frontend cache hit restores a definition without inspecting a module graph",
+				),
 				frontendMs: Date.now() - startedAt,
 				phases,
 				dependencies: cached.dependencies.map((dependency) => dependency.path),
@@ -508,7 +521,17 @@ export function compileBuildFrontend(
 		entryPrelude,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
-	const facts = compilerProgramFactsFromConfig(options.config);
+	const facts = withProgramClosure(
+		compilerProgramFactsFromConfig(options.config),
+		// A relocatable request selects the packaged development runner, which both
+		// splices fragment islands and exposes `mal._runWire` to the program. It is
+		// the request, not the fragment outcome, that decides: a fragment fallback
+		// still compiles a whole image that the same runner can extend.
+		certifyProgramClosure(graph, options.config, {
+			relocatableArtifact: options.relocatable === true,
+			hostWireSplicing: options.relocatable === true,
+		}),
+	);
 
 	let sharedSemantic: ReturnType<typeof runSemanticAnalysisForGraph> | undefined;
 	const semanticForGraph = () => {
@@ -627,6 +650,7 @@ export function compileBuildFrontend(
 			return artifacts.length > 1 ? materializeWires() : undefined;
 		},
 		cache: "miss",
+		closure: facts.closure,
 		frontendMs: Date.now() - startedAt,
 		phases,
 		dependencies: dependencies.map((dependency) => dependency.path),
